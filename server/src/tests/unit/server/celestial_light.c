@@ -12,10 +12,12 @@
 #include <global.h>
 
 #include <arch.h>
+#include <celestial_override.h>
 #include <celestial_structure.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <commands.h>
 #include <initialization.h>
 #include <light.h>
 #include <map.h>
@@ -157,6 +159,236 @@ START_TEST(test_celestial_keyframe_preserves_current_and_stages_next_field) {
 }
 END_TEST
 
+START_TEST(test_celestial_override_replaces_lunar_age_and_invalidates_cache) {
+    mapstruct *map = open_fixture(3, 3);
+    MapSpace *space = GET_MAP_SPACE_PTR(map, 1, 1);
+    uint64_t initial_generation;
+    uint64_t initial_revision;
+
+    (void)celestial_override_clear();
+    ck_assert(celestial_light_rebuild(map, 0));
+    ck_assert_int_eq(space->celestial_light_value, 2);
+    initial_generation = celestial_light_generation(map);
+    initial_revision = celestial_override_revision();
+
+    ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_FULL));
+    ck_assert_uint_gt(celestial_override_revision(), initial_revision);
+    celestial_light_invalidate_all();
+    ck_assert(celestial_light_rebuild(map, 0));
+    ck_assert_int_eq(space->celestial_light_value, 22);
+    ck_assert_uint_gt(celestial_light_generation(map), initial_generation);
+
+    ck_assert(celestial_override_set_age(0, HOURS_PER_MONTH));
+    celestial_light_invalidate_all();
+    ck_assert(celestial_light_rebuild(map, 0));
+    ck_assert_int_eq(space->celestial_light_value, 2);
+    ck_assert_uint_gt(celestial_light_generation(map), initial_generation + 1);
+
+    ck_assert(celestial_override_clear());
+    ck_assert(!celestial_override_clear());
+}
+END_TEST
+
+START_TEST(test_celestial_override_named_phases_scale_to_effective_period) {
+    static const celestial_lunar_phase phases[] = {
+        CELESTIAL_LUNAR_NEW,
+        CELESTIAL_LUNAR_WAXING_CRESCENT,
+        CELESTIAL_LUNAR_FIRST_QUARTER,
+        CELESTIAL_LUNAR_WAXING_GIBBOUS,
+        CELESTIAL_LUNAR_FULL,
+        CELESTIAL_LUNAR_WANING_GIBBOUS,
+        CELESTIAL_LUNAR_LAST_QUARTER,
+        CELESTIAL_LUNAR_WANING_CRESCENT,
+    };
+
+    (void)celestial_override_clear();
+    for (size_t index = 0; index < arraysize(phases); index++) {
+        uint16_t age = UINT16_MAX;
+        ck_assert(celestial_override_set_phase(phases[index]));
+        ck_assert(celestial_override_apply(HOURS_PER_MONTH, &age));
+        ck_assert_uint_eq(age, index * (HOURS_PER_MONTH / 8));
+        ck_assert(celestial_override_apply(HOURS_PER_MONTH / 4, &age));
+        ck_assert_uint_eq(age, index * ((HOURS_PER_MONTH / 4) / 8));
+    }
+
+    ck_assert(celestial_override_set_age(HOURS_PER_MONTH / 2, HOURS_PER_MONTH));
+    uint16_t age = 0;
+    ck_assert(celestial_override_apply(HOURS_PER_MONTH / 4, &age));
+    ck_assert_uint_eq(age, HOURS_PER_MONTH / 8);
+    ck_assert(!celestial_override_set_age(HOURS_PER_MONTH, HOURS_PER_MONTH));
+    ck_assert(!celestial_override_set_age(0, 167));
+    ck_assert(!celestial_override_set_phase((celestial_lunar_phase)CELESTIAL_LUNAR_PHASE_COUNT));
+    ck_assert(celestial_override_clear());
+}
+END_TEST
+
+START_TEST(test_celestial_override_parser_is_strict_and_names_are_stable) {
+    static const char *const names[] = {
+        "new",
+        "waxing-crescent",
+        "first-quarter",
+        "waxing-gibbous",
+        "full",
+        "waning-gibbous",
+        "last-quarter",
+        "waning-crescent",
+    };
+    uint16_t age;
+    celestial_lunar_phase phase;
+
+    for (size_t index = 0; index < arraysize(names); index++) {
+        ck_assert(celestial_override_parse_phase(names[index], &phase));
+        ck_assert_uint_eq(phase, index);
+        ck_assert_str_eq(celestial_override_phase_name(phase), names[index]);
+    }
+    ck_assert(celestial_override_parse_phase("FULL", &phase));
+    ck_assert_int_eq(phase, CELESTIAL_LUNAR_FULL);
+    ck_assert(!celestial_override_parse_phase("full-moon", &phase));
+    ck_assert(!celestial_override_parse_phase("full extra", &phase));
+
+    ck_assert(celestial_override_parse_age("0", &age));
+    ck_assert_uint_eq(age, 0);
+    ck_assert(celestial_override_parse_age("65535", &age));
+    ck_assert_uint_eq(age, UINT16_MAX);
+    ck_assert(!celestial_override_parse_age("65536", &age));
+    ck_assert(!celestial_override_parse_age("-1", &age));
+    ck_assert(!celestial_override_parse_age("+1", &age));
+    ck_assert(!celestial_override_parse_age("1x", &age));
+    ck_assert(!celestial_override_parse_age("", &age));
+}
+END_TEST
+
+START_TEST(test_celestial_override_invalidates_loaded_keyframes) {
+    mapstruct *map = open_fixture(2, 2);
+    uint64_t hour = (uint64_t)todtick;
+    uint64_t key;
+    uint64_t generation;
+
+    (void)celestial_override_clear();
+    ck_assert(celestial_light_keyframe_ensure(map, hour));
+    ck_assert(map->celestial_light_valid);
+    ck_assert(map->celestial_light_keyframe_valid);
+    key = map->celestial_light_key;
+    generation = celestial_light_generation(map);
+    ck_assert_uint_gt(generation, 0);
+
+    ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_FULL));
+    celestial_light_invalidate_all();
+    ck_assert(map->celestial_light_valid);
+    ck_assert_uint_eq(map->celestial_light_key, key);
+    ck_assert_uint_eq(celestial_light_generation(map), generation);
+    ck_assert(!map->celestial_light_keyframe_valid);
+    ck_assert_uint_eq(map->celestial_light_next_key, 0);
+
+    ck_assert(celestial_light_keyframe_ensure(map, hour));
+    ck_assert(map->celestial_light_keyframe_valid);
+    ck_assert_uint_gt(celestial_light_generation(map), generation);
+    ck_assert(celestial_override_clear());
+}
+END_TEST
+
+START_TEST(test_celestial_command_lifecycle_and_permission_gate) {
+    mapstruct *map;
+    object *pl;
+    const region_celestial_profile_t *profile;
+    char saved_default_groups[MAX_BUF];
+    celestial_override_state_t state;
+    uint64_t revision;
+    char command[MAX_BUF];
+
+    check_setup_env_pl(&map, &pl);
+    profile = region_celestial_for_map(map);
+    ck_assert_ptr_nonnull(profile);
+    (void)celestial_override_clear();
+    memcpy(saved_default_groups, settings.default_permission_groups, sizeof(saved_default_groups));
+    settings.default_permission_groups[0] = '\0';
+
+    snprintf(command, sizeof(command), "/celestial phase full");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert(!state.active);
+    ck_assert(!commands_check_permission(CONTR(pl), "/celestial"));
+
+    snprintf(settings.default_permission_groups,
+             sizeof(settings.default_permission_groups),
+             "[DEV]");
+    ck_assert(commands_check_permission(CONTR(pl), "celestial"));
+
+    snprintf(command, sizeof(command), "/celestial phase full");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert(state.active);
+    ck_assert_int_eq(state.mode, CELESTIAL_OVERRIDE_MODE_PHASE);
+    ck_assert_int_eq(state.value, CELESTIAL_LUNAR_FULL);
+    revision = state.revision;
+
+    snprintf(command, sizeof(command), "/celestial phase full");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert_uint_gt(state.revision, revision);
+    revision = state.revision;
+
+    snprintf(command, sizeof(command), "/celestial phase full extra");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert_int_eq(state.mode, CELESTIAL_OVERRIDE_MODE_PHASE);
+    ck_assert_int_eq(state.value, CELESTIAL_LUNAR_FULL);
+    ck_assert_uint_eq(state.revision, revision);
+
+    snprintf(command, sizeof(command), "/celestial phase full-moon");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert_uint_eq(state.revision, revision);
+
+    snprintf(command, sizeof(command), "/celestial status");
+    commands_handle(pl, command);
+    snprintf(command, sizeof(command), "/celestial");
+    commands_handle(pl, command);
+
+    snprintf(command, sizeof(command), "/celestial age 0");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert_int_eq(state.mode, CELESTIAL_OVERRIDE_MODE_AGE);
+    ck_assert_uint_eq(state.value, 0);
+    ck_assert_uint_eq(state.period, profile->lunar_period);
+    revision = state.revision;
+
+    snprintf(command,
+             sizeof(command),
+             "/celestial age %u",
+             profile->lunar_period);
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert_uint_eq(state.revision, revision);
+
+    snprintf(command, sizeof(command), "/celestial age -1");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert_uint_eq(state.revision, revision);
+
+    snprintf(command, sizeof(command), "/celestial clear extra");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert(state.active);
+
+    snprintf(command, sizeof(command), "/celestial clear");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert(!state.active);
+    revision = state.revision;
+
+    snprintf(command, sizeof(command), "/celestial clear");
+    commands_handle(pl, command);
+    celestial_override_get(&state);
+    ck_assert(!state.active);
+    ck_assert_uint_eq(state.revision, revision);
+
+    memcpy(settings.default_permission_groups,
+           saved_default_groups,
+           sizeof(settings.default_permission_groups));
+}
+END_TEST
+
 START_TEST(test_celestial_64x64_build_is_bounded) {
     mapstruct *map = open_fixture(64, 64);
     struct timespec start;
@@ -185,6 +417,11 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_celestial_map_darkness_uses_current_cached_field);
     tcase_add_test(tc_core, test_celestial_invalidation_rebuilds_only_after_revision_change);
     tcase_add_test(tc_core, test_celestial_keyframe_preserves_current_and_stages_next_field);
+    tcase_add_test(tc_core, test_celestial_override_replaces_lunar_age_and_invalidates_cache);
+    tcase_add_test(tc_core, test_celestial_override_named_phases_scale_to_effective_period);
+    tcase_add_test(tc_core, test_celestial_override_parser_is_strict_and_names_are_stable);
+    tcase_add_test(tc_core, test_celestial_override_invalidates_loaded_keyframes);
+    tcase_add_test(tc_core, test_celestial_command_lifecycle_and_permission_gate);
     tcase_add_test(tc_core, test_celestial_64x64_build_is_bounded);
     return s;
 }

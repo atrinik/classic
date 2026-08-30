@@ -25,6 +25,7 @@ typedef enum celestial_lunar_phase {
     CELESTIAL_LUNAR_WANING_GIBBOUS,
     CELESTIAL_LUNAR_LAST_QUARTER,
     CELESTIAL_LUNAR_WANING_CRESCENT,
+    CELESTIAL_LUNAR_PHASE_COUNT,
 } celestial_lunar_phase;
 
 /** Effective celestial inputs resolved by the regional profile owner. */
