@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -130,6 +130,10 @@ extern void command_arrest(object *op, const char *command, char *params);
 /** Public API implemented in src/commands/permission/ban.c. */
 
 extern void command_ban(object *op, const char *command, char *params);
+
+/** Public API implemented in src/commands/permission/celestial.c. */
+
+extern void command_celestial(object *op, const char *command, char *params);
 
 /** Public API implemented in src/commands/permission/config.c. */
 

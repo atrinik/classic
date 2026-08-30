@@ -1,6 +1,7 @@
 set(SERVER_CORE_SOURCES
 	src/commands/permission/arrest.c
 	src/commands/permission/ban.c
+	src/commands/permission/celestial.c
 	src/commands/permission/config.c
 	src/commands/permission/custody.c
 	src/commands/permission/follow.c
@@ -74,6 +75,7 @@ set(SERVER_CORE_SOURCES
 	src/server/bank.c
 	src/server/cache.c
 	src/server/celestial_lunar.c
+	src/server/celestial_override.c
 	src/server/commands.c
 	src/server/connection.c
 	src/server/content_benchmark.c

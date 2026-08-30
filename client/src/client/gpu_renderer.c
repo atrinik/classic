@@ -40,6 +40,7 @@ typedef struct gpu_surface_texture {
     size_t bytes;
     SDL_FRect atlas_source;
     bool atlased;
+    bool has_texture_alpha;
     bool accounted;
     struct gpu_surface_texture *next;
 } gpu_surface_texture_t;
@@ -98,6 +99,22 @@ static bool recreation_requested;
 static bool hardware_verified;
 
 static bool gpu_renderer_draw_color(Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha);
+
+static bool gpu_renderer_surface_has_texture_alpha(SDL_Surface *surface) {
+    if (SDL_SurfaceHasColorKey(surface) || SDL_ISPIXELFORMAT_ALPHA(surface->format)) {
+        return true;
+    }
+    SDL_Palette *palette = SDL_GetSurfacePalette(surface);
+    if (palette == NULL) {
+        return false;
+    }
+    for (int index = 0; index < palette->ncolors; index++) {
+        if (palette->colors[index].a != SDL_ALPHA_OPAQUE) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static bool gpu_renderer_frame_result(bool success) {
     frame_failed |= !success;
@@ -1029,6 +1046,7 @@ static gpu_surface_texture_t *gpu_renderer_surface_texture(SDL_Surface *surface)
         SDL_SetTextureScaleMode(entry->texture, SDL_SCALEMODE_NEAREST);
     }
     entry->surface = surface;
+    entry->has_texture_alpha = gpu_renderer_surface_has_texture_alpha(surface);
     entry->generation = next_surface_generation++;
     if (next_surface_generation == 0) {
         next_surface_generation = 1;
@@ -1275,13 +1293,39 @@ static bool gpu_renderer_draw_surface_to_impl(SDL_Surface *target,
         return false;
     }
     Uint8 red, green, blue, alpha;
-    SDL_BlendMode blend_mode;
+    SDL_BlendMode texture_blend_mode;
+    SDL_BlendMode surface_blend_mode;
+    /*
+     * SDL_CreateTextureFromSurface() translates color keys and palette alpha
+     * into texture alpha and selects the corresponding texture blend mode.
+     * That mode is independent from the source surface's software-blit mode:
+     * a color-keyed RGB/XRGB surface can legitimately report
+     * SDL_BLENDMODE_NONE while its texture must blend transparent texels.
+     * Keep the mode owned by the texture unless the source explicitly asks for
+     * a non-NONE software-blit mode. Some SDL versions leave indexed palette
+     * alpha textures at NONE, so derive BLEND when the source proves that the
+     * texture carries alpha. Atlas and canvas textures are initialized with
+     * the blend mode required by their stored alpha.
+     */
     if (!SDL_GetSurfaceColorMod(surface, &red, &green, &blue) ||
-        !SDL_GetSurfaceAlphaMod(surface, &alpha) ||
-        !SDL_GetSurfaceBlendMode(surface, &blend_mode) ||
-        !SDL_SetTextureScaleMode(texture, scale_mode) ||
+        !SDL_GetSurfaceAlphaMod(surface, &alpha) || !SDL_SetTextureScaleMode(texture, scale_mode) ||
         !SDL_SetTextureColorMod(texture, red, green, blue) ||
-        !SDL_SetTextureAlphaMod(texture, alpha) || !SDL_SetTextureBlendMode(texture, blend_mode)) {
+        !SDL_SetTextureAlphaMod(texture, alpha) ||
+        !SDL_GetTextureBlendMode(texture, &texture_blend_mode) ||
+        !SDL_GetSurfaceBlendMode(surface, &surface_blend_mode)) {
+        return target == NULL ? false : gpu_renderer_target_end(&scope, false);
+    }
+    SDL_BlendMode blend_mode = texture_blend_mode;
+    if (surface_blend_mode != SDL_BLENDMODE_NONE) {
+        blend_mode = surface_blend_mode;
+    } else if (source_canvas != NULL || (surface_entry != NULL && surface_entry->atlased)) {
+        /* Atlas and canvas textures are shared by multiple source surfaces. */
+        blend_mode = SDL_BLENDMODE_BLEND;
+    } else if (blend_mode == SDL_BLENDMODE_NONE && surface_entry != NULL &&
+               surface_entry->has_texture_alpha) {
+        blend_mode = SDL_BLENDMODE_BLEND;
+    }
+    if (!SDL_SetTextureBlendMode(texture, blend_mode)) {
         return target == NULL ? false : gpu_renderer_target_end(&scope, false);
     }
     SDL_FRect source_float;
