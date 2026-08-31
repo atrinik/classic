@@ -8588,6 +8588,59 @@ bool widget_map_projection_contract_test(void) {
                       BIT_QUERY(context.commands[2].effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
                       !BIT_QUERY(context.commands[2].effects.flags,
                                  SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+
+            map_cell_light_record_t *light = map_cell_light_record(cell, 0, true);
+            uint8_t saved_fow = cell->fow;
+            uint16_t saved_radiance = light != NULL ? light->radiance : 0;
+            if (light == NULL) {
+                success = false;
+            } else {
+                cell->fow = true;
+                light->radiance = 0;
+
+                map_render_context_t remembered_context = {0};
+                map_render_data_t remembered = production;
+                remembered.render_context = &remembered_context;
+                remembered.layer = LAYER_FLOOR;
+                remembered.ground_pass = false;
+                remembered.smooth_lighting = false;
+                remembered.lightmap_pending = false;
+                draw_map_object(surface, &remembered);
+                uint8_t expected_dark_level =
+                    (UINT8_MAX - lighting_radiance_to_level(
+                                    MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE)) *
+                    DARK_LEVELS / UINT8_MAX;
+                success = success && remembered_context.commands_num == 1 &&
+                          BIT_QUERY(remembered_context.commands[0].effects.flags,
+                                    SPRITE_FLAG_DARK) &&
+                          remembered_context.commands[0].effects.dark_level == expected_dark_level;
+
+                map_render_data_t lighting = {
+                    .midx = MAP_STARTX,
+                    .midy = MAP_STARTY,
+                    .primary_level = true,
+                    .depth = 0,
+                };
+                lighting_vertex_t remembered_vertex =
+                    map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
+                success = success &&
+                          remembered_vertex.scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.red == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.green == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.blue == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+
+                cell->fow = false;
+                lighting_vertex_t visible_vertex =
+                    map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
+                success = success &&
+                          visible_vertex.scalar ==
+                              map_visibility_add_player_radiance(
+                                  0, map_visibility_field_weight(0, 0));
+
+                cell->fow = saved_fow;
+                light->radiance = saved_radiance;
+                free(remembered_context.commands);
+            }
         }
         FaceList[1].sprite = saved_sprite;
         MapData.height_diff = saved_height_diff;
