@@ -397,6 +397,82 @@ static bool draw_checkpoint(SDL_Surface *source,
     return valid;
 }
 
+static bool recover_and_republish(SDL_Window *window,
+                                  SDL_Surface *source,
+                                  bool qualified,
+                                  uint16_t light_level);
+
+static bool async_map_submission_checkpoint(SDL_Surface *source) {
+    SDL_FRect destination = {0.0f, 0.0f, 32.0f, 32.0f};
+    if (!gpu_renderer_wait_idle()) {
+        return false;
+    }
+    gpu_renderer_statistics_reset();
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(32, 32) ||
+        !gpu_renderer_draw_surface(source, NULL, &destination) || !gpu_renderer_map_end()) {
+        return false;
+    }
+
+    gpu_renderer_statistics_t submitted;
+    gpu_renderer_statistics_get(&submitted);
+    bool queued = submitted.map_submissions == 1 && submitted.map_completions == 0 &&
+                  submitted.timings[GPU_RENDERER_TIMING_COMPLETION].calls == 0 &&
+                  gpu_map_renderer_pending_submission_count() == 1 && gpu_renderer_map_available();
+    if (!queued) {
+        SDL_SetError("map submission completed synchronously or was not published atomically");
+        return false;
+    }
+    size_t peak_pending = gpu_map_renderer_pending_submission_count();
+    if (!gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) || !gpu_renderer_present()) {
+        return false;
+    }
+    for (unsigned int frame = 1; frame < 4; frame++) {
+        if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(32, 32) ||
+            !gpu_renderer_draw_surface(source, NULL, &destination) || !gpu_renderer_map_end() ||
+            !gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) || !gpu_renderer_present()) {
+            return false;
+        }
+        peak_pending = MAX(peak_pending, gpu_map_renderer_pending_submission_count());
+    }
+
+    gpu_renderer_statistics_t queued_frames;
+    gpu_renderer_statistics_get(&queued_frames);
+    if (queued_frames.map_submissions != 4 || queued_frames.map_in_flight_peak > 3 ||
+        peak_pending > 3) {
+        SDL_SetError("map submissions exceeded the bounded in-flight frame budget");
+        return false;
+    }
+    if (!gpu_renderer_wait_idle()) {
+        return false;
+    }
+
+    gpu_renderer_statistics_t completed;
+    gpu_renderer_statistics_get(&completed);
+    return completed.map_submissions == 4 && completed.map_completions == 4 &&
+           completed.map_in_flight_peak <= 3 && gpu_map_renderer_pending_submission_count() == 0;
+}
+
+static bool
+async_fence_failure_checkpoint(SDL_Window *window, SDL_Surface *source, bool qualified) {
+    SDL_FRect destination = {0.0f, 0.0f, 32.0f, 32.0f};
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(32, 32) ||
+        !gpu_renderer_draw_surface(source, NULL, &destination) || !gpu_renderer_map_end()) {
+        return false;
+    }
+    gpu_renderer_conformance_fault_set(GPU_RENDERER_CONFORMANCE_FAULT_FENCE);
+    gpu_map_renderer_poll();
+    gpu_renderer_statistics_t failed;
+    gpu_renderer_statistics_get(&failed);
+    bool discarded = gpu_map_renderer_pending_submission_count() == 0 &&
+                     !gpu_renderer_map_available() && failed.map_dropped_updates == 1 &&
+                     gpu_renderer_recreation_take_request();
+    if (!discarded) {
+        SDL_SetError("failed map fence did not invalidate the published target");
+        return false;
+    }
+    return recover_and_republish(window, source, qualified, 2048);
+}
+
 static bool instance_delta_frame(SDL_Surface *source, float second_x) {
     SDL_FRect first = {0.0f, 0.0f, 16.0f, 16.0f};
     SDL_FRect second = {second_x, 16.0f, 16.0f, 16.0f};
@@ -416,6 +492,9 @@ static bool instance_delta_upload_checkpoint(SDL_Surface *source) {
     if (!instance_delta_frame(source, 0.0f)) {
         return false;
     }
+    if (!gpu_renderer_wait_idle()) {
+        return false;
+    }
     gpu_renderer_statistics_reset();
     if (!instance_delta_frame(source, 0.0f)) {
         return false;
@@ -426,6 +505,9 @@ static bool instance_delta_upload_checkpoint(SDL_Surface *source) {
         stable.slot_uniform_upload_count != 1 || stable.slot_uniform_upload_bytes != 16 ||
         stable.instance_upload_count != 0) {
         SDL_SetError("unchanged stable map records exceeded their slot-uniform upload bound");
+        return false;
+    }
+    if (!gpu_renderer_wait_idle()) {
         return false;
     }
     gpu_renderer_statistics_reset();
@@ -491,8 +573,18 @@ static bool light_delta_upload_checkpoint(SDL_Surface *source) {
     if (!light_delta_frame(source, UINT_MAX, 0)) {
         return false;
     }
+    /* Delta accounting is an idle-state contract. The asynchronous renderer
+     * must cycle a compact buffer when an earlier submission still uses it;
+     * wait here before measuring the retained snapshot rather than turning
+     * this focused upload test into an implicit completion wait. */
+    if (!gpu_renderer_wait_idle()) {
+        return false;
+    }
     gpu_renderer_statistics_reset();
     if (!light_delta_frame(source, UINT_MAX, 0)) {
+        return false;
+    }
+    if (!gpu_renderer_wait_idle()) {
         return false;
     }
     gpu_renderer_statistics_t stable;
@@ -503,8 +595,14 @@ static bool light_delta_upload_checkpoint(SDL_Surface *source) {
     }
 
     for (uint16_t delta = 1; delta <= 2; delta++) {
+        if (!gpu_renderer_wait_idle()) {
+            return false;
+        }
         gpu_renderer_statistics_reset();
         if (!light_delta_frame(source, 2, delta)) {
+            return false;
+        }
+        if (!gpu_renderer_wait_idle()) {
             return false;
         }
         gpu_renderer_statistics_t changed;
@@ -549,6 +647,9 @@ static bool retained_identity_delta_checkpoint(SDL_Surface *source) {
     if (!retained_identity_frame(source, 0)) {
         return false;
     }
+    if (!gpu_renderer_wait_idle()) {
+        return false;
+    }
     gpu_renderer_statistics_reset();
     if (!retained_identity_frame(source, 1)) {
         return false;
@@ -559,6 +660,9 @@ static bool retained_identity_delta_checkpoint(SDL_Surface *source) {
         inserted.instance_upload_bytes > 256 || inserted.source_upload_count != 0 ||
         inserted.light_upload_count != 0) {
         SDL_SetError("stable-slot head insertion rewrote the painter suffix");
+        return false;
+    }
+    if (!gpu_renderer_wait_idle()) {
         return false;
     }
     gpu_renderer_statistics_reset();
@@ -657,6 +761,9 @@ static bool slot_fragmentation_checkpoint(SDL_Surface *source) {
         }
     }
 
+    if (!gpu_renderer_wait_idle()) {
+        return false;
+    }
     gpu_renderer_statistics_reset();
     if (!slot_fragmentation_frame(source, phases - 1U, false)) {
         return false;
@@ -672,6 +779,9 @@ static bool slot_fragmentation_checkpoint(SDL_Surface *source) {
         return false;
     }
 
+    if (!gpu_renderer_wait_idle()) {
+        return false;
+    }
     gpu_renderer_statistics_reset();
     if (!slot_fragmentation_frame(source, phases - 1U, true)) {
         return false;
@@ -756,8 +866,12 @@ static bool atlas_churn_cycle(unsigned int phase, size_t *peak_pages) {
     }
 
     /* Replacing the world command set releases its retained asset references. */
-    return gpu_renderer_begin_frame() && gpu_renderer_map_begin(32, 32) && gpu_renderer_map_end() &&
-           gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) && gpu_renderer_present();
+    success = gpu_renderer_begin_frame() && gpu_renderer_map_begin(32, 32) &&
+              gpu_renderer_map_end() && gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) &&
+              gpu_renderer_present();
+    /* Resource-retirement assertions must observe the fence, not merely the
+     * client-side surface destruction that queued the release. */
+    return success && gpu_renderer_wait_idle();
 }
 
 static bool atlas_churn_plateau_checkpoint(void) {
@@ -888,7 +1002,7 @@ static bool ui_atlas_churn_cycle(unsigned int phase, size_t *peak_pages) {
         SDL_DestroySurface(surfaces[index]);
     }
     free(surfaces);
-    return success;
+    return success && gpu_renderer_wait_idle();
 }
 
 static bool ui_atlas_churn_plateau_checkpoint(void) {
@@ -1392,6 +1506,8 @@ int main(void) {
     GPU_REQUIRE(retained.resource_creations == warmup.resource_creations);
     GPU_REQUIRE(retained.retained_bytes == warmup.retained_bytes);
     GPU_REQUIRE(retained.timings[GPU_RENDERER_TIMING_COMPLETION].calls == 2);
+    GPU_REQUIRE(async_map_submission_checkpoint(source));
+    GPU_REQUIRE(async_fence_failure_checkpoint(window, source, qualified));
     GPU_REQUIRE(instance_delta_upload_checkpoint(source));
     GPU_REQUIRE(light_delta_upload_checkpoint(source));
     GPU_REQUIRE(atlas_batch_checkpoint(source, sources[3]));

@@ -29,6 +29,7 @@
 #define GPU_RENDERER_CANVAS_PROPERTY "atrinik.gpu.canvas"
 #define GPU_RENDERER_ATLAS_SIZE 2048
 #define GPU_RENDERER_ATLAS_ENTRY_LIMIT 512
+#define GPU_RENDERER_ALLOWED_FRAMES_IN_FLIGHT 3U
 
 typedef struct gpu_texture_atlas gpu_texture_atlas_t;
 
@@ -417,6 +418,14 @@ static void gpu_renderer_readbacks_cancel(void) {
 
 static void gpu_renderer_device_destroy(void) {
     if (device != NULL) {
+        /* Raw map submissions and SDL_Renderer submissions share this
+         * device. Finish the complete queue before releasing readback
+         * buffers, retained targets, or their host-side ownership records. */
+        if (renderer != NULL) {
+            (void)SDL_FlushRenderer(renderer);
+        }
+        (void)SDL_WaitForGPUIdle(device);
+        (void)gpu_map_renderer_wait_idle();
         gpu_renderer_readbacks_cancel();
     }
     gpu_map_renderer_destroy();
@@ -535,6 +544,10 @@ static bool gpu_renderer_create_internal(SDL_Window *window, bool require_hardwa
                      "verified hardware acceleration plus R8G8B8A8_UNORM and R32_UINT "
                      "render targets");
         gpu_renderer_failure_preserve("unsupported GPU renderer capabilities");
+        return false;
+    }
+    if (!SDL_SetGPUAllowedFramesInFlight(device, GPU_RENDERER_ALLOWED_FRAMES_IN_FLIGHT)) {
+        gpu_renderer_failure_preserve("unable to configure GPU frames in flight");
         return false;
     }
 
@@ -703,7 +716,7 @@ bool gpu_renderer_wait_idle(void) {
     uint64_t started = gpu_renderer_timing_begin();
     bool succeeded = SDL_WaitForGPUIdle(device);
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMPLETION, started);
-    return succeeded;
+    return succeeded && gpu_map_renderer_wait_idle();
 }
 
 void gpu_renderer_destroy(void) {
@@ -793,6 +806,7 @@ bool gpu_renderer_begin_frame(void) {
         SDL_SetError("GPU resource recovery is pending");
         return gpu_renderer_frame_result(false);
     }
+    gpu_map_renderer_poll();
     frame_failed = false;
     if (!gpu_renderer_frame_target_create() || !SDL_SetRenderTarget(renderer, frame_target) ||
         !SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE)) {
@@ -819,6 +833,7 @@ bool gpu_renderer_present(void) {
         SDL_RenderTexture(renderer, frame_target, NULL, NULL) && SDL_RenderPresent(renderer);
     statistics.draws++;
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_PRESENT_WAIT, started);
+    gpu_map_renderer_poll();
     return gpu_renderer_frame_result(result);
 }
 
@@ -1671,6 +1686,7 @@ bool gpu_renderer_readback_async(const SDL_Rect *rect,
 }
 
 void gpu_renderer_readback_poll(void) {
+    gpu_map_renderer_poll();
     gpu_pending_readback_t **link = &pending_readbacks;
     while (*link != NULL) {
         gpu_pending_readback_t *pending = *link;
@@ -1683,6 +1699,7 @@ void gpu_renderer_readback_poll(void) {
         void *userdata = pending->userdata;
         SDL_Surface *surface = gpu_renderer_readback_finish(pending);
         callback(surface, userdata);
+        gpu_map_renderer_poll();
     }
 }
 
@@ -1703,7 +1720,9 @@ SDL_Surface *gpu_renderer_readback(const SDL_Rect *rect) {
         free(pending);
         return NULL;
     }
-    return gpu_renderer_readback_finish(pending);
+    SDL_Surface *surface = gpu_renderer_readback_finish(pending);
+    gpu_map_renderer_poll();
+    return surface;
 }
 
 Uint64 gpu_renderer_surface_generation(SDL_Surface *surface) {
@@ -1796,4 +1815,34 @@ void gpu_renderer_statistics_resource_destroy(size_t retained_bytes) {
 void gpu_renderer_statistics_recovery(bool succeeded) {
     statistics.device_recoveries++;
     statistics.recovery_failures += !succeeded;
+}
+
+static void gpu_renderer_statistics_add(uint64_t *total, uint64_t value) {
+    if (UINT64_MAX - *total < value) {
+        *total = UINT64_MAX;
+    } else {
+        *total += value;
+    }
+}
+
+void gpu_renderer_statistics_map_submission(size_t queue_depth) {
+    statistics.map_submissions++;
+    statistics.map_queue_depth_samples++;
+    gpu_renderer_statistics_add(&statistics.map_queue_depth_total, (uint64_t)queue_depth);
+    uint64_t in_flight = queue_depth == SIZE_MAX ? UINT64_MAX : (uint64_t)queue_depth + 1U;
+    statistics.map_in_flight_peak = MAX(statistics.map_in_flight_peak, in_flight);
+}
+
+void gpu_renderer_statistics_map_completion(uint64_t queue_age_ns, uint64_t frame_latency_ns) {
+    statistics.map_completions++;
+    gpu_renderer_statistics_add(&statistics.map_queue_age_total_ns, queue_age_ns);
+    gpu_renderer_statistics_add(&statistics.map_frame_latency_total_ns, frame_latency_ns);
+    statistics.map_queue_age_max_ns = MAX(statistics.map_queue_age_max_ns, queue_age_ns);
+    statistics.map_frame_latency_max_ns =
+        MAX(statistics.map_frame_latency_max_ns, frame_latency_ns);
+}
+
+void gpu_renderer_statistics_map_update(bool dropped, bool merged) {
+    statistics.map_dropped_updates += dropped;
+    statistics.map_merged_updates += merged;
 }

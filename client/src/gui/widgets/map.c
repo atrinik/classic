@@ -7517,6 +7517,7 @@ void map_draw_map(SDL_Surface *surface) {
 
     if (!gpu_output) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         SDL_SetError("mandatory GPU map renderer is unavailable");
         LOG(ERROR, "%s", SDL_GetError());
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
@@ -7526,6 +7527,7 @@ void map_draw_map(SDL_Surface *surface) {
                                    : gpu_renderer_map_begin(surface->w, surface->h);
     if (!began) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         LOG(ERROR, "Could not begin retained GPU map target: %s", SDL_GetError());
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
         return;
@@ -7593,6 +7595,7 @@ void map_draw_map(SDL_Surface *surface) {
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMMAND_BUILD, gpu_command_build_started);
     if (!gpu_renderer_map_end()) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         if (primary_surface) {
             map_retained_primary_projection.valid = false;
         }
