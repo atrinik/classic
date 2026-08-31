@@ -4449,14 +4449,7 @@ void object_reverse_inventory(object *op) {
  * @return
  * True on success, false on failure.
  */
-static bool object_enter_map_internal(object *op,
-                                      object *exit,
-                                      mapstruct *m,
-                                      int x,
-                                      int y,
-                                      bool fixed_pos,
-                                      bool honor_fixed_login,
-                                      bool require_exact_target) {
+bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool fixed_pos) {
     HARD_ASSERT(op != NULL);
 
     op = HEAD(op);
@@ -4541,7 +4534,7 @@ static bool object_enter_map_internal(object *op,
         fixed_pos = true;
     }
 
-    if (exit == NULL && honor_fixed_login && MAP_FIXEDLOGIN(m)) {
+    if (exit == NULL && MAP_FIXEDLOGIN(m)) {
         x = MAP_ENTER_X(m);
         y = MAP_ENTER_Y(m);
     }
@@ -4580,13 +4573,7 @@ static bool object_enter_map_internal(object *op,
     }
 
     if (op->map != NULL && op->type == PLAYER) {
-        tag_t leave_count = op->count;
-        mapstruct *leave_map = op->map;
         trigger_map_event(MEVENT_LEAVE, op->map, op, NULL, NULL, NULL, 0);
-        if (OBJECT_DESTROYED(op, leave_count) ||
-            (require_exact_target && op->map != leave_map)) {
-            return false;
-        }
     }
 
     op->x = x;
@@ -4601,23 +4588,12 @@ static bool object_enter_map_internal(object *op,
         living_update_player(op);
     }
 
-    tag_t insert_count = op->count;
     op = object_insert_map(op, m, NULL, 0);
-    if (op == NULL || OBJECT_DESTROYED(op, insert_count) || !OBJECT_ACTIVE(op)) {
+    if (op == NULL) {
         return false;
-    }
-    if (op->map != m || op->x != x || op->y != y) {
-        return !require_exact_target;
     }
 
-    tag_t enter_count = op->count;
     trigger_map_event(MEVENT_ENTER, m, op, NULL, NULL, NULL, 0);
-    if (OBJECT_DESTROYED(op, enter_count) || !OBJECT_ACTIVE(op)) {
-        return false;
-    }
-    if (op->map != m || op->x != x || op->y != y) {
-        return !require_exact_target;
-    }
     m->timeout = 0;
 
     /* Do some action special for players after we have inserted them. */
@@ -4643,21 +4619,8 @@ static bool object_enter_map_internal(object *op,
     return true;
 }
 
-bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool fixed_pos) {
-    return object_enter_map_internal(op, exit, m, x, y, fixed_pos, true, false);
-}
-
-bool object_enter_map_exact(object *op, mapstruct *m, int x, int y, bool fixed_pos) {
-    return object_enter_map_internal(op, NULL, m, x, y, fixed_pos, false, true);
-}
-
-static object_semantic_result_t
-object_enter_map_reason_internal(object *op,
-                                 mapstruct *m,
-                                 int x,
-                                 int y,
-                                 const char *reason,
-                                 bool require_exact_target) {
+object_semantic_result_t
+object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reason) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(m != NULL);
     HARD_ASSERT(reason != NULL);
@@ -4688,7 +4651,7 @@ object_enter_map_reason_internal(object *op,
     if (journal) {
         object_custody_apply(op, &transaction);
     }
-    if (!object_enter_map_internal(op, NULL, m, x, y, true, true, require_exact_target)) {
+    if (!object_enter_map(op, NULL, m, x, y, true)) {
         /* Entry can fail after removal or a map effect mutated the object. */
         if (transaction.active) {
             bool attempted = gameplay_journal_attempt(transaction.transaction_id);
@@ -4701,16 +4664,6 @@ object_enter_map_reason_internal(object *op,
         return OBJECT_SEMANTIC_AMBIGUOUS;
     }
     return OBJECT_SEMANTIC_COMMITTED;
-}
-
-object_semantic_result_t
-object_enter_map_reason(object *op, mapstruct *m, int x, int y, const char *reason) {
-    return object_enter_map_reason_internal(op, m, x, y, reason, false);
-}
-
-object_semantic_result_t
-object_enter_map_reason_exact(object *op, mapstruct *m, int x, int y, const char *reason) {
-    return object_enter_map_reason_internal(op, m, x, y, reason, true);
 }
 
 /**

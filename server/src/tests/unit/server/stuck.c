@@ -37,7 +37,6 @@ static void stuck_test_setup(void) {
 }
 
 static void stuck_test_teardown(void) {
-    player_stuck_destination_for_test(NULL);
     player_stuck_cancel_observation_reset_for_test();
     player_save_fail_for_test(false);
     player_save_observation_reset_for_test();
@@ -49,14 +48,6 @@ static void stuck_test_prepare_player(mapstruct **map, object **pl, const char *
     check_setup_env_pl(map, pl);
     FREE_AND_COPY_HASH((*map)->path, "/tests/stuck-source");
     FREE_AND_COPY_HASH((*pl)->name, name);
-}
-
-static mapstruct *stuck_test_destination(void) {
-    mapstruct *destination = get_empty_map(24, 24);
-    ck_assert_ptr_nonnull(destination);
-    FREE_AND_COPY_HASH(destination->path, "/tests/stuck-destination");
-    player_stuck_destination_for_test(destination);
-    return destination;
 }
 
 static bool stuck_test_has_message(object *pl, const char *expected) {
@@ -124,11 +115,10 @@ START_TEST(test_stuck_command_is_registered_and_has_no_destination_arguments) {
 }
 END_TEST
 
-START_TEST(test_stuck_countdown_transfers_to_fixed_safe_destination) {
+START_TEST(test_stuck_countdown_transfers_to_emergency_map) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Successful Recovery");
-    mapstruct *destination = stuck_test_destination();
 
     stuck_test_start(pl);
     server_tick_duration_t countdown = stuck_test_countdown();
@@ -138,26 +128,10 @@ START_TEST(test_stuck_countdown_transfers_to_fixed_safe_destination) {
 
     server_clock_fake_advance_ticks((server_tick_duration_t){1});
     ck_assert(!player_stuck_process(pl));
-    ck_assert_ptr_eq(pl->map, destination);
+    ck_assert_str_eq(pl->map->path, EMERGENCY_MAPPATH);
     ck_assert_int_eq(pl->x, EMERGENCY_X);
     ck_assert_int_eq(pl->y, EMERGENCY_Y);
     ck_assert(stuck_test_has_message(pl, "You have been moved to the safe recovery location."));
-}
-END_TEST
-
-START_TEST(test_stuck_resolves_production_emergency_exit_before_transfer) {
-    mapstruct *map;
-    object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Production Recovery");
-    player_stuck_destination_for_test(NULL);
-
-    stuck_test_start(pl);
-    server_clock_fake_advance_ticks(stuck_test_countdown());
-    ck_assert(!player_stuck_process(pl));
-
-    ck_assert_str_eq(pl->map->path, "/shattered_islands/world_2_68");
-    ck_assert_int_eq(pl->x, 3);
-    ck_assert_int_eq(pl->y, 7);
 }
 END_TEST
 
@@ -165,7 +139,6 @@ START_TEST(test_stuck_movement_cancels_pending_recovery) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Movement Cancellation");
-    stuck_test_destination();
     stuck_test_start(pl);
 
     ck_assert_int_eq(object_move_to(pl, 1, pl, map, pl->x + 1, pl->y), 1);
@@ -179,7 +152,6 @@ START_TEST(test_stuck_nonplaying_player_cancels_pending_recovery) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Nonplaying Cancellation");
-    stuck_test_destination();
     stuck_test_start(pl);
     CONTR(pl)->cs->state = ST_DEAD;
 
@@ -194,7 +166,6 @@ START_TEST(test_stuck_healing_spell_does_not_interrupt_recovery) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Healing Spell");
-    stuck_test_destination();
     stuck_test_start(pl);
     pl->stats.hp = pl->stats.maxhp / 2;
     pl->stats.sp = 1000;
@@ -206,35 +177,10 @@ START_TEST(test_stuck_healing_spell_does_not_interrupt_recovery) {
 }
 END_TEST
 
-START_TEST(test_stuck_rejects_blocked_fixed_login_entry_even_with_adjacent_space) {
-    mapstruct *map;
-    object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Fixed Login Entry");
-    mapstruct *destination = stuck_test_destination();
-    destination->map_flags |= MAP_FLAG_FIXED_LOGIN;
-    MAP_ENTER_X(destination) = 5;
-    MAP_ENTER_Y(destination) = 5;
-    SET_MAP_FLAGS(destination, MAP_ENTER_X(destination), MAP_ENTER_Y(destination), P_NO_PASS);
-
-    int old_x = pl->x;
-    int old_y = pl->y;
-    stuck_test_start(pl);
-    server_clock_fake_advance_ticks(stuck_test_countdown());
-    ck_assert(player_stuck_process(pl));
-
-    ck_assert_ptr_eq(pl->map, map);
-    ck_assert_int_eq(pl->x, old_x);
-    ck_assert_int_eq(pl->y, old_y);
-    ck_assert(stuck_test_has_message(
-        pl, "The safe recovery location is unavailable; you were not moved."));
-}
-END_TEST
-
 START_TEST(test_stuck_combat_interrupts_before_transfer) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Combat Interrupt");
-    stuck_test_destination();
 
     stuck_test_start(pl);
     player_mark_combat(CONTR(pl));
@@ -252,7 +198,6 @@ START_TEST(test_stuck_same_tick_combat_interrupts_before_transfer) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Same Tick Combat");
-    stuck_test_destination();
 
     stuck_test_start(pl);
     player_mark_combat(CONTR(pl));
@@ -269,42 +214,15 @@ START_TEST(test_stuck_ignores_combat_completed_before_request_same_tick) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Prior Same Tick Combat");
-    mapstruct *destination = stuck_test_destination();
 
     player_mark_combat(CONTR(pl));
     stuck_test_start(pl);
     server_clock_fake_advance_ticks(stuck_test_countdown());
     ck_assert(!player_stuck_process(pl));
 
-    ck_assert_ptr_eq(pl->map, destination);
+    ck_assert_str_eq(pl->map->path, EMERGENCY_MAPPATH);
     ck_assert_int_eq(pl->x, EMERGENCY_X);
     ck_assert_int_eq(pl->y, EMERGENCY_Y);
-}
-END_TEST
-
-START_TEST(test_stuck_rejects_unavailable_recovery_location_without_moving) {
-    mapstruct *map;
-    object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Unavailable Recovery");
-    mapstruct *destination = stuck_test_destination();
-    for (int y = 0; y < destination->height; y++) {
-        for (int x = 0; x < destination->width; x++) {
-            SET_MAP_FLAGS(destination, x, y, P_NO_PASS);
-        }
-    }
-
-    int old_x = pl->x;
-    int old_y = pl->y;
-    stuck_test_start(pl);
-    server_clock_fake_advance_ticks(stuck_test_countdown());
-    ck_assert(player_stuck_process(pl));
-
-    ck_assert_ptr_eq(pl->map, map);
-    ck_assert_int_eq(pl->x, old_x);
-    ck_assert_int_eq(pl->y, old_y);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
-    ck_assert(stuck_test_has_message(
-        pl, "The safe recovery location is unavailable; you were not moved."));
 }
 END_TEST
 
@@ -312,7 +230,6 @@ START_TEST(test_stuck_cooldown_survives_save_load_and_reconnect) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Cooldown Persistence");
-    stuck_test_destination();
     stuck_test_start(pl);
 
     char *path = player_make_path(pl->name, "player.dat");
@@ -418,13 +335,12 @@ START_TEST(test_stuck_main_processes_expired_countdown_in_post_event_phase) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Main Phase");
-    mapstruct *destination = stuck_test_destination();
 
     stuck_test_start(pl);
     server_clock_fake_advance_ticks(stuck_test_countdown());
     main_process();
 
-    ck_assert_ptr_eq(pl->map, destination);
+    ck_assert_str_eq(pl->map->path, EMERGENCY_MAPPATH);
     ck_assert_int_eq(pl->x, EMERGENCY_X);
     ck_assert_int_eq(pl->y, EMERGENCY_Y);
 }
@@ -470,45 +386,10 @@ START_TEST(test_stuck_rejects_unique_map_without_starting) {
 }
 END_TEST
 
-START_TEST(test_stuck_save_failure_after_transfer_restores_source) {
-    mapstruct *map;
-    object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Transfer Save Failure");
-    mapstruct *destination = stuck_test_destination();
-    int old_x = pl->x;
-    int old_y = pl->y;
-
-    stuck_test_start(pl);
-    server_clock_fake_advance_ticks(stuck_test_countdown());
-    player_save_fail_for_test(true);
-    ck_assert(!player_stuck_process(pl));
-    player_save_fail_for_test(false);
-
-    ck_assert_ptr_eq(pl->map, map);
-    ck_assert_ptr_ne(pl->map, destination);
-    ck_assert_int_eq(pl->x, old_x);
-    ck_assert_int_eq(pl->y, old_y);
-    ck_assert(stuck_test_has_message(pl, "Safe recovery could not be saved; you were not moved."));
-
-    char *path = player_make_path(pl->name, "player.dat");
-    FILE *fp = fopen(path, "rb");
-    ck_assert_ptr_nonnull(fp);
-    char contents[HUGE_BUF * 4];
-    size_t length = fread(contents, 1, sizeof(contents) - 1, fp);
-    ck_assert(!ferror(fp));
-    contents[length] = '\0';
-    ck_assert_ptr_nonnull(strstr(contents, "map /tests/stuck-source\n"));
-    ck_assert_ptr_nonnull(strstr(contents, "stuck_cooldown 1700000300\n"));
-    ck_assert_int_eq(fclose(fp), 0);
-    free(path);
-}
-END_TEST
-
 START_TEST(test_stuck_cancel_clears_transient_countdown_for_disconnect) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Disconnect Cleanup");
-    stuck_test_destination();
     stuck_test_start(pl);
 
     player_stuck_cancel(pl);
@@ -522,7 +403,6 @@ START_TEST(test_stuck_logout_clears_countdown_before_saving) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Logout Cleanup");
-    stuck_test_destination();
     stuck_test_start(pl);
 
     char *path = player_make_path(pl->name, "player.dat");
@@ -551,16 +431,13 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, stuck_test_setup, stuck_test_teardown);
     tcase_add_test(tc_core, test_stuck_command_is_registered_and_has_no_destination_arguments);
-    tcase_add_test(tc_core, test_stuck_countdown_transfers_to_fixed_safe_destination);
-    tcase_add_test(tc_core, test_stuck_resolves_production_emergency_exit_before_transfer);
+    tcase_add_test(tc_core, test_stuck_countdown_transfers_to_emergency_map);
     tcase_add_test(tc_core, test_stuck_movement_cancels_pending_recovery);
     tcase_add_test(tc_core, test_stuck_nonplaying_player_cancels_pending_recovery);
     tcase_add_test(tc_core, test_stuck_healing_spell_does_not_interrupt_recovery);
-    tcase_add_test(tc_core, test_stuck_rejects_blocked_fixed_login_entry_even_with_adjacent_space);
     tcase_add_test(tc_core, test_stuck_combat_interrupts_before_transfer);
     tcase_add_test(tc_core, test_stuck_same_tick_combat_interrupts_before_transfer);
     tcase_add_test(tc_core, test_stuck_ignores_combat_completed_before_request_same_tick);
-    tcase_add_test(tc_core, test_stuck_rejects_unavailable_recovery_location_without_moving);
     tcase_add_test(tc_core, test_stuck_cooldown_survives_save_load_and_reconnect);
     tcase_add_test(tc_core, test_stuck_malformed_persisted_cooldown_fails_closed);
     tcase_add_test(tc_core, test_stuck_truncated_persisted_cooldown_fails_closed);
@@ -568,7 +445,6 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_stuck_main_processes_expired_countdown_in_post_event_phase);
     tcase_add_test(tc_core, test_stuck_save_failure_does_not_arm_or_persist_cooldown);
     tcase_add_test(tc_core, test_stuck_rejects_unique_map_without_starting);
-    tcase_add_test(tc_core, test_stuck_save_failure_after_transfer_restores_source);
     tcase_add_test(tc_core, test_stuck_cancel_clears_transient_countdown_for_disconnect);
     tcase_add_test(tc_core, test_stuck_logout_clears_countdown_before_saving);
     suite_add_tcase(s, tc_core);

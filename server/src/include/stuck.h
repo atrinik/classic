@@ -53,8 +53,6 @@ void player_stuck_process_all(void);
 void player_stuck_cancel(object *op);
 
 #ifdef ATRINIK_TESTING
-/** Replace the recovery map in unit tests; NULL restores the production map. */
-void player_stuck_destination_for_test(mapstruct *destination);
 /** Reset the test observation of active-countdown cancellation. */
 void player_stuck_cancel_observation_reset_for_test(void);
 /** Whether a test has observed an active countdown being cancelled. */

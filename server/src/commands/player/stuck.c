@@ -25,7 +25,6 @@
 /** @file Implements the /stuck player command. */
 
 #include <global.h>
-#include <exit.h>
 #include <gameplay_journal.h>
 #include <map.h>
 #include <object.h>
@@ -36,7 +35,6 @@
 #include <stuck.h>
 
 #ifdef ATRINIK_TESTING
-static mapstruct *test_destination;
 static bool test_cancel_observed_active;
 #endif
 
@@ -90,172 +88,6 @@ static bool stuck_combat_interrupted(const object *op, const player *pl) {
     return pl->combat_event_sequence != pl->stuck_combat_event_sequence;
 }
 
-static mapstruct *stuck_recovery_map(void) {
-#ifdef ATRINIK_TESTING
-    if (test_destination != NULL) {
-        return test_destination;
-    }
-#endif
-
-    return ready_map_name(EMERGENCY_MAPPATH, NULL, 0);
-}
-
-/**
- * Resolve walk-on exits before entering the recovery map.
- *
- * The production emergency map is deliberately a one-tile map whose tile
- * contains a walk-on exit. Entering that map through the normal movement path
- * would therefore make the final location depend on map callbacks. Resolve
- * the canonical exit chain up front so the transfer can target its final map
- * directly. Ambiguous or unresolvable walk-on behavior fails closed.
- */
-static bool stuck_resolve_walk_on_exits(object *op, mapstruct **map, int *x, int *y) {
-    HARD_ASSERT(op != NULL);
-    HARD_ASSERT(map != NULL);
-    HARD_ASSERT(*map != NULL);
-    HARD_ASSERT(x != NULL);
-    HARD_ASSERT(y != NULL);
-
-    const bool flying = QUERY_FLAG(op, FLAG_FLYING);
-    const int trigger_flag = flying ? P_FLY_ON : P_WALK_ON;
-    for (unsigned int depth = 0; depth < 4; depth++) {
-        MapSpace *space = GET_MAP_SPACE_PTR(*map, *x, *y);
-        if ((space->flags & trigger_flag) == 0) {
-            return true;
-        }
-
-        object *walk_on_exit = NULL;
-        for (object *candidate = GET_MAP_OB(*map, *x, *y); candidate != NULL;
-             candidate = candidate->above) {
-            if ((flying && !QUERY_FLAG(candidate, FLAG_FLY_ON)) ||
-                (!flying && !QUERY_FLAG(candidate, FLAG_WALK_ON))) {
-                continue;
-            }
-
-            if (candidate->type != EXIT || !exit_has_usable_destination(candidate) ||
-                walk_on_exit != NULL) {
-                return false;
-            }
-            walk_on_exit = candidate;
-        }
-
-        if (walk_on_exit == NULL) {
-            return false;
-        }
-
-        int next_x;
-        int next_y;
-        mapstruct *next_map = exit_get_destination(walk_on_exit, &next_x, &next_y, true);
-        if (next_map == NULL) {
-            return false;
-        }
-
-        mapstruct *actual_map = get_map_from_coord(next_map, &next_x, &next_y);
-        if (actual_map == NULL ||
-            (actual_map == *map && next_x == *x && next_y == *y)) {
-            return false;
-        }
-
-        *map = actual_map;
-        *x = next_x;
-        *y = next_y;
-    }
-
-    return false;
-}
-
-/**
- * Resolve and validate the fixed recovery location before any map mutation.
- */
-static bool stuck_find_destination(object *op, mapstruct **destination, int *x, int *y) {
-    mapstruct *requested_map = stuck_recovery_map();
-    int requested_x = EMERGENCY_X;
-    int requested_y = EMERGENCY_Y;
-
-    if (requested_map == NULL) {
-        return false;
-    }
-
-    if (MAP_FIXEDLOGIN(requested_map)) {
-        requested_x = MAP_ENTER_X(requested_map);
-        requested_y = MAP_ENTER_Y(requested_map);
-    } else {
-        int free_index =
-            map_free_spot_first(requested_map, requested_x, requested_y, op->arch, op);
-        if (free_index == -1) {
-            return false;
-        }
-
-        requested_x += freearr_x[free_index];
-        requested_y += freearr_y[free_index];
-    }
-
-    /* Validate after resolving a tiled-map boundary. */
-    int actual_x = requested_x;
-    int actual_y = requested_y;
-    mapstruct *actual_map = get_map_from_coord(requested_map, &actual_x, &actual_y);
-    if (actual_map == NULL || MAP_PLAYER_NO_SAVE(requested_map) ||
-        MAP_PLAYER_NO_SAVE(actual_map)) {
-        return false;
-    }
-
-    mapstruct *resolved_map = actual_map;
-    int resolved_x = actual_x;
-    int resolved_y = actual_y;
-    if (!stuck_resolve_walk_on_exits(op, &resolved_map, &resolved_x, &resolved_y)) {
-        return false;
-    }
-
-    if (MAP_FIXEDLOGIN(resolved_map)) {
-        resolved_x = MAP_ENTER_X(resolved_map);
-        resolved_y = MAP_ENTER_Y(resolved_map);
-    }
-
-    resolved_map = get_map_from_coord(resolved_map, &resolved_x, &resolved_y);
-    if (resolved_map == NULL || MAP_PLAYER_NO_SAVE(resolved_map)) {
-        return false;
-    }
-
-    if (arch_blocked(op->arch, op, resolved_map, resolved_x, resolved_y) != 0) {
-        return false;
-    }
-
-    *destination = resolved_map;
-    *x = resolved_x;
-    *y = resolved_y;
-    return true;
-}
-
-/** Restore a player to its exact pre-transfer location after a failed entry. */
-static bool stuck_restore_source(object *op,
-                                 mapstruct *source,
-                                 int source_x,
-                                 int source_y,
-                                 bool *destroyed) {
-    HARD_ASSERT(op != NULL);
-    HARD_ASSERT(destroyed != NULL);
-
-    *destroyed = false;
-    if (source == NULL) {
-        return false;
-    }
-
-    if (op->map == source && op->x == source_x && op->y == source_y &&
-        !QUERY_FLAG(op, FLAG_REMOVED)) {
-        return true;
-    }
-
-    tag_t rollback_count = op->count;
-    bool entered = object_enter_map_exact(op, source, source_x, source_y, true);
-    if (OBJECT_DESTROYED(op, rollback_count)) {
-        *destroyed = true;
-        return false;
-    }
-
-    return entered && op->map == source && op->x == source_x && op->y == source_y &&
-           !QUERY_FLAG(op, FLAG_REMOVED);
-}
-
 void player_stuck_cancel(object *op) {
     if (op == NULL || op->type != PLAYER || CONTR(op) == NULL) {
         return;
@@ -301,72 +133,18 @@ bool player_stuck_process(object *op) {
 
     player_stuck_cancel(op);
 
-    mapstruct *destination;
-    int x, y;
-    if (!stuck_find_destination(op, &destination, &x, &y)) {
+    tag_t object_count = op->count;
+    if (!object_enter_map(op, NULL, NULL, 0, 0, false)) {
+        if (OBJECT_DESTROYED(op, object_count)) {
+            return false;
+        }
         draw_info(COLOR_RED,
                   op,
                   "The safe recovery location is unavailable; you were not moved.");
-        return true;
+        return false;
     }
 
-    mapstruct *source = op->map;
-    int source_x = op->x;
-    int source_y = op->y;
-    tag_t object_count = op->count;
-    object_semantic_result_t result =
-        object_enter_map_reason_exact(op, destination, x, y, "player.stuck-recovery");
     if (OBJECT_DESTROYED(op, object_count)) {
-        return false;
-    }
-
-    if (result == OBJECT_SEMANTIC_COMMITTED &&
-        (!OBJECT_ACTIVE(op) || op->map != destination || op->x != x || op->y != y)) {
-        result = OBJECT_SEMANTIC_AMBIGUOUS;
-    }
-
-    if (result != OBJECT_SEMANTIC_COMMITTED) {
-        bool destroyed = false;
-        bool restored = stuck_restore_source(op, source, source_x, source_y, &destroyed);
-        if (destroyed) {
-            return false;
-        }
-
-        if (result == OBJECT_SEMANTIC_AMBIGUOUS && !restored) {
-            draw_info(COLOR_RED,
-                      op,
-                      "Safe recovery was attempted, but its result and your location could not be confirmed.");
-            return false;
-        }
-
-        if (!restored) {
-            draw_info(COLOR_RED,
-                      op,
-                      "Safe recovery failed and your original location could not be restored.");
-            return false;
-        }
-
-        draw_info(COLOR_RED,
-                  op,
-                  "The safe recovery could not be completed; you were not moved.");
-        return false;
-    }
-
-    if (!player_save_checked(op)) {
-        bool destroyed = false;
-        bool restored = stuck_restore_source(op, source, source_x, source_y, &destroyed);
-        if (destroyed) {
-            return false;
-        }
-        if (!restored) {
-            draw_info(COLOR_RED,
-                      op,
-                      "Safe recovery could not be saved and your location could not be restored.");
-            return false;
-        }
-        draw_info(COLOR_RED,
-                  op,
-                  "Safe recovery could not be saved; you were not moved.");
         return false;
     }
 
@@ -473,10 +251,6 @@ void command_stuck(object *op, const char *command, char *params) {
 }
 
 #ifdef ATRINIK_TESTING
-void player_stuck_destination_for_test(mapstruct *destination) {
-    test_destination = destination;
-}
-
 void player_stuck_cancel_observation_reset_for_test(void) {
     test_cancel_observed_active = false;
 }
