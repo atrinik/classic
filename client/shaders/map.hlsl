@@ -5,11 +5,40 @@
  * The client never invokes a runtime shader compiler.
  */
 
+static const uint SPRITE_EFFECT_TINT = 1u << 0u;
+static const uint SPRITE_EFFECT_DARK = 1u << 1u;
+static const uint SPRITE_EFFECT_GRAY = 1u << 2u;
+static const uint SPRITE_EFFECT_RED = 1u << 3u;
+static const uint SPRITE_EFFECT_FOG = 1u << 4u;
+static const uint SPRITE_EFFECT_TRANSIENT_OVERLAY = 1u << 5u;
+static const uint SPRITE_EFFECT_ROTATE = 1u << 6u;
+static const uint SPRITE_EFFECT_SCALE = 1u << 7u;
+static const uint SPRITE_EFFECT_STRETCH = 1u << 8u;
+static const uint SPRITE_EFFECT_GLOW = 1u << 9u;
+static const uint SPRITE_EFFECT_OUTLINE = 1u << 10u;
+static const uint SPRITE_EFFECT_MASK_INPUT = 1u << 11u;
+static const uint SPRITE_EFFECT_LIGHT_INPUT = 1u << 12u;
+static const uint SPRITE_TEXTURE_ATLAS = 1u << 0u;
+static const uint SPRITE_TEXTURE_STANDALONE = 1u << 1u;
+static const uint SPRITE_TEXTURE_SOURCE_COLOR_KEY = 1u << 2u;
+static const uint SPRITE_TEXTURE_STRAIGHT_ALPHA = 1u << 3u;
+static const uint SPRITE_TEXTURE_PREMULTIPLIED_ALPHA = 1u << 4u;
+static const uint SPRITE_TEXTURE_NEAREST = 1u << 5u;
+static const uint SPRITE_TEXTURE_CLAMP_EDGE = 1u << 6u;
+
 struct WorldVertexOutput {
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
     float4 modulation : COLOR0;
     nointerpolation uint lighting_key : TEXCOORD1;
+    nointerpolation uint effect_flags : TEXCOORD2;
+    nointerpolation uint owner_depth : TEXCOORD3;
+    float4 effect_color : COLOR1;
+    float4 effect_parameters : COLOR2;
+    nointerpolation uint effect_time : TEXCOORD4;
+    nointerpolation uint effect_phase : TEXCOORD5;
+    nointerpolation uint effect_seed : TEXCOORD6;
+    nointerpolation uint texture_flags : TEXCOORD7;
 };
 
 cbuffer WorldVertexUniforms : register(b0, space1) {
@@ -17,14 +46,15 @@ cbuffer WorldVertexUniforms : register(b0, space1) {
     float2 world_vertex_padding;
 };
 
-struct WorldInstance {
-    float4 destination;
-    float4 uv;
-    float4 modulation;
-    uint4 lighting_key_padding;
+#define GPU_SPRITE_ABI_FLOAT4(_name) float4 _name;
+#define GPU_SPRITE_ABI_UINT(_name) uint _name;
+struct SpriteInstance {
+#include "sprite_effect_abi.inc"
 };
+#undef GPU_SPRITE_ABI_UINT
+#undef GPU_SPRITE_ABI_FLOAT4
 
-StructuredBuffer<WorldInstance> world_instances : register(t0, space0);
+StructuredBuffer<SpriteInstance> world_instances : register(t0, space0);
 
 cbuffer WorldSlotUniforms : register(b1, space1) {
     uint4 world_instance_slots[64];
@@ -40,17 +70,40 @@ WorldVertexOutput world_vertex(uint vertex_id : SV_VertexID, uint instance_id : 
         float2(1.0, 1.0),
     };
     uint stable_slot = world_instance_slots[instance_id / 4][instance_id % 4];
-    WorldInstance instance = world_instances[stable_slot];
+    SpriteInstance instance = world_instances[stable_slot];
     float2 corner = corners[vertex_id];
-    float2 pixel = instance.destination.xy + corner * instance.destination.zw;
+    float2 scale = float2(1.0, 1.0);
+    if ((instance.effect_flags & SPRITE_EFFECT_SCALE) != 0u) {
+        scale = instance.transform.yz;
+    }
+    float2 size = instance.destination.zw * scale;
+    float2 pixel = instance.destination.xy + corner * size;
+    if ((instance.effect_flags & SPRITE_EFFECT_ROTATE) != 0u) {
+        float2 center = instance.destination.xy + size * 0.5;
+        float2 offset = pixel - center;
+        float sine = sin(instance.transform.x);
+        float cosine = cos(instance.transform.x);
+        pixel = center + float2(offset.x * cosine - offset.y * sine,
+                                offset.x * sine + offset.y * cosine);
+    }
     WorldVertexOutput output;
     output.position = float4(pixel.x * 2.0 / world_viewport.x - 1.0,
                              1.0 - pixel.y * 2.0 / world_viewport.y,
                              0.0,
                              1.0);
-    output.uv = instance.uv.xy + corner * instance.uv.zw;
+    float2 uv_min = instance.uv.xy + instance.texture_metadata.zw;
+    float2 uv_max = instance.uv.xy + instance.uv.zw - instance.texture_metadata.zw;
+    output.uv = clamp(instance.uv.xy + corner * instance.uv.zw, uv_min, uv_max);
     output.modulation = instance.modulation;
-    output.lighting_key = instance.lighting_key_padding.x;
+    output.lighting_key = instance.lighting_key;
+    output.effect_flags = instance.effect_flags;
+    output.owner_depth = instance.owner_depth;
+    output.effect_color = instance.effect_color;
+    output.effect_parameters = instance.effect_parameters;
+    output.effect_time = instance.effect_time;
+    output.effect_phase = instance.effect_phase;
+    output.effect_seed = instance.effect_seed;
+    output.texture_flags = instance.texture_flags;
     return output;
 }
 
@@ -68,7 +121,32 @@ struct WorldFragmentOutput {
 };
 
 WorldFragmentOutput world_fragment(WorldVertexOutput input) {
-    float4 color = world_texture.Sample(world_sampler, input.uv) * input.modulation;
+    float4 color = world_texture.Sample(world_sampler, input.uv);
+    if ((input.texture_flags & SPRITE_TEXTURE_PREMULTIPLIED_ALPHA) != 0u) {
+        color.rgb = color.a > 0.0 ? color.rgb / color.a : float3(0.0, 0.0, 0.0);
+    }
+    color *= input.modulation;
+    if ((input.effect_flags & SPRITE_EFFECT_TINT) != 0u) {
+        color *= input.effect_color;
+    }
+    if ((input.effect_flags & SPRITE_EFFECT_DARK) != 0u) {
+        color.rgb *= saturate(input.effect_parameters.x);
+    } else if ((input.effect_flags & SPRITE_EFFECT_GRAY) != 0u) {
+        color.rgb = dot(color.rgb, float3(0.212671, 0.715160, 0.072169));
+    } else if ((input.effect_flags & SPRITE_EFFECT_RED) != 0u) {
+        color.rgb = float3(dot(color.rgb, float3(0.212671, 0.715160, 0.072169)), 0.0, 0.0);
+    } else if ((input.effect_flags & SPRITE_EFFECT_FOG) != 0u) {
+        float fog = dot(color.rgb, float3(0.212671, 0.715160, 0.072169)) * 0.34;
+        color.rgb = float3(fog, fog, saturate(fog + 16.0 / 255.0));
+    }
+    if ((input.effect_flags & SPRITE_EFFECT_TRANSIENT_OVERLAY) != 0u) {
+        float overlay_alpha = saturate(input.effect_parameters.y);
+        color.rgb = lerp(color.rgb, input.effect_color.rgb, overlay_alpha);
+        color.a *= lerp(1.0, input.effect_color.a, overlay_alpha);
+    }
+    if ((input.texture_flags & SPRITE_TEXTURE_SOURCE_COLOR_KEY) != 0u && color.a <= 0.0) {
+        discard;
+    }
     if (color.a <= 0.0) {
         discard;
     }

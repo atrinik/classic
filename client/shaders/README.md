@@ -1,9 +1,15 @@
 # GPU shader build
 
-`map.hlsl` is the single authoritative shader source. Every client build embeds
-SPIR-V, DXIL, and MSL artifacts generated from it; the client has no runtime
-shader compiler. Generated binaries live only in ignored build directories and
-release-package staging, never in Git or Git LFS.
+`map.hlsl` is the single authoritative shader source. Its world-instance
+declaration includes `sprite_effect_abi.inc`, which is also included by the C
+producer through `src/include/gpu_sprite_effect.h`. Keep the field order and
+stride synchronized through that shared declaration; the contract and
+ownership matrix are documented in `SPRITE_EFFECT_ABI.md`.
+
+Every client build embeds SPIR-V, DXIL, and MSL artifacts generated from the
+shader source; the client has no runtime shader compiler. Generated binaries
+live only in ignored build directories and release-package staging, never in
+Git or Git LFS.
 
 The pinned toolchain is:
 
@@ -16,6 +22,10 @@ The pinned toolchain is:
 `SHA256SUMS` is the small, reviewable output lock: shader changes intentionally
 update it, while every build rejects compiler output that does not reproduce the
 locked cohort.
+
+The CTest `client-gpu-sprite-effect-abi-source` check validates the shared
+declaration and the production map binding. The ABI layout/serialization test
+is `client-gpu-sprite-effect-abi`; run both when changing the instance contract.
 
 For an x86-64 Linux build without system `dxc` and `spirv-cross`, prepare the
 pinned tools once:
