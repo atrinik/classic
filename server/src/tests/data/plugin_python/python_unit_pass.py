@@ -45,5 +45,5 @@ existing.Destroy()
 monster = Atrinik.CreateObject("raas")
 monster.randomitems = "random_coin"
 inserted = test_map.InsertMonster(monster, 0, 2)
-if inserted is not monster or not monster.inv:
+if inserted != monster or not monster.inv:
     raise RuntimeError("Map.InsertMonster did not insert the generated monster")
