@@ -259,7 +259,9 @@ The normal MAP2 decoder must retain the authorized static floor while removing
 its light state, and both renderer modes must show the remembered tile above a
 clear black field at the fixed memory floor. The paired snapshots make the
 fully-dark FOW transition a deterministic render fixture without adding a
-wire field or live-object authorization.
+wire field or live-object authorization. Their zero GPU pixel markers remain
+pending until a trusted backend approves the exact RGBA8 golden; semantic map
+and renderer tests still pin the retention and memory-floor contract.
 
 The widget-state scene freezes `sans.ttf`, enables names and target UI, renders
 through the real widget zoom/blit path at 125%, then applies a second validated
