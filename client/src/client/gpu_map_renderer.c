@@ -16,17 +16,18 @@
 
 #include <global.h>
 #include <gpu_shader_data.h>
+#include <gpu_sprite_effect.h>
 
 #define GPU_MAP_SURFACE_GENERATION_PROPERTY "atrinik.gpu.map_surface_generation"
 #define GPU_MAP_SURFACE_ASSET_PROPERTY "atrinik.gpu.map_surface_asset"
 /* Integer target clears are backend-defined for nonzero float values. */
 #define GPU_MAP_OWNER_KEY_TRANSPARENT UINT8_C(0)
-#define GPU_MAP_LIGHT_KEY_BITS 19U
-#define GPU_MAP_LIGHT_KEY_MASK ((UINT32_C(1) << GPU_MAP_LIGHT_KEY_BITS) - 1U)
-#define GPU_MAP_LIGHT_KEY_DARK (GPU_MAP_LIGHT_KEY_MASK - 1U)
-#define GPU_MAP_LIGHT_KEY_UNLIT GPU_MAP_LIGHT_KEY_MASK
+#define GPU_MAP_LIGHT_KEY_BITS GPU_SPRITE_LIGHTING_KEY_BITS
+#define GPU_MAP_LIGHT_KEY_MASK GPU_SPRITE_LIGHTING_KEY_MASK
+#define GPU_MAP_LIGHT_KEY_DARK GPU_SPRITE_LIGHTING_KEY_DARK
+#define GPU_MAP_LIGHT_KEY_UNLIT GPU_SPRITE_LIGHTING_KEY_UNLIT
 #define GPU_MAP_LIGHT_QUAD_KEY_MAX (GPU_MAP_LIGHT_KEY_MASK - 2U)
-#define GPU_MAP_LIGHT_KEY_PROJECTED (UINT32_C(1) << GPU_MAP_LIGHT_KEY_BITS)
+#define GPU_MAP_LIGHT_KEY_PROJECTED GPU_SPRITE_LIGHTING_KEY_PROJECTED
 #define GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY 1024U
 #define GPU_MAP_LIGHT_ROW_INITIAL_CAPACITY 128U
 #define GPU_MAP_LIGHT_SPAN_INITIAL_CAPACITY 1024U
@@ -64,6 +65,7 @@ typedef struct gpu_map_asset {
     SDL_Surface *surface;
     SDL_GPUTexture *texture;
     Uint64 generation;
+    uint32_t texture_flags;
     uint32_t width;
     uint32_t height;
     uint32_t atlas_x;
@@ -88,13 +90,7 @@ typedef struct gpu_map_vertex_uniforms {
     float padding[2];
 } gpu_map_vertex_uniforms_t;
 
-typedef struct gpu_map_world_instance {
-    float destination[4];
-    float uv[4];
-    float modulation[4];
-    uint32_t owner;
-    uint32_t padding[3];
-} gpu_map_world_instance_t;
+typedef gpu_sprite_instance_t gpu_map_world_instance_t;
 
 typedef struct gpu_map_world_command {
     gpu_map_world_instance_t instance;
@@ -1153,6 +1149,10 @@ static bool gpu_map_world_instance_buffers_reserve(gpu_map_target_set_t *target,
     size_t capacity = MAX(required, (size_t)GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY);
     capacity = (capacity + GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY - 1U) /
                GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY * GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY;
+    if (capacity > UINT32_MAX / sizeof(gpu_map_world_instance_t)) {
+        SDL_SetError("GPU map painter instance stream exceeds the backend limit");
+        return false;
+    }
     uint32_t bytes = (uint32_t)(capacity * sizeof(gpu_map_world_instance_t));
     SDL_GPUBufferCreateInfo buffer_info = {
         .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
@@ -1658,6 +1658,13 @@ static gpu_map_asset_t *gpu_map_asset_create(SDL_Surface *surface) {
     asset->bytes = (size_t)surface->w * (size_t)surface->h * 4U;
     asset->standalone =
         asset->width > GPU_MAP_ATLAS_MAX_ASSET_SIZE || asset->height > GPU_MAP_ATLAS_MAX_ASSET_SIZE;
+    asset->texture_flags = (asset->standalone ? GPU_SPRITE_TEXTURE_STANDALONE
+                                               : GPU_SPRITE_TEXTURE_ATLAS) |
+                           GPU_SPRITE_TEXTURE_STRAIGHT_ALPHA |
+                           GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE;
+    if (SDL_SurfaceHasColorKey(surface)) {
+        asset->texture_flags |= GPU_SPRITE_TEXTURE_SOURCE_COLOR_KEY;
+    }
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
     bool allocation_fault =
         gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_ALLOCATION);
@@ -2402,6 +2409,17 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                        (float)green / 255.0f,
                        (float)blue / 255.0f,
                        (float)alpha / 255.0f},
+        .texture_flags = asset->texture_flags,
+        .texture_metadata = {1.0f / texture_width,
+                              1.0f / texture_height,
+                              0.5f / texture_width,
+                              0.5f / texture_height},
+        .transform = {0.0f, 1.0f, 1.0f, 0.0f},
+        .effect_color = {1.0f, 1.0f, 1.0f, 1.0f},
+        .effect_parameters = {1.0f, 0.0f, 0.0f, 0.0f},
+        .owner_depth =
+            gpu_sprite_owner_depth_pack(GPU_SPRITE_OWNER_UNSET, GPU_SPRITE_DEPTH_UNSET),
+        .abi_version = GPU_SPRITE_INSTANCE_ABI_VERSION,
     };
 
     SDL_Rect base_clip =
@@ -2409,7 +2427,7 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
     if (base_clip.w <= 0 || base_clip.h <= 0) {
         return true;
     }
-    instance.owner = GPU_MAP_LIGHT_KEY_UNLIT;
+    instance.lighting_key = GPU_MAP_LIGHT_KEY_UNLIT;
     if (current_light_owner != GPU_RENDERER_OWNER_UNLIT) {
         if (current_light_projected) {
             int first_y = MAX(0, (int)floorf(destination->y));
@@ -2423,17 +2441,18 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                     row == GPU_MAP_LIGHT_KEY_UNLIT ? GPU_MAP_LIGHT_KEY_UNLIT : (uint32_t)(row + 1U);
             }
             projected_light_rows_used = true;
-            instance.owner = GPU_MAP_LIGHT_KEY_PROJECTED | current_light_owner;
+            instance.lighting_key = GPU_MAP_LIGHT_KEY_PROJECTED | current_light_owner;
         } else {
             int sample_y = MAX(0, MIN(target_height - 1, current_light_sample_y));
             size_t row = gpu_map_light_row_build(current_light_owner, sample_y);
             if (row == SIZE_MAX) {
                 return false;
             }
-            instance.owner =
+            instance.lighting_key =
                 row == GPU_MAP_LIGHT_KEY_UNLIT ? GPU_MAP_LIGHT_KEY_UNLIT : (uint32_t)(row + 1U);
         }
     }
+    HARD_ASSERT(gpu_sprite_instance_valid(&instance));
     if (world_commands_num == world_commands_capacity) {
         world_commands_capacity =
             world_commands_capacity == 0 ? 1024U : world_commands_capacity * 2U;
@@ -2740,7 +2759,7 @@ size_t gpu_map_renderer_lit_instance_count(bool auxiliary) {
     size_t count = 0;
     for (size_t slot = 0; slot < target->world_commands_num; slot++) {
         if (target->world_slot_active[slot] &&
-            target->world_commands[slot].instance.owner != GPU_MAP_LIGHT_KEY_UNLIT) {
+            target->world_commands[slot].instance.lighting_key != GPU_MAP_LIGHT_KEY_UNLIT) {
             count++;
         }
     }
