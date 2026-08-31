@@ -14,6 +14,9 @@
 #define MAP_VISIBILITY_FIELD_UNIT UINT16_C(256)
 #define MAP_VISIBILITY_INNER_RADIUS_SQUARED UINT16_C(16)
 #define MAP_VISIBILITY_OUTER_RADIUS_SQUARED UINT16_C(64)
+#define MAP_VISIBILITY_MEMORY_FLOOR_RAW UINT16_C(512)
+/* Q5.11 round-half-up encoding of the 512-raw remembered-world floor. */
+#define MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE UINT16_C(819)
 #define MAP_VISIBILITY_PLAYER_RADIANCE UINT16_C(640)
 #define MAP_VISIBILITY_FADE_DURATION_MS UINT32_C(250)
 #define MAP_VISIBILITY_INTERACTION_CUTOFF UINT8_C(192)
@@ -36,6 +39,12 @@ uint16_t map_visibility_field_weight_squared(uint32_t distance_squared);
 
 /** Add the presentation-only player contribution to one radiance sample. */
 uint16_t map_visibility_add_player_radiance(uint16_t radiance, uint16_t weight);
+
+/** Return one radiance sample raised to the remembered-world presentation floor. */
+uint16_t map_visibility_memory_floor(uint16_t radiance);
+
+/** Apply the remembered-world floor and its neutral RGB lift in place. */
+void map_visibility_apply_memory_floor(uint16_t *radiance, uint16_t rgb[3]);
 
 /** Initialize a presentation transition. */
 void map_visibility_fade_init(map_visibility_fade_t *fade);

@@ -3870,9 +3870,12 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
+        uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
+        if (data->cell->fow && remembered) {
+            radiance = map_visibility_memory_floor(radiance);
+        }
         effects.dark_level =
-            (UINT8_MAX - lighting_radiance_to_level(
-                             map_cell_light_record_read(data->cell, data->sub_layer)->radiance)) *
+            (UINT8_MAX - lighting_radiance_to_level(radiance)) *
             DARK_LEVELS / UINT8_MAX;
     }
 
@@ -4869,10 +4872,14 @@ static bool map_cell_has_remembered_geometry(const map_cell_t *cell) {
 
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         for (int object_layer = LAYER_FLOOR; object_layer <= LAYER_WALL; object_layer++) {
-            if (map_layer_is_remembered((uint8_t)object_layer) &&
+            if (!map_layer_is_remembered((uint8_t)object_layer)) {
+                continue;
+            }
+            const map_cell_layer_record_t *record =
                 map_cell_layer_record((map_cell_t *)cell,
                                       GET_MAP_LAYER(object_layer, sub_layer),
-                                      false) != NULL) {
+                                      false);
+            if (record != NULL && record->face != 0) {
                 return true;
             }
         }
@@ -5704,7 +5711,9 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     };
     uint16_t rgb[3];
     map_lighting_radiance(x, y, cell, sub_layer, &vertex.scalar, rgb);
-    if (data->primary_level && data->depth == 0 && !cell->fow) {
+    if (cell->fow && map_cell_has_remembered_geometry(cell)) {
+        map_visibility_apply_memory_floor(&vertex.scalar, rgb);
+    } else if (data->primary_level && data->depth == 0 && !cell->fow) {
         uint16_t weight = map_visibility_field_weight(x - data->midx, y - data->midy);
         vertex.scalar = map_visibility_add_player_radiance(vertex.scalar, weight);
         for (size_t channel = 0; channel < 3; channel++) {

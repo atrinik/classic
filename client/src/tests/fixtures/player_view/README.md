@@ -253,6 +253,14 @@ full alpha, while the local player cannot enter a presentation fade. It then
 expires one revoked item to its zero-alpha generation tombstone and verifies
 that authoritative re-entry interpolates from zero instead of snapping opaque.
 
+The remembered-floor smooth and discrete scenes first authorize a zero-radiance
+floor beside a zero-radiance local actor, then soft-clear only that floor cell.
+The normal MAP2 decoder must retain the authorized static floor while removing
+its light state, and both renderer modes must show the remembered tile above a
+clear black field at the fixed memory floor. The paired snapshots make the
+fully-dark FOW transition a deterministic render fixture without adding a
+wire field or live-object authorization.
+
 The widget-state scene freezes `sans.ttf`, enables names and target UI, renders
 through the real widget zoom/blit path at 125%, then applies a second validated
 MAP update that scrolls the cache and redraws the unobscured local player at the
