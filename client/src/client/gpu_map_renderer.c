@@ -1884,9 +1884,14 @@ static bool gpu_map_world_commands_submit(void) {
 
     /* The minimap has no compact light grid. Do not resize the shared
      * projected-row buffer for an auxiliary target and invalidate the primary
-     * row snapshot as a side effect. */
-    if ((active_target_index == 0 || projected_light_rows_used) &&
-        !gpu_map_projected_light_rows_upload()) {
+     * row snapshot as a side effect. The world shader still declares the
+     * binding, so provide a minimal buffer when the minimap is the first map
+     * target rendered after device creation. */
+    if (active_target_index == 0 || projected_light_rows_used) {
+        if (!gpu_map_projected_light_rows_upload()) {
+            return false;
+        }
+    } else if (!gpu_map_projected_light_rows_reserve(1)) {
         return false;
     }
     world_pass_load_existing = target->published && !world_frame_full_redraw;

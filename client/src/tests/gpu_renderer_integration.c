@@ -406,6 +406,16 @@ static bool target_resize_fault_checkpoint(void) {
     return true;
 }
 
+static bool auxiliary_first_map_checkpoint(SDL_Surface *source) {
+    SDL_FRect destination = {0.0f, 0.0f, 24.0f, 24.0f};
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin_auxiliary(24, 24) ||
+        !gpu_renderer_draw_surface(source, NULL, &destination) || !gpu_renderer_map_end() ||
+        gpu_map_renderer_texture(true) == NULL || !gpu_renderer_present()) {
+        return false;
+    }
+    return gpu_renderer_wait_idle();
+}
+
 static bool surfaces_match(SDL_Surface *left, SDL_Surface *right) {
     if (left == NULL || right == NULL || left->w != right->w || left->h != right->h ||
         left->pitch < left->w * 4 || right->pitch < right->w * 4) {
@@ -1383,6 +1393,12 @@ int main(void) {
     GPU_REQUIRE(SDL_FillSurfaceRect(sources[3],
                                     NULL,
                                     SDL_MapSurfaceRGBA(sources[3], 32, 192, 64, SDL_ALPHA_OPAQUE)));
+
+    /* The production minimap can be the first GPU map target. Keep that path
+     * covered before the primary map allocates the shared projected-light
+     * binding. */
+    gpu_renderer_statistics_reset();
+    GPU_REQUIRE(auxiliary_first_map_checkpoint(source));
 
     SDL_Rect transparency_source = {0, 0, 3, 1};
     SDL_Surface *keyed_rgb = gpu_keyed_surface(SDL_PIXELFORMAT_RGB24, 3);
