@@ -1420,10 +1420,26 @@ START_TEST(test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized) 
     ck_assert_ptr_nonnull(roof);
     ck_assert(object_is_roof_surface(roof));
 
+    object *floor = arch_get("water_still");
+    ck_assert_ptr_nonnull(floor);
+    floor->x = roof->x;
+    floor->y = roof->y;
+    floor = object_insert_map(floor, upper, NULL, 0);
+    ck_assert_ptr_nonnull(floor);
+
+    object *item = arch_get("sword");
+    ck_assert_ptr_nonnull(item);
+    item->x = roof->x;
+    item->y = roof->y;
+    item = object_insert_map(item, upper, NULL, 0);
+    ck_assert_ptr_nonnull(item);
+
     socket_struct *cs = CONTR(pl)->cs;
     int ax = cs->mapx_2 + 1;
     int ay = cs->mapy_2;
     size_t socket_layer = NUM_LAYERS * roof->sub_layer + LAYER_WALL - 1;
+    size_t floor_socket_layer = NUM_LAYERS * floor->sub_layer + LAYER_FLOOR - 1;
+    size_t item_socket_layer = NUM_LAYERS * item->sub_layer + LAYER_ITEM - 1;
 
     update_los(pl);
     map_client_cache_clear(&cs->lastmap);
@@ -1434,6 +1450,8 @@ START_TEST(test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized) 
     MapCell *cell = map_client_cache_cell(&cs->lastmap, 1, ax, ay, false);
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_eq(cell->roof[socket_layer], 1);
+    ck_assert_uint_ne(cell->faces[floor_socket_layer], 0);
+    ck_assert_uint_eq(cell->faces[item_socket_layer], 0);
     ck_assert_uint_eq(cell->light_known[roof->sub_layer], 1);
     ck_assert_uint_eq(cell->light_radiance[roof->sub_layer], 0);
 
