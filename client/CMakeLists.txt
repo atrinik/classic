@@ -1012,6 +1012,8 @@ if (BUILD_TESTING)
         exit-cues
         living-outline-translucent
         living-outline-retained-fow
+        remembered-floor-smooth
+        remembered-floor-discrete
         timed-light
         map-overlay-linked-depth
         map-overlay-widget-state
