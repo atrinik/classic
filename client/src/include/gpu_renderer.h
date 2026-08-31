@@ -25,7 +25,7 @@ typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Window SDL_Window;
 typedef struct lighting_vertex lighting_vertex_t;
 
-#define GPU_RENDERER_STATISTICS_VERSION UINT8_C(2)
+#define GPU_RENDERER_STATISTICS_VERSION UINT8_C(3)
 #define GPU_RENDERER_OWNER_UNLIT (UINT8_MAX - UINT8_C(1))
 
 typedef enum gpu_renderer_timing_stage {
@@ -70,6 +70,20 @@ typedef struct gpu_renderer_statistics {
     uint64_t recovery_failures;
     uint64_t readbacks;
     uint64_t fallbacks;
+    /* Map submissions are paced independently from presentation. Totals
+     * remain separate so benchmark consumers do not conflate queue age,
+     * frame latency, and present wait. */
+    uint64_t map_submissions;
+    uint64_t map_completions;
+    uint64_t map_in_flight_peak;
+    uint64_t map_queue_depth_samples;
+    uint64_t map_queue_depth_total;
+    uint64_t map_queue_age_total_ns;
+    uint64_t map_queue_age_max_ns;
+    uint64_t map_frame_latency_total_ns;
+    uint64_t map_frame_latency_max_ns;
+    uint64_t map_dropped_updates;
+    uint64_t map_merged_updates;
 } gpu_renderer_statistics_t;
 
 bool gpu_renderer_create(SDL_Window *window);
@@ -97,6 +111,7 @@ typedef enum gpu_renderer_conformance_fault {
     GPU_RENDERER_CONFORMANCE_FAULT_TARGET,
     GPU_RENDERER_CONFORMANCE_FAULT_UPLOAD,
     GPU_RENDERER_CONFORMANCE_FAULT_SUBMISSION,
+    GPU_RENDERER_CONFORMANCE_FAULT_FENCE,
     GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN,
     GPU_RENDERER_CONFORMANCE_FAULT_DEVICE_LOSS,
     GPU_RENDERER_CONFORMANCE_FAULT_READBACK,
@@ -232,5 +247,11 @@ void gpu_renderer_statistics_slot_uniform_upload(size_t bytes);
 void gpu_renderer_statistics_resource_create(size_t retained_bytes);
 void gpu_renderer_statistics_resource_destroy(size_t retained_bytes);
 void gpu_renderer_statistics_recovery(bool succeeded);
+/** Record one map submission and the number of map submissions already queued. */
+void gpu_renderer_statistics_map_submission(size_t queue_depth);
+/** Record separately observed map queue age and end-to-end frame latency. */
+void gpu_renderer_statistics_map_completion(uint64_t queue_age_ns, uint64_t frame_latency_ns);
+/** Record an update intentionally dropped or merged by map pacing. */
+void gpu_renderer_statistics_map_update(bool dropped, bool merged);
 
 #endif

@@ -39,6 +39,17 @@ void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics) {
         .peak_retained_bytes = UINT64_C(4194304),
         .device_recoveries = 2,
         .recovery_failures = 1,
+        .map_submissions = 5,
+        .map_completions = 4,
+        .map_in_flight_peak = 3,
+        .map_queue_depth_samples = 5,
+        .map_queue_depth_total = 7,
+        .map_queue_age_total_ns = UINT64_C(12000000),
+        .map_queue_age_max_ns = UINT64_C(5000000),
+        .map_frame_latency_total_ns = UINT64_C(28000000),
+        .map_frame_latency_max_ns = UINT64_C(9000000),
+        .map_dropped_updates = 1,
+        .map_merged_updates = 2,
     };
 }
 
@@ -139,6 +150,8 @@ static void test_stage_metadata_is_rendered(void) {
     TEST_CHECK(strstr(text, "[c=#ffd060]Stage breakdown[/c]") != NULL);
     TEST_CHECK(strstr(text, "commands 101  batches 23  draws 47") != NULL);
     TEST_CHECK(strstr(text, "command  2.00") != NULL);
+    TEST_CHECK(strstr(text, "submissions 5  completions 4  in-flight peak 3") != NULL);
+    TEST_CHECK(strstr(text, "dropped 1  merged 2") != NULL);
 
     for (render_profile_stage_t stage = 0; stage < RENDER_PROFILE_STAGE_NUM; stage++) {
         render_profile_stage_metadata_t metadata = {0};

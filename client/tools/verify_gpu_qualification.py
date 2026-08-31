@@ -68,6 +68,14 @@ STAGES = {
     "gpu_completion_wait",
     "present_wait",
 }
+MAP_PACING_FIELDS = {
+    "submissions", "completions", "in_flight_peak", "queue_depth_samples",
+    "queue_depth_total", "queue_age_total_ns", "queue_age_max_ns",
+    "frame_latency_total_ns", "frame_latency_max_ns", "dropped_updates",
+    "merged_updates", "cpu_recording_calls", "cpu_recording_ns",
+    "submission_calls", "submission_ns", "completion_calls", "completion_ns",
+    "present_wait_calls", "present_wait_ns",
+}
 LIFECYCLE_EVENTS = [
     "cold_asset_upload", "resize_grow", "resize_restore", "teleport", "reconnect",
     "foreground_resume", "fullscreen_enter", "fullscreen_leave", "display_migration",
@@ -238,8 +246,33 @@ def _percentile(values: list[int], percentile: int) -> int:
     return ordered[(len(ordered) * percentile + 99) // 100 - 1]
 
 
+def _validate_map_pacing(value: dict, label: str) -> None:
+    _require(isinstance(value, dict) and set(value) == MAP_PACING_FIELDS,
+             f"{label} map-pacing evidence schema is incomplete")
+    for field in MAP_PACING_FIELDS:
+        _require(type(value[field]) is int and value[field] >= 0,
+                 f"{label} map-pacing {field} is invalid")
+    _require(value["completions"] <= value["submissions"],
+             f"{label} map-pacing completions exceed submissions")
+    _require(value["queue_depth_samples"] == value["submissions"],
+             f"{label} map-pacing queue samples do not cover submissions")
+    if value["submissions"] == 0:
+        _require(value["in_flight_peak"] == 0,
+                 f"{label} map-pacing in-flight peak is inconsistent")
+    else:
+        _require(0 < value["in_flight_peak"] <= value["submissions"],
+                 f"{label} map-pacing in-flight peak is inconsistent")
+    max_queue_depth = max(value["in_flight_peak"] - 1, 0)
+    _require(value["queue_depth_total"] <=
+             value["queue_depth_samples"] * max_queue_depth,
+             f"{label} map-pacing queue depth is unbounded")
+    _require(value["queue_age_max_ns"] <= value["queue_age_total_ns"] and
+             value["frame_latency_max_ns"] <= value["frame_latency_total_ns"],
+             f"{label} map-pacing maxima exceed their totals")
+
+
 def validate_record(record: dict) -> str:
-    _require(record.get("schema_version") == 3, "unsupported schema_version")
+    _require(record.get("schema_version") == 4, "unsupported schema_version")
     _require(record.get("benchmark") == "gpu-interop-stress-qualification", "wrong benchmark")
     _require(record.get("dirty") is False, "qualified revision must be clean")
     _require(bool(REVISION.fullmatch(str(record.get("revision", "")))), "invalid revision")
@@ -394,8 +427,10 @@ def validate_record(record: dict) -> str:
                              "light_upload_bytes", "slot_uniform_uploads",
                              "slot_uniform_upload_bytes", "resource_creations",
                              "resource_destructions", "readbacks", "commands", "batches",
-                             "draws", "retained_bytes", "peak_retained_bytes", "fallbacks"},
+                             "draws", "retained_bytes", "peak_retained_bytes", "fallbacks",
+                             "map_pacing"},
              "steady-state evidence schema is incomplete")
+    _validate_map_pacing(steady.get("map_pacing"), "steady-state")
     for field in ("uploads", "upload_bytes", "instance_uploads", "instance_upload_bytes",
                   "slot_uniform_uploads", "slot_uniform_upload_bytes"):
         _require(isinstance(steady.get(field), int) and steady[field] >= 0,
@@ -459,7 +494,7 @@ def validate(paths: list[Path], require_complete: bool) -> None:
 
 
 def validate_lifecycle_record(record: dict) -> None:
-    _require(record.get("schema_version") == 2, "unsupported lifecycle schema_version")
+    _require(record.get("schema_version") == 3, "unsupported lifecycle schema_version")
     _require(record.get("benchmark") == "gpu-production-recovery-lifecycle",
              "wrong lifecycle benchmark")
     _require(record.get("dirty") is False, "qualified revision must be clean")
@@ -511,7 +546,7 @@ def validate_lifecycle_record(record: dict) -> None:
             "light_uploads", "light_upload_bytes",
             "slot_uniform_uploads", "slot_uniform_upload_bytes",
             "resource_creations", "resource_destructions", "device_recoveries",
-            "recovery_failures", "readbacks", "fallbacks",
+            "recovery_failures", "readbacks", "fallbacks", "map_pacing",
         }
         _require(set(action) == expected_action_fields,
                  f"{event['name']} action evidence schema is incomplete")
@@ -523,6 +558,7 @@ def validate_lifecycle_record(record: dict) -> None:
                  f"{event['name']} action readback count is wrong")
         _require(action.get("fallbacks") == 0 and action.get("recovery_failures") == 0,
                  f"{event['name']} action used a fallback or failed recovery")
+        _validate_map_pacing(action.get("map_pacing"), f"{event['name']} action")
         recovery = event["name"] not in no_recovery
         _require(action.get("device_recoveries") == (1 if recovery else 0),
                  f"{event['name']} action recovery statistics are wrong")
@@ -584,6 +620,7 @@ def validate_lifecycle_record(record: dict) -> None:
         for field in ("commands", "batches", "draws", "retained_bytes"):
             _require(isinstance(steady.get(field), int) and steady[field] > 0,
                      f"{event['name']} steady {field} is absent")
+        _validate_map_pacing(steady.get("map_pacing"), f"{event['name']} steady-state")
     by_name = {event["name"]: event for event in events}
     baseline = by_name["cold_asset_upload"]["pixels_sha256"]
     _require(by_name["resize_grow"]["output_size"] ==
