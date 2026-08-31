@@ -541,9 +541,8 @@ static PyObject *Atrinik_Map_InsertMonster(Atrinik_Map *self, PyObject *args) {
     if (monster->arch == NULL || monster->type != MONSTER || monster->map != NULL ||
         monster->env != NULL || !QUERY_FLAG(monster, FLAG_REMOVED) || monster->inv != NULL ||
         monster->more != NULL || monster->head != NULL || monster->above != NULL ||
-        monster->below != NULL || monster->active_next != NULL || monster->active_prev != NULL ||
-        monster->custom_attrset != NULL || monster->combat_contributions != NULL ||
-        monster->key_values != NULL || monster->enemy != NULL || monster->attacked_by != NULL ||
+        monster->below != NULL || monster->custom_attrset != NULL ||
+        monster->combat_contributions != NULL || monster->enemy != NULL || monster->attacked_by != NULL ||
         monster->owner != NULL || monster->chosen_skill != NULL || monster->exp_obj != NULL ||
         monster->enemy_count != 0 || monster->attacked_by_count != 0 || monster->ownercount != 0 ||
         monster->custody_lineage != NULL || monster->custody_provenance != NULL ||
