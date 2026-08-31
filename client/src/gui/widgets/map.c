@@ -3496,6 +3496,23 @@ typedef struct map_render_cohort {
     int8_t depth;
 } map_render_cohort_t;
 
+/** Per-frame command totals that can be replayed without walking the painter list. */
+typedef struct map_benchmark_command_summary {
+    uint64_t stretched_commands;
+    uint64_t double_commands;
+    uint64_t living_commands;
+    uint64_t door_commands;
+    uint64_t roof_commands;
+    uint16_t command_depth_mask;
+    uint16_t living_depth_mask;
+    uint16_t door_depth_mask;
+    uint16_t roof_depth_mask;
+    bool frame_stretch;
+    bool frame_living;
+    bool frame_door;
+    bool frame_roof;
+} map_benchmark_command_summary_t;
+
 /** Output accumulated while traversing independently cached map levels. */
 typedef struct map_render_context {
     map_render_command_t *commands;
@@ -3525,11 +3542,12 @@ typedef struct map_render_context {
     uint8_t target_sub_layer;
     bool commands_sorted;
     bool capture_candidates;
+    map_benchmark_command_summary_t benchmark_summary;
 } map_render_context_t;
 
 static void map_render_context_sort(map_render_context_t *context);
 
-static void map_benchmark_commands_accumulate(const map_render_command_t *commands,
+static void map_benchmark_commands_accumulate(map_render_context_t *context,
                                               size_t commands_num,
                                               bool primary_surface,
                                               bool animation_only) {
@@ -3537,27 +3555,28 @@ static void map_benchmark_commands_accumulate(const map_render_command_t *comman
     bool frame_living = false;
     bool frame_door = false;
     bool frame_roof = false;
+    map_benchmark_command_summary_t summary = {0};
     uint64_t animation_digest = UINT64_C(14695981039346656037);
     for (size_t index = 0; index < commands_num; index++) {
-        const map_render_command_t *command = &commands[index];
+        const map_render_command_t *command = &context->commands[index];
         bool stretch = command->effects.stretch != 0;
         bool living = command->object_layer == LAYER_LIVING;
-        map_benchmark_statistics.stretched_commands += stretch;
-        map_benchmark_statistics.double_commands += command->draw_double;
-        map_benchmark_statistics.living_commands += living;
-        map_benchmark_statistics.door_commands += command->door;
-        map_benchmark_statistics.roof_commands += command->roof;
+        summary.stretched_commands += stretch;
+        summary.double_commands += command->draw_double;
+        summary.living_commands += living;
+        summary.door_commands += command->door;
+        summary.roof_commands += command->roof;
         if (!primary_surface) {
             continue;
         }
         uint16_t depth_bit = UINT16_C(1) << MAP2_DEPTH_INDEX(command->depth);
-        map_benchmark_statistics.command_depth_mask |= depth_bit;
+        summary.command_depth_mask |= depth_bit;
         if (living)
-            map_benchmark_statistics.living_depth_mask |= depth_bit;
+            summary.living_depth_mask |= depth_bit;
         if (command->door)
-            map_benchmark_statistics.door_depth_mask |= depth_bit;
+            summary.door_depth_mask |= depth_bit;
         if (command->roof)
-            map_benchmark_statistics.roof_depth_mask |= depth_bit;
+            summary.roof_depth_mask |= depth_bit;
         frame_stretch |= stretch;
         frame_living |= living;
         frame_door |= command->door;
@@ -3573,11 +3592,26 @@ static void map_benchmark_commands_accumulate(const map_render_command_t *comman
                 map_cell_hash_bytes(animation_digest, &command->effects, sizeof(command->effects));
         }
     }
+    context->benchmark_summary = summary;
+    map_benchmark_statistics.stretched_commands += summary.stretched_commands;
+    map_benchmark_statistics.double_commands += summary.double_commands;
+    map_benchmark_statistics.living_commands += summary.living_commands;
+    map_benchmark_statistics.door_commands += summary.door_commands;
+    map_benchmark_statistics.roof_commands += summary.roof_commands;
     if (primary_surface) {
-        map_benchmark_statistics.primary_frames_with_stretch += frame_stretch;
-        map_benchmark_statistics.primary_frames_with_living += frame_living;
-        map_benchmark_statistics.primary_frames_with_door += frame_door;
-        map_benchmark_statistics.primary_frames_with_roof += frame_roof;
+        summary.frame_stretch = frame_stretch;
+        summary.frame_living = frame_living;
+        summary.frame_door = frame_door;
+        summary.frame_roof = frame_roof;
+        context->benchmark_summary = summary;
+        map_benchmark_statistics.command_depth_mask |= summary.command_depth_mask;
+        map_benchmark_statistics.living_depth_mask |= summary.living_depth_mask;
+        map_benchmark_statistics.door_depth_mask |= summary.door_depth_mask;
+        map_benchmark_statistics.roof_depth_mask |= summary.roof_depth_mask;
+        map_benchmark_statistics.primary_frames_with_stretch += summary.frame_stretch;
+        map_benchmark_statistics.primary_frames_with_living += summary.frame_living;
+        map_benchmark_statistics.primary_frames_with_door += summary.frame_door;
+        map_benchmark_statistics.primary_frames_with_roof += summary.frame_roof;
     }
     if (animation_only) {
         map_benchmark_statistics.animation_reason_draws++;
@@ -3588,6 +3622,27 @@ static void map_benchmark_commands_accumulate(const map_render_command_t *comman
         map_benchmark_animation_command_digest = animation_digest;
         map_benchmark_animation_command_digest_valid = true;
     }
+}
+
+static void map_benchmark_commands_retain(const map_render_context_t *context) {
+    const map_benchmark_command_summary_t *summary = &context->benchmark_summary;
+    map_benchmark_statistics.render_commands += context->commands_num;
+    map_benchmark_statistics.reused_render_commands += context->commands_num;
+    map_benchmark_statistics.stretched_commands += summary->stretched_commands;
+    map_benchmark_statistics.double_commands += summary->double_commands;
+    map_benchmark_statistics.living_commands += summary->living_commands;
+    map_benchmark_statistics.door_commands += summary->door_commands;
+    map_benchmark_statistics.roof_commands += summary->roof_commands;
+    map_benchmark_statistics.command_depth_mask |= summary->command_depth_mask;
+    map_benchmark_statistics.living_depth_mask |= summary->living_depth_mask;
+    map_benchmark_statistics.door_depth_mask |= summary->door_depth_mask;
+    map_benchmark_statistics.roof_depth_mask |= summary->roof_depth_mask;
+    map_benchmark_statistics.primary_frames_with_stretch += summary->frame_stretch;
+    map_benchmark_statistics.primary_frames_with_living += summary->frame_living;
+    map_benchmark_statistics.primary_frames_with_door += summary->frame_door;
+    map_benchmark_statistics.primary_frames_with_roof += summary->frame_roof;
+    map_benchmark_statistics.peak_render_commands =
+        MAX(map_benchmark_statistics.peak_render_commands, context->commands_num);
 }
 
 /** Stable geometry identity for one visible exit cue member. */
@@ -7153,6 +7208,7 @@ typedef struct map_retained_projection {
     uint16_t level_mask;
     uint8_t player_sub_layer;
     bool smooth_lighting;
+    uint64_t face_content_generation;
     bool valid;
 } map_retained_projection_t;
 
@@ -7228,6 +7284,7 @@ static void map_render_context_copy(map_render_context_t *destination,
     destination->target_sub_layer = source->target_sub_layer;
     destination->commands_sorted = source->commands_sorted;
     destination->capture_candidates = source->capture_candidates;
+    destination->benchmark_summary = source->benchmark_summary;
 }
 
 /** Resolve a retained cell only while both its sparse slot and revision match. */
@@ -7367,7 +7424,13 @@ static void map_retained_animation_prepare(map_render_context_t *context,
         context->candidates_num += old->candidates_num;
 
         map_cell_t *cell = NULL;
-        bool stable = map_retained_cell_matches(old->depth,
+        map_cell_header_t header = {0};
+        bool level_available = map_select_level(old->depth, false);
+        if (level_available) {
+            header = cells->headers[map_cache_physical_index(old->tile_x, old->tile_y)];
+        }
+        bool stable = level_available &&
+                      map_retained_cell_matches(old->depth,
                                                 old->tile_x,
                                                 old->tile_y,
                                                 old->record_identity,
@@ -7393,7 +7456,7 @@ static void map_retained_animation_prepare(map_render_context_t *context,
             }
             context->tiles_num += old->tiles_num;
             map_benchmark_statistics.reused_render_commands += old->commands_num;
-        } else if (map_select_level(old->depth, false)) {
+        } else if (level_available) {
             cell = MAP_CELL_GET(old->tile_x, old->tile_y);
             for (size_t candidate = 0; candidate < old->candidates_num; candidate++) {
                 map_retained_candidate_replay(
@@ -7404,8 +7467,6 @@ static void map_retained_animation_prepare(map_render_context_t *context,
             map_benchmark_statistics.compiled_render_commands += old->candidates_num;
         }
 
-        const map_cell_header_t *header =
-            &cells->headers[map_cache_physical_index(old->tile_x, old->tile_y)];
         context->cohorts[context->cohorts_num++] = (map_render_cohort_t){
             .candidates_first = candidates_first,
             .candidates_num = context->candidates_num - candidates_first,
@@ -7416,8 +7477,8 @@ static void map_retained_animation_prepare(map_render_context_t *context,
             .tiles_first = tiles_first,
             .tiles_num = context->tiles_num - tiles_first,
             .record_identity = cell != NULL ? cell->painter_identity : 0,
-            .cell_generation = header->generation,
-            .cell_revision = header->revision,
+            .cell_generation = header.generation,
+            .cell_revision = header.revision,
             .tile_x = old->tile_x,
             .tile_y = old->tile_y,
             .depth = old->depth,
@@ -7444,6 +7505,30 @@ static map_render_context_t map_render_contexts[2];
 static map_render_context_t map_retained_primary_context;
 static map_retained_projection_t map_retained_primary_projection;
 
+/** Translate the production map invalidation bitset into GPU diagnostics. */
+static gpu_renderer_map_invalidation_reason_t map_gpu_invalidation_reason(uint32_t reasons,
+                                                                          bool animation_only) {
+    if (animation_only) {
+        return GPU_RENDERER_MAP_INVALIDATION_ANIMATION;
+    }
+    if (reasons & MAP_REDRAW_REASON_RESIZE) {
+        return GPU_RENDERER_MAP_INVALIDATION_RESIZE;
+    }
+    if (reasons & MAP_REDRAW_REASON_SCROLL) {
+        return GPU_RENDERER_MAP_INVALIDATION_CAMERA_SCROLL;
+    }
+    if (reasons & MAP_REDRAW_REASON_LIGHTING) {
+        return GPU_RENDERER_MAP_INVALIDATION_LIGHTING;
+    }
+    if (reasons & MAP_REDRAW_REASON_MAP_PACKET) {
+        return GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION;
+    }
+    if (reasons & (MAP_REDRAW_REASON_EXTERNAL | MAP_REDRAW_REASON_UI)) {
+        return GPU_RENDERER_MAP_INVALIDATION_ACTOR_EFFECT;
+    }
+    return GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION;
+}
+
 static bool map_retained_projection_matches(SDL_Surface *surface) {
     return map_retained_primary_projection.valid &&
            map_retained_primary_projection.surface_width == surface->w &&
@@ -7455,7 +7540,9 @@ static bool map_retained_projection_matches(SDL_Surface *surface) {
            map_retained_primary_projection.level_mask == map_level_mask &&
            map_retained_primary_projection.player_sub_layer == MapData.player_sub_layer &&
            map_retained_primary_projection.smooth_lighting ==
-               (setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0);
+               (setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0) &&
+           map_retained_primary_projection.face_content_generation ==
+               image_face_content_generation();
 }
 
 static void map_retained_projection_commit(SDL_Surface *surface) {
@@ -7469,6 +7556,7 @@ static void map_retained_projection_commit(SDL_Surface *surface) {
         .level_mask = map_level_mask,
         .player_sub_layer = MapData.player_sub_layer,
         .smooth_lighting = setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0,
+        .face_content_generation = image_face_content_generation(),
         .valid = true,
     };
 }
@@ -7481,8 +7569,9 @@ void map_draw_map(SDL_Surface *surface) {
 
     bool primary_surface = cur_widget[MAP_ID] != NULL && surface == cur_widget[MAP_ID]->surface;
     bool gpu_output = gpu_renderer_ready() && (primary_surface || map_gpu_auxiliary);
+    uint32_t pending_redraw_reasons = primary_surface ? map_redraw_pending_reasons() : 0;
     bool animation_only = primary_surface && !map_redraw_due() && map_animation_redraw_due() &&
-                          map_redraw_pending_reasons() == MAP_REDRAW_REASON_ANIMATION;
+                          pending_redraw_reasons == MAP_REDRAW_REASON_ANIMATION;
     bool reuse_retained = animation_only && map_retained_projection_matches(surface);
     if (animation_only && !reuse_retained) {
         /* A missing/stale compilation is safe to recover with one full build;
@@ -7510,6 +7599,19 @@ void map_draw_map(SDL_Surface *surface) {
         map_benchmark_statistics.render_failures++;
         SDL_SetError("mandatory GPU map renderer is unavailable");
         LOG(ERROR, "%s", SDL_GetError());
+        render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
+        return;
+    }
+    if (primary_surface) {
+        gpu_renderer_map_set_invalidation_hint(map_gpu_invalidation_reason(pending_redraw_reasons,
+                                                                            animation_only));
+    }
+    if (primary_surface && pending_redraw_reasons == MAP_REDRAW_REASON_EXTERNAL &&
+        map_retained_projection_matches(surface) &&
+        gpu_renderer_map_retain(surface->w, surface->h)) {
+        map_benchmark_commands_retain(&map_retained_primary_context);
+        map_select_level(0, true);
+        lighting_select_level(0);
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
         return;
     }
@@ -7565,10 +7667,13 @@ void map_draw_map(SDL_Surface *surface) {
     map_render_context_sort(render_context);
 
     map_benchmark_statistics.render_commands += render_context->commands_num;
-    map_benchmark_commands_accumulate(render_context->commands,
+    map_benchmark_commands_accumulate(render_context,
                                       render_context->commands_num,
                                       primary_surface,
                                       animation_only);
+    if (primary_surface) {
+        map_retained_primary_context.benchmark_summary = render_context->benchmark_summary;
+    }
     map_benchmark_statistics.annotations += render_context->annotations_num;
     map_benchmark_statistics.ui_tiles += render_context->tiles_num;
     map_benchmark_statistics.peak_render_commands =

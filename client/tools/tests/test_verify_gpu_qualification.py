@@ -46,8 +46,67 @@ def record(name="dense-17x17-five-depth-1080p"):
     logical, width, height, depths, animation, actors, *_ = WORKLOAD_CONTRACTS[name]
     frames = [10_000] * 40
     depth_mask = (1 << depths) - 1
+    map_statistics = {
+        "full_redraws": 0, "damage_frames": 0,
+        "damage_pixels": 0, "damage_bytes": 0,
+        "retained_frames": 44, "skipped_passes": 44,
+        "dirty_commands": 0, "dirty_pixels": 0,
+        "dirty_bytes": 0, "published_generation": 1,
+        "source_generation": 1, "camera_generation": 1,
+        "lighting_generation": 1, "effect_generation": 1,
+        "render_commands": 100, "compiled_render_commands": 10,
+        "reused_render_commands": 90, "peak_render_commands": 10,
+        "peak_active_levels": depths,
+        "last_dirty": {"commands": 0, "pixels": 0, "bytes": 0,
+                        "rect": [0, 0, 0, 0],
+                        "invalidation_reason": "unchanged"},
+        "invalidation_reasons": {
+            "unchanged": 44, "animation": 0, "actor_effect": 0,
+            "camera_scroll": 0, "map_publication": 0,
+            "lighting": 0, "resize": 0, "resource_replacement": 0,
+            "reset": 0, "device_recovery": 0,
+        },
+    }
+    steady_state = {
+        "uploads": 80, "upload_bytes": 1280,
+        "source_uploads": 0, "source_upload_bytes": 0,
+        "instance_uploads": 0, "instance_upload_bytes": 0,
+        "light_uploads": 0, "light_upload_bytes": 0,
+        "slot_uniform_uploads": 80, "slot_uniform_upload_bytes": 1280,
+        "resource_creations": 0,
+        "resource_destructions": 0, "readbacks": 0, "commands": 100,
+        "batches": 80, "draws": 80, "retained_bytes": 4,
+        "peak_retained_bytes": 4, "fallbacks": 0,
+    }
+    if animation:
+        map_statistics.update({
+            "full_redraws": 1, "damage_frames": 40,
+            "damage_pixels": 100, "damage_bytes": 800,
+            "retained_frames": 43, "skipped_passes": 3,
+            "dirty_commands": 1, "dirty_pixels": 200,
+            "dirty_bytes": 1600,
+            "render_commands": 100, "compiled_render_commands": 40,
+            "reused_render_commands": 60, "peak_render_commands": 10,
+            "peak_active_levels": depths,
+            "last_dirty": {"commands": 1, "pixels": 100, "bytes": 800,
+                            "rect": [0, 0, 10, 10],
+                            "invalidation_reason": "animation"},
+            "invalidation_reasons": {
+                "unchanged": 4, "animation": 40, "actor_effect": 0,
+                "camera_scroll": 0, "map_publication": 0,
+                "lighting": 0, "resize": 0, "resource_replacement": 0,
+                "reset": 0, "device_recovery": 0,
+            },
+        })
+        steady_state.update({
+            "uploads": 119, "upload_bytes": 42_224,
+            "source_uploads": 40, "source_upload_bytes": 40_960,
+            "instance_uploads": 40, "instance_upload_bytes": 640,
+            "slot_uniform_uploads": 39, "slot_uniform_upload_bytes": 624,
+        })
+    steady_state["map"] = map_statistics
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "benchmark": "gpu-interop-stress-qualification",
         "revision": "1" * 40,
         "dirty": False,
@@ -84,17 +143,7 @@ def record(name="dense-17x17-five-depth-1080p"):
                        "pixels_sha256": "3" * 64,
                        "animation_pixels_sha256":
                            ["4" * 64, "5" * 64, "4" * 64] if animation else ["", "", ""]},
-        "steady_state": {"uploads": 36,
-                         "upload_bytes": 576,
-                         "source_uploads": 0, "source_upload_bytes": 0,
-                         "instance_uploads": 0,
-                         "instance_upload_bytes": 0,
-                         "light_uploads": 0, "light_upload_bytes": 0,
-                         "slot_uniform_uploads": 36, "slot_uniform_upload_bytes": 576,
-                         "resource_creations": 0,
-                         "resource_destructions": 0, "readbacks": 0, "commands": 100,
-                         "batches": 80, "draws": 80, "retained_bytes": 4,
-                         "peak_retained_bytes": 4, "fallbacks": 0},
+        "steady_state": steady_state,
     }
 
 
@@ -459,6 +508,10 @@ class VerifyGpuQualificationTests(unittest.TestCase):
         value["steady_state"]["uploads"] = 1
         with self.assertRaisesRegex(ArtifactError, "uploads"):
             validate_record(value)
+        value = record()
+        value["steady_state"]["source_uploads"] = "1"
+        with self.assertRaisesRegex(ArtifactError, "non-negative"):
+            validate_record(value)
 
     def test_rejects_missing_or_unbounded_slot_uniform_uploads(self):
         value = record()
@@ -466,8 +519,12 @@ class VerifyGpuQualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ArtifactError, "schema"):
             validate_record(value)
         value = record()
+        value["steady_state"]["uploads"] = 36
         value["steady_state"]["slot_uniform_upload_bytes"] = 36 * 1024 + 1
+        value["steady_state"]["slot_uniform_uploads"] = 36
         value["steady_state"]["upload_bytes"] = 36 * 1024 + 1
+        value["steady_state"]["batches"] = 36
+        value["steady_state"]["draws"] = 36
         with self.assertRaisesRegex(ArtifactError, "bounded"):
             validate_record(value)
 

@@ -35,8 +35,17 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
     (void)auxiliary;
     return false;
 }
+bool gpu_map_renderer_retain(int width, int height, bool auxiliary) {
+    (void)width;
+    (void)height;
+    (void)auxiliary;
+    return false;
+}
 bool gpu_map_renderer_active(void) {
     return false;
+}
+void gpu_map_renderer_set_invalidation_hint(gpu_renderer_map_invalidation_reason_t reason) {
+    (void)reason;
 }
 void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected) {
     (void)owner;

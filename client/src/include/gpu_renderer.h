@@ -25,7 +25,7 @@ typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Window SDL_Window;
 typedef struct lighting_vertex lighting_vertex_t;
 
-#define GPU_RENDERER_STATISTICS_VERSION UINT8_C(2)
+#define GPU_RENDERER_STATISTICS_VERSION UINT8_C(3)
 #define GPU_RENDERER_OWNER_UNLIT (UINT8_MAX - UINT8_C(1))
 
 typedef enum gpu_renderer_timing_stage {
@@ -44,6 +44,37 @@ typedef struct gpu_renderer_timing {
     uint64_t calls;
     uint64_t elapsed_ns;
 } gpu_renderer_timing_t;
+
+/** Named causes used to classify a retained map frame. */
+typedef enum gpu_renderer_map_invalidation_reason {
+    GPU_RENDERER_MAP_INVALIDATION_UNCHANGED,
+    GPU_RENDERER_MAP_INVALIDATION_ANIMATION,
+    GPU_RENDERER_MAP_INVALIDATION_ACTOR_EFFECT,
+    GPU_RENDERER_MAP_INVALIDATION_CAMERA_SCROLL,
+    GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION,
+    GPU_RENDERER_MAP_INVALIDATION_LIGHTING,
+    GPU_RENDERER_MAP_INVALIDATION_RESIZE,
+    GPU_RENDERER_MAP_INVALIDATION_RESOURCE_REPLACEMENT,
+    GPU_RENDERER_MAP_INVALIDATION_RESET,
+    GPU_RENDERER_MAP_INVALIDATION_DEVICE_RECOVERY,
+
+    GPU_RENDERER_MAP_INVALIDATION_REASON_NUM
+} gpu_renderer_map_invalidation_reason_t;
+
+/** Per-frame retained-map contract recorded with renderer statistics. */
+typedef struct gpu_renderer_map_frame_diagnostics {
+    gpu_renderer_map_invalidation_reason_t invalidation_reason;
+    uint64_t published_generation;
+    uint64_t source_generation;
+    uint64_t camera_generation;
+    uint64_t lighting_generation;
+    uint64_t effect_generation;
+    uint64_t dirty_commands;
+    int32_t dirty_x;
+    int32_t dirty_y;
+    int32_t dirty_width;
+    int32_t dirty_height;
+} gpu_renderer_map_frame_diagnostics_t;
 
 typedef struct gpu_renderer_statistics {
     gpu_renderer_timing_t timings[GPU_RENDERER_TIMING_NUM];
@@ -70,6 +101,29 @@ typedef struct gpu_renderer_statistics {
     uint64_t recovery_failures;
     uint64_t readbacks;
     uint64_t fallbacks;
+    uint64_t map_full_redraws;
+    uint64_t map_damage_frames;
+    uint64_t map_damage_pixels;
+    uint64_t map_damage_bytes;
+    uint64_t map_retained_frames;
+    uint64_t map_skipped_passes;
+    uint64_t map_dirty_commands;
+    uint64_t map_dirty_pixels;
+    uint64_t map_dirty_bytes;
+    uint64_t map_published_generation;
+    uint64_t map_source_generation;
+    uint64_t map_camera_generation;
+    uint64_t map_lighting_generation;
+    uint64_t map_effect_generation;
+    uint64_t map_last_dirty_commands;
+    uint64_t map_last_dirty_pixels;
+    uint64_t map_last_dirty_bytes;
+    int32_t map_last_dirty_x;
+    int32_t map_last_dirty_y;
+    int32_t map_last_dirty_width;
+    int32_t map_last_dirty_height;
+    gpu_renderer_map_invalidation_reason_t map_last_invalidation_reason;
+    uint64_t map_invalidation_counts[GPU_RENDERER_MAP_INVALIDATION_REASON_NUM];
 } gpu_renderer_statistics_t;
 
 bool gpu_renderer_create(SDL_Window *window);
@@ -135,6 +189,10 @@ bool gpu_renderer_frame_valid(void);
 bool gpu_renderer_map_begin(int width, int height);
 /** Begin the independently retained auxiliary/minimap map target. */
 bool gpu_renderer_map_begin_auxiliary(int width, int height);
+/** Reuse a complete published map target without issuing map GPU work. */
+bool gpu_renderer_map_retain(int width, int height);
+/** Supply the production map invalidation reason for the next map target. */
+void gpu_renderer_map_set_invalidation_hint(gpu_renderer_map_invalidation_reason_t reason);
 void gpu_renderer_map_set_owner(uint8_t owner, int sample_y, bool projected);
 /** Bind the stable semantic map-record identity for the next painter draw. */
 void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t draw_variant);
@@ -231,6 +289,14 @@ void gpu_renderer_statistics_projected_light_upload(size_t bytes);
 void gpu_renderer_statistics_slot_uniform_upload(size_t bytes);
 void gpu_renderer_statistics_resource_create(size_t retained_bytes);
 void gpu_renderer_statistics_resource_destroy(size_t retained_bytes);
+void gpu_renderer_statistics_map_frame(bool full_redraw,
+                                       bool damage,
+                                       size_t damage_pixels,
+                                       size_t damage_bytes,
+                                       bool skipped_pass,
+                                       const gpu_renderer_map_frame_diagnostics_t *diagnostics);
+const char *gpu_renderer_map_invalidation_reason_name(
+    gpu_renderer_map_invalidation_reason_t reason);
 void gpu_renderer_statistics_recovery(bool succeeded);
 
 #endif

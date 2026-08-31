@@ -23,11 +23,15 @@ typedef struct SDL_Renderer SDL_Renderer;
 typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Texture SDL_Texture;
 typedef struct lighting_vertex lighting_vertex_t;
+typedef enum gpu_renderer_map_invalidation_reason gpu_renderer_map_invalidation_reason_t;
 
 bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer);
 void gpu_map_renderer_destroy(void);
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary);
+/** Reuse a complete published target without opening a command buffer. */
+bool gpu_map_renderer_retain(int width, int height, bool auxiliary);
 bool gpu_map_renderer_active(void);
+void gpu_map_renderer_set_invalidation_hint(gpu_renderer_map_invalidation_reason_t reason);
 void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected);
 /** Bind the stable semantic record identity for the next world draw. */
 void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant);
