@@ -123,6 +123,16 @@ def scenes() -> dict[str, bytes]:
     upper_copy_wall = tile(8, 7, layer(LAYER_WALL, FACE_WALL, height=48))
     dark_actor = tile(7, 6, layer(LAYER_LIVING, FACE_ACTOR), radiance=0)
     dark_wall = tile(8, 7, layer(LAYER_WALL, FACE_WALL, height=16), radiance=0)
+    remembered_floor = tile(ORIGIN + 1, ORIGIN, layer(0, 1), radiance=0)
+    remembered_floor_initial = packet(
+        (
+            (
+                0,
+                tile(ORIGIN, ORIGIN, layer(LAYER_LIVING, FACE_ACTOR), radiance=0)
+                + remembered_floor,
+            ),
+        )
+    )
 
     crowded_unobscured = bytearray(tile(ORIGIN, ORIGIN, layer(LAYER_LIVING, FACE_ACTOR)))
     crowded = bytearray(crowded_unobscured)
@@ -158,6 +168,8 @@ def scenes() -> dict[str, bytes]:
         "living-outline-crowded": packet(((0, bytes(crowded)),)),
         "living-outline-retained-fow": base(actor, same_level_wall),
         "living-outline-retained-fow-next": same_packet(fow_tile(7, 6)),
+        "remembered-floor": remembered_floor_initial,
+        "remembered-floor-next": same_packet(fow_tile(ORIGIN + 1, ORIGIN)),
         "visibility-fade-centered": centered_visibility_fade(),
     }
 
