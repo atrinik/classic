@@ -509,6 +509,75 @@ static PyObject *Atrinik_Map_CreateObject(Atrinik_Map *self, PyObject *args) {
     return wrap_object(newobj);
 }
 
+/** Documentation for Atrinik_Map_InsertMonster(). */
+static const char doc_Atrinik_Map_InsertMonster[] =
+    ".. method:: InsertMonster(obj, x, y).\n\n"
+    "Generate the specified fresh monster's randomitems treasure and insert it on the map.\n\n"
+    ":param obj: Fresh, detached monster with no inventory.\n"
+    ":type obj: :class:`Atrinik.Object.Object`\n"
+    ":param x: X position on the map.\n"
+    ":type x: int\n"
+    ":param y: Y position on the map.\n"
+    ":type y: int\n"
+    ":returns: The inserted object, or None if map effects destroy it.\n"
+    ":rtype: :class:`Atrinik.Object.Object` or None\n"
+    ":raises Atrinik.AtrinikError: If *obj* is not a fresh detached monster or the position is invalid.";
+
+/**
+ * Implements Atrinik.Map.Map.InsertMonster() Python method.
+ * @copydoc PyMethod_VARARGS
+ */
+static PyObject *Atrinik_Map_InsertMonster(Atrinik_Map *self, PyObject *args) {
+    Atrinik_Object *obj;
+    int16_t x, y;
+
+    if (!PyArg_ParseTuple(args, "O!hh", &Atrinik_ObjectType, &obj, &x, &y)) {
+        return NULL;
+    }
+
+    OBJEXISTCHECK(obj);
+
+    object *monster = obj->obj;
+    if (monster->arch == NULL || monster->type != MONSTER || monster->map != NULL ||
+        monster->env != NULL || !QUERY_FLAG(monster, FLAG_REMOVED) || monster->inv != NULL ||
+        monster->more != NULL || monster->head != NULL || monster->above != NULL ||
+        monster->below != NULL || monster->custom_attrset != NULL ||
+        monster->combat_contributions != NULL || monster->enemy != NULL || monster->attacked_by != NULL ||
+        monster->owner != NULL || monster->chosen_skill != NULL || monster->exp_obj != NULL ||
+        monster->enemy_count != 0 || monster->attacked_by_count != 0 || monster->ownercount != 0 ||
+        monster->custody_lineage != NULL || monster->custody_provenance != NULL ||
+        monster->custody_first != NULL || monster->custody_last != NULL ||
+        monster->custody_actor != NULL) {
+        RAISE("Map.InsertMonster requires a fresh detached monster with no inventory or runtime state.");
+    }
+
+    int map_x = x;
+    int map_y = y;
+    mapstruct *destination = hooks->get_map_from_coord(self->map, &map_x, &map_y);
+    if (destination == NULL) {
+        RAISE("Unable to get map using get_map_from_coord().");
+    }
+
+    monster->x = x;
+    monster->y = y;
+
+    if (monster->randomitems != NULL) {
+        int level = monster->level != 0 ? monster->level : destination->difficulty;
+        hooks->treasure_generate(monster->randomitems, monster, level, 0);
+    }
+
+    object *inserted = hooks->object_insert_map(monster, self->map, NULL, 0);
+    if (inserted == NULL) {
+        Py_RETURN_NONE;
+    }
+
+    if (inserted->type == MONSTER && inserted->custom_attrset == NULL) {
+        hooks->monster_data_init(inserted);
+    }
+
+    return wrap_object(inserted);
+}
+
 /** Documentation for Atrinik_Map_CountPlayers(). */
 static const char doc_Atrinik_Map_CountPlayers[] = ".. method:: CountPlayers().\n\n"
                                                    "Count number of players on map.\n\n"
@@ -935,6 +1004,10 @@ static PyMethodDef MapMethods[] = {
      PY_METHOD(Atrinik_Map_CreateObject),
      METH_VARARGS,
      doc_Atrinik_Map_CreateObject},
+    {"InsertMonster",
+     PY_METHOD(Atrinik_Map_InsertMonster),
+     METH_VARARGS,
+     doc_Atrinik_Map_InsertMonster},
     {"CountPlayers",
      PY_METHOD(Atrinik_Map_CountPlayers),
      METH_NOARGS,

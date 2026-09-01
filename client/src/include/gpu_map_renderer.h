@@ -51,6 +51,10 @@ SDL_Texture *gpu_map_renderer_texture(bool auxiliary);
 /** Mark a retained target unavailable until its next successful publication. */
 void gpu_map_renderer_invalidate_target(bool auxiliary);
 void gpu_map_renderer_invalidate_surface(SDL_Surface *surface);
+/** Poll submitted map work without blocking and retire signaled resources. */
+void gpu_map_renderer_poll(void);
+/** Wait for all submitted map work during an explicit lifecycle transition. */
+bool gpu_map_renderer_wait_idle(void);
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
 typedef struct gpu_map_renderer_probe {
     uint8_t albedo[4];
@@ -66,6 +70,8 @@ size_t gpu_map_renderer_atlas_page_count(void);
 size_t gpu_map_renderer_atlas_allocation_count(void);
 /** Count active retained primary or auxiliary instances with compact-light owners. */
 size_t gpu_map_renderer_lit_instance_count(bool auxiliary);
+/** Return the number of submitted map command buffers not yet retired. */
+size_t gpu_map_renderer_pending_submission_count(void);
 #endif
 
 #endif

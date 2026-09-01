@@ -1400,7 +1400,7 @@ static bool gpu_player_view_render(widgetdata *widget, bool widget_render) {
                                (float)widget->h)) {
         return false;
     }
-    return gpu_renderer_frame_valid() && gpu_renderer_present() && gpu_renderer_wait_idle();
+    return gpu_renderer_frame_valid() && gpu_renderer_present();
 #endif
 }
 
@@ -1574,6 +1574,39 @@ static void gpu_player_view_json_map_statistics(
                 statistics->map_invalidation_counts[reason]);
     }
     fputs("}}", output);
+}
+
+static void gpu_player_view_json_map_pacing(FILE *output,
+                                            const gpu_renderer_statistics_t *statistics) {
+    fprintf(output,
+            "{\"submissions\":%" PRIu64 ",\"completions\":%" PRIu64 ",\"in_flight_peak\":%" PRIu64
+            ",\"queue_depth_samples\":%" PRIu64 ",\"queue_depth_total\":%" PRIu64
+            ",\"queue_age_total_ns\":%" PRIu64 ",\"queue_age_max_ns\":%" PRIu64
+            ",\"frame_latency_total_ns\":%" PRIu64 ",\"frame_latency_max_ns\":%" PRIu64
+            ",\"dropped_updates\":%" PRIu64 ",\"merged_updates\":%" PRIu64
+            ",\"cpu_recording_calls\":%" PRIu64 ",\"cpu_recording_ns\":%" PRIu64
+            ",\"submission_calls\":%" PRIu64 ",\"submission_ns\":%" PRIu64
+            ",\"completion_calls\":%" PRIu64 ",\"completion_ns\":%" PRIu64
+            ",\"present_wait_calls\":%" PRIu64 ",\"present_wait_ns\":%" PRIu64 "}",
+            statistics->map_submissions,
+            statistics->map_completions,
+            statistics->map_in_flight_peak,
+            statistics->map_queue_depth_samples,
+            statistics->map_queue_depth_total,
+            statistics->map_queue_age_total_ns,
+            statistics->map_queue_age_max_ns,
+            statistics->map_frame_latency_total_ns,
+            statistics->map_frame_latency_max_ns,
+            statistics->map_dropped_updates,
+            statistics->map_merged_updates,
+            statistics->timings[GPU_RENDERER_TIMING_COMMAND_BUILD].calls,
+            statistics->timings[GPU_RENDERER_TIMING_COMMAND_BUILD].elapsed_ns,
+            statistics->timings[GPU_RENDERER_TIMING_SUBMISSION].calls,
+            statistics->timings[GPU_RENDERER_TIMING_SUBMISSION].elapsed_ns,
+            statistics->timings[GPU_RENDERER_TIMING_COMPLETION].calls,
+            statistics->timings[GPU_RENDERER_TIMING_COMPLETION].elapsed_ns,
+            statistics->timings[GPU_RENDERER_TIMING_PRESENT_WAIT].calls,
+            statistics->timings[GPU_RENDERER_TIMING_PRESENT_WAIT].elapsed_ns);
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
@@ -2727,7 +2760,8 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
             ",\"slot_uniform_upload_bytes\":%" PRIu64 ",\"resource_creations\":%" PRIu64
             ",\"resource_destructions\":%" PRIu64 ",\"readbacks\":%" PRIu64 ",\"commands\":%" PRIu64
             ",\"batches\":%" PRIu64 ",\"draws\":%" PRIu64 ",\"retained_bytes\":%" PRIu64
-            ",\"peak_retained_bytes\":%" PRIu64 ",\"fallbacks\":%" PRIu64 ",",
+            ",\"peak_retained_bytes\":%" PRIu64 ",\"fallbacks\":%" PRIu64
+            ",\"map_pacing\":",
             checkpoint,
             animation_checkpoints[0],
             animation_checkpoints[1],
@@ -2751,6 +2785,8 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
             measured.retained_bytes,
             measured.peak_retained_bytes,
             measured.fallbacks);
+    gpu_player_view_json_map_pacing(output, &measured);
+    fputs(",", output);
     gpu_player_view_json_map_statistics(output, &measured, &map_measured);
     fputs("}}\n", output);
     return output == stdout || fclose(output) == 0;
@@ -2888,7 +2924,7 @@ static bool gpu_player_view_lifecycle_write(
         return false;
     }
     fprintf(output,
-            "{\"schema_version\":2,\"benchmark\":\"gpu-production-recovery-lifecycle\","
+            "{\"schema_version\":3,\"benchmark\":\"gpu-production-recovery-lifecycle\","
             "\"fixture\":\"brynknot-movement\",\"manifest_sha256\":\"%s\","
             "\"viewport\":[%u,%u],\"resize_delta\":[%u,%u],\"revision\":",
             manifest->manifest_digest,
@@ -2931,11 +2967,7 @@ static bool gpu_player_view_lifecycle_write(
                 ",\"slot_uniform_upload_bytes\":%" PRIu64 ",\"resource_creations\":%" PRIu64
                 ",\"resource_destructions\":%" PRIu64 ",\"device_recoveries\":%" PRIu64
                 ",\"recovery_failures\":%" PRIu64 ",\"readbacks\":%" PRIu64
-                ",\"fallbacks\":%" PRIu64 "},"
-                "\"output_size\":[%d,%d],\"display_mode_size\":[%d,%d],"
-                "\"pixels_sha256\":\"%s\",\"artifact\":\"%s\","
-                "\"artifact_sha256\":\"%s\","
-                "\"frame_windows_ns\":[",
+                ",\"fallbacks\":%" PRIu64 ",\"map_pacing\":",
                 index == 0 ? "" : ",",
                 event->name,
                 event->recovery_attempts,
@@ -2957,7 +2989,13 @@ static bool gpu_player_view_lifecycle_write(
                 event->action.device_recoveries,
                 event->action.recovery_failures,
                 event->action_readbacks,
-                event->action.fallbacks,
+                event->action.fallbacks);
+        gpu_player_view_json_map_pacing(output, &event->action);
+        fprintf(output,
+                "},\"output_size\":[%d,%d],\"display_mode_size\":[%d,%d],"
+                "\"pixels_sha256\":\"%s\",\"artifact\":\"%s\","
+                "\"artifact_sha256\":\"%s\","
+                "\"frame_windows_ns\":[",
                 event->output_width,
                 event->output_height,
                 event->display_mode_width,
@@ -2974,7 +3012,8 @@ static bool gpu_player_view_lifecycle_write(
                 ",\"slot_uniform_uploads\":%" PRIu64 ",\"slot_uniform_upload_bytes\":%" PRIu64
                 ",\"resource_creations\":%" PRIu64 ",\"resource_destructions\":%" PRIu64
                 ",\"readbacks\":%" PRIu64 ",\"commands\":%" PRIu64 ",\"batches\":%" PRIu64
-                ",\"draws\":%" PRIu64 ",\"retained_bytes\":%" PRIu64 ",\"fallbacks\":%" PRIu64 "}}",
+                ",\"draws\":%" PRIu64 ",\"retained_bytes\":%" PRIu64 ",\"fallbacks\":%" PRIu64
+                ",\"map_pacing\":",
                 gpu_player_view_percentile(event->frame_samples, 95),
                 gpu_player_view_percentile(event->frame_samples, 99),
                 gpu_player_view_percentile(event->frame_samples, 100),
@@ -2990,6 +3029,8 @@ static bool gpu_player_view_lifecycle_write(
                 event->steady.draws,
                 event->steady.retained_bytes,
                 event->steady.fallbacks);
+        gpu_player_view_json_map_pacing(output, &event->steady);
+        fputs("}}", output);
     }
     fprintf(output,
             "],\"final_checkpoint\":{\"algorithm\":\"sha256-rgba32-with-dimensions\","

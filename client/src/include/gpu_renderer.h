@@ -124,6 +124,20 @@ typedef struct gpu_renderer_statistics {
     int32_t map_last_dirty_height;
     gpu_renderer_map_invalidation_reason_t map_last_invalidation_reason;
     uint64_t map_invalidation_counts[GPU_RENDERER_MAP_INVALIDATION_REASON_NUM];
+    /* Map submissions are paced independently from presentation. Totals
+     * remain separate so benchmark consumers do not conflate queue age,
+     * frame latency, and present wait. */
+    uint64_t map_submissions;
+    uint64_t map_completions;
+    uint64_t map_in_flight_peak;
+    uint64_t map_queue_depth_samples;
+    uint64_t map_queue_depth_total;
+    uint64_t map_queue_age_total_ns;
+    uint64_t map_queue_age_max_ns;
+    uint64_t map_frame_latency_total_ns;
+    uint64_t map_frame_latency_max_ns;
+    uint64_t map_dropped_updates;
+    uint64_t map_merged_updates;
 } gpu_renderer_statistics_t;
 
 bool gpu_renderer_create(SDL_Window *window);
@@ -151,6 +165,7 @@ typedef enum gpu_renderer_conformance_fault {
     GPU_RENDERER_CONFORMANCE_FAULT_TARGET,
     GPU_RENDERER_CONFORMANCE_FAULT_UPLOAD,
     GPU_RENDERER_CONFORMANCE_FAULT_SUBMISSION,
+    GPU_RENDERER_CONFORMANCE_FAULT_FENCE,
     GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN,
     GPU_RENDERER_CONFORMANCE_FAULT_DEVICE_LOSS,
     GPU_RENDERER_CONFORMANCE_FAULT_READBACK,
@@ -298,5 +313,11 @@ void gpu_renderer_statistics_map_frame(bool full_redraw,
 const char *gpu_renderer_map_invalidation_reason_name(
     gpu_renderer_map_invalidation_reason_t reason);
 void gpu_renderer_statistics_recovery(bool succeeded);
+/** Record one map submission and the number of map submissions already queued. */
+void gpu_renderer_statistics_map_submission(size_t queue_depth);
+/** Record separately observed map queue age and end-to-end frame latency. */
+void gpu_renderer_statistics_map_completion(uint64_t queue_age_ns, uint64_t frame_latency_ns);
+/** Record an update intentionally dropped or merged by map pacing. */
+void gpu_renderer_statistics_map_update(bool dropped, bool merged);
 
 #endif

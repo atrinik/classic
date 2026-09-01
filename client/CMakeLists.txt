@@ -118,6 +118,7 @@ else ()
         COMMAND ${ATRINIK_GPU_SHADER_GENERATOR_COMMAND}
         DEPENDS
             "${CMAKE_CURRENT_SOURCE_DIR}/shaders/map.hlsl"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sprite_effect_abi.inc"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_gpu_shaders.sh"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/write_gpu_shader_manifest.py"
             "${ATRINIK_DXC_EXECUTABLE}"
@@ -493,6 +494,17 @@ if (BUILD_TESTING)
     target_include_directories(client-lighting-transfer-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
     add_test(NAME client-lighting-transfer COMMAND client-lighting-transfer-tests)
+
+    add_executable(client-gpu-sprite-effect-abi-tests
+        src/tests/gpu_sprite_effect_abi.c)
+    atrinik_configure_target(client-gpu-sprite-effect-abi-tests)
+    target_include_directories(client-gpu-sprite-effect-abi-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-gpu-sprite-effect-abi
+        COMMAND client-gpu-sprite-effect-abi-tests)
+    add_test(NAME client-gpu-sprite-effect-abi-source
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_gpu_sprite_abi.py")
 
     add_executable(client-rich-presence-tests
         src/tests/rich_presence.c
@@ -1012,6 +1024,8 @@ if (BUILD_TESTING)
         exit-cues
         living-outline-translucent
         living-outline-retained-fow
+        remembered-floor-smooth
+        remembered-floor-discrete
         timed-light
         map-overlay-linked-depth
         map-overlay-widget-state

@@ -16,17 +16,18 @@
 
 #include <global.h>
 #include <gpu_shader_data.h>
+#include <gpu_sprite_effect.h>
 
 #define GPU_MAP_SURFACE_GENERATION_PROPERTY "atrinik.gpu.map_surface_generation"
 #define GPU_MAP_SURFACE_ASSET_PROPERTY "atrinik.gpu.map_surface_asset"
 /* Integer target clears are backend-defined for nonzero float values. */
 #define GPU_MAP_OWNER_KEY_TRANSPARENT UINT8_C(0)
-#define GPU_MAP_LIGHT_KEY_BITS 19U
-#define GPU_MAP_LIGHT_KEY_MASK ((UINT32_C(1) << GPU_MAP_LIGHT_KEY_BITS) - 1U)
-#define GPU_MAP_LIGHT_KEY_DARK (GPU_MAP_LIGHT_KEY_MASK - 1U)
-#define GPU_MAP_LIGHT_KEY_UNLIT GPU_MAP_LIGHT_KEY_MASK
+#define GPU_MAP_LIGHT_KEY_BITS GPU_SPRITE_LIGHTING_KEY_BITS
+#define GPU_MAP_LIGHT_KEY_MASK GPU_SPRITE_LIGHTING_KEY_MASK
+#define GPU_MAP_LIGHT_KEY_DARK GPU_SPRITE_LIGHTING_KEY_DARK
+#define GPU_MAP_LIGHT_KEY_UNLIT GPU_SPRITE_LIGHTING_KEY_UNLIT
 #define GPU_MAP_LIGHT_QUAD_KEY_MAX (GPU_MAP_LIGHT_KEY_MASK - 2U)
-#define GPU_MAP_LIGHT_KEY_PROJECTED (UINT32_C(1) << GPU_MAP_LIGHT_KEY_BITS)
+#define GPU_MAP_LIGHT_KEY_PROJECTED GPU_SPRITE_LIGHTING_KEY_PROJECTED
 #define GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY 1024U
 #define GPU_MAP_LIGHT_ROW_INITIAL_CAPACITY 128U
 #define GPU_MAP_LIGHT_SPAN_INITIAL_CAPACITY 1024U
@@ -43,6 +44,7 @@
 #define GPU_MAP_DAMAGE_CLEAR_INITIAL_CAPACITY (64U * 1024U)
 #define GPU_MAP_DAMAGE_FULL_REDRAW_NUMERATOR 1U
 #define GPU_MAP_DAMAGE_FULL_REDRAW_DENOMINATOR 2U
+#define GPU_MAP_MAX_IN_FLIGHT 3U
 
 typedef struct gpu_map_atlas_region {
     uint32_t x;
@@ -67,6 +69,7 @@ typedef struct gpu_map_asset {
     SDL_Surface *surface;
     SDL_GPUTexture *texture;
     Uint64 generation;
+    uint32_t texture_flags;
     uint32_t width;
     uint32_t height;
     uint32_t atlas_x;
@@ -75,6 +78,7 @@ typedef struct gpu_map_asset {
     size_t references;
     bool accounted;
     bool standalone;
+    uint64_t last_pending_submission;
     gpu_map_atlas_page_t *atlas_page;
     struct gpu_map_asset *next;
 } gpu_map_asset_t;
@@ -91,13 +95,7 @@ typedef struct gpu_map_vertex_uniforms {
     float padding[2];
 } gpu_map_vertex_uniforms_t;
 
-typedef struct gpu_map_world_instance {
-    float destination[4];
-    float uv[4];
-    float modulation[4];
-    uint32_t owner;
-    uint32_t padding[3];
-} gpu_map_world_instance_t;
+typedef gpu_sprite_instance_t gpu_map_world_instance_t;
 
 typedef struct gpu_map_world_command {
     gpu_map_world_instance_t instance;
@@ -156,6 +154,7 @@ typedef struct gpu_map_target_set {
     int height;
     bool accounted;
     bool published;
+    uint64_t published_generation;
     SDL_GPUBuffer *world_instance_buffer;
     SDL_GPUTransferBuffer *world_instance_transfer;
     size_t world_instance_capacity;
@@ -171,12 +170,22 @@ typedef struct gpu_map_target_set {
     uint32_t *world_order;
     size_t world_order_num;
     size_t world_order_capacity;
-    uint64_t published_generation;
     uint64_t source_generation;
     uint64_t camera_generation;
     uint64_t lighting_generation;
     uint64_t effect_generation;
 } gpu_map_target_set_t;
+
+typedef struct gpu_map_pending_submission {
+    SDL_GPUFence *fence;
+    uint64_t submitted_at_ns;
+    uint64_t frame_started_at_ns;
+    uint64_t generation;
+    size_t target_index;
+    gpu_map_asset_t **assets;
+    size_t assets_num;
+    struct gpu_map_pending_submission *next;
+} gpu_map_pending_submission_t;
 
 static SDL_GPUDevice *map_device;
 static SDL_Renderer *map_renderer;
@@ -209,6 +218,12 @@ static gpu_map_target_set_t map_targets[2];
 static size_t active_target_index;
 static SDL_GPUCommandBuffer *map_command_buffer;
 static SDL_GPURenderPass *world_pass;
+static gpu_map_pending_submission_t *pending_submissions;
+static gpu_map_pending_submission_t *pending_submissions_tail;
+static gpu_map_pending_submission_t *abandoned_submissions;
+static size_t pending_submission_count;
+static uint64_t next_pending_submission_id = 1;
+static uint64_t next_map_generation = 1;
 static SDL_Surface *solid_surface;
 static gpu_map_asset_t *assets;
 static gpu_map_atlas_page_t *atlas_pages;
@@ -296,9 +311,23 @@ static uint64_t map_frame_effect_generation;
 
 #define GPU_MAP_CONTRACT_HASH_OFFSET UINT64_C(14695981039346656037)
 #define GPU_MAP_CONTRACT_HASH_PRIME UINT64_C(1099511628211)
+static uint64_t map_frame_started_at_ns;
 
 static void gpu_map_world_pass_end(void);
 static void gpu_map_asset_release(gpu_map_asset_t *asset);
+static bool gpu_map_pending_wait_oldest(void);
+static bool gpu_map_pending_wait_all(void);
+static bool gpu_map_projected_light_rows_reserve(size_t required);
+
+static bool gpu_map_pending_target_in_use(size_t target_index) {
+    for (gpu_map_pending_submission_t *pending = pending_submissions; pending != NULL;
+         pending = pending->next) {
+        if (pending->target_index == target_index) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static void gpu_map_world_commands_release(gpu_map_world_command_t *commands, size_t count) {
     for (size_t index = 0; index < count; index++) {
@@ -356,6 +385,7 @@ static void gpu_map_command_discard(void) {
     }
     gpu_map_world_commands_release(world_commands, world_commands_num);
     world_commands_num = 0;
+    map_frame_started_at_ns = 0;
     current_record_identity = 0;
     current_draw_variant = 0;
 }
@@ -600,6 +630,11 @@ static bool gpu_map_light_quad_buffers_reserve(size_t required) {
         SDL_ReleaseGPUTransferBuffer(map_device, transfer);
         return false;
     }
+    if (!gpu_map_pending_wait_all()) {
+        SDL_ReleaseGPUBuffer(map_device, buffer);
+        SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+        return false;
+    }
     map_frame_resource_replaced |= light_quad_gpu_bytes != 0;
     SDL_ReleaseGPUBuffer(map_device, light_quad_buffer);
     SDL_ReleaseGPUTransferBuffer(map_device, light_quad_transfer);
@@ -640,6 +675,11 @@ static bool gpu_map_light_row_buffers_reserve(size_t required) {
     SDL_GPUBuffer *buffer = SDL_CreateGPUBuffer(map_device, &info);
     SDL_GPUTransferBuffer *transfer = SDL_CreateGPUTransferBuffer(map_device, &transfer_info);
     if (buffer == NULL || transfer == NULL) {
+        SDL_ReleaseGPUBuffer(map_device, buffer);
+        SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+        return false;
+    }
+    if (!gpu_map_pending_wait_all()) {
         SDL_ReleaseGPUBuffer(map_device, buffer);
         SDL_ReleaseGPUTransferBuffer(map_device, transfer);
         return false;
@@ -688,6 +728,11 @@ static bool gpu_map_light_span_buffers_reserve(size_t required) {
         SDL_ReleaseGPUTransferBuffer(map_device, transfer);
         return false;
     }
+    if (!gpu_map_pending_wait_all()) {
+        SDL_ReleaseGPUBuffer(map_device, buffer);
+        SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+        return false;
+    }
     map_frame_resource_replaced |= light_span_gpu_bytes != 0;
     SDL_ReleaseGPUBuffer(map_device, light_span_buffer);
     SDL_ReleaseGPUTransferBuffer(map_device, light_span_transfer);
@@ -725,7 +770,8 @@ static bool gpu_map_light_buffers_create(void) {
     bool created = gpu_map_light_quad_buffers_reserve(GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY) &&
                    gpu_map_light_row_buffers_reserve(GPU_MAP_LIGHT_ROW_INITIAL_CAPACITY) &&
                    gpu_map_light_span_buffers_reserve(GPU_MAP_LIGHT_SPAN_INITIAL_CAPACITY) &&
-                   light_forward_lut_buffer != NULL && light_inverse_lut_buffer != NULL &&
+                   gpu_map_projected_light_rows_reserve(1) && light_forward_lut_buffer != NULL &&
+                   light_inverse_lut_buffer != NULL &&
                    gpu_map_buffer_upload(light_forward_lut_buffer, forward, sizeof(forward)) &&
                    gpu_map_buffer_upload(light_inverse_lut_buffer, inverse, sizeof(inverse));
     if (created) {
@@ -1102,6 +1148,163 @@ static void gpu_map_asset_release(gpu_map_asset_t *asset) {
     }
 }
 
+static uint64_t gpu_map_elapsed_ns(uint64_t started_at_ns, uint64_t finished_at_ns) {
+    return finished_at_ns >= started_at_ns ? finished_at_ns - started_at_ns : 0;
+}
+
+static void gpu_map_pending_submission_release_assets(gpu_map_pending_submission_t *pending) {
+    for (size_t index = 0; index < pending->assets_num; index++) {
+        gpu_map_asset_release(pending->assets[index]);
+    }
+    free(pending->assets);
+    pending->assets = NULL;
+    pending->assets_num = 0;
+}
+
+static void gpu_map_pending_submission_retire(gpu_map_pending_submission_t *pending) {
+    uint64_t completed_at_ns = gpu_renderer_timing_begin();
+    uint64_t queue_age_ns = gpu_map_elapsed_ns(pending->submitted_at_ns, completed_at_ns);
+    uint64_t frame_latency_ns = gpu_map_elapsed_ns(pending->frame_started_at_ns, completed_at_ns);
+    gpu_renderer_statistics_map_completion(queue_age_ns, frame_latency_ns);
+    gpu_map_pending_submission_release_assets(pending);
+    SDL_ReleaseGPUFence(map_device, pending->fence);
+    free(pending);
+}
+
+static void gpu_map_pending_submission_remove_head(bool completed) {
+    HARD_ASSERT(pending_submissions != NULL && pending_submission_count != 0);
+    gpu_map_pending_submission_t *pending = pending_submissions;
+    pending_submissions = pending->next;
+    if (pending_submissions == NULL) {
+        pending_submissions_tail = NULL;
+    }
+    pending->next = NULL;
+    pending_submission_count--;
+    if (completed) {
+        gpu_map_pending_submission_retire(pending);
+    } else {
+        if (pending->target_index < SDL_arraysize(map_targets) &&
+            map_targets[pending->target_index].published_generation == pending->generation) {
+            map_targets[pending->target_index].published = false;
+        }
+        gpu_renderer_statistics_map_update(true, false);
+        gpu_map_pending_submission_release_assets(pending);
+        SDL_ReleaseGPUFence(map_device, pending->fence);
+        free(pending);
+    }
+}
+
+/* A failed fence does not prove that the submitted command stopped using its
+ * resources. Keep those references until the owning device has been drained
+ * by recovery or teardown. */
+static void gpu_map_pending_abandon_all(void) {
+    while (pending_submissions != NULL) {
+        gpu_map_pending_submission_t *pending = pending_submissions;
+        pending_submissions = pending->next;
+        pending->next = abandoned_submissions;
+        abandoned_submissions = pending;
+        pending_submission_count--;
+        if (pending->target_index < SDL_arraysize(map_targets) &&
+            map_targets[pending->target_index].published_generation == pending->generation) {
+            map_targets[pending->target_index].published = false;
+        }
+        gpu_renderer_statistics_map_update(true, false);
+    }
+    pending_submissions_tail = NULL;
+}
+
+static void gpu_map_pending_abandoned_destroy(void) {
+    while (abandoned_submissions != NULL) {
+        gpu_map_pending_submission_t *pending = abandoned_submissions;
+        abandoned_submissions = pending->next;
+        gpu_map_pending_submission_release_assets(pending);
+        SDL_ReleaseGPUFence(map_device, pending->fence);
+        free(pending);
+    }
+}
+
+static void gpu_map_pending_poll(void) {
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (pending_submissions != NULL &&
+        gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_FENCE)) {
+        gpu_map_pending_abandon_all();
+        gpu_renderer_recreation_request();
+        return;
+    }
+#endif
+    while (pending_submissions != NULL &&
+           SDL_QueryGPUFence(map_device, pending_submissions->fence)) {
+        gpu_map_pending_submission_remove_head(true);
+    }
+}
+
+static bool gpu_map_pending_wait_oldest(void) {
+    if (pending_submissions == NULL) {
+        return true;
+    }
+    SDL_GPUFence *fence = pending_submissions->fence;
+    uint64_t completion_started = gpu_renderer_timing_begin();
+    bool completed = SDL_WaitForGPUFences(map_device, true, &fence, 1);
+    gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMPLETION, completion_started);
+    if (!completed) {
+        gpu_map_pending_abandon_all();
+        gpu_renderer_recreation_request();
+        return false;
+    }
+    gpu_map_pending_submission_remove_head(true);
+    gpu_map_pending_poll();
+    return true;
+}
+
+static bool gpu_map_pending_wait_all(void) {
+    gpu_map_pending_poll();
+    while (pending_submissions != NULL) {
+        if (!gpu_map_pending_wait_oldest()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool gpu_map_pending_enqueue(SDL_GPUFence *fence,
+                                    size_t target_index,
+                                    uint64_t generation,
+                                    uint64_t frame_started_at_ns) {
+    HARD_ASSERT(fence != NULL);
+    gpu_map_pending_submission_t *pending = xcalloc(1, sizeof(*pending));
+    pending->fence = fence;
+    pending->submitted_at_ns = gpu_renderer_timing_begin();
+    pending->frame_started_at_ns = frame_started_at_ns;
+    pending->generation = generation;
+    pending->target_index = target_index;
+
+    uint64_t submission_id = next_pending_submission_id++;
+    if (next_pending_submission_id == 0) {
+        next_pending_submission_id = 1;
+    }
+    for (size_t index = 0; index < world_commands_num; index++) {
+        gpu_map_asset_t *asset = world_commands[index].asset;
+        if (asset == NULL || asset->last_pending_submission == submission_id) {
+            continue;
+        }
+        asset->last_pending_submission = submission_id;
+        pending->assets =
+            xreallocarray(pending->assets, pending->assets_num + 1U, sizeof(*pending->assets));
+        pending->assets[pending->assets_num++] = asset;
+        gpu_map_asset_retain(asset);
+    }
+    pending->next = NULL;
+    if (pending_submissions_tail == NULL) {
+        pending_submissions = pending;
+    } else {
+        pending_submissions_tail->next = pending;
+    }
+    pending_submissions_tail = pending;
+    gpu_renderer_statistics_map_submission(pending_submission_count);
+    pending_submission_count++;
+    return true;
+}
+
 static void SDLCALL gpu_map_asset_cleanup(void *userdata, void *value) {
     (void)userdata;
     gpu_map_asset_t *asset = value;
@@ -1157,6 +1360,11 @@ static bool gpu_map_projected_light_rows_reserve(size_t required) {
         SDL_ReleaseGPUTransferBuffer(map_device, transfer);
         return false;
     }
+    if (!gpu_map_pending_wait_all()) {
+        SDL_ReleaseGPUBuffer(map_device, buffer);
+        SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+        return false;
+    }
     map_frame_resource_replaced |= projected_light_row_gpu_bytes != 0;
     SDL_ReleaseGPUBuffer(map_device, projected_light_row_buffer);
     SDL_ReleaseGPUTransferBuffer(map_device, projected_light_row_transfer);
@@ -1175,18 +1383,19 @@ static bool gpu_map_projected_light_rows_reserve(size_t required) {
 }
 
 static bool gpu_map_projected_light_rows_upload(void) {
+    if (!projected_light_rows_used) {
+        return true;
+    }
     size_t required = MAX(projected_light_rows_num, (size_t)1);
     if (!gpu_map_projected_light_rows_reserve(required)) {
         return false;
-    }
-    if (!projected_light_rows_used) {
-        return true;
     }
     map_frame_lighting_generation = gpu_map_contract_hash_append(
         map_frame_lighting_generation,
         projected_light_rows,
         projected_light_rows_num * sizeof(*projected_light_rows));
-    bool full_upload = !uploaded_projected_light_rows_valid ||
+    bool cycle = pending_submissions != NULL;
+    bool full_upload = cycle || !uploaded_projected_light_rows_valid ||
                        projected_light_rows_num != uploaded_projected_light_rows_num;
     if (!full_upload && memcmp(projected_light_rows,
                                uploaded_projected_light_rows,
@@ -1239,7 +1448,7 @@ static bool gpu_map_projected_light_rows_upload(void) {
             .offset = offset,
             .size = bytes,
         };
-        SDL_UploadToGPUBuffer(copy, &source, &destination, false);
+        SDL_UploadToGPUBuffer(copy, &source, &destination, cycle);
         first = end;
     }
     SDL_EndGPUCopyPass(copy);
@@ -1270,6 +1479,10 @@ static bool gpu_map_world_instance_buffers_reserve(gpu_map_target_set_t *target,
     size_t capacity = MAX(required, (size_t)GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY);
     capacity = (capacity + GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY - 1U) /
                GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY * GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY;
+    if (capacity > UINT32_MAX / sizeof(gpu_map_world_instance_t)) {
+        SDL_SetError("GPU map painter instance stream exceeds the backend limit");
+        return false;
+    }
     uint32_t bytes = (uint32_t)(capacity * sizeof(gpu_map_world_instance_t));
     SDL_GPUBufferCreateInfo buffer_info = {
         .usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
@@ -1282,6 +1495,11 @@ static bool gpu_map_world_instance_buffers_reserve(gpu_map_target_set_t *target,
     SDL_GPUBuffer *buffer = SDL_CreateGPUBuffer(map_device, &buffer_info);
     SDL_GPUTransferBuffer *transfer = SDL_CreateGPUTransferBuffer(map_device, &transfer_info);
     if (buffer == NULL || transfer == NULL) {
+        SDL_ReleaseGPUBuffer(map_device, buffer);
+        SDL_ReleaseGPUTransferBuffer(map_device, transfer);
+        return false;
+    }
+    if (!gpu_map_pending_wait_all()) {
         SDL_ReleaseGPUBuffer(map_device, buffer);
         SDL_ReleaseGPUTransferBuffer(map_device, transfer);
         return false;
@@ -1672,12 +1890,14 @@ static bool gpu_map_world_pass_begin(void) {
             .clear_color = {0.0f, 0.0f, 0.0f, 0.0f},
             .load_op = world_pass_load_existing ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR,
             .store_op = SDL_GPU_STOREOP_STORE,
+            .cycle = !world_pass_load_existing,
         },
         {
             .texture = owner_target,
             .clear_color = {(float)GPU_MAP_OWNER_KEY_TRANSPARENT, 0.0f, 0.0f, 0.0f},
             .load_op = world_pass_load_existing ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR,
             .store_op = SDL_GPU_STOREOP_STORE,
+            .cycle = !world_pass_load_existing,
         },
     };
     world_pass = SDL_BeginGPURenderPass(map_command_buffer, targets, SDL_arraysize(targets), NULL);
@@ -1791,6 +2011,7 @@ static bool gpu_map_world_commands_submit(void) {
     if (!gpu_map_world_instance_buffers_reserve(target, MAX(pending_world_slots_num, (size_t)1))) {
         return false;
     }
+    bool cycle_instance_buffer = gpu_map_pending_target_in_use(active_target_index);
     bool changed = false;
     size_t changed_slots = 0;
     for (size_t slot = 0; slot < pending_world_slots_num && !changed; slot++) {
@@ -1841,11 +2062,12 @@ static bool gpu_map_world_commands_submit(void) {
         if (mapped == NULL) {
             return false;
         }
-        if (!target->world_instance_valid) {
+        if (!target->world_instance_valid || cycle_instance_buffer) {
             memset(mapped, 0, target->world_instance_bytes);
         }
         for (size_t slot = 0; slot < pending_world_slots_num; slot++) {
-            if (gpu_map_world_slot_changed(target, slot)) {
+            if (!target->world_instance_valid || cycle_instance_buffer ||
+                gpu_map_world_slot_changed(target, slot)) {
                 mapped[slot] = pending_world_instances[slot];
             }
         }
@@ -1855,13 +2077,15 @@ static bool gpu_map_world_commands_submit(void) {
             return false;
         }
         for (size_t first = 0; first < pending_world_slots_num;) {
-            if (target->world_instance_valid && !gpu_map_world_slot_changed(target, first)) {
+            if (target->world_instance_valid && !cycle_instance_buffer &&
+                !gpu_map_world_slot_changed(target, first)) {
                 first++;
                 continue;
             }
             size_t end = first + 1U;
             while (end < pending_world_slots_num &&
-                   (!target->world_instance_valid || gpu_map_world_slot_changed(target, end))) {
+                   (!target->world_instance_valid || cycle_instance_buffer ||
+                    gpu_map_world_slot_changed(target, end))) {
                 end++;
             }
             uint32_t offset = (uint32_t)(first * sizeof(gpu_map_world_instance_t));
@@ -1875,7 +2099,7 @@ static bool gpu_map_world_commands_submit(void) {
                 .offset = offset,
                 .size = bytes,
             };
-            SDL_UploadToGPUBuffer(copy, &source, &destination, false);
+            SDL_UploadToGPUBuffer(copy, &source, &destination, cycle_instance_buffer);
             gpu_renderer_statistics_instance_upload(bytes);
             first = end;
         }
@@ -1984,7 +2208,8 @@ static bool gpu_map_light_buffer_upload_delta(SDL_GPUBuffer *buffer,
                                               size_t current_count,
                                               const void *uploaded,
                                               size_t uploaded_count,
-                                              size_t record_size) {
+                                              size_t record_size,
+                                              bool cycle) {
     if (current_count == 0) {
         return true;
     }
@@ -1993,7 +2218,7 @@ static bool gpu_map_light_buffer_upload_delta(SDL_GPUBuffer *buffer,
         return false;
     }
 
-    bool full_upload = !uploaded_light_quads_valid;
+    bool full_upload = cycle || !uploaded_light_quads_valid;
     const uint8_t *current_bytes = current;
     const uint8_t *uploaded_bytes = uploaded;
     for (size_t index = 0; index < current_count; index++) {
@@ -2039,7 +2264,7 @@ static bool gpu_map_light_buffer_upload_delta(SDL_GPUBuffer *buffer,
             .offset = (uint32_t)offset_bytes,
             .size = (uint32_t)upload_bytes,
         };
-        SDL_UploadToGPUBuffer(copy, &source, &destination, false);
+        SDL_UploadToGPUBuffer(copy, &source, &destination, cycle);
         gpu_renderer_statistics_light_upload(upload_bytes);
         first = end;
     }
@@ -2174,6 +2399,13 @@ static gpu_map_asset_t *gpu_map_asset_create(SDL_Surface *surface) {
     asset->bytes = (size_t)surface->w * (size_t)surface->h * 4U;
     asset->standalone =
         asset->width > GPU_MAP_ATLAS_MAX_ASSET_SIZE || asset->height > GPU_MAP_ATLAS_MAX_ASSET_SIZE;
+    asset->texture_flags = (asset->standalone ? GPU_SPRITE_TEXTURE_STANDALONE
+                                               : GPU_SPRITE_TEXTURE_ATLAS) |
+                           GPU_SPRITE_TEXTURE_STRAIGHT_ALPHA |
+                           GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE;
+    if (SDL_SurfaceHasColorKey(surface)) {
+        asset->texture_flags |= GPU_SPRITE_TEXTURE_SOURCE_COLOR_KEY;
+    }
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
     bool allocation_fault =
         gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_ALLOCATION);
@@ -2346,6 +2578,14 @@ void gpu_map_renderer_destroy(void) {
     }
     gpu_map_world_commands_release(world_commands, world_commands_num);
     world_commands_num = 0;
+    /* The owning renderer normally waits for the device before entering
+     * teardown. Keep this direct destroy path safe as well; a failed wait
+     * abandons the records and requests bounded renderer reconstruction. */
+    (void)gpu_map_pending_wait_all();
+    if (abandoned_submissions != NULL) {
+        (void)SDL_WaitForGPUIdle(map_device);
+        gpu_map_pending_abandoned_destroy();
+    }
     gpu_map_targets_destroy();
     gpu_map_assets_destroy();
     gpu_map_atlas_pages_destroy();
@@ -2483,8 +2723,28 @@ void gpu_map_renderer_destroy(void) {
     projected_light_row_buffer = NULL;
     projected_light_row_transfer = NULL;
     map_sampler = NULL;
+    pending_submissions = NULL;
+    pending_submissions_tail = NULL;
+    abandoned_submissions = NULL;
+    pending_submission_count = 0;
+    next_pending_submission_id = 1;
+    next_map_generation = 1;
+    map_frame_started_at_ns = 0;
     map_device = NULL;
     map_renderer = NULL;
+}
+
+void gpu_map_renderer_poll(void) {
+    if (map_device != NULL) {
+        gpu_map_pending_poll();
+    }
+}
+
+bool gpu_map_renderer_wait_idle(void) {
+    if (map_device == NULL) {
+        return true;
+    }
+    return gpu_map_pending_wait_all();
 }
 
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
@@ -2493,8 +2753,28 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
     map_frame_target_resized = target->albedo != NULL &&
                                (target->width != width || target->height != height);
     map_frame_resource_replaced = false;
-    if (map_device == NULL || width <= 0 || height <= 0 || !SDL_FlushRenderer(map_renderer) ||
-        !gpu_map_target_create(target, width, height)) {
+    if (map_device == NULL || width <= 0 || height <= 0 || !SDL_FlushRenderer(map_renderer)) {
+        return false;
+    }
+    gpu_map_pending_poll();
+    if (target->albedo != NULL && (target->width != width || target->height != height)) {
+        uint64_t started = gpu_renderer_timing_begin();
+        bool idle = SDL_WaitForGPUIdle(map_device);
+        if (idle) {
+            idle = gpu_map_renderer_wait_idle();
+        }
+        gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMPLETION, started);
+        if (!idle) {
+            gpu_renderer_recreation_request();
+            return false;
+        }
+    }
+    while (pending_submission_count >= GPU_MAP_MAX_IN_FLIGHT) {
+        if (!gpu_map_pending_wait_oldest()) {
+            return false;
+        }
+    }
+    if (!gpu_map_target_create(target, width, height)) {
         return false;
     }
     gpu_map_target_activate(target_index);
@@ -2524,6 +2804,7 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
     projected_light_rows_num = lookup_entries;
     projected_light_rows_used = false;
     projected_light_rows_uploaded = false;
+    map_frame_started_at_ns = gpu_renderer_timing_begin();
     map_command_buffer = SDL_AcquireGPUCommandBuffer(map_device);
     world_pass = NULL;
     world_pass_load_existing = false;
@@ -2975,6 +3256,17 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                        (float)green / 255.0f,
                        (float)blue / 255.0f,
                        (float)alpha / 255.0f},
+        .texture_flags = asset->texture_flags,
+        .texture_metadata = {1.0f / texture_width,
+                              1.0f / texture_height,
+                              0.5f / texture_width,
+                              0.5f / texture_height},
+        .transform = {0.0f, 1.0f, 1.0f, 0.0f},
+        .effect_color = {1.0f, 1.0f, 1.0f, 1.0f},
+        .effect_parameters = {1.0f, 0.0f, 0.0f, 0.0f},
+        .owner_depth =
+            gpu_sprite_owner_depth_pack(GPU_SPRITE_OWNER_UNSET, GPU_SPRITE_DEPTH_UNSET),
+        .abi_version = GPU_SPRITE_INSTANCE_ABI_VERSION,
     };
 
     SDL_Rect base_clip =
@@ -2982,7 +3274,7 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
     if (base_clip.w <= 0 || base_clip.h <= 0) {
         return true;
     }
-    instance.owner = GPU_MAP_LIGHT_KEY_UNLIT;
+    instance.lighting_key = GPU_MAP_LIGHT_KEY_UNLIT;
     if (current_light_owner != GPU_RENDERER_OWNER_UNLIT) {
         if (current_light_projected) {
             int first_y = MAX(0, (int)floorf(destination->y));
@@ -2996,17 +3288,18 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                     row == GPU_MAP_LIGHT_KEY_UNLIT ? GPU_MAP_LIGHT_KEY_UNLIT : (uint32_t)(row + 1U);
             }
             projected_light_rows_used = true;
-            instance.owner = GPU_MAP_LIGHT_KEY_PROJECTED | current_light_owner;
+            instance.lighting_key = GPU_MAP_LIGHT_KEY_PROJECTED | current_light_owner;
         } else {
             int sample_y = MAX(0, MIN(target_height - 1, current_light_sample_y));
             size_t row = gpu_map_light_row_build(current_light_owner, sample_y);
             if (row == SIZE_MAX) {
                 return false;
             }
-            instance.owner =
+            instance.lighting_key =
                 row == GPU_MAP_LIGHT_KEY_UNLIT ? GPU_MAP_LIGHT_KEY_UNLIT : (uint32_t)(row + 1U);
         }
     }
+    HARD_ASSERT(gpu_sprite_instance_valid(&instance));
     if (world_commands_num == world_commands_capacity) {
         world_commands_capacity =
             world_commands_capacity == 0 ? 1024U : world_commands_capacity * 2U;
@@ -3032,8 +3325,8 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                                                                &instance.modulation,
                                                                sizeof(instance.modulation));
     map_frame_effect_generation = gpu_map_contract_hash_append(map_frame_effect_generation,
-                                                               &instance.owner,
-                                                               sizeof(instance.owner));
+                                                               &instance.lighting_key,
+                                                               sizeof(instance.lighting_key));
     gpu_map_asset_retain(asset);
     world_commands[world_commands_num] = (gpu_map_world_command_t){
         .instance = instance,
@@ -3149,6 +3442,7 @@ bool gpu_map_renderer_end(void) {
                                                                           uploaded_light_spans,
                                                                           uploaded_light_spans_num,
                                                                           sizeof(*light_spans));
+    bool cycle_light_buffers = pending_submissions != NULL;
     bool light_changed = quad_changed || row_changed || span_changed;
     if (light_changed && (light_bytes != 0 || row_bytes != 0 || span_bytes != 0)) {
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
@@ -3164,21 +3458,24 @@ bool gpu_map_renderer_end(void) {
                                                                 light_quads_num,
                                                                 uploaded_light_quads,
                                                                 uploaded_light_quads_num,
-                                                                sizeof(*light_quads))) ||
+                                                                sizeof(*light_quads),
+                                                                cycle_light_buffers)) ||
             (row_changed && !gpu_map_light_buffer_upload_delta(light_row_buffer,
                                                                light_row_transfer,
                                                                light_rows,
                                                                light_rows_num,
                                                                uploaded_light_rows,
                                                                uploaded_light_rows_num,
-                                                               sizeof(*light_rows))) ||
+                                                               sizeof(*light_rows),
+                                                               cycle_light_buffers)) ||
             (span_changed && !gpu_map_light_buffer_upload_delta(light_span_buffer,
                                                                 light_span_transfer,
                                                                 light_spans,
                                                                 light_spans_num,
                                                                 uploaded_light_spans,
                                                                 uploaded_light_spans_num,
-                                                                sizeof(*light_spans)))) {
+                                                                sizeof(*light_spans),
+                                                                cycle_light_buffers))) {
             gpu_renderer_timing_end(GPU_RENDERER_TIMING_LIGHT_TONE, light_timing_started);
             gpu_map_command_cancel();
             return false;
@@ -3203,6 +3500,7 @@ bool gpu_map_renderer_end(void) {
         .clear_color = {0.0f, 0.0f, 0.0f, 0.0f},
         .load_op = final_load_clear ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD,
         .store_op = SDL_GPU_STOREOP_STORE,
+        .cycle = final_load_clear,
     };
     SDL_GPURenderPass *final_pass =
         SDL_BeginGPURenderPass(map_command_buffer, &final_info, 1, NULL);
@@ -3254,13 +3552,10 @@ bool gpu_map_renderer_end(void) {
     map_command_buffer = NULL;
     if (fence == NULL) {
         gpu_map_command_cancel();
+        map_frame_started_at_ns = 0;
         return false;
     }
-    uint64_t completion_started = gpu_renderer_timing_begin();
-    bool completed = SDL_WaitForGPUFences(map_device, true, &fence, 1);
-    gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMPLETION, completion_started);
-    SDL_ReleaseGPUFence(map_device, fence);
-    if (completed && light_changed) {
+    if (light_changed) {
         if (light_quads_num != 0) {
             uploaded_light_quads =
                 xreallocarray(uploaded_light_quads, light_quads_num, sizeof(*uploaded_light_quads));
@@ -3281,7 +3576,7 @@ bool gpu_map_renderer_end(void) {
         uploaded_light_spans_num = light_spans_num;
         uploaded_light_quads_valid = true;
     }
-    if (completed && projected_light_rows_uploaded) {
+    if (projected_light_rows_uploaded) {
         uploaded_projected_light_rows = xreallocarray(uploaded_projected_light_rows,
                                                       projected_light_rows_num,
                                                       sizeof(*uploaded_projected_light_rows));
@@ -3291,35 +3586,36 @@ bool gpu_map_renderer_end(void) {
         uploaded_projected_light_rows_num = projected_light_rows_num;
         uploaded_projected_light_rows_valid = true;
     }
-    if (completed) {
-        if (world_frame_updated) {
-            gpu_map_world_commands_commit();
-        }
-        target->published = true;
-        target->published_generation++;
-        if (target->published_generation == 0) {
-            target->published_generation = 1;
-        }
-        gpu_map_target_contract_commit(target);
-        bool damage_frame = !final_full_redraw && world_frame_damage_valid;
-        size_t damage_pixels = damage_frame
-                                   ? (size_t)world_frame_damage.w * (size_t)world_frame_damage.h
-                                   : 0;
-        size_t damage_bytes = damage_pixels <= SIZE_MAX / 8U ? damage_pixels * 8U : SIZE_MAX;
-        gpu_renderer_map_frame_diagnostics_t diagnostics = gpu_map_frame_diagnostics(target,
-                                                                                     target_was_published,
-                                                                                     light_changed,
-                                                                                     final_full_redraw);
-        gpu_renderer_statistics_map_frame(final_full_redraw,
-                                          damage_frame,
-                                          damage_pixels,
-                                          damage_bytes,
-                                          false,
-                                          &diagnostics);
-    } else {
-        gpu_map_command_cancel();
+    size_t target_index = active_target_index;
+    uint64_t generation = next_map_generation++;
+    if (next_map_generation == 0) {
+        next_map_generation = 1;
     }
-    return completed;
+    if (!gpu_map_pending_enqueue(fence, target_index, generation, map_frame_started_at_ns)) {
+        SDL_ReleaseGPUFence(map_device, fence);
+        gpu_map_command_cancel();
+        map_frame_started_at_ns = 0;
+        return false;
+    }
+    gpu_map_world_commands_commit();
+    map_targets[target_index].published_generation = generation;
+    map_targets[target_index].published = true;
+    gpu_map_target_contract_commit(target);
+    bool damage_frame = !final_full_redraw && world_frame_damage_valid;
+    size_t damage_pixels = damage_frame ? (size_t)world_frame_damage.w * (size_t)world_frame_damage.h : 0;
+    size_t damage_bytes = damage_pixels <= SIZE_MAX / 8U ? damage_pixels * 8U : SIZE_MAX;
+    gpu_renderer_map_frame_diagnostics_t diagnostics = gpu_map_frame_diagnostics(target,
+                                                                                 target_was_published,
+                                                                                 light_changed,
+                                                                                 final_full_redraw);
+    gpu_renderer_statistics_map_frame(final_full_redraw,
+                                      damage_frame,
+                                      damage_pixels,
+                                      damage_bytes,
+                                      false,
+                                      &diagnostics);
+    map_frame_started_at_ns = 0;
+    return true;
 }
 
 SDL_Texture *gpu_map_renderer_texture(bool auxiliary) {
@@ -3371,11 +3667,15 @@ size_t gpu_map_renderer_lit_instance_count(bool auxiliary) {
     size_t count = 0;
     for (size_t slot = 0; slot < target->world_commands_num; slot++) {
         if (target->world_slot_active[slot] &&
-            target->world_commands[slot].instance.owner != GPU_MAP_LIGHT_KEY_UNLIT) {
+            target->world_commands[slot].instance.lighting_key != GPU_MAP_LIGHT_KEY_UNLIT) {
             count++;
         }
     }
     return count;
+}
+
+size_t gpu_map_renderer_pending_submission_count(void) {
+    return pending_submission_count;
 }
 
 static bool gpu_map_renderer_download_pixel(SDL_GPUTexture *texture,
@@ -3593,6 +3893,7 @@ bool gpu_map_renderer_probe(int x, int y, uint8_t light_owner, gpu_map_renderer_
         return false;
     }
     memset(probe, 0, sizeof(*probe));
+    uint64_t completion_started = gpu_renderer_timing_begin();
     bool downloaded = gpu_map_renderer_download_pixel(albedo_target, 0, x, y, 4, probe->albedo) &&
                       gpu_map_renderer_download_pixel(owner_target,
                                                       0,
@@ -3601,8 +3902,14 @@ bool gpu_map_renderer_probe(int x, int y, uint8_t light_owner, gpu_map_renderer_
                                                       sizeof(probe->lighting_key),
                                                       &probe->lighting_key) &&
                       gpu_map_renderer_download_pixel(final_target, 0, x, y, 4, probe->final_color);
-    return downloaded &&
-           gpu_map_renderer_probe_light(probe->lighting_key, x, light_owner, probe->light);
+    gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMPLETION, completion_started);
+    bool valid = downloaded &&
+                 gpu_map_renderer_probe_light(probe->lighting_key, x, light_owner, probe->light);
+    /* A probe is an explicit synchronous readback checkpoint. Retire the map
+     * fence it ordered behind so completion statistics and asset lifetimes
+     * stay current for the conformance caller. */
+    gpu_map_pending_poll();
+    return valid;
 }
 #endif
 

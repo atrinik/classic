@@ -35,6 +35,33 @@ def png(width: int, height: int) -> bytes:
             chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b""))
 
 
+def map_pacing(submissions: int = 0, completions: int | None = None) -> dict:
+    if completions is None:
+        completions = submissions
+    peak = 1 if submissions else 0
+    return {
+        "submissions": submissions,
+        "completions": completions,
+        "in_flight_peak": peak,
+        "queue_depth_samples": submissions,
+        "queue_depth_total": 0,
+        "queue_age_total_ns": completions * 100,
+        "queue_age_max_ns": 100 if completions else 0,
+        "frame_latency_total_ns": completions * 200,
+        "frame_latency_max_ns": 200 if completions else 0,
+        "dropped_updates": 0,
+        "merged_updates": 0,
+        "cpu_recording_calls": submissions,
+        "cpu_recording_ns": submissions * 10,
+        "submission_calls": submissions,
+        "submission_ns": submissions * 10,
+        "completion_calls": completions,
+        "completion_ns": completions * 10,
+        "present_wait_calls": submissions,
+        "present_wait_ns": submissions * 10,
+    }
+
+
 def record(name="dense-17x17-five-depth-1080p"):
     stages = {
         stage: [1000] * 40
@@ -77,6 +104,7 @@ def record(name="dense-17x17-five-depth-1080p"):
         "resource_destructions": 0, "readbacks": 0, "commands": 100,
         "batches": 80, "draws": 80, "retained_bytes": 4,
         "peak_retained_bytes": 4, "fallbacks": 0,
+        "map_pacing": map_pacing(40),
     }
     if animation:
         map_statistics.update({
@@ -319,7 +347,8 @@ class VerifyGpuQualificationTests(unittest.TestCase):
                            } else 1,
                            "recovery_failures": 0,
                            "readbacks": 1 if name == "screenshot_readback" else 0,
-                           "fallbacks": 0},
+                           "fallbacks": 0,
+                           "map_pacing": map_pacing(1 if name == "cold_asset_upload" else 0)},
                 "output_size": [1056, 804] if name == "resize_grow" else [1024, 780],
                 "display_mode_size": [1024, 780] if name == "fullscreen_enter" else [0, 0],
                 "pixels_sha256": "4" * 64 if name == "resize_grow" else (
@@ -333,10 +362,11 @@ class VerifyGpuQualificationTests(unittest.TestCase):
                                  "slot_uniform_upload_bytes": 0,
                                  "resource_creations": 0, "resource_destructions": 0,
                                  "readbacks": 0, "commands": 1, "batches": 1,
-                                 "draws": 1, "retained_bytes": 4, "fallbacks": 0},
+                                 "draws": 1, "retained_bytes": 4, "fallbacks": 0,
+                                 "map_pacing": map_pacing(40)},
             })
         value = {
-            "schema_version": 2,
+            "schema_version": 3,
             "benchmark": "gpu-production-recovery-lifecycle",
             "fixture": "brynknot-movement",
             "manifest_sha256": "7" * 64,
@@ -392,6 +422,7 @@ class VerifyGpuQualificationTests(unittest.TestCase):
                     "recovery_failures": 0,
                     "readbacks": 1 if name == "screenshot_readback" else 0,
                     "fallbacks": 0,
+                    "map_pacing": map_pacing(1 if name == "cold_asset_upload" else 0),
                 },
                 "output_size": [1056, 804] if name == "resize_grow" else [1024, 780],
                 "display_mode_size": [1024, 780] if name == "fullscreen_enter" else [0, 0],
@@ -405,10 +436,11 @@ class VerifyGpuQualificationTests(unittest.TestCase):
                     "slot_uniform_upload_bytes": 0, "resource_creations": 0,
                     "resource_destructions": 0, "readbacks": 0, "commands": 1,
                     "batches": 1, "draws": 1, "retained_bytes": 4, "fallbacks": 0,
+                    "map_pacing": map_pacing(40),
                 },
             })
         value = {
-            "schema_version": 2, "benchmark": "gpu-production-recovery-lifecycle",
+            "schema_version": 3, "benchmark": "gpu-production-recovery-lifecycle",
             "fixture": "brynknot-movement", "manifest_sha256": "7" * 64,
             "viewport": [1024, 780], "resize_delta": [32, 24], "revision": "1" * 40,
             "dirty": False,

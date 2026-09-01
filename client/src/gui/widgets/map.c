@@ -3925,9 +3925,12 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
+        uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
+        if (data->cell->fow && remembered) {
+            radiance = map_visibility_memory_floor(radiance);
+        }
         effects.dark_level =
-            (UINT8_MAX - lighting_radiance_to_level(
-                             map_cell_light_record_read(data->cell, data->sub_layer)->radiance)) *
+            (UINT8_MAX - lighting_radiance_to_level(radiance)) *
             DARK_LEVELS / UINT8_MAX;
     }
 
@@ -4924,10 +4927,14 @@ static bool map_cell_has_remembered_geometry(const map_cell_t *cell) {
 
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         for (int object_layer = LAYER_FLOOR; object_layer <= LAYER_WALL; object_layer++) {
-            if (map_layer_is_remembered((uint8_t)object_layer) &&
+            if (!map_layer_is_remembered((uint8_t)object_layer)) {
+                continue;
+            }
+            const map_cell_layer_record_t *record =
                 map_cell_layer_record((map_cell_t *)cell,
                                       GET_MAP_LAYER(object_layer, sub_layer),
-                                      false) != NULL) {
+                                      false);
+            if (record != NULL && record->face != 0) {
                 return true;
             }
         }
@@ -5759,7 +5766,9 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     };
     uint16_t rgb[3];
     map_lighting_radiance(x, y, cell, sub_layer, &vertex.scalar, rgb);
-    if (data->primary_level && data->depth == 0 && !cell->fow) {
+    if (cell->fow && map_cell_has_remembered_geometry(cell)) {
+        map_visibility_apply_memory_floor(&vertex.scalar, rgb);
+    } else if (data->primary_level && data->depth == 0 && !cell->fow) {
         uint16_t weight = map_visibility_field_weight(x - data->midx, y - data->midy);
         vertex.scalar = map_visibility_add_player_radiance(vertex.scalar, weight);
         for (size_t channel = 0; channel < 3; channel++) {
@@ -7597,6 +7606,7 @@ void map_draw_map(SDL_Surface *surface) {
 
     if (!gpu_output) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         SDL_SetError("mandatory GPU map renderer is unavailable");
         LOG(ERROR, "%s", SDL_GetError());
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
@@ -7619,6 +7629,7 @@ void map_draw_map(SDL_Surface *surface) {
                                    : gpu_renderer_map_begin(surface->w, surface->h);
     if (!began) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         LOG(ERROR, "Could not begin retained GPU map target: %s", SDL_GetError());
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
         return;
@@ -7689,6 +7700,7 @@ void map_draw_map(SDL_Surface *surface) {
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMMAND_BUILD, gpu_command_build_started);
     if (!gpu_renderer_map_end()) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         if (primary_surface) {
             map_retained_primary_projection.valid = false;
         }
@@ -8684,6 +8696,59 @@ bool widget_map_projection_contract_test(void) {
                       BIT_QUERY(context.commands[2].effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
                       !BIT_QUERY(context.commands[2].effects.flags,
                                  SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+
+            map_cell_light_record_t *light = map_cell_light_record(cell, 0, true);
+            uint8_t saved_fow = cell->fow;
+            uint16_t saved_radiance = light != NULL ? light->radiance : 0;
+            if (light == NULL) {
+                success = false;
+            } else {
+                cell->fow = true;
+                light->radiance = 0;
+
+                map_render_context_t remembered_context = {0};
+                map_render_data_t remembered = production;
+                remembered.render_context = &remembered_context;
+                remembered.layer = LAYER_FLOOR;
+                remembered.ground_pass = false;
+                remembered.smooth_lighting = false;
+                remembered.lightmap_pending = false;
+                draw_map_object(surface, &remembered);
+                uint8_t expected_dark_level =
+                    (UINT8_MAX - lighting_radiance_to_level(
+                                    MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE)) *
+                    DARK_LEVELS / UINT8_MAX;
+                success = success && remembered_context.commands_num == 1 &&
+                          BIT_QUERY(remembered_context.commands[0].effects.flags,
+                                    SPRITE_FLAG_DARK) &&
+                          remembered_context.commands[0].effects.dark_level == expected_dark_level;
+
+                map_render_data_t lighting = {
+                    .midx = MAP_STARTX,
+                    .midy = MAP_STARTY,
+                    .primary_level = true,
+                    .depth = 0,
+                };
+                lighting_vertex_t remembered_vertex =
+                    map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
+                success = success &&
+                          remembered_vertex.scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.red == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.green == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.blue == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+
+                cell->fow = false;
+                lighting_vertex_t visible_vertex =
+                    map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
+                success = success &&
+                          visible_vertex.scalar ==
+                              map_visibility_add_player_radiance(
+                                  0, map_visibility_field_weight(0, 0));
+
+                cell->fow = saved_fow;
+                light->radiance = saved_radiance;
+                free(remembered_context.commands);
+            }
         }
         FaceList[1].sprite = saved_sprite;
         MapData.height_diff = saved_height_diff;
