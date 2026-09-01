@@ -40,23 +40,16 @@
 /** Seconds before the player may request another recovery. */
 #define PLAYER_STUCK_COOLDOWN_SECONDS (5U * 60U)
 
-/**
- * Process the active recovery countdown.
- *
- * @return
- * True if the caller may continue processing the player this tick; false if
- * map transfer was attempted or the player object was destroyed.
- */
-bool player_stuck_process(object *op);
-/** Process all active recovery requests after the current object tick. */
-void player_stuck_process_all(void);
-void player_stuck_cancel(object *op);
+/** Status key used by the transient recovery effect. */
+#define PLAYER_STUCK_STATUS_KEY "command:stuck"
 
-#ifdef ATRINIK_TESTING
-/** Reset the test observation of active-countdown cancellation. */
-void player_stuck_cancel_observation_reset_for_test(void);
-/** Whether a test has observed an active countdown being cancelled. */
-bool player_stuck_cancel_observed_active_for_test(void);
-#endif
+/** Whether the object is the active /stuck recovery effect. */
+bool player_stuck_effect(const object *op);
+
+/** Process an expired /stuck recovery effect. */
+void player_stuck_process_effect(object *op);
+
+/** Remove every active /stuck recovery effect from a player. */
+bool player_stuck_cancel(object *op);
 
 #endif

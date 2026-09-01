@@ -53,7 +53,6 @@ static bool test_drop_event_veto;
 static bool test_map_pickup_event_veto;
 static bool test_map_drop_event_veto;
 static bool test_player_save_failure;
-static bool test_player_save_observed_stuck_clear;
 
 void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool map_drop) {
     test_pickup_event_veto = pickup;
@@ -66,13 +65,6 @@ void player_save_fail_for_test(bool fail) {
     test_player_save_failure = fail;
 }
 
-void player_save_observation_reset_for_test(void) {
-    test_player_save_observed_stuck_clear = false;
-}
-
-bool player_save_observed_stuck_clear_for_test(void) {
-    return test_player_save_observed_stuck_clear;
-}
 #endif
 #include <player_status.h>
 #include <player.h>
@@ -93,8 +85,8 @@ void player_mark_combat(player *pl) {
     HARD_ASSERT(pl != NULL);
 
     pl->last_combat = pticks;
-    if (pl->combat_event_sequence != UINT64_MAX) {
-        pl->combat_event_sequence++;
+    if (pl->ob != NULL && player_stuck_cancel(pl->ob)) {
+        draw_info(COLOR_WHITE, pl->ob, "Your stuck recovery was interrupted by combat.");
     }
 }
 
@@ -3289,9 +3281,6 @@ bool player_save_checked(object *op) {
     HARD_ASSERT(op != NULL);
 
 #ifdef ATRINIK_TESTING
-    if (CONTR(op) != NULL && CONTR(op)->stuck_deadline.value == 0) {
-        test_player_save_observed_stuck_clear = true;
-    }
     if (test_player_save_failure) {
         return false;
     }

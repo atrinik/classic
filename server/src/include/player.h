@@ -502,22 +502,8 @@ struct pl_player {
     char journal_run_id[33];
     uint64_t journal_sequence;
 
-    /* Keep new transient /stuck state at the end to preserve existing plugin
-     * offsets in this public player layout. */
-    /** Monotonic per-player combat event generation. */
-    uint64_t combat_event_sequence;
-
-    /** Simulation deadline for the active /stuck countdown. */
-    server_tick_t stuck_deadline;
-
     /** UTC deadline for the durable /stuck cooldown. */
     server_wall_utc_t stuck_cooldown;
-
-    /** Simulation tick at which the active /stuck countdown began. */
-    server_tick_t stuck_started;
-
-    /** Combat event generation observed when /stuck began. */
-    uint64_t stuck_combat_event_sequence;
 };
 
 /* Prototypes */
@@ -557,8 +543,6 @@ void drop_object(object *op, object *tmp, long nrof, int no_mevent);
 #ifdef ATRINIK_TESTING
 void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool map_drop);
 void player_save_fail_for_test(bool fail);
-void player_save_observation_reset_for_test(void);
-bool player_save_observed_stuck_clear_for_test(void);
 #endif
 void drop(object *op, object *tmp, int no_mevent);
 char *player_make_path(const char *name, const char *ext);

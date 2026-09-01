@@ -43,7 +43,6 @@
 #include <arch.h>
 #include <object.h>
 #include <player.h>
-#include <stuck.h>
 #include <gameplay_journal.h>
 #include <object_methods.h>
 #include <door.h>
@@ -2429,12 +2428,6 @@ object *object_insert_map(object *op, mapstruct *m, object *originator, int flag
     if (!QUERY_FLAG(op, FLAG_REMOVED)) {
         log_error("Attempted to insert non-removed object: %s", object_get_str(op));
         return op;
-    }
-
-    /* A map insertion is a movement boundary for players. Clear transient
-     * movement-dependent actions before any map or walk-on callback can run. */
-    if (op->type == PLAYER) {
-        player_stuck_cancel(op);
     }
 
     if (op->head == NULL && op->arch->more != NULL && op->more == NULL) {
@@ -4824,7 +4817,7 @@ object *object_create_singularity(const char *name) {
 void object_save(const object *op, FILE *fp) {
     HARD_ASSERT(op != NULL);
 
-    if (fp == NULL) {
+    if (fp == NULL || QUERY_FLAG(op, FLAG_NO_SAVE)) {
         return;
     }
 

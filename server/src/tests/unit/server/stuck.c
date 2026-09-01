@@ -9,6 +9,10 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
+/** @file Tests the /stuck player command and its transient effect. */
+
+#include <math.h>
+
 #include <global.h>
 #include <server_main.h>
 #include <server.h>
@@ -20,6 +24,7 @@
 #include <movement.h>
 #include <object.h>
 #include <player.h>
+#include <player_status.h>
 #include <server_clock_fake.h>
 #include <spells.h>
 #include <stuck.h>
@@ -37,9 +42,7 @@ static void stuck_test_setup(void) {
 }
 
 static void stuck_test_teardown(void) {
-    player_stuck_cancel_observation_reset_for_test();
     player_save_fail_for_test(false);
-    player_save_observation_reset_for_test();
     server_clock_fake_uninstall();
     pticks = saved_pticks;
 }
@@ -48,6 +51,16 @@ static void stuck_test_prepare_player(mapstruct **map, object **pl, const char *
     check_setup_env_pl(map, pl);
     FREE_AND_COPY_HASH((*map)->path, "/tests/stuck-source");
     FREE_AND_COPY_HASH((*pl)->name, name);
+    CONTR(*pl)->cs->state = ST_PLAYING;
+}
+
+static object *stuck_test_find_effect(object *pl) {
+    for (object *effect = pl->inv; effect != NULL; effect = effect->below) {
+        if (player_stuck_effect(effect)) {
+            return effect;
+        }
+    }
+    return NULL;
 }
 
 static bool stuck_test_has_message(object *pl, const char *expected) {
@@ -75,19 +88,44 @@ static bool stuck_test_has_message(object *pl, const char *expected) {
     return false;
 }
 
-static server_tick_duration_t stuck_test_countdown(void) {
-    server_tick_duration_t countdown;
-    ck_assert(server_duration_to_ticks(server_duration_from_seconds(
-                                          PLAYER_STUCK_COUNTDOWN_SECONDS),
-                                      &countdown));
-    return countdown;
+static bool stuck_test_has_status(object *pl, int32_t expected_seconds) {
+    for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type != CLIENT_CMD_PLAYER_STATUS) {
+            continue;
+        }
+
+        packet_reader_t reader;
+        char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
+        char name[ATRINIK_PLAYER_STATUS_NAME_SIZE + 1U];
+        char tooltip[ATRINIK_PLAYER_STATUS_TOOLTIP_SIZE + 1U];
+        packet_reader_init(&reader, packet->data, packet->len);
+        if (packet_reader_read_uint8(&reader) != PLAYER_STATUS_UPSERT ||
+            !packet_reader_read_string(&reader, VS(key)) || !packet_reader_read_uint16(&reader) ||
+            !packet_reader_read_string(&reader, VS(name)) ||
+            !packet_reader_read_string(&reader, VS(tooltip)) ||
+            packet_reader_read_int32(&reader) != expected_seconds ||
+            packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+            continue;
+        }
+
+        return strcmp(key, PLAYER_STUCK_STATUS_KEY) == 0 && strcmp(name, "stuck recovery") == 0;
+    }
+
+    return false;
 }
 
 static void stuck_test_start(object *pl) {
     command_stuck(pl, "stuck", NULL);
-    ck_assert_uint_gt(CONTR(pl)->stuck_deadline.value, server_tick_now().value);
-    ck_assert_int_eq(CONTR(pl)->stuck_cooldown.seconds, INT64_C(1700000000) +
-                                                            PLAYER_STUCK_COOLDOWN_SECONDS);
+
+    object *effect = stuck_test_find_effect(pl);
+    ck_assert_ptr_nonnull(effect);
+    ck_assert_int_eq(effect->type, WORD_OF_RECALL);
+    ck_assert_double_gt(effect->speed, 0.0);
+    ck_assert(fabs(effect->speed - 1.0 / (PLAYER_STUCK_COUNTDOWN_SECONDS * MAX_TICKS)) < 0.000001);
+    ck_assert_double_eq(effect->speed_left, -1.0);
+    ck_assert(player_status_should_publish(effect));
+    ck_assert_int_eq(CONTR(pl)->stuck_cooldown.seconds,
+                     INT64_C(1700000000) + PLAYER_STUCK_COOLDOWN_SECONDS);
 }
 
 static player *stuck_test_load_state(FILE *fp, const char *name, object **loaded) {
@@ -103,6 +141,16 @@ static player *stuck_test_load_state(FILE *fp, const char *name, object **loaded
     return state;
 }
 
+static void stuck_test_run_countdown(object *pl, mapstruct *source_map) {
+    object *effect = stuck_test_find_effect(pl);
+    ck_assert_ptr_nonnull(effect);
+
+    size_t ticks = (size_t)ceil(1.0 / effect->speed) + 2U;
+    for (size_t i = 0; i < ticks && pl->map == source_map; i++) {
+        process_events();
+    }
+}
+
 START_TEST(test_stuck_command_is_registered_and_has_no_destination_arguments) {
     mapstruct *map;
     object *pl;
@@ -110,8 +158,19 @@ START_TEST(test_stuck_command_is_registered_and_has_no_destination_arguments) {
 
     char command[] = "/stuck somewhere";
     commands_handle(pl, command);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
+    ck_assert_ptr_null(stuck_test_find_effect(pl));
+    ck_assert_int_eq(CONTR(pl)->stuck_cooldown.seconds, 0);
     ck_assert(stuck_test_has_message(pl, "Usage: /stuck"));
+}
+END_TEST
+
+START_TEST(test_stuck_start_publishes_a_ticking_status_effect) {
+    mapstruct *map;
+    object *pl;
+    stuck_test_prepare_player(&map, &pl, "Stuck Status Effect");
+
+    stuck_test_start(pl);
+    ck_assert(stuck_test_has_status(pl, PLAYER_STUCK_COUNTDOWN_SECONDS));
 }
 END_TEST
 
@@ -121,46 +180,38 @@ START_TEST(test_stuck_countdown_transfers_to_emergency_map) {
     stuck_test_prepare_player(&map, &pl, "Stuck Successful Recovery");
 
     stuck_test_start(pl);
-    server_tick_duration_t countdown = stuck_test_countdown();
-    server_clock_fake_advance_ticks((server_tick_duration_t){countdown.value - 1});
-    ck_assert(player_stuck_process(pl));
-    ck_assert_ptr_eq(pl->map, map);
+    stuck_test_run_countdown(pl, map);
 
-    server_clock_fake_advance_ticks((server_tick_duration_t){1});
-    ck_assert(!player_stuck_process(pl));
-    /* The generic emergency fallback owns map loading and any walk-on
-     * behavior of the emergency map. The stuck command only requests that
-     * fallback; it does not resolve the map's exit itself. */
     ck_assert_ptr_nonnull(pl->map);
     ck_assert_ptr_ne(pl->map, map);
+    ck_assert_ptr_null(stuck_test_find_effect(pl));
     ck_assert(stuck_test_has_message(pl, "You have been moved to the safe recovery location."));
 }
 END_TEST
 
-START_TEST(test_stuck_movement_cancels_pending_recovery) {
+START_TEST(test_stuck_movement_does_not_cancel_pending_recovery) {
     mapstruct *map;
     object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Movement Cancellation");
+    stuck_test_prepare_player(&map, &pl, "Stuck Movement");
     stuck_test_start(pl);
 
     ck_assert_int_eq(object_move_to(pl, 1, pl, map, pl->x + 1, pl->y), 1);
     ck_assert_ptr_eq(pl->map, map);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
-    ck_assert_uint_eq(CONTR(pl)->stuck_started.value, 0);
+    ck_assert_ptr_nonnull(stuck_test_find_effect(pl));
 }
 END_TEST
 
-START_TEST(test_stuck_nonplaying_player_cancels_pending_recovery) {
+START_TEST(test_stuck_nonplaying_player_discards_pending_recovery) {
     mapstruct *map;
     object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Nonplaying Cancellation");
+    stuck_test_prepare_player(&map, &pl, "Stuck Nonplaying Cleanup");
     stuck_test_start(pl);
     CONTR(pl)->cs->state = ST_DEAD;
 
-    ck_assert(player_stuck_process(pl));
+    object *effect = stuck_test_find_effect(pl);
+    player_stuck_process_effect(effect);
     ck_assert_ptr_eq(pl->map, map);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
-    ck_assert_uint_eq(CONTR(pl)->stuck_started.value, 0);
+    ck_assert_ptr_null(stuck_test_find_effect(pl));
 }
 END_TEST
 
@@ -173,65 +224,43 @@ START_TEST(test_stuck_healing_spell_does_not_interrupt_recovery) {
     pl->stats.sp = 1000;
 
     ck_assert(cast_spell(pl, pl, 0, SP_MINOR_HEAL, 0, CAST_NORMAL, NULL));
-    ck_assert_uint_gt(CONTR(pl)->stuck_deadline.value, server_tick_now().value);
-    ck_assert_uint_eq(CONTR(pl)->stuck_combat_event_sequence,
-                      CONTR(pl)->combat_event_sequence);
+    ck_assert_ptr_nonnull(stuck_test_find_effect(pl));
 }
 END_TEST
 
-START_TEST(test_stuck_combat_interrupts_before_transfer) {
+START_TEST(test_stuck_combat_removes_the_effect) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Combat Interrupt");
 
     stuck_test_start(pl);
     player_mark_combat(CONTR(pl));
-    server_clock_fake_advance_ticks((server_tick_duration_t){1});
-    server_clock_fake_advance_ticks(stuck_test_countdown());
-    ck_assert(player_stuck_process(pl));
 
     ck_assert_ptr_eq(pl->map, map);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
+    ck_assert_ptr_null(stuck_test_find_effect(pl));
     ck_assert(stuck_test_has_message(pl, "Your stuck recovery was interrupted by combat."));
 }
 END_TEST
 
-START_TEST(test_stuck_same_tick_combat_interrupts_before_transfer) {
+START_TEST(test_stuck_combat_before_request_does_not_interrupt_new_effect) {
     mapstruct *map;
     object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Same Tick Combat");
-
-    stuck_test_start(pl);
-    player_mark_combat(CONTR(pl));
-    server_clock_fake_advance_ticks(stuck_test_countdown());
-    ck_assert(player_stuck_process(pl));
-
-    ck_assert_ptr_eq(pl->map, map);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
-    ck_assert(stuck_test_has_message(pl, "Your stuck recovery was interrupted by combat."));
-}
-END_TEST
-
-START_TEST(test_stuck_ignores_combat_completed_before_request_same_tick) {
-    mapstruct *map;
-    object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Prior Same Tick Combat");
+    stuck_test_prepare_player(&map, &pl, "Stuck Prior Combat");
 
     player_mark_combat(CONTR(pl));
     stuck_test_start(pl);
-    server_clock_fake_advance_ticks(stuck_test_countdown());
-    ck_assert(!player_stuck_process(pl));
+    stuck_test_run_countdown(pl, map);
 
-    ck_assert_ptr_nonnull(pl->map);
     ck_assert_ptr_ne(pl->map, map);
 }
 END_TEST
 
-START_TEST(test_stuck_cooldown_survives_save_load_and_reconnect) {
+START_TEST(test_stuck_cooldown_survives_save_load_without_saving_effect) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Cooldown Persistence");
     stuck_test_start(pl);
+    ck_assert(player_save_checked(pl));
 
     char *path = player_make_path(pl->name, "player.dat");
     FILE *fp = fopen(path, "rb");
@@ -241,6 +270,7 @@ START_TEST(test_stuck_cooldown_survives_save_load_and_reconnect) {
     ck_assert(!ferror(fp));
     contents[length] = '\0';
     ck_assert_ptr_nonnull(strstr(contents, "stuck_cooldown 1700000300\n"));
+    ck_assert_ptr_null(strstr(contents, PLAYER_STUCK_STATUS_KEY));
 
     rewind(fp);
     object *restored;
@@ -249,19 +279,19 @@ START_TEST(test_stuck_cooldown_survives_save_load_and_reconnect) {
     free(path);
 
     ck_assert_int_eq(loaded_state->stuck_cooldown.seconds, INT64_C(1700000300));
-    ck_assert_uint_eq(loaded_state->stuck_deadline.value, 0);
+    ck_assert_ptr_null(stuck_test_find_effect(restored));
 
     mapstruct *reconnect_map = get_empty_map(24, 24);
     FREE_AND_COPY_HASH(reconnect_map->path, "/tests/stuck-reconnect");
     ck_assert(object_enter_map(restored, NULL, reconnect_map, 1, 1, true));
     command_stuck(restored, "stuck", NULL);
-    ck_assert_uint_eq(loaded_state->stuck_deadline.value, 0);
-    ck_assert(stuck_test_has_message(
-        restored, "You must wait 300 more seconds before using /stuck again."));
+    ck_assert_ptr_null(stuck_test_find_effect(restored));
+    ck_assert(stuck_test_has_message(restored,
+                                     "You must wait 300 more seconds before using /stuck again."));
 
     server_clock_fake_set_wall((server_wall_utc_t){INT64_C(1700000300)});
     command_stuck(restored, "stuck", NULL);
-    ck_assert_uint_gt(loaded_state->stuck_deadline.value, server_tick_now().value);
+    ck_assert_ptr_nonnull(stuck_test_find_effect(restored));
 }
 END_TEST
 
@@ -269,10 +299,7 @@ START_TEST(test_stuck_malformed_persisted_cooldown_fails_closed) {
     FILE *fp = tmpfile();
     ck_assert_ptr_nonnull(fp);
     static const char embedded_nul_line[] = "stuck_cooldown 0\0garbage\n";
-    ck_assert_uint_eq(fwrite(embedded_nul_line,
-                             1,
-                             sizeof(embedded_nul_line) - 1,
-                             fp),
+    ck_assert_uint_eq(fwrite(embedded_nul_line, 1, sizeof(embedded_nul_line) - 1, fp),
                       sizeof(embedded_nul_line) - 1);
     ck_assert_int_ne(fputs("stuck_cooldown\n"
                            "stuck_cooldown\t0\n"
@@ -283,7 +310,7 @@ START_TEST(test_stuck_malformed_persisted_cooldown_fails_closed) {
                            "endplst\n"
                            "arch human_male\n"
                            "end\n",
-                       fp),
+                           fp),
                      EOF);
     rewind(fp);
 
@@ -292,17 +319,13 @@ START_TEST(test_stuck_malformed_persisted_cooldown_fails_closed) {
     ck_assert_int_eq(fclose(fp), 0);
     ck_assert_int_eq(loaded_state->stuck_cooldown.seconds, INT64_MAX);
 
-    mapstruct *reconnect_map = get_empty_map(24, 24);
-    FREE_AND_COPY_HASH(reconnect_map->path, "/tests/stuck-malformed-reconnect");
-    ck_assert(object_enter_map(restored, NULL, reconnect_map, 1, 1, true));
+    mapstruct *map = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(map->path, "/tests/stuck-malformed-reconnect");
+    ck_assert(object_enter_map(restored, NULL, map, 1, 1, true));
     command_stuck(restored, "stuck", NULL);
-    ck_assert_uint_eq(loaded_state->stuck_deadline.value, 0);
-    ck_assert(stuck_test_has_message(
-        restored, "You must wait 300 more seconds before using /stuck again."));
-
-    server_clock_fake_set_wall((server_wall_utc_t){INT64_MAX});
-    command_stuck(restored, "stuck", NULL);
-    ck_assert_uint_eq(loaded_state->stuck_deadline.value, 0);
+    ck_assert_ptr_null(stuck_test_find_effect(restored));
+    ck_assert(stuck_test_has_message(restored,
+                                     "You must wait 300 more seconds before using /stuck again."));
 }
 END_TEST
 
@@ -326,23 +349,9 @@ START_TEST(test_stuck_negative_in_memory_cooldown_fails_closed) {
     CONTR(pl)->stuck_cooldown.seconds = -1;
 
     command_stuck(pl, "stuck", NULL);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
-    ck_assert(stuck_test_has_message(
-        pl, "You must wait 300 more seconds before using /stuck again."));
-}
-END_TEST
-
-START_TEST(test_stuck_main_processes_expired_countdown_in_post_event_phase) {
-    mapstruct *map;
-    object *pl;
-    stuck_test_prepare_player(&map, &pl, "Stuck Main Phase");
-
-    stuck_test_start(pl);
-    server_clock_fake_advance_ticks(stuck_test_countdown());
-    main_process();
-
-    ck_assert_ptr_nonnull(pl->map);
-    ck_assert_ptr_ne(pl->map, map);
+    ck_assert_ptr_null(stuck_test_find_effect(pl));
+    ck_assert(
+        stuck_test_has_message(pl, "You must wait 300 more seconds before using /stuck again."));
 }
 END_TEST
 
@@ -355,11 +364,11 @@ START_TEST(test_stuck_save_failure_does_not_arm_or_persist_cooldown) {
     player_save_fail_for_test(true);
     command_stuck(pl, "stuck", NULL);
     player_save_fail_for_test(false);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
-    ck_assert_uint_eq(CONTR(pl)->stuck_started.value, 0);
+    ck_assert_ptr_null(stuck_test_find_effect(pl));
     ck_assert_int_eq(CONTR(pl)->stuck_cooldown.seconds, 0);
     ck_assert(stuck_test_has_message(
-        pl, "Your stuck recovery cooldown could not be saved; recovery was not started."));
+        pl,
+        "Your stuck recovery cooldown could not be saved; recovery was not started."));
 
     char *path = player_make_path(pl->name, "player.dat");
     FILE *fp = fopen(path, "rb");
@@ -379,39 +388,35 @@ START_TEST(test_stuck_rejects_unique_map_without_starting) {
 
     map->map_flags |= MAP_FLAG_UNIQUE;
     command_stuck(pl, "stuck", NULL);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
+    ck_assert_ptr_null(stuck_test_find_effect(pl));
     ck_assert_int_eq(CONTR(pl)->stuck_cooldown.seconds, 0);
     ck_assert(stuck_test_has_message(
-        pl, "You cannot use /stuck in this location because your cooldown cannot be saved safely."));
+        pl,
+        "You cannot use /stuck in this location because your cooldown cannot be saved safely."));
 }
 END_TEST
 
-START_TEST(test_stuck_cancel_clears_transient_countdown_for_disconnect) {
+START_TEST(test_stuck_cancel_removes_effect_but_keeps_cooldown) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Disconnect Cleanup");
     stuck_test_start(pl);
 
-    player_stuck_cancel(pl);
-    ck_assert_uint_eq(CONTR(pl)->stuck_deadline.value, 0);
-    ck_assert_uint_eq(CONTR(pl)->stuck_started.value, 0);
+    ck_assert(player_stuck_cancel(pl));
+    ck_assert_ptr_null(stuck_test_find_effect(pl));
     ck_assert_int_eq(CONTR(pl)->stuck_cooldown.seconds, INT64_C(1700000300));
 }
 END_TEST
 
-START_TEST(test_stuck_logout_clears_countdown_before_saving) {
+START_TEST(test_stuck_logout_removes_effect_before_saving) {
     mapstruct *map;
     object *pl;
     stuck_test_prepare_player(&map, &pl, "Stuck Logout Cleanup");
     stuck_test_start(pl);
 
     char *path = player_make_path(pl->name, "player.dat");
-    player_stuck_cancel_observation_reset_for_test();
-    player_save_observation_reset_for_test();
     CONTR(pl)->cs->state = ST_DEAD;
     player_logout(CONTR(pl));
-    ck_assert(player_stuck_cancel_observed_active_for_test());
-    ck_assert(player_save_observed_stuck_clear_for_test());
 
     FILE *fp = fopen(path, "rb");
     ck_assert_ptr_nonnull(fp);
@@ -420,6 +425,7 @@ START_TEST(test_stuck_logout_clears_countdown_before_saving) {
     ck_assert(!ferror(fp));
     contents[length] = '\0';
     ck_assert_ptr_nonnull(strstr(contents, "stuck_cooldown 1700000300\n"));
+    ck_assert_ptr_null(strstr(contents, PLAYER_STUCK_STATUS_KEY));
     ck_assert_int_eq(fclose(fp), 0);
     free(path);
 }
@@ -431,22 +437,21 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, stuck_test_setup, stuck_test_teardown);
     tcase_add_test(tc_core, test_stuck_command_is_registered_and_has_no_destination_arguments);
+    tcase_add_test(tc_core, test_stuck_start_publishes_a_ticking_status_effect);
     tcase_add_test(tc_core, test_stuck_countdown_transfers_to_emergency_map);
-    tcase_add_test(tc_core, test_stuck_movement_cancels_pending_recovery);
-    tcase_add_test(tc_core, test_stuck_nonplaying_player_cancels_pending_recovery);
+    tcase_add_test(tc_core, test_stuck_movement_does_not_cancel_pending_recovery);
+    tcase_add_test(tc_core, test_stuck_nonplaying_player_discards_pending_recovery);
     tcase_add_test(tc_core, test_stuck_healing_spell_does_not_interrupt_recovery);
-    tcase_add_test(tc_core, test_stuck_combat_interrupts_before_transfer);
-    tcase_add_test(tc_core, test_stuck_same_tick_combat_interrupts_before_transfer);
-    tcase_add_test(tc_core, test_stuck_ignores_combat_completed_before_request_same_tick);
-    tcase_add_test(tc_core, test_stuck_cooldown_survives_save_load_and_reconnect);
+    tcase_add_test(tc_core, test_stuck_combat_removes_the_effect);
+    tcase_add_test(tc_core, test_stuck_combat_before_request_does_not_interrupt_new_effect);
+    tcase_add_test(tc_core, test_stuck_cooldown_survives_save_load_without_saving_effect);
     tcase_add_test(tc_core, test_stuck_malformed_persisted_cooldown_fails_closed);
     tcase_add_test(tc_core, test_stuck_truncated_persisted_cooldown_fails_closed);
     tcase_add_test(tc_core, test_stuck_negative_in_memory_cooldown_fails_closed);
-    tcase_add_test(tc_core, test_stuck_main_processes_expired_countdown_in_post_event_phase);
     tcase_add_test(tc_core, test_stuck_save_failure_does_not_arm_or_persist_cooldown);
     tcase_add_test(tc_core, test_stuck_rejects_unique_map_without_starting);
-    tcase_add_test(tc_core, test_stuck_cancel_clears_transient_countdown_for_disconnect);
-    tcase_add_test(tc_core, test_stuck_logout_clears_countdown_before_saving);
+    tcase_add_test(tc_core, test_stuck_cancel_removes_effect_but_keeps_cooldown);
+    tcase_add_test(tc_core, test_stuck_logout_removes_effect_before_saving);
     suite_add_tcase(s, tc_core);
     return s;
 }

@@ -26,17 +26,14 @@
 
 #include <global.h>
 #include <gameplay_journal.h>
+#include <arch.h>
 #include <map.h>
 #include <object.h>
 #include <player.h>
+#include <player_status.h>
 #include <server.h>
-#include <server_main.h>
 #include <server_clock.h>
 #include <stuck.h>
-
-#ifdef ATRINIK_TESTING
-static bool test_cancel_observed_active;
-#endif
 
 static bool stuck_cooldown_remaining(const player *pl, server_duration_t *remaining) {
     HARD_ASSERT(pl != NULL);
@@ -80,89 +77,74 @@ static bool stuck_currently_in_combat(const object *op) {
            OBJECT_VALID(op->attacked_by, op->attacked_by_count);
 }
 
-static bool stuck_combat_interrupted(const object *op, const player *pl) {
-    if (stuck_currently_in_combat(op)) {
-        return true;
+bool player_stuck_effect(const object *op) {
+    const char *status_key;
+
+    if (op == NULL || op->type != WORD_OF_RECALL) {
+        return false;
     }
 
-    return pl->combat_event_sequence != pl->stuck_combat_event_sequence;
+    status_key = object_get_value(op, "player_status_key");
+    return status_key != NULL && strcmp(status_key, PLAYER_STUCK_STATUS_KEY) == 0;
 }
 
-void player_stuck_cancel(object *op) {
+static object *player_stuck_find(object *op) {
+    for (object *effect = op->inv; effect != NULL; effect = effect->below) {
+        if (player_stuck_effect(effect)) {
+            return effect;
+        }
+    }
+    return NULL;
+}
+
+bool player_stuck_cancel(object *op) {
     if (op == NULL || op->type != PLAYER || CONTR(op) == NULL) {
+        return false;
+    }
+
+    bool cancelled = false;
+    for (object *effect = op->inv, *next; effect != NULL; effect = next) {
+        next = effect->below;
+        if (!player_stuck_effect(effect)) {
+            continue;
+        }
+
+        cancelled = true;
+        object_remove(effect, 0);
+        object_destroy(effect);
+    }
+    return cancelled;
+}
+
+void player_stuck_process_effect(object *effect) {
+    HARD_ASSERT(effect != NULL);
+
+    object *op = effect->env;
+    if (op == NULL || op->type != PLAYER || CONTR(op) == NULL || CONTR(op)->cs == NULL ||
+        CONTR(op)->cs->state != ST_PLAYING || !OBJECT_ACTIVE(op)) {
+        if (!QUERY_FLAG(effect, FLAG_REMOVED)) {
+            object_remove(effect, 0);
+        }
+        object_destroy(effect);
         return;
     }
 
-#ifdef ATRINIK_TESTING
-    if (CONTR(op)->stuck_deadline.value != 0) {
-        test_cancel_observed_active = true;
-    }
-#endif
-
-    CONTR(op)->stuck_deadline.value = 0;
-    CONTR(op)->stuck_started.value = 0;
-    CONTR(op)->stuck_combat_event_sequence = 0;
-}
-
-bool player_stuck_process(object *op) {
-    HARD_ASSERT(op != NULL);
-
-    if (op->type != PLAYER || CONTR(op) == NULL) {
-        return true;
-    }
-
-    player *pl = CONTR(op);
-    if (pl->cs == NULL || pl->cs->state != ST_PLAYING || !OBJECT_ACTIVE(op)) {
-        player_stuck_cancel(op);
-        return true;
-    }
-
-    if (pl->stuck_deadline.value == 0) {
-        return true;
-    }
-
-    if (stuck_combat_interrupted(op, pl)) {
-        player_stuck_cancel(op);
-        draw_info(COLOR_WHITE, op, "Your stuck recovery was interrupted by combat.");
-        return true;
-    }
-
-    if (!server_tick_expired(pl->stuck_deadline)) {
-        return true;
-    }
-
-    player_stuck_cancel(op);
+    /* The effect has done its job. Remove it before transferring the player so
+     * combat or a map callback cannot observe stale recovery state. */
+    object_remove(effect, 0);
+    object_destroy(effect);
 
     tag_t object_count = op->count;
     if (!object_enter_map(op, NULL, NULL, 0, 0, false)) {
         if (OBJECT_DESTROYED(op, object_count)) {
-            return false;
+            return;
         }
-        draw_info(COLOR_RED,
-                  op,
-                  "The safe recovery location is unavailable; you were not moved.");
-        return false;
+        draw_info(COLOR_RED, op, "The safe recovery location is unavailable; you were not moved.");
+        return;
     }
 
-    if (OBJECT_DESTROYED(op, object_count)) {
-        return false;
-    }
-
-    draw_info(COLOR_WHITE, op, "You have been moved to the safe recovery location.");
-    return false;
-}
-
-void player_stuck_process_all(void) {
-    for (player *pl = first_player; pl != NULL;) {
-        player *next = pl->next;
-        if (pl->ob != NULL && !OBJECT_FREE(pl->ob)) {
-            if (pl->cs == NULL || pl->cs->state != ST_PLAYING || !OBJECT_ACTIVE(pl->ob)) {
-                player_stuck_cancel(pl->ob);
-            } else {
-                (void)player_stuck_process(pl->ob);
-            }
-        }
-        pl = next;
+    if (!OBJECT_DESTROYED(op, object_count)) {
+        draw_info(COLOR_WHITE, op, "You have been moved to the safe recovery location.");
     }
 }
 
@@ -177,7 +159,7 @@ void command_stuck(object *op, const char *command, char *params) {
         return;
     }
 
-    if (pl->stuck_deadline.value != 0) {
+    if (player_stuck_find(op) != NULL) {
         draw_info(COLOR_WHITE, op, "Your stuck recovery is already counting down.");
         return;
     }
@@ -197,9 +179,10 @@ void command_stuck(object *op, const char *command, char *params) {
      * is renamed, so do not arm a cooldown on a path whose failure could
      * leave the durable record ambiguous. */
     if (op->map == NULL || MAP_PLAYER_NO_SAVE(op->map) || MAP_UNIQUE(op->map)) {
-        draw_info(COLOR_RED,
-                  op,
-                  "You cannot use /stuck in this location because your cooldown cannot be saved safely.");
+        draw_info(
+            COLOR_RED,
+            op,
+            "You cannot use /stuck in this location because your cooldown cannot be saved safely.");
         return;
     }
 
@@ -215,47 +198,45 @@ void command_stuck(object *op, const char *command, char *params) {
         return;
     }
 
-    server_tick_duration_t countdown;
-    if (!server_duration_to_ticks(server_duration_from_seconds(PLAYER_STUCK_COUNTDOWN_SECONDS),
-                                  &countdown)) {
+    object *effect = arch_get("force");
+    if (effect == NULL) {
         draw_info(COLOR_RED, op, "Stuck recovery is temporarily unavailable.");
         return;
     }
 
-    server_tick_t old_started = pl->stuck_started;
-    server_tick_t old_deadline = pl->stuck_deadline;
+    effect->type = WORD_OF_RECALL;
+    effect->speed = 1.0 / ((double)PLAYER_STUCK_COUNTDOWN_SECONDS * MAX_TICKS);
+    object_update_speed(effect);
+    effect->speed_left = -1.0;
+    SET_FLAG(effect, FLAG_NO_SAVE);
+    if (!player_status_set(effect,
+                           PLAYER_STUCK_STATUS_KEY,
+                           "stuck recovery",
+                           "You will be moved to safety when this effect expires.",
+                           effect->face)) {
+        object_destroy(effect);
+        draw_info(COLOR_RED, op, "Stuck recovery is temporarily unavailable.");
+        return;
+    }
+
     server_wall_utc_t old_cooldown = pl->stuck_cooldown;
-    uint64_t old_combat_event_sequence = pl->stuck_combat_event_sequence;
-
-    pl->stuck_started = server_tick_now();
-    pl->stuck_deadline = server_tick_deadline_after(countdown);
     pl->stuck_cooldown = stuck_cooldown_deadline(server_wall_utc_now());
-    pl->stuck_combat_event_sequence = pl->combat_event_sequence;
 
-    /* Persist before the countdown starts so reconnecting cannot reset the cooldown. */
+    /* Persist before inserting the effect so reconnecting cannot reset the
+     * cooldown and the countdown cannot advance while the save is committed. */
     if (!player_save_checked(op)) {
-        pl->stuck_started = old_started;
-        pl->stuck_deadline = old_deadline;
         pl->stuck_cooldown = old_cooldown;
-        pl->stuck_combat_event_sequence = old_combat_event_sequence;
+        object_destroy(effect);
         draw_info(COLOR_RED,
                   op,
                   "Your stuck recovery cooldown could not be saved; recovery was not started.");
         return;
     }
 
+    object_insert_into(effect, op, 0);
+
     draw_info_format(COLOR_WHITE,
                      op,
                      "You will be moved to safety in %u seconds if you remain out of combat.",
                      PLAYER_STUCK_COUNTDOWN_SECONDS);
 }
-
-#ifdef ATRINIK_TESTING
-void player_stuck_cancel_observation_reset_for_test(void) {
-    test_cancel_observed_active = false;
-}
-
-bool player_stuck_cancel_observed_active_for_test(void) {
-    return test_cancel_observed_active;
-}
-#endif

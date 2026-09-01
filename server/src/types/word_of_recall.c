@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -34,10 +34,16 @@
 #include <server.h>
 #include <object.h>
 #include <object_methods.h>
+#include <stuck.h>
 
 /** @copydoc object_methods_t::process_func */
 static void process_func(object *op) {
     HARD_ASSERT(op != NULL);
+
+    if (player_stuck_effect(op)) {
+        player_stuck_process_effect(op);
+        return;
+    }
 
     if (op->env != NULL && op->env->map && op->env->type == PLAYER) {
         if (blocks_magic(op->env->map, op->env->x, op->env->y)) {
