@@ -4817,7 +4817,7 @@ object *object_create_singularity(const char *name) {
 void object_save(const object *op, FILE *fp) {
     HARD_ASSERT(op != NULL);
 
-    if (fp == NULL) {
+    if (fp == NULL || QUERY_FLAG(op, FLAG_NO_SAVE)) {
         return;
     }
 

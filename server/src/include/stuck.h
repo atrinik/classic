@@ -24,42 +24,32 @@
 
 /**
  * @file
- * Handles code for @ref WORD_OF_RECALL "word of recall" objects.
- *
- * @author Zoey Rose
+ * Player stuck-recovery command and lifecycle API.
  */
 
-#include <global.h>
-#include <server_main.h>
-#include <server.h>
-#include <object.h>
-#include <object_methods.h>
-#include <stuck.h>
+#ifndef STUCK_H
+#define STUCK_H
 
-/** @copydoc object_methods_t::process_func */
-static void process_func(object *op) {
-    HARD_ASSERT(op != NULL);
+#include <stdbool.h>
 
-    if (player_stuck_effect(op)) {
-        player_stuck_process_effect(op);
-        return;
-    }
+#include <decls.h>
 
-    if (op->env != NULL && op->env->map && op->env->type == PLAYER) {
-        if (blocks_magic(op->env->map, op->env->x, op->env->y)) {
-            draw_info(COLOR_WHITE, op, "You feel something fizzle inside you.");
-        } else {
-            object_enter_map(op->env, op, NULL, 0, 0, false);
-        }
-    }
+/** Seconds a player must remain out of combat before recovery. */
+#define PLAYER_STUCK_COUNTDOWN_SECONDS 10U
 
-    object_remove(op, 0);
-    object_destroy(op);
-}
+/** Seconds before the player may request another recovery. */
+#define PLAYER_STUCK_COOLDOWN_SECONDS (5U * 60U)
 
-/**
- * Initialize the word of recall type object methods.
- */
-OBJECT_TYPE_INIT_DEFINE(word_of_recall) {
-    OBJECT_METHODS(WORD_OF_RECALL)->process_func = process_func;
-}
+/** Status key used by the transient recovery effect. */
+#define PLAYER_STUCK_STATUS_KEY "command:stuck"
+
+/** Whether the object is the active /stuck recovery effect. */
+bool player_stuck_effect(const object *op);
+
+/** Process an expired /stuck recovery effect. */
+void player_stuck_process_effect(object *op);
+
+/** Remove every active /stuck recovery effect from a player. */
+bool player_stuck_cancel(object *op);
+
+#endif

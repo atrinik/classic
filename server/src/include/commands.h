@@ -303,6 +303,10 @@ extern void command_say(object *op, const char *command, char *params);
 
 extern void command_statistics(object *op, const char *command, char *params);
 
+/** Public API implemented in src/commands/player/stuck.c. */
+
+extern void command_stuck(object *op, const char *command, char *params);
+
 /** Public API implemented in src/commands/player/take.c. */
 
 extern void command_take(object *op, const char *command, char *params);

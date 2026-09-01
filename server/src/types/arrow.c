@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -118,6 +118,7 @@ static int ranged_fire_func(object *op, object *shooter, int dir, double *delay)
 
     if (shooter->type == PLAYER) {
         metrics_add(&CONTR(shooter)->metrics, METRIC_CHARACTER_MISSILES_THROWN, 1);
+        player_mark_combat(CONTR(shooter));
     }
 
     play_sound_map(shooter->map, CMD_SOUND_EFFECT, "throw.ogg", shooter->x, shooter->y, 0, 0);

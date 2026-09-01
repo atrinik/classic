@@ -45,12 +45,14 @@
 #include <monster_data.h>
 #include <arch.h>
 #include <ban.h>
+#include <stuck.h>
 
 #ifdef ATRINIK_TESTING
 static bool test_pickup_event_veto;
 static bool test_drop_event_veto;
 static bool test_map_pickup_event_veto;
 static bool test_map_drop_event_veto;
+static bool test_player_save_failure;
 
 void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool map_drop) {
     test_pickup_event_veto = pickup;
@@ -58,6 +60,11 @@ void player_event_veto_for_test(bool pickup, bool drop, bool map_pickup, bool ma
     test_map_pickup_event_veto = map_pickup;
     test_map_drop_event_veto = map_drop;
 }
+
+void player_save_fail_for_test(bool fail) {
+    test_player_save_failure = fail;
+}
+
 #endif
 #include <player_status.h>
 #include <player.h>
@@ -73,6 +80,15 @@ static int save_life(object *op);
 static void remove_unpaid_objects(object *op, object *env);
 
 #define CELESTIAL_UNIQUE_TOKEN_PREFIX "unique-v1:"
+
+void player_mark_combat(player *pl) {
+    HARD_ASSERT(pl != NULL);
+
+    pl->last_combat = pticks;
+    if (pl->ob != NULL && player_stuck_cancel(pl->ob)) {
+        draw_info(COLOR_WHITE, pl->ob, "Your stuck recovery was interrupted by combat.");
+    }
+}
 
 static bool player_unique_owner_parts(const player *pl,
                                       char account[MAX_BUF],
@@ -988,6 +1004,10 @@ static void player_death_clear_paralysis(object *op) {
 void kill_player(object *op, bool pvp, bool environmental) {
     char buf[HUGE_BUF];
     object *tmp;
+
+    /* Death is an authoritative lifecycle boundary. A pending recovery must
+     * never survive into the respawn or post-event phases. */
+    player_stuck_cancel(op);
 
     if (pvp_area(NULL, op)) {
         uint64_t deaths = metrics_get(&CONTR(op)->metrics, METRIC_CHARACTER_DEATHS);
@@ -3253,15 +3273,24 @@ int player_exists(const char *name) {
  *
  * @param op
  * Player object to save.
+ * @return
+ * True when the player record was committed; false when saving was deferred
+ * or failed.
  */
-void player_save(object *op) {
+bool player_save_checked(object *op) {
     HARD_ASSERT(op != NULL);
+
+#ifdef ATRINIK_TESTING
+    if (test_player_save_failure) {
+        return false;
+    }
+#endif
 
     if (!gameplay_journal_player_checkpoint_allowed(op)) {
         LOG(INFO,
             "Deferring save of player %s while a gameplay journal transaction is pending.",
             op->name != NULL ? op->name : "<unnamed>");
-        return;
+        return false;
     }
 
     /* Is this a map players can't save on? */
@@ -3269,7 +3298,7 @@ void player_save(object *op) {
         if (!metrics_character_save(CONTR(op))) {
             draw_info(COLOR_RED, op, "Your character metrics couldn't be saved.");
         }
-        return;
+        return false;
     }
 
     char *path = player_make_path(op->name, "player.dat");
@@ -3277,6 +3306,7 @@ void player_save(object *op) {
     bool character_transaction = false;
     char transaction_account[MAX_BUF] = "", transaction_character[MAX_BUF] = "";
     FILE *fp = NULL;
+    bool saved = false;
 
     player *pl = CONTR(op);
     char map_value[MAX_BUF], bed_value[MAX_BUF];
@@ -3358,6 +3388,7 @@ void player_save(object *op) {
     }
 
     fprintf(fp, "fame %" PRId64 "\n", pl->fame);
+    fprintf(fp, "stuck_cooldown %" PRId64 "\n", pl->stuck_cooldown.seconds);
     fprintf(fp, "endplst\n");
 
     SET_FLAG(op, FLAG_NO_FIX_PLAYER);
@@ -3374,7 +3405,16 @@ void player_save(object *op) {
         goto error;
     }
 
-    /* Make sure the write succeeded. */
+    /* Make sure the file contents are durable before publishing the rename. */
+#ifndef WIN32
+    if (unlikely(fflush(fp) != 0 || fsync(fileno(fp)) != 0)) {
+#else
+    if (unlikely(fflush(fp) != 0 || _commit(_fileno(fp)) != 0)) {
+#endif
+        LOG(ERROR, "Failure syncing file %s: %s", path_tmp, strerror(errno));
+        goto error;
+    }
+
     if (unlikely(fclose(fp) == EOF)) {
         LOG(ERROR, "Failure closing file %s: %s", path_tmp, strerror(errno));
         fp = NULL;
@@ -3387,6 +3427,20 @@ void player_save(object *op) {
         LOG(ERROR, "Failure renaming %s to %s: %s", path_tmp, path, strerror(errno));
         goto error;
     }
+
+#ifndef WIN32
+    char *directory = path_dirname(path);
+    int directory_fd = directory != NULL ? open(directory, O_RDONLY | O_DIRECTORY) : -1;
+    bool directory_synced = directory_fd >= 0 && fsync(directory_fd) == 0;
+    if (directory_fd >= 0 && close(directory_fd) != 0) {
+        directory_synced = false;
+    }
+    free(directory);
+    if (unlikely(!directory_synced)) {
+        LOG(ERROR, "Failure syncing directory containing %s: %s", path, strerror(errno));
+        goto error;
+    }
+#endif
 
     if (character_transaction) {
         char transaction_error[HUGE_BUF];
@@ -3408,6 +3462,8 @@ void player_save(object *op) {
                 transaction_error);
         }
     }
+
+    saved = true;
 
     if (!metrics_character_save(pl)) {
         draw_info(COLOR_RED, op, "Your character metrics couldn't be saved.");
@@ -3431,6 +3487,62 @@ error:
 out:
     free(path);
     free(path_tmp);
+    return saved;
+}
+
+/**
+ * Saves the specified player through the legacy fire-and-forget API.
+ *
+ * @param op
+ * Player object to save.
+ */
+void player_save(object *op) {
+    (void)player_save_checked(op);
+}
+
+/**
+ * Read one complete player-data line while preserving embedded NUL bytes.
+ *
+ * fgets() treats an embedded NUL as the end of the C string, which would let
+ * trailing data evade strict field validation. The caller replaces embedded
+ * NUL bytes before parsing the line.
+ */
+static bool player_read_line(FILE *fp,
+                             char *buf,
+                             size_t buf_size,
+                             size_t *length,
+                             bool *truncated) {
+    HARD_ASSERT(fp != NULL);
+    HARD_ASSERT(buf != NULL);
+    HARD_ASSERT(buf_size > 1);
+    HARD_ASSERT(length != NULL);
+    HARD_ASSERT(truncated != NULL);
+
+    size_t stored = 0;
+    bool read_any = false;
+    int ch;
+    *truncated = false;
+
+    while ((ch = fgetc(fp)) != EOF) {
+        read_any = true;
+        if (stored + 1 < buf_size) {
+            buf[stored++] = (char)ch;
+        } else {
+            *truncated = true;
+        }
+
+        if (ch == '\n') {
+            break;
+        }
+    }
+
+    if (!read_any) {
+        return false;
+    }
+
+    buf[stored] = '\0';
+    *length = stored;
+    return true;
 }
 
 /**
@@ -3448,7 +3560,21 @@ bool player_load_stream(player *pl, FILE *fp) {
     HARD_ASSERT(fp != NULL);
 
     char buf[HUGE_BUF];
-    while (fgets(VS(buf), fp)) {
+    bool stuck_cooldown_seen = false;
+    size_t line_length;
+    bool line_truncated;
+    while (player_read_line(fp, VS(buf), &line_length, &line_truncated)) {
+        for (size_t i = 0; i < line_length; i++) {
+            if (buf[i] == '\0') {
+                buf[i] = '\x01';
+            }
+        }
+        if (line_truncated) {
+            LOG(ERROR, "Skipping overlong player-data line for %s.",
+                pl->ob != NULL && pl->ob->name != NULL ? pl->ob->name : "<unnamed>");
+            continue;
+        }
+
         char *cp = buf;
         string_strip_newline(cp);
 
@@ -3505,6 +3631,34 @@ bool player_load_stream(player *pl, FILE *fp) {
             }
         } else if (strncmp(buf, "fame ", 5) == 0) {
             pl->fame = atoll(buf + 5);
+        } else if (strncmp(buf, "stuck_cooldown", 14) == 0) {
+            if (stuck_cooldown_seen) {
+                LOG(ERROR,
+                    "Duplicate persisted /stuck cooldown for %s; retaining a fail-closed cooldown.",
+                    pl->ob != NULL && pl->ob->name != NULL ? pl->ob->name : "<unnamed>");
+                pl->stuck_cooldown.seconds = INT64_MAX;
+                continue;
+            }
+            stuck_cooldown_seen = true;
+            if (line_length <= 15 || buf[14] != ' ' || buf[15] < '0' || buf[15] > '9') {
+                LOG(ERROR,
+                    "Invalid persisted /stuck cooldown for %s; retaining a fail-closed cooldown.",
+                    pl->ob != NULL && pl->ob->name != NULL ? pl->ob->name : "<unnamed>");
+                pl->stuck_cooldown.seconds = INT64_MAX;
+                continue;
+            }
+            errno = 0;
+            char *end;
+            intmax_t cooldown = strtoimax(buf + 15, &end, 10);
+            if (errno == 0 && end != buf + 15 && *end == '\0' && cooldown >= 0 &&
+                cooldown <= INT64_MAX) {
+                pl->stuck_cooldown.seconds = (int64_t)cooldown;
+            } else {
+                LOG(ERROR,
+                    "Invalid persisted /stuck cooldown for %s; retaining a fail-closed cooldown.",
+                    pl->ob != NULL && pl->ob->name != NULL ? pl->ob->name : "<unnamed>");
+                pl->stuck_cooldown.seconds = INT64_MAX;
+            }
         }
     }
 
@@ -3997,6 +4151,9 @@ void player_logout(player *pl) {
     if (pl->ob->type == DEAD_OBJECT) {
         return;
     }
+
+    player_stuck_cancel(pl->ob);
+
     if (!gameplay_journal_player_checkpoint_allowed(pl->ob)) {
         LOG(INFO,
             "Deferring logout of %s while a gameplay journal transaction is pending.",

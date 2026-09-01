@@ -108,6 +108,7 @@ TOOLKIT_INIT_FUNC(commands) {
     commands_add(COMMAND(right), 1.0, 0);
     commands_add(COMMAND(say), 1.0, 0);
     commands_add(COMMAND(statistics), 1.0, 0);
+    commands_add(COMMAND(stuck), 1.0, 0);
     commands_add(COMMAND(take), 1.0, 0);
     commands_add(COMMAND(tell), 1.0, 0);
     commands_add(COMMAND(time), 1.0, 0);

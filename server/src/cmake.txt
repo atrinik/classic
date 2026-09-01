@@ -44,6 +44,7 @@ set(SERVER_CORE_SOURCES
 	src/commands/player/right.c
 	src/commands/player/say.c
 	src/commands/player/statistics.c
+	src/commands/player/stuck.c
 	src/commands/player/take.c
 	src/commands/player/tell.c
 	src/commands/player/time.c

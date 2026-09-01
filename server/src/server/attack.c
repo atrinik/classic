@@ -615,11 +615,11 @@ static int attack_object_internal(object *op, object *hitter, bool target_was_un
     hitter->anim_flags &= ~ANIM_FLAG_STOP_ATTACKING;
 
     if (op->type == PLAYER) {
-        CONTR(op)->last_combat = pticks;
+        player_mark_combat(CONTR(op));
     }
 
     if (hitter->type == PLAYER) {
-        CONTR(hitter)->last_combat = pticks;
+        player_mark_combat(CONTR(hitter));
     }
 
     if (unlikely(hitter->stats.dam == 0)) {
@@ -1135,11 +1135,11 @@ static int attack_hit_internal(object *op,
     }
 
     if (hitter_owner->type == PLAYER) {
-        CONTR(hitter_owner)->last_combat = pticks;
+        player_mark_combat(CONTR(hitter_owner));
     }
 
     if (op->type == PLAYER) {
-        CONTR(op)->last_combat = pticks;
+        player_mark_combat(CONTR(op));
     }
 
     double accumulated_damage = op->last_damage + maxdam;
