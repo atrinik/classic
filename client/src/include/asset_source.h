@@ -1,6 +1,9 @@
 #ifndef ASSET_SOURCE_H
 #define ASSET_SOURCE_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 typedef struct asset_source asset_source_t;
 
 typedef enum asset_source_state {

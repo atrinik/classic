@@ -30,6 +30,12 @@
 #ifndef LIST_H
 #define LIST_H
 
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <scrollbar.h>
+#include <text.h>
+
 /** One list. */
 typedef struct list_struct {
     /** X position of the list. */

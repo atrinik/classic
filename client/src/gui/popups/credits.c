@@ -29,7 +29,17 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <stdint.h>
+#include <main.h>
+#include <misc.h>
+#include <popup.h>
+#include <text.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
+
 
 #define CREDITS_WIDTH 455
 #define CREDITS_HEIGHT 250

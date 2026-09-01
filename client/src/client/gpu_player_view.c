@@ -12,25 +12,55 @@
 /** @file Deterministic, bounded replay through the live map decoder/renderer.
  */
 
-#include <global.h>
+#include <mouse.h>
 
 #include <animations.h>
+#include <client.h>
 #include <commands.h>
 #include <client_socket.h>
+#include <book.h>
+#include <config.h>
+#include <color_picker.h>
+#include <effects.h>
+#include <event.h>
 #include <image_codec.h>
+#include <image.h>
+#include <inventory.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <lighting.h>
+#include <map.h>
 #include <map_transform.h>
+#include <misc.h>
 #include <metaserver.h>
 #include <notification.h>
+#include <party.h>
 #include <openssl/evp.h>
 #include <gpu_player_view.h>
+#include <gpu_renderer.h>
+#include <gpu_map_renderer.h>
+#include <interface.h>
+#include <item.h>
+#include <main.h>
+#include <menu.h>
+#include <popup.h>
+#include <player.h>
 #include <region_map.h>
 #include <resources.h>
+#include <settings.h>
+#include <server_settings.h>
+#include <sprite.h>
+#include <surface_primitives.h>
+#include <text.h>
+#include <textwin.h>
+#include <texture.h>
+#include <video.h>
 #include <toolkit/map_protocol.h>
+#include <toolkit/memory.h>
 #include <toolkit/packet.h>
+#include <toolkit/toolkit.h>
 #include <wrapper.h>
+#include <widget.h>
 #ifndef WIN32
 #include <sys/resource.h>
 #include <unistd.h>

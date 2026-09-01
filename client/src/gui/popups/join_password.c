@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  *   This program is free software; you can redistribute it and/or modify *
  *   it under the terms of the GNU General Public License as published by *
@@ -11,8 +11,17 @@
 
 /** @file Session-only server join-password prompt. */
 
-#include <global.h>
 #include <openssl/crypto.h>
+#include <button.h>
+#include <client.h>
+#include <main.h>
+#include <popup.h>
+#include <text.h>
+#include <text_input.h>
+#include <textwin.h>
+#include <join_credentials.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/path.h>
 #include <toolkit/rendezvous.h>
 #include <toolkit/string.h>

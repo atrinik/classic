@@ -22,7 +22,20 @@
 #include <dxgi1_6.h>
 #endif
 
-#include <global.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <gpu_map_renderer.h>
+#include <gpu_renderer.h>
+#include <lighting.h>
+#include <settings.h>
+#include <surface_primitives.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+
 
 #define GPU_RENDERER_SURFACE_GENERATION_PROPERTY "atrinik.gpu.surface_generation"
 #define GPU_RENDERER_SURFACE_TEXTURE_PROPERTY "atrinik.gpu.surface_texture"

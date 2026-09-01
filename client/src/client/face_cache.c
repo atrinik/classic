@@ -3,9 +3,13 @@
  * Bounded asynchronous private face-cache writer.
  */
 
-#include <global.h>
 #include <face_cache.h>
+#include <config.h>
+#include <SDL3/SDL.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
 #include <toolkit/path.h>
+#include <toolkit/toolkit.h>
 #include <wrapper.h>
 
 #define FACE_CACHE_WRITE_MAX 64U

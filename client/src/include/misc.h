@@ -30,6 +30,11 @@
 #ifndef MISC_H
 #define MISC_H
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+
 #define MAX_INPUT_STR 256
 
 /** Public API implemented in src/client/misc.c. */

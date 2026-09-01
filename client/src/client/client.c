@@ -41,11 +41,22 @@
  * independent format.
  */
 
-#include <global.h>
+#include <animations.h>
+#include <book.h>
+#include <client.h>
 #include <client_command_queue.h>
 #include <client_socket.h>
+#include <commands.h>
+#include <interface.h>
+#include <menu.h>
 #include <notification.h>
+#include <popup.h>
+#include <party.h>
 #include <resources.h>
+#include <server_files.h>
+#include <sound.h>
+#include <main.h>
+#include <player.h>
 #include <toolkit/datetime.h>
 #include <toolkit/packet.h>
 

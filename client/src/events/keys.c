@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -27,7 +27,15 @@
  *
  */
 
-#include <global.h>
+#include <string.h>
+
+#include <event.h>
+#include <client.h>
+#include <keybind.h>
+#include <main.h>
+#include <player.h>
+#include <settings.h>
+#include <toolkit/toolkit.h>
 
 key_struct keys[SDL_SCANCODE_COUNT];
 

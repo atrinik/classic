@@ -12,6 +12,9 @@
 #ifndef AUDIO_LOG_H
 #define AUDIO_LOG_H
 
+#include <stdbool.h>
+#include <stddef.h>
+
 void audio_log_asset_escape(const char *asset, char *buf, size_t size);
 void audio_log_effect_started(const char *source,
                               const char *requested,

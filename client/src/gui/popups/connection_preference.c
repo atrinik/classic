@@ -11,8 +11,17 @@
 
 /** @file Per-server direct connection preference popup. */
 
-#include <global.h>
 #include <connection_preferences.h>
+#include <button.h>
+#include <list.h>
+#include <main.h>
+#include <popup.h>
+#include <text.h>
+#include <texture.h>
+#include <sprite.h>
+#include <surface_primitives.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 static list_struct *preference_list;

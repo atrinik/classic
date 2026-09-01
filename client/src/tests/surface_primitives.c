@@ -9,7 +9,14 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
+#include <gpu_renderer.h>
+#include <settings.h>
+#include <sprite.h>
+#include <stdlib.h>
+#include <surface_primitives.h>
+#include <toolkit/toolkit.h>
 
 SDL_Surface *OfflineRenderSurface = NULL;
 

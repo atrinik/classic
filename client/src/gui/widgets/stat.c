@@ -29,7 +29,16 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <main.h>
+#include <client.h>
+#include <event.h>
+#include <player.h>
+#include <server_settings.h>
+#include <sprite.h>
+#include <surface_primitives.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 /**

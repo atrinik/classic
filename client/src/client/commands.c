@@ -28,16 +28,45 @@
  * handle all the commands - some might be in other files.
  */
 
-#include <global.h>
+#include <animations.h>
+#include <asset.h>
+#include <book.h>
+#include <client.h>
+#include <commands.h>
+#include <effects.h>
+#include <image.h>
+#include <interface.h>
+#include <item.h>
+#include <keybind.h>
+#include <lighting.h>
+#include <main.h>
+#include <map.h>
+#include <menu.h>
+#include <notification.h>
+#include <player.h>
 #include <player_status.h>
+#include <popup.h>
+#include <region_map.h>
+#include <rich_presence.h>
+#include <server_files.h>
+#include <settings.h>
+#include <sound.h>
+#include <sprite.h>
+#include <text.h>
+#include <toolkit/memory.h>
+#include <toolkit/socket.h>
+#include <toolkit/toolkit.h>
 #include <video.h>
 #include <client_socket.h>
 #include <packet_payload.h>
 #include <item_packet.h>
-#include <region_map.h>
+#include <join_credentials.h>
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
+#include <textwin.h>
+#include <widget.h>
+#include <zlib.h>
 
 static_assert(MAP2_PROTOCOL_METADATA_LONG_MAX == HUGE_BUF - 1,
               "MAP long metadata bound must match its client destination");

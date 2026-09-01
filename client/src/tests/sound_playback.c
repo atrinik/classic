@@ -9,7 +9,17 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
+#include <client.h>
+#include <map.h>
+#include <player.h>
+#include <settings.h>
+#include <sound.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <toolkit/packet.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 
 Client_Player cpl;
 _mapdata MapData;

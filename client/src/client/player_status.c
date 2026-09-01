@@ -1,4 +1,3 @@
-#include <global.h>
 #include <player_status.h>
 #include <toolkit/packet.h>
 

@@ -29,16 +29,36 @@
  * @author Zoey Rose
  */
 
+#include <mouse.h>
 #include <ctype.h>
 #include <errno.h>
-#include <global.h>
 #include <video.h>
 #include <surface_primitives.h>
 #include <client_socket.h>
+#include <client.h>
+#include <commands.h>
+#include <effects.h>
+#include <event.h>
+#include <gpu_map_renderer.h>
+#include <gpu_renderer.h>
+#include <image.h>
+#include <keybind.h>
+#include <main.h>
+#include <misc.h>
+#include <map.h>
 #include <player.h>
 #include <animations.h>
 #include <map_transform.h>
+#include <settings.h>
+#include <sound.h>
+#include <sprite.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <region_map.h>
+#include <render_profiler.h>
+#include <rich_presence.h>
+#include <popup.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <toolkit/bresenham.h>

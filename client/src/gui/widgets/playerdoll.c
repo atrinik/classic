@@ -29,8 +29,15 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <toolkit/string.h>
+#include <main.h>
+#include <client.h>
+#include <event.h>
+#include <item.h>
+#include <player.h>
+#include <sprite.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 #include "playerdoll_equipment.h"
 

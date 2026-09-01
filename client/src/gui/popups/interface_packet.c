@@ -1,6 +1,13 @@
-#include <global.h>
 #include <interface_packet.h>
 #include <item_packet.h>
+#include <client.h>
+#include <commands.h>
+#include <interface.h>
+#include <item.h>
+#include <main.h>
+#include <toolkit/packet.h>
+#include <toolkit/socket.h>
+#include <toolkit/toolkit.h>
 
 static void interface_packet_read_string(packet_reader_t *reader, size_t maximum) {
     (void)packet_reader_read_string_view(reader, maximum);

@@ -4,8 +4,9 @@
  * Copyright 2026 The Atrinik Project
  *************************************************************************/
 
-#include <global.h>
 #include <map_visibility.h>
+#include <string.h>
+#include <toolkit/toolkit.h>
 
 static uint8_t map_visibility_fade_value(uint8_t from, uint8_t target, uint32_t elapsed) {
     if (elapsed >= MAP_VISIBILITY_FADE_DURATION_MS || from == target) {

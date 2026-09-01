@@ -9,10 +9,11 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
 #include <atrinik/protocol/game_commands.h>
+#include <client.h>
 #include <client_command_queue.h>
 #include <toolkit/datetime.h>
+#include <toolkit/toolkit.h>
 
 #include <stdio.h>
 #include <stdlib.h>

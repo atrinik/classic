@@ -30,6 +30,11 @@
 #ifndef PARTY_H
 #define PARTY_H
 
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct widgetdata widgetdata;
+
 /**
  * @defgroup CMD_PARTY_xxx Party socket command types
  * Various types of the BINARY_CMD_PARTY socket command.

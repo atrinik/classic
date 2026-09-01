@@ -29,7 +29,13 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <main.h>
+#include <misc.h>
+#include <progress.h>
+#include <sprite.h>
+#include <texture.h>
+#include <toolkit/toolkit.h>
+
 
 /**
  * Create progress dots indicator.

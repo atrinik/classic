@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,12 @@
 
 #ifndef ITEM_H
 #define ITEM_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <toolkit/porting.h>
 
 /** How many objects are initially reserved for the objects pool. */
 #define NROF_ITEMS 50

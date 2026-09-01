@@ -30,6 +30,15 @@
 #ifndef SPRITE_H
 #define SPRITE_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+
+#include <SDL3/SDL.h>
+#include <main.h>
+#include <toolkit/toolkit.h>
+
 #define SPRITE_CACHE_MAX_BYTES (64U * 1024U * 1024U)
 #define SPRITE_CACHE_MAX_ENTRIES 4096U
 #define SPRITE_CACHE_GC_MAX_TIME 100000

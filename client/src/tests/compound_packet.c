@@ -1,6 +1,7 @@
-#include <global.h>
 #include <interface_packet.h>
 #include <item_packet.h>
+#include <toolkit/socket.h>
+#include <toolkit/toolkit.h>
 
 #include <stdio.h>
 #include <stdlib.h>

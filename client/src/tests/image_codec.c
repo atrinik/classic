@@ -11,8 +11,10 @@
 
 /** @file Deterministic priority regressions for the SDL_image codec gate. */
 
-#include <global.h>
 #include <image_codec.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <toolkit/toolkit.h>
 
 #define TEST_CHECK(condition)                                                               \
     do {                                                                                    \

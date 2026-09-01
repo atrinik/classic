@@ -1,5 +1,6 @@
-#include <global.h>
 #include <item_packet.h>
+#include <toolkit/socket.h>
+#include <toolkit/toolkit.h>
 
 #define ITEM_UPDATE_FLAGS                                                                     \
     (UPD_LOCATION | UPD_FLAGS | UPD_WEIGHT | UPD_FACE | UPD_NAME | UPD_ANIM | UPD_ANIMSPEED | \

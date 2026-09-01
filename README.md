@@ -71,17 +71,15 @@ ctest --preset linux-debug
 ```
 
 The `linux-release`, `linux-coverage`, and `linux-sanitizers` root presets use
-the same graph. Shared warning, coverage, sanitizer, and precompiled-header
-options are explicit across both consumers. Use
-`ATRINIK_CLIENT_ENABLE_PRECOMPILED_HEADERS` and
-`ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS` to control the target-scoped PCH
-policies independently. Coverage and sanitizers are rejected together because
-they would request incompatible instrumentation;
-the coverage preset disables precompiled headers to retain the conventional
-diagnostic path. Consumer-specific behavior such as `ENABLE_PYTHON_PLUGIN`
-remains scoped to its target. The component presets in `client/`, `server/`,
-and `libatrinik/` remain the supported standalone, packaging, and
-installed-consumer paths.
+the same graph. Shared warning, coverage, and sanitizer options are explicit
+across both consumers. The Classic client uses direct module headers and no
+precompiled header; `ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS` controls only
+the server core. Coverage and sanitizers are rejected together because they
+would request incompatible instrumentation; the coverage preset disables the
+server precompiled header to retain the conventional diagnostic path.
+Consumer-specific behavior such as `ENABLE_PYTHON_PLUGIN` remains scoped to its
+target. The component presets in `client/`, `server/`, and `libatrinik/` remain
+the supported standalone, packaging, and installed-consumer paths.
 
 Client, server, and integrated builds accept one optional immutable release
 input, `-DATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH`. When it is omitted,

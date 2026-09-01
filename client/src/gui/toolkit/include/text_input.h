@@ -32,6 +32,13 @@
 #ifndef TEXT_INPUT_H
 #define TEXT_INPUT_H
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+
 typedef struct text_input_history_struct {
     /**
      * The history.

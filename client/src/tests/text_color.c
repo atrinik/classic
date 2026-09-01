@@ -9,7 +9,11 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
 
 #define TEST_CHECK(condition) \
     do {                      \

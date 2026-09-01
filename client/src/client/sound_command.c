@@ -14,8 +14,12 @@
  * Server sound command decoding and dispatch.
  */
 
-#include <global.h>
+#include <stdint.h>
+
+#include <toolkit/logger.h>
 #include <toolkit/packet.h>
+#include <toolkit/socket.h>
+#include <toolkit/toolkit.h>
 
 #include "sound_command_internal.h"
 

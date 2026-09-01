@@ -16,14 +16,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct SDL_FRect SDL_FRect;
-typedef enum SDL_ScaleMode SDL_ScaleMode;
+#include <SDL3/SDL.h>
+#include <lighting.h>
+
 typedef struct SDL_GPUDevice SDL_GPUDevice;
-typedef struct SDL_Rect SDL_Rect;
-typedef struct SDL_Renderer SDL_Renderer;
-typedef struct SDL_Surface SDL_Surface;
-typedef struct SDL_Window SDL_Window;
-typedef struct lighting_vertex lighting_vertex_t;
 
 #define GPU_RENDERER_STATISTICS_VERSION UINT8_C(3)
 #define GPU_RENDERER_OWNER_UNLIT (UINT8_MAX - UINT8_C(1))

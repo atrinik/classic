@@ -35,11 +35,21 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <video.h>
+#include <client.h>
+#include <event.h>
+#include <gpu_renderer.h>
+#include <keybind.h>
+#include <menu.h>
+#include <misc.h>
 #include <surface_primitives.h>
 #include <notification.h>
+#include <main.h>
+#include <text.h>
+#include <sprite.h>
 #include <toolkit/packet.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 /**

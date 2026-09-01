@@ -29,14 +29,25 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <image_codec.h>
+#include <gpu_renderer.h>
+#include <item.h>
+#include <main.h>
+#include <map.h>
+#include <sprite.h>
+#include <texture.h>
+#include <widget.h>
 #include <wrapper.h>
 #include <video.h>
+#include <client.h>
+#include <player.h>
 #include <surface_primitives.h>
 #include <region_map.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
 #include <toolkit/string.h>
 #include <toolkit/path.h>
+#include <toolkit/toolkit.h>
 
 static UT_icd icd = {sizeof(region_map_fow_tile_t), NULL, NULL, NULL};
 #ifdef ATRINIK_WIDGET_TESTS

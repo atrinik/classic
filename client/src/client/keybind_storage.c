@@ -14,8 +14,11 @@
  * Keybinding persistence and ownership.
  */
 
-#include <global.h>
 #include <toolkit/path.h>
+#include <keybind.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 
 /** The keybindings. */
 keybind_struct **keybindings = NULL;

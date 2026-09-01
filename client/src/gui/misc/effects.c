@@ -29,7 +29,24 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <client.h>
+#include <effects.h>
+#include <image.h>
+#include <main.h>
+#include <map.h>
+#include <player.h>
+#include <server_files.h>
+#include <settings.h>
+#include <sound.h>
+#include <sprite.h>
+#include <text.h>
+#include <textwin.h>
+#include <misc.h>
+#include <surface_primitives.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 /** Linked list of possible effects. */

@@ -29,7 +29,16 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <button.h>
+#include <event.h>
+#include <main.h>
+#include <misc.h>
+#include <mouse.h>
+#include <text.h>
+#include <texture.h>
+#include <sprite.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 /**
  * Initialize the button API.

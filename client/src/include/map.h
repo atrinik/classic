@@ -30,8 +30,17 @@
 #ifndef MAP_H
 #define MAP_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <text.h>
+#include <toolkit/toolkit.h>
 #include <toolkit/map_protocol.h>
+#include <toolkit/socket.h>
 #include <map_visibility.h>
+
+typedef struct widgetdata widgetdata;
 
 /** Map tile position Y offset */
 #define MAP_TILE_POS_YOFF 23

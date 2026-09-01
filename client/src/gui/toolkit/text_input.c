@@ -29,8 +29,17 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <event.h>
+#include <keybind.h>
+#include <main.h>
+#include <settings.h>
+#include <sprite.h>
+#include <text.h>
+#include <text_input.h>
 #include <video.h>
+#include <widget.h>
+#include <toolkit/toolkit.h>
 #include <toolkit/string.h>
 
 static size_t utf8_previous(const char *str, size_t pos) {

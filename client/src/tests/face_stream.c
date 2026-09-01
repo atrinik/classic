@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -11,10 +11,13 @@
 
 /** @file Live QUIC cold-cache isolation regression. */
 
-#include <global.h>
 #include <asset.h>
+#include <client.h>
 #include <client_socket.h>
 #include <network_graph.h>
+#include <player.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <toolkit/datetime.h>
 #include <toolkit/packet.h>
 #include <toolkit/path.h>

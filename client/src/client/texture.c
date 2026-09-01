@@ -29,11 +29,16 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <wrapper.h>
 #include <video.h>
 #include <surface_primitives.h>
+#include <sprite.h>
+#include <texture.h>
+#include <text.h>
+#include <main.h>
+#include <toolkit/memory.h>
 #include <toolkit/string.h>
+#include <toolkit/toolkit.h>
 
 /**
  * All the textures.

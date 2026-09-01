@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -16,9 +16,15 @@
  * Handles the QUIC server directory and its client-side server list.
  */
 
-#include <global.h>
 #include <metaserver.h>
+#include <metaserver_options.h>
+#include <client.h>
+#include <join_credentials.h>
+#include <main.h>
 #include <wrapper.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <toolkit/curl.h>

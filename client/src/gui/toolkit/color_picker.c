@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -28,8 +28,15 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <color_picker.h>
+#include <event.h>
+#include <mouse.h>
+#include <SDL3/SDL.h>
+#include <sprite.h>
+#include <surface_primitives.h>
+#include <text.h>
 #include <toolkit/colorspace.h>
+#include <toolkit/toolkit.h>
 
 /**
  * Create a new color picker.

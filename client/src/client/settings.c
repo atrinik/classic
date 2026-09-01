@@ -29,13 +29,25 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <video.h>
+#include <main.h>
+#include <config.h>
 #include <client_socket.h>
+#include <client.h>
+#include <event.h>
+#include <gpu_renderer.h>
+#include <lighting.h>
+#include <map.h>
+#include <render_profiler.h>
+#include <settings.h>
 #include <setting_value.h>
+#include <widget.h>
+#include <toolkit/logger.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <toolkit/path.h>
+#include <toolkit/toolkit.h>
+#include <sound.h>
 
 /** Text representations of the setting types. */
 static const char *const opt_types[OPT_TYPE_NUM] =

@@ -30,6 +30,18 @@
 #ifndef WIDGET_H
 #define WIDGET_H
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include <SDL3/SDL.h>
+#include <text.h>
+#include <text_input.h>
+#include <textwin.h>
+#include <texture.h>
+#include <inventory.h>
+#include <toolkit/toolkit.h>
+
 /* If you want (a LOT of) debug info about widgets, uncomment this */
 /*#define DEBUG_WIDGET*/
 

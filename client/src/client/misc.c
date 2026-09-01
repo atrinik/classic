@@ -27,9 +27,14 @@
  * Miscellaneous functions.
  */
 
-#include <global.h>
 #include <image_codec.h>
+#include <gpu_renderer.h>
+#include <main.h>
+#include <misc.h>
+#include <textwin.h>
 #include <wrapper.h>
+#include <toolkit/logger.h>
+#include <toolkit/toolkit.h>
 
 #ifdef ATRINIK_WIDGET_TESTS
 static bool ui_test_clock_enabled;

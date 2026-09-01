@@ -3,11 +3,17 @@
  * Asynchronous HTTP-first asset source with in-band QUIC fallback.
  */
 
-#include <global.h>
 #include <wrapper.h>
+#include <asset.h>
 #include <asset_source.h>
+#include <client.h>
+#include <player.h>
+#include <toolkit/logger.h>
+#include <toolkit/curl.h>
+#include <toolkit/memory.h>
 #include <toolkit/path.h>
 #include <toolkit/string.h>
+#include <toolkit/toolkit.h>
 #include <curl/curl.h>
 #include <openssl/evp.h>
 
