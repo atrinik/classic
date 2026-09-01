@@ -37,7 +37,17 @@ bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer) {
 }
 
 void gpu_map_renderer_destroy(void) {}
+void gpu_map_renderer_poll(void) {}
+bool gpu_map_renderer_wait_idle(void) {
+    return true;
+}
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
+    (void)width;
+    (void)height;
+    (void)auxiliary;
+    return false;
+}
+bool gpu_map_renderer_retain(int width, int height, bool auxiliary) {
     (void)width;
     (void)height;
     (void)auxiliary;
@@ -45,6 +55,9 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
 }
 bool gpu_map_renderer_active(void) {
     return false;
+}
+void gpu_map_renderer_set_invalidation_hint(gpu_renderer_map_invalidation_reason_t reason) {
+    (void)reason;
 }
 void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected) {
     (void)owner;
@@ -118,6 +131,9 @@ int main(void) {
     gpu_renderer_statistics_resource_destroy(8192);
     gpu_renderer_statistics_recovery(true);
     gpu_renderer_statistics_recovery(false);
+    gpu_renderer_statistics_map_submission(2);
+    gpu_renderer_statistics_map_completion(100, 200);
+    gpu_renderer_statistics_map_update(true, false);
     uint64_t started = gpu_renderer_timing_begin();
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMMAND_BUILD, started);
     gpu_renderer_statistics_get(&statistics);
@@ -142,6 +158,17 @@ int main(void) {
     HARD_ASSERT(statistics.device_recoveries == 2);
     HARD_ASSERT(statistics.recovery_failures == 1);
     HARD_ASSERT(statistics.fallbacks == 0);
+    HARD_ASSERT(statistics.map_submissions == 1);
+    HARD_ASSERT(statistics.map_completions == 1);
+    HARD_ASSERT(statistics.map_in_flight_peak == 3);
+    HARD_ASSERT(statistics.map_queue_depth_samples == 1);
+    HARD_ASSERT(statistics.map_queue_depth_total == 2);
+    HARD_ASSERT(statistics.map_queue_age_total_ns == 100);
+    HARD_ASSERT(statistics.map_queue_age_max_ns == 100);
+    HARD_ASSERT(statistics.map_frame_latency_total_ns == 200);
+    HARD_ASSERT(statistics.map_frame_latency_max_ns == 200);
+    HARD_ASSERT(statistics.map_dropped_updates == 1);
+    HARD_ASSERT(statistics.map_merged_updates == 0);
     HARD_ASSERT(statistics.timings[GPU_RENDERER_TIMING_COMMAND_BUILD].calls == 1);
 
     gpu_renderer_destroy();

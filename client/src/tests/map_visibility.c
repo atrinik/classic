@@ -29,6 +29,37 @@ int main(void) {
     CHECK(map_visibility_field_weight(3, 4) == 208);
     CHECK(map_visibility_add_player_radiance(1280, 256) == 2304);
     CHECK(map_visibility_add_player_radiance(UINT16_MAX, 256) == UINT16_MAX);
+
+    CHECK(MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE ==
+          (MAP_VISIBILITY_MEMORY_FLOOR_RAW * 8U + 2U) / 5U);
+    CHECK(map_visibility_memory_floor(0) == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(map_visibility_memory_floor(MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE) ==
+          MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(map_visibility_memory_floor(UINT16_MAX) == UINT16_MAX);
+    uint16_t remembered_scalar = 0;
+    uint16_t remembered_rgb[3] = {0, 0, 0};
+    map_visibility_apply_memory_floor(&remembered_scalar, remembered_rgb);
+    CHECK(remembered_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(remembered_rgb[0] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(remembered_rgb[1] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(remembered_rgb[2] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    remembered_scalar = 128;
+    remembered_rgb[0] = 128;
+    remembered_rgb[1] = 0;
+    remembered_rgb[2] = 0;
+    map_visibility_apply_memory_floor(&remembered_scalar, remembered_rgb);
+    CHECK(remembered_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(remembered_rgb[0] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(remembered_rgb[1] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - 128);
+    CHECK(remembered_rgb[2] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - 128);
+    remembered_scalar = MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+    remembered_rgb[0] = 1000;
+    remembered_rgb[1] = 2000;
+    remembered_rgb[2] = 3000;
+    map_visibility_apply_memory_floor(&remembered_scalar, remembered_rgb);
+    CHECK(remembered_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+    CHECK(remembered_rgb[0] == 1000 && remembered_rgb[1] == 2000 && remembered_rgb[2] == 3000);
+
     map_visibility_fade_t fade;
     map_visibility_fade_init(&fade);
     map_visibility_fade_authorize(&fade, 255, 1000);

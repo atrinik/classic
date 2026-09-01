@@ -24,10 +24,14 @@ typedef struct SDL_Rect SDL_Rect;
 typedef struct SDL_Renderer SDL_Renderer;
 typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Texture SDL_Texture;
+typedef enum gpu_renderer_map_invalidation_reason gpu_renderer_map_invalidation_reason_t;
 bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer);
 void gpu_map_renderer_destroy(void);
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary);
+/** Reuse a complete published target without opening a command buffer. */
+bool gpu_map_renderer_retain(int width, int height, bool auxiliary);
 bool gpu_map_renderer_active(void);
+void gpu_map_renderer_set_invalidation_hint(gpu_renderer_map_invalidation_reason_t reason);
 void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected);
 /** Bind the stable semantic record identity for the next world draw. */
 void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant);
@@ -47,6 +51,10 @@ SDL_Texture *gpu_map_renderer_texture(bool auxiliary);
 /** Mark a retained target unavailable until its next successful publication. */
 void gpu_map_renderer_invalidate_target(bool auxiliary);
 void gpu_map_renderer_invalidate_surface(SDL_Surface *surface);
+/** Poll submitted map work without blocking and retire signaled resources. */
+void gpu_map_renderer_poll(void);
+/** Wait for all submitted map work during an explicit lifecycle transition. */
+bool gpu_map_renderer_wait_idle(void);
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
 typedef struct gpu_map_renderer_probe {
     uint8_t albedo[4];
@@ -62,6 +70,8 @@ size_t gpu_map_renderer_atlas_page_count(void);
 size_t gpu_map_renderer_atlas_allocation_count(void);
 /** Count active retained primary or auxiliary instances with compact-light owners. */
 size_t gpu_map_renderer_lit_instance_count(bool auxiliary);
+/** Return the number of submitted map command buffers not yet retired. */
+size_t gpu_map_renderer_pending_submission_count(void);
 #endif
 
 #endif

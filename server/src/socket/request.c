@@ -1000,6 +1000,11 @@ static bool map_level_layer_visible(map_level_visibility visibility, int layer) 
     return visibility == MAP_LEVEL_VISIBLE;
 }
 
+/** Static MAP2 geometry remains eligible for remembered presentation at zero light. */
+static bool map_layer_is_remembered_geometry(int layer) {
+    return layer == LAYER_FLOOR || layer == LAYER_FMASK || layer == LAYER_WALL;
+}
+
 static bool map_space_has_client_content(MapSpace *msp, map_level_visibility visibility) {
     for (int layer = LAYER_FLOOR; layer <= NUM_LAYERS; layer++) {
         if (!map_level_layer_visible(visibility, layer)) {
@@ -1794,9 +1799,10 @@ void draw_client_map2(object *pl) {
                             }
 
                             /* XRAY vision is an explicit authorization to see
-                             * through darkness. Ordinary roofs retain their
-                             * physical illumination, including zero; their
-                             * geometry is kept below even when unlit. */
+                             * through darkness. Static MAP2 geometry remains
+                             * authorized at zero radiance so the client can
+                             * retain it for remembered-world presentation;
+                             * live entities and effects remain light-gated. */
                             if (raw_light[sub_layer] < 100 && special_vision & 1) {
                                 raw_light[sub_layer] = 100;
                             }
@@ -1807,7 +1813,8 @@ void draw_client_map2(object *pl) {
                                                     light_rgb_radiance[sub_layer]);
                         }
 
-                        if (tmp != NULL && raw_light[sub_layer] <= 0 && !roof_surface) {
+                        if (tmp != NULL && raw_light[sub_layer] <= 0 &&
+                            !map_layer_is_remembered_geometry(layer) && !roof_surface) {
                             tmp = NULL;
                         }
 

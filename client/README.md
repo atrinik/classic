@@ -278,9 +278,10 @@
  churn, retained-resource, and changing animation checkpoints. Upload evidence
  attributes immutable source textures, changed painter instances, compact
  light data, and per-batch stable-slot uniforms independently. Static plateaus
- require the first three classes to remain zero and bound slot uniforms to one
- 16 to 1024-byte push per world batch; animation rows additionally permit only
- bounded changed-instance deltas.
+ require source, instance, and light uploads to remain zero and skip the
+ retained world pass; animation rows additionally permit only bounded
+ actor-effect source and instance deltas. Stable-slot uniforms remain one
+ 16 to 1024-byte push per submitted world batch.
 
  The client deliberately uses a 1:1 logical-to-output-pixel window contract.
  High-density backing stores are not requested: one SDL window coordinate is

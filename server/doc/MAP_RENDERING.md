@@ -2061,6 +2061,51 @@ target and timestamp. At alpha zero the record and any redraw request are
 removed; alpha-only changes repaint the affected bounded region but never
 rebuild remembered geometry or the light field.
 
+### Opt-in per-tile lighting diagnostics
+
+Issue #483 adds a local, opt-in diagnostic view for the client-side lighting
+pipeline. It does not add a MAP2 field, server request, socket flag, or source
+identity. The server continues to send only the viewer-authorized aggregate
+Q5.11 scalar/RGB sample described above; the client labels that received
+aggregate and reports the transformations already used by the renderer.
+
+Activation is through the client console:
+
+```text
+/d_lighting
+/d_lighting tile <x> <y> [depth [sub-layer]]
+/d_lighting grid [radius [depth [sub-layer]]]
+```
+
+Coordinates are the logical MAP2 wire-window coordinates, not absolute map
+coordinates or a map path. The no-argument form reports the player-centered
+wire tile. The optional grid is centered on that tile and bounded to radius
+`0..4`. Every report starts with `lightdiag v1` and is one copyable key/value
+line. `lightgrid v1` is a bounded status grid; its cells never contain raw
+fogged values.
+
+The single-tile record has these stages and fields:
+
+| Field | Meaning |
+| --- | --- |
+| `state` | `visible`, `remembered`, `fogged`, `stale`, `missing`, and `cleared` flags for the requested tile/depth. |
+| `source` / `received` | The current viewer-authorized server MAP2 aggregate and whether its scalar endpoint is present. No source position, emitter, component, or hidden object is included. |
+| `unit` / `scalar` / `rgb` | Unsigned wire words in Q5.11; a sample word represents `sample / 2048`. RGB values are the received aggregate channels, not an inferred source color. |
+| `keyframe` / `next` | The optional bounded MAP2 timed endpoint, generation, interval, and next scalar/RGB words. `replaced` means the timed endpoint supersedes the provisional current target. |
+| `working` | The client value after temporal interpolation and the existing bounded nearest-known-ring fallback. On a visible primary-depth tile it also includes the presentation-only local-player field. `interpolated` and `borrowed` identify those transformations. |
+| `presentation` | Smooth mode reports tone-mapped sRGB illumination RGB and neutral brightness; discrete mode reports the existing scalar level lookup and neutral RGB. This is illumination presentation, not a texture/albedo pixel. |
+| `reasons` | Comma-separated `zero`, `unavailable`, `stale`, `clamped`, `replaced`, and `borrowed` explanations; `none` means no listed condition. |
+
+Fogged tiles deliberately redact `received`, `keyframe`, `working`, and
+`presentation` numbers (the record prints `redacted`) while retaining the
+visibility/remembered/stale/missing/cleared state. This makes fog-boundary
+inspection useful without creating a hidden-map disclosure channel. The
+diagnostic reads the already-published local cache only when the user invokes
+it; normal MAP2 decoding, rendering, wire size, allocations, redraws, and
+benchmark counters are unchanged while it is disabled. If a MAP2 transaction
+is still being assembled, the diagnostic reports the tile as unavailable until
+the complete publication is visible.
+
 ### Unified composition and resource contract
 
 The normal MAP decoder and `map_draw_map()` path remain the only scene-building

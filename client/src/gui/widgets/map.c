@@ -30,6 +30,8 @@
  */
 
 #include <mouse.h>
+#include <ctype.h>
+#include <errno.h>
 #include <video.h>
 #include <surface_primitives.h>
 #include <client_socket.h>
@@ -151,6 +153,13 @@ typedef struct map_cell {
     int16_t render_max_height;
 } map_cell_t;
 
+/** Provenance retained independently of compact light records. */
+typedef enum map_light_cache_state {
+    MAP_LIGHT_CACHE_UNKNOWN,
+    MAP_LIGHT_CACHE_RECEIVED,
+    MAP_LIGHT_CACHE_CLEARED,
+} map_light_cache_state_t;
+
 typedef struct map_cell_store {
     map_cell_t **slots;
     struct map_cell_header *headers;
@@ -165,7 +174,7 @@ typedef struct map_cell_header {
     uint8_t occupancy;
     uint8_t fow;
     uint8_t structural_fow;
-    uint8_t reserved;
+    uint8_t light_state;
 } map_cell_header_t;
 
 static map_cell_store_t *cells;
@@ -276,6 +285,9 @@ static void map_cell_store_clear_slot(map_cell_store_t *store, size_t index);
 static void map_cell_store_trim_slot(map_cell_store_t *store, size_t index);
 static bool
 map_cell_store_set_support_height(map_cell_store_t *store, size_t index, int16_t height);
+static void map_cell_store_set_light_state(map_cell_store_t *store,
+                                           size_t index,
+                                           map_light_cache_state_t state);
 static void
 map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow);
 static void map_mark_stretch_dirty(int x, int y);
@@ -1094,6 +1106,17 @@ map_cell_store_set_support_height(map_cell_store_t *store, size_t index, int16_t
     return true;
 }
 
+static void map_cell_store_set_light_state(map_cell_store_t *store,
+                                           size_t index,
+                                           map_light_cache_state_t state) {
+    HARD_ASSERT(store != NULL);
+    HARD_ASSERT(index < store->count);
+    if (store->headers[index].light_state == (uint8_t)state) {
+        return;
+    }
+    store->headers[index].light_state = (uint8_t)state;
+}
+
 static void
 map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow) {
     HARD_ASSERT(store != NULL);
@@ -1207,9 +1230,15 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             int physical_y = (y + map_cache_origin_y) % height;
             size_t index = (size_t)physical_y * width + physical_x;
             map_cell_t *cell = map_cell_store_slot(level, index, false);
+            bool had_light_state =
+                level->headers[index].light_state != MAP_LIGHT_CACHE_UNKNOWN ||
+                (cell != NULL && (cell->lights != NULL || cell->light_keyframe != NULL));
             if (cell != NULL && (!cell->fow || cell->structural_fow)) {
                 map_clear_live_cell(cell);
                 map_cell_clear_light_state(cell);
+            }
+            if (had_light_state) {
+                map_cell_store_set_light_state(level, index, MAP_LIGHT_CACHE_CLEARED);
             }
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
@@ -2788,10 +2817,15 @@ void map_clear_cell(int x, int y, bool hard) {
         if (hard) {
             map_cell_store_set_support_height(cells, index, 0);
         }
+        if (cells->headers[index].light_state != MAP_LIGHT_CACHE_UNKNOWN) {
+            map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_CLEARED);
+        }
         map_cell_store_set_fow(cells, index, true, false);
         return;
     }
     bool had_known_light = false;
+    bool had_light_state = cells->headers[index].light_state != MAP_LIGHT_CACHE_UNKNOWN ||
+                           cell->lights != NULL || cell->light_keyframe != NULL;
     for (size_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         had_known_light |= map_cell_light_record_read(cell, sub_layer)->known != 0;
     }
@@ -2805,6 +2839,9 @@ void map_clear_cell(int x, int y, bool hard) {
 
         map_cell_store_clear_slot(cells, index);
         map_cell_store_set_support_height(cells, index, 0);
+        if (had_light_state) {
+            map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_CLEARED);
+        }
         map_cell_store_set_fow(cells, index, true, false);
 
         if (had_floor_geometry) {
@@ -2820,6 +2857,9 @@ void map_clear_cell(int x, int y, bool hard) {
 
     map_clear_live_cell(cell);
     map_cell_clear_light_state(cell);
+    if (had_light_state) {
+        map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_CLEARED);
+    }
     map_cell_store_set_fow(cells, index, true, false);
     map_cell_store_trim_slot(cells, index);
 
@@ -2877,8 +2917,10 @@ void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance) {
     map_cell_t *cell;
 
     map_state_transaction_record_cell(x, y);
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
     cell = MAP_CELL_GET_MIDDLE_MUTABLE(x, y);
     map_cell_light_record_t *light = map_cell_light_record(cell, sub_layer, true);
+    map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_RECEIVED);
     bool changed = !light->known || light->radiance != radiance;
     light->radiance = radiance;
     light->known = 1;
@@ -2935,6 +2977,9 @@ void map_set_light_rgb_radiance(int x,
         light->next_rgb_explicit = light->rgb_explicit;
         map_cell_light_record_trim(cell, sub_layer);
     }
+    if (bitmap != 0) {
+        map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_RECEIVED);
+    }
     bool visible = !cell->fow;
     map_cell_store_trim_slot(cells, index);
     if (changed && visible) {
@@ -2973,6 +3018,7 @@ void map_set_light_keyframe(int x,
     keyframe->end_seconds = end_seconds;
     keyframe->flags = flags;
     keyframe->valid = 1;
+    map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_RECEIVED);
     for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         bool scalar_present = (scalar_bitmap & (UINT8_C(1) << sub_layer)) != 0;
         bool rgb_present = (rgb_bitmap & (UINT8_C(1) << sub_layer)) != 0;
@@ -3470,6 +3516,23 @@ typedef struct map_render_cohort {
     int8_t depth;
 } map_render_cohort_t;
 
+/** Per-frame command totals that can be replayed without walking the painter list. */
+typedef struct map_benchmark_command_summary {
+    uint64_t stretched_commands;
+    uint64_t double_commands;
+    uint64_t living_commands;
+    uint64_t door_commands;
+    uint64_t roof_commands;
+    uint16_t command_depth_mask;
+    uint16_t living_depth_mask;
+    uint16_t door_depth_mask;
+    uint16_t roof_depth_mask;
+    bool frame_stretch;
+    bool frame_living;
+    bool frame_door;
+    bool frame_roof;
+} map_benchmark_command_summary_t;
+
 /** Output accumulated while traversing independently cached map levels. */
 typedef struct map_render_context {
     map_render_command_t *commands;
@@ -3499,11 +3562,12 @@ typedef struct map_render_context {
     uint8_t target_sub_layer;
     bool commands_sorted;
     bool capture_candidates;
+    map_benchmark_command_summary_t benchmark_summary;
 } map_render_context_t;
 
 static void map_render_context_sort(map_render_context_t *context);
 
-static void map_benchmark_commands_accumulate(const map_render_command_t *commands,
+static void map_benchmark_commands_accumulate(map_render_context_t *context,
                                               size_t commands_num,
                                               bool primary_surface,
                                               bool animation_only) {
@@ -3511,27 +3575,28 @@ static void map_benchmark_commands_accumulate(const map_render_command_t *comman
     bool frame_living = false;
     bool frame_door = false;
     bool frame_roof = false;
+    map_benchmark_command_summary_t summary = {0};
     uint64_t animation_digest = UINT64_C(14695981039346656037);
     for (size_t index = 0; index < commands_num; index++) {
-        const map_render_command_t *command = &commands[index];
+        const map_render_command_t *command = &context->commands[index];
         bool stretch = command->effects.stretch != 0;
         bool living = command->object_layer == LAYER_LIVING;
-        map_benchmark_statistics.stretched_commands += stretch;
-        map_benchmark_statistics.double_commands += command->draw_double;
-        map_benchmark_statistics.living_commands += living;
-        map_benchmark_statistics.door_commands += command->door;
-        map_benchmark_statistics.roof_commands += command->roof;
+        summary.stretched_commands += stretch;
+        summary.double_commands += command->draw_double;
+        summary.living_commands += living;
+        summary.door_commands += command->door;
+        summary.roof_commands += command->roof;
         if (!primary_surface) {
             continue;
         }
         uint16_t depth_bit = UINT16_C(1) << MAP2_DEPTH_INDEX(command->depth);
-        map_benchmark_statistics.command_depth_mask |= depth_bit;
+        summary.command_depth_mask |= depth_bit;
         if (living)
-            map_benchmark_statistics.living_depth_mask |= depth_bit;
+            summary.living_depth_mask |= depth_bit;
         if (command->door)
-            map_benchmark_statistics.door_depth_mask |= depth_bit;
+            summary.door_depth_mask |= depth_bit;
         if (command->roof)
-            map_benchmark_statistics.roof_depth_mask |= depth_bit;
+            summary.roof_depth_mask |= depth_bit;
         frame_stretch |= stretch;
         frame_living |= living;
         frame_door |= command->door;
@@ -3547,11 +3612,26 @@ static void map_benchmark_commands_accumulate(const map_render_command_t *comman
                 map_cell_hash_bytes(animation_digest, &command->effects, sizeof(command->effects));
         }
     }
+    context->benchmark_summary = summary;
+    map_benchmark_statistics.stretched_commands += summary.stretched_commands;
+    map_benchmark_statistics.double_commands += summary.double_commands;
+    map_benchmark_statistics.living_commands += summary.living_commands;
+    map_benchmark_statistics.door_commands += summary.door_commands;
+    map_benchmark_statistics.roof_commands += summary.roof_commands;
     if (primary_surface) {
-        map_benchmark_statistics.primary_frames_with_stretch += frame_stretch;
-        map_benchmark_statistics.primary_frames_with_living += frame_living;
-        map_benchmark_statistics.primary_frames_with_door += frame_door;
-        map_benchmark_statistics.primary_frames_with_roof += frame_roof;
+        summary.frame_stretch = frame_stretch;
+        summary.frame_living = frame_living;
+        summary.frame_door = frame_door;
+        summary.frame_roof = frame_roof;
+        context->benchmark_summary = summary;
+        map_benchmark_statistics.command_depth_mask |= summary.command_depth_mask;
+        map_benchmark_statistics.living_depth_mask |= summary.living_depth_mask;
+        map_benchmark_statistics.door_depth_mask |= summary.door_depth_mask;
+        map_benchmark_statistics.roof_depth_mask |= summary.roof_depth_mask;
+        map_benchmark_statistics.primary_frames_with_stretch += summary.frame_stretch;
+        map_benchmark_statistics.primary_frames_with_living += summary.frame_living;
+        map_benchmark_statistics.primary_frames_with_door += summary.frame_door;
+        map_benchmark_statistics.primary_frames_with_roof += summary.frame_roof;
     }
     if (animation_only) {
         map_benchmark_statistics.animation_reason_draws++;
@@ -3562,6 +3642,27 @@ static void map_benchmark_commands_accumulate(const map_render_command_t *comman
         map_benchmark_animation_command_digest = animation_digest;
         map_benchmark_animation_command_digest_valid = true;
     }
+}
+
+static void map_benchmark_commands_retain(const map_render_context_t *context) {
+    const map_benchmark_command_summary_t *summary = &context->benchmark_summary;
+    map_benchmark_statistics.render_commands += context->commands_num;
+    map_benchmark_statistics.reused_render_commands += context->commands_num;
+    map_benchmark_statistics.stretched_commands += summary->stretched_commands;
+    map_benchmark_statistics.double_commands += summary->double_commands;
+    map_benchmark_statistics.living_commands += summary->living_commands;
+    map_benchmark_statistics.door_commands += summary->door_commands;
+    map_benchmark_statistics.roof_commands += summary->roof_commands;
+    map_benchmark_statistics.command_depth_mask |= summary->command_depth_mask;
+    map_benchmark_statistics.living_depth_mask |= summary->living_depth_mask;
+    map_benchmark_statistics.door_depth_mask |= summary->door_depth_mask;
+    map_benchmark_statistics.roof_depth_mask |= summary->roof_depth_mask;
+    map_benchmark_statistics.primary_frames_with_stretch += summary->frame_stretch;
+    map_benchmark_statistics.primary_frames_with_living += summary->frame_living;
+    map_benchmark_statistics.primary_frames_with_door += summary->frame_door;
+    map_benchmark_statistics.primary_frames_with_roof += summary->frame_roof;
+    map_benchmark_statistics.peak_render_commands =
+        MAX(map_benchmark_statistics.peak_render_commands, context->commands_num);
 }
 
 /** Stable geometry identity for one visible exit cue member. */
@@ -3844,9 +3945,12 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
+        uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
+        if (data->cell->fow && remembered) {
+            radiance = map_visibility_memory_floor(radiance);
+        }
         effects.dark_level =
-            (UINT8_MAX - lighting_radiance_to_level(
-                             map_cell_light_record_read(data->cell, data->sub_layer)->radiance)) *
+            (UINT8_MAX - lighting_radiance_to_level(radiance)) *
             DARK_LEVELS / UINT8_MAX;
     }
 
@@ -4678,7 +4782,8 @@ map_lighting_interpolate(uint16_t current, uint16_t next, uint64_t progress, uin
 static bool map_lighting_temporal_sample(const map_cell_t *cell,
                                          uint8_t sub_layer,
                                          uint16_t *scalar,
-                                         uint16_t rgb[3]) {
+                                         uint16_t rgb[3],
+                                         bool count_benchmark) {
     if (!map_cell_light_keyframe_record_read(cell)->valid ||
         !map_cell_light_record_read(cell, sub_layer)->known ||
         !map_cell_light_record_read(cell, sub_layer)->next_known) {
@@ -4705,7 +4810,9 @@ static bool map_lighting_temporal_sample(const map_cell_t *cell,
             progress,
             duration);
     }
-    map_benchmark_statistics.temporal_light_samples++;
+    if (count_benchmark) {
+        map_benchmark_statistics.temporal_light_samples++;
+    }
     return true;
 }
 
@@ -4717,23 +4824,35 @@ static bool map_lighting_temporal_sample(const map_cell_t *cell,
  * ring. This extends the known field naturally at map and FOW boundaries and
  * prevents temporary dark bands from influencing nearby structures.
  */
-static void map_lighting_radiance(int x,
-                                  int y,
-                                  const map_cell_t *cell,
-                                  uint8_t sub_layer,
-                                  uint16_t *scalar,
-                                  uint16_t rgb[3]) {
+static bool map_lighting_radiance_ex(int x,
+                                     int y,
+                                     const map_cell_t *cell,
+                                     uint8_t sub_layer,
+                                     uint16_t *scalar,
+                                     uint16_t rgb[3],
+                                     bool count_benchmark,
+                                     bool *interpolated,
+                                     bool *borrowed) {
     int cache_width = map_width * MAP_FOW_SIZE;
     int cache_height = map_height * MAP_FOW_SIZE;
 
+    if (interpolated != NULL) {
+        *interpolated = false;
+    }
+    if (borrowed != NULL) {
+        *borrowed = false;
+    }
+
     if (map_cell_light_record_read(cell, sub_layer)->known) {
-        if (!map_lighting_temporal_sample(cell, sub_layer, scalar, rgb)) {
+        if (!map_lighting_temporal_sample(cell, sub_layer, scalar, rgb, count_benchmark)) {
             *scalar = map_cell_light_record_read(cell, sub_layer)->radiance;
             memcpy(rgb,
                    map_cell_light_record_read(cell, sub_layer)->rgb_radiance,
                    sizeof(map_cell_light_record_read(cell, 0)->rgb_radiance));
+        } else if (interpolated != NULL) {
+            *interpolated = true;
         }
-        return;
+        return true;
     }
 
     /* The rasterizer includes a two-cell border around the drawable map.
@@ -4770,7 +4889,8 @@ static void map_lighting_radiance(int x,
                 if (!map_lighting_temporal_sample(sample_cell,
                                                   sample_sub_layer,
                                                   &sample_scalar,
-                                                  sample_rgb)) {
+                                                  sample_rgb,
+                                                  count_benchmark)) {
                     sample_scalar =
                         map_cell_light_record_read(sample_cell, sample_sub_layer)->radiance;
                     memcpy(sample_rgb,
@@ -4778,6 +4898,9 @@ static void map_lighting_radiance(int x,
                            sizeof(sample_rgb));
                 } else {
                     temporal_samples++;
+                    if (interpolated != NULL) {
+                        *interpolated = true;
+                    }
                 }
                 total[0] += sample_scalar;
                 for (size_t channel = 0; channel < 3; channel++) {
@@ -4788,18 +4911,565 @@ static void map_lighting_radiance(int x,
         }
 
         if (samples != 0) {
-            map_benchmark_statistics.borrowed_light_samples++;
-            map_benchmark_statistics.borrowed_temporal_light_samples += temporal_samples != 0;
+            if (count_benchmark) {
+                map_benchmark_statistics.borrowed_light_samples++;
+                map_benchmark_statistics.borrowed_temporal_light_samples += temporal_samples != 0;
+            }
             *scalar = (uint16_t)((total[0] + samples / 2) / samples);
             for (size_t channel = 0; channel < 3; channel++) {
                 rgb[channel] = (uint16_t)((total[channel + 1] + samples / 2) / samples);
             }
-            return;
+            if (borrowed != NULL) {
+                *borrowed = true;
+            }
+            return true;
         }
     }
 
     *scalar = 0;
     memset(rgb, 0, sizeof(uint16_t) * 3);
+    return false;
+}
+
+static void map_lighting_radiance(int x,
+                                  int y,
+                                  const map_cell_t *cell,
+                                  uint8_t sub_layer,
+                                  uint16_t *scalar,
+                                  uint16_t rgb[3]) {
+    (void)map_lighting_radiance_ex(x, y, cell, sub_layer, scalar, rgb, true, NULL, NULL);
+}
+
+static bool map_cell_has_remembered_geometry(const map_cell_t *cell) {
+    if (cell == NULL) {
+        return false;
+    }
+
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        for (int object_layer = LAYER_FLOOR; object_layer <= LAYER_WALL; object_layer++) {
+            if (!map_layer_is_remembered((uint8_t)object_layer)) {
+                continue;
+            }
+            const map_cell_layer_record_t *record =
+                map_cell_layer_record((map_cell_t *)cell,
+                                      GET_MAP_LAYER(object_layer, sub_layer),
+                                      false);
+            if (record != NULL && record->face != 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void map_lighting_diagnostic_present(map_lighting_diagnostic_t *diagnostic) {
+    if (!diagnostic->working_available) {
+        return;
+    }
+
+    diagnostic->presentation_available = true;
+    if (!diagnostic->smooth_lighting) {
+        diagnostic->presentation_brightness =
+            lighting_radiance_to_level(diagnostic->working_scalar);
+        for (size_t channel = 0; channel < 3; channel++) {
+            diagnostic->presentation_rgb[channel] = diagnostic->presentation_brightness;
+        }
+        return;
+    }
+
+    uint16_t linear[3];
+    lighting_tone_map_linear(diagnostic->working_scalar, diagnostic->working_rgb, linear);
+    for (size_t channel = 0; channel < 3; channel++) {
+        diagnostic->presentation_rgb[channel] = lighting_linear_to_srgb8(linear[channel]);
+    }
+
+    uint16_t neutral[3] = {diagnostic->working_scalar,
+                           diagnostic->working_scalar,
+                           diagnostic->working_scalar};
+    lighting_tone_map_linear(diagnostic->working_scalar, neutral, linear);
+    diagnostic->presentation_brightness = lighting_linear_to_srgb8(linear[0]);
+}
+
+/** Remove all numeric light data before a fogged diagnostic leaves this layer. */
+static void map_lighting_diagnostic_redact(map_lighting_diagnostic_t *diagnostic) {
+    if (!diagnostic->fogged) {
+        return;
+    }
+
+    diagnostic->received = false;
+    diagnostic->received_scalar = 0;
+    memset(diagnostic->received_rgb, 0, sizeof(diagnostic->received_rgb));
+    diagnostic->received_rgb_explicit = false;
+    diagnostic->keyframe_valid = false;
+    diagnostic->next_known = false;
+    diagnostic->keyframe_generation = 0;
+    diagnostic->keyframe_start_seconds = 0;
+    diagnostic->keyframe_end_seconds = 0;
+    diagnostic->next_scalar = 0;
+    memset(diagnostic->next_rgb, 0, sizeof(diagnostic->next_rgb));
+    diagnostic->next_rgb_explicit = false;
+    diagnostic->working_available = false;
+    diagnostic->interpolated = false;
+    diagnostic->borrowed = false;
+    diagnostic->working_scalar = 0;
+    memset(diagnostic->working_rgb, 0, sizeof(diagnostic->working_rgb));
+    diagnostic->presentation_available = false;
+    diagnostic->presentation_brightness = 0;
+    memset(diagnostic->presentation_rgb, 0, sizeof(diagnostic->presentation_rgb));
+
+    diagnostic->reasons = 0;
+    if (diagnostic->stale) {
+        diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_STALE;
+    }
+    if (diagnostic->missing) {
+        diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE;
+    }
+}
+
+bool map_lighting_diagnostic_get(int depth,
+                                 int x,
+                                 int y,
+                                 int sub_layer,
+                                 bool smooth_lighting,
+                                 map_lighting_diagnostic_t *diagnostic) {
+    if (diagnostic == NULL) {
+        return false;
+    }
+    memset(diagnostic, 0, sizeof(*diagnostic));
+    diagnostic->x = x;
+    diagnostic->y = y;
+    diagnostic->depth = depth;
+    diagnostic->sub_layer = (uint8_t)MAX(0, sub_layer);
+    diagnostic->smooth_lighting = smooth_lighting;
+
+    if (map_state_transaction.active || map_light_keyframe_transaction.active || map_width <= 0 ||
+        map_height <= 0 ||
+        depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || x < 0 || x >= map_width || y < 0 ||
+        y >= map_height || sub_layer < 0 || sub_layer >= NUM_SUB_LAYERS) {
+        return false;
+    }
+
+    size_t level_index = (size_t)MAP2_DEPTH_INDEX(depth);
+    if (!(map_level_mask & (UINT16_C(1) << level_index)) || level_cells[level_index] == NULL) {
+        return false;
+    }
+
+    map_cell_store_t *saved_cells = cells;
+    size_t saved_level_index = current_level_index;
+    map_cell_store_t *level = level_cells[level_index];
+    cells = level;
+    current_level_index = level_index;
+
+    int cache_x = x + MAP_STARTX;
+    int cache_y = y + MAP_STARTY;
+    size_t physical_index = map_cache_physical_index(cache_x, cache_y);
+    const map_cell_header_t *header = &level->headers[physical_index];
+    const map_cell_t *cell = level->slots[physical_index];
+    if (cell == NULL) {
+        cell = map_cache_cell(level, cache_x, cache_y);
+    }
+
+    diagnostic->visible = header->fow == 0;
+    diagnostic->remembered = !diagnostic->visible && map_cell_has_remembered_geometry(cell);
+    diagnostic->fogged = !diagnostic->visible;
+    diagnostic->cleared = header->light_state == MAP_LIGHT_CACHE_CLEARED;
+
+    const map_cell_light_record_t *light = map_cell_light_record_read(cell, sub_layer);
+    diagnostic->received = light->known != 0;
+    diagnostic->received_scalar = light->radiance;
+    memcpy(diagnostic->received_rgb, light->rgb_radiance, sizeof(diagnostic->received_rgb));
+    diagnostic->received_rgb_explicit = light->rgb_explicit != 0;
+
+    const map_cell_light_keyframe_record_t *keyframe = map_cell_light_keyframe_record_read(cell);
+    diagnostic->keyframe_valid = keyframe->valid != 0;
+    diagnostic->keyframe_generation = keyframe->generation;
+    diagnostic->keyframe_start_seconds = keyframe->start_seconds;
+    diagnostic->keyframe_end_seconds = keyframe->end_seconds;
+    diagnostic->next_known = light->next_known != 0;
+    diagnostic->next_scalar = light->next_radiance;
+    memcpy(diagnostic->next_rgb, light->next_rgb_radiance, sizeof(diagnostic->next_rgb));
+    diagnostic->next_rgb_explicit = light->next_rgb_explicit != 0;
+    diagnostic->missing = !diagnostic->received && !diagnostic->received_rgb_explicit &&
+                          !diagnostic->keyframe_valid && light->radiance == 0;
+    diagnostic->stale = !diagnostic->received && light->radiance != 0;
+
+    bool clamped = false;
+    diagnostic->working_available = map_lighting_radiance_ex(cache_x,
+                                                             cache_y,
+                                                             cell,
+                                                             (uint8_t)sub_layer,
+                                                             &diagnostic->working_scalar,
+                                                             diagnostic->working_rgb,
+                                                             false,
+                                                             &diagnostic->interpolated,
+                                                             &diagnostic->borrowed);
+
+    /* Match map_lighting_vertex(): the local player field is presentation-only,
+     * primary-level, and never applied to a fogged tile. */
+    if (diagnostic->working_available && diagnostic->depth == 0 && diagnostic->visible) {
+        int player_x = map_width - (map_width / 2) - 1;
+        int player_y = map_height - (map_height / 2) - 1;
+        uint16_t weight = map_visibility_field_weight(x - player_x, y - player_y);
+        uint16_t player_addition = map_visibility_add_player_radiance(0, weight);
+        if ((uint32_t)diagnostic->working_scalar + player_addition > UINT16_MAX) {
+            clamped = true;
+        }
+        diagnostic->working_scalar =
+            map_visibility_add_player_radiance(diagnostic->working_scalar, weight);
+        for (size_t channel = 0; channel < 3; channel++) {
+            if ((uint32_t)diagnostic->working_rgb[channel] + player_addition > UINT16_MAX) {
+                clamped = true;
+            }
+            diagnostic->working_rgb[channel] =
+                map_visibility_add_player_radiance(diagnostic->working_rgb[channel], weight);
+        }
+    }
+
+    if (!diagnostic->working_available) {
+        diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE;
+    } else if (diagnostic->working_scalar == 0) {
+        diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO;
+    }
+    if (diagnostic->stale) {
+        diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_STALE;
+    }
+    if (clamped) {
+        diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED;
+    }
+    if (diagnostic->keyframe_valid && diagnostic->next_known) {
+        diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED;
+    }
+    if (diagnostic->borrowed) {
+        diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_BORROWED;
+    }
+    map_lighting_diagnostic_present(diagnostic);
+    map_lighting_diagnostic_redact(diagnostic);
+
+    cells = saved_cells;
+    current_level_index = saved_level_index;
+    return true;
+}
+
+static const char *map_lighting_diagnostic_reason_name(uint32_t reason) {
+    switch (reason) {
+        case MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO:
+            return "zero";
+        case MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE:
+            return "unavailable";
+        case MAP_LIGHTING_DIAGNOSTIC_REASON_STALE:
+            return "stale";
+        case MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED:
+            return "clamped";
+        case MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED:
+            return "replaced";
+        case MAP_LIGHTING_DIAGNOSTIC_REASON_BORROWED:
+            return "borrowed";
+        default:
+            return "unknown";
+    }
+}
+
+static void map_lighting_diagnostic_reason_text(uint32_t reasons, char *text, size_t text_size) {
+    static const uint32_t reason_flags[] = {
+        MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO,
+        MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE,
+        MAP_LIGHTING_DIAGNOSTIC_REASON_STALE,
+        MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED,
+        MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED,
+        MAP_LIGHTING_DIAGNOSTIC_REASON_BORROWED,
+    };
+    if (text == NULL || text_size == 0) {
+        return;
+    }
+    size_t used = 0;
+    text[0] = '\0';
+    for (size_t index = 0; index < arraysize(reason_flags); index++) {
+        if (!(reasons & reason_flags[index]) || used >= text_size) {
+            continue;
+        }
+        int written = snprintf(text + used,
+                               text_size - used,
+                               "%s%s",
+                               used == 0 ? "" : ",",
+                               map_lighting_diagnostic_reason_name(reason_flags[index]));
+        if (written < 0) {
+            text[0] = '\0';
+            return;
+        }
+        used += (size_t)MIN(written, (int)(text_size - used - 1));
+    }
+    if (used == 0 && text_size > 1) {
+        snprintf(text, text_size, "none");
+    }
+}
+
+static void
+map_lighting_diagnostic_emit_tile(int depth, int x, int y, int sub_layer, bool smooth_lighting) {
+    map_lighting_diagnostic_t diagnostic;
+    if (!map_lighting_diagnostic_get(depth, x, y, sub_layer, smooth_lighting, &diagnostic)) {
+        draw_info_format(COLOR_RED,
+                         "lightdiag v%u x=%d y=%d depth=%d sub=%d state=unavailable",
+                         MAP_LIGHTING_DIAGNOSTIC_VERSION,
+                         x,
+                         y,
+                         depth,
+                         sub_layer);
+        return;
+    }
+
+    char reasons[96];
+    map_lighting_diagnostic_reason_text(diagnostic.reasons, reasons, sizeof(reasons));
+    if (diagnostic.fogged) {
+        /* Do not print cached radiance, temporal endpoints, or presentation
+         * values for a fogged tile. The state labels remain useful at a fog
+         * boundary without turning diagnostics into a hidden-map channel. */
+        draw_info_format(COLOR_WHITE,
+                         "lightdiag v%u x=%d y=%d depth=%d sub=%u "
+                         "state=visible:%u remembered:%u fogged:%u stale:%u missing:%u cleared:%u "
+                         "source=redacted field=redacted presentation=redacted reasons=%s",
+                         MAP_LIGHTING_DIAGNOSTIC_VERSION,
+                         diagnostic.x,
+                         diagnostic.y,
+                         diagnostic.depth,
+                         diagnostic.sub_layer,
+                         diagnostic.visible,
+                         diagnostic.remembered,
+                         diagnostic.fogged,
+                         diagnostic.stale,
+                         diagnostic.missing,
+                         diagnostic.cleared,
+                         reasons);
+        return;
+    }
+
+    draw_info_format(COLOR_WHITE,
+                     "lightdiag v%u x=%d y=%d depth=%d sub=%u "
+                     "state=visible:%u remembered:%u fogged:%u stale:%u missing:%u cleared:%u "
+                     "source=server-map2-aggregate received:%u scalar:%u rgb:%u,%u,%u "
+                     "rgb-explicit:%u unit=Q5.11(sample/2048) "
+                     "keyframe:valid:%u generation:%" PRIu64 " start:%" PRIu64 " end:%" PRIu64
+                     " next:%u scalar:%u rgb:%u,%u,%u rgb-explicit:%u "
+                     "working:available:%u scalar:%u rgb:%u,%u,%u interpolated:%u borrowed:%u "
+                     "presentation:mode:%s available:%u brightness:%u rgb:%u,%u,%u reasons=%s",
+                     MAP_LIGHTING_DIAGNOSTIC_VERSION,
+                     diagnostic.x,
+                     diagnostic.y,
+                     diagnostic.depth,
+                     diagnostic.sub_layer,
+                     diagnostic.visible,
+                     diagnostic.remembered,
+                     diagnostic.fogged,
+                     diagnostic.stale,
+                     diagnostic.missing,
+                     diagnostic.cleared,
+                     diagnostic.received,
+                     diagnostic.received_scalar,
+                     diagnostic.received_rgb[0],
+                     diagnostic.received_rgb[1],
+                     diagnostic.received_rgb[2],
+                     diagnostic.received_rgb_explicit,
+                     diagnostic.keyframe_valid,
+                     diagnostic.keyframe_generation,
+                     diagnostic.keyframe_start_seconds,
+                     diagnostic.keyframe_end_seconds,
+                     diagnostic.next_known,
+                     diagnostic.next_scalar,
+                     diagnostic.next_rgb[0],
+                     diagnostic.next_rgb[1],
+                     diagnostic.next_rgb[2],
+                     diagnostic.next_rgb_explicit,
+                     diagnostic.working_available,
+                     diagnostic.working_scalar,
+                     diagnostic.working_rgb[0],
+                     diagnostic.working_rgb[1],
+                     diagnostic.working_rgb[2],
+                     diagnostic.interpolated,
+                     diagnostic.borrowed,
+                     diagnostic.smooth_lighting ? "smooth" : "discrete",
+                     diagnostic.presentation_available,
+                     diagnostic.presentation_brightness,
+                     diagnostic.presentation_rgb[0],
+                     diagnostic.presentation_rgb[1],
+                     diagnostic.presentation_rgb[2],
+                     reasons);
+}
+
+#define MAP_LIGHTING_DIAGNOSTIC_GRID_MAX_RADIUS 4
+
+static const char *map_lighting_diagnostic_skip_space(const char *cursor) {
+    while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+        cursor++;
+    }
+    return cursor;
+}
+
+static bool
+map_lighting_diagnostic_parse_int(const char **cursor, int minimum, int maximum, int *value) {
+    const char *start = map_lighting_diagnostic_skip_space(*cursor);
+    if (*start == '\0') {
+        return false;
+    }
+    errno = 0;
+    char *end;
+    long parsed = strtol(start, &end, 10);
+    if (errno == ERANGE || end == start || parsed < minimum || parsed > maximum) {
+        return false;
+    }
+    *value = (int)parsed;
+    *cursor = end;
+    return true;
+}
+
+static bool map_lighting_diagnostic_at_end(const char *cursor) {
+    return *map_lighting_diagnostic_skip_space(cursor) == '\0';
+}
+
+static char map_lighting_diagnostic_grid_glyph(const map_lighting_diagnostic_t *diagnostic) {
+    if (diagnostic->fogged) {
+        if (diagnostic->cleared) {
+            return 'c';
+        }
+        if (diagnostic->stale) {
+            return 's';
+        }
+        return diagnostic->remembered ? 'r' : 'f';
+    }
+    if (!diagnostic->working_available) {
+        return '?';
+    }
+    if (diagnostic->presentation_brightness == 0) {
+        return '0';
+    }
+    if (diagnostic->presentation_brightness < 86) {
+        return '1';
+    }
+    if (diagnostic->presentation_brightness < 171) {
+        return '2';
+    }
+    return '#';
+}
+
+static void
+map_lighting_diagnostic_emit_grid(int radius, int depth, int sub_layer, bool smooth_lighting) {
+    if (map_width <= 0 || map_height <= 0) {
+        draw_info(COLOR_RED, "lightdiag grid unavailable: no MAP2 window is cached.");
+        return;
+    }
+
+    int center_x = map_width - map_width / 2 - 1;
+    int center_y = map_height - map_height / 2 - 1;
+    draw_info_format(COLOR_WHITE,
+                     "lightgrid v%u center=%d,%d depth=%d sub=%d radius=%d mode=%s "
+                     "legend=0..2/# visible ?missing rremembered ffogged sstale ccleared "
+                     "fogged values redacted",
+                     MAP_LIGHTING_DIAGNOSTIC_VERSION,
+                     center_x,
+                     center_y,
+                     depth,
+                     sub_layer,
+                     radius,
+                     smooth_lighting ? "smooth" : "discrete");
+
+    const int diameter = radius * 2 + 1;
+    for (int offset_y = -radius; offset_y <= radius; offset_y++) {
+        char row[MAP_LIGHTING_DIAGNOSTIC_GRID_MAX_RADIUS * 2 + 2];
+        for (int offset_x = -radius; offset_x <= radius; offset_x++) {
+            int x = center_x + offset_x;
+            int y = center_y + offset_y;
+            char glyph = '-';
+            if (x >= 0 && x < map_width && y >= 0 && y < map_height) {
+                map_lighting_diagnostic_t diagnostic;
+                if (map_lighting_diagnostic_get(depth,
+                                                x,
+                                                y,
+                                                sub_layer,
+                                                smooth_lighting,
+                                                &diagnostic)) {
+                    glyph = map_lighting_diagnostic_grid_glyph(&diagnostic);
+                } else {
+                    glyph = '!';
+                }
+            }
+            row[offset_x + radius] = glyph;
+        }
+        row[diameter] = '\0';
+        draw_info_format(COLOR_WHITE,
+                         "lightgrid y=%d x0=%d cells=%s",
+                         center_y + offset_y,
+                         center_x - radius,
+                         row);
+    }
+}
+
+void map_lighting_diagnostic_command(const char *params) {
+    const char *cursor = map_lighting_diagnostic_skip_space(params != NULL ? params : "");
+    /* The command is normally reached after settings_init(), but keep the
+     * standalone map-state diagnostic safe before client startup completes. */
+    bool smooth_lighting =
+        setting_categories != NULL && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0;
+    int default_sub_layer = MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
+    int center_x = map_width > 0 ? map_width - map_width / 2 - 1 : 0;
+    int center_y = map_height > 0 ? map_height - map_height / 2 - 1 : 0;
+
+    if (*cursor == '\0') {
+        map_lighting_diagnostic_emit_tile(0,
+                                          center_x,
+                                          center_y,
+                                          default_sub_layer,
+                                          smooth_lighting);
+        return;
+    }
+
+    if (strncmp(cursor, "grid", 4) == 0 &&
+        (cursor[4] == '\0' || isspace((unsigned char)cursor[4]))) {
+        cursor = map_lighting_diagnostic_skip_space(cursor + 4);
+        int radius = 2;
+        int depth = 0;
+        int sub_layer = default_sub_layer;
+        if (*cursor != '\0' &&
+            (!map_lighting_diagnostic_parse_int(&cursor,
+                                                0,
+                                                MAP_LIGHTING_DIAGNOSTIC_GRID_MAX_RADIUS,
+                                                &radius) ||
+             (*map_lighting_diagnostic_skip_space(cursor) != '\0' &&
+              !map_lighting_diagnostic_parse_int(&cursor,
+                                                 -MAP2_MAX_DEPTH,
+                                                 MAP2_MAX_DEPTH,
+                                                 &depth)) ||
+             (*map_lighting_diagnostic_skip_space(cursor) != '\0' &&
+              !map_lighting_diagnostic_parse_int(&cursor, 0, NUM_SUB_LAYERS - 1, &sub_layer)) ||
+             !map_lighting_diagnostic_at_end(cursor))) {
+            draw_info(COLOR_RED,
+                      "Usage: /d_lighting [tile x y [depth [sub-layer]] | grid [radius [depth "
+                      "[sub-layer]]]]");
+            return;
+        }
+        map_lighting_diagnostic_emit_grid(radius, depth, sub_layer, smooth_lighting);
+        return;
+    }
+
+    if (strncmp(cursor, "tile", 4) == 0 &&
+        (cursor[4] == '\0' || isspace((unsigned char)cursor[4]))) {
+        cursor = map_lighting_diagnostic_skip_space(cursor + 4);
+    }
+
+    int x;
+    int y;
+    int depth = 0;
+    int sub_layer = default_sub_layer;
+    if (!map_lighting_diagnostic_parse_int(&cursor, 0, MAX(MAP_WIRE_SIZE_MAX, map_width), &x) ||
+        !map_lighting_diagnostic_parse_int(&cursor, 0, MAX(MAP_WIRE_SIZE_MAX, map_height), &y) ||
+        (*map_lighting_diagnostic_skip_space(cursor) != '\0' &&
+         !map_lighting_diagnostic_parse_int(&cursor, -MAP2_MAX_DEPTH, MAP2_MAX_DEPTH, &depth)) ||
+        (*map_lighting_diagnostic_skip_space(cursor) != '\0' &&
+         !map_lighting_diagnostic_parse_int(&cursor, 0, NUM_SUB_LAYERS - 1, &sub_layer)) ||
+        !map_lighting_diagnostic_at_end(cursor)) {
+        draw_info(COLOR_RED,
+                  "Usage: /d_lighting [tile x y [depth [sub-layer]] | grid [radius [depth "
+                  "[sub-layer]]]]");
+        return;
+    }
+    map_lighting_diagnostic_emit_tile(depth, x, y, sub_layer, smooth_lighting);
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
@@ -4874,6 +5544,230 @@ bool widget_map_temporal_lighting_test(void) {
     MapData.light_keyframe_valid = saved_valid;
     return success;
 }
+
+bool widget_map_lighting_diagnostic_test(void) {
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        if (level_cells[level] != NULL) {
+            return false;
+        }
+    }
+
+    int saved_width = map_width;
+    int saved_height = map_height;
+    int saved_origin_x = map_cache_origin_x;
+    int saved_origin_y = map_cache_origin_y;
+    size_t saved_level_index = current_level_index;
+    uint16_t saved_level_mask = map_level_mask;
+    map_cell_store_t *saved_cells = cells;
+    uint64_t saved_allocation_count = map_cell_allocation_count;
+    uint64_t saved_allocation_bytes = map_cell_allocation_bytes;
+    uint64_t saved_retained_bytes = map_cell_retained_bytes;
+    uint64_t saved_peak_retained_bytes = map_cell_peak_retained_bytes;
+    uint64_t saved_next_painter_identity = map_cell_next_painter_identity;
+    uint64_t saved_revisions[MAP2_LEVELS];
+    memcpy(saved_revisions, level_lighting_revision, sizeof(saved_revisions));
+    uint64_t saved_temporal_bucket = map_temporal_lighting_bucket;
+
+    map_width = 17;
+    map_height = 17;
+    map_cache_origin_x = 0;
+    map_cache_origin_y = 0;
+    current_level_index = MAP2_DEPTH_INDEX(0);
+    map_level_mask = UINT16_C(1) << current_level_index;
+    bool success = map_select_level(0, true);
+    success = success && map_select_level(1, true);
+    map_level_mask |= UINT16_C(1) << MAP2_DEPTH_INDEX(1);
+
+    struct diagnostic_fixture {
+        const char *name;
+        int x;
+        int y;
+        uint16_t scalar;
+        uint16_t rgb[3];
+        bool fog;
+    } fixtures[] = {
+        {"day", 8, 8, 2048, {2048, 2048, 2048}, false},
+        {"local-falloff", 9, 8, 256, {256, 256, 256}, false},
+        {"dark-night", 0, 0, 0, {0, 0, 0}, false},
+        {"moonlit", 8, 9, 128, {64, 96, 128}, false},
+        {"moonless", 1, 0, 32, {32, 32, 32}, false},
+        {"indoor", 2, 2, 768, {768, 768, 768}, false},
+        {"clamp", 7, 7, UINT16_MAX - 1, {UINT16_MAX - 1, UINT16_MAX - 1, UINT16_MAX - 1}, false},
+        {"fog-boundary", 16, 16, 512, {512, 512, 512}, true},
+    };
+    uint16_t fixture_rgb[NUM_SUB_LAYERS][3] = {{0}};
+    if (success) {
+        map_select_level(0, true);
+        for (size_t index = 0; index < arraysize(fixtures); index++) {
+            map_set_light_radiance(fixtures[index].x, fixtures[index].y, 0, fixtures[index].scalar);
+            memset(fixture_rgb, 0, sizeof(fixture_rgb));
+            memcpy(fixture_rgb[0], fixtures[index].rgb, sizeof(fixtures[index].rgb));
+            map_set_light_rgb_radiance(fixtures[index].x, fixtures[index].y, 1, fixture_rgb);
+            if (fixtures[index].fog) {
+                map_cell_t *fog_cell =
+                    MAP_CELL_GET_MIDDLE_MUTABLE(fixtures[index].x, fixtures[index].y);
+                map_cell_layer_record(fog_cell, GET_MAP_LAYER(LAYER_FLOOR, 0), true)->face = 1;
+                map_set_fow(fixtures[index].x, fixtures[index].y, true);
+            }
+        }
+
+        success = success &&
+                  map_lighting_diagnostic_get(0, 8, 8, 0, false, &(map_lighting_diagnostic_t){0});
+    }
+
+    map_lighting_diagnostic_t diagnostic;
+    for (size_t index = 0; success && index < arraysize(fixtures); index++) {
+        if (fixtures[index].fog) {
+            continue;
+        }
+        bool fixture_received = map_lighting_diagnostic_get(0,
+                                                            fixtures[index].x,
+                                                            fixtures[index].y,
+                                                            0,
+                                                            false,
+                                                            &diagnostic);
+        success = fixture_received && diagnostic.received &&
+                  diagnostic.received_scalar == fixtures[index].scalar;
+    }
+    bool got = success && map_lighting_diagnostic_get(0, 8, 8, 0, false, &diagnostic);
+    success = success && got && diagnostic.visible && !diagnostic.fogged && diagnostic.received &&
+              diagnostic.working_available && diagnostic.received_scalar == 2048 &&
+              diagnostic.received_rgb_explicit && !diagnostic.interpolated &&
+              !diagnostic.borrowed && diagnostic.presentation_available &&
+              diagnostic.presentation_brightness ==
+                  lighting_radiance_to_level(diagnostic.working_scalar) &&
+              diagnostic.presentation_rgb[0] == diagnostic.presentation_brightness &&
+              diagnostic.presentation_rgb[1] == diagnostic.presentation_brightness &&
+              diagnostic.presentation_rgb[2] == diagnostic.presentation_brightness;
+
+    got = success && map_lighting_diagnostic_get(0, 8, 9, 0, true, &diagnostic);
+    success = success && got && diagnostic.smooth_lighting && diagnostic.working_available &&
+              diagnostic.presentation_available &&
+              diagnostic.presentation_rgb[0] < diagnostic.presentation_rgb[2];
+
+    got = success && map_lighting_diagnostic_get(0, 0, 0, 0, false, &diagnostic);
+    success = success && got && diagnostic.received && diagnostic.working_available &&
+              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO) != 0 &&
+              diagnostic.presentation_brightness == 0;
+
+    got = success && map_lighting_diagnostic_get(0, 0, 16, 0, false, &diagnostic);
+    success = success && got && diagnostic.missing && !diagnostic.received &&
+              !diagnostic.working_available &&
+              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE) != 0;
+
+    got = success && map_lighting_diagnostic_get(0, 7, 7, 0, false, &diagnostic);
+    success = success && got && diagnostic.working_available &&
+              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED) != 0 &&
+              diagnostic.working_scalar == UINT16_MAX;
+
+    got = success && map_lighting_diagnostic_get(0, 16, 16, 0, false, &diagnostic);
+    success = success && got && !diagnostic.visible && diagnostic.fogged && diagnostic.remembered &&
+              diagnostic.stale && !diagnostic.received && !diagnostic.missing &&
+              diagnostic.cleared && !diagnostic.keyframe_valid && !diagnostic.working_available &&
+              !diagnostic.presentation_available && diagnostic.received_scalar == 0 &&
+              diagnostic.working_scalar == 0 &&
+              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_STALE) != 0;
+
+    success = success && map_light_keyframe_transaction_begin(8, 100, 200, MAP2_LIGHT_KEYFRAME_CONTINUOUS) &&
+              !map_lighting_diagnostic_get(0, 8, 8, 0, false, &diagnostic);
+    map_light_keyframe_transaction_abort();
+
+    map_select_level(1, true);
+    map_set_light_radiance(8, 8, 0, 100);
+    uint16_t next_scalar[NUM_SUB_LAYERS] = {300};
+    uint16_t next_rgb[NUM_SUB_LAYERS][3] = {{300, 240, 200}};
+    map_set_light_keyframe(8,
+                           8,
+                           7,
+                           100,
+                           200,
+                           MAP2_LIGHT_KEYFRAME_CONTINUOUS,
+                           1,
+                           next_scalar,
+                           1,
+                           next_rgb);
+    telemetry_game_time_sync(150, 60000);
+    got = success && map_lighting_diagnostic_get(1, 8, 8, 0, true, &diagnostic);
+    success = success && got && diagnostic.keyframe_valid && diagnostic.next_known &&
+              diagnostic.interpolated && diagnostic.working_available &&
+              diagnostic.working_scalar == 200 &&
+              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED) != 0;
+
+    const uint32_t all_reasons = MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_STALE |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED |
+                                 MAP_LIGHTING_DIAGNOSTIC_REASON_BORROWED;
+    char reason_text[96];
+    map_lighting_diagnostic_reason_text(0, reason_text, sizeof(reason_text));
+    success = success && strcmp(reason_text, "none") == 0;
+    map_lighting_diagnostic_reason_text(all_reasons, reason_text, sizeof(reason_text));
+    success = success && strstr(reason_text, "zero") != NULL &&
+              strstr(reason_text, "borrowed") != NULL;
+    map_lighting_diagnostic_reason_text(all_reasons, reason_text, 1);
+    map_lighting_diagnostic_reason_text(all_reasons, NULL, sizeof(reason_text));
+    success = success && strcmp(map_lighting_diagnostic_reason_name(MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO),
+                                 "zero") == 0 &&
+              strcmp(map_lighting_diagnostic_reason_name(UINT32_C(0)), "unknown") == 0;
+
+    const char *cursor = "  -12 tail";
+    int parsed = 0;
+    success = success && map_lighting_diagnostic_parse_int(&cursor, -20, 20, &parsed) &&
+              parsed == -12 && !map_lighting_diagnostic_at_end(cursor);
+    cursor = "   ";
+    success = success && !map_lighting_diagnostic_parse_int(&cursor, 0, 20, &parsed) &&
+              map_lighting_diagnostic_at_end(cursor);
+    cursor = "999999999999999999999999";
+    success = success && !map_lighting_diagnostic_parse_int(&cursor, 0, 20, &parsed);
+    cursor = "21";
+    success = success && !map_lighting_diagnostic_parse_int(&cursor, 0, 20, &parsed);
+    cursor = " 7 ";
+    success = success && map_lighting_diagnostic_parse_int(&cursor, 0, 20, &parsed) &&
+              parsed == 7 && map_lighting_diagnostic_at_end(cursor);
+
+    map_lighting_diagnostic_t glyph = {0};
+    glyph.fogged = true;
+    glyph.cleared = true;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == 'c';
+    glyph.cleared = false;
+    glyph.stale = true;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == 's';
+    glyph.stale = false;
+    glyph.remembered = true;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == 'r';
+    glyph.fogged = false;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '?';
+    glyph.working_available = true;
+    glyph.presentation_brightness = 0;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '0';
+    glyph.presentation_brightness = 85;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '1';
+    glyph.presentation_brightness = 170;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '2';
+    glyph.presentation_brightness = 171;
+    success = success && map_lighting_diagnostic_grid_glyph(&glyph) == '#';
+
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        map_cell_store_destroy(level_cells[level]);
+        level_cells[level] = NULL;
+    }
+    cells = saved_cells;
+    current_level_index = saved_level_index;
+    map_width = saved_width;
+    map_height = saved_height;
+    map_cache_origin_x = saved_origin_x;
+    map_cache_origin_y = saved_origin_y;
+    map_level_mask = saved_level_mask;
+    memcpy(level_lighting_revision, saved_revisions, sizeof(level_lighting_revision));
+    map_temporal_lighting_bucket = saved_temporal_bucket;
+    map_cell_next_painter_identity = saved_next_painter_identity;
+    map_cell_allocation_count = saved_allocation_count;
+    map_cell_allocation_bytes = saved_allocation_bytes;
+    map_cell_retained_bytes = saved_retained_bytes;
+    map_cell_peak_retained_bytes = saved_peak_retained_bytes;
+    return success;
+}
 #endif
 
 /** Project one cell and resolve its light sample for the lighting grid. */
@@ -4892,7 +5786,9 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     };
     uint16_t rgb[3];
     map_lighting_radiance(x, y, cell, sub_layer, &vertex.scalar, rgb);
-    if (data->primary_level && data->depth == 0 && !cell->fow) {
+    if (cell->fow && map_cell_has_remembered_geometry(cell)) {
+        map_visibility_apply_memory_floor(&vertex.scalar, rgb);
+    } else if (data->primary_level && data->depth == 0 && !cell->fow) {
         uint16_t weight = map_visibility_field_weight(x - data->midx, y - data->midy);
         vertex.scalar = map_visibility_add_player_radiance(vertex.scalar, weight);
         for (size_t channel = 0; channel < 3; channel++) {
@@ -6341,6 +7237,7 @@ typedef struct map_retained_projection {
     uint16_t level_mask;
     uint8_t player_sub_layer;
     bool smooth_lighting;
+    uint64_t face_content_generation;
     bool valid;
 } map_retained_projection_t;
 
@@ -6416,6 +7313,7 @@ static void map_render_context_copy(map_render_context_t *destination,
     destination->target_sub_layer = source->target_sub_layer;
     destination->commands_sorted = source->commands_sorted;
     destination->capture_candidates = source->capture_candidates;
+    destination->benchmark_summary = source->benchmark_summary;
 }
 
 /** Resolve a retained cell only while both its sparse slot and revision match. */
@@ -6555,7 +7453,13 @@ static void map_retained_animation_prepare(map_render_context_t *context,
         context->candidates_num += old->candidates_num;
 
         map_cell_t *cell = NULL;
-        bool stable = map_retained_cell_matches(old->depth,
+        map_cell_header_t header = {0};
+        bool level_available = map_select_level(old->depth, false);
+        if (level_available) {
+            header = cells->headers[map_cache_physical_index(old->tile_x, old->tile_y)];
+        }
+        bool stable = level_available &&
+                      map_retained_cell_matches(old->depth,
                                                 old->tile_x,
                                                 old->tile_y,
                                                 old->record_identity,
@@ -6581,7 +7485,7 @@ static void map_retained_animation_prepare(map_render_context_t *context,
             }
             context->tiles_num += old->tiles_num;
             map_benchmark_statistics.reused_render_commands += old->commands_num;
-        } else if (map_select_level(old->depth, false)) {
+        } else if (level_available) {
             cell = MAP_CELL_GET(old->tile_x, old->tile_y);
             for (size_t candidate = 0; candidate < old->candidates_num; candidate++) {
                 map_retained_candidate_replay(
@@ -6592,8 +7496,6 @@ static void map_retained_animation_prepare(map_render_context_t *context,
             map_benchmark_statistics.compiled_render_commands += old->candidates_num;
         }
 
-        const map_cell_header_t *header =
-            &cells->headers[map_cache_physical_index(old->tile_x, old->tile_y)];
         context->cohorts[context->cohorts_num++] = (map_render_cohort_t){
             .candidates_first = candidates_first,
             .candidates_num = context->candidates_num - candidates_first,
@@ -6604,8 +7506,8 @@ static void map_retained_animation_prepare(map_render_context_t *context,
             .tiles_first = tiles_first,
             .tiles_num = context->tiles_num - tiles_first,
             .record_identity = cell != NULL ? cell->painter_identity : 0,
-            .cell_generation = header->generation,
-            .cell_revision = header->revision,
+            .cell_generation = header.generation,
+            .cell_revision = header.revision,
             .tile_x = old->tile_x,
             .tile_y = old->tile_y,
             .depth = old->depth,
@@ -6632,6 +7534,30 @@ static map_render_context_t map_render_contexts[2];
 static map_render_context_t map_retained_primary_context;
 static map_retained_projection_t map_retained_primary_projection;
 
+/** Translate the production map invalidation bitset into GPU diagnostics. */
+static gpu_renderer_map_invalidation_reason_t map_gpu_invalidation_reason(uint32_t reasons,
+                                                                          bool animation_only) {
+    if (animation_only) {
+        return GPU_RENDERER_MAP_INVALIDATION_ANIMATION;
+    }
+    if (reasons & MAP_REDRAW_REASON_RESIZE) {
+        return GPU_RENDERER_MAP_INVALIDATION_RESIZE;
+    }
+    if (reasons & MAP_REDRAW_REASON_SCROLL) {
+        return GPU_RENDERER_MAP_INVALIDATION_CAMERA_SCROLL;
+    }
+    if (reasons & MAP_REDRAW_REASON_LIGHTING) {
+        return GPU_RENDERER_MAP_INVALIDATION_LIGHTING;
+    }
+    if (reasons & MAP_REDRAW_REASON_MAP_PACKET) {
+        return GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION;
+    }
+    if (reasons & (MAP_REDRAW_REASON_EXTERNAL | MAP_REDRAW_REASON_UI)) {
+        return GPU_RENDERER_MAP_INVALIDATION_ACTOR_EFFECT;
+    }
+    return GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION;
+}
+
 static bool map_retained_projection_matches(SDL_Surface *surface) {
     return map_retained_primary_projection.valid &&
            map_retained_primary_projection.surface_width == surface->w &&
@@ -6643,7 +7569,9 @@ static bool map_retained_projection_matches(SDL_Surface *surface) {
            map_retained_primary_projection.level_mask == map_level_mask &&
            map_retained_primary_projection.player_sub_layer == MapData.player_sub_layer &&
            map_retained_primary_projection.smooth_lighting ==
-               (setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0);
+               (setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0) &&
+           map_retained_primary_projection.face_content_generation ==
+               image_face_content_generation();
 }
 
 static void map_retained_projection_commit(SDL_Surface *surface) {
@@ -6657,6 +7585,7 @@ static void map_retained_projection_commit(SDL_Surface *surface) {
         .level_mask = map_level_mask,
         .player_sub_layer = MapData.player_sub_layer,
         .smooth_lighting = setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0,
+        .face_content_generation = image_face_content_generation(),
         .valid = true,
     };
 }
@@ -6669,8 +7598,9 @@ void map_draw_map(SDL_Surface *surface) {
 
     bool primary_surface = cur_widget[MAP_ID] != NULL && surface == cur_widget[MAP_ID]->surface;
     bool gpu_output = gpu_renderer_ready() && (primary_surface || map_gpu_auxiliary);
+    uint32_t pending_redraw_reasons = primary_surface ? map_redraw_pending_reasons() : 0;
     bool animation_only = primary_surface && !map_redraw_due() && map_animation_redraw_due() &&
-                          map_redraw_pending_reasons() == MAP_REDRAW_REASON_ANIMATION;
+                          pending_redraw_reasons == MAP_REDRAW_REASON_ANIMATION;
     bool reuse_retained = animation_only && map_retained_projection_matches(surface);
     if (animation_only && !reuse_retained) {
         /* A missing/stale compilation is safe to recover with one full build;
@@ -6696,8 +7626,22 @@ void map_draw_map(SDL_Surface *surface) {
 
     if (!gpu_output) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         SDL_SetError("mandatory GPU map renderer is unavailable");
         LOG(ERROR, "%s", SDL_GetError());
+        render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
+        return;
+    }
+    if (primary_surface) {
+        gpu_renderer_map_set_invalidation_hint(map_gpu_invalidation_reason(pending_redraw_reasons,
+                                                                            animation_only));
+    }
+    if (primary_surface && pending_redraw_reasons == MAP_REDRAW_REASON_EXTERNAL &&
+        map_retained_projection_matches(surface) &&
+        gpu_renderer_map_retain(surface->w, surface->h)) {
+        map_benchmark_commands_retain(&map_retained_primary_context);
+        map_select_level(0, true);
+        lighting_select_level(0);
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
         return;
     }
@@ -6705,6 +7649,7 @@ void map_draw_map(SDL_Surface *surface) {
                                    : gpu_renderer_map_begin(surface->w, surface->h);
     if (!began) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         LOG(ERROR, "Could not begin retained GPU map target: %s", SDL_GetError());
         render_profiler_end(RENDER_PROFILE_MAP, profile_map_started);
         return;
@@ -6753,10 +7698,13 @@ void map_draw_map(SDL_Surface *surface) {
     map_render_context_sort(render_context);
 
     map_benchmark_statistics.render_commands += render_context->commands_num;
-    map_benchmark_commands_accumulate(render_context->commands,
+    map_benchmark_commands_accumulate(render_context,
                                       render_context->commands_num,
                                       primary_surface,
                                       animation_only);
+    if (primary_surface) {
+        map_retained_primary_context.benchmark_summary = render_context->benchmark_summary;
+    }
     map_benchmark_statistics.annotations += render_context->annotations_num;
     map_benchmark_statistics.ui_tiles += render_context->tiles_num;
     map_benchmark_statistics.peak_render_commands =
@@ -6772,6 +7720,7 @@ void map_draw_map(SDL_Surface *surface) {
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMMAND_BUILD, gpu_command_build_started);
     if (!gpu_renderer_map_end()) {
         map_benchmark_statistics.render_failures++;
+        gpu_renderer_statistics_map_update(true, false);
         if (primary_surface) {
             map_retained_primary_projection.valid = false;
         }
@@ -7767,6 +8716,59 @@ bool widget_map_projection_contract_test(void) {
                       BIT_QUERY(context.commands[2].effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
                       !BIT_QUERY(context.commands[2].effects.flags,
                                  SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+
+            map_cell_light_record_t *light = map_cell_light_record(cell, 0, true);
+            uint8_t saved_fow = cell->fow;
+            uint16_t saved_radiance = light != NULL ? light->radiance : 0;
+            if (light == NULL) {
+                success = false;
+            } else {
+                cell->fow = true;
+                light->radiance = 0;
+
+                map_render_context_t remembered_context = {0};
+                map_render_data_t remembered = production;
+                remembered.render_context = &remembered_context;
+                remembered.layer = LAYER_FLOOR;
+                remembered.ground_pass = false;
+                remembered.smooth_lighting = false;
+                remembered.lightmap_pending = false;
+                draw_map_object(surface, &remembered);
+                uint8_t expected_dark_level =
+                    (UINT8_MAX - lighting_radiance_to_level(
+                                    MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE)) *
+                    DARK_LEVELS / UINT8_MAX;
+                success = success && remembered_context.commands_num == 1 &&
+                          BIT_QUERY(remembered_context.commands[0].effects.flags,
+                                    SPRITE_FLAG_DARK) &&
+                          remembered_context.commands[0].effects.dark_level == expected_dark_level;
+
+                map_render_data_t lighting = {
+                    .midx = MAP_STARTX,
+                    .midy = MAP_STARTY,
+                    .primary_level = true,
+                    .depth = 0,
+                };
+                lighting_vertex_t remembered_vertex =
+                    map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
+                success = success &&
+                          remembered_vertex.scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.red == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.green == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+                          remembered_vertex.blue == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+
+                cell->fow = false;
+                lighting_vertex_t visible_vertex =
+                    map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
+                success = success &&
+                          visible_vertex.scalar ==
+                              map_visibility_add_player_radiance(
+                                  0, map_visibility_field_weight(0, 0));
+
+                cell->fow = saved_fow;
+                light->radiance = saved_radiance;
+                free(remembered_context.commands);
+            }
         }
         FaceList[1].sprite = saved_sprite;
         MapData.height_diff = saved_height_diff;

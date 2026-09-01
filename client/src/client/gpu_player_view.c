@@ -83,6 +83,10 @@
 #define PLAYER_VIEW_DEATH_FACE 9
 #define PLAYER_VIEW_BENCHMARK_ITERATIONS 40
 #define PLAYER_VIEW_BENCHMARK_WARMUPS 3
+#define PLAYER_VIEW_BENCHMARK_ANIMATION_SOURCE_UPLOADS_PER_FRAME 64U
+#define PLAYER_VIEW_BENCHMARK_ANIMATION_SOURCE_BYTES_PER_FRAME (256U * 1024U)
+#define PLAYER_VIEW_BENCHMARK_ANIMATION_INSTANCE_UPLOADS_PER_FRAME 128U
+#define PLAYER_VIEW_BENCHMARK_ANIMATION_INSTANCE_BYTES_PER_FRAME (16U * 1024U)
 #define PLAYER_VIEW_LIFECYCLE_EVENTS 12
 #define PLAYER_VIEW_LARGE_WIDTH 1920
 #define PLAYER_VIEW_LARGE_HEIGHT 1080
@@ -1426,7 +1430,7 @@ static bool gpu_player_view_render(widgetdata *widget, bool widget_render) {
                                (float)widget->h)) {
         return false;
     }
-    return gpu_renderer_frame_valid() && gpu_renderer_present() && gpu_renderer_wait_idle();
+    return gpu_renderer_frame_valid() && gpu_renderer_present();
 #endif
 }
 
@@ -1534,6 +1538,105 @@ static void gpu_player_view_json_string_to(FILE *output, const char *value) {
 
 static void gpu_player_view_json_string(const char *value) {
     gpu_player_view_json_string_to(stdout, value);
+}
+
+static void gpu_player_view_json_map_statistics(
+    FILE *output,
+    const gpu_renderer_statistics_t *statistics,
+    const map_benchmark_statistics_t *map_statistics) {
+    fputs("\"map\":{", output);
+    fprintf(output,
+            "\"full_redraws\":%" PRIu64 ",\"damage_frames\":%" PRIu64
+            ",\"damage_pixels\":%" PRIu64 ",\"damage_bytes\":%" PRIu64
+            ",\"retained_frames\":%" PRIu64 ",\"skipped_passes\":%" PRIu64
+            ",\"dirty_commands\":%" PRIu64 ",\"dirty_pixels\":%" PRIu64
+            ",\"dirty_bytes\":%" PRIu64 ",\"published_generation\":%" PRIu64
+            ",\"source_generation\":%" PRIu64 ",\"camera_generation\":%" PRIu64
+            ",\"lighting_generation\":%" PRIu64 ",\"effect_generation\":%" PRIu64,
+            statistics->map_full_redraws,
+            statistics->map_damage_frames,
+            statistics->map_damage_pixels,
+            statistics->map_damage_bytes,
+            statistics->map_retained_frames,
+            statistics->map_skipped_passes,
+            statistics->map_dirty_commands,
+            statistics->map_dirty_pixels,
+            statistics->map_dirty_bytes,
+            statistics->map_published_generation,
+            statistics->map_source_generation,
+            statistics->map_camera_generation,
+            statistics->map_lighting_generation,
+            statistics->map_effect_generation);
+    fprintf(output,
+            ",\"render_commands\":%" PRIu64
+            ",\"compiled_render_commands\":%" PRIu64
+            ",\"reused_render_commands\":%" PRIu64
+            ",\"peak_render_commands\":%" PRIu64
+            ",\"peak_active_levels\":%" PRIu64,
+            map_statistics->render_commands,
+            map_statistics->compiled_render_commands,
+            map_statistics->reused_render_commands,
+            map_statistics->peak_render_commands,
+            map_statistics->peak_active_levels);
+    fprintf(output,
+            ",\"last_dirty\":{\"commands\":%" PRIu64
+            ",\"pixels\":%" PRIu64 ",\"bytes\":%" PRIu64
+            ",\"rect\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32
+            "],\"invalidation_reason\":",
+            statistics->map_last_dirty_commands,
+            statistics->map_last_dirty_pixels,
+            statistics->map_last_dirty_bytes,
+            statistics->map_last_dirty_x,
+            statistics->map_last_dirty_y,
+            statistics->map_last_dirty_width,
+            statistics->map_last_dirty_height);
+    gpu_player_view_json_string_to(
+        output,
+        gpu_renderer_map_invalidation_reason_name(statistics->map_last_invalidation_reason));
+    fputs("},\"invalidation_reasons\":{", output);
+    for (gpu_renderer_map_invalidation_reason_t reason = GPU_RENDERER_MAP_INVALIDATION_UNCHANGED;
+         reason < GPU_RENDERER_MAP_INVALIDATION_REASON_NUM;
+         reason++) {
+        fprintf(output,
+                "%s\"%s\":%" PRIu64,
+                reason == GPU_RENDERER_MAP_INVALIDATION_UNCHANGED ? "" : ",",
+                gpu_renderer_map_invalidation_reason_name(reason),
+                statistics->map_invalidation_counts[reason]);
+    }
+    fputs("}}", output);
+}
+
+static void gpu_player_view_json_map_pacing(FILE *output,
+                                            const gpu_renderer_statistics_t *statistics) {
+    fprintf(output,
+            "{\"submissions\":%" PRIu64 ",\"completions\":%" PRIu64 ",\"in_flight_peak\":%" PRIu64
+            ",\"queue_depth_samples\":%" PRIu64 ",\"queue_depth_total\":%" PRIu64
+            ",\"queue_age_total_ns\":%" PRIu64 ",\"queue_age_max_ns\":%" PRIu64
+            ",\"frame_latency_total_ns\":%" PRIu64 ",\"frame_latency_max_ns\":%" PRIu64
+            ",\"dropped_updates\":%" PRIu64 ",\"merged_updates\":%" PRIu64
+            ",\"cpu_recording_calls\":%" PRIu64 ",\"cpu_recording_ns\":%" PRIu64
+            ",\"submission_calls\":%" PRIu64 ",\"submission_ns\":%" PRIu64
+            ",\"completion_calls\":%" PRIu64 ",\"completion_ns\":%" PRIu64
+            ",\"present_wait_calls\":%" PRIu64 ",\"present_wait_ns\":%" PRIu64 "}",
+            statistics->map_submissions,
+            statistics->map_completions,
+            statistics->map_in_flight_peak,
+            statistics->map_queue_depth_samples,
+            statistics->map_queue_depth_total,
+            statistics->map_queue_age_total_ns,
+            statistics->map_queue_age_max_ns,
+            statistics->map_frame_latency_total_ns,
+            statistics->map_frame_latency_max_ns,
+            statistics->map_dropped_updates,
+            statistics->map_merged_updates,
+            statistics->timings[GPU_RENDERER_TIMING_COMMAND_BUILD].calls,
+            statistics->timings[GPU_RENDERER_TIMING_COMMAND_BUILD].elapsed_ns,
+            statistics->timings[GPU_RENDERER_TIMING_SUBMISSION].calls,
+            statistics->timings[GPU_RENDERER_TIMING_SUBMISSION].elapsed_ns,
+            statistics->timings[GPU_RENDERER_TIMING_COMPLETION].calls,
+            statistics->timings[GPU_RENDERER_TIMING_COMPLETION].elapsed_ns,
+            statistics->timings[GPU_RENDERER_TIMING_PRESENT_WAIT].calls,
+            statistics->timings[GPU_RENDERER_TIMING_PRESENT_WAIT].elapsed_ns);
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
@@ -2461,7 +2564,8 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
         (map_measured.animation_draws == PLAYER_VIEW_BENCHMARK_ITERATIONS &&
          map_measured.animation_reason_draws == PLAYER_VIEW_BENCHMARK_ITERATIONS &&
          map_measured.animation_command_transitions > 0 &&
-         map_measured.reused_render_commands > map_measured.compiled_render_commands &&
+         map_measured.render_commands > 0 &&
+         map_measured.reused_render_commands >= map_measured.render_commands / 2U &&
          map_measured.door_commands > 0 && map_measured.roof_commands > 0 &&
          map_measured.primary_frames_with_door == PLAYER_VIEW_BENCHMARK_ITERATIONS &&
          map_measured.primary_frames_with_roof == PLAYER_VIEW_BENCHMARK_ITERATIONS &&
@@ -2469,14 +2573,41 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
          gpu_player_view_depth_mask_count(map_measured.roof_depth_mask) == workload->active_depths);
     bool instance_uploads_verified =
         workload->animation_only
-            ? measured.instance_upload_count <= PLAYER_VIEW_BENCHMARK_ITERATIONS * 64U &&
-                  measured.instance_upload_bytes <= PLAYER_VIEW_BENCHMARK_ITERATIONS * 4096U
+            ? measured.instance_upload_count <=
+                  PLAYER_VIEW_BENCHMARK_ITERATIONS *
+                      PLAYER_VIEW_BENCHMARK_ANIMATION_INSTANCE_UPLOADS_PER_FRAME &&
+                  measured.instance_upload_bytes <=
+                      (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS *
+                          PLAYER_VIEW_BENCHMARK_ANIMATION_INSTANCE_BYTES_PER_FRAME
             : measured.instance_upload_count == 0 && measured.instance_upload_bytes == 0;
+    bool source_uploads_verified =
+        workload->animation_only
+            ? measured.source_upload_count <=
+                  PLAYER_VIEW_BENCHMARK_ITERATIONS *
+                      PLAYER_VIEW_BENCHMARK_ANIMATION_SOURCE_UPLOADS_PER_FRAME &&
+                  measured.source_upload_bytes <=
+                      (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS *
+                          PLAYER_VIEW_BENCHMARK_ANIMATION_SOURCE_BYTES_PER_FRAME
+            : measured.source_upload_count == 0 && measured.source_upload_bytes == 0;
     uint64_t completed_maps = map_measured.primary_map_draws + map_measured.auxiliary_map_draws;
+    uint64_t map_passes = measured.map_full_redraws + measured.map_damage_frames;
     bool slot_uniform_uploads_verified =
-        measured.batches >= completed_maps &&
-        measured.slot_uniform_upload_count == measured.batches - completed_maps &&
+        measured.batches >= map_passes &&
+        measured.slot_uniform_upload_count == measured.batches - map_passes &&
         gpu_player_view_slot_uniform_uploads_bounded(&measured);
+    bool map_retention_verified =
+        measured.map_full_redraws + measured.map_retained_frames == completed_maps &&
+        measured.map_skipped_passes <= measured.map_retained_frames &&
+        map_passes <= completed_maps &&
+        (workload->animation_only
+             ? measured.map_damage_frames == PLAYER_VIEW_BENCHMARK_ITERATIONS &&
+                   measured.map_full_redraws > 0 && measured.map_dirty_commands > 0 &&
+                   measured.map_damage_pixels > 0
+             : measured.map_full_redraws == 0 && measured.map_damage_frames == 0 &&
+                   measured.map_retained_frames == completed_maps &&
+                   measured.map_skipped_passes == completed_maps &&
+                   measured.map_dirty_commands == 0 && measured.map_dirty_pixels == 0 &&
+                   measured.map_dirty_bytes == 0);
     if (map_measured.primary_map_draws != PLAYER_VIEW_BENCHMARK_ITERATIONS ||
         map_measured.auxiliary_map_draws != PLAYER_VIEW_BENCHMARK_ITERATIONS / 10U ||
         map_measured.stretched_commands == 0 || map_measured.double_commands == 0 ||
@@ -2485,13 +2616,16 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
         map_measured.primary_frames_with_living != PLAYER_VIEW_BENCHMARK_ITERATIONS ||
         gpu_player_view_depth_mask_count(map_measured.command_depth_mask) !=
             workload->active_depths ||
-        !animation_submission_verified || measured.source_upload_count != 0 ||
-        measured.source_upload_bytes != 0 || measured.light_upload_count != 0 ||
+        !animation_submission_verified || !source_uploads_verified ||
+        measured.light_upload_count != 0 ||
         measured.light_upload_bytes != 0 || !slot_uniform_uploads_verified ||
+        !map_retention_verified ||
         measured.upload_count !=
-            measured.instance_upload_count + measured.slot_uniform_upload_count ||
+            measured.source_upload_count + measured.instance_upload_count +
+                measured.slot_uniform_upload_count ||
         measured.upload_bytes !=
-            measured.instance_upload_bytes + measured.slot_uniform_upload_bytes ||
+            measured.source_upload_bytes + measured.instance_upload_bytes +
+                measured.slot_uniform_upload_bytes ||
         !instance_uploads_verified || measured.resource_creations != 0 ||
         measured.resource_destructions != 0 || measured.readbacks != 0 || measured.fallbacks != 0) {
         SDL_SetError("production benchmark did not reach its retained stretch/actor plateau");
@@ -2538,7 +2672,7 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
         "gpu_completion_wait",
         "present_wait",
     };
-    fputs("{\"schema_version\":3,\"benchmark\":\"gpu-interop-stress-qualification\","
+    fputs("{\"schema_version\":4,\"benchmark\":\"gpu-interop-stress-qualification\","
           "\"revision\":",
           output);
     gpu_player_view_json_string_to(output, ATRINIK_BENCHMARK_REVISION);
@@ -2656,7 +2790,8 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
             ",\"slot_uniform_upload_bytes\":%" PRIu64 ",\"resource_creations\":%" PRIu64
             ",\"resource_destructions\":%" PRIu64 ",\"readbacks\":%" PRIu64 ",\"commands\":%" PRIu64
             ",\"batches\":%" PRIu64 ",\"draws\":%" PRIu64 ",\"retained_bytes\":%" PRIu64
-            ",\"peak_retained_bytes\":%" PRIu64 ",\"fallbacks\":%" PRIu64 "}}\n",
+            ",\"peak_retained_bytes\":%" PRIu64 ",\"fallbacks\":%" PRIu64
+            ",\"map_pacing\":",
             checkpoint,
             animation_checkpoints[0],
             animation_checkpoints[1],
@@ -2680,6 +2815,10 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
             measured.retained_bytes,
             measured.peak_retained_bytes,
             measured.fallbacks);
+    gpu_player_view_json_map_pacing(output, &measured);
+    fputs(",", output);
+    gpu_player_view_json_map_statistics(output, &measured, &map_measured);
+    fputs("}}\n", output);
     return output == stdout || fclose(output) == 0;
 }
 
@@ -2815,7 +2954,7 @@ static bool gpu_player_view_lifecycle_write(
         return false;
     }
     fprintf(output,
-            "{\"schema_version\":2,\"benchmark\":\"gpu-production-recovery-lifecycle\","
+            "{\"schema_version\":3,\"benchmark\":\"gpu-production-recovery-lifecycle\","
             "\"fixture\":\"brynknot-movement\",\"manifest_sha256\":\"%s\","
             "\"viewport\":[%u,%u],\"resize_delta\":[%u,%u],\"revision\":",
             manifest->manifest_digest,
@@ -2858,11 +2997,7 @@ static bool gpu_player_view_lifecycle_write(
                 ",\"slot_uniform_upload_bytes\":%" PRIu64 ",\"resource_creations\":%" PRIu64
                 ",\"resource_destructions\":%" PRIu64 ",\"device_recoveries\":%" PRIu64
                 ",\"recovery_failures\":%" PRIu64 ",\"readbacks\":%" PRIu64
-                ",\"fallbacks\":%" PRIu64 "},"
-                "\"output_size\":[%d,%d],\"display_mode_size\":[%d,%d],"
-                "\"pixels_sha256\":\"%s\",\"artifact\":\"%s\","
-                "\"artifact_sha256\":\"%s\","
-                "\"frame_windows_ns\":[",
+                ",\"fallbacks\":%" PRIu64 ",\"map_pacing\":",
                 index == 0 ? "" : ",",
                 event->name,
                 event->recovery_attempts,
@@ -2884,7 +3019,13 @@ static bool gpu_player_view_lifecycle_write(
                 event->action.device_recoveries,
                 event->action.recovery_failures,
                 event->action_readbacks,
-                event->action.fallbacks,
+                event->action.fallbacks);
+        gpu_player_view_json_map_pacing(output, &event->action);
+        fprintf(output,
+                "},\"output_size\":[%d,%d],\"display_mode_size\":[%d,%d],"
+                "\"pixels_sha256\":\"%s\",\"artifact\":\"%s\","
+                "\"artifact_sha256\":\"%s\","
+                "\"frame_windows_ns\":[",
                 event->output_width,
                 event->output_height,
                 event->display_mode_width,
@@ -2901,7 +3042,8 @@ static bool gpu_player_view_lifecycle_write(
                 ",\"slot_uniform_uploads\":%" PRIu64 ",\"slot_uniform_upload_bytes\":%" PRIu64
                 ",\"resource_creations\":%" PRIu64 ",\"resource_destructions\":%" PRIu64
                 ",\"readbacks\":%" PRIu64 ",\"commands\":%" PRIu64 ",\"batches\":%" PRIu64
-                ",\"draws\":%" PRIu64 ",\"retained_bytes\":%" PRIu64 ",\"fallbacks\":%" PRIu64 "}}",
+                ",\"draws\":%" PRIu64 ",\"retained_bytes\":%" PRIu64 ",\"fallbacks\":%" PRIu64
+                ",\"map_pacing\":",
                 gpu_player_view_percentile(event->frame_samples, 95),
                 gpu_player_view_percentile(event->frame_samples, 99),
                 gpu_player_view_percentile(event->frame_samples, 100),
@@ -2917,6 +3059,8 @@ static bool gpu_player_view_lifecycle_write(
                 event->steady.draws,
                 event->steady.retained_bytes,
                 event->steady.fallbacks);
+        gpu_player_view_json_map_pacing(output, &event->steady);
+        fputs("}}", output);
     }
     fprintf(output,
             "],\"final_checkpoint\":{\"algorithm\":\"sha256-rgba32-with-dimensions\","

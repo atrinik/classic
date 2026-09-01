@@ -123,6 +123,18 @@ static uint64_t face_asset_next_loader_token;
 static uint64_t face_asset_next_urgent_sequence;
 static uint64_t face_asset_loader_retry_at_ms;
 static uint64_t face_asset_demand_generation = 1;
+static uint64_t face_asset_content_generation = 1;
+
+static void image_face_content_changed(void) {
+    face_asset_content_generation++;
+    if (face_asset_content_generation == 0) {
+        face_asset_content_generation = 1;
+    }
+}
+
+uint64_t image_face_content_generation(void) {
+    return face_asset_content_generation;
+}
 
 #ifdef ATRINIK_FACE_REQUEST_TESTING
 static uint64_t (*face_completion_test_clock)(void);
@@ -604,15 +616,20 @@ void image_bmaps_deinit(void) {
         image_bmaps_size = 0;
     }
 
+    bool content_changed = false;
     for (size_t i = 0; i < MAX_FACE_TILES; i++) {
         if (FaceList[i].name != NULL) {
             free(FaceList[i].name);
             FaceList[i].name = NULL;
+            content_changed |= FaceList[i].sprite != NULL;
             sprite_free_rendered(FaceList[i].sprite);
             FaceList[i].sprite = NULL;
             FaceList[i].checksum = 0;
         }
         FaceList[i].flags = 0;
+    }
+    if (content_changed) {
+        image_face_content_changed();
     }
 
     sprite_cache_free_all();
@@ -663,6 +680,7 @@ void finish_face_cmd(int facenum, uint32_t checksum, const char *face) {
         free(FaceList[facenum].name);
         FaceList[facenum].name = NULL;
         sprite_free_rendered(FaceList[facenum].sprite);
+        image_face_content_changed();
         FaceList[facenum].sprite = NULL;
     }
 
@@ -1165,6 +1183,7 @@ face_asset_requests_complete_loader(uint64_t now_ms, uint64_t started_us, bool *
                 }
                 sprite_free_rendered(FaceList[request->face].sprite);
                 FaceList[request->face].sprite = result->sprite;
+                image_face_content_changed();
                 result->sprite = NULL;
                 FaceList[request->face].flags &= ~FACE_REQUESTED;
                 face_asset_request_remove(request);
@@ -1174,6 +1193,7 @@ face_asset_requests_complete_loader(uint64_t now_ms, uint64_t started_us, bool *
             face_cache_enqueue(FaceList[request->face].name, result->data, result->size);
             sprite_free_rendered(FaceList[request->face].sprite);
             FaceList[request->face].sprite = result->sprite;
+            image_face_content_changed();
             result->sprite = NULL;
             LOG(DEBUG,
                 "Installed face %u (%" PRIu64 " bytes; worker %.3f ms)",

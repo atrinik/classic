@@ -51,6 +51,25 @@ uint16_t map_visibility_add_player_radiance(uint16_t radiance, uint16_t weight) 
     return (uint16_t)MIN(UINT16_MAX, (uint32_t)radiance + addition);
 }
 
+uint16_t map_visibility_memory_floor(uint16_t radiance) {
+    return MAX(radiance, MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
+}
+
+void map_visibility_apply_memory_floor(uint16_t *radiance, uint16_t rgb[3]) {
+    HARD_ASSERT(radiance != NULL);
+    HARD_ASSERT(rgb != NULL);
+
+    if (*radiance >= MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE) {
+        return;
+    }
+
+    uint16_t lift = MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - *radiance;
+    *radiance = MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+    for (size_t channel = 0; channel < 3; channel++) {
+        rgb[channel] = (uint16_t)MIN(UINT16_MAX, (uint32_t)rgb[channel] + lift);
+    }
+}
+
 void map_visibility_fade_init(map_visibility_fade_t *fade) {
     HARD_ASSERT(fade != NULL);
     memset(fade, 0, sizeof(*fade));
