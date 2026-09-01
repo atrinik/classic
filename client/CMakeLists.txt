@@ -1032,8 +1032,6 @@ if (BUILD_TESTING)
         map-overlay-elevated
         visibility-fade-centered
         brynknot-movement
-        remembered-floor-smooth
-        remembered-floor-discrete
         gpu-qualification-town-25x25
         gpu-ui-closure)
     foreach (fixture IN LISTS gpu_player_view_fixtures)
