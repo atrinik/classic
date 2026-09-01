@@ -27,13 +27,34 @@
  * General convenience functions for the client.
  */
 
-#include <global.h>
 #include <image_codec.h>
+#include <client.h>
+#include <effects.h>
+#include <image.h>
+#include <interface.h>
+#include <item.h>
+#include <keybind.h>
+#include <main.h>
+#include <settings.h>
+#include <sound.h>
+#include <sprite.h>
+#include <text.h>
+#include <texture.h>
+#include <widget.h>
+#include <popup.h>
+#include <server_files.h>
+#include <server_settings.h>
+#include <gpu_renderer.h>
+#include <rich_presence.h>
+#include <misc.h>
+#include <player.h>
+#include <toolkit/toolkit.h>
 #include <user_data.h>
 #include <wrapper.h>
 #include <video.h>
 #include <metaserver.h>
 #include <connection_preferences.h>
+#include <commands.h>
 #include <client_socket.h>
 #include <animations.h>
 #include <notification.h>

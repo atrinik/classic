@@ -27,10 +27,18 @@
  * Sprite related functions.
  */
 
-#include <global.h>
 #include <image_codec.h>
+#include <config.h>
+#include <effects.h>
+#include <gpu_renderer.h>
+#include <lighting.h>
+#include <settings.h>
+#include <sprite.h>
+#include <text.h>
 #include <wrapper.h>
 #include <surface_primitives.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 #include <toolkit/string.h>
 #include <toolkit/colorspace.h>
 

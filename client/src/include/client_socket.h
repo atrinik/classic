@@ -25,7 +25,11 @@
 #ifndef CLIENT_SOCKET_H
 #define CLIENT_SOCKET_H
 
-#include <client_command_queue.h>
+#include <stdbool.h>
+#include <toolkit/socket.h>
+
+typedef struct client_socket client_socket_t;
+struct packet_struct;
 
 /**
  * @file

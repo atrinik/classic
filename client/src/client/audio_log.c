@@ -9,9 +9,13 @@
  * (at your option) any later version.                                   *
  ************************************************************************/
 
-#include <global.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <string.h>
 
 #include <audio_log.h>
+#include <toolkit/logger.h>
+#include <toolkit/toolkit.h>
 
 void audio_log_asset_escape(const char *asset, char *buf, size_t size) {
     if (size == 0) {

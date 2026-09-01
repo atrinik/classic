@@ -12,8 +12,11 @@
 #ifndef RENDER_PROFILER_H
 #define RENDER_PROFILER_H
 
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
+
+typedef struct widgetdata widgetdata;
 
 #define RENDER_PROFILER_STATISTICS_VERSION UINT8_C(5)
 

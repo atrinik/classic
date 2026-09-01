@@ -55,6 +55,9 @@ extern void light_radiance_from_raw(const MapSpace *space,
 /** Invalidate the bounded celestial field after structural/topology changes. */
 extern void celestial_light_invalidate(mapstruct *map);
 
+/** Invalidate all loaded celestial keyframes after a process-local override. */
+extern void celestial_light_invalidate_all(void);
+
 /** Publish the bounded celestial field for one absolute gameplay hour. */
 extern bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour);
 

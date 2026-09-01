@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -24,6 +24,11 @@
 
 #ifndef METASERVER_H
 #define METASERVER_H
+
+#include <stdbool.h>
+#include <stddef.h>
+
+typedef struct server_struct server_struct;
 
 /**
  * @file

@@ -29,9 +29,25 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <user_data.h>
 #include <wrapper.h>
+#include <button.h>
+#include <client.h>
+#include <event.h>
+#include <misc.h>
+#include <popup.h>
+#include <list.h>
+#include <main.h>
+#include <player.h>
+#include <scrollbar.h>
+#include <sound.h>
+#include <settings.h>
+#include <text.h>
+#include <sprite.h>
+#include <textwin.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/path.h>
 
 /**

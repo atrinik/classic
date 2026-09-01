@@ -27,6 +27,11 @@ WORKLOAD_CONTRACTS = {
     "wire-ceiling-28x28-thirteen-depth-4k": (28, 3840, 2160, 13, False, 64, 25, 30, 20),
     "actor-door-roof-animation-25x25": (25, 2560, 1440, 7, True, 64, 8, 10, 5),
 }
+BENCHMARK_ITERATIONS = 40
+ANIMATION_SOURCE_UPLOADS_PER_FRAME = 64
+ANIMATION_SOURCE_BYTES_PER_FRAME = 256 * 1024
+ANIMATION_INSTANCE_UPLOADS_PER_FRAME = 128
+ANIMATION_INSTANCE_BYTES_PER_FRAME = 16 * 1024
 PRODUCTION_FIXTURES = (
     "smooth", "radial-light-smooth", "exit-cues", "living-outline-translucent",
     "living-outline-retained-fow", "timed-light", "map-overlay-linked-depth",
@@ -67,6 +72,18 @@ STAGES = {
     "cpu_submission",
     "gpu_completion_wait",
     "present_wait",
+}
+MAP_INVALIDATION_REASONS = {
+    "unchanged", "animation", "actor_effect", "camera_scroll", "map_publication",
+    "lighting", "resize", "resource_replacement", "reset", "device_recovery",
+}
+MAP_PACING_FIELDS = {
+    "submissions", "completions", "in_flight_peak", "queue_depth_samples",
+    "queue_depth_total", "queue_age_total_ns", "queue_age_max_ns",
+    "frame_latency_total_ns", "frame_latency_max_ns", "dropped_updates",
+    "merged_updates", "cpu_recording_calls", "cpu_recording_ns",
+    "submission_calls", "submission_ns", "completion_calls", "completion_ns",
+    "present_wait_calls", "present_wait_ns",
 }
 LIFECYCLE_EVENTS = [
     "cold_asset_upload", "resize_grow", "resize_restore", "teleport", "reconnect",
@@ -238,8 +255,33 @@ def _percentile(values: list[int], percentile: int) -> int:
     return ordered[(len(ordered) * percentile + 99) // 100 - 1]
 
 
+def _validate_map_pacing(value: dict, label: str) -> None:
+    _require(isinstance(value, dict) and set(value) == MAP_PACING_FIELDS,
+             f"{label} map-pacing evidence schema is incomplete")
+    for field in MAP_PACING_FIELDS:
+        _require(type(value[field]) is int and value[field] >= 0,
+                 f"{label} map-pacing {field} is invalid")
+    _require(value["completions"] <= value["submissions"],
+             f"{label} map-pacing completions exceed submissions")
+    _require(value["queue_depth_samples"] == value["submissions"],
+             f"{label} map-pacing queue samples do not cover submissions")
+    if value["submissions"] == 0:
+        _require(value["in_flight_peak"] == 0,
+                 f"{label} map-pacing in-flight peak is inconsistent")
+    else:
+        _require(0 < value["in_flight_peak"] <= value["submissions"],
+                 f"{label} map-pacing in-flight peak is inconsistent")
+    max_queue_depth = max(value["in_flight_peak"] - 1, 0)
+    _require(value["queue_depth_total"] <=
+             value["queue_depth_samples"] * max_queue_depth,
+             f"{label} map-pacing queue depth is unbounded")
+    _require(value["queue_age_max_ns"] <= value["queue_age_total_ns"] and
+             value["frame_latency_max_ns"] <= value["frame_latency_total_ns"],
+             f"{label} map-pacing maxima exceed their totals")
+
+
 def validate_record(record: dict) -> str:
-    _require(record.get("schema_version") == 3, "unsupported schema_version")
+    _require(record.get("schema_version") == 4, "unsupported schema_version")
     _require(record.get("benchmark") == "gpu-interop-stress-qualification", "wrong benchmark")
     _require(record.get("dirty") is False, "qualified revision must be clean")
     _require(bool(REVISION.fullmatch(str(record.get("revision", "")))), "invalid revision")
@@ -384,8 +426,8 @@ def validate_record(record: dict) -> str:
         _require(animation_pixels == ["", "", ""],
                  "static workload has unexpected animation checkpoints")
     steady = record.get("steady_state", {})
-    for field in ("source_uploads", "source_upload_bytes", "light_uploads",
-                  "light_upload_bytes", "resource_creations", "resource_destructions",
+    for field in ("light_uploads", "light_upload_bytes", "resource_creations",
+                  "resource_destructions",
                   "readbacks", "fallbacks"):
         _require(steady.get(field) == 0, f"steady-state {field} must be zero")
     _require(set(steady) == {"uploads", "upload_bytes", "source_uploads",
@@ -394,32 +436,111 @@ def validate_record(record: dict) -> str:
                              "light_upload_bytes", "slot_uniform_uploads",
                              "slot_uniform_upload_bytes", "resource_creations",
                              "resource_destructions", "readbacks", "commands", "batches",
-                             "draws", "retained_bytes", "peak_retained_bytes", "fallbacks"},
+                             "draws", "retained_bytes", "peak_retained_bytes", "fallbacks",
+                             "map", "map_pacing"},
              "steady-state evidence schema is incomplete")
-    for field in ("uploads", "upload_bytes", "instance_uploads", "instance_upload_bytes",
-                  "slot_uniform_uploads", "slot_uniform_upload_bytes"):
+    _validate_map_pacing(steady.get("map_pacing"), "steady-state")
+    for field in ("uploads", "upload_bytes", "source_uploads", "source_upload_bytes",
+                  "instance_uploads", "instance_upload_bytes", "slot_uniform_uploads",
+                  "slot_uniform_upload_bytes"):
         _require(isinstance(steady.get(field), int) and steady[field] >= 0,
                  f"steady-state {field} must be a non-negative integer")
-    _require(steady["uploads"] == steady["instance_uploads"] +
+    _require(steady["uploads"] == steady["source_uploads"] +
+             steady["instance_uploads"] +
              steady["slot_uniform_uploads"] and
-             steady["upload_bytes"] == steady["instance_upload_bytes"] +
+             steady["upload_bytes"] == steady["source_upload_bytes"] +
+             steady["instance_upload_bytes"] +
              steady["slot_uniform_upload_bytes"],
-             "steady-state uploads are not classified instance/slot data")
+             "steady-state uploads are not classified source/instance/slot data")
     if animation:
-        _require(steady["instance_uploads"] <= len(frames) * 64 and
-                 steady["instance_upload_bytes"] <= len(frames) * 4096,
+        _require(steady["source_uploads"] <=
+                 len(frames) * ANIMATION_SOURCE_UPLOADS_PER_FRAME and
+                 steady["source_upload_bytes"] <=
+                 len(frames) * ANIMATION_SOURCE_BYTES_PER_FRAME,
+                 "animated source deltas exceed the bounded upload budget")
+        _require(steady["instance_uploads"] <=
+                 len(frames) * ANIMATION_INSTANCE_UPLOADS_PER_FRAME and
+                 steady["instance_upload_bytes"] <=
+                 len(frames) * ANIMATION_INSTANCE_BYTES_PER_FRAME,
                  "animated instance deltas exceed the bounded upload budget")
     else:
-        _require(steady["instance_uploads"] == 0 and steady["instance_upload_bytes"] == 0,
-                 "unchanged painter records performed instance uploads")
-    for field in ("commands", "batches", "draws", "retained_bytes", "peak_retained_bytes"):
+        _require(steady["source_uploads"] == 0 and steady["source_upload_bytes"] == 0 and
+                 steady["instance_uploads"] == 0 and steady["instance_upload_bytes"] == 0,
+                 "unchanged painter records performed source/instance uploads")
+    for field in ("draws", "retained_bytes", "peak_retained_bytes"):
         _require(isinstance(steady.get(field), int) and steady[field] > 0,
                  f"steady-state {field} must be positive")
-    _require(steady["draws"] == steady["batches"],
-             "each adjacent-compatible painter batch must use one instanced draw")
-    completed_maps = len(frames) + len(frames) // 10
-    _require(steady["batches"] >= completed_maps and
-             steady["slot_uniform_uploads"] == steady["batches"] - completed_maps,
+    for field in ("commands", "batches"):
+        _require(isinstance(steady.get(field), int) and steady[field] >= 0,
+                 f"steady-state {field} must be non-negative")
+    _require(steady["draws"] >= steady["batches"],
+             "total GPU draws are below the retained map batch count")
+    map_statistics = steady.get("map")
+    expected_map_fields = {
+        "full_redraws", "damage_frames", "damage_pixels", "damage_bytes",
+        "retained_frames", "skipped_passes", "dirty_commands", "dirty_pixels",
+        "dirty_bytes", "published_generation", "source_generation", "camera_generation",
+        "lighting_generation", "effect_generation", "last_dirty", "invalidation_reasons",
+        "render_commands", "compiled_render_commands", "reused_render_commands",
+        "peak_render_commands", "peak_active_levels",
+    }
+    _require(isinstance(map_statistics, dict) and set(map_statistics) == expected_map_fields,
+             "map retained-state evidence schema is incomplete")
+    for field in (
+        "full_redraws", "damage_frames", "damage_pixels", "damage_bytes", "retained_frames",
+        "skipped_passes", "dirty_commands", "dirty_pixels", "dirty_bytes",
+        "published_generation", "source_generation", "camera_generation",
+        "lighting_generation", "effect_generation",
+        "render_commands", "compiled_render_commands", "reused_render_commands",
+        "peak_render_commands", "peak_active_levels",
+    ):
+        _require(type(map_statistics[field]) is int and map_statistics[field] >= 0,
+                 f"map {field} is invalid")
+    _require(map_statistics["published_generation"] > 0 and
+             map_statistics["source_generation"] > 0 and
+             map_statistics["camera_generation"] > 0 and
+             map_statistics["lighting_generation"] > 0 and
+             map_statistics["effect_generation"] > 0,
+             "map contract generations are not published")
+    _require(map_statistics["render_commands"] > 0 and
+             map_statistics["compiled_render_commands"] >= 0 and
+             map_statistics["reused_render_commands"] >= 0 and
+             map_statistics["peak_render_commands"] > 0 and
+             map_statistics["peak_active_levels"] > 0,
+             "map CPU command evidence is invalid")
+    measured_map_frames = len(frames) + len(frames) // 10
+    _require(map_statistics["full_redraws"] + map_statistics["retained_frames"] ==
+             measured_map_frames,
+             "map full/retained frame accounting is inconsistent")
+    _require(map_statistics["damage_bytes"] == map_statistics["damage_pixels"] * 8 and
+             map_statistics["dirty_bytes"] == map_statistics["dirty_pixels"] * 8 and
+             map_statistics["skipped_passes"] <= map_statistics["retained_frames"],
+             "map damage accounting is inconsistent")
+    last_dirty = map_statistics["last_dirty"]
+    _require(isinstance(last_dirty, dict) and set(last_dirty) == {
+        "commands", "pixels", "bytes", "rect", "invalidation_reason",
+    }, "map last-dirty evidence schema is incomplete")
+    for field in ("commands", "pixels", "bytes"):
+        _require(type(last_dirty[field]) is int and last_dirty[field] >= 0,
+                 f"map last-dirty {field} is invalid")
+    rectangle = last_dirty["rect"]
+    _require(isinstance(rectangle, list) and len(rectangle) == 4 and
+             all(type(value) is int and value >= 0 for value in rectangle),
+             "map last-dirty rectangle is invalid")
+    _require(last_dirty["pixels"] == rectangle[2] * rectangle[3] and
+             last_dirty["bytes"] == last_dirty["pixels"] * 8 and
+             last_dirty["invalidation_reason"] in MAP_INVALIDATION_REASONS,
+             "map last-dirty accounting is inconsistent")
+    invalidation_reasons = map_statistics["invalidation_reasons"]
+    _require(isinstance(invalidation_reasons, dict) and
+             set(invalidation_reasons) == MAP_INVALIDATION_REASONS and
+             all(type(value) is int and value >= 0 for value in invalidation_reasons.values()),
+             "map invalidation reason evidence is invalid")
+    _require(sum(invalidation_reasons.values()) == measured_map_frames,
+             "map invalidation reason accounting is inconsistent")
+    map_passes = map_statistics["full_redraws"] + map_statistics["damage_frames"]
+    _require(steady["batches"] >= map_passes and
+             steady["slot_uniform_uploads"] == steady["batches"] - map_passes,
              "slot-uniform uploads do not match world batch submissions")
     _require(steady["slot_uniform_upload_bytes"] >= steady["slot_uniform_uploads"] * 16 and
              steady["slot_uniform_upload_bytes"] <= steady["slot_uniform_uploads"] * 1024,
@@ -428,6 +549,29 @@ def validate_record(record: dict) -> str:
              "painter submission did not reduce command draws by at least ten percent")
     _require(steady["peak_retained_bytes"] >= steady["retained_bytes"],
              "steady-state retained peak is below retained bytes")
+    if animation:
+        _require(map_statistics["damage_frames"] == len(frames) and
+                 map_statistics["full_redraws"] > 0 and
+                 map_statistics["dirty_commands"] > 0 and
+                 map_statistics["damage_pixels"] > 0 and
+                 invalidation_reasons["animation"] == len(frames),
+                 "animation workload did not publish bounded retained damage")
+        _require(map_statistics["reused_render_commands"] >=
+                 map_statistics["render_commands"] // 2,
+                 "animation workload did not reuse most retained painter records")
+    else:
+        _require(map_statistics["full_redraws"] == 0 and
+                 map_statistics["damage_frames"] == 0 and
+                 map_statistics["retained_frames"] == measured_map_frames and
+                 map_statistics["skipped_passes"] == measured_map_frames and
+                 map_statistics["dirty_commands"] == 0 and
+                 map_statistics["dirty_pixels"] == 0 and
+                 map_statistics["dirty_bytes"] == 0 and
+                 invalidation_reasons["unchanged"] == measured_map_frames,
+                 "static workload did not remain on its retained target")
+        _require(map_statistics["reused_render_commands"] >
+                 map_statistics["compiled_render_commands"],
+                 "static workload did not reuse its retained painter records")
     return name
 
 
@@ -459,7 +603,7 @@ def validate(paths: list[Path], require_complete: bool) -> None:
 
 
 def validate_lifecycle_record(record: dict) -> None:
-    _require(record.get("schema_version") == 2, "unsupported lifecycle schema_version")
+    _require(record.get("schema_version") == 3, "unsupported lifecycle schema_version")
     _require(record.get("benchmark") == "gpu-production-recovery-lifecycle",
              "wrong lifecycle benchmark")
     _require(record.get("dirty") is False, "qualified revision must be clean")
@@ -511,7 +655,7 @@ def validate_lifecycle_record(record: dict) -> None:
             "light_uploads", "light_upload_bytes",
             "slot_uniform_uploads", "slot_uniform_upload_bytes",
             "resource_creations", "resource_destructions", "device_recoveries",
-            "recovery_failures", "readbacks", "fallbacks",
+            "recovery_failures", "readbacks", "fallbacks", "map_pacing",
         }
         _require(set(action) == expected_action_fields,
                  f"{event['name']} action evidence schema is incomplete")
@@ -523,6 +667,7 @@ def validate_lifecycle_record(record: dict) -> None:
                  f"{event['name']} action readback count is wrong")
         _require(action.get("fallbacks") == 0 and action.get("recovery_failures") == 0,
                  f"{event['name']} action used a fallback or failed recovery")
+        _validate_map_pacing(action.get("map_pacing"), f"{event['name']} action")
         recovery = event["name"] not in no_recovery
         _require(action.get("device_recoveries") == (1 if recovery else 0),
                  f"{event['name']} action recovery statistics are wrong")
@@ -584,6 +729,7 @@ def validate_lifecycle_record(record: dict) -> None:
         for field in ("commands", "batches", "draws", "retained_bytes"):
             _require(isinstance(steady.get(field), int) and steady[field] > 0,
                      f"{event['name']} steady {field} is absent")
+        _validate_map_pacing(steady.get("map_pacing"), f"{event['name']} steady-state")
     by_name = {event["name"]: event for event in events}
     baseline = by_name["cold_asset_upload"]["pixels_sha256"]
     _require(by_name["resize_grow"]["output_size"] ==

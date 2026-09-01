@@ -148,7 +148,6 @@ case "${component}" in
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
     cmake --preset linux-coverage \
-      -DENABLE_PRECOMPILED_HEADERS=OFF \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
     ctest --preset linux-coverage -LE performance

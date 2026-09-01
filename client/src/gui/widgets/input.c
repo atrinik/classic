@@ -29,7 +29,17 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <client.h>
+#include <event.h>
+#include <menu.h>
+#include <keybind.h>
+#include <main.h>
+#include <misc.h>
+#include <popup.h>
+#include <text_input.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 static void widget_input_handle_enter(widgetdata *widget) {

@@ -30,8 +30,17 @@
 #ifndef MAP_H
 #define MAP_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <text.h>
+#include <toolkit/toolkit.h>
 #include <toolkit/map_protocol.h>
+#include <toolkit/socket.h>
 #include <map_visibility.h>
+
+typedef struct widgetdata widgetdata;
 
 /** Map tile position Y offset */
 #define MAP_TILE_POS_YOFF 23
@@ -221,6 +230,65 @@ typedef struct map_cell_snapshot {
     uint8_t structural_fow;
 } map_cell_snapshot_t;
 
+/** Version of the copyable, opt-in lighting diagnostic record. */
+#define MAP_LIGHTING_DIAGNOSTIC_VERSION UINT8_C(1)
+
+/** Reasons a diagnostic light sample is zero, unavailable, or transformed. */
+typedef enum map_lighting_diagnostic_reason {
+    MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO = 1U << 0,
+    MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE = 1U << 1,
+    MAP_LIGHTING_DIAGNOSTIC_REASON_STALE = 1U << 2,
+    MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED = 1U << 3,
+    MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED = 1U << 4,
+    MAP_LIGHTING_DIAGNOSTIC_REASON_BORROWED = 1U << 5,
+} map_lighting_diagnostic_reason_t;
+
+/** One local, privacy-bounded report of the client lighting pipeline. */
+typedef struct map_lighting_diagnostic {
+    int x;
+    int y;
+    int depth;
+    uint8_t sub_layer;
+
+    bool visible;
+    bool remembered;
+    bool fogged;
+    bool stale;
+    bool missing;
+    bool cleared;
+
+    /** Current server-authorized MAP2 aggregate endpoint is present. */
+    bool received;
+    uint16_t received_scalar;
+    uint16_t received_rgb[3];
+    bool received_rgb_explicit;
+
+    /** The optional timed MAP2 endpoint which the client may interpolate. */
+    bool keyframe_valid;
+    bool next_known;
+    uint64_t keyframe_generation;
+    uint64_t keyframe_start_seconds;
+    uint64_t keyframe_end_seconds;
+    uint16_t next_scalar;
+    uint16_t next_rgb[3];
+    bool next_rgb_explicit;
+
+    /** Client working value after temporal resolution and bounded borrowing. */
+    bool working_available;
+    bool interpolated;
+    bool borrowed;
+    uint16_t working_scalar;
+    uint16_t working_rgb[3];
+
+    /** Presentation projection used by smooth or discrete map rendering. */
+    bool smooth_lighting;
+    bool presentation_available;
+    uint8_t presentation_brightness;
+    uint8_t presentation_rgb[3];
+
+    uint32_t reasons;
+} map_lighting_diagnostic_t;
+
 #define MAP_STARTX map_width *(MAP_FOW_SIZE / 2)
 #define MAP_STARTY map_height *(MAP_FOW_SIZE / 2)
 #define MAP_WIDTH map_width
@@ -389,6 +457,8 @@ bool widget_map_transaction_abort_test(void);
 bool widget_map_light_keyframe_capacity_test(void);
 /** Verify timed-light redraw and FOW extension use the interpolated endpoint. */
 bool widget_map_temporal_lighting_test(void);
+/** Verify diagnostic stages, deterministic fixtures, and fog privacy state. */
+bool widget_map_lighting_diagnostic_test(void);
 /** Verify the complete negotiated overscan window remains a render candidate. */
 bool widget_map_projection_contract_test(void);
 #endif
@@ -406,6 +476,23 @@ extern bool map_get_fow(int x, int y);
 extern void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance);
 extern void
 map_set_light_rgb_radiance(int x, int y, uint8_t bitmap, const uint16_t rgb[NUM_SUB_LAYERS][3]);
+
+/**
+ * Resolve one logical visible-window tile without changing map state.
+ * Coordinates are MAP2 wire coordinates; radiance fields are Q5.11 samples.
+ * Fogged-tile source, working, and presentation values are zeroed; the state
+ * flags remain available without disclosing hidden map data.
+ */
+extern bool map_lighting_diagnostic_get(int depth,
+                                        int x,
+                                        int y,
+                                        int sub_layer,
+                                        bool smooth_lighting,
+                                        map_lighting_diagnostic_t *diagnostic);
+
+/** Handle the opt-in local /d_lighting command. */
+extern void map_lighting_diagnostic_command(const char *params);
+
 extern void map_set_light_keyframe(int x,
                                    int y,
                                    uint64_t generation,

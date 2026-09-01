@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,14 @@
 
 #ifndef IMAGE_H
 #define IMAGE_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <toolkit/toolkit.h>
+
+struct sprite_struct;
 
 /**
  * Structure for bmap data.
@@ -96,6 +104,8 @@ int image_get_id(const char *name);
 bool image_face_valid(int face);
 struct sprite_struct *image_get_sprite(int face);
 const char *image_get_face_name(int face);
+/** Monotonic generation of face bitmap content visible to map rendering. */
+uint64_t image_face_content_generation(void);
 
 /** Reset unavailable-face detection before replaying an immutable snapshot. */
 void image_missing_faces_reset(void);

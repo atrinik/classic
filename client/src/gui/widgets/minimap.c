@@ -29,10 +29,22 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <video.h>
+#include <event.h>
+#include <gpu_renderer.h>
+#include <image.h>
+#include <settings.h>
 #include <surface_primitives.h>
+#include <main.h>
+#include <map.h>
+#include <misc.h>
+#include <player.h>
 #include <region_map.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+#include <toolkit/memory.h>
+#include <sprite.h>
+#include <widget.h>
 
 /**
  * Textures used by the minimap.

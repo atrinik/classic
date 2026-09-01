@@ -3,10 +3,16 @@
  * Bounded priority-aware filesystem and PNG face loader.
  */
 
-#include <global.h>
 #include <face_asset.h>
 #include <face_loader.h>
 #include <image_codec.h>
+#include <asset.h>
+#include <sprite.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <SDL3/SDL.h>
+#include <zlib.h>
 
 #define FACE_LOADER_OUTSTANDING_MAX 8U
 #define FACE_LOADER_BACKGROUND_OUTSTANDING_MAX 2U

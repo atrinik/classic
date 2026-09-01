@@ -131,6 +131,10 @@ extern void command_arrest(object *op, const char *command, char *params);
 
 extern void command_ban(object *op, const char *command, char *params);
 
+/** Public API implemented in src/commands/permission/celestial.c. */
+
+extern void command_celestial(object *op, const char *command, char *params);
+
 /** Public API implemented in src/commands/permission/config.c. */
 
 extern void command_config(object *op, const char *command, char *params);

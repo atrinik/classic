@@ -27,12 +27,31 @@
  * Menu related functions.
  */
 
-#include <global.h>
+#include <ctype.h>
 #include <wrapper.h>
+#include <client.h>
+#include <effects.h>
+#include <event.h>
+#include <gpu_renderer.h>
+#include <inventory.h>
+#include <commands.h>
 #include <client_socket.h>
+#include <item.h>
+#include <main.h>
+#include <misc.h>
+#include <map.h>
+#include <player.h>
+#include <popup.h>
+#include <textwin.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
 #include <region_map.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
+#include <toolkit/toolkit.h>
+#include <sound.h>
+#include <sprite.h>
+#include <widget.h>
 
 /**
  * Analyze /cmd type commands the player has typed in the console or bound to a
@@ -117,6 +136,10 @@ int client_command_check(const char *cmd) {
             draw_info_format(COLOR_RED, "No such effect %s.", cmd + 8);
         }
 
+        return 1;
+    } else if (strncmp(cmd, "/d_lighting", 11) == 0 &&
+               (cmd[11] == '\0' || isspace((unsigned char)cmd[11]))) {
+        map_lighting_diagnostic_command(cmd + 11);
         return 1;
     } else if (!strncmp(cmd, "/d_effect ", 10)) {
         effect_debug(cmd + 10);

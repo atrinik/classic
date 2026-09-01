@@ -30,6 +30,16 @@
 #ifndef POPUP_H
 #define POPUP_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <button.h>
+#include <text_input.h>
+
+typedef struct hfile_struct hfile_struct;
+typedef struct server_struct server_struct;
+
 /**
  * A single "generic" button in a popup.
  */

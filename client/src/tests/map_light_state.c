@@ -4,7 +4,8 @@
  * Copyright 2026 The Atrinik Project
  ************************************************************************/
 
-#include <global.h>
+#include <map.h>
+#include <stdlib.h>
 
 #define TEST_CHECK(condition) \
     do {                      \

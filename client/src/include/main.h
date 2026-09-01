@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,23 @@
 
 #ifndef MAIN_H
 #define MAIN_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <config.h>
+#include <toolkit/rendezvous.h>
+#include <toolkit/toolkit.h>
+
+typedef struct Animations Animations;
+typedef struct _anim_table _anim_table;
+typedef struct clioption_settings_struct clioption_settings_struct;
+typedef struct client_socket client_socket_t;
+typedef struct obj object;
+typedef struct texture_struct texture_struct;
+typedef struct screensize screensize;
 
 #define COLOR_BUF 7
 

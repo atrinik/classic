@@ -30,9 +30,17 @@
 #ifndef CLIENT_H
 #define CLIENT_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #include <client_command_queue.h>
+#include <connection_failure.h>
 #include <metaserver_options.h>
 #include <stun_config.h>
+#include <toolkit/socket.h>
+
+typedef struct Player_Struct Client_Player;
 
 /* How many skill types server supports/client will get sent to it.
  * If more skills are added to server, this needs to get increased. */

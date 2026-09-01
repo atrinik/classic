@@ -12,7 +12,10 @@
 #ifndef PLAYERDOLL_EQUIPMENT_H
 #define PLAYERDOLL_EQUIPMENT_H
 
-#include <global.h>
+#include <toolkit/porting.h>
+#include <toolkit/socket.h>
+
+typedef struct obj object;
 
 object *playerdoll_equipment_resolve(int slot, const tag_t equipment[PLAYER_EQUIP_MAX]);
 

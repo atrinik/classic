@@ -29,9 +29,31 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <SDL3_ttf/SDL_ttf.h>
+#include <gpu_renderer.h>
+#include <book.h>
+#include <client.h>
+#include <event.h>
+#include <image.h>
+#include <inventory.h>
+#include <item.h>
+#include <main.h>
+#include <animations.h>
+#include <menu.h>
+#include <map.h>
+#include <player.h>
+#include <mouse.h>
+#include <misc.h>
+#include <popup.h>
+#include <settings.h>
+#include <sprite.h>
+#include <text.h>
+#include <texture.h>
+#include <widget.h>
 #include <wrapper.h>
 #include <surface_primitives.h>
+#include <toolkit/logger.h>
+#include <toolkit/toolkit.h>
 #include <toolkit/string.h>
 
 /**

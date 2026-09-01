@@ -11,7 +11,12 @@
 
 /** @file Experience-per-hour widget. */
 
-#include <global.h>
+#include <main.h>
+#include <event.h>
+#include <player.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/datetime.h>
 #include <toolkit/string.h>
 

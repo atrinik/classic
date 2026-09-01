@@ -31,6 +31,10 @@
 #define TEXTWIN_H
 
 #include <button.h>
+#include <scrollbar.h>
+#include <text_input.h>
+
+typedef struct widgetdata widgetdata;
 
 #define TEXTWIN_TAB_NAME(_tab) ((_tab)->name ? (_tab)->name : textwin_tab_names[(_tab)->type - 1])
 

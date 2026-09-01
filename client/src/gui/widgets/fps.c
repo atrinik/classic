@@ -29,7 +29,12 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <stdint.h>
+#include <misc.h>
+#include <text.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 /**
  * FPS widget data.

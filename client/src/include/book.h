@@ -30,6 +30,11 @@
 #ifndef BOOK_H
 #define BOOK_H
 
+#include <stdbool.h>
+#include <stddef.h>
+
+#include <toolkit/shstr.h>
+
 /**
  * @defgroup BOOK_TEXT_xxx Book text coords
  * Book text coordinates.

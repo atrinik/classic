@@ -29,9 +29,15 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <main.h>
+#include <misc.h>
+#include <sprite.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
 #include <video.h>
 #include <surface_primitives.h>
+#include <widget.h>
 
 /** Tooltip's text. */
 static char tooltip_text[HUGE_BUF * 4];

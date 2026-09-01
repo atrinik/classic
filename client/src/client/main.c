@@ -27,21 +27,50 @@
  * Client main related functions.
  */
 
-#include <global.h>
+#include <mouse.h>
+#include <animations.h>
+#include <client.h>
+#include <commands.h>
+#include <config.h>
+#include <effects.h>
+#include <event.h>
+#include <image.h>
+#include <join_credentials.h>
+#include <inventory.h>
+#include <item.h>
+#include <keybind.h>
+#include <lighting.h>
+#include <main.h>
+#include <map.h>
+#include <player.h>
+#include <server_files.h>
+#include <settings.h>
+#include <sound.h>
+#include <sprite.h>
+#include <widget.h>
+#include <texture.h>
+#include <textwin.h>
 #include <wrapper.h>
 #include <video.h>
 #include <metaserver.h>
+#include <misc.h>
+#include <popup.h>
 #include <connection_preferences.h>
 #include <client_socket.h>
 #include <SDL3/SDL_main.h>
 #include <region_map.h>
+#include <rich_presence.h>
+#include <render_profiler.h>
 #include <toolkit/packet.h>
+#include <toolkit/memory.h>
+#include <toolkit/mempool.h>
 #include <toolkit/string.h>
 #include <toolkit/clioptions.h>
 #include <window_title.h>
 #include <toolkit/path.h>
 #include <resources.h>
 #include <gpu_player_view.h>
+#include <gpu_renderer.h>
 #include <toolkit/signals.h>
 #include <toolkit/colorspace.h>
 #include <toolkit/binreloc.h>
@@ -846,23 +875,26 @@ int main(int argc, char *argv[]) {
         bool transaction = widget_map_transaction_abort_test();
         bool capacity = widget_map_light_keyframe_capacity_test();
         bool temporal = widget_map_temporal_lighting_test();
+        bool diagnostic = widget_map_lighting_diagnostic_test();
         bool projection = widget_map_projection_contract_test();
         bool descriptor = socket_command_map_timed_light_same_test();
         bool continuation = socket_command_map_continuation_transaction_test();
         bool clock_suspend = presentation_clock_suspend_test();
-        if (!(sparse && transaction && capacity && temporal && projection && descriptor &&
-              continuation && clock_suspend)) {
-            fprintf(stderr,
-                    "map state test failed: sparse=%d transaction=%d capacity=%d temporal=%d "
-                    "projection=%d descriptor=%d continuation=%d presentation-clock=%d\n",
-                    sparse,
-                    transaction,
-                    capacity,
-                    temporal,
-                    projection,
-                    descriptor,
-                    continuation,
-                    clock_suspend);
+        if (!(sparse && transaction && capacity && temporal && diagnostic && projection &&
+              descriptor && continuation && clock_suspend)) {
+            fprintf(
+                stderr,
+                "map state test failed: sparse=%d transaction=%d capacity=%d temporal=%d "
+                "diagnostic=%d projection=%d descriptor=%d continuation=%d presentation-clock=%d\n",
+                sparse,
+                transaction,
+                capacity,
+                temporal,
+                diagnostic,
+                projection,
+                descriptor,
+                continuation,
+                clock_suspend);
             return EXIT_FAILURE;
         }
         return EXIT_SUCCESS;

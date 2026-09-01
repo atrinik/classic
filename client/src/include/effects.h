@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,13 @@
 
 #ifndef EFFECTS_H
 #define EFFECTS_H
+
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <toolkit/toolkit.h>
+
+typedef struct widgetdata widgetdata;
 
 /**
  * @defgroup WIND_BLOW_xxx Wind blow directions

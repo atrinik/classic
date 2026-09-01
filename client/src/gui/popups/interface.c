@@ -29,9 +29,25 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <interface_packet.h>
+#include <event.h>
+#include <image.h>
+#include <item.h>
+#include <keybind.h>
+#include <commands.h>
 #include <client_socket.h>
+#include <client.h>
+#include <interface.h>
+#include <main.h>
+#include <menu.h>
+#include <misc.h>
+#include <popup.h>
+#include <player.h>
+#include <sprite.h>
+#include <text.h>
+#include <texture.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 

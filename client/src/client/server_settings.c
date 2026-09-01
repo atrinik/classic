@@ -29,8 +29,12 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <server_settings.h>
+#include <server_files.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
 #include <toolkit/string.h>
+#include <toolkit/toolkit.h>
 
 /** The server settings. */
 server_settings *s_settings = NULL;

@@ -18,7 +18,13 @@
  * submits them directly to gpu_map_renderer.c.
  */
 
-#include <global.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <lighting.h>
+#include <toolkit/socket.h>
+#include <toolkit/toolkit.h>
 
 static int selected_depth;
 

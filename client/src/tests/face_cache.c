@@ -1,6 +1,5 @@
 /** @file Tests for bounded asynchronous face-cache writes. */
 
-#include <global.h>
 #include <face_cache.h>
 #include <toolkit/datetime.h>
 #include <toolkit/path.h>

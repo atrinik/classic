@@ -25,6 +25,13 @@
 #ifndef WRAPPER_H
 #define WRAPPER_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+
+#include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
+
 /**
  * @file
  * Public declarations for the corresponding client module.

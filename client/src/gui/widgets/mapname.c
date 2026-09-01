@@ -29,7 +29,13 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <main.h>
+#include <map.h>
+#include <misc.h>
+#include <text.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 typedef struct widget_mapname_struct {
     int alpha;

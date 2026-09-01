@@ -8,10 +8,16 @@
  * the Free Software Foundation; either version 2 of the License, or     *
  * (at your option) any later version.                                   *
  ************************************************************************/
-
 /** @file Synchronized in-game clock widget. */
 
-#include <global.h>
+#include <SDL3/SDL.h>
+#include <event.h>
+#include <stdint.h>
+#include <main.h>
+#include <player.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 static void widget_draw(widgetdata *widget) {
     if (!widget->redraw) {

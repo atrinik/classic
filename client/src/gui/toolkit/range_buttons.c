@@ -29,7 +29,16 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <button.h>
+#include <misc.h>
+#include <sprite.h>
+#include <main.h>
+#include <mouse.h>
+#include <player.h>
+#include <text.h>
+#include <texture.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 /**
  * Last clicked ticks to prevent single button click from triggering many

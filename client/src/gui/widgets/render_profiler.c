@@ -14,7 +14,16 @@
  * Low-overhead frame profiling and its optional display widget.
  */
 
-#include <global.h>
+#include <gpu_renderer.h>
+#include <main.h>
+#include <render_profiler.h>
+#include <scrollbar.h>
+#include <event.h>
+#include <surface_primitives.h>
+#include <sprite.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/datetime.h>
 #include <toolkit/string.h>
 
@@ -197,6 +206,19 @@ static char *render_profiler_widget_text(const render_profile_snapshot_t *snapsh
         gpu_renderer_statistics_get(&gpu_statistics);
     }
 
+    double map_queue_depth =
+        gpu_statistics.map_queue_depth_samples == 0
+            ? 0.0
+            : (double)gpu_statistics.map_queue_depth_total / gpu_statistics.map_queue_depth_samples;
+    double map_queue_age_ms = gpu_statistics.map_completions == 0
+                                  ? 0.0
+                                  : (double)gpu_statistics.map_queue_age_total_ns /
+                                        gpu_statistics.map_completions / 1000000.0;
+    double map_frame_latency_ms = gpu_statistics.map_completions == 0
+                                      ? 0.0
+                                      : (double)gpu_statistics.map_frame_latency_total_ns /
+                                            gpu_statistics.map_completions / 1000000.0;
+
     stringbuffer_append_printf(
         sb,
         "[c=#ffd060]Render profiler[/c] (last %.2fs)\n"
@@ -267,6 +289,25 @@ static char *render_profiler_widget_text(const render_profile_snapshot_t *snapsh
         gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_SUBMISSION),
         gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_COMPLETION),
         gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_PRESENT_WAIT));
+
+    stringbuffer_append_printf(
+        sb,
+        " map CPU record %5.2f ms\n"
+        "[c=#ffd060]Map pacing[/c]\n"
+        " submissions %" PRIu64 "  completions %" PRIu64 "  in-flight peak %" PRIu64 "\n"
+        " queue depth %.2f  age %.2f ms (max %.2f)\n"
+        " frame latency %.2f ms (max %.2f)  dropped %" PRIu64 "  merged %" PRIu64 "\n",
+        gpu_timing_average_ms(&gpu_statistics, GPU_RENDERER_TIMING_COMMAND_BUILD),
+        gpu_statistics.map_submissions,
+        gpu_statistics.map_completions,
+        gpu_statistics.map_in_flight_peak,
+        map_queue_depth,
+        map_queue_age_ms,
+        gpu_statistics.map_queue_age_max_ns / 1000000.0,
+        map_frame_latency_ms,
+        gpu_statistics.map_frame_latency_max_ns / 1000000.0,
+        gpu_statistics.map_dropped_updates,
+        gpu_statistics.map_merged_updates);
 
     for (stage = 0; stage < RENDER_PROFILE_STAGE_NUM; stage++) {
         render_profile_stage_metadata_t metadata = {0};

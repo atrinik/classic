@@ -30,6 +30,12 @@
 #ifndef BUTTON_H
 #define BUTTON_H
 
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <text.h>
+#include <texture.h>
+
 /** Determine whether the x,y position is over the specified button. */
 #define BUTTON_MOUSE_OVER(button, mx, my, texture)                                             \
     ((mx) - (button)->px >= (button)->x && (mx) - (button)->px < (button)->x + (texture)->w && \

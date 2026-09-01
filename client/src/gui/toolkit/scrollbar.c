@@ -29,8 +29,15 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
+#include <mouse.h>
+#include <event.h>
+#include <misc.h>
+#include <scrollbar.h>
+#include <text.h>
 #include <surface_primitives.h>
+#include <sprite.h>
+#include <toolkit/logger.h>
+#include <toolkit/toolkit.h>
 
 /** Scrollbar background color. */
 static SDL_Color scrollbar_color_bg;

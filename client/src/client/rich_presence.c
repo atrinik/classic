@@ -1,6 +1,14 @@
-#include <global.h>
 #include <discord_rpc.h>
 #include <rich_presence.h>
+#include <client.h>
+#include <map.h>
+#include <main.h>
+#include <player.h>
+#include <settings.h>
+#include <text.h>
+#include <toolkit/logger.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 #include <wrapper.h>
 
 static discord_rpc_t *presence_rpc;

@@ -11,12 +11,19 @@
 
 /** @file Deterministic negotiated face-batch scheduler and parser tests. */
 
-#include <global.h>
+#include <asset.h>
+#include <client.h>
 #include <client_socket.h>
 #include <network_graph.h>
+#include <player.h>
 #include <toolkit/packet.h>
+#include <toolkit/memory.h>
+#include <toolkit/toolkit.h>
 #include <wrapper.h>
 #include <openssl/evp.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define TEST_CHECK(condition)                                                               \
     do {                                                                                    \

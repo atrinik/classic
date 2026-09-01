@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -27,12 +27,19 @@
  * Handles movement events.
  */
 
-#include <global.h>
+#include <client.h>
+#include <event.h>
+#include <keybind.h>
+#include <main.h>
+#include <map.h>
+#include <player.h>
+#include <settings.h>
+#include <toolkit/toolkit.h>
+#include <client_socket.h>
+#include <toolkit/packet.h>
 
 /** Whether a running movement producer still needs a direction-zero stop. */
 static bool run_stream_active;
-#include <client_socket.h>
-#include <toolkit/packet.h>
 
 /**
  * Number of the possible directions.

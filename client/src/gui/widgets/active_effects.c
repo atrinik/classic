@@ -29,9 +29,19 @@
  * @author Zoey Rose
  */
 
-#include <global.h>
 #include <active_effects_model.h>
+#include <effects.h>
+#include <event.h>
+#include <gpu_renderer.h>
+#include <image.h>
+#include <misc.h>
+#include <player.h>
+#include <sprite.h>
+#include <surface_primitives.h>
 #include <video.h>
+#include <text.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 #include <toolkit/string.h>
 
 /**

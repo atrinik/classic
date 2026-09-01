@@ -14,7 +14,14 @@
  * Testable physical keybinding dispatch and movement-stream integration.
  */
 
-#include <global.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include <keybind.h>
+#include <event.h>
+#include <toolkit/toolkit.h>
 
 static bool keybind_event_running(const keybind_event_handler *handler) {
     return handler->running != NULL && handler->running(handler->user_data);

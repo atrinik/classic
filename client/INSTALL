@@ -42,10 +42,10 @@ configure downloads the exact libatrinik source release recorded in
 `cmake/dependencies.lock.json` and verifies its SHA-256 digest; use
 `FETCHCONTENT_SOURCE_DIR_LIBATRINIK` for coordinated local work.
 
-The main client target precompiles `src/include/global.h` by default. Pass
-`-DENABLE_PRECOMPILED_HEADERS=OFF` for a conventional build. See
-`../docs/BUILD_ACCELERATION.md` for the benchmark procedure, measurements, and
-invalidation tradeoffs.
+The client uses direct module headers and has no client precompiled-header
+mode. Every source and test therefore exercises the same conventional include
+graph. See `../docs/BUILD_ACCELERATION.md` for the server PCH benchmark
+procedure and invalidation tradeoffs.
 
 Discord Rich Presence is optional. A build without an Application ID remains
 fully functional and opens no Discord IPC endpoint. For an installed/package

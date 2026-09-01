@@ -24,20 +24,15 @@
 
 /**
  * @file
- * The main include file, included by most C files.
+ * Small helpers for querying SDL mouse state.
  */
 
-#ifndef GLOBAL_H
-#define GLOBAL_H
+#ifndef MOUSE_H
+#define MOUSE_H
 
-#ifndef WINVER
-#define WINVER 0x502
-#endif
+#include <stddef.h>
 
-/* Include standard headers. */
 #include <SDL3/SDL.h>
-#include <SDL3_image/SDL_image.h>
-#include <SDL3_ttf/SDL_ttf.h>
 
 static inline SDL_MouseButtonFlags mouse_get_state(int *x, int *y) {
     float mouse_x, mouse_y;
@@ -53,75 +48,5 @@ static inline SDL_MouseButtonFlags mouse_get_state(int *x, int *y) {
 
     return state;
 }
-#include <zlib.h>
-#include <pthread.h>
-#include <config.h>
-#include <toolkit/toolkit.h>
-#include <toolkit/socket.h>
-#include <toolkit/shstr.h>
-#include <toolkit/memory.h>
-#include <toolkit/mempool.h>
-
-/* Shared opaque types used by component API declarations. */
-typedef struct Animations Animations;
-typedef struct Player_Struct Client_Player;
-typedef struct _anim_table _anim_table;
-typedef struct clioption_settings_struct clioption_settings_struct;
-typedef struct client_socket client_socket_t;
-typedef struct command_buffer command_buffer;
-typedef struct server_struct server_struct;
-typedef struct widgetdata widgetdata;
-struct packet_struct;
-struct packet_reader;
-
-#ifdef HAVE_SDL_MIXER
-#include <SDL3_mixer/SDL_mixer.h>
-#endif
-
-#include <scrollbar.h>
-#include <item.h>
-#include <text.h>
-#include <text_input.h>
-#include <texture.h>
-#include <toolkit/curl.h>
-#include <book.h>
-#include <interface.h>
-#include <commands.h>
-#include <connection_failure.h>
-#include <join_credentials.h>
-#include <main.h>
-#include <metaserver_direct.h>
-#include <client.h>
-#include <effects.h>
-#include <sprite.h>
-#include <surface_primitives.h>
-#include <widget.h>
-#include <textwin.h>
-#include <player.h>
-#include <party.h>
-#include <misc.h>
-#include <event.h>
-#include <ignore.h>
-#include <sound.h>
-#include <map.h>
-#include <lighting.h>
-#include <gpu_renderer.h>
-#include <gpu_map_renderer.h>
-#include <render_profiler.h>
-#include <inventory.h>
-#include <menu.h>
-#include <list.h>
-#include <button.h>
-#include <color_picker.h>
-#include <popup.h>
-#include <server_settings.h>
-#include <server_files.h>
-#include <asset.h>
-#include <asset_source.h>
-#include <image.h>
-#include <settings.h>
-#include <keybind.h>
-#include <progress.h>
-#include <rich_presence.h>
 
 #endif

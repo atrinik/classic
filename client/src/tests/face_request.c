@@ -11,13 +11,28 @@
 
 /** @file Bounded local decoding, priority, retry, and face-backlog regressions. */
 
-#include <global.h>
 #include <face_cache.h>
 #include <face_loader.h>
 #include <image_codec.h>
+#include <image.h>
+#include <asset.h>
+#include <client.h>
+#include <config.h>
+#include <main.h>
+#include <map.h>
+#include <player.h>
+#include <server_files.h>
+#include <sprite.h>
+#include <widget.h>
 #include <toolkit/datetime.h>
+#include <toolkit/memory.h>
 #include <toolkit/path.h>
+#include <toolkit/toolkit.h>
 #include <wrapper.h>
+#include <zlib.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define TEST_WARM_FACE 1U
 #define TEST_PACK_FACE 2U

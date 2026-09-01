@@ -54,7 +54,6 @@ docker run --rm \
       python3 client/tools/dependencies.py verify
       cd client
       cmake --preset linux-coverage \
-        -DENABLE_PRECOMPILED_HEADERS=OFF \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
         -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders

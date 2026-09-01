@@ -14,7 +14,9 @@
  * Priority-list operations shared by the widget toolkit and its tests.
  */
 
-#include <global.h>
+#include <stddef.h>
+#include <toolkit/toolkit.h>
+#include <widget.h>
 
 bool widget_priority_is_ancestor(const widgetdata *ancestor, const widgetdata *widget) {
     for (const widgetdata *node = widget; node != NULL; node = node->env) {

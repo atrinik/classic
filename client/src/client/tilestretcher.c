@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -40,7 +40,14 @@
  * @author Documentation by: Karon Webb
  */
 
-#include <global.h>
+#include <stdlib.h>
+#include <stdint.h>
+
+#include <SDL3/SDL.h>
+#include <map.h>
+#include <sprite.h>
+#include <surface_primitives.h>
+#include <toolkit/toolkit.h>
 
 /**
  * Pixel y-co-ordinate (offset) of the edge of a standard

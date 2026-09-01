@@ -35,6 +35,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef struct widgetdata widgetdata;
+
 enum {
     NETWORK_GRAPH_TYPE_GAME, ///< Game data.
     NETWORK_GRAPH_TYPE_ASSET, ///< In-band QUIC asset data.
