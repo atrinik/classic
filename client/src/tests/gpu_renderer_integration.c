@@ -491,9 +491,13 @@ static bool async_map_submission_checkpoint(SDL_Surface *source) {
     if (!gpu_renderer_wait_idle()) {
         return false;
     }
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(32, 32)) {
+        return false;
+    }
+    /* A preceding retained-map checkpoint may resize the target here and
+     * legitimately wait for its old fence. Measure only this submission. */
     gpu_renderer_statistics_reset();
-    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(32, 32) ||
-        !gpu_renderer_draw_surface(source, NULL, &destination) || !gpu_renderer_map_end()) {
+    if (!gpu_renderer_draw_surface(source, NULL, &destination) || !gpu_renderer_map_end()) {
         return false;
     }
 
@@ -511,6 +515,9 @@ static bool async_map_submission_checkpoint(SDL_Surface *source) {
         return false;
     }
     for (unsigned int frame = 1; frame < 4; frame++) {
+        /* Retained map rendering correctly skips an identical frame. Move the
+         * source by one pixel so this checkpoint still fills the async queue. */
+        destination.x = (float)frame;
         if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(32, 32) ||
             !gpu_renderer_draw_surface(source, NULL, &destination) || !gpu_renderer_map_end() ||
             !gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) || !gpu_renderer_present()) {
