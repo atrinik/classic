@@ -546,7 +546,11 @@ void save_map_header(mapstruct *m, FILE *fp, int flag)
 
     /* Save any tiling information */
     for (i = 0; i < TILED_NUM; i++) {
-        if (m->tile_path[i]) {
+        /* Filename-derived celestial-v1 links are runtime-only.  Persist
+         * authored path/policy pairs, never the lookup result. */
+        if (m->tile_path[i] &&
+            (m->celestial_schema != 1 || m->celestial_tile_path_seen[i] ||
+             m->celestial_boundary[i] != CELESTIAL_BOUNDARY_UNSET)) {
             fprintf(fp, "tile_path_%d %s\n", i + 1, m->tile_path[i]);
             if (m->celestial_schema == 1) {
                 fprintf(fp,

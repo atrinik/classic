@@ -1245,7 +1245,11 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         cp = string_sub(path_cp, 0, -coords_len);
 
         for (i = 0; i < TILED_NUM; i++) {
-            if (m->celestial_schema == 1 || m->tile_path[i] != NULL) {
+            /* Celestial-v1 keeps its vertical stack authored and reciprocal.
+             * Horizontal links retain the legacy coordinate lookup, but only
+             * an existing map can satisfy the v1 rule. */
+            if (m->tile_path[i] != NULL ||
+                (m->celestial_schema == 1 && i >= TILED_UP)) {
                 continue;
             }
 
@@ -1259,10 +1263,12 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
                 snprintfcat(VS(path), "_%d", m->coords[2] + map_tiled_coords[i][2]);
             }
 
-            if ((!(flags & MAP_NO_DYNAMIC) &&
-                 ((m->coords[2] >= 0 && i != TILED_UP && i != TILED_DOWN) ||
-                  (m->coords[2] > 0 && i != TILED_UP))) ||
-                path_exists(path)) {
+            if ((m->celestial_schema == 1 && path_exists(path)) ||
+                (m->celestial_schema != 1 &&
+                 ((!(flags & MAP_NO_DYNAMIC) &&
+                   ((m->coords[2] >= 0 && i != TILED_UP && i != TILED_DOWN) ||
+                    (m->coords[2] > 0 && i != TILED_UP))) ||
+                  path_exists(path)))) {
                 cp2 = path_basename(path);
                 map_set_tile(m, i, cp2);
                 free(cp2);
