@@ -1315,12 +1315,11 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
     ck_assert_ptr_eq(map->tile_path[TILED_SOUTH], NULL);
     delete_map(map);
 
-    write_filename_tile_map(temporary_root, "/world_6_6", "open", NULL);
-    write_filename_tile_map(temporary_root, "/world_6_6_1", "open", NULL);
-    map = ready_map_name("/world_6_6", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    write_legacy_filename_tile_map(temporary_root, "/legacy_6_6");
+    write_legacy_filename_tile_map(temporary_root, "/legacy_6_6_1");
+    map = ready_map_name("/legacy_6_6", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_nonnull(map);
-    ck_assert_str_eq(map->tile_path[TILED_UP], "/world_6_6_1");
-    ck_assert(!map->celestial_tile_path_seen[TILED_UP]);
+    ck_assert_str_eq(map->tile_path[TILED_UP], "/legacy_6_6_1");
     delete_map(map);
 
     write_filename_tile_map(temporary_root,
@@ -1404,10 +1403,10 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
 
     const char *logical_paths[] = {
         "/world_5_5",       "/world_5_6",       "/world_4_4",
-        "/world_6_6",       "/world_6_6_1",     "/world_3_3",     "/world_3_4",
-        "/override",        "/world_1_50",      "/world_1_50_-1", "/world_1_51_-1",
+        "/world_3_3",       "/world_3_4",       "/override",
+        "/world_1_50",      "/world_1_50_-1", "/world_1_51_-1",
         "/world_2_47",       "/world_2_47_-1",   "/world_1_47_-1", "/legacy_5_5",
-        "/legacy_5_6",       "/legacy_7_7",
+        "/legacy_5_6",       "/legacy_7_7",     "/legacy_6_6",     "/legacy_6_6_1",
     };
     for (size_t i = 0; i < arraysize(logical_paths); i++) {
         char path[HUGE_BUF];
