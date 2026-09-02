@@ -367,8 +367,8 @@ Run it through a dedicated Classic-derived wrapper profile and isolated state:
 
 The inventory never rewrites authored maps, `map_info` objects, or mutable
 state. It includes the runtime closure of authored links and existing
-horizontal filename-derived celestial-v1 neighbours; vertical stack links
-remain explicit reciprocal records.
+filename-derived neighbours. Celestial boundary and vertical-stack metadata
+remain authoritative only when explicitly authored.
 
 Celestial lighting diagnostics
 ------------------------------

@@ -1282,7 +1282,7 @@ START_TEST(test_private_map_loads_from_source_without_provenance) {
 }
 END_TEST
 
-START_TEST(test_celestial_v1_filename_tiling_restores_safe_horizontal_links) {
+START_TEST(test_filename_tiling_restores_legacy_links) {
     char temporary_root[] = "/tmp/atrinik-celestial-filename-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
 
@@ -1290,14 +1290,16 @@ START_TEST(test_celestial_v1_filename_tiling_restores_safe_horizontal_links) {
     snprintf(VS(saved_mapspath), "%s", settings.mapspath);
     snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
 
-    write_filename_tile_map(temporary_root, "/world_5_5", "open", NULL);
+    write_filename_tile_map(temporary_root, "/world_5_5", "linked", NULL);
     write_filename_tile_map(temporary_root, "/world_5_6", "open", NULL);
     write_filename_tile_map(temporary_root, "/world_5_5_1", "open", NULL);
     write_filename_tile_map(temporary_root, "/world_4_4", "open", NULL);
     mapstruct *map = ready_map_name("/world_5_5", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_nonnull(map);
     ck_assert_str_eq(map->tile_path[TILED_SOUTH], "/world_5_6");
+    ck_assert_str_eq(map->tile_path[TILED_UP], "/world_5_5_1");
     ck_assert(!map->celestial_tile_path_seen[TILED_SOUTH]);
+    ck_assert(!map->celestial_tile_path_seen[TILED_UP]);
     char error[HUGE_BUF];
     ck_assert_msg(celestial_structure_validate_header(map, VS(error)), "%s", error);
     char *saved = NULL;
@@ -1307,6 +1309,7 @@ START_TEST(test_celestial_v1_filename_tiling_restores_safe_horizontal_links) {
     save_map_header(map, saved_fp, 1);
     ck_assert_int_eq(fclose(saved_fp), 0);
     ck_assert_ptr_eq(strstr(saved, "tile_path_3 "), NULL);
+    ck_assert_ptr_eq(strstr(saved, "tile_path_9 "), NULL);
     free(saved);
     delete_map(map);
 
@@ -1319,7 +1322,8 @@ START_TEST(test_celestial_v1_filename_tiling_restores_safe_horizontal_links) {
     write_filename_tile_map(temporary_root, "/world_6_6_1", "open", NULL);
     map = ready_map_name("/world_6_6", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_nonnull(map);
-    ck_assert_ptr_eq(map->tile_path[TILED_UP], NULL);
+    ck_assert_str_eq(map->tile_path[TILED_UP], "/world_6_6_1");
+    ck_assert(!map->celestial_tile_path_seen[TILED_UP]);
     delete_map(map);
 
     write_filename_tile_map(temporary_root,
@@ -1732,7 +1736,7 @@ static Suite *suite(void) {
 #ifndef WIN32
     tcase_add_test(tc_core, test_private_map_provenance_writes_authored_source);
     tcase_add_test(tc_core, test_private_map_loads_from_source_without_provenance);
-    tcase_add_test(tc_core, test_celestial_v1_filename_tiling_restores_safe_horizontal_links);
+    tcase_add_test(tc_core, test_filename_tiling_restores_legacy_links);
     tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
     tcase_add_test(tc_core, test_character_transaction_recovery_quarantines_prepared_group);
     tcase_add_test(tc_core, test_committed_map_transaction_missing_unique_is_quarantined);

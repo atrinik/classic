@@ -379,20 +379,19 @@ validated initializer; bare `get_empty_map()` remains test/internal allocation
 and cannot be published, inserted into `first_map`, entered, saved, or swapped
 until initialized.
 
-Celestial-v1 keeps filename-coordinate link synthesis limited to existing
-horizontal neighbours.  When a map has a signed coordinate suffix, the
-loader may derive slots 1 through 8 only when the candidate file exists and
-the slot has no authored `tile_path_N`; an omitted direction remains a valid
-terminal edge and creates no path, retry, or invisible map.  The derived link
-is runtime-only, carries no boundary policy, and is never written back as an
-authored record.  Vertical `TILED_UP`/`TILED_DOWN` links remain explicit so
-the reciprocal celestial stack and sky-anchor validation cannot be replaced by
-filename parsing.  An authored path, including one whose target is missing,
-remains authoritative and is a validation failure when unresolved.  The
-static authored-exit validator mirrors the same signed filename and
-map-existence rule.  Fixtures cover an explicit east/west pair, an omitted
-terminal edge, a derived horizontal neighbour, an authored missing target,
-asymmetry, different profiles, and reload.
+Filename-coordinate link synthesis is not gated by the celestial schema.  When
+a map has a signed coordinate suffix, the loader applies the legacy ten-slot
+coordinate lookup to every missing `tile_path_N`; explicit paths remain
+authoritative.  With `MAP_NO_DYNAMIC`, a derived slot is populated only when
+the candidate map exists, so an omitted direction remains a valid terminal
+edge and creates no path, retry, or invisible map.  Without that flag, the
+legacy dynamic-map rules are preserved as well.  Derived links carry no
+authored boundary policy, while explicit celestial links continue to require
+their reciprocal boundary declarations and vertical-stack validation.  The
+static authored-exit validator mirrors the existing-map coordinate lookup.
+Fixtures cover explicit and derived links, an omitted terminal edge, vertical
+coordinates, an authored missing target, asymmetry, different profiles, and
+reload.
 
 The shared structural classifier returns a five-bit oriented face mask
 `DOWN,N,E,S,W` for each cell, never a cell-level boundary boolean.  It sets
@@ -660,14 +659,14 @@ upper boundary into sky-exposed cells.
 
 Canonical save orders each authored `tile_path_N` immediately before its
 `celestial_boundary_N`, with suffixes increasing from 1 through 10.  A
-runtime-derived horizontal link has no boundary policy and is not serialized;
-it exists only for coordinate traversal and must not be used to infer
-`continuous`.  The fixture abbreviations `N`, `E`,
+runtime-derived filename link has no boundary policy and, on celestial maps,
+is not serialized; it exists only for coordinate traversal and must not be
+used to infer `continuous`.  The fixture abbreviations `N`, `E`,
 `S`, `W`, `NE`, `SE`, `SW`, `NW`, `UP`, and `DOWN` mean precisely the suffixes
 in this table and are not additional serialized spellings.  Parser/save
 vectors cover reciprocal pairs `2/4`, `5/7`, and `9/10`, both policies, a
-terminal edge, and signed coordinate-derived horizontal links; the explicit
-records round-trip byte-identically while a missing candidate creates no link.
+terminal edge, and signed coordinate-derived links; the explicit records
+round-trip byte-identically while a missing candidate creates no link.
 
 Every pre-v1 mutable map without an indexed canonical authored source is
 unprovable, regardless of its path or old flags.  This includes `/random/N`,
