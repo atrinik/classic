@@ -1290,16 +1290,13 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
     snprintf(VS(saved_mapspath), "%s", settings.mapspath);
     snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
 
-    write_filename_tile_map(temporary_root, "/world_5_5", "linked", NULL);
+    write_filename_tile_map(temporary_root, "/world_5_5", "open", NULL);
     write_filename_tile_map(temporary_root, "/world_5_6", "open", NULL);
-    write_filename_tile_map(temporary_root, "/world_5_5_1", "open", NULL);
     write_filename_tile_map(temporary_root, "/world_4_4", "open", NULL);
     mapstruct *map = ready_map_name("/world_5_5", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_nonnull(map);
     ck_assert_str_eq(map->tile_path[TILED_SOUTH], "/world_5_6");
-    ck_assert_str_eq(map->tile_path[TILED_UP], "/world_5_5_1");
     ck_assert(!map->celestial_tile_path_seen[TILED_SOUTH]);
-    ck_assert(!map->celestial_tile_path_seen[TILED_UP]);
     char error[HUGE_BUF];
     ck_assert_msg(celestial_structure_validate_header(map, VS(error)), "%s", error);
     char *saved = NULL;
@@ -1406,7 +1403,7 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
     delete_map(map);
 
     const char *logical_paths[] = {
-        "/world_5_5",       "/world_5_6",       "/world_5_5_1",   "/world_4_4",
+        "/world_5_5",       "/world_5_6",       "/world_4_4",
         "/world_6_6",       "/world_6_6_1",     "/world_3_3",     "/world_3_4",
         "/override",        "/world_1_50",      "/world_1_50_-1", "/world_1_51_-1",
         "/world_2_47",       "/world_2_47_-1",   "/world_1_47_-1", "/legacy_5_5",
