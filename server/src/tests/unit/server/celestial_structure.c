@@ -81,6 +81,21 @@ static void write_filename_tile_map(const char *root,
                      0);
     ck_assert_int_eq(fclose(fp), 0);
 }
+
+static void write_legacy_filename_tile_map(const char *root, const char *logical_path) {
+    char path[HUGE_BUF];
+    ck_assert_int_lt(snprintf(VS(path), "%s%s", root, logical_path), (int)sizeof(path));
+    path_ensure_directories(path);
+    FILE *fp = fopen(path, "wb");
+    ck_assert_ptr_nonnull(fp);
+    ck_assert_int_ge(fprintf(fp,
+                             "arch map\n"
+                             "width 24\n"
+                             "height 24\n"
+                             "end\n"),
+                     0);
+    ck_assert_int_eq(fclose(fp), 0);
+}
 #endif
 
 static mapstruct *new_v1_map(const char *path, int width, int height, int sky) {
@@ -1373,11 +1388,25 @@ START_TEST(test_celestial_v1_filename_tiling_restores_safe_horizontal_links) {
     delete_map(lower);
     delete_map(resolved);
 
+    write_legacy_filename_tile_map(temporary_root, "/legacy_5_5");
+    write_legacy_filename_tile_map(temporary_root, "/legacy_5_6");
+    map = ready_map_name("/legacy_5_5", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(map);
+    ck_assert_str_eq(map->tile_path[TILED_SOUTH], "/legacy_5_6");
+    delete_map(map);
+
+    write_legacy_filename_tile_map(temporary_root, "/legacy_7_7");
+    map = ready_map_name("/legacy_7_7", NULL, MAP_FLUSH);
+    ck_assert_ptr_nonnull(map);
+    ck_assert_str_eq(map->tile_path[TILED_EAST], "/legacy_8_7");
+    delete_map(map);
+
     const char *logical_paths[] = {
         "/world_5_5",       "/world_5_6",       "/world_5_5_1",   "/world_4_4",
         "/world_6_6",       "/world_6_6_1",     "/world_3_3",     "/world_3_4",
         "/override",        "/world_1_50",      "/world_1_50_-1", "/world_1_51_-1",
-        "/world_2_47",       "/world_2_47_-1",   "/world_1_47_-1",
+        "/world_2_47",       "/world_2_47_-1",   "/world_1_47_-1", "/legacy_5_5",
+        "/legacy_5_6",       "/legacy_7_7",
     };
     for (size_t i = 0; i < arraysize(logical_paths); i++) {
         char path[HUGE_BUF];
