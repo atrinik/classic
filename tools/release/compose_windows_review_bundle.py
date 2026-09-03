@@ -170,6 +170,7 @@ $Identity = Join-Path $State "quic-identity.pem"
 $ClientData = Join-Path $Root "client-data"
 $ServerLog = Join-Path $State "server.log"
 $ClientLog = Join-Path $Root "client.log"
+$LauncherFailureLog = Join-Path $Root "launcher-failure.log"
 $Account = "review521"
 $Character = "Review Hero"
 $LaunchMutex = [System.Threading.Mutex]::new(
@@ -245,6 +246,20 @@ function Assert-ReviewPathAncestors([string]$Path) {
             throw "Review path did not resolve to the bundle root: $Path"
         }
         $Candidate = $Parent.FullName
+    }
+}
+
+function Write-ReviewFailure([string]$Message) {
+    try {
+        Assert-ReviewPathAncestors $LauncherFailureLog
+        $SafeMessage = $Message -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]'
+        $SafeMessage = $SafeMessage -replace "(?i)https?://\S+", "[redacted-url]"
+        [System.IO.File]::WriteAllText(
+            $LauncherFailureLog,
+            $SafeMessage,
+            [System.Text.Encoding]::UTF8
+        )
+    } catch {
     }
 }
 
@@ -413,6 +428,11 @@ try {
     }
     if (-not $LaunchLockHeld) {
         throw "Another Atrinik review launcher is already starting UDP port 1731"
+    }
+
+    Assert-ReviewPathAncestors $LauncherFailureLog
+    if (Test-Path -LiteralPath $LauncherFailureLog) {
+        Remove-Item -LiteralPath $LauncherFailureLog -Force
     }
 
     $ExistingEndpoint = Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
@@ -830,10 +850,18 @@ try {
         }
         throw $Failure
     }
+} catch {
+    Write-ReviewFailure $_.Exception.Message
+    throw
 } finally {
     try {
         if ($LaunchLockHeld) {
-            Remove-ReviewSecretFiles
+            try {
+                Remove-ReviewSecretFiles
+            } catch {
+                Write-ReviewFailure $_.Exception.Message
+                throw
+            }
         }
     } finally {
         if ($null -ne $Client) {
