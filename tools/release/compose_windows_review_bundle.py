@@ -179,8 +179,8 @@ $LaunchMutex = [System.Threading.Mutex]::new(
 $LaunchLockHeld = $false
 $Server = $null
 $Client = $null
-$ServerStdoutTask = $null
-$ServerStderrTask = $null
+$ServerOutputLines = $null
+$ServerErrorLines = $null
 
 function ConvertTo-ReviewArguments([string[]]$Values) {
     return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
@@ -515,8 +515,22 @@ try {
             )
         }
     }
-    $ServerStdoutTask = $Server.StandardOutput.ReadToEndAsync()
-    $ServerStderrTask = $Server.StandardError.ReadToEndAsync()
+    $ServerOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $ServerErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $Server.add_OutputDataReceived({
+        param($Sender, $EventArgs)
+        if ($null -ne $EventArgs.Data) {
+            [void]$ServerOutputLines.Enqueue($EventArgs.Data)
+        }
+    }.GetNewClosure())
+    $Server.add_ErrorDataReceived({
+        param($Sender, $EventArgs)
+        if ($null -ne $EventArgs.Data) {
+            [void]$ServerErrorLines.Enqueue($EventArgs.Data)
+        }
+    }.GetNewClosure())
+    $Server.BeginOutputReadLine()
+    $Server.BeginErrorReadLine()
 
     try {
         $Deadline = [System.DateTime]::UtcNow.AddSeconds(60)
@@ -537,10 +551,18 @@ try {
                     $ServerLogText = ""
                 }
             }
+            $ServerOutputReady = @(
+                $ServerOutputLines.ToArray() | Where-Object {
+                    $_ -match "Server ready\. Waiting for connections"
+                }
+            ).Count -gt 0
             if ($Endpoint.Count -eq 1 -and $Endpoint[0].LocalAddress -eq "127.0.0.1" -and
                 $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
                 $IdentityInfo.LastWriteTimeUtc -ge $Started -and
-                $ServerLogText -match "Server ready\. Waiting for connections") {
+                (
+                    $ServerLogText -match "Server ready\. Waiting for connections" -or
+                    $ServerOutputReady
+                )) {
                 $Ready = $true
                 break
             }
@@ -569,6 +591,9 @@ try {
                 "identity_recent=$IdentityRecent"
                 "server_log_exists=$ServerLogExists"
                 "ready_marker=$ReadyMarker"
+                "stdout_lines=$($ServerOutputLines.Count)"
+                "stdout_ready_marker=$ServerOutputReady"
+                "stderr_lines=$($ServerErrorLines.Count)"
                 "shutdown_marker=$ShutdownMarker"
             ) -join "; "
             throw (
@@ -656,10 +681,7 @@ try {
         if (-not $Server.WaitForExit(30000)) {
             throw "Server did not exit after the graceful shutdown request"
         }
-        if ($null -eq $ServerStdoutTask -or $null -eq $ServerStderrTask -or
-            -not $ServerStdoutTask.Wait(10000) -or -not $ServerStderrTask.Wait(10000)) {
-            throw "Server output did not close after graceful shutdown"
-        }
+        $Server.WaitForExit()
         if ($Server.ExitCode -ne 0) {
             throw "Server exited with code $($Server.ExitCode)"
         }
