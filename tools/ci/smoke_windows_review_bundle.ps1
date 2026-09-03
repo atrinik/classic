@@ -35,6 +35,28 @@ function Get-LauncherOutput($Task) {
     return $Task.Result
 }
 
+function Get-LauncherLogTail([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return "<log missing>"
+    }
+    try {
+        $Lines = @(Get-Content -LiteralPath $Path -Tail 40 -ErrorAction Stop)
+        if ($Lines.Count -eq 0) {
+            return "<log empty>"
+        }
+        return (@(
+            $Lines | ForEach-Object {
+                $_ -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]' |
+                    ForEach-Object {
+                        $_ -replace "(?i)https?://\S+", "[redacted-url]"
+                    }
+            }
+        ) -join [System.Environment]::NewLine)
+    } catch {
+        return "<log unavailable>"
+    }
+}
+
 try {
     Expand-Archive -LiteralPath $packagePath -DestinationPath $smokeRoot
     $packageRoots = @(Get-ChildItem -LiteralPath $smokeRoot -Directory)
@@ -251,12 +273,18 @@ try {
         if ($launcherProcess.HasExited) {
             $launcherStdout = Get-LauncherOutput $launcherOutputTask
             $launcherStderr = Get-LauncherOutput $launcherErrorTask
+            $launcherServerLogTail = Get-LauncherLogTail $launcherServerLog
+            $launcherClientLogTail = Get-LauncherLogTail $launcherClientLog
             throw (
                 "run-review.bat exited before login smoke completion with code " +
                 "$($launcherProcess.ExitCode):" + [System.Environment]::NewLine +
                 "Launcher stdout:" + [System.Environment]::NewLine + $launcherStdout +
                 [System.Environment]::NewLine + "Launcher stderr:" +
-                [System.Environment]::NewLine + $launcherStderr
+                [System.Environment]::NewLine + $launcherStderr +
+                [System.Environment]::NewLine + "Server log tail:" +
+                [System.Environment]::NewLine + $launcherServerLogTail +
+                [System.Environment]::NewLine + "Client log tail:" +
+                [System.Environment]::NewLine + $launcherClientLogTail
             )
         }
         $launcherServers = @(Get-Process -Name "atrinik-server" -ErrorAction SilentlyContinue |
@@ -321,30 +349,18 @@ try {
     if (-not $launcherReady) {
         $launcherStdout = Get-LauncherOutput $launcherOutputTask
         $launcherStderr = Get-LauncherOutput $launcherErrorTask
-        if (Test-Path -LiteralPath $launcherServerLog) {
-            try {
-                $serverLogText = Get-Content -Raw -LiteralPath $launcherServerLog
-            } catch {
-                $serverLogText = "<server log could not be read>"
-            }
-        }
-        if (Test-Path -LiteralPath $launcherClientLog) {
-            try {
-                $clientLogText = Get-Content -Raw -LiteralPath $launcherClientLog
-            } catch {
-                $clientLogText = "<client log could not be read>"
-            }
-        }
+        $launcherServerLogTail = Get-LauncherLogTail $launcherServerLog
+        $launcherClientLogTail = Get-LauncherLogTail $launcherClientLog
         throw (
             "One-click launcher did not prove loopback login and gameplay readiness within " +
             "120 seconds:" + [System.Environment]::NewLine +
             "Launcher stdout:" + [System.Environment]::NewLine + $launcherStdout +
             [System.Environment]::NewLine + "Launcher stderr:" +
             [System.Environment]::NewLine + $launcherStderr +
-            [System.Environment]::NewLine + "Server log:" +
-            [System.Environment]::NewLine + $serverLogText +
-            [System.Environment]::NewLine + "Client log:" +
-            [System.Environment]::NewLine + $clientLogText
+            [System.Environment]::NewLine + "Server log tail:" +
+            [System.Environment]::NewLine + $launcherServerLogTail +
+            [System.Environment]::NewLine + "Client log tail:" +
+            [System.Environment]::NewLine + $launcherClientLogTail
         )
     }
 
