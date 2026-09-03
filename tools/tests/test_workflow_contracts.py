@@ -1284,6 +1284,7 @@ class WorkflowContractTests(unittest.TestCase):
             smoke.index('$remainderTask = $process.StandardOutput.ReadToEndAsync()'),
             smoke.index('$listenerEndpoints ='),
         )
+        self.assertIn("$listenerEndpoints = @(Get-PortEvidence -Port $serverPort)", smoke)
         shutdown_loop = smoke[
             smoke.index("$shutdownDeadline =") : smoke.index(
                 'if ($process.ExitCode -ne 0)', smoke.index("$shutdownDeadline =")

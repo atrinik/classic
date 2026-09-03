@@ -228,7 +228,7 @@ try {
     }
 
     $remainderTask = $process.StandardOutput.ReadToEndAsync()
-    $listenerEndpoints = @(Get-NetUDPEndpoint -LocalPort $serverPort)
+    $listenerEndpoints = @(Get-PortEvidence -Port $serverPort)
     if (
         $listenerEndpoints.Count -ne 1 -or
         $listenerEndpoints[0].LocalAddress -ne "127.0.0.1"
