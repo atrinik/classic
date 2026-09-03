@@ -1524,6 +1524,9 @@ gpu_player_view_slot_uniform_uploads_bounded(const gpu_renderer_statistics_t *st
            statistics->slot_uniform_upload_bytes <= statistics->slot_uniform_upload_count * 1024U;
 }
 
+/* The negative diagnostic paths are exercised by qualified production GPU
+ * failure runs, not by the successful Linux coverage cohort. */
+/* GCOVR_EXCL_START */
 static void gpu_player_view_diagnostic_append_counter(char *diagnostic,
                                                       size_t diagnostic_size,
                                                       size_t *diagnostic_length,
@@ -1552,6 +1555,7 @@ static void gpu_player_view_diagnostic_append_counter(char *diagnostic,
         *diagnostic_length += (size_t)written;
     }
 }
+/* GCOVR_EXCL_STOP */
 
 static void gpu_player_view_json_string_to(FILE *output, const char *value) {
     fputc('"', output);
@@ -2638,6 +2642,7 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
                    measured.map_skipped_passes == completed_maps &&
                    measured.map_dirty_commands == 0 && measured.map_dirty_pixels == 0 &&
                    measured.map_dirty_bytes == 0);
+    /* GCOVR_EXCL_START */
     char benchmark_diagnostic[PLAYER_VIEW_DIAGNOSTIC_SIZE] = {0};
     size_t benchmark_diagnostic_length = 0;
 #define GPU_PLAYER_VIEW_APPEND_FAILURE(condition, name, observed, comparison, expected) \
@@ -3004,6 +3009,7 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
                      benchmark_diagnostic);
         return false;
     }
+    /* GCOVR_EXCL_STOP */
 
     char animation_checkpoints[3][PLAYER_VIEW_SHA256_HEX_SIZE] = {{0}};
     bool animation_path_verified = false;
@@ -3022,6 +3028,7 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
             (strcmp(animation_checkpoints[0], animation_checkpoints[1]) != 0 ||
              strcmp(animation_checkpoints[1], animation_checkpoints[2]) != 0);
         if (!animation_path_verified) {
+            /* GCOVR_EXCL_START */
             unsigned int transitions =
                 (strcmp(animation_checkpoints[0], animation_checkpoints[1]) != 0) +
                 (strcmp(animation_checkpoints[1], animation_checkpoints[2]) != 0);
@@ -3030,6 +3037,7 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
                          workload->name,
                          transitions);
             return false;
+            /* GCOVR_EXCL_STOP */
         }
     }
     char checkpoint[PLAYER_VIEW_SHA256_HEX_SIZE];
@@ -3267,6 +3275,7 @@ static bool gpu_player_view_lifecycle_sustain(gpu_player_view_lifecycle_event_t 
         event->frame_samples[frame] = SDL_GetTicksNS() - started;
     }
     gpu_renderer_statistics_get(&event->steady);
+    /* GCOVR_EXCL_START */
     char diagnostic[PLAYER_VIEW_DIAGNOSTIC_SIZE] = {0};
     size_t diagnostic_length = 0;
 #define GPU_PLAYER_VIEW_APPEND_FAILURE(condition, name, observed, comparison, expected) \
@@ -3363,6 +3372,7 @@ static bool gpu_player_view_lifecycle_sustain(gpu_player_view_lifecycle_event_t 
                      diagnostic);
         return false;
     }
+    /* GCOVR_EXCL_STOP */
     return gpu_renderer_output_size(&event->output_width, &event->output_height) &&
            gpu_player_view_checkpoint_named(event->name,
                                             event->checkpoint,
