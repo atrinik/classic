@@ -21,6 +21,7 @@ CONTENT_FORMAT = "classic-ads-v1"
 CONTENT_ARTIFACT_FORMAT = "atrinik-classic-runtime-content-v1"
 CONTENT_CONSUMERS = ["classic/client", "classic/editor", "classic/server"]
 CONTENT_COMPATIBILITY = ">=5.10.1 <6.0.0"
+RUNTIME_METADATA_FILES = frozenset({".atrinik-dependency.json"})
 LOCK_CONTENT_KEYS = {
     "name", "repository", "tag", "commit", "url", "sha256",
     "destination", "strip_components",
@@ -393,6 +394,19 @@ def _manifest_files_digest(entries: list[dict[str, Any]]) -> str:
     return digest.hexdigest()
 
 
+def _runtime_file_paths(runtime_root: Path, manifest_relative: str) -> set[str]:
+    actual_paths: set[str] = set()
+    ignored_paths = RUNTIME_METADATA_FILES | {manifest_relative}
+    for candidate in runtime_root.rglob("*"):
+        _require(not candidate.is_symlink(),
+                 f"content runtime contains a symbolic link: {candidate}")
+        if candidate.is_file():
+            relative = candidate.relative_to(runtime_root).as_posix()
+            if relative not in ignored_paths:
+                actual_paths.add(relative)
+    return actual_paths
+
+
 def _validate_runtime_manifest(
     runtime_root: Path, provenance: dict[str, Any]
 ) -> dict[str, Any]:
@@ -495,14 +509,7 @@ def _validate_runtime_manifest(
              "content runtime archetype artifact disagrees with fixture provenance")
 
     expected_paths = set(paths)
-    actual_paths: set[str] = set()
-    for candidate in runtime_root.rglob("*"):
-        _require(not candidate.is_symlink(),
-                 f"content runtime contains a symbolic link: {candidate}")
-        if candidate.is_file():
-            relative = candidate.relative_to(runtime_root).as_posix()
-            if relative != manifest_relative:
-                actual_paths.add(relative)
+    actual_paths = _runtime_file_paths(runtime_root, manifest_relative)
     _require(actual_paths == expected_paths,
              "content runtime files differ from the manifest")
 

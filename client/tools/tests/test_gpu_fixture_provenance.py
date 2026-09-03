@@ -7,6 +7,7 @@ import unittest
 
 from tools.verify_gpu_fixture_provenance import (
     ProvenanceError,
+    _runtime_file_paths,
     load_json,
     load_provenance,
     verify,
@@ -96,6 +97,20 @@ class GpuFixtureProvenanceTests(unittest.TestCase):
             link.symlink_to(target, target_is_directory=True)
             with self.assertRaises(ProvenanceError):
                 verify(ROOT.parent, content_runtime=link)
+
+    def test_dependency_manager_metadata_is_not_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "manifest.json").write_text("{}", encoding="utf-8")
+            (root / ".atrinik-dependency.json").write_text("{}", encoding="utf-8")
+            content = root / "maps/example.map"
+            content.parent.mkdir()
+            content.write_text("fixture", encoding="utf-8")
+
+            self.assertEqual(
+                {"maps/example.map"},
+                _runtime_file_paths(root, "manifest.json"),
+            )
 
 
 if __name__ == "__main__":
