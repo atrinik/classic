@@ -292,7 +292,7 @@ function Invoke-ReviewIcacls([string[]]$Arguments) {
     return $Output
 }
 
-function Protect-ReviewSecretFile([string]$Path) {
+function Protect-ReviewSecretFile([string]$Path, [switch]$CreateEmpty, [switch]$WriteAccess) {
     Assert-ReviewPathAncestors $Path
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Secret file is missing: $Path"
@@ -303,13 +303,17 @@ function Protect-ReviewSecretFile([string]$Path) {
     }
     $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     $SidArgument = "*$($CurrentSid.Value)"
-    [void](Invoke-ReviewIcacls -Arguments @($Path, "/reset", "/q"))
+    $Access = if ($WriteAccess) { "F" } else { "R" }
+    $ExpectedMask = if ($WriteAccess) { 0x1f01ff } else { 0x120089 }
+    if ($CreateEmpty) {
+        [void](Invoke-ReviewIcacls -Arguments @($Path, "/reset", "/q"))
+    }
     [void](Invoke-ReviewIcacls -Arguments @($Path, "/setowner", $SidArgument, "/q"))
     [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
     [void](Invoke-ReviewIcacls -Arguments @(
         $Path,
         "/grant:r",
-        "$($SidArgument):(R)",
+        "$($SidArgument):($Access)",
         "/q"
     ))
 
@@ -357,7 +361,7 @@ function Protect-ReviewSecretFile([string]$Path) {
                     $Ace.AceType -eq [System.Security.AccessControl.AceType]::AccessAllowed -and
                     $Ace.AceFlags -eq [System.Security.AccessControl.AceFlags]::None -and
                     $Ace.SecurityIdentifier.Value -eq $CurrentSid.Value -and
-                    $Ace.AccessMask -eq 0x120089
+                    $Ace.AccessMask -eq $ExpectedMask
                 )
             } catch {
                 $ParseError = $_.Exception.Message
@@ -373,6 +377,29 @@ function Protect-ReviewSecretFile([string]$Path) {
     } finally {
         Remove-Item -LiteralPath $AclFile -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Protect-ReviewTemporaryDirectory([string]$Path) {
+    Assert-ReviewPathAncestors $Path
+    $Info = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if (-not $Info.PSIsContainer) {
+        throw "Review temporary path is not a directory: $Path"
+    }
+    if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Review temporary directory is a reparse point: $Path"
+    }
+    $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $SidArgument = "*$($CurrentSid.Value)"
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/reset", "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/setowner", $SidArgument, "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @(
+        $Path,
+        "/grant:r",
+        "$($SidArgument):(OI)(CI)(F)",
+        "/q"
+    ))
+    Assert-ReviewPathAncestors $Path
 }
 
 function Remove-ReviewSecretFile([string]$Path) {
@@ -463,6 +490,7 @@ try {
             Assert-ReviewPathAncestors $StageTmp
             New-Item -ItemType Directory -Force -Path $StageTmp | Out-Null
             Assert-ReviewPathAncestors $StageTmp
+            Protect-ReviewTemporaryDirectory $StageTmp
             $StagePassword = Join-Path $Stage ".atrinik-review-password"
             $StageProvisionLog = Join-Path $Stage "provision.log"
             Assert-ReviewPathAncestors $StagePassword
@@ -473,12 +501,13 @@ try {
                 [System.Text.Encoding]::ASCII
             )
             Assert-ReviewPathAncestors $StagePassword
-            Protect-ReviewSecretFile $StagePassword
+            Protect-ReviewSecretFile $StagePassword -CreateEmpty -WriteAccess
             [System.IO.File]::WriteAllText(
                 $StagePassword,
                 [Guid]::NewGuid().ToString("N").Substring(0, 20),
                 [System.Text.Encoding]::ASCII
             )
+            Protect-ReviewSecretFile $StagePassword
 
             $ProvisionStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
             $ProvisionStartInfo.FileName = Join-Path $Root "atrinik-server.exe"
@@ -568,6 +597,7 @@ try {
     Assert-ReviewPathAncestors $StateTmp
     New-Item -ItemType Directory -Force -Path $StateTmp | Out-Null
     Assert-ReviewPathAncestors $StateTmp
+    Protect-ReviewTemporaryDirectory $StateTmp
     Assert-ReviewPathAncestors $ClientData
     New-Item -ItemType Directory -Force -Path $ClientData | Out-Null
     if (Test-Path -LiteralPath $ClientLog) {
