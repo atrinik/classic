@@ -181,6 +181,7 @@ $Server = $null
 $Client = $null
 $ServerStdoutTask = $null
 $ServerStderrTask = $null
+Add-Type -AssemblyName System.IO.FileSystem.AccessControl
 
 function ConvertTo-ReviewArguments([string[]]$Values) {
     return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
@@ -206,7 +207,8 @@ function Protect-ReviewSecretFile([string]$Path) {
     if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "Secret file is a reparse point: $Path"
     }
-    $Acl = Get-Acl -LiteralPath $Path
+    $FileInfo = [System.IO.FileInfo]::new($Path)
+    $Acl = [System.IO.FileSystemAclExtensions]::GetAccessControl($FileInfo)
     $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     $Acl.SetAccessRuleProtection($true, $false)
     foreach ($Rule in @($Acl.Access)) {
@@ -218,9 +220,9 @@ function Protect-ReviewSecretFile([string]$Path) {
         [System.Security.AccessControl.AccessControlType]::Allow
     )
     $Acl.AddAccessRule($ReadRule)
-    Set-Acl -LiteralPath $Path -AclObject $Acl
+    [System.IO.FileSystemAclExtensions]::SetAccessControl($FileInfo, $Acl)
 
-    $VerifiedAcl = Get-Acl -LiteralPath $Path
+    $VerifiedAcl = [System.IO.FileSystemAclExtensions]::GetAccessControl($FileInfo)
     $VerifiedRules = @($VerifiedAcl.Access)
     if (-not $VerifiedAcl.AreAccessRulesProtected -or $VerifiedRules.Count -ne 1) {
         throw "Secret file ACL is not owner-only: $Path"
