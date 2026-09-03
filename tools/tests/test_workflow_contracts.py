@@ -47,6 +47,35 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ATRINIK_BENCHMARK_REVISION=${revision}", workflow)
         self.assertIn("ATRINIK_BENCHMARK_DIRTY=false", workflow)
 
+    def test_gpu_fixture_provenance_is_gated_before_qualification(self) -> None:
+        workflow = self.text("gpu-qualification.yml")
+        cmake = (ROOT / "client/CMakeLists.txt").read_text(encoding="utf-8")
+        client_package = (ROOT / "client/tools/build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        server_package = (ROOT / "server/tools/build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        coverage = (ROOT / "tools/ci/run_gpu_coverage.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Verify frozen GPU fixture provenance", workflow)
+        self.assertIn(
+            "run: python3 client/tools/verify_gpu_fixture_provenance.py", workflow
+        )
+        self.assertIn("client-gpu-fixture-provenance", cmake)
+        self.assertIn("DEPENDS client-gpu-fixture-provenance", cmake)
+        self.assertIn("python3 tools/verify_gpu_fixture_provenance.py", client_package)
+        self.assertIn(
+            "python3 ../client/tools/verify_gpu_fixture_provenance.py "
+            "--content-runtime runtime/content",
+            server_package,
+        )
+        self.assertIn(
+            "python3 client/tools/verify_gpu_fixture_provenance.py", coverage
+        )
+
     def test_release_builds_use_one_cmake_version_interface(self) -> None:
         check = self.text("check.yml")
         candidate = self.text("build-release-candidate.yml")
@@ -1192,6 +1221,24 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("windows-one-click-${COVERAGE_SHA:0:7}.zip", build)
 
         self.assertIn("runs-on: windows-2025", run)
+        self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", run)
+        self.assertIn("ref: ${{ env.COVERAGE_SHA }}", run)
+        self.assertIn("Verify the exact Windows checkout and GPU fixture bytes", run)
+        self.assertIn(
+            "client/tools/verify_gpu_fixture_bytes.py --source-root client", run
+        )
+        self.assertIn(
+            "Verify staged client package GPU fixture bytes before launch", run
+        )
+        self.assertIn("--package-root $packageRoots[0].FullName", run)
+        self.assertLess(
+            run.index("client/tools/verify_gpu_fixture_bytes.py --source-root client"),
+            run.index("actions/download-artifact"),
+        )
+        self.assertLess(
+            run.index("Verify staged client package GPU fixture bytes before launch"),
+            run.index('"smoke_windows_review_bundle.ps1"'),
+        )
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
         self.assertIn('"libatrinik-path.exe"', run)
         self.assertIn("New-Item -ItemType Junction", run)
@@ -1264,6 +1311,27 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"maps/regions.reg"', smoke)
+        self.assertIn('$ErrorActionPreference = "Stop"', smoke)
+        self.assertIn('$startInfo.RedirectStandardError = $true', smoke)
+        self.assertIn('        "call",', smoke)
+        self.assertNotIn('        "2>&1"', smoke)
+        self.assertIn('$errorTask = $process.StandardError.ReadToEndAsync()', smoke)
+        self.assertIn('Get-CapturedOutput', smoke)
+        self.assertIn('Captured output:', smoke)
+        self.assertIn('Captured output available before the deadline:', smoke)
+        self.assertIn('Get-ProcessTreeEvidence', smoke)
+        self.assertIn('Get-PackagedServerProcesses', smoke)
+        self.assertIn('Get-PortEvidence', smoke)
+        self.assertIn('Remaining UDP endpoints:', smoke)
+        self.assertLess(
+            smoke.index('$errorTask = $process.StandardError.ReadToEndAsync()'),
+            smoke.index('$deadline ='),
+        )
+        self.assertLess(
+            smoke.index('$remainderTask = $process.StandardOutput.ReadToEndAsync()'),
+            smoke.index('$listenerEndpoints ='),
+        )
+        self.assertIn("$listenerEndpoints = @(Get-PortEvidence -Port $serverPort)", smoke)
         self.assertIn('$state = Join-Path $smokeRoot "server-data"', smoke)
         self.assertIn(
             'Copy-Item -LiteralPath (Join-Path $serverRoot "install_data") '
@@ -1316,10 +1384,15 @@ class WorkflowContractTests(unittest.TestCase):
             '"--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic"',
             smoke,
         )
-        self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", smoke)
+        self.assertIn("Get-NetUDPEndpoint -ErrorAction Stop", smoke)
+        self.assertIn("Where-Object { $_.LocalPort -eq $Port }", smoke)
         self.assertIn('$listenerEndpoints[0].LocalAddress -ne "127.0.0.1"', smoke)
         self.assertIn('if ($output -match "Discovered a direct")', smoke)
         self.assertIn("$bodySucceeded -and $cleanupFailures.Count -ne 0", smoke)
+        self.assertIn("Packaged server cleanup left", smoke)
+        self.assertIn("Process tree before containment", smoke)
+        self.assertIn("$stdinOpen = $false", smoke)
+        self.assertLess(smoke.index("$cleanupDeadline ="), smoke.index("$bodySucceeded = $true"))
         self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
         self.assertLess(
             smoke.index('"Server ready\\. Waiting for connections"'),

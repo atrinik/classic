@@ -447,7 +447,7 @@ def main() -> int:
         generated = benchmark_scene(source, 28)
     else:
         generated = expanded(source, map_name, map_path, arguments.roof_heavy)
-    arguments.output.write_text(generated.hex() + "\n", encoding="ascii")
+    arguments.output.write_bytes((generated.hex() + "\n").encode("ascii"))
     return 0
 
 

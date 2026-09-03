@@ -369,6 +369,9 @@ The inventory never rewrites authored maps, `map_info` objects, or mutable
 state. It includes the runtime closure of authored links and existing
 filename-derived neighbours. Celestial boundary and vertical-stack metadata
 remain authoritative only when explicitly authored.
+For `sky_above linked`, an existing coordinate-derived upper map supplies the
+runtime `TILED_UP` link before header validation. The link remains boundary-free
+and is not serialized.
 
 Celestial lighting diagnostics
 ------------------------------

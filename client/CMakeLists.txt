@@ -27,6 +27,9 @@ find_package(Python3 3.11 COMPONENTS Interpreter REQUIRED)
 option(ATRINIK_GPU_CONFORMANCE_REQUIRED
     "Require a runnable supported GPU for the production conformance test" OFF)
 
+set(ATRINIK_GPU_CONTENT_RUNTIME_DIR "" CACHE PATH
+    "Optional staged content runtime for GPU fixture provenance checks")
+
 set(ATRINIK_GPU_SHADER_DIRECTORY "" CACHE PATH
     "Optional directory containing a pre-generated, validated GPU shader cohort")
 set(ATRINIK_DXC_EXECUTABLE "" CACHE FILEPATH
@@ -423,6 +426,20 @@ endif ()
 if (BUILD_TESTING)
     set(ATRINIK_PYTHON3_EXECUTABLE "${Python3_EXECUTABLE}")
 
+    set(ATRINIK_GPU_FIXTURE_PROVENANCE_COMMAND
+        "${ATRINIK_PYTHON3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_gpu_fixture_provenance.py")
+    if (ATRINIK_GPU_CONTENT_RUNTIME_DIR)
+        list(APPEND ATRINIK_GPU_FIXTURE_PROVENANCE_COMMAND
+            --content-runtime "${ATRINIK_GPU_CONTENT_RUNTIME_DIR}")
+    endif ()
+    add_test(NAME client-gpu-fixture-provenance
+        COMMAND ${ATRINIK_GPU_FIXTURE_PROVENANCE_COMMAND})
+    set_tests_properties(client-gpu-fixture-provenance PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        LABELS "gpu-conformance;fixture-provenance"
+        TIMEOUT 30)
+
     add_test(
         NAME client-include-ownership
         COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
@@ -557,6 +574,8 @@ if (BUILD_TESTING)
     target_compile_definitions(${EXECUTABLE} PRIVATE
         ATRINIK_GPU_CONFORMANCE_TESTS
         ATRINIK_WIDGET_TESTS)
+
+    add_test(NAME client-help-parser COMMAND ${EXECUTABLE} --help-parser-test)
 
     if (NOT MINGW)
         target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_SOUND_TESTS)
@@ -1037,6 +1056,7 @@ if (BUILD_TESTING)
             ENVIRONMENT "SDL_VIDEODRIVER=offscreen"
             LABELS "gpu-conformance;production-fixture"
             SKIP_RETURN_CODE 77
+            DEPENDS client-gpu-fixture-provenance
             TIMEOUT 60)
     endforeach ()
 endif ()

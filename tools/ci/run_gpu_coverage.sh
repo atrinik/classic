@@ -52,6 +52,7 @@ docker run --rm \
       python3 client/tools/dependencies.py sync \
         --cache build/dependency-inputs/downloads --refresh --offline
       python3 client/tools/dependencies.py verify
+      python3 client/tools/verify_gpu_fixture_provenance.py
       cd client
       cmake --preset linux-coverage \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
