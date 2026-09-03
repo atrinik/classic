@@ -181,7 +181,6 @@ $Server = $null
 $Client = $null
 $ServerStdoutTask = $null
 $ServerStderrTask = $null
-Add-Type -AssemblyName System.IO.FileSystem.AccessControl
 
 function ConvertTo-ReviewArguments([string[]]$Values) {
     return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
@@ -199,6 +198,17 @@ function Stop-ReviewProcessTree([System.Diagnostics.Process]$Process, [string]$L
     }
 }
 
+function Invoke-ReviewIcacls([string[]]$Arguments) {
+    $Output = @(& icacls.exe @Arguments 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw (
+            "icacls $($Arguments -join ' ') failed with exit code " +
+            "$($LASTEXITCODE): $($Output -join ' ')"
+        )
+    }
+    return $Output
+}
+
 function Protect-ReviewSecretFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Secret file is missing: $Path"
@@ -207,39 +217,32 @@ function Protect-ReviewSecretFile([string]$Path) {
     if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "Secret file is a reparse point: $Path"
     }
-    $FileInfo = [System.IO.FileInfo]::new($Path)
-    $Acl = [System.IO.FileSystemAclExtensions]::GetAccessControl($FileInfo)
     $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $Acl.SetAccessRuleProtection($true, $false)
-    foreach ($Rule in @($Acl.Access)) {
-        $Acl.RemoveAccessRule($Rule) | Out-Null
-    }
-    $ReadRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-        $CurrentSid,
-        [System.Security.AccessControl.FileSystemRights]::Read,
-        [System.Security.AccessControl.AccessControlType]::Allow
-    )
-    $Acl.AddAccessRule($ReadRule)
-    [System.IO.FileSystemAclExtensions]::SetAccessControl($FileInfo, $Acl)
+    $SidArgument = "*$($CurrentSid.Value)"
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/reset", "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @(
+        $Path,
+        "/grant:r",
+        "$($SidArgument):(R)",
+        "/q"
+    ))
 
-    $VerifiedAcl = [System.IO.FileSystemAclExtensions]::GetAccessControl($FileInfo)
-    $VerifiedRules = @($VerifiedAcl.Access)
-    if (-not $VerifiedAcl.AreAccessRulesProtected -or $VerifiedRules.Count -ne 1) {
-        throw "Secret file ACL is not owner-only: $Path"
-    }
-    $VerifiedSid = $VerifiedRules[0].IdentityReference.Translate(
-        [System.Security.Principal.SecurityIdentifier]
+    $AclFile = Join-Path $Root (
+        ".atrinik-review-acl-" + [Guid]::NewGuid().ToString("N") + ".txt"
     )
-    if ($VerifiedSid.Value -ne $CurrentSid.Value) {
-        throw "Secret file ACL owner does not match the current user: $Path"
-    }
-    if ($VerifiedRules[0].AccessControlType -ne
-        [System.Security.AccessControl.AccessControlType]::Allow) {
-        throw "Secret file ACL contains a non-allow rule: $Path"
-    }
-    if ($VerifiedRules[0].FileSystemRights -ne
-        [System.Security.AccessControl.FileSystemRights]::Read) {
-        throw "Secret file ACL grants more than read access: $Path"
+    try {
+        [void](Invoke-ReviewIcacls -Arguments @($Path, "/save", $AclFile, "/q"))
+        $SddlLines = @(
+            Get-Content -LiteralPath $AclFile -ErrorAction Stop |
+                Where-Object { $_ -match "^D:" }
+        )
+        $ExpectedSddl = "D:P(A;;FR;;;$($CurrentSid.Value))"
+        if ($SddlLines.Count -ne 1 -or $SddlLines[0] -ne $ExpectedSddl) {
+            throw "Secret file ACL is not owner-only: $Path"
+        }
+    } finally {
+        Remove-Item -LiteralPath $AclFile -Force -ErrorAction SilentlyContinue
     }
 }
 
