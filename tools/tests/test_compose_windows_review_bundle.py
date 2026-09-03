@@ -107,6 +107,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "icacls.exe",
                     '"/inheritance:r"',
                     '"/grant:r"',
+                    '"/setowner"',
                     "RawSecurityDescriptor",
                     "DiscretionaryAclProtected",
                     "AccessMask -eq 0x120089",

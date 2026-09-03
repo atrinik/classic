@@ -226,6 +226,7 @@ function Protect-ReviewSecretFile([string]$Path) {
     $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
     $SidArgument = "*$($CurrentSid.Value)"
     [void](Invoke-ReviewIcacls -Arguments @($Path, "/reset", "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/setowner", $SidArgument, "/q"))
     [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
     [void](Invoke-ReviewIcacls -Arguments @(
         $Path,
