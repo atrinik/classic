@@ -282,11 +282,18 @@ function Stop-ReviewProcessTree([System.Diagnostics.Process]$Process, [string]$L
 }
 
 function Invoke-ReviewIcacls([string[]]$Arguments) {
-    $Output = @(& icacls.exe @Arguments 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $Output = @(& icacls.exe @Arguments 2>&1)
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+    if ($ExitCode -ne 0) {
         throw (
             "icacls $($Arguments -join ' ') failed with exit code " +
-            "$($LASTEXITCODE): $($Output -join ' ')"
+            "$($ExitCode): $($Output -join ' ')"
         )
     }
     return $Output
