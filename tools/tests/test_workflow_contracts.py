@@ -1311,6 +1311,27 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"maps/regions.reg"', smoke)
+        self.assertIn('$ErrorActionPreference = "Stop"', smoke)
+        self.assertIn('$startInfo.RedirectStandardError = $true', smoke)
+        self.assertIn('        "call",', smoke)
+        self.assertNotIn('        "2>&1"', smoke)
+        self.assertIn('$errorTask = $process.StandardError.ReadToEndAsync()', smoke)
+        self.assertIn('Get-CapturedOutput', smoke)
+        self.assertIn('Captured output:', smoke)
+        self.assertIn('Captured output available before the deadline:', smoke)
+        self.assertIn('Get-ProcessTreeEvidence', smoke)
+        self.assertIn('Get-PackagedServerProcesses', smoke)
+        self.assertIn('Get-PortEvidence', smoke)
+        self.assertIn('Remaining UDP endpoints:', smoke)
+        self.assertLess(
+            smoke.index('$errorTask = $process.StandardError.ReadToEndAsync()'),
+            smoke.index('$deadline ='),
+        )
+        self.assertLess(
+            smoke.index('$remainderTask = $process.StandardOutput.ReadToEndAsync()'),
+            smoke.index('$listenerEndpoints ='),
+        )
+        self.assertIn("$listenerEndpoints = @(Get-PortEvidence -Port $serverPort)", smoke)
         self.assertIn('$state = Join-Path $smokeRoot "server-data"', smoke)
         self.assertIn(
             'Copy-Item -LiteralPath (Join-Path $serverRoot "install_data") '
@@ -1363,10 +1384,15 @@ class WorkflowContractTests(unittest.TestCase):
             '"--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic"',
             smoke,
         )
-        self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", smoke)
+        self.assertIn("Get-NetUDPEndpoint -ErrorAction Stop", smoke)
+        self.assertIn("Where-Object { $_.LocalPort -eq $Port }", smoke)
         self.assertIn('$listenerEndpoints[0].LocalAddress -ne "127.0.0.1"', smoke)
         self.assertIn('if ($output -match "Discovered a direct")', smoke)
         self.assertIn("$bodySucceeded -and $cleanupFailures.Count -ne 0", smoke)
+        self.assertIn("Packaged server cleanup left", smoke)
+        self.assertIn("Process tree before containment", smoke)
+        self.assertIn("$stdinOpen = $false", smoke)
+        self.assertLess(smoke.index("$cleanupDeadline ="), smoke.index("$bodySucceeded = $true"))
         self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
         self.assertLess(
             smoke.index('"Server ready\\. Waiting for connections"'),
