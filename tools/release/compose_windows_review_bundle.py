@@ -164,13 +164,27 @@ POWERSHELL_LAUNCHER = r'''$ErrorActionPreference = "Stop"
 $Root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $State = Join-Path $Root "server-data"
 $Sentinel = Join-Path $State ".atrinik-review-initialized"
+$PasswordFile = Join-Path $State ".atrinik-review-password"
 $InstallData = Join-Path $Root "install_data"
 $Identity = Join-Path $State "quic-identity.pem"
+$ClientData = Join-Path $Root "client-data"
+$ServerLog = Join-Path $State "server.log"
+$ClientLog = Join-Path $Root "client.log"
+$Account = "review521"
+$Character = "Review Hero"
 $LaunchMutex = [System.Threading.Mutex]::new(
     $false,
     "Local\AtrinikClassicReviewUdp1731"
 )
 $LaunchLockHeld = $false
+$Server = $null
+$Client = $null
+$ServerStdoutTask = $null
+$ServerStderrTask = $null
+
+function ConvertTo-ReviewArguments([string[]]$Values) {
+    return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
+}
 
 try {
     try {
@@ -203,6 +217,61 @@ try {
         $Stage = Join-Path $Root ("server-data-stage-" + [Guid]::NewGuid().ToString("N"))
         try {
             Copy-Item -LiteralPath $InstallData -Destination $Stage -Recurse
+            New-Item -ItemType Directory -Force -Path (Join-Path $Stage "tmp") | Out-Null
+            $Password = [Guid]::NewGuid().ToString("N")
+            $StagePassword = Join-Path $Stage ".atrinik-review-password"
+            $StageProvisionLog = Join-Path $Stage "provision.log"
+            [System.IO.File]::WriteAllText(
+                $StagePassword,
+                $Password,
+                [System.Text.Encoding]::ASCII
+            )
+
+            $ProvisionStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $ProvisionStartInfo.FileName = Join-Path $Root "atrinik-server.exe"
+            $ProvisionStartInfo.WorkingDirectory = $Root
+            $ProvisionStartInfo.UseShellExecute = $false
+            $ProvisionStartInfo.CreateNoWindow = $true
+            $ProvisionStartInfo.Arguments = ConvertTo-ReviewArguments @(
+                "--datapath=$Stage",
+                "--no_console",
+                "--provision_scenario",
+                "--provision_account=$Account",
+                "--provision_character=$Character",
+                "--provision_archetype=human_male",
+                "--provision_preset=basic-player",
+                "--provision_password_file=$StagePassword",
+                "--http_url=off",
+                "--server_public=false",
+                "--stun_server=off",
+                "--port_mapping=off",
+                "--metaserver_publish_origin=http://127.0.0.1:9",
+                "--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic",
+                "--logfile=$StageProvisionLog"
+            )
+            $Provision = [System.Diagnostics.Process]::new()
+            $Provision.StartInfo = $ProvisionStartInfo
+            try {
+                if (-not $Provision.Start()) {
+                    throw "Could not start the isolated scenario provisioner"
+                }
+                if (-not $Provision.WaitForExit(60000)) {
+                    try {
+                        $Provision.Kill()
+                    } finally {
+                        if (-not $Provision.WaitForExit(10000)) {
+                            throw "The isolated scenario provisioner did not exit after timeout containment"
+                        }
+                    }
+                    throw "The isolated scenario provisioner did not exit within 60 seconds"
+                }
+                if ($Provision.ExitCode -ne 0) {
+                    throw "The isolated scenario provisioner exited with code $($Provision.ExitCode)"
+                }
+            } finally {
+                $Provision.Dispose()
+            }
+
             New-Item -ItemType File -Path (Join-Path $Stage ".atrinik-review-initialized") | Out-Null
             Move-Item -LiteralPath $Stage -Destination $State
         } catch {
@@ -214,66 +283,243 @@ try {
         }
     }
 
+    $PasswordInfo = Get-Item -LiteralPath $PasswordFile -ErrorAction SilentlyContinue
+    if ($null -eq $PasswordInfo -or $PasswordInfo.PSIsContainer -or
+        (($PasswordInfo.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        throw "The isolated review account password file is missing or unsafe"
+    }
+    $Password = [System.IO.File]::ReadAllText($PasswordFile).Trim()
+    if ([string]::IsNullOrWhiteSpace($Password)) {
+        throw "The isolated review account password file is empty"
+    }
+
     $ClientMaps = Join-Path $InstallData "http\client-maps"
     if (Test-Path -LiteralPath $ClientMaps) {
         $StateHttp = Join-Path $State "http"
         New-Item -ItemType Directory -Force -Path $StateHttp | Out-Null
         $StateMaps = Join-Path $StateHttp "client-maps"
-        if (Test-Path -LiteralPath $StateMaps) { Remove-Item -LiteralPath $StateMaps -Recurse }
+        if (Test-Path -LiteralPath $StateMaps) {
+            Remove-Item -LiteralPath $StateMaps -Recurse -Force
+        }
         Copy-Item -LiteralPath $ClientMaps -Destination $StateMaps -Recurse
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $State "tmp") | Out-Null
+    New-Item -ItemType Directory -Force -Path $ClientData | Out-Null
+    if (Test-Path -LiteralPath $ClientLog) {
+        Remove-Item -LiteralPath $ClientLog -Force
+    }
 
     if (Test-Path -LiteralPath $Identity) {
         Move-Item -LiteralPath $Identity -Destination ($Identity + ".previous-" + [Guid]::NewGuid().ToString("N"))
     }
-    $Started = Get-Date
-    $ServerArgs = @(
-        "--datapath=`"$State`"", "--port_quic=1731", "--no_console",
-        "--network_stack=ipv4=127.0.0.1", "--server_public=false",
-        "--stun_server=off", "--port_mapping=off"
+
+    $Started = [System.DateTime]::UtcNow
+    $ServerStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $ServerStartInfo.FileName = Join-Path $Root "atrinik-server.exe"
+    $ServerStartInfo.WorkingDirectory = $Root
+    $ServerStartInfo.UseShellExecute = $false
+    $ServerStartInfo.CreateNoWindow = $true
+    $ServerStartInfo.RedirectStandardInput = $true
+    $ServerStartInfo.RedirectStandardOutput = $true
+    $ServerStartInfo.RedirectStandardError = $true
+    $ServerStartInfo.Arguments = ConvertTo-ReviewArguments @(
+        "--datapath=$State",
+        "--port_quic=1731",
+        "--network_stack=ipv4=127.0.0.1",
+        "--server_public=false",
+        "--stun_server=off",
+        "--port_mapping=off",
+        "--http_url=off",
+        "--metaserver_publish_origin=http://127.0.0.1:9",
+        "--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic",
+        "--logfile=$ServerLog"
     )
-    $Server = Start-Process -FilePath (Join-Path $Root "atrinik-server.exe") `
-        -ArgumentList $ServerArgs -WorkingDirectory $Root -PassThru
+    $Server = [System.Diagnostics.Process]::new()
+    $Server.StartInfo = $ServerStartInfo
+    $ServerEnvironment = @{}
+    foreach ($Name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
+        $ServerEnvironment[$Name] =
+            [System.Environment]::GetEnvironmentVariable($Name, "Process")
+        [System.Environment]::SetEnvironmentVariable($Name, $null, "Process")
+    }
+    [System.Environment]::SetEnvironmentVariable(
+        "NO_PROXY",
+        "127.0.0.1,localhost",
+        "Process"
+    )
+    try {
+        if (-not $Server.Start()) {
+            throw "Could not start the isolated review server"
+        }
+    } finally {
+        foreach ($Name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
+            [System.Environment]::SetEnvironmentVariable(
+                $Name,
+                $ServerEnvironment[$Name],
+                "Process"
+            )
+        }
+    }
+    $ServerStdoutTask = $Server.StandardOutput.ReadToEndAsync()
+    $ServerStderrTask = $Server.StandardError.ReadToEndAsync()
 
     try {
-        $Deadline = (Get-Date).AddSeconds(60)
+        $Deadline = [System.DateTime]::UtcNow.AddSeconds(60)
         $Ready = $false
-        while ((Get-Date) -lt $Deadline) {
-            if ($Server.HasExited) { throw "Server exited with code $($Server.ExitCode)" }
-            $Endpoint = Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
-                Where-Object { $_.OwningProcess -eq $Server.Id } | Select-Object -First 1
+        while ([System.DateTime]::UtcNow -lt $Deadline) {
+            if ($Server.HasExited) {
+                throw "Server exited with code $($Server.ExitCode)"
+            }
+            $Endpoint = @(Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
+                Where-Object { $_.OwningProcess -eq $Server.Id } |
+                Select-Object -First 1)
             $IdentityInfo = Get-Item -LiteralPath $Identity -ErrorAction SilentlyContinue
-            if ($Endpoint -and $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
-                $IdentityInfo.LastWriteTime -ge $Started) {
+            $ServerLogText = ""
+            if (Test-Path -LiteralPath $ServerLog) {
+                try {
+                    $ServerLogText = [System.IO.File]::ReadAllText($ServerLog)
+                } catch {
+                    $ServerLogText = ""
+                }
+            }
+            if ($Endpoint.Count -eq 1 -and $Endpoint[0].LocalAddress -eq "127.0.0.1" -and
+                $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
+                $IdentityInfo.LastWriteTimeUtc -ge $Started -and
+                $ServerLogText -match "Server ready\. Waiting for connections") {
                 $Ready = $true
                 break
             }
             Start-Sleep -Milliseconds 250
             $Server.Refresh()
         }
-        if (-not $Ready) { throw "Server did not own UDP port 1731 with a fresh QUIC identity within 60 seconds" }
+        if (-not $Ready) {
+            throw "Server did not reach loopback-ready state within 60 seconds"
+        }
 
-        $Fingerprint = & (Join-Path $Root "python.exe") `
-            (Join-Path $Root "review-quic-fingerprint.py") $Identity
+        $Fingerprint = (& (Join-Path $Root "python.exe") (Join-Path $Root "review-quic-fingerprint.py") $Identity).Trim()
         if ($LASTEXITCODE -ne 0 -or $Fingerprint -notmatch "^[0-9a-f]{64}$") {
             throw "Could not derive the server QUIC certificate fingerprint"
         }
-        $ClientArgs = @(
-            "--nometa", "--stun_server=off",
-            "--server=`"127.0.0.1 1731 $Fingerprint`"", "--connect=127.0.0.1", "--reconnect"
+
+        $ClientStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $ClientStartInfo.FileName = Join-Path $Root "atrinik.exe"
+        $ClientStartInfo.WorkingDirectory = $Root
+        $ClientStartInfo.UseShellExecute = $false
+        $ClientStartInfo.CreateNoWindow = $false
+        $ClientStartInfo.Arguments = ConvertTo-ReviewArguments @(
+            "--nometa",
+            "--game_news_url=off",
+            "--stun_server=off",
+            "--server=127.0.0.1 1731 $Fingerprint",
+            "--connect=127.0.0.1:" + $Account + ":" + $Password + ":" + $Character
         )
-        Start-Process -FilePath (Join-Path $Root "atrinik.exe") `
-            -ArgumentList $ClientArgs -WorkingDirectory $Root
-        Write-Host "Server and client started. The server owns UDP port 1731 (PID $($Server.Id))."
+        $ClientStartInfoEnvironment = @{}
+        foreach ($Name in @(
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "ATRINIK_CONFIG_DIR"
+        )) {
+            $ClientStartInfoEnvironment[$Name] =
+                [System.Environment]::GetEnvironmentVariable($Name, "Process")
+            [System.Environment]::SetEnvironmentVariable($Name, $null, "Process")
+        }
+        [System.Environment]::SetEnvironmentVariable(
+            "NO_PROXY",
+            "127.0.0.1,localhost",
+            "Process"
+        )
+        [System.Environment]::SetEnvironmentVariable(
+            "ATRINIK_CONFIG_DIR",
+            $ClientData,
+            "Process"
+        )
+        try {
+            $Client = [System.Diagnostics.Process]::new()
+            $Client.StartInfo = $ClientStartInfo
+            if (-not $Client.Start()) {
+                throw "Could not start the packaged client"
+            }
+        } finally {
+            foreach ($Name in @(
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "ATRINIK_CONFIG_DIR"
+            )) {
+                [System.Environment]::SetEnvironmentVariable(
+                    $Name,
+                    $ClientStartInfoEnvironment[$Name],
+                    "Process"
+                )
+            }
+        }
+
+        Write-Host "Server and client started. Close the client window to finish the review."
+        $Client.WaitForExit()
+        $Client.Refresh()
+        if ($Client.ExitCode -ne 0) {
+            throw "Client exited with code $($Client.ExitCode)"
+        }
+        if (-not (Test-Path -LiteralPath $ClientLog) -or
+            ([System.IO.File]::ReadAllText($ClientLog) -notmatch "Client shutdown complete\.")) {
+            throw "Client did not report a clean shutdown"
+        }
+
+        $Server.StandardInput.WriteLine("shutdown")
+        $Server.StandardInput.Flush()
+        $Server.StandardInput.Close()
+        if (-not $Server.WaitForExit(30000)) {
+            throw "Server did not exit after the graceful shutdown request"
+        }
+        if ($null -eq $ServerStdoutTask -or $null -eq $ServerStderrTask -or
+            -not $ServerStdoutTask.Wait(10000) -or -not $ServerStderrTask.Wait(10000)) {
+            throw "Server output did not close after graceful shutdown"
+        }
+        if ($Server.ExitCode -ne 0) {
+            throw "Server exited with code $($Server.ExitCode)"
+        }
+        if (-not (Test-Path -LiteralPath $ServerLog) -or
+            ([System.IO.File]::ReadAllText($ServerLog) -notmatch "Server shutdown complete\.")) {
+            throw "Server did not report a clean shutdown"
+        }
+        Write-Host "Client and server exited cleanly."
     } catch {
-        if (-not $Server.HasExited) { Stop-Process -Id $Server.Id -Force }
+        if ($null -ne $Client) {
+            try {
+                if (-not $Client.HasExited) {
+                    $Client.Kill()
+                    $Client.WaitForExit(10000)
+                }
+            } catch {
+            }
+        }
+        if ($null -ne $Server) {
+            try {
+                if (-not $Server.HasExited) {
+                    $Server.Kill()
+                    $Server.WaitForExit(10000)
+                }
+            } catch {
+            }
+        }
         throw
     }
 } finally {
-    if ($LaunchLockHeld) { $LaunchMutex.ReleaseMutex() }
+    if ($null -ne $Client) {
+        $Client.Dispose()
+    }
+    if ($null -ne $Server) {
+        $Server.Dispose()
+    }
+    if ($LaunchLockHeld) {
+        $LaunchMutex.ReleaseMutex()
+    }
     $LaunchMutex.Dispose()
 }
+
 '''
 
 
@@ -309,12 +555,13 @@ def compose(client: Path, server: Path, output: Path, revision: str) -> None:
             "run-review.ps1": POWERSHELL_LAUNCHER.replace("\n", "\r\n").encode(),
             "review-quic-fingerprint.py": FINGERPRINT_HELPER.encode(),
             "REVIEW-README.txt": (
-                "Atrinik Classic issue #477 Windows review package\r\n"
+                "Atrinik Classic issue #521 Windows review package\r\n"
                 f"Exact revision: {revision}\r\n\r\n"
                 "Extract the complete ZIP to a writable directory, then double-click "
-                "run-review.bat. It creates isolated state, starts the server on UDP 1731, "
-                "waits for the exact server process to own the port, and starts a reconnecting "
-                "client pinned to the fresh QUIC identity.\r\n"
+                "run-review.bat. It provisions an isolated review account and character, "
+                "starts the server on loopback UDP 1731, and launches the production client "
+                "with the fresh QUIC identity. Close the client window after gameplay is ready; "
+                "the launcher then requests a graceful server shutdown.\r\n"
             ).encode(),
         }
     )
@@ -339,7 +586,7 @@ def compose(client: Path, server: Path, output: Path, revision: str) -> None:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     ).encode()
 
-    root = f"atrinik-classic-issue-477-windows-one-click-{revision[:7]}"
+    root = f"atrinik-classic-issue-521-windows-one-click-{revision[:7]}"
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=output.parent, suffix=".zip", delete=False) as handle:
         temporary = Path(handle.name)

@@ -106,6 +106,7 @@ try {
         "--server_public=false",
         "--port_mapping=off",
         "--stun_server=off",
+        "--http_url=off",
         "--metaserver_publish_origin=http://127.0.0.1:9",
         "--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic"
     )) {
@@ -202,6 +203,9 @@ try {
     if ($process.ExitCode -ne 0) {
         throw "Flat review-bundle server exited with code $($process.ExitCode):`n$output"
     }
+    if ($output -notmatch "Server shutdown complete\.") {
+        throw "Flat review-bundle server did not report a clean shutdown"
+    }
 
     $launcherStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $launcherStartInfo.FileName = $env:ComSpec
@@ -217,47 +221,115 @@ try {
     if (-not $launcherProcess.Start()) {
         throw "Could not execute the user-facing run-review.bat launcher"
     }
-    if (-not $launcherProcess.WaitForExit(60000)) {
-        $launcherProcess.Kill($true)
-        throw "run-review.bat did not return after launching the review processes"
-    }
-    if ($launcherProcess.ExitCode -ne 0) {
-        throw "run-review.bat exited with code $($launcherProcess.ExitCode)"
-    }
-    $launcherDeadline = [System.DateTime]::UtcNow.AddSeconds(60)
+
+    $launcherDeadline = [System.DateTime]::UtcNow.AddSeconds(120)
     $serverExecutable = Join-Path $reviewRoot "atrinik-server.exe"
     $clientExecutable = Join-Path $reviewRoot "atrinik.exe"
+    $launcherServerLog = Join-Path (Join-Path $reviewRoot "server-data") "server.log"
+    $launcherClientLog = Join-Path $reviewRoot "client.log"
+    $launcherReady = $false
     while ([System.DateTime]::UtcNow -lt $launcherDeadline) {
+        if ($launcherProcess.HasExited) {
+            throw "run-review.bat exited before login smoke completion with code $($launcherProcess.ExitCode)"
+        }
         $launcherServers = @(Get-Process -Name "atrinik-server" -ErrorAction SilentlyContinue |
             Where-Object { $_.Path -eq $serverExecutable })
         $launcherClients = @(Get-Process -Name "atrinik" -ErrorAction SilentlyContinue |
             Where-Object { $_.Path -eq $clientExecutable })
-        if ($launcherServers.Count -eq 1 -and $launcherClients.Count -eq 1) {
+        if ($launcherServers.Count -eq 1) {
             $launcherServer = $launcherServers[0]
+        }
+        if ($launcherClients.Count -eq 1) {
             $launcherClient = $launcherClients[0]
-            break
+        }
+
+        if ($null -ne $launcherServer -and $null -ne $launcherClient) {
+            try {
+                $launcherServer.Refresh()
+                $launcherClient.Refresh()
+                $launcherEndpoints = @(Get-NetUDPEndpoint -LocalPort 1731 |
+                    Where-Object { $_.OwningProcess -eq $launcherServer.Id })
+                $serverLogText = ""
+                $clientLogText = ""
+                if (Test-Path -LiteralPath $launcherServerLog) {
+                    $serverLogText = Get-Content -Raw -LiteralPath $launcherServerLog
+                }
+                if (Test-Path -LiteralPath $launcherClientLog) {
+                    $clientLogText = Get-Content -Raw -LiteralPath $launcherClientLog
+                }
+                $combinedLogText =
+                    $serverLogText + [System.Environment]::NewLine + $clientLogText
+                foreach ($diagnostic in
+                    [System.Text.RegularExpressions.Regex]::Matches(
+                        $combinedLogText,
+                        "HTTP request origin=[^\r\n]*"
+                    )) {
+                    if ($diagnostic.Value -match "://") {
+                        throw "cURL diagnostic unexpectedly retained a URL"
+                    }
+                    if ($diagnostic.Value -match "endpoint=(?:http|https)-remote$") {
+                        throw "cURL diagnostic unexpectedly targeted a remote endpoint"
+                    }
+                    if ($diagnostic.Value -notmatch
+                        "HTTP request origin=[A-Za-z0-9_.-]+ endpoint=(?:(?:http|https)-loopback)$") {
+                        throw "cURL diagnostic was not bounded to an origin and endpoint class"
+                    }
+                }
+                if (-not $launcherServer.HasExited -and -not $launcherClient.HasExited -and
+                    $launcherEndpoints.Count -eq 1 -and
+                    $launcherEndpoints[0].LocalAddress -eq "127.0.0.1" -and
+                    $serverLogText -match "Server ready\. Waiting for connections" -and
+                    $serverLogText -match "Connection .*: player .* logged in" -and
+                    $clientLogText -match "Connection established to selected server\." -and
+                    $clientLogText -match "Gameplay ready\.") {
+                    $launcherReady = $true
+                    break
+                }
+            } catch [System.Management.Automation.ItemNotFoundException] {
+            } catch [System.IO.IOException] {
+            }
         }
         Start-Sleep -Milliseconds 250
     }
-    if ($null -eq $launcherServer -or $null -eq $launcherClient) {
-        throw "One-click launcher did not start exactly one packaged server and client"
+    if (-not $launcherReady) {
+        throw "One-click launcher did not prove loopback login and gameplay readiness within 120 seconds"
     }
-    $launcherEndpoints = @(Get-NetUDPEndpoint -LocalPort 1731 | Where-Object {
-        $_.OwningProcess -eq $launcherServer.Id
-    })
-    if ($launcherEndpoints.Count -ne 1) {
-        throw "One-click launcher server does not own UDP port 1731"
-    }
-    Start-Sleep -Seconds 5
-    $launcherServer.Refresh()
+
     $launcherClient.Refresh()
-    if ($launcherServer.HasExited -or $launcherClient.HasExited) {
-        throw "One-click launcher server or client exited during the startup smoke interval"
+    if ($launcherClient.HasExited) {
+        throw "One-click client exited before the graceful close request"
     }
-    Stop-Process -Id $launcherClient.Id -Force
-    Stop-Process -Id $launcherServer.Id -Force
-    [void]$launcherClient.WaitForExit(10000)
-    [void]$launcherServer.WaitForExit(10000)
+    if (-not $launcherClient.CloseMainWindow()) {
+        throw "Could not request a normal close of the one-click client window"
+    }
+    if (-not $launcherClient.WaitForExit(30000)) {
+        throw "One-click client did not exit after the normal close request"
+    }
+    if ($launcherClient.ExitCode -ne 0) {
+        throw "One-click client exited with code $($launcherClient.ExitCode)"
+    }
+    $launcherClientLogText = Get-Content -Raw -LiteralPath $launcherClientLog
+    if ($launcherClientLogText -notmatch "Client shutdown complete\.") {
+        throw "One-click client did not report a clean shutdown"
+    }
+
+    $launcherServer.Refresh()
+    if (-not $launcherServer.HasExited -and -not $launcherServer.WaitForExit(45000)) {
+        throw "One-click server did not exit after the client closed"
+    }
+    if ($launcherServer.ExitCode -ne 0) {
+        throw "One-click server exited with code $($launcherServer.ExitCode)"
+    }
+    $launcherServerLogText = Get-Content -Raw -LiteralPath $launcherServerLog
+    if ($launcherServerLogText -notmatch "Server shutdown complete\.") {
+        throw "One-click server did not report a clean shutdown"
+    }
+    if (-not $launcherProcess.WaitForExit(60000)) {
+        throw "run-review.bat did not return after the graceful review shutdown"
+    }
+    if ($launcherProcess.ExitCode -ne 0) {
+        throw "run-review.bat exited with code $($launcherProcess.ExitCode)"
+    }
     $bodySucceeded = $true
 } finally {
     $cleanupFailures = [System.Collections.Generic.List[string]]::new()

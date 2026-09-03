@@ -347,6 +347,7 @@ void clean_tmp_files(void) {
 void server_shutdown(void) {
     player_disconnect_all();
     clean_tmp_files();
+    LOG(INFO, "Server shutdown complete.");
     exit(0);
 }
 

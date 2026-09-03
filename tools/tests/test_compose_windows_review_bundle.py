@@ -64,7 +64,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
 
             with zipfile.ZipFile(first) as archive:
                 names = archive.namelist()
-                prefix = f"atrinik-classic-issue-477-windows-one-click-{self.revision[:7]}/"
+                prefix = f"atrinik-classic-issue-521-windows-one-click-{self.revision[:7]}/"
                 self.assertTrue(all(name.startswith(prefix) for name in names))
                 relative = [name.removeprefix(prefix) for name in names]
                 self.assertNotIn("client", {Path(name).parts[0] for name in relative})
@@ -77,17 +77,32 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 powershell = archive.read(prefix + "run-review.ps1").decode()
                 for token in (
                     "server-data-stage-",
+                    "server-data-incomplete-",
                     '"Local\\AtrinikClassicReviewUdp1731"',
                     "$LaunchMutex.WaitOne(0)",
                     "UDP port 1731 is already owned by PID",
                     "Get-NetUDPEndpoint -LocalPort 1731",
                     "OwningProcess -eq $Server.Id",
                     '"--no_console"',
+                    '"--provision_scenario"',
+                    '"--provision_account=$Account"',
+                    '"--provision_character=$Character"',
+                    '"--provision_archetype=human_male"',
+                    '"--provision_preset=basic-player"',
+                    '"--provision_password_file=$StagePassword"',
+                    '"--http_url=off"',
                     '"--network_stack=ipv4=127.0.0.1"',
-                    "--connect=127.0.0.1",
-                    '"--reconnect"',
+                    '"--nometa"',
+                    '"--game_news_url=off"',
+                    "--connect=127.0.0.1:",
+                    "$Provision.WaitForExit(10000)",
+                    "$ClientData",
+                    "StandardInput.WriteLine(\"shutdown\")",
+                    "Client shutdown complete",
+                    "Server shutdown complete",
                 ):
                     self.assertIn(token, powershell)
+                self.assertNotIn('"--reconnect"', powershell)
                 manifest = json.loads(archive.read(prefix + "BUNDLE-MANIFEST.json"))
                 self.assertEqual(manifest["revision"], self.revision)
                 self.assertEqual(manifest["udp_port"], 1731)

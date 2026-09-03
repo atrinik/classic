@@ -344,6 +344,7 @@ static int game_status_chain(void) {
             return 1;
         }
 
+        LOG(INFO, "Connection established to selected server.");
         socket_thread_start();
         clear_player();
         cpl.state = ST_START_DATA;
@@ -679,7 +680,9 @@ static const char *clioptions_option_game_news_url_desc =
     "Sets the game news URL. Typically this doesn't need to be changed.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_game_news_url(const char *arg, char **errmsg) {
-    clioption_settings.game_news_url = xstrdup(arg);
+    free(clioption_settings.game_news_url);
+    clioption_settings.game_news_url =
+        strcasecmp(arg, "off") == 0 ? NULL : xstrdup(arg);
     return true;
 }
 
