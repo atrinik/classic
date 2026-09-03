@@ -181,9 +181,71 @@ $Server = $null
 $Client = $null
 $ServerOutputLines = $null
 $ServerErrorLines = $null
+$ClientOutputLines = $null
+$ClientErrorLines = $null
 
 function ConvertTo-ReviewArguments([string[]]$Values) {
     return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
+}
+
+function Get-ReviewDiagnosticTail($Lines) {
+    if ($null -eq $Lines) {
+        return "<not captured>"
+    }
+    $Tail = @($Lines.ToArray() | Select-Object -Last 40)
+    if ($Tail.Count -eq 0) {
+        return "<empty>"
+    }
+    return (@(
+        $Tail | ForEach-Object {
+            $_ -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]' |
+                ForEach-Object {
+                    $_ -replace "(?i)https?://\S+", "[redacted-url]"
+                }
+        }
+    ) -join "|")
+}
+
+function Assert-ReviewPathAncestors([string]$Path) {
+    $RootFullPath = ([System.IO.Path]::GetFullPath($Root)).TrimEnd(
+        [char[]]@(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+    )
+    $Candidate = [System.IO.Path]::GetFullPath($Path)
+    $RootPrefix = $RootFullPath + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $Candidate.Equals(
+        $RootFullPath,
+        [System.StringComparison]::OrdinalIgnoreCase
+    ) -and -not $Candidate.StartsWith(
+        $RootPrefix,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Review path is outside the bundle: $Path"
+    }
+
+    while ($true) {
+        $Info = Get-Item -LiteralPath $Candidate -Force -ErrorAction SilentlyContinue
+        if ($null -ne $Info -and
+            (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+            throw "Review path is a reparse point: $Candidate"
+        }
+        if ($Candidate.Equals(
+            $RootFullPath,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            break
+        }
+        $Parent = [System.IO.Directory]::GetParent($Candidate)
+        if ($null -eq $Parent -or $Parent.FullName.Equals(
+            $Candidate,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            throw "Review path did not resolve to the bundle root: $Path"
+        }
+        $Candidate = $Parent.FullName
+    }
 }
 
 function Stop-ReviewProcessTree([System.Diagnostics.Process]$Process, [string]$Label) {
@@ -216,6 +278,7 @@ function Invoke-ReviewIcacls([string[]]$Arguments) {
 }
 
 function Protect-ReviewSecretFile([string]$Path) {
+    Assert-ReviewPathAncestors $Path
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Secret file is missing: $Path"
     }
@@ -298,6 +361,7 @@ function Protect-ReviewSecretFile([string]$Path) {
 }
 
 function Remove-ReviewSecretFile([string]$Path) {
+    Assert-ReviewPathAncestors $Path
     $Info = Get-Item -LiteralPath $Path -ErrorAction Stop
     if ($Info.PSIsContainer) {
         throw "Secret path is a directory: $Path"
@@ -317,6 +381,7 @@ function Remove-ReviewSecretFile([string]$Path) {
 }
 
 function Remove-ReviewSecretFiles {
+    Assert-ReviewPathAncestors $Root
     $Candidates = [System.Collections.Generic.List[string]]::new()
     [void]$Candidates.Add($PasswordFile)
     $DataDirectories = @(
@@ -327,6 +392,7 @@ function Remove-ReviewSecretFiles {
             }
     )
     foreach ($Directory in $DataDirectories) {
+        Assert-ReviewPathAncestors $Directory.FullName
         [void]$Candidates.Add(
             (Join-Path $Directory.FullName ".atrinik-review-password")
         )
@@ -339,6 +405,7 @@ function Remove-ReviewSecretFiles {
 }
 
 try {
+    Assert-ReviewPathAncestors $Root
     try {
         $LaunchLockHeld = $LaunchMutex.WaitOne(0)
     } catch [System.Threading.AbandonedMutexException] {
@@ -362,12 +429,15 @@ try {
 
     if (-not (Test-Path -LiteralPath $Sentinel) -or -not (Test-Path -LiteralPath $PasswordFile)) {
         if (Test-Path -LiteralPath $State) {
+            Assert-ReviewPathAncestors $State
             $Preserved = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
             Move-Item -LiteralPath $State -Destination $Preserved
             Write-Warning "Preserved incomplete server state as $Preserved"
         }
         $Stage = Join-Path $Root ("server-data-stage-" + [Guid]::NewGuid().ToString("N"))
         try {
+            Assert-ReviewPathAncestors $InstallData
+            Assert-ReviewPathAncestors $Stage
             Copy-Item -LiteralPath $InstallData -Destination $Stage -Recurse
             New-Item -ItemType Directory -Force -Path (Join-Path $Stage "tmp") | Out-Null
             $StagePassword = Join-Path $Stage ".atrinik-review-password"
@@ -431,7 +501,9 @@ try {
             }
 
             New-Item -ItemType File -Path (Join-Path $Stage ".atrinik-review-initialized") | Out-Null
+            Assert-ReviewPathAncestors $Stage
             Move-Item -LiteralPath $Stage -Destination $State
+            Assert-ReviewPathAncestors $State
         } catch {
             if (Test-Path -LiteralPath $Stage) {
                 $Failed = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
@@ -450,23 +522,30 @@ try {
 
     $ClientMaps = Join-Path $InstallData "http\client-maps"
     if (Test-Path -LiteralPath $ClientMaps) {
+        Assert-ReviewPathAncestors $ClientMaps
         $StateHttp = Join-Path $State "http"
         New-Item -ItemType Directory -Force -Path $StateHttp | Out-Null
         $StateMaps = Join-Path $StateHttp "client-maps"
         if (Test-Path -LiteralPath $StateMaps) {
+            Assert-ReviewPathAncestors $StateMaps
             Remove-Item -LiteralPath $StateMaps -Recurse -Force
         }
+        Assert-ReviewPathAncestors $StateMaps
         Copy-Item -LiteralPath $ClientMaps -Destination $StateMaps -Recurse
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $State "tmp") | Out-Null
+    Assert-ReviewPathAncestors $ClientData
     New-Item -ItemType Directory -Force -Path $ClientData | Out-Null
     if (Test-Path -LiteralPath $ClientLog) {
+        Assert-ReviewPathAncestors $ClientLog
         Remove-Item -LiteralPath $ClientLog -Force
     }
 
+    Assert-ReviewPathAncestors $Identity
     if (Test-Path -LiteralPath $Identity) {
         Move-Item -LiteralPath $Identity -Destination ($Identity + ".previous-" + [Guid]::NewGuid().ToString("N"))
     }
+    Assert-ReviewPathAncestors $ServerLog
 
     $Started = [System.DateTime]::UtcNow
     $ServerStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -537,7 +616,14 @@ try {
         $Ready = $false
         while ([System.DateTime]::UtcNow -lt $Deadline) {
             if ($Server.HasExited) {
-                throw "Server exited with code $($Server.ExitCode)"
+                $ServerExitDiagnostics = @(
+                    "stdout=$(Get-ReviewDiagnosticTail $ServerOutputLines)"
+                    "stderr=$(Get-ReviewDiagnosticTail $ServerErrorLines)"
+                ) -join "; "
+                throw (
+                    "Server exited with code $($Server.ExitCode); diagnostics: " +
+                    $ServerExitDiagnostics
+                )
             }
             $Endpoint = @(Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
                 Where-Object { $_.OwningProcess -eq $Server.Id } |
@@ -593,7 +679,9 @@ try {
                 "ready_marker=$ReadyMarker"
                 "stdout_lines=$($ServerOutputLines.Count)"
                 "stdout_ready_marker=$ServerOutputReady"
+                "stdout_tail=$(Get-ReviewDiagnosticTail $ServerOutputLines)"
                 "stderr_lines=$($ServerErrorLines.Count)"
+                "stderr_tail=$(Get-ReviewDiagnosticTail $ServerErrorLines)"
                 "shutdown_marker=$ShutdownMarker"
             ) -join "; "
             throw (
@@ -612,6 +700,8 @@ try {
         $ClientStartInfo.WorkingDirectory = $Root
         $ClientStartInfo.UseShellExecute = $false
         $ClientStartInfo.CreateNoWindow = $false
+        $ClientStartInfo.RedirectStandardOutput = $true
+        $ClientStartInfo.RedirectStandardError = $true
         $ClientStartInfo.Arguments = ConvertTo-ReviewArguments @(
             "--nometa",
             "--game_news_url=off",
@@ -642,12 +732,28 @@ try {
             $ClientData,
             "Process"
         )
+        $Client = [System.Diagnostics.Process]::new()
+        $Client.StartInfo = $ClientStartInfo
+        $ClientOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+        $ClientErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+        $Client.add_OutputDataReceived({
+            param($Sender, $EventArgs)
+            if ($null -ne $EventArgs.Data) {
+                [void]$ClientOutputLines.Enqueue($EventArgs.Data)
+            }
+        }.GetNewClosure())
+        $Client.add_ErrorDataReceived({
+            param($Sender, $EventArgs)
+            if ($null -ne $EventArgs.Data) {
+                [void]$ClientErrorLines.Enqueue($EventArgs.Data)
+            }
+        }.GetNewClosure())
         try {
-            $Client = [System.Diagnostics.Process]::new()
-            $Client.StartInfo = $ClientStartInfo
             if (-not $Client.Start()) {
                 throw "Could not start the packaged client"
             }
+            $Client.BeginOutputReadLine()
+            $Client.BeginErrorReadLine()
         } finally {
             foreach ($Name in @(
                 "HTTP_PROXY",
@@ -666,13 +772,21 @@ try {
 
         Write-Host "Server and client started. Close the client window to finish the review."
         $Client.WaitForExit()
+        $Client.WaitForExit()
         $Client.Refresh()
+        $ClientDiagnostics = @(
+            "stdout=$(Get-ReviewDiagnosticTail $ClientOutputLines)"
+            "stderr=$(Get-ReviewDiagnosticTail $ClientErrorLines)"
+        ) -join "; "
         if ($Client.ExitCode -ne 0) {
-            throw "Client exited with code $($Client.ExitCode)"
+            throw (
+                "Client exited with code $($Client.ExitCode); diagnostics: " +
+                $ClientDiagnostics
+            )
         }
         if (-not (Test-Path -LiteralPath $ClientLog) -or
             ([System.IO.File]::ReadAllText($ClientLog) -notmatch "Client shutdown complete\.")) {
-            throw "Client did not report a clean shutdown"
+            throw "Client did not report a clean shutdown; diagnostics: $ClientDiagnostics"
         }
 
         $Server.StandardInput.WriteLine("shutdown")
@@ -718,7 +832,9 @@ try {
     }
 } finally {
     try {
-        Remove-ReviewSecretFiles
+        if ($LaunchLockHeld) {
+            Remove-ReviewSecretFiles
+        }
     } finally {
         if ($null -ne $Client) {
             $Client.Dispose()
