@@ -218,13 +218,23 @@ hfile_struct *help_find(const char *name) {
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
+#define HFILES_TEST_REQUIRE(condition)                                           \
+    do {                                                                         \
+        if (!(condition)) {                                                      \
+            fprintf(stderr, "%s:%d: requirement failed: %s\n",                  \
+                    __FILE__,                                                    \
+                    __LINE__,                                                    \
+                    #condition);                                                 \
+            return false;                                                        \
+        }                                                                        \
+    } while (0)
 static bool hfiles_parser_test_case(const char *input, const char *expected) {
     FILE *fp = tmpfile();
-    HARD_ASSERT(fp != NULL);
+    HFILES_TEST_REQUIRE(fp != NULL);
 
     size_t input_len = strlen(input);
-    HARD_ASSERT(fwrite(input, 1, input_len, fp) == input_len);
-    HARD_ASSERT(fseek(fp, 0, SEEK_SET) == 0);
+    HFILES_TEST_REQUIRE(fwrite(input, 1, input_len, fp) == input_len);
+    HFILES_TEST_REQUIRE(fseek(fp, 0, SEEK_SET) == 0);
 
     hfiles_load(fp);
     hfile_struct *hfile = help_find("parser-test");
@@ -246,10 +256,10 @@ static bool hfiles_parser_incomplete_test(void) {
                                 "msg\n"
                                 "last line";
     FILE *fp = tmpfile();
-    HARD_ASSERT(fp != NULL);
+    HFILES_TEST_REQUIRE(fp != NULL);
     size_t input_len = strlen(input);
-    HARD_ASSERT(fwrite(input, 1, input_len, fp) == input_len);
-    HARD_ASSERT(fseek(fp, 0, SEEK_SET) == 0);
+    HFILES_TEST_REQUIRE(fwrite(input, 1, input_len, fp) == input_len);
+    HFILES_TEST_REQUIRE(fseek(fp, 0, SEEK_SET) == 0);
 
     hfiles_load(fp);
     bool success = help_find("incomplete") == NULL;

@@ -3,6 +3,17 @@
 
 #include <openssl/crypto.h>
 
+#define require(condition)                                                        \
+    do {                                                                          \
+        if (!(condition)) {                                                       \
+            fprintf(stderr, "%s:%d: requirement failed: %s\n",                   \
+                    __FILE__,                                                     \
+                    __LINE__,                                                     \
+                    #condition);                                                  \
+            return 1;                                                             \
+        }                                                                          \
+    } while (0)
+
 static char observed[64];
 static char captured[HUGE_BUF];
 
@@ -26,20 +37,20 @@ static bool sensitive_handler(const char *arg, char **errmsg) {
 static int test_crlf_category(void) {
     char path[] = "/tmp/atrinik-clioptions-test.XXXXXX";
     int fd = mkstemp(path);
-    HARD_ASSERT(fd != -1);
+    require(fd != -1);
 
     FILE *fp = fdopen(fd, "wb");
-    HARD_ASSERT(fp != NULL);
+    require(fp != NULL);
 
     static const char config[] = "[general]\r\n"
                                   "secret = general-value\r\n"
                                   "[meta]\r\n"
                                   "secret = meta-value\r\n";
-    HARD_ASSERT(fwrite(config, 1, sizeof(config) - 1, fp) == sizeof(config) - 1);
-    HARD_ASSERT(fclose(fp) == 0);
-    HARD_ASSERT(clioptions_load(path, "[general]"));
-    HARD_ASSERT(strcmp(observed, "general-value") == 0);
-    HARD_ASSERT(unlink(path) == 0);
+    require(fwrite(config, 1, sizeof(config) - 1, fp) == sizeof(config) - 1);
+    require(fclose(fp) == 0);
+    require(clioptions_load(path, "[general]"));
+    require(strcmp(observed, "general-value") == 0);
+    require(unlink(path) == 0);
     return 0;
 }
 
