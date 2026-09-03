@@ -128,6 +128,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "Remove-ReviewSecretFile $Candidate",
                     '"$($SidArgument):(F)"',
                     "$StageTmp",
+                    "$StagePasswordSeed",
+                    "Move-Item -LiteralPath $StagePasswordSeed -Destination $StagePassword",
                     "$StateTmp",
                     '"server-data-stage-*"',
                     '"server-data-incomplete-*"',
@@ -155,11 +157,11 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 ):
                     self.assertIn(token, powershell)
                 self.assertIn(
-                    '# Protect the empty file before materializing the disposable secret.',
+                    '# Create the secret under the owner-controlled temporary directory.',
                     powershell,
                 )
                 self.assertIn(
-                    'Protect-ReviewSecretFile $StagePassword -WriteAccess',
+                    'Protect-ReviewSecretFile $StagePasswordSeed -WriteAccess',
                     powershell,
                 )
                 secret_protection = powershell[
