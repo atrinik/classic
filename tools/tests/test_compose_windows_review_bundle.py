@@ -103,6 +103,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "Stop-ReviewProcessTree",
                     "function Protect-ReviewSecretFile",
                     "SetAccessRuleProtection($true, $false)",
+                    "System.IO.FileSystemAclExtensions]::GetAccessControl",
+                    "System.IO.FileSystemAclExtensions]::SetAccessControl",
                     "FileSystemRights]::Read",
                     "function Remove-ReviewSecretFiles",
                     '"server-data-stage-*"',
@@ -119,6 +121,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 ):
                     self.assertIn(token, powershell)
                 self.assertNotIn('$Account + ":" + $Password', powershell)
+                self.assertNotIn("Get-Acl", powershell)
+                self.assertNotIn("Set-Acl", powershell)
                 self.assertNotIn('"--reconnect"', powershell)
                 manifest = json.loads(archive.read(prefix + "BUNDLE-MANIFEST.json"))
                 self.assertEqual(manifest["revision"], self.revision)
