@@ -87,6 +87,7 @@
 #define PLAYER_VIEW_BENCHMARK_ANIMATION_SOURCE_BYTES_PER_FRAME (256U * 1024U)
 #define PLAYER_VIEW_BENCHMARK_ANIMATION_INSTANCE_UPLOADS_PER_FRAME 128U
 #define PLAYER_VIEW_BENCHMARK_ANIMATION_INSTANCE_BYTES_PER_FRAME (16U * 1024U)
+#define PLAYER_VIEW_DIAGNOSTIC_SIZE (8U * 1024U)
 #define PLAYER_VIEW_LIFECYCLE_EVENTS 12
 #define PLAYER_VIEW_LARGE_WIDTH 1920
 #define PLAYER_VIEW_LARGE_HEIGHT 1080
@@ -1523,6 +1524,35 @@ gpu_player_view_slot_uniform_uploads_bounded(const gpu_renderer_statistics_t *st
            statistics->slot_uniform_upload_bytes <= statistics->slot_uniform_upload_count * 1024U;
 }
 
+static void gpu_player_view_diagnostic_append_counter(char *diagnostic,
+                                                      size_t diagnostic_size,
+                                                      size_t *diagnostic_length,
+                                                      const char *name,
+                                                      uint64_t observed,
+                                                      const char *comparison,
+                                                      uint64_t expected) {
+    if (diagnostic_size == 0U || *diagnostic_length >= diagnostic_size - 1U) {
+        return;
+    }
+    size_t remaining = diagnostic_size - *diagnostic_length;
+    int written = snprintf(diagnostic + *diagnostic_length,
+                           remaining,
+                           "%s%s=%" PRIu64 " (expected %s %" PRIu64 ")",
+                           *diagnostic_length == 0U ? "" : "; ",
+                           name,
+                           observed,
+                           comparison,
+                           expected);
+    if (written < 0) {
+        return;
+    }
+    if ((size_t)written >= remaining) {
+        *diagnostic_length = diagnostic_size - 1U;
+    } else {
+        *diagnostic_length += (size_t)written;
+    }
+}
+
 static void gpu_player_view_json_string_to(FILE *output, const char *value) {
     fputc('"', output);
     for (const unsigned char *cursor = (const unsigned char *)value; *cursor != '\0'; cursor++) {
@@ -2608,27 +2638,370 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
                    measured.map_skipped_passes == completed_maps &&
                    measured.map_dirty_commands == 0 && measured.map_dirty_pixels == 0 &&
                    measured.map_dirty_bytes == 0);
-    if (map_measured.primary_map_draws != PLAYER_VIEW_BENCHMARK_ITERATIONS ||
-        map_measured.auxiliary_map_draws != PLAYER_VIEW_BENCHMARK_ITERATIONS / 10U ||
-        map_measured.stretched_commands == 0 || map_measured.double_commands == 0 ||
-        map_measured.living_commands < UINT64_C(64) * PLAYER_VIEW_BENCHMARK_ITERATIONS ||
-        map_measured.primary_frames_with_stretch != PLAYER_VIEW_BENCHMARK_ITERATIONS ||
-        map_measured.primary_frames_with_living != PLAYER_VIEW_BENCHMARK_ITERATIONS ||
+    char benchmark_diagnostic[PLAYER_VIEW_DIAGNOSTIC_SIZE] = {0};
+    size_t benchmark_diagnostic_length = 0;
+#define GPU_PLAYER_VIEW_APPEND_FAILURE(condition, name, observed, comparison, expected) \
+    do {                                                                                \
+        if (condition) {                                                                \
+            gpu_player_view_diagnostic_append_counter(benchmark_diagnostic,             \
+                                                      sizeof(benchmark_diagnostic),      \
+                                                      &benchmark_diagnostic_length,       \
+                                                      name,                              \
+                                                      observed,                          \
+                                                      comparison,                        \
+                                                      expected);                         \
+        }                                                                               \
+    } while (0)
+    GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.primary_map_draws !=
+                                       PLAYER_VIEW_BENCHMARK_ITERATIONS,
+                                   "map.primary_draws",
+                                   map_measured.primary_map_draws,
+                                   "==",
+                                   PLAYER_VIEW_BENCHMARK_ITERATIONS);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.auxiliary_map_draws !=
+                                       PLAYER_VIEW_BENCHMARK_ITERATIONS / 10U,
+                                   "map.auxiliary_draws",
+                                   map_measured.auxiliary_map_draws,
+                                   "==",
+                                   PLAYER_VIEW_BENCHMARK_ITERATIONS / 10U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.stretched_commands == 0U,
+                                   "map.stretched_commands",
+                                   map_measured.stretched_commands,
+                                   ">",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.double_commands == 0U,
+                                   "map.double_commands",
+                                   map_measured.double_commands,
+                                   ">",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(
+        map_measured.living_commands < UINT64_C(64) * PLAYER_VIEW_BENCHMARK_ITERATIONS,
+        "map.living_commands",
+        map_measured.living_commands,
+        ">=",
+        UINT64_C(64) * PLAYER_VIEW_BENCHMARK_ITERATIONS);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.primary_frames_with_stretch !=
+                                       PLAYER_VIEW_BENCHMARK_ITERATIONS,
+                                   "map.primary_frames_with_stretch",
+                                   map_measured.primary_frames_with_stretch,
+                                   "==",
+                                   PLAYER_VIEW_BENCHMARK_ITERATIONS);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.primary_frames_with_living !=
+                                       PLAYER_VIEW_BENCHMARK_ITERATIONS,
+                                   "map.primary_frames_with_living",
+                                   map_measured.primary_frames_with_living,
+                                   "==",
+                                   PLAYER_VIEW_BENCHMARK_ITERATIONS);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(
         gpu_player_view_depth_mask_count(map_measured.command_depth_mask) !=
-            workload->active_depths ||
-        !animation_submission_verified || !source_uploads_verified ||
-        measured.light_upload_count != 0 ||
-        measured.light_upload_bytes != 0 || !slot_uniform_uploads_verified ||
-        !map_retention_verified ||
-        measured.upload_count !=
-            measured.source_upload_count + measured.instance_upload_count +
-                measured.slot_uniform_upload_count ||
-        measured.upload_bytes !=
-            measured.source_upload_bytes + measured.instance_upload_bytes +
-                measured.slot_uniform_upload_bytes ||
-        !instance_uploads_verified || measured.resource_creations != 0 ||
-        measured.resource_destructions != 0 || measured.readbacks != 0 || measured.fallbacks != 0) {
-        SDL_SetError("production benchmark did not reach its retained stretch/actor plateau");
+            workload->active_depths,
+        "map.command_depths",
+        gpu_player_view_depth_mask_count(map_measured.command_depth_mask),
+        "==",
+        workload->active_depths);
+
+    if (workload->animation_only && !animation_submission_verified) {
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.animation_draws !=
+                                           PLAYER_VIEW_BENCHMARK_ITERATIONS,
+                                       "animation.draws",
+                                       map_measured.animation_draws,
+                                       "==",
+                                       PLAYER_VIEW_BENCHMARK_ITERATIONS);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.animation_reason_draws !=
+                                           PLAYER_VIEW_BENCHMARK_ITERATIONS,
+                                       "animation.reason_draws",
+                                       map_measured.animation_reason_draws,
+                                       "==",
+                                       PLAYER_VIEW_BENCHMARK_ITERATIONS);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.animation_command_transitions == 0U,
+                                       "animation.command_transitions",
+                                       map_measured.animation_command_transitions,
+                                       ">",
+                                       0U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.render_commands == 0U,
+                                       "animation.render_commands",
+                                       map_measured.render_commands,
+                                       ">",
+                                       0U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.reused_render_commands <
+                                           map_measured.render_commands / 2U,
+                                       "animation.reused_render_commands",
+                                       map_measured.reused_render_commands,
+                                       ">=",
+                                       map_measured.render_commands / 2U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.door_commands == 0U,
+                                       "animation.door_commands",
+                                       map_measured.door_commands,
+                                       ">",
+                                       0U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.roof_commands == 0U,
+                                       "animation.roof_commands",
+                                       map_measured.roof_commands,
+                                       ">",
+                                       0U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.primary_frames_with_door !=
+                                           PLAYER_VIEW_BENCHMARK_ITERATIONS,
+                                       "animation.primary_frames_with_door",
+                                       map_measured.primary_frames_with_door,
+                                       "==",
+                                       PLAYER_VIEW_BENCHMARK_ITERATIONS);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.primary_frames_with_roof !=
+                                           PLAYER_VIEW_BENCHMARK_ITERATIONS,
+                                       "animation.primary_frames_with_roof",
+                                       map_measured.primary_frames_with_roof,
+                                       "==",
+                                       PLAYER_VIEW_BENCHMARK_ITERATIONS);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_measured.door_depth_mask == 0U,
+                                       "animation.door_depth_mask",
+                                       map_measured.door_depth_mask,
+                                       "!=",
+                                       0U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(
+            gpu_player_view_depth_mask_count(map_measured.roof_depth_mask) !=
+                workload->active_depths,
+            "animation.roof_depths",
+            gpu_player_view_depth_mask_count(map_measured.roof_depth_mask),
+            "==",
+            workload->active_depths);
+    }
+
+    if (workload->animation_only) {
+        uint64_t source_count_limit =
+            (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS *
+            PLAYER_VIEW_BENCHMARK_ANIMATION_SOURCE_UPLOADS_PER_FRAME;
+        uint64_t source_bytes_limit =
+            (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS *
+            PLAYER_VIEW_BENCHMARK_ANIMATION_SOURCE_BYTES_PER_FRAME;
+        GPU_PLAYER_VIEW_APPEND_FAILURE(!source_uploads_verified &&
+                                           measured.source_upload_count > source_count_limit,
+                                       "uploads.source_count",
+                                       measured.source_upload_count,
+                                       "<=",
+                                       source_count_limit);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(!source_uploads_verified &&
+                                           measured.source_upload_bytes > source_bytes_limit,
+                                       "uploads.source_bytes",
+                                       measured.source_upload_bytes,
+                                       "<=",
+                                       source_bytes_limit);
+    } else {
+        GPU_PLAYER_VIEW_APPEND_FAILURE(!source_uploads_verified &&
+                                           measured.source_upload_count != 0U,
+                                       "uploads.source_count",
+                                       measured.source_upload_count,
+                                       "==",
+                                       0U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(!source_uploads_verified &&
+                                           measured.source_upload_bytes != 0U,
+                                       "uploads.source_bytes",
+                                       measured.source_upload_bytes,
+                                       "==",
+                                       0U);
+    }
+    GPU_PLAYER_VIEW_APPEND_FAILURE(measured.light_upload_count != 0U,
+                                   "uploads.light_count",
+                                   measured.light_upload_count,
+                                   "==",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(measured.light_upload_bytes != 0U,
+                                   "uploads.light_bytes",
+                                   measured.light_upload_bytes,
+                                   "==",
+                                   0U);
+
+    if (!slot_uniform_uploads_verified) {
+        GPU_PLAYER_VIEW_APPEND_FAILURE(measured.batches < map_passes,
+                                       "uploads.slot_batches",
+                                       measured.batches,
+                                       ">=",
+                                       map_passes);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(measured.batches >= map_passes &&
+                                           measured.slot_uniform_upload_count !=
+                                               measured.batches - map_passes,
+                                       "uploads.slot_count",
+                                       measured.slot_uniform_upload_count,
+                                       "==",
+                                       measured.batches - map_passes);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(measured.slot_uniform_upload_count >
+                                           UINT64_MAX / 1024U,
+                                       "uploads.slot_count_bound",
+                                       measured.slot_uniform_upload_count,
+                                       "<=",
+                                       UINT64_MAX / 1024U);
+        if (measured.slot_uniform_upload_count <= UINT64_MAX / 1024U) {
+            GPU_PLAYER_VIEW_APPEND_FAILURE(
+                measured.slot_uniform_upload_bytes <
+                    measured.slot_uniform_upload_count * 16U,
+                "uploads.slot_bytes_min",
+                measured.slot_uniform_upload_bytes,
+                ">=",
+                measured.slot_uniform_upload_count * 16U);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(
+                measured.slot_uniform_upload_bytes >
+                    measured.slot_uniform_upload_count * 1024U,
+                "uploads.slot_bytes_max",
+                measured.slot_uniform_upload_bytes,
+                "<=",
+                measured.slot_uniform_upload_count * 1024U);
+        }
+    }
+
+    if (!map_retention_verified) {
+        GPU_PLAYER_VIEW_APPEND_FAILURE(
+            measured.map_full_redraws + measured.map_retained_frames != completed_maps,
+            "map.full_plus_retained",
+            measured.map_full_redraws + measured.map_retained_frames,
+            "==",
+            completed_maps);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_skipped_passes >
+                                           measured.map_retained_frames,
+                                       "map.skipped_passes",
+                                       measured.map_skipped_passes,
+                                       "<=",
+                                       measured.map_retained_frames);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(map_passes > completed_maps,
+                                       "map.passes",
+                                       map_passes,
+                                       "<=",
+                                       completed_maps);
+        if (workload->animation_only) {
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_damage_frames !=
+                                               PLAYER_VIEW_BENCHMARK_ITERATIONS,
+                                           "map.damage_frames",
+                                           measured.map_damage_frames,
+                                           "==",
+                                           PLAYER_VIEW_BENCHMARK_ITERATIONS);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_full_redraws == 0U,
+                                           "map.full_redraws",
+                                           measured.map_full_redraws,
+                                           ">",
+                                           0U);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_dirty_commands == 0U,
+                                           "map.dirty_commands",
+                                           measured.map_dirty_commands,
+                                           ">",
+                                           0U);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_damage_pixels == 0U,
+                                           "map.damage_pixels",
+                                           measured.map_damage_pixels,
+                                           ">",
+                                           0U);
+        } else {
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_full_redraws != 0U,
+                                           "map.full_redraws",
+                                           measured.map_full_redraws,
+                                           "==",
+                                           0U);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_damage_frames != 0U,
+                                           "map.damage_frames",
+                                           measured.map_damage_frames,
+                                           "==",
+                                           0U);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_retained_frames != completed_maps,
+                                           "map.retained_frames",
+                                           measured.map_retained_frames,
+                                           "==",
+                                           completed_maps);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_skipped_passes != completed_maps,
+                                           "map.skipped_passes",
+                                           measured.map_skipped_passes,
+                                           "==",
+                                           completed_maps);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_dirty_commands != 0U,
+                                           "map.dirty_commands",
+                                           measured.map_dirty_commands,
+                                           "==",
+                                           0U);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_dirty_pixels != 0U,
+                                           "map.dirty_pixels",
+                                           measured.map_dirty_pixels,
+                                           "==",
+                                           0U);
+            GPU_PLAYER_VIEW_APPEND_FAILURE(measured.map_dirty_bytes != 0U,
+                                           "map.dirty_bytes",
+                                           measured.map_dirty_bytes,
+                                           "==",
+                                           0U);
+        }
+    }
+
+    uint64_t expected_upload_count =
+        measured.source_upload_count + measured.instance_upload_count +
+        measured.slot_uniform_upload_count;
+    uint64_t expected_upload_bytes =
+        measured.source_upload_bytes + measured.instance_upload_bytes +
+        measured.slot_uniform_upload_bytes;
+    GPU_PLAYER_VIEW_APPEND_FAILURE(measured.upload_count != expected_upload_count,
+                                   "uploads.total_count",
+                                   measured.upload_count,
+                                   "==",
+                                   expected_upload_count);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(measured.upload_bytes != expected_upload_bytes,
+                                   "uploads.total_bytes",
+                                   measured.upload_bytes,
+                                   "==",
+                                   expected_upload_bytes);
+
+    if (workload->animation_only) {
+        uint64_t instance_count_limit =
+            (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS *
+            PLAYER_VIEW_BENCHMARK_ANIMATION_INSTANCE_UPLOADS_PER_FRAME;
+        uint64_t instance_bytes_limit =
+            (uint64_t)PLAYER_VIEW_BENCHMARK_ITERATIONS *
+            PLAYER_VIEW_BENCHMARK_ANIMATION_INSTANCE_BYTES_PER_FRAME;
+        GPU_PLAYER_VIEW_APPEND_FAILURE(!instance_uploads_verified &&
+                                           measured.instance_upload_count >
+                                               instance_count_limit,
+                                       "uploads.instance_count",
+                                       measured.instance_upload_count,
+                                       "<=",
+                                       instance_count_limit);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(!instance_uploads_verified &&
+                                           measured.instance_upload_bytes >
+                                               instance_bytes_limit,
+                                       "uploads.instance_bytes",
+                                       measured.instance_upload_bytes,
+                                       "<=",
+                                       instance_bytes_limit);
+    } else {
+        GPU_PLAYER_VIEW_APPEND_FAILURE(!instance_uploads_verified &&
+                                           measured.instance_upload_count != 0U,
+                                       "uploads.instance_count",
+                                       measured.instance_upload_count,
+                                       "==",
+                                       0U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(!instance_uploads_verified &&
+                                           measured.instance_upload_bytes != 0U,
+                                       "uploads.instance_bytes",
+                                       measured.instance_upload_bytes,
+                                       "==",
+                                       0U);
+    }
+    GPU_PLAYER_VIEW_APPEND_FAILURE(measured.resource_creations != 0U,
+                                   "resources.creations",
+                                   measured.resource_creations,
+                                   "==",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(measured.resource_destructions != 0U,
+                                   "resources.destructions",
+                                   measured.resource_destructions,
+                                   "==",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(measured.readbacks != 0U,
+                                   "resources.readbacks",
+                                   measured.readbacks,
+                                   "==",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(measured.fallbacks != 0U,
+                                   "resources.fallbacks",
+                                   measured.fallbacks,
+                                   "==",
+                                   0U);
+#undef GPU_PLAYER_VIEW_APPEND_FAILURE
+    if (benchmark_diagnostic_length != 0U) {
+        SDL_SetError("production benchmark invariant failures for %s: %s",
+                     workload->name,
+                     benchmark_diagnostic);
         return false;
     }
 
@@ -2649,7 +3022,13 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
             (strcmp(animation_checkpoints[0], animation_checkpoints[1]) != 0 ||
              strcmp(animation_checkpoints[1], animation_checkpoints[2]) != 0);
         if (!animation_path_verified) {
-            SDL_SetError("door/roof/actor animation workload produced no changing frame");
+            unsigned int transitions =
+                (strcmp(animation_checkpoints[0], animation_checkpoints[1]) != 0) +
+                (strcmp(animation_checkpoints[1], animation_checkpoints[2]) != 0);
+            SDL_SetError("production benchmark invariant failure for %s: "
+                         "animation_checkpoint_transitions=%u (expected > 0)",
+                         workload->name,
+                         transitions);
             return false;
         }
     }
@@ -2888,14 +3267,100 @@ static bool gpu_player_view_lifecycle_sustain(gpu_player_view_lifecycle_event_t 
         event->frame_samples[frame] = SDL_GetTicksNS() - started;
     }
     gpu_renderer_statistics_get(&event->steady);
-    if (event->steady.upload_count != event->steady.slot_uniform_upload_count ||
-        event->steady.upload_bytes != event->steady.slot_uniform_upload_bytes ||
-        !gpu_player_view_slot_uniform_uploads_bounded(&event->steady) ||
-        event->steady.slot_uniform_upload_count > event->steady.batches ||
-        event->steady.resource_creations != 0 || event->steady.resource_destructions != 0 ||
-        event->steady.readbacks != 0 || event->steady.fallbacks != 0 ||
-        event->steady.commands == 0 || event->steady.batches == 0 || event->steady.draws == 0) {
-        SDL_SetError("production lifecycle did not return to a retained steady state");
+    char diagnostic[PLAYER_VIEW_DIAGNOSTIC_SIZE] = {0};
+    size_t diagnostic_length = 0;
+#define GPU_PLAYER_VIEW_APPEND_FAILURE(condition, name, observed, comparison, expected) \
+    do {                                                                                \
+        if (condition) {                                                                \
+            gpu_player_view_diagnostic_append_counter(diagnostic,                      \
+                                                      sizeof(diagnostic),                \
+                                                      &diagnostic_length,                \
+                                                      name,                             \
+                                                      observed,                         \
+                                                      comparison,                       \
+                                                      expected);                        \
+        }                                                                               \
+    } while (0)
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.upload_count !=
+                                       event->steady.slot_uniform_upload_count,
+                                   "steady.upload_count",
+                                   event->steady.upload_count,
+                                   "==",
+                                   event->steady.slot_uniform_upload_count);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.upload_bytes !=
+                                       event->steady.slot_uniform_upload_bytes,
+                                   "steady.upload_bytes",
+                                   event->steady.upload_bytes,
+                                   "==",
+                                   event->steady.slot_uniform_upload_bytes);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.slot_uniform_upload_count >
+                                       UINT64_MAX / 1024U,
+                                   "steady.slot_count_bound",
+                                   event->steady.slot_uniform_upload_count,
+                                   "<=",
+                                   UINT64_MAX / 1024U);
+    if (event->steady.slot_uniform_upload_count <= UINT64_MAX / 1024U) {
+        GPU_PLAYER_VIEW_APPEND_FAILURE(
+            event->steady.slot_uniform_upload_bytes <
+                event->steady.slot_uniform_upload_count * 16U,
+            "steady.slot_bytes_min",
+            event->steady.slot_uniform_upload_bytes,
+            ">=",
+            event->steady.slot_uniform_upload_count * 16U);
+        GPU_PLAYER_VIEW_APPEND_FAILURE(
+            event->steady.slot_uniform_upload_bytes >
+                event->steady.slot_uniform_upload_count * 1024U,
+            "steady.slot_bytes_max",
+            event->steady.slot_uniform_upload_bytes,
+            "<=",
+            event->steady.slot_uniform_upload_count * 1024U);
+    }
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.slot_uniform_upload_count >
+                                       event->steady.batches,
+                                   "steady.slot_count",
+                                   event->steady.slot_uniform_upload_count,
+                                   "<=",
+                                   event->steady.batches);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.resource_creations != 0U,
+                                   "steady.resource_creations",
+                                   event->steady.resource_creations,
+                                   "==",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.resource_destructions != 0U,
+                                   "steady.resource_destructions",
+                                   event->steady.resource_destructions,
+                                   "==",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.readbacks != 0U,
+                                   "steady.readbacks",
+                                   event->steady.readbacks,
+                                   "==",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.fallbacks != 0U,
+                                   "steady.fallbacks",
+                                   event->steady.fallbacks,
+                                   "==",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.commands == 0U,
+                                   "steady.commands",
+                                   event->steady.commands,
+                                   ">",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.batches == 0U,
+                                   "steady.batches",
+                                   event->steady.batches,
+                                   ">",
+                                   0U);
+    GPU_PLAYER_VIEW_APPEND_FAILURE(event->steady.draws == 0U,
+                                   "steady.draws",
+                                   event->steady.draws,
+                                   ">",
+                                   0U);
+#undef GPU_PLAYER_VIEW_APPEND_FAILURE
+    if (diagnostic_length != 0U) {
+        SDL_SetError("production lifecycle steady-state invariant failures for %s: %s",
+                     event->name,
+                     diagnostic);
         return false;
     }
     return gpu_renderer_output_size(&event->output_width, &event->output_height) &&
