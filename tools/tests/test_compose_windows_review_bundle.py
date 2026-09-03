@@ -116,6 +116,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "icacls.exe",
                     '"/inheritance:r"',
                     '"/grant:r"',
+                    '"/remove"',
                     '"/setowner"',
                     "RawSecurityDescriptor",
                     "DiscretionaryAclProtected",
@@ -166,8 +167,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     powershell.index("function Protect-ReviewTemporaryDirectory")
                 ]
                 self.assertNotIn('"/reset"', secret_protection)
-                self.assertIn('"/restore"', secret_protection)
-                self.assertIn("WriteAllLines", secret_protection)
+                self.assertNotIn('"/restore"', secret_protection)
+                self.assertIn('"/remove"', secret_protection)
                 self.assertNotIn('"/setowner"', secret_protection)
                 self.assertIn(
                     '        "/grant",\r\n'

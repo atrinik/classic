@@ -309,36 +309,59 @@ function Protect-ReviewSecretFile([string]$Path, [switch]$WriteAccess) {
         throw "Secret file is a reparse point: $Path"
     }
     $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $SidArgument = "*$($CurrentSid.Value)"
+    $Access = if ($WriteAccess) { "F" } else { "R" }
     $ExpectedMask = if ($WriteAccess) { 0x1f01ff } else { 0x120089 }
     # The launcher creates this file under the current identity. Replace only
-    # the DACL with a protected owner ACE so validation does not need elevation.
+    # the DACL with a protected current-user ACE so validation does not need
+    # an elevated owner change.
     $AclFile = Join-Path $Root (
         ".atrinik-review-acl-" + [Guid]::NewGuid().ToString("N") + ".txt"
     )
     try {
-        $Parent = [System.IO.Path]::GetDirectoryName($Info.FullName)
-        $Leaf = [System.IO.Path]::GetFileName($Info.FullName)
-        if ([string]::IsNullOrEmpty($Parent) -or [string]::IsNullOrEmpty($Leaf)) {
-            throw "Secret file path has no parent or leaf: $Path"
-        }
-        Assert-ReviewPathAncestors $Parent
         Assert-ReviewPathAncestors $AclFile
-        $AccessMask = "0x{0:X8}" -f $ExpectedMask
-        [System.IO.File]::WriteAllLines(
-            $AclFile,
-            @(
-                $Leaf,
-                "D:P(A;;$AccessMask;;;$($CurrentSid.Value))"
-            ),
-            [System.Text.Encoding]::Unicode
-        )
+        [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
         [void](Invoke-ReviewIcacls -Arguments @(
-            $Parent,
-            "/restore",
-            $AclFile,
+            $Path,
+            "/grant:r",
+            "$($SidArgument):($Access)",
             "/q"
         ))
+        Remove-Item -LiteralPath $AclFile -Force -ErrorAction SilentlyContinue
+        [void](Invoke-ReviewIcacls -Arguments @($Path, "/save", $AclFile, "/q"))
+        $AclLines = @(
+            Get-Content -LiteralPath $AclFile -Encoding Unicode -ErrorAction Stop
+        )
+        $SddlLines = @(
+            $AclLines | Where-Object { $_ -match "^D:" }
+        )
+        if ($SddlLines.Count -ne 1) {
+            throw "Secret file ACL export is not one descriptor: $Path"
+        }
+        $ExistingDescriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+            $SddlLines[0]
+        )
+        $ExistingDacl = $ExistingDescriptor.DiscretionaryAcl
+        if ($null -eq $ExistingDacl) {
+            throw "Secret file ACL export has no DACL: $Path"
+        }
+        $ExistingSids = @(
+            $ExistingDacl |
+                ForEach-Object { $_.SecurityIdentifier.Value } |
+                Select-Object -Unique
+        )
+        foreach ($Sid in $ExistingSids) {
+            if ($Sid -ne $CurrentSid.Value) {
+                [void](Invoke-ReviewIcacls -Arguments @(
+                    $Path,
+                    "/remove",
+                    "*$Sid",
+                    "/q"
+                ))
+            }
+        }
         Assert-ReviewPathAncestors $Path
+        Remove-Item -LiteralPath $AclFile -Force -ErrorAction SilentlyContinue
         [void](Invoke-ReviewIcacls -Arguments @($Path, "/save", $AclFile, "/q"))
         $AclLines = @(
             Get-Content -LiteralPath $AclFile -Encoding Unicode -ErrorAction Stop
