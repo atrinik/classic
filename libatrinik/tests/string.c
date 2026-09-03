@@ -45,6 +45,26 @@ static int test_replace_unprintable(void) {
     return 0;
 }
 
+static int test_newline(void) {
+    char lf[] = "line\n";
+    string_strip_newline(lf);
+    require(strcmp(lf, "line") == 0);
+
+    char crlf[] = "line\r\n";
+    string_strip_newline(crlf);
+    require(strcmp(crlf, "line") == 0);
+
+    char only_newline[] = "\n";
+    string_strip_newline(only_newline);
+    require(strcmp(only_newline, "") == 0);
+
+    char no_newline[] = "line";
+    string_strip_newline(no_newline);
+    require(strcmp(no_newline, "line") == 0);
+
+    return 0;
+}
+
 static int test_whitespace(void) {
     char value[] = "\xc3\xa9   \xe4\xb8\x96\t\xf0\x9f\x8c\x8d";
     string_whitespace_squeeze(value);
@@ -69,6 +89,9 @@ static int test_whitespace(void) {
 int main(void) {
     toolkit_import(string);
     int result = test_replace_unprintable();
+    if (result == 0) {
+        result = test_newline();
+    }
     if (result == 0) {
         result = test_whitespace();
     }

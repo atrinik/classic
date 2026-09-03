@@ -23,6 +23,34 @@ static bool sensitive_handler(const char *arg, char **errmsg) {
     return true;
 }
 
+static int test_crlf_category(void) {
+    char path[] = "/tmp/atrinik-clioptions-test.XXXXXX";
+    int fd = mkstemp(path);
+    if (fd == -1) {
+        return 1;
+    }
+
+    FILE *fp = fdopen(fd, "wb");
+    if (fp == NULL) {
+        close(fd);
+        unlink(path);
+        return 1;
+    }
+
+    static const char config[] = "[general]\r\n"
+                                  "secret = general-value\r\n"
+                                  "[meta]\r\n"
+                                  "secret = meta-value\r\n";
+    int failed = fwrite(config, 1, sizeof(config) - 1, fp) != sizeof(config) - 1;
+    failed |= fclose(fp) != 0;
+    if (!failed) {
+        failed = !clioptions_load(path, "[general]") ||
+                 strcmp(observed, "general-value") != 0;
+    }
+    failed |= unlink(path) != 0;
+    return failed;
+}
+
 int main(void) {
     toolkit_import(clioptions);
 
@@ -55,6 +83,7 @@ int main(void) {
     failed |= strcmp(clioptions_get("secret"), "<redacted>") != 0;
 
     logger_set_print_func(logger_do_print);
+    failed |= test_crlf_category();
     if (errmsg != NULL) {
         OPENSSL_cleanse(errmsg, strlen(errmsg) + 1U);
     }

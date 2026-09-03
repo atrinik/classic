@@ -88,20 +88,14 @@ void hfiles_deinit(void) {
 }
 
 /**
- * Read help files from file.
+ * Parse help files from an open file.
  */
-void hfiles_init(void) {
-    FILE *fp;
-    char buf[HUGE_BUF], *key, *value, *end;
+static void hfiles_load(FILE *fp) {
+    char buf[HUGE_BUF], *key, *value;
     hfile_struct *hfile;
     StringBuffer *sb;
 
-    fp = server_file_open_name(SERVER_FILE_HFILES);
-
-    if (fp == NULL) {
-        LOG(BUG, "Could not open help files: %s", strerror(errno));
-        return;
-    }
+    HARD_ASSERT(fp != NULL);
 
     hfiles_deinit();
     hfile = NULL;
@@ -113,11 +107,7 @@ void hfiles_init(void) {
             key++;
         }
 
-        end = strchr(buf, '\n');
-
-        if (end != NULL) {
-            *end = '\0';
-        }
+        string_strip_newline(buf);
 
         /* Empty line or a comment */
         if (*key == '\0' || *key == '#') {
@@ -152,11 +142,16 @@ void hfiles_init(void) {
                 }
 
                 while (fgets(buf, sizeof(buf), fp)) {
-                    if (strcmp(buf, "endmsg\n") == 0) {
+                    bool has_newline = strchr(buf, '\n') != NULL;
+                    string_strip_newline(buf);
+                    if (strcmp(buf, "endmsg") == 0) {
                         break;
                     }
 
                     stringbuffer_append_string(sb, buf);
+                    if (has_newline) {
+                        stringbuffer_append_char(sb, '\n');
+                    }
                 }
 
                 hfile->msg = stringbuffer_finish(sb);
@@ -183,8 +178,6 @@ void hfiles_init(void) {
         }
     }
 
-    fclose(fp);
-
     if (hfile != NULL) {
         LOG(BUG, "Help block without end: %s", hfile->key);
         hfile_free(hfile);
@@ -192,6 +185,21 @@ void hfiles_init(void) {
 
     command_buf[0] = '\0';
     utarray_new(command_matches, &ut_str_icd);
+}
+
+/**
+ * Read help files from file.
+ */
+void hfiles_init(void) {
+    FILE *fp = server_file_open_name(SERVER_FILE_HFILES);
+
+    if (fp == NULL) {
+        LOG(BUG, "Could not open help files: %s", strerror(errno));
+        return;
+    }
+
+    hfiles_load(fp);
+    fclose(fp);
 }
 
 /**
@@ -208,6 +216,53 @@ hfile_struct *help_find(const char *name) {
 
     return hfile;
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+static bool hfiles_parser_test_case(const char *input, const char *expected) {
+    FILE *fp = tmpfile();
+    if (fp == NULL) {
+        return false;
+    }
+
+    size_t input_len = strlen(input);
+    bool success = fwrite(input, 1, input_len, fp) == input_len;
+    if (success) {
+        success = fseek(fp, 0, SEEK_SET) == 0;
+    }
+    if (success) {
+        hfiles_load(fp);
+        hfile_struct *hfile = help_find("parser-test");
+        success = hfile != NULL && hfile->msg != NULL &&
+                  strcmp(hfile->msg, expected) == 0 &&
+                  hfile->msg_len == strlen(expected);
+    }
+
+    hfiles_deinit();
+    success = fclose(fp) == 0 && success;
+    return success;
+}
+
+bool hfiles_parser_test(void) {
+    static const char lf[] =
+        "help parser-test\n"
+        "msg\n"
+        "first line\n"
+        "second line\n"
+        "endmsg\n"
+        "end\n";
+    static const char crlf[] =
+        "help parser-test\r\n"
+        "msg\r\n"
+        "first line\r\n"
+        "second line\r\n"
+        "endmsg\r\n"
+        "end\r\n";
+    static const char expected[] = "first line\nsecond line\n";
+
+    return hfiles_parser_test_case(lf, expected) &&
+           hfiles_parser_test_case(crlf, expected);
+}
+#endif
 
 /**
  * Show a help GUI.

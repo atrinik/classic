@@ -558,6 +558,8 @@ if (BUILD_TESTING)
         ATRINIK_GPU_CONFORMANCE_TESTS
         ATRINIK_WIDGET_TESTS)
 
+    add_test(NAME client-help-parser COMMAND ${EXECUTABLE} --help-parser-test)
+
     if (NOT MINGW)
         target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_SOUND_TESTS)
 
