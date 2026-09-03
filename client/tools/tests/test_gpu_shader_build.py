@@ -31,6 +31,10 @@ manifest_writer = load_module(
 
 
 class GPUShaderBuildTests(unittest.TestCase):
+    @staticmethod
+    def write_ascii(path: Path, contents: str) -> None:
+        path.write_bytes(contents.encode("ascii"))
+
     def write_cohort(self, directory: Path) -> Path:
         lines = []
         for name in embed.EXPECTED_NAMES:
@@ -39,7 +43,7 @@ class GPUShaderBuildTests(unittest.TestCase):
             digest = hashlib.sha256(payload).hexdigest()
             lines.append(f"{digest}  ./{name}\n")
         manifest = directory / "expected.sha256"
-        manifest.write_text("".join(lines), encoding="ascii")
+        self.write_ascii(manifest, "".join(lines))
         return manifest
 
     def test_embed_requires_and_embeds_the_complete_locked_cohort(self) -> None:
@@ -60,15 +64,14 @@ class GPUShaderBuildTests(unittest.TestCase):
             root = Path(directory)
             manifest = self.write_cohort(root)
             lines = manifest.read_text(encoding="ascii").splitlines()
-            manifest.write_text("\n".join(lines[:-1]) + "\n", encoding="ascii")
+            self.write_ascii(manifest, "\n".join(lines[:-1]) + "\n")
             with self.assertRaisesRegex(embed.ShaderError, "membership mismatch"):
                 embed.load_manifest(manifest)
-            manifest.write_text("\n".join((*lines, lines[0])) + "\n", encoding="ascii")
+            self.write_ascii(manifest, "\n".join((*lines, lines[0])) + "\n")
             with self.assertRaisesRegex(embed.ShaderError, "duplicate"):
                 embed.load_manifest(manifest)
-            manifest.write_text(
-                lines[0].replace("final_fragment", "unknown") + "\n",
-                encoding="ascii",
+            self.write_ascii(
+                manifest, lines[0].replace("final_fragment", "unknown") + "\n"
             )
             with self.assertRaisesRegex(embed.ShaderError, "membership mismatch"):
                 embed.load_manifest(manifest)
