@@ -103,6 +103,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "Stop-ReviewProcessTree",
                     "taskkill.exe",
                     "function Invoke-ReviewIcacls",
+                    "function Get-ReviewDiagnosticTail",
+                    "function Assert-ReviewPathAncestors",
                     "function Protect-ReviewSecretFile",
                     "icacls.exe",
                     '"/inheritance:r"',
@@ -133,8 +135,16 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "ready_marker",
                     "BeginOutputReadLine",
                     "stdout_ready_marker",
+                    "ServerExitDiagnostics",
+                    "stdout_tail=",
+                    "stderr_tail=",
+                    "RedirectStandardOutput = $true",
+                    "RedirectStandardError = $true",
+                    "$ClientOutputLines",
+                    "$ClientErrorLines",
                 ):
                     self.assertIn(token, powershell)
+                self.assertIn("if ($LaunchLockHeld)", powershell)
                 self.assertNotIn('$Account + ":" + $Password', powershell)
                 self.assertNotIn("$Process.Kill($true)", powershell)
                 self.assertNotIn("Get-Acl", powershell)
