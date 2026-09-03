@@ -34,7 +34,6 @@ def _directory(path: Path, label: str) -> Path:
     return path.resolve()
 
 
-
 def _package_path(root: Path, relative: PurePosixPath, label: str) -> Path:
     path = root
     for part in relative.parts:
@@ -42,6 +41,7 @@ def _package_path(root: Path, relative: PurePosixPath, label: str) -> Path:
         if path.is_symlink():
             raise FixtureError(f"{label} contains a symbolic-link component: {path}")
     return path
+
 
 def _read_lf(path: Path, label: str) -> bytes:
     if path.is_symlink() or not path.is_file():
