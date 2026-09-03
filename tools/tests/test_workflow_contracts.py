@@ -1264,10 +1264,14 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"maps/regions.reg"', smoke)
+        self.assertIn('$ErrorActionPreference = "Stop"', smoke)
         self.assertIn('$startInfo.RedirectStandardError = $true', smoke)
         self.assertIn('        "call",', smoke)
         self.assertNotIn('        "2>&1"', smoke)
         self.assertIn('$errorTask = $process.StandardError.ReadToEndAsync()', smoke)
+        self.assertIn('Get-CapturedOutput', smoke)
+        self.assertIn('Captured output:', smoke)
+        self.assertIn('Captured output available before the deadline:', smoke)
         self.assertIn('Get-ProcessTreeEvidence', smoke)
         self.assertIn('Get-PackagedServerProcesses', smoke)
         self.assertIn('Get-PortEvidence', smoke)
@@ -1275,6 +1279,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(
             smoke.index('$errorTask = $process.StandardError.ReadToEndAsync()'),
             smoke.index('$deadline ='),
+        )
+        self.assertLess(
+            smoke.index('$remainderTask = $process.StandardOutput.ReadToEndAsync()'),
+            smoke.index('$listenerEndpoints ='),
         )
         shutdown_loop = smoke[
             smoke.index("$shutdownDeadline =") : smoke.index(

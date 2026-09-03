@@ -3,6 +3,8 @@ param(
     [string]$Package
 )
 
+$ErrorActionPreference = "Stop"
+
 function Get-ProcessTreeEvidence {
     param([int]$RootProcessId)
     try {
@@ -65,6 +67,30 @@ function Get-PortEvidence {
         throw "Could not inspect packaged server UDP endpoints: $($_.Exception.Message)"
     }
 }
+
+function Get-CapturedOutput {
+    param(
+        [System.Collections.Generic.List[string]]$Lines,
+        $RemainderTask,
+        $ErrorTask
+    )
+
+    $output = $Lines -join "`n"
+    if ($null -ne $RemainderTask -and $RemainderTask.IsCompleted) {
+        $remainder = $RemainderTask.Result
+        if ($remainder) {
+            $output += "`n$remainder"
+        }
+    }
+    if ($null -ne $ErrorTask -and $ErrorTask.IsCompleted) {
+        $errorOutput = $ErrorTask.Result
+        if ($errorOutput) {
+            $output += "`nSTDERR:`n$errorOutput"
+        }
+    }
+    return [string]$output
+}
+
 $packagePath = (Resolve-Path -LiteralPath $Package).Path
 $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "atrinik-server-package-smoke-{0}" -f [System.Guid]::NewGuid()
@@ -75,6 +101,7 @@ $remainderTask = $null
 $serverExecutable = $null
 $stdinOpen = $false
 $bodySucceeded = $false
+$output = ""
 $portProbe = [System.Net.Sockets.UdpClient]::new(0)
 try {
     $serverPort = ([System.Net.IPEndPoint]$portProbe.Client.LocalEndPoint).Port
@@ -199,16 +226,54 @@ try {
         )
     }
 
+    $remainderTask = $process.StandardOutput.ReadToEndAsync()
     $listenerEndpoints = @(Get-NetUDPEndpoint -LocalPort $serverPort)
     if (
         $listenerEndpoints.Count -ne 1 -or
         $listenerEndpoints[0].LocalAddress -ne "127.0.0.1"
     ) {
         $boundAddresses = ($listenerEndpoints | ForEach-Object { $_.LocalAddress }) -join ", "
-        throw "Packaged server listener is not isolated to IPv4 loopback: $boundAddresses"
+        $processTree = Get-ProcessTreeEvidence -RootProcessId $process.Id
+        try {
+            $process.StandardInput.Close()
+        } catch {
+            if (-not $process.HasExited) {
+                throw
+            }
+        }
+        $stdinOpen = $false
+        if (-not $process.HasExited) {
+            try {
+                $process.Kill($true)
+            } catch {
+                if (-not $process.HasExited) {
+                    throw
+                }
+            }
+        }
+        if (-not $process.WaitForExit(10000)) {
+            throw (
+                "Packaged server process tree did not exit after listener containment:`n" +
+                "$processTree"
+            )
+        }
+        $remainderClosed = $remainderTask.Wait(10000)
+        $errorClosed = $errorTask.Wait(10000)
+        $failureOutput = Get-CapturedOutput -Lines $lines -RemainderTask $remainderTask -ErrorTask $errorTask
+        if (-not $remainderClosed -or -not $errorClosed) {
+            throw (
+                "Packaged server listener output did not close within 10 seconds:`n" +
+                "Captured output available before the deadline:`n$failureOutput`n" +
+                "Process tree before containment:`n$processTree"
+            )
+        }
+        throw (
+            "Packaged server listener is not isolated to IPv4 loopback: $boundAddresses`n" +
+            "Captured output:`n$failureOutput`n" +
+            "Process tree before containment:`n$processTree"
+        )
     }
 
-    $remainderTask = $process.StandardOutput.ReadToEndAsync()
     $shutdownProcessTree = $null
     $shutdownDeadline = [System.DateTime]::UtcNow.AddSeconds(30)
     $shutdownAttempts = 0
@@ -260,8 +325,10 @@ try {
         } else {
             Get-ProcessTreeEvidence -RootProcessId $process.Id
         }
+        $partialOutput = Get-CapturedOutput -Lines $lines -RemainderTask $remainderTask -ErrorTask $errorTask
         throw (
             "Packaged server output did not close within 10 seconds:`n" +
+            "Captured output available before the deadline:`n$partialOutput`n" +
             "Process tree:`n$processTree"
         )
     }
@@ -326,6 +393,7 @@ try {
             "Packaged server cleanup did not complete within 10 seconds:`n" +
             "Remaining processes:`n$remainingProcessText`n" +
             "Remaining UDP endpoints:`n$remainingEndpointText`n" +
+            "Captured output:`n$output`n" +
             "Process tree:`n$processTree"
         )
     }
@@ -392,7 +460,9 @@ try {
         }
     }
     if ($bodySucceeded -and $cleanupFailures.Count -ne 0) {
-        throw ($cleanupFailures -join "; ")
+        throw (
+            ($cleanupFailures -join "; ") + "`nCaptured output:`n$output"
+        )
     }
     if (-not $bodySucceeded -and $cleanupFailures.Count -ne 0) {
         Write-Warning ("Packaged server smoke cleanup findings: " + ($cleanupFailures -join "; "))
