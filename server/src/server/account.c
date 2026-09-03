@@ -633,8 +633,6 @@ bool account_provision_from_file(const char *name,
     char account_name[MAX_BUF];
     char character_name[MAX_BUF];
     bool ok = false;
-    int fd = -1;
-    FILE *fp = NULL;
 
     HARD_ASSERT(password_file != NULL);
     HARD_ASSERT(preset != NULL);
@@ -652,54 +650,30 @@ bool account_provision_from_file(const char *name,
         return false;
     }
 
-    memset(password, 0, sizeof(password));
-    int flags = O_RDONLY;
-#ifdef O_CLOEXEC
-    flags |= O_CLOEXEC;
-#endif
-#ifdef O_NOFOLLOW
-    flags |= O_NOFOLLOW;
-#endif
-    fd = open(password_file, flags);
-    if (fd < 0) {
-        snprintf(error, error_size, "cannot open password file: %s", strerror(errno));
+    bool permissive_mode = false;
+    path_secret_error_t password_error =
+        path_read_secret(password_file, VS(password), &permissive_mode);
+    if (permissive_mode) {
+        snprintf(error,
+                 error_size,
+                 "password file must be owned by this user and mode 0600");
         goto out;
     }
-
-    struct stat statbuf;
-    if (fstat(fd, &statbuf) != 0 || !S_ISREG(statbuf.st_mode)) {
-        snprintf(error, error_size, "password file is not a regular file");
-        goto out;
-    }
-#ifndef WIN32
-    if (statbuf.st_uid != geteuid() || (statbuf.st_mode & 0777) != SAVE_MODE) {
-        snprintf(error, error_size, "password file must be owned by this user and mode 0600");
-        goto out;
-    }
-#endif
-    fp = fdopen(fd, "rb");
-    if (fp == NULL) {
-        snprintf(error, error_size, "cannot read password file: %s", strerror(errno));
-        goto out;
-    }
-    fd = -1;
-    size_t length = fread(password, 1, sizeof(password) - 1, fp);
-    if (ferror(fp) || !feof(fp)) {
-        snprintf(error, error_size, "password file is too large or unreadable");
-        goto out;
-    }
-    if (memchr(password, '\0', length) != NULL) {
-        snprintf(error, error_size, "password file contains a NUL byte");
-        goto out;
-    }
-    if (length > 0 && password[length - 1] == '\n') {
-        password[--length] = '\0';
-        if (length > 0 && password[length - 1] == '\r') {
-            password[--length] = '\0';
+    if (password_error != PATH_SECRET_OK) {
+        if (password_error == PATH_SECRET_TRAILING_DATA) {
+            snprintf(error, error_size, "password file must contain exactly one line");
+        } else if (password_error == PATH_SECRET_NOT_FOUND ||
+                   password_error == PATH_SECRET_OPEN_ERROR) {
+            snprintf(error,
+                     error_size,
+                     "cannot open password file: %s",
+                     path_secret_error_string(password_error));
+        } else {
+            snprintf(error,
+                     error_size,
+                     "cannot read password file: %s",
+                     path_secret_error_string(password_error));
         }
-    }
-    if (memchr(password, '\n', length) != NULL || memchr(password, '\r', length) != NULL) {
-        snprintf(error, error_size, "password file must contain exactly one line");
         goto out;
     }
     ok = account_provision(name, password, character, archname, error, error_size);
@@ -736,11 +710,6 @@ bool account_provision_from_file(const char *name,
         ok = false;
     }
 out:
-    if (fp != NULL) {
-        fclose(fp);
-    } else if (fd >= 0) {
-        close(fd);
-    }
     OPENSSL_cleanse(password, sizeof(password));
     return ok;
 }

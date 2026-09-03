@@ -17,6 +17,7 @@
 #include <account.h>
 #include <initialization.h>
 #include <player.h>
+#include <toolkit/path.h>
 
 START_TEST(test_account_provision) {
     const char *account_name = "scenarioaccount";
@@ -106,6 +107,14 @@ START_TEST(test_account_provision_password_file_permissions) {
     ck_assert_int_eq(write(fd, password, sizeof(password) - 1), sizeof(password) - 1);
     ck_assert_int_eq(close(fd), 0);
 
+#ifdef WIN32
+    unlink(password_path);
+    ck_assert_int_eq(path_secret_create_atomic(password_path,
+                                               password,
+                                               sizeof(password) - 1),
+                     PATH_SECRET_CREATE_OK);
+#endif
+
 #ifndef WIN32
     ck_assert(!account_provision_from_file(account_name,
                                            password_path,
@@ -124,12 +133,20 @@ START_TEST(test_account_provision_password_file_permissions) {
                                            VS(error)));
     ck_assert_ptr_nonnull(strstr(error, "exactly one line"));
 
+    const char valid_password[] = "local-file-8!\r\n";
+#ifdef WIN32
+    unlink(password_path);
+    ck_assert_int_eq(path_secret_create_atomic(password_path,
+                                               valid_password,
+                                               sizeof(valid_password) - 1),
+                     PATH_SECRET_CREATE_OK);
+#else
     fd = open(password_path, O_WRONLY | O_TRUNC);
     ck_assert_int_ge(fd, 0);
-    const char valid_password[] = "local-file-8!\r\n";
     ck_assert_int_eq(write(fd, valid_password, sizeof(valid_password) - 1),
                      sizeof(valid_password) - 1);
     ck_assert_int_eq(close(fd), 0);
+#endif
     ck_assert(account_provision_from_file(account_name,
                                           password_path,
                                           character_name,

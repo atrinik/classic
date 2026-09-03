@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright 2009-2026 The Atrinik Project                             *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -129,6 +129,9 @@ static uint64_t last_keepalive_us;
  * Command line option settings.
  */
 clioption_settings_struct clioption_settings;
+
+/** Whether connect[2] was loaded from --connect_password_file. */
+static bool clioption_connect_password_file_loaded;
 
 /** Keepalive request accounting for the current connection. */
 static client_keepalive_state_t keepalive_state;
@@ -519,6 +522,7 @@ void clioption_settings_deinit(void) {
     for (i = 0; i < arraysize(clioption_settings.connect); i++) {
         clioption_connect_value_clear(i);
     }
+    clioption_connect_password_file_loaded = false;
 
     free(clioption_settings.game_news_url);
 
@@ -578,8 +582,18 @@ static bool clioptions_option_connect(const char *arg, char **errmsg) {
     char *cps[4];
     size_t num = string_split(cp, cps, arraysize(cps), ':');
 
+    bool preserve_file_password =
+        clioption_connect_password_file_loaded && (num <= 2 || *cps[2] == '\0');
+
     for (size_t i = 0; i < arraysize(clioption_settings.connect); i++) {
+        if (i == 2 && preserve_file_password) {
+            continue;
+        }
         clioption_connect_value_clear(i);
+    }
+
+    if (!preserve_file_password) {
+        clioption_connect_password_file_loaded = false;
     }
 
     for (size_t i = 0; i < num; i++) {
@@ -622,6 +636,7 @@ static bool clioptions_option_connect_password_file(const char *arg, char **errm
 
     clioption_connect_value_clear(2);
     clioption_settings.connect[2] = xstrdup(password);
+    clioption_connect_password_file_loaded = true;
     OPENSSL_cleanse(password, sizeof(password));
     return true;
 }

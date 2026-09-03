@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -1007,11 +1007,9 @@ path_read_secret(const char *path, char *secret, size_t secret_size, bool *permi
 
     char *newline = memchr(secret, '\n', length);
     if (newline != NULL) {
-        for (char *cp = newline + 1; cp < secret + length; cp++) {
-            if (*cp != '\r' && *cp != '\n') {
-                result = PATH_SECRET_TRAILING_DATA;
-                goto out;
-            }
+        if ((size_t)(newline - secret) + 1U < length) {
+            result = PATH_SECRET_TRAILING_DATA;
+            goto out;
         }
 
         for (;;) {
@@ -1035,13 +1033,8 @@ path_read_secret(const char *path, char *secret, size_t secret_size, bool *permi
             if (trailing_length == 0) {
                 break;
             }
-            for (size_t i = 0; i < trailing_length; i++) {
-                if (trailing[i] != '\r' && trailing[i] != '\n') {
-                    result = PATH_SECRET_TRAILING_DATA;
-                    goto out;
-                }
-            }
-            OPENSSL_cleanse(trailing, sizeof(trailing));
+            result = PATH_SECRET_TRAILING_DATA;
+            goto out;
         }
 
         size_t used = (size_t)(newline - secret);
