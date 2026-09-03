@@ -245,7 +245,10 @@ function Protect-ReviewSecretFile([string]$Path) {
         )
         $ExpectedSddl = "D:P(A;;FR;;;$($CurrentSid.Value))"
         if ($SddlLines.Count -ne 1 -or $SddlLines[0] -ne $ExpectedSddl) {
-            throw "Secret file ACL is not owner-only: $Path"
+            throw (
+                "Secret file ACL is not owner-only: $Path; observed SDDL: " +
+                ($SddlLines -join "|") + "; expected: $ExpectedSddl"
+            )
         }
     } finally {
         Remove-Item -LiteralPath $AclFile -Force -ErrorAction SilentlyContinue
