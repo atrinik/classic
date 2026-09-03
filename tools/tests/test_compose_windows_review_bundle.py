@@ -109,6 +109,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "D:P(A;;FR;;;",
                     "function Remove-ReviewSecretFile",
                     "function Remove-ReviewSecretFiles",
+                    "Remove-ReviewSecretFile $Candidate",
                     '"$($SidArgument):(F)"',
                     '"server-data-stage-*"',
                     '"server-data-incomplete-*"',
