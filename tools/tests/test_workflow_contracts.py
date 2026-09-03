@@ -1264,6 +1264,18 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"maps/regions.reg"', smoke)
+        self.assertIn('$startInfo.RedirectStandardError = $true', smoke)
+        self.assertIn('        "call",', smoke)
+        self.assertNotIn('        "2>&1"', smoke)
+        self.assertIn('$errorTask = $process.StandardError.ReadToEndAsync()', smoke)
+        self.assertIn('Get-ProcessTreeEvidence', smoke)
+        self.assertIn('Get-PackagedServerProcesses', smoke)
+        self.assertIn('Get-PortEvidence', smoke)
+        self.assertIn('Remaining UDP endpoints:', smoke)
+        self.assertLess(
+            smoke.index('$errorTask = $process.StandardError.ReadToEndAsync()'),
+            smoke.index('$deadline ='),
+        )
         shutdown_loop = smoke[
             smoke.index("$shutdownDeadline =") : smoke.index(
                 'if ($process.ExitCode -ne 0)', smoke.index("$shutdownDeadline =")
@@ -1303,6 +1315,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('$listenerEndpoints[0].LocalAddress -ne "127.0.0.1"', smoke)
         self.assertIn('if ($output -match "Discovered a direct")', smoke)
         self.assertIn("$bodySucceeded -and $cleanupFailures.Count -ne 0", smoke)
+        self.assertIn("Packaged server cleanup left", smoke)
+        self.assertIn("Process tree before containment", smoke)
+        self.assertIn("$stdinOpen = $false", smoke)
+        self.assertLess(smoke.index("$cleanupDeadline ="), smoke.index("$bodySucceeded = $true"))
         self.assertIn('$process.StandardInput.WriteLine("shutdown")', smoke)
         self.assertLess(
             smoke.index('"Server ready\\. Waiting for connections"'),

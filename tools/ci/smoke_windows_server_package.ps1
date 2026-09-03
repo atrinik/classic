@@ -3,12 +3,77 @@ param(
     [string]$Package
 )
 
-$ErrorActionPreference = "Stop"
+function Get-ProcessTreeEvidence {
+    param([int]$RootProcessId)
+    try {
+        $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    } catch {
+        return "process-tree-error=$($_.Exception.Message)"
+    }
+
+    $ids = [System.Collections.Generic.HashSet[int]]::new()
+    [void]$ids.Add($RootProcessId)
+    $changed = $true
+    while ($changed) {
+        $changed = $false
+        foreach ($candidate in $processes) {
+            if ($ids.Contains([int]$candidate.ParentProcessId) -and $ids.Add([int]$candidate.ProcessId)) {
+                $changed = $true
+            }
+        }
+    }
+
+    $rows = @(
+        $processes |
+            Where-Object { $ids.Contains([int]$_.ProcessId) } |
+            Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine
+    )
+    if ($rows.Count -eq 0) {
+        return "root-process-id=$RootProcessId (no live process rows)"
+    }
+    return ($rows | ConvertTo-Json -Compress)
+}
+
+function Get-PackagedServerProcesses {
+    param([string]$ExecutablePath)
+
+    try {
+        return @(
+            Get-CimInstance -ClassName Win32_Process -Filter "Name = 'atrinik-server.exe'" -ErrorAction Stop |
+                Where-Object {
+                    [string]::Equals(
+                        [string]$_.ExecutablePath,
+                        $ExecutablePath,
+                        [System.StringComparison]::OrdinalIgnoreCase
+                    )
+                }
+        )
+    } catch {
+        throw "Could not inspect packaged server processes: $($_.Exception.Message)"
+    }
+}
+
+function Get-PortEvidence {
+    param([int]$Port)
+
+    try {
+        return @(
+            Get-NetUDPEndpoint -LocalPort $Port -ErrorAction Stop |
+                Select-Object LocalAddress, LocalPort, OwningProcess
+        )
+    } catch {
+        throw "Could not inspect packaged server UDP endpoints: $($_.Exception.Message)"
+    }
+}
 $packagePath = (Resolve-Path -LiteralPath $Package).Path
 $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "atrinik-server-package-smoke-{0}" -f [System.Guid]::NewGuid()
 )
 $process = $null
+$errorTask = $null
+$remainderTask = $null
+$serverExecutable = $null
+$stdinOpen = $false
 $bodySucceeded = $false
 $portProbe = [System.Net.Sockets.UdpClient]::new(0)
 try {
@@ -25,6 +90,7 @@ try {
     }
 
     $serverRoot = Join-Path $packageRoots[0].FullName "server"
+    $serverExecutable = Join-Path $serverRoot "atrinik-server.exe"
     $regions = Join-Path $serverRoot "maps/regions.reg"
     if (-not (Test-Path -LiteralPath $regions -PathType Leaf)) {
         throw "Packaged server is missing server/maps/regions.reg"
@@ -35,6 +101,7 @@ try {
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $env:ComSpec
+    $startInfo.RedirectStandardError = $true
     $startInfo.WorkingDirectory = $serverRoot
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
@@ -47,14 +114,14 @@ try {
     foreach ($argument in @(
         "/d",
         "/c",
+        "call",
         "server.bat",
         "--port_quic=$serverPort",
         "--network_stack=ipv4=127.0.0.1",
         "--port_mapping=off",
         "--stun_server=off",
         "--metaserver_publish_origin=http://127.0.0.1:9",
-        "--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic",
-        "2>&1"
+        "--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic"
     )) {
         $startInfo.ArgumentList.Add($argument)
     }
@@ -64,6 +131,8 @@ try {
     if (-not $process.Start()) {
         throw "Could not launch the packaged server"
     }
+    $stdinOpen = $true
+    $errorTask = $process.StandardError.ReadToEndAsync()
 
     $lines = [System.Collections.Generic.List[string]]::new()
     $ready = $false
@@ -87,8 +156,47 @@ try {
     }
 
     if (-not $ready) {
+        $stdinState = if ($stdinOpen) { "open" } else { "closed" }
+        $processTree = Get-ProcessTreeEvidence -RootProcessId $process.Id
+        try {
+            $process.StandardInput.Close()
+        } catch {
+            if (-not $process.HasExited) {
+                throw
+            }
+        }
+        $stdinOpen = $false
+        if (-not $process.HasExited) {
+            try {
+                $process.Kill($true)
+            } catch {
+                if (-not $process.HasExited) {
+                    throw
+                }
+            }
+        }
+        if (-not $process.WaitForExit(10000)) {
+            throw "Packaged server process tree did not exit after readiness containment:`n$processTree"
+        }
+        $lineClosed = $lineTask.Wait(10000)
+        $errorClosed = $errorTask.Wait(10000)
+        if (-not $lineClosed -or -not $errorClosed) {
+            throw "Packaged server readiness output did not close within 10 seconds:`nProcess tree:`n$processTree"
+        }
+        $lastLine = $lineTask.Result
+        if ($lastLine) {
+            $lines.Add($lastLine)
+        }
+        $errorOutput = $errorTask.Result
         $output = $lines -join "`n"
-        throw "Packaged server did not reach the ready state within 60 seconds:`n$output"
+        if ($errorOutput) {
+            $output += "`nSTDERR:`n$errorOutput"
+        }
+        throw (
+            "Packaged server did not reach the ready state within 60 seconds " +
+            "(stdin=$stdinState):`nSTDOUT:`n$output`n" +
+            "Process tree before containment:`n$processTree"
+        )
     }
 
     $listenerEndpoints = @(Get-NetUDPEndpoint -LocalPort $serverPort)
@@ -101,6 +209,7 @@ try {
     }
 
     $remainderTask = $process.StandardOutput.ReadToEndAsync()
+    $shutdownProcessTree = $null
     $shutdownDeadline = [System.DateTime]::UtcNow.AddSeconds(30)
     $shutdownAttempts = 0
     while (-not $process.HasExited -and [System.DateTime]::UtcNow -lt $shutdownDeadline) {
@@ -119,7 +228,18 @@ try {
         }
     }
     $shutdownTimedOut = -not $process.HasExited
-    $process.StandardInput.Close()
+    if ($shutdownTimedOut) {
+        $shutdownProcessTree = Get-ProcessTreeEvidence -RootProcessId $process.Id
+    }
+    $stdinState = if ($stdinOpen) { "open" } else { "closed" }
+    try {
+        $process.StandardInput.Close()
+    } catch {
+        if (-not $process.HasExited) {
+            throw
+        }
+    }
+    $stdinOpen = $false
     if ($shutdownTimedOut) {
         try {
             $process.Kill($true)
@@ -132,9 +252,18 @@ try {
             throw "Packaged server process tree did not exit after forced containment"
         }
     }
-    if (-not $remainderTask.Wait(10000)) {
-        $output = $lines -join "`n"
-        throw "Packaged server output did not close within 10 seconds:`n$output"
+    $remainderClosed = $remainderTask.Wait(10000)
+    $errorClosed = $errorTask.Wait(10000)
+    if (-not $remainderClosed -or -not $errorClosed) {
+        $processTree = if ($shutdownProcessTree) {
+            $shutdownProcessTree
+        } else {
+            Get-ProcessTreeEvidence -RootProcessId $process.Id
+        }
+        throw (
+            "Packaged server output did not close within 10 seconds:`n" +
+            "Process tree:`n$processTree"
+        )
     }
 
     $remainder = $remainderTask.Result
@@ -142,11 +271,21 @@ try {
         $lines.Add($remainder)
         Write-Host $remainder
     }
+    $errorOutput = $errorTask.Result
     $output = $lines -join "`n"
+    if ($errorOutput) {
+        $output += "`nSTDERR:`n$errorOutput"
+    }
     if ($shutdownTimedOut) {
+        $processTree = if ($shutdownProcessTree) {
+            $shutdownProcessTree
+        } else {
+            Get-ProcessTreeEvidence -RootProcessId $process.Id
+        }
         throw (
             "Packaged server did not shut down after $shutdownAttempts " +
-            "graceful attempts within 30 seconds:`n$output"
+            "graceful attempts within 30 seconds (stdin=$stdinState):`n" +
+            "STDOUT:`n$output`nProcess tree before containment:`n$processTree"
         )
     }
     if ($process.ExitCode -ne 0) {
@@ -158,6 +297,38 @@ try {
     if ($output -match "Discovered a direct") {
         throw "Loopback-only packaged server advertised a direct candidate:`n$output"
     }
+    $cleanupDeadline = [System.DateTime]::UtcNow.AddSeconds(10)
+    $remainingServerProcesses = @()
+    $remainingEndpoints = @()
+    do {
+        $remainingServerProcesses = @(Get-PackagedServerProcesses -ExecutablePath $serverExecutable)
+        $remainingEndpoints = @(Get-PortEvidence -Port $serverPort)
+        if ($remainingServerProcesses.Count -eq 0 -and $remainingEndpoints.Count -eq 0) {
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([System.DateTime]::UtcNow -lt $cleanupDeadline)
+    if ($remainingServerProcesses.Count -ne 0 -or $remainingEndpoints.Count -ne 0) {
+        $processTree = Get-ProcessTreeEvidence -RootProcessId $process.Id
+        $remainingProcessText = if ($remainingServerProcesses.Count -gt 0) {
+            $remainingServerProcesses |
+                Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine |
+                ConvertTo-Json -Compress
+        } else {
+            "none"
+        }
+        $remainingEndpointText = if ($remainingEndpoints.Count -gt 0) {
+            $remainingEndpoints | ConvertTo-Json -Compress
+        } else {
+            "none"
+        }
+        throw (
+            "Packaged server cleanup did not complete within 10 seconds:`n" +
+            "Remaining processes:`n$remainingProcessText`n" +
+            "Remaining UDP endpoints:`n$remainingEndpointText`n" +
+            "Process tree:`n$processTree"
+        )
+    }
     $bodySucceeded = $true
 } finally {
     $cleanupFailures = [System.Collections.Generic.List[string]]::new()
@@ -167,6 +338,7 @@ try {
         } catch {
             Write-Warning "Could not close packaged server input: $_"
         }
+        $stdinOpen = $false
         try {
             if (-not $process.HasExited) {
                 $process.Kill($true)
@@ -184,6 +356,22 @@ try {
                 Write-Warning "Could not dispose packaged server process: $_"
                 $cleanupFailures.Add("Could not dispose packaged server process")
             }
+        }
+    }
+    if ($null -ne $serverExecutable) {
+        try {
+            $remainingServerProcesses = @(Get-PackagedServerProcesses -ExecutablePath $serverExecutable)
+            $remainingEndpoints = @(Get-PortEvidence -Port $serverPort)
+            if ($remainingServerProcesses.Count -ne 0 -or $remainingEndpoints.Count -ne 0) {
+                $cleanupFailures.Add(
+                    "Packaged server cleanup left " +
+                    "$($remainingServerProcesses.Count) process(es) and " +
+                    "$($remainingEndpoints.Count) UDP endpoint(s)"
+                )
+            }
+        } catch {
+            Write-Warning "Could not verify packaged server cleanup: $_"
+            $cleanupFailures.Add("Could not verify packaged server cleanup")
         }
     }
     if (Test-Path -LiteralPath $smokeRoot) {
@@ -205,5 +393,8 @@ try {
     }
     if ($bodySucceeded -and $cleanupFailures.Count -ne 0) {
         throw ($cleanupFailures -join "; ")
+    }
+    if (-not $bodySucceeded -and $cleanupFailures.Count -ne 0) {
+        Write-Warning ("Packaged server smoke cleanup findings: " + ($cleanupFailures -join "; "))
     }
 }
