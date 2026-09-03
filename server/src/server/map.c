@@ -1245,7 +1245,7 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         cp = string_sub(path_cp, 0, -coords_len);
 
         for (i = 0; i < TILED_NUM; i++) {
-            if (m->celestial_schema == 1 || m->tile_path[i] != NULL) {
+            if (m->tile_path[i] != NULL) {
                 continue;
             }
 

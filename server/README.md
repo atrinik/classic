@@ -366,8 +366,9 @@ Run it through a dedicated Classic-derived wrapper profile and isolated state:
 ```
 
 The inventory never rewrites authored maps, `map_info` objects, or mutable
-state. Linked topology is discovered only from explicit reciprocal authored
-records; filenames never synthesize celestial-v1 neighbours.
+state. It includes the runtime closure of authored links and existing
+filename-derived neighbours. Celestial boundary and vertical-stack metadata
+remain authoritative only when explicitly authored.
 
 Celestial lighting diagnostics
 ------------------------------

@@ -1212,8 +1212,10 @@ bool celestial_structure_validate_header(mapstruct *map, char *error, size_t err
                          map_path(map));
     }
     for (size_t i = 0; i < TILED_NUM; i++) {
-        if ((map->tile_path[i] != NULL) !=
-            (map->celestial_boundary[i] != CELESTIAL_BOUNDARY_UNSET)) {
+        bool has_path = map->tile_path[i] != NULL;
+        bool has_boundary = map->celestial_boundary[i] != CELESTIAL_BOUNDARY_UNSET;
+        if ((map->celestial_tile_path_seen[i] && (!has_path || !has_boundary)) ||
+            (!map->celestial_tile_path_seen[i] && !has_path && has_boundary)) {
             return set_error(error,
                              error_size,
                              "%s tile_path_%u and celestial_boundary_%u disagree",
