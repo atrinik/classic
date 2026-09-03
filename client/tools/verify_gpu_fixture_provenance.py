@@ -400,10 +400,13 @@ def _runtime_file_paths(runtime_root: Path, manifest_relative: str) -> set[str]:
     for candidate in runtime_root.rglob("*"):
         _require(not candidate.is_symlink(),
                  f"content runtime contains a symbolic link: {candidate}")
-        if candidate.is_file():
-            relative = candidate.relative_to(runtime_root).as_posix()
-            if relative not in ignored_paths:
-                actual_paths.add(relative)
+        if candidate.is_dir():
+            continue
+        _require(candidate.is_file(),
+                 f"content runtime contains a non-regular entry: {candidate}")
+        relative = candidate.relative_to(runtime_root).as_posix()
+        if relative not in ignored_paths:
+            actual_paths.add(relative)
     return actual_paths
 
 

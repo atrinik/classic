@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -111,6 +112,15 @@ class GpuFixtureProvenanceTests(unittest.TestCase):
                 {"maps/example.map"},
                 _runtime_file_paths(root, "manifest.json"),
             )
+
+    def test_non_regular_runtime_entry_is_rejected(self) -> None:
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("FIFO creation is unavailable on this platform")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            os.mkfifo(root / "unexpected.fifo")
+            with self.assertRaisesRegex(ProvenanceError, "non-regular entry"):
+                _runtime_file_paths(root, "manifest.json")
 
 
 if __name__ == "__main__":
