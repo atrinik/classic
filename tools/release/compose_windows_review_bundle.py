@@ -411,7 +411,19 @@ try {
                     throw "The isolated scenario provisioner did not exit within 60 seconds"
                 }
                 if ($Provision.ExitCode -ne 0) {
-                    throw "The isolated scenario provisioner exited with code $($Provision.ExitCode)"
+                    $ProvisionDiagnostics = "provision log missing"
+                    if (Test-Path -LiteralPath $StageProvisionLog -PathType Leaf) {
+                        $ProvisionDiagnostics = @(
+                            Get-Content -LiteralPath $StageProvisionLog -Tail 20 -ErrorAction SilentlyContinue |
+                                ForEach-Object {
+                                    $_ -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]'
+                                }
+                        ) -join "|"
+                    }
+                    throw (
+                        "The isolated scenario provisioner exited with code " +
+                        "$($Provision.ExitCode); diagnostics: $ProvisionDiagnostics"
+                    )
                 }
             } finally {
                 $Provision.Dispose()
