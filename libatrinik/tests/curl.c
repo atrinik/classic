@@ -267,6 +267,40 @@ static int test_bounded_request_diagnostic(void) {
     pthread_join(thread, NULL);
     close(fixture.listener);
 
+    static const char not_modified_response[] = "HTTP/1.1 304 Not Modified\r\n"
+                                                "Content-Length: 0\r\n"
+                                                "Connection: close\r\n"
+                                                "\r\n";
+    http_fixture_t cache_fixture = {.listener = -1, .response = not_modified_response};
+    char cache_url[128];
+    if (http_fixture_start(&cache_fixture, cache_url, sizeof(cache_url)) != 0) {
+        return 1;
+    }
+    pthread_t cache_thread;
+    if (pthread_create(&cache_thread, NULL, http_fixture_run, &cache_fixture) != 0) {
+        close(cache_fixture.listener);
+        return 1;
+    }
+    request = curl_request_create_with_origin(cache_url, CURL_PKEY_TRUST_SYSTEM, "cache-test");
+    curl_request_do_get(request);
+    curl_state_t cache_state = curl_request_get_state(request);
+    int cache_http_code = curl_request_get_http_code(request);
+    curl_request_free(request);
+    pthread_join(cache_thread, NULL);
+    close(cache_fixture.listener);
+    bool cache_without_path = cache_fixture.accepted &&
+                               cache_state == CURL_STATE_ERROR &&
+                               cache_http_code == 304;
+
+    captured_log[0] = '\0';
+    request = curl_request_create_with_origin("https://127.0.0.1:9",
+                                              CURL_PKEY_TRUST_SYSTEM,
+                                              "client.asset");
+    curl_request_do_get(request);
+    bool https_loopback =
+        strstr(captured_log, "HTTP request origin=client.asset endpoint=https-loopback") != NULL;
+    curl_request_free(request);
+
     request = curl_request_create_with_origin(url, CURL_PKEY_TRUST_SYSTEM, NULL);
     curl_request_free(request);
     request = curl_request_create_with_origin(url, CURL_PKEY_TRUST_SYSTEM, "");
@@ -287,7 +321,8 @@ static int test_bounded_request_diagnostic(void) {
 
     return !fixture.accepted || state != CURL_STATE_OK || http_code != 200 ||
            strstr(loopback_log, "HTTP request origin=unknown endpoint=http-loopback") == NULL ||
-           strstr(loopback_log, url) != NULL || !other_endpoint;
+           strstr(loopback_log, url) != NULL || !other_endpoint || !cache_without_path ||
+           !https_loopback;
 }
 
 int main(void) {

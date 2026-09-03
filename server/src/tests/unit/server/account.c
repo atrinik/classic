@@ -133,6 +133,31 @@ START_TEST(test_account_provision_password_file_permissions) {
                                            VS(error)));
     ck_assert_ptr_nonnull(strstr(error, "exactly one line"));
 
+    char missing_password_path[HUGE_BUF];
+    snprintf(VS(missing_password_path), "%s/scenario-password-missing", settings.datapath);
+    unlink(missing_password_path);
+    ck_assert(!account_provision_from_file(account_name,
+                                           missing_password_path,
+                                           character_name,
+                                           "human_male",
+                                           "basic-player",
+                                           VS(error)));
+    ck_assert_ptr_nonnull(strstr(error, "cannot open password file"));
+
+    static const char empty_password[] = "";
+    unlink(password_path);
+    ck_assert_int_eq(path_secret_create_atomic(password_path,
+                                               empty_password,
+                                               sizeof(empty_password) - 1),
+                     PATH_SECRET_CREATE_OK);
+    ck_assert(!account_provision_from_file(account_name,
+                                           password_path,
+                                           character_name,
+                                           "human_male",
+                                           "basic-player",
+                                           VS(error)));
+    ck_assert_ptr_nonnull(strstr(error, "cannot read password file"));
+
     const char valid_password[] = "local-file-8!\r\n";
 #ifdef WIN32
     unlink(password_path);
