@@ -15,8 +15,8 @@ zero, +1, and +2.
 family. It binds the static Classic `data/archdef.dat` input, the selected
 `atrinik/content@main` runtime release and manifest, the generated archetype
 artifact, and the worldmaker output boundary. The selected content coordinate
-is `v1.0.0` at
-`63eb9bb5f02fb9104c2385d5e01c28c3df20b735`; the 2026-09-01 issue observation
+is `v1.7.0` at
+`08e8bc869d5d727d3862997176a137275f349869`; the 2026-09-01 issue observation
 (`v1.5.0` at `b9580ce4b920644494a9912f6ea4f37b4a4e7aa6`) remains recorded as
 historical evidence.
 
