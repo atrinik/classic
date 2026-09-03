@@ -1292,6 +1292,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("[redacted-url]", review_smoke)
         self.assertIn("Server log tail", review_smoke)
         self.assertIn("Client log tail", review_smoke)
+        self.assertIn("Launcher failure log tail", review_smoke)
         self.assertIn("$_.OwningProcess -eq $process.Id", review_smoke)
         self.assertIn('"atrinik-server.exe"', review_smoke)
         self.assertIn("$launcherStartInfo.FileName = $env:ComSpec", review_smoke)

@@ -105,6 +105,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "function Invoke-ReviewIcacls",
                     "function Get-ReviewDiagnosticTail",
                     "function Assert-ReviewPathAncestors",
+                    "function Write-ReviewFailure",
+                    '"launcher-failure.log"',
                     "function Protect-ReviewSecretFile",
                     "icacls.exe",
                     '"/inheritance:r"',
