@@ -1272,10 +1272,21 @@ class WorkflowContractTests(unittest.TestCase):
         review_smoke = (
             ROOT / "tools" / "ci" / "smoke_windows_review_bundle.ps1"
         ).read_text(encoding="utf-8")
+        client_main = (ROOT / "client" / "src" / "client" / "main.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("clioption_connect_value_clear", client_main)
+        self.assertIn("clioptions_option_connect_password_file", client_main)
+        self.assertIn("path_read_secret", client_main)
+        self.assertIn("clioptions_enable_sensitive(cli)", client_main)
         self.assertIn("BUNDLE-MANIFEST.json", review_smoke)
         self.assertIn("Language.Parser]::ParseFile", review_smoke)
         self.assertIn("Get-FileHash -Algorithm SHA256", review_smoke)
         self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", review_smoke)
+        self.assertIn("$launcherStartInfo.RedirectStandardOutput = $true", review_smoke)
+        self.assertIn("$launcherStartInfo.RedirectStandardError = $true", review_smoke)
+        self.assertIn('Environment["ATRINIK_REVIEW_NO_PAUSE"] = "1"', review_smoke)
+        self.assertIn("Launcher stdout", review_smoke)
         self.assertIn("$_.OwningProcess -eq $process.Id", review_smoke)
         self.assertIn('"atrinik-server.exe"', review_smoke)
         self.assertIn("$launcherStartInfo.FileName = $env:ComSpec", review_smoke)
