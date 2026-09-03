@@ -128,6 +128,9 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "StandardInput.WriteLine(\"shutdown\")",
                     "Client shutdown complete",
                     "Server shutdown complete",
+                    "ServerDiagnostics",
+                    "identity_recent",
+                    "ready_marker",
                 ):
                     self.assertIn(token, powershell)
                 self.assertNotIn('$Account + ":" + $Password', powershell)

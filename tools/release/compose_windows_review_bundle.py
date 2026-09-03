@@ -548,7 +548,33 @@ try {
             $Server.Refresh()
         }
         if (-not $Ready) {
-            throw "Server did not reach loopback-ready state within 60 seconds"
+            $IdentityRecent = $false
+            if ($null -ne $IdentityInfo) {
+                $IdentityRecent = $IdentityInfo.LastWriteTimeUtc -ge $Started
+            }
+            $ServerLogExists = Test-Path -LiteralPath $ServerLog
+            $ReadyMarker = $ServerLogText -match "Server ready\. Waiting for connections"
+            $ShutdownMarker = $ServerLogText -match "Server shutdown complete\."
+            $EndpointSummary = @(
+                $Endpoint | ForEach-Object {
+                    "$($_.LocalAddress):$($_.LocalPort)"
+                }
+            ) -join ","
+            $ServerDiagnostics = @(
+                "exited=$($Server.HasExited)"
+                "endpoint_count=$($Endpoint.Count)"
+                "endpoints=$EndpointSummary"
+                "identity_exists=$($null -ne $IdentityInfo)"
+                "identity_length=$(if ($null -ne $IdentityInfo) { $IdentityInfo.Length } else { 0 })"
+                "identity_recent=$IdentityRecent"
+                "server_log_exists=$ServerLogExists"
+                "ready_marker=$ReadyMarker"
+                "shutdown_marker=$ShutdownMarker"
+            ) -join "; "
+            throw (
+                "Server did not reach loopback-ready state within 60 seconds; " +
+                "diagnostics: $ServerDiagnostics"
+            )
         }
 
         $Fingerprint = (& (Join-Path $Root "python.exe") (Join-Path $Root "review-quic-fingerprint.py") $Identity).Trim()
