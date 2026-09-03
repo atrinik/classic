@@ -140,10 +140,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "ServerExitDiagnostics",
                     "stdout_tail=",
                     "stderr_tail=",
-                    "RedirectStandardOutput = $true",
-                    "RedirectStandardError = $true",
-                    "$ClientOutputLines",
-                    "$ClientErrorLines",
+                    "$Client = Start-Process",
+                    "-PassThru",
                 ):
                     self.assertIn(token, powershell)
                 self.assertIn("if ($LaunchLockHeld)", powershell)

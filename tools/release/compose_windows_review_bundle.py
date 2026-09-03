@@ -182,8 +182,6 @@ $Server = $null
 $Client = $null
 $ServerOutputLines = $null
 $ServerErrorLines = $null
-$ClientOutputLines = $null
-$ClientErrorLines = $null
 
 function ConvertTo-ReviewArguments([string[]]$Values) {
     return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
@@ -720,14 +718,7 @@ try {
             throw "Could not derive the server QUIC certificate fingerprint"
         }
 
-        $ClientStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-        $ClientStartInfo.FileName = Join-Path $Root "atrinik.exe"
-        $ClientStartInfo.WorkingDirectory = $Root
-        $ClientStartInfo.UseShellExecute = $false
-        $ClientStartInfo.CreateNoWindow = $false
-        $ClientStartInfo.RedirectStandardOutput = $true
-        $ClientStartInfo.RedirectStandardError = $true
-        $ClientStartInfo.Arguments = ConvertTo-ReviewArguments @(
+        $ClientArguments = ConvertTo-ReviewArguments @(
             "--nometa",
             "--game_news_url=off",
             "--stun_server=off",
@@ -757,28 +748,15 @@ try {
             $ClientData,
             "Process"
         )
-        $Client = [System.Diagnostics.Process]::new()
-        $Client.StartInfo = $ClientStartInfo
-        $ClientOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-        $ClientErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-        $Client.add_OutputDataReceived({
-            param($Sender, $EventArgs)
-            if ($null -ne $EventArgs.Data) {
-                [void]$ClientOutputLines.Enqueue($EventArgs.Data)
-            }
-        }.GetNewClosure())
-        $Client.add_ErrorDataReceived({
-            param($Sender, $EventArgs)
-            if ($null -ne $EventArgs.Data) {
-                [void]$ClientErrorLines.Enqueue($EventArgs.Data)
-            }
-        }.GetNewClosure())
         try {
-            if (-not $Client.Start()) {
+            $Client = Start-Process `
+                -FilePath (Join-Path $Root "atrinik.exe") `
+                -ArgumentList $ClientArguments `
+                -WorkingDirectory $Root `
+                -PassThru
+            if ($null -eq $Client) {
                 throw "Could not start the packaged client"
             }
-            $Client.BeginOutputReadLine()
-            $Client.BeginErrorReadLine()
         } finally {
             foreach ($Name in @(
                 "HTTP_PROXY",
@@ -800,8 +778,7 @@ try {
         $Client.WaitForExit()
         $Client.Refresh()
         $ClientDiagnostics = @(
-            "stdout=$(Get-ReviewDiagnosticTail $ClientOutputLines)"
-            "stderr=$(Get-ReviewDiagnosticTail $ClientErrorLines)"
+            "client_log_exists=$(Test-Path -LiteralPath $ClientLog -PathType Leaf)"
         ) -join "; "
         if ($Client.ExitCode -ne 0) {
             throw (
