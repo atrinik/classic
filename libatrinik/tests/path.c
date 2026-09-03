@@ -317,6 +317,20 @@ int main(int argc, char **argv) {
     require(path_read_secret(trailing, VS(secret), NULL) == PATH_SECRET_TRAILING_DATA);
     require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
 
+    char embedded_nul[HUGE_BUF];
+    require(snprintf(VS(embedded_nul), "%s/embedded-nul", directory) <
+            (int)sizeof(embedded_nul));
+    static const char embedded_nul_data[] = "secret\0wrong\n";
+    require(path_secret_create_atomic(embedded_nul,
+                                      embedded_nul_data,
+                                      sizeof(embedded_nul_data) - 1U) == PATH_SECRET_CREATE_OK);
+#ifndef WIN32
+    require(chmod(embedded_nul, 0600) == 0);
+#endif
+    memset(secret, 'x', sizeof(secret));
+    require(path_read_secret(embedded_nul, VS(secret), NULL) == PATH_SECRET_INVALID_DATA);
+    require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
+
     char boundary_trailing[HUGE_BUF];
     require(snprintf(VS(boundary_trailing), "%s/boundary-trailing", directory) <
             (int)sizeof(boundary_trailing));
@@ -414,6 +428,7 @@ int main(int argc, char **argv) {
     unlink(link_path);
 #endif
     unlink(atomic);
+    unlink(embedded_nul);
     unlink(trailing);
     unlink(boundary_trailing);
     unlink(too_long);

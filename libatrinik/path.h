@@ -55,6 +55,7 @@ typedef enum path_secret_error {
     PATH_SECRET_EMPTY,
     PATH_SECRET_TOO_LONG,
     PATH_SECRET_TRAILING_DATA,
+    PATH_SECRET_INVALID_DATA,
     PATH_SECRET_READ_ERROR
 } path_secret_error_t;
 
@@ -118,8 +119,9 @@ path_secret_create_atomic(const char *path, const void *data, size_t size);
  * Read the first line of a strict secret file through one verified file handle.
  *
  * `secret` is caller-owned and is always cleared before use and again on every
- * Only an optional LF or CRLF terminator may follow the secret; later bytes are rejected.
- * error. A successful read NUL-terminates it. `permissive_mode`, when non-NULL,
+ * error. Only an optional LF or CRLF terminator may follow the secret; later
+ * bytes and embedded NUL bytes are rejected. A successful read NUL-terminates it.
+ * `permissive_mode`, when non-NULL,
  * reports an otherwise readable file whose POSIX mode or Windows DACL grants
  * broader access; policy-sensitive callers should reject that result. Link,
  * reparse, owner, regular-file, length, and trailing-data failures are distinct.

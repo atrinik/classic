@@ -191,7 +191,13 @@ function Stop-ReviewProcessTree([System.Diagnostics.Process]$Process, [string]$L
         return
     }
     if (-not $Process.HasExited) {
-        $Process.Kill($true)
+        $Output = @(& taskkill.exe /PID $Process.Id /T /F 2>&1)
+        if ($LASTEXITCODE -ne 0 -and -not $Process.HasExited) {
+            throw (
+                "$Label process tree termination failed with exit code " +
+                "$($LASTEXITCODE): $($Output -join ' ')"
+            )
+        }
     }
     if (-not $Process.WaitForExit(10000)) {
         throw "$Label process tree did not exit after forced containment"
@@ -235,7 +241,7 @@ function Protect-ReviewSecretFile([string]$Path) {
         [void](Invoke-ReviewIcacls -Arguments @($Path, "/save", $AclFile, "/q"))
         $SddlLines = @(
             Get-Content -LiteralPath $AclFile -ErrorAction Stop |
-                Where-Object { $_ -match "^D:" }
+                Where-Object { $_ -match "^D:P\(" }
         )
         $ExpectedSddl = "D:P(A;;FR;;;$($CurrentSid.Value))"
         if ($SddlLines.Count -ne 1 -or $SddlLines[0] -ne $ExpectedSddl) {
