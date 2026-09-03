@@ -108,13 +108,15 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "function Write-ReviewFailure",
                     '"launcher-failure.log"',
                     "function Protect-ReviewSecretFile",
+                    "function Protect-ReviewTemporaryDirectory",
+                    '"$($SidArgument):(OI)(CI)(F)"',
                     "icacls.exe",
                     '"/inheritance:r"',
                     '"/grant:r"',
                     '"/setowner"',
                     "RawSecurityDescriptor",
                     "DiscretionaryAclProtected",
-                    "AccessMask -eq 0x120089",
+                    "AccessMask -eq $ExpectedMask",
                     '-Encoding Unicode',
                     r'Where-Object { $_ -match "^D:" }',
                     "function Remove-ReviewSecretFile",
@@ -150,6 +152,10 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     self.assertIn(token, powershell)
                 self.assertIn(
                     '# Protect the empty file before materializing the disposable secret.',
+                    powershell,
+                )
+                self.assertIn(
+                    'Protect-ReviewSecretFile $StagePassword -CreateEmpty -WriteAccess',
                     powershell,
                 )
                 self.assertNotIn("Set-Content -LiteralPath $LauncherFailureLog", powershell)
