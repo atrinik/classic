@@ -1239,6 +1239,7 @@ class WorkflowContractTests(unittest.TestCase):
             run.index("Verify staged client package GPU fixture bytes before launch"),
             run.index('"smoke_windows_review_bundle.ps1"'),
         )
+        self.assertNotIn('"atrinik-classic-issue-477-windows-one-click-*.zip"', run)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
         self.assertIn('"libatrinik-path.exe"', run)
         self.assertIn("New-Item -ItemType Junction", run)
