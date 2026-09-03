@@ -24,9 +24,9 @@ class GpuFixtureProvenanceTests(unittest.TestCase):
     def test_bound_fixture_and_content_coordinate_pass(self) -> None:
         result = verify(ROOT.parent)
 
-        self.assertEqual("v1.0.0", result["content_coordinate"]["tag"])
+        self.assertEqual("v1.7.0", result["content_coordinate"]["tag"])
         self.assertEqual(
-            "63eb9bb5f02fb9104c2385d5e01c28c3df20b735",
+            "08e8bc869d5d727d3862997176a137275f349869",
             result["content_coordinate"]["commit"],
         )
         self.assertEqual(
