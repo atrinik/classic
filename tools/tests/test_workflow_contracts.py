@@ -47,6 +47,35 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ATRINIK_BENCHMARK_REVISION=${revision}", workflow)
         self.assertIn("ATRINIK_BENCHMARK_DIRTY=false", workflow)
 
+    def test_gpu_fixture_provenance_is_gated_before_qualification(self) -> None:
+        workflow = self.text("gpu-qualification.yml")
+        cmake = (ROOT / "client/CMakeLists.txt").read_text(encoding="utf-8")
+        client_package = (ROOT / "client/tools/build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        server_package = (ROOT / "server/tools/build-windows-package.sh").read_text(
+            encoding="utf-8"
+        )
+        coverage = (ROOT / "tools/ci/run_gpu_coverage.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Verify frozen GPU fixture provenance", workflow)
+        self.assertIn(
+            "run: python3 client/tools/verify_gpu_fixture_provenance.py", workflow
+        )
+        self.assertIn("client-gpu-fixture-provenance", cmake)
+        self.assertIn("DEPENDS client-gpu-fixture-provenance", cmake)
+        self.assertIn("python3 tools/verify_gpu_fixture_provenance.py", client_package)
+        self.assertIn(
+            "python3 ../client/tools/verify_gpu_fixture_provenance.py "
+            "--content-runtime runtime/content",
+            server_package,
+        )
+        self.assertIn(
+            "python3 client/tools/verify_gpu_fixture_provenance.py", coverage
+        )
+
     def test_release_builds_use_one_cmake_version_interface(self) -> None:
         check = self.text("check.yml")
         candidate = self.text("build-release-candidate.yml")
