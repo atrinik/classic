@@ -276,7 +276,10 @@ content and swap files from legacy headers.
 
 `open` asserts that the map is the resolved top of this stack and forbids a
 `tile_path_9` (`TILED_UP`) link.  `linked` requires an aligned, reciprocal
-`TILED_UP`/`TILED_DOWN` pair whose target is loaded and resolved.  Celestial-v1
+`TILED_UP`/`TILED_DOWN` pair whose target is loaded and resolved. Either member
+may be supplied by an existing filename-derived coordinate link; Classic derives
+that runtime link before validating the sky anchor, while explicit paths remain
+authoritative.  Celestial-v1
 defines no immutable-summary encoding; adding one requires a new schema
 version and exact bitmap, transform, onward-link, revision, and digest vectors.
 `sealed` says that unmodelled solid cover exists above the whole map and
@@ -661,7 +664,9 @@ Canonical save orders each authored `tile_path_N` immediately before its
 `celestial_boundary_N`, with suffixes increasing from 1 through 10.  A
 runtime-derived filename link has no boundary policy and, on celestial maps,
 is not serialized; it exists only for coordinate traversal and must not be
-used to infer `continuous`.  The fixture abbreviations `N`, `E`,
+used to infer `continuous`.  A derived vertical link is recomputed from its
+coordinate-suffixed filename on save/reload, so it does not require a serialized
+`tile_path_9`/`tile_path_10` record.  The fixture abbreviations `N`, `E`,
 `S`, `W`, `NE`, `SE`, `SW`, `NW`, `UP`, and `DOWN` mean precisely the suffixes
 in this table and are not additional serialized spellings.  Parser/save
 vectors cover reciprocal pairs `2/4`, `5/7`, and `9/10`, both policies, a
