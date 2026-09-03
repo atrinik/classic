@@ -315,7 +315,8 @@ function Protect-ReviewSecretFile([string]$Path, [switch]$CreateEmpty, [switch]$
     if ($CreateEmpty) {
         [void](Invoke-ReviewIcacls -Arguments @($Path, "/reset", "/q"))
     }
-    [void](Invoke-ReviewIcacls -Arguments @($Path, "/setowner", $SidArgument, "/q"))
+    # The launcher creates this file under the current identity; changing its
+    # owner requires an elevated token and is unnecessary for DACL hardening.
     [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
     [void](Invoke-ReviewIcacls -Arguments @(
         $Path,
