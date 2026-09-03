@@ -220,49 +220,95 @@ hfile_struct *help_find(const char *name) {
 #ifdef ATRINIK_WIDGET_TESTS
 static bool hfiles_parser_test_case(const char *input, const char *expected) {
     FILE *fp = tmpfile();
-    if (fp == NULL) {
-        return false;
-    }
+    HARD_ASSERT(fp != NULL);
 
     size_t input_len = strlen(input);
-    bool success = fwrite(input, 1, input_len, fp) == input_len;
-    if (success) {
-        success = fseek(fp, 0, SEEK_SET) == 0;
-    }
-    if (success) {
-        hfiles_load(fp);
-        hfile_struct *hfile = help_find("parser-test");
-        success = hfile != NULL && hfile->msg != NULL &&
-                  strcmp(hfile->msg, expected) == 0 &&
-                  hfile->msg_len == strlen(expected);
-    }
+    HARD_ASSERT(fwrite(input, 1, input_len, fp) == input_len);
+    HARD_ASSERT(fseek(fp, 0, SEEK_SET) == 0);
+
+    hfiles_load(fp);
+    hfile_struct *hfile = help_find("parser-test");
+    hfile_struct *empty = help_find("empty");
+    bool success = hfile != NULL && hfile->msg != NULL &&
+                   strcmp(hfile->msg, expected) == 0 &&
+                   hfile->msg_len == strlen(expected) &&
+                   hfile->autocomplete == 1 &&
+                   hfile->autocomplete_wiz == 1 &&
+                   empty != NULL && empty->msg == NULL && empty->msg_len == 0;
 
     hfiles_deinit();
-    success = fclose(fp) == 0 && success;
+    HARD_ASSERT(fclose(fp) == 0);
+    return success;
+}
+
+static bool hfiles_parser_incomplete_test(void) {
+    static const char input[] = "help incomplete\n"
+                                "msg\n"
+                                "last line";
+    FILE *fp = tmpfile();
+    HARD_ASSERT(fp != NULL);
+    size_t input_len = strlen(input);
+    HARD_ASSERT(fwrite(input, 1, input_len, fp) == input_len);
+    HARD_ASSERT(fseek(fp, 0, SEEK_SET) == 0);
+
+    hfiles_load(fp);
+    bool success = help_find("incomplete") == NULL;
+    hfiles_deinit();
+    HARD_ASSERT(fclose(fp) == 0);
     return success;
 }
 
 bool hfiles_parser_test(void) {
     static const char lf[] =
+        " \t# ignored\n"
+        "\n"
+        "help\n"
+        "unknown\n"
         "help parser-test\n"
+        "autocomplete 1\n"
+        "autocomplete_wiz 1\n"
+        "title Title\n"
         "msg\n"
         "first line\n"
         "second line\n"
         "endmsg\n"
+        "msg\n"
+        "third line\n"
+        "endmsg\n"
+        "unknown value\n"
+        "end\n"
+        "help empty\n"
         "end\n";
     static const char crlf[] =
+        " \t# ignored\r\n"
+        "\r\n"
+        "help\r\n"
+        "unknown\r\n"
         "help parser-test\r\n"
+        "autocomplete 1\r\n"
+        "autocomplete_wiz 1\r\n"
+        "title Title\r\n"
         "msg\r\n"
         "first line\r\n"
         "second line\r\n"
         "endmsg\r\n"
+        "msg\r\n"
+        "third line\r\n"
+        "endmsg\r\n"
+        "unknown value\r\n"
+        "end\r\n"
+        "help empty\r\n"
         "end\r\n";
-    static const char expected[] = "first line\nsecond line\n";
+    static const char expected[] = "[book]Title[/book]first line\n"
+                                   "second line\n"
+                                   "third line\n";
 
     return hfiles_parser_test_case(lf, expected) &&
-           hfiles_parser_test_case(crlf, expected);
+           hfiles_parser_test_case(crlf, expected) &&
+           hfiles_parser_incomplete_test();
 }
 #endif
+
 
 /**
  * Show a help GUI.

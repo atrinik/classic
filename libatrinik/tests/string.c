@@ -46,21 +46,15 @@ static int test_replace_unprintable(void) {
 }
 
 static int test_newline(void) {
-    char lf[] = "line\n";
-    string_strip_newline(lf);
-    require(strcmp(lf, "line") == 0);
+    static char cases[][8] = {"line\n", "line\r\n", "\n", "line"};
+    static const char *expected[] = {"line", "line", "", "line"};
 
-    char crlf[] = "line\r\n";
-    string_strip_newline(crlf);
-    require(strcmp(crlf, "line") == 0);
-
-    char only_newline[] = "\n";
-    string_strip_newline(only_newline);
-    require(strcmp(only_newline, "") == 0);
-
-    char no_newline[] = "line";
-    string_strip_newline(no_newline);
-    require(strcmp(no_newline, "line") == 0);
+    for (size_t i = 0; i < arraysize(cases); i++) {
+        string_strip_newline(cases[i]);
+        if (strcmp(cases[i], expected[i]) != 0) {
+            return 1;
+        }
+    }
 
     return 0;
 }

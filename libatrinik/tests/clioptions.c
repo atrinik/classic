@@ -26,29 +26,21 @@ static bool sensitive_handler(const char *arg, char **errmsg) {
 static int test_crlf_category(void) {
     char path[] = "/tmp/atrinik-clioptions-test.XXXXXX";
     int fd = mkstemp(path);
-    if (fd == -1) {
-        return 1;
-    }
+    HARD_ASSERT(fd != -1);
 
     FILE *fp = fdopen(fd, "wb");
-    if (fp == NULL) {
-        close(fd);
-        unlink(path);
-        return 1;
-    }
+    HARD_ASSERT(fp != NULL);
 
     static const char config[] = "[general]\r\n"
                                   "secret = general-value\r\n"
                                   "[meta]\r\n"
                                   "secret = meta-value\r\n";
-    int failed = fwrite(config, 1, sizeof(config) - 1, fp) != sizeof(config) - 1;
-    failed |= fclose(fp) != 0;
-    if (!failed) {
-        failed = !clioptions_load(path, "[general]") ||
-                 strcmp(observed, "general-value") != 0;
-    }
-    failed |= unlink(path) != 0;
-    return failed;
+    HARD_ASSERT(fwrite(config, 1, sizeof(config) - 1, fp) == sizeof(config) - 1);
+    HARD_ASSERT(fclose(fp) == 0);
+    HARD_ASSERT(clioptions_load(path, "[general]"));
+    HARD_ASSERT(strcmp(observed, "general-value") == 0);
+    HARD_ASSERT(unlink(path) == 0);
+    return 0;
 }
 
 int main(void) {
