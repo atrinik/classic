@@ -131,6 +131,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "ServerDiagnostics",
                     "identity_recent",
                     "ready_marker",
+                    "BeginOutputReadLine",
+                    "stdout_ready_marker",
                 ):
                     self.assertIn(token, powershell)
                 self.assertNotIn('$Account + ":" + $Password', powershell)
