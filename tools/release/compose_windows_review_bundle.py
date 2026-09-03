@@ -246,6 +246,25 @@ function Protect-ReviewSecretFile([string]$Path) {
     }
 }
 
+function Remove-ReviewSecretFile([string]$Path) {
+    $Info = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($Info.PSIsContainer) {
+        throw "Secret path is a directory: $Path"
+    }
+    if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Secret file is a reparse point: $Path"
+    }
+    $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $SidArgument = "*$($CurrentSid.Value)"
+    [void](Invoke-ReviewIcacls -Arguments @(
+        $Path,
+        "/grant:r",
+        "$($SidArgument):(F)",
+        "/q"
+    ))
+    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+}
+
 function Remove-ReviewSecretFiles {
     $Candidates = [System.Collections.Generic.List[string]]::new()
     [void]$Candidates.Add($PasswordFile)
