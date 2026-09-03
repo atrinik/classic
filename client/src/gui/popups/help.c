@@ -40,6 +40,7 @@
 #include <toolkit/toolkit.h>
 #include <widget.h>
 #include <toolkit/string.h>
+#include <toolkit/path.h>
 
 /**
  * Hashtable that contains the help files.
@@ -251,6 +252,44 @@ static bool hfiles_parser_test_case(const char *input, const char *expected) {
     return success;
 }
 
+static FILE *hfiles_test_file;
+
+static FILE *hfiles_test_fopen(const char *path, const char *mode) {
+    HFILES_TEST_REQUIRE(strcmp(path, "srv_files/hfiles") == 0);
+    HFILES_TEST_REQUIRE(strcmp(mode, "rb") == 0);
+    FILE *fp = hfiles_test_file;
+    hfiles_test_file = NULL;
+    return fp;
+}
+
+static bool hfiles_parser_init_test(const char *input, const char *expected) {
+    FILE *fp = tmpfile();
+    HFILES_TEST_REQUIRE(fp != NULL);
+    size_t input_len = strlen(input);
+    HFILES_TEST_REQUIRE(fwrite(input, 1, input_len, fp) == input_len);
+    HFILES_TEST_REQUIRE(fseek(fp, 0, SEEK_SET) == 0);
+
+    path_fopen_t original_path_fopen = path_fopen;
+    hfiles_test_file = fp;
+    path_fopen = hfiles_test_fopen;
+    server_files_init();
+    path_fopen = original_path_fopen;
+
+    hfile_struct *hfile = help_find("parser-test");
+    bool success = hfile != NULL && hfile->msg != NULL &&
+                   strcmp(hfile->msg, expected) == 0;
+
+    hfiles_deinit();
+    hfiles_test_file = NULL;
+    path_fopen = hfiles_test_fopen;
+    hfiles_init();
+    path_fopen = original_path_fopen;
+    bool missing = help_find("parser-test") == NULL;
+    hfiles_deinit();
+    server_files_deinit();
+    return success && missing;
+}
+
 static bool hfiles_parser_incomplete_test(void) {
     static const char input[] = "help incomplete\n"
                                 "msg\n"
@@ -314,6 +353,7 @@ bool hfiles_parser_test(void) {
                                    "third line\n";
 
     return hfiles_parser_test_case(lf, expected) &&
+           hfiles_parser_init_test(lf, expected) &&
            hfiles_parser_test_case(crlf, expected) &&
            hfiles_parser_incomplete_test();
 }
