@@ -282,7 +282,7 @@ function Remove-ReviewSecretFiles {
     }
     foreach ($Candidate in $Candidates | Select-Object -Unique) {
         if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
-            Remove-Item -LiteralPath $Candidate -Force -ErrorAction Stop
+            Remove-ReviewSecretFile $Candidate
         }
     }
 }
