@@ -1347,6 +1347,10 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
     delete_map(map);
     delete_map(upper);
 
+    write_filename_tile_map(temporary_root, "/vertical_80_80", "linked", NULL);
+    map = ready_map_name("/vertical_80_80", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_eq(map, NULL);
+
     map = ready_map_name("/world_4_4", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_ne(map, NULL);
     ck_assert_ptr_eq(map->tile_path[TILED_SOUTH], NULL);
@@ -1442,6 +1446,7 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
         "/world_5_5",       "/world_5_6",       "/world_4_4",
         "/vertical_60_60",  "/vertical_60_60_1", "/vertical_70_70",
         "/vertical_70_70_-1",
+        "/vertical_80_80",
         "/world_3_3",       "/world_3_4",       "/override",
         "/world_1_50",      "/world_1_50_-1", "/world_1_51_-1",
         "/world_2_47",       "/world_2_47_-1",   "/world_1_47_-1", "/legacy_5_5",
