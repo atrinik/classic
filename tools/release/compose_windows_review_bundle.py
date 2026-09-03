@@ -250,15 +250,20 @@ function Assert-ReviewPathAncestors([string]$Path) {
 }
 
 function Write-ReviewFailure([string]$Message) {
+    $SafeMessage = $Message -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]'
+    $SafeMessage = $SafeMessage -replace "(?i)https?://\S+", "[redacted-url]"
     try {
         Assert-ReviewPathAncestors $LauncherFailureLog
-        $SafeMessage = $Message -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]'
-        $SafeMessage = $SafeMessage -replace "(?i)https?://\S+", "[redacted-url]"
         [System.IO.File]::WriteAllText(
             $LauncherFailureLog,
             $SafeMessage,
             [System.Text.Encoding]::UTF8
         )
+        return
+    } catch {
+    }
+    try {
+        Set-Content -LiteralPath $LauncherFailureLog -Value $SafeMessage -Encoding UTF8 -Force
     } catch {
     }
 }
