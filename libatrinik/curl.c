@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright 2009-2026 The Atrinik Project                             *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -1593,7 +1593,6 @@ static curl_state_t curl_request_setup(curl_request_t *request) {
 
     pthread_mutex_lock(&request->mutex);
     CURL_SETOPT(request->handle, CURLOPT_URL, request->url);
-    CURL_SETOPT(request->handle, CURLOPT_REFERER, request->url);
     CURL_SETOPT(request->handle, CURLOPT_SHARE, handle_share);
     pthread_mutex_unlock(&request->mutex);
 

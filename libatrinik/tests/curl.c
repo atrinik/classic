@@ -1,4 +1,5 @@
 #include <toolkit/curl.h>
+#include <toolkit/logger.h>
 #include <toolkit/path.h>
 
 #include <arpa/inet.h>
@@ -13,6 +14,13 @@ typedef struct http_fixture {
     useconds_t stall_us;
     bool accepted;
 } http_fixture_t;
+static char captured_log[HUGE_BUF];
+
+static void capture_curl_log(const char *message) {
+    if (strstr(message, "HTTP request origin=") != NULL) {
+        snprintf(captured_log, sizeof(captured_log), "%s", message);
+    }
+}
 
 static void *http_fixture_run(void *user_data) {
     http_fixture_t *fixture = user_data;
@@ -227,12 +235,67 @@ static int test_validated_cache_commit(void) {
            !cached_fixture.accepted || !not_modified_valid;
 }
 
+static int test_bounded_request_diagnostic(void) {
+    static const char response[] = "HTTP/1.1 200 OK\r\n"
+                                   "Content-Length: 7\r\n"
+                                   "Connection: close\r\n"
+                                   "\r\n"
+                                   "bounded";
+    http_fixture_t fixture = {.listener = -1, .response = response};
+    char url[128];
+    if (http_fixture_start(&fixture, url, sizeof(url)) != 0) {
+        return 1;
+    }
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, http_fixture_run, &fixture) != 0) {
+        close(fixture.listener);
+        return 1;
+    }
+
+    captured_log[0] = '\0';
+    logger_set_print_func(capture_curl_log);
+    curl_request_t *request =
+        curl_request_create_with_origin(url, CURL_PKEY_TRUST_SYSTEM, "credential/value");
+    curl_request_do_get(request);
+    curl_state_t state = curl_request_get_state(request);
+    int http_code = curl_request_get_http_code(request);
+    curl_request_free(request);
+    char loopback_log[HUGE_BUF];
+    snprintf(loopback_log, sizeof(loopback_log), "%s", captured_log);
+
+    pthread_join(thread, NULL);
+    close(fixture.listener);
+
+    request = curl_request_create_with_origin(url, CURL_PKEY_TRUST_SYSTEM, NULL);
+    curl_request_free(request);
+    request = curl_request_create_with_origin(url, CURL_PKEY_TRUST_SYSTEM, "");
+    curl_request_free(request);
+    char long_origin[66];
+    memset(long_origin, 'x', sizeof(long_origin) - 1);
+    long_origin[sizeof(long_origin) - 1] = '\0';
+    request = curl_request_create_with_origin(url, CURL_PKEY_TRUST_SYSTEM, long_origin);
+    curl_request_free(request);
+
+    captured_log[0] = '\0';
+    request = curl_request_create_with_origin("not-a-url", CURL_PKEY_TRUST_SYSTEM, "client.asset");
+    curl_request_do_get(request);
+    bool other_endpoint =
+        strstr(captured_log, "HTTP request origin=client.asset endpoint=other") != NULL;
+    curl_request_free(request);
+    logger_set_print_func(logger_do_print);
+
+    return !fixture.accepted || state != CURL_STATE_OK || http_code != 200 ||
+           strstr(loopback_log, "HTTP request origin=unknown endpoint=http-loopback") == NULL ||
+           strstr(loopback_log, url) != NULL || !other_endpoint;
+}
+
 int main(void) {
     toolkit_import(path);
     toolkit_import(curl);
     int failed = test_response_code_survives_body_limit() ||
                  test_response_code_survives_partial_body() || test_total_timeout() ||
-                 test_validated_cache_commit();
+                 test_validated_cache_commit() || test_bounded_request_diagnostic();
     toolkit_deinit();
     return failed;
 }

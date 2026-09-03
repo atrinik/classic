@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -118,6 +118,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size);
  * Read the first line of a strict secret file through one verified file handle.
  *
  * `secret` is caller-owned and is always cleared before use and again on every
+ * Only an optional LF or CRLF terminator may follow the secret; later bytes are rejected.
  * error. A successful read NUL-terminates it. `permissive_mode`, when non-NULL,
  * reports an otherwise readable file whose POSIX mode or Windows DACL grants
  * broader access; policy-sensitive callers should reject that result. Link,

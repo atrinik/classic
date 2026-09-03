@@ -198,6 +198,71 @@ function Stop-ReviewProcessTree([System.Diagnostics.Process]$Process, [string]$L
     }
 }
 
+function Protect-ReviewSecretFile([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Secret file is missing: $Path"
+    }
+    $Info = Get-Item -LiteralPath $Path
+    if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Secret file is a reparse point: $Path"
+    }
+    $Acl = Get-Acl -LiteralPath $Path
+    $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $Acl.SetAccessRuleProtection($true, $false)
+    foreach ($Rule in @($Acl.Access)) {
+        $Acl.RemoveAccessRule($Rule) | Out-Null
+    }
+    $ReadRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $CurrentSid,
+        [System.Security.AccessControl.FileSystemRights]::Read,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    $Acl.AddAccessRule($ReadRule)
+    Set-Acl -LiteralPath $Path -AclObject $Acl
+
+    $VerifiedAcl = Get-Acl -LiteralPath $Path
+    $VerifiedRules = @($VerifiedAcl.Access)
+    if (-not $VerifiedAcl.AreAccessRulesProtected -or $VerifiedRules.Count -ne 1) {
+        throw "Secret file ACL is not owner-only: $Path"
+    }
+    $VerifiedSid = $VerifiedRules[0].IdentityReference.Translate(
+        [System.Security.Principal.SecurityIdentifier]
+    )
+    if ($VerifiedSid.Value -ne $CurrentSid.Value) {
+        throw "Secret file ACL owner does not match the current user: $Path"
+    }
+    if ($VerifiedRules[0].AccessControlType -ne
+        [System.Security.AccessControl.AccessControlType]::Allow) {
+        throw "Secret file ACL contains a non-allow rule: $Path"
+    }
+    if ($VerifiedRules[0].FileSystemRights -ne
+        [System.Security.AccessControl.FileSystemRights]::Read) {
+        throw "Secret file ACL grants more than read access: $Path"
+    }
+}
+
+function Remove-ReviewSecretFiles {
+    $Candidates = [System.Collections.Generic.List[string]]::new()
+    [void]$Candidates.Add($PasswordFile)
+    $DataDirectories = @(
+        Get-ChildItem -LiteralPath $Root -Directory -Force -ErrorAction Stop |
+            Where-Object {
+                $_.Name -like "server-data-stage-*" -or
+                $_.Name -like "server-data-incomplete-*"
+            }
+    )
+    foreach ($Directory in $DataDirectories) {
+        [void]$Candidates.Add(
+            (Join-Path $Directory.FullName ".atrinik-review-password")
+        )
+    }
+    foreach ($Candidate in $Candidates | Select-Object -Unique) {
+        if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
+            Remove-Item -LiteralPath $Candidate -Force -ErrorAction Stop
+        }
+    }
+}
+
 try {
     try {
         $LaunchLockHeld = $LaunchMutex.WaitOne(0)
@@ -220,7 +285,7 @@ try {
         }
     }
 
-    if (-not (Test-Path -LiteralPath $Sentinel)) {
+    if (-not (Test-Path -LiteralPath $Sentinel) -or -not (Test-Path -LiteralPath $PasswordFile)) {
         if (Test-Path -LiteralPath $State) {
             $Preserved = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
             Move-Item -LiteralPath $State -Destination $Preserved
@@ -230,14 +295,14 @@ try {
         try {
             Copy-Item -LiteralPath $InstallData -Destination $Stage -Recurse
             New-Item -ItemType Directory -Force -Path (Join-Path $Stage "tmp") | Out-Null
-            $Password = [Guid]::NewGuid().ToString("N")
             $StagePassword = Join-Path $Stage ".atrinik-review-password"
             $StageProvisionLog = Join-Path $Stage "provision.log"
             [System.IO.File]::WriteAllText(
                 $StagePassword,
-                $Password,
+                [Guid]::NewGuid().ToString("N").Substring(0, 20),
                 [System.Text.Encoding]::ASCII
             )
+            Protect-ReviewSecretFile $StagePassword
 
             $ProvisionStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
             $ProvisionStartInfo.FileName = Join-Path $Root "atrinik-server.exe"
@@ -294,10 +359,7 @@ try {
         (($PasswordInfo.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
         throw "The isolated review account password file is missing or unsafe"
     }
-    $Password = [System.IO.File]::ReadAllText($PasswordFile).Trim()
-    if ([string]::IsNullOrWhiteSpace($Password)) {
-        throw "The isolated review account password file is empty"
-    }
+    Protect-ReviewSecretFile $PasswordFile
 
     $ClientMaps = Join-Path $InstallData "http\client-maps"
     if (Test-Path -LiteralPath $ClientMaps) {
@@ -520,16 +582,20 @@ try {
         throw $Failure
     }
 } finally {
-    if ($null -ne $Client) {
-        $Client.Dispose()
+    try {
+        Remove-ReviewSecretFiles
+    } finally {
+        if ($null -ne $Client) {
+            $Client.Dispose()
+        }
+        if ($null -ne $Server) {
+            $Server.Dispose()
+        }
+        if ($LaunchLockHeld) {
+            $LaunchMutex.ReleaseMutex()
+        }
+        $LaunchMutex.Dispose()
     }
-    if ($null -ne $Server) {
-        $Server.Dispose()
-    }
-    if ($LaunchLockHeld) {
-        $LaunchMutex.ReleaseMutex()
-    }
-    $LaunchMutex.Dispose()
 }
 
 '''
