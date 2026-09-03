@@ -158,6 +158,14 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     'Protect-ReviewSecretFile $StagePassword -CreateEmpty -WriteAccess',
                     powershell,
                 )
+                self.assertIn(
+                    '        "/grant",\r\n'
+                    '        "$($SidArgument):(F)",\r\n'
+                    '        "/q"\r\n'
+                    '    ))\r\n'
+                    '    Remove-Item -LiteralPath $Path',
+                    powershell,
+                )
                 self.assertNotIn("Set-Content -LiteralPath $LauncherFailureLog", powershell)
                 self.assertIn("if ($LaunchLockHeld)", powershell)
                 self.assertNotIn('$Account + ":" + $Password', powershell)
