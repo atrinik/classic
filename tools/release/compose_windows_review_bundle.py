@@ -246,17 +246,29 @@ function Protect-ReviewSecretFile([string]$Path) {
             $AclLines | Where-Object { $_ -match "^D:" }
         )
         $OwnerOnly = $false
+        $DescriptorSummary = "unparsed"
+        $AceSummary = "unparsed"
+        $ParseError = $null
         if ($SddlLines.Count -eq 1) {
             try {
                 $Descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
                     $SddlLines[0],
                     0
                 )
+                $DescriptorSummary = [string]$Descriptor.ControlFlags
                 $Dacl = $Descriptor.DiscretionaryAcl
                 $Ace = if ($null -ne $Dacl -and $Dacl.Count -eq 1) {
                     $Dacl[0]
                 } else {
                     $null
+                }
+                if ($null -ne $Ace) {
+                    $AceSummary = (
+                        "type=$($Ace.AceType);flags=$($Ace.AceFlags);" +
+                        "sid=$($Ace.SecurityIdentifier.Value);mask=$($Ace.AccessMask)"
+                    )
+                } else {
+                    $AceSummary = "missing-or-multiple"
                 }
                 $OwnerOnly = (
                     $null -ne $Dacl -and
@@ -270,13 +282,14 @@ function Protect-ReviewSecretFile([string]$Path) {
                     $Ace.AccessMask -eq 0x120089
                 )
             } catch {
-                $OwnerOnly = $false
+                $ParseError = $_.Exception.Message
             }
         }
         if (-not $OwnerOnly) {
             throw (
                 "Secret file ACL is not owner-only: $Path; observed ACL export: " +
-                ($AclLines -join "|")
+                ($AclLines -join "|") + "; descriptor: " + $DescriptorSummary +
+                "; ACE: " + $AceSummary + "; parse error: " + $ParseError
             )
         }
     } finally {
