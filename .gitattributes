@@ -17,6 +17,14 @@
 client/textures/** -filter binary
 client/fonts/** -filter binary
 client/src/tests/fixtures/audio/*.mid -filter binary
+
+# GPU manifest inputs are hash-pinned as raw bytes and must stay LF-stable.
+client/data/archdef.dat text eol=lf
+client/data/interface.cfg text eol=lf
+client/src/tests/fixtures/player_view/*.xml text eol=lf
+client/src/tests/fixtures/player_view/*.map2.hex text eol=lf
+client/src/tests/fixtures/player_view/*.cfg text eol=lf
+client/src/tests/fixtures/player_view/*.txt text eol=lf
 docs/history/*-commit-map.txt linguist-generated=true
 
 # Module release bookkeeping is not part of exported source archives.

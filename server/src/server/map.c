@@ -1193,15 +1193,6 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         fclose(fp);
         return NULL;
     }
-    if (fp != NULL && m->celestial_v1_header_seen) {
-        char error[HUGE_BUF];
-        if (!celestial_structure_validate_header(m, VS(error))) {
-            LOG(ERROR, "Celestial structural header validation failed: %s", error);
-            delete_map(m);
-            fclose(fp);
-            return NULL;
-        }
-    }
 
     basename = strrchr(filename, flags & MAP_PLAYER_UNIQUE ? '$' : '/');
     if (basename == NULL) {
@@ -1278,6 +1269,21 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         m->level_max = INT8_MAX;
     } else if (m->level_max == 0 && m->level_min == 0) {
         m->level_min = m->level_max = m->coords[2];
+    }
+
+    /*
+     * Filename-derived links are part of the runtime topology, so derive them
+     * before validating a celestial sky anchor. Explicit links remain
+     * authoritative because the lookup above only fills missing slots.
+     */
+    if (fp != NULL && m->celestial_v1_header_seen) {
+        char error[HUGE_BUF];
+        if (!celestial_structure_validate_header(m, VS(error))) {
+            LOG(ERROR, "Celestial structural header validation failed: %s", error);
+            delete_map(m);
+            fclose(fp);
+            return NULL;
+        }
     }
 
     if (fp == NULL && originator != NULL) {

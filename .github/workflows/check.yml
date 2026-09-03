@@ -524,10 +524,58 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.COVERAGE_SHA }}
+          persist-credentials: false
+      - name: Verify the exact Windows checkout and GPU fixture bytes
+        shell: pwsh
+        run: |
+          $revision = (git rev-parse --verify HEAD).Trim()
+          if ($revision -ne $env:COVERAGE_SHA) {
+            throw "Windows checkout revision does not match COVERAGE_SHA"
+          }
+          $checkoutStatus = git status --short
+          if ($checkoutStatus) {
+            throw "Windows checkout is dirty: $checkoutStatus"
+          }
+          python client/tools/verify_gpu_fixture_bytes.py --source-root client
+          if ($LASTEXITCODE -ne 0) {
+            throw "GPU fixture byte verification failed for the Windows checkout"
+          }
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: native-windows-tests
           path: build/native-windows-tests
+      - name: Verify staged client package GPU fixture bytes before launch
+        shell: pwsh
+        run: |
+          $bundle = (Resolve-Path "build/native-windows-tests").Path
+          $reviewPackages = @(Get-ChildItem -LiteralPath $bundle -File `
+            -Filter "atrinik-classic-issue-477-windows-one-click-*.zip")
+          if ($reviewPackages.Count -ne 1) {
+            throw "Expected exactly one Windows review bundle, found $($reviewPackages.Count)"
+          }
+          $extractRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
+            ("atrinik-gpu-fixture-{0}" -f [System.Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $extractRoot | Out-Null
+          try {
+            Expand-Archive -LiteralPath $reviewPackages[0].FullName -DestinationPath $extractRoot
+            $packageRoots = @(Get-ChildItem -LiteralPath $extractRoot -Directory)
+            $rootFiles = @(Get-ChildItem -LiteralPath $extractRoot -File)
+            if ($packageRoots.Count -ne 1 -or $rootFiles.Count -ne 0) {
+              throw "Review ZIP must contain exactly one top-level directory"
+            }
+            python client/tools/verify_gpu_fixture_bytes.py `
+              --source-root client --package-root $packageRoots[0].FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "GPU fixture byte verification failed for the staged package"
+            }
+          } finally {
+            if (Test-Path -LiteralPath $extractRoot) {
+              Remove-Item -LiteralPath $extractRoot -Recurse -Force
+            }
+          }
       - name: Execute private-state and protocol tests on Windows
         shell: pwsh
         run: |

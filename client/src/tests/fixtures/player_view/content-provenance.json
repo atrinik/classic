@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "fixture_family": "gpu-player-view",
+  "fixture_source": {
+    "repository": "atrinik/classic",
+    "branch": "main",
+    "introduced_commit": "8391af51cb5bfecdfa9a1510c5fc275ba80ae101"
+  },
+  "archdef": {
+    "path": "client/data/archdef.dat",
+    "fixture_path": "data/archdef.dat",
+    "sha256": "977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e",
+    "size": 1383,
+    "owner": "classic/client"
+  },
+  "content": {
+    "selected": {
+      "repository": "atrinik/content",
+      "branch": "main",
+      "tag": "v1.0.0",
+      "commit": "63eb9bb5f02fb9104c2385d5e01c28c3df20b735",
+      "release_version": "1.0.0",
+      "artifact": {
+        "content_format": "classic-ads-v1",
+        "format": "atrinik-classic-runtime-content-v1",
+        "url": "https://github.com/atrinik/content/releases/download/v1.0.0/atrinik-content-1.0.0-classic-runtime.tar.gz",
+        "sha256": "e1bffdd1b492472ef594b558c322c655976a95888e7a1d0ab6a56ade2a21b0d5",
+        "manifest": {
+          "path": "manifest.json",
+          "sha256": "5bb767b98d3c8b66737fab7871a967cd96f792d24a56eebcc92dbb5f9329fb20",
+          "size": 749843,
+          "files_sha256": "108974665fdd932db69cc26a451c31fa13ef91bd1d53865407090b32926204bb"
+        },
+        "archetypes": {
+          "path": "lib/archetypes",
+          "sha256": "8fc67cbef760eaa719bdb4a7b61641fd44baa0669ada0d301cff7564fe8d4748",
+          "size": 665267
+        }
+      },
+      "runtime_manifests": [
+        {
+          "release_version": "1.0.0",
+          "sha256": "5bb767b98d3c8b66737fab7871a967cd96f792d24a56eebcc92dbb5f9329fb20",
+          "size": 749843,
+          "files_sha256": "108974665fdd932db69cc26a451c31fa13ef91bd1d53865407090b32926204bb"
+        }
+      ]
+    },
+    "observed_issue_coordinate": {
+      "observed_on": "2026-09-01",
+      "classic_revision": "269c6ea37aa6117ce440913e494eacde0568e661",
+      "content_revision": "b9580ce4b920644494a9912f6ea4f37b4a4e7aa6",
+      "content_release": "v1.5.0"
+    }
+  },
+  "worldmaker": {
+    "archdef_generated": false,
+    "archdef_source": "classic/client/data/archdef.dat",
+    "generated_outputs": [
+      "client-maps",
+      "data/*.zz"
+    ]
+  }
+}

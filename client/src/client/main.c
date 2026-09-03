@@ -970,6 +970,10 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
+    if (argc == 2 && strcmp(argv[1], "--help-parser-test") == 0) {
+        return hfiles_parser_test() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     if (argc == 4 && strcmp(argv[1], "--widget-priority-test") == 0) {
         return widget_priority_integration_test(argv[2], argv[3]);
     }
