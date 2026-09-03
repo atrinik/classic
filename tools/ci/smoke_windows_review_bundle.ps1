@@ -13,6 +13,8 @@ $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
 )
 $process = $null
 $launcherProcess = $null
+$launcherOutputTask = $null
+$launcherErrorTask = $null
 $launcherServer = $null
 $launcherClient = $null
 $bodySucceeded = $false
@@ -21,6 +23,16 @@ try {
     $serverPort = ([System.Net.IPEndPoint]$portProbe.Client.LocalEndPoint).Port
 } finally {
     $portProbe.Dispose()
+}
+
+function Get-LauncherOutput($Task) {
+    if ($null -eq $Task) {
+        return ""
+    }
+    if (-not $Task.Wait(1000)) {
+        return "<launcher output did not close>"
+    }
+    return $Task.Result
 }
 
 try {
@@ -213,6 +225,9 @@ try {
     $launcherStartInfo.UseShellExecute = $false
     $launcherStartInfo.CreateNoWindow = $true
     $launcherStartInfo.ArgumentList.Add("/d")
+    $launcherStartInfo.RedirectStandardOutput = $true
+    $launcherStartInfo.RedirectStandardError = $true
+    $launcherStartInfo.Environment["ATRINIK_REVIEW_NO_PAUSE"] = "1"
     $launcherStartInfo.ArgumentList.Add("/c")
     $launcherStartInfo.ArgumentList.Add("call")
     $launcherStartInfo.ArgumentList.Add($launchers[0].FullName)
@@ -222,15 +237,27 @@ try {
         throw "Could not execute the user-facing run-review.bat launcher"
     }
 
+    $launcherOutputTask = $launcherProcess.StandardOutput.ReadToEndAsync()
+    $launcherErrorTask = $launcherProcess.StandardError.ReadToEndAsync()
     $launcherDeadline = [System.DateTime]::UtcNow.AddSeconds(120)
     $serverExecutable = Join-Path $reviewRoot "atrinik-server.exe"
     $clientExecutable = Join-Path $reviewRoot "atrinik.exe"
     $launcherServerLog = Join-Path (Join-Path $reviewRoot "server-data") "server.log"
     $launcherClientLog = Join-Path $reviewRoot "client.log"
     $launcherReady = $false
+    $serverLogText = ""
+    $clientLogText = ""
     while ([System.DateTime]::UtcNow -lt $launcherDeadline) {
         if ($launcherProcess.HasExited) {
-            throw "run-review.bat exited before login smoke completion with code $($launcherProcess.ExitCode)"
+            $launcherStdout = Get-LauncherOutput $launcherOutputTask
+            $launcherStderr = Get-LauncherOutput $launcherErrorTask
+            throw (
+                "run-review.bat exited before login smoke completion with code " +
+                "$($launcherProcess.ExitCode):" + [System.Environment]::NewLine +
+                "Launcher stdout:" + [System.Environment]::NewLine + $launcherStdout +
+                [System.Environment]::NewLine + "Launcher stderr:" +
+                [System.Environment]::NewLine + $launcherStderr
+            )
         }
         $launcherServers = @(Get-Process -Name "atrinik-server" -ErrorAction SilentlyContinue |
             Where-Object { $_.Path -eq $serverExecutable })
@@ -292,7 +319,33 @@ try {
         Start-Sleep -Milliseconds 250
     }
     if (-not $launcherReady) {
-        throw "One-click launcher did not prove loopback login and gameplay readiness within 120 seconds"
+        $launcherStdout = Get-LauncherOutput $launcherOutputTask
+        $launcherStderr = Get-LauncherOutput $launcherErrorTask
+        if (Test-Path -LiteralPath $launcherServerLog) {
+            try {
+                $serverLogText = Get-Content -Raw -LiteralPath $launcherServerLog
+            } catch {
+                $serverLogText = "<server log could not be read>"
+            }
+        }
+        if (Test-Path -LiteralPath $launcherClientLog) {
+            try {
+                $clientLogText = Get-Content -Raw -LiteralPath $launcherClientLog
+            } catch {
+                $clientLogText = "<client log could not be read>"
+            }
+        }
+        throw (
+            "One-click launcher did not prove loopback login and gameplay readiness within " +
+            "120 seconds:" + [System.Environment]::NewLine +
+            "Launcher stdout:" + [System.Environment]::NewLine + $launcherStdout +
+            [System.Environment]::NewLine + "Launcher stderr:" +
+            [System.Environment]::NewLine + $launcherStderr +
+            [System.Environment]::NewLine + "Server log:" +
+            [System.Environment]::NewLine + $serverLogText +
+            [System.Environment]::NewLine + "Client log:" +
+            [System.Environment]::NewLine + $clientLogText
+        )
     }
 
     $launcherClient.Refresh()

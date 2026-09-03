@@ -154,7 +154,7 @@ set "RESULT=%ERRORLEVEL%"
 if not "%RESULT%"=="0" (
   echo.
   echo Review launch failed. See the error above.
-  pause
+  if not "%ATRINIK_REVIEW_NO_PAUSE%"=="1" pause
 )
 exit /b %RESULT%
 '''
@@ -184,6 +184,18 @@ $ServerStderrTask = $null
 
 function ConvertTo-ReviewArguments([string[]]$Values) {
     return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
+}
+
+function Stop-ReviewProcessTree([System.Diagnostics.Process]$Process, [string]$Label) {
+    if ($null -eq $Process) {
+        return
+    }
+    if (-not $Process.HasExited) {
+        $Process.Kill($true)
+    }
+    if (-not $Process.WaitForExit(10000)) {
+        throw "$Label process tree did not exit after forced containment"
+    }
 }
 
 try {
@@ -256,13 +268,7 @@ try {
                     throw "Could not start the isolated scenario provisioner"
                 }
                 if (-not $Provision.WaitForExit(60000)) {
-                    try {
-                        $Provision.Kill()
-                    } finally {
-                        if (-not $Provision.WaitForExit(10000)) {
-                            throw "The isolated scenario provisioner did not exit after timeout containment"
-                        }
-                    }
+                    Stop-ReviewProcessTree $Provision "Scenario provisioner"
                     throw "The isolated scenario provisioner did not exit within 60 seconds"
                 }
                 if ($Provision.ExitCode -ne 0) {
@@ -411,7 +417,8 @@ try {
             "--game_news_url=off",
             "--stun_server=off",
             "--server=127.0.0.1 1731 $Fingerprint",
-            "--connect=127.0.0.1:" + $Account + ":" + $Password + ":" + $Character
+            "--connect=127.0.0.1:" + $Account + "::" + $Character,
+            "--connect_password_file=$PasswordFile"
         )
         $ClientStartInfoEnvironment = @{}
         foreach ($Name in @(
@@ -487,25 +494,30 @@ try {
         }
         Write-Host "Client and server exited cleanly."
     } catch {
-        if ($null -ne $Client) {
+        $Failure = $_
+        $CleanupFailures = [System.Collections.Generic.List[string]]::new()
+        foreach ($Entry in @(
+            @{ Process = $Client; Label = "Client" },
+            @{ Process = $Server; Label = "Server" }
+        )) {
+            if ($null -eq $Entry.Process) {
+                continue
+            }
             try {
-                if (-not $Client.HasExited) {
-                    $Client.Kill()
-                    $Client.WaitForExit(10000)
-                }
+                Stop-ReviewProcessTree $Entry.Process $Entry.Label
             } catch {
+                $CleanupFailures.Add(
+                    "$($Entry.Label): $($_.Exception.Message)"
+                )
             }
         }
-        if ($null -ne $Server) {
-            try {
-                if (-not $Server.HasExited) {
-                    $Server.Kill()
-                    $Server.WaitForExit(10000)
-                }
-            } catch {
-            }
+        if ($CleanupFailures.Count -ne 0) {
+            throw (
+                "$($Failure.Exception.Message); cleanup failures: " +
+                ($CleanupFailures -join "; ")
+            )
         }
-        throw
+        throw $Failure
     }
 } finally {
     if ($null -ne $Client) {

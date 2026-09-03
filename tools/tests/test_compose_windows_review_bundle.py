@@ -74,7 +74,9 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     ["run-review.bat"],
                 )
                 self.assertEqual(archive.read(prefix + "libffi-8.dll"), b"client-superset")
+                bat = archive.read(prefix + "run-review.bat").decode()
                 powershell = archive.read(prefix + "run-review.ps1").decode()
+                self.assertIn("ATRINIK_REVIEW_NO_PAUSE", bat)
                 for token in (
                     "server-data-stage-",
                     "server-data-incomplete-",
@@ -95,13 +97,17 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     '"--nometa"',
                     '"--game_news_url=off"',
                     "--connect=127.0.0.1:",
-                    "$Provision.WaitForExit(10000)",
+                    '"--connect=127.0.0.1:" + $Account + "::" + $Character',
+                    '"--connect_password_file=$PasswordFile"',
+                    "Stop-ReviewProcessTree",
+                    "$Provision.WaitForExit(60000)",
                     "$ClientData",
                     "StandardInput.WriteLine(\"shutdown\")",
                     "Client shutdown complete",
                     "Server shutdown complete",
                 ):
                     self.assertIn(token, powershell)
+                self.assertNotIn('$Account + ":" + $Password', powershell)
                 self.assertNotIn('"--reconnect"', powershell)
                 manifest = json.loads(archive.read(prefix + "BUNDLE-MANIFEST.json"))
                 self.assertEqual(manifest["revision"], self.revision)

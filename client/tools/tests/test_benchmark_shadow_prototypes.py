@@ -43,11 +43,11 @@ class ShadowPrototypeTests(unittest.TestCase):
 
     def test_fixture_rejects_wrong_movement_length(self) -> None:
         data = FIXTURE.read_text(encoding="utf-8").replace('"movement_frames": 480', '"movement_frames": 479')
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as handle:
-            handle.write(data)
-            handle.flush()
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "fixture.json"
+            path.write_text(data, encoding="utf-8")
             with self.assertRaisesRegex(prototype.PrototypeError, "480-frame"):
-                prototype.measure(Path(handle.name))
+                prototype.measure(path)
 
 
 if __name__ == "__main__":
