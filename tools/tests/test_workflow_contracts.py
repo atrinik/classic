@@ -1264,6 +1264,23 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"maps/regions.reg"', smoke)
+        self.assertIn('$state = Join-Path $smokeRoot "server-data"', smoke)
+        self.assertIn(
+            'Copy-Item -LiteralPath (Join-Path $serverRoot "install_data") '
+            '-Destination $state -Recurse',
+            smoke,
+        )
+        self.assertIn(
+            'New-Item -ItemType Directory -Force -Path (Join-Path $state "tmp")',
+            smoke,
+        )
+        self.assertIn('"--datapath=$state"', smoke)
+        self.assertIn('"--server_public=false"', smoke)
+        self.assertLess(smoke.index('$state = Join-Path'), smoke.index('$startInfo ='))
+        process_start = smoke.index('$process = [System.Diagnostics.Process]::new()')
+        self.assertLess(smoke.index('Copy-Item -LiteralPath'), process_start)
+        self.assertLess(smoke.index('"--datapath=$state"'), process_start)
+        self.assertLess(smoke.index('"--server_public=false"'), process_start)
         shutdown_loop = smoke[
             smoke.index("$shutdownDeadline =") : smoke.index(
                 'if ($process.ExitCode -ne 0)', smoke.index("$shutdownDeadline =")
