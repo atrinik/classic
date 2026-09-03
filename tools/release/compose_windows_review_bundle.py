@@ -259,10 +259,7 @@ function Write-ReviewFailure([string]$Message) {
         )
         return
     } catch {
-    }
-    try {
-        Set-Content -LiteralPath $LauncherFailureLog -Value $SafeMessage -Encoding UTF8 -Force
-    } catch {
+        # Do not follow an unvalidated path for failure diagnostics.
     }
 }
 
@@ -462,15 +459,26 @@ try {
             Assert-ReviewPathAncestors $InstallData
             Assert-ReviewPathAncestors $Stage
             Copy-Item -LiteralPath $InstallData -Destination $Stage -Recurse
-            New-Item -ItemType Directory -Force -Path (Join-Path $Stage "tmp") | Out-Null
+            $StageTmp = Join-Path $Stage "tmp"
+            Assert-ReviewPathAncestors $StageTmp
+            New-Item -ItemType Directory -Force -Path $StageTmp | Out-Null
+            Assert-ReviewPathAncestors $StageTmp
             $StagePassword = Join-Path $Stage ".atrinik-review-password"
             $StageProvisionLog = Join-Path $Stage "provision.log"
+            Assert-ReviewPathAncestors $StagePassword
+            # Protect the empty file before materializing the disposable secret.
+            [System.IO.File]::WriteAllText(
+                $StagePassword,
+                "",
+                [System.Text.Encoding]::ASCII
+            )
+            Assert-ReviewPathAncestors $StagePassword
+            Protect-ReviewSecretFile $StagePassword
             [System.IO.File]::WriteAllText(
                 $StagePassword,
                 [Guid]::NewGuid().ToString("N").Substring(0, 20),
                 [System.Text.Encoding]::ASCII
             )
-            Protect-ReviewSecretFile $StagePassword
 
             $ProvisionStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
             $ProvisionStartInfo.FileName = Join-Path $Root "atrinik-server.exe"
@@ -556,7 +564,10 @@ try {
         Assert-ReviewPathAncestors $StateMaps
         Copy-Item -LiteralPath $ClientMaps -Destination $StateMaps -Recurse
     }
-    New-Item -ItemType Directory -Force -Path (Join-Path $State "tmp") | Out-Null
+    $StateTmp = Join-Path $State "tmp"
+    Assert-ReviewPathAncestors $StateTmp
+    New-Item -ItemType Directory -Force -Path $StateTmp | Out-Null
+    Assert-ReviewPathAncestors $StateTmp
     Assert-ReviewPathAncestors $ClientData
     New-Item -ItemType Directory -Force -Path $ClientData | Out-Null
     if (Test-Path -LiteralPath $ClientLog) {
@@ -639,6 +650,7 @@ try {
         $Ready = $false
         while ([System.DateTime]::UtcNow -lt $Deadline) {
             if ($Server.HasExited) {
+                $Server.WaitForExit()
                 $ServerExitDiagnostics = @(
                     "stdout=$(Get-ReviewDiagnosticTail $ServerOutputLines)"
                     "stderr=$(Get-ReviewDiagnosticTail $ServerErrorLines)"
@@ -718,7 +730,12 @@ try {
             throw "Could not derive the server QUIC certificate fingerprint"
         }
 
-        $ClientArguments = ConvertTo-ReviewArguments @(
+        $ClientStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $ClientStartInfo.FileName = Join-Path $Root "atrinik.exe"
+        $ClientStartInfo.WorkingDirectory = $Root
+        $ClientStartInfo.UseShellExecute = $false
+        $ClientStartInfo.CreateNoWindow = $false
+        $ClientStartInfo.Arguments = ConvertTo-ReviewArguments @(
             "--nometa",
             "--game_news_url=off",
             "--stun_server=off",
@@ -749,12 +766,9 @@ try {
             "Process"
         )
         try {
-            $Client = Start-Process `
-                -FilePath (Join-Path $Root "atrinik.exe") `
-                -ArgumentList $ClientArguments `
-                -WorkingDirectory $Root `
-                -PassThru
-            if ($null -eq $Client) {
+            $Client = [System.Diagnostics.Process]::new()
+            $Client.StartInfo = $ClientStartInfo
+            if (-not $Client.Start()) {
                 throw "Could not start the packaged client"
             }
         } finally {

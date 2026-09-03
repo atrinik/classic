@@ -628,10 +628,11 @@ static bool clioptions_option_connect_password_file(const char *arg, char **errm
         return false;
     }
     if (permissive_mode) {
-        LOG(SYSTEM,
-            "Connect password file %s is readable or writable by group/other; "
-            "use mode 0600",
-            arg);
+        *errmsg = xstrdup(
+            "Connect password file must be readable only by the owner (mode 0600)"
+        );
+        OPENSSL_cleanse(password, sizeof(password));
+        return false;
     }
 
     clioption_connect_value_clear(2);

@@ -121,6 +121,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "function Remove-ReviewSecretFiles",
                     "Remove-ReviewSecretFile $Candidate",
                     '"$($SidArgument):(F)"',
+                    "$StageTmp",
+                    "$StateTmp",
                     '"server-data-stage-*"',
                     '"server-data-incomplete-*"',
                     "Test-Path -LiteralPath $PasswordFile",
@@ -140,10 +142,17 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "ServerExitDiagnostics",
                     "stdout_tail=",
                     "stderr_tail=",
-                    "$Client = Start-Process",
-                    "-PassThru",
+                    "$ClientStartInfo = [System.Diagnostics.ProcessStartInfo]::new()",
+                    "$ClientStartInfo.UseShellExecute = $false",
+                    "$Client = [System.Diagnostics.Process]::new()",
+                    "$Client.StartInfo = $ClientStartInfo",
                 ):
                     self.assertIn(token, powershell)
+                self.assertIn(
+                    '# Protect the empty file before materializing the disposable secret.',
+                    powershell,
+                )
+                self.assertNotIn("Set-Content -LiteralPath $LauncherFailureLog", powershell)
                 self.assertIn("if ($LaunchLockHeld)", powershell)
                 self.assertNotIn('$Account + ":" + $Password', powershell)
                 self.assertNotIn("$Process.Kill($true)", powershell)
