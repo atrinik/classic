@@ -481,6 +481,9 @@ function Remove-ReviewSecretFiles {
         [void]$Candidates.Add(
             (Join-Path $Directory.FullName ".atrinik-review-password")
         )
+        [void]$Candidates.Add(
+            (Join-Path $Directory.FullName "tmp\.atrinik-review-password")
+        )
     }
     foreach ($Candidate in $Candidates | Select-Object -Unique) {
         if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
@@ -535,21 +538,28 @@ try {
             Assert-ReviewPathAncestors $StageTmp
             Protect-ReviewTemporaryDirectory $StageTmp
             $StagePassword = Join-Path $Stage ".atrinik-review-password"
+            $StagePasswordSeed = Join-Path $StageTmp ".atrinik-review-password"
             $StageProvisionLog = Join-Path $Stage "provision.log"
             Assert-ReviewPathAncestors $StagePassword
-            # Protect the empty file before materializing the disposable secret.
+            Assert-ReviewPathAncestors $StagePasswordSeed
+            # Create the secret under the owner-controlled temporary directory.
+            # A same-volume move preserves its owner and protected DACL at the
+            # staged data root without requiring an elevated owner change.
             [System.IO.File]::WriteAllText(
-                $StagePassword,
+                $StagePasswordSeed,
                 "",
                 [System.Text.Encoding]::ASCII
             )
-            Assert-ReviewPathAncestors $StagePassword
-            Protect-ReviewSecretFile $StagePassword -WriteAccess
+            Assert-ReviewPathAncestors $StagePasswordSeed
+            Protect-ReviewSecretFile $StagePasswordSeed -WriteAccess
             [System.IO.File]::WriteAllText(
-                $StagePassword,
+                $StagePasswordSeed,
                 [Guid]::NewGuid().ToString("N").Substring(0, 20),
                 [System.Text.Encoding]::ASCII
             )
+            Protect-ReviewSecretFile $StagePasswordSeed
+            Move-Item -LiteralPath $StagePasswordSeed -Destination $StagePassword
+            Assert-ReviewPathAncestors $StagePassword
             Protect-ReviewSecretFile $StagePassword
 
             $ProvisionStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
