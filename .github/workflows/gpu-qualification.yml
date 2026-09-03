@@ -97,6 +97,8 @@ jobs:
         run: >-
           cmake --build client/build/gpu-qualification --config Release
           --target atrinik client-gpu-renderer-integration-tests
+      - name: Verify frozen GPU fixture provenance
+        run: python3 client/tools/verify_gpu_fixture_provenance.py
       - name: Run GPU integration and conformance checks
         shell: bash
         env:

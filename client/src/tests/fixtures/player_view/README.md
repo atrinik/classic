@@ -9,6 +9,35 @@ ordinary and stretched terrain, a multipart sprite, a protocol animation,
 fog, roof/cutaway data, smooth and discrete lighting, and physical depths
 zero, +1, and +2.
 
+## Cross-repository artifact identity
+
+`content-provenance.json` is the machine-readable coordinate for this fixture
+family. It binds the static Classic `data/archdef.dat` input, the selected
+`atrinik/content@main` runtime release and manifest, the generated archetype
+artifact, and the worldmaker output boundary. The selected content coordinate
+is `v1.0.0` at
+`63eb9bb5f02fb9104c2385d5e01c28c3df20b735`; the 2026-09-01 issue observation
+(`v1.5.0` at `b9580ce4b920644494a9912f6ea4f37b4a4e7aa6`) remains recorded as
+historical evidence.
+
+`archdef.dat` is a static Classic client input. Worldmaker does not generate
+or replace it; its generated `client-maps` and `data/*.zz` outputs are
+separate derived artifacts. The selected release remains the exact
+dependency-bundle coordinate used by Classic. Run the provenance preflight
+before qualification:
+
+```sh
+python3 tools/verify_gpu_fixture_provenance.py
+```
+
+When a staged content runtime is available, pass it to rehash every file
+against its schema-2 manifest:
+
+```sh
+python3 tools/verify_gpu_fixture_provenance.py \
+  --content-runtime ../server/runtime/content
+```
+
 The generated `gpu-qualification-town-25x25` snapshot supplies seven active
 depths, nearly three thousand ordered sprite layers, mixed owner depths,
 roof/door/exit/FOW and transform semantics, plus exactly 64 animated live

@@ -52,6 +52,7 @@ else
   python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
   python3 tools/dependencies.py verify
 fi
+python3 tools/verify_gpu_fixture_provenance.py
 mkdir -p "${output_directory}"
 
 dependency_arguments=()

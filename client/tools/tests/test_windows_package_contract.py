@@ -17,6 +17,7 @@ class WindowsPackageContractTests(unittest.TestCase):
         self.assertNotIn("-DBUILD_TESTING=ON", script)
         self.assertIn("'--gpu-player-view'", script)
         self.assertIn("'injected GPU conformance fault'", script)
+        self.assertIn("python3 tools/verify_gpu_fixture_provenance.py", script)
         self.assertIn(
             "if (BUILD_TESTING)\n\tlist(APPEND SOURCES src/client/gpu_player_view.c)\nendif ()",
             sources,

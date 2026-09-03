@@ -63,6 +63,7 @@ else
   python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
   python3 tools/dependencies.py verify
 fi
+python3 ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runtime/content
 
 dependency_arguments=()
 native_compiler_arguments=()
