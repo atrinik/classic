@@ -252,8 +252,7 @@ function Protect-ReviewSecretFile([string]$Path) {
         if ($SddlLines.Count -eq 1) {
             try {
                 $Descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
-                    $SddlLines[0],
-                    0
+                    $SddlLines[0]
                 )
                 $DescriptorSummary = [string]$Descriptor.ControlFlags
                 $Dacl = $Descriptor.DiscretionaryAcl
