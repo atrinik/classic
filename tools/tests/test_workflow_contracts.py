@@ -1266,7 +1266,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-socket-quic.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
         self.assertIn('"client-rich-presence-tests.exe"', run)
-        self.assertIn('"atrinik-classic-issue-477-windows-one-click-*.zip"', run)
+        self.assertIn('"atrinik-classic-issue-521-windows-one-click-*.zip"', run)
         self.assertIn('"smoke_windows_review_bundle.ps1"', run)
         self.assertIn("-Revision $env:COVERAGE_SHA", run)
         review_smoke = (
@@ -1286,7 +1286,20 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("& $launcherPath", review_smoke)
         self.assertIn('"atrinik.exe"', review_smoke)
         self.assertIn("Get-NetUDPEndpoint -LocalPort 1731", review_smoke)
-        self.assertIn("One-click launcher server or client exited", review_smoke)
+        self.assertIn("CloseMainWindow", review_smoke)
+        self.assertIn("WaitForExit(30000)", review_smoke)
+        self.assertIn("Server ready\\. Waiting for connections", review_smoke)
+        self.assertIn("Connection .*: player .* logged in", review_smoke)
+        self.assertIn("Connection established to selected server", review_smoke)
+        self.assertIn("Gameplay ready", review_smoke)
+        self.assertIn("HTTP request origin=", review_smoke)
+        self.assertIn("endpoint=(?:(?:http|https)-loopback)$", review_smoke)
+        self.assertIn("unexpectedly targeted a remote endpoint", review_smoke)
+        self.assertNotIn("Stop-Process -Id $launcher", review_smoke)
+        self.assertIn(
+            "One-click launcher did not prove loopback login and gameplay readiness",
+            review_smoke,
+        )
         review_shutdown_loop = review_smoke[
             review_smoke.index("$shutdownDeadline =") : review_smoke.index(
                 'if ($process.ExitCode -ne 0)',

@@ -1381,7 +1381,9 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
         goto out;
     }
 
-    request = curl_request_create(url, CURL_PKEY_TRUST_SYSTEM);
+    request = curl_request_create_with_origin(url,
+                                                 CURL_PKEY_TRUST_SYSTEM,
+                                                 "server.metaserver");
     if (!curl_request_set_post_body(request, body, body_size) ||
         !curl_request_header_add(request, "Content-Type", METASERVER_PUBLISH_CONTENT_TYPE) ||
         !curl_request_header_add(request, "Content-Digest", components.content_digest) ||

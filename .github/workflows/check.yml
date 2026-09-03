@@ -504,7 +504,7 @@ jobs:
           python3 tools/release/compose_windows_review_bundle.py \
             --client-package "${client_packages[0]}" \
             --server-package "${server_packages[0]}" \
-            --output "libatrinik/build/windows-test-bundle/atrinik-classic-issue-477-windows-one-click-${COVERAGE_SHA:0:7}.zip" \
+            --output "libatrinik/build/windows-test-bundle/atrinik-classic-issue-521-windows-one-click-${COVERAGE_SHA:0:7}.zip" \
             --revision "${COVERAGE_SHA}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -706,7 +706,7 @@ jobs:
           }
 
           $reviewPackages = @(Get-ChildItem -LiteralPath $bundle -File `
-            -Filter "atrinik-classic-issue-477-windows-one-click-*.zip")
+            -Filter "atrinik-classic-issue-521-windows-one-click-*.zip")
           if ($reviewPackages.Count -ne 1) {
             throw "Expected exactly one Windows review bundle, found $($reviewPackages.Count)"
           }

@@ -260,6 +260,11 @@ static int popup_destroy_callback(popup_struct *popup) {
  * Title of the news entry that we want to read.
  */
 void game_news_open(const char *title) {
+    if (clioption_settings.game_news_url == NULL ||
+        *clioption_settings.game_news_url == '\0') {
+        return;
+    }
+
     popup_struct *popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
     if (popup == NULL) {
         return;
@@ -283,7 +288,8 @@ void game_news_open(const char *title) {
     curl_easy_cleanup(curl);
 
     /* Start downloading. */
-    game_news->request = curl_request_create(url, CURL_PKEY_TRUST_ULTIMATE);
+    game_news->request =
+        curl_request_create_with_origin(url, CURL_PKEY_TRUST_ULTIMATE, "client.game-news");
     curl_request_start_get(game_news->request);
     game_news->state = CURL_STATE_NONE;
 }
