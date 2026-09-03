@@ -1005,6 +1005,11 @@ path_read_secret(const char *path, char *secret, size_t secret_size, bool *permi
     }
 #endif
 
+    if (memchr(secret, '\0', length) != NULL) {
+        result = PATH_SECRET_INVALID_DATA;
+        goto out;
+    }
+
     char *newline = memchr(secret, '\n', length);
     if (newline != NULL) {
         if ((size_t)(newline - secret) + 1U < length) {
@@ -1091,6 +1096,8 @@ const char *path_secret_error_string(path_secret_error_t error) {
             return "the first line is too long";
         case PATH_SECRET_TRAILING_DATA:
             return "the file contains data after the first line";
+        case PATH_SECRET_INVALID_DATA:
+            return "the file contains invalid bytes";
         case PATH_SECRET_READ_ERROR:
             return "cannot read the file";
     }

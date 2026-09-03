@@ -101,12 +101,14 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     '"--connect_password_file=$PasswordFile"',
                     'Substring(0, 20)',
                     "Stop-ReviewProcessTree",
+                    "taskkill.exe",
                     "function Invoke-ReviewIcacls",
                     "function Protect-ReviewSecretFile",
                     "icacls.exe",
                     '"/inheritance:r"',
                     '"/grant:r"',
                     "D:P(A;;FR;;;",
+                    r'Where-Object { $_ -match "^D:P\(" }',
                     "function Remove-ReviewSecretFile",
                     "function Remove-ReviewSecretFiles",
                     "Remove-ReviewSecretFile $Candidate",
@@ -125,6 +127,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 ):
                     self.assertIn(token, powershell)
                 self.assertNotIn('$Account + ":" + $Password', powershell)
+                self.assertNotIn("$Process.Kill($true)", powershell)
                 self.assertNotIn("Get-Acl", powershell)
                 self.assertNotIn("Set-Acl", powershell)
                 self.assertNotIn('"--reconnect"', powershell)
