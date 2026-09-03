@@ -33,6 +33,10 @@ try {
         throw "Packaged server contains the obsolete root-level maps directory"
     }
 
+    $state = Join-Path $smokeRoot "server-data"
+    Copy-Item -LiteralPath (Join-Path $serverRoot "install_data") -Destination $state -Recurse
+    New-Item -ItemType Directory -Force -Path (Join-Path $state "tmp") | Out-Null
+
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $env:ComSpec
     $startInfo.WorkingDirectory = $serverRoot
@@ -48,6 +52,8 @@ try {
         "/d",
         "/c",
         "server.bat",
+        "--datapath=$state",
+        "--server_public=false",
         "--port_quic=$serverPort",
         "--network_stack=ipv4=127.0.0.1",
         "--port_mapping=off",
