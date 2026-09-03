@@ -1310,6 +1310,47 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
     free(saved);
     delete_map(map);
 
+    write_filename_tile_map(temporary_root, "/vertical_60_60", "linked", NULL);
+    write_filename_tile_map(temporary_root, "/vertical_60_60_1", "open", NULL);
+    map = ready_map_name("/vertical_60_60", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(map);
+    ck_assert_str_eq(map->tile_path[TILED_UP], "/vertical_60_60_1");
+    ck_assert(!map->celestial_tile_path_seen[TILED_UP]);
+    ck_assert_int_eq(map->celestial_boundary[TILED_UP], CELESTIAL_BOUNDARY_UNSET);
+    ck_assert_msg(celestial_structure_validate_header(map, VS(error)), "%s", error);
+    char *vertical_saved = NULL;
+    size_t vertical_saved_size = 0;
+    FILE *vertical_saved_fp = open_memstream(&vertical_saved, &vertical_saved_size);
+    ck_assert_ptr_nonnull(vertical_saved_fp);
+    save_map_header(map, vertical_saved_fp, 1);
+    ck_assert_int_eq(fclose(vertical_saved_fp), 0);
+    ck_assert_ptr_eq(strstr(vertical_saved, "tile_path_9 "), NULL);
+    free(vertical_saved);
+    mapstruct *upper = ready_map_name("/vertical_60_60_1", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(upper);
+    ck_assert_str_eq(upper->tile_path[TILED_DOWN], "/vertical_60_60");
+    ck_assert_msg(celestial_structure_validate_topology(map, VS(error)), "%s", error);
+    delete_map(map);
+    delete_map(upper);
+
+    write_filename_tile_map(temporary_root, "/vertical_70_70_-1", "linked", NULL);
+    write_filename_tile_map(temporary_root, "/vertical_70_70", "open", NULL);
+    map = ready_map_name("/vertical_70_70_-1", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(map);
+    ck_assert_str_eq(map->tile_path[TILED_UP], "/vertical_70_70");
+    ck_assert(!map->celestial_tile_path_seen[TILED_UP]);
+    ck_assert_int_eq(map->celestial_boundary[TILED_UP], CELESTIAL_BOUNDARY_UNSET);
+    upper = ready_map_name("/vertical_70_70", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(upper);
+    ck_assert_str_eq(upper->tile_path[TILED_DOWN], "/vertical_70_70_-1");
+    ck_assert_msg(celestial_structure_validate_topology(map, VS(error)), "%s", error);
+    delete_map(map);
+    delete_map(upper);
+
+    write_filename_tile_map(temporary_root, "/vertical_80_80", "linked", NULL);
+    map = ready_map_name("/vertical_80_80", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_eq(map, NULL);
+
     map = ready_map_name("/world_4_4", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_ne(map, NULL);
     ck_assert_ptr_eq(map->tile_path[TILED_SOUTH], NULL);
@@ -1403,6 +1444,9 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
 
     const char *logical_paths[] = {
         "/world_5_5",       "/world_5_6",       "/world_4_4",
+        "/vertical_60_60",  "/vertical_60_60_1", "/vertical_70_70",
+        "/vertical_70_70_-1",
+        "/vertical_80_80",
         "/world_3_3",       "/world_3_4",       "/override",
         "/world_1_50",      "/world_1_50_-1", "/world_1_51_-1",
         "/world_2_47",       "/world_2_47_-1",   "/world_1_47_-1", "/legacy_5_5",
