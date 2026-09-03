@@ -1231,6 +1231,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("clioption_connect_value_clear", client_main)
         self.assertIn("clioptions_option_connect_password_file", client_main)
         self.assertIn("path_read_secret", client_main)
+        self.assertIn(
+            "Connect password file must be readable only by the owner",
+            client_main,
+        )
+        self.assertNotIn(
+            "Connect password file %s is readable or writable by group/other",
+            client_main,
+        )
         self.assertIn("clioptions_enable_sensitive(cli)", client_main)
         self.assertIn("BUNDLE-MANIFEST.json", review_smoke)
         self.assertIn("Language.Parser]::ParseFile", review_smoke)
