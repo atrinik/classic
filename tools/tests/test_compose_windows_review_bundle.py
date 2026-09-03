@@ -108,7 +108,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     '"/inheritance:r"',
                     '"/grant:r"',
                     "D:P(A;;FR;;;",
-                    r'Where-Object { $_ -match "^D:P\(" }',
+                    r'Where-Object { $_ -match "^D:" }',
                     "function Remove-ReviewSecretFile",
                     "function Remove-ReviewSecretFiles",
                     "Remove-ReviewSecretFile $Candidate",

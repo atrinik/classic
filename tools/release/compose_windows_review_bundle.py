@@ -239,15 +239,17 @@ function Protect-ReviewSecretFile([string]$Path) {
     )
     try {
         [void](Invoke-ReviewIcacls -Arguments @($Path, "/save", $AclFile, "/q"))
+        $AclLines = @(
+            Get-Content -LiteralPath $AclFile -ErrorAction Stop
+        )
         $SddlLines = @(
-            Get-Content -LiteralPath $AclFile -ErrorAction Stop |
-                Where-Object { $_ -match "^D:P\(" }
+            $AclLines | Where-Object { $_ -match "^D:" }
         )
         $ExpectedSddl = "D:P(A;;FR;;;$($CurrentSid.Value))"
         if ($SddlLines.Count -ne 1 -or $SddlLines[0] -ne $ExpectedSddl) {
             throw (
-                "Secret file ACL is not owner-only: $Path; observed SDDL: " +
-                ($SddlLines -join "|") + "; expected: $ExpectedSddl"
+                "Secret file ACL is not owner-only: $Path; observed ACL export: " +
+                ($AclLines -join "|") + "; expected SDDL: $ExpectedSddl"
             )
         }
     } finally {
