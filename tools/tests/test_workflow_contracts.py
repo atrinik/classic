@@ -1319,7 +1319,8 @@ class WorkflowContractTests(unittest.TestCase):
             '"--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic"',
             smoke,
         )
-        self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", smoke)
+        self.assertIn("Get-NetUDPEndpoint -ErrorAction Stop", smoke)
+        self.assertIn("Where-Object { $_.LocalPort -eq $Port }", smoke)
         self.assertIn('$listenerEndpoints[0].LocalAddress -ne "127.0.0.1"', smoke)
         self.assertIn('if ($output -match "Discovered a direct")', smoke)
         self.assertIn("$bodySucceeded -and $cleanupFailures.Count -ne 0", smoke)

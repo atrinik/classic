@@ -60,7 +60,8 @@ function Get-PortEvidence {
 
     try {
         return @(
-            Get-NetUDPEndpoint -LocalPort $Port -ErrorAction Stop |
+            Get-NetUDPEndpoint -ErrorAction Stop |
+                Where-Object { $_.LocalPort -eq $Port } |
                 Select-Object LocalAddress, LocalPort, OwningProcess
         )
     } catch {
