@@ -299,7 +299,7 @@ function Invoke-ReviewIcacls([string[]]$Arguments) {
     return $Output
 }
 
-function Protect-ReviewSecretFile([string]$Path, [switch]$CreateEmpty, [switch]$WriteAccess) {
+function Protect-ReviewSecretFile([string]$Path, [switch]$WriteAccess) {
     Assert-ReviewPathAncestors $Path
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Secret file is missing: $Path"
@@ -312,11 +312,9 @@ function Protect-ReviewSecretFile([string]$Path, [switch]$CreateEmpty, [switch]$
     $SidArgument = "*$($CurrentSid.Value)"
     $Access = if ($WriteAccess) { "F" } else { "R" }
     $ExpectedMask = if ($WriteAccess) { 0x1f01ff } else { 0x120089 }
-    if ($CreateEmpty) {
-        [void](Invoke-ReviewIcacls -Arguments @($Path, "/reset", "/q"))
-    }
-    # The launcher creates this file under the current identity; changing its
-    # owner requires an elevated token and is unnecessary for DACL hardening.
+    # The launcher creates this file under the current identity. Removing
+    # inherited access and granting the current SID preserves that owner
+    # without requiring an elevated owner change.
     [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
     [void](Invoke-ReviewIcacls -Arguments @(
         $Path,
@@ -511,7 +509,7 @@ try {
                 [System.Text.Encoding]::ASCII
             )
             Assert-ReviewPathAncestors $StagePassword
-            Protect-ReviewSecretFile $StagePassword -CreateEmpty -WriteAccess
+            Protect-ReviewSecretFile $StagePassword -WriteAccess
             [System.IO.File]::WriteAllText(
                 $StagePassword,
                 [Guid]::NewGuid().ToString("N").Substring(0, 20),

@@ -158,9 +158,14 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     powershell,
                 )
                 self.assertIn(
-                    'Protect-ReviewSecretFile $StagePassword -CreateEmpty -WriteAccess',
+                    'Protect-ReviewSecretFile $StagePassword -WriteAccess',
                     powershell,
                 )
+                secret_protection = powershell[
+                    powershell.index("function Protect-ReviewSecretFile") :
+                    powershell.index("function Protect-ReviewTemporaryDirectory")
+                ]
+                self.assertNotIn('"/reset"', secret_protection)
                 self.assertIn(
                     '        "/grant",\r\n'
                     '        "$($SidArgument):(F)",\r\n'
