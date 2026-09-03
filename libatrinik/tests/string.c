@@ -45,6 +45,20 @@ static int test_replace_unprintable(void) {
     return 0;
 }
 
+static int test_newline(void) {
+    static char cases[][8] = {"line\n", "line\r\n", "\n", "line"};
+    static const char *expected[] = {"line", "line", "", "line"};
+
+    for (size_t i = 0; i < arraysize(cases); i++) {
+        string_strip_newline(cases[i]);
+        if (strcmp(cases[i], expected[i]) != 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static int test_whitespace(void) {
     char value[] = "\xc3\xa9   \xe4\xb8\x96\t\xf0\x9f\x8c\x8d";
     string_whitespace_squeeze(value);
@@ -69,6 +83,9 @@ static int test_whitespace(void) {
 int main(void) {
     toolkit_import(string);
     int result = test_replace_unprintable();
+    if (result == 0) {
+        result = test_newline();
+    }
     if (result == 0) {
         result = test_whitespace();
     }

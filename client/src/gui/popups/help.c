@@ -40,6 +40,7 @@
 #include <toolkit/toolkit.h>
 #include <widget.h>
 #include <toolkit/string.h>
+#include <toolkit/path.h>
 
 /**
  * Hashtable that contains the help files.
@@ -88,20 +89,14 @@ void hfiles_deinit(void) {
 }
 
 /**
- * Read help files from file.
+ * Parse help files from an open file.
  */
-void hfiles_init(void) {
-    FILE *fp;
-    char buf[HUGE_BUF], *key, *value, *end;
+static void hfiles_load(FILE *fp) {
+    char buf[HUGE_BUF], *key, *value;
     hfile_struct *hfile;
     StringBuffer *sb;
 
-    fp = server_file_open_name(SERVER_FILE_HFILES);
-
-    if (fp == NULL) {
-        LOG(BUG, "Could not open help files: %s", strerror(errno));
-        return;
-    }
+    HARD_ASSERT(fp != NULL);
 
     hfiles_deinit();
     hfile = NULL;
@@ -113,11 +108,7 @@ void hfiles_init(void) {
             key++;
         }
 
-        end = strchr(buf, '\n');
-
-        if (end != NULL) {
-            *end = '\0';
-        }
+        string_strip_newline(buf);
 
         /* Empty line or a comment */
         if (*key == '\0' || *key == '#') {
@@ -152,11 +143,16 @@ void hfiles_init(void) {
                 }
 
                 while (fgets(buf, sizeof(buf), fp)) {
-                    if (strcmp(buf, "endmsg\n") == 0) {
+                    bool has_newline = strchr(buf, '\n') != NULL;
+                    string_strip_newline(buf);
+                    if (strcmp(buf, "endmsg") == 0) {
                         break;
                     }
 
                     stringbuffer_append_string(sb, buf);
+                    if (has_newline) {
+                        stringbuffer_append_char(sb, '\n');
+                    }
                 }
 
                 hfile->msg = stringbuffer_finish(sb);
@@ -183,8 +179,6 @@ void hfiles_init(void) {
         }
     }
 
-    fclose(fp);
-
     if (hfile != NULL) {
         LOG(BUG, "Help block without end: %s", hfile->key);
         hfile_free(hfile);
@@ -192,6 +186,21 @@ void hfiles_init(void) {
 
     command_buf[0] = '\0';
     utarray_new(command_matches, &ut_str_icd);
+}
+
+/**
+ * Read help files from file.
+ */
+void hfiles_init(void) {
+    FILE *fp = server_file_open_name(SERVER_FILE_HFILES);
+
+    if (fp == NULL) {
+        LOG(BUG, "Could not open help files: %s", strerror(errno));
+        return;
+    }
+
+    hfiles_load(fp);
+    fclose(fp);
 }
 
 /**
@@ -208,6 +217,148 @@ hfile_struct *help_find(const char *name) {
 
     return hfile;
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+#define HFILES_TEST_REQUIRE(condition)                                           \
+    do {                                                                         \
+        if (!(condition)) {                                                      \
+            fprintf(stderr, "%s:%d: requirement failed: %s\n",                  \
+                    __FILE__,                                                    \
+                    __LINE__,                                                    \
+                    #condition);                                                 \
+            return false;                                                        \
+        }                                                                        \
+    } while (0)
+static bool hfiles_parser_test_case(const char *input, const char *expected) {
+    FILE *fp = tmpfile();
+    HFILES_TEST_REQUIRE(fp != NULL);
+
+    size_t input_len = strlen(input);
+    HFILES_TEST_REQUIRE(fwrite(input, 1, input_len, fp) == input_len);
+    HFILES_TEST_REQUIRE(fseek(fp, 0, SEEK_SET) == 0);
+
+    hfiles_load(fp);
+    hfile_struct *hfile = help_find("parser-test");
+    hfile_struct *empty = help_find("empty");
+    bool success = hfile != NULL && hfile->msg != NULL &&
+                   strcmp(hfile->msg, expected) == 0 &&
+                   hfile->msg_len == strlen(expected) &&
+                   hfile->autocomplete == 1 &&
+                   hfile->autocomplete_wiz == 1 &&
+                   empty != NULL && empty->msg == NULL && empty->msg_len == 0;
+
+    hfiles_deinit();
+    HARD_ASSERT(fclose(fp) == 0);
+    return success;
+}
+
+static FILE *hfiles_test_file;
+
+static FILE *hfiles_test_fopen(const char *path, const char *mode) {
+    HFILES_TEST_REQUIRE(strcmp(path, "srv_files/hfiles") == 0);
+    HFILES_TEST_REQUIRE(strcmp(mode, "rb") == 0);
+    FILE *fp = hfiles_test_file;
+    hfiles_test_file = NULL;
+    return fp;
+}
+
+static bool hfiles_parser_init_test(const char *input, const char *expected) {
+    FILE *fp = tmpfile();
+    HFILES_TEST_REQUIRE(fp != NULL);
+    size_t input_len = strlen(input);
+    HFILES_TEST_REQUIRE(fwrite(input, 1, input_len, fp) == input_len);
+    HFILES_TEST_REQUIRE(fseek(fp, 0, SEEK_SET) == 0);
+
+    path_fopen_t original_path_fopen = path_fopen;
+    hfiles_test_file = fp;
+    path_fopen = hfiles_test_fopen;
+    server_files_init();
+    path_fopen = original_path_fopen;
+
+    hfile_struct *hfile = help_find("parser-test");
+    bool success = hfile != NULL && hfile->msg != NULL &&
+                   strcmp(hfile->msg, expected) == 0;
+
+    hfiles_deinit();
+    hfiles_test_file = NULL;
+    path_fopen = hfiles_test_fopen;
+    hfiles_init();
+    path_fopen = original_path_fopen;
+    bool missing = help_find("parser-test") == NULL;
+    hfiles_deinit();
+    server_files_deinit();
+    return success && missing;
+}
+
+static bool hfiles_parser_incomplete_test(void) {
+    static const char input[] = "help incomplete\n"
+                                "msg\n"
+                                "last line";
+    FILE *fp = tmpfile();
+    HFILES_TEST_REQUIRE(fp != NULL);
+    size_t input_len = strlen(input);
+    HFILES_TEST_REQUIRE(fwrite(input, 1, input_len, fp) == input_len);
+    HFILES_TEST_REQUIRE(fseek(fp, 0, SEEK_SET) == 0);
+
+    hfiles_load(fp);
+    bool success = help_find("incomplete") == NULL;
+    hfiles_deinit();
+    HARD_ASSERT(fclose(fp) == 0);
+    return success;
+}
+
+bool hfiles_parser_test(void) {
+    static const char lf[] =
+        " \t# ignored\n"
+        "\n"
+        "help\n"
+        "unknown\n"
+        "help parser-test\n"
+        "autocomplete 1\n"
+        "autocomplete_wiz 1\n"
+        "title Title\n"
+        "msg\n"
+        "first line\n"
+        "second line\n"
+        "endmsg\n"
+        "msg\n"
+        "third line\n"
+        "endmsg\n"
+        "unknown value\n"
+        "end\n"
+        "help empty\n"
+        "end\n";
+    static const char crlf[] =
+        " \t# ignored\r\n"
+        "\r\n"
+        "help\r\n"
+        "unknown\r\n"
+        "help parser-test\r\n"
+        "autocomplete 1\r\n"
+        "autocomplete_wiz 1\r\n"
+        "title Title\r\n"
+        "msg\r\n"
+        "first line\r\n"
+        "second line\r\n"
+        "endmsg\r\n"
+        "msg\r\n"
+        "third line\r\n"
+        "endmsg\r\n"
+        "unknown value\r\n"
+        "end\r\n"
+        "help empty\r\n"
+        "end\r\n";
+    static const char expected[] = "[book]Title[/book]first line\n"
+                                   "second line\n"
+                                   "third line\n";
+
+    return hfiles_parser_test_case(lf, expected) &&
+           hfiles_parser_init_test(lf, expected) &&
+           hfiles_parser_test_case(crlf, expected) &&
+           hfiles_parser_incomplete_test();
+}
+#endif
+
 
 /**
  * Show a help GUI.

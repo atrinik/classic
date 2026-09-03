@@ -213,6 +213,10 @@ extern void hfiles_deinit(void);
 
 extern void hfiles_init(void);
 
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool hfiles_parser_test(void);
+#endif
+
 extern hfile_struct *help_find(const char *name);
 
 extern void help_show(const char *name);

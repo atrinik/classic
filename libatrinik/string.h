@@ -52,7 +52,8 @@
     } while (0)
 
 /**
- * Strip the trailing newline in the specified string, if any.
+ * Strip the trailing line ending in the specified string, if any.
+ * Both LF and CRLF line endings are supported.
  *
  * @param str
  * The string. Cannot be NULL.
@@ -62,6 +63,10 @@
         HARD_ASSERT(str != NULL);                        \
         char *CONCAT(end, __LINE__) = strchr(str, '\n'); \
         if (CONCAT(end, __LINE__) != NULL) {             \
+            if (CONCAT(end, __LINE__) != str &&         \
+                CONCAT(end, __LINE__)[-1] == '\r') {    \
+                CONCAT(end, __LINE__)[-1] = '\0';        \
+            }                                            \
             *CONCAT(end, __LINE__) = '\0';               \
         }                                                \
     } while (0)

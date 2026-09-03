@@ -3,6 +3,17 @@
 
 #include <openssl/crypto.h>
 
+#define require(condition)                                                        \
+    do {                                                                          \
+        if (!(condition)) {                                                       \
+            fprintf(stderr, "%s:%d: requirement failed: %s\n",                   \
+                    __FILE__,                                                     \
+                    __LINE__,                                                     \
+                    #condition);                                                  \
+            return 1;                                                             \
+        }                                                                          \
+    } while (0)
+
 static char observed[64];
 static char captured[HUGE_BUF];
 
@@ -21,6 +32,26 @@ static bool sensitive_handler(const char *arg, char **errmsg) {
 
     snprintf(observed, sizeof(observed), "%s", arg);
     return true;
+}
+
+static int test_crlf_category(void) {
+    char path[] = "/tmp/atrinik-clioptions-test.XXXXXX";
+    int fd = mkstemp(path);
+    require(fd != -1);
+
+    FILE *fp = fdopen(fd, "wb");
+    require(fp != NULL);
+
+    static const char config[] = "[general]\r\n"
+                                  "secret = general-value\r\n"
+                                  "[meta]\r\n"
+                                  "secret = meta-value\r\n";
+    require(fwrite(config, 1, sizeof(config) - 1, fp) == sizeof(config) - 1);
+    require(fclose(fp) == 0);
+    require(clioptions_load(path, "[general]"));
+    require(strcmp(observed, "general-value") == 0);
+    require(unlink(path) == 0);
+    return 0;
 }
 
 int main(void) {
@@ -55,6 +86,7 @@ int main(void) {
     failed |= strcmp(clioptions_get("secret"), "<redacted>") != 0;
 
     logger_set_print_func(logger_do_print);
+    failed |= test_crlf_category();
     if (errmsg != NULL) {
         OPENSSL_cleanse(errmsg, strlen(errmsg) + 1U);
     }
