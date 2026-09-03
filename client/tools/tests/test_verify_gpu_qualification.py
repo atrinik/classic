@@ -176,6 +176,14 @@ def record(name="dense-17x17-five-depth-1080p"):
 
 
 class VerifyGpuQualificationTests(unittest.TestCase):
+    def test_qualified_d3d12_requires_selected_adapter_identity(self):
+        value = record()
+        value["gpu"]["backend"] = "direct3d12"
+        with self.assertRaisesRegex(ArtifactError, "adapter_identity"):
+            validate_record(value)
+        value["gpu"]["adapter_identity"] = "dxgi-luid:12345678:abcdef01"
+        self.assertEqual(validate_record(value), value["workload"]["name"])
+
     def test_fullscreen_golden_is_keyed_by_tier_and_display_mode(self):
         contract = {"backends": {"vulkan": {"brynknot-movement": {
             "fullscreen": {

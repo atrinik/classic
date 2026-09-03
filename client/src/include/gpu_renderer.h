@@ -193,6 +193,8 @@ const char *gpu_renderer_backend(void);
 const char *gpu_renderer_device_name(void);
 const char *gpu_renderer_driver_name(void);
 const char *gpu_renderer_driver_version(void);
+/** Stable identity for the selected native adapter, or unavailable. */
+const char *gpu_renderer_adapter_identity(void);
 bool gpu_renderer_output_size(int *width, int *height);
 bool gpu_renderer_begin_frame(void);
 bool gpu_renderer_present(void);

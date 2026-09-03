@@ -25,6 +25,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
 
 #include <SDL3/SDL.h>
 #include <gpu_map_renderer.h>
@@ -108,6 +111,7 @@ static char backend[32];
 static char device_name[256];
 static char driver_name[256];
 static char driver_version[256];
+static char adapter_identity[64];
 static bool frame_failed;
 static bool recreation_requested;
 static bool hardware_verified;
@@ -149,22 +153,128 @@ static bool gpu_renderer_backend_supported(const char *name) {
 }
 
 #ifdef WIN32
-static bool gpu_renderer_qualification_requested(void) {
-    const char *value = SDL_GetEnvironmentVariable(SDL_GetEnvironment(),
-                                                   "ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE");
-    return value != NULL && strcmp(value, "1") == 0;
+/*
+ * MXE does not provide d3dkmthk.h. These are the documented WDDM structures
+ * needed to query the driver description after opening the adapter by its
+ * DXGI LUID. Keep the declarations local so no SDL private backend layout or
+ * an enumerated adapter candidate is mistaken for the selected device.
+ */
+typedef struct gpu_renderer_d3dkmt_open_adapter_from_luid {
+    LUID adapter_luid;
+    ULONG adapter;
+} gpu_renderer_d3dkmt_open_adapter_from_luid_t;
+
+typedef struct gpu_renderer_d3dkmt_query_adapter_info {
+    ULONG adapter;
+    UINT type;
+    void *private_driver_data;
+    UINT private_driver_data_size;
+} gpu_renderer_d3dkmt_query_adapter_info_t;
+
+typedef struct gpu_renderer_d3dkmt_close_adapter {
+    ULONG adapter;
+} gpu_renderer_d3dkmt_close_adapter_t;
+
+typedef struct gpu_renderer_d3dkmt_driver_description {
+    WCHAR description[4096];
+} gpu_renderer_d3dkmt_driver_description_t;
+
+/* KMTQAITYPE_DRIVER_DESCRIPTION in the current WDDM d3dkmthk.h. */
+#define GPU_RENDERER_D3DKMT_QUERY_DRIVER_DESCRIPTION 65U
+
+extern LONG WINAPI D3DKMTOpenAdapterFromLuid(
+    const gpu_renderer_d3dkmt_open_adapter_from_luid_t *open_adapter);
+extern LONG WINAPI D3DKMTQueryAdapterInfo(
+    const gpu_renderer_d3dkmt_query_adapter_info_t *query_adapter);
+extern LONG WINAPI D3DKMTCloseAdapter(
+    const gpu_renderer_d3dkmt_close_adapter_t *close_adapter);
+
+static bool gpu_renderer_d3d12_wide_to_utf8(const WCHAR *value,
+                                            char *destination,
+                                            size_t size) {
+    if (value == NULL || destination == NULL || size == 0 || size > (size_t)INT_MAX) {
+        return false;
+    }
+    destination[0] = '\0';
+    int converted = WideCharToMultiByte(CP_UTF8,
+                                        WC_ERR_INVALID_CHARS,
+                                        value,
+                                        -1,
+                                        destination,
+                                        (int)size,
+                                        NULL,
+                                        NULL);
+    return converted > 1 && converted <= (int)size;
+}
+
+static bool gpu_renderer_d3d12_format_version(LARGE_INTEGER value,
+                                               char *destination,
+                                               size_t size) {
+    int written = snprintf(destination,
+                           size,
+                           "%u.%u.%u.%u",
+                           (unsigned int)HIWORD(value.HighPart),
+                           (unsigned int)LOWORD(value.HighPart),
+                           (unsigned int)HIWORD(value.LowPart),
+                           (unsigned int)LOWORD(value.LowPart));
+    return written > 0 && (size_t)written < size;
+}
+
+static bool gpu_renderer_d3d12_driver_description(const LUID *adapter_luid,
+                                                  char *destination,
+                                                  size_t size) {
+    if (adapter_luid == NULL || destination == NULL || size == 0) {
+        return false;
+    }
+    destination[0] = '\0';
+    gpu_renderer_d3dkmt_open_adapter_from_luid_t open_adapter = {
+        *adapter_luid,
+        0,
+    };
+    if (D3DKMTOpenAdapterFromLuid(&open_adapter) < 0) {
+        return false;
+    }
+
+    gpu_renderer_d3dkmt_driver_description_t description = {{0}};
+    gpu_renderer_d3dkmt_query_adapter_info_t query_adapter = {
+        open_adapter.adapter,
+        GPU_RENDERER_D3DKMT_QUERY_DRIVER_DESCRIPTION,
+        &description,
+        (UINT)sizeof(description),
+    };
+    LONG result = D3DKMTQueryAdapterInfo(&query_adapter);
+    gpu_renderer_d3dkmt_close_adapter_t close_adapter = {open_adapter.adapter};
+    (void)D3DKMTCloseAdapter(&close_adapter);
+    if (result < 0) {
+        return false;
+    }
+    description.description[SDL_arraysize(description.description) - 1] = L'\0';
+    return gpu_renderer_d3d12_wide_to_utf8(description.description, destination, size);
 }
 #endif
 
-static bool gpu_renderer_d3d12_hardware_verified(void) {
 #ifdef WIN32
-    IDXGIFactory1 *factory1 = NULL;
-    HRESULT result = CreateDXGIFactory1(&IID_IDXGIFactory1, (void **)&factory1);
-    if (FAILED(result)) {
-        SDL_SetError("could not create DXGI factory for D3D12 hardware attestation");
+static bool gpu_renderer_d3d12_identity_resolve(const char *selected_device_name,
+                                                const char *selected_driver_name,
+                                                const char *selected_driver_version) {
+    if (selected_device_name == NULL || selected_driver_version == NULL ||
+        strcmp(selected_device_name, "unavailable") == 0 ||
+        strcmp(selected_driver_version, "unavailable") == 0 ||
+        *selected_device_name == '\0' || *selected_driver_version == '\0') {
+        SDL_SetError("selected D3D12 device properties are incomplete");
         return false;
     }
-    unsigned int hardware_adapters = 0;
+
+    IDXGIFactory1 *factory1 = NULL;
+    HRESULT result = CreateDXGIFactory1(&IID_IDXGIFactory1, (void **)&factory1);
+    if (FAILED(result) || factory1 == NULL) {
+        SDL_SetError("could not create DXGI factory for selected D3D12 identity");
+        return false;
+    }
+
+    UINT matching_adapters = 0;
+    DXGI_ADAPTER_DESC1 matched_description = {0};
+    char matched_driver_version[sizeof(driver_version)] = "";
     for (UINT index = 0;; index++) {
         IDXGIAdapter1 *adapter = NULL;
         result = IDXGIFactory1_EnumAdapters1(factory1, index, &adapter);
@@ -173,51 +283,102 @@ static bool gpu_renderer_d3d12_hardware_verified(void) {
         }
         if (FAILED(result) || adapter == NULL) {
             IDXGIFactory1_Release(factory1);
-            SDL_SetError("could not enumerate DXGI adapters for D3D12 hardware attestation");
+            SDL_SetError("could not enumerate DXGI adapters for selected D3D12 identity");
             return false;
         }
-        DXGI_ADAPTER_DESC1 description;
+
+        DXGI_ADAPTER_DESC1 description = {0};
         ID3D12Device *candidate_device = NULL;
-        bool hardware = SUCCEEDED(IDXGIAdapter1_GetDesc1(adapter, &description)) &&
-                        !(description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
-                        SUCCEEDED(D3D12CreateDevice((IUnknown *)adapter,
-                                                    D3D_FEATURE_LEVEL_11_0,
-                                                    &IID_ID3D12Device,
-                                                    (void **)&candidate_device));
+        bool hardware_capable =
+            SUCCEEDED(IDXGIAdapter1_GetDesc1(adapter, &description)) &&
+            !(description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
+            SUCCEEDED(D3D12CreateDevice((IUnknown *)adapter,
+                                        D3D_FEATURE_LEVEL_11_0,
+                                        &IID_ID3D12Device,
+                                        (void **)&candidate_device));
         if (candidate_device != NULL) {
             ID3D12Device_Release(candidate_device);
         }
+
+        char candidate_name[sizeof(device_name)] = "";
+        char candidate_driver_version[sizeof(driver_version)] = "";
+        LARGE_INTEGER umd_version = {0};
+        bool selected_properties_match =
+            hardware_capable &&
+            gpu_renderer_d3d12_wide_to_utf8(description.Description,
+                                             candidate_name,
+                                             sizeof(candidate_name)) &&
+            strcmp(candidate_name, selected_device_name) == 0 &&
+            SUCCEEDED(IDXGIAdapter1_CheckInterfaceSupport(adapter,
+                                                          &IID_IDXGIDevice,
+                                                          &umd_version)) &&
+            gpu_renderer_d3d12_format_version(umd_version,
+                                               candidate_driver_version,
+                                               sizeof(candidate_driver_version)) &&
+            strcmp(candidate_driver_version, selected_driver_version) == 0;
+        if (selected_properties_match) {
+            matching_adapters++;
+            if (matching_adapters == 1U) {
+                matched_description = description;
+                snprintf(matched_driver_version,
+                         sizeof(matched_driver_version),
+                         "%s",
+                         candidate_driver_version);
+            }
+        }
         IDXGIAdapter1_Release(adapter);
-        hardware_adapters += hardware;
     }
     IDXGIFactory1_Release(factory1);
-    bool unique_required = gpu_renderer_qualification_requested();
-    if (hardware_adapters == 0U || (unique_required && hardware_adapters != 1U)) {
-        SDL_SetError("D3D12 hardware attestation requires %s hardware-capable DXGI adapter "
-                     "(found %u)",
-                     unique_required ? "exactly one" : "at least one",
-                     hardware_adapters);
+
+    if (matching_adapters != 1U) {
+        SDL_SetError("selected D3D12 adapter identity is ambiguous or unavailable "
+                     "(matched %u hardware-capable adapters)",
+                     matching_adapters);
         return false;
     }
-    /* SDL 3.4 does not expose the selected ID3D12Device/LUID. Qualification
-     * runners are constrained to one D3D12-capable non-software adapter so
-     * SDL's successful selection is unambiguous. Normal production accepts
-     * hybrid/multi-GPU systems when at least one hardware adapter qualifies. */
-    return true;
-#else
-    SDL_SetError("D3D12 hardware attestation is unavailable on this platform");
-    return false;
-#endif
-}
 
-static bool gpu_renderer_hardware_attest(const char *name, bool require_hardware) {
-    if (!require_hardware) {
+    char resolved_driver_name[sizeof(driver_name)] = "";
+    bool native_driver_name =
+        gpu_renderer_d3d12_driver_description(&matched_description.AdapterLuid,
+                                              resolved_driver_name,
+                                              sizeof(resolved_driver_name)) &&
+        strcmp(resolved_driver_name, "unavailable") != 0;
+    if (!native_driver_name) {
+        if (selected_driver_name == NULL || *selected_driver_name == '\0' ||
+            strcmp(selected_driver_name, "unavailable") == 0) {
+            SDL_SetError("selected D3D12 adapter driver name is unavailable");
+            return false;
+        }
+        snprintf(resolved_driver_name,
+                 sizeof(resolved_driver_name),
+                 "%s",
+                 selected_driver_name);
+    }
+
+    if (snprintf(adapter_identity,
+                 sizeof(adapter_identity),
+                 "dxgi-luid:%08lx:%08lx",
+                 (unsigned long)matched_description.AdapterLuid.HighPart,
+                 (unsigned long)matched_description.AdapterLuid.LowPart) <= 0) {
+        SDL_SetError("could not format selected D3D12 adapter identity");
+        return false;
+    }
+    snprintf(driver_name, sizeof(driver_name), "%s", resolved_driver_name);
+    snprintf(driver_version, sizeof(driver_version), "%s", matched_driver_version);
+    return true;
+}
+#endif
+
+static bool gpu_renderer_hardware_attest(const char *name,
+                                         bool require_hardware,
+                                         bool d3d12_identity_resolved) {
+    if (!require_hardware || name == NULL) {
         return false;
     }
     if (strcmp(name, "vulkan") == 0 || strcmp(name, "metal") == 0) {
         return true;
     }
-    return strcmp(name, "direct3d12") == 0 && gpu_renderer_d3d12_hardware_verified();
+    return strcmp(name, "direct3d12") == 0 && d3d12_identity_resolved;
 }
 
 static bool gpu_renderer_formats_supported(SDL_GPUDevice *candidate) {
@@ -467,6 +628,7 @@ static void gpu_renderer_identity_clear(void) {
     device_name[0] = '\0';
     driver_name[0] = '\0';
     driver_version[0] = '\0';
+    adapter_identity[0] = '\0';
     hardware_verified = false;
 }
 
@@ -474,12 +636,13 @@ static void gpu_renderer_failure_preserve(const char *context) {
     char error[512];
     snprintf(error, sizeof(error), "%s", SDL_GetError());
     gpu_renderer_device_destroy();
-    SDL_SetError("%s (backend: %s; device: %s; driver: %s %s): %s",
+    SDL_SetError("%s (backend: %s; device: %s; driver: %s %s; adapter: %s): %s",
                  context,
                  backend[0] != '\0' ? backend : "unavailable",
                  device_name[0] != '\0' ? device_name : "unavailable",
                  driver_name[0] != '\0' ? driver_name : "unavailable",
                  driver_version[0] != '\0' ? driver_version : "unavailable",
+                 adapter_identity[0] != '\0' ? adapter_identity : "unavailable",
                  error[0] != '\0' ? error : "unspecified failure");
 }
 
@@ -549,13 +712,30 @@ static bool gpu_renderer_create_internal(SDL_Window *window, bool require_hardwa
                                sizeof(driver_version),
                                device_properties,
                                SDL_PROP_GPU_DEVICE_DRIVER_VERSION_STRING);
-    if (!gpu_renderer_backend_supported(selected_backend) ||
-        !gpu_renderer_formats_supported(device) ||
-        (require_hardware &&
-         !(hardware_verified = gpu_renderer_hardware_attest(selected_backend, true)))) {
-        SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with "
-                     "verified hardware acceleration plus R8G8B8A8_UNORM and R32_UINT "
-                     "render targets");
+    snprintf(adapter_identity, sizeof(adapter_identity), "%s", "unavailable");
+    bool d3d12_identity_resolved = false;
+    if (require_hardware && selected_backend != NULL &&
+        strcmp(selected_backend, "direct3d12") == 0 &&
+        gpu_renderer_backend_supported(selected_backend) &&
+        gpu_renderer_formats_supported(device)) {
+#ifdef WIN32
+        d3d12_identity_resolved =
+            gpu_renderer_d3d12_identity_resolve(device_name, driver_name, driver_version);
+#endif
+    }
+    if (require_hardware) {
+        hardware_verified =
+            gpu_renderer_hardware_attest(selected_backend, true, d3d12_identity_resolved);
+    }
+    bool capabilities_supported = gpu_renderer_backend_supported(selected_backend) &&
+                                  gpu_renderer_formats_supported(device);
+    if (!capabilities_supported || (require_hardware && !hardware_verified)) {
+        if (!(require_hardware && selected_backend != NULL &&
+              strcmp(selected_backend, "direct3d12") == 0 && !d3d12_identity_resolved)) {
+            SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with "
+                         "verified hardware acceleration plus R8G8B8A8_UNORM and R32_UINT "
+                         "render targets");
+        }
         gpu_renderer_failure_preserve("unsupported GPU renderer capabilities");
         return false;
     }
@@ -767,6 +947,10 @@ const char *gpu_renderer_driver_name(void) {
 
 const char *gpu_renderer_driver_version(void) {
     return driver_version;
+}
+
+const char *gpu_renderer_adapter_identity(void) {
+    return adapter_identity;
 }
 
 bool gpu_renderer_output_size(int *width, int *height) {

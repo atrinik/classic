@@ -1393,6 +1393,27 @@ static const char *gpu_player_view_hardware_tier(void) {
     return value != NULL && *value != '\0' ? value : "unavailable";
 }
 
+static bool gpu_player_view_d3d12_adapter_identity_valid(void) {
+    if (strcmp(gpu_renderer_backend(), "direct3d12") != 0) {
+        return true;
+    }
+    const char *identity = gpu_renderer_adapter_identity();
+    if (identity == NULL || strlen(identity) != 27 ||
+        strncmp(identity, "dxgi-luid:", 10) != 0 || identity[18] != ':') {
+        return false;
+    }
+    for (size_t index = 10; index < 27; index++) {
+        if (index == 18) {
+            continue;
+        }
+        if (!((identity[index] >= '0' && identity[index] <= '9') ||
+              (identity[index] >= 'a' && identity[index] <= 'f'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool gpu_player_view_identity_valid(void) {
     const char *tier = gpu_player_view_hardware_tier();
     return strcmp(ATRINIK_BENCHMARK_REVISION, "unknown") != 0 &&
@@ -2458,6 +2479,8 @@ static void gpu_player_view_record(const player_view_manifest_t *manifest,
     gpu_player_view_json_string(gpu_renderer_driver_name());
     fputs(",\"driver_version\":", stdout);
     gpu_player_view_json_string(gpu_renderer_driver_version());
+    fputs(",\"adapter_identity\":", stdout);
+    gpu_player_view_json_string(gpu_renderer_adapter_identity());
     fputs(",\"hardware_tier\":", stdout);
     gpu_player_view_json_string(gpu_player_view_hardware_tier());
     fputs(",\"build\":{\"type\":", stdout);
@@ -3080,6 +3103,8 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
     gpu_player_view_json_string_to(output, gpu_renderer_driver_name());
     fputs(",\"driver_version\":", output);
     gpu_player_view_json_string_to(output, gpu_renderer_driver_version());
+    fputs(",\"adapter_identity\":", output);
+    gpu_player_view_json_string_to(output, gpu_renderer_adapter_identity());
     fputs(",\"hardware_tier\":", output);
     gpu_player_view_json_string_to(output, gpu_player_view_hardware_tier());
     fprintf(output,
@@ -3452,6 +3477,8 @@ static bool gpu_player_view_lifecycle_write(
     gpu_player_view_json_string_to(output, gpu_renderer_driver_name());
     fputs(",\"driver_version\":", output);
     gpu_player_view_json_string_to(output, gpu_renderer_driver_version());
+    fputs(",\"adapter_identity\":", output);
+    gpu_player_view_json_string_to(output, gpu_renderer_adapter_identity());
     fputs(",\"hardware_tier\":", output);
     gpu_player_view_json_string_to(output, gpu_player_view_hardware_tier());
     fprintf(output,
@@ -3980,7 +4007,8 @@ int gpu_player_view_main(int argc, char *argv[]) {
     if (gpu_player_view_qualified() &&
         (strcmp(gpu_renderer_device_name(), "unavailable") == 0 ||
          strcmp(gpu_renderer_driver_name(), "unavailable") == 0 ||
-         strcmp(gpu_renderer_driver_version(), "unavailable") == 0)) {
+         strcmp(gpu_renderer_driver_version(), "unavailable") == 0 ||
+         !gpu_player_view_d3d12_adapter_identity_valid())) {
         fprintf(stderr, "gpu-player-view: qualified evidence lacks exact GPU identity\n");
         goto cleanup;
     }

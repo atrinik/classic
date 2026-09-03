@@ -39,6 +39,11 @@
  software renderer or fallback;
  startup reports the selected backend, device, and driver failure and exits if
  the required GPU contract is unavailable.
+On Windows qualified Direct3D 12 evidence additionally maps SDL's selected
+device name and UMD version to exactly one hardware-capable DXGI adapter,
+records that adapter's DXGI LUID, and queries the driver description by that
+LUID. Ambiguous matches or unavailable native attestation remain unqualified;
+environment variables never synthesize a selected-adapter identity.
 
  Releases are produced from every squash merge to main. semantic-release
  parses the Conventional Commits pull-request title. Classic stays on the
