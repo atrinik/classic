@@ -415,7 +415,9 @@ function Remove-ReviewSecretFile([string]$Path) {
     $SidArgument = "*$($CurrentSid.Value)"
     [void](Invoke-ReviewIcacls -Arguments @(
         $Path,
-        "/grant:r",
+        # Add full control without replacing the owner ACE first; replacing the
+        # only ACE can make icacls lose WRITE_DAC before it installs the grant.
+        "/grant",
         "$($SidArgument):(F)",
         "/q"
     ))
