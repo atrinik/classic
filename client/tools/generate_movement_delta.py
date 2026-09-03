@@ -85,8 +85,9 @@ def main() -> int:
     arguments = parser.parse_args()
     if not 1 <= arguments.x <= 11 or not 1 <= arguments.y <= 11:
         parser.error("origin coordinates must be in [1, 11]")
-    arguments.output.write_text(stream(arguments.x, arguments.y, arguments.static_radiance).hex() + "\n",
-                                encoding="ascii")
+    arguments.output.write_bytes(
+        (stream(arguments.x, arguments.y, arguments.static_radiance).hex() + "\n").encode("ascii")
+    )
     return 0
 
 

@@ -1192,6 +1192,24 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("windows-one-click-${COVERAGE_SHA:0:7}.zip", build)
 
         self.assertIn("runs-on: windows-2025", run)
+        self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", run)
+        self.assertIn("ref: ${{ env.COVERAGE_SHA }}", run)
+        self.assertIn("Verify the exact Windows checkout and GPU fixture bytes", run)
+        self.assertIn(
+            "client/tools/verify_gpu_fixture_bytes.py --source-root client", run
+        )
+        self.assertIn(
+            "Verify staged client package GPU fixture bytes before launch", run
+        )
+        self.assertIn("--package-root $packageRoots[0].FullName", run)
+        self.assertLess(
+            run.index("client/tools/verify_gpu_fixture_bytes.py --source-root client"),
+            run.index("actions/download-artifact"),
+        )
+        self.assertLess(
+            run.index("Verify staged client package GPU fixture bytes before launch"),
+            run.index('"smoke_windows_review_bundle.ps1"'),
+        )
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
         self.assertIn('"libatrinik-path.exe"', run)
         self.assertIn("New-Item -ItemType Junction", run)
