@@ -552,7 +552,7 @@ jobs:
         run: |
           $bundle = (Resolve-Path "build/native-windows-tests").Path
           $reviewPackages = @(Get-ChildItem -LiteralPath $bundle -File `
-            -Filter "atrinik-classic-issue-477-windows-one-click-*.zip")
+            -Filter "atrinik-classic-issue-521-windows-one-click-*.zip")
           if ($reviewPackages.Count -ne 1) {
             throw "Expected exactly one Windows review bundle, found $($reviewPackages.Count)"
           }
