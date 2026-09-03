@@ -317,6 +317,26 @@ int main(int argc, char **argv) {
     require(path_read_secret(trailing, VS(secret), NULL) == PATH_SECRET_TRAILING_DATA);
     require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
 
+    char boundary_trailing[HUGE_BUF];
+    require(snprintf(VS(boundary_trailing), "%s/boundary-trailing", directory) <
+            (int)sizeof(boundary_trailing));
+    char boundary_data[MAX_BUF + 1];
+    memset(boundary_data, 'a', MAX_BUF);
+    boundary_data[MAX_BUF - 1] = '\n';
+    boundary_data[MAX_BUF] = 'x';
+    require(path_secret_create_atomic(boundary_trailing,
+                                      boundary_data,
+                                      sizeof(boundary_data)) == PATH_SECRET_CREATE_OK);
+    char boundary_secret[MAX_BUF];
+    memset(boundary_secret, 'x', sizeof(boundary_secret));
+    require(path_read_secret(boundary_trailing,
+                             VS(boundary_secret),
+                             NULL) == PATH_SECRET_TRAILING_DATA);
+    static const char boundary_cleared[MAX_BUF];
+    require(CRYPTO_memcmp(boundary_secret,
+                          boundary_cleared,
+                          sizeof(boundary_secret)) == 0);
+
     char atomic[HUGE_BUF];
     require(snprintf(VS(atomic), "%s/atomic", directory) < (int)sizeof(atomic));
     static const char atomic_data[] = "atomic-data";
@@ -395,6 +415,7 @@ int main(int argc, char **argv) {
 #endif
     unlink(atomic);
     unlink(trailing);
+    unlink(boundary_trailing);
     unlink(too_long);
     unlink(path);
 #ifdef WIN32
