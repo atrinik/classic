@@ -240,16 +240,43 @@ function Protect-ReviewSecretFile([string]$Path) {
     try {
         [void](Invoke-ReviewIcacls -Arguments @($Path, "/save", $AclFile, "/q"))
         $AclLines = @(
-            Get-Content -LiteralPath $AclFile -ErrorAction Stop
+            Get-Content -LiteralPath $AclFile -Encoding Unicode -ErrorAction Stop
         )
         $SddlLines = @(
             $AclLines | Where-Object { $_ -match "^D:" }
         )
-        $ExpectedSddl = "D:P(A;;FR;;;$($CurrentSid.Value))"
-        if ($SddlLines.Count -ne 1 -or $SddlLines[0] -ne $ExpectedSddl) {
+        $OwnerOnly = $false
+        if ($SddlLines.Count -eq 1) {
+            try {
+                $Descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+                    $SddlLines[0],
+                    0
+                )
+                $Dacl = $Descriptor.DiscretionaryAcl
+                $Ace = if ($null -ne $Dacl -and $Dacl.Count -eq 1) {
+                    $Dacl[0]
+                } else {
+                    $null
+                }
+                $OwnerOnly = (
+                    $null -ne $Dacl -and
+                    $null -ne $Ace -and
+                    $Descriptor.ControlFlags.HasFlag(
+                        [System.Security.AccessControl.ControlFlags]::DiscretionaryAclProtected
+                    ) -and
+                    $Ace.AceType -eq [System.Security.AccessControl.AceType]::AccessAllowed -and
+                    $Ace.AceFlags -eq [System.Security.AccessControl.AceFlags]::None -and
+                    $Ace.SecurityIdentifier.Value -eq $CurrentSid.Value -and
+                    $Ace.AccessMask -eq 0x120089
+                )
+            } catch {
+                $OwnerOnly = $false
+            }
+        }
+        if (-not $OwnerOnly) {
             throw (
                 "Secret file ACL is not owner-only: $Path; observed ACL export: " +
-                ($AclLines -join "|") + "; expected SDDL: $ExpectedSddl"
+                ($AclLines -join "|")
             )
         }
     } finally {
