@@ -182,11 +182,11 @@ typedef struct gpu_renderer_d3dkmt_driver_description {
 /* KMTQAITYPE_DRIVER_DESCRIPTION in the current WDDM d3dkmthk.h. */
 #define GPU_RENDERER_D3DKMT_QUERY_DRIVER_DESCRIPTION 65U
 
-extern LONG WINAPI D3DKMTOpenAdapterFromLuid(
+typedef LONG(WINAPI *gpu_renderer_d3dkmt_open_adapter_from_luid_fn)(
     const gpu_renderer_d3dkmt_open_adapter_from_luid_t *open_adapter);
-extern LONG WINAPI D3DKMTQueryAdapterInfo(
+typedef LONG(WINAPI *gpu_renderer_d3dkmt_query_adapter_info_fn)(
     const gpu_renderer_d3dkmt_query_adapter_info_t *query_adapter);
-extern LONG WINAPI D3DKMTCloseAdapter(
+typedef LONG(WINAPI *gpu_renderer_d3dkmt_close_adapter_fn)(
     const gpu_renderer_d3dkmt_close_adapter_t *close_adapter);
 
 static bool gpu_renderer_d3d12_wide_to_utf8(const WCHAR *value,
@@ -227,11 +227,38 @@ static bool gpu_renderer_d3d12_driver_description(const LUID *adapter_luid,
         return false;
     }
     destination[0] = '\0';
+    HMODULE gdi32 = LoadLibraryW(L"gdi32.dll");
+    if (gdi32 == NULL) {
+        return false;
+    }
+    union {
+        FARPROC address;
+        gpu_renderer_d3dkmt_open_adapter_from_luid_fn open_adapter_from_luid;
+        gpu_renderer_d3dkmt_query_adapter_info_fn query_adapter_info;
+        gpu_renderer_d3dkmt_close_adapter_fn close_adapter;
+    } d3dkmt_function;
+    d3dkmt_function.address =
+        GetProcAddress(gdi32, "D3DKMTOpenAdapterFromLuid");
+    gpu_renderer_d3dkmt_open_adapter_from_luid_fn open_adapter_from_luid =
+        d3dkmt_function.open_adapter_from_luid;
+    d3dkmt_function.address =
+        GetProcAddress(gdi32, "D3DKMTQueryAdapterInfo");
+    gpu_renderer_d3dkmt_query_adapter_info_fn query_adapter_info =
+        d3dkmt_function.query_adapter_info;
+    d3dkmt_function.address =
+        GetProcAddress(gdi32, "D3DKMTCloseAdapter");
+    gpu_renderer_d3dkmt_close_adapter_fn close_adapter =
+        d3dkmt_function.close_adapter;
+    if (open_adapter_from_luid == NULL || query_adapter_info == NULL || close_adapter == NULL) {
+        FreeLibrary(gdi32);
+        return false;
+    }
     gpu_renderer_d3dkmt_open_adapter_from_luid_t open_adapter = {
         *adapter_luid,
         0,
     };
-    if (D3DKMTOpenAdapterFromLuid(&open_adapter) < 0) {
+    if (open_adapter_from_luid(&open_adapter) < 0) {
+        FreeLibrary(gdi32);
         return false;
     }
 
@@ -242,9 +269,10 @@ static bool gpu_renderer_d3d12_driver_description(const LUID *adapter_luid,
         &description,
         (UINT)sizeof(description),
     };
-    LONG result = D3DKMTQueryAdapterInfo(&query_adapter);
-    gpu_renderer_d3dkmt_close_adapter_t close_adapter = {open_adapter.adapter};
-    (void)D3DKMTCloseAdapter(&close_adapter);
+    LONG result = query_adapter_info(&query_adapter);
+    gpu_renderer_d3dkmt_close_adapter_t close_request = {open_adapter.adapter};
+    (void)close_adapter(&close_request);
+    FreeLibrary(gdi32);
     if (result < 0) {
         return false;
     }
