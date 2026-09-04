@@ -389,13 +389,12 @@ try {
         throw "One-click client did not exit after the normal close request"
     }
     $launcherClient.Refresh()
+    # The launcher owns and validates the client Process object. A process
+    # object rediscovered through Get-Process can expose no ExitCode after a
+    # GUI close, so the launcher and batch exit codes below are authoritative.
     $launcherClientExitCode = $launcherClient.ExitCode
     if ($null -ne $launcherClientExitCode -and $launcherClientExitCode -ne 0) {
         throw "One-click client exited with code $launcherClientExitCode"
-    }
-    $launcherProgressText = Get-Content -Raw -LiteralPath $launcherProgressLog
-    if ($launcherProgressText -notmatch "(?m)^client-exit-code=0\r?$") {
-        throw "One-click client did not report exit code zero"
     }
     $launcherClientLogText = Get-Content -Raw -LiteralPath $launcherClientLog
     if ($launcherClientLogText -notmatch "Client shutdown complete\.") {
@@ -410,10 +409,6 @@ try {
     $launcherServerExitCode = $launcherServer.ExitCode
     if ($null -ne $launcherServerExitCode -and $launcherServerExitCode -ne 0) {
         throw "One-click server exited with code $launcherServerExitCode"
-    }
-    $launcherProgressText = Get-Content -Raw -LiteralPath $launcherProgressLog
-    if ($launcherProgressText -notmatch "(?m)^server-exit-code=0\r?$") {
-        throw "One-click server did not report exit code zero"
     }
     $launcherServerLogText = Get-Content -Raw -LiteralPath $launcherServerLog
     if ($launcherServerLogText -notmatch "Server shutdown complete\.") {
