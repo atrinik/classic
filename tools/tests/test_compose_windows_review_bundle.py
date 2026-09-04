@@ -159,6 +159,9 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "stderr_tail=",
                     "function ConvertTo-ReviewCommandLineArgument",
                     "function Set-ReviewArgumentList",
+                    "function Get-ReviewQuicFingerprint",
+                    "FromBase64String",
+                    "[System.Security.Cryptography.SHA256]::Create()",
                     'GetProperty("ArgumentList")',
                     "ArgumentList.Add",
                     "$StartInfo.Arguments =",
@@ -176,6 +179,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 ):
                     self.assertIn(token, powershell)
                 self.assertNotIn("ConvertTo-ReviewArguments", powershell)
+                self.assertNotIn("review-quic-fingerprint.py", powershell)
                 self.assertIn(
                     '# Create the secret with an explicit owner and protected DACL.',
                     powershell,

@@ -124,28 +124,6 @@ def _add_package(
             raise BundleError(f"different client/server payloads collide at {target}")
 
 
-FINGERPRINT_HELPER = '''"""Print the SHA-256 fingerprint of a QUIC identity certificate."""
-from __future__ import annotations
-import hashlib
-from pathlib import Path
-import ssl
-import sys
-
-BEGIN = "-----BEGIN CERTIFICATE-----"
-END = "-----END CERTIFICATE-----"
-
-if len(sys.argv) != 2:
-    raise SystemExit("usage: review-quic-fingerprint.py IDENTITY_FILE")
-identity = Path(sys.argv[1]).read_text(encoding="ascii")
-begin = identity.find(BEGIN)
-end = identity.find(END, begin)
-if begin < 0 or end < 0:
-    raise SystemExit("QUIC certificate is missing from the identity file")
-pem = identity[begin : end + len(END)]
-print(hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest())
-'''
-
-
 BAT_LAUNCHER = r'''@echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
@@ -427,6 +405,45 @@ function Assert-ReviewPathAncestors([string]$Path) {
             throw "Review path did not resolve to the bundle root: $Path"
         }
         $Candidate = $Parent.FullName
+    }
+}
+
+function Get-ReviewQuicFingerprint([string]$Path) {
+    Assert-ReviewPathAncestors $Path
+    $IdentityText = [System.IO.File]::ReadAllText(
+        $Path,
+        [System.Text.Encoding]::ASCII
+    )
+    $CertificateBegin = "-----BEGIN CERTIFICATE-----"
+    $CertificateEnd = "-----END CERTIFICATE-----"
+    $BeginIndex = $IdentityText.IndexOf($CertificateBegin)
+    if ($BeginIndex -lt 0) {
+        throw "QUIC certificate is missing from the identity file"
+    }
+    $BodyStart = $BeginIndex + $CertificateBegin.Length
+    $EndIndex = $IdentityText.IndexOf($CertificateEnd, $BodyStart)
+    if ($EndIndex -lt 0) {
+        throw "QUIC certificate is missing its PEM terminator"
+    }
+    $CertificateBody = $IdentityText.Substring(
+        $BodyStart,
+        $EndIndex - $BodyStart
+    ) -replace "\s", ""
+    if ([string]::IsNullOrEmpty($CertificateBody)) {
+        throw "QUIC certificate has an empty PEM body"
+    }
+    try {
+        $Der = [System.Convert]::FromBase64String($CertificateBody)
+    } catch {
+        throw "QUIC certificate PEM body is invalid"
+    }
+    $Sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString(
+            $Sha256.ComputeHash($Der)
+        )).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $Sha256.Dispose()
     }
 }
 
@@ -1009,8 +1026,8 @@ try {
             )
         }
 
-        $Fingerprint = (& (Join-Path $Root "python.exe") (Join-Path $Root "review-quic-fingerprint.py") $Identity).Trim()
-        if ($LASTEXITCODE -ne 0 -or $Fingerprint -notmatch "^[0-9a-f]{64}$") {
+        $Fingerprint = Get-ReviewQuicFingerprint $Identity
+        if ($Fingerprint -notmatch "^[0-9a-f]{64}$") {
             throw "Could not derive the server QUIC certificate fingerprint"
         }
 
@@ -1213,7 +1230,6 @@ def compose(client: Path, server: Path, output: Path, revision: str) -> None:
         {
             "run-review.bat": BAT_LAUNCHER.replace("\n", "\r\n").encode(),
             "run-review.ps1": POWERSHELL_LAUNCHER.replace("\n", "\r\n").encode(),
-            "review-quic-fingerprint.py": FINGERPRINT_HELPER.encode(),
             "REVIEW-README.txt": (
                 "Atrinik Classic issue #521 Windows review package\r\n"
                 f"Exact revision: {revision}\r\n\r\n"
@@ -1226,7 +1242,6 @@ def compose(client: Path, server: Path, output: Path, revision: str) -> None:
         }
     )
     origins.update({name: "generated" for name in payloads if name.startswith("run-review")})
-    origins["review-quic-fingerprint.py"] = "generated"
     origins["REVIEW-README.txt"] = "generated"
     manifest = {
         "format": 1,
