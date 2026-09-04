@@ -325,12 +325,35 @@ static int test_bounded_request_diagnostic(void) {
            !https_loopback;
 }
 
+static int test_endpoint_alias_diagnostics(void) {
+    static const char *const urls[] = {
+        "http://localhost:9/",
+        "http://[::1]:9/",
+    };
+    bool all_logged = true;
+    logger_set_print_func(capture_curl_log);
+    for (size_t i = 0; i < arraysize(urls); i++) {
+        captured_log[0] = '\0';
+        curl_request_t *request =
+            curl_request_create_with_origin(urls[i], CURL_PKEY_TRUST_SYSTEM, "client.asset");
+        curl_request_set_timeout(request, 50);
+        curl_request_do_get(request);
+        all_logged = all_logged &&
+                     strstr(captured_log,
+                            "HTTP request origin=client.asset endpoint=http-loopback") != NULL;
+        curl_request_free(request);
+    }
+    logger_set_print_func(logger_do_print);
+    return !all_logged;
+}
+
 int main(void) {
     toolkit_import(path);
     toolkit_import(curl);
     int failed = test_response_code_survives_body_limit() ||
                  test_response_code_survives_partial_body() || test_total_timeout() ||
-                 test_validated_cache_commit() || test_bounded_request_diagnostic();
+                 test_validated_cache_commit() || test_bounded_request_diagnostic() ||
+                 test_endpoint_alias_diagnostics();
     toolkit_deinit();
     return failed;
 }

@@ -458,6 +458,14 @@ int main(int argc, char **argv) {
     memset(secret, 'x', sizeof(secret));
     require(path_read_secret(embedded_nul, VS(secret), NULL) == PATH_SECRET_INVALID_DATA);
     require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_OK), "success") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_EMPTY), "the file is empty") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_TOO_LONG), "the first line is too long") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_TRAILING_DATA),
+                   "the file contains data after the first line") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_INVALID_DATA),
+                   "the file contains invalid bytes") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_READ_ERROR), "cannot read the file") == 0);
 
     char boundary_trailing[HUGE_BUF];
     require(snprintf(VS(boundary_trailing), "%s/boundary-trailing", directory) <
