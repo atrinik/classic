@@ -657,6 +657,48 @@ static bool path_windows_remove_file_handle(HANDLE file) {
                                       sizeof(disposition)) != 0;
 }
 
+typedef LONG path_windows_ntstatus_t;
+
+typedef struct path_windows_io_status_block {
+    union {
+        path_windows_ntstatus_t status;
+        PVOID pointer;
+    };
+    ULONG_PTR information;
+} path_windows_io_status_block_t;
+
+typedef path_windows_ntstatus_t (NTAPI *path_windows_nt_set_information_file_t)(
+    HANDLE file,
+    path_windows_io_status_block_t *io_status,
+    PVOID information,
+    ULONG information_size,
+    ULONG information_class);
+
+typedef ULONG (WINAPI *path_windows_rtl_nt_status_to_dos_error_t)(
+    path_windows_ntstatus_t status);
+
+static DWORD path_windows_ntstatus_error(path_windows_ntstatus_t status) {
+    static const path_windows_ntstatus_t status_object_name_collision =
+        (path_windows_ntstatus_t)0xc0000035L;
+    if (status == status_object_name_collision) {
+        return ERROR_FILE_EXISTS;
+    }
+
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll != NULL) {
+        path_windows_rtl_nt_status_to_dos_error_t convert =
+            (path_windows_rtl_nt_status_to_dos_error_t)GetProcAddress(
+                ntdll, "RtlNtStatusToDosError");
+        if (convert != NULL) {
+            DWORD error = convert(status);
+            if (error != ERROR_MR_MID_NOT_FOUND) {
+                return error;
+            }
+        }
+    }
+    return ERROR_GEN_FAILURE;
+}
+
 static bool path_windows_publish_file(HANDLE file,
                                       HANDLE directory,
                                       const wchar_t *basename,
@@ -680,10 +722,36 @@ static bool path_windows_publish_file(HANDLE file,
     rename->RootDirectory = directory;
     rename->FileNameLength = (DWORD)(basename_length * sizeof(*basename));
     memcpy(rename->FileName, basename, basename_length * sizeof(*basename));
-    bool published = SetFileInformationByHandle(
-                         file, FileRenameInfo, rename, (DWORD)rename_size) != 0;
+    /*
+     * The documented FILE_RENAME_INFO RootDirectory form is rejected by
+     * SetFileInformationByHandle on supported Windows versions. Call the
+     * native handle-relative information class instead so publication does
+     * not reopen the parent directory by path.
+     */
+    bool published = false;
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    path_windows_nt_set_information_file_t set_information =
+        ntdll == NULL
+            ? NULL
+            : (path_windows_nt_set_information_file_t)GetProcAddress(
+                  ntdll, "NtSetInformationFile");
+    if (set_information == NULL) {
+        *error = ERROR_CALL_NOT_IMPLEMENTED;
+    } else {
+        path_windows_io_status_block_t io_status = {0};
+        path_windows_ntstatus_t status = set_information(file,
+                                                          &io_status,
+                                                          rename,
+                                                          (ULONG)rename_size,
+                                                          10U);
+        if (status == 0) {
+            published = true;
+        } else {
+            *error = path_windows_ntstatus_error(status);
+        }
+    }
     if (!published) {
-        *error = GetLastError();
+        SetLastError(*error);
     }
     free(rename);
     return published;
