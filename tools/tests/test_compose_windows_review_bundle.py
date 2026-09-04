@@ -110,6 +110,14 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "function Assert-ReviewPathAncestors",
                     "function Write-ReviewFailure",
                     '"launcher-failure.log"',
+                    "Add-Type -TypeDefinition",
+                    "AtrinikReviewSecretNative",
+                    "CreateFileW",
+                    "WriteFile",
+                    "FlushFileBuffers",
+                    "function New-ReviewOwnerSecretFile",
+                    "RawSecurityDescriptor",
+                    "CreateOwnerOnlyFile",
                     "function Protect-ReviewSecretFile",
                     "function Protect-ReviewTemporaryDirectory",
                     '"$($SidArgument):(OI)(CI)(F)"',
@@ -128,8 +136,6 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "Remove-ReviewSecretFile $Candidate",
                     '"$($SidArgument):(F)"',
                     "$StageTmp",
-                    "$StagePasswordSeed",
-                    "Move-Item -LiteralPath $StagePasswordSeed -Destination $StagePassword",
                     "$StateTmp",
                     '"server-data-stage-*"',
                     '"server-data-incomplete-*"',
@@ -157,13 +163,15 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 ):
                     self.assertIn(token, powershell)
                 self.assertIn(
-                    '# Create the secret under the owner-controlled temporary directory.',
+                    '# Create the secret with an explicit owner and protected DACL.',
                     powershell,
                 )
                 self.assertIn(
-                    'Protect-ReviewSecretFile $StagePasswordSeed -WriteAccess',
+                    'New-ReviewOwnerSecretFile $StagePassword $StagePasswordValue',
                     powershell,
                 )
+                self.assertNotIn("$StagePasswordSeed", powershell)
+                self.assertNotIn("Move-Item -LiteralPath $StagePasswordSeed", powershell)
                 secret_protection = powershell[
                     powershell.index("function Protect-ReviewSecretFile") :
                     powershell.index("function Protect-ReviewTemporaryDirectory")
