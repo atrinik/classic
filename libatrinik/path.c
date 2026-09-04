@@ -599,6 +599,29 @@ static wchar_t *path_windows_full_path(const wchar_t *path) {
     }
 }
 
+static wchar_t *path_windows_long_path(const wchar_t *path) {
+    DWORD capacity = MAX_PATH;
+    for (;;) {
+        wchar_t *long_path = calloc((size_t)capacity, sizeof(*long_path));
+        if (long_path == NULL) {
+            return NULL;
+        }
+        DWORD length = GetLongPathNameW(path, long_path, capacity);
+        if (length == 0) {
+            free(long_path);
+            return NULL;
+        }
+        if (length < capacity) {
+            return long_path;
+        }
+        free(long_path);
+        if (length >= UINT_MAX - 1U) {
+            return NULL;
+        }
+        capacity = length + 1U;
+    }
+}
+
 static wchar_t *path_windows_extended_full_path(const wchar_t *path) {
     size_t path_length = wcslen(path);
     if (path_length >= 4U && path[0] == L'\\' && path[1] == L'\\' && path[2] == L'?' &&
@@ -620,6 +643,13 @@ static wchar_t *path_windows_extended_full_path(const wchar_t *path) {
     if (full == NULL) {
         return NULL;
     }
+    wchar_t *long_path = path_windows_long_path(full);
+    if (long_path == NULL) {
+        free(full);
+        return NULL;
+    }
+    free(full);
+    full = long_path;
     for (wchar_t *cp = full; *cp != L'\0'; cp++) {
         if (*cp == L'/') {
             *cp = L'\\';
