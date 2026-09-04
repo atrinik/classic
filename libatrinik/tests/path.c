@@ -326,7 +326,7 @@ int main(int argc, char **argv) {
     char backslash_path[HUGE_BUF];
     require(snprintf(VS(backslash_path), "%s\\backslash-invite", directory) <
             (int)sizeof(backslash_path));
-    static const char backslash_secret[] = "backslash-secret\\n";
+    static const char backslash_secret[] = "backslash-secret\n";
     require(path_secret_create_atomic(backslash_path,
                                       backslash_secret,
                                       sizeof(backslash_secret) - 1U) == PATH_SECRET_CREATE_OK);
