@@ -240,8 +240,7 @@ public static class AtrinikReviewSecretNative
         if (String.IsNullOrEmpty(path) ||
             securityDescriptor == null ||
             securityDescriptor.Length == 0 ||
-            data == null ||
-            data.Length > UInt32.MaxValue)
+            data == null)
         {
             return 87;
         }
