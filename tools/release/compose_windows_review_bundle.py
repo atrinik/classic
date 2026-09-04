@@ -149,6 +149,7 @@ $ClientData = Join-Path $Root "client-data"
 $ServerLog = Join-Path $State "server.log"
 $ClientLog = Join-Path $Root "client.log"
 $LauncherFailureLog = Join-Path $Root "launcher-failure.log"
+$LauncherProgressLog = Join-Path $Root "launcher-progress.log"
 $Account = "review521"
 $Character = "Review Hero"
 $LaunchMutex = [System.Threading.Mutex]::new(
@@ -162,6 +163,19 @@ $ServerOutputLines = $null
 $ServerErrorLines = $null
 $ClientOutputLines = $null
 $ClientErrorLines = $null
+$LauncherSucceeded = $false
+
+function Write-ReviewProgress([string]$Message) {
+    try {
+        [System.IO.File]::AppendAllText(
+            $LauncherProgressLog,
+            $Message + [System.Environment]::NewLine,
+            [System.Text.Encoding]::UTF8
+        )
+    } catch {
+        # Progress diagnostics must never replace the launch result.
+    }
+}
 
 Add-Type -TypeDefinition @'
 using System;
@@ -741,6 +755,11 @@ try {
     if (Test-Path -LiteralPath $LauncherFailureLog) {
         Remove-Item -LiteralPath $LauncherFailureLog -Force
     }
+    Assert-ReviewPathAncestors $LauncherProgressLog
+    if (Test-Path -LiteralPath $LauncherProgressLog) {
+        Remove-Item -LiteralPath $LauncherProgressLog -Force
+    }
+    Write-ReviewProgress "launch-lock-acquired"
 
     $ExistingEndpoint = Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
         Select-Object -First 1
@@ -920,6 +939,7 @@ try {
         if (-not $Server.Start()) {
             throw "Could not start the isolated review server"
         }
+        Write-ReviewProgress "server-started"
     } finally {
         foreach ($Name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
             [System.Environment]::SetEnvironmentVariable(
@@ -1026,10 +1046,13 @@ try {
             )
         }
 
+        Write-ReviewProgress "server-ready"
+        Write-ReviewProgress "fingerprint-start"
         $Fingerprint = Get-ReviewQuicFingerprint $Identity
         if ($Fingerprint -notmatch "^[0-9a-f]{64}$") {
             throw "Could not derive the server QUIC certificate fingerprint"
         }
+        Write-ReviewProgress "fingerprint-ready"
 
         $ClientStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $ClientStartInfo.FileName = Join-Path $Root "atrinik.exe"
@@ -1086,11 +1109,13 @@ try {
                     [void]$ClientErrorLines.Enqueue($EventArgs.Data)
                 }
             }.GetNewClosure())
+            Write-ReviewProgress "client-start"
             if (-not $Client.Start()) {
                 throw "Could not start the packaged client"
             }
             $Client.BeginOutputReadLine()
             $Client.BeginErrorReadLine()
+            Write-ReviewProgress "client-started"
         } finally {
             foreach ($Name in @(
                 "HTTP_PROXY",
@@ -1143,6 +1168,7 @@ try {
             ([System.IO.File]::ReadAllText($ServerLog) -notmatch "Server shutdown complete\.")) {
             throw "Server did not report a clean shutdown"
         }
+        $LauncherSucceeded = $true
         Write-Host "Client and server exited cleanly."
     } catch {
         $Failure = $_
@@ -1171,6 +1197,7 @@ try {
         throw $Failure
     }
 } catch {
+    Write-ReviewProgress "launcher-failed"
     Write-ReviewFailure $_.Exception.Message
     throw
 } finally {
@@ -1194,6 +1221,9 @@ try {
             $LaunchMutex.ReleaseMutex()
         }
         $LaunchMutex.Dispose()
+        if ($LauncherSucceeded -and (Test-Path -LiteralPath $LauncherProgressLog)) {
+            Remove-Item -LiteralPath $LauncherProgressLog -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
