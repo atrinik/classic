@@ -404,6 +404,7 @@ set(TOOLKIT_SOURCES
     packet.c
     password.c
     path.c
+    path_windows.c
     porting.c
     process.c
     rendezvous.c
@@ -558,7 +559,7 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     atrinik_configure_target(libatrinik-path)
     target_link_libraries(libatrinik-path PRIVATE Atrinik::Core)
     if (MINGW)
-        target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=OpenProcessToken")
+        target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=path_windows_token_user")
     elseif (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=fsync" "-Wl,--wrap=close")
     endif ()

@@ -8,14 +8,17 @@
 #if defined(__MINGW32__) || defined(__MINGW64__)
 static bool fail_process_token;
 
-BOOL WINAPI __real_OpenProcessToken(HANDLE process, DWORD access, PHANDLE token);
+TOKEN_USER *__real_path_windows_token_user(HANDLE *token);
 
-BOOL WINAPI __wrap_OpenProcessToken(HANDLE process, DWORD access, PHANDLE token) {
+TOKEN_USER *__wrap_path_windows_token_user(HANDLE *token) {
     if (fail_process_token) {
         SetLastError(ERROR_ACCESS_DENIED);
-        return FALSE;
+        if (token != NULL) {
+            *token = NULL;
+        }
+        return NULL;
     }
-    return __real_OpenProcessToken(process, access, token);
+    return __real_path_windows_token_user(token);
 }
 #endif
 #else

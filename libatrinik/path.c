@@ -518,6 +518,9 @@ bool path_write_atomic_existing(const char *path,
 }
 
 #ifdef WIN32
+/* Kept in a separate translation unit so tests can wrap token acquisition. */
+TOKEN_USER *path_windows_token_user(HANDLE *token);
+
 static wchar_t *path_windows_wide(const char *path) {
     int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
     if (length <= 0) {
@@ -965,22 +968,6 @@ static path_directory_result_t path_directory_inspect_windows(const wchar_t *pat
     return PATH_DIRECTORY_OK;
 }
 
-static TOKEN_USER *path_secret_token_user(HANDLE *token) {
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, token)) {
-        return NULL;
-    }
-    DWORD size = 0;
-    GetTokenInformation(*token, TokenUser, NULL, 0, &size);
-    TOKEN_USER *user = size != 0 ? malloc(size) : NULL;
-    if (user == NULL || !GetTokenInformation(*token, TokenUser, user, size, &size)) {
-        free(user);
-        CloseHandle(*token);
-        *token = NULL;
-        return NULL;
-    }
-    return user;
-}
-
 static bool path_secret_windows_security(HANDLE file,
                                          const TOKEN_USER *user,
                                          bool *permissive_mode,
@@ -1140,7 +1127,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     }
 
     HANDLE token = NULL;
-    TOKEN_USER *user = path_secret_token_user(&token);
+    TOKEN_USER *user = path_windows_token_user(&token);
     DWORD sid_size = user != NULL ? GetLengthSid(user->User.Sid) : 0;
     DWORD acl_size = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + sid_size;
     PACL dacl = user != NULL ? malloc(acl_size) : NULL;
@@ -1386,7 +1373,7 @@ path_read_secret(const char *path, char *secret, size_t secret_size, bool *permi
         goto out;
     }
     HANDLE token = NULL;
-    TOKEN_USER *user = path_secret_token_user(&token);
+    TOKEN_USER *user = path_windows_token_user(&token);
     bool security_ok = user != NULL &&
                        path_secret_windows_security(file, user, permissive_mode, &result);
     if (!security_ok) {
