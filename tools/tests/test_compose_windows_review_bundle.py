@@ -176,6 +176,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     'server-probe-$ProbeCount-result:',
                     'Write-ReviewProgress "client-start"',
                     'Write-ReviewProgress "client-started"',
+                    'Write-ReviewProgress "client-exit-code=$($Client.ExitCode)"',
+                    'Write-ReviewProgress "server-exit-code=$($Server.ExitCode)"',
                     'GetProperty("ArgumentList")',
                     "ArgumentList.Add",
                     "$StartInfo.Arguments =",
