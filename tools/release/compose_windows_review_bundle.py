@@ -183,6 +183,136 @@ $Client = $null
 $ServerOutputLines = $null
 $ServerErrorLines = $null
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class AtrinikReviewSecretNative
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SecurityAttributes
+    {
+        public int Length;
+        public IntPtr SecurityDescriptor;
+        public int InheritHandle;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFileW(
+        string name,
+        uint desiredAccess,
+        uint shareMode,
+        ref SecurityAttributes securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool WriteFile(
+        IntPtr file,
+        byte[] buffer,
+        uint bytesToWrite,
+        out uint bytesWritten,
+        IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FlushFileBuffers(IntPtr file);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool DeleteFileW(string name);
+
+    private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
+
+    private static int LastError()
+    {
+        int error = Marshal.GetLastWin32Error();
+        return error == 0 ? 1 : error;
+    }
+
+    public static int CreateOwnerOnlyFile(
+        string path,
+        byte[] securityDescriptor,
+        byte[] data)
+    {
+        if (String.IsNullOrEmpty(path) ||
+            securityDescriptor == null ||
+            securityDescriptor.Length == 0 ||
+            data == null ||
+            data.Length > UInt32.MaxValue)
+        {
+            return 87;
+        }
+
+        GCHandle pinnedDescriptor = default(GCHandle);
+        IntPtr file = IntPtr.Zero;
+        bool created = false;
+        int result = 0;
+        try
+        {
+            pinnedDescriptor = GCHandle.Alloc(
+                securityDescriptor,
+                GCHandleType.Pinned);
+            SecurityAttributes attributes = new SecurityAttributes
+            {
+                Length = Marshal.SizeOf<SecurityAttributes>(),
+                SecurityDescriptor = pinnedDescriptor.AddrOfPinnedObject(),
+                InheritHandle = 0
+            };
+            file = CreateFileW(
+                path,
+                0x40000000U,
+                0,
+                ref attributes,
+                1U,
+                0x80000080U,
+                IntPtr.Zero);
+            if (file == InvalidHandleValue)
+            {
+                result = LastError();
+                return result;
+            }
+            created = true;
+            uint bytesWritten;
+            if (!WriteFile(
+                    file,
+                    data,
+                    (uint)data.Length,
+                    out bytesWritten,
+                    IntPtr.Zero) ||
+                bytesWritten != data.Length)
+            {
+                result = LastError();
+                return result;
+            }
+            if (!FlushFileBuffers(file))
+            {
+                result = LastError();
+                return result;
+            }
+            return 0;
+        }
+        finally
+        {
+            if (file != IntPtr.Zero && file != InvalidHandleValue)
+            {
+                CloseHandle(file);
+            }
+            if (result != 0 && created)
+            {
+                DeleteFileW(path);
+            }
+            if (pinnedDescriptor.IsAllocated)
+            {
+                pinnedDescriptor.Free();
+            }
+        }
+    }
+}
+'@
+
 function ConvertTo-ReviewArguments([string[]]$Values) {
     return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
 }
@@ -245,6 +375,30 @@ function Assert-ReviewPathAncestors([string]$Path) {
         }
         $Candidate = $Parent.FullName
     }
+}
+
+function New-ReviewOwnerSecretFile([string]$Path, [string]$Secret) {
+    Assert-ReviewPathAncestors $Path
+    if ([string]::IsNullOrEmpty($Secret) -or
+        $Secret.IndexOf([char]13) -ge 0 -or $Secret.IndexOf([char]10) -ge 0) {
+        throw "Owner-bound review secret must be a non-empty single line"
+    }
+    $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $SecurityDescriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+        "O:$($CurrentSid.Value)G:$($CurrentSid.Value)D:P(A;;FA;;;$($CurrentSid.Value))"
+    )
+    $SecurityDescriptorBytes = New-Object byte[] $SecurityDescriptor.BinaryLength
+    $SecurityDescriptor.GetBinaryForm($SecurityDescriptorBytes, 0)
+    $Data = [System.Text.Encoding]::ASCII.GetBytes($Secret)
+    $Result = [AtrinikReviewSecretNative]::CreateOwnerOnlyFile(
+        $Path,
+        $SecurityDescriptorBytes,
+        $Data
+    )
+    if ($Result -ne 0) {
+        throw "Owner-bound review secret creation failed with Win32 error $Result"
+    }
+    Assert-ReviewPathAncestors $Path
 }
 
 function Write-ReviewFailure([string]$Message) {
@@ -538,27 +692,11 @@ try {
             Assert-ReviewPathAncestors $StageTmp
             Protect-ReviewTemporaryDirectory $StageTmp
             $StagePassword = Join-Path $Stage ".atrinik-review-password"
-            $StagePasswordSeed = Join-Path $StageTmp ".atrinik-review-password"
             $StageProvisionLog = Join-Path $Stage "provision.log"
             Assert-ReviewPathAncestors $StagePassword
-            Assert-ReviewPathAncestors $StagePasswordSeed
-            # Create the secret under the owner-controlled temporary directory.
-            # A same-volume move preserves its owner and protected DACL at the
-            # staged data root without requiring an elevated owner change.
-            [System.IO.File]::WriteAllText(
-                $StagePasswordSeed,
-                "",
-                [System.Text.Encoding]::ASCII
-            )
-            Assert-ReviewPathAncestors $StagePasswordSeed
-            Protect-ReviewSecretFile $StagePasswordSeed -WriteAccess
-            [System.IO.File]::WriteAllText(
-                $StagePasswordSeed,
-                [Guid]::NewGuid().ToString("N").Substring(0, 20),
-                [System.Text.Encoding]::ASCII
-            )
-            Protect-ReviewSecretFile $StagePasswordSeed
-            Move-Item -LiteralPath $StagePasswordSeed -Destination $StagePassword
+            $StagePasswordValue = [Guid]::NewGuid().ToString("N").Substring(0, 20)
+            # Create the secret with an explicit owner and protected DACL.
+            New-ReviewOwnerSecretFile $StagePassword $StagePasswordValue
             Assert-ReviewPathAncestors $StagePassword
             Protect-ReviewSecretFile $StagePassword
 
