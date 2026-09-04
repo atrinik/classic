@@ -208,6 +208,69 @@ int main(int argc, char **argv) {
                                           linked_secret_data,
                                           sizeof(linked_secret_data) - 1U) ==
                 PATH_SECRET_CREATE_ERROR);
+
+        char nested_directory[HUGE_BUF];
+        require(snprintf(VS(nested_directory), "%s/nested", prepared) <
+                (int)sizeof(nested_directory));
+        wchar_t *nested_directory_wide = path_to_wide(nested_directory);
+        require(CreateDirectoryW(nested_directory_wide, NULL));
+
+        char ancestor_link[HUGE_BUF];
+        require(snprintf(VS(ancestor_link), "%s/ancestor-link", directory) <
+                (int)sizeof(ancestor_link));
+        wchar_t *ancestor_link_wide = path_to_wide(ancestor_link);
+        bool ancestor_link_created =
+            CreateSymbolicLinkW(ancestor_link_wide,
+                                prepared_wide,
+                                SYMBOLIC_LINK_FLAG_DIRECTORY |
+                                    SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0;
+        DWORD ancestor_link_error = ancestor_link_created ? ERROR_SUCCESS : GetLastError();
+        if (!ancestor_link_created && ancestor_link_error == ERROR_INVALID_PARAMETER) {
+            ancestor_link_created =
+                CreateSymbolicLinkW(ancestor_link_wide,
+                                    prepared_wide,
+                                    SYMBOLIC_LINK_FLAG_DIRECTORY) != 0;
+            ancestor_link_error = ancestor_link_created ? ERROR_SUCCESS : GetLastError();
+        }
+        require(ancestor_link_created || ancestor_link_error == ERROR_PRIVILEGE_NOT_HELD);
+        if (ancestor_link_created) {
+            char ancestor_secret[HUGE_BUF];
+            require(snprintf(VS(ancestor_secret),
+                             "%s/nested/ancestor-secret",
+                             ancestor_link) < (int)sizeof(ancestor_secret));
+            static const char ancestor_secret_data[] = "must-not-follow\n";
+            require(path_secret_create_atomic(ancestor_secret,
+                                              ancestor_secret_data,
+                                              sizeof(ancestor_secret_data) - 1U) ==
+                    PATH_SECRET_CREATE_ERROR);
+
+            char real_secret[HUGE_BUF];
+            require(snprintf(VS(real_secret),
+                             "%s/ancestor-secret",
+                             nested_directory) < (int)sizeof(real_secret));
+            require(path_exists(real_secret) == 0);
+            static const char real_secret_data[] = "ancestor-secret\n";
+            require(path_secret_create_atomic(real_secret,
+                                              real_secret_data,
+                                              sizeof(real_secret_data) - 1U) ==
+                    PATH_SECRET_CREATE_OK);
+            char ancestor_secret_value[64];
+            memset(ancestor_secret_value, 'x', sizeof(ancestor_secret_value));
+            require(path_read_secret(ancestor_secret,
+                                     VS(ancestor_secret_value),
+                                     NULL) == PATH_SECRET_UNSAFE_LINK);
+            static const char ancestor_cleared[sizeof(ancestor_secret_value)];
+            require(CRYPTO_memcmp(ancestor_secret_value,
+                                  ancestor_cleared,
+                                  sizeof(ancestor_secret_value)) == 0);
+            wchar_t *real_secret_wide = path_to_wide(real_secret);
+            require(DeleteFileW(real_secret_wide));
+            free(real_secret_wide);
+            require(RemoveDirectoryW(ancestor_link_wide));
+        }
+        free(ancestor_link_wide);
+        require(RemoveDirectoryW(nested_directory_wide));
+        free(nested_directory_wide);
         require(RemoveDirectoryW(directory_link_wide));
     }
     free(directory_link_wide);

@@ -388,6 +388,7 @@ try {
     if (-not $launcherClient.WaitForExit(30000)) {
         throw "One-click client did not exit after the normal close request"
     }
+    $launcherClient.Refresh()
     if ($launcherClient.ExitCode -ne 0) {
         throw "One-click client exited with code $($launcherClient.ExitCode)"
     }

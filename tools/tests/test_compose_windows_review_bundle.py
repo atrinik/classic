@@ -115,6 +115,12 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "Add-Type -TypeDefinition",
                     "AtrinikReviewSecretNative",
                     "CreateFileW",
+                    "GetFinalPathNameByHandleW",
+                    "SetFileInformationByHandle",
+                    "HandlePathMatches",
+                    "DeleteFileByHandle",
+                    "0xC0010000U",
+                    "0x80200080U",
                     "WriteFile",
                     "FlushFileBuffers",
                     "function New-ReviewOwnerSecretFile",
@@ -195,6 +201,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     self.assertIn(token, powershell)
                 self.assertNotIn("ConvertTo-ReviewArguments", powershell)
                 self.assertNotIn("review-quic-fingerprint.py", powershell)
+                self.assertNotIn("DeleteFileW", powershell)
                 self.assertNotIn("add_OutputDataReceived", powershell)
                 self.assertNotIn("add_ErrorDataReceived", powershell)
                 self.assertIn(
