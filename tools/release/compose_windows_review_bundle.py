@@ -213,6 +213,17 @@ public static class AtrinikReviewSecretNative
         uint flagsAndAttributes,
         IntPtr templateFile);
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true,
+        EntryPoint = "CreateFileW")]
+    private static extern IntPtr OpenFileForDeletion(
+        string name,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandleW(
         IntPtr file,
@@ -320,6 +331,39 @@ public static class AtrinikReviewSecretNative
             4,
             ref information,
             (uint)Marshal.SizeOf<FileDispositionInfo>());
+    }
+
+    public static int DeleteOwnerOnlyFile(string path)
+    {
+        if (String.IsNullOrEmpty(path))
+        {
+            return 87;
+        }
+
+        IntPtr file = OpenFileForDeletion(
+            path,
+            0x00010000U,
+            7U,
+            IntPtr.Zero,
+            3U,
+            0x00200080U,
+            IntPtr.Zero);
+        if (file == InvalidHandleValue)
+        {
+            return LastError();
+        }
+        try
+        {
+            if (!HandlePathMatches(file, path))
+            {
+                return 4390;
+            }
+            return DeleteFileByHandle(file) ? 0 : LastError();
+        }
+        finally
+        {
+            CloseHandle(file);
+        }
     }
 
     public static int CreateOwnerOnlyFile(
@@ -834,24 +878,10 @@ function Protect-ReviewTemporaryDirectory([string]$Path) {
 
 function Remove-ReviewSecretFile([string]$Path) {
     Assert-ReviewPathAncestors $Path
-    $Info = Get-Item -LiteralPath $Path -ErrorAction Stop
-    if ($Info.PSIsContainer) {
-        throw "Secret path is a directory: $Path"
+    $Result = [AtrinikReviewSecretNative]::DeleteOwnerOnlyFile($Path)
+    if ($Result -ne 0) {
+        throw "Owner-bound review secret cleanup failed with Win32 error $Result"
     }
-    if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Secret file is a reparse point: $Path"
-    }
-    $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $SidArgument = "*$($CurrentSid.Value)"
-    [void](Invoke-ReviewIcacls -Arguments @(
-        $Path,
-        # Add full control without replacing the owner ACE first; replacing the
-        # only ACE can make icacls lose WRITE_DAC before it installs the grant.
-        "/grant",
-        "$($SidArgument):(F)",
-        "/q"
-    ))
-    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
 }
 
 function Remove-ReviewSecretFiles {
