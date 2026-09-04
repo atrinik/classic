@@ -527,7 +527,39 @@ static wchar_t *path_windows_wide(const char *path) {
             *cp = L'\\';
         }
     }
-    return wide;
+    size_t wide_length = (size_t)length - 1U;
+    bool drive_absolute =
+        wide_length >= 3U && wide[1] == L':' && wide[2] == L'\\';
+    bool unc_absolute =
+        wide_length >= 2U && wide[0] == L'\\' && wide[1] == L'\\';
+    bool already_extended = wide_length >= 4U && wide[0] == L'\\' &&
+                            wide[1] == L'\\' && wide[2] == L'?' && wide[3] == L'\\';
+    if (wide_length < (size_t)(MAX_PATH - 1) ||
+        (!drive_absolute && !unc_absolute) || already_extended) {
+        return wide;
+    }
+
+    const wchar_t *source = wide;
+    size_t source_length = wide_length;
+    static const wchar_t drive_prefix[] = L"\\\\?\\";
+    const wchar_t *prefix = drive_prefix;
+    size_t prefix_length = sizeof(drive_prefix) / sizeof(drive_prefix[0]) - 1U;
+    if (unc_absolute) {
+        static const wchar_t unc_prefix[] = L"\\\\?\\UNC\\";
+        prefix = unc_prefix;
+        prefix_length = sizeof(unc_prefix) / sizeof(unc_prefix[0]) - 1U;
+        source += 2;
+        source_length -= 2;
+    }
+    wchar_t *extended = calloc(prefix_length + source_length + 1U, sizeof(*extended));
+    if (extended == NULL) {
+        free(wide);
+        return NULL;
+    }
+    memcpy(extended, prefix, prefix_length * sizeof(*extended));
+    memcpy(extended + prefix_length, source, (source_length + 1U) * sizeof(*extended));
+    free(wide);
+    return extended;
 }
 
 static path_directory_result_t path_directory_inspect_windows(const wchar_t *path, bool *missing) {
