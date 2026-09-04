@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import runpy
 from pathlib import Path
+import stat
+import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 
@@ -280,6 +284,193 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(bundle.BundleError, "test marker"):
                 bundle.compose(client, server, root / "out.zip", self.revision)
+
+
+    def test_safe_entries_skips_directories_and_rejects_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive_path = root / "archive.zip"
+            self.make_zip(
+                archive_path,
+                {"client/empty/": b"", "client/payload": b"payload"},
+            )
+            with zipfile.ZipFile(archive_path) as archive:
+                archive_root, entries = bundle._safe_entries(archive)
+            self.assertEqual(archive_root, "client")
+            self.assertEqual([entry.filename for entry in entries], ["client/payload"])
+
+            symlink_path = root / "symlink.zip"
+            symlink = zipfile.ZipInfo("client/link")
+            symlink.external_attr = (stat.S_IFLNK | 0o777) << 16
+            with zipfile.ZipFile(symlink_path, "w") as archive:
+                archive.writestr(symlink, b"target")
+            with zipfile.ZipFile(symlink_path) as archive:
+                with self.assertRaisesRegex(
+                    bundle.BundleError, "symbolic links are not allowed"
+                ):
+                    bundle._safe_entries(archive)
+
+    def test_safe_entries_rejects_case_duplicates_and_multiple_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            duplicate = root / "duplicate.zip"
+            self.make_zip(
+                duplicate,
+                {"client/Name": b"one", "client/name": b"two"},
+            )
+            with zipfile.ZipFile(duplicate) as archive:
+                with self.assertRaisesRegex(
+                    bundle.BundleError, "duplicate or case-colliding"
+                ):
+                    bundle._safe_entries(archive)
+
+            multiple_roots = root / "multiple-roots.zip"
+            self.make_zip(
+                multiple_roots,
+                {"client/file": b"one", "other/file": b"two"},
+            )
+            with zipfile.ZipFile(multiple_roots) as archive:
+                with self.assertRaisesRegex(
+                    bundle.BundleError, "exactly one top-level directory"
+                ):
+                    bundle._safe_entries(archive)
+
+    def test_member_target_rejects_non_server_and_empty_members(self) -> None:
+        self.assertIsNone(
+            bundle._member_target(
+                zipfile.ZipInfo("package/not-server.txt"),
+                "package",
+                server=True,
+            )
+        )
+        self.assertIsNone(
+            bundle._member_target(
+                zipfile.ZipInfo("client/"),
+                "client",
+                server=False,
+            )
+        )
+
+    def test_add_package_rejects_case_colliding_bundle_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client = root / "client.zip"
+            server = root / "server.zip"
+            self.make_zip(client, {"client/payload": b"client"})
+            self.make_zip(server, {"package/server/PAYLOAD": b"server"})
+            payloads: dict[str, bytes] = {}
+            origins: dict[str, str] = {}
+            bundle._add_package(payloads, origins, client, server=False)
+            with self.assertRaisesRegex(bundle.BundleError, "case-colliding bundle paths"):
+                bundle._add_package(payloads, origins, server, server=True)
+
+    def test_rejects_invalid_revision_and_existing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client, server = self.packages(root)
+            with self.assertRaisesRegex(bundle.BundleError, "exact 40-character"):
+                bundle.compose(client, server, root / "invalid.zip", "invalid")
+            existing = root / "existing.zip"
+            existing.write_bytes(b"existing")
+            with self.assertRaisesRegex(bundle.BundleError, "overwrite existing output"):
+                bundle.compose(client, server, existing, self.revision)
+
+    def test_rejects_missing_install_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client, server = self.packages(root)
+            self.make_zip(
+                server,
+                {
+                    "package/server/atrinik-server.exe": b"server "
+                    + self.revision.encode(),
+                    "package/server/python.exe": b"python",
+                },
+            )
+            with self.assertRaisesRegex(bundle.BundleError, "missing install_data"):
+                bundle.compose(client, server, root / "out.zip", self.revision)
+
+    def test_rejects_missing_required_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client, server = self.packages(root)
+            self.make_zip(client, {"client/README.md": b"client readme"})
+            with self.assertRaisesRegex(bundle.BundleError, "bundle is missing atrinik.exe"):
+                bundle.compose(client, server, root / "out.zip", self.revision)
+
+    def test_rejects_missing_embedded_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client, server = self.packages(root)
+            self.make_zip(client, {"client/atrinik.exe": b"client"})
+            with self.assertRaisesRegex(bundle.BundleError, "does not embed exact revision"):
+                bundle.compose(client, server, root / "out.zip", self.revision)
+
+    def test_rejects_crc_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client, server = self.packages(root)
+            with mock.patch.object(bundle.zipfile.ZipFile, "testzip", return_value="bad"):
+                with self.assertRaisesRegex(bundle.BundleError, "CRC validation"):
+                    bundle.compose(client, server, root / "out.zip", self.revision)
+
+    def test_main_parses_valid_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client, server = self.packages(root)
+            output = root / "out.zip"
+            argv = [
+                "compose_windows_review_bundle.py",
+                "--client-package",
+                str(client),
+                "--server-package",
+                str(server),
+                "--output",
+                str(output),
+                "--revision",
+                self.revision,
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(bundle.main(), 0)
+
+    def test_main_reports_argument_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client, server = self.packages(root)
+            argv = [
+                "compose_windows_review_bundle.py",
+                "--client-package",
+                str(client),
+                "--server-package",
+                str(server),
+                "--output",
+                str(root / "out.zip"),
+                "--revision",
+                "invalid",
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit):
+                    bundle.main()
+
+    def test_module_entrypoint_exits_successfully(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            client, server = self.packages(root)
+            argv = [
+                str(MODULE_PATH),
+                "--client-package",
+                str(client),
+                "--server-package",
+                str(server),
+                "--output",
+                str(root / "out.zip"),
+                "--revision",
+                self.revision,
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit) as raised:
+                    runpy.run_path(str(MODULE_PATH), run_name="__main__")
+            self.assertEqual(raised.exception.code, 0)
 
 
 if __name__ == "__main__":
