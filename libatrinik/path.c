@@ -986,6 +986,9 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     if (token != NULL) {
         CloseHandle(token);
     }
+    if (result == PATH_SECRET_CREATE_ERROR && publish_error != ERROR_SUCCESS) {
+        SetLastError(publish_error);
+    }
     free(temporary_wide);
     free(basename_wide);
     free(directory_wide);
