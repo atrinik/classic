@@ -267,6 +267,7 @@ try {
     $launcherServerLog = Join-Path (Join-Path $reviewRoot "server-data") "server.log"
     $launcherClientLog = Join-Path $reviewRoot "client.log"
     $launcherFailureLog = Join-Path $reviewRoot "launcher-failure.log"
+    $launcherProgressLog = Join-Path $reviewRoot "launcher-progress.log"
     $launcherReady = $false
     $serverLogText = ""
     $clientLogText = ""
@@ -277,6 +278,7 @@ try {
             $launcherServerLogTail = Get-LauncherLogTail $launcherServerLog
             $launcherClientLogTail = Get-LauncherLogTail $launcherClientLog
             $launcherFailureLogTail = Get-LauncherLogTail $launcherFailureLog
+            $launcherProgressLogTail = Get-LauncherLogTail $launcherProgressLog
             throw (
                 "run-review.bat exited before login smoke completion with code " +
                 "$($launcherProcess.ExitCode):" + [System.Environment]::NewLine +
@@ -288,7 +290,9 @@ try {
                 [System.Environment]::NewLine + "Client log tail:" +
                 [System.Environment]::NewLine + $launcherClientLogTail +
                 [System.Environment]::NewLine + "Launcher failure log tail:" +
-                [System.Environment]::NewLine + $launcherFailureLogTail
+                [System.Environment]::NewLine + $launcherFailureLogTail +
+                [System.Environment]::NewLine + "Launcher progress log tail:" +
+                [System.Environment]::NewLine + $launcherProgressLogTail
             )
         }
         $launcherServers = @(Get-Process -Name "atrinik-server" -ErrorAction SilentlyContinue |
@@ -356,6 +360,7 @@ try {
         $launcherServerLogTail = Get-LauncherLogTail $launcherServerLog
         $launcherClientLogTail = Get-LauncherLogTail $launcherClientLog
         $launcherFailureLogTail = Get-LauncherLogTail $launcherFailureLog
+        $launcherProgressLogTail = Get-LauncherLogTail $launcherProgressLog
         throw (
             "One-click launcher did not prove loopback login and gameplay readiness within " +
             "120 seconds:" + [System.Environment]::NewLine +
@@ -367,7 +372,9 @@ try {
             [System.Environment]::NewLine + "Client log tail:" +
             [System.Environment]::NewLine + $launcherClientLogTail +
             [System.Environment]::NewLine + "Launcher failure log tail:" +
-            [System.Environment]::NewLine + $launcherFailureLogTail
+            [System.Environment]::NewLine + $launcherFailureLogTail +
+            [System.Environment]::NewLine + "Launcher progress log tail:" +
+            [System.Environment]::NewLine + $launcherProgressLogTail
         )
     }
 
