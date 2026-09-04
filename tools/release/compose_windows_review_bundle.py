@@ -183,7 +183,9 @@ function Write-ReviewProgress([string]$Message) {
 
 Add-Type -TypeDefinition @'
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 public static class AtrinikReviewSecretNative
 {
@@ -195,6 +197,12 @@ public static class AtrinikReviewSecretNative
         public int InheritHandle;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileDispositionInfo
+    {
+        public byte DeleteFile;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateFileW(
         string name,
@@ -204,6 +212,20 @@ public static class AtrinikReviewSecretNative
         uint creationDisposition,
         uint flagsAndAttributes,
         IntPtr templateFile);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(
+        IntPtr file,
+        [Out] StringBuilder path,
+        uint length,
+        uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetFileInformationByHandle(
+        IntPtr file,
+        int fileInformationClass,
+        ref FileDispositionInfo information,
+        uint bufferSize);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool WriteFile(
@@ -219,15 +241,85 @@ public static class AtrinikReviewSecretNative
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool DeleteFileW(string name);
-
     private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
 
     private static int LastError()
     {
         int error = Marshal.GetLastWin32Error();
         return error == 0 ? 1 : error;
+    }
+
+    private static string ExtendedFullPath(string path)
+    {
+        string full = Path.GetFullPath(path).Replace('/', '\\');
+        if (full.StartsWith(@"\\?\", StringComparison.Ordinal))
+        {
+            return full;
+        }
+        if (full.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return @"\\?\UNC\" + full.Substring(2);
+        }
+        return @"\\?\" + full;
+    }
+
+    private static string TrimSeparators(string path)
+    {
+        int length = path.Length;
+        while (length > 0 && path[length - 1] == '\\')
+        {
+            length--;
+        }
+        return path.Substring(0, length);
+    }
+
+    private static bool HandlePathMatches(IntPtr file, string path)
+    {
+        string expected;
+        try
+        {
+            expected = ExtendedFullPath(path);
+        }
+        catch
+        {
+            return false;
+        }
+
+        uint capacity = 260U;
+        while (true)
+        {
+            StringBuilder actual = new StringBuilder((int)capacity);
+            uint length = GetFinalPathNameByHandleW(file, actual, capacity, 0U);
+            if (length == 0U)
+            {
+                return false;
+            }
+            if (length < capacity)
+            {
+                return String.Equals(
+                    TrimSeparators(expected),
+                    TrimSeparators(actual.ToString()),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            if (length == UInt32.MaxValue)
+            {
+                return false;
+            }
+            capacity = length + 1U;
+        }
+    }
+
+    private static bool DeleteFileByHandle(IntPtr file)
+    {
+        FileDispositionInfo information = new FileDispositionInfo
+        {
+            DeleteFile = 1
+        };
+        return SetFileInformationByHandle(
+            file,
+            4,
+            ref information,
+            (uint)Marshal.SizeOf<FileDispositionInfo>());
     }
 
     public static int CreateOwnerOnlyFile(
@@ -260,11 +352,11 @@ public static class AtrinikReviewSecretNative
             };
             file = CreateFileW(
                 path,
-                0x40000000U,
+                0xC0010000U,
                 0,
                 ref attributes,
                 1U,
-                0x80000080U,
+                0x80200080U,
                 IntPtr.Zero);
             if (file == InvalidHandleValue)
             {
@@ -272,6 +364,11 @@ public static class AtrinikReviewSecretNative
                 return result;
             }
             created = true;
+            if (!HandlePathMatches(file, path))
+            {
+                result = 4390;
+                return result;
+            }
             uint bytesWritten;
             if (!WriteFile(
                     file,
@@ -293,13 +390,14 @@ public static class AtrinikReviewSecretNative
         }
         finally
         {
+            if (result != 0 && created &&
+                !DeleteFileByHandle(file))
+            {
+                result = LastError();
+            }
             if (file != IntPtr.Zero && file != InvalidHandleValue)
             {
                 CloseHandle(file);
-            }
-            if (result != 0 && created)
-            {
-                DeleteFileW(path);
             }
             if (pinnedDescriptor.IsAllocated)
             {

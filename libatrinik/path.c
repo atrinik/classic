@@ -27,6 +27,12 @@
  * OS path API.
  */
 
+#ifdef WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+#endif
+
 #include "path.h"
 #include "string.h"
 #include <openssl/crypto.h>
@@ -563,6 +569,149 @@ static wchar_t *path_windows_wide(const char *path) {
     return extended;
 }
 
+/*
+ * CreateFileW protects the final component when FILE_FLAG_OPEN_REPARSE_POINT
+ * is used, but ancestor junctions can still redirect pathname resolution.
+ * Compare the stable final handle path with the requested path before using
+ * the handle so that a redirected ancestor is rejected without a pathname
+ * based cleanup or read/write.
+ */
+static wchar_t *path_windows_full_path(const wchar_t *path) {
+    DWORD capacity = MAX_PATH;
+    for (;;) {
+        wchar_t *full = calloc((size_t)capacity, sizeof(*full));
+        if (full == NULL) {
+            return NULL;
+        }
+        DWORD length = GetFullPathNameW(path, capacity, full, NULL);
+        if (length == 0) {
+            free(full);
+            return NULL;
+        }
+        if (length < capacity) {
+            return full;
+        }
+        free(full);
+        if (length == UINT_MAX) {
+            return NULL;
+        }
+        capacity = length + 1U;
+    }
+}
+
+static wchar_t *path_windows_extended_full_path(const wchar_t *path) {
+    size_t path_length = wcslen(path);
+    if (path_length >= 4U && path[0] == L'\\' && path[1] == L'\\' && path[2] == L'?' &&
+        path[3] == L'\\') {
+        wchar_t *extended = calloc(path_length + 1U, sizeof(*extended));
+        if (extended == NULL) {
+            return NULL;
+        }
+        memcpy(extended, path, (path_length + 1U) * sizeof(*extended));
+        for (wchar_t *cp = extended; *cp != L'\0'; cp++) {
+            if (*cp == L'/') {
+                *cp = L'\\';
+            }
+        }
+        return extended;
+    }
+
+    wchar_t *full = path_windows_full_path(path);
+    if (full == NULL) {
+        return NULL;
+    }
+    for (wchar_t *cp = full; *cp != L'\0'; cp++) {
+        if (*cp == L'/') {
+            *cp = L'\\';
+        }
+    }
+
+    size_t full_length = wcslen(full);
+    if (full_length >= 4U && full[0] == L'\\' && full[1] == L'\\' && full[2] == L'?' &&
+        full[3] == L'\\') {
+        return full;
+    }
+
+    const wchar_t *source = full;
+    size_t source_length = full_length;
+    static const wchar_t drive_prefix[] = L"\\\\?\\";
+    static const wchar_t unc_prefix[] = L"\\\\?\\UNC\\";
+    const wchar_t *prefix = drive_prefix;
+    size_t prefix_length = arraysize(drive_prefix) - 1U;
+    if (full_length >= 2U && full[0] == L'\\' && full[1] == L'\\') {
+        prefix = unc_prefix;
+        prefix_length = arraysize(unc_prefix) - 1U;
+        source += 2;
+        source_length -= 2;
+    } else if (full_length < 3U || full[1] != L':' || full[2] != L'\\') {
+        free(full);
+        return NULL;
+    }
+
+    if (source_length > SIZE_MAX - prefix_length - 1U) {
+        free(full);
+        return NULL;
+    }
+    wchar_t *extended = calloc(prefix_length + source_length + 1U, sizeof(*extended));
+    if (extended == NULL) {
+        free(full);
+        return NULL;
+    }
+    memcpy(extended, prefix, prefix_length * sizeof(*extended));
+    memcpy(extended + prefix_length, source, (source_length + 1U) * sizeof(*extended));
+    free(full);
+    return extended;
+}
+
+static bool path_windows_paths_equal(const wchar_t *left, const wchar_t *right) {
+    size_t left_length = wcslen(left);
+    size_t right_length = wcslen(right);
+    while (left_length > 0U && left[left_length - 1U] == L'\\') {
+        left_length--;
+    }
+    while (right_length > 0U && right[right_length - 1U] == L'\\') {
+        right_length--;
+    }
+    return left_length == right_length && _wcsnicmp(left, right, left_length) == 0;
+}
+
+static bool path_windows_handle_path_matches(HANDLE handle, const wchar_t *requested) {
+    wchar_t *expected = path_windows_extended_full_path(requested);
+    if (expected == NULL) {
+        return false;
+    }
+
+    DWORD capacity = MAX_PATH;
+    for (;;) {
+        wchar_t *actual = calloc((size_t)capacity, sizeof(*actual));
+        if (actual == NULL) {
+            free(expected);
+            return false;
+        }
+        DWORD length = GetFinalPathNameByHandleW(handle,
+                                                 actual,
+                                                 capacity,
+                                                 FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (length == 0) {
+            free(actual);
+            free(expected);
+            return false;
+        }
+        if (length < capacity) {
+            bool matches = path_windows_paths_equal(expected, actual);
+            free(actual);
+            free(expected);
+            return matches;
+        }
+        free(actual);
+        if (length == UINT_MAX) {
+            free(expected);
+            return false;
+        }
+        capacity = length + 1U;
+    }
+}
+
 typedef struct path_windows_file_identity {
     DWORD volume_serial_number;
     DWORD file_index_high;
@@ -614,6 +763,7 @@ static HANDLE path_windows_open_secret_directory(const wchar_t *path,
         GetFileType(directory) == FILE_TYPE_DISK &&
         standard.Directory &&
         (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 &&
+        path_windows_handle_path_matches(directory, path) &&
         (identity == NULL || path_windows_file_identity_read(directory, identity));
     if (!safe) {
         CloseHandle(directory);
@@ -990,7 +1140,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     if (directory_handle != INVALID_HANDLE_VALUE && basename_wide != NULL &&
         temporary_wide != NULL && security_ok) {
         file = CreateFileW(temporary_wide,
-                           GENERIC_WRITE | DELETE,
+                           GENERIC_READ | GENERIC_WRITE | DELETE,
                            0,
                            &attributes,
                            CREATE_NEW,
@@ -999,7 +1149,9 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
                            NULL);
     }
 
-    bool temporary_created = file != INVALID_HANDLE_VALUE;
+    bool file_open = file != INVALID_HANDLE_VALUE;
+    bool temporary_created = file_open &&
+                             path_windows_handle_path_matches(file, temporary_wide);
     bool ok = temporary_created;
     size_t offset = 0;
     while (ok && offset < size) {
@@ -1013,6 +1165,9 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     path_secret_create_result_t result = PATH_SECRET_CREATE_ERROR;
     bool published = false;
     DWORD publish_error = ERROR_SUCCESS;
+    if (file_open && !temporary_created) {
+        publish_error = ERROR_INVALID_DATA;
+    }
     if (ok) {
         ok = FlushFileBuffers(file) != 0;
         if (!ok) {
@@ -1041,7 +1196,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
         result = PATH_SECRET_CREATE_EXISTS;
     }
 
-    if (!published && temporary_created && !path_windows_remove_file_handle(file)) {
+    if (!published && file_open && !path_windows_remove_file_handle(file)) {
         result = PATH_SECRET_CREATE_ERROR;
     }
     if (file != INVALID_HANDLE_VALUE && !CloseHandle(file)) {
@@ -1178,12 +1333,18 @@ path_read_secret(const char *path, char *secret, size_t secret_size, bool *permi
                                                  FILE_FLAG_SEQUENTIAL_SCAN,
                                              NULL)
                                : INVALID_HANDLE_VALUE;
-    free(wide);
     if (file == INVALID_HANDLE_VALUE) {
         DWORD error = GetLastError();
+        free(wide);
         return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND
                    ? PATH_SECRET_NOT_FOUND
                    : PATH_SECRET_OPEN_ERROR;
+    }
+    bool path_matches = path_windows_handle_path_matches(file, wide);
+    free(wide);
+    if (!path_matches) {
+        result = PATH_SECRET_UNSAFE_LINK;
+        goto out;
     }
     FILE_ATTRIBUTE_TAG_INFO attributes;
     FILE_STANDARD_INFO standard;
