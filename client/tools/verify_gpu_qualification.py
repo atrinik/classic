@@ -92,6 +92,7 @@ LIFECYCLE_EVENTS = [
 ]
 HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
+DXGI_LUID = re.compile(r"dxgi-luid:[0-9a-f]{8}:[0-9a-f]{8}\Z")
 
 
 class ArtifactError(ValueError):
@@ -280,6 +281,16 @@ def _validate_map_pacing(value: dict, label: str) -> None:
              f"{label} map-pacing maxima exceed their totals")
 
 
+def _validate_gpu_identity(gpu: dict, label: str) -> None:
+    _require(gpu.get("backend") in {"vulkan", "direct3d12", "metal"},
+             f"{label}.backend is unsupported")
+    for field in ("device", "driver_name", "driver_version"):
+        _require(isinstance(gpu.get(field), str) and gpu[field] and gpu[field] != "unavailable",
+                 f"missing {label}.{field}")
+    if gpu["backend"] == "direct3d12":
+        _require(bool(DXGI_LUID.fullmatch(str(gpu.get("adapter_identity", "")))),
+                 f"missing {label}.adapter_identity")
+
 def validate_record(record: dict) -> str:
     _require(record.get("schema_version") == 4, "unsupported schema_version")
     _require(record.get("benchmark") == "gpu-interop-stress-qualification", "wrong benchmark")
@@ -287,11 +298,8 @@ def validate_record(record: dict) -> str:
     _require(bool(REVISION.fullmatch(str(record.get("revision", "")))), "invalid revision")
     _require(bool(HEX_64.fullmatch(str(record.get("shader_cohort", "")))), "invalid shader cohort")
     gpu = record.get("gpu", {})
-    _require(gpu.get("backend") in {"vulkan", "direct3d12", "metal"}, "unsupported backend")
+    _validate_gpu_identity(gpu, "gpu")
     _require(gpu.get("qualified_hardware") is True, "hardware attestation is absent")
-    for field in ("device", "driver_name", "driver_version"):
-        _require(isinstance(gpu.get(field), str) and gpu[field] and gpu[field] != "unavailable",
-                 f"missing gpu.{field}")
     _require(gpu.get("hardware_tier") in {"reference", "minimum"},
              "missing qualified hardware tier")
     build = record.get("build", {})
@@ -580,7 +588,7 @@ def validate(paths: list[Path], require_complete: bool) -> None:
     revisions: set[str] = set()
     cohorts: set[str] = set()
     backends: set[str] = set()
-    identities: set[tuple[str, str, str, str, str]] = set()
+    identities: set[tuple[str, str, str, str, str, str]] = set()
     for path in paths:
         for record in _records(path):
             counts[validate_record(record)] += 1
@@ -589,7 +597,8 @@ def validate(paths: list[Path], require_complete: bool) -> None:
             backends.add(record["gpu"]["backend"])
             gpu = record["gpu"]
             identities.add((gpu["backend"], gpu["device"], gpu["driver_name"],
-                            gpu["driver_version"], gpu["hardware_tier"]))
+                            gpu["driver_version"], gpu.get("adapter_identity", "unavailable"),
+                            gpu["hardware_tier"]))
     _require(len(revisions) == 1, "artifacts contain different revisions")
     _require(len(cohorts) == 1, "artifacts contain different shader cohorts")
     _require(len(identities) == 1, "artifacts mix GPU device, driver, or hardware tier")
@@ -611,11 +620,8 @@ def validate_lifecycle_record(record: dict) -> None:
     _require(bool(HEX_64.fullmatch(str(record.get("shader_cohort", "")))),
              "invalid shader cohort")
     gpu = record.get("gpu", {})
-    _require(gpu.get("backend") in {"vulkan", "direct3d12", "metal"}, "unsupported backend")
+    _validate_gpu_identity(gpu, "gpu")
     _require(gpu.get("qualified_hardware") is True, "hardware attestation is absent")
-    for field in ("device", "driver_name", "driver_version"):
-        _require(isinstance(gpu.get(field), str) and gpu[field] and gpu[field] != "unavailable",
-                 f"missing gpu.{field}")
     _require(gpu.get("hardware_tier") in {"reference", "minimum"},
              "missing lifecycle hardware tier")
     build = record.get("build", {})
@@ -807,12 +813,8 @@ def validate_production_record(record: dict) -> bool:
     for field in ("manifest_sha256", "snapshot_sha256", "pixels_sha256",
                   "initial_pixels_sha256"):
         _require(bool(HEX_64.fullmatch(str(record.get(field, "")))), f"invalid {field}")
-    _require(record.get("backend") in {"vulkan", "direct3d12", "metal"},
-             "unsupported backend")
+    _validate_gpu_identity(record, "production")
     _require(record.get("qualified_hardware") is True, "hardware attestation is absent")
-    for field in ("device", "driver_name", "driver_version"):
-        _require(isinstance(record.get(field), str) and record[field] and
-                 record[field] != "unavailable", f"missing {field}")
     for prefix in ("initial", "final"):
         _require(isinstance(record.get(f"{prefix}_artifact"), str) and
                  record[f"{prefix}_artifact"].startswith("review/"),
@@ -1047,7 +1049,8 @@ def validate_production(paths: list[Path], closure: bool) -> None:
     _require(len({record["backend"] for record in records}) == 1,
              "production fixtures contain different backends")
     _require(len({(record["backend"], record["device"], record["driver_name"],
-                   record["driver_version"], record["hardware_tier"])
+                   record["driver_version"], record.get("adapter_identity", "unavailable"),
+                   record["hardware_tier"])
                   for record in records}) == 1,
              "production fixtures mix device, driver, or hardware tier")
     if closure:

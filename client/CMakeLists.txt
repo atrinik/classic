@@ -393,7 +393,7 @@ target_link_libraries(${EXECUTABLE} PRIVATE
     SDL3_image::SDL3_image
     SDL3_ttf::SDL3_ttf)
 if (WIN32)
-    target_link_libraries(${EXECUTABLE} PRIVATE d3d12 dxgi dxguid)
+    target_link_libraries(${EXECUTABLE} PRIVATE d3d12 dxgi dxguid gdi32)
 endif ()
 if (TARGET LibXml2::LibXml2)
     target_link_libraries(${EXECUTABLE} PRIVATE LibXml2::LibXml2)
@@ -555,7 +555,8 @@ if (BUILD_TESTING)
         target_link_libraries(client-gpu-renderer-integration-tests PRIVATE
             d3d12
             dxgi
-            dxguid)
+            dxguid
+            gdi32)
     endif ()
     add_test(NAME client-gpu-renderer-integration
         COMMAND client-gpu-renderer-integration-tests)

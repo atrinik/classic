@@ -1499,6 +1499,19 @@ int main(void) {
     GPU_REQUIRE(!qualified || strcmp(gpu_renderer_device_name(), "unavailable") != 0);
     GPU_REQUIRE(!qualified || strcmp(gpu_renderer_driver_name(), "unavailable") != 0);
     GPU_REQUIRE(!qualified || strcmp(gpu_renderer_driver_version(), "unavailable") != 0);
+    if (qualified && strcmp(gpu_renderer_backend(), "direct3d12") == 0) {
+        const char *identity = gpu_renderer_adapter_identity();
+        GPU_REQUIRE(strlen(identity) == 27);
+        GPU_REQUIRE(strncmp(identity, "dxgi-luid:", 10) == 0);
+        GPU_REQUIRE(identity[18] == ':');
+        for (size_t index = 10; index < 27; index++) {
+            if (index == 18) {
+                continue;
+            }
+            GPU_REQUIRE((identity[index] >= '0' && identity[index] <= '9') ||
+                        (identity[index] >= 'a' && identity[index] <= 'f'));
+        }
+    }
 
     SDL_Surface *sources[4] = {
         SDL_CreateSurface(2, 2, SDL_PIXELFORMAT_RGBA32),
