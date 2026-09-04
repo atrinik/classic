@@ -119,6 +119,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "SetFileInformationByHandle",
                     "HandlePathMatches",
                     "DeleteFileByHandle",
+                    "DeleteOwnerOnlyFile",
                     "0xC0010000U",
                     "0x80200080U",
                     "WriteFile",
@@ -142,7 +143,6 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "function Remove-ReviewSecretFile",
                     "function Remove-ReviewSecretFiles",
                     "Remove-ReviewSecretFile $Candidate",
-                    '"$($SidArgument):(F)"',
                     "$StageTmp",
                     "$StateTmp",
                     '"server-data-stage-*"',
@@ -222,14 +222,15 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 self.assertNotIn('"/restore"', secret_protection)
                 self.assertIn('"/remove"', secret_protection)
                 self.assertNotIn('"/setowner"', secret_protection)
+                secret_cleanup = powershell[
+                    powershell.index("function Remove-ReviewSecretFile") :
+                    powershell.index("function Remove-ReviewSecretFiles")
+                ]
                 self.assertIn(
-                    '        "/grant",\r\n'
-                    '        "$($SidArgument):(F)",\r\n'
-                    '        "/q"\r\n'
-                    '    ))\r\n'
-                    '    Remove-Item -LiteralPath $Path',
-                    powershell,
+                    '    $Result = [AtrinikReviewSecretNative]::DeleteOwnerOnlyFile($Path)',
+                    secret_cleanup,
                 )
+                self.assertNotIn("Remove-Item -LiteralPath $Path", secret_cleanup)
                 self.assertNotIn("Set-Content -LiteralPath $LauncherFailureLog", powershell)
                 self.assertIn("if ($LaunchLockHeld)", powershell)
                 self.assertNotIn('$Account + ":" + $Password', powershell)
