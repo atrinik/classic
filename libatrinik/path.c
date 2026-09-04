@@ -1387,7 +1387,12 @@ path_read_secret(const char *path, char *secret, size_t secret_size, bool *permi
     }
     HANDLE token = NULL;
     TOKEN_USER *user = path_secret_token_user(&token);
-    if (user == NULL || !path_secret_windows_security(file, user, permissive_mode, &result)) {
+    bool security_ok = user != NULL &&
+                       path_secret_windows_security(file, user, permissive_mode, &result);
+    if (!security_ok) {
+        if (result == PATH_SECRET_OK) {
+            result = PATH_SECRET_METADATA_ERROR;
+        }
         free(user);
         if (token != NULL) {
             CloseHandle(token);
