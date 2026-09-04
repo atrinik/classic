@@ -965,11 +965,17 @@ try {
     }.GetNewClosure())
     $Server.BeginOutputReadLine()
     $Server.BeginErrorReadLine()
+    Write-ReviewProgress "server-output-started"
 
     try {
         $Deadline = [System.DateTime]::UtcNow.AddSeconds(60)
         $Ready = $false
+        $ProbeCount = 0
         while ([System.DateTime]::UtcNow -lt $Deadline) {
+            $ProbeCount++
+            if ($ProbeCount -le 3) {
+                Write-ReviewProgress "server-probe-$ProbeCount-start"
+            }
             if ($Server.HasExited) {
                 $Server.WaitForExit()
                 $ServerExitDiagnostics = @(
@@ -998,13 +1004,19 @@ try {
                     $_ -match "Server ready\. Waiting for connections"
                 }
             ).Count -gt 0
-            if ($Endpoint.Count -eq 1 -and $Endpoint[0].LocalAddress -eq "127.0.0.1" -and
-                $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
-                $IdentityInfo.LastWriteTimeUtc -ge $Started -and
-                (
-                    $ServerLogText -match "Server ready\. Waiting for connections" -or
-                    $ServerOutputReady
-                )) {
+            $EndpointReady = $Endpoint.Count -eq 1 -and
+                $Endpoint[0].LocalAddress -eq "127.0.0.1"
+            $IdentityReady = $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
+                $IdentityInfo.LastWriteTimeUtc -ge $Started
+            $LogReady = $ServerLogText -match "Server ready\. Waiting for connections"
+            if ($ProbeCount -le 3) {
+                Write-ReviewProgress (
+                    "server-probe-$ProbeCount-result:" +
+                    "endpoint=$EndpointReady;identity=$IdentityReady;" +
+                    "log=$LogReady;stdout=$ServerOutputReady"
+                )
+            }
+            if ($EndpointReady -and $IdentityReady -and ($LogReady -or $ServerOutputReady)) {
                 $Ready = $true
                 break
             }
