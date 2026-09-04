@@ -4,6 +4,20 @@
 
 #ifdef WIN32
 #include <aclapi.h>
+
+#if defined(__MINGW32__) || defined(__MINGW64__)
+static bool fail_process_token;
+
+BOOL WINAPI __real_OpenProcessToken(HANDLE process, DWORD access, PHANDLE token);
+
+BOOL WINAPI __wrap_OpenProcessToken(HANDLE process, DWORD access, PHANDLE token) {
+    if (fail_process_token) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    return __real_OpenProcessToken(process, access, token);
+}
+#endif
 #else
 #include <sys/stat.h>
 #endif
@@ -305,6 +319,17 @@ int main(int argc, char **argv) {
     bool permissive = true;
     require(path_read_secret(path, VS(secret), &permissive) == PATH_SECRET_OK);
     require(strcmp(secret, "secret-value") == 0 && !permissive);
+#if defined(__MINGW32__) || defined(__MINGW64__)
+    fail_process_token = true;
+    memset(secret, 'x', sizeof(secret));
+    bool token_failure_permissive = true;
+    require(path_read_secret(path, VS(secret), &token_failure_permissive) ==
+            PATH_SECRET_METADATA_ERROR);
+    static const char token_failure_cleared[sizeof(secret)];
+    require(CRYPTO_memcmp(secret, token_failure_cleared, sizeof(secret)) == 0 &&
+            !token_failure_permissive);
+    fail_process_token = false;
+#endif
     struct stat metadata;
     require(stat(path, &metadata) == 0 && S_ISREG(metadata.st_mode));
 #ifndef WIN32
