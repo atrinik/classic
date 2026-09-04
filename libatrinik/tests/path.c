@@ -247,6 +247,35 @@ int main(int argc, char **argv) {
     require(strcmp(secret, "secret-value") == 0);
 
 #ifdef WIN32
+    char long_name[220];
+    memset(long_name, 'x', sizeof(long_name) - 1U);
+    long_name[sizeof(long_name) - 1U] = 0;
+    char long_path[HUGE_BUF];
+    require(snprintf(VS(long_path), "%s/%s", directory, long_name) < (int)sizeof(long_path));
+    static const char long_secret[] = "long-secret";
+    require(path_secret_create_atomic(long_path, long_secret, sizeof(long_secret) - 1U) ==
+            PATH_SECRET_CREATE_OK);
+    permissive = true;
+    require(path_read_secret(long_path, VS(secret), &permissive) == PATH_SECRET_OK);
+    require(strcmp(secret, "long-secret") == 0 && !permissive);
+    char extended_path[HUGE_BUF];
+    require(snprintf(VS(extended_path), "%s", long_path) < (int)sizeof(extended_path));
+    for (char *cp = extended_path; *cp != 0; cp++) {
+        if (*cp == '/') {
+            *cp = '\\';
+        }
+    }
+    char prefixed_path[HUGE_BUF];
+    static const char extended_prefix[] = "\\\\?\\";
+    size_t long_path_length = strlen(extended_path);
+    size_t prefix_length = sizeof(extended_prefix) - 1U;
+    require(long_path_length + prefix_length < sizeof(prefixed_path));
+    memcpy(prefixed_path, extended_prefix, prefix_length);
+    memcpy(prefixed_path + prefix_length, extended_path, long_path_length + 1U);
+    wchar_t *long_path_wide = path_to_wide(prefixed_path);
+    require(DeleteFileW(long_path_wide));
+    free(long_path_wide);
+
     char broad[HUGE_BUF];
     require(snprintf(VS(broad), "%s/broad", directory) < (int)sizeof(broad));
     static const char broad_secret[] = "broad-secret\n";
