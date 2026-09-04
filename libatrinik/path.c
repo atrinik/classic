@@ -663,13 +663,14 @@ static bool path_windows_publish_file(HANDLE file,
                                       DWORD *error) {
     const size_t file_name_offset = FIELD_OFFSET(FILE_RENAME_INFO, FileName);
     size_t basename_length = wcslen(basename);
-    if (basename_length > (SIZE_MAX - file_name_offset) / sizeof(*basename) ||
-        file_name_offset + basename_length * sizeof(*basename) > UINT_MAX) {
+    if (basename_length > SIZE_MAX / sizeof(*basename) - 1U ||
+        file_name_offset > SIZE_MAX - (basename_length + 1U) * sizeof(*basename) ||
+        file_name_offset + (basename_length + 1U) * sizeof(*basename) > UINT_MAX) {
         *error = ERROR_FILENAME_EXCED_RANGE;
         return false;
     }
 
-    size_t rename_size = file_name_offset + basename_length * sizeof(*basename);
+    size_t rename_size = file_name_offset + (basename_length + 1U) * sizeof(*basename);
     FILE_RENAME_INFO *rename = calloc(1, rename_size);
     if (rename == NULL) {
         *error = ERROR_NOT_ENOUGH_MEMORY;
