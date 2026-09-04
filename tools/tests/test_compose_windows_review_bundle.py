@@ -152,7 +152,6 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "ServerDiagnostics",
                     "identity_recent",
                     "ready_marker",
-                    "BeginOutputReadLine",
                     "stdout_ready_marker",
                     "ServerExitDiagnostics",
                     "stdout_tail=",
@@ -165,7 +164,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "function Write-ReviewProgress",
                     '$LauncherProgressLog = Join-Path $Root "launcher-progress.log"',
                     'Write-ReviewProgress "fingerprint-start"',
-                    'Write-ReviewProgress "server-output-started"',
+                    'Write-ReviewProgress "server-output-registered"',
                     'Write-ReviewProgress "server-probe-$ProbeCount-start"',
                     'server-probe-$ProbeCount-result:',
                     'Write-ReviewProgress "client-start"',
@@ -184,10 +183,19 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "$Client.BeginErrorReadLine()",
                     "client_stdout_tail=",
                     "client_stderr_tail=",
+                    "function Register-ReviewProcessOutput",
+                    "function Receive-ReviewProcessOutput",
+                    "function Unregister-ReviewProcessOutput",
+                    "Register-ObjectEvent",
+                    "Get-Event -SourceIdentifier",
+                    "Remove-Event -EventIdentifier",
+                    "Unregister-Event -SourceIdentifier",
                 ):
                     self.assertIn(token, powershell)
                 self.assertNotIn("ConvertTo-ReviewArguments", powershell)
                 self.assertNotIn("review-quic-fingerprint.py", powershell)
+                self.assertNotIn("add_OutputDataReceived", powershell)
+                self.assertNotIn("add_ErrorDataReceived", powershell)
                 self.assertIn(
                     '# Create the secret with an explicit owner and protected DACL.',
                     powershell,

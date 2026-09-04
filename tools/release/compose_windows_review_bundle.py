@@ -163,6 +163,10 @@ $ServerOutputLines = $null
 $ServerErrorLines = $null
 $ClientOutputLines = $null
 $ClientErrorLines = $null
+$ServerOutputSource = $null
+$ServerErrorSource = $null
+$ClientOutputSource = $null
+$ClientErrorSource = $null
 $LauncherSucceeded = $false
 
 function Write-ReviewProgress([string]$Message) {
@@ -378,6 +382,45 @@ function Get-ReviewDiagnosticTail($Lines) {
                 }
         }
     ) -join "|")
+}
+
+function Register-ReviewProcessOutput(
+    [System.Diagnostics.Process]$Process,
+    [string]$EventName,
+    [string]$SourceIdentifier
+) {
+    Register-ObjectEvent -InputObject $Process `
+        -EventName $EventName `
+        -SourceIdentifier $SourceIdentifier | Out-Null
+}
+
+function Receive-ReviewProcessOutput(
+    [string]$SourceIdentifier,
+    $Lines
+) {
+    if ([string]::IsNullOrEmpty($SourceIdentifier) -or $null -eq $Lines) {
+        return
+    }
+    foreach ($Event in @(
+        Get-Event -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue
+    )) {
+        try {
+            if ($null -ne $Event.SourceEventArgs.Data) {
+                [void]$Lines.Enqueue([string]$Event.SourceEventArgs.Data)
+            }
+        } finally {
+            Remove-Event -EventIdentifier $Event.EventIdentifier `
+                -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Unregister-ReviewProcessOutput([string]$SourceIdentifier) {
+    if ([string]::IsNullOrEmpty($SourceIdentifier)) {
+        return
+    }
+    Remove-Event -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue
+    Unregister-Event -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue
 }
 
 function Assert-ReviewPathAncestors([string]$Path) {
@@ -935,10 +978,19 @@ try {
         "127.0.0.1,localhost",
         "Process"
     )
+    $ServerOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $ServerErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $ServerOutputSource = "AtrinikReviewServerOutput-$PID"
+    $ServerErrorSource = "AtrinikReviewServerError-$PID"
+    Register-ReviewProcessOutput $Server "OutputDataReceived" $ServerOutputSource
+    Register-ReviewProcessOutput $Server "ErrorDataReceived" $ServerErrorSource
+    Write-ReviewProgress "server-output-registered"
     try {
         if (-not $Server.Start()) {
             throw "Could not start the isolated review server"
         }
+        $Server.BeginOutputReadLine()
+        $Server.BeginErrorReadLine()
         Write-ReviewProgress "server-started"
     } finally {
         foreach ($Name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
@@ -949,24 +1001,6 @@ try {
             )
         }
     }
-    $ServerOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-    $ServerErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-    $Server.add_OutputDataReceived({
-        param($Sender, $EventArgs)
-        if ($null -ne $EventArgs.Data) {
-            [void]$ServerOutputLines.Enqueue($EventArgs.Data)
-        }
-    }.GetNewClosure())
-    $Server.add_ErrorDataReceived({
-        param($Sender, $EventArgs)
-        if ($null -ne $EventArgs.Data) {
-            [void]$ServerErrorLines.Enqueue($EventArgs.Data)
-        }
-    }.GetNewClosure())
-    $Server.BeginOutputReadLine()
-    $Server.BeginErrorReadLine()
-    Write-ReviewProgress "server-output-started"
-
     try {
         $Deadline = [System.DateTime]::UtcNow.AddSeconds(60)
         $Ready = $false
@@ -976,6 +1010,8 @@ try {
             if ($ProbeCount -le 3) {
                 Write-ReviewProgress "server-probe-$ProbeCount-start"
             }
+            Receive-ReviewProcessOutput $ServerOutputSource $ServerOutputLines
+            Receive-ReviewProcessOutput $ServerErrorSource $ServerErrorLines
             if ($Server.HasExited) {
                 $Server.WaitForExit()
                 $ServerExitDiagnostics = @(
@@ -1023,6 +1059,8 @@ try {
             Start-Sleep -Milliseconds 250
             $Server.Refresh()
         }
+        Receive-ReviewProcessOutput $ServerOutputSource $ServerOutputLines
+        Receive-ReviewProcessOutput $ServerErrorSource $ServerErrorLines
         if (-not $Ready) {
             $IdentityRecent = $false
             if ($null -ne $IdentityInfo) {
@@ -1109,18 +1147,10 @@ try {
             $Client.StartInfo = $ClientStartInfo
             $ClientOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
             $ClientErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
-            $Client.add_OutputDataReceived({
-                param($Sender, $EventArgs)
-                if ($null -ne $EventArgs.Data) {
-                    [void]$ClientOutputLines.Enqueue($EventArgs.Data)
-                }
-            }.GetNewClosure())
-            $Client.add_ErrorDataReceived({
-                param($Sender, $EventArgs)
-                if ($null -ne $EventArgs.Data) {
-                    [void]$ClientErrorLines.Enqueue($EventArgs.Data)
-                }
-            }.GetNewClosure())
+            $ClientOutputSource = "AtrinikReviewClientOutput-$PID"
+            $ClientErrorSource = "AtrinikReviewClientError-$PID"
+            Register-ReviewProcessOutput $Client "OutputDataReceived" $ClientOutputSource
+            Register-ReviewProcessOutput $Client "ErrorDataReceived" $ClientErrorSource
             Write-ReviewProgress "client-start"
             if (-not $Client.Start()) {
                 throw "Could not start the packaged client"
@@ -1145,8 +1175,18 @@ try {
         }
 
         Write-Host "Server and client started. Close the client window to finish the review."
+        while (-not $Client.HasExited) {
+            Receive-ReviewProcessOutput $ServerOutputSource $ServerOutputLines
+            Receive-ReviewProcessOutput $ServerErrorSource $ServerErrorLines
+            Receive-ReviewProcessOutput $ClientOutputSource $ClientOutputLines
+            Receive-ReviewProcessOutput $ClientErrorSource $ClientErrorLines
+            Start-Sleep -Milliseconds 250
+        }
         $Client.WaitForExit()
-        $Client.WaitForExit()
+        Receive-ReviewProcessOutput $ServerOutputSource $ServerOutputLines
+        Receive-ReviewProcessOutput $ServerErrorSource $ServerErrorLines
+        Receive-ReviewProcessOutput $ClientOutputSource $ClientOutputLines
+        Receive-ReviewProcessOutput $ClientErrorSource $ClientErrorLines
         $Client.Refresh()
         $ClientOutputTail = Get-ReviewDiagnosticTail $ClientOutputLines
         $ClientErrorTail = Get-ReviewDiagnosticTail $ClientErrorLines
@@ -1223,6 +1263,10 @@ try {
             }
         }
     } finally {
+        Unregister-ReviewProcessOutput $ServerOutputSource
+        Unregister-ReviewProcessOutput $ServerErrorSource
+        Unregister-ReviewProcessOutput $ClientOutputSource
+        Unregister-ReviewProcessOutput $ClientErrorSource
         if ($null -ne $Client) {
             $Client.Dispose()
         }
