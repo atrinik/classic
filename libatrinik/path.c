@@ -624,24 +624,15 @@ static wchar_t *path_windows_long_path(const wchar_t *path) {
 
 static wchar_t *path_windows_extended_full_path(const wchar_t *path) {
     size_t path_length = wcslen(path);
-    if (path_length >= 4U && path[0] == L'\\' && path[1] == L'\\' && path[2] == L'?' &&
-        path[3] == L'\\') {
-        wchar_t *extended = calloc(path_length + 1U, sizeof(*extended));
-        if (extended == NULL) {
-            return NULL;
-        }
-        memcpy(extended, path, (path_length + 1U) * sizeof(*extended));
-        for (wchar_t *cp = extended; *cp != L'\0'; cp++) {
-            if (*cp == L'/') {
-                *cp = L'\\';
-            }
-        }
-        return extended;
-    }
-
-    wchar_t *full = path_windows_full_path(path);
+    bool already_extended = path_length >= 4U && path[0] == L'\\' && path[1] == L'\\' &&
+                             path[2] == L'?' && path[3] == L'\\';
+    wchar_t *full = already_extended ? calloc(path_length + 1U, sizeof(*full))
+                                     : path_windows_full_path(path);
     if (full == NULL) {
         return NULL;
+    }
+    if (already_extended) {
+        memcpy(full, path, (path_length + 1U) * sizeof(*full));
     }
     wchar_t *long_path = path_windows_long_path(full);
     if (long_path == NULL) {
