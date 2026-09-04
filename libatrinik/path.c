@@ -1096,12 +1096,19 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     string_tolower(suffix);
 
 #ifdef WIN32
-    char *directory = path_dirname(path);
-    char *basename = path_basename(path);
+    char *normalized_path = xstrdup(path);
+    for (char *cp = normalized_path; *cp != '\0'; cp++) {
+        if (*cp == '\\') {
+            *cp = '/';
+        }
+    }
+    char *directory = path_dirname(normalized_path);
+    char *basename = path_basename(normalized_path);
     if (directory == NULL || basename == NULL || *basename == '\0' ||
         strchr(basename, '/') != NULL) {
         free(directory);
         free(basename);
+        free(normalized_path);
         OPENSSL_cleanse(suffix, sizeof(suffix));
         return PATH_SECRET_CREATE_ERROR;
     }
@@ -1110,6 +1117,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     if (snprintf(VS(temporary), "%s.tmp.%s", path, suffix) >= (int)sizeof(temporary)) {
         free(directory);
         free(basename);
+        free(normalized_path);
         OPENSSL_cleanse(suffix, sizeof(suffix));
         return PATH_SECRET_CREATE_ERROR;
     }
@@ -1227,6 +1235,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     free(directory_wide);
     free(directory);
     free(basename);
+    free(normalized_path);
     OPENSSL_cleanse(temporary, sizeof(temporary));
     OPENSSL_cleanse(suffix, sizeof(suffix));
     return result;

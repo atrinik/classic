@@ -322,6 +322,18 @@ int main(int argc, char **argv) {
     bool permissive = true;
     require(path_read_secret(path, VS(secret), &permissive) == PATH_SECRET_OK);
     require(strcmp(secret, "secret-value") == 0 && !permissive);
+#ifdef WIN32
+    char backslash_path[HUGE_BUF];
+    require(snprintf(VS(backslash_path), "%s\\backslash-invite", directory) <
+            (int)sizeof(backslash_path));
+    static const char backslash_secret[] = "backslash-secret\\n";
+    require(path_secret_create_atomic(backslash_path,
+                                      backslash_secret,
+                                      sizeof(backslash_secret) - 1U) == PATH_SECRET_CREATE_OK);
+    permissive = true;
+    require(path_read_secret(backslash_path, VS(secret), &permissive) == PATH_SECRET_OK);
+    require(strcmp(secret, "backslash-secret") == 0 && !permissive);
+#endif
 #if defined(__MINGW32__) || defined(__MINGW64__)
     fail_process_token = true;
     memset(secret, 'x', sizeof(secret));
@@ -570,6 +582,7 @@ int main(int argc, char **argv) {
     unlink(too_long);
     unlink(path);
 #ifdef WIN32
+    unlink(backslash_path);
     unlink(broad);
     unlink(not_directory);
     require(RemoveDirectoryA(prepared));
