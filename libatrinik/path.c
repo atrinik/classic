@@ -139,6 +139,18 @@ char *path_dirname(const char *path) {
         end--;
     }
 
+#ifdef WIN32
+    /* A drive root is not the drive-relative directory named by its letter. */
+    if (end == path + 1 && path[1] == ':' && path[2] == '/') {
+        return xstrndup(path, 3);
+    }
+    if (end == path + 5 && path[0] == '/' && path[1] == '/' &&
+        path[2] == '?' && path[3] == '/' && path[5] == ':' &&
+        path[6] == '/') {
+        return xstrndup(path, 7);
+    }
+#endif
+
     result = xstrndup(path, end - path + 1);
 
     if (result[0] == '\0') {

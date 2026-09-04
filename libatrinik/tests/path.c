@@ -155,6 +155,25 @@ static void setup_file(const char *path, const char *contents) {
 int main(int argc, char **argv) {
     toolkit_import(path);
 
+#ifdef WIN32
+    char drive_path[10] = {'C', ':', '/', 's', 'e', 'c', 'r', 'e', 't', 0};
+    char *drive_root = path_dirname(drive_path);
+    require(drive_root != NULL && strlen(drive_root) == 3 && drive_root[0] == 'C' &&
+            drive_root[1] == ':' && drive_root[2] == '/');
+    free(drive_root);
+
+    char extended_drive_path[14] = {
+        '/', '/', '?', '/', 'C', ':', '/', 's', 'e', 'c', 'r', 'e', 't', 0
+    };
+    char *extended_drive_root = path_dirname(extended_drive_path);
+    require(extended_drive_root != NULL && strlen(extended_drive_root) == 7 &&
+            extended_drive_root[0] == '/' && extended_drive_root[1] == '/' &&
+            extended_drive_root[2] == '?' && extended_drive_root[3] == '/' &&
+            extended_drive_root[4] == 'C' && extended_drive_root[5] == ':' &&
+            extended_drive_root[6] == '/');
+    free(extended_drive_root);
+#endif
+
 #ifndef WIN32
     (void)argc;
     (void)argv;
