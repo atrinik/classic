@@ -663,7 +663,7 @@ typedef struct path_windows_io_status_block {
     union {
         path_windows_ntstatus_t status;
         PVOID pointer;
-    };
+    } result;
     ULONG_PTR information;
 } path_windows_io_status_block_t;
 
@@ -686,9 +686,11 @@ static DWORD path_windows_ntstatus_error(path_windows_ntstatus_t status) {
 
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (ntdll != NULL) {
-        path_windows_rtl_nt_status_to_dos_error_t convert =
-            (path_windows_rtl_nt_status_to_dos_error_t)GetProcAddress(
-                ntdll, "RtlNtStatusToDosError");
+        FARPROC symbol = GetProcAddress(ntdll, "RtlNtStatusToDosError");
+        path_windows_rtl_nt_status_to_dos_error_t convert = NULL;
+        _Static_assert(sizeof(symbol) == sizeof(convert),
+                       "Windows function pointers must have one representation");
+        memcpy(&convert, &symbol, sizeof(convert));
         if (convert != NULL) {
             DWORD error = convert(status);
             if (error != ERROR_MR_MID_NOT_FOUND) {
@@ -730,11 +732,11 @@ static bool path_windows_publish_file(HANDLE file,
      */
     bool published = false;
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    path_windows_nt_set_information_file_t set_information =
-        ntdll == NULL
-            ? NULL
-            : (path_windows_nt_set_information_file_t)GetProcAddress(
-                  ntdll, "NtSetInformationFile");
+    FARPROC symbol = ntdll == NULL ? NULL : GetProcAddress(ntdll, "NtSetInformationFile");
+    path_windows_nt_set_information_file_t set_information = NULL;
+    _Static_assert(sizeof(symbol) == sizeof(set_information),
+                   "Windows function pointers must have one representation");
+    memcpy(&set_information, &symbol, sizeof(set_information));
     if (set_information == NULL) {
         *error = ERROR_CALL_NOT_IMPLEMENTED;
     } else {
