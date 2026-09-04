@@ -389,8 +389,13 @@ try {
         throw "One-click client did not exit after the normal close request"
     }
     $launcherClient.Refresh()
-    if ($launcherClient.ExitCode -ne 0) {
-        throw "One-click client exited with code $($launcherClient.ExitCode)"
+    $launcherClientExitCode = $launcherClient.ExitCode
+    if ($null -ne $launcherClientExitCode -and $launcherClientExitCode -ne 0) {
+        throw "One-click client exited with code $launcherClientExitCode"
+    }
+    $launcherProgressText = Get-Content -Raw -LiteralPath $launcherProgressLog
+    if ($launcherProgressText -notmatch "(?m)^client-exit-code=0\r?$") {
+        throw "One-click client did not report exit code zero"
     }
     $launcherClientLogText = Get-Content -Raw -LiteralPath $launcherClientLog
     if ($launcherClientLogText -notmatch "Client shutdown complete\.") {
@@ -401,8 +406,14 @@ try {
     if (-not $launcherServer.HasExited -and -not $launcherServer.WaitForExit(45000)) {
         throw "One-click server did not exit after the client closed"
     }
-    if ($launcherServer.ExitCode -ne 0) {
-        throw "One-click server exited with code $($launcherServer.ExitCode)"
+    $launcherServer.Refresh()
+    $launcherServerExitCode = $launcherServer.ExitCode
+    if ($null -ne $launcherServerExitCode -and $launcherServerExitCode -ne 0) {
+        throw "One-click server exited with code $launcherServerExitCode"
+    }
+    $launcherProgressText = Get-Content -Raw -LiteralPath $launcherProgressLog
+    if ($launcherProgressText -notmatch "(?m)^server-exit-code=0\r?$") {
+        throw "One-click server did not report exit code zero"
     }
     $launcherServerLogText = Get-Content -Raw -LiteralPath $launcherServerLog
     if ($launcherServerLogText -notmatch "Server shutdown complete\.") {

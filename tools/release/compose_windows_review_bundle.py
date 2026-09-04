@@ -1317,6 +1317,7 @@ try {
         Receive-ReviewProcessOutput $ClientOutputSource $ClientOutputLines
         Receive-ReviewProcessOutput $ClientErrorSource $ClientErrorLines
         $Client.Refresh()
+        Write-ReviewProgress "client-exit-code=$($Client.ExitCode)"
         $ClientOutputTail = Get-ReviewDiagnosticTail $ClientOutputLines
         $ClientErrorTail = Get-ReviewDiagnosticTail $ClientErrorLines
         $ClientDiagnostics = @(
@@ -1342,6 +1343,8 @@ try {
             throw "Server did not exit after the graceful shutdown request"
         }
         $Server.WaitForExit()
+        $Server.Refresh()
+        Write-ReviewProgress "server-exit-code=$($Server.ExitCode)"
         if ($Server.ExitCode -ne 0) {
             throw "Server exited with code $($Server.ExitCode)"
         }
