@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -99,6 +99,15 @@ TOOLKIT_FUNCS_DECLARE(curl);
 void curl_set_user_agent(const char *user_agent);
 bool curl_set_trust_application(const char *pubkey);
 void curl_set_data_dir(const char *dir);
+/**
+ * Create a request with a bounded subsystem label for diagnostics.
+ *
+ * The origin is retained only as a sanitized label; request URLs and
+ * credentials are never included in the diagnostic.
+ */
+curl_request_t *curl_request_create_with_origin(const char *url,
+                                                curl_pkey_trust_t trust,
+                                                const char *origin);
 curl_request_t *curl_request_create(const char *url, curl_pkey_trust_t trust);
 void curl_request_form_add(curl_request_t *request, const char *key, const char *value);
 /**

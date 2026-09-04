@@ -130,6 +130,9 @@ static uint64_t last_keepalive_us;
  */
 clioption_settings_struct clioption_settings;
 
+/** Whether connect[2] was loaded from --connect_password_file. */
+static bool clioption_connect_password_file_loaded;
+
 /** Keepalive request accounting for the current connection. */
 static client_keepalive_state_t keepalive_state;
 
@@ -344,6 +347,7 @@ static int game_status_chain(void) {
             return 1;
         }
 
+        LOG(INFO, "Connection established to selected server.");
         socket_thread_start();
         clear_player();
         cpl.state = ST_START_DATA;
@@ -489,6 +493,21 @@ static bool presentation_clock_suspend_test(void) {
 }
 #endif
 
+/** Release one connect field, cleansing the password slot. */
+static void clioption_connect_value_clear(size_t index) {
+    HARD_ASSERT(index < arraysize(clioption_settings.connect));
+
+    if (clioption_settings.connect[index] == NULL) {
+        return;
+    }
+    if (index == 2) {
+        OPENSSL_cleanse(clioption_settings.connect[index],
+                        strlen(clioption_settings.connect[index]) + 1U);
+    }
+    free(clioption_settings.connect[index]);
+    clioption_settings.connect[index] = NULL;
+}
+
 void clioption_settings_deinit(void) {
     size_t i;
 
@@ -501,8 +520,9 @@ void clioption_settings_deinit(void) {
     client_metaserver_options_deinit(&clioption_settings.metaservers);
 
     for (i = 0; i < arraysize(clioption_settings.connect); i++) {
-        free(clioption_settings.connect[i]);
+        clioption_connect_value_clear(i);
     }
+    clioption_connect_password_file_loaded = false;
 
     free(clioption_settings.game_news_url);
 
@@ -562,6 +582,20 @@ static bool clioptions_option_connect(const char *arg, char **errmsg) {
     char *cps[4];
     size_t num = string_split(cp, cps, arraysize(cps), ':');
 
+    bool preserve_file_password =
+        clioption_connect_password_file_loaded && (num <= 2 || *cps[2] == '\0');
+
+    for (size_t i = 0; i < arraysize(clioption_settings.connect); i++) {
+        if (i == 2 && preserve_file_password) {
+            continue;
+        }
+        clioption_connect_value_clear(i);
+    }
+
+    if (!preserve_file_password) {
+        clioption_connect_password_file_loaded = false;
+    }
+
     for (size_t i = 0; i < num; i++) {
         if (*cps[i] == '\0') {
             continue;
@@ -571,6 +605,40 @@ static bool clioptions_option_connect(const char *arg, char **errmsg) {
     }
 
     free(cp);
+    return true;
+}
+
+/**
+ * Description of the --connect_password_file command.
+ */
+static const char *const clioptions_option_connect_password_file_desc =
+    "Read the account password for --connect from a protected file.";
+
+/** @copydoc clioptions_handler_func */
+static bool clioptions_option_connect_password_file(const char *arg, char **errmsg) {
+    char password[MAX_BUF];
+    bool permissive_mode;
+    path_secret_error_t error = path_read_secret(arg, VS(password), &permissive_mode);
+    if (error != PATH_SECRET_OK) {
+        string_fmt(*errmsg,
+                   "Cannot use connect password file %s: %s",
+                   arg,
+                   path_secret_error_string(error));
+        OPENSSL_cleanse(password, sizeof(password));
+        return false;
+    }
+    if (permissive_mode) {
+        *errmsg = xstrdup(
+            "Connect password file must be readable only by the owner (mode 0600)"
+        );
+        OPENSSL_cleanse(password, sizeof(password));
+        return false;
+    }
+
+    clioption_connect_value_clear(2);
+    clioption_settings.connect[2] = xstrdup(password);
+    clioption_connect_password_file_loaded = true;
+    OPENSSL_cleanse(password, sizeof(password));
     return true;
 }
 
@@ -679,7 +747,9 @@ static const char *clioptions_option_game_news_url_desc =
     "Sets the game news URL. Typically this doesn't need to be changed.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_game_news_url(const char *arg, char **errmsg) {
-    clioption_settings.game_news_url = xstrdup(arg);
+    free(clioption_settings.game_news_url);
+    clioption_settings.game_news_url =
+        strcasecmp(arg, "off") == 0 ? NULL : xstrdup(arg);
     return true;
 }
 
@@ -943,6 +1013,8 @@ int main(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, server, "Add a server to the list");
     CLIOPTIONS_CREATE_ARGUMENT(cli, metaserver, "Add a metaserver to the list");
     CLIOPTIONS_CREATE_ARGUMENT(cli, connect, "Connect to the specified server");
+    clioptions_enable_sensitive(cli);
+    CLIOPTIONS_CREATE_ARGUMENT(cli, connect_password_file, "Protected account password file");
     CLIOPTIONS_CREATE_ARGUMENT(cli, game_news_url, "Set game news URL");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
     clioptions_enable_sensitive(cli);

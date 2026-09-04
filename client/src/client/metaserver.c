@@ -286,7 +286,9 @@ int metaserver_thread(void *dummy) {
                                                       now);
 
         curl_request_t *request =
-            curl_request_create(endpoint->directory_url, CURL_PKEY_TRUST_SYSTEM);
+            curl_request_create_with_origin(endpoint->directory_url,
+                                             CURL_PKEY_TRUST_SYSTEM,
+                                             "client.metaserver");
         curl_request_set_follow_redirects(request, false);
         curl_request_set_max_body(request, METASERVER_DIRECTORY_BODY_MAX);
         curl_request_set_max_header(request, 16384);

@@ -124,28 +124,6 @@ def _add_package(
             raise BundleError(f"different client/server payloads collide at {target}")
 
 
-FINGERPRINT_HELPER = '''"""Print the SHA-256 fingerprint of a QUIC identity certificate."""
-from __future__ import annotations
-import hashlib
-from pathlib import Path
-import ssl
-import sys
-
-BEGIN = "-----BEGIN CERTIFICATE-----"
-END = "-----END CERTIFICATE-----"
-
-if len(sys.argv) != 2:
-    raise SystemExit("usage: review-quic-fingerprint.py IDENTITY_FILE")
-identity = Path(sys.argv[1]).read_text(encoding="ascii")
-begin = identity.find(BEGIN)
-end = identity.find(END, begin)
-if begin < 0 or end < 0:
-    raise SystemExit("QUIC certificate is missing from the identity file")
-pem = identity[begin : end + len(END)]
-print(hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest())
-'''
-
-
 BAT_LAUNCHER = r'''@echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
@@ -154,7 +132,7 @@ set "RESULT=%ERRORLEVEL%"
 if not "%RESULT%"=="0" (
   echo.
   echo Review launch failed. See the error above.
-  pause
+  if not "%ATRINIK_REVIEW_NO_PAUSE%"=="1" pause
 )
 exit /b %RESULT%
 '''
@@ -164,15 +142,777 @@ POWERSHELL_LAUNCHER = r'''$ErrorActionPreference = "Stop"
 $Root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $State = Join-Path $Root "server-data"
 $Sentinel = Join-Path $State ".atrinik-review-initialized"
+$PasswordFile = Join-Path $State ".atrinik-review-password"
 $InstallData = Join-Path $Root "install_data"
 $Identity = Join-Path $State "quic-identity.pem"
+$ClientData = Join-Path $Root "client-data"
+$ServerLog = Join-Path $State "server.log"
+$ClientLog = Join-Path $Root "client.log"
+$LauncherFailureLog = Join-Path $Root "launcher-failure.log"
+$LauncherProgressLog = Join-Path $Root "launcher-progress.log"
+$Account = "review521"
+$Character = "Review Hero"
 $LaunchMutex = [System.Threading.Mutex]::new(
     $false,
     "Local\AtrinikClassicReviewUdp1731"
 )
 $LaunchLockHeld = $false
+$Server = $null
+$Client = $null
+$ServerOutputLines = $null
+$ServerErrorLines = $null
+$ClientOutputLines = $null
+$ClientErrorLines = $null
+$ServerOutputSource = $null
+$ServerErrorSource = $null
+$ClientOutputSource = $null
+$ClientErrorSource = $null
+$LauncherSucceeded = $false
+
+function Write-ReviewProgress([string]$Message) {
+    try {
+        [System.IO.File]::AppendAllText(
+            $LauncherProgressLog,
+            $Message + [System.Environment]::NewLine,
+            [System.Text.Encoding]::UTF8
+        )
+    } catch {
+        # Progress diagnostics must never replace the launch result.
+    }
+}
+
+Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class AtrinikReviewSecretNative
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SecurityAttributes
+    {
+        public int Length;
+        public IntPtr SecurityDescriptor;
+        public int InheritHandle;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileDispositionInfo
+    {
+        public byte DeleteFile;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateFileW(
+        string name,
+        uint desiredAccess,
+        uint shareMode,
+        ref SecurityAttributes securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true,
+        EntryPoint = "CreateFileW")]
+    private static extern IntPtr OpenFileForDeletion(
+        string name,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(
+        IntPtr file,
+        [Out] StringBuilder path,
+        uint length,
+        uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetFileInformationByHandle(
+        IntPtr file,
+        int fileInformationClass,
+        ref FileDispositionInfo information,
+        uint bufferSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool WriteFile(
+        IntPtr file,
+        byte[] buffer,
+        uint bytesToWrite,
+        out uint bytesWritten,
+        IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool FlushFileBuffers(IntPtr file);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
+
+    private static int LastError()
+    {
+        int error = Marshal.GetLastWin32Error();
+        return error == 0 ? 1 : error;
+    }
+
+    private static string ExtendedFullPath(string path)
+    {
+        string full = Path.GetFullPath(path).Replace('/', '\\');
+        if (full.StartsWith(@"\\?\", StringComparison.Ordinal))
+        {
+            return full;
+        }
+        if (full.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return @"\\?\UNC\" + full.Substring(2);
+        }
+        return @"\\?\" + full;
+    }
+
+    private static string TrimSeparators(string path)
+    {
+        int length = path.Length;
+        while (length > 0 && path[length - 1] == '\\')
+        {
+            length--;
+        }
+        return path.Substring(0, length);
+    }
+
+    private static bool HandlePathMatches(IntPtr file, string path)
+    {
+        string expected;
+        try
+        {
+            expected = ExtendedFullPath(path);
+        }
+        catch
+        {
+            return false;
+        }
+
+        uint capacity = 260U;
+        while (true)
+        {
+            StringBuilder actual = new StringBuilder((int)capacity);
+            uint length = GetFinalPathNameByHandleW(file, actual, capacity, 0U);
+            if (length == 0U)
+            {
+                return false;
+            }
+            if (length < capacity)
+            {
+                return String.Equals(
+                    TrimSeparators(expected),
+                    TrimSeparators(actual.ToString()),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            if (length == UInt32.MaxValue)
+            {
+                return false;
+            }
+            capacity = length + 1U;
+        }
+    }
+
+    private static bool DeleteFileByHandle(IntPtr file)
+    {
+        FileDispositionInfo information = new FileDispositionInfo
+        {
+            DeleteFile = 1
+        };
+        return SetFileInformationByHandle(
+            file,
+            4,
+            ref information,
+            (uint)Marshal.SizeOf<FileDispositionInfo>());
+    }
+
+    public static int DeleteOwnerOnlyFile(string path)
+    {
+        if (String.IsNullOrEmpty(path))
+        {
+            return 87;
+        }
+
+        IntPtr file = OpenFileForDeletion(
+            path,
+            0x00010000U,
+            7U,
+            IntPtr.Zero,
+            3U,
+            0x00200080U,
+            IntPtr.Zero);
+        if (file == InvalidHandleValue)
+        {
+            return LastError();
+        }
+        try
+        {
+            if (!HandlePathMatches(file, path))
+            {
+                return 4390;
+            }
+            return DeleteFileByHandle(file) ? 0 : LastError();
+        }
+        finally
+        {
+            CloseHandle(file);
+        }
+    }
+
+    public static int CreateOwnerOnlyFile(
+        string path,
+        byte[] securityDescriptor,
+        byte[] data)
+    {
+        if (String.IsNullOrEmpty(path) ||
+            securityDescriptor == null ||
+            securityDescriptor.Length == 0 ||
+            data == null)
+        {
+            return 87;
+        }
+
+        GCHandle pinnedDescriptor = default(GCHandle);
+        IntPtr file = IntPtr.Zero;
+        bool created = false;
+        int result = 0;
+        try
+        {
+            pinnedDescriptor = GCHandle.Alloc(
+                securityDescriptor,
+                GCHandleType.Pinned);
+            SecurityAttributes attributes = new SecurityAttributes
+            {
+                Length = Marshal.SizeOf<SecurityAttributes>(),
+                SecurityDescriptor = pinnedDescriptor.AddrOfPinnedObject(),
+                InheritHandle = 0
+            };
+            file = CreateFileW(
+                path,
+                0xC0010000U,
+                0,
+                ref attributes,
+                1U,
+                0x80200080U,
+                IntPtr.Zero);
+            if (file == InvalidHandleValue)
+            {
+                result = LastError();
+                return result;
+            }
+            created = true;
+            if (!HandlePathMatches(file, path))
+            {
+                result = 4390;
+                return result;
+            }
+            uint bytesWritten;
+            if (!WriteFile(
+                    file,
+                    data,
+                    (uint)data.Length,
+                    out bytesWritten,
+                    IntPtr.Zero) ||
+                bytesWritten != data.Length)
+            {
+                result = LastError();
+                return result;
+            }
+            if (!FlushFileBuffers(file))
+            {
+                result = LastError();
+                return result;
+            }
+            return 0;
+        }
+        finally
+        {
+            if (result != 0 && created &&
+                !DeleteFileByHandle(file))
+            {
+                result = LastError();
+            }
+            if (file != IntPtr.Zero && file != InvalidHandleValue)
+            {
+                CloseHandle(file);
+            }
+            if (pinnedDescriptor.IsAllocated)
+            {
+                pinnedDescriptor.Free();
+            }
+        }
+    }
+}
+'@
+
+function ConvertTo-ReviewCommandLineArgument([string]$Value) {
+    if ([string]::IsNullOrEmpty($Value)) {
+        return '""'
+    }
+    if ($Value -notmatch '[\s"]') {
+        return $Value
+    }
+    $Builder = [System.Text.StringBuilder]::new()
+    [void]$Builder.Append([char]34)
+    $Backslashes = 0
+    foreach ($Character in $Value.ToCharArray()) {
+        if ($Character -eq [char]92) {
+            $Backslashes++
+            continue
+        }
+        if ($Character -eq [char]34) {
+            for ($Index = 0; $Index -lt ($Backslashes * 2 + 1); $Index++) {
+                [void]$Builder.Append([char]92)
+            }
+            [void]$Builder.Append([char]34)
+            $Backslashes = 0
+            continue
+        }
+        for ($Index = 0; $Index -lt $Backslashes; $Index++) {
+            [void]$Builder.Append([char]92)
+        }
+        $Backslashes = 0
+        [void]$Builder.Append($Character)
+    }
+    for ($Index = 0; $Index -lt ($Backslashes * 2); $Index++) {
+        [void]$Builder.Append([char]92)
+    }
+    [void]$Builder.Append([char]34)
+    return $Builder.ToString()
+}
+
+function Set-ReviewArgumentList(
+    [System.Diagnostics.ProcessStartInfo]$StartInfo,
+    [string[]]$Values
+) {
+    $ArgumentListProperty = $StartInfo.GetType().GetProperty("ArgumentList")
+    $ArgumentList = $null
+    if ($null -ne $ArgumentListProperty) {
+        $ArgumentList = $ArgumentListProperty.GetValue($StartInfo, $null)
+    }
+    if ($null -ne $ArgumentList) {
+        foreach ($Value in $Values) {
+            [void]$ArgumentList.Add($Value)
+        }
+        return
+    }
+    $StartInfo.Arguments = (
+        $Values | ForEach-Object { ConvertTo-ReviewCommandLineArgument $_ }
+    ) -join " "
+}
+
+function Get-ReviewDiagnosticTail($Lines) {
+    if ($null -eq $Lines) {
+        return "<not captured>"
+    }
+    $Tail = @($Lines.ToArray() | Select-Object -Last 40)
+    if ($Tail.Count -eq 0) {
+        return "<empty>"
+    }
+    return (@(
+        $Tail | ForEach-Object {
+            $_ -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]' |
+                ForEach-Object {
+                    $_ -replace "(?i)https?://\S+", "[redacted-url]"
+                }
+        }
+    ) -join "|")
+}
+
+function Register-ReviewProcessOutput(
+    [System.Diagnostics.Process]$Process,
+    [string]$EventName,
+    [string]$SourceIdentifier
+) {
+    Register-ObjectEvent -InputObject $Process `
+        -EventName $EventName `
+        -SourceIdentifier $SourceIdentifier | Out-Null
+}
+
+function Receive-ReviewProcessOutput(
+    [string]$SourceIdentifier,
+    $Lines
+) {
+    if ([string]::IsNullOrEmpty($SourceIdentifier) -or $null -eq $Lines) {
+        return
+    }
+    foreach ($Event in @(
+        Get-Event -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue
+    )) {
+        try {
+            if ($null -ne $Event.SourceEventArgs.Data) {
+                [void]$Lines.Enqueue([string]$Event.SourceEventArgs.Data)
+            }
+        } finally {
+            Remove-Event -EventIdentifier $Event.EventIdentifier `
+                -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Unregister-ReviewProcessOutput([string]$SourceIdentifier) {
+    if ([string]::IsNullOrEmpty($SourceIdentifier)) {
+        return
+    }
+    Remove-Event -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue
+    Unregister-Event -SourceIdentifier $SourceIdentifier -ErrorAction SilentlyContinue
+}
+
+function Assert-ReviewPathAncestors([string]$Path) {
+    $RootFullPath = ([System.IO.Path]::GetFullPath($Root)).TrimEnd(
+        [char[]]@(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+    )
+    $Candidate = [System.IO.Path]::GetFullPath($Path)
+    $RootPrefix = $RootFullPath + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $Candidate.Equals(
+        $RootFullPath,
+        [System.StringComparison]::OrdinalIgnoreCase
+    ) -and -not $Candidate.StartsWith(
+        $RootPrefix,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Review path is outside the bundle: $Path"
+    }
+
+    while ($true) {
+        $Info = Get-Item -LiteralPath $Candidate -Force -ErrorAction SilentlyContinue
+        if ($null -ne $Info -and
+            (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+            throw "Review path is a reparse point: $Candidate"
+        }
+        if ($Candidate.Equals(
+            $RootFullPath,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            break
+        }
+        $Parent = [System.IO.Directory]::GetParent($Candidate)
+        if ($null -eq $Parent -or $Parent.FullName.Equals(
+            $Candidate,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            throw "Review path did not resolve to the bundle root: $Path"
+        }
+        $Candidate = $Parent.FullName
+    }
+}
+
+function Get-ReviewQuicFingerprint([string]$Path) {
+    Assert-ReviewPathAncestors $Path
+    $IdentityText = [System.IO.File]::ReadAllText(
+        $Path,
+        [System.Text.Encoding]::ASCII
+    )
+    $CertificateBegin = "-----BEGIN CERTIFICATE-----"
+    $CertificateEnd = "-----END CERTIFICATE-----"
+    $BeginIndex = $IdentityText.IndexOf($CertificateBegin)
+    if ($BeginIndex -lt 0) {
+        throw "QUIC certificate is missing from the identity file"
+    }
+    $BodyStart = $BeginIndex + $CertificateBegin.Length
+    $EndIndex = $IdentityText.IndexOf($CertificateEnd, $BodyStart)
+    if ($EndIndex -lt 0) {
+        throw "QUIC certificate is missing its PEM terminator"
+    }
+    $CertificateBody = $IdentityText.Substring(
+        $BodyStart,
+        $EndIndex - $BodyStart
+    ) -replace "\s", ""
+    if ([string]::IsNullOrEmpty($CertificateBody)) {
+        throw "QUIC certificate has an empty PEM body"
+    }
+    try {
+        $Der = [System.Convert]::FromBase64String($CertificateBody)
+    } catch {
+        throw "QUIC certificate PEM body is invalid"
+    }
+    $Sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString(
+            $Sha256.ComputeHash($Der)
+        )).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $Sha256.Dispose()
+    }
+}
+
+function New-ReviewOwnerSecretFile([string]$Path, [string]$Secret) {
+    Assert-ReviewPathAncestors $Path
+    if ([string]::IsNullOrEmpty($Secret) -or
+        $Secret.IndexOf([char]13) -ge 0 -or $Secret.IndexOf([char]10) -ge 0) {
+        throw "Owner-bound review secret must be a non-empty single line"
+    }
+    $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $SecurityDescriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+        "O:$($CurrentSid.Value)G:$($CurrentSid.Value)D:P(A;;FA;;;$($CurrentSid.Value))"
+    )
+    $SecurityDescriptorBytes = New-Object byte[] $SecurityDescriptor.BinaryLength
+    $SecurityDescriptor.GetBinaryForm($SecurityDescriptorBytes, 0)
+    $Data = [System.Text.Encoding]::ASCII.GetBytes($Secret)
+    $Result = [AtrinikReviewSecretNative]::CreateOwnerOnlyFile(
+        $Path,
+        $SecurityDescriptorBytes,
+        $Data
+    )
+    if ($Result -ne 0) {
+        throw "Owner-bound review secret creation failed with Win32 error $Result"
+    }
+    Assert-ReviewPathAncestors $Path
+}
+
+function Write-ReviewFailure([string]$Message) {
+    $SafeMessage = $Message -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]'
+    $SafeMessage = $SafeMessage -replace "(?i)https?://\S+", "[redacted-url]"
+    if ($SafeMessage.Length -gt 8192) {
+        $SafeMessage = $SafeMessage.Substring(0, 8192) + "...[truncated]"
+    }
+    try {
+        Assert-ReviewPathAncestors $LauncherFailureLog
+        [System.IO.File]::WriteAllText(
+            $LauncherFailureLog,
+            $SafeMessage,
+            [System.Text.Encoding]::UTF8
+        )
+        return
+    } catch {
+        # Do not follow an unvalidated path for failure diagnostics.
+        try {
+            [Console]::Error.WriteLine(
+                "Review launcher failure diagnostics unavailable: $SafeMessage"
+            )
+        } catch {
+            # Preserve the original failure if stderr is unavailable.
+        }
+    }
+}
+
+function Stop-ReviewProcessTree([System.Diagnostics.Process]$Process, [string]$Label) {
+    if ($null -eq $Process) {
+        return
+    }
+    if (-not $Process.HasExited) {
+        $Output = @(& taskkill.exe /PID $Process.Id /T /F 2>&1)
+        if ($LASTEXITCODE -ne 0 -and -not $Process.HasExited) {
+            throw (
+                "$Label process tree termination failed with exit code " +
+                "$($LASTEXITCODE): $($Output -join ' ')"
+            )
+        }
+    }
+    if (-not $Process.WaitForExit(10000)) {
+        throw "$Label process tree did not exit after forced containment"
+    }
+}
+
+function Invoke-ReviewIcacls([string[]]$Arguments) {
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $Output = @(& icacls.exe @Arguments 2>&1)
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+    if ($ExitCode -ne 0) {
+        throw (
+            "icacls $($Arguments -join ' ') failed with exit code " +
+            "$($ExitCode): $($Output -join ' ')"
+        )
+    }
+    return $Output
+}
+
+function Protect-ReviewSecretFile([string]$Path, [switch]$WriteAccess) {
+    Assert-ReviewPathAncestors $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Secret file is missing: $Path"
+    }
+    $Info = Get-Item -LiteralPath $Path
+    if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Secret file is a reparse point: $Path"
+    }
+    $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $SidArgument = "*$($CurrentSid.Value)"
+    $Access = if ($WriteAccess) { "F" } else { "R" }
+    $ExpectedMask = if ($WriteAccess) { 0x1f01ff } else { 0x120089 }
+    # The launcher creates this file under the current identity. Replace only
+    # the DACL with a protected current-user ACE so validation does not need
+    # an elevated owner change.
+    $AclFile = Join-Path $Root (
+        ".atrinik-review-acl-" + [Guid]::NewGuid().ToString("N") + ".txt"
+    )
+    try {
+        Assert-ReviewPathAncestors $AclFile
+        [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
+        [void](Invoke-ReviewIcacls -Arguments @(
+            $Path,
+            "/grant:r",
+            "$($SidArgument):($Access)",
+            "/q"
+        ))
+        Remove-Item -LiteralPath $AclFile -Force -ErrorAction SilentlyContinue
+        [void](Invoke-ReviewIcacls -Arguments @($Path, "/save", $AclFile, "/q"))
+        $AclLines = @(
+            Get-Content -LiteralPath $AclFile -Encoding Unicode -ErrorAction Stop
+        )
+        $SddlLines = @(
+            $AclLines | Where-Object { $_ -match "^D:" }
+        )
+        if ($SddlLines.Count -ne 1) {
+            throw "Secret file ACL export is not one descriptor: $Path"
+        }
+        $ExistingDescriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+            $SddlLines[0]
+        )
+        $ExistingDacl = $ExistingDescriptor.DiscretionaryAcl
+        if ($null -eq $ExistingDacl) {
+            throw "Secret file ACL export has no DACL: $Path"
+        }
+        $ExistingSids = @(
+            $ExistingDacl |
+                ForEach-Object { $_.SecurityIdentifier.Value } |
+                Select-Object -Unique
+        )
+        foreach ($Sid in $ExistingSids) {
+            if ($Sid -ne $CurrentSid.Value) {
+                [void](Invoke-ReviewIcacls -Arguments @(
+                    $Path,
+                    "/remove",
+                    "*$Sid",
+                    "/q"
+                ))
+            }
+        }
+        Assert-ReviewPathAncestors $Path
+        Remove-Item -LiteralPath $AclFile -Force -ErrorAction SilentlyContinue
+        [void](Invoke-ReviewIcacls -Arguments @($Path, "/save", $AclFile, "/q"))
+        $AclLines = @(
+            Get-Content -LiteralPath $AclFile -Encoding Unicode -ErrorAction Stop
+        )
+        $SddlLines = @(
+            $AclLines | Where-Object { $_ -match "^D:" }
+        )
+        $OwnerOnly = $false
+        $DescriptorSummary = "unparsed"
+        $AceSummary = "unparsed"
+        $ParseError = $null
+        if ($SddlLines.Count -eq 1) {
+            try {
+                $Descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+                    $SddlLines[0]
+                )
+                $DescriptorSummary = [string]$Descriptor.ControlFlags
+                $Dacl = $Descriptor.DiscretionaryAcl
+                $Ace = if ($null -ne $Dacl -and $Dacl.Count -eq 1) {
+                    $Dacl[0]
+                } else {
+                    $null
+                }
+                if ($null -ne $Ace) {
+                    $AceSummary = (
+                        "type=$($Ace.AceType);flags=$($Ace.AceFlags);" +
+                        "sid=$($Ace.SecurityIdentifier.Value);mask=$($Ace.AccessMask)"
+                    )
+                } else {
+                    $AceSummary = "missing-or-multiple"
+                }
+                $OwnerOnly = (
+                    $null -ne $Dacl -and
+                    $null -ne $Ace -and
+                    $Descriptor.ControlFlags.HasFlag(
+                        [System.Security.AccessControl.ControlFlags]::DiscretionaryAclProtected
+                    ) -and
+                    $Ace.AceType -eq [System.Security.AccessControl.AceType]::AccessAllowed -and
+                    $Ace.AceFlags -eq [System.Security.AccessControl.AceFlags]::None -and
+                    $Ace.SecurityIdentifier.Value -eq $CurrentSid.Value -and
+                    $Ace.AccessMask -eq $ExpectedMask
+                )
+            } catch {
+                $ParseError = $_.Exception.Message
+            }
+        }
+        if (-not $OwnerOnly) {
+            throw (
+                "Secret file ACL is not owner-only: $Path; observed ACL export: " +
+                ($AclLines -join "|") + "; descriptor: " + $DescriptorSummary +
+                "; ACE: " + $AceSummary + "; parse error: " + $ParseError
+            )
+        }
+    } finally {
+        Remove-Item -LiteralPath $AclFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Protect-ReviewTemporaryDirectory([string]$Path) {
+    Assert-ReviewPathAncestors $Path
+    $Info = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if (-not $Info.PSIsContainer) {
+        throw "Review temporary path is not a directory: $Path"
+    }
+    if (($Info.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Review temporary directory is a reparse point: $Path"
+    }
+    $CurrentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $SidArgument = "*$($CurrentSid.Value)"
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/reset", "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/setowner", $SidArgument, "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @($Path, "/inheritance:r", "/q"))
+    [void](Invoke-ReviewIcacls -Arguments @(
+        $Path,
+        "/grant:r",
+        "$($SidArgument):(OI)(CI)(F)",
+        "/q"
+    ))
+    Assert-ReviewPathAncestors $Path
+}
+
+function Remove-ReviewSecretFile([string]$Path) {
+    Assert-ReviewPathAncestors $Path
+    $Result = [AtrinikReviewSecretNative]::DeleteOwnerOnlyFile($Path)
+    if ($Result -ne 0) {
+        throw "Owner-bound review secret cleanup failed with Win32 error $Result"
+    }
+}
+
+function Remove-ReviewSecretFiles {
+    Assert-ReviewPathAncestors $Root
+    $Candidates = [System.Collections.Generic.List[string]]::new()
+    [void]$Candidates.Add($PasswordFile)
+    $DataDirectories = @(
+        Get-ChildItem -LiteralPath $Root -Directory -Force -ErrorAction Stop |
+            Where-Object {
+                $_.Name -like "server-data-stage-*" -or
+                $_.Name -like "server-data-incomplete-*"
+            }
+    )
+    foreach ($Directory in $DataDirectories) {
+        Assert-ReviewPathAncestors $Directory.FullName
+        [void]$Candidates.Add(
+            (Join-Path $Directory.FullName ".atrinik-review-password")
+        )
+        [void]$Candidates.Add(
+            (Join-Path $Directory.FullName "tmp\.atrinik-review-password")
+        )
+    }
+    foreach ($Candidate in $Candidates | Select-Object -Unique) {
+        if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
+            Remove-ReviewSecretFile $Candidate
+        }
+    }
+}
 
 try {
+    Assert-ReviewPathAncestors $Root
     try {
         $LaunchLockHeld = $LaunchMutex.WaitOne(0)
     } catch [System.Threading.AbandonedMutexException] {
@@ -181,6 +921,16 @@ try {
     if (-not $LaunchLockHeld) {
         throw "Another Atrinik review launcher is already starting UDP port 1731"
     }
+
+    Assert-ReviewPathAncestors $LauncherFailureLog
+    if (Test-Path -LiteralPath $LauncherFailureLog) {
+        Remove-Item -LiteralPath $LauncherFailureLog -Force
+    }
+    Assert-ReviewPathAncestors $LauncherProgressLog
+    if (Test-Path -LiteralPath $LauncherProgressLog) {
+        Remove-Item -LiteralPath $LauncherProgressLog -Force
+    }
+    Write-ReviewProgress "launch-lock-acquired"
 
     $ExistingEndpoint = Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
         Select-Object -First 1
@@ -194,17 +944,87 @@ try {
         }
     }
 
-    if (-not (Test-Path -LiteralPath $Sentinel)) {
+    if (-not (Test-Path -LiteralPath $Sentinel) -or -not (Test-Path -LiteralPath $PasswordFile)) {
         if (Test-Path -LiteralPath $State) {
+            Assert-ReviewPathAncestors $State
             $Preserved = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
             Move-Item -LiteralPath $State -Destination $Preserved
             Write-Warning "Preserved incomplete server state as $Preserved"
         }
         $Stage = Join-Path $Root ("server-data-stage-" + [Guid]::NewGuid().ToString("N"))
         try {
+            Assert-ReviewPathAncestors $InstallData
+            Assert-ReviewPathAncestors $Stage
             Copy-Item -LiteralPath $InstallData -Destination $Stage -Recurse
+            $StageTmp = Join-Path $Stage "tmp"
+            Assert-ReviewPathAncestors $StageTmp
+            New-Item -ItemType Directory -Force -Path $StageTmp | Out-Null
+            Assert-ReviewPathAncestors $StageTmp
+            Protect-ReviewTemporaryDirectory $StageTmp
+            $StagePassword = Join-Path $Stage ".atrinik-review-password"
+            $StageProvisionLog = Join-Path $Stage "provision.log"
+            Assert-ReviewPathAncestors $StagePassword
+            $StagePasswordValue = [Guid]::NewGuid().ToString("N").Substring(0, 20)
+            # Create the secret with an explicit owner and protected DACL.
+            New-ReviewOwnerSecretFile $StagePassword $StagePasswordValue
+            Assert-ReviewPathAncestors $StagePassword
+            Protect-ReviewSecretFile $StagePassword
+
+            $ProvisionStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $ProvisionStartInfo.FileName = Join-Path $Root "atrinik-server.exe"
+            $ProvisionStartInfo.WorkingDirectory = $Root
+            $ProvisionStartInfo.UseShellExecute = $false
+            $ProvisionStartInfo.CreateNoWindow = $true
+            Set-ReviewArgumentList $ProvisionStartInfo @(
+                "--datapath=$Stage",
+                "--no_console",
+                "--provision_scenario",
+                "--provision_account=$Account",
+                "--provision_character=$Character",
+                "--provision_archetype=human_male",
+                "--provision_preset=basic-player",
+                "--provision_password_file=$StagePassword",
+                "--http_url=off",
+                "--server_public=false",
+                "--stun_server=off",
+                "--port_mapping=off",
+                "--metaserver_publish_origin=http://127.0.0.1:9",
+                "--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic",
+                "--logfile=$StageProvisionLog"
+            )
+            $Provision = [System.Diagnostics.Process]::new()
+            $Provision.StartInfo = $ProvisionStartInfo
+            try {
+                if (-not $Provision.Start()) {
+                    throw "Could not start the isolated scenario provisioner"
+                }
+                if (-not $Provision.WaitForExit(60000)) {
+                    Stop-ReviewProcessTree $Provision "Scenario provisioner"
+                    throw "The isolated scenario provisioner did not exit within 60 seconds"
+                }
+                if ($Provision.ExitCode -ne 0) {
+                    $ProvisionDiagnostics = "provision log missing"
+                    if (Test-Path -LiteralPath $StageProvisionLog -PathType Leaf) {
+                        $ProvisionDiagnostics = @(
+                            Get-Content -LiteralPath $StageProvisionLog -Tail 20 -ErrorAction SilentlyContinue |
+                                ForEach-Object {
+                                    $_ -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]'
+                                }
+                        ) -join "|"
+                    }
+                    throw (
+                        "The isolated scenario provisioner exited with code " +
+                        "$($Provision.ExitCode); diagnostics: $ProvisionDiagnostics"
+                    )
+                }
+            } finally {
+                $Provision.Dispose()
+            }
+
             New-Item -ItemType File -Path (Join-Path $Stage ".atrinik-review-initialized") | Out-Null
+            Assert-ReviewPathAncestors $Stage
             Move-Item -LiteralPath $Stage -Destination $State
+            Assert-ReviewPathAncestors $State
         } catch {
             if (Test-Path -LiteralPath $Stage) {
                 $Failed = Join-Path $Root ("server-data-incomplete-" + [Guid]::NewGuid().ToString("N"))
@@ -214,66 +1034,387 @@ try {
         }
     }
 
+    $PasswordInfo = Get-Item -LiteralPath $PasswordFile -ErrorAction SilentlyContinue
+    if ($null -eq $PasswordInfo -or $PasswordInfo.PSIsContainer -or
+        (($PasswordInfo.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        throw "The isolated review account password file is missing or unsafe"
+    }
+    Protect-ReviewSecretFile $PasswordFile
+
     $ClientMaps = Join-Path $InstallData "http\client-maps"
     if (Test-Path -LiteralPath $ClientMaps) {
+        Assert-ReviewPathAncestors $ClientMaps
         $StateHttp = Join-Path $State "http"
         New-Item -ItemType Directory -Force -Path $StateHttp | Out-Null
         $StateMaps = Join-Path $StateHttp "client-maps"
-        if (Test-Path -LiteralPath $StateMaps) { Remove-Item -LiteralPath $StateMaps -Recurse }
+        if (Test-Path -LiteralPath $StateMaps) {
+            Assert-ReviewPathAncestors $StateMaps
+            Remove-Item -LiteralPath $StateMaps -Recurse -Force
+        }
+        Assert-ReviewPathAncestors $StateMaps
         Copy-Item -LiteralPath $ClientMaps -Destination $StateMaps -Recurse
     }
-    New-Item -ItemType Directory -Force -Path (Join-Path $State "tmp") | Out-Null
+    $StateTmp = Join-Path $State "tmp"
+    Assert-ReviewPathAncestors $StateTmp
+    New-Item -ItemType Directory -Force -Path $StateTmp | Out-Null
+    Assert-ReviewPathAncestors $StateTmp
+    Protect-ReviewTemporaryDirectory $StateTmp
+    Assert-ReviewPathAncestors $ClientData
+    New-Item -ItemType Directory -Force -Path $ClientData | Out-Null
+    if (Test-Path -LiteralPath $ClientLog) {
+        Assert-ReviewPathAncestors $ClientLog
+        Remove-Item -LiteralPath $ClientLog -Force
+    }
 
+    Assert-ReviewPathAncestors $Identity
     if (Test-Path -LiteralPath $Identity) {
         Move-Item -LiteralPath $Identity -Destination ($Identity + ".previous-" + [Guid]::NewGuid().ToString("N"))
     }
-    $Started = Get-Date
-    $ServerArgs = @(
-        "--datapath=`"$State`"", "--port_quic=1731", "--no_console",
-        "--network_stack=ipv4=127.0.0.1", "--server_public=false",
-        "--stun_server=off", "--port_mapping=off"
-    )
-    $Server = Start-Process -FilePath (Join-Path $Root "atrinik-server.exe") `
-        -ArgumentList $ServerArgs -WorkingDirectory $Root -PassThru
+    Assert-ReviewPathAncestors $ServerLog
 
+    $Started = [System.DateTime]::UtcNow
+    $ServerStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $ServerStartInfo.FileName = Join-Path $Root "atrinik-server.exe"
+    $ServerStartInfo.WorkingDirectory = $Root
+    $ServerStartInfo.UseShellExecute = $false
+    $ServerStartInfo.CreateNoWindow = $true
+    $ServerStartInfo.RedirectStandardInput = $true
+    $ServerStartInfo.RedirectStandardOutput = $true
+    $ServerStartInfo.RedirectStandardError = $true
+    Set-ReviewArgumentList $ServerStartInfo @(
+        "--datapath=$State",
+        "--port_quic=1731",
+        "--network_stack=ipv4=127.0.0.1",
+        "--server_public=false",
+        "--stun_server=off",
+        "--port_mapping=off",
+        "--http_url=off",
+        "--metaserver_publish_origin=http://127.0.0.1:9",
+        "--metaserver_rendezvous_origin=http://127.0.0.1:9/v1/classic",
+        "--logfile=$ServerLog"
+    )
+    $Server = [System.Diagnostics.Process]::new()
+    $Server.StartInfo = $ServerStartInfo
+    $ServerEnvironment = @{}
+    foreach ($Name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
+        $ServerEnvironment[$Name] =
+            [System.Environment]::GetEnvironmentVariable($Name, "Process")
+        [System.Environment]::SetEnvironmentVariable($Name, $null, "Process")
+    }
+    [System.Environment]::SetEnvironmentVariable(
+        "NO_PROXY",
+        "127.0.0.1,localhost",
+        "Process"
+    )
+    $ServerOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $ServerErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $ServerOutputSource = "AtrinikReviewServerOutput-$PID"
+    $ServerErrorSource = "AtrinikReviewServerError-$PID"
+    Register-ReviewProcessOutput $Server "OutputDataReceived" $ServerOutputSource
+    Register-ReviewProcessOutput $Server "ErrorDataReceived" $ServerErrorSource
+    Write-ReviewProgress "server-output-registered"
     try {
-        $Deadline = (Get-Date).AddSeconds(60)
+        if (-not $Server.Start()) {
+            throw "Could not start the isolated review server"
+        }
+        $Server.BeginOutputReadLine()
+        $Server.BeginErrorReadLine()
+        Write-ReviewProgress "server-started"
+    } finally {
+        foreach ($Name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")) {
+            [System.Environment]::SetEnvironmentVariable(
+                $Name,
+                $ServerEnvironment[$Name],
+                "Process"
+            )
+        }
+    }
+    try {
+        $Deadline = [System.DateTime]::UtcNow.AddSeconds(60)
         $Ready = $false
-        while ((Get-Date) -lt $Deadline) {
-            if ($Server.HasExited) { throw "Server exited with code $($Server.ExitCode)" }
-            $Endpoint = Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
-                Where-Object { $_.OwningProcess -eq $Server.Id } | Select-Object -First 1
+        $ProbeCount = 0
+        while ([System.DateTime]::UtcNow -lt $Deadline) {
+            $ProbeCount++
+            if ($ProbeCount -le 3) {
+                Write-ReviewProgress "server-probe-$ProbeCount-start"
+            }
+            Receive-ReviewProcessOutput $ServerOutputSource $ServerOutputLines
+            Receive-ReviewProcessOutput $ServerErrorSource $ServerErrorLines
+            if ($Server.HasExited) {
+                $Server.WaitForExit()
+                $ServerExitDiagnostics = @(
+                    "stdout=$(Get-ReviewDiagnosticTail $ServerOutputLines)"
+                    "stderr=$(Get-ReviewDiagnosticTail $ServerErrorLines)"
+                ) -join "; "
+                throw (
+                    "Server exited with code $($Server.ExitCode); diagnostics: " +
+                    $ServerExitDiagnostics
+                )
+            }
+            $Endpoint = @(Get-NetUDPEndpoint -LocalPort 1731 -ErrorAction SilentlyContinue |
+                Where-Object { $_.OwningProcess -eq $Server.Id } |
+                Select-Object -First 1)
             $IdentityInfo = Get-Item -LiteralPath $Identity -ErrorAction SilentlyContinue
-            if ($Endpoint -and $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
-                $IdentityInfo.LastWriteTime -ge $Started) {
+            $ServerLogText = ""
+            if (Test-Path -LiteralPath $ServerLog) {
+                try {
+                    $ServerLogText = [System.IO.File]::ReadAllText($ServerLog)
+                } catch {
+                    $ServerLogText = ""
+                }
+            }
+            $ServerOutputReady = @(
+                $ServerOutputLines.ToArray() | Where-Object {
+                    $_ -match "Server ready\. Waiting for connections"
+                }
+            ).Count -gt 0
+            $EndpointReady = $Endpoint.Count -eq 1 -and
+                $Endpoint[0].LocalAddress -eq "127.0.0.1"
+            $IdentityReady = $IdentityInfo -and $IdentityInfo.Length -gt 0 -and
+                $IdentityInfo.LastWriteTimeUtc -ge $Started
+            $LogReady = $ServerLogText -match "Server ready\. Waiting for connections"
+            if ($ProbeCount -le 3) {
+                Write-ReviewProgress (
+                    "server-probe-$ProbeCount-result:" +
+                    "endpoint=$EndpointReady;identity=$IdentityReady;" +
+                    "log=$LogReady;stdout=$ServerOutputReady"
+                )
+            }
+            if ($EndpointReady -and $IdentityReady -and ($LogReady -or $ServerOutputReady)) {
                 $Ready = $true
                 break
             }
             Start-Sleep -Milliseconds 250
             $Server.Refresh()
         }
-        if (-not $Ready) { throw "Server did not own UDP port 1731 with a fresh QUIC identity within 60 seconds" }
+        Receive-ReviewProcessOutput $ServerOutputSource $ServerOutputLines
+        Receive-ReviewProcessOutput $ServerErrorSource $ServerErrorLines
+        if (-not $Ready) {
+            $IdentityRecent = $false
+            if ($null -ne $IdentityInfo) {
+                $IdentityRecent = $IdentityInfo.LastWriteTimeUtc -ge $Started
+            }
+            $ServerLogExists = Test-Path -LiteralPath $ServerLog
+            $ReadyMarker = $ServerLogText -match "Server ready\. Waiting for connections"
+            $ShutdownMarker = $ServerLogText -match "Server shutdown complete\."
+            $EndpointSummary = @(
+                $Endpoint | ForEach-Object {
+                    "$($_.LocalAddress):$($_.LocalPort)"
+                }
+            ) -join ","
+            $ServerDiagnostics = @(
+                "exited=$($Server.HasExited)"
+                "endpoint_count=$($Endpoint.Count)"
+                "endpoints=$EndpointSummary"
+                "identity_exists=$($null -ne $IdentityInfo)"
+                "identity_length=$(if ($null -ne $IdentityInfo) { $IdentityInfo.Length } else { 0 })"
+                "identity_recent=$IdentityRecent"
+                "server_log_exists=$ServerLogExists"
+                "ready_marker=$ReadyMarker"
+                "stdout_lines=$($ServerOutputLines.Count)"
+                "stdout_ready_marker=$ServerOutputReady"
+                "stdout_tail=$(Get-ReviewDiagnosticTail $ServerOutputLines)"
+                "stderr_lines=$($ServerErrorLines.Count)"
+                "stderr_tail=$(Get-ReviewDiagnosticTail $ServerErrorLines)"
+                "shutdown_marker=$ShutdownMarker"
+            ) -join "; "
+            throw (
+                "Server did not reach loopback-ready state within 60 seconds; " +
+                "diagnostics: $ServerDiagnostics"
+            )
+        }
 
-        $Fingerprint = & (Join-Path $Root "python.exe") `
-            (Join-Path $Root "review-quic-fingerprint.py") $Identity
-        if ($LASTEXITCODE -ne 0 -or $Fingerprint -notmatch "^[0-9a-f]{64}$") {
+        Write-ReviewProgress "server-ready"
+        Write-ReviewProgress "fingerprint-start"
+        $Fingerprint = Get-ReviewQuicFingerprint $Identity
+        if ($Fingerprint -notmatch "^[0-9a-f]{64}$") {
             throw "Could not derive the server QUIC certificate fingerprint"
         }
-        $ClientArgs = @(
-            "--nometa", "--stun_server=off",
-            "--server=`"127.0.0.1 1731 $Fingerprint`"", "--connect=127.0.0.1", "--reconnect"
+        Write-ReviewProgress "fingerprint-ready"
+
+        $ClientStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $ClientStartInfo.FileName = Join-Path $Root "atrinik.exe"
+        $ClientStartInfo.WorkingDirectory = $Root
+        $ClientStartInfo.UseShellExecute = $false
+        $ClientStartInfo.CreateNoWindow = $false
+        $ClientStartInfo.RedirectStandardOutput = $true
+        $ClientStartInfo.RedirectStandardError = $true
+        $ConnectArgument = "--connect=127.0.0.1:" + $Account + "::" + $Character
+        Set-ReviewArgumentList $ClientStartInfo @(
+            "--logfile=$ClientLog",
+            "--nometa",
+            "--game_news_url=off",
+            "--stun_server=off",
+            "--server=127.0.0.1 1731 $Fingerprint",
+            $ConnectArgument,
+            "--connect_password_file=$PasswordFile"
         )
-        Start-Process -FilePath (Join-Path $Root "atrinik.exe") `
-            -ArgumentList $ClientArgs -WorkingDirectory $Root
-        Write-Host "Server and client started. The server owns UDP port 1731 (PID $($Server.Id))."
+        $ClientStartInfoEnvironment = @{}
+        foreach ($Name in @(
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "ATRINIK_CONFIG_DIR"
+        )) {
+            $ClientStartInfoEnvironment[$Name] =
+                [System.Environment]::GetEnvironmentVariable($Name, "Process")
+            [System.Environment]::SetEnvironmentVariable($Name, $null, "Process")
+        }
+        [System.Environment]::SetEnvironmentVariable(
+            "NO_PROXY",
+            "127.0.0.1,localhost",
+            "Process"
+        )
+        [System.Environment]::SetEnvironmentVariable(
+            "ATRINIK_CONFIG_DIR",
+            $ClientData,
+            "Process"
+        )
+        try {
+            $Client = [System.Diagnostics.Process]::new()
+            $Client.StartInfo = $ClientStartInfo
+            $ClientOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+            $ClientErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+            $ClientOutputSource = "AtrinikReviewClientOutput-$PID"
+            $ClientErrorSource = "AtrinikReviewClientError-$PID"
+            Register-ReviewProcessOutput $Client "OutputDataReceived" $ClientOutputSource
+            Register-ReviewProcessOutput $Client "ErrorDataReceived" $ClientErrorSource
+            Write-ReviewProgress "client-start"
+            if (-not $Client.Start()) {
+                throw "Could not start the packaged client"
+            }
+            $Client.BeginOutputReadLine()
+            $Client.BeginErrorReadLine()
+            Write-ReviewProgress "client-started"
+        } finally {
+            foreach ($Name in @(
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "ATRINIK_CONFIG_DIR"
+            )) {
+                [System.Environment]::SetEnvironmentVariable(
+                    $Name,
+                    $ClientStartInfoEnvironment[$Name],
+                    "Process"
+                )
+            }
+        }
+
+        Write-Host "Server and client started. Close the client window to finish the review."
+        while (-not $Client.HasExited) {
+            Receive-ReviewProcessOutput $ServerOutputSource $ServerOutputLines
+            Receive-ReviewProcessOutput $ServerErrorSource $ServerErrorLines
+            Receive-ReviewProcessOutput $ClientOutputSource $ClientOutputLines
+            Receive-ReviewProcessOutput $ClientErrorSource $ClientErrorLines
+            Start-Sleep -Milliseconds 250
+        }
+        $Client.WaitForExit()
+        Receive-ReviewProcessOutput $ServerOutputSource $ServerOutputLines
+        Receive-ReviewProcessOutput $ServerErrorSource $ServerErrorLines
+        Receive-ReviewProcessOutput $ClientOutputSource $ClientOutputLines
+        Receive-ReviewProcessOutput $ClientErrorSource $ClientErrorLines
+        $Client.Refresh()
+        Write-ReviewProgress "client-exit-code=$($Client.ExitCode)"
+        $ClientOutputTail = Get-ReviewDiagnosticTail $ClientOutputLines
+        $ClientErrorTail = Get-ReviewDiagnosticTail $ClientErrorLines
+        $ClientDiagnostics = @(
+            "client_log_exists=$(Test-Path -LiteralPath $ClientLog -PathType Leaf)"
+            "client_stdout_tail=$ClientOutputTail"
+            "client_stderr_tail=$ClientErrorTail"
+        ) -join "; "
+        if ($Client.ExitCode -ne 0) {
+            throw (
+                "Client exited with code $($Client.ExitCode); diagnostics: " +
+                $ClientDiagnostics
+            )
+        }
+        if (-not (Test-Path -LiteralPath $ClientLog) -or
+            ([System.IO.File]::ReadAllText($ClientLog) -notmatch "Client shutdown complete\.")) {
+            throw "Client did not report a clean shutdown; diagnostics: $ClientDiagnostics"
+        }
+
+        $Server.StandardInput.WriteLine("shutdown")
+        $Server.StandardInput.Flush()
+        $Server.StandardInput.Close()
+        if (-not $Server.WaitForExit(30000)) {
+            throw "Server did not exit after the graceful shutdown request"
+        }
+        $Server.WaitForExit()
+        $Server.Refresh()
+        Write-ReviewProgress "server-exit-code=$($Server.ExitCode)"
+        if ($Server.ExitCode -ne 0) {
+            throw "Server exited with code $($Server.ExitCode)"
+        }
+        if (-not (Test-Path -LiteralPath $ServerLog) -or
+            ([System.IO.File]::ReadAllText($ServerLog) -notmatch "Server shutdown complete\.")) {
+            throw "Server did not report a clean shutdown"
+        }
+        $LauncherSucceeded = $true
+        Write-Host "Client and server exited cleanly."
     } catch {
-        if (-not $Server.HasExited) { Stop-Process -Id $Server.Id -Force }
-        throw
+        $Failure = $_
+        $CleanupFailures = [System.Collections.Generic.List[string]]::new()
+        foreach ($Entry in @(
+            @{ Process = $Client; Label = "Client" },
+            @{ Process = $Server; Label = "Server" }
+        )) {
+            if ($null -eq $Entry.Process) {
+                continue
+            }
+            try {
+                Stop-ReviewProcessTree $Entry.Process $Entry.Label
+            } catch {
+                $CleanupFailures.Add(
+                    "$($Entry.Label): $($_.Exception.Message)"
+                )
+            }
+        }
+        if ($CleanupFailures.Count -ne 0) {
+            throw (
+                "$($Failure.Exception.Message); cleanup failures: " +
+                ($CleanupFailures -join "; ")
+            )
+        }
+        throw $Failure
     }
+} catch {
+    Write-ReviewProgress "launcher-failed"
+    Write-ReviewFailure $_.Exception.Message
+    throw
 } finally {
-    if ($LaunchLockHeld) { $LaunchMutex.ReleaseMutex() }
-    $LaunchMutex.Dispose()
+    try {
+        if ($LaunchLockHeld) {
+            try {
+                Remove-ReviewSecretFiles
+            } catch {
+                Write-ReviewFailure $_.Exception.Message
+                throw
+            }
+        }
+    } finally {
+        Unregister-ReviewProcessOutput $ServerOutputSource
+        Unregister-ReviewProcessOutput $ServerErrorSource
+        Unregister-ReviewProcessOutput $ClientOutputSource
+        Unregister-ReviewProcessOutput $ClientErrorSource
+        if ($null -ne $Client) {
+            $Client.Dispose()
+        }
+        if ($null -ne $Server) {
+            $Server.Dispose()
+        }
+        if ($LaunchLockHeld) {
+            $LaunchMutex.ReleaseMutex()
+        }
+        $LaunchMutex.Dispose()
+        if ($LauncherSucceeded -and (Test-Path -LiteralPath $LauncherProgressLog)) {
+            Remove-Item -LiteralPath $LauncherProgressLog -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
+
 '''
 
 
@@ -307,19 +1448,18 @@ def compose(client: Path, server: Path, output: Path, revision: str) -> None:
         {
             "run-review.bat": BAT_LAUNCHER.replace("\n", "\r\n").encode(),
             "run-review.ps1": POWERSHELL_LAUNCHER.replace("\n", "\r\n").encode(),
-            "review-quic-fingerprint.py": FINGERPRINT_HELPER.encode(),
             "REVIEW-README.txt": (
-                "Atrinik Classic issue #477 Windows review package\r\n"
+                "Atrinik Classic issue #521 Windows review package\r\n"
                 f"Exact revision: {revision}\r\n\r\n"
                 "Extract the complete ZIP to a writable directory, then double-click "
-                "run-review.bat. It creates isolated state, starts the server on UDP 1731, "
-                "waits for the exact server process to own the port, and starts a reconnecting "
-                "client pinned to the fresh QUIC identity.\r\n"
+                "run-review.bat. It provisions an isolated review account and character, "
+                "starts the server on loopback UDP 1731, and launches the production client "
+                "with the fresh QUIC identity. Close the client window after gameplay is ready; "
+                "the launcher then requests a graceful server shutdown.\r\n"
             ).encode(),
         }
     )
     origins.update({name: "generated" for name in payloads if name.startswith("run-review")})
-    origins["review-quic-fingerprint.py"] = "generated"
     origins["REVIEW-README.txt"] = "generated"
     manifest = {
         "format": 1,
@@ -339,7 +1479,7 @@ def compose(client: Path, server: Path, output: Path, revision: str) -> None:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     ).encode()
 
-    root = f"atrinik-classic-issue-477-windows-one-click-{revision[:7]}"
+    root = f"atrinik-classic-issue-521-windows-one-click-{revision[:7]}"
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=output.parent, suffix=".zip", delete=False) as handle:
         temporary = Path(handle.name)

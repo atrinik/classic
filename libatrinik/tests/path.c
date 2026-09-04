@@ -4,6 +4,23 @@
 
 #ifdef WIN32
 #include <aclapi.h>
+
+#if defined(__MINGW32__) || defined(__MINGW64__)
+static bool fail_process_token;
+
+TOKEN_USER *__real_path_windows_token_user(HANDLE *token);
+
+TOKEN_USER *__wrap_path_windows_token_user(HANDLE *token) {
+    if (fail_process_token) {
+        SetLastError(ERROR_ACCESS_DENIED);
+        if (token != NULL) {
+            *token = NULL;
+        }
+        return NULL;
+    }
+    return __real_path_windows_token_user(token);
+}
+#endif
 #else
 #include <sys/stat.h>
 #endif
@@ -138,6 +155,25 @@ static void setup_file(const char *path, const char *contents) {
 int main(int argc, char **argv) {
     toolkit_import(path);
 
+#ifdef WIN32
+    char drive_path[10] = {'C', ':', '/', 's', 'e', 'c', 'r', 'e', 't', 0};
+    char *drive_root = path_dirname(drive_path);
+    require(drive_root != NULL && strlen(drive_root) == 3 && drive_root[0] == 'C' &&
+            drive_root[1] == ':' && drive_root[2] == '/');
+    free(drive_root);
+
+    char extended_drive_path[14] = {
+        '/', '/', '?', '/', 'C', ':', '/', 's', 'e', 'c', 'r', 'e', 't', 0
+    };
+    char *extended_drive_root = path_dirname(extended_drive_path);
+    require(extended_drive_root != NULL && strlen(extended_drive_root) == 7 &&
+            extended_drive_root[0] == '/' && extended_drive_root[1] == '/' &&
+            extended_drive_root[2] == '?' && extended_drive_root[3] == '/' &&
+            extended_drive_root[4] == 'C' && extended_drive_root[5] == ':' &&
+            extended_drive_root[6] == '/');
+    free(extended_drive_root);
+#endif
+
 #ifndef WIN32
     (void)argc;
     (void)argv;
@@ -200,6 +236,77 @@ int main(int argc, char **argv) {
     require(directory_link_created || directory_link_error == ERROR_PRIVILEGE_NOT_HELD);
     if (directory_link_created) {
         require(path_ensure_real_directory(directory_link, 0700) == PATH_DIRECTORY_UNSAFE);
+        char linked_secret[HUGE_BUF];
+        require(snprintf(VS(linked_secret), "%s/linked-secret", directory_link) <
+                (int)sizeof(linked_secret));
+        static const char linked_secret_data[] = "must-not-follow\n";
+        require(path_secret_create_atomic(linked_secret,
+                                          linked_secret_data,
+                                          sizeof(linked_secret_data) - 1U) ==
+                PATH_SECRET_CREATE_ERROR);
+
+        char nested_directory[HUGE_BUF];
+        require(snprintf(VS(nested_directory), "%s/nested", prepared) <
+                (int)sizeof(nested_directory));
+        wchar_t *nested_directory_wide = path_to_wide(nested_directory);
+        require(CreateDirectoryW(nested_directory_wide, NULL));
+
+        char ancestor_link[HUGE_BUF];
+        require(snprintf(VS(ancestor_link), "%s/ancestor-link", directory) <
+                (int)sizeof(ancestor_link));
+        wchar_t *ancestor_link_wide = path_to_wide(ancestor_link);
+        bool ancestor_link_created =
+            CreateSymbolicLinkW(ancestor_link_wide,
+                                prepared_wide,
+                                SYMBOLIC_LINK_FLAG_DIRECTORY |
+                                    SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0;
+        DWORD ancestor_link_error = ancestor_link_created ? ERROR_SUCCESS : GetLastError();
+        if (!ancestor_link_created && ancestor_link_error == ERROR_INVALID_PARAMETER) {
+            ancestor_link_created =
+                CreateSymbolicLinkW(ancestor_link_wide,
+                                    prepared_wide,
+                                    SYMBOLIC_LINK_FLAG_DIRECTORY) != 0;
+            ancestor_link_error = ancestor_link_created ? ERROR_SUCCESS : GetLastError();
+        }
+        require(ancestor_link_created || ancestor_link_error == ERROR_PRIVILEGE_NOT_HELD);
+        if (ancestor_link_created) {
+            char ancestor_secret[HUGE_BUF];
+            require(snprintf(VS(ancestor_secret),
+                             "%s/nested/ancestor-secret",
+                             ancestor_link) < (int)sizeof(ancestor_secret));
+            static const char ancestor_secret_data[] = "must-not-follow\n";
+            require(path_secret_create_atomic(ancestor_secret,
+                                              ancestor_secret_data,
+                                              sizeof(ancestor_secret_data) - 1U) ==
+                    PATH_SECRET_CREATE_ERROR);
+
+            char real_secret[HUGE_BUF];
+            require(snprintf(VS(real_secret),
+                             "%s/ancestor-secret",
+                             nested_directory) < (int)sizeof(real_secret));
+            require(path_exists(real_secret) == 0);
+            static const char real_secret_data[] = "ancestor-secret\n";
+            require(path_secret_create_atomic(real_secret,
+                                              real_secret_data,
+                                              sizeof(real_secret_data) - 1U) ==
+                    PATH_SECRET_CREATE_OK);
+            char ancestor_secret_value[64];
+            memset(ancestor_secret_value, 'x', sizeof(ancestor_secret_value));
+            require(path_read_secret(ancestor_secret,
+                                     VS(ancestor_secret_value),
+                                     NULL) == PATH_SECRET_UNSAFE_LINK);
+            static const char ancestor_cleared[sizeof(ancestor_secret_value)];
+            require(CRYPTO_memcmp(ancestor_secret_value,
+                                  ancestor_cleared,
+                                  sizeof(ancestor_secret_value)) == 0);
+            wchar_t *real_secret_wide = path_to_wide(real_secret);
+            require(DeleteFileW(real_secret_wide));
+            free(real_secret_wide);
+            require(RemoveDirectoryW(ancestor_link_wide));
+        }
+        free(ancestor_link_wide);
+        require(RemoveDirectoryW(nested_directory_wide));
+        free(nested_directory_wide);
         require(RemoveDirectoryW(directory_link_wide));
     }
     free(directory_link_wide);
@@ -234,6 +341,29 @@ int main(int argc, char **argv) {
     bool permissive = true;
     require(path_read_secret(path, VS(secret), &permissive) == PATH_SECRET_OK);
     require(strcmp(secret, "secret-value") == 0 && !permissive);
+#ifdef WIN32
+    char backslash_path[HUGE_BUF];
+    require(snprintf(VS(backslash_path), "%s\\backslash-invite", directory) <
+            (int)sizeof(backslash_path));
+    static const char backslash_secret[] = "backslash-secret\n";
+    require(path_secret_create_atomic(backslash_path,
+                                      backslash_secret,
+                                      sizeof(backslash_secret) - 1U) == PATH_SECRET_CREATE_OK);
+    permissive = true;
+    require(path_read_secret(backslash_path, VS(secret), &permissive) == PATH_SECRET_OK);
+    require(strcmp(secret, "backslash-secret") == 0 && !permissive);
+#endif
+#if defined(__MINGW32__) || defined(__MINGW64__)
+    fail_process_token = true;
+    memset(secret, 'x', sizeof(secret));
+    bool token_failure_permissive = true;
+    require(path_read_secret(path, VS(secret), &token_failure_permissive) ==
+            PATH_SECRET_METADATA_ERROR);
+    static const char token_failure_cleared[sizeof(secret)];
+    require(CRYPTO_memcmp(secret, token_failure_cleared, sizeof(secret)) == 0 &&
+            !token_failure_permissive);
+    fail_process_token = false;
+#endif
     struct stat metadata;
     require(stat(path, &metadata) == 0 && S_ISREG(metadata.st_mode));
 #ifndef WIN32
@@ -247,6 +377,35 @@ int main(int argc, char **argv) {
     require(strcmp(secret, "secret-value") == 0);
 
 #ifdef WIN32
+    char long_name[220];
+    memset(long_name, 'x', sizeof(long_name) - 1U);
+    long_name[sizeof(long_name) - 1U] = 0;
+    char long_path[HUGE_BUF];
+    require(snprintf(VS(long_path), "%s/%s", directory, long_name) < (int)sizeof(long_path));
+    static const char long_secret[] = "long-secret";
+    require(path_secret_create_atomic(long_path, long_secret, sizeof(long_secret) - 1U) ==
+            PATH_SECRET_CREATE_OK);
+    permissive = true;
+    require(path_read_secret(long_path, VS(secret), &permissive) == PATH_SECRET_OK);
+    require(strcmp(secret, "long-secret") == 0 && !permissive);
+    char extended_path[HUGE_BUF];
+    require(snprintf(VS(extended_path), "%s", long_path) < (int)sizeof(extended_path));
+    for (char *cp = extended_path; *cp != 0; cp++) {
+        if (*cp == '/') {
+            *cp = '\\';
+        }
+    }
+    char prefixed_path[HUGE_BUF];
+    static const char extended_prefix[] = "\\\\?\\";
+    size_t long_path_length = strlen(extended_path);
+    size_t prefix_length = sizeof(extended_prefix) - 1U;
+    require(long_path_length + prefix_length < sizeof(prefixed_path));
+    memcpy(prefixed_path, extended_prefix, prefix_length);
+    memcpy(prefixed_path + prefix_length, extended_path, long_path_length + 1U);
+    wchar_t *long_path_wide = path_to_wide(prefixed_path);
+    require(DeleteFileW(long_path_wide));
+    free(long_path_wide);
+
     char broad[HUGE_BUF];
     require(snprintf(VS(broad), "%s/broad", directory) < (int)sizeof(broad));
     static const char broad_secret[] = "broad-secret\n";
@@ -316,6 +475,48 @@ int main(int argc, char **argv) {
     memset(secret, 'x', sizeof(secret));
     require(path_read_secret(trailing, VS(secret), NULL) == PATH_SECRET_TRAILING_DATA);
     require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
+
+    char embedded_nul[HUGE_BUF];
+    require(snprintf(VS(embedded_nul), "%s/embedded-nul", directory) <
+            (int)sizeof(embedded_nul));
+    static const char embedded_nul_data[] = "secret\0wrong\n";
+    require(path_secret_create_atomic(embedded_nul,
+                                      embedded_nul_data,
+                                      sizeof(embedded_nul_data) - 1U) == PATH_SECRET_CREATE_OK);
+#ifndef WIN32
+    require(chmod(embedded_nul, 0600) == 0);
+#endif
+    memset(secret, 'x', sizeof(secret));
+    require(path_read_secret(embedded_nul, VS(secret), NULL) == PATH_SECRET_INVALID_DATA);
+    require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_OK), "success") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_EMPTY), "the file is empty") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_TOO_LONG), "the first line is too long") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_TRAILING_DATA),
+                   "the file contains data after the first line") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_INVALID_DATA),
+                   "the file contains invalid bytes") == 0);
+    require(strcmp(path_secret_error_string(PATH_SECRET_READ_ERROR), "cannot read the file") == 0);
+
+    char boundary_trailing[HUGE_BUF];
+    require(snprintf(VS(boundary_trailing), "%s/boundary-trailing", directory) <
+            (int)sizeof(boundary_trailing));
+    char boundary_data[MAX_BUF + 1];
+    memset(boundary_data, 'a', MAX_BUF);
+    boundary_data[MAX_BUF - 1] = '\n';
+    boundary_data[MAX_BUF] = 'x';
+    require(path_secret_create_atomic(boundary_trailing,
+                                      boundary_data,
+                                      sizeof(boundary_data)) == PATH_SECRET_CREATE_OK);
+    char boundary_secret[MAX_BUF];
+    memset(boundary_secret, 'x', sizeof(boundary_secret));
+    require(path_read_secret(boundary_trailing,
+                             VS(boundary_secret),
+                             NULL) == PATH_SECRET_TRAILING_DATA);
+    static const char boundary_cleared[MAX_BUF];
+    require(CRYPTO_memcmp(boundary_secret,
+                          boundary_cleared,
+                          sizeof(boundary_secret)) == 0);
 
     char atomic[HUGE_BUF];
     require(snprintf(VS(atomic), "%s/atomic", directory) < (int)sizeof(atomic));
@@ -394,10 +595,13 @@ int main(int argc, char **argv) {
     unlink(link_path);
 #endif
     unlink(atomic);
+    unlink(embedded_nul);
     unlink(trailing);
+    unlink(boundary_trailing);
     unlink(too_long);
     unlink(path);
 #ifdef WIN32
+    unlink(backslash_path);
     unlink(broad);
     unlink(not_directory);
     require(RemoveDirectoryA(prepared));

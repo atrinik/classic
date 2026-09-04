@@ -35,6 +35,7 @@
 #include <main.h>
 #include <popup.h>
 #include <event.h>
+#include <join_credentials.h>
 #include <keybind.h>
 #include <player.h>
 #include <settings.h>
@@ -83,6 +84,7 @@ static void settings_button_handle(popup_struct *popup, size_t button) {
         settings_keybinding_open();
     } else if (button == BUTTON_LOGOUT) {
         clioption_settings.connect[1] = xstrdup(cpl.account);
+        client_join_credentials_clear(NULL, &clioption_settings.connect[2]);
         clioption_settings.connect[2] = xstrdup(cpl.password);
         client_socket_close(&csocket);
         login_start();

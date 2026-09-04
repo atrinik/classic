@@ -1239,6 +1239,7 @@ class WorkflowContractTests(unittest.TestCase):
             run.index("Verify staged client package GPU fixture bytes before launch"),
             run.index('"smoke_windows_review_bundle.ps1"'),
         )
+        self.assertNotIn('"atrinik-classic-issue-477-windows-one-click-*.zip"', run)
         self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
         self.assertIn('"libatrinik-path.exe"', run)
         self.assertIn("New-Item -ItemType Junction", run)
@@ -1266,16 +1267,41 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"libatrinik-socket-quic.exe"', run)
         self.assertIn('"libatrinik-stun.exe"', run)
         self.assertIn('"client-rich-presence-tests.exe"', run)
-        self.assertIn('"atrinik-classic-issue-477-windows-one-click-*.zip"', run)
+        self.assertIn('"atrinik-classic-issue-521-windows-one-click-*.zip"', run)
         self.assertIn('"smoke_windows_review_bundle.ps1"', run)
         self.assertIn("-Revision $env:COVERAGE_SHA", run)
         review_smoke = (
             ROOT / "tools" / "ci" / "smoke_windows_review_bundle.ps1"
         ).read_text(encoding="utf-8")
+        client_main = (ROOT / "client" / "src" / "client" / "main.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("clioption_connect_value_clear", client_main)
+        self.assertIn("clioptions_option_connect_password_file", client_main)
+        self.assertIn("path_read_secret", client_main)
+        self.assertIn(
+            "Connect password file must be readable only by the owner",
+            client_main,
+        )
+        self.assertNotIn(
+            "Connect password file %s is readable or writable by group/other",
+            client_main,
+        )
+        self.assertIn("clioptions_enable_sensitive(cli)", client_main)
         self.assertIn("BUNDLE-MANIFEST.json", review_smoke)
         self.assertIn("Language.Parser]::ParseFile", review_smoke)
         self.assertIn("Get-FileHash -Algorithm SHA256", review_smoke)
         self.assertIn("Get-NetUDPEndpoint -LocalPort $serverPort", review_smoke)
+        self.assertIn("$launcherStartInfo.RedirectStandardOutput = $true", review_smoke)
+        self.assertIn("$launcherStartInfo.RedirectStandardError = $true", review_smoke)
+        self.assertIn('Environment["ATRINIK_REVIEW_NO_PAUSE"] = "1"', review_smoke)
+        self.assertIn("Launcher stdout", review_smoke)
+        self.assertIn("Get-LauncherLogTail", review_smoke)
+        self.assertIn("-Tail 40", review_smoke)
+        self.assertIn("[redacted-url]", review_smoke)
+        self.assertIn("Server log tail", review_smoke)
+        self.assertIn("Client log tail", review_smoke)
+        self.assertIn("Launcher failure log tail", review_smoke)
         self.assertIn("$_.OwningProcess -eq $process.Id", review_smoke)
         self.assertIn('"atrinik-server.exe"', review_smoke)
         self.assertIn("$launcherStartInfo.FileName = $env:ComSpec", review_smoke)
@@ -1286,7 +1312,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("& $launcherPath", review_smoke)
         self.assertIn('"atrinik.exe"', review_smoke)
         self.assertIn("Get-NetUDPEndpoint -LocalPort 1731", review_smoke)
-        self.assertIn("One-click launcher server or client exited", review_smoke)
+        self.assertIn("CloseMainWindow", review_smoke)
+        self.assertIn("WaitForExit(30000)", review_smoke)
+        self.assertIn("$launcherClientExitCode", review_smoke)
+        self.assertIn("$launcherServerExitCode", review_smoke)
+        self.assertIn("launcher and batch exit codes below are authoritative", review_smoke)
+        self.assertIn("Server ready\\. Waiting for connections", review_smoke)
+        self.assertIn("Connection .*: player .* logged in", review_smoke)
+        self.assertIn("Connection established to selected server", review_smoke)
+        self.assertIn("Gameplay ready", review_smoke)
+        self.assertIn("HTTP request origin=", review_smoke)
+        self.assertIn("endpoint=(?:(?:http|https)-loopback)$", review_smoke)
+        self.assertIn("unexpectedly targeted a remote endpoint", review_smoke)
+        self.assertNotIn("Stop-Process -Id $launcher", review_smoke)
+        self.assertIn(
+            "One-click launcher did not prove loopback login and gameplay readiness",
+            review_smoke,
+        )
         review_shutdown_loop = review_smoke[
             review_smoke.index("$shutdownDeadline =") : review_smoke.index(
                 'if ($process.ExitCode -ne 0)',

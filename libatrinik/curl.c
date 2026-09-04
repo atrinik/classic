@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -101,6 +101,9 @@ struct curl_request {
 
     /** URL used. */
     char *url;
+
+    /** Sanitized subsystem label used in bounded diagnostics. */
+    char *origin;
 
     /** Path to cached file. */
     char *path;
@@ -221,6 +224,62 @@ static char *curl_user_agent = NULL;
 static curl_trust_store_t *curl_trust_pkeys[CURL_PKEY_TRUST_NUM] = {};
 /** cURL data directory. */
 static char *curl_data_dir = NULL;
+
+static bool curl_request_origin_char_valid(unsigned char cp) {
+    return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') ||
+           (cp >= '0' && cp <= '9') || cp == '_' || cp == '-' || cp == '.';
+}
+
+static char *curl_request_origin_copy(const char *origin) {
+    if (origin == NULL || *origin == '\0') {
+        return xstrdup("unknown");
+    }
+
+    size_t length = strlen(origin);
+    if (length > 64) {
+        return xstrdup("unknown");
+    }
+
+    for (size_t i = 0; i < length; i++) {
+        if (!curl_request_origin_char_valid((unsigned char)origin[i])) {
+            return xstrdup("unknown");
+        }
+    }
+
+    return xstrdup(origin);
+}
+
+static bool curl_request_loopback_host(const char *host) {
+    return strcasecmp(host, "localhost") == 0 || strcmp(host, "127.0.0.1") == 0 ||
+           strcmp(host, "::1") == 0 || strcmp(host, "[::1]") == 0;
+}
+
+static const char *curl_request_endpoint_class(const char *url) {
+    CURLU *parsed = curl_url();
+    char *scheme = NULL;
+    char *host = NULL;
+    const char *endpoint = "other";
+
+    if (parsed == NULL || curl_url_set(parsed, CURLUPART_URL, url, 0) != CURLUE_OK ||
+        curl_url_get(parsed, CURLUPART_SCHEME, &scheme, 0) != CURLUE_OK ||
+        curl_url_get(parsed, CURLUPART_HOST, &host, 0) != CURLUE_OK) {
+        goto out;
+    }
+
+    if (strcasecmp(scheme, "https") == 0) {
+        endpoint = curl_request_loopback_host(host) ? "https-loopback" : "https-remote";
+    } else if (strcasecmp(scheme, "http") == 0) {
+        endpoint = curl_request_loopback_host(host) ? "http-loopback" : "http-remote";
+    }
+
+out:
+    curl_free(scheme);
+    curl_free(host);
+    if (parsed != NULL) {
+        curl_url_cleanup(parsed);
+    }
+    return endpoint;
+}
 
 /**
  * Lock the share handle.
@@ -515,7 +574,10 @@ static bool curl_load_cache(curl_request_t *request) {
     char *buffer = NULL;
 
     if (request->path == NULL) {
-        LOG(ERROR, "No cache location specified for %s", request->url);
+        LOG(ERROR,
+            "No cache location specified for request origin=%s endpoint=%s",
+            request->origin,
+            curl_request_endpoint_class(request->url));
         goto fail;
     }
 
@@ -672,15 +734,20 @@ bool curl_request_cache_commit(curl_request_t *request) {
  * URL to connect to.
  * @param trust
  * Trust store to use.
+ * @param origin
+ * Sanitized subsystem label for bounded diagnostics.
  * @return
  * The new structure.
  */
-curl_request_t *curl_request_create(const char *url, curl_pkey_trust_t trust) {
+curl_request_t *curl_request_create_with_origin(const char *url,
+                                                curl_pkey_trust_t trust,
+                                                const char *origin) {
     HARD_ASSERT(url != NULL);
     TOOLKIT_PROTECT();
 
     curl_request_t *request = xcalloc(1, sizeof(*request));
     request->url = xstrdup(url);
+    request->origin = curl_request_origin_copy(origin);
     request->http_code = -1;
     /* coverity[missing_lock] */
     request->state = CURL_STATE_INPROGRESS;
@@ -693,6 +760,10 @@ curl_request_t *curl_request_create(const char *url, curl_pkey_trust_t trust) {
     pthread_mutex_init(&request->mutex, NULL);
 
     return request;
+}
+
+curl_request_t *curl_request_create(const char *url, curl_pkey_trust_t trust) {
+    return curl_request_create_with_origin(url, trust, "unspecified");
 }
 
 /**
@@ -1117,6 +1188,7 @@ void curl_request_free(curl_request_t *request) {
     OPENSSL_clear_free(request->post_body, request->post_body_size);
 
     free(request->url);
+    free(request->origin);
     free(request);
 }
 
@@ -1201,7 +1273,10 @@ static int curl_ssl_verify(int preverify_ok, X509_STORE_CTX *ctx) {
     request->cert_cn = common_name;
 
     if (request->cert_id == sizeof(request->cert_chain) * CHAR_BIT) {
-        LOG(ERROR, "Certificate chain too long for URL: %s", request->url);
+        LOG(ERROR,
+            "Certificate chain too long for request origin=%s endpoint=%s",
+            request->origin,
+            curl_request_endpoint_class(request->url));
         preverify_ok = 0;
         goto out;
     }
@@ -1246,7 +1321,10 @@ static bool curl_verify_cert_chain(curl_request_t *request) {
 
     if (request->cert_chain == 0) {
         LOG(SYSTEM, "!!! UNTRUSTED CERTIFICATE !!!");
-        LOG(SYSTEM, "Aborting connection to URL: %s, CN: %s", request->url, request->cert_cn);
+        LOG(SYSTEM,
+            "Aborting connection to request origin=%s endpoint=%s",
+            request->origin,
+            curl_request_endpoint_class(request->url));
         return false;
     }
 
@@ -1259,7 +1337,10 @@ static bool curl_verify_cert_chain(curl_request_t *request) {
                    EVP_sha256(),
                    NULL) != 1 ||
         digest_size != 32) {
-        LOG(ERROR, "Failed to compute certificate cache key for URL: %s", request->url);
+        LOG(ERROR,
+            "Failed to compute certificate cache key for request origin=%s endpoint=%s",
+            request->origin,
+            curl_request_endpoint_class(request->url));
         return false;
     }
 
@@ -1281,7 +1362,10 @@ static bool curl_verify_cert_chain(curl_request_t *request) {
         } else if (cert_chain != request->cert_chain) {
             LOG(SYSTEM, "!!! CERTIFICATE CHAIN CHANGED !!!");
             LOG(SYSTEM, "Old chain: %x, new chain: %x", cert_chain, request->cert_chain);
-            LOG(SYSTEM, "Aborting connection to URL: %s, CN: %s", request->url, request->cert_cn);
+            LOG(SYSTEM,
+                "Aborting connection to request origin=%s endpoint=%s",
+                request->origin,
+                curl_request_endpoint_class(request->url));
             fclose(fp);
             pthread_mutex_unlock(&certchains_mutex);
             return false;
@@ -1482,6 +1566,9 @@ static curl_state_t curl_request_setup(curl_request_t *request) {
     HARD_ASSERT(request != NULL);
     HARD_ASSERT(request->handle != NULL);
 
+    LOG(INFO, "HTTP request origin=%s endpoint=%s",
+        request->origin, curl_request_endpoint_class(request->url));
+
     /* Set connection timeout. */
     CURL_SETOPT(request->handle, CURLOPT_CONNECTTIMEOUT, CURL_TIMEOUT);
 
@@ -1506,7 +1593,6 @@ static curl_state_t curl_request_setup(curl_request_t *request) {
 
     pthread_mutex_lock(&request->mutex);
     CURL_SETOPT(request->handle, CURLOPT_URL, request->url);
-    CURL_SETOPT(request->handle, CURLOPT_REFERER, request->url);
     CURL_SETOPT(request->handle, CURLOPT_SHARE, handle_share);
     pthread_mutex_unlock(&request->mutex);
 
@@ -1572,7 +1658,10 @@ static curl_state_t curl_request_complete(curl_request_t *request) {
 
     if (request->untrusted) {
         LOG(SYSTEM, "!!! CONNECTED TO UNTRUSTED HOST !!! ");
-        LOG(SYSTEM, "Request URL: %s", request->url);
+        LOG(SYSTEM,
+            "Request origin=%s endpoint=%s",
+            request->origin,
+            curl_request_endpoint_class(request->url));
     }
 
     if (http_code != 200 && http_code != 304) {

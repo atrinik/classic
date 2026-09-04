@@ -81,7 +81,9 @@ static bool asset_source_url(const char *asset_path, char *url, size_t size) {
 }
 
 static void asset_source_start_http(asset_source_t *source) {
-    source->http = curl_request_create(source->http_url, CURL_PKEY_TRUST_APPLICATION);
+    source->http = curl_request_create_with_origin(source->http_url,
+                                                     CURL_PKEY_TRUST_APPLICATION,
+                                                     "client.asset");
     curl_request_set_max_body(source->http, ASSET_MAX_SIZE);
     /*
      * Do not let the generic cURL layer persist an unverified response. The

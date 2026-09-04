@@ -448,6 +448,7 @@ void socket_command_player(uint8_t *data, size_t len, size_t pos) {
     }
 
     rich_presence_session_start();
+    LOG(INFO, "Gameplay ready.");
     cpl.state = ST_PLAY;
 }
 

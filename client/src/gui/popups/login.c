@@ -33,6 +33,7 @@
 #include <button.h>
 #include <client.h>
 #include <event.h>
+#include <join_credentials.h>
 #include <list.h>
 #include <main.h>
 #include <player.h>
@@ -157,8 +158,7 @@ static int popup_draw(popup_struct *popup) {
             text_input_set(&text_inputs[LOGIN_TEXT_INPUT_PASSWORD], clioption_settings.connect[2]);
 
             if (!clioption_settings.reconnect) {
-                free(clioption_settings.connect[2]);
-                clioption_settings.connect[2] = NULL;
+                client_join_credentials_clear(NULL, &clioption_settings.connect[2]);
             }
 
             event_push_key_once(SDLK_RETURN, 0);

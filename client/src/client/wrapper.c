@@ -113,6 +113,7 @@ void system_end(void) {
     server_files_deinit();
     image_deinit();
     asset_requests_deinit();
+    LOG(INFO, "Client shutdown complete.");
     toolkit_deinit();
     gpu_renderer_destroy();
     SDL_DestroyWindow(ScreenWindow);
