@@ -578,6 +578,18 @@ if (BUILD_TESTING)
 
     add_test(NAME client-help-parser COMMAND ${EXECUTABLE} --help-parser-test)
 
+    add_test(NAME client-cli-options
+        COMMAND ${EXECUTABLE}
+            --connect=example:account:password:character
+            --connect=second:account::
+            --game_news_url=https://news.example/
+            --game_news_url=off
+            --help)
+    add_test(NAME client-cli-connect-password-file-error
+        COMMAND ${EXECUTABLE}
+            --connect_password_file=${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/missing-password
+            --help=connect_password_file)
+
     if (NOT MINGW)
         target_compile_definitions(${EXECUTABLE} PRIVATE ATRINIK_SOUND_TESTS)
 
