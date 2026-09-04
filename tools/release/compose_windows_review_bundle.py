@@ -314,13 +314,60 @@ public static class AtrinikReviewSecretNative
 }
 '@
 
+function ConvertTo-ReviewCommandLineArgument([string]$Value) {
+    if ([string]::IsNullOrEmpty($Value)) {
+        return '""'
+    }
+    if ($Value -notmatch '[\s"]') {
+        return $Value
+    }
+    $Builder = [System.Text.StringBuilder]::new()
+    [void]$Builder.Append([char]34)
+    $Backslashes = 0
+    foreach ($Character in $Value.ToCharArray()) {
+        if ($Character -eq [char]92) {
+            $Backslashes++
+            continue
+        }
+        if ($Character -eq [char]34) {
+            for ($Index = 0; $Index -lt ($Backslashes * 2 + 1); $Index++) {
+                [void]$Builder.Append([char]92)
+            }
+            [void]$Builder.Append([char]34)
+            $Backslashes = 0
+            continue
+        }
+        for ($Index = 0; $Index -lt $Backslashes; $Index++) {
+            [void]$Builder.Append([char]92)
+        }
+        $Backslashes = 0
+        [void]$Builder.Append($Character)
+    }
+    for ($Index = 0; $Index -lt ($Backslashes * 2); $Index++) {
+        [void]$Builder.Append([char]92)
+    }
+    [void]$Builder.Append([char]34)
+    return $Builder.ToString()
+}
+
 function Set-ReviewArgumentList(
     [System.Diagnostics.ProcessStartInfo]$StartInfo,
     [string[]]$Values
 ) {
-    foreach ($Value in $Values) {
-        [void]$StartInfo.ArgumentList.Add($Value)
+    $ArgumentListProperty = $StartInfo.GetType().GetProperty("ArgumentList")
+    $ArgumentList = $null
+    if ($null -ne $ArgumentListProperty) {
+        $ArgumentList = $ArgumentListProperty.GetValue($StartInfo, $null)
     }
+    if ($null -ne $ArgumentList) {
+        foreach ($Value in $Values) {
+            [void]$ArgumentList.Add($Value)
+        }
+        return
+    }
+    $StartInfo.Arguments = (
+        $Values | ForEach-Object { ConvertTo-ReviewCommandLineArgument $_ }
+    ) -join " "
 }
 
 function Get-ReviewDiagnosticTail($Lines) {
