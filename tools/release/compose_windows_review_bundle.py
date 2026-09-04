@@ -1111,13 +1111,14 @@ try {
         $ClientStartInfo.CreateNoWindow = $false
         $ClientStartInfo.RedirectStandardOutput = $true
         $ClientStartInfo.RedirectStandardError = $true
+        $ConnectArgument = "--connect=127.0.0.1:" + $Account + "::" + $Character
         Set-ReviewArgumentList $ClientStartInfo @(
             "--logfile=$ClientLog",
             "--nometa",
             "--game_news_url=off",
             "--stun_server=off",
             "--server=127.0.0.1 1731 $Fingerprint",
-            "--connect=127.0.0.1:" + $Account + "::" + $Character,
+            $ConnectArgument,
             "--connect_password_file=$PasswordFile"
         )
         $ClientStartInfoEnvironment = @{}
