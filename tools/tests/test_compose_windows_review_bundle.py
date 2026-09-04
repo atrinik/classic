@@ -109,6 +109,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "function Get-ReviewDiagnosticTail",
                     "function Assert-ReviewPathAncestors",
                     "function Write-ReviewFailure",
+                    "diagnostics unavailable",
                     '"launcher-failure.log"',
                     "Add-Type -TypeDefinition",
                     "AtrinikReviewSecretNative",
@@ -156,12 +157,22 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "ServerExitDiagnostics",
                     "stdout_tail=",
                     "stderr_tail=",
+                    "function Set-ReviewArgumentList",
+                    "ArgumentList.Add",
                     "$ClientStartInfo = [System.Diagnostics.ProcessStartInfo]::new()",
                     "$ClientStartInfo.UseShellExecute = $false",
+                    "$ClientStartInfo.RedirectStandardOutput = $true",
+                    "$ClientStartInfo.RedirectStandardError = $true",
+                    '"--logfile=$ClientLog"',
                     "$Client = [System.Diagnostics.Process]::new()",
                     "$Client.StartInfo = $ClientStartInfo",
+                    "$Client.BeginOutputReadLine()",
+                    "$Client.BeginErrorReadLine()",
+                    "client_stdout_tail=",
+                    "client_stderr_tail=",
                 ):
                     self.assertIn(token, powershell)
+                self.assertNotIn("ConvertTo-ReviewArguments", powershell)
                 self.assertIn(
                     '# Create the secret with an explicit owner and protected DACL.',
                     powershell,

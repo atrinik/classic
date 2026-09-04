@@ -182,6 +182,8 @@ $Server = $null
 $Client = $null
 $ServerOutputLines = $null
 $ServerErrorLines = $null
+$ClientOutputLines = $null
+$ClientErrorLines = $null
 
 Add-Type -TypeDefinition @'
 using System;
@@ -312,8 +314,13 @@ public static class AtrinikReviewSecretNative
 }
 '@
 
-function ConvertTo-ReviewArguments([string[]]$Values) {
-    return (($Values | ForEach-Object { '"' + $_ + '"' }) -join " ")
+function Set-ReviewArgumentList(
+    [System.Diagnostics.ProcessStartInfo]$StartInfo,
+    [string[]]$Values
+) {
+    foreach ($Value in $Values) {
+        [void]$StartInfo.ArgumentList.Add($Value)
+    }
 }
 
 function Get-ReviewDiagnosticTail($Lines) {
@@ -403,6 +410,9 @@ function New-ReviewOwnerSecretFile([string]$Path, [string]$Secret) {
 function Write-ReviewFailure([string]$Message) {
     $SafeMessage = $Message -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]'
     $SafeMessage = $SafeMessage -replace "(?i)https?://\S+", "[redacted-url]"
+    if ($SafeMessage.Length -gt 8192) {
+        $SafeMessage = $SafeMessage.Substring(0, 8192) + "...[truncated]"
+    }
     try {
         Assert-ReviewPathAncestors $LauncherFailureLog
         [System.IO.File]::WriteAllText(
@@ -413,6 +423,13 @@ function Write-ReviewFailure([string]$Message) {
         return
     } catch {
         # Do not follow an unvalidated path for failure diagnostics.
+        try {
+            [Console]::Error.WriteLine(
+                "Review launcher failure diagnostics unavailable: $SafeMessage"
+            )
+        } catch {
+            # Preserve the original failure if stderr is unavailable.
+        }
     }
 }
 
@@ -704,7 +721,7 @@ try {
             $ProvisionStartInfo.WorkingDirectory = $Root
             $ProvisionStartInfo.UseShellExecute = $false
             $ProvisionStartInfo.CreateNoWindow = $true
-            $ProvisionStartInfo.Arguments = ConvertTo-ReviewArguments @(
+            Set-ReviewArgumentList $ProvisionStartInfo @(
                 "--datapath=$Stage",
                 "--no_console",
                 "--provision_scenario",
@@ -810,7 +827,7 @@ try {
     $ServerStartInfo.RedirectStandardInput = $true
     $ServerStartInfo.RedirectStandardOutput = $true
     $ServerStartInfo.RedirectStandardError = $true
-    $ServerStartInfo.Arguments = ConvertTo-ReviewArguments @(
+    Set-ReviewArgumentList $ServerStartInfo @(
         "--datapath=$State",
         "--port_quic=1731",
         "--network_stack=ipv4=127.0.0.1",
@@ -955,7 +972,10 @@ try {
         $ClientStartInfo.WorkingDirectory = $Root
         $ClientStartInfo.UseShellExecute = $false
         $ClientStartInfo.CreateNoWindow = $false
-        $ClientStartInfo.Arguments = ConvertTo-ReviewArguments @(
+        $ClientStartInfo.RedirectStandardOutput = $true
+        $ClientStartInfo.RedirectStandardError = $true
+        Set-ReviewArgumentList $ClientStartInfo @(
+            "--logfile=$ClientLog",
             "--nometa",
             "--game_news_url=off",
             "--stun_server=off",
@@ -988,9 +1008,25 @@ try {
         try {
             $Client = [System.Diagnostics.Process]::new()
             $Client.StartInfo = $ClientStartInfo
+            $ClientOutputLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+            $ClientErrorLines = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+            $Client.add_OutputDataReceived({
+                param($Sender, $EventArgs)
+                if ($null -ne $EventArgs.Data) {
+                    [void]$ClientOutputLines.Enqueue($EventArgs.Data)
+                }
+            }.GetNewClosure())
+            $Client.add_ErrorDataReceived({
+                param($Sender, $EventArgs)
+                if ($null -ne $EventArgs.Data) {
+                    [void]$ClientErrorLines.Enqueue($EventArgs.Data)
+                }
+            }.GetNewClosure())
             if (-not $Client.Start()) {
                 throw "Could not start the packaged client"
             }
+            $Client.BeginOutputReadLine()
+            $Client.BeginErrorReadLine()
         } finally {
             foreach ($Name in @(
                 "HTTP_PROXY",
@@ -1011,8 +1047,12 @@ try {
         $Client.WaitForExit()
         $Client.WaitForExit()
         $Client.Refresh()
+        $ClientOutputTail = Get-ReviewDiagnosticTail $ClientOutputLines
+        $ClientErrorTail = Get-ReviewDiagnosticTail $ClientErrorLines
         $ClientDiagnostics = @(
             "client_log_exists=$(Test-Path -LiteralPath $ClientLog -PathType Leaf)"
+            "client_stdout_tail=$ClientOutputTail"
+            "client_stderr_tail=$ClientErrorTail"
         ) -join "; "
         if ($Client.ExitCode -ne 0) {
             throw (

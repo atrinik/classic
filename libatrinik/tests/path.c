@@ -200,6 +200,14 @@ int main(int argc, char **argv) {
     require(directory_link_created || directory_link_error == ERROR_PRIVILEGE_NOT_HELD);
     if (directory_link_created) {
         require(path_ensure_real_directory(directory_link, 0700) == PATH_DIRECTORY_UNSAFE);
+        char linked_secret[HUGE_BUF];
+        require(snprintf(VS(linked_secret), "%s/linked-secret", directory_link) <
+                (int)sizeof(linked_secret));
+        static const char linked_secret_data[] = "must-not-follow\n";
+        require(path_secret_create_atomic(linked_secret,
+                                          linked_secret_data,
+                                          sizeof(linked_secret_data) - 1U) ==
+                PATH_SECRET_CREATE_ERROR);
         require(RemoveDirectoryW(directory_link_wide));
     }
     free(directory_link_wide);

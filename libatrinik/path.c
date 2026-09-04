@@ -34,6 +34,7 @@
 
 #ifdef WIN32
 #include <aclapi.h>
+#include <wchar.h>
 #endif
 
 TOOLKIT_API(DEPENDS(logger), DEPENDS(string), DEPENDS(stringbuffer));
@@ -562,6 +563,131 @@ static wchar_t *path_windows_wide(const char *path) {
     return extended;
 }
 
+typedef struct path_windows_file_identity {
+    DWORD volume_serial_number;
+    DWORD file_index_high;
+    DWORD file_index_low;
+} path_windows_file_identity_t;
+
+static bool path_windows_file_identity_read(HANDLE handle,
+                                            path_windows_file_identity_t *identity) {
+    BY_HANDLE_FILE_INFORMATION information;
+    if (!GetFileInformationByHandle(handle, &information)) {
+        return false;
+    }
+    identity->volume_serial_number = information.dwVolumeSerialNumber;
+    identity->file_index_high = information.nFileIndexHigh;
+    identity->file_index_low = information.nFileIndexLow;
+    return true;
+}
+
+static bool path_windows_file_identity_equal(const path_windows_file_identity_t *left,
+                                             const path_windows_file_identity_t *right) {
+    return left->volume_serial_number == right->volume_serial_number &&
+           left->file_index_high == right->file_index_high &&
+           left->file_index_low == right->file_index_low;
+}
+
+static HANDLE path_windows_open_secret_directory(const wchar_t *path,
+                                                 DWORD desired_access,
+                                                 path_windows_file_identity_t *identity) {
+    HANDLE directory = CreateFileW(path,
+                                    desired_access,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    NULL,
+                                    OPEN_EXISTING,
+                                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                                    NULL);
+    if (directory == INVALID_HANDLE_VALUE) {
+        return INVALID_HANDLE_VALUE;
+    }
+
+    FILE_ATTRIBUTE_TAG_INFO attributes;
+    FILE_STANDARD_INFO standard;
+    bool safe =
+        GetFileInformationByHandleEx(directory,
+                                     FileAttributeTagInfo,
+                                     &attributes,
+                                     sizeof(attributes)) != 0 &&
+        GetFileInformationByHandleEx(directory, FileStandardInfo, &standard, sizeof(standard)) !=
+            0 &&
+        GetFileType(directory) == FILE_TYPE_DISK &&
+        standard.Directory &&
+        (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0 &&
+        (identity == NULL || path_windows_file_identity_read(directory, identity));
+    if (!safe) {
+        CloseHandle(directory);
+        return INVALID_HANDLE_VALUE;
+    }
+    return directory;
+}
+
+static bool path_windows_handle_is_regular_file(HANDLE file) {
+    FILE_ATTRIBUTE_TAG_INFO attributes;
+    FILE_STANDARD_INFO standard;
+    return GetFileInformationByHandleEx(file,
+                                        FileAttributeTagInfo,
+                                        &attributes,
+                                        sizeof(attributes)) != 0 &&
+           GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof(standard)) != 0 &&
+           GetFileType(file) == FILE_TYPE_DISK && !standard.Directory &&
+           (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
+}
+
+static bool path_windows_parent_identity_matches(const wchar_t *path,
+                                                 const path_windows_file_identity_t *expected) {
+    path_windows_file_identity_t actual;
+    HANDLE directory =
+        path_windows_open_secret_directory(path, FILE_READ_ATTRIBUTES, &actual);
+    if (directory == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    bool matches = path_windows_file_identity_equal(&actual, expected);
+    bool closed = CloseHandle(directory) != 0;
+    return matches && closed;
+}
+
+static bool path_windows_remove_file_handle(HANDLE file) {
+    FILE_DISPOSITION_INFO disposition = {
+        .DeleteFile = TRUE,
+    };
+    return SetFileInformationByHandle(file,
+                                      FileDispositionInfo,
+                                      &disposition,
+                                      sizeof(disposition)) != 0;
+}
+
+static bool path_windows_publish_file(HANDLE file,
+                                      HANDLE directory,
+                                      const wchar_t *basename,
+                                      DWORD *error) {
+    const size_t file_name_offset = FIELD_OFFSET(FILE_RENAME_INFO, FileName);
+    size_t basename_length = wcslen(basename);
+    if (basename_length > (SIZE_MAX - file_name_offset) / sizeof(*basename) ||
+        file_name_offset + basename_length * sizeof(*basename) > UINT_MAX) {
+        *error = ERROR_FILENAME_EXCED_RANGE;
+        return false;
+    }
+
+    size_t rename_size = file_name_offset + basename_length * sizeof(*basename);
+    FILE_RENAME_INFO *rename = calloc(1, rename_size);
+    if (rename == NULL) {
+        *error = ERROR_NOT_ENOUGH_MEMORY;
+        return false;
+    }
+    rename->ReplaceIfExists = FALSE;
+    rename->RootDirectory = directory;
+    rename->FileNameLength = (DWORD)(basename_length * sizeof(*basename));
+    memcpy(rename->FileName, basename, basename_length * sizeof(*basename));
+    bool published = SetFileInformationByHandle(
+                         file, FileRenameInfo, rename, (DWORD)rename_size) != 0;
+    if (!published) {
+        *error = GetLastError();
+    }
+    free(rename);
+    return published;
+}
+
 static path_directory_result_t path_directory_inspect_windows(const wchar_t *path, bool *missing) {
     *missing = false;
     HANDLE directory = CreateFileW(path,
@@ -741,12 +867,36 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     string_tolower(suffix);
 
 #ifdef WIN32
-    char temporary[HUGE_BUF];
-    if (snprintf(VS(temporary), "%s.tmp.%s", path, suffix) >= (int)sizeof(temporary)) {
+    char *directory = path_dirname(path);
+    char *basename = path_basename(path);
+    if (directory == NULL || basename == NULL || *basename == '\0' ||
+        strchr(basename, '/') != NULL) {
+        free(directory);
+        free(basename);
+        OPENSSL_cleanse(suffix, sizeof(suffix));
         return PATH_SECRET_CREATE_ERROR;
     }
-    wchar_t *destination_wide = path_windows_wide(path);
+
+    char temporary[HUGE_BUF];
+    if (snprintf(VS(temporary), "%s.tmp.%s", path, suffix) >= (int)sizeof(temporary)) {
+        free(directory);
+        free(basename);
+        OPENSSL_cleanse(suffix, sizeof(suffix));
+        return PATH_SECRET_CREATE_ERROR;
+    }
+
+    wchar_t *directory_wide = path_windows_wide(directory);
+    wchar_t *basename_wide = path_windows_wide(basename);
     wchar_t *temporary_wide = path_windows_wide(temporary);
+    path_windows_file_identity_t directory_identity;
+    HANDLE directory_handle = INVALID_HANDLE_VALUE;
+    if (directory_wide != NULL) {
+        directory_handle = path_windows_open_secret_directory(
+            directory_wide,
+            FILE_READ_ATTRIBUTES | FILE_ADD_FILE,
+            &directory_identity);
+    }
+
     HANDLE token = NULL;
     TOKEN_USER *user = path_secret_token_user(&token);
     DWORD sid_size = user != NULL ? GetLengthSid(user->User.Sid) : 0;
@@ -766,15 +916,18 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
         .bInheritHandle = FALSE,
     };
     HANDLE file = INVALID_HANDLE_VALUE;
-    if (destination_wide != NULL && temporary_wide != NULL && security_ok) {
+    if (directory_handle != INVALID_HANDLE_VALUE && basename_wide != NULL &&
+        temporary_wide != NULL && security_ok) {
         file = CreateFileW(temporary_wide,
                            GENERIC_WRITE | DELETE,
                            0,
                            &attributes,
                            CREATE_NEW,
-                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH |
+                               FILE_FLAG_OPEN_REPARSE_POINT,
                            NULL);
     }
+
     bool temporary_created = file != INVALID_HANDLE_VALUE;
     bool ok = temporary_created;
     size_t offset = 0;
@@ -785,35 +938,58 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
              written == chunk;
         offset += written;
     }
+
     path_secret_create_result_t result = PATH_SECRET_CREATE_ERROR;
     bool published = false;
     DWORD publish_error = ERROR_SUCCESS;
     if (ok) {
         ok = FlushFileBuffers(file) != 0;
-    }
-    bool closed = file == INVALID_HANDLE_VALUE || CloseHandle(file) != 0;
-    if (ok && closed) {
-        published = MoveFileExW(temporary_wide, destination_wide, MOVEFILE_WRITE_THROUGH) != 0;
-        if (!published) {
+        if (!ok) {
             publish_error = GetLastError();
         }
     }
-    if (published) {
-        result = PATH_SECRET_CREATE_OK;
-    } else if (!published &&
-               (publish_error == ERROR_FILE_EXISTS || publish_error == ERROR_ALREADY_EXISTS)) {
+
+    bool renamed = false;
+    if (ok && directory_handle != INVALID_HANDLE_VALUE &&
+        path_windows_handle_is_regular_file(file) &&
+        path_windows_parent_identity_matches(directory_wide, &directory_identity)) {
+        renamed = path_windows_publish_file(file, directory_handle, basename_wide, &publish_error);
+    } else if (ok) {
+        publish_error = ERROR_ACCESS_DENIED;
+    }
+
+    if (renamed) {
+        if (path_windows_handle_is_regular_file(file) &&
+            path_windows_parent_identity_matches(directory_wide, &directory_identity)) {
+            published = true;
+            result = PATH_SECRET_CREATE_OK;
+        } else {
+            publish_error = ERROR_INVALID_DATA;
+        }
+    } else if (publish_error == ERROR_FILE_EXISTS || publish_error == ERROR_ALREADY_EXISTS) {
         result = PATH_SECRET_CREATE_EXISTS;
     }
-    if (!published && temporary_created && temporary_wide != NULL) {
-        DeleteFileW(temporary_wide);
+
+    if (!published && temporary_created && !path_windows_remove_file_handle(file)) {
+        result = PATH_SECRET_CREATE_ERROR;
     }
+    if (file != INVALID_HANDLE_VALUE && !CloseHandle(file)) {
+        result = PATH_SECRET_CREATE_ERROR;
+    }
+    if (directory_handle != INVALID_HANDLE_VALUE && !CloseHandle(directory_handle)) {
+        result = PATH_SECRET_CREATE_ERROR;
+    }
+
     free(dacl);
     free(user);
     if (token != NULL) {
         CloseHandle(token);
     }
     free(temporary_wide);
-    free(destination_wide);
+    free(basename_wide);
+    free(directory_wide);
+    free(directory);
+    free(basename);
     OPENSSL_cleanse(temporary, sizeof(temporary));
     OPENSSL_cleanse(suffix, sizeof(suffix));
     return result;
