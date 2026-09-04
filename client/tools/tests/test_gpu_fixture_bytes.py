@@ -19,7 +19,7 @@ EXPECTED = {
     "data/interface.cfg": "cb3bccde141390f8e016a988f1c3b8c13fcf72f54d0e1ef4305cd7716f0a2302",
     "src/tests/fixtures/player_view/gpu-interface.cfg": "8f2fc77fead14655d039c9cd7e52c6767e942603eb06646f427f87d25cb8a3d2",
     "src/tests/fixtures/player_view/gpu-benchmark-17x17-five-depth.map2.hex": "eef02084f57ef9bf8e511a3019a3ae911efa0c2808cd93bf3e4ba0919c17b0ef",
-    "src/tests/fixtures/player_view/gpu-benchmark-28x28-thirteen-depth.map2.hex": "513833c7e8ab46b94c9914f7e26b0b66d8db63bccb24833ec92d89bff06c8975",
+    "src/tests/fixtures/player_view/gpu-benchmark-28x28-thirteen-depth.map2.hex": "ee0d4de99741ec050ecb46a609f747726d22f371f584fa536ba20a26dc8476c8",
 }
 
 
