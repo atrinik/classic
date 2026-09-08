@@ -23,7 +23,7 @@ class VersionMetadataTests(unittest.TestCase):
 #include <stdio.h>
 
 int main(void) {
-    printf("%s|%d|%d|%d|%s|%s|%s|%s|%s\\n",
+    printf("%s|%d|%d|%d|%s|%s|%s|%s|%s|%s\\n",
            PACKAGE_VERSION,
            PACKAGE_VERSION_MAJOR,
            PACKAGE_VERSION_MINOR,
@@ -32,7 +32,7 @@ int main(void) {
            ATRINIK_COMPILER_ID,
            ATRINIK_COMPILER_VERSION,
            ATRINIK_SYSTEM_NAME,
-           ATRINIK_BENCHMARK_REVISION);
+           ATRINIK_BENCHMARK_REVISION, ATRINIK_BENCHMARK_DIRTY);
     return 0;
 }
 """.lstrip(),
@@ -82,7 +82,7 @@ endforeach()
             outputs.append(result.stdout.strip())
         return outputs[0], outputs[1]
 
-    def assert_component_version_probe(self, source: Path, build: Path) -> None:
+    def assert_component_version_probe(self, source: Path, build: Path, *, version: str = "9.8.7", explicit: bool = True) -> None:
         probe = self.root / "component-version-probe.cmake"
         probe.write_text(
             """
@@ -90,7 +90,7 @@ if (NOT PROJECT_VERSION STREQUAL "9.8.7")
     message(FATAL_ERROR "Unexpected project version: ${PROJECT_VERSION}")
 endif ()
 message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
-""".lstrip(),
+""".lstrip().replace("9.8.7", version),
             encoding="utf-8",
         )
         result = subprocess.run(
@@ -100,7 +100,7 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                 str(source),
                 "-B",
                 str(build),
-                "-DATRINIK_PACKAGE_VERSION=9.8.7",
+                *(["-DATRINIK_PACKAGE_VERSION=" + version] if explicit else []),
                 f"-DCMAKE_PROJECT_INCLUDE={probe}",
             ],
             check=False,
@@ -120,7 +120,7 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
         self.assertEqual(result.returncode, 0, result.stderr)
         client, server = self.build_and_outputs()
         self.assertEqual(client, server)
-        self.assertRegex(client, r"^6\.7\.8\|6\|7\|8\|Release\|.+\|.+\|.+\|unknown$")
+        self.assertRegex(client, r"^6\.7\.8\|6\|7\|8\|Release\|.+\|.+\|.+\|unknown\|unknown$")
 
     def test_invalid_explicit_version_is_rejected(self) -> None:
         result = self.configure("-DATRINIK_PACKAGE_VERSION=6.7")
@@ -169,6 +169,153 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
         client, server = self.build_and_outputs()
         self.assertTrue(client.startswith("5.1.0|5|1|0|"))
         self.assertEqual(client, server)
+
+    def git(self, directory: Path, *arguments: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(directory), *arguments], text=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                 "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"},
+        ).strip()
+
+    def initialize_git(self, directory: Path) -> str:
+        self.git(directory, "init", "-q", "-b", "main")
+        self.git(directory, "add", ".")
+        self.git(directory, "commit", "-qm", "test: owner fixture")
+        return self.git(directory, "rev-parse", "HEAD")
+
+    def test_archive_below_foreign_repository_does_not_inherit_metadata(self) -> None:
+        foreign = self.initialize_git(self.root)
+        self.git(self.root, "tag", "v88.99.100")
+        (self.source / "VERSION").write_text("5.68.0\n")
+        result = self.configure()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        client, server = self.build_and_outputs()
+        self.assertEqual(client, server)
+        self.assertTrue(client.startswith("5.68.0|5|68|0|"))
+        self.assertTrue(client.endswith("|unknown|unknown"), client)
+        self.assertNotIn(foreign, client)
+
+    def test_untagged_source_below_foreign_tag_uses_development_version(self) -> None:
+        self.initialize_git(self.root)
+        self.git(self.root, "tag", "v88.99.100")
+        result = self.configure()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        client, _ = self.build_and_outputs()
+        self.assertTrue(client.startswith("5.1.0|"), client)
+        self.assertTrue(client.endswith("|unknown|unknown"), client)
+
+    def test_linked_worktree_and_dirty_identity_are_physical(self) -> None:
+        revision = self.initialize_git(self.source)
+        self.git(self.source, "tag", "v5.68.0")
+        linked = self.root / "linked"
+        self.git(self.source, "worktree", "add", "-b", "fixture", str(linked))
+        self.source = linked
+        self.assertTrue((linked / ".git").is_file())
+        result = self.configure()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        client, _ = self.build_and_outputs()
+        self.assertTrue(client.startswith("5.68.0|"), client)
+        self.assertTrue(client.endswith("|" + revision + "|false"), client)
+        (linked / "untracked.txt").write_text("dirty")
+        result = self.configure()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        client, _ = self.build_and_outputs()
+        self.assertTrue(client.endswith("|" + revision + "|true"), client)
+
+    def test_explicit_identity_reconfigures_without_source_changes(self) -> None:
+        for version, revision, dirty in (("5.68.0", "a" * 40, "false"), ("5.69.0", "b" * 40, "true")):
+            result = self.configure("-DATRINIK_PACKAGE_VERSION=" + version,
+                                    "-DATRINIK_SOURCE_REVISION=" + revision,
+                                    "-DATRINIK_SOURCE_DIRTY=" + dirty)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            client, server = self.build_and_outputs()
+            self.assertEqual(client, server)
+            self.assertTrue(client.startswith(version + "|"), client)
+            self.assertTrue(client.endswith("|" + revision + "|" + dirty), client)
+
+    def test_all_component_entrypoints_accept_explicit_owner_version(self) -> None:
+        for component in ("client", "server", "protocol", "libatrinik"):
+            with self.subTest(component=component):
+                self.assert_component_version_probe(ROOT / component, self.root / (component + "-explicit"))
+
+    def test_invalid_explicit_revision_and_dirty_state_are_rejected(self) -> None:
+        for argument in ("-DATRINIK_SOURCE_REVISION=not-a-commit", "-DATRINIK_SOURCE_DIRTY=maybe"):
+            with self.subTest(argument=argument):
+                result = self.configure(argument)
+                self.assertNotEqual(result.returncode, 0)
+                if (self.root / "build/CMakeCache.txt").exists():
+                    (self.root / "build/CMakeCache.txt").unlink()
+
+    def test_git_selectors_cannot_redirect_owner_metadata(self) -> None:
+        revision = self.initialize_git(self.source)
+        self.git(self.source, "tag", "v5.68.0")
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        (foreign / "README").write_text("foreign")
+        self.initialize_git(foreign)
+        self.git(foreign, "tag", "v88.99.100")
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(foreign / ".git"), "GIT_WORK_TREE": str(self.source)}):
+            result = self.configure()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        client, _ = self.build_and_outputs()
+        self.assertTrue(client.startswith("5.68.0|"), client)
+        self.assertTrue(client.endswith("|" + revision + "|false"), client)
+
+    def test_real_protocol_unified_and_embedded_archive_versions(self) -> None:
+        self.initialize_git(self.root)
+        self.git(self.root, "tag", "v88.99.100")
+        for layout in ("unified", "embedded", "standalone"):
+            with self.subTest(layout=layout):
+                package = self.root / layout
+                package.mkdir()
+                (package / "cmake").mkdir()
+                shutil.copy2(MODULE, package / "cmake/AtrinikVersion.cmake")
+                (package / "VERSION").write_text("5.68.0\n")
+                if layout == "standalone":
+                    protocol = package
+                else:
+                    protocol = package / ("protocol" if layout == "unified" else "dependencies/protocol")
+                shutil.copytree(ROOT / "protocol", protocol, dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns("build", "__pycache__"))
+                if layout == "unified":
+                    shutil.copy2(ROOT / "CMakeLists.txt", package / "CMakeLists.txt")
+                    # Exercise actual root/protocol configuration and package-version
+                    # generation without compiling unrelated gameplay dependencies.
+                    for consumer in ("libatrinik", "client", "server"):
+                        (package / consumer).mkdir()
+                        (package / consumer / "CMakeLists.txt").write_text("")
+                    configure_source = package
+                else:
+                    (protocol / "VERSION").write_text("5.68.0\n")
+                    configure_source = protocol
+                build = self.root / (layout + "-build")
+                result = subprocess.run(["cmake", "-S", str(configure_source), "-B", str(build)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                config = build / ("protocol" if layout == "unified" else "") / "AtrinikProtocolConfigVersion.cmake"
+                self.assertIn('set(PACKAGE_VERSION "5.68.0")', config.read_text())
+
+    def test_physical_component_and_symlink_views_use_owner_tag_without_override(self) -> None:
+        owner = self.root / "classic-owner"
+        (owner / "cmake").mkdir(parents=True)
+        shutil.copy2(MODULE, owner / "cmake/AtrinikVersion.cmake")
+        for component in ("client", "server", "protocol", "libatrinik"):
+            (owner / component).mkdir()
+            shutil.copy2(ROOT / component / "CMakeLists.txt", owner / component / "CMakeLists.txt")
+        self.initialize_git(owner)
+        self.git(owner, "tag", "v5.68.0")
+        for component in ("client", "server", "protocol", "libatrinik"):
+            for linked in (False, True):
+                with self.subTest(component=component, linked=linked):
+                    source = owner / component
+                    label = component + ("-view" if linked else "-physical")
+                    if linked:
+                        source = self.root / label
+                        source.mkdir()
+                        (source / "CMakeLists.txt").symlink_to(owner / component / "CMakeLists.txt")
+                    self.assert_component_version_probe(source, self.root / (label + "-build"),
+                                                        version="5.68.0", explicit=False)
 
     def test_component_configuration_has_no_source_tree_version_header(self) -> None:
         for component in ("client", "server"):

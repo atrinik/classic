@@ -1,3 +1,54 @@
+# Ambient Git selectors must not redirect an owner query into another repository.
+# Normal user/system credentials remain available; no network operation is used.
+set(ATRINIK_OWNER_GIT_COMMAND "${CMAKE_COMMAND}" -E env
+    --unset=GIT_DIR
+    --unset=GIT_WORK_TREE
+    --unset=GIT_COMMON_DIR
+    --unset=GIT_INDEX_FILE
+    --unset=GIT_OBJECT_DIRECTORY
+    --unset=GIT_ALTERNATE_OBJECT_DIRECTORIES
+    --unset=GIT_CONFIG
+    --unset=GIT_CONFIG_COUNT
+    --unset=GIT_CONFIG_PARAMETERS
+    --unset=GIT_CONFIG_SYSTEM
+    --unset=GIT_CONFIG_GLOBAL
+    --unset=GIT_CONFIG_NOSYSTEM
+    --unset=GIT_CEILING_DIRECTORIES
+    --unset=GIT_DISCOVERY_ACROSS_FILESYSTEM
+    --unset=GIT_NAMESPACE
+    --unset=GIT_SHALLOW_FILE
+    --unset=GIT_REPLACE_REF_BASE
+    git --no-replace-objects)
+
+# Resolve Git only at the physical source owner, never an enclosing workspace.
+function(atrinik_source_git_root output)
+    file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt" source_file)
+    get_filename_component(source_dir "${source_file}" DIRECTORY)
+    set(candidate "${source_dir}")
+    if (NOT EXISTS "${candidate}/.git")
+        get_filename_component(component "${source_dir}" NAME)
+        get_filename_component(parent "${source_dir}" DIRECTORY)
+        file(REAL_PATH "${CMAKE_CURRENT_FUNCTION_LIST_FILE}" module_file)
+        file(REAL_PATH "${parent}/cmake/AtrinikVersion.cmake" owner_module)
+        if (component MATCHES "^(client|server|protocol|libatrinik)$" AND
+                module_file STREQUAL owner_module AND EXISTS "${parent}/.git")
+            set(candidate "${parent}")
+        else ()
+            set(${output} "" PARENT_SCOPE)
+            return()
+        endif ()
+    endif ()
+    execute_process(COMMAND ${ATRINIK_OWNER_GIT_COMMAND} -C "${candidate}" rev-parse --show-toplevel
+        OUTPUT_VARIABLE git_root OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET RESULT_VARIABLE result)
+    file(REAL_PATH "${candidate}" candidate)
+    if (result EQUAL 0 AND git_root STREQUAL candidate)
+        set(${output} "${candidate}" PARENT_SCOPE)
+    else ()
+        set(${output} "" PARENT_SCOPE)
+    endif ()
+endfunction()
+
 set(ATRINIK_DEVELOPMENT_VERSION "5.1.0")
 
 function(atrinik_resolve_version output)
@@ -6,17 +57,23 @@ function(atrinik_resolve_version output)
 
     if (NOT ATRINIK_PACKAGE_VERSION STREQUAL "")
         set(resolved "${ATRINIK_PACKAGE_VERSION}")
+    elseif (DEFINED ENV{ATRINIK_PACKAGE_VERSION} AND NOT "$ENV{ATRINIK_PACKAGE_VERSION}" STREQUAL "")
+        set(resolved "$ENV{ATRINIK_PACKAGE_VERSION}")
     elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
         file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
             resolved LIMIT_COUNT 1)
     else ()
-        execute_process(
-            COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
-                describe --tags --exact-match --match "v[0-9]*"
-            OUTPUT_VARIABLE tag
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-            RESULT_VARIABLE tag_result)
+        atrinik_source_git_root(owner_root)
+        set(tag_result 1)
+        if (NOT owner_root STREQUAL "")
+            execute_process(
+                COMMAND ${ATRINIK_OWNER_GIT_COMMAND} -C "${owner_root}"
+                    describe --tags --exact-match --match "v[0-9]*"
+                OUTPUT_VARIABLE tag
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+                RESULT_VARIABLE tag_result)
+        endif ()
         if (tag_result EQUAL 0)
             string(REGEX REPLACE "^v" "" resolved "${tag}")
         else ()
@@ -60,15 +117,24 @@ macro(atrinik_initialize_version_metadata)
         endif ()
     endforeach ()
 
-    set(ATRINIK_BENCHMARK_REVISION "$ENV{ATRINIK_BENCHMARK_REVISION}")
+    set(ATRINIK_SOURCE_REVISION "" CACHE STRING "Exact physical-owner revision, or unknown")
+    set(ATRINIK_SOURCE_DIRTY "" CACHE STRING "Physical-owner dirty state: true, false, unknown")
+    atrinik_source_git_root(ATRINIK_OWNER_GIT_ROOT)
+    set(ATRINIK_BENCHMARK_REVISION "${ATRINIK_SOURCE_REVISION}")
     if (ATRINIK_BENCHMARK_REVISION STREQUAL "")
-        execute_process(
-            COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
-                rev-parse --verify HEAD
-            OUTPUT_VARIABLE ATRINIK_BENCHMARK_REVISION
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-            RESULT_VARIABLE benchmark_revision_result)
+        set(ATRINIK_BENCHMARK_REVISION "$ENV{ATRINIK_BENCHMARK_REVISION}")
+    endif ()
+    if (ATRINIK_BENCHMARK_REVISION STREQUAL "")
+        set(benchmark_revision_result 1)
+        if (NOT ATRINIK_OWNER_GIT_ROOT STREQUAL "")
+            execute_process(
+                COMMAND ${ATRINIK_OWNER_GIT_COMMAND} -C "${ATRINIK_OWNER_GIT_ROOT}"
+                    rev-parse --verify HEAD
+                OUTPUT_VARIABLE ATRINIK_BENCHMARK_REVISION
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+                RESULT_VARIABLE benchmark_revision_result)
+        endif ()
         if (NOT benchmark_revision_result EQUAL 0)
             set(ATRINIK_BENCHMARK_REVISION "unknown")
         endif ()
@@ -84,15 +150,21 @@ macro(atrinik_initialize_version_metadata)
     endif ()
     string(TOLOWER "${ATRINIK_BENCHMARK_REVISION}" ATRINIK_BENCHMARK_REVISION)
 
-    set(ATRINIK_BENCHMARK_DIRTY "$ENV{ATRINIK_BENCHMARK_DIRTY}")
+    set(ATRINIK_BENCHMARK_DIRTY "${ATRINIK_SOURCE_DIRTY}")
     if (ATRINIK_BENCHMARK_DIRTY STREQUAL "")
-        execute_process(
-            COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
-                status --porcelain=v1 --untracked-files=normal
-            OUTPUT_VARIABLE benchmark_status
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-            RESULT_VARIABLE benchmark_status_result)
+        set(ATRINIK_BENCHMARK_DIRTY "$ENV{ATRINIK_BENCHMARK_DIRTY}")
+    endif ()
+    if (ATRINIK_BENCHMARK_DIRTY STREQUAL "")
+        set(benchmark_status_result 1)
+        if (NOT ATRINIK_OWNER_GIT_ROOT STREQUAL "")
+            execute_process(
+                COMMAND ${ATRINIK_OWNER_GIT_COMMAND} -C "${ATRINIK_OWNER_GIT_ROOT}"
+                    status --porcelain=v1 --untracked-files=normal
+                OUTPUT_VARIABLE benchmark_status
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+                RESULT_VARIABLE benchmark_status_result)
+        endif ()
         if (benchmark_status_result EQUAL 0)
             if (benchmark_status STREQUAL "")
                 set(ATRINIK_BENCHMARK_DIRTY "false")
