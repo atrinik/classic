@@ -119,7 +119,10 @@ def build_archive(
     scope: str,
     version: str,
     timestamp: int,
+    revision: str,
 ) -> None:
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
+        raise PackageError("source revision must be an exact hexadecimal commit")
     package = "atrinik-classic" if scope == "root" else f"atrinik-classic-{scope}"
     package = f"{package}-{version}"
     if output.exists():
@@ -142,25 +145,18 @@ def build_archive(
                             payload = source.extractfile(original) if original.isfile() else None
                             target.addfile(member, payload)
 
-                        version_path = f"{package}/VERSION"
-                        if version_path in seen:
-                            raise PackageError(f"tracked file conflicts with generated {version_path}")
-                        add_bytes(target, version_path, f"{version}\n".encode(), timestamp)
-                        for dependency in PACKAGED_DEPENDENCIES.get(scope, ()):
-                            dependency_version_path = (
-                                f"{package}/dependencies/{dependency}/VERSION"
-                            )
-                            if dependency_version_path in seen:
-                                raise PackageError(
-                                    "tracked file conflicts with generated "
-                                    f"{dependency_version_path}"
-                                )
-                            add_bytes(
-                                target,
-                                dependency_version_path,
-                                f"{version}\n".encode(),
-                                timestamp,
-                            )
+                        metadata_roots = [package, *(
+                            f"{package}/dependencies/{dependency}"
+                            for dependency in PACKAGED_DEPENDENCIES.get(scope, ())
+                        )]
+                        for metadata_root in metadata_roots:
+                            for filename, value in (("VERSION", version), ("SOURCE_REVISION", revision)):
+                                metadata_path = f"{metadata_root}/{filename}"
+                                if metadata_path in seen:
+                                    raise PackageError(
+                                        f"tracked file conflicts with generated {metadata_path}"
+                                    )
+                                add_bytes(target, metadata_path, f"{value}\n".encode(), timestamp)
 
     if not seen:
         raise PackageError(f"scope {scope} selected no tracked files")
@@ -213,7 +209,7 @@ def main() -> int:
         for scope in scopes:
             stem = "atrinik-classic" if scope == "root" else f"atrinik-classic-{scope}"
             path = output / f"{stem}-{arguments.version}.tar.gz"
-            build_archive(source_archive, path, scope, arguments.version, timestamp)
+            build_archive(source_archive, path, scope, arguments.version, timestamp, commit)
             paths.append(path)
 
     manifest = {
