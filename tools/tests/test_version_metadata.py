@@ -61,7 +61,7 @@ endforeach()
 
     def configure(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["cmake", "-S", str(self.source), "-B", str(self.root / "build"), *arguments],
+            ["cmake", "-Werror=dev", "-S", str(self.source), "-B", str(self.root / "build"), *arguments],
             check=False,
             capture_output=True,
             text=True,
@@ -293,7 +293,7 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                     (protocol / "VERSION").write_text("5.68.0\n")
                     configure_source = protocol
                 build = self.root / (layout + "-build")
-                result = subprocess.run(["cmake", "-S", str(configure_source), "-B", str(build)],
+                result = subprocess.run(["cmake", "-Werror=dev", "-S", str(configure_source), "-B", str(build)],
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 config = build / ("protocol" if layout == "unified" else "") / "AtrinikProtocolConfigVersion.cmake"
@@ -392,7 +392,7 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                                         "pathfinding" if scope == "libatrinik" else
                                         "dependencies/libatrinik/pathfinding")
                 build = self.root / (scope + "-pathfinding-build")
-                result = subprocess.run(["cmake", "-S", str(pathfinding), "-B", str(build)],
+                result = subprocess.run(["cmake", "-Werror=dev", "-S", str(pathfinding), "-B", str(build)],
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn('set(PACKAGE_VERSION "5.68.0")',
