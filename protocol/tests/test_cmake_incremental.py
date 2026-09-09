@@ -28,6 +28,15 @@ class CMakeIncrementalTests(unittest.TestCase):
             source = temporary / "protocol"
             build = temporary / "build"
             shutil.copytree(ROOT, source, ignore=shutil.ignore_patterns("build"))
+            # Match the scoped release layout, which carries the shared module.
+            if not (source / "cmake/AtrinikVersion.cmake").is_file():
+                module = next(
+                    directory / "cmake/AtrinikVersion.cmake"
+                    for directory in (ROOT.parent, ROOT.parent.parent)
+                    if (directory / "cmake/AtrinikVersion.cmake").is_file()
+                )
+                (source / "cmake").mkdir(exist_ok=True)
+                shutil.copy2(module, source / "cmake/AtrinikVersion.cmake")
             configured = self.run_command(
                 "cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
                 "-DBUILD_TESTING=OFF", cwd=temporary
