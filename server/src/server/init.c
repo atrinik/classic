@@ -96,6 +96,8 @@ static void init_beforeplay(void);
 static void init_dynamic(void);
 static void init_clocks(void);
 static bool removed_httppath_seen;
+/* Handler failures do not stop CLI parsing; reject startup even after a valid option. */
+static bool oversized_assetspath_seen;
 
 /**
  * Initialize the ::shstr_cons structure.
@@ -445,6 +447,12 @@ static const char *clioptions_option_assetspath_desc =
     "files inside it.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_assetspath(const char *arg, char **errmsg) {
+    if (strlen(arg) >= sizeof(settings.assetspath)) {
+        oversized_assetspath_seen = true;
+        *errmsg = xstrdup("Asset staging path is too long; --assetspath must be at most 255 bytes");
+        return false;
+    }
+
     snprintf(VS(settings.assetspath), "%s", arg);
     return true;
 }
@@ -1133,6 +1141,11 @@ static void init_library(int argc, char *argv[]) {
     }
     if (removed_httppath_seen) {
         LOG(ERROR, "httppath was removed; use assetspath");
+        exit(EXIT_FAILURE);
+    }
+
+    if (oversized_assetspath_seen) {
+        LOG(ERROR, "Asset staging path is too long; --assetspath must be at most 255 bytes");
         exit(EXIT_FAILURE);
     }
 
