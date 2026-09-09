@@ -53,6 +53,9 @@ class PackageSourcesTests(unittest.TestCase):
                 "GIT_COMMITTER_DATE": "2020-01-02T03:04:05Z",
             },
         )
+        self.revision = subprocess.check_output(
+            ["git", "-C", self.root, "rev-parse", "HEAD"], text=True
+        ).strip()
         self.source = self.root / "repository.tar"
         with self.source.open("wb") as stream:
             subprocess.run(
@@ -67,10 +70,16 @@ class PackageSourcesTests(unittest.TestCase):
     def test_scoped_archive_contains_shared_evidence_but_not_other_modules(self) -> None:
         output = self.root / "client.tar.gz"
         package_sources.build_archive(
-            self.source, output, "client", "5.6.0", 1_577_934_245
+            self.source, output, "client", "5.6.0", 1_577_934_245, self.revision
         )
         with tarfile.open(output, "r:gz") as archive:
             names = set(archive.getnames())
+            for relative in ("", "dependencies/protocol/", "dependencies/libatrinik/"):
+                revision = archive.extractfile(
+                    f"atrinik-classic-client-5.6.0/{relative}SOURCE_REVISION"
+                )
+                assert revision is not None
+                self.assertEqual(revision.read(), (self.revision + "\n").encode())
             version = archive.extractfile("atrinik-classic-client-5.6.0/VERSION")
             assert version is not None
             self.assertEqual(version.read(), b"5.6.0\n")
@@ -106,11 +115,11 @@ class PackageSourcesTests(unittest.TestCase):
     def test_archive_is_reproducible_and_refuses_overwrite(self) -> None:
         first = self.root / "first.tar.gz"
         second = self.root / "second.tar.gz"
-        package_sources.build_archive(self.source, first, "root", "5.6.0", 42)
-        package_sources.build_archive(self.source, second, "root", "5.6.0", 42)
+        package_sources.build_archive(self.source, first, "root", "5.6.0", 42, self.revision)
+        package_sources.build_archive(self.source, second, "root", "5.6.0", 42, self.revision)
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with self.assertRaisesRegex(package_sources.PackageError, "refusing to overwrite"):
-            package_sources.build_archive(self.source, first, "root", "5.6.0", 42)
+            package_sources.build_archive(self.source, first, "root", "5.6.0", 42, self.revision)
 
     def test_unsafe_source_path_is_rejected(self) -> None:
         with self.assertRaisesRegex(package_sources.PackageError, "unsafe archive path"):

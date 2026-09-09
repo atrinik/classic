@@ -20,23 +20,35 @@ set(ATRINIK_OWNER_GIT_COMMAND "${CMAKE_COMMAND}" -E env
     --unset=GIT_REPLACE_REF_BASE
     git --no-replace-objects)
 
-# Resolve Git only at the physical source owner, never an enclosing workspace.
-function(atrinik_source_git_root output)
+# Recognize only the repository's physical component layout, never arbitrary parents.
+function(atrinik_source_owner_directory output)
     file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt" source_file)
     get_filename_component(source_dir "${source_file}" DIRECTORY)
-    set(candidate "${source_dir}")
-    if (NOT EXISTS "${candidate}/.git")
-        get_filename_component(component "${source_dir}" NAME)
+    get_filename_component(component "${source_dir}" NAME)
+    get_filename_component(parent "${source_dir}" DIRECTORY)
+    get_filename_component(parent_name "${parent}" NAME)
+    file(REAL_PATH "${CMAKE_CURRENT_FUNCTION_LIST_FILE}" module_file)
+    file(REAL_PATH "${parent}/cmake/AtrinikVersion.cmake" parent_module)
+    if (component STREQUAL "pathfinding" AND
+            (parent_name STREQUAL "libatrinik" OR module_file STREQUAL parent_module))
+        set(source_dir "${parent}")
+        set(component "libatrinik")
         get_filename_component(parent "${source_dir}" DIRECTORY)
-        file(REAL_PATH "${CMAKE_CURRENT_FUNCTION_LIST_FILE}" module_file)
-        file(REAL_PATH "${parent}/cmake/AtrinikVersion.cmake" owner_module)
-        if (component MATCHES "^(client|server|protocol|libatrinik)$" AND
-                module_file STREQUAL owner_module AND EXISTS "${parent}/.git")
-            set(candidate "${parent}")
-        else ()
-            set(${output} "" PARENT_SCOPE)
-            return()
-        endif ()
+    endif ()
+    file(REAL_PATH "${parent}/cmake/AtrinikVersion.cmake" owner_module)
+    if (component MATCHES "^(client|server|protocol|libatrinik)$" AND
+            module_file STREQUAL owner_module)
+        set(source_dir "${parent}")
+    endif ()
+    set(${output} "${source_dir}" PARENT_SCOPE)
+endfunction()
+
+# Resolve Git only at the physical source owner, never an enclosing workspace.
+function(atrinik_source_git_root output)
+    atrinik_source_owner_directory(candidate)
+    if (NOT EXISTS "${candidate}/.git")
+        set(${output} "" PARENT_SCOPE)
+        return()
     endif ()
     execute_process(COMMAND ${ATRINIK_OWNER_GIT_COMMAND} -C "${candidate}" rev-parse --show-toplevel
         OUTPUT_VARIABLE git_root OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -55,6 +67,7 @@ function(atrinik_resolve_version output)
     set(ATRINIK_PACKAGE_VERSION "" CACHE STRING
         "Explicit Atrinik release version (MAJOR.MINOR.PATCH)")
 
+    atrinik_source_owner_directory(owner_directory)
     if (NOT ATRINIK_PACKAGE_VERSION STREQUAL "")
         set(resolved "${ATRINIK_PACKAGE_VERSION}")
     elseif (DEFINED ENV{ATRINIK_PACKAGE_VERSION} AND NOT "$ENV{ATRINIK_PACKAGE_VERSION}" STREQUAL "")
@@ -62,6 +75,8 @@ function(atrinik_resolve_version output)
     elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
         file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
             resolved LIMIT_COUNT 1)
+    elseif (EXISTS "${owner_directory}/VERSION")
+        file(STRINGS "${owner_directory}/VERSION" resolved LIMIT_COUNT 1)
     else ()
         atrinik_source_git_root(owner_root)
         set(tag_result 1)
@@ -123,6 +138,16 @@ macro(atrinik_initialize_version_metadata)
     set(ATRINIK_BENCHMARK_REVISION "${ATRINIK_SOURCE_REVISION}")
     if (ATRINIK_BENCHMARK_REVISION STREQUAL "")
         set(ATRINIK_BENCHMARK_REVISION "$ENV{ATRINIK_BENCHMARK_REVISION}")
+    endif ()
+    if (ATRINIK_BENCHMARK_REVISION STREQUAL "")
+        atrinik_source_owner_directory(owner_directory)
+        if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/SOURCE_REVISION")
+            file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/SOURCE_REVISION"
+                ATRINIK_BENCHMARK_REVISION LIMIT_COUNT 1)
+        elseif (EXISTS "${owner_directory}/SOURCE_REVISION")
+            file(STRINGS "${owner_directory}/SOURCE_REVISION"
+                ATRINIK_BENCHMARK_REVISION LIMIT_COUNT 1)
+        endif ()
     endif ()
     if (ATRINIK_BENCHMARK_REVISION STREQUAL "")
         set(benchmark_revision_result 1)

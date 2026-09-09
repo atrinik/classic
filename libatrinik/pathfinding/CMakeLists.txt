@@ -1,31 +1,17 @@
 cmake_minimum_required(VERSION 3.21)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(ATRINIK_SOURCE_VERSION "1.0.0")
-    if (DEFINED ENV{ATRINIK_PACKAGE_VERSION})
-        set(ATRINIK_SOURCE_VERSION "$ENV{ATRINIK_PACKAGE_VERSION}")
-    elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
-        file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
-            ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
-    elseif (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
-        file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION"
-            ATRINIK_SOURCE_VERSION LIMIT_COUNT 1)
+    # Resolve the shared module from the physical CMake file, including source views.
+    file(REAL_PATH "${CMAKE_CURRENT_LIST_FILE}" component_file)
+    get_filename_component(component_dir "${component_file}" DIRECTORY)
+    if (EXISTS "${component_dir}/../cmake/AtrinikVersion.cmake")
+        include("${component_dir}/../cmake/AtrinikVersion.cmake")
+    elseif (EXISTS "${component_dir}/../../cmake/AtrinikVersion.cmake")
+        include("${component_dir}/../../cmake/AtrinikVersion.cmake")
     else ()
-        execute_process(
-            COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}"
-                describe --tags --exact-match --match "v[0-9]*"
-            OUTPUT_VARIABLE ATRINIK_GIT_TAG
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-            RESULT_VARIABLE ATRINIK_GIT_TAG_RESULT)
-        if (ATRINIK_GIT_TAG_RESULT EQUAL 0)
-            string(REGEX REPLACE "^v" "" ATRINIK_SOURCE_VERSION
-                "${ATRINIK_GIT_TAG}")
-        endif ()
+        include("${component_dir}/../../../cmake/AtrinikVersion.cmake")
     endif ()
-    if (NOT ATRINIK_SOURCE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
-        message(FATAL_ERROR "Atrinik source version must be MAJOR.MINOR.PATCH")
-    endif ()
+    atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
 
     project(atrinik-pathfinding VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
     include(CTest)

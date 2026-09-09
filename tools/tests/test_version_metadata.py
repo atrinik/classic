@@ -5,6 +5,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tarfile
+
+from tools.release import package_sources
 import unittest
 
 
@@ -316,6 +319,94 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                         (source / "CMakeLists.txt").symlink_to(owner / component / "CMakeLists.txt")
                     self.assert_component_version_probe(source, self.root / (label + "-build"),
                                                         version="5.68.0", explicit=False)
+
+    def test_pathfinding_physical_tag_untagged_and_installed_package(self) -> None:
+        owner = self.root / "classic-owner"
+        (owner / "cmake").mkdir(parents=True)
+        shutil.copy2(MODULE, owner / "cmake/AtrinikVersion.cmake")
+        shutil.copytree(ROOT / "libatrinik/pathfinding", owner / "libatrinik/pathfinding")
+        self.initialize_git(owner)
+        self.git(owner, "tag", "v5.68.0")
+        for tagged in (True, False):
+            if not tagged:
+                self.git(owner, "tag", "-d", "v5.68.0")
+            version = "5.68.0" if tagged else "5.1.0"
+            build = self.root / ("pathfinding-tagged" if tagged else "pathfinding-untagged")
+            install = build / "install"
+            result = subprocess.run([
+                "cmake", "-S", str(owner / "libatrinik/pathfinding"), "-B", str(build),
+                "-DCMAKE_INSTALL_PREFIX=" + str(install),
+            ], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            subprocess.run(["cmake", "--build", str(build), "--parallel", "2"],
+                           check=True, capture_output=True)
+            subprocess.run(["ctest", "--test-dir", str(build), "--output-on-failure"],
+                           check=True, capture_output=True)
+            subprocess.run(["cmake", "--install", str(build)], check=True, capture_output=True)
+            config = install / "lib/cmake/AtrinikPathfinding/AtrinikPathfindingConfigVersion.cmake"
+            self.assertIn(f'set(PACKAGE_VERSION "{version}")', config.read_text())
+            consumer = build / "consumer"
+            consumer.mkdir()
+            (consumer / "CMakeLists.txt").write_text(
+                'cmake_minimum_required(VERSION 3.21)\nproject(consumer LANGUAGES C)\n'
+                f'find_package(AtrinikPathfinding {version} EXACT CONFIG REQUIRED)\n'
+                'add_executable(consumer main.c)\ntarget_link_libraries(consumer PRIVATE Atrinik::Pathfinding)\n')
+            (consumer / "main.c").write_text('int main(void) { return 0; }\n')
+            subprocess.run(["cmake", "-S", str(consumer), "-B", str(consumer / "build"),
+                            "-DCMAKE_PREFIX_PATH=" + str(install)], check=True, capture_output=True)
+            subprocess.run(["cmake", "--build", str(consumer / "build")],
+                           check=True, capture_output=True)
+
+    def test_generated_archives_keep_owner_identity_and_pathfinding_package_version(self) -> None:
+        owner = self.root / "owner"
+        (owner / "cmake").mkdir(parents=True)
+        shutil.copy2(MODULE, owner / "cmake/AtrinikVersion.cmake")
+        shutil.copytree(ROOT / "protocol", owner / "protocol",
+                        ignore=shutil.ignore_patterns("build", "__pycache__"))
+        shutil.copytree(ROOT / "libatrinik/pathfinding", owner / "libatrinik/pathfinding")
+        for component in ("client", "server"):
+            (owner / component).mkdir()
+            shutil.copy2(self.source / "main.c", owner / component / "main.c")
+            cmake = (self.source / "CMakeLists.txt").read_text().replace(
+                MODULE.as_posix(), '${CMAKE_CURRENT_LIST_DIR}/cmake/AtrinikVersion.cmake')
+            (owner / component / "CMakeLists.txt").write_text(cmake)
+        revision = self.initialize_git(owner)
+        self.git(owner, "tag", "v5.68.0")
+        source_tar = self.root / "source.tar"
+        with source_tar.open("wb") as stream:
+            subprocess.run(["git", "-C", str(owner), "archive", "HEAD"], check=True, stdout=stream)
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        (foreign / "README").write_text("foreign")
+        foreign_revision = self.initialize_git(foreign)
+        self.git(foreign, "tag", "v88.99.100")
+        for scope in ("root", "client", "server", "libatrinik"):
+            with self.subTest(scope=scope):
+                archive = self.root / (scope + ".tar.gz")
+                package_sources.build_archive(source_tar, archive, scope, "5.68.0", 42, revision)
+                destination = foreign / scope
+                with tarfile.open(archive) as source:
+                    source.extractall(destination, filter="data")
+                package = next(destination.iterdir())
+                pathfinding = package / ("libatrinik/pathfinding" if scope == "root" else
+                                        "pathfinding" if scope == "libatrinik" else
+                                        "dependencies/libatrinik/pathfinding")
+                build = self.root / (scope + "-pathfinding-build")
+                result = subprocess.run(["cmake", "-S", str(pathfinding), "-B", str(build)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('set(PACKAGE_VERSION "5.68.0")',
+                              (build / "AtrinikPathfindingConfigVersion.cmake").read_text())
+                if scope in ("client", "server"):
+                    self.source = package
+                    result = self.configure()
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    client, server = self.build_and_outputs()
+                    self.assertEqual(client, server)
+                    self.assertTrue(client.startswith("5.68.0|"), client)
+                    self.assertTrue(client.endswith("|" + revision + "|unknown"), client)
+                    self.assertNotIn(foreign_revision, client)
+                    shutil.rmtree(self.root / "build")
 
     def test_component_configuration_has_no_source_tree_version_header(self) -> None:
         for component in ("client", "server"):
