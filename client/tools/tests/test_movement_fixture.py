@@ -224,7 +224,7 @@ class MovementFixtureTests(unittest.TestCase):
              "eef02084f57ef9bf8e511a3019a3ae911efa0c2808cd93bf3e4ba0919c17b0ef"),
             (28, "gpu-benchmark-28x28-thirteen-depth.map2.hex", (32, 32, 16, 16),
              list(generator.BENCHMARK_28_DEPTHS),
-             "513833c7e8ab46b94c9914f7e26b0b66d8db63bccb24833ec92d89bff06c8975"),
+             "ee0d4de99741ec050ecb46a609f747726d22f371f584fa536ba20a26dc8476c8"),
         )
         for logical_size, filename, geometry, depths, text_digest in cases:
             with self.subTest(logical_size=logical_size):

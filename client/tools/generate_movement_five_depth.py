@@ -277,7 +277,7 @@ def wire_ceiling_payload(depth: int) -> bytes:
                     )
                 )
                 actor += 1
-            elif depth == 0 and ((x, y) in ((20, 20), (21, 20)) or seed % 211 == 0):
+            elif ((x, y) in ((20, 20), (21, 20)) or seed % 211 == 0):
                 layers.append(
                     qualification_layer(
                         0,
