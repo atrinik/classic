@@ -975,12 +975,62 @@ START_TEST(test_loaded_login_introduces_items_before_updates) {
     ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM_UPDATE));
     ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM));
 
+    /* A different inventory must not enable deltas for the player. */
+    object *container = object_get();
+    container->type = CONTAINER;
+    esrv_send_inventory(pl->ob, container);
+    esrv_update_item(UPD_NROF, item);
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM_UPDATE));
+    socket_buffer_clear(pl->cs);
+    object_destroy(container);
+
     esrv_new_player(pl, pl->ob->weight + pl->ob->carrying);
-    esrv_send_inventory(pl->ob, pl->ob);
     added = arch_get("bolt");
     added->nrof = 1;
     ck_assert_ptr_eq(object_insert_into(added, pl->ob, 0), item);
     ck_assert_uint_eq(item->nrof, count + 3);
+    object *later_item = object_insert_into(arch_get("sword"), pl->ob, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(later_item);
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM_UPDATE));
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM));
+
+    esrv_send_inventory(pl->ob, pl->ob);
+    packet_struct *snapshot = queued_command_find(pl->cs, CLIENT_CMD_ITEM);
+    ck_assert_ptr_nonnull(snapshot);
+    packet_reader_t baseline;
+    packet_reader_init(&baseline, snapshot->data, snapshot->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&baseline), 1);
+    ck_assert_uint_eq(packet_reader_read_uint32(&baseline), pl->ob->count);
+    ck_assert_uint_eq(packet_reader_read_uint32(&baseline), pl->ob->count);
+    ck_assert_uint_eq(packet_reader_read_uint8(&baseline), 1);
+    bool found_stack = false, found_new = false, found_later = false;
+    for (object *tmp = pl->ob->inv; tmp != NULL; tmp = tmp->below) {
+        if (IS_INVISIBLE(tmp, pl->ob)) {
+            continue;
+        }
+        packet_struct *record = packet_new(0, 128, 256);
+        add_object_to_packet(record,
+                             tmp,
+                             pl->ob,
+                             CMD_APPLY_ACTION_NORMAL,
+                             UPD_FLAGS | UPD_WEIGHT | UPD_FACE | UPD_DIRECTION | UPD_TYPE |
+                                 UPD_NAME | UPD_ANIM | UPD_ANIMSPEED | UPD_NROF | UPD_EXTRA |
+                                 UPD_GLOW,
+                             0);
+        const uint8_t *received = packet_reader_read_view(&baseline, record->len);
+        ck_assert_ptr_nonnull(received);
+        ck_assert_int_eq(memcmp(received, record->data, record->len), 0);
+        found_stack |= tmp == item;
+        found_new |= tmp == new_item;
+        found_later |= tmp == later_item;
+        packet_free(record);
+    }
+    ck_assert(found_stack && found_new && found_later);
+    ck_assert(packet_reader_finish(&baseline));
+    added = arch_get("bolt");
+    added->nrof = 1;
+    ck_assert_ptr_eq(object_insert_into(added, pl->ob, 0), item);
+    ck_assert_uint_eq(item->nrof, count + 4);
     bool introduced_player = false;
     bool introduced_inventory = false;
     unsigned updates = 0;
@@ -995,9 +1045,20 @@ START_TEST(test_loaded_login_introduces_items_before_updates) {
             packet_reader_t reader;
             packet_reader_init(&reader, packet->data, packet->len);
             uint16_t flags = packet_reader_read_uint16(&reader);
-            ck_assert((flags & UPD_NROF) != 0);
-            ck_assert_uint_eq(packet_reader_read_uint32(&reader), item->count);
-            updates++;
+            uint32_t tag = packet_reader_read_uint32(&reader);
+            if (tag == item->count) {
+                ck_assert((flags & UPD_NROF) != 0);
+                if (flags & UPD_NAME) {
+                    char name[MAX_BUF];
+                    ck_assert(packet_reader_read_string(&reader, VS(name)));
+                }
+                ck_assert_uint_eq(packet_reader_read_uint32(&reader), count + 4);
+                ck_assert(packet_reader_finish(&reader));
+                updates++;
+            } else {
+                ck_assert_uint_eq(tag, pl->ob->count);
+                ck_assert_uint_eq(flags, UPD_WEIGHT);
+            }
         }
     }
     ck_assert(introduced_player && introduced_inventory);

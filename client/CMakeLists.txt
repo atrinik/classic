@@ -760,9 +760,14 @@ if (BUILD_TESTING)
 
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
+        src/client/commands.c
         src/client/item_packet.c
         src/gui/popups/interface_packet.c)
     atrinik_configure_target(client-compound-packet-tests)
+    target_compile_options(client-compound-packet-tests PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+    target_link_options(client-compound-packet-tests PRIVATE
+        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
     target_compile_definitions(client-compound-packet-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-compound-packet-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
