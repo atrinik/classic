@@ -1,6 +1,7 @@
 #include <commands.h>
 #include <map.h>
 #include <player.h>
+#include <region_map.h>
 #include <interface_packet.h>
 #include <item_packet.h>
 #include <toolkit/socket.h>
