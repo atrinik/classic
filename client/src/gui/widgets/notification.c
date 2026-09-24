@@ -222,10 +222,11 @@ void socket_command_notification(uint8_t *data, size_t len, size_t pos) {
                 break;
             }
 
-            case CMD_NOTIFICATION_DELAY:
-                notification->delay =
-                    MAX(NOTIFICATION_DEFAULT_FADEOUT, packet_reader_read_uint32(&reader));
+            case CMD_NOTIFICATION_DELAY: {
+                uint32_t delay = packet_reader_read_uint32(&reader);
+                notification->delay = MAX(NOTIFICATION_DEFAULT_FADEOUT, delay);
                 break;
+            }
 
             default:
                 packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);

@@ -760,9 +760,16 @@ if (BUILD_TESTING)
 
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
+        src/client/commands.c
         src/client/item_packet.c
         src/gui/popups/interface_packet.c)
     atrinik_configure_target(client-compound-packet-tests)
+    # Keep optimized switch tables separate when discarding unrelated handlers.
+    target_compile_options(client-compound-packet-tests PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-fdata-sections>)
+    target_link_options(client-compound-packet-tests PRIVATE
+        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
     target_compile_definitions(client-compound-packet-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-compound-packet-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -939,6 +946,22 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-textwin-event-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-textwin-event COMMAND client-textwin-event-tests)
+
+    add_executable(client-notification-tests src/tests/notification.c)
+    atrinik_configure_target(client-notification-tests)
+    target_compile_definitions(client-notification-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_compile_options(client-notification-tests PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+    target_link_options(client-notification-tests PRIVATE
+        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+    target_include_directories(client-notification-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-notification-tests PRIVATE
+        Atrinik::Core SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+    add_test(NAME client-notification COMMAND client-notification-tests)
 
     add_executable(client-widget-priority-tests
         src/tests/widget_priority.c

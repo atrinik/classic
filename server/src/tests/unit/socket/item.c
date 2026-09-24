@@ -914,6 +914,197 @@ START_TEST(test_player_status_word_of_recall_cancel) {
 }
 END_TEST
 
+/* Exercise the same persisted load and initialization sequence as player_login.
+ * The socket is deliberately PLAYING before its initial snapshots, as in login. */
+START_TEST(test_loaded_login_introduces_items_before_updates) {
+    mapstruct *map;
+    object *saved;
+    check_setup_env_pl(&map, &saved);
+    FREE_AND_COPY_HASH(saved->name, "Packet Ordering");
+    object *bolts = arch_get("bolt");
+    ck_assert_ptr_nonnull(bolts);
+    bolts->nrof = 3;
+    ck_assert_ptr_nonnull(object_insert_into(bolts, saved, INS_NO_MERGE));
+    player_save(saved);
+    char *path = player_make_path(saved->name, "player.dat");
+    char *metrics_path = player_make_path(saved->name, "metrics.dat");
+    FILE *fp = fopen(path, "rb");
+    ck_assert_ptr_nonnull(fp);
+
+    object *placeholder = player_get_dummy("Packet Restore", NULL);
+    player *pl = CONTR(placeholder);
+    object_remove(placeholder, 0);
+    placeholder->custom_attrset = NULL;
+    object_destroy(placeholder);
+    pl->ob = object_get();
+    pl->cs->state = ST_LOGIN;
+    socket_buffer_clear(pl->cs);
+    ck_assert(player_load_stream(pl, fp));
+    ck_assert_int_eq(fclose(fp), 0);
+    pl->ob->custom_attrset = pl;
+    object_weight_sum(pl->ob);
+    living_update_player(pl->ob);
+    link_player_skills(pl->ob);
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM_UPDATE));
+    object *item = NULL;
+    for (object *tmp = pl->ob->inv; tmp != NULL; tmp = tmp->below) {
+        if (tmp->arch == arch_find("bolt")) {
+            item = tmp;
+            break;
+        }
+    }
+    ck_assert_ptr_nonnull(item);
+    uint32_t count = item->nrof;
+    object *added = arch_get("bolt");
+    added->nrof = 1;
+    ck_assert_ptr_eq(object_insert_into(added, pl->ob, 0), item);
+    ck_assert_uint_eq(item->nrof, count + 1);
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM_UPDATE));
+
+    pl->cs->state = ST_PLAYING;
+    ck_assert(object_enter_map(pl->ob, NULL, map, 1, 1, true));
+    added = arch_get("bolt");
+    added->nrof = 1;
+    ck_assert_ptr_eq(object_insert_into(added, pl->ob, 0), item);
+    ck_assert_uint_eq(item->nrof, count + 2);
+    object *new_item = object_insert_into(arch_get("sword"), pl->ob, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(new_item);
+    esrv_update_item(UPD_FLAGS, item);
+    esrv_update_item(UPD_WEIGHT, pl->ob);
+    esrv_send_item(item);
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM_UPDATE));
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM));
+
+    /* A different inventory must not enable deltas for the player. */
+    object *container = object_get();
+    container->type = CONTAINER;
+    esrv_send_inventory(pl->ob, container);
+    esrv_update_item(UPD_NROF, item);
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM_UPDATE));
+    socket_buffer_clear(pl->cs);
+    object_destroy(container);
+
+    esrv_new_player(pl, pl->ob->weight + pl->ob->carrying);
+    added = arch_get("bolt");
+    added->nrof = 1;
+    ck_assert_ptr_eq(object_insert_into(added, pl->ob, 0), item);
+    ck_assert_uint_eq(item->nrof, count + 3);
+    object *later_item = object_insert_into(arch_get("sword"), pl->ob, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(later_item);
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM_UPDATE));
+    ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_ITEM));
+
+    esrv_send_inventory(pl->ob, pl->ob);
+    packet_struct *snapshot = queued_command_find(pl->cs, CLIENT_CMD_ITEM);
+    ck_assert_ptr_nonnull(snapshot);
+    packet_reader_t baseline;
+    packet_reader_init(&baseline, snapshot->data, snapshot->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&baseline), 1);
+    ck_assert_uint_eq(packet_reader_read_uint32(&baseline), pl->ob->count);
+    ck_assert_uint_eq(packet_reader_read_uint32(&baseline), pl->ob->count);
+    ck_assert_uint_eq(packet_reader_read_uint8(&baseline), 1);
+    bool found_stack = false, found_new = false, found_later = false;
+    for (object *tmp = pl->ob->inv; tmp != NULL; tmp = tmp->below) {
+        if (IS_INVISIBLE(tmp, pl->ob)) {
+            continue;
+        }
+        packet_struct *record = packet_new(0, 128, 256);
+        add_object_to_packet(record,
+                             tmp,
+                             pl->ob,
+                             CMD_APPLY_ACTION_NORMAL,
+                             UPD_FLAGS | UPD_WEIGHT | UPD_FACE | UPD_DIRECTION | UPD_TYPE |
+                                 UPD_NAME | UPD_ANIM | UPD_ANIMSPEED | UPD_NROF | UPD_EXTRA |
+                                 UPD_GLOW,
+                             0);
+        packet_view_t received = packet_reader_read_view(&baseline, record->len);
+        ck_assert_ptr_nonnull(received.data);
+        ck_assert_uint_eq(received.len, record->len);
+        ck_assert_int_eq(memcmp(received.data, record->data, record->len), 0);
+        found_stack |= tmp == item;
+        found_new |= tmp == new_item;
+        found_later |= tmp == later_item;
+        packet_free(record);
+    }
+    ck_assert(found_stack && found_new && found_later);
+    ck_assert(packet_reader_finish(&baseline));
+    added = arch_get("bolt");
+    added->nrof = 1;
+    ck_assert_ptr_eq(object_insert_into(added, pl->ob, 0), item);
+    ck_assert_uint_eq(item->nrof, count + 4);
+    bool introduced_player = false;
+    bool introduced_inventory = false;
+    unsigned updates = 0;
+    for (packet_struct *packet = pl->cs->packets; packet != NULL; packet = packet->next) {
+        if (packet->type == CLIENT_CMD_PLAYER) {
+            introduced_player = true;
+        } else if (packet->type == CLIENT_CMD_ITEM) {
+            ck_assert(introduced_player);
+            introduced_inventory = true;
+        } else if (packet->type == CLIENT_CMD_ITEM_UPDATE) {
+            ck_assert(introduced_player && introduced_inventory);
+            packet_reader_t reader;
+            packet_reader_init(&reader, packet->data, packet->len);
+            uint16_t flags = packet_reader_read_uint16(&reader);
+            uint32_t tag = packet_reader_read_uint32(&reader);
+            if (tag == item->count) {
+                ck_assert((flags & UPD_NROF) != 0);
+                if (flags & UPD_NAME) {
+                    char name[MAX_BUF];
+                    ck_assert(packet_reader_read_string(&reader, VS(name)));
+                }
+                ck_assert_uint_eq(packet_reader_read_uint32(&reader), count + 4);
+                ck_assert(packet_reader_finish(&reader));
+                updates++;
+            } else {
+                ck_assert_uint_eq(tag, pl->ob->count);
+                ck_assert_uint_eq(flags, UPD_WEIGHT);
+            }
+        }
+    }
+    ck_assert(introduced_player && introduced_inventory);
+    ck_assert_uint_eq(updates, 1);
+    socket_buffer_clear(pl->cs);
+    esrv_send_item(item);
+    ck_assert_ptr_nonnull(queued_command_find(pl->cs, CLIENT_CMD_ITEM));
+    ck_assert_int_eq(unlink(path), 0);
+    ck_assert_int_eq(unlink(metrics_path), 0);
+    free(path);
+    free(metrics_path);
+    object_destroy(pl->ob);
+    object_destroy(saved);
+}
+END_TEST
+
+/* The optional output is a synthetic production packet for the client replay
+ * fixture. It contains no account, network or authored content data. */
+START_TEST(test_sign_notification_wire_fixture) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *sign = object_get();
+    sign->type = SIGN;
+    object_set_value(sign, "notification_message", "A sign", 1);
+    object_set_value(sign, "notification_delay", "120000", 1);
+    socket_buffer_clear(CONTR(pl)->cs);
+    manual_apply(pl, sign, 0);
+    packet_struct *packet = queued_command_find(CONTR(pl)->cs, CLIENT_CMD_NOTIFICATION);
+    ck_assert_ptr_nonnull(packet);
+    const uint8_t expected[] = {0, 'A', ' ', 's', 'i', 'g', 'n', 0, 3, 0, 1, 0xd4, 0xc0};
+    ck_assert_uint_eq(packet->len, sizeof(expected));
+    ck_assert_int_eq(memcmp(packet->data, expected, sizeof(expected)), 0);
+    const char *output = getenv("ATRINIK_TEST_NOTIFICATION_PACKET");
+    if (output != NULL) {
+        FILE *fp = fopen(output, "wb");
+        ck_assert_ptr_nonnull(fp);
+        ck_assert_uint_eq(fwrite(packet->data, 1, packet->len, fp), packet->len);
+        ck_assert_int_eq(fclose(fp), 0);
+    }
+    object_destroy(sign);
+    object_destroy(pl);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("item");
     TCase *tc_core = tcase_create("Core");
@@ -921,6 +1112,8 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_loaded_login_introduces_items_before_updates);
+    tcase_add_test(tc_core, test_sign_notification_wire_fixture);
     tcase_add_test(tc_core, test_spell_extra_message_wire_limit);
     tcase_add_test(tc_core, test_update_map_item_name_and_count_marks_look_stale);
     tcase_add_test(tc_core, test_player_status_hidden_disease_lifecycle_and_snapshot);
