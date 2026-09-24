@@ -764,8 +764,10 @@ if (BUILD_TESTING)
         src/client/item_packet.c
         src/gui/popups/interface_packet.c)
     atrinik_configure_target(client-compound-packet-tests)
+    # Keep optimized switch tables separate when discarding unrelated handlers.
     target_compile_options(client-compound-packet-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-fdata-sections>)
     target_link_options(client-compound-packet-tests PRIVATE
         $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
     target_compile_definitions(client-compound-packet-tests PRIVATE SDL_DISABLE_OLD_NAMES)
