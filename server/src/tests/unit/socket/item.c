@@ -1017,9 +1017,10 @@ START_TEST(test_loaded_login_introduces_items_before_updates) {
                                  UPD_NAME | UPD_ANIM | UPD_ANIMSPEED | UPD_NROF | UPD_EXTRA |
                                  UPD_GLOW,
                              0);
-        const uint8_t *received = packet_reader_read_view(&baseline, record->len);
-        ck_assert_ptr_nonnull(received);
-        ck_assert_int_eq(memcmp(received, record->data, record->len), 0);
+        packet_view_t received = packet_reader_read_view(&baseline, record->len);
+        ck_assert_ptr_nonnull(received.data);
+        ck_assert_uint_eq(received.len, record->len);
+        ck_assert_int_eq(memcmp(received.data, record->data, record->len), 0);
         found_stack |= tmp == item;
         found_new |= tmp == new_item;
         found_later |= tmp == later_item;
