@@ -4,50 +4,99 @@
 #include "../gui/widgets/notification.c"
 #include <stdio.h>
 
-#define TEST_CHECK(condition) do { \
-    if (!(condition)) { \
-        fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
-        abort(); \
-    } \
-} while (0)
+#define TEST_CHECK(condition)                                                               \
+    do {                                                                                    \
+        if (!(condition)) {                                                                 \
+            fprintf(stderr, "check failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
+            abort();                                                                        \
+        }                                                                                   \
+    } while (0)
 
 widgetdata *cur_widget[TOTAL_SUBWIDGETS];
-uint32_t client_ui_ticks(void) { return 0; }
-void SetPriorityWidget(widgetdata *widget) { (void)widget; }
-void resize_widget(widgetdata *widget, int side, int offset) {
-    (void)widget; (void)side; (void)offset;
+uint32_t client_ui_ticks(void) {
+    return 0;
 }
-keybind_struct *keybind_find_by_command(const char *command) { (void)command; return NULL; }
+void SetPriorityWidget(widgetdata *widget) {
+    (void)widget;
+}
+void resize_widget(widgetdata *widget, int side, int offset) {
+    (void)widget;
+    (void)side;
+    (void)offset;
+}
+keybind_struct *keybind_find_by_command(const char *command) {
+    (void)command;
+    return NULL;
+}
 char *keybind_get_key_shortcut(SDL_Keycode key, SDL_Keymod mod, char *buf, size_t len) {
-    (void)key; (void)mod; (void)len; buf[0] = '\0'; return buf;
+    (void)key;
+    (void)mod;
+    (void)len;
+    buf[0] = '\0';
+    return buf;
 }
 font_struct *font_get_weak(const char *name, uint8_t size) {
-    (void)name; (void)size; return NULL;
+    (void)name;
+    (void)size;
+    return NULL;
 }
-void text_show(SDL_Surface *surface, font_struct *font, const char *text, int x, int y,
-               const char *color, uint64_t flags, SDL_Rect *box) {
-    (void)surface; (void)font; (void)text; (void)x; (void)y; (void)color; (void)flags;
-    box->w = 20; box->h = 10;
+void text_show(SDL_Surface *surface,
+               font_struct *font,
+               const char *text,
+               int x,
+               int y,
+               const char *color,
+               uint64_t flags,
+               SDL_Rect *box) {
+    (void)surface;
+    (void)font;
+    (void)text;
+    (void)x;
+    (void)y;
+    (void)color;
+    (void)flags;
+    box->w = 20;
+    box->h = 10;
 }
 int text_color_parse(const char *text, SDL_Color *color) {
-    (void)text; *color = (SDL_Color){0}; return 1;
+    (void)text;
+    *color = (SDL_Color){0};
+    return 1;
 }
-uint32_t get_video_flags(void) { return 0; }
-int video_get_bpp(void) { return 32; }
-SDL_Surface *surface_create_rgb(Uint32 flags, int w, int h, int depth,
-                                Uint32 r, Uint32 g, Uint32 b, Uint32 a) {
-    (void)flags; (void)depth; (void)r; (void)g; (void)b; (void)a;
+uint32_t get_video_flags(void) {
+    return 0;
+}
+int video_get_bpp(void) {
+    return 32;
+}
+SDL_Surface *
+surface_create_rgb(Uint32 flags, int w, int h, int depth, Uint32 r, Uint32 g, Uint32 b, Uint32 a) {
+    (void)flags;
+    (void)depth;
+    (void)r;
+    (void)g;
+    (void)b;
+    (void)a;
     return SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
 }
-bool gpu_renderer_canvas_register(SDL_Surface **surface) { return *surface != NULL; }
+bool gpu_renderer_canvas_register(SDL_Surface **surface) {
+    return *surface != NULL;
+}
 bool surface_fill_rect(SDL_Surface *surface, const SDL_Rect *box, Uint32 color) {
     return SDL_FillSurfaceRect(surface, box, color);
 }
 Uint32 surface_map_rgb(SDL_Surface *surface, Uint8 r, Uint8 g, Uint8 b) {
-    (void)surface; (void)r; (void)g; (void)b; return 0;
+    (void)surface;
+    (void)r;
+    (void)g;
+    (void)b;
+    return 0;
 }
 void border_create_color(SDL_Surface *surface, SDL_Rect *box, int width, const char *color) {
-    (void)surface; (void)box; (void)width; (void)color;
+    (void)surface;
+    (void)box;
+    (void)width;
+    (void)color;
 }
 
 static packet_error_t consume(uint8_t *data, size_t length) {
