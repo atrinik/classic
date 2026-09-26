@@ -271,7 +271,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Upload release-tool coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           disable_search: true
           fail_ci_if_error: false
@@ -279,7 +279,7 @@ jobs:
           flags: release-tools
           use_oidc: true
       - name: Upload libatrinik coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           disable_search: true
           fail_ci_if_error: false
@@ -788,7 +788,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Upload coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
@@ -888,7 +888,7 @@ jobs:
             "${CLASSIC_LINUX_IMAGE}" \
             "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Upload coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
@@ -946,7 +946,7 @@ jobs:
             "${CLASSIC_LINUX_IMAGE}" \
             "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Upload GPU-complete client coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
