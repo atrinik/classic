@@ -1492,6 +1492,32 @@ static bool gpu_player_view_render_complete(void) {
 
 static char gpu_player_view_review_prefix[256];
 
+/** Finish the normal HUD map-name transition on the injected UI clock. */
+static bool gpu_player_view_render_map_transition(widgetdata *widget,
+                                                   bool widget_render,
+                                                   uint32_t *ui_clock) {
+#ifdef ATRINIK_WIDGET_TESTS
+    const uint32_t duration = 2U * MAP_NAME_FADEOUT;
+    if (*ui_clock > UINT32_MAX - duration) {
+        SDL_SetError("map-name transition exceeds the bounded fixture UI clock");
+        return false;
+    }
+    /* The first production frame starts the old-name fade. A frozen clock
+     * otherwise leaves the old label visible, making identity-only map
+     * transitions falsely equal to the initial checkpoint. Complete both
+     * fade halves before taking evidence, and advance monotonically again
+     * for the return transition. Do not advance the MAP animation clock. */
+    if (!gpu_player_view_render(widget, widget_render)) {
+        return false;
+    }
+    *ui_clock += duration;
+    client_ui_test_clock_set(*ui_clock);
+#else
+    (void)ui_clock;
+#endif
+    return gpu_player_view_render(widget, widget_render);
+}
+
 static bool gpu_player_view_review_save(SDL_Surface *surface,
                                         const char *label,
                                         char artifact[PLAYER_VIEW_ARTIFACT_PATH_SIZE],
@@ -4417,9 +4443,11 @@ int gpu_player_view_main(int argc, char *argv[]) {
                     SDL_GetError());
             goto cleanup;
         }
+        uint32_t transition_ui_clock = client_ui_ticks();
         socket_command_map(transition_snapshot, transition_snapshot_size, 0);
         if (image_missing_faces_detected() ||
-            !gpu_player_view_render(map_widget, manifest.widget_render) ||
+            !gpu_player_view_render_map_transition(map_widget, manifest.widget_render,
+                                                    &transition_ui_clock) ||
             !gpu_player_view_checkpoint(transition_digest)) {
             fprintf(stderr,
                     "gpu-player-view: transition production frame failed: %s\n",
@@ -4428,7 +4456,8 @@ int gpu_player_view_main(int argc, char *argv[]) {
         }
         socket_command_map(snapshot, snapshot_size, 0);
         if (image_missing_faces_detected() ||
-            !gpu_player_view_render(map_widget, manifest.widget_render)) {
+            !gpu_player_view_render_map_transition(map_widget, manifest.widget_render,
+                                                    &transition_ui_clock)) {
             fprintf(stderr,
                     "gpu-player-view: return production frame failed: %s\n",
                     SDL_GetError());
@@ -4535,9 +4564,11 @@ int gpu_player_view_main(int argc, char *argv[]) {
          strcmp(pixels_digest, manifest.expected_pixels_digest) != 0) ||
         (movement_lifecycle && !gpu_player_view_digest_zero(manifest.expected_pixels_digest))) {
         fprintf(stderr,
-                "gpu-player-view: pixel/lifecycle mismatch (expected %s, initial %s, got %s)\n",
+                "gpu-player-view: pixel/lifecycle mismatch (expected %s, initial %s, "
+                "transition %s, got %s)\n",
                 movement_lifecycle ? initial_digest : manifest.expected_pixels_digest,
                 initial_digest,
+                transition_digest,
                 pixels_digest);
         result = 7;
         goto cleanup;
