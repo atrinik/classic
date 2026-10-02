@@ -60,6 +60,16 @@ int main(void) {
     CHECK(map_visibility_scale_radiance(2048, 16) == 128);
     CHECK(map_visibility_scale_radiance(2048, 256) == 2048);
     CHECK(map_visibility_scale_radiance(UINT16_MAX, UINT16_MAX) == UINT16_MAX);
+    const uint16_t expected_boundary[] = {0, 128, 2048, UINT16_MAX};
+    for (int x = 0; x <= 3; x++) {
+        uint16_t scalar = UINT16_MAX;
+        uint16_t rgb[3] = {UINT16_MAX, 32768, 16384};
+        map_visibility_apply_window_fade(x, 8, 17, 17, &scalar, rgb);
+        CHECK(scalar == expected_boundary[x]);
+        CHECK(rgb[0] == expected_boundary[x]);
+        CHECK(rgb[1] == (x == 3 ? 32768 : expected_boundary[x] / 2));
+        CHECK(rgb[2] == (x == 3 ? 16384 : expected_boundary[x] / 4));
+    }
 
     CHECK(MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE ==
           (MAP_VISIBILITY_MEMORY_FLOOR_RAW * 8U + 2U) / 5U);

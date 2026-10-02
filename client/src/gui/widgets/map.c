@@ -5131,13 +5131,8 @@ bool map_lighting_diagnostic_get(int depth,
     }
 
     if (diagnostic->working_available && smooth_lighting) {
-        uint16_t edge_weight = map_visibility_window_weight(x, y, map_width, map_height);
-        diagnostic->working_scalar =
-            map_visibility_scale_radiance(diagnostic->working_scalar, edge_weight);
-        for (size_t channel = 0; channel < 3; channel++) {
-            diagnostic->working_rgb[channel] =
-                map_visibility_scale_radiance(diagnostic->working_rgb[channel], edge_weight);
-        }
+        map_visibility_apply_window_fade(x, y, map_width, map_height,
+                                          &diagnostic->working_scalar, diagnostic->working_rgb);
     }
 
     if (!diagnostic->working_available) {
@@ -5813,14 +5808,9 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     /* Nearest-known light borrowing must not extend a bright field to the
      * clipped wire-window boundary. Feather the completed presentation sample,
      * including the local field and remembered floor, before interpolation. */
-    uint16_t edge_weight = map_visibility_window_weight(x - (data->midx - map_width / 2),
-                                                        y - (data->midy - map_height / 2),
-                                                        map_width,
-                                                        map_height);
-    vertex.scalar = map_visibility_scale_radiance(vertex.scalar, edge_weight);
-    for (size_t channel = 0; channel < 3; channel++) {
-        rgb[channel] = map_visibility_scale_radiance(rgb[channel], edge_weight);
-    }
+    map_visibility_apply_window_fade(x - (data->midx - map_width / 2),
+                                      y - (data->midy - map_height / 2),
+                                      map_width, map_height, &vertex.scalar, rgb);
     vertex.red = rgb[0];
     vertex.green = rgb[1];
     vertex.blue = rgb[2];
@@ -8831,6 +8821,17 @@ bool widget_map_projection_contract_test(void) {
                                   edge.blue == 512 * weight / 256 &&
                                   edge_light->radiance == 2048 &&
                                   edge_light->rgb_radiance[0] == 2048;
+                        edge_light->radiance = UINT16_MAX;
+                        edge_light->rgb_radiance[0] = UINT16_MAX;
+                        edge_light->rgb_radiance[1] = 32768;
+                        edge_light->rgb_radiance[2] = 16384;
+                        edge = map_lighting_vertex(surface, &lighting, sample_x, sample_y);
+                        success = success && edge.scalar == 2048 * weight / 256 &&
+                                  edge.red == 2048 * weight / 256 &&
+                                  edge.green == 1024 * weight / 256 &&
+                                  edge.blue == 512 * weight / 256 &&
+                                  edge_light->radiance == UINT16_MAX &&
+                                  edge_light->rgb_radiance[0] == UINT16_MAX;
                     }
                 }
 
