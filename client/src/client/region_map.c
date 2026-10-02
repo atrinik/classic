@@ -44,6 +44,8 @@
 #include <surface_primitives.h>
 #include <region_map.h>
 #include <region_exploration.h>
+#include <client_socket.h>
+#include <toolkit/packet.h>
 #include <toolkit/logger.h>
 #include <toolkit/memory.h>
 #include <toolkit/string.h>
@@ -753,6 +755,9 @@ static void region_map_fow_create(region_map_t *region_map) {
     HARD_ASSERT(region_map->fow != NULL);
     HARD_ASSERT(region_map->fow->bitmap == NULL);
     region_map->fow->bitmap = xcalloc(1, RM_MAP_FOW_BITMAP_SIZE(region_map));
+    for (size_t i = 0; i < region_map->def->num_maps; i++) {
+        region_exploration_request(region_map->def->maps[i].path);
+    }
     region_map_fow_update(region_map);
 }
 
@@ -1079,6 +1084,9 @@ void region_map_exploration_refresh_map(const char *path, bool reset) {
     minimap_redraw_flag = 1;
     for (region_map_t *map = region_maps; map != NULL; map = map->next) {
         if (reset) {
+            for (size_t i = 0; i < map->def->num_maps; i++) {
+                region_exploration_request(map->def->maps[i].path);
+            }
             if (map->fow->tiles != NULL) {
                 for (unsigned i = 0; i < utarray_len(map->fow->tiles); i++) {
                     region_map_fow_tile_t *tile =
@@ -1088,8 +1096,7 @@ void region_map_exploration_refresh_map(const char *path, bool reset) {
                 utarray_clear(map->fow->tiles);
             }
         }
-        /* A snapshot can replace dimensions or clear old geometry. Rebuild
-         * from the authoritative session cache before accepting new live bits. */
+        /* Account changes rebuild views; deltas touch only the changed path. */
         if (map->fow->bitmap != NULL) {
             if (path == NULL) {
                 memset(map->fow->bitmap, 0, RM_MAP_FOW_BITMAP_SIZE(map));
@@ -1109,16 +1116,38 @@ void region_map_exploration_refresh(bool reset) {
 }
 
 void region_map_exploration_clear(void) {
-    region_exploration_clear();
+    region_exploration_disconnect();
     region_map_exploration_refresh(true);
 }
 
+static bool region_map_exploration_send(const uint8_t *data, size_t len, void *user) {
+    (void)user;
+    packet_struct *packet = packet_new(SERVER_CMD_REGION_EXPLORATION, len, 0);
+    packet_writer_write_bytes(packet, data, len);
+    return socket_send_packet_bounded(packet, 256U * 1024U);
+}
+
+void region_map_exploration_service(void) {
+    region_exploration_service(region_map_exploration_send, NULL);
+}
+
 #ifdef ATRINIK_WIDGET_TESTS
+static bool region_map_exploration_test_send(const uint8_t *data, size_t len, void *user) {
+    const uint8_t expected[] = {0, '/', 't', 0, 0, 1, 0x21};
+    bool *ok = user;
+    *ok &= len == sizeof(expected) && memcmp(data, expected, sizeof(expected)) == 0;
+    return true;
+}
+
 bool region_map_exploration_test(void) {
     const uint8_t packet[] = {1, '/', 't', 0, 0, 3, 0, 2, 0x21};
-    region_map_exploration_clear();
+    region_exploration_clear();
+    region_exploration_connect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                               NULL);
+    const uint8_t reset[] = {0, 't', 0};
+    bool ok = region_exploration_receive(reset, sizeof(reset), NULL);
     region_map_t *map = region_map_create();
-    bool ok = region_exploration_receive(packet, sizeof(packet));
+    ok &= region_exploration_receive(packet, sizeof(packet), NULL);
     region_map_exploration_refresh(false); /* Arrives before either asset. */
     map->def->pixel_size = 2;
     map->def->maps = xcalloc(1, sizeof(*map->def->maps));
@@ -1133,15 +1162,17 @@ bool region_map_exploration_test(void) {
         return false;
     }
     region_map_fow_create(map);
+    ok &= region_exploration_service(region_map_exploration_test_send, &ok) == 1;
     ok &= region_map_fow_is_visited(map, 2, 1) && region_map_fow_is_visited(map, 4, 2) &&
           !region_map_fow_is_visited(map, 3, 1);
     region_map_fow_reset(map);
     region_map_fow_create(map); /* Region is reopened with no network replay. */
     ok &= region_map_fow_is_visited(map, 4, 2);
+    ok &= region_exploration_service(region_map_exploration_test_send, &ok) == 0;
     const uint8_t replacement[] = {1, '/', 't', 0, 0, 1, 0, 1, 1};
-    ok &= region_exploration_receive(replacement, sizeof(replacement));
+    ok &= region_exploration_receive(replacement, sizeof(replacement), NULL);
     region_map_exploration_refresh(false);
-    ok &= region_map_fow_is_visited(map, 2, 1) && !region_map_fow_is_visited(map, 4, 2);
+    ok &= region_map_fow_is_visited(map, 2, 1) && region_map_fow_is_visited(map, 4, 2);
     region_map_t *clone = region_map_clone(map);
     clone->fow_zoomed = SDL_CreateSurface(8, 8, SDL_PIXELFORMAT_RGBA32);
     region_map_exploration_clear();
@@ -1151,7 +1182,11 @@ bool region_map_exploration_test(void) {
     region_map_fow_reset(map);
     region_map_fow_create(map);
     ok &= !region_map_fow_is_visited(map, 2, 1);
+    ok &= region_exploration_receive(reset, sizeof(reset), NULL);
+    region_map_exploration_refresh(true);
+    ok &= region_map_fow_is_visited(map, 4, 2);
     region_map_free(map);
+    region_exploration_clear();
     return ok;
 }
 #endif

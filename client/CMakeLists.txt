@@ -762,7 +762,9 @@ if (BUILD_TESTING)
         src/tests/region_exploration.c src/client/region_exploration.c)
     atrinik_configure_target(client-region-exploration-tests)
     target_include_directories(client-region-exploration-tests PRIVATE src/include)
-    add_test(NAME client-region-exploration COMMAND client-region-exploration-tests)
+    target_link_libraries(client-region-exploration-tests PRIVATE Atrinik::Core OpenSSL::Crypto)
+    add_test(NAME client-region-exploration COMMAND client-region-exploration-tests
+        "${CMAKE_CURRENT_BINARY_DIR}/region-exploration-cache-test")
 
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c

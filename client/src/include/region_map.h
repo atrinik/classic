@@ -268,6 +268,7 @@ void region_map_fow_update(region_map_t *region_map);
 void region_map_exploration_refresh(bool reset);
 void region_map_exploration_refresh_map(const char *path, bool reset);
 void region_map_exploration_clear(void);
+void region_map_exploration_service(void);
 #ifdef ATRINIK_WIDGET_TESTS
 bool region_map_exploration_test(void);
 #endif

@@ -1157,6 +1157,7 @@ int main(int argc, char *argv[]) {
 
             DoClient();
             image_face_requests_service();
+            region_map_exploration_service();
         }
 
         /* If not connected, walk through connection chain and/or wait for
