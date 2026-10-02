@@ -1,5 +1,20 @@
 # Frozen renderer migration fixtures
 
+The `presentation-day`, `presentation-dusk`, and `presentation-night` fixtures
+exercise the normal MAP2 decoder and `map_draw_map()` compositor with the same
+17-by-17 floor, opaque center player, viewport, and assets. Only authoritative
+neutral radiance changes: Q5.11 2048, 128, and 0. The analytic gray floor and
+white player are generated test geometry, not game artwork. Regenerate all
+three closed manifests and their pinned inputs with
+`python3 tools/generate_night_presentation_fixtures.py`.
+
+Run `atrinik --gpu-player-view src/tests/fixtures/player_view/presentation-night.xml`
+from the client directory (and the corresponding day/dusk manifests). Set
+`ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY` to a task-owned directory to export
+the actual completed GPU frames. The large viewport exposes all four map
+boundaries for inspection of the two-tile lighting feather. The zero golden
+hashes request measured evidence; they do not claim cross-backend approval.
+
 These XML manifests preserve the pre-cutover renderer's viewport, logical map
 size, lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
 MAP command, and every image by SHA-256. They are immutable inputs for schema

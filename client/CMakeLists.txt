@@ -1081,6 +1081,9 @@ if (BUILD_TESTING)
         map-overlay-widget-state
         map-overlay-elevated
         visibility-fade-centered
+        presentation-day
+        presentation-dusk
+        presentation-night
         brynknot-movement
         gpu-qualification-town-25x25
         gpu-ui-closure)
