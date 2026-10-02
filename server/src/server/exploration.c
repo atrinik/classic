@@ -16,7 +16,6 @@
 #include <server.h>
 #include <toolkit/packet.h>
 #include <toolkit/path.h>
-#include <toolkit/stringbuffer.h>
 
 #define EXPLORATION_MAPS_MAX 10000U
 #define EXPLORATION_DIM_MAX 256U
@@ -189,30 +188,38 @@ static bool load_account(exploration_account *account) {
     return ok;
 }
 
-static void append_u16(StringBuffer *buffer, unsigned value) {
-    uint8_t data[2] = {value >> 8, value & 255};
-    stringbuffer_append_string_len(buffer, (const char *)data, 2);
+static void write_u16(uint8_t *data, unsigned value) {
+    data[0] = (uint8_t)(value >> 8);
+    data[1] = (uint8_t)value;
 }
 
 static bool save_account(exploration_account *account) {
     if (!account->valid || !account->dirty) {
         return !account->dirty;
     }
-    StringBuffer *buffer = stringbuffer_new();
-    stringbuffer_append_string_len(buffer, EXPLORATION_MAGIC, 8);
+    /* Allocate once: incrementally growing a large string buffer can copy the
+     * entire account for each map, depending on the allocator. */
     size_t size = 8;
     for (exploration_map *map = account->maps; map != NULL; map = map->hh.next) {
+        size += 6 + strlen(map->path) + bitmap_size(map->width, map->height);
+    }
+    uint8_t *data = xmalloc(size);
+    memcpy(data, EXPLORATION_MAGIC, 8);
+    size_t pos = 8;
+    for (exploration_map *map = account->maps; map != NULL; map = map->hh.next) {
         size_t len = strlen(map->path), bytes = bitmap_size(map->width, map->height);
-        append_u16(buffer, len);
-        stringbuffer_append_string_len(buffer, map->path, len);
-        append_u16(buffer, map->width);
-        append_u16(buffer, map->height);
-        stringbuffer_append_string_len(buffer, (const char *)map->bits, bytes);
-        size += 6 + len + bytes;
+        write_u16(data + pos, len);
+        pos += 2;
+        memcpy(data + pos, map->path, len);
+        pos += len;
+        write_u16(data + pos, map->width);
+        write_u16(data + pos + 2, map->height);
+        pos += 4;
+        memcpy(data + pos, map->bits, bytes);
+        pos += bytes;
     }
     TEST_COUNT(save_records, account->count);
     TEST_COUNT(save_bytes, size);
-    char *data = stringbuffer_finish(buffer);
     bool ok = path_write_atomic(account->path, data, size, 0600);
     free(data);
     if (ok) {
