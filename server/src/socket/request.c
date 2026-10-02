@@ -1813,7 +1813,9 @@ void draw_client_map2(object *pl) {
                                                     light_rgb_radiance[sub_layer]);
                         }
 
-                        if (tmp != NULL && raw_light[sub_layer] <= 0 &&
+                        /* The viewer remains visible even in total darkness. This
+                         * exception grants no visibility to other live objects. */
+                        if (tmp != NULL && tmp != pl && raw_light[sub_layer] <= 0 &&
                             !map_layer_is_remembered_geometry(layer) && !roof_surface) {
                             tmp = NULL;
                         }

@@ -54,6 +54,49 @@ START_TEST(test_celestial_open_field_matches_daylight_anchor) {
 }
 END_TEST
 
+START_TEST(test_derived_horizontal_neighbors_preserve_day_and_lunar_light) {
+    mapstruct *map = open_fixture(3, 3);
+    FREE_AND_COPY_HASH(map->path, "/celestial/world_1_1");
+    /* The normal coordinate loader synthesizes these travel paths without
+     * an authored celestial boundary, even while neighbors are unloaded. */
+    for (size_t i = 0; i < TILED_UP; i++) {
+        FREE_AND_COPY_HASH(map->tile_path[i], "/celestial/unloaded-neighbor");
+    }
+    uint64_t saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    int daylight = map_get_darkness(map, 1, 1, NULL);
+    uint64_t generation = celestial_light_generation(map);
+    ck_assert_int_gt(daylight, 1000);
+
+    todtick = HOURS_PER_MONTH / 2;
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    int moonlight = map_get_darkness(map, 1, 1, NULL);
+    ck_assert_int_gt(moonlight, 0);
+    ck_assert_int_lt(moonlight, daylight);
+    ck_assert_uint_gt(celestial_light_generation(map), generation);
+
+    ck_assert(celestial_override_set_phase(CELESTIAL_LUNAR_NEW));
+    celestial_light_invalidate_all();
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    ck_assert_int_lt(map_get_darkness(map, 1, 1, NULL), moonlight);
+    ck_assert(celestial_override_clear());
+    todtick = saved_hour;
+
+    /* Authored unresolved seams and vertical stacks still fail closed. */
+    map->celestial_tile_path_seen[TILED_EAST] = true;
+    map->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    ck_assert(!celestial_light_rebuild(map, (uint64_t)todtick));
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 1, 1)->celestial_light_value, 0);
+    map->celestial_tile_path_seen[TILED_EAST] = false;
+    map->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_UNSET;
+    map->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    FREE_AND_COPY_HASH(map->tile_path[TILED_UP], "/celestial/missing-upper");
+    ck_assert(!celestial_light_rebuild(map, (uint64_t)todtick));
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 1, 1)->celestial_light_value, 0);
+}
+END_TEST
+
 START_TEST(test_celestial_uses_directional_shadow_and_reseeds_after_bound) {
     mapstruct *map = open_fixture(40, 1);
     object *wall = arch_get("wall_wood_1");
@@ -410,6 +453,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_celestial_open_field_matches_daylight_anchor);
+    tcase_add_test(tc_core, test_derived_horizontal_neighbors_preserve_day_and_lunar_light);
     tcase_add_test(tc_core, test_celestial_uses_directional_shadow_and_reseeds_after_bound);
     tcase_add_test(tc_core, test_celestial_lunar_and_starlight_are_additive);
     tcase_add_test(tc_core, test_celestial_invalid_topology_fails_closed);

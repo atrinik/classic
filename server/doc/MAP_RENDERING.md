@@ -388,9 +388,11 @@ coordinate lookup to every missing `tile_path_N`; explicit paths remain
 authoritative.  With `MAP_NO_DYNAMIC`, a derived slot is populated only when
 the candidate map exists, so an omitted direction remains a valid terminal
 edge and creates no path, retry, or invisible map.  Without that flag, the
-legacy dynamic-map rules are preserved as well.  Derived links carry no
-authored boundary policy, while explicit celestial links continue to require
-their reciprocal boundary declarations and vertical-stack validation.  The
+legacy dynamic-map rules are preserved as well.  Derived horizontal links carry no
+authored boundary policy and do not require resident neighbors for local celestial
+lighting; they transport no celestial field across the seam. Explicit celestial
+links continue to require their reciprocal boundary declarations and vertical-stack
+validation. The
 static authored-exit validator mirrors the existing-map coordinate lookup.
 Fixtures cover explicit and derived links, an omitted terminal edge, vertical
 coordinates, an authored missing target, asymmetry, different profiles, and
@@ -2007,8 +2009,8 @@ frozen constants are:
 | Quantity | Value |
 | --- | ---: |
 | Normal daylight raw radiance | 1280 |
-| Remembered-geometry neutral floor (`M`) | 512 raw (40% of daylight) |
-| Player-field neutral center (`P`) | 640 raw (50% of daylight) |
+| Remembered-geometry neutral floor (`M`) | 40 raw (3.125% of daylight) |
+| Player-field neutral center (`P`) | 80 raw (6.25% of daylight) |
 | Inner radius squared | 16 (radius 4) |
 | Outer radius squared | 64 (radius 8) |
 | Field weight unit | 256 |
@@ -2042,16 +2044,16 @@ memory lift, not a current-visibility grant. Let `S` be the decoded server
 scalar and `C` its decoded linear RGB vector. The display-only values are:
 
 ```text
-memory_lift = max(0, 512 - S)
+memory_lift = max(0, 40 - S)
 S_display   = S + memory_lift
 C_display   = max((0, 0, 0), C + (memory_lift, memory_lift, memory_lift))
 ```
 
-Thus zero-radiance remembered geometry is `(512,512,512)`, a low colored local
+Thus zero-radiance remembered geometry is `(40,40,40)`, a low colored local
 sample keeps its color while receiving only the missing neutral floor, and a
 negative or zero endpoint cannot produce a negative display value. The RGB
 component clamp is display-only and does not alter the cached sample. At or
-above raw 512 the server sample is unchanged. Current visible geometry does not get
+above raw 40 the server sample is unchanged. Current visible geometry does not get
 the memory lift; it receives the authoritative sample plus the player-field
 contribution. Q5.11 encoding remains the existing checked round-half-up
 `raw * 8 / 5` operation at the wire boundary; this contract adds no protocol
@@ -2213,10 +2215,10 @@ The following vectors are mandatory in unit/fixture coverage:
 | Case | Remembered display scalar/RGB | Player contribution | Alpha |
 | --- | --- | --- | ---: |
 | never-seen cell | empty; no output | none | 0 |
-| remembered, zero server radiance | `(512,512,512)` | none | 255 for static geometry |
-| remembered, raw server `(80,0,0)` | `(512,432,432)` after neutral lift | none | 255 |
-| current visible, neutral raw 1280, center | `(1280,1280,1280)` | `640` each channel before tone mapping | 255 |
-| current visible, neutral raw 1280, `d2=25` | `(1280,1280,1280)` | `520` each channel | 255 |
+| remembered, zero server radiance | `(40,40,40)` | none | 255 for static geometry |
+| remembered, raw server `(20,0,0)` | `(40,20,20)` after neutral lift | none | 255 |
+| current visible, neutral raw 1280, center | `(1280,1280,1280)` | `80` each channel before tone mapping | 255 |
+| current visible, neutral raw 1280, `d2=25` | `(1280,1280,1280)` | `65` each channel | 255 |
 | fade-in at 125 ms | unchanged light | unchanged | 128 |
 | fade-out at 125 ms | unchanged static geometry | none | 127 |
 | revoked at 500 ms | unchanged remembered geometry only | none | 0 for live record |

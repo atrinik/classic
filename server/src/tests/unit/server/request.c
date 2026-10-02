@@ -1398,6 +1398,44 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
 }
 END_TEST
 
+START_TEST(test_local_player_remains_visible_without_disclosing_dark_actors) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 12, 12);
+    CONTR(pl)->tli = 0;
+    CLEAR_FLAG(pl, FLAG_XRAYS);
+    CLEAR_FLAG(pl, FLAG_SEE_IN_DARK);
+    object *monster = arch_get("kobold");
+    ck_assert_ptr_nonnull(monster);
+    monster->x = pl->x + 1;
+    monster->y = pl->y;
+    monster = object_insert_map(monster, map, NULL, 0);
+    ck_assert_ptr_nonnull(monster);
+    socket_struct *cs = CONTR(pl)->cs;
+    size_t player_layer = NUM_LAYERS * pl->sub_layer + pl->layer - 1;
+    size_t monster_layer = NUM_LAYERS * monster->sub_layer + monster->layer - 1;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+
+    for (int darkness = 0; darkness >= -80; darkness -= 80) {
+        map->light_value = darkness;
+        ck_assert_int_le(map_get_darkness(map, pl->x, pl->y, NULL), 0);
+        map_client_cache_clear(&cs->lastmap);
+        socket_buffer_clear(cs);
+        draw_client_map2(pl);
+        ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+        MapCell *self = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
+        MapCell *other = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2 + 1, cs->mapy_2, false);
+        ck_assert_ptr_nonnull(self);
+        ck_assert_ptr_nonnull(other);
+        ck_assert_uint_ne(self->faces[player_layer], 0);
+        ck_assert_uint_eq(self->light_radiance[pl->sub_layer], 0);
+        ck_assert_uint_eq(other->faces[monster_layer], 0);
+    }
+}
+END_TEST
+
 START_TEST(test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized) {
     mapstruct *base;
     object *pl;
@@ -1983,6 +2021,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_invalid_request_preserves_existing_queue);
     tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
+    tcase_add_test(tc_core, test_local_player_remains_visible_without_disclosing_dark_actors);
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);

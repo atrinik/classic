@@ -1543,6 +1543,15 @@ bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t e
             if (cursor->tile_path[i] == NULL) {
                 continue;
             }
+            /* Filename-derived horizontal neighbors are travel links, not
+             * authored celestial seams. They may remain unloaded without
+             * suppressing this map's own sky. Vertical coverage and every
+             * explicitly declared boundary still require full validation. */
+            if (i != TILED_UP && i != TILED_DOWN &&
+                !cursor->celestial_tile_path_seen[i] &&
+                cursor->celestial_boundary[i] == CELESTIAL_BOUNDARY_UNSET) {
+                continue;
+            }
             mapstruct *other = cursor->tile_map[i];
             size_t reverse = map_tiled_reverse[i];
             if (other == NULL || other->in_memory != MAP_IN_MEMORY ||
