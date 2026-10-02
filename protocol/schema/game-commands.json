@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 1080,
+  "protocol_version": 1082,
   "item_name_size": 128,
   "item_extra_message_size": 256,
   "player_status": {
@@ -37,7 +37,8 @@
     {"id": 19, "symbol": "COMBAT", "wire_name": "combat"},
     {"id": 20, "symbol": "TALK", "wire_name": "talk"},
     {"id": 21, "symbol": "MOVE", "wire_name": "move"},
-    {"id": 22, "symbol": "TARGET", "wire_name": "target"}
+    {"id": 22, "symbol": "TARGET", "wire_name": "target"},
+    {"id": 23, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
   ],
   "server_to_client": [
     {"id": 0, "symbol": "MAP", "wire_name": "map"},
@@ -68,6 +69,7 @@
     {"id": 25, "symbol": "INTERFACE", "wire_name": "interface"},
     {"id": 26, "symbol": "NOTIFICATION", "wire_name": "notification"},
     {"id": 27, "symbol": "KEEPALIVE", "wire_name": "keepalive"},
-    {"id": 28, "symbol": "PLAYER_STATUS", "wire_name": "player_status"}
+    {"id": 28, "symbol": "PLAYER_STATUS", "wire_name": "player_status"},
+    {"id": 29, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
   ]
 }

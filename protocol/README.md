@@ -9,6 +9,14 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
+Protocol v1082 synchronizes account region-map exploration using map-path
+bitfields. Server-to-client `REGION_EXPLORATION` (ID 29) carries account binding,
+bitmaps and sparse bit deltas. Client-to-server `REGION_EXPLORATION` (ID 23)
+requests only discoveries missing from a cached bitmap, without granting any
+discovery on the server. See the [exploration contract](../server/doc/REGION_EXPLORATION.md)
+for framing, bounds, persistence and lifecycle rules. Both peers require the
+exact protocol version; the earlier snapshot-only v1081 format is superseded.
+
 Protocol v1080 adds timed celestial aggregate-light keyframes to MAP2. Its
 payload carries a bounded absolute game-time interval and next-endpoint samples;
 the client interpolates locally without periodic MAP traffic.

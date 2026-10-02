@@ -320,8 +320,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1080U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1080")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1082U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1082")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -758,6 +758,14 @@ if (BUILD_TESTING)
     target_link_libraries(client-move-stream-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-move-stream COMMAND client-move-stream-tests)
 
+    add_executable(client-region-exploration-tests
+        src/tests/region_exploration.c src/client/region_exploration.c)
+    atrinik_configure_target(client-region-exploration-tests)
+    target_include_directories(client-region-exploration-tests PRIVATE src/include)
+    target_link_libraries(client-region-exploration-tests PRIVATE Atrinik::Core OpenSSL::Crypto)
+    add_test(NAME client-region-exploration COMMAND client-region-exploration-tests
+        "${CMAKE_CURRENT_BINARY_DIR}/region-exploration-cache-test")
+
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
         src/client/commands.c
@@ -1063,6 +1071,7 @@ if (BUILD_TESTING)
     set_tests_properties(client-widget-priority-integration PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+    add_test(NAME client-region-exploration-integration COMMAND atrinik --region-exploration-test)
     add_test(NAME client-map-state-integration COMMAND atrinik --map-state-test)
 
     endif ()

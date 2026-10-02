@@ -35,6 +35,7 @@
 #include <region.h>
 #include <initialization.h>
 #include <account.h>
+#include <exploration.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <arch.h>
@@ -97,7 +98,9 @@ void account_init(void) {
     account_auth_work_tokens = ACCOUNT_AUTH_WORK_BURST;
 }
 
-void account_deinit(void) {}
+void account_deinit(void) {
+    exploration_shutdown();
+}
 
 static bool account_auth_work_allowed(unsigned int cost) {
     time_t now = datetime_getutc();
@@ -1095,6 +1098,7 @@ void account_login_char(socket_struct *ns, char *name) {
 }
 
 void account_logout_char(socket_struct *ns, player *pl) {
+    exploration_end(ns);
     char *path;
     account_struct account;
     size_t i;
@@ -1142,6 +1146,7 @@ void account_character_session_start(socket_struct *ns, player *pl) {
     HARD_ASSERT(pl != NULL);
     HARD_ASSERT(ns->account != NULL);
 
+    exploration_begin(ns);
     char *path = account_make_path(ns->account);
     account_struct account;
     if (!account_load(&account, path)) {

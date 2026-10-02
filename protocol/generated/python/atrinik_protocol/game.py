@@ -2,7 +2,7 @@
 # Do not edit by hand.
 from enum import IntEnum
 
-PROTOCOL_VERSION = 1080
+PROTOCOL_VERSION = 1082
 
 
 ITEM_NAME_SIZE = 128
@@ -47,6 +47,7 @@ class ClientToServerCommand(IntEnum):
     TALK = 20
     MOVE = 21
     TARGET = 22
+    REGION_EXPLORATION = 23
 
 
 class ServerToClientCommand(IntEnum):
@@ -79,3 +80,4 @@ class ServerToClientCommand(IntEnum):
     NOTIFICATION = 26
     KEEPALIVE = 27
     PLAYER_STATUS = 28
+    REGION_EXPLORATION = 29

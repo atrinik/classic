@@ -940,6 +940,10 @@ int main(int argc, char *argv[]) {
         return gpu_player_view_main(argc - 1, &argv[1]);
     }
 
+    if (argc == 2 && strcmp(argv[1], "--region-exploration-test") == 0) {
+        return region_map_exploration_test() ? 0 : 1;
+    }
+
     if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {
         bool sparse = widget_map_sparse_state_test();
         bool transaction = widget_map_transaction_abort_test();
@@ -1153,6 +1157,7 @@ int main(int argc, char *argv[]) {
 
             DoClient();
             image_face_requests_service();
+            region_map_exploration_service();
         }
 
         /* If not connected, walk through connection chain and/or wait for
