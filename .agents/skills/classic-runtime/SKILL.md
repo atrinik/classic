@@ -7,7 +7,14 @@ description: Run or diagnose the classic client/server stack through wrapper pro
 
 Run from the `atrinik/atrinik` wrapper root. The wrapper owns builds,
 collection, state locks, ports, PIDs, logs, supervision, and client config; do
-not reconstruct or edit its generated paths.
+not reconstruct its generated paths from guesses or edit state used by a live
+process. If broken local metadata prevents an authorized launch and the public
+inspect/retry/recovery operation cannot run, follow the wrapper's canonical
+[local recovery](https://github.com/atrinik/atrinik/blob/main/docs/LOCAL_RECOVERY.md)
+contract. Repair only the smallest owned coordinate after fresh path, object,
+user, generation, ownership and current-use checks under exclusive coordination;
+preserve the original evidence. The repair cannot rewrite a live generation,
+adopt another task's state, fabricate ownership, or bypass wrapper validation.
 
 The wrapper supplies a disposable transport-neutral `assets` staging view.
 Generated `data/*`, exact-profile `client-maps/*`, and resources use
