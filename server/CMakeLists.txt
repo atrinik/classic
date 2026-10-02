@@ -473,6 +473,24 @@ if (BUILD_TESTING AND NOT MINGW)
             endif ()
         endforeach ()
 
+        option(ATRINIK_SERVER_HANG_DIAGNOSTIC
+            "Register the bounded authored Strakewood idle simulation diagnostic" OFF)
+        if (ATRINIK_SERVER_HANG_DIAGNOSTIC)
+            add_test(NAME server-diagnostic-strakewood-idle
+                COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                    --name server-diagnostic-strakewood-idle
+                    --
+                    $<TARGET_FILE:atrinik-server-tests>
+                    --unit
+                    --logger_filter_stdout=-info,-devel
+                    --port_mapping=off)
+            set_tests_properties(server-diagnostic-strakewood-idle PROPERTIES
+                ENVIRONMENT "ATRINIK_TEST_SUITE=server.transport_benchmark;ATRINIK_DIAGNOSTIC_STRAKEWOOD=1"
+                LABELS "server;diagnostic"
+                TIMEOUT 300
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+        endif ()
+
         add_test(NAME server-gameplay-journal-tool
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_gameplay_journal.py
