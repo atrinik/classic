@@ -310,7 +310,7 @@ rejection avoids mask allocation when no actor is occluded.
 `tools/generate_living_outline_fixtures.py` recreates every snapshot.
 
 The centered visibility-fade scene places authoritative item, living, and
-effect records on the MAP2 player cell. Its normal 320-by-240 player-view run
+effect records on the MAP2 player cell. Its normal 1024-by-640 player-view run
 advances the presentation clock and asserts that current records remain at
 full alpha, while the local player cannot enter a presentation fade. It then
 expires one revoked item to its zero-alpha generation tombstone and verifies
@@ -322,6 +322,12 @@ actual unchanged commands; the original single-cell scene had none and could
 never satisfy that assertion. The original `visibility-fade-centered.map2.hex`
 remains unchanged as historical input. Its archived software pixel hash remains
 in the manifest's Git history and is not asserted for the expanded scene.
+The viewport leaves the center world cell exposed within the real HUD layout;
+the former 320-by-240 viewport allowed HUD panels to obscure every changed
+sprite. The logical look size remains 9-by-9, which negotiates the fixture's
+13-by-13 wire window including two overscan tiles on each side. Deletion must
+still change the actual completed-frame hash, and restoring the settled
+opaque records must reproduce the initial hash.
 
 The remembered-floor smooth and discrete scenes first authorize a zero-radiance
 floor beside a zero-radiance local actor, then soft-clear only that floor cell.

@@ -8663,6 +8663,19 @@ bool widget_map_visibility_test(void) {
                         item->visibility.alpha);
                 success = false;
             }
+            /* The retained deletion/restore comparison starts from a settled
+             * opaque scene. Finish the real fade through the normal animator
+             * after checking its midpoint; never force the endpoint alpha. */
+            LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+            map_animate();
+            item = map_cell_layer_record(center, item_layer, false);
+            if (item == NULL || item->face != face || !item->visibility.authorized ||
+                item->visibility.alpha != UINT8_MAX ||
+                item->visibility.target_alpha != UINT8_MAX) {
+                fprintf(stderr,
+                        "map visibility test: re-entry did not settle opaque at 250 ms\n");
+                success = false;
+            }
         }
     }
 
