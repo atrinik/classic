@@ -3,7 +3,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define CHECK(c) do { if (!(c)) { fprintf(stderr, "line %d: %s\n", __LINE__, #c); abort(); } } while (0)
+#define CHECK(c)                                            \
+    do {                                                    \
+        if (!(c)) {                                         \
+            fprintf(stderr, "line %d: %s\n", __LINE__, #c); \
+            abort();                                        \
+        }                                                   \
+    } while (0)
 
 static size_t packet(uint8_t *out, const char *path, unsigned w, unsigned h) {
     out[0] = 1;
@@ -45,7 +51,9 @@ int main(void) {
     len = packet(data, "/test", 257, 1);
     CHECK(!region_exploration_receive(data, len));
     char path[258];
-    memset(path, 'a', sizeof(path)); path[0] = '/'; path[256] = 0;
+    memset(path, 'a', sizeof(path));
+    path[0] = '/';
+    path[256] = 0;
     len = packet(data, path, 1, 1);
     CHECK(!region_exploration_receive(data, len));
     path[255] = 0;

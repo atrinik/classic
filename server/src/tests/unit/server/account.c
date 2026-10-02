@@ -297,7 +297,6 @@ START_TEST(test_account_provision_lighting_preset_rolls_back) {
 }
 END_TEST
 
-
 static char *exploration_test_path(const char *name) {
     char *base = account_make_path(name);
     char *path = xmalloc(strlen(base) + sizeof(".exploration"));
@@ -372,7 +371,7 @@ END_TEST
 START_TEST(test_exploration_corrupt_file_preserved) {
     char *path = exploration_test_path("explorecorrupt");
     /* Valid magic followed by a truncated record. */
-    static const uint8_t bad[] = {'A','E','X','P','0','0','0','1',0,6,'/','x'};
+    static const uint8_t bad[] = {'A', 'E', 'X', 'P', '0', '0', '0', '1', 0, 6, '/', 'x'};
     ck_assert(path_write_atomic(path, bad, sizeof(bad), 0600));
     socket_struct ns = {.state = ST_PLAYING, .account = "explorecorrupt"};
     exploration_begin(&ns);

@@ -1797,8 +1797,8 @@ void socket_command_region_exploration(uint8_t *data, size_t len, size_t pos) {
     }
     /* MAP snapshots add visited cells; a changed geometry requires a full
      * rebuild so coordinates from the previous dimensions cannot survive. */
-    region_map_exploration_refresh_map(data[pos] == 1 && !geometry_changed
-                                          ? (const char *)data + pos + 1 : NULL,
-                                      data[pos] == 0);
+    region_map_exploration_refresh_map(
+        data[pos] == 1 && !geometry_changed ? (const char *)data + pos + 1 : NULL,
+        data[pos] == 0);
     packet_reader_skip(&reader, len - pos);
 }

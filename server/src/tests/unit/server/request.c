@@ -1942,7 +1942,6 @@ START_TEST(test_odd_view_los_matches_emitted_map_coordinates) {
 }
 END_TEST
 
-
 START_TEST(test_region_exploration_grants_only_visible_public_base_cells) {
     mapstruct *base;
     object *pl;

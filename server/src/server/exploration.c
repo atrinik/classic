@@ -48,8 +48,7 @@ static size_t bitmap_size(unsigned width, unsigned height) {
 }
 
 static bool valid_path(const char *path) {
-    if (path == NULL || path[0] != '/' || strlen(path) > EXPLORATION_PATH_MAX ||
-        path[1] == '\0') {
+    if (path == NULL || path[0] != '/' || strlen(path) > EXPLORATION_PATH_MAX || path[1] == '\0') {
         return false;
     }
     /* Paths are identities, never filesystem operands. Exclude physical/private
@@ -104,8 +103,8 @@ static void free_maps(exploration_account *account) {
     account->count = 0;
 }
 
-static exploration_map *add_map(exploration_account *account, const char *path,
-                                unsigned width, unsigned height) {
+static exploration_map *
+add_map(exploration_account *account, const char *path, unsigned width, unsigned height) {
     if (account->count == EXPLORATION_MAPS_MAX) {
         return NULL;
     }
@@ -166,8 +165,7 @@ static bool load_account(exploration_account *account) {
         exploration_map *map = add_map(account, path, width, height);
         size_t size = bitmap_size(width, height);
         if (map == NULL || fread(map->bits, 1, size, fp) != size ||
-            ((width * height) % 8 != 0 &&
-             (map->bits[size - 1] >> ((width * height) % 8)) != 0)) {
+            ((width * height) % 8 != 0 && (map->bits[size - 1] >> ((width * height) % 8)) != 0)) {
             ok = false;
             break;
         }
@@ -244,7 +242,8 @@ void exploration_begin(socket_struct *ns) {
         free(base);
         account->valid = load_account(account);
         if (!account->valid) {
-            LOG(ERROR, "Invalid account exploration preserved without modification: %s",
+            LOG(ERROR,
+                "Invalid account exploration preserved without modification: %s",
                 account->path);
         }
         account->next = accounts;
@@ -260,8 +259,12 @@ void exploration_begin(socket_struct *ns) {
     exploration_flush(ns, false);
 }
 
-bool exploration_mark(socket_struct *ns, const char *path, unsigned width,
-                      unsigned height, unsigned x, unsigned y) {
+bool exploration_mark(socket_struct *ns,
+                      const char *path,
+                      unsigned width,
+                      unsigned height,
+                      unsigned x,
+                      unsigned y) {
     exploration_account *account = find_account(ns);
     if (account == NULL || !account->valid || !valid_path(path) || width == 0 || height == 0 ||
         width > EXPLORATION_DIM_MAX || height > EXPLORATION_DIM_MAX || x >= width || y >= height) {

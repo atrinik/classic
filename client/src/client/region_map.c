@@ -219,8 +219,6 @@ void region_map_update(region_map_t *region_map, const char *region_name) {
     }
     region_map->source_def = asset_source_start(buf, path);
     free(path);
-
-
 }
 
 /**
@@ -861,7 +859,8 @@ static void region_map_exploration_replay(region_map_t *region_map, const char *
             continue;
         }
         unsigned width, height;
-        const uint8_t *bits = region_exploration_find(region_map->def->maps[i].path, &width, &height);
+        const uint8_t *bits =
+            region_exploration_find(region_map->def->maps[i].path, &width, &height);
         if (bits == NULL) {
             continue;
         }
@@ -874,7 +873,6 @@ static void region_map_exploration_replay(region_map_t *region_map, const char *
             }
         }
     }
-
 }
 
 void region_map_fow_update(region_map_t *region_map) {
@@ -1147,8 +1145,8 @@ bool region_map_exploration_test(void) {
     region_map_t *clone = region_map_clone(map);
     clone->fow_zoomed = SDL_CreateSurface(8, 8, SDL_PIXELFORMAT_RGBA32);
     region_map_exploration_clear();
-    ok &= !region_map_fow_is_visited(map, 2, 1) &&
-          !region_map_fow_is_visited(clone, 2, 1) && clone->fow_zoomed == NULL;
+    ok &= !region_map_fow_is_visited(map, 2, 1) && !region_map_fow_is_visited(clone, 2, 1) &&
+          clone->fow_zoomed == NULL;
     region_map_free(clone);
     region_map_fow_reset(map);
     region_map_fow_create(map);

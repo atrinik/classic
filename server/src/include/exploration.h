@@ -11,8 +11,12 @@
 void exploration_begin(socket_struct *ns);
 void exploration_end(socket_struct *ns);
 void exploration_shutdown(void);
-bool exploration_mark(socket_struct *ns, const char *path, unsigned width,
-                      unsigned height, unsigned x, unsigned y);
+bool exploration_mark(socket_struct *ns,
+                      const char *path,
+                      unsigned width,
+                      unsigned height,
+                      unsigned x,
+                      unsigned y);
 void exploration_flush(socket_struct *ns, bool force);
 #ifdef ATRINIK_TESTING
 bool exploration_visited(socket_struct *ns, const char *path, unsigned x, unsigned y);
