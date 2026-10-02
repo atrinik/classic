@@ -8,6 +8,7 @@ import shutil
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "release" / "dependency_bundle.py"
@@ -16,8 +17,39 @@ assert SPEC is not None and SPEC.loader is not None
 dependency_bundle = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(dependency_bundle)
 
+UPDATE_SPEC = importlib.util.spec_from_file_location(
+    "update_dependency_inputs", MODULE_PATH.with_name("update_dependency_inputs.py")
+)
+assert UPDATE_SPEC is not None and UPDATE_SPEC.loader is not None
+update_inputs = importlib.util.module_from_spec(UPDATE_SPEC)
+UPDATE_SPEC.loader.exec_module(update_inputs)
+
 
 class DependencyBundleTests(unittest.TestCase):
+    def test_update_regenerates_bundle_from_changed_lock(self) -> None:
+        relative = Path("server/dependencies.lock.json")
+        updated = json.loads((self.root / relative).read_text())
+        updated["dependencies"][0]["tag"] = "v1.1.0"
+        update_inputs.apply_documents(self.root, {relative: updated}, cache=self.cache)
+        descriptor = dependency_bundle.load_descriptor(self.descriptor_path)
+        dependency_bundle.verify_descriptor(self.root, descriptor)
+        self.assertNotEqual(descriptor["digest"], self.descriptor["digest"])
+        self.assertEqual(json.loads((self.root / relative).read_text()), updated)
+
+    def test_failed_bundle_update_preserves_all_tracked_inputs(self) -> None:
+        relative = Path("server/dependencies.lock.json")
+        original = {path: path.read_bytes() for path in
+                    (self.root / relative, self.descriptor_path)}
+        updated = json.loads((self.root / relative).read_text())
+        updated["dependencies"][0]["tag"] = "v1.1.0"
+        with mock.patch.object(update_inputs, "load_tool", return_value=dependency_bundle):
+            with mock.patch.object(dependency_bundle, "build_layout",
+                                   side_effect=dependency_bundle.BundleError("bad archive")):
+                with self.assertRaisesRegex(dependency_bundle.BundleError, "bad archive"):
+                    update_inputs.apply_documents(self.root, {relative: updated}, cache=self.cache)
+        for path, data in original.items():
+            self.assertEqual(path.read_bytes(), data)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "root"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -22,6 +23,7 @@ CONTENT_REPOSITORY = "atrinik/content"
 CONTENT_BRANCH = "main"
 CONTENT_TARGET = "classic"
 LOCK_PATH = Path("server/dependencies.lock.json")
+PROVENANCE_PATH = Path("client/src/tests/fixtures/player_view/content-provenance.json")
 RUNTIME_FORMAT = "atrinik-classic-runtime-content-v1"
 CONTENT_FORMAT = "classic-ads-v1"
 CONSUMERS = ["classic/client", "classic/editor", "classic/server"]
@@ -373,7 +375,7 @@ def validate_manifest(
 
 def verify_archive(
     path: Path, *, version: str, commit: str, classic_version: tuple[int, int, int]
-) -> None:
+) -> dict[str, object]:
     root = f"atrinik-content-{version}-{CONTENT_TARGET}-runtime"
     seen: set[str] = set()
     file_paths: set[str] = set()
@@ -426,10 +428,15 @@ def verify_archive(
                     files[relative] = (hash_stream(stream, member.size), member.size)
     if manifest_data is None:
         raise UpdateError("runtime archive has no manifest at its canonical location")
-    validate_manifest(
+    manifest = validate_manifest(
         manifest_data, files, version=version, commit=commit,
         classic_version=classic_version,
     )
+    return {
+        "manifest": manifest,
+        "sha256": hashlib.sha256(manifest_data).hexdigest(),
+        "size": len(manifest_data),
+    }
 
 
 def release_by_tag(
@@ -494,13 +501,14 @@ def verify_candidate(
     actual_digest = download_asset(runtime, runtime_url, runtime_path, MAX_ARCHIVE_BYTES, downloader)
     if actual_digest != expected_digest:
         raise UpdateError(f"{tag}: runtime digest differs from SHA256SUMS")
-    verify_archive(runtime_path, version=version, commit=commit, classic_version=classic_version)
+    runtime = verify_archive(runtime_path, version=version, commit=commit, classic_version=classic_version)
     return {
         "tag": tag,
         "version": list(semver),
         "commit": commit,
         "url": runtime_url,
         "sha256": actual_digest,
+        "runtime": runtime,
     }
 
 
@@ -623,8 +631,60 @@ def update_lock(
     return {"changed": True, "old": before, "new": after}
 
 
+def selected_provenance(root: Path, selected: dict[str, object]) -> dict[str, object]:
+    """Derive current fixture inputs from the completely verified runtime."""
+    value = load_json_bytes((root / PROVENANCE_PATH).read_bytes(), "fixture provenance")
+    runtime = selected["runtime"]
+    manifest = runtime["manifest"]
+    archetypes = next((entry for entry in manifest["files"]
+                       if entry["path"] == "lib/archetypes"), None)
+    if archetypes is None or "celestial_manifest_files_sha256" not in manifest:
+        raise UpdateError("verified runtime lacks GPU fixture provenance inputs")
+    manifest_record = {
+        "path": "manifest.json", "sha256": runtime["sha256"],
+        "size": runtime["size"],
+        "files_sha256": manifest["celestial_manifest_files_sha256"],
+    }
+    value["content"]["selected"] = {
+        "repository": CONTENT_REPOSITORY, "branch": CONTENT_BRANCH,
+        "tag": selected["tag"], "commit": selected["commit"],
+        "release_version": manifest["release_version"],
+        "artifact": {
+            "content_format": CONTENT_FORMAT, "format": RUNTIME_FORMAT,
+            "url": selected["url"], "sha256": selected["sha256"],
+            "manifest": manifest_record, "archetypes": archetypes,
+        },
+        "runtime_manifests": [{
+            "release_version": manifest["release_version"],
+            **{key: manifest_record[key] for key in ("sha256", "size", "files_sha256")},
+        }],
+    }
+    return value
+
+
+def apply_inputs(root: Path, lock: dict[str, object], selected: dict[str, object],
+                 *, cache: Path | None, trusted_bundle: Path | None) -> None:
+    specification = importlib.util.spec_from_file_location(
+        "update_dependency_inputs", root / "tools/release/update_dependency_inputs.py"
+    )
+    assert specification is not None and specification.loader is not None
+    helper = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(helper)
+    provenance = selected_provenance(root, selected)
+    verifier = helper.load_tool(root / "client/tools/verify_gpu_fixture_provenance.py")
+    verifier._validate_provenance(provenance)
+    verifier._verify_static_inputs(root, provenance)
+    try:
+        helper.apply_documents(root, {LOCK_PATH: lock, PROVENANCE_PATH: provenance},
+                               cache=cache or root / "build/dependency-update-cache",
+                               trusted_bundle=trusted_bundle)
+    except (RuntimeError, ValueError) as error:
+        raise UpdateError(f"cannot prepare derived dependency inputs: {error}") from error
+
+
 def execute(
     root: Path, *, apply: bool, api: GitHubAPI | None = None,
+    cache: Path | None = None, trusted_bundle: Path | None = None,
     downloader: Callable[[str, BinaryIO, int], tuple[str, int]] = download_bounded,
 ) -> dict[str, object]:
     api = api or GitHubAPI()
@@ -689,7 +749,9 @@ def execute(
             }
             return evidence
         selected = max(accepted, key=lambda item: tuple(item["version"]))
-        mutation = update_lock(root, lock, current, selected, apply=apply)
+        mutation = update_lock(root, lock, current, selected, apply=False)
+        if apply and mutation["changed"]:
+            apply_inputs(root, lock, selected, cache=cache, trusted_bundle=trusted_bundle)
         return {
             "schema_version": 1,
             "repository": CONTENT_REPOSITORY,
@@ -758,7 +820,9 @@ def write_github_output(evidence: dict[str, object], path: Path) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
-    parser.add_argument("--apply", action="store_true", help="atomically update the verified lock")
+    parser.add_argument("--apply", action="store_true", help="update verified lock and derived dependency inputs")
+    parser.add_argument("--cache", type=Path, help="verified archive cache")
+    parser.add_argument("--trusted-bundle", type=Path, help="previously attested recovery bundle")
     parser.add_argument("--evidence", type=Path, help="write machine-readable old/new evidence")
     parser.add_argument("--pr-body", type=Path, help="write a complete pull-request body")
     parser.add_argument("--github-output", type=Path, help="append bounded workflow outputs")
@@ -768,7 +832,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     arguments = parse_args()
     try:
-        evidence = execute(arguments.root.resolve(strict=True), apply=arguments.apply)
+        evidence = execute(arguments.root.resolve(strict=True), apply=arguments.apply,
+                           cache=arguments.cache, trusted_bundle=arguments.trusted_bundle)
         serialized = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
         if arguments.evidence:
             arguments.evidence.parent.mkdir(parents=True, exist_ok=True)

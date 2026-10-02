@@ -652,6 +652,64 @@ class UpdateContentLockTests(unittest.TestCase):
             with self.assertRaisesRegex(UPDATER.UpdateError, "ambiguous"):
                 UPDATER.execute(ROOT, apply=False, api=api)
 
+    def test_apply_coordinates_lock_provenance_and_bundle_without_early_writes(self) -> None:
+        lock = json.loads((ROOT / UPDATER.LOCK_PATH).read_text())
+        selected = dict(lock["dependencies"][0])
+        selected.update(tag="v9.0.0", version=[9, 0, 0], commit="a" * 40)
+        selected["url"] = "https://github.com/atrinik/content/releases/download/v9.0.0/atrinik-content-9.0.0-classic-runtime.tar.gz"
+        selected["runtime"] = {"sha256": "c" * 64, "size": 1234, "manifest": {
+            "release_version": "9.0.0", "celestial_manifest_files_sha256": "d" * 64,
+            "files": [{"path": "lib/archetypes", "sha256": "e" * 64, "size": 123}],
+        }}
+        api = mock.Mock()
+        api.releases.return_value = [{"tag_name": "v9.0.0", "draft": False, "published_at": "now"}]
+        api.compare.return_value = "ahead"
+        helper = mock.Mock()
+        originals = {path: (ROOT / path).read_bytes() for path in
+                     (UPDATER.LOCK_PATH, UPDATER.PROVENANCE_PATH, Path("dependencies.bundle.json"))}
+        with (
+            mock.patch.object(UPDATER, "current_classic_version", return_value=(5, 50, 0)),
+            mock.patch.object(UPDATER, "verify_current_coordinate", return_value=((1, 0, 0), False)),
+            mock.patch.object(UPDATER, "verify_candidate", return_value=selected),
+            mock.patch.object(UPDATER.importlib.util, "spec_from_file_location", return_value=mock.Mock()),
+            mock.patch.object(UPDATER.importlib.util, "module_from_spec", return_value=helper),
+        ):
+            UPDATER.execute(ROOT, apply=True, api=api)
+            documents = helper.apply_documents.call_args.args[1]
+            self.assertEqual(documents[UPDATER.LOCK_PATH]["dependencies"][0]["tag"], "v9.0.0")
+            self.assertEqual(documents[UPDATER.PROVENANCE_PATH]["content"]["selected"]["tag"], "v9.0.0")
+            helper.apply_documents.side_effect = RuntimeError("bundle unavailable")
+            with self.assertRaisesRegex(UPDATER.UpdateError, "bundle unavailable"):
+                UPDATER.execute(ROOT, apply=True, api=api)
+        for path, original in originals.items():
+            self.assertEqual((ROOT / path).read_bytes(), original)
+
+    def test_selected_provenance_derives_runtime_and_preserves_fixture_history(self) -> None:
+        original = json.loads((ROOT / UPDATER.PROVENANCE_PATH).read_text())
+        selected = {
+            "tag": "v9.0.0", "commit": "a" * 40,
+            "url": "https://github.com/atrinik/content/releases/download/v9.0.0/atrinik-content-9.0.0-classic-runtime.tar.gz",
+            "sha256": "b" * 64,
+            "runtime": {"sha256": "c" * 64, "size": 1234, "manifest": {
+                "release_version": "9.0.0",
+                "celestial_manifest_files_sha256": "d" * 64,
+                "files": [{"path": "lib/archetypes", "sha256": "e" * 64, "size": 123}],
+            }},
+        }
+        value = UPDATER.selected_provenance(ROOT, selected)
+        self.assertEqual(value["fixture_source"], original["fixture_source"])
+        self.assertEqual(value["archdef"], original["archdef"])
+        self.assertEqual(value["content"]["observed_issue_coordinate"],
+                         original["content"]["observed_issue_coordinate"])
+        current = value["content"]["selected"]
+        self.assertEqual(current["tag"], "v9.0.0")
+        self.assertEqual(current["artifact"]["manifest"]["sha256"], "c" * 64)
+        self.assertEqual(current["artifact"]["archetypes"], selected["runtime"]["manifest"]["files"][0])
+        self.assertEqual(current["runtime_manifests"], [{
+            "release_version": "9.0.0", "sha256": "c" * 64, "size": 1234,
+            "files_sha256": "d" * 64,
+        }])
+
     def test_pull_request_body_and_outputs_are_bounded_evidence(self) -> None:
         evidence = {
             "changed": True,
