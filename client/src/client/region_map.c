@@ -774,7 +774,6 @@ static void region_map_fow_free(region_map_t *region_map) {
         utarray_free(region_map->fow->tiles);
         region_map->fow->tiles = NULL;
     }
-
 }
 
 static void region_map_fow_reset(region_map_t *region_map) {
@@ -1082,7 +1081,8 @@ void region_map_exploration_refresh_map(const char *path, bool reset) {
         if (reset) {
             if (map->fow->tiles != NULL) {
                 for (unsigned i = 0; i < utarray_len(map->fow->tiles); i++) {
-                    region_map_fow_tile_t *tile = utarray_eltptr(map->fow->tiles, i);
+                    region_map_fow_tile_t *tile =
+                        (region_map_fow_tile_t *)utarray_eltptr(map->fow->tiles, i);
                     free(tile->path);
                 }
                 utarray_clear(map->fow->tiles);
