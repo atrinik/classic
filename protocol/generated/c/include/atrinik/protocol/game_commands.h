@@ -3,7 +3,7 @@
 #ifndef ATRINIK_PROTOCOL_GAME_COMMANDS_H
 #define ATRINIK_PROTOCOL_GAME_COMMANDS_H
 
-#define ATRINIK_PROTOCOL_VERSION 1081U
+#define ATRINIK_PROTOCOL_VERSION 1082U
 #define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION
 #define ATRINIK_PROTOCOL_ITEM_NAME_SIZE 128U
 
@@ -45,7 +45,8 @@ typedef enum atrinik_client_to_server_command {
     SERVER_CMD_TALK = 20,
     SERVER_CMD_MOVE = 21,
     SERVER_CMD_TARGET = 22,
-    SERVER_CMD_NROF = 23
+    SERVER_CMD_REGION_EXPLORATION = 23,
+    SERVER_CMD_NROF = 24
 } atrinik_client_to_server_command_t;
 
 /* Stable diagnostic names for client-to-server commands. */
@@ -72,6 +73,7 @@ typedef enum atrinik_client_to_server_command {
 #define SERVER_CMD_NAME_TALK "talk"
 #define SERVER_CMD_NAME_MOVE "move"
 #define SERVER_CMD_NAME_TARGET "target"
+#define SERVER_CMD_NAME_REGION_EXPLORATION "region_exploration"
 
 typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_MAP = 0,
