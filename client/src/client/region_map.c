@@ -43,6 +43,7 @@
 #include <player.h>
 #include <surface_primitives.h>
 #include <region_map.h>
+#include <region_exploration.h>
 #include <toolkit/logger.h>
 #include <toolkit/memory.h>
 #include <toolkit/string.h>
@@ -50,13 +51,7 @@
 #include <toolkit/toolkit.h>
 
 static UT_icd icd = {sizeof(region_map_fow_tile_t), NULL, NULL, NULL};
-#ifdef ATRINIK_WIDGET_TESTS
-static bool region_map_test_fow_persistence = true;
-
-void region_map_test_fow_persistence_set(bool enabled) {
-    region_map_test_fow_persistence = enabled;
-}
-#endif
+static region_map_t *region_maps;
 
 static region_map_def_t *region_map_def_new(void);
 static void region_map_def_load(region_map_def_t *def, const char *str);
@@ -79,6 +74,8 @@ region_map_t *region_map_create(void) {
     region_map->def = region_map_def_new();
     region_map->fow = region_map_fow_new();
 
+    region_map->next = region_maps;
+    region_maps = region_map;
     return region_map;
 }
 
@@ -100,6 +97,8 @@ region_map_t *region_map_clone(region_map_t *region_map) {
     clone->fow = region_map->fow;
     clone->fow->refcount++;
 
+    clone->next = region_maps;
+    region_maps = clone;
     return clone;
 }
 
@@ -118,6 +117,11 @@ void region_map_free(region_map_t *region_map) {
     region_map_fow_free(region_map);
     free(region_map->def);
     free(region_map->fow);
+    region_map_t **entry = &region_maps;
+    while (*entry != region_map) {
+        entry = &(*entry)->next;
+    }
+    *entry = region_map->next;
     free(region_map);
 }
 
@@ -216,11 +220,7 @@ void region_map_update(region_map_t *region_map, const char *region_name) {
     region_map->source_def = asset_source_start(buf, path);
     free(path);
 
-    snprintf(VS(buf), "client-maps/%s.tiles", region_name);
-    region_map->fow->path = file_path_player(buf);
-    if (region_map->fow->path == NULL) {
-        snprintf(VS(region_map->error), "The server sent an invalid region.");
-    }
+
 }
 
 /**
@@ -752,42 +752,9 @@ static region_map_fow_t *region_map_fow_new(void) {
 }
 
 static void region_map_fow_create(region_map_t *region_map) {
-    FILE *fp;
-
     HARD_ASSERT(region_map->fow != NULL);
-    HARD_ASSERT(region_map->fow->path != NULL);
     HARD_ASSERT(region_map->fow->bitmap == NULL);
-
-    fp = path_fopen(region_map->fow->path, "r");
-
-    if (fp != NULL) {
-        struct stat statbuf;
-
-        if (fstat(fileno(fp), &statbuf) == -1) {
-            LOG(ERROR, "Could not stat %s: %d (%s)", region_map->fow->path, errno, strerror(errno));
-        } else if ((size_t)statbuf.st_size == RM_MAP_FOW_BITMAP_SIZE(region_map)) {
-            region_map->fow->bitmap = xmalloc(statbuf.st_size);
-
-            if (fread(region_map->fow->bitmap, 1, statbuf.st_size, fp) != (size_t)statbuf.st_size) {
-                LOG(ERROR,
-                    "Could not read %" PRIu64 " bytes from %s: %d "
-                    "(%s)",
-                    (uint64_t)statbuf.st_size,
-                    region_map->fow->path,
-                    errno,
-                    strerror(errno));
-                free(region_map->fow->bitmap);
-                region_map->fow->bitmap = NULL;
-            }
-        }
-
-        fclose(fp);
-    }
-
-    if (region_map->fow->bitmap == NULL) {
-        region_map->fow->bitmap = xcalloc(1, RM_MAP_FOW_BITMAP_SIZE(region_map));
-    }
-
+    region_map->fow->bitmap = xcalloc(1, RM_MAP_FOW_BITMAP_SIZE(region_map));
     region_map_fow_update(region_map);
 }
 
@@ -810,8 +777,6 @@ static void region_map_fow_free(region_map_t *region_map) {
         region_map->fow->tiles = NULL;
     }
 
-    free(region_map->fow->path);
-    region_map->fow->path = NULL;
 }
 
 static void region_map_fow_reset(region_map_t *region_map) {
@@ -828,29 +793,9 @@ static void region_map_fow_reset(region_map_t *region_map) {
         region_map->fow_zoomed = NULL;
     }
 
-    if (region_map->fow->bitmap != NULL) {
-        FILE *fp;
-
-        HARD_ASSERT(region_map->surface != NULL);
-        HARD_ASSERT(region_map->fow->path != NULL);
-
-        fp = NULL;
-#ifdef ATRINIK_WIDGET_TESTS
-        if (region_map_test_fow_persistence) {
-#endif
-            fp = path_fopen(region_map->fow->path, "w");
-#ifdef ATRINIK_WIDGET_TESTS
-        }
-#endif
-
-        if (fp != NULL) {
-            fwrite(region_map->fow->bitmap, 1, RM_MAP_FOW_BITMAP_SIZE(region_map), fp);
-            fclose(fp);
-        }
-
-        free(region_map->fow->bitmap);
-        region_map->fow->bitmap = NULL;
-    }
+    free(region_map->fow->bitmap);
+    region_map->fow->bitmap = NULL;
+    region_map->fow->exploration_loaded = false;
 }
 
 static bool region_map_fow_update_regions(region_map_t *region_map, const uint32_t *color) {
@@ -860,7 +805,7 @@ static bool region_map_fow_update_regions(region_map_t *region_map, const uint32
 
     utarray_new(regions, &ut_str_icd);
 
-    for (object *op = cpl.ob->inv; op != NULL; op = op->next) {
+    for (object *op = cpl.ob != NULL ? cpl.ob->inv : NULL; op != NULL; op = op->next) {
         if (op->itype != TYPE_REGION_MAP) {
             continue;
         }
@@ -910,6 +855,28 @@ static bool region_map_fow_update_regions(region_map_t *region_map, const uint32
     return ret;
 }
 
+static void region_map_exploration_replay(region_map_t *region_map, const char *path) {
+    for (size_t i = 0; i < region_map->def->num_maps; i++) {
+        if (path != NULL && strcmp(path, region_map->def->maps[i].path) != 0) {
+            continue;
+        }
+        unsigned width, height;
+        const uint8_t *bits = region_exploration_find(region_map->def->maps[i].path, &width, &height);
+        if (bits == NULL) {
+            continue;
+        }
+        for (unsigned y = 0; y < height; y++) {
+            for (unsigned x = 0; x < width; x++) {
+                size_t bit = (size_t)y * width + x;
+                if (bits[bit / 8] & (1U << (bit % 8))) {
+                    region_map_fow_set_visited(region_map, &region_map->def->maps[i], NULL, x, y);
+                }
+            }
+        }
+    }
+
+}
+
 void region_map_fow_update(region_map_t *region_map) {
     region_map_def_map_t *def_map;
     int rowsize, x, y;
@@ -919,9 +886,14 @@ void region_map_fow_update(region_map_t *region_map) {
     HARD_ASSERT(region_map->fow != NULL);
     HARD_ASSERT(region_map->def != NULL);
 
-    if (region_map->surface == NULL) {
+    if (region_map->surface == NULL || region_map->fow->bitmap == NULL) {
         /* Not yet loaded, nothing to do. */
         return;
+    }
+
+    if (!region_map->fow->exploration_loaded) {
+        region_map_exploration_replay(region_map, NULL);
+        region_map->fow->exploration_loaded = true;
     }
 
     if (region_map->fow->tiles != NULL) {
@@ -1103,3 +1075,85 @@ SDL_Surface *region_map_fow_surface(region_map_t *region_map) {
 
     return region_map->fow->surface;
 }
+
+/* Reset all views, including open popup clones, before replaying a new account.
+ * This and packet receipt run on the main thread, never on the socket worker. */
+void region_map_exploration_refresh_map(const char *path, bool reset) {
+    minimap_redraw_flag = 1;
+    for (region_map_t *map = region_maps; map != NULL; map = map->next) {
+        if (reset) {
+            if (map->fow->tiles != NULL) {
+                for (unsigned i = 0; i < utarray_len(map->fow->tiles); i++) {
+                    region_map_fow_tile_t *tile = utarray_eltptr(map->fow->tiles, i);
+                    free(tile->path);
+                }
+                utarray_clear(map->fow->tiles);
+            }
+        }
+        /* A snapshot can replace dimensions or clear old geometry. Rebuild
+         * from the authoritative session cache before accepting new live bits. */
+        if (map->fow->bitmap != NULL) {
+            if (path == NULL) {
+                memset(map->fow->bitmap, 0, RM_MAP_FOW_BITMAP_SIZE(map));
+                map->fow->exploration_loaded = false;
+            } else {
+                region_map_exploration_replay(map, path);
+            }
+        }
+        if (path == NULL || region_map_find_map(map, path) != NULL) {
+            region_map_fow_update(map);
+        }
+    }
+}
+
+void region_map_exploration_refresh(bool reset) {
+    region_map_exploration_refresh_map(NULL, reset);
+}
+
+void region_map_exploration_clear(void) {
+    region_exploration_clear();
+    region_map_exploration_refresh(true);
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool region_map_exploration_test(void) {
+    const uint8_t packet[] = {1, '/', 't', 0, 0, 3, 0, 2, 0x21};
+    region_map_exploration_clear();
+    region_map_t *map = region_map_create();
+    bool ok = region_exploration_receive(packet, sizeof(packet));
+    region_map_exploration_refresh(false); /* Arrives before either asset. */
+    map->def->pixel_size = 2;
+    map->def->maps = xcalloc(1, sizeof(*map->def->maps));
+    map->def->num_maps = 1;
+    map->def->maps[0].path = xstrdup("/t");
+    map->def->maps[0].xpos = 4;
+    map->def->maps[0].ypos = 2;
+    map->surface = SDL_CreateSurface(16, 16, SDL_PIXELFORMAT_RGBA32);
+    if (map->surface == NULL) {
+        region_map_free(map);
+        region_map_exploration_clear();
+        return false;
+    }
+    region_map_fow_create(map);
+    ok &= region_map_fow_is_visited(map, 2, 1) && region_map_fow_is_visited(map, 4, 2) &&
+          !region_map_fow_is_visited(map, 3, 1);
+    region_map_fow_reset(map);
+    region_map_fow_create(map); /* Region is reopened with no network replay. */
+    ok &= region_map_fow_is_visited(map, 4, 2);
+    const uint8_t replacement[] = {1, '/', 't', 0, 0, 1, 0, 1, 1};
+    ok &= region_exploration_receive(replacement, sizeof(replacement));
+    region_map_exploration_refresh(false);
+    ok &= region_map_fow_is_visited(map, 2, 1) && !region_map_fow_is_visited(map, 4, 2);
+    region_map_t *clone = region_map_clone(map);
+    clone->fow_zoomed = SDL_CreateSurface(8, 8, SDL_PIXELFORMAT_RGBA32);
+    region_map_exploration_clear();
+    ok &= !region_map_fow_is_visited(map, 2, 1) &&
+          !region_map_fow_is_visited(clone, 2, 1) && clone->fow_zoomed == NULL;
+    region_map_free(clone);
+    region_map_fow_reset(map);
+    region_map_fow_create(map);
+    ok &= !region_map_fow_is_visited(map, 2, 1);
+    region_map_free(map);
+    return ok;
+}
+#endif

@@ -97,6 +97,8 @@ extern void socket_command_version(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_compressed(uint8_t *data, size_t len, size_t pos);
 
+extern void socket_command_region_exploration(uint8_t *data, size_t len, size_t pos);
+
 extern void socket_command_control(uint8_t *data, size_t len, size_t pos);
 
 #endif

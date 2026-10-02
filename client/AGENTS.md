@@ -34,6 +34,9 @@
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.
+- Region-map exploration is a bounded server-owned account snapshot cache,
+  reset on session RESET and disconnect. Replay it after region assets load;
+  character `.tiles` files are historical and must never be read or written.
 - Client user data lives below `.atrinik/<major>.x/`. When that stable directory
   is first created, the client may migrate the highest valid same-major legacy
   directory; the migration is collision-safe and marker-backed, leaves other

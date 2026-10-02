@@ -30,6 +30,7 @@
 #include <metaserver.h>
 #include <asset.h>
 #include <client.h>
+#include <region_map.h>
 #include <client_socket.h>
 #include <event.h>
 #include <join_credentials.h>
@@ -321,6 +322,7 @@ int handle_socket_shutdown(void) {
         SDL_UnlockMutex(socket_mutex);
 
         /* Empty all queues */
+        region_map_exploration_clear();
         client_command_retry_clear();
         client_command_queue_clear();
         bool input_statistics_reset = client_command_queue_statistics_reset();
@@ -419,6 +421,7 @@ void client_socket_deinitialize(void) {
     } else if (csocket.sc != NULL) {
         client_socket_close(&csocket);
     }
+    region_map_exploration_clear();
     client_command_retry_clear();
     client_command_queue_deinitialize();
     if (output_buffer_mutex != NULL) {

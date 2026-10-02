@@ -47,6 +47,7 @@
 #include <player_status.h>
 #include <popup.h>
 #include <region_map.h>
+#include <region_exploration.h>
 #include <rich_presence.h>
 #include <server_files.h>
 #include <settings.h>
@@ -1773,4 +1774,31 @@ void socket_command_control(uint8_t *data, size_t len, size_t pos) {
     if (type == CMD_CONTROL_PLAYER && sub_type == CMD_CONTROL_PLAYER_TELEPORT) {
         SDL_RaiseWindow(ScreenWindow);
     }
+}
+
+void socket_command_region_exploration(uint8_t *data, size_t len, size_t pos) {
+    packet_reader_t reader;
+    packet_reader_init_at(&reader, data, len, pos);
+    unsigned old_width = 0, old_height = 0;
+    bool geometry_changed = false;
+    /* Inspect the old snapshot only after validating a bounded path extent. */
+    if (pos < len && data[pos] == 1 && len - pos > 1 &&
+        memchr(data + pos + 1, 0, len - pos - 1 < 256 ? len - pos - 1 : 256) != NULL) {
+        region_exploration_find((const char *)data + pos + 1, &old_width, &old_height);
+    }
+    if (pos > len || !region_exploration_receive(data + pos, len - pos)) {
+        packet_reader_set_error(&reader, PACKET_ERROR_INVALID_ENCODING);
+        return;
+    }
+    if (data[pos] == 1 && old_width != 0) {
+        unsigned width, height;
+        region_exploration_find((const char *)data + pos + 1, &width, &height);
+        geometry_changed = width != old_width || height != old_height;
+    }
+    /* MAP snapshots add visited cells; a changed geometry requires a full
+     * rebuild so coordinates from the previous dimensions cannot survive. */
+    region_map_exploration_refresh_map(data[pos] == 1 && !geometry_changed
+                                          ? (const char *)data + pos + 1 : NULL,
+                                      data[pos] == 0);
+    packet_reader_skip(&reader, len - pos);
 }

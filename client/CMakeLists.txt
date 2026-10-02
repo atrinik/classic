@@ -758,6 +758,12 @@ if (BUILD_TESTING)
     target_link_libraries(client-move-stream-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-move-stream COMMAND client-move-stream-tests)
 
+    add_executable(client-region-exploration-tests
+        src/tests/region_exploration.c src/client/region_exploration.c)
+    atrinik_configure_target(client-region-exploration-tests)
+    target_include_directories(client-region-exploration-tests PRIVATE src/include)
+    add_test(NAME client-region-exploration COMMAND client-region-exploration-tests)
+
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
         src/client/commands.c
@@ -1063,6 +1069,7 @@ if (BUILD_TESTING)
     set_tests_properties(client-widget-priority-integration PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+    add_test(NAME client-region-exploration-integration COMMAND atrinik --region-exploration-test)
     add_test(NAME client-map-state-integration COMMAND atrinik --map-state-test)
 
     endif ()
