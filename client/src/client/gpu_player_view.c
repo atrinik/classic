@@ -4388,12 +4388,22 @@ int gpu_player_view_main(int argc, char *argv[]) {
             restored_map.reused_render_commands <= restored_map.compiled_render_commands) {
             fprintf(stderr,
                     "gpu-player-view: retained cohort insert/delete mismatch: "
+                    "delete-changed=%d restore-equal=%d "
+                    "delete-animation=%" PRIu64 " restore-animation=%" PRIu64 " "
                     "delete-compiled=%" PRIu64 " delete-reused=%" PRIu64
-                    " restore-compiled=%" PRIu64 " restore-reused=%" PRIu64 "\n",
+                    " restore-compiled=%" PRIu64 " restore-reused=%" PRIu64 " "
+                    "initial=%s deleted=%s restored=%s\n",
+                    strcmp(deleted_digest, initial_digest) != 0,
+                    strcmp(restored_digest, initial_digest) == 0,
+                    deleted_map.animation_draws,
+                    restored_map.animation_draws,
                     deleted_map.compiled_render_commands,
                     deleted_map.reused_render_commands,
                     restored_map.compiled_render_commands,
-                    restored_map.reused_render_commands);
+                    restored_map.reused_render_commands,
+                    initial_digest,
+                    deleted_digest,
+                    restored_digest);
             goto cleanup;
         }
     }
