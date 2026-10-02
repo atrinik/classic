@@ -233,7 +233,7 @@ static bool account_select(const uint8_t *data, size_t len) {
     dirty = false;
     memcpy(cache_key, key, sizeof(key));
     if (cache_directory != NULL) {
-        char name[80];
+        char name[sizeof("exploration-.bin") + 64];
         snprintf(name, sizeof(name), "exploration-%s.bin", key);
         cache_path = path_join(cache_directory, name);
     }
