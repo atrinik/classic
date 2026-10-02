@@ -2066,7 +2066,13 @@ sample to any of the four window sides. Its Q0.8 weight is `0` at distance zero,
 `16` at distance one, and `256` at distance two or greater; samples outside the
 window also have weight zero. Multiply scalar and each RGB channel by this weight
 with checked round-half-up division by 256, after the player contribution or
-memory lift and before spatial interpolation and tone mapping. The low midpoint
+memory lift and before spatial interpolation and tone mapping. Within the outer
+three vertex rings (`distance <= 2`), first bound scalar values above Q5.11 2048
+(the display-white endpoint) to 2048 and scale every RGB channel by the same
+factor, with round-half-up division by the original scalar. This preserves channel
+ratios and prevents saturated light from defeating the feather. Full-weight
+vertices at distance two also use this normalization; samples at distance three
+or greater remain unchanged. The low midpoint
 compensates for the steep low-radiance tone curve. This presentation-only taper
 also bounds nearest-known light borrowing and leaves authoritative cache samples
 unchanged. Discrete lighting retains its per-tile transfer without this spatial
