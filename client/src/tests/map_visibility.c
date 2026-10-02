@@ -5,6 +5,7 @@
  *************************************************************************/
 
 #include <map_visibility.h>
+#include <lighting.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,8 +28,38 @@ int main(void) {
 
     CHECK(map_visibility_field_weight(2, 2) == 256);
     CHECK(map_visibility_field_weight(3, 4) == 208);
-    CHECK(map_visibility_add_player_radiance(1280, 256) == 2304);
+    CHECK(map_visibility_add_player_radiance(2048, 256) == 2176);
+    CHECK(map_visibility_add_player_radiance(0, 208) == 104);
     CHECK(map_visibility_add_player_radiance(UINT16_MAX, 256) == UINT16_MAX);
+
+    /* A zero-ambient player field must remain visibly dark after the actual
+     * scene-linear tone map, not merely have a small raw/daylight fraction. */
+    uint16_t night = map_visibility_add_player_radiance(0, 256);
+    uint16_t night_rgb[3] = {night, night, night};
+    uint16_t illumination[3];
+    lighting_tone_map_linear(night, night_rgb, illumination);
+    CHECK(lighting_multiply_channel(255, illumination[0]) == 120);
+    CHECK(illumination[0] < UINT16_MAX / 5);
+    uint16_t memory_rgb[3] = {64, 64, 64};
+    lighting_tone_map_linear(64, memory_rgb, illumination);
+    CHECK(lighting_multiply_channel(255, illumination[0]) == 80);
+    CHECK(illumination[0] < UINT16_MAX / 10);
+    uint16_t day_rgb[3] = {2176, 2176, 2176};
+    lighting_tone_map_linear(2176, day_rgb, illumination);
+    CHECK(lighting_multiply_channel(255, illumination[0]) == 255);
+
+    for (int distance = -1; distance <= 3; distance++) {
+        uint16_t weight = distance <= 0 ? 0 : distance == 1 ? 16 : 256;
+        CHECK(map_visibility_window_weight(distance, 8, 17, 17) == weight);
+        CHECK(map_visibility_window_weight(16 - distance, 8, 17, 17) == weight);
+        CHECK(map_visibility_window_weight(8, distance, 17, 17) == weight);
+        CHECK(map_visibility_window_weight(8, 16 - distance, 17, 17) == weight);
+    }
+    CHECK(map_visibility_window_weight(0, 0, 0, 0) == 0);
+    CHECK(map_visibility_scale_radiance(2048, 0) == 0);
+    CHECK(map_visibility_scale_radiance(2048, 16) == 128);
+    CHECK(map_visibility_scale_radiance(2048, 256) == 2048);
+    CHECK(map_visibility_scale_radiance(UINT16_MAX, UINT16_MAX) == UINT16_MAX);
 
     CHECK(MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE ==
           (MAP_VISIBILITY_MEMORY_FLOOR_RAW * 8U + 2U) / 5U);
@@ -43,15 +74,15 @@ int main(void) {
     CHECK(remembered_rgb[0] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
     CHECK(remembered_rgb[1] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
     CHECK(remembered_rgb[2] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
-    remembered_scalar = 128;
-    remembered_rgb[0] = 128;
+    remembered_scalar = 32;
+    remembered_rgb[0] = 32;
     remembered_rgb[1] = 0;
     remembered_rgb[2] = 0;
     map_visibility_apply_memory_floor(&remembered_scalar, remembered_rgb);
     CHECK(remembered_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
     CHECK(remembered_rgb[0] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
-    CHECK(remembered_rgb[1] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - 128);
-    CHECK(remembered_rgb[2] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - 128);
+    CHECK(remembered_rgb[1] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - 32);
+    CHECK(remembered_rgb[2] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - 32);
     remembered_scalar = MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
     remembered_rgb[0] = 1000;
     remembered_rgb[1] = 2000;

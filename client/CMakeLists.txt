@@ -1024,6 +1024,7 @@ if (BUILD_TESTING)
 
     add_executable(client-map-visibility-tests
         src/tests/map_visibility.c
+        src/client/lighting_transfer.c
         src/client/map_visibility.c)
     atrinik_configure_target(client-map-visibility-tests)
     target_compile_definitions(client-map-visibility-tests PRIVATE SDL_DISABLE_OLD_NAMES)

@@ -5125,6 +5125,16 @@ bool map_lighting_diagnostic_get(int depth,
         }
     }
 
+    if (diagnostic->working_available && smooth_lighting) {
+        uint16_t edge_weight = map_visibility_window_weight(x, y, map_width, map_height);
+        diagnostic->working_scalar =
+            map_visibility_scale_radiance(diagnostic->working_scalar, edge_weight);
+        for (size_t channel = 0; channel < 3; channel++) {
+            diagnostic->working_rgb[channel] =
+                map_visibility_scale_radiance(diagnostic->working_rgb[channel], edge_weight);
+        }
+    }
+
     if (!diagnostic->working_available) {
         diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE;
     } else if (diagnostic->working_scalar == 0) {
@@ -5794,6 +5804,17 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
         for (size_t channel = 0; channel < 3; channel++) {
             rgb[channel] = map_visibility_add_player_radiance(rgb[channel], weight);
         }
+    }
+    /* Nearest-known light borrowing must not extend a bright field to the
+     * clipped wire-window boundary. Feather the completed presentation sample,
+     * including the local field and remembered floor, before interpolation. */
+    uint16_t edge_weight = map_visibility_window_weight(x - (data->midx - map_width / 2),
+                                                        y - (data->midy - map_height / 2),
+                                                        map_width,
+                                                        map_height);
+    vertex.scalar = map_visibility_scale_radiance(vertex.scalar, edge_weight);
+    for (size_t channel = 0; channel < 3; channel++) {
+        rgb[channel] = map_visibility_scale_radiance(rgb[channel], edge_weight);
     }
     vertex.red = rgb[0];
     vertex.green = rgb[1];
@@ -8764,6 +8785,42 @@ bool widget_map_projection_contract_test(void) {
                           visible_vertex.scalar ==
                               map_visibility_add_player_radiance(
                                   0, map_visibility_field_weight(0, 0));
+
+                /* Production light vertices must feather each side even when
+                 * authoritative daylight or colored samples reach the window
+                 * boundary. Neither the cache nor the interior is attenuated. */
+                const int edge_offsets[4][2] = {
+                    {-map_width / 2, 0}, {map_width / 2, 0},
+                    {0, -map_height / 2}, {0, map_height / 2},
+                };
+                for (size_t side = 0; side < arraysize(edge_offsets); side++) {
+                    for (int step = 0; step <= 2; step++) {
+                        int dx = edge_offsets[side][0];
+                        int dy = edge_offsets[side][1];
+                        dx += dx < 0 ? step : dx > 0 ? -step : 0;
+                        dy += dy < 0 ? step : dy > 0 ? -step : 0;
+                        int sample_x = lighting.midx + dx;
+                        int sample_y = lighting.midy + dy;
+                        map_cell_t *edge_cell = MAP_CELL_GET_MUTABLE(sample_x, sample_y);
+                        map_cell_light_record_t *edge_light =
+                            map_cell_light_record(edge_cell, 0, true);
+                        edge_light->known = 1;
+                        edge_light->radiance = 2048;
+                        edge_light->rgb_explicit = 1;
+                        edge_light->rgb_radiance[0] = 2048;
+                        edge_light->rgb_radiance[1] = 1024;
+                        edge_light->rgb_radiance[2] = 512;
+                        lighting_vertex_t edge =
+                            map_lighting_vertex(surface, &lighting, sample_x, sample_y);
+                        uint16_t weight = step == 0 ? 0 : step == 1 ? 16 : 256;
+                        success = success && edge.scalar == 2048 * weight / 256 &&
+                                  edge.red == 2048 * weight / 256 &&
+                                  edge.green == 1024 * weight / 256 &&
+                                  edge.blue == 512 * weight / 256 &&
+                                  edge_light->radiance == 2048 &&
+                                  edge_light->rgb_radiance[0] == 2048;
+                    }
+                }
 
                 cell->fow = saved_fow;
                 light->radiance = saved_radiance;
