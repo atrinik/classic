@@ -18,6 +18,10 @@
 - Persist spell/skill identities as stable strings, never table positions.
   Review `doc/METRICS.md` and the metric registry/hooks for gameplay changes;
   metric names, subjects, and event semantics are durable save contracts.
+- Region-map exploration is account-owned server state. Follow
+  [`doc/REGION_EXPLORATION.md`](doc/REGION_EXPLORATION.md): only visible public
+  base-level MAP2 cells grant discovery; retain account sidecars in backups and
+  never import untrusted client `.tiles` files.
 - Preserve object ownership, map activation/swap, lighting, plugin boundaries,
   and save transactionality. Test cleanup/rollback for lifecycle changes.
 - With the active celestial-v1 runtime, player persistence uses owner-bound

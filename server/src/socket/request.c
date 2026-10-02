@@ -45,6 +45,7 @@
 #include <initialization.h>
 #include <animation.h>
 #include <account.h>
+#include <exploration.h>
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -1711,6 +1712,11 @@ void draw_client_map2(object *pl) {
                         mask |= MAP2_MASK_SUPPORT_HEIGHT;
                     }
                 }
+                if (depth == 0 && !tile_fow && !MAP_UNIQUE(m) && m->region != NULL &&
+                    region_find_with_map(m->region) != NULL) {
+                    exploration_mark(CONTR(pl)->cs, m->path, MAP_WIDTH(m), MAP_HEIGHT(m), nx, ny);
+                }
+
                 if (!mp->fow_known || (mp->fow != 0) != tile_fow) {
                     mask |= MAP2_MASK_FOW;
                 }
@@ -2613,6 +2619,7 @@ void draw_client_map2(object *pl) {
     packet_header->data[continuation_count_pos] = continuation_marker >> 8;
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
+    exploration_flush(CONTR(pl)->cs, false);
     bool connected = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     socket_send_packet(CONTR(pl)->cs, packet_header);
     for (uint16_t i = 0; i < continuation_packet_count; i++) {

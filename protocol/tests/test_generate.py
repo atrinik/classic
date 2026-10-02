@@ -17,12 +17,12 @@ SPEC.loader.exec_module(GENERATE)
 class GenerateTests(unittest.TestCase):
     def test_repository_schema_is_valid(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
-        self.assertEqual(schema["protocol_version"], 1080)
+        self.assertEqual(schema["protocol_version"], 1081)
         self.assertEqual(schema["item_name_size"], 128)
         self.assertEqual(schema["item_extra_message_size"], 256)
         self.assertEqual(schema["player_status"]["max_statuses"], 48)
         self.assertEqual(len(schema["client_to_server"]), 23)
-        self.assertEqual(len(schema["server_to_client"]), 29)
+        self.assertEqual(len(schema["server_to_client"]), 30)
 
     def test_repository_outputs_are_current(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")

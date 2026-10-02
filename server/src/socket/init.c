@@ -32,6 +32,7 @@
 #include <global.h>
 #include <server_main.h>
 #include <server.h>
+#include <exploration.h>
 #include <initialization.h>
 #include <animation.h>
 #include <toolkit/packet.h>
@@ -130,6 +131,7 @@ void free_all_newserver(void) {
  * The socket.
  */
 static void free_newsocket_internal(socket_struct *ns, bool connected) {
+    exploration_end(ns);
     socket_assets_connection_clear(ns);
     if (connected) {
         socket_destroy(ns->sc);

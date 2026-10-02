@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 1080,
+  "protocol_version": 1081,
   "item_name_size": 128,
   "item_extra_message_size": 256,
   "player_status": {
@@ -68,6 +68,7 @@
     {"id": 25, "symbol": "INTERFACE", "wire_name": "interface"},
     {"id": 26, "symbol": "NOTIFICATION", "wire_name": "notification"},
     {"id": 27, "symbol": "KEEPALIVE", "wire_name": "keepalive"},
-    {"id": 28, "symbol": "PLAYER_STATUS", "wire_name": "player_status"}
+    {"id": 28, "symbol": "PLAYER_STATUS", "wire_name": "player_status"},
+    {"id": 29, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
   ]
 }

@@ -9,6 +9,11 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
+Protocol v1081 adds server-to-client `REGION_EXPLORATION` (ID 29), an account
+exploration reset or bounded per-map bitmap. See the normative
+[exploration contract](../server/doc/REGION_EXPLORATION.md) for framing, bounds,
+sequencing, persistence and migration. Exact-version login rejects older peers.
+
 Protocol v1080 adds timed celestial aggregate-light keyframes to MAP2. Its
 payload carries a bounded absolute game-time interval and next-endpoint samples;
 the client interpolates locally without periodic MAP traffic.

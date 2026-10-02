@@ -3,7 +3,7 @@
 #ifndef ATRINIK_PROTOCOL_GAME_COMMANDS_H
 #define ATRINIK_PROTOCOL_GAME_COMMANDS_H
 
-#define ATRINIK_PROTOCOL_VERSION 1080U
+#define ATRINIK_PROTOCOL_VERSION 1081U
 #define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION
 #define ATRINIK_PROTOCOL_ITEM_NAME_SIZE 128U
 
@@ -103,7 +103,8 @@ typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_NOTIFICATION = 26,
     CLIENT_CMD_KEEPALIVE = 27,
     CLIENT_CMD_PLAYER_STATUS = 28,
-    CLIENT_CMD_NROF = 29
+    CLIENT_CMD_REGION_EXPLORATION = 29,
+    CLIENT_CMD_NROF = 30
 } atrinik_server_to_client_command_t;
 
 /* Stable diagnostic names for server-to-client commands. */
@@ -136,5 +137,6 @@ typedef enum atrinik_server_to_client_command {
 #define CLIENT_CMD_NAME_NOTIFICATION "notification"
 #define CLIENT_CMD_NAME_KEEPALIVE "keepalive"
 #define CLIENT_CMD_NAME_PLAYER_STATUS "player_status"
+#define CLIENT_CMD_NAME_REGION_EXPLORATION "region_exploration"
 
 #endif
