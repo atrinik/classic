@@ -85,25 +85,54 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for label in ("day", "dusk", "night"):
         parser.add_argument(f"--{label}", type=Path, required=True)
+    parser.add_argument("--saturated", type=Path,
+                        help="also require saturated edge falloff to match ordinary daylight")
     arguments = parser.parse_args()
     metrics = {}
     captures = {}
     for label, expected_maximum in (("day", 255), ("dusk", 165), ("night", 120)):
         width, height, image = pixels(getattr(arguments, label))
-        histogram = collections.Counter(red for red, green, blue in image)
-        if any(red != green or red != blue for red, green, blue in image):
-            raise SystemExit(f"{label}: neutral analytic scene has unexpected colored pixels")
+        # The production capture includes the real HUD. This fixed world-only
+        # rectangle encloses the player and gray floor without touching any
+        # widgets in the pinned 1024x640 layout. Do not mask by pixel color:
+        # that could hide a renderer color-contamination regression.
+        world = [image[y * width + x] for y in range(240, 401) for x in range(350, 701)]
+        histogram = collections.Counter(red for red, green, blue in world)
+        if any(red != green or red != blue for red, green, blue in world):
+            raise SystemExit(f"{label}: neutral world rectangle has unexpected colored pixels")
         maximum = max(histogram)
         if maximum != expected_maximum or histogram[maximum] < 100:
             raise SystemExit(f"{label}: player maximum/count {maximum}/{histogram[maximum]}, "
                              f"expected {expected_maximum}/at least 100")
-        captures[label] = image
+        captures[label] = world
         metrics[label] = {"maximum": maximum, "maximum_pixels": histogram[maximum],
-                          "nonblack_pixels": len(image) - histogram[0]}
+                          "nonblack_pixels": len(world) - histogram[0],
+                          "floor_rgb": image[350 * width + 500]}
     brighter = sum(day[0] > night[0] for day, night in zip(captures["day"], captures["night"]))
     if brighter < metrics["day"]["nonblack_pixels"] * 0.9:
         raise SystemExit("day/night difference does not affect at least 90% of the visible world")
     metrics["day_brighter_than_night_pixels"] = brighter
+    metrics["world_rectangle"] = [350, 240, 701, 401]
+    if arguments.saturated:
+        width, height, day = pixels(arguments.day)
+        _, _, saturated = pixels(arguments.saturated)
+        # Three exposed boundaries avoid the inventory that covers the right
+        # side. Tall test pillars do not intersect these diagnostic rays.
+        rays = {
+            "left": [(x, 320) for x in range(130, 221)],
+            "top": [(512, y) for y in range(130, 177)],
+            "bottom": [(512, y) for y in range(464, 511)],
+        }
+        metrics["saturated_edges"] = {}
+        for name, coordinates in rays.items():
+            maximum_difference = max(
+                abs(day[y * width + x][channel] - saturated[y * width + x][channel])
+                for x, y in coordinates for channel in range(3)
+            )
+            metrics["saturated_edges"][name] = maximum_difference
+            if maximum_difference > 2:
+                raise SystemExit(f"{name}: saturated edge differs from daylight by "
+                                 f"{maximum_difference} codes (maximum 2)")
     print(json.dumps(metrics, sort_keys=True))
 
 

@@ -17,8 +17,15 @@ hashes request measured evidence; they do not claim cross-backend approval.
 Check exported initial captures with
 `python3 tools/verify_night_presentation.py --day DAY.png --dusk DUSK.png --night NIGHT.png`.
 This rejects color contamination, missing or incorrectly lit player pixels,
-and day/night changes that fail to darken the visible world. It requires the
+and day/night changes that fail to darken the fixed world-only rectangle
+`[350,240)..[701,401)`. The production captures include the HUD, so the checker
+uses coordinates from the pinned layout, never a color-based exclusion mask.
+It requires the
 actual completed GPU captures; manifest validation alone cannot pass it.
+Add `--saturated SATURATED.png` to compare three exposed boundary profiles
+against daylight (the inventory covers the fourth). A difference above two
+sRGB codes fails; this catches a steep saturated edge despite successful
+rendering and capture.
 
 The `presentation-saturated` companion uses Q5.11 65535 on every tile and
 120-pixel-tall colored structural sprites one tile inside each of the four
