@@ -3948,6 +3948,11 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
         if (data->cell->fow && remembered) {
             radiance = map_visibility_memory_floor(radiance);
+        } else if (data->world_surface && data->primary_level && data->depth == 0 &&
+                   !data->cell->fow) {
+            radiance = map_visibility_add_player_radiance(
+                radiance,
+                map_visibility_field_weight(data->x - data->midx, data->y - data->midy));
         }
         effects.dark_level =
             (UINT8_MAX - lighting_radiance_to_level(radiance)) *
@@ -8779,6 +8784,13 @@ bool widget_map_projection_contract_test(void) {
                           remembered_vertex.blue == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
 
                 cell->fow = false;
+                remembered_context.commands_num = 0;
+                draw_map_object(surface, &remembered);
+                success = success && remembered_context.commands_num == 1 &&
+                          remembered_context.commands[0].effects.dark_level ==
+                              (UINT8_MAX - lighting_radiance_to_level(
+                                               map_visibility_add_player_radiance(0, 256))) *
+                                  DARK_LEVELS / UINT8_MAX;
                 lighting_vertex_t visible_vertex =
                     map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
                 success = success &&
