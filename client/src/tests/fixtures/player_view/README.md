@@ -315,6 +315,13 @@ advances the presentation clock and asserts that current records remain at
 full alpha, while the local player cannot enter a presentation fade. It then
 expires one revoked item to its zero-alpha generation tombstone and verifies
 that authoritative re-entry interpolates from zero instead of snapping opaque.
+Its GPU manifest uses `visibility-fade-retained.map2.hex`, which preserves the
+center records and adds 168 static floor neighbors within the same 13-by-13
+wire window. The subsequent retained-cohort insertion/deletion check must reuse
+actual unchanged commands; the original single-cell scene had none and could
+never satisfy that assertion. The original `visibility-fade-centered.map2.hex`
+remains unchanged as historical input. Its archived software pixel hash remains
+in the manifest's Git history and is not asserted for the expanded scene.
 
 The remembered-floor smooth and discrete scenes first authorize a zero-radiance
 floor beside a zero-radiance local actor, then soft-clear only that floor cell.
