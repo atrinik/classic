@@ -479,6 +479,7 @@ if (BUILD_TESTING AND NOT MINGW)
             add_test(NAME server-diagnostic-strakewood-idle
                 COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
                     --name server-diagnostic-strakewood-idle
+                    --copy-python-maps
                     --
                     $<TARGET_FILE:atrinik-server-tests>
                     --unit

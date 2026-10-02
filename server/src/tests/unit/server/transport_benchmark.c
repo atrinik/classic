@@ -30,6 +30,9 @@
 #include <commands.h>
 #include <movement.h>
 #include <tod.h>
+#include <plugin.h>
+#include <account.h>
+#include <toolkit/packet.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -465,7 +468,27 @@ static void strakewood_progress(unsigned int tick, const char *phase) {
     fflush(stderr);
 }
 
+static bool strakewood_python_loaded(object *pl) {
+    static const char identification[] = "Python, ";
+    socket_buffer_clear(CONTR(pl)->cs);
+    display_plugins_list(pl);
+    for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL;
+         packet = packet->next) {
+        for (size_t i = 0; i + sizeof(identification) - 1 <= packet->len; i++) {
+            if (memcmp(packet->data + i, identification, sizeof(identification) - 1) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 START_TEST(test_strakewood_idle_simulation) {
+    bool plugins = getenv("ATRINIK_DIAGNOSTIC_PLUGINS") != NULL;
+    if (plugins) {
+        strakewood_progress(0, "plugins-init");
+        init_plugins();
+    }
     const char *paths[] = {
         "/shattered_islands/world_1_61",
         "/shattered_islands/world_2_61",
@@ -481,10 +504,27 @@ START_TEST(test_strakewood_idle_simulation) {
         }
     }
     strakewood_progress(0, "player-create");
-    object *pl = player_get_dummy("HangDiagnostic", NULL);
+    char provision_error[HUGE_BUF];
+    ck_assert_msg(account_provision("hangdiagnostic", "local-test-7!", "Hang Diagnostic",
+                                   "human_male", VS(provision_error)),
+                  "%s", provision_error);
+    object *pl = player_get_dummy("Hang Diagnostic", NULL);
     ck_assert_ptr_nonnull(pl);
+    free(CONTR(pl)->cs->account);
+    CONTR(pl)->cs->account = xstrdup("hangdiagnostic");
+    if (plugins) {
+        ck_assert_msg(strakewood_python_loaded(pl), "Python plugin did not load");
+    }
     SET_FLAG(pl, FLAG_INVULNERABLE);
     ck_assert(object_enter_map(pl, NULL, town, 20, 8, false));
+    strakewood_progress(0, "initial-save");
+    ck_assert(player_save_checked(pl));
+    char *checkpoint_path = player_make_path(pl->name, "player.dat");
+    FILE *checkpoint = fopen(checkpoint_path, "rb");
+    ck_assert_ptr_nonnull(checkpoint);
+    CONTR(pl)->last_save_tick = pticks;
+    long last_save_tick = CONTR(pl)->last_save_tick;
+    unsigned int autosaves = 0;
     socket_buffer_clear(CONTR(pl)->cs);
 
     /* Default is idle, matching the report. A separate opt-in run explores
@@ -511,12 +551,36 @@ START_TEST(test_strakewood_idle_simulation) {
         strakewood_progress(tick, "main-process");
         main_process();
         ck_assert_ptr_nonnull(pl->map);
+        if (CONTR(pl)->last_save_tick != last_save_tick) {
+            struct stat before, after;
+            ck_assert_int_eq(fstat(fileno(checkpoint), &before), 0);
+            ck_assert_int_eq(stat(checkpoint_path, &after), 0);
+            ck_assert_int_gt(after.st_size, 0);
+            /* Keep the previous file open until comparison so its inode cannot
+             * be recycled: an advanced timer alone does not prove a save. */
+            ck_assert(before.st_dev != after.st_dev || before.st_ino != after.st_ino);
+            ck_assert_int_eq(fclose(checkpoint), 0);
+            checkpoint = fopen(checkpoint_path, "rb");
+            ck_assert_ptr_nonnull(checkpoint);
+            last_save_tick = CONTR(pl)->last_save_tick;
+            autosaves++;
+            strakewood_progress(tick, "autosave-returned");
+        }
         strakewood_progress(tick, "map2");
         draw_client_map(pl);
         strakewood_progress(tick, "queue-drain");
         /* This offline player has no authenticated peer. Exercise MAP2 and
          * simulation, but do not pass its dummy socket through live transport. */
         socket_buffer_clear(CONTR(pl)->cs);
+    }
+    ck_assert_uint_eq(autosaves, ticks / (AUTOSAVE + 1));
+    ck_assert_int_eq(fclose(checkpoint), 0);
+    free(checkpoint_path);
+    strakewood_progress(ticks, "final-save");
+    ck_assert(player_save_checked(pl));
+    if (plugins) {
+        strakewood_progress(ticks, "plugins-remove");
+        remove_plugins();
     }
     strakewood_progress(ticks, "complete");
 }
