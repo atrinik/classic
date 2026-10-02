@@ -18,38 +18,57 @@
 #include <toolkit/path.h>
 #include <toolkit/stringbuffer.h>
 
-#define EXPLORATION_MAPS_MAX 4096U
+#define EXPLORATION_MAPS_MAX 10000U
 #define EXPLORATION_DIM_MAX 256U
 #define EXPLORATION_PATH_MAX 255U
-#define EXPLORATION_BYTES_MAX (36U * 1024U * 1024U)
+#define EXPLORATION_BYTES_MAX (96U * 1024U * 1024U)
 #define EXPLORATION_MAGIC "AEXP0001"
 
 typedef struct exploration_map {
-    struct exploration_map *next;
     char *path;
     unsigned width, height;
     uint8_t *bits;
-    unsigned index;
-    uint64_t revision;
+    UT_hash_handle hh;
 } exploration_map;
 
+typedef struct exploration_pending {
+    struct exploration_pending *next, *prev;
+    char *path;
+    exploration_map *map;
+    uint8_t *bits;
+    UT_hash_handle hh;
+} exploration_pending;
+
+typedef struct exploration_account exploration_account;
+
+/* Owned by its socket. Other account sessions are visited only when newly
+ * discovered bits must be broadcast, never to locate this session or flush it. */
 typedef struct exploration_session {
-    struct exploration_session *next;
+    struct exploration_session *next, *prev;
     socket_struct *socket;
-    uint64_t seen[EXPLORATION_MAPS_MAX];
+    exploration_account *account;
+    exploration_map *last_map;
+    exploration_pending *pending, *pending_index;
 } exploration_session;
 
-typedef struct exploration_account {
-    struct exploration_account *next;
+struct exploration_account {
     char *name, *path;
     exploration_map *maps;
     exploration_session *sessions;
     unsigned count;
     bool valid, dirty, error_reported;
     time_t last_save;
-} exploration_account;
+    UT_hash_handle hh;
+};
 
 static exploration_account *accounts;
+
+#ifdef ATRINIK_TESTING
+static exploration_test_stats stats;
+#define TEST_COUNT(field, count) (stats.field += (count))
+#else
+#define TEST_COUNT(field, count) ((void)0)
+#endif
 
 static size_t bitmap_size(unsigned width, unsigned height) {
     return ((size_t)width * height + 7) / 8;
@@ -80,30 +99,16 @@ static bool valid_path(const char *path) {
 }
 
 static exploration_map *find_map(exploration_account *account, const char *path) {
-    for (exploration_map *map = account->maps; map != NULL; map = map->next) {
-        if (strcmp(map->path, path) == 0) {
-            return map;
-        }
-    }
-    return NULL;
-}
-
-static exploration_account *find_account(socket_struct *ns) {
-    for (exploration_account *account = accounts; account != NULL; account = account->next) {
-        for (exploration_session *session = account->sessions; session != NULL;
-             session = session->next) {
-            if (session->socket == ns) {
-                return account;
-            }
-        }
-    }
-    return NULL;
+    exploration_map *map;
+    TEST_COUNT(map_lookups, 1);
+    HASH_FIND_STR(account->maps, path, map);
+    return map;
 }
 
 static void free_maps(exploration_account *account) {
-    while (account->maps != NULL) {
-        exploration_map *map = account->maps;
-        account->maps = map->next;
+    exploration_map *map, *next;
+    HASH_ITER(hh, account->maps, map, next) {
+        HASH_DEL(account->maps, map);
         free(map->path);
         free(map->bits);
         free(map);
@@ -121,10 +126,8 @@ add_map(exploration_account *account, const char *path, unsigned width, unsigned
     map->width = width;
     map->height = height;
     map->bits = xcalloc(bitmap_size(width, height), 1);
-    map->next = account->maps;
-    account->maps = map;
-    map->index = account->count++;
-    map->revision = 1;
+    HASH_ADD_KEYPTR(hh, account->maps, map->path, strlen(map->path), map);
+    account->count++;
     return map;
 }
 
@@ -171,6 +174,7 @@ static bool load_account(exploration_account *account) {
             break;
         }
         exploration_map *map = add_map(account, path, width, height);
+        TEST_COUNT(load_records, 1);
         size_t size = bitmap_size(width, height);
         if (map == NULL || fread(map->bits, 1, size, fp) != size ||
             ((width * height) % 8 != 0 && (map->bits[size - 1] >> ((width * height) % 8)) != 0)) {
@@ -197,7 +201,7 @@ static bool save_account(exploration_account *account) {
     StringBuffer *buffer = stringbuffer_new();
     stringbuffer_append_string_len(buffer, EXPLORATION_MAGIC, 8);
     size_t size = 8;
-    for (exploration_map *map = account->maps; map != NULL; map = map->next) {
+    for (exploration_map *map = account->maps; map != NULL; map = map->hh.next) {
         size_t len = strlen(map->path), bytes = bitmap_size(map->width, map->height);
         append_u16(buffer, len);
         stringbuffer_append_string_len(buffer, map->path, len);
@@ -206,6 +210,8 @@ static bool save_account(exploration_account *account) {
         stringbuffer_append_string_len(buffer, (const char *)map->bits, bytes);
         size += 6 + len + bytes;
     }
+    TEST_COUNT(save_records, account->count);
+    TEST_COUNT(save_bytes, size);
     char *data = stringbuffer_finish(buffer);
     bool ok = path_write_atomic(account->path, data, size, 0600);
     free(data);
@@ -220,13 +226,64 @@ static bool save_account(exploration_account *account) {
     return ok;
 }
 
-static void send_map(socket_struct *ns, const exploration_map *map) {
+static exploration_pending *
+pending_get(exploration_session *session, const char *path, exploration_map *map) {
+    exploration_pending *pending;
+    HASH_FIND_STR(session->pending_index, path, pending);
+    if (pending == NULL) {
+        if (HASH_COUNT(session->pending_index) >= EXPLORATION_MAPS_MAX) {
+            return NULL;
+        }
+        pending = xcalloc(1, sizeof(*pending));
+        pending->path = xstrdup(path);
+        HASH_ADD_KEYPTR(hh, session->pending_index, pending->path, strlen(path), pending);
+        DL_APPEND(session->pending, pending);
+    }
+    if (map != NULL && pending->map == NULL) {
+        pending->map = map;
+        pending->bits = xcalloc(bitmap_size(map->width, map->height), 1);
+    }
+    return pending;
+}
+
+static void pending_free(exploration_session *session, exploration_pending *pending) {
+    HASH_DEL(session->pending_index, pending);
+    DL_DELETE(session->pending, pending);
+    free(pending->path);
+    free(pending->bits);
+    free(pending);
+}
+
+static void send_pending(socket_struct *ns, const exploration_pending *pending) {
     packet_struct *packet = packet_new(CLIENT_CMD_REGION_EXPLORATION, 0, 256);
-    packet_writer_write_uint8(packet, 1);
-    packet_writer_write_cstring(packet, map->path);
-    packet_writer_write_uint16(packet, map->width);
-    packet_writer_write_uint16(packet, map->height);
-    packet_writer_write_bytes(packet, map->bits, bitmap_size(map->width, map->height));
+    const exploration_map *map = pending->map;
+    if (map == NULL) {
+        packet_writer_write_uint8(packet, 3);
+        packet_writer_write_cstring(packet, pending->path);
+    } else {
+        size_t bytes = bitmap_size(map->width, map->height);
+        unsigned changed = 0;
+        for (size_t i = 0; i < bytes; i++) {
+            changed += pending->bits[i] != 0;
+        }
+        bool patch = 2 + (size_t)changed * 3 < bytes;
+        packet_writer_write_uint8(packet, patch ? 2 : 1);
+        packet_writer_write_cstring(packet, map->path);
+        packet_writer_write_uint16(packet, map->width);
+        packet_writer_write_uint16(packet, map->height);
+        if (patch) {
+            packet_writer_write_uint16(packet, changed);
+            for (size_t i = 0; i < bytes; i++) {
+                if (pending->bits[i] != 0) {
+                    packet_writer_write_uint16(packet, i);
+                    packet_writer_write_uint8(packet, pending->bits[i]);
+                }
+            }
+        } else {
+            packet_writer_write_bytes(packet, map->bits, bytes);
+        }
+    }
+    TEST_COUNT(sent_records, 1);
     socket_send_packet(ns, packet);
 }
 
@@ -236,11 +293,8 @@ void exploration_begin(socket_struct *ns) {
     }
     exploration_end(ns);
     exploration_account *account;
-    for (account = accounts; account != NULL; account = account->next) {
-        if (strcmp(account->name, ns->account) == 0) {
-            break;
-        }
-    }
+    TEST_COUNT(account_lookups, 1);
+    HASH_FIND_STR(accounts, ns->account, account);
     if (account == NULL) {
         account = xcalloc(1, sizeof(*account));
         account->name = xstrdup(ns->account);
@@ -254,17 +308,18 @@ void exploration_begin(socket_struct *ns) {
                 "Invalid account exploration preserved without modification: %s",
                 account->path);
         }
-        account->next = accounts;
-        accounts = account;
+        HASH_ADD_KEYPTR(hh, accounts, account->name, strlen(account->name), account);
     }
     exploration_session *session = xcalloc(1, sizeof(*session));
     session->socket = ns;
-    session->next = account->sessions;
-    account->sessions = session;
-    packet_struct *packet = packet_new(CLIENT_CMD_REGION_EXPLORATION, 1, 0);
+    session->account = account;
+    DL_APPEND(account->sessions, session);
+    ns->exploration = session;
+    packet_struct *packet = packet_new(CLIENT_CMD_REGION_EXPLORATION, 0, 64);
     packet_writer_write_uint8(packet, 0);
+    packet_writer_write_cstring(packet, ns->account);
     socket_send_packet(ns, packet);
-    exploration_flush(ns, false);
+    /* The client requests only maps in its region, with any cached bits. */
 }
 
 bool exploration_mark(socket_struct *ns,
@@ -273,116 +328,189 @@ bool exploration_mark(socket_struct *ns,
                       unsigned height,
                       unsigned x,
                       unsigned y) {
-    exploration_account *account = find_account(ns);
-    if (account == NULL || !account->valid || !valid_path(path) || width == 0 || height == 0 ||
-        width > EXPLORATION_DIM_MAX || height > EXPLORATION_DIM_MAX || x >= width || y >= height) {
+    exploration_session *session = ns != NULL ? ns->exploration : NULL;
+    if (session == NULL || !session->account->valid || path == NULL || width == 0 || height == 0 ||
+        width > EXPLORATION_DIM_MAX || height > EXPLORATION_DIM_MAX) {
         return false;
     }
-    exploration_map *map = find_map(account, path);
+    exploration_account *account = session->account;
+    exploration_map *map = session->last_map;
+    if (map == NULL || strcmp(map->path, path) != 0) {
+        if (!valid_path(path)) {
+            return false;
+        }
+        map = find_map(account, path);
+    }
     if (map == NULL) {
+        if (x >= width || y >= height) {
+            return false;
+        }
         map = add_map(account, path, width, height);
         if (map == NULL) {
             return false;
         }
-    } else if (map->width != width || map->height != height) {
-        /* Authored geometry changed. Old coordinates have no safe meaning. */
-        free(map->bits);
-        map->bits = xcalloc(bitmap_size(width, height), 1);
-        map->width = width;
-        map->height = height;
     }
-    size_t bit = (size_t)y * width + x;
+    session->last_map = map;
+    /* The initial dimensions define the bitfield layout. Do not compare map
+     * revisions or replace stored exploration when authored geometry changes. */
+    if (x >= map->width || y >= map->height) {
+        return false;
+    }
+    size_t bit = (size_t)y * map->width + x;
     uint8_t mask = 1U << (bit % 8);
     if (map->bits[bit / 8] & mask) {
         return false;
     }
     map->bits[bit / 8] |= mask;
-    map->revision++;
     account->dirty = true;
+    for (session = account->sessions; session != NULL; session = session->next) {
+        TEST_COUNT(broadcast_sessions, 1);
+        exploration_pending *pending = pending_get(session, map->path, map);
+        if (pending != NULL) {
+            pending->bits[bit / 8] |= mask;
+        } else {
+            /* A client that exhausts the bounded reconciliation queue must
+             * reconnect rather than silently miss authoritative live bits. */
+            session->socket->state = ST_ZOMBIE;
+        }
+    }
     return true;
 }
 
-void exploration_flush(socket_struct *ns, bool force) {
-    exploration_account *account = find_account(ns);
-    if (account == NULL) {
+void socket_command_region_exploration(socket_struct *ns,
+                                       player *pl,
+                                       uint8_t *data,
+                                       size_t len,
+                                       size_t pos) {
+    (void)pl;
+    packet_reader_t reader;
+    packet_reader_init_at(&reader, data, len, pos);
+    uint8_t operation = packet_reader_read_uint8(&reader);
+    char path[EXPLORATION_PATH_MAX + 1];
+    packet_reader_read_string(&reader, path, sizeof(path));
+    uint16_t count = packet_reader_read_uint16(&reader);
+    packet_view_t cached = packet_reader_read_view(&reader, count);
+    if (!packet_reader_finish(&reader)) {
         return;
     }
-    /* A full account can exceed the transport's 4 MiB queue. Stream bounded
-     * batches with gameplay headroom and retry unsent revisions next draw. */
-    for (exploration_session *session = account->sessions; session != NULL;
-         session = session->next) {
-        unsigned sent = 0;
-        for (exploration_map *map = account->maps; map != NULL; map = map->next) {
-            if (session->seen[map->index] == map->revision) {
-                continue;
-            }
-            if (sent == 32 || session->socket->packet_queue_bytes > 1024U * 1024U ||
-                session->socket->packet_queue_count > 1024U) {
-                break;
-            }
-            send_map(session->socket, map);
-            session->seen[map->index] = map->revision;
-            sent++;
-        }
+    if (operation != 0 || !valid_path(path) || count > 8192) {
+        packet_reader_set_error(&reader, PACKET_ERROR_INVALID_ENCODING);
+        return;
     }
+    exploration_session *session = ns != NULL ? ns->exploration : NULL;
+    if (session == NULL || ns->state != ST_PLAYING || ns->account == NULL) {
+        packet_reader_set_error(&reader, PACKET_ERROR_INVALID_ENCODING);
+        return;
+    }
+    exploration_map *map = find_map(session->account, path);
+    if (map == NULL) {
+        if (pending_get(session, path, NULL) == NULL) {
+            packet_reader_set_error(&reader, PACKET_ERROR_LIMIT_EXCEEDED);
+        }
+        return;
+    }
+    size_t bytes = bitmap_size(map->width, map->height);
+    unsigned tail = (map->width * map->height) % 8;
+    if ((count != 0 && count != bytes) ||
+        (count != 0 && tail != 0 && (cached.data[count - 1] >> tail) != 0)) {
+        packet_reader_set_error(&reader, PACKET_ERROR_INVALID_ENCODING);
+        return;
+    }
+    exploration_pending *pending = NULL;
+    for (size_t i = 0; i < bytes; i++) {
+        uint8_t missing = map->bits[i] & (count != 0 ? (uint8_t)~cached.data[i] : UINT8_MAX);
+        if (missing == 0) {
+            continue;
+        }
+        if (pending == NULL) {
+            pending = pending_get(session, path, map);
+            if (pending == NULL) {
+                packet_reader_set_error(&reader, PACKET_ERROR_LIMIT_EXCEEDED);
+                return;
+            }
+        }
+        pending->bits[i] |= missing;
+    }
+}
+
+void exploration_flush(socket_struct *ns, bool force) {
+    exploration_session *session = ns != NULL ? ns->exploration : NULL;
+    if (session == NULL) {
+        return;
+    }
+    unsigned sent = 0;
+    while (session->pending != NULL && sent < 32 && ns->packet_queue_bytes <= 1024U * 1024U &&
+           ns->packet_queue_count <= 1024U && ns->state != ST_DEAD && ns->state != ST_ZOMBIE) {
+        exploration_pending *pending = session->pending;
+        TEST_COUNT(pending_visits, 1);
+        send_pending(ns, pending);
+        pending_free(session, pending);
+        sent++;
+    }
+    exploration_account *account = session->account;
     time_t now = time(NULL);
     if (account->dirty && (force || now < account->last_save || now - account->last_save >= 5)) {
         save_account(account);
     }
 }
 
+static void free_account(exploration_account *account) {
+    HASH_DEL(accounts, account);
+    free_maps(account);
+    free(account->name);
+    free(account->path);
+    free(account);
+}
+
+static void free_session(exploration_session *session) {
+    while (session->pending != NULL) {
+        pending_free(session, session->pending);
+    }
+    session->socket->exploration = NULL;
+    DL_DELETE(session->account->sessions, session);
+    free(session);
+}
+
 void exploration_end(socket_struct *ns) {
-    exploration_account **link = &accounts;
-    while (*link != NULL) {
-        exploration_account *account = *link;
-        exploration_session **session_link = &account->sessions;
-        while (*session_link != NULL && (*session_link)->socket != ns) {
-            session_link = &(*session_link)->next;
-        }
-        if (*session_link == NULL) {
-            link = &account->next;
-            continue;
-        }
-        exploration_session *session = *session_link;
-        *session_link = session->next;
-        free(session);
-        save_account(account);
-        if (account->sessions == NULL && !account->dirty) {
-            *link = account->next;
-            free_maps(account);
-            free(account->name);
-            free(account->path);
-            free(account);
-        }
+    exploration_session *session = ns != NULL ? ns->exploration : NULL;
+    if (session == NULL) {
         return;
+    }
+    exploration_account *account = session->account;
+    free_session(session);
+    save_account(account);
+    if (account->sessions == NULL && !account->dirty) {
+        free_account(account);
     }
 }
 
 void exploration_shutdown(void) {
     while (accounts != NULL) {
         exploration_account *account = accounts;
-        accounts = account->next;
         save_account(account);
         while (account->sessions != NULL) {
-            exploration_session *session = account->sessions;
-            account->sessions = session->next;
-            free(session);
+            free_session(account->sessions);
         }
-        free_maps(account);
-        free(account->name);
-        free(account->path);
-        free(account);
+        free_account(account);
     }
 }
 
 #ifdef ATRINIK_TESTING
 bool exploration_visited(socket_struct *ns, const char *path, unsigned x, unsigned y) {
-    exploration_account *account = find_account(ns);
-    exploration_map *map = account != NULL ? find_map(account, path) : NULL;
+    exploration_session *session = ns != NULL ? ns->exploration : NULL;
+    exploration_map *map = session != NULL ? find_map(session->account, path) : NULL;
     if (map == NULL || x >= map->width || y >= map->height) {
         return false;
     }
     size_t bit = (size_t)y * map->width + x;
     return (map->bits[bit / 8] & (1U << (bit % 8))) != 0;
+}
+
+void exploration_stats_reset(void) {
+    memset(&stats, 0, sizeof(stats));
+}
+
+exploration_test_stats exploration_stats_get(void) {
+    return stats;
 }
 #endif

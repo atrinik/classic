@@ -15,7 +15,8 @@
 #include <decls.h>
 
 /* Main simulation thread only. Store keys come from authenticated sockets;
- * only draw_client_map2 may grant discoveries. No client upload API exists. */
+ * only draw_client_map2 may grant discoveries. Client cache reconciliation never
+ * mutates the authoritative account bitfields. */
 void exploration_begin(socket_struct *ns);
 void exploration_end(socket_struct *ns);
 void exploration_shutdown(void);
@@ -27,6 +28,12 @@ bool exploration_mark(socket_struct *ns,
                       unsigned y);
 void exploration_flush(socket_struct *ns, bool force);
 #ifdef ATRINIK_TESTING
+typedef struct exploration_test_stats {
+    uint64_t account_lookups, map_lookups, broadcast_sessions, pending_visits;
+    uint64_t sent_records, save_records, save_bytes, load_records;
+} exploration_test_stats;
+void exploration_stats_reset(void);
+exploration_test_stats exploration_stats_get(void);
 bool exploration_visited(socket_struct *ns, const char *path, unsigned x, unsigned y);
 #endif
 #endif

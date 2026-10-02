@@ -1,11 +1,12 @@
 # Account region-map exploration
 
-The Classic server owns region-map discoveries for an authenticated account.
-Characters on that account share the union, including simultaneous sessions.
-A fresh client receives the same discoveries. This is separate from MAP2's
-remembered geometry, current lighting and inventory region-map reveal items.
+The Classic server owns a map-path-to-bitfield store for each authenticated
+account. Characters share discoveries, including simultaneous sessions. Fresh
+clients request the same history. Client caches and requests never grant server
+exploration. This is separate from MAP2 remembered geometry, current lighting
+and inventory region-map reveal items.
 
-## Discovery and ownership
+## Discovery and execution cost
 
 `draw_client_map2()` records the resolved map identity and local tile coordinates
 only after its content and visibility checks accept a public, non-unique map
@@ -14,91 +15,115 @@ Blocked LOS, retained roof boundaries, other depths, absent content, private
 maps and maps without a region map never grant persistence. Discovery cannot
 load another map, change gameplay LOS, or reveal actors or lights.
 
-`exploration.c` owns the account cache on the single simulation thread. Sessions
-share a store by authenticated account name; they never upload discoveries.
-The last session normally saves and releases the store. Socket cleanup also
-releases exceptional sessions. Failed writes retain dirty state for retry on
-reconnect, and final server cleanup retries all remaining stores.
+`exploration.c` owns this state on the single simulation thread. Each socket
+holds its own session pointer and that session points directly to its account.
+Accounts and map paths use the existing `uthash` implementation. Repeated cells
+on the same map use the session's last-map cache. Unchanged discoveries perform
+no account/session scan, pending-queue work or write. A newly set bit is queued
+only for sessions sharing that account.
 
-Each map is keyed by canonical logical path, with row-major local coordinates.
-Paths start with `/`, contain at most 255 bytes, and contain no empty, `.` or
-`..` segment, backslash, colon or control character. Width and height are each
-1–256; a store contains at most 4096 maps. Coordinates outside the map and
-entries above the limit are rejected. A changed map size resets only that map's
-bitmap because old coordinates no longer identify the same geometry. Changes
-to region image layout do not invalidate logical map-local coordinates.
+Each session has a hashed, coalescing pending-map FIFO. Flushing one socket
+visits only its own pending records, never every account, session or stored map.
+At most 32 records are sent per map draw, stopping when the socket queue exceeds
+1 MiB or 1024 queued fragments. Backpressure retains pending bits. Pending maps
+are bounded at 10,000 per session; exhausting that bound through requests is a
+protocol limit error, and an exhausted session is disconnected rather than
+silently losing live discoveries. Reconnect reconciliation recovers history.
+
+Map paths start with `/`, contain at most 255 bytes, and contain no empty, `.`
+or `..` segment, backslash, colon or ASCII control character. Width and height
+are each 1–256; an account contains at most 10,000 maps. Initial dimensions
+establish the row-major bitfield layout. There is no map revision or geometry
+consistency check, reset, migration or comparison. Later coordinates outside
+that initial layout are ignored; client rendering clips to its region image.
 
 ## Durable storage
 
-The sidecar is `<account_make_path(name)>.exploration`, next to the existing
-account file. Credential and character-roster rewrites cannot erase it. Missing
-sidecars mean empty exploration. This is initialized runtime state: include it
-in account backups and the complete mutable-datapath activation archive.
+The sidecar is `<account_make_path(name)>.exploration`, next to the account
+file. Credential and roster rewrites cannot erase it. Missing sidecars mean an
+empty store. Include sidecars in account backups and complete mutable-datapath
+activation archives.
 
-The binary format is:
+The existing binary format remains:
 
 - Eight ASCII magic/version bytes `AEXP0001`.
-- Zero or more records until EOF: big-endian unsigned 16-bit path byte length,
-  exactly that many path bytes without a terminator, big-endian unsigned 16-bit
-  width and height, then exactly `ceil(width * height / 8)` bitmap bytes.
-- Bits are row-major, least-significant-bit first within each byte. Unused bits
-  in the last byte must be zero. Duplicate paths are invalid.
+- Records until EOF: big-endian unsigned 16-bit path byte length, that many path
+  bytes without a terminator, big-endian unsigned 16-bit width and height, then
+  exactly `ceil(width * height / 8)` bitmap bytes.
+- Bits are row-major and least-significant-bit first in each byte. Unused tail
+  bits must be zero. Duplicate paths are invalid.
 
-Readers bound the entire file to 36 MiB and the record count to 4096. Validation
-is transactional: malformed/truncated/oversized data discards the staged store,
-logs a diagnostic, and disables writes for that account session. The original
-file is preserved for operator recovery rather than replaced with an empty one.
+Readers bound the file to 96 MiB and 10,000 records. Hash lookups detect duplicate
+paths while loading. Parsing is transactional: malformed/truncated/oversized
+files discard staged state, log a diagnostic and disable writes for that
+account session. The original file remains available for operator recovery.
 
-Writes use the existing mode-0600 atomic file replacement API, including its
-flush/fsync/rename behavior. Discovery writes are batched at most once per five
-seconds; logout, socket teardown and orderly server shutdown force a save.
-There is no write when nothing changed. A crash may lose the most recent
-unsaved batch; failed saves keep dirty data in memory and log an error.
+Dirty accounts use the existing mode-0600 atomic replacement API, including
+flush/fsync/rename, at most once per five seconds. Logout, socket teardown and
+orderly shutdown force a save. Clean accounts do not write. Failed saves retain
+dirty state for retry across reconnect and log an error. A crash may lose the
+most recent unsaved batch. This intentionally remains one account snapshot,
+not a per-map file tree or journal: a save is linear in that account's data,
+while discovery, idle flush and region synchronization do not scan it.
 
-## Protocol 1081
+The scale test reports actual bytes and mark/save/load microseconds for 10,000
+24×24 maps and 10,000 256×256 maps. The latter has about 82 MiB of bitmaps plus
+record overhead; it is a deliberate persistence-cost bound, not a typical
+region. Save/load timings are diagnostics, not hardware-dependent assertions.
 
-`REGION_EXPLORATION` is server-to-client command 29. The ordinary packet envelope
-provides framing; its payload begins with an unsigned 8-bit operation:
+## Protocol 1082
+
+Server-to-client `REGION_EXPLORATION` remains command 29. Its payload starts
+with one unsigned 8-bit operation:
 
 | Operation | Remaining payload |
 | --- | --- |
-| `0` RESET | Empty; clears the previous account's session cache and rendered FOW. |
-| `1` MAP | NUL-terminated logical path (1–255 bytes), big-endian u16 width, big-endian u16 height, exactly `ceil(width * height / 8)` bitmap bytes. |
+| `0` RESET | Authenticated account name, NUL terminated (1–`MAX_BUF-1` bytes). Binds the session to that account's client cache. |
+| `1` BITMAP | Path cstring, width u16, height u16, complete bitmap. |
+| `2` PATCH | Path cstring, width u16, height u16, count u16, then `count` pairs of byte-index u16 and OR-mask u8. |
+| `3` EMPTY | Path cstring; this account has no exploration record for the requested path. |
 
-The bounds and bit order match persistence. Unknown operations, truncated or
-extra bytes, invalid dimensions/path/padding, and a 4097th distinct map are
-rejected before mutating the client cache. MAP replaces the cached record for
-its path. RESET starts every successful character session before snapshot
-records, even when the account has no discoveries. Disconnect clears client
-session state. Exact-version negotiation rejects incompatible older peers;
-there is no client-upload command or compatibility persistence branch.
+All multibyte integers are big-endian. Paths, dimensions and bitmap bounds match
+storage. PATCH contains 1–8192 entries in strictly increasing index order,
+nonzero masks, valid byte indices and no unused tail bits. BITMAP and PATCH
+merge into the account cache by OR. The server chooses PATCH only when its
+count-and-pair bytes are smaller than a full bitmap; otherwise it sends BITMAP.
 
-Initial snapshots and later map revisions stream at most 32 records per map
-draw, stopping when the socket queue exceeds 1 MiB or 1024 queued fragments.
-Per-session revision tracking retries remaining records on later draws and
-keeps simultaneous characters synchronized without exceeding the transport's
-4 MiB/4096-fragment queue limits. Each map record is independently complete;
-there is no unbounded staging transaction or implicit snapshot-complete marker.
+Client-to-server `REGION_EXPLORATION` command 23 is playing-only. Its payload is
+operation `0`, path cstring, cached-byte-count u16, and that many cache bytes.
+Zero count means a cache miss. For a known map a nonzero count must exactly
+match its stored bitmap size, with canonical zero padding. For an unknown path,
+any bounded cache up to 8192 bytes yields EMPTY, without creating a server map.
 
-The client caches records independently of asynchronous region PNG/definition
-loading, applies matching logical maps once assets are ready, and refreshes
-open map/minimap clones. Normal MAP2 updates can still reveal currently visible
-cells immediately. Server snapshots restore history after reconnect and region
-transitions; client disks are not authoritative.
+The server computes `authoritative_bits & ~cached_bits` and queues only missing
+bits. A matching cache sends no BITMAP/PATCH. Client-supplied bits never mutate
+server exploration. All requests are fully validated before enqueuing state.
+Unknown operations, invalid paths/lengths, trailing/truncated bytes and excess
+pending requests fail through the normal bounded packet parser.
+
+RESET is sent for each successful character session. It carries the canonical
+authenticated account name so the client can bind a cache under that identity
+and the pinned server certificate. No 10,000-map snapshot is sent at login.
+Once region definitions are ready, the client requests their map paths using
+its cache; live discoveries arrive through the same per-session pending queue.
+Different characters on the same account receive shared live bits. Transport
+ordering and monotonic OR merges require no revision history, acknowledgments,
+subscriptions or reconciliation journal. Exact-version login rejects older
+peers.
 
 ## Migration and validation
 
-Existing per-character `client-maps/*.tiles` files remain untouched but are no
-longer loaded or written. Previously local exploration is not imported: it has
-no server-verifiable account ownership or visibility provenance. Existing
-accounts begin recording newly observed cells after the upgrade. No account,
-character, content artifact or initialized runtime file requires manual edits.
+Existing `AEXP0001` server files remain readable. Old per-character client
+`client-maps/*.tiles` files remain untouched and are not imported: they have no
+server-verifiable ownership or visibility provenance. No account, character,
+content artifact or initialized runtime file requires manual edits.
 
-Server account tests cover shared sessions, another account, reload into fresh
-session state, dimensions, corruption preservation, failed-save retry and
-paced replay. The request suite drives normal `draw_client_map2()` through
-visible, concealed, upper-level, private and non-region cases. Client parser and
-region-map integration tests cover bounded transactional decoding and delayed
-assets/reconnect rendering. Protocol generation tests bind both consumers to
-version 1081 and command 29. Use the workspace Classic profile for integrated
-server/client tests and the supervised isolated lifecycle for runtime checks.
+Server tests cover shared accounts, fresh-session reload, bounded parsing,
+corruption preservation, failed-save retry, sparse responses, forged caches,
+unknown maps, own-session flushing, backpressure and 10,000-map scaling. The
+request suite drives normal `draw_client_map2()` through visible, concealed,
+upper-level, private and non-region cases. Deterministic counters assert that
+idle work and repeated discoveries perform no map/account lookup or full-store
+scan. Client tests cover transactional decoding, cache identity, region loading
+and incremental rendering. Use the workspace Classic profile for integrated
+validation and the supervised isolated lifecycle for runtime checks.
