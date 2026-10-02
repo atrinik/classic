@@ -14,6 +14,11 @@ from the client directory (and the corresponding day/dusk manifests). Set
 the actual completed GPU frames. The large viewport exposes all four map
 boundaries for inspection of the two-tile lighting feather. The zero golden
 hashes request measured evidence; they do not claim cross-backend approval.
+Check exported initial captures with
+`python3 tools/verify_night_presentation.py --day DAY.png --dusk DUSK.png --night NIGHT.png`.
+This rejects color contamination, missing or incorrectly lit player pixels,
+and day/night changes that fail to darken the visible world. It requires the
+actual completed GPU captures; manifest validation alone cannot pass it.
 
 The `presentation-saturated` companion uses Q5.11 65535 on every tile and
 120-pixel-tall colored structural sprites one tile inside each of the four
