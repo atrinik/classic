@@ -23,6 +23,16 @@ void region_exploration_connect(const char *certificate, const char *cache_direc
 void region_exploration_disconnect(void);
 void region_exploration_clear(void);
 bool region_exploration_receive(const uint8_t *data, size_t len, bool *changed);
+/* Account bitmap allocations total at most 1 MiB (10,000 normal 24x24 maps
+ * use 720,000 bytes). Over-limit new records are rejected transactionally.
+ * RESET is idempotent while active; disconnect permits a new account. */
+uint64_t region_exploration_revision(void);
+typedef void (*region_exploration_visit_fn)(unsigned x, unsigned y, void *user);
+/* Resume a record's set bits using a caller-owned byte cursor and shared work
+ * budget. True means complete; unchanged records cost no byte/cell work.
+ * The caller charges map lookup work and resets the cursor for the next map. */
+bool region_exploration_replay(const char *path, uint64_t since, size_t *cursor,
+                               size_t *budget, region_exploration_visit_fn visit, void *user);
 /* Borrowed storage, valid until clear or an account change. */
 const uint8_t *region_exploration_find(const char *path, unsigned *width, unsigned *height);
 /* Deduplicates requests for the session; retry queue is bounded to 10000 paths. */

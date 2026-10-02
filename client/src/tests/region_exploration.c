@@ -75,6 +75,74 @@ static char *cache_file(const char *directory) {
     strcat(name, ".bin");
     return path_join(directory, name);
 }
+static size_t visited;
+static void count_visit(unsigned x, unsigned y, void *user) {
+    (void)user;
+    CHECK(x < 256 && y < 256);
+    visited++;
+}
+
+static void replay_limits(void) {
+    region_exploration_clear();
+    select_account(NULL);
+    uint8_t data[9000];
+    char path[64];
+    size_t accepted = 0;
+    for (unsigned i = 0; i < 10000; i++) {
+        snprintf(path, sizeof(path), "/attack/%u", i);
+        size_t len = packet(data, path, 256, 256) - 8192;
+        data[0] = 2;
+        const uint8_t sparse[] = {0, 1, 0, 0, 1};
+        memcpy(data + len, sparse, sizeof(sparse));
+        bool changed;
+        bool ok = region_exploration_receive(data, len + sizeof(sparse), &changed);
+        CHECK(ok == (i < 128)); /* 1 MiB, never the former 78.125 MiB. */
+        CHECK(changed == ok);
+        accepted += ok;
+    }
+    CHECK(accepted == 128);
+    size_t budget = 65536, before = budget, cursor = 0;
+    visited = 0;
+    for (unsigned i = 0; i < 10000 && budget > 0; i++) {
+        snprintf(path, sizeof(path), "/attack/%u", i);
+        budget--; /* Same map-lookup charge as the view service. */
+        cursor = 0;
+        if (!region_exploration_replay(path, 0, &cursor, &budget, count_visit, NULL)) {
+            break;
+        }
+    }
+    CHECK(before - budget <= 65536 && visited < 10 && cursor < 8192);
+    /* A full dense map cannot bypass a small work slice; later slices resume
+     * exactly, and an unchanged revision avoids even the byte scan. */
+    region_exploration_clear();
+    select_account(NULL);
+    size_t len = packet(data, "/dense", 256, 256);
+    memset(data + len - 8192, 255, 8192);
+    CHECK(receive(data, len));
+    uint64_t revision = region_exploration_revision();
+    visited = cursor = 0;
+    unsigned slices = 0;
+    for (;;) {
+        budget = 100;
+        before = visited;
+        bool done = region_exploration_replay("/dense", 0, &cursor, &budget, count_visit, NULL);
+        CHECK(visited - before <= 88 && budget <= 100);
+        slices++;
+        if (done) {
+            break;
+        }
+        CHECK(cursor > 0 && slices < 1000);
+    }
+    CHECK(visited == 65536 && slices > 1);
+    budget = 100;
+    cursor = 0;
+    CHECK(region_exploration_replay("/dense", revision, &cursor, &budget, count_visit, NULL));
+    CHECK(visited == 65536 && budget == 100 && cursor == 0);
+    bool changed;
+    CHECK(region_exploration_receive(data, len, &changed) && !changed);
+    CHECK(region_exploration_revision() == revision);
+    region_exploration_clear();
+}
 int main(int argc, char **argv) {
     CHECK(argc == 2);
     CHECK(path_ensure_real_directory(argv[1], 0700) == PATH_DIRECTORY_OK);
@@ -119,23 +187,32 @@ int main(int argc, char **argv) {
           bits[0] == 0x85);
     CHECK(region_exploration_request("/test"));
     CHECK(region_exploration_request("/test"));
+    uint64_t unchanged = region_exploration_revision();
+    for (unsigned i = 0; i < 10000; i++) {
+        CHECK(region_exploration_receive(reset, sizeof(reset), &changed) && !changed);
+    }
+    CHECK(region_exploration_revision() == unchanged);
     blocked = true;
     CHECK(region_exploration_service(send_request, NULL) == 0);
     blocked = false;
     CHECK(region_exploration_service(send_request, NULL) == 1 && sent == 1);
+    CHECK(region_exploration_receive(reset, sizeof(reset), &changed) && !changed);
     CHECK(region_exploration_request("/test"));
     CHECK(region_exploration_service(send_request, NULL) == 0);
     region_exploration_disconnect();
     CHECK(!region_exploration_find("/test", &w, &h));
     CHECK(region_exploration_service(send_request, NULL) == 0);
-    select_account(NULL);
+    CHECK(region_exploration_receive(reset, sizeof(reset), &changed) && changed);
     CHECK(region_exploration_find("/test", &w, &h) == bits && bits[0] == 0x85);
     len = packet(data, "/test", 1, 1);
     data[len - 1] = 1;
     CHECK(receive(data, len));
     CHECK(region_exploration_find("/test", &w, &h) == bits && w == 9 && h == 2 && bits[0] == 0x85);
     const uint8_t account_b[] = {0, 'b', 0};
-    CHECK(receive(account_b, sizeof(account_b)));
+    CHECK(!region_exploration_receive(account_b, sizeof(account_b), &changed) && !changed);
+    CHECK(region_exploration_find("/test", &w, &h) == bits);
+    region_exploration_connect(certificate, NULL);
+    CHECK(region_exploration_receive(account_b, sizeof(account_b), &changed) && changed);
     CHECK(!region_exploration_find("/test", &w, &h));
     CHECK(!receive((const uint8_t *)"\0a\0x", 4));
     len = packet(data, "/test", 0, 1);
@@ -167,7 +244,7 @@ int main(int argc, char **argv) {
     sent = 0;
     for (unsigned i = 0; i < 10000; i++) {
         snprintf(path, sizeof(path), "/map/%u", i);
-        len = packet(data, path, 1, 1);
+        len = packet(data, path, 24, 24);
         data[len - 1] = 1;
         CHECK(receive(data, len));
         CHECK(region_exploration_request(path));
@@ -183,7 +260,7 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < 10000; i++) {
         snprintf(path, sizeof(path), "/map/%u", i);
         bits = region_exploration_find(path, &w, &h);
-        CHECK(bits && w == 1 && h == 1 && bits[0] == 1);
+        CHECK(bits && w == 24 && h == 24 && bits[71] == 1);
     }
     region_exploration_connect("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                                argv[1]);
@@ -198,5 +275,6 @@ int main(int argc, char **argv) {
     region_exploration_clear();
     CHECK(remove(filename) == 0);
     free(filename);
+    replay_limits();
     return 0;
 }

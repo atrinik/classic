@@ -172,7 +172,9 @@ typedef struct region_map_fow {
     SDL_Surface *surface;
 
     uint32_t *bitmap;
-    bool exploration_loaded; ///< Session cache has been applied after asset loading.
+    uint64_t exploration_revision; ///< Last completely applied cache revision.
+    uint64_t exploration_target; ///< Revision at the beginning of this pass.
+    size_t exploration_map, exploration_byte; ///< Bounded replay continuation.
 
     UT_array *tiles;
 } region_map_fow_t;

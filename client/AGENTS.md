@@ -38,8 +38,12 @@
   map bitfields, scoped to the pinned connection certificate and authenticated
   account. Retain initial dimensions and OR incoming snapshots/patches. Request
   only region-definition paths, deduplicated and paced with socket backpressure.
-  RESET selects the account and rebuilds views; disconnect hides cached bits and
-  flushes optional private disk storage. Never import character `.tiles` files or
+  Bitmap allocations total at most 1 MiB; reject excess new records without
+  changing the cache. Replay uses one shared 65,536-unit map/byte/set-bit budget
+  per frame, resumes across frames, and coalesces packets by cache revision.
+  RESET selects the account once per connection; duplicate active RESETs are
+  idempotent and account switches require disconnect. Disconnect hides cached
+  bits and flushes optional private disk storage. Never import character `.tiles` files or
   persist client-renderer visibility in the account cache.
 - Client user data lives below `.atrinik/<major>.x/`. When that stable directory
   is first created, the client may migrate the highest valid same-major legacy

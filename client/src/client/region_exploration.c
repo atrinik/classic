@@ -17,12 +17,14 @@
 #include <string.h>
 
 #define EXPLORATION_MAP_LIMIT 10000U
+#define EXPLORATION_BITMAP_LIMIT (1024U * 1024U)
 #define EXPLORATION_PACKET_MAX (1U + 256U + 4U + 8192U)
 
 typedef struct exploration_record {
     char path[256];
     unsigned width, height;
     uint8_t *bits;
+    uint64_t revision;
     UT_hash_handle hh;
 } exploration_record_t;
 typedef struct exploration_request {
@@ -35,6 +37,8 @@ static exploration_request_t *requests, *pending, *pending_tail;
 static char connection[65], cache_key[65];
 static char *cache_directory, *cache_path;
 static bool active, dirty;
+static size_t bitmap_bytes;
+static uint64_t revision = 1;
 
 static void requests_clear(void) {
     exploration_request_t *entry, *next;
@@ -45,6 +49,8 @@ static void requests_clear(void) {
     pending = pending_tail = NULL;
 }
 static void records_clear(void) {
+    bitmap_bytes = 0;
+    revision++;
     exploration_record_t *entry, *next;
     HASH_ITER(hh, records, entry, next) {
         HASH_DEL(records, entry);
@@ -197,7 +203,7 @@ void region_exploration_connect(const char *certificate, const char *directory) 
         }
     }
 }
-static bool account_select(const uint8_t *data, size_t len) {
+static bool account_select(const uint8_t *data, size_t len, bool *changed) {
     /* RESET is trusted only inside the authenticated, pinned connection. */
     if (connection[0] == '\0' || len < 3 || len > 257 || data[len - 1] != 0) {
         return false;
@@ -221,9 +227,18 @@ static bool account_select(const uint8_t *data, size_t len) {
         key[i * 2 + 1] = hex[digest[i] & 15];
     }
     key[64] = 0;
+    if (active) {
+        /* A connection authenticates one account. Duplicate RESETs must not
+         * clear request deduplication, reload disk or invalidate live views. */
+        return strcmp(cache_key, key) == 0;
+    }
     requests_clear();
+    if (changed != NULL) {
+        *changed = true;
+    }
     if (strcmp(cache_key, key) == 0) {
         active = true;
+        revision++;
         return true;
     }
     cache_save();
@@ -264,11 +279,7 @@ bool region_exploration_receive(const uint8_t *data, size_t len, bool *changed) 
         return false;
     }
     if (data[0] == 0) {
-        bool ok = account_select(data, len);
-        if (changed != NULL) {
-            *changed = ok;
-        }
-        return ok;
+        return account_select(data, len, changed);
     }
     if (!active || data[0] > 3 || len < 4) {
         return false;
@@ -318,7 +329,8 @@ bool region_exploration_receive(const uint8_t *data, size_t len, bool *changed) 
     exploration_record_t *entry;
     HASH_FIND_STR(records, (const char *)data + 1, entry);
     if (entry == NULL) {
-        if (HASH_COUNT(records) >= EXPLORATION_MAP_LIMIT) {
+        if (HASH_COUNT(records) >= EXPLORATION_MAP_LIMIT ||
+            bytes > EXPLORATION_BITMAP_LIMIT - bitmap_bytes) {
             return false;
         }
         entry = calloc(1, sizeof(*entry));
@@ -334,6 +346,7 @@ bool region_exploration_receive(const uint8_t *data, size_t len, bool *changed) 
         entry->width = width;
         entry->height = height;
         HASH_ADD_STR(records, path, entry);
+        bitmap_bytes += bytes;
         dirty = true;
     }
     /* Dimensions are metadata from the first observation, not an authored-map
@@ -354,9 +367,47 @@ bool region_exploration_receive(const uint8_t *data, size_t len, bool *changed) 
         any |= (entry->bits[index] | mask) != entry->bits[index];
         entry->bits[index] |= mask;
     }
+    if (any) {
+        entry->revision = ++revision;
+    }
     dirty |= any;
     if (changed != NULL) {
         *changed = any;
+    }
+    return true;
+}
+
+uint64_t region_exploration_revision(void) {
+    return revision;
+}
+
+/* Each byte costs one scan unit plus at most eight visited-cell units. Do not
+ * split a byte: a caller with fewer than nine units resumes it next frame. */
+bool region_exploration_replay(const char *path, uint64_t since, size_t *cursor,
+                               size_t *budget, region_exploration_visit_fn visit, void *user) {
+    exploration_record_t *entry;
+    if (!active) {
+        return true;
+    }
+    HASH_FIND_STR(records, path, entry);
+    if (entry == NULL || entry->revision <= since) {
+        return true;
+    }
+    size_t bytes = ((size_t)entry->width * entry->height + 7) / 8;
+    while (*cursor < bytes) {
+        uint8_t mask = entry->bits[*cursor];
+        if (*budget < (mask ? 9U : 1U)) {
+            return false;
+        }
+        (*budget)--;
+        for (unsigned bit = 0; mask != 0; bit++, mask >>= 1) {
+            if (mask & 1U) {
+                size_t cell = *cursor * 8 + bit;
+                (*budget)--;
+                visit((unsigned)(cell % entry->width), (unsigned)(cell / entry->width), user);
+            }
+        }
+        (*cursor)++;
     }
     return true;
 }

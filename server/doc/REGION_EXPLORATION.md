@@ -67,7 +67,7 @@ not a per-map file tree or journal: a save is linear in that account's data,
 while discovery, idle flush and region synchronization do not scan it.
 
 The scale test reports actual bytes and mark/save/load microseconds for 10,000
-24×24 maps and 10,000 256×256 maps. The latter has about 82 MiB of bitmaps plus
+24×24 maps and 10,000 256×256 maps. The latter has 78.125 MiB of bitmaps plus
 record overhead; it is a deliberate persistence-cost bound, not a typical
 region. Save/load timings are diagnostics, not hardware-dependent assertions.
 
@@ -110,6 +110,29 @@ Different characters on the same account receive shared live bits. Transport
 ordering and monotonic OR merges require no revision history, acknowledgments,
 subscriptions or reconciliation journal. Exact-version login rejects older
 peers.
+
+## Client resource bounds
+
+The optional client cache keeps at most 10,000 records and 1 MiB of bitmap
+allocations. This fits 10,000 typical 24×24 maps (720,000 bytes), including
+headroom for the small minority of larger maps. An otherwise valid new record
+that exceeds either limit is rejected without evicting or modifying existing
+records. Oversized optional disk caches are complete cache misses. The server
+store's larger persistence limits do not imply equivalent client allocations.
+
+A connection authenticates one account. Repeated active RESETs for that account
+leave views and request deduplication unchanged; a different account is rejected
+until disconnect. Reconnecting restores hidden cached bits and schedules fresh
+requests, including when the account is unchanged.
+
+Replay is deferred to the once-per-frame client service with a shared budget of
+65,536 map lookups, bitmap bytes and visited cells. Zero bytes skip cell work;
+only set bits reach the view. Each view resumes its cursor, unchanged records
+are skipped by revision, and new packets coalesce into a subsequent pass without
+restarting the current one. Views take turns when work spans frames. Dense or
+large histories therefore appear progressively. Packet handlers and asset/FOW
+updates cannot replenish this budget. Changed shared views invalidate each
+popup's derived fog zoom, which is rebuilt when rendered.
 
 ## Migration and validation
 
