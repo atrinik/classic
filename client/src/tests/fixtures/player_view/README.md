@@ -15,6 +15,13 @@ the actual completed GPU frames. The large viewport exposes all four map
 boundaries for inspection of the two-tile lighting feather. The zero golden
 hashes request measured evidence; they do not claim cross-backend approval.
 
+The `presentation-saturated` companion uses Q5.11 65535 on every tile and
+120-pixel-tall colored structural sprites one tile inside each of the four
+edges. It exposes saturation in the tone curve and verifies that structural
+sprites use their owning floor sample instead of changing brightness with
+screen height. It is deliberately a stress diagnostic; a zero golden hash
+does not establish that the brightness taper has passed visual review.
+
 These XML manifests preserve the pre-cutover renderer's viewport, logical map
 size, lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
 MAP command, and every image by SHA-256. They are immutable inputs for schema

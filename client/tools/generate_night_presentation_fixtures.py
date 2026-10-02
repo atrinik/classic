@@ -46,17 +46,23 @@ def main() -> None:
                 if (7 <= x <= 16 and y < 10) or (3 <= x <= 20 and 10 <= y < 29)
                 or (5 <= x <= 10 and y >= 29) or (14 <= x <= 19 and y >= 29)
                 else (0, 0, 0, 0))
-    for name, contents in (("presentation-floor", floor), ("presentation-player", actor)):
+    tall = png(24, 120, lambda x, y: (255, 192, 128, 255)
+               if 3 <= x <= 20 else (0, 0, 0, 0))
+    for name, contents in (("presentation-floor", floor), ("presentation-player", actor),
+                           ("presentation-tall", tall)):
         (fixtures / f"{name}.png").write_bytes(contents)
 
     template = ET.parse(fixtures / "radial-light-smooth.xml").getroot()
-    for label, radiance in (("day", 2048), ("dusk", 128), ("night", 0)):
+    for label, radiance in (("day", 2048), ("dusk", 128), ("night", 0),
+                            ("saturated", 65535)):
         tiles = bytearray()
         for x in range(wire.MAP_SIZE):
             for y in range(wire.MAP_SIZE):
                 layers = [wire.layer(0, 1)]
                 if x == wire.ORIGIN and y == wire.ORIGIN:
                     layers.append(wire.layer(wire.LAYER_LIVING, 2))
+                if label == "saturated" and (x, y) in ((1, 8), (8, 1), (15, 8), (8, 15)):
+                    layers.append(wire.layer(wire.LAYER_WALL, 3))
                 tiles.extend(wire.tile(x, y, *layers, radiance=radiance))
         packet = wire.packet(((0, bytes(tiles)),))
         snapshot = fixtures / f"presentation-{label}.map2.hex"
@@ -69,7 +75,10 @@ def main() -> None:
         manifest.attrib.pop("archived-software-pixels-sha256", None)
         for child in list(manifest):
             manifest.remove(child)
-        for face, name in ((1, "presentation-floor"), (2, "presentation-player")):
+        assets = [(1, "presentation-floor"), (2, "presentation-player")]
+        if label == "saturated":
+            assets.append((3, "presentation-tall"))
+        for face, name in assets:
             path = fixtures / f"{name}.png"
             ET.SubElement(manifest, "asset", {
                 "face": str(face), "path": str(path.relative_to(root)),
