@@ -292,6 +292,7 @@ static void
 map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow);
 static void map_mark_stretch_dirty(int x, int y);
 static int map_level_support_height(int x, int y, int depth);
+static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, int object_layer);
 
 static void *map_cell_record_allocate(size_t size) {
     void *record = xcalloc(1, size);
@@ -872,6 +873,42 @@ bool widget_map_sparse_state_test(void) {
     map_cell_store_trim_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index);
     success = success && map_cell_retained_bytes == before_trim &&
               stores[MAP2_DEPTH_INDEX(0)]->headers[trim_index].occupancy == 0;
+
+    /* Expiry must clear only the visual payload, not the sparse record's
+     * lookup key or next pointer. Exercise tail, middle and head records
+     * with remembered floor geometry interleaved in the same cell. */
+    map_cell_t *expired_owner = map_cell_store_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index, true);
+    const int expiry_layers[] = {LAYER_ITEM, LAYER_LIVING, LAYER_EFFECT};
+    map_cell_layer_record_t *expiry_records[arraysize(expiry_layers)];
+    for (size_t index = 0; index < arraysize(expiry_layers); index++) {
+        map_cell_layer_record_t *record =
+            map_cell_layer_record(expired_owner, GET_MAP_LAYER(expiry_layers[index], 0), true);
+        record->face = (uint16_t)(index + 2);
+        record->visibility.initialized = true;
+        expiry_records[index] = record;
+        if (index == 0) {
+            map_cell_layer_record(expired_owner, GET_MAP_LAYER(LAYER_FLOOR, 0), true)->face = 1;
+        }
+    }
+    uint64_t before_expiry = map_cell_retained_bytes;
+    for (size_t index = 0; index < arraysize(expiry_layers); index++) {
+        map_clear_expired_visibility_layer(expired_owner, 0, expiry_layers[index]);
+        map_cell_layer_record_t *record =
+            map_cell_layer_record(expired_owner, GET_MAP_LAYER(expiry_layers[index], 0), false);
+        success = success && record == expiry_records[index] && record->face == 0 &&
+                  record->visibility.initialized && !record->visibility.authorized &&
+                  record->visibility.alpha == 0 && map_cell_retained_bytes == before_expiry;
+        for (size_t other = 0; other < arraysize(expiry_layers); other++) {
+            success = success &&
+                      map_cell_layer_record(expired_owner,
+                                            GET_MAP_LAYER(expiry_layers[other], 0), false) ==
+                          expiry_records[other];
+        }
+        success = success &&
+                  map_cell_layer_record_read(expired_owner, GET_MAP_LAYER(LAYER_FLOOR, 0))->face == 1;
+    }
+    map_cell_store_clear_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index);
+    success = success && map_cell_retained_bytes == before_trim;
 
     for (size_t level = 0; level < MAP2_LEVELS; level++) {
         map_cell_store_destroy(stores[level]);
@@ -2580,9 +2617,11 @@ static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, 
         /* Preserve a zero-alpha tombstone for this cache generation.  A later
          * authoritative reappearance can then fade in from zero instead of
          * being mistaken for the initial complete-snapshot baseline. */
-        map_visibility_fade_t visibility = record->visibility;
-        memset(record, 0, sizeof(*record));
-        record->visibility = visibility;
+        *record = (map_cell_layer_record_t){
+            .next = record->next,
+            .layer = record->layer,
+            .visibility = record->visibility,
+        };
     }
 }
 
