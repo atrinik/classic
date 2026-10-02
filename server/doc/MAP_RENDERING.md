@@ -2041,7 +2041,8 @@ positions where the player is rendered.
 
 Remembered static geometry outside current authorization receives a neutral
 memory lift, not a current-visibility grant. Let `S` be the decoded server
-scalar and `C` its decoded linear RGB vector. The display-only values are:
+scalar and `C` its decoded linear RGB vector. The display-only values before
+window attenuation are:
 
 ```text
 memory_lift = max(0, 40 - S)
@@ -2053,11 +2054,23 @@ Thus zero-radiance remembered geometry is `(40,40,40)`, a low colored local
 sample keeps its color while receiving only the missing neutral floor, and a
 negative or zero endpoint cannot produce a negative display value. The RGB
 component clamp is display-only and does not alter the cached sample. At or
-above raw 40 the server sample is unchanged. Current visible geometry does not get
+above raw 40 the interior server sample is unchanged. Current visible geometry does not get
 the memory lift; it receives the authoritative sample plus the player-field
 contribution. Q5.11 encoding remains the existing checked round-half-up
 `raw * 8 / 5` operation at the wire boundary; this contract adds no protocol
 field and no second visibility authority.
+
+With smooth lighting, feather the completed presentation sample at the negotiated
+wire-window boundary. Let `distance` be the minimum integer distance from the
+sample to any of the four window sides. Its Q0.8 weight is `0` at distance zero,
+`16` at distance one, and `256` at distance two or greater; samples outside the
+window also have weight zero. Multiply scalar and each RGB channel by this weight
+with checked round-half-up division by 256, after the player contribution or
+memory lift and before spatial interpolation and tone mapping. The low midpoint
+compensates for the steep low-radiance tone curve. This presentation-only taper
+also bounds nearest-known light borrowing and leaves authoritative cache samples
+unchanged. Discrete lighting retains its per-tile transfer without this spatial
+taper. The interior values above and below describe full-weight samples.
 
 Fade alpha is integer and monotonic for one authoritative transition:
 
@@ -2210,7 +2223,8 @@ coordinated update to all consumers before implementation proceeds.
 
 ### Conformance vectors and review gates
 
-The following vectors are mandatory in unit/fixture coverage:
+The following vectors are mandatory in unit/fixture coverage; light values
+describe interior samples before window attenuation:
 
 | Case | Remembered display scalar/RGB | Player contribution | Alpha |
 | --- | --- | --- | ---: |
