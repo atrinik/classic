@@ -834,7 +834,16 @@ if (BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_video_encoder.py"
                 "$<TARGET_FILE:${EXECUTABLE}>")
-        set_tests_properties(client-video-recording client-video-encoder PROPERTIES TIMEOUT 60)
+        add_executable(client-video-encoder-failure-tests
+            src/tests/video_encoder_failure.c src/client/video_encoder.c src/client/video_avi.c)
+        atrinik_configure_target(client-video-encoder-failure-tests)
+        target_include_directories(client-video-encoder-failure-tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+        target_link_libraries(client-video-encoder-failure-tests PRIVATE
+            SDL3::SDL3 SDL3_image::SDL3_image)
+        add_test(NAME client-video-encoder-failure COMMAND client-video-encoder-failure-tests)
+        set_tests_properties(client-video-recording client-video-encoder
+            client-video-encoder-failure PROPERTIES TIMEOUT 60)
     endif ()
 
     add_executable(client-compound-packet-tests
