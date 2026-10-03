@@ -426,8 +426,7 @@ static int test_wilderness_transition_diagnostic(void) {
 
     live_movement_route_state_t *state = live_movement_route_state_create(route, 0);
     REQUIRE(state != NULL);
-    live_movement_route_observation_t current =
-        observation(1, "/wilderness/0_68", 23, 18, 67);
+    live_movement_route_observation_t current = observation(1, "/wilderness/0_68", 23, 18, 67);
     REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
     REQUIRE(live_movement_route_arrival_presented(state));
     current.now_ms = 2;
@@ -473,15 +472,15 @@ static int test_maximum_map_diagnostic(void) {
     actual[LIVE_MOVEMENT_ROUTE_MAP_MAX] = '\0';
 
     char xml[2048];
-    int xml_size = snprintf(
-        xml,
-        sizeof(xml),
-        "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
-        "<checkpoint map=\"%s\" x=\"255\" y=\"255\" direction=\"0\"/>"
-        "<checkpoint map=\"%s\" x=\"0\" y=\"0\" direction=\"6\"/>"
-        "</live-movement-route>",
-        source,
-        destination);
+    int xml_size =
+        snprintf(xml,
+                 sizeof(xml),
+                 "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
+                 "<checkpoint map=\"%s\" x=\"255\" y=\"255\" direction=\"0\"/>"
+                 "<checkpoint map=\"%s\" x=\"0\" y=\"0\" direction=\"6\"/>"
+                 "</live-movement-route>",
+                 source,
+                 destination);
     REQUIRE(xml_size > 0 && (size_t)xml_size < sizeof(xml));
     live_movement_route_t *route = NULL;
     REQUIRE(load_xml(xml, &route));
@@ -504,10 +503,8 @@ static int test_maximum_map_diagnostic(void) {
     REQUIRE(strstr(failure, "(127,63)") != NULL);
     REQUIRE(strstr(failure, "(255,255)") != NULL);
     REQUIRE(strstr(failure, "(0,0)") != NULL);
-    REQUIRE(strstr(failure,
-                   "dispatched_publication_generation=18446744073709551614") != NULL);
-    REQUIRE(strstr(failure,
-                   "committed_publication_generation=18446744073709551615") != NULL);
+    REQUIRE(strstr(failure, "dispatched_publication_generation=18446744073709551614") != NULL);
+    REQUIRE(strstr(failure, "committed_publication_generation=18446744073709551615") != NULL);
     live_movement_route_state_free(state);
     live_movement_route_free(route);
     return 0;

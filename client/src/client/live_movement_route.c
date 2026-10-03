@@ -433,8 +433,7 @@ route_fail_wrong_position(live_movement_route_state_t *state,
         sizeof(state->failure),
         "published position is neither source nor destination: actual=%.*s(%u,%u), "
         "source=%.*s(%u,%u), target=%.*s(%u,%u), "
-        "dispatched_publication_generation=%" PRIu64
-        ", committed_publication_generation=%" PRIu64,
+        "dispatched_publication_generation=%" PRIu64 ", committed_publication_generation=%" PRIu64,
         (int)LIVE_MOVEMENT_ROUTE_MAP_MAX,
         observation->map,
         (unsigned int)observation->x,
