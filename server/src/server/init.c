@@ -1027,6 +1027,15 @@ static void init_library(int argc, char *argv[]) {
     toolkit_import(datetime);
     content_benchmark_startup_begin();
     toolkit_import(logger);
+    /* Configuration loading logs before option callbacks run. Select only
+     * the fixed route invocation here so its stdout stays a framed artifact;
+     * the ordinary CLI parser still validates and activates the mode. */
+    for (int i = 1; argv != NULL && i < argc; i++) {
+        if (strcmp(argv[i], "--content_benchmark_route=brynknot-v1") == 0) {
+            logger_set_print_func(content_route_log_stderr);
+            break;
+        }
+    }
     toolkit_import(math);
     toolkit_import(mempool);
     toolkit_import(packet);
