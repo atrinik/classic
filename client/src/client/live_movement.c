@@ -230,7 +230,8 @@ static bool capture_checkpoints_poll(uint64_t now) {
     return true;
 }
 
-static bool capture_checkpoint_request(size_t index, uint64_t now, uint64_t gpu_publication) {
+static bool capture_checkpoint_request(size_t index, uint64_t now, uint64_t gpu_publication,
+                                       bool game_time_valid, uint64_t game_seconds) {
     live_capture_checkpoint_t *checkpoint = &capture_checkpoints[index];
     checkpoint->requested_us = now;
     snprintf(checkpoint->map, sizeof(checkpoint->map), "%s", MapData.map_path);
@@ -238,7 +239,8 @@ static bool capture_checkpoint_request(size_t index, uint64_t now, uint64_t gpu_
     checkpoint->y = MapData.posy;
     checkpoint->publication = socket_command_map_publication_generation();
     checkpoint->gpu_publication = gpu_publication;
-    checkpoint->game_time_valid = telemetry_game_time_seconds(&checkpoint->game_seconds);
+    checkpoint->game_time_valid = game_time_valid;
+    checkpoint->game_seconds = game_seconds;
     fprintf(report, "{\"type\":\"capture_requested\",\"kind\":\"%s\","
                     "\"frame_sequence\":%" PRIu64 ",\"elapsed_us\":%" PRIu64 "}\n",
             index == 0 ? "initial" : "final", frames, elapsed_us());
@@ -553,7 +555,7 @@ void live_movement_frame_finished(bool presented,
             if (review_lighting_phase != NULL && review_lighting_stage != 3) return;
             const live_movement_capture_result_t *initial = live_movement_capture_result(capture_checkpoints[0].job);
             if (initial->status == LIVE_MOVEMENT_CAPTURE_READY) {
-                capture_checkpoint_request(0, now, primary_gpu_generation);
+                capture_checkpoint_request(0, now, primary_gpu_generation, time_valid, game_seconds);
                 return;
             }
             if (!capture_checkpoints[0].reported) return;
@@ -571,7 +573,7 @@ void live_movement_frame_finished(bool presented,
                 arrival_index, socket_command_map_publication_generation(),
                 primary_gpu_generation, elapsed_us());
         if (final_checkpoint && capture_checkpoints[1].job != NULL)
-            capture_checkpoint_request(1, now, primary_gpu_generation);
+            capture_checkpoint_request(1, now, primary_gpu_generation, time_valid, game_seconds);
     }
 }
 
