@@ -21,6 +21,8 @@
 #include <object.h>
 #include <object_methods.h>
 #include <player.h>
+#include <toolkit/path.h>
+#include <toolkit/string.h>
 
 START_TEST(test_map_list_accepts_canonical_unique_logical_ids) {
     ck_assert(
@@ -72,6 +74,10 @@ static object *route_fixture(mapstruct *maps[WALKING_ROUTE_MAPS]) {
     for (int i = 0; i < WALKING_ROUTE_MAPS; i++) {
         maps[i] = get_empty_map(24, 24);
         ck_assert_ptr_nonnull(maps[i]);
+        /* Normal spawned-monster base info retains its home map identity. */
+        char path[MAX_BUF];
+        snprintf(VS(path), "/tests/walking-route/world_%d_%d", i % 4, i / 4 + 66);
+        maps[i]->path = add_string(path);
         for (int y = 0; y < 24; y++) {
             for (int x = 0; x < 24; x++) {
                 object *floor = arch_get("floor_cave1");
@@ -298,9 +304,17 @@ START_TEST(test_walking_route_candidate_rejects_missing_and_wrong_archetype) {
 }
 END_TEST
 
+static void map_list_setup(void) {
+    /* The preceding route case shuts the server and toolkit down. Keep these
+     * parser-only tests independent of test-case ordering and server state. */
+    toolkit_import(string);
+    toolkit_import(path);
+}
+
 static Suite *suite(void) {
     Suite *s = suite_create("content_benchmark");
     TCase *tc_core = tcase_create("Core");
+    tcase_add_unchecked_fixture(tc_core, map_list_setup, toolkit_deinit);
     tcase_add_test(tc_core, test_map_list_accepts_canonical_unique_logical_ids);
     tcase_add_test(tc_core, test_map_list_rejects_ambiguous_or_unsafe_ids);
     tcase_add_test(tc_core, test_map_list_enforces_count_and_component_bounds);
