@@ -609,6 +609,7 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         atrinik_configure_target(libatrinik-curl)
         target_link_libraries(libatrinik-curl PRIVATE Atrinik::Core Threads::Threads)
         add_test(NAME libatrinik-curl COMMAND libatrinik-curl)
+        set_tests_properties(libatrinik-curl PROPERTIES TIMEOUT 45)
     endif ()
 
     add_executable(libatrinik-stun tests/stun.c)

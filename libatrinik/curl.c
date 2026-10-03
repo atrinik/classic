@@ -29,14 +29,14 @@
  * @author Zoey Rose
  */
 
-#include "string.h"
+#include "clioptions.h"
 #include "curl.h"
 #include "path.h"
-#include "clioptions.h"
+#include "string.h"
 
 #include <curl/curl.h>
-#include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <openssl/x509.h>
 
 TOOLKIT_API(DEPENDS(clioptions));
@@ -184,14 +184,15 @@ struct curl_request {
     uint32_t delay;
 
     /**
-     * True if the thread is quitting.
+     * Cancellation requested by the owner, protected by mutex. Keep this
+     * separate from bitfields written by the worker.
      */
-    bool finished : 1;
+    bool cancelled;
 
     /**
      * Whether the request was started in its own thread.
      */
-    bool threaded : 1;
+    bool threaded;
 
     /**
      * Whether the peer certificate is untrusted.
@@ -226,8 +227,8 @@ static curl_trust_store_t *curl_trust_pkeys[CURL_PKEY_TRUST_NUM] = {};
 static char *curl_data_dir = NULL;
 
 static bool curl_request_origin_char_valid(unsigned char cp) {
-    return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') ||
-           (cp >= '0' && cp <= '9') || cp == '_' || cp == '-' || cp == '.';
+    return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9') ||
+           cp == '_' || cp == '-' || cp == '.';
 }
 
 static char *curl_request_origin_copy(const char *origin) {
@@ -739,9 +740,8 @@ bool curl_request_cache_commit(curl_request_t *request) {
  * @return
  * The new structure.
  */
-curl_request_t *curl_request_create_with_origin(const char *url,
-                                                curl_pkey_trust_t trust,
-                                                const char *origin) {
+curl_request_t *
+curl_request_create_with_origin(const char *url, curl_pkey_trust_t trust, const char *origin) {
     HARD_ASSERT(url != NULL);
     TOOLKIT_PROTECT();
 
@@ -1132,8 +1132,8 @@ char *curl_request_speedinfo(curl_request_t *request, char *buf, size_t bufsize)
 /**
  * Frees previously created ::curl_request_t structure.
  *
- * Note that this might wait up to a second in order to exit the thread,
- * if any.
+ * Cancels and joins the worker before releasing any request storage. See
+ * curl.h for callback lifetime and cooperative cancellation restrictions.
  *
  * @param request
  * What to free.
@@ -1142,15 +1142,22 @@ void curl_request_free(curl_request_t *request) {
     HARD_ASSERT(request != NULL);
     TOOLKIT_PROTECT();
 
-    /* Still downloading? Kill the thread. */
-    if (curl_request_get_state(request) == CURL_STATE_INPROGRESS) {
-        pthread_mutex_lock(&request->mutex);
-        request->finished = true;
+    pthread_mutex_lock(&request->mutex);
+    /* A callback must return to its worker; it cannot join or free itself. */
+    if (request->threaded && pthread_equal(pthread_self(), request->thread_id)) {
         pthread_mutex_unlock(&request->mutex);
+        LOG(ERROR, "A request callback cannot free its own HTTP request");
+        return;
     }
+    request->cancelled = true;
+    pthread_mutex_unlock(&request->mutex);
 
     if (request->threaded) {
-        pthread_join(request->thread_id, NULL);
+        int rc = pthread_join(request->thread_id, NULL);
+        if (rc != 0) {
+            LOG(ERROR, "Failed to join HTTP request thread: %s (%d)", strerror(rc), rc);
+            return;
+        }
     }
 
     if (request->body != NULL) {
@@ -1338,7 +1345,8 @@ static bool curl_verify_cert_chain(curl_request_t *request) {
                    NULL) != 1 ||
         digest_size != 32) {
         LOG(ERROR,
-            "Failed to compute certificate cache key for request origin=%s endpoint=%s",
+            "Failed to compute certificate cache key for request origin=%s "
+            "endpoint=%s",
             request->origin,
             curl_request_endpoint_class(request->url));
         return false;
@@ -1530,7 +1538,7 @@ static size_t curl_header_callback(char *buffer, size_t size, size_t nitems, voi
  * @param ulnow
  * Bytes uploaded.
  * @return
- * 1 to continue downloading, 0 otherwise.
+ * 0 to continue transferring, 1 to abort.
  */
 static int curl_progress(void *userdata,
                          curl_off_t dltotal,
@@ -1541,19 +1549,9 @@ static int curl_progress(void *userdata,
 
     pthread_mutex_lock(&request->mutex);
 
-    if (!curl_verify_cert_chain(request)) {
-        pthread_mutex_unlock(&request->mutex);
-        return 0;
-    }
-
-    bool finished = request->finished;
+    bool cancelled = request->cancelled || !curl_verify_cert_chain(request);
     pthread_mutex_unlock(&request->mutex);
-
-    if (finished) {
-        return 0;
-    }
-
-    return 1;
+    return cancelled ? 1 : 0;
 }
 
 /**
@@ -1566,8 +1564,10 @@ static curl_state_t curl_request_setup(curl_request_t *request) {
     HARD_ASSERT(request != NULL);
     HARD_ASSERT(request->handle != NULL);
 
-    LOG(INFO, "HTTP request origin=%s endpoint=%s",
-        request->origin, curl_request_endpoint_class(request->url));
+    LOG(INFO,
+        "HTTP request origin=%s endpoint=%s",
+        request->origin,
+        curl_request_endpoint_class(request->url));
 
     /* Set connection timeout. */
     CURL_SETOPT(request->handle, CURLOPT_CONNECTTIMEOUT, CURL_TIMEOUT);
@@ -1590,11 +1590,12 @@ static curl_state_t curl_request_setup(curl_request_t *request) {
      * we need to. */
     CURL_SETOPT(request->handle, CURLOPT_XFERINFOFUNCTION, curl_progress);
     CURL_SETOPT(request->handle, CURLOPT_XFERINFODATA, request);
+    CURL_SETOPT(request->handle, CURLOPT_NOPROGRESS, 0L);
 
-    pthread_mutex_lock(&request->mutex);
+    /* These options are immutable once started. Do not hold the request
+     * mutex across CURL_SETOPT, whose failure path returns immediately. */
     CURL_SETOPT(request->handle, CURLOPT_URL, request->url);
     CURL_SETOPT(request->handle, CURLOPT_SHARE, handle_share);
-    pthread_mutex_unlock(&request->mutex);
 
     /* The callback function. */
     CURL_SETOPT(request->handle, CURLOPT_WRITEFUNCTION, curl_callback);
@@ -1681,6 +1682,20 @@ static curl_state_t curl_request_complete(curl_request_t *request) {
     return CURL_STATE_OK;
 }
 
+/** Admit the completion callback under the cancellation lock, then release
+ * the lock before calling user code. The owner joins even an admitted callback.
+ */
+static void curl_request_notify(curl_request_t *request) {
+    pthread_mutex_lock(&request->mutex);
+    curl_request_cb cb = request->cancelled ? NULL : request->cb;
+    void *user_data = request->cb_user_data;
+    pthread_mutex_unlock(&request->mutex);
+
+    if (cb != NULL) {
+        cb(request, user_data);
+    }
+}
+
 /**
  * Use cURL to send a GET request to the URL specified in ::curl_request_t
  * structure (user_data).
@@ -1736,9 +1751,7 @@ done:
         curl_slist_free_all(chunk);
     }
 
-    if (request->cb != NULL && !request->finished) {
-        request->cb(request, request->cb_user_data);
-    }
+    curl_request_notify(request);
 
     return NULL;
 }
@@ -1753,15 +1766,16 @@ void curl_request_start_get(curl_request_t *request) {
     HARD_ASSERT(request != NULL);
     TOOLKIT_PROTECT();
 
+    /* Publish thread identity before the worker can admit a callback. */
+    pthread_mutex_lock(&request->mutex);
     int rc = pthread_create(&request->thread_id, NULL, curl_request_do_get, request);
     if (rc != 0) {
-        /* Thread creation failed; no lock necessary. */
-        /* coverity[missing_lock] */
         LOG(ERROR, "Failed to create thread: %s (%d)", strerror(rc), rc);
         request->state = CURL_STATE_ERROR;
     } else {
         request->threaded = true;
     }
+    pthread_mutex_unlock(&request->mutex);
 }
 
 /**
@@ -1891,9 +1905,7 @@ done:
     }
     curl_slist_free_all(headers);
 
-    if (request->cb != NULL && !request->finished) {
-        request->cb(request, request->cb_user_data);
-    }
+    curl_request_notify(request);
 
     return NULL;
 }
@@ -1908,15 +1920,16 @@ void curl_request_start_post(curl_request_t *request) {
     HARD_ASSERT(request != NULL);
     TOOLKIT_PROTECT();
 
+    /* Publish thread identity before the worker can admit a callback. */
+    pthread_mutex_lock(&request->mutex);
     int rc = pthread_create(&request->thread_id, NULL, curl_request_do_post, request);
     if (rc != 0) {
-        /* Thread creation failed; no lock necessary. */
-        /* coverity[missing_lock] */
         LOG(ERROR, "Failed to create thread: %s (%d)", strerror(rc), rc);
         request->state = CURL_STATE_ERROR;
     } else {
         request->threaded = true;
     }
+    pthread_mutex_unlock(&request->mutex);
 }
 
 /**

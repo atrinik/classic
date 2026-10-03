@@ -105,9 +105,8 @@ void curl_set_data_dir(const char *dir);
  * The origin is retained only as a sanitized label; request URLs and
  * credentials are never included in the diagnostic.
  */
-curl_request_t *curl_request_create_with_origin(const char *url,
-                                                curl_pkey_trust_t trust,
-                                                const char *origin);
+curl_request_t *
+curl_request_create_with_origin(const char *url, curl_pkey_trust_t trust, const char *origin);
 curl_request_t *curl_request_create(const char *url, curl_pkey_trust_t trust);
 void curl_request_form_add(curl_request_t *request, const char *key, const char *value);
 /**
@@ -148,6 +147,12 @@ void curl_request_set_max_body(curl_request_t *request, size_t maximum);
 void curl_request_set_max_header(curl_request_t *request, size_t maximum);
 /** Set a positive total request deadline in milliseconds. */
 void curl_request_set_timeout(curl_request_t *request, long timeout_ms);
+/** Configure completion before starting the request. The callback runs on the
+ * request worker for start_get/start_post and must not free its own request
+ * (attempts are rejected; the owner must still free it).
+ * Keep user_data valid until curl_request_free returns, including when the
+ * request state is already terminal: an admitted callback may still be running.
+ * Callbacks may read request results without holding the internal mutex. */
 void curl_request_set_cb(curl_request_t *request, curl_request_cb cb, void *user_data);
 void curl_request_set_delay(curl_request_t *request, uint32_t delay);
 curl_state_t curl_request_get_state(curl_request_t *request);
@@ -160,6 +165,14 @@ int curl_request_get_http_code(curl_request_t *request);
 const char *curl_request_get_url(curl_request_t *request);
 int64_t curl_request_sizeinfo(curl_request_t *request, curl_info_t info);
 char *curl_request_speedinfo(curl_request_t *request, char *buf, size_t bufsize);
+/** Cancel and free a caller-owned request, joining its worker and any admitted
+ * completion callback before releasing storage. Call only from the owner,
+ * after start_get/start_post returns, never from that request's worker callback
+ * or concurrently with other owner operations (including synchronous do_get/
+ * do_post). Do not hold locks needed by the callback while freeing.
+ * Cancellation is cooperative: libcurl normally checks about once per second
+ * while idle, but blocking DNS, a configured start delay or application
+ * callbacks can take longer. This is not a hard shutdown deadline. */
 void curl_request_free(curl_request_t *request);
 void *curl_request_do_get(void *user_data);
 void curl_request_start_get(curl_request_t *request);
