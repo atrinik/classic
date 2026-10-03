@@ -3832,6 +3832,21 @@ static bool map_object_uses_projected_lighting(const map_render_data_t *data,
     return data->ground_pass || record->roof;
 }
 
+static void map_lighting_radiance(int x, int y, const map_cell_t *cell,
+                                  uint8_t sub_layer, uint16_t *scalar, uint16_t rgb[3]);
+
+/** Historical scalar storage is not current lighting authority after a soft clear. */
+static uint16_t map_remembered_discrete_radiance(int x, int y, const map_cell_t *cell,
+                                                uint8_t sub_layer) {
+    const map_cell_light_record_t *light = map_cell_light_record_read(cell, sub_layer);
+    uint16_t radiance = light->radiance;
+    if (!light->known) {
+        uint16_t rgb[3];
+        map_lighting_radiance(x, y, cell, sub_layer, &radiance, rgb);
+    }
+    return map_visibility_memory_floor(radiance);
+}
+
 static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(data != NULL);
@@ -3986,7 +4001,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
         uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
         if (data->cell->fow && remembered) {
-            radiance = map_visibility_memory_floor(radiance);
+            radiance = map_remembered_discrete_radiance(
+                data->x, data->y, data->cell, data->sub_layer);
         } else if (data->world_surface && data->primary_level && data->depth == 0 &&
                    !data->cell->fow) {
             radiance = map_visibility_add_player_radiance(
@@ -5570,6 +5586,27 @@ bool widget_map_temporal_lighting_test(void) {
     uint16_t rgb[3] = {0};
     map_lighting_radiance(MAP_STARTX, MAP_STARTY, MAP_CELL_GET_MIDDLE(0, 0), 0, &scalar, rgb);
     bool success = scalar == 200 && rgb[0] == 300 && rgb[1] == 300 && rgb[2] == 300;
+
+    map_cell_t *remembered = MAP_CELL_GET_MIDDLE_MUTABLE(0, 0);
+    map_cell_light_record_t *historical = map_cell_light_record(remembered, 0, true);
+    historical->radiance = UINT16_MAX;
+    historical->known = 1;
+    map_clear_cell(0, 0, false);
+    success = success &&
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 200 &&
+              historical->radiance == UINT16_MAX && !historical->known;
+    /* Current authoritative samples keep their established discrete transfer. */
+    historical->known = 1;
+    historical->radiance = 2048;
+    success = success &&
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 2048;
+    historical->known = 0;
+    historical->radiance = UINT16_MAX;
+    light->known = 0;
+    success = success &&
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) ==
+                  MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE && historical->radiance == UINT16_MAX;
+    light->known = 1;
 
     uint64_t revision = level_lighting_revision[current_level_index];
     map_temporal_lighting_bucket = UINT64_MAX;
@@ -8824,6 +8861,17 @@ bool widget_map_projection_contract_test(void) {
                           remembered_vertex.red == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
                           remembered_vertex.green == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
                           remembered_vertex.blue == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+
+                /* The normal discrete command path must ignore old daylight
+                 * once a soft clear revoked the tile's light knowledge. */
+                light->radiance = UINT16_MAX;
+                light->known = 0;
+                remembered_context.commands_num = 0;
+                draw_map_object(surface, &remembered);
+                success = success && remembered_context.commands_num == 1 &&
+                          remembered_context.commands[0].effects.dark_level == expected_dark_level &&
+                          light->radiance == UINT16_MAX && !light->known;
+                light->radiance = 0;
 
                 cell->fow = false;
                 remembered_context.commands_num = 0;
