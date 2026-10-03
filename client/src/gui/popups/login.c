@@ -128,13 +128,12 @@ static int login_submit(void) {
             draw_info(COLOR_RED, "You must enter a valid value for all text inputs.");
             packet_free(packet);
             return 1;
-        } else if (sscanf(
-                       s_settings->text[i == LOGIN_TEXT_INPUT_NAME
-                                            ? SERVER_TEXT_ALLOWED_CHARS_ACCOUNT_MAX
-                                            : SERVER_TEXT_ALLOWED_CHARS_PASSWORD_MAX],
-                       "%u-%u",
-                       &lower,
-                       &upper) == 2 &&
+        } else if (sscanf(s_settings->text[i == LOGIN_TEXT_INPUT_NAME
+                                               ? SERVER_TEXT_ALLOWED_CHARS_ACCOUNT_MAX
+                                               : SERVER_TEXT_ALLOWED_CHARS_PASSWORD_MAX],
+                          "%u-%u",
+                          &lower,
+                          &upper) == 2 &&
                    (text_inputs[i].num < lower || text_inputs[i].num > upper)) {
             draw_info_format(COLOR_RED,
                              "%s must be between %d and %d characters long.",
@@ -148,9 +147,7 @@ static int login_submit(void) {
         packet_writer_write_cstring(packet, text_inputs[i].str);
     }
 
-    strncpy(cpl.password,
-            text_inputs[LOGIN_TEXT_INPUT_PASSWORD].str,
-            sizeof(cpl.password) - 1);
+    strncpy(cpl.password, text_inputs[LOGIN_TEXT_INPUT_PASSWORD].str, sizeof(cpl.password) - 1);
     cpl.password[sizeof(cpl.password) - 1] = '\0';
 
     for (size_t i = 0; i < LOGIN_TEXT_INPUT_MAX; i++) {
@@ -211,8 +208,7 @@ static int popup_draw(popup_struct *popup) {
     if ((string_isempty(clioption_settings.connect[0]) ||
          strcasecmp(selected_server->name, clioption_settings.connect[0]) == 0) &&
         cpl.state < ST_WAITLOGIN) {
-        bool diagnostic_submit = live_movement_enabled() &&
-                                 clioption_settings.connect[1] != NULL &&
+        bool diagnostic_submit = live_movement_enabled() && clioption_settings.connect[1] != NULL &&
                                  clioption_settings.connect[2] != NULL &&
                                  button_tab_login.pressed_forced;
         if (clioption_settings.connect[1]) {

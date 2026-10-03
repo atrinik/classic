@@ -396,10 +396,9 @@ void intro_show(void) {
         {
             if (clioption_settings.game_news_url != NULL &&
                 *clioption_settings.game_news_url != '\0') {
-                news_request =
-                    curl_request_create_with_origin(clioption_settings.game_news_url,
-                                                    CURL_PKEY_TRUST_ULTIMATE,
-                                                    "client.game-news");
+                news_request = curl_request_create_with_origin(clioption_settings.game_news_url,
+                                                               CURL_PKEY_TRUST_ULTIMATE,
+                                                               "client.game-news");
                 curl_request_start_get(news_request);
             }
         }

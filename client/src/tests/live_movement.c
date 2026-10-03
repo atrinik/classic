@@ -518,9 +518,12 @@ static int test_unfocused_startup_deadline_and_visibility(void) {
         now_us = started_us + LIVE_STARTUP_TIMEOUT_US - 1;
         live_movement_tick();
         CHECK(!live_movement_finished() && arrivals == 0);
-        if (scenario == 0) now_us++;
-        if (scenario == 1) window_flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_INPUT_FOCUS;
-        if (scenario == 2) window_flags = SDL_WINDOW_MINIMIZED;
+        if (scenario == 0)
+            now_us++;
+        if (scenario == 1)
+            window_flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_INPUT_FOCUS;
+        if (scenario == 2)
+            window_flags = SDL_WINDOW_MINIMIZED;
         live_movement_tick();
         CHECK(live_movement_finished() && live_movement_exit_status() == 8);
         CHECK(move_count == 0);

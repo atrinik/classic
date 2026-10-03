@@ -489,13 +489,14 @@ static bool presentation_clock_suspend_test(void) {
     success = success && clock.tick == 600;
     presentation_clock_step(&clock, 5050, true);
     success = success && clock.tick == 650;
-    clock = presentation_clock_start(500,
-        live_movement_window_is_active(SDL_WINDOW_INPUT_FOCUS, true));
+    clock =
+        presentation_clock_start(500, live_movement_window_is_active(SDL_WINDOW_INPUT_FOCUS, true));
     presentation_clock_step(&clock, 600, live_movement_window_is_active(0, true));
     presentation_clock_step(&clock, 900, live_movement_window_is_active(0, true));
     success = success && clock.tick == 900;
-    presentation_clock_step(&clock, 1000,
-        live_movement_window_is_active(SDL_WINDOW_MINIMIZED, true));
+    presentation_clock_step(&clock,
+                            1000,
+                            live_movement_window_is_active(SDL_WINDOW_MINIMIZED, true));
     presentation_clock_step(&clock, 5000, live_movement_window_is_active(0, true));
     return success && clock.tick == 1000;
 }
