@@ -225,12 +225,12 @@ int Event_PollInputDevice(void) {
                         "Unable to query logical window size after resize: %s",
                         SDL_GetError());
                     resize_window_recovery_request();
-                    gpu_renderer_recreation_request();
+                    gpu_renderer_recreation_request_event(&event, SDL_GetError());
                     map_redraw_request(MAP_REDRAW_REASON_RESIZE);
                     break;
                 }
                 resize_window(width, height);
-                gpu_renderer_recreation_request();
+                gpu_renderer_recreation_request_event(&event, NULL);
                 map_redraw_request(MAP_REDRAW_REASON_RESIZE);
                 break;
 
@@ -244,7 +244,7 @@ int Event_PollInputDevice(void) {
             case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
             case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             case SDL_EVENT_DID_ENTER_FOREGROUND:
-                gpu_renderer_recreation_request();
+                gpu_renderer_recreation_request_event(&event, NULL);
                 map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
                 break;
 

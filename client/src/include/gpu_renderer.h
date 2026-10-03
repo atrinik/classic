@@ -179,7 +179,29 @@ bool gpu_renderer_conformance_fault_take(gpu_renderer_conformance_fault_t fault)
 size_t gpu_renderer_atlas_page_count(void);
 size_t gpu_renderer_atlas_allocation_count(void);
 #endif
-void gpu_renderer_recreation_request(void);
+/**
+ * Main-thread-only first request metadata. All request/take operations belong to
+ * the render/event owner; asset loader workers must not call this API. Origin
+ * is a function name, never a source path. SDL errors are snapshots, not proof
+ * of causality; successful window events pass NULL to exclude stale SDL text.
+ */
+typedef struct gpu_renderer_recreation_diagnostic {
+    char origin[64];
+    char error_snapshot[256];
+    uint32_t line;
+    uint32_t request_count;
+    uint32_t event_type;
+    uint32_t window_id;
+    int32_t data1, data2;
+} gpu_renderer_recreation_diagnostic_t;
+void gpu_renderer_recreation_request_at(const char *origin, uint32_t line,
+                                         const SDL_Event *event, const char *error_snapshot);
+#define gpu_renderer_recreation_request() \
+    gpu_renderer_recreation_request_at(__func__, __LINE__, NULL, SDL_GetError())
+#define gpu_renderer_recreation_request_event(event, error_snapshot) \
+    gpu_renderer_recreation_request_at(__func__, __LINE__, event, error_snapshot)
+/** Copy and consume this incident. An empty read zeroes the output, never reuses old metadata. */
+bool gpu_renderer_recreation_take_diagnostic(gpu_renderer_recreation_diagnostic_t *diagnostic);
 bool gpu_renderer_recreation_take_request(void);
 void gpu_renderer_destroy(void);
 bool gpu_renderer_ready(void);

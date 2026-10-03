@@ -109,7 +109,56 @@ void gpu_map_renderer_invalidate_surface(SDL_Surface *surface) {
     (void)surface;
 }
 
+static void test_recreation_diagnostics(void) {
+    gpu_renderer_recreation_diagnostic_t diagnostic;
+    memset(&diagnostic, 0xff, sizeof(diagnostic));
+    HARD_ASSERT(!gpu_renderer_recreation_take_diagnostic(&diagnostic));
+    HARD_ASSERT(diagnostic.origin[0] == '\0' && diagnostic.error_snapshot[0] == '\0' &&
+                diagnostic.request_count == 0 && diagnostic.event_type == 0 &&
+                diagnostic.window_id == 0 && diagnostic.data1 == 0 && diagnostic.data2 == 0);
+    SDL_Event event = {0};
+    event.type = SDL_EVENT_WINDOW_DISPLAY_CHANGED;
+    event.window.windowID = 17;
+    event.window.data1 = 23;
+    event.window.data2 = -9;
+    SDL_SetError("unrelated old SDL error");
+    gpu_renderer_recreation_request_at("window_event", 12, &event, NULL);
+    gpu_renderer_recreation_request_at("later_failure", 34, NULL, "later error");
+    HARD_ASSERT(gpu_renderer_recreation_take_diagnostic(&diagnostic));
+    HARD_ASSERT(strcmp(diagnostic.origin, "window_event") == 0 && diagnostic.line == 12 &&
+                diagnostic.request_count == 2 && diagnostic.error_snapshot[0] == '\0' &&
+                diagnostic.event_type == SDL_EVENT_WINDOW_DISPLAY_CHANGED &&
+                diagnostic.window_id == 17 && diagnostic.data1 == 23 && diagnostic.data2 == -9);
+    HARD_ASSERT(!gpu_renderer_recreation_take_diagnostic(&diagnostic));
+    HARD_ASSERT(diagnostic.origin[0] == '\0' && diagnostic.event_type == 0);
+    char error[] = "original failure";
+    gpu_renderer_recreation_request_at("gpu_failure", 56, NULL, error);
+    error[0] = 'X';
+    HARD_ASSERT(gpu_renderer_recreation_take_diagnostic(&diagnostic));
+    HARD_ASSERT(strcmp(diagnostic.error_snapshot, "original failure") == 0 &&
+                diagnostic.event_type == 0 && diagnostic.window_id == 0 &&
+                diagnostic.request_count == 1);
+    gpu_renderer_recreation_request_at("discarded", 78, NULL, "discarded error");
+    HARD_ASSERT(gpu_renderer_recreation_take_request());
+    HARD_ASSERT(!gpu_renderer_recreation_take_diagnostic(&diagnostic));
+    HARD_ASSERT(diagnostic.origin[0] == '\0' && diagnostic.error_snapshot[0] == '\0');
+    event.type = SDL_EVENT_DID_ENTER_FOREGROUND;
+    gpu_renderer_recreation_request_at("foreground", 90, &event, NULL);
+    HARD_ASSERT(gpu_renderer_recreation_take_diagnostic(&diagnostic));
+    HARD_ASSERT(diagnostic.event_type == SDL_EVENT_DID_ENTER_FOREGROUND &&
+                diagnostic.window_id == 0 && diagnostic.data1 == 0 && diagnostic.data2 == 0);
+    char long_text[512];
+    memset(long_text, 'a', sizeof(long_text) - 1);
+    long_text[sizeof(long_text) - 1] = '\0';
+    gpu_renderer_recreation_request_at(long_text, 1, NULL, long_text);
+    HARD_ASSERT(gpu_renderer_recreation_take_diagnostic(&diagnostic));
+    HARD_ASSERT(strlen(diagnostic.origin) == sizeof(diagnostic.origin) - 1 &&
+                strlen(diagnostic.error_snapshot) == sizeof(diagnostic.error_snapshot) - 1);
+    SDL_ClearError();
+}
+
 int main(void) {
+    test_recreation_diagnostics();
     gpu_renderer_statistics_t statistics;
 
     HARD_ASSERT(!gpu_renderer_ready());

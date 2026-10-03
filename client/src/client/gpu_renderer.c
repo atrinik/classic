@@ -114,6 +114,7 @@ static char driver_version[256];
 static char adapter_identity[64];
 static bool frame_failed;
 static bool recreation_requested;
+static gpu_renderer_recreation_diagnostic_t recreation_diagnostic;
 static bool hardware_verified;
 
 static bool gpu_renderer_draw_color(Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha);
@@ -920,14 +921,41 @@ size_t gpu_renderer_atlas_allocation_count(void) {
 }
 #endif
 
-void gpu_renderer_recreation_request(void) {
+void gpu_renderer_recreation_request_at(const char *origin, uint32_t line,
+                                         const SDL_Event *event, const char *error_snapshot) {
+    if (!recreation_requested) {
+        recreation_diagnostic = (gpu_renderer_recreation_diagnostic_t){.line = line};
+        snprintf(recreation_diagnostic.origin, sizeof(recreation_diagnostic.origin), "%s",
+                 origin != NULL ? origin : "unknown");
+        snprintf(recreation_diagnostic.error_snapshot, sizeof(recreation_diagnostic.error_snapshot),
+                 "%s", error_snapshot != NULL ? error_snapshot : "");
+        if (event != NULL) {
+            recreation_diagnostic.event_type = event->type;
+            if (event->type >= SDL_EVENT_WINDOW_FIRST && event->type <= SDL_EVENT_WINDOW_LAST) {
+                recreation_diagnostic.window_id = event->window.windowID;
+                recreation_diagnostic.data1 = event->window.data1;
+                recreation_diagnostic.data2 = event->window.data2;
+            }
+        }
+    }
+    if (recreation_diagnostic.request_count != UINT32_MAX) {
+        recreation_diagnostic.request_count++;
+    }
     recreation_requested = true;
 }
 
-bool gpu_renderer_recreation_take_request(void) {
+bool gpu_renderer_recreation_take_diagnostic(gpu_renderer_recreation_diagnostic_t *diagnostic) {
     bool requested = recreation_requested;
+    if (diagnostic != NULL) {
+        *diagnostic = requested ? recreation_diagnostic : (gpu_renderer_recreation_diagnostic_t){0};
+    }
     recreation_requested = false;
+    recreation_diagnostic = (gpu_renderer_recreation_diagnostic_t){0};
     return requested;
+}
+
+bool gpu_renderer_recreation_take_request(void) {
+    return gpu_renderer_recreation_take_diagnostic(NULL);
 }
 
 bool gpu_renderer_wait_idle(void) {

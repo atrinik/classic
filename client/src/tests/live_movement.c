@@ -535,16 +535,16 @@ static int test_unfocused_startup_deadline_and_visibility(void) {
 
 static int test_renderer_startup_and_recovery(void) {
     adapter_reset();
-    CHECK(live_movement_renderer_recovery());
+    CHECK(live_movement_renderer_recovery("test recovery", NULL, "", 0, 800, 600));
     for (unsigned int scenario = 0; scenario < 3; scenario++) {
         fixture_paths_t paths;
         adapter_reset();
         CHECK(fixture_create(&paths, route_xml));
         CHECK(live_movement_initialize(paths.route, paths.report));
         cpl.state = ST_WAITFORPLAY;
-        CHECK(live_movement_renderer_recovery() && !live_movement_finished());
+        CHECK(live_movement_renderer_recovery("test recovery", NULL, "", 0, 800, 600) && !live_movement_finished());
         live_movement_ready();
-        CHECK(live_movement_renderer_recovery() && !live_movement_finished());
+        CHECK(live_movement_renderer_recovery("test recovery", NULL, "", 0, 800, 600) && !live_movement_finished());
         if (scenario == 0) {
             frame(true);
             CHECK(frames == 1 && arrivals == 0);
@@ -556,9 +556,33 @@ static int test_renderer_startup_and_recovery(void) {
             }
             CHECK(arrivals == (scenario == 2 ? 1U : 0U));
         }
-        CHECK(!live_movement_renderer_recovery());
+        gpu_renderer_recreation_diagnostic_t diagnostic = {
+            .origin = "window_event", .error_snapshot = "request snapshot", .line = 123,
+            .request_count = 2, .event_type = SDL_EVENT_WINDOW_RESTORED,
+            .window_id = 42, .data1 = 800, .data2 = 600,
+        };
+        CHECK(!live_movement_renderer_recovery("test recovery", scenario == 0 ? &diagnostic : NULL,
+                                                "current snapshot", 7, 800, 600));
         CHECK(live_movement_finished() && live_movement_exit_status() == 8);
-        CHECK(!live_movement_renderer_recovery());
+        FILE *evidence = fopen(paths.report, "rb");
+        CHECK(evidence != NULL);
+        char text[16384];
+        size_t size = fread(text, 1, sizeof(text) - 1, evidence);
+        text[size] = '\0';
+        CHECK(fclose(evidence) == 0);
+        CHECK(strstr(text, "context=test recovery") != NULL &&
+              strstr(text, "flags=7 size=800,600") != NULL &&
+              strstr(text, "current_error_snapshot=current snapshot") != NULL);
+        if (scenario == 0) {
+            CHECK(strstr(text, "origin=window_event:123 requests=2") != NULL &&
+                  strstr(text, "window=42 data=800,600") != NULL &&
+                  strstr(text, "request_error_snapshot=request snapshot") != NULL);
+        } else {
+            CHECK(strstr(text, "origin=:0 requests=0 event=0 window=0 data=0,0") != NULL &&
+                  strstr(text, "window_event") == NULL &&
+                  strstr(text, "request_error_snapshot= current_error_snapshot=") != NULL);
+        }
+        CHECK(!live_movement_renderer_recovery("test recovery", NULL, "", 0, 800, 600));
         live_movement_close();
         fixture_destroy(&paths);
     }
