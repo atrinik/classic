@@ -712,6 +712,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
                      "lighting_barrier light keyframe interval is invalid")
             _require((keyframe_start // 3600) % 24 == expected_hour,
                      f"lighting_barrier {expected_stage} light keyframe has the wrong hour")
+            _require(keyframe_start <= game_seconds < keyframe_end,
+                     f"lighting_barrier {expected_stage} game time is outside its keyframe")
             map_generation = _integer(record["map_publication_generation"],
                                       "lighting_barrier map_publication_generation", 1)
             previous_generation = (pending_arrival["publication_generation"]

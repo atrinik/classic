@@ -441,6 +441,13 @@ class VerifyLiveMovementTests(unittest.TestCase):
         with self.assertRaisesRegex(verifier.ReportError, "keyframe interval is invalid"):
             self.verify_capture(invalid_interval, lighting_phase="day")
 
+        def same_hour_different_day(records, _root):
+            target = next(record for record in records if record.get("stage") == "target")
+            target["game_seconds"] += 24 * 3600
+
+        with self.assertRaisesRegex(verifier.ReportError, "outside its keyframe"):
+            self.verify_capture(same_hour_different_day, lighting_phase="day")
+
         def stale_capture_keyframe(records, _root):
             initial_frame = next(record for record in records
                                  if record.get("type") == "frame" and record["sequence"] == 1)
