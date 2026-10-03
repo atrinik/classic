@@ -12,12 +12,12 @@
 /* Include the adapter so the test can reset its process-lifetime state. */
 #include "../client/live_movement.c"
 
-#define CHECK(expression)                                                    \
-    do {                                                                     \
-        if (!(expression)) {                                                 \
+#define CHECK(expression)                                                       \
+    do {                                                                        \
+        if (!(expression)) {                                                    \
             fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #expression); \
-            return 1;                                                        \
-        }                                                                    \
+            return 1;                                                           \
+        }                                                                       \
     } while (0)
 
 typedef struct fixture_paths {
@@ -40,42 +40,28 @@ Client_Player cpl;
 _mapdata MapData;
 SDL_Window *ScreenWindow;
 
-uint64_t datetime_monotonic_us(void) {
-    return now_us;
-}
+uint64_t datetime_monotonic_us(void) { return now_us; }
 
-bool client_socket_active(void) {
-    return socket_active;
-}
-bool client_socket_shutdown_pending(void) {
-    return shutdown_pending;
-}
+bool client_socket_active(void) { return socket_active; }
+bool client_socket_shutdown_pending(void) { return shutdown_pending; }
 uint64_t socket_command_map_publication_generation(void) {
     return publication_generation;
 }
-bool map_state_transaction_active(void) {
-    return map_transaction_active;
-}
+bool map_state_transaction_active(void) { return map_transaction_active; }
 
 void move_keys_stream(int direction, uint32_t epoch) {
-    if (epoch != LIVE_MOVEMENT_EPOCH)
-        abort();
+    if (epoch != LIVE_MOVEMENT_EPOCH) abort();
     move_count++;
     last_move = direction;
 }
 
 void move_keys_stream_stop(uint32_t epoch) {
-    if (epoch != LIVE_MOVEMENT_EPOCH)
-        abort();
+    if (epoch != LIVE_MOVEMENT_EPOCH) abort();
     stop_count++;
 }
 
-void render_profiler_set_enabled(bool enabled_value) {
-    (void)enabled_value;
-}
-void render_profiler_statistics_reset(void) {
-    profile_statistics.frames = 0;
-}
+void render_profiler_set_enabled(bool enabled_value) { (void)enabled_value; }
+void render_profiler_statistics_reset(void) { profile_statistics.frames = 0; }
 void render_profiler_statistics_get(render_profile_snapshot_t *statistics) {
     *statistics = profile_statistics;
 }
@@ -87,15 +73,9 @@ bool render_profiler_stage_metadata_get(render_profile_stage_t stage,
     return true;
 }
 
-const char *gpu_renderer_backend(void) {
-    return "test";
-}
-const char *gpu_renderer_device_name(void) {
-    return "test-device";
-}
-const char *gpu_renderer_driver_name(void) {
-    return "test-driver";
-}
+const char *gpu_renderer_backend(void) { return "test"; }
+const char *gpu_renderer_device_name(void) { return "test-device"; }
+const char *gpu_renderer_driver_name(void) { return "test-driver"; }
 void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics) {
     *statistics = (gpu_renderer_statistics_t){0};
 }
@@ -135,13 +115,18 @@ static const char route_xml[] =
     "<checkpoint map=\"/maps/start\" x=\"11\" y=\"10\" direction=\"6\"/>"
     "</live-movement-route>";
 
+static const char capture_route_xml[] =
+    "<live-movement-route version=\"1\" timeout-ms=\"30000\" step-timeout-ms=\"5000\">"
+    "<checkpoint map=\"/maps/start\" x=\"10\" y=\"10\" direction=\"0\"/>"
+    "<checkpoint map=\"/maps/start\" x=\"11\" y=\"10\" direction=\"6\"/>"
+    "</live-movement-route>";
+
 static bool write_all(int fd, const char *value) {
     size_t offset = 0;
     size_t length = strlen(value);
     while (offset < length) {
         ssize_t written = write(fd, value + offset, length - offset);
-        if (written <= 0)
-            return false;
+        if (written <= 0) return false;
         offset += (size_t)written;
     }
     return true;
@@ -153,10 +138,8 @@ static bool fixture_create(fixture_paths_t *paths, const char *xml) {
     int route_fd = mkstemp(paths->route);
     int report_fd = mkstemp(paths->report);
     if (route_fd < 0 || report_fd < 0) {
-        if (route_fd >= 0)
-            close(route_fd);
-        if (report_fd >= 0)
-            close(report_fd);
+        if (route_fd >= 0) close(route_fd);
+        if (report_fd >= 0) close(report_fd);
         unlink(paths->route);
         unlink(paths->report);
         return false;
@@ -207,8 +190,7 @@ static void adapter_reset(void) {
 }
 
 static bool fixture_ready(const fixture_paths_t *paths) {
-    if (!live_movement_initialize(paths->route, paths->report))
-        return false;
+    if (!live_movement_initialize(paths->route, paths->report)) return false;
     live_movement_ready();
     return true;
 }
@@ -222,6 +204,22 @@ static void present_arrival(void) {
     map_statistics.primary_map_draws++;
     primary_gpu_generation++;
     frame(true);
+}
+
+static void capture_complete(size_t index) {
+    captures[index].result.status = LIVE_MOVEMENT_CAPTURE_COMPLETE;
+    captures[index].result.width = 1;
+    captures[index].result.height = 1;
+    captures[index].result.size_bytes = 4;
+    memset(captures[index].result.sha256, 'a', 64);
+    captures[index].result.sha256[64] = '\0';
+}
+
+static void capture_settled_frame(bool presented) {
+    now_us += (MAP_VISIBILITY_FADE_DURATION_MS + UINT64_C(125)) * 1000;
+    map_statistics.primary_map_draws++;
+    primary_gpu_generation++;
+    frame(presented);
 }
 
 static int test_initialize_and_abort(void) {
@@ -406,17 +404,124 @@ static int test_final_drain_disconnect(void) {
     return 0;
 }
 
+static int test_capture_barriers(void) {
+    fixture_paths_t paths;
+    adapter_reset();
+    CHECK(fixture_create(&paths, capture_route_xml));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    CHECK(!live_movement_configure_review(paths.report, "/tmp/initial.png", NULL, NULL));
+    CHECK(!live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/initial.png", NULL));
+    CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", NULL));
+    live_movement_ready();
+    publication_generation = 1;
+    live_movement_tick();
+    capture_settled_frame(true);
+    CHECK(captures[0].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
+    CHECK(presented_checkpoints == 0U && move_count == 0U);
+    capture_complete(0);
+    live_movement_tick();
+    CHECK(redraw_count == 1U && presented_checkpoints == 0U);
+    capture_settled_frame(false);
+    CHECK(presented_checkpoints == 0U);
+    capture_settled_frame(true);
+    CHECK(presented_checkpoints == 1U);
+    live_movement_tick();
+    CHECK(move_count == 1U);
+    MapData.posx = 11;
+    publication_generation++;
+    live_movement_tick();
+    capture_settled_frame(true);
+    CHECK(captures[1].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
+    live_movement_tick();
+    CHECK(!live_movement_finished());
+    capture_complete(1);
+    live_movement_tick();
+    now_us += LIVE_FINAL_DRAIN_US;
+    frame(true);
+    live_movement_tick();
+    CHECK(live_movement_finished() && live_movement_exit_status() == 0);
+    live_movement_close();
+    fixture_destroy(&paths);
+    return 0;
+}
+
+static int test_capture_failure_and_deadline(void) {
+    fixture_paths_t paths;
+    adapter_reset();
+    CHECK(fixture_create(&paths, capture_route_xml));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", NULL));
+    live_movement_ready();
+    publication_generation = 1;
+    live_movement_tick();
+    capture_settled_frame(true);
+    captures[0].result.status = LIVE_MOVEMENT_CAPTURE_FAILED;
+    snprintf(captures[0].result.error, sizeof(captures[0].result.error), "readback failed");
+    live_movement_tick();
+    CHECK(live_movement_finished());
+    live_movement_close();
+    fixture_destroy(&paths);
+
+    adapter_reset();
+    CHECK(fixture_create(&paths, capture_route_xml));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", NULL));
+    live_movement_ready();
+    publication_generation = 1;
+    live_movement_tick();
+    capture_settled_frame(true);
+    now_us += 5000000;
+    live_movement_tick();
+    CHECK(live_movement_finished());
+    live_movement_close();
+    fixture_destroy(&paths);
+    return 0;
+}
+
+static int test_lighting_phase_barrier(void) {
+    fixture_paths_t paths;
+    adapter_reset();
+    CHECK(fixture_create(&paths, capture_route_xml));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", "new-moon"));
+    live_movement_ready();
+    publication_generation = 1;
+    live_movement_tick();
+    CHECK(command_count == 1U && strcmp(commands[0], "/settime 15") == 0);
+    telemetry_valid = true;
+    telemetry_seconds = 15 * 3600;
+    MapData.light_keyframe_valid = true;
+    MapData.light_keyframe_generation = 1;
+    MapData.light_keyframe_start_seconds = 15 * 3600;
+    MapData.light_keyframe_end_seconds = 16 * 3600;
+    publication_generation++;
+    live_movement_tick();
+    CHECK(command_count == 3U && strcmp(commands[1], "/celestial phase new") == 0 &&
+          strcmp(commands[2], "/settime 0") == 0);
+    telemetry_seconds = 0;
+    publication_generation++;
+    live_movement_tick();
+    CHECK(review_lighting_stage == 2U);
+    MapData.light_keyframe_generation++;
+    MapData.light_keyframe_start_seconds = 0;
+    MapData.light_keyframe_end_seconds = 3600;
+    publication_generation++;
+    live_movement_tick();
+    CHECK(review_lighting_stage == 3U);
+    live_movement_close();
+    fixture_destroy(&paths);
+    return 0;
+}
+
 int main(void) {
-    if (test_initialize_and_abort() != 0)
-        return 1;
-    if (test_publication_and_movement() != 0)
-        return 1;
-    if (test_deadline_and_report_failure() != 0)
-        return 1;
-    if (test_final_drain() != 0)
-        return 1;
-    if (test_final_drain_disconnect() != 0)
-        return 1;
+    if (test_initialize_and_abort() != 0) return 1;
+    if (test_publication_and_movement() != 0) return 1;
+    if (test_deadline_and_report_failure() != 0) return 1;
+    if (test_final_drain() != 0) return 1;
+    if (test_final_drain_disconnect() != 0) return 1;
+    if (test_capture_barriers() != 0) return 1;
+    if (test_capture_failure_and_deadline() != 0) return 1;
+    if (test_lighting_phase_barrier() != 0) return 1;
     adapter_reset();
     return 0;
 }
