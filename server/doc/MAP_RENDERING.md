@@ -614,8 +614,14 @@ which either `(0,0)` or `(width-1,height-1)` does not map identically is invalid
 fixtures cover 64x64/64x64 success, 64x64/63x64 failure, and attempted `(1,0)`
 offset failure.  Adding a vertical transform requires a new schema version.
 
-Every referenced map must be resident for construction; v1 treats an unloaded
-upper target as unresolved rather than guessing from its path or last cache.
+Every vertical dependency must be resident for field construction; v1 treats an
+unloaded upper target as unresolved rather than guessing from its path or last
+cache. Continuous horizontal seams also retain their residency and reciprocal
+validation requirements. Discontinuous horizontal neighbors are independent
+local fields: their residency does not gate this map's sky or radiance. The
+full topology inventory still requires resident, reciprocal declarations on
+both sides of every authored seam. Local-field validation does not load a
+neighbor, transmit across a discontinuous seam, or waive vertical coverage.
 
 For each aligned column, scan from the highest resolved depth downward.  The
 first set `DOWN` face is the highest relevant horizontal boundary.  Its exposed face

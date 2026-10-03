@@ -97,6 +97,82 @@ START_TEST(test_derived_horizontal_neighbors_preserve_day_and_lunar_light) {
 }
 END_TEST
 
+START_TEST(test_discontinuous_horizontal_neighbor_is_not_a_local_light_dependency) {
+    mapstruct *map = open_fixture(3, 3);
+    FREE_AND_COPY_HASH(map->path, "/independent-west");
+    FREE_AND_COPY_HASH(map->tile_path[TILED_EAST], "/unloaded-east");
+    map->celestial_tile_path_seen[TILED_EAST] = true;
+    map->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    char error[HUGE_BUF];
+    ck_assert(!celestial_structure_validate_topology(map, VS(error)));
+    ck_assert_msg(celestial_structure_validate_light_dependencies(map, VS(error)), "%s", error);
+    ck_assert(celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 15));
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 1, 1)->celestial_light_value, 100);
+
+    /* Missing policies and continuous dependencies must still fail closed. */
+    map->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_UNSET;
+    ck_assert(!celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 15));
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 1, 1)->celestial_light_value, 0);
+    map->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    ck_assert(!celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 15));
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 1, 1)->celestial_light_value, 0);
+
+    /* Discontinuity never authorizes light through unresolved upper cover. */
+    map->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    map->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    FREE_AND_COPY_HASH(map->tile_path[TILED_UP], "/unloaded-cover");
+    map->celestial_tile_path_seen[TILED_UP] = true;
+    map->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    ck_assert(!celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 15));
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 1, 1)->celestial_light_value, 0);
+}
+END_TEST
+
+START_TEST(test_brynknot_and_outside_fields_follow_settime) {
+    const char *paths[] = {
+        "/shattered_islands/world_0_70",
+        "/shattered_islands/world_2_67",
+        "/shattered_islands/world_3_67",
+    };
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    for (size_t i = 0; i < arraysize(paths); i++) {
+        mapstruct *map = ready_map_name(paths[i], NULL, MAP_NO_DYNAMIC);
+        ck_assert_msg(map != NULL, "Could not load %s", paths[i]);
+        if (map->tile_path[TILED_UP] != NULL) {
+            ck_assert_ptr_nonnull(get_map_from_tiled(map, TILED_UP));
+        }
+        int x = -1, y = -1;
+        for (int row = 0; row < map->height && x < 0; row++) {
+            for (int col = 0; col < map->width; col++) {
+                if (celestial_structure_cell_exposed(map, col, row)) {
+                    x = col;
+                    y = row;
+                    break;
+                }
+            }
+        }
+        ck_assert_msg(x >= 0, "%s has no exposed sample", paths[i]);
+        todtick = 5 * HOURS_PER_MONTH;
+        char afternoon[] = "15";
+        command_settime(NULL, "settime", afternoon);
+        ck_assert_uint_eq(todtick, 5 * HOURS_PER_MONTH + 15);
+        ck_assert_msg(celestial_light_keyframe_ensure(map, (uint64_t)todtick),
+                      "%s afternoon field failed", paths[i]);
+        int day = GET_MAP_SPACE_PTR(map, x, y)->celestial_light_value;
+        uint64_t generation = celestial_light_generation(map);
+        ck_assert_msg(day > 100, "%s afternoon radiance is %d", paths[i], day);
+        char midnight[] = "0";
+        command_settime(NULL, "settime", midnight);
+        ck_assert_uint_eq(todtick, 5 * HOURS_PER_MONTH + HOURS_PER_DAY);
+        ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+        ck_assert_int_lt(GET_MAP_SPACE_PTR(map, x, y)->celestial_light_value, day);
+        ck_assert_uint_gt(celestial_light_generation(map), generation);
+    }
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_uses_directional_shadow_and_reseeds_after_bound) {
     mapstruct *map = open_fixture(40, 1);
     object *wall = arch_get("wall_wood_1");
@@ -453,6 +529,8 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_celestial_open_field_matches_daylight_anchor);
+    tcase_add_test(tc_core, test_discontinuous_horizontal_neighbor_is_not_a_local_light_dependency);
+    tcase_add_test(tc_core, test_brynknot_and_outside_fields_follow_settime);
     tcase_add_test(tc_core, test_derived_horizontal_neighbors_preserve_day_and_lunar_light);
     tcase_add_test(tc_core, test_celestial_uses_directional_shadow_and_reseeds_after_bound);
     tcase_add_test(tc_core, test_celestial_lunar_and_starlight_are_additive);

@@ -37,7 +37,14 @@ typedef enum celestial_transmission {
 
 bool celestial_structure_finalize_map(mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_validate_header(mapstruct *map, char *error, size_t error_size);
+/** Validate all authored seam declarations and the complete resident stack. */
 bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t error_size);
+/** Validate local lighting dependencies without loading maps. Discontinuous
+ * horizontal neighbors are independent; vertical coverage and continuous
+ * seams retain full validation. Server-thread only, retains no pointers. */
+bool celestial_structure_validate_light_dependencies(mapstruct *map,
+                                                     char *error,
+                                                     size_t error_size);
 bool celestial_structure_cell_exposed(const mapstruct *map, int x, int y);
 uint8_t celestial_structure_faces(const object *op);
 celestial_transmission_t celestial_structure_transmission(const char *value);

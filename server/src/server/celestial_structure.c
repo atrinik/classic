@@ -1514,7 +1514,10 @@ static bool validate_cardinal_seam_apertures(const mapstruct *map,
     return true;
 }
 
-bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t error_size) {
+static bool validate_topology(mapstruct *map,
+                              bool local_field,
+                              char *error,
+                              size_t error_size) {
     HARD_ASSERT(map != NULL);
     if (!celestial_structure_validate_header(map, error, error_size)) {
         return false;
@@ -1550,6 +1553,14 @@ bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t e
             if (i != TILED_UP && i != TILED_DOWN &&
                 !cursor->celestial_tile_path_seen[i] &&
                 cursor->celestial_boundary[i] == CELESTIAL_BOUNDARY_UNSET) {
+                continue;
+            }
+            /* A discontinuous horizontal seam transports no celestial
+             * radiance or vertical cover. Its neighbor is not a dependency
+             * of the local field. The full inventory validator still checks
+             * both declarations, even when local lighting can stand alone. */
+            if (local_field && i != TILED_UP && i != TILED_DOWN &&
+                cursor->celestial_boundary[i] == CELESTIAL_BOUNDARY_DISCONTINUOUS) {
                 continue;
             }
             mapstruct *other = cursor->tile_map[i];
@@ -1593,6 +1604,16 @@ bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t e
         }
     }
     return true;
+}
+
+bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t error_size) {
+    return validate_topology(map, false, error, error_size);
+}
+
+bool celestial_structure_validate_light_dependencies(mapstruct *map,
+                                                     char *error,
+                                                     size_t error_size) {
+    return validate_topology(map, true, error, error_size);
 }
 
 void celestial_structure_save_metadata(const mapstruct *map, FILE *fp) {

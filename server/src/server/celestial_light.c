@@ -520,7 +520,7 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
     size_t count = 0;
     char error[HUGE_BUF];
     if (!collect_stack(map, levels, &count) ||
-        !celestial_structure_validate_topology(map, VS(error))) {
+        !celestial_structure_validate_light_dependencies(map, VS(error))) {
         for (size_t i = 0; i < count; i++) {
             clear_map_field(levels[i]);
             levels[i]->celestial_light_valid = true;
