@@ -780,6 +780,24 @@ if (BUILD_TESTING)
     target_link_libraries(client-live-movement-input-tests PRIVATE SDL3::SDL3)
     add_test(NAME client-live-movement-input COMMAND client-live-movement-input-tests)
 
+    add_executable(client-live-movement-tests
+        src/tests/live_movement.c src/client/live_movement_route.c)
+    atrinik_configure_target(client-live-movement-tests)
+    target_include_directories(client-live-movement-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-live-movement-tests PRIVATE
+        Atrinik::Core SDL3::SDL3 OpenSSL::Crypto)
+    if (TARGET LibXml2::LibXml2)
+        target_link_libraries(client-live-movement-tests PRIVATE LibXml2::LibXml2)
+    else ()
+        target_include_directories(client-live-movement-tests PRIVATE ${LIBXML2_INCLUDE_DIR})
+        target_link_libraries(client-live-movement-tests PRIVATE ${LIBXML2_LIBRARIES})
+    endif ()
+    add_test(NAME client-live-movement COMMAND client-live-movement-tests)
+
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
         src/client/commands.c

@@ -300,8 +300,8 @@ void live_movement_frame_finished(bool presented,
 #undef GPU_TOTAL
     fprintf(report, "\"resource_creations\":%" PRIu64 "},"
                     "\"gpu_primary_publication_generation\":%" PRIu64 ",\"network\":{"
-                    "\"connected\":%s,\"shutdown_pending\":%s,\"service_gap_us\":%" PRIu64
-                    ",\"max_service_gap_us\":%" PRIu64 ",\"queue_depth\":%" PRIu64
+                    "\"connected\":%s,\"shutdown_pending\":%s,\"main_service_gap_us\":%" PRIu64
+                    ",\"main_service_gap_max_us\":%" PRIu64 ",\"queue_depth\":%" PRIu64
                     ",\"queue_oldest_age_us\":%" PRIu64 ",\"queue_processing_total_us\":%" PRIu64
                     ",\"queue_budget_yields_total\":%" PRIu64 ",\"keepalive_tx_total\":%" PRIu64
                     ",\"keepalive_rx_total\":%" PRIu64 ",\"keepalive_timeout_total\":%" PRIu64
