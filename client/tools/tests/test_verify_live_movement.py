@@ -182,7 +182,7 @@ class VerifyLiveMovementTests(unittest.TestCase):
         with self.assertRaisesRegex(verifier.ReportError, message):
             self.verify(records)
 
-    def verify_capture(self, mutate=None) -> dict:
+    def verify_capture(self, mutate=None, lighting_phase: str | None = None) -> dict:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             route_path = root / "route.xml"
@@ -196,10 +196,39 @@ class VerifyLiveMovementTests(unittest.TestCase):
             records[0]["capture_paths"] = {
                 "initial": str(initial_path), "final": str(final_path),
             }
-            initial = capture_event("initial", initial_path, contents, records[2], 100)
-            final = capture_event("final", final_path, contents, records[5], 201)
-            records.insert(3, initial)
-            records.insert(8, final)
+            if lighting_phase is not None:
+                records[0]["lighting_phase"] = lighting_phase
+                opposite_hour, target_hour = ((0, 15) if lighting_phase == "day" else
+                                              (15, 0))
+                records[2]["map_publication_generation"] = 3
+                records[2]["world_time"]["game_seconds"] = target_hour * 3600
+                records[3]["map_publication_generation"] = 3
+                records[4]["publication_generation"] = 4
+                records[5]["map_publication_generation"] = 5
+                records[6]["map_publication_generation"] = 5
+                barriers = [
+                    {"type": "lighting_barrier", "stage": "opposite",
+                     "requested_hour": opposite_hour, "game_seconds": opposite_hour * 3600,
+                     "map_publication_generation": 2, "elapsed_us": 10},
+                    {"type": "lighting_barrier", "stage": "target",
+                     "requested_hour": target_hour, "game_seconds": target_hour * 3600,
+                     "map_publication_generation": 3, "elapsed_us": 10},
+                ]
+                records[2:2] = barriers
+            initial_source = next(record for record in records
+                                  if record.get("type") == "frame" and record["sequence"] == 1)
+            final_source = next(record for record in records
+                                if record.get("type") == "frame" and record["sequence"] == 2)
+            initial = capture_event("initial", initial_path, contents, initial_source,
+                                    initial_source["elapsed_us"])
+            final = capture_event("final", final_path, contents, final_source, 201)
+            initial_position = records.index(initial_source) + 1
+            records.insert(initial_position, initial)
+            final_presentation = next(
+                record for record in records
+                if record.get("type") == "checkpoint_presented" and record["index"] == 1
+            )
+            records.insert(records.index(final_presentation) + 1, final)
             if mutate is not None:
                 mutate(records, root)
             route_path.write_bytes(ROUTE)
@@ -325,6 +354,79 @@ class VerifyLiveMovementTests(unittest.TestCase):
 
         with self.assertRaisesRegex(verifier.ReportError, "outside its checkpoint"):
             self.verify_capture(wrong_order)
+
+    def test_accepts_typed_lighting_barrier_proof(self) -> None:
+        for phase, target_hour in (("day", 15), ("new-moon", 0), ("full-moon", 0)):
+            with self.subTest(phase=phase):
+                summary = self.verify_capture(lighting_phase=phase)
+                self.assertEqual(summary["identity"]["lighting_phase"], phase)
+                self.assertEqual([item["stage"] for item in summary["lighting_barriers"]],
+                                 ["opposite", "target"])
+                self.assertEqual(summary["captures"]["initial"]["game_seconds"] // 3600,
+                                 target_hour)
+
+    def test_rejects_incomplete_or_reversed_lighting_barriers(self) -> None:
+        def missing(records, _root):
+            records.pop(next(index for index, record in enumerate(records)
+                             if record.get("stage") == "target"))
+
+        with self.assertRaisesRegex(verifier.ReportError, "missing lighting barriers"):
+            self.verify_capture(missing, lighting_phase="day")
+
+        def reversed_order(records, _root):
+            indexes = [index for index, record in enumerate(records)
+                       if record.get("type") == "lighting_barrier"]
+            records[indexes[0]], records[indexes[1]] = records[indexes[1]], records[indexes[0]]
+
+        with self.assertRaisesRegex(verifier.ReportError, "stage must be opposite"):
+            self.verify_capture(reversed_order, lighting_phase="day")
+
+        def duplicate(records, _root):
+            target_index = next(index for index, record in enumerate(records)
+                                if record.get("stage") == "target")
+            records.insert(target_index + 1, copy.deepcopy(records[target_index]))
+
+        with self.assertRaisesRegex(verifier.ReportError, "duplicate lighting_barrier"):
+            self.verify_capture(duplicate, lighting_phase="day")
+
+    def test_rejects_invalid_lighting_hour_generation_and_unrequested_event(self) -> None:
+        def bad_hour(records, _root):
+            target = next(record for record in records if record.get("stage") == "target")
+            target["requested_hour"] = 14
+
+        with self.assertRaisesRegex(verifier.ReportError, "requested_hour is invalid"):
+            self.verify_capture(bad_hour, lighting_phase="day")
+
+        def stale_generation(records, _root):
+            target = next(record for record in records if record.get("stage") == "target")
+            target["map_publication_generation"] = 2
+
+        with self.assertRaisesRegex(verifier.ReportError, "generation is not fresh"):
+            self.verify_capture(stale_generation, lighting_phase="day")
+
+        def unrequested(records, _root):
+            records.insert(2, {
+                "type": "lighting_barrier", "stage": "opposite", "requested_hour": 0,
+                "game_seconds": 0, "map_publication_generation": 2, "elapsed_us": 10,
+            })
+
+        with self.assertRaisesRegex(verifier.ReportError, "forbidden without"):
+            self.verify_capture(unrequested)
+
+    def test_rejects_initial_capture_of_frame_presented_before_target_barrier(self) -> None:
+        def stale_frame(records, _root):
+            barriers = [record for record in records
+                        if record.get("type") == "lighting_barrier"]
+            records[:] = [record for record in records
+                          if record.get("type") != "lighting_barrier"]
+            initial_capture_index = next(index for index, record in enumerate(records)
+                                         if record.get("kind") == "initial")
+            for barrier in barriers:
+                barrier["elapsed_us"] = 100
+            records[initial_capture_index:initial_capture_index] = barriers
+
+        with self.assertRaisesRegex(verifier.ReportError, "outside its checkpoint"):
+            self.verify_capture(stale_frame, lighting_phase="day")
 
     def test_cli_writes_same_stable_summary_as_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

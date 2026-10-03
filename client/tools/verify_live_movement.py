@@ -88,6 +88,11 @@ CAPTURE_FIELDS = {
     "x", "y", "map_publication_generation", "gpu_primary_publication_generation",
     "game_time_valid", "game_seconds", "elapsed_us",
 }
+LIGHTING_BARRIER_FIELDS = {
+    "type", "stage", "requested_hour", "game_seconds", "map_publication_generation",
+    "elapsed_us",
+}
+LIGHTING_PHASES = {"day", "new-moon", "full-moon"}
 
 
 class ReportError(ValueError):
@@ -406,7 +411,9 @@ def _stage_summary(names: list[str], samples: list[array], unit: str) -> dict:
 def _validate_identity(record: dict, route_digest: str, checkpoint_count: int,
                        report_path: Path) -> dict:
     fields = set(record)
-    _require(fields in (IDENTITY_FIELDS, IDENTITY_FIELDS | {"capture_paths"}),
+    _require(fields in (IDENTITY_FIELDS,
+                        IDENTITY_FIELDS | {"capture_paths"},
+                        IDENTITY_FIELDS | {"capture_paths", "lighting_phase"}),
              "identity fields are not closed")
     _require(record["type"] == "identity" and type(record["schema_version"]) is int and
              record["schema_version"] == 1,
@@ -439,7 +446,15 @@ def _validate_identity(record: dict, route_digest: str, checkpoint_count: int,
                                                    "identity gpu_host_stage_names")
     if "capture_paths" in record:
         record["capture_paths"] = _capture_paths(record["capture_paths"], report_path)
+    if "lighting_phase" in record:
+        _require(isinstance(record["lighting_phase"], str) and
+                 record["lighting_phase"] in LIGHTING_PHASES,
+                 "identity lighting_phase is invalid")
     return record
+
+
+def _lighting_hours(phase: str) -> tuple[int, int]:
+    return (0, 15) if phase == "day" else (15, 0)
 
 
 def verify(route_path: Path, report_path: Path) -> dict:
@@ -461,6 +476,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
     presentation_frame_evidence: dict[str, object] | None = None
     final_capture_source: dict[str, object] | None = None
     captures: dict[str, dict] = {}
+    lighting_barriers: list[dict] = []
     step_started_elapsed = 0
     frame_times = array("Q")
     presented_spacings = array("Q")
@@ -662,7 +678,40 @@ def verify(route_path: Path, report_path: Path) -> dict:
         _require(elapsed <= route_limits["timeout_us"], "report exceeded route timeout")
         _require(elapsed >= last_elapsed, "record elapsed_us decreased")
         last_elapsed = elapsed
-        if record_type == "capture":
+        if record_type == "lighting_barrier":
+            _closed(record, LIGHTING_BARRIER_FIELDS, "lighting_barrier")
+            phase = identity.get("lighting_phase")
+            _require(isinstance(phase, str),
+                     "lighting_barrier is forbidden without identity lighting_phase")
+            _require(presentations == 0 and pending_arrival is not None and
+                     pending_arrival["index"] == 0 and "initial" not in captures,
+                     "lighting_barrier is outside the initial checkpoint window")
+            _require(len(lighting_barriers) < 2, "duplicate lighting_barrier record")
+            expected_stage = ("opposite", "target")[len(lighting_barriers)]
+            _require(record["stage"] == expected_stage,
+                     f"lighting_barrier stage must be {expected_stage}")
+            opposite_hour, target_hour = _lighting_hours(phase)
+            expected_hour = opposite_hour if expected_stage == "opposite" else target_hour
+            _require(type(record["requested_hour"]) is int and
+                     record["requested_hour"] == expected_hour,
+                     f"lighting_barrier {expected_stage} requested_hour is invalid")
+            game_seconds = _integer(record["game_seconds"],
+                                    "lighting_barrier game_seconds")
+            _require((game_seconds // 3600) % 24 == expected_hour,
+                     f"lighting_barrier {expected_stage} game time has the wrong hour")
+            map_generation = _integer(record["map_publication_generation"],
+                                      "lighting_barrier map_publication_generation", 1)
+            previous_generation = (pending_arrival["publication_generation"]
+                                   if not lighting_barriers else
+                                   lighting_barriers[-1]["map_publication_generation"])
+            _require(map_generation > previous_generation,
+                     "lighting_barrier map publication generation is not fresh")
+            lighting_barriers.append({key: value for key, value in record.items()
+                                      if key != "type"})
+            presentation_frame_generation = None
+            presentation_gpu_generation = None
+            presentation_frame_evidence = None
+        elif record_type == "capture":
             capture_paths = identity.get("capture_paths")
             _require(isinstance(capture_paths, dict),
                      "capture record is forbidden without identity capture_paths")
@@ -682,6 +731,16 @@ def verify(route_path: Path, report_path: Path) -> dict:
                          "final capture is outside its checkpoint presentation window")
                 source = final_capture_source
             captures[kind] = _validate_capture(record, kind, capture_paths, source)
+            if kind == "initial" and "lighting_phase" in identity:
+                _require(len(lighting_barriers) == 2,
+                         "initial capture is missing lighting barriers")
+                target_hour = _lighting_hours(identity["lighting_phase"])[1]
+                target_generation = lighting_barriers[-1]["map_publication_generation"]
+                _require(record["map_publication_generation"] >= target_generation,
+                         "initial capture predates the target lighting barrier")
+                _require(record["game_time_valid"] is True and
+                         (record["game_seconds"] // 3600) % 24 == target_hour,
+                         "initial capture does not show the target lighting hour")
         elif record_type == "arrival":
             _closed(record, ARRIVAL_FIELDS, "arrival")
             _require(pending_arrival is None,
@@ -766,6 +825,12 @@ def verify(route_path: Path, report_path: Path) -> dict:
     if capture_paths is not None:
         _require(set(captures) == {"initial", "final"},
                  "successful capture report is missing a capture callback")
+    lighting_phase = identity.get("lighting_phase")
+    if lighting_phase is not None:
+        _require(len(lighting_barriers) == 2,
+                 "successful lighting report is missing lighting barriers")
+    else:
+        _require(not lighting_barriers, "unrequested lighting barriers are forbidden")
     expected_count = len(checkpoints)
     _require(pending_arrival is None and arrivals == presentations == expected_count,
              "report did not present every route checkpoint")
@@ -856,6 +921,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
     }
     if capture_paths is not None:
         summary["captures"] = {kind: captures[kind] for kind in ("initial", "final")}
+    if lighting_phase is not None:
+        summary["lighting_barriers"] = lighting_barriers
     return summary
 
 
