@@ -2038,7 +2038,7 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         SDL_SetError("canceling pending login did not return to startup");
         return false;
     }
-    const int authenticated_states[] = {ST_CHARACTERS, ST_WAITFORPLAY, ST_PLAY};
+    const player_state_t authenticated_states[] = {ST_CHARACTERS, ST_WAITFORPLAY, ST_PLAY};
     for (size_t i = 0; i < arraysize(authenticated_states); i++) {
         login_start();
         login_popup = popup_get_head();
