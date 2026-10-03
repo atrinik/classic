@@ -22,6 +22,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #define LIVE_REPORT_MAX_BYTES (UINT64_C(127) * 1024 * 1024)
 #define LIVE_REPORT_MAX_FRAMES UINT64_C(900000)
@@ -33,6 +34,7 @@ static live_movement_route_state_t *route_state;
 static FILE *report;
 static bool enabled, ready, finished, succeeded, arrival_waiting;
 static uint64_t started_us, previous_frame_us, previous_service_us, service_gap_us;
+static uint64_t started_utc_us;
 static uint64_t max_service_gap_us, final_drain_started_us;
 static uint64_t final_drain_presented_frames;
 static uint64_t frames, presented_frames, arrivals, presented_checkpoints;
@@ -88,6 +90,10 @@ static void terminal(bool success, const char *reason) {
 }
 
 bool live_movement_initialize(const char *route_path, const char *report_path) {
+    if (enabled) {
+        fprintf(stderr, "live movement is already initialized\n");
+        return false;
+    }
     if (route_path == NULL && report_path == NULL) {
         return true;
     }
@@ -97,6 +103,12 @@ bool live_movement_initialize(const char *route_path, const char *report_path) {
         return false;
     }
     started_us = datetime_monotonic_us();
+    struct timespec utc;
+    if (timespec_get(&utc, TIME_UTC) != TIME_UTC || utc.tv_sec < 0) {
+        fprintf(stderr, "live movement cannot establish its UTC time anchor\n");
+        return false;
+    }
+    started_utc_us = (uint64_t)utc.tv_sec * UINT64_C(1000000) + (uint64_t)utc.tv_nsec / 1000;
     if (!live_movement_route_load(route_path, &route, error, sizeof(error))) {
         fprintf(stderr, "live movement: %s\n", error);
         return false;
@@ -128,7 +140,8 @@ void live_movement_ready(void) {
     render_profiler_statistics_reset();
     int width = 0, height = 0;
     SDL_GetWindowSizeInPixels(ScreenWindow, &width, &height);
-    fprintf(report, "{\"type\":\"identity\",\"schema_version\":1,\"route_sha256\":");
+    fprintf(report, "{\"type\":\"identity\",\"schema_version\":1,\"started_utc_us\":%" PRIu64
+                    ",\"route_sha256\":", started_utc_us);
     json_string(live_movement_route_sha256(route));
     fprintf(report, ",\"route_checkpoints\":%zu,\"source_revision\":",
             live_movement_route_checkpoint_count(route));
