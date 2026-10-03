@@ -198,6 +198,31 @@ class VerifyLiveMovementTests(unittest.TestCase):
         records[2]["presented"] = False
         self.assert_rejected(records, "lacks a preceding matching presented frame")
 
+    def test_accepts_newer_qualifying_frame_generation(self) -> None:
+        records = good_records()
+        records[2]["map_publication_generation"] = 3
+        records[3]["map_publication_generation"] = 3
+        records[4]["publication_generation"] = 4
+        records[5]["map_publication_generation"] = 5
+        records[6]["map_publication_generation"] = 5
+        summary = self.verify(records)
+        self.assertEqual(summary["presented_checkpoints"], 2)
+
+    def test_rejects_presentation_generation_not_from_qualifying_frame(self) -> None:
+        records = good_records()
+        records[2]["map_publication_generation"] = 3
+        records[3]["map_publication_generation"] = 2
+        self.assert_rejected(records, "does not match its presented frame")
+
+    def test_accepts_equal_event_timestamps(self) -> None:
+        records = good_records()
+        records[3]["elapsed_us"] = records[2]["elapsed_us"]
+        records[4]["elapsed_us"] = records[2]["elapsed_us"]
+        records[6]["elapsed_us"] = records[5]["elapsed_us"]
+        records[7]["elapsed_us"] = records[5]["elapsed_us"]
+        summary = self.verify(records)
+        self.assertEqual(summary["elapsed_us"], 200)
+
     def test_rejects_nonfinite_number(self) -> None:
         records = good_records()
         records[2]["frame_us"] = float("nan")

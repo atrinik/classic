@@ -300,7 +300,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
     last_arrival_generation = 0
     last_gpu_generation = 0
     pending_arrival: dict | None = None
-    presentation_frame_seen = False
+    presentation_frame_generation: int | None = None
     step_started_elapsed = 0
     frame_times = array("Q")
     presented_spacings = array("Q")
@@ -339,9 +339,10 @@ def verify(route_path: Path, report_path: Path) -> dict:
             elapsed = _integer(record["elapsed_us"], "frame elapsed_us", 1)
             frame_us = _integer(record["frame_us"], "frame frame_us", 1)
             _require(elapsed <= route_limits["timeout_us"], "report exceeded route timeout")
-            _require(elapsed > last_elapsed, "record elapsed_us is not strictly increasing")
+            _require(elapsed >= last_elapsed, "record elapsed_us decreased")
             _require((frame_count == 1 and elapsed >= frame_us) or
-                     (frame_count > 1 and elapsed - last_frame_elapsed >= frame_us),
+                     (frame_count > 1 and elapsed > last_frame_elapsed and
+                      elapsed - last_frame_elapsed >= frame_us),
                      "frame elapsed_us is inconsistent with frame_us")
             last_elapsed = elapsed
             last_frame_elapsed = elapsed
@@ -424,16 +425,17 @@ def verify(route_path: Path, report_path: Path) -> dict:
                     presented_spacings.append(elapsed - last_presented_elapsed)
                 last_presented_elapsed = elapsed
                 if pending_arrival is not None:
-                    presentation_frame_seen = (
+                    qualifying_frame = (
                         record["map_ready"] and map_path == pending_arrival["map_path"] and
                         x == pending_arrival["x"] and y == pending_arrival["y"] and
-                        generation == pending_arrival["publication_generation"]
+                        generation >= pending_arrival["publication_generation"]
                     )
+                    presentation_frame_generation = generation if qualifying_frame else None
             continue
 
         elapsed = _integer(record.get("elapsed_us"), f"{record_type} elapsed_us")
         _require(elapsed <= route_limits["timeout_us"], "report exceeded route timeout")
-        _require(elapsed > last_elapsed, "record elapsed_us is not strictly increasing")
+        _require(elapsed >= last_elapsed, "record elapsed_us decreased")
         last_elapsed = elapsed
         if record_type == "arrival":
             _closed(record, ARRIVAL_FIELDS, "arrival")
@@ -454,7 +456,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
                      "arrival publication_generation is not fresh")
             last_arrival_generation = generation
             pending_arrival = record
-            presentation_frame_seen = False
+            presentation_frame_generation = None
             arrivals += 1
         elif record_type == "checkpoint_presented":
             _closed(record, PRESENTATION_FIELDS, "checkpoint_presented")
@@ -465,15 +467,14 @@ def verify(route_path: Path, report_path: Path) -> dict:
             presentation_map_generation = _integer(
                 record["map_publication_generation"],
                 "checkpoint map_publication_generation", 1)
-            _require(presentation_map_generation ==
-                     pending_arrival["publication_generation"],
-                     "checkpoint presentation generation does not match arrival")
+            _require(presentation_frame_generation is not None,
+                     "checkpoint presentation lacks a preceding matching presented frame")
+            _require(presentation_map_generation == presentation_frame_generation,
+                     "checkpoint presentation generation does not match its presented frame")
             generation = _integer(record["gpu_published_generation"],
                                   "checkpoint gpu_published_generation", 1)
             _require(generation > last_gpu_generation,
                      "checkpoint GPU published generation is not fresh")
-            _require(presentation_frame_seen,
-                     "checkpoint presentation lacks a preceding matching presented frame")
             _require(elapsed - step_started_elapsed <= route_limits["step_timeout_us"],
                      "checkpoint presentation exceeded route step timeout")
             last_gpu_generation = generation
@@ -481,7 +482,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
             covered_tiles.add((pending_arrival["map_path"], pending_arrival["x"],
                                pending_arrival["y"]))
             pending_arrival = None
-            presentation_frame_seen = False
+            presentation_frame_generation = None
             step_started_elapsed = elapsed
             presentations += 1
         elif record_type == "terminal":
