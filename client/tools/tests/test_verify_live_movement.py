@@ -202,6 +202,7 @@ class VerifyLiveMovementTests(unittest.TestCase):
                                               (15, 0))
                 records[2]["map_publication_generation"] = 3
                 records[2]["world_time"]["game_seconds"] = target_hour * 3600
+                records[2]["world_time"]["light_keyframe_generation"] = 2
                 records[3]["map_publication_generation"] = 3
                 records[4]["publication_generation"] = 4
                 records[5]["map_publication_generation"] = 5
@@ -209,10 +210,16 @@ class VerifyLiveMovementTests(unittest.TestCase):
                 barriers = [
                     {"type": "lighting_barrier", "stage": "opposite",
                      "requested_hour": opposite_hour, "game_seconds": opposite_hour * 3600,
-                     "map_publication_generation": 2, "elapsed_us": 10},
+                     "map_publication_generation": 2, "light_keyframe_generation": 1,
+                     "light_keyframe_start_seconds": opposite_hour * 3600,
+                     "light_keyframe_end_seconds": opposite_hour * 3600 + 3600,
+                     "elapsed_us": 10},
                     {"type": "lighting_barrier", "stage": "target",
                      "requested_hour": target_hour, "game_seconds": target_hour * 3600,
-                     "map_publication_generation": 3, "elapsed_us": 10},
+                     "map_publication_generation": 3, "light_keyframe_generation": 2,
+                     "light_keyframe_start_seconds": target_hour * 3600,
+                     "light_keyframe_end_seconds": target_hour * 3600 + 3600,
+                     "elapsed_us": 10},
                 ]
                 records[2:2] = barriers
             initial_source = next(record for record in records
@@ -408,10 +415,39 @@ class VerifyLiveMovementTests(unittest.TestCase):
             records.insert(2, {
                 "type": "lighting_barrier", "stage": "opposite", "requested_hour": 0,
                 "game_seconds": 0, "map_publication_generation": 2, "elapsed_us": 10,
+                "light_keyframe_generation": 1, "light_keyframe_start_seconds": 0,
+                "light_keyframe_end_seconds": 3600,
             })
 
         with self.assertRaisesRegex(verifier.ReportError, "forbidden without"):
             self.verify_capture(unrequested)
+
+    def test_rejects_stale_or_invalid_lighting_keyframe_descriptor(self) -> None:
+        def stale_opposite_descriptor(records, _root):
+            barriers = [record for record in records
+                        if record.get("type") == "lighting_barrier"]
+            barriers[1]["light_keyframe_start_seconds"] = \
+                barriers[0]["light_keyframe_start_seconds"]
+            barriers[1]["light_keyframe_end_seconds"] = \
+                barriers[0]["light_keyframe_end_seconds"]
+
+        with self.assertRaisesRegex(verifier.ReportError, "light keyframe has the wrong hour"):
+            self.verify_capture(stale_opposite_descriptor, lighting_phase="day")
+
+        def invalid_interval(records, _root):
+            target = next(record for record in records if record.get("stage") == "target")
+            target["light_keyframe_end_seconds"] = target["light_keyframe_start_seconds"]
+
+        with self.assertRaisesRegex(verifier.ReportError, "keyframe interval is invalid"):
+            self.verify_capture(invalid_interval, lighting_phase="day")
+
+        def stale_capture_keyframe(records, _root):
+            initial_frame = next(record for record in records
+                                 if record.get("type") == "frame" and record["sequence"] == 1)
+            initial_frame["world_time"]["light_keyframe_generation"] = 1
+
+        with self.assertRaisesRegex(verifier.ReportError, "target light keyframe"):
+            self.verify_capture(stale_capture_keyframe, lighting_phase="day")
 
     def test_rejects_initial_capture_of_frame_presented_before_target_barrier(self) -> None:
         def stale_frame(records, _root):

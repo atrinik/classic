@@ -90,7 +90,8 @@ CAPTURE_FIELDS = {
 }
 LIGHTING_BARRIER_FIELDS = {
     "type", "stage", "requested_hour", "game_seconds", "map_publication_generation",
-    "elapsed_us",
+    "light_keyframe_generation", "light_keyframe_start_seconds",
+    "light_keyframe_end_seconds", "elapsed_us",
 }
 LIGHTING_PHASES = {"day", "new-moon", "full-moon"}
 
@@ -669,6 +670,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
                         "gpu_primary_publication_generation": gpu_primary_generation,
                         "game_time_valid": world_time["valid"],
                         "game_seconds": world_time["game_seconds"],
+                        "light_keyframe_valid": world_time["light_keyframe_valid"],
+                        "light_keyframe_generation": world_time["light_keyframe_generation"],
                     } if qualifying_frame else None)
                 elif presentations == len(checkpoints):
                     post_route_presented_frame = True
@@ -699,6 +702,16 @@ def verify(route_path: Path, report_path: Path) -> dict:
                                     "lighting_barrier game_seconds")
             _require((game_seconds // 3600) % 24 == expected_hour,
                      f"lighting_barrier {expected_stage} game time has the wrong hour")
+            _integer(record["light_keyframe_generation"],
+                     "lighting_barrier light_keyframe_generation", 1)
+            keyframe_start = _integer(record["light_keyframe_start_seconds"],
+                                      "lighting_barrier light_keyframe_start_seconds")
+            keyframe_end = _integer(record["light_keyframe_end_seconds"],
+                                    "lighting_barrier light_keyframe_end_seconds")
+            _require(keyframe_start < keyframe_end,
+                     "lighting_barrier light keyframe interval is invalid")
+            _require((keyframe_start // 3600) % 24 == expected_hour,
+                     f"lighting_barrier {expected_stage} light keyframe has the wrong hour")
             map_generation = _integer(record["map_publication_generation"],
                                       "lighting_barrier map_publication_generation", 1)
             previous_generation = (pending_arrival["publication_generation"]
@@ -741,6 +754,10 @@ def verify(route_path: Path, report_path: Path) -> dict:
                 _require(record["game_time_valid"] is True and
                          (record["game_seconds"] // 3600) % 24 == target_hour,
                          "initial capture does not show the target lighting hour")
+                _require(source["light_keyframe_valid"] is True and
+                         source["light_keyframe_generation"] >=
+                         lighting_barriers[-1]["light_keyframe_generation"],
+                         "initial capture does not show the target light keyframe")
         elif record_type == "arrival":
             _closed(record, ARRIVAL_FIELDS, "arrival")
             _require(pending_arrival is None,
