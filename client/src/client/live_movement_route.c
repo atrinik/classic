@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -47,7 +48,7 @@ struct live_movement_route_state {
     uint64_t move_started_ms;
     uint64_t move_generation;
     bool play_started;
-    char failure[160];
+    char failure[2048];
 };
 
 static void route_error(char *error, size_t error_size, const char *format, ...) {
@@ -421,6 +422,41 @@ static bool route_observation_matches(const live_movement_route_observation_t *o
            observation->x == checkpoint->x && observation->y == checkpoint->y;
 }
 
+static live_movement_route_action_t
+route_fail_wrong_position(live_movement_route_state_t *state,
+                          const live_movement_route_observation_t *observation,
+                          const live_movement_checkpoint_t *source,
+                          const live_movement_checkpoint_t *destination) {
+    state->phase = LIVE_MOVEMENT_ROUTE_PHASE_FAILED;
+    int written = snprintf(
+        state->failure,
+        sizeof(state->failure),
+        "published position is neither source nor destination: actual=%.*s(%u,%u), "
+        "source=%.*s(%u,%u), target=%.*s(%u,%u), "
+        "dispatched_publication_generation=%" PRIu64
+        ", committed_publication_generation=%" PRIu64,
+        (int)LIVE_MOVEMENT_ROUTE_MAP_MAX,
+        observation->map,
+        (unsigned int)observation->x,
+        (unsigned int)observation->y,
+        (int)LIVE_MOVEMENT_ROUTE_MAP_MAX,
+        source->map,
+        (unsigned int)source->x,
+        (unsigned int)source->y,
+        (int)LIVE_MOVEMENT_ROUTE_MAP_MAX,
+        destination->map,
+        (unsigned int)destination->x,
+        (unsigned int)destination->y,
+        state->move_generation,
+        observation->publication_generation);
+    if (written < 0 || (size_t)written >= sizeof(state->failure)) {
+        snprintf(state->failure,
+                 sizeof(state->failure),
+                 "wrong-position diagnostic exceeded its fixed bound");
+    }
+    return route_action(state, LIVE_MOVEMENT_ROUTE_ACTION_FAILED, 0);
+}
+
 live_movement_route_action_t
 live_movement_route_tick(live_movement_route_state_t *state,
                          const live_movement_route_observation_t *observation) {
@@ -506,7 +542,7 @@ live_movement_route_tick(live_movement_route_state_t *state,
     const live_movement_checkpoint_t *next =
         &state->route->checkpoints[state->checkpoint_index + 1U];
     if (!route_observation_matches(observation, next)) {
-        return route_fail(state, "published position is neither the source nor destination");
+        return route_fail_wrong_position(state, observation, current, next);
     }
     state->checkpoint_index++;
     state->phase = LIVE_MOVEMENT_ROUTE_PHASE_ARRIVAL;

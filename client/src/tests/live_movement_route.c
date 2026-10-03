@@ -415,6 +415,104 @@ static int test_failures(const live_movement_route_t *route) {
     return 0;
 }
 
+static int test_wilderness_transition_diagnostic(void) {
+    static const char transition_xml[] =
+        "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
+        "<checkpoint map=\"/wilderness/0_68\" x=\"23\" y=\"18\" direction=\"0\"/>"
+        "<checkpoint map=\"/wilderness/1_68\" x=\"0\" y=\"18\" direction=\"6\"/>"
+        "</live-movement-route>";
+    live_movement_route_t *route = NULL;
+    REQUIRE(load_xml(transition_xml, &route));
+
+    live_movement_route_state_t *state = live_movement_route_state_create(route, 0);
+    REQUIRE(state != NULL);
+    live_movement_route_observation_t current =
+        observation(1, "/wilderness/0_68", 23, 18, 67);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
+    REQUIRE(live_movement_route_arrival_presented(state));
+    current.now_ms = 2;
+    current.publication_generation = 68;
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_MOVE);
+    current = observation(3, "/wilderness/1_68", 0, 18, 69);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
+    live_movement_route_state_free(state);
+
+    state = live_movement_route_state_create(route, 0);
+    REQUIRE(state != NULL);
+    current = observation(1, "/wilderness/0_68", 23, 18, 67);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
+    REQUIRE(live_movement_route_arrival_presented(state));
+    current.now_ms = 2;
+    current.publication_generation = 68;
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_MOVE);
+    current = observation(3, "/wilderness/unexpected_68", 4, 7, 72);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_FAILED);
+    const char *failure = live_movement_route_failure(state);
+    REQUIRE(failure != NULL);
+    REQUIRE(strcmp(failure,
+                   "published position is neither source nor destination: "
+                   "actual=/wilderness/unexpected_68(4,7), "
+                   "source=/wilderness/0_68(23,18), target=/wilderness/1_68(0,18), "
+                   "dispatched_publication_generation=68, "
+                   "committed_publication_generation=72") == 0);
+    live_movement_route_state_free(state);
+    live_movement_route_free(route);
+    return 0;
+}
+
+static int test_maximum_map_diagnostic(void) {
+    char source[LIVE_MOVEMENT_ROUTE_MAP_MAX + 1U];
+    char destination[LIVE_MOVEMENT_ROUTE_MAP_MAX + 1U];
+    char actual[LIVE_MOVEMENT_ROUTE_MAP_MAX + 1U];
+    source[0] = destination[0] = actual[0] = '/';
+    memset(source + 1, 'a', LIVE_MOVEMENT_ROUTE_MAP_MAX - 1U);
+    memset(destination + 1, 'b', LIVE_MOVEMENT_ROUTE_MAP_MAX - 1U);
+    memset(actual + 1, 'c', LIVE_MOVEMENT_ROUTE_MAP_MAX - 1U);
+    source[LIVE_MOVEMENT_ROUTE_MAP_MAX] = '\0';
+    destination[LIVE_MOVEMENT_ROUTE_MAP_MAX] = '\0';
+    actual[LIVE_MOVEMENT_ROUTE_MAP_MAX] = '\0';
+
+    char xml[2048];
+    int xml_size = snprintf(
+        xml,
+        sizeof(xml),
+        "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
+        "<checkpoint map=\"%s\" x=\"255\" y=\"255\" direction=\"0\"/>"
+        "<checkpoint map=\"%s\" x=\"0\" y=\"0\" direction=\"6\"/>"
+        "</live-movement-route>",
+        source,
+        destination);
+    REQUIRE(xml_size > 0 && (size_t)xml_size < sizeof(xml));
+    live_movement_route_t *route = NULL;
+    REQUIRE(load_xml(xml, &route));
+    live_movement_route_state_t *state = live_movement_route_state_create(route, 0);
+    REQUIRE(state != NULL);
+    live_movement_route_observation_t current = observation(1, source, 255, 255, 1);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
+    REQUIRE(live_movement_route_arrival_presented(state));
+    current.now_ms = 2;
+    current.publication_generation = UINT64_MAX - 1U;
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_MOVE);
+    current = observation(3, actual, 127, 63, UINT64_MAX);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_FAILED);
+    const char *failure = live_movement_route_failure(state);
+    REQUIRE(failure != NULL);
+    REQUIRE(strstr(failure, actual) != NULL);
+    REQUIRE(strstr(failure, source) != NULL);
+    REQUIRE(strstr(failure, destination) != NULL);
+    REQUIRE(strstr(failure, "actual=") != NULL);
+    REQUIRE(strstr(failure, "(127,63)") != NULL);
+    REQUIRE(strstr(failure, "(255,255)") != NULL);
+    REQUIRE(strstr(failure, "(0,0)") != NULL);
+    REQUIRE(strstr(failure,
+                   "dispatched_publication_generation=18446744073709551614") != NULL);
+    REQUIRE(strstr(failure,
+                   "committed_publication_generation=18446744073709551615") != NULL);
+    live_movement_route_state_free(state);
+    live_movement_route_free(route);
+    return 0;
+}
+
 static int test_final_presentation(void) {
     static const char final_xml[] =
         "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
@@ -474,6 +572,8 @@ int main(void) {
     REQUIRE(test_state_progression(route) == 0);
     REQUIRE(test_failures(route) == 0);
     live_movement_route_free(route);
+    REQUIRE(test_wilderness_transition_diagnostic() == 0);
+    REQUIRE(test_maximum_map_diagnostic() == 0);
     REQUIRE(test_final_presentation() == 0);
     return 0;
 }
