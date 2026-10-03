@@ -8886,6 +8886,514 @@ bool widget_map_visibility_test(void) {
     return success;
 }
 
+/** Append one living-layer update to a production MAP2 test level. */
+static const char *map_actor_relocation_test_case = "setup";
+
+static void map_actor_relocation_test_actor(packet_struct *level,
+                                            int x,
+                                            int y,
+                                            uint16_t face,
+                                            uint8_t quick_pos,
+                                            uint32_t actor_id,
+                                            uint8_t probe) {
+    uint8_t flags = 0;
+    uint32_t flags2 = 0;
+    if (quick_pos != 0) {
+        flags |= MAP2_FLAG_MULTI;
+    }
+    if (actor_id != 0 || probe != 0) {
+        flags |= MAP2_FLAG_MORE;
+        flags2 |= MAP2_FLAG2_TARGET;
+        if (probe != 0) {
+            flags2 |= MAP2_FLAG2_PROBE;
+        }
+    }
+
+    packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6));
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, GET_MAP_LAYER(LAYER_LIVING, 0));
+    packet_writer_write_uint16(level, face);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, flags);
+    if (quick_pos != 0) {
+        packet_writer_write_uint8(level, quick_pos);
+    }
+    if (flags2 != 0) {
+        packet_writer_write_uint32(level, flags2);
+        packet_writer_write_uint32(level, actor_id);
+        packet_writer_write_uint8(level, 0);
+        if (probe != 0) {
+            packet_writer_write_uint8(level, probe);
+        }
+    }
+    packet_writer_write_uint8(level, 0);
+}
+
+/** Append one living-layer clear to a production MAP2 test level. */
+static void map_actor_relocation_test_clear(packet_struct *level, int x, int y) {
+    packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6));
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, MAP2_LAYER_CLEAR);
+    packet_writer_write_uint8(level, GET_MAP_LAYER(LAYER_LIVING, 0));
+    packet_writer_write_uint8(level, 0);
+}
+
+/** Append one soft-FOW update to a production MAP2 test level. */
+static void map_actor_relocation_test_fow(packet_struct *level, int x, int y) {
+    packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6 | MAP2_MASK_FOW));
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 0);
+}
+
+/** Frame one complete, same-map, or continuation MAP2 test packet. */
+static packet_struct *map_actor_relocation_test_packet(uint8_t mapstat,
+                                                       uint8_t posx,
+                                                       uint8_t posy,
+                                                       uint16_t continuation,
+                                                       packet_struct *base,
+                                                       packet_struct *upper) {
+    packet_struct *packet = packet_new(0, 128, 128);
+    packet_writer_write_uint8(packet, mapstat);
+    if (mapstat != MAP_UPDATE_CMD_SAME && mapstat != MAP_UPDATE_CMD_PARTIAL) {
+        packet_writer_write_cstring(packet, "actor relocation test");
+        packet_writer_write_cstring(packet, "");
+        packet_writer_write_cstring(packet, "none");
+        packet_writer_write_uint8(packet, 0);
+        packet_writer_write_uint8(packet, 0);
+        packet_writer_write_cstring(packet, "");
+        packet_writer_write_cstring(packet, "");
+        packet_writer_write_cstring(packet, "");
+        if (mapstat == MAP_UPDATE_CMD_NEW) {
+            packet_writer_write_uint8(packet, (uint8_t)map_width);
+            packet_writer_write_uint8(packet, (uint8_t)map_height);
+        } else {
+            packet_writer_write_uint8(packet, MAP_UPDATE_TILE_MIN);
+            packet_writer_write_int8(packet, 0);
+            packet_writer_write_int8(packet, 0);
+            packet_writer_write_int8(packet, 0);
+        }
+    }
+    packet_writer_write_uint8(packet, posx);
+    packet_writer_write_uint8(packet, posy);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(packet, continuation);
+    packet_writer_write_uint8(packet, upper != NULL ? 2 : 1);
+    packet_writer_write_int8(packet, 0);
+    packet_writer_write_uint32(packet, base != NULL ? base->len : 0);
+    if (base != NULL) {
+        packet_writer_write_packet(packet, base);
+    }
+    if (upper != NULL) {
+        packet_writer_write_int8(packet, 1);
+        packet_writer_write_uint32(packet, upper->len);
+        packet_writer_write_packet(packet, upper);
+    }
+    return packet;
+}
+
+/** Send a generated packet through the normal decoder and release its writers. */
+static bool map_actor_relocation_test_send(uint8_t mapstat,
+                                           uint8_t posx,
+                                           uint8_t posy,
+                                           uint16_t continuation,
+                                           packet_struct *base,
+                                           packet_struct *upper) {
+    packet_struct *packet = map_actor_relocation_test_packet(
+        mapstat, posx, posy, continuation, base, upper);
+    bool valid = packet_writer_finish(packet);
+    if (valid) {
+        socket_command_map(packet->data, packet->len, 0);
+    } else {
+        fprintf(stderr,
+                "map actor relocation test: %s packet writer failed "
+                "(mapstat=%u continuation=%u)\n",
+                map_actor_relocation_test_case,
+                mapstat,
+                continuation);
+    }
+    packet_free(packet);
+    if (base != NULL) {
+        packet_free(base);
+    }
+    if (upper != NULL) {
+        packet_free(upper);
+    }
+    return valid;
+}
+
+/** Return one living record without creating test-only map state. */
+static map_cell_layer_record_t *map_actor_relocation_test_record(int depth, int x, int y) {
+    if (!map_select_level(depth, false)) {
+        return NULL;
+    }
+    return map_cell_layer_record(
+        MAP_CELL_GET_MIDDLE(x, y), GET_MAP_LAYER(LAYER_LIVING, 0), false);
+}
+
+/** Verify one actor pose and its interaction identity. */
+static bool map_actor_relocation_test_pose(int depth,
+                                           int x,
+                                           int y,
+                                           uint32_t actor_id,
+                                           uint8_t alpha,
+                                           bool authorized,
+                                           uint8_t quick_pos) {
+    map_cell_layer_record_t *record = map_actor_relocation_test_record(depth, x, y);
+    if (record == NULL || record->face != 4 || record->visibility_actor_id != actor_id ||
+        !record->visibility.initialized || record->visibility.alpha != alpha ||
+        record->visibility.authorized != authorized || record->quick_pos != quick_pos) {
+        fprintf(stderr,
+                "map actor relocation test: %s pose mismatch depth=%d x=%d y=%d "
+                "expected=(face=4 id=%" PRIu32 " alpha=%u authorized=%d quick=%u) "
+                "got=(face=%d id=%" PRIu32 " initialized=%d alpha=%u authorized=%d quick=%u)\n",
+                map_actor_relocation_test_case,
+                depth,
+                x,
+                y,
+                actor_id,
+                alpha,
+                authorized,
+                quick_pos,
+                record != NULL ? record->face : 0,
+                record != NULL ? record->visibility_actor_id : 0,
+                record != NULL && record->visibility.initialized,
+                record != NULL ? record->visibility.alpha : 0,
+                record != NULL && record->visibility.authorized,
+                record != NULL ? record->quick_pos : 0);
+        return false;
+    }
+    uint32_t interaction =
+        map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(x, y), 0)->target_object_count;
+    if (interaction != actor_id) {
+        fprintf(stderr,
+                "map actor relocation test: %s interaction mismatch depth=%d x=%d y=%d "
+                "expected=%" PRIu32 " got=%" PRIu32 "\n",
+                map_actor_relocation_test_case,
+                depth,
+                x,
+                y,
+                actor_id,
+                interaction);
+        return false;
+    }
+    return true;
+}
+
+/** Verify no drawable or interactive living pose remains on one tile. */
+static bool map_actor_relocation_test_absent(int depth, int x, int y) {
+    map_cell_layer_record_t *record = map_actor_relocation_test_record(depth, x, y);
+    map_cell_t *cell = MAP_CELL_GET_MIDDLE(x, y);
+    uint32_t interaction = map_cell_actor_record_read(cell, 0)->target_object_count;
+    uint8_t probe = map_cell_actor_record_read(cell, 0)->probe;
+    bool absent = (record == NULL || record->face == 0) && interaction == 0 && probe == 0;
+    if (!absent) {
+        fprintf(stderr,
+                "map actor relocation test: %s stale pose depth=%d x=%d y=%d "
+                "face=%d interaction=%" PRIu32 " probe=%u\n",
+                map_actor_relocation_test_case,
+                depth,
+                x,
+                y,
+                record != NULL ? record->face : 0,
+                interaction,
+                probe);
+    }
+    return absent;
+}
+
+/** Exercise the production painter and require its exact living-command count. */
+static bool map_actor_relocation_test_draw(SDL_Surface *surface, uint64_t living) {
+    map_benchmark_statistics_reset();
+    map_draw_map_gpu_auxiliary(surface);
+    map_benchmark_statistics_t statistics;
+    map_benchmark_statistics_get(&statistics);
+    bool success = statistics.map_draws == 1 && statistics.auxiliary_map_draws == 1 &&
+                   statistics.living_commands == living && statistics.render_failures == 0;
+    if (!success) {
+        fprintf(stderr,
+                "map actor relocation test: %s draw mismatch expected-living=%" PRIu64
+                " got-living=%" PRIu64 " draws=%" PRIu64 " auxiliary=%" PRIu64
+                " failures=%" PRIu64 "\n",
+                map_actor_relocation_test_case,
+                living,
+                statistics.living_commands,
+                statistics.map_draws,
+                statistics.auxiliary_map_draws,
+                statistics.render_failures);
+    }
+    return success;
+}
+
+/** Verify decoder-to-painter actor relocation and disappearance semantics. */
+bool widget_map_actor_relocation_test(void) {
+#define MAP_ACTOR_RELOCATION_CHECKPOINT()                                               \
+    do {                                                                                \
+        if (!success) {                                                                 \
+            fprintf(stderr, "map actor relocation test: %s failed\n",                  \
+                    map_actor_relocation_test_case);                                    \
+            goto done;                                                                  \
+        }                                                                               \
+    } while (0)
+
+    const int center = map_width - map_width / 2 - 1;
+    const uint8_t initial_position = (uint8_t)center;
+    bool success = true;
+    SDL_Surface *surface = SDL_CreateSurface(640, 480, SDL_PIXELFORMAT_RGBA32);
+    if (surface == NULL) {
+        return false;
+    }
+
+    map_actor_relocation_test_case = "linked-depth locality";
+    packet_struct *base = packet_new(0, 32, 32);
+    packet_struct *upper = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, center, center, 4, 0, 0, 0);
+    map_actor_relocation_test_actor(upper, center, center, 4, 0, 0, 0);
+    success &= map_actor_relocation_test_send(
+        MAP_UPDATE_CMD_NEW, initial_position, initial_position, 0, base, upper);
+    map_cell_layer_record_t *local = map_actor_relocation_test_record(0, center, center);
+    map_cell_layer_record_t *linked = map_actor_relocation_test_record(1, center, center);
+    success &= local != NULL && local->visibility_local_player &&
+               local->visibility.alpha == UINT8_MAX && linked != NULL &&
+               !linked->visibility_local_player && map_actor_relocation_test_draw(surface, 2);
+    map_state_transaction_begin(false);
+    map_clear_cell(center, center, false);
+    success &= map_actor_relocation_test_absent(0, center, center);
+    map_state_transaction_abort();
+    local = map_actor_relocation_test_record(0, center, center);
+    success &= local != NULL && local->face == 4 && local->visibility_local_player &&
+               local->visibility.alpha == UINT8_MAX && local->visibility.authorized;
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    map_actor_relocation_test_case = "local SAME scroll";
+    base = packet_new(0, 48, 48);
+    map_actor_relocation_test_actor(base, center, center, 4, 0, 0, 0);
+    map_actor_relocation_test_clear(base, center - 1, center);
+    success &= map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME,
+                                              initial_position + 1,
+                                              initial_position,
+                                              0,
+                                              base,
+                                              NULL);
+    local = map_actor_relocation_test_record(0, center, center);
+    success &= local != NULL && local->visibility_local_player &&
+               local->visibility.alpha == UINT8_MAX &&
+               map_actor_relocation_test_absent(0, center - 1, center) &&
+               map_actor_relocation_test_draw(surface, 1);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    map_actor_relocation_test_case = "local soft FOW";
+    base = packet_new(0, 16, 16);
+    map_actor_relocation_test_fow(base, center, center);
+    success &= map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME,
+                                              initial_position + 1,
+                                              initial_position,
+                                              0,
+                                              base,
+                                              NULL) &&
+               map_actor_relocation_test_absent(0, center, center) &&
+               map_actor_relocation_test_draw(surface, 0);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    map_actor_relocation_test_case = "local explicit clear";
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, center, center, 4, 0, 0, 0);
+    success &= map_actor_relocation_test_send(
+        MAP_UPDATE_CMD_NEW, initial_position, initial_position, 0, base, NULL);
+    base = packet_new(0, 16, 16);
+    map_actor_relocation_test_clear(base, center, center);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_absent(0, center, center);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    const uint32_t actor_id = UINT32_C(0x10203040);
+    int old_x = center - 2;
+    int new_x = center - 1;
+    map_actor_relocation_test_case = "CONNECTED actor relocation";
+    base = packet_new(0, 1, 1);
+    success &= map_actor_relocation_test_send(
+        MAP_UPDATE_CMD_NEW, initial_position, initial_position, 0, base, NULL);
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, old_x, center, 4, 0, actor_id, 80);
+    success &= map_actor_relocation_test_send(
+        MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL);
+    LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+    map_animate();
+    success &= map_actor_relocation_test_pose(0, old_x, center, actor_id, 128, true, 0);
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, new_x, center, 4, 0, actor_id, 80);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_CONNECTED, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_absent(0, old_x, center) &&
+               map_actor_relocation_test_pose(0, new_x, center, actor_id, 128, true, 0) &&
+               map_actor_relocation_test_draw(surface, 1);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    map_actor_relocation_test_case = "stable actor clear-before-add";
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, old_x, center, 4, 0, actor_id, 80);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_NEW, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_pose(
+                   0, old_x, center, actor_id, UINT8_MAX, true, 0);
+    base = packet_new(0, 48, 48);
+    map_actor_relocation_test_clear(base, old_x, center);
+    map_actor_relocation_test_actor(base, new_x, center, 4, 0, actor_id, 80);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_absent(0, old_x, center) &&
+               map_actor_relocation_test_pose(
+                   0, new_x, center, actor_id, UINT8_MAX, true, 0) &&
+               map_actor_relocation_test_draw(surface, 1);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    old_x = new_x;
+    new_x = center + 1;
+    map_actor_relocation_test_case = "stable actor add-before-clear multipart";
+    base = packet_new(0, 48, 48);
+    map_actor_relocation_test_actor(base, new_x, center, 4, 0x11, actor_id, 80);
+    map_actor_relocation_test_clear(base, old_x, center);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_absent(0, old_x, center) &&
+               map_actor_relocation_test_pose(
+                   0, new_x, center, actor_id, UINT8_MAX, true, 0x11);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    old_x = new_x;
+    new_x = center + 2;
+    map_actor_relocation_test_case = "stable actor multipart quick-pos change";
+    base = packet_new(0, 48, 48);
+    map_actor_relocation_test_clear(base, old_x, center);
+    map_actor_relocation_test_actor(base, new_x, center, 4, 0x12, actor_id, 80);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_absent(0, old_x, center) &&
+               map_actor_relocation_test_pose(
+                   0, new_x, center, actor_id, UINT8_MAX, true, 0x12);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    map_actor_relocation_test_case = "stable actor multipart reset";
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, new_x, center, 4, 0, actor_id, 80);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_pose(
+                   0, new_x, center, actor_id, UINT8_MAX, true, 0) &&
+               map_actor_relocation_test_draw(surface, 1);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    const uint32_t replacement_id = UINT32_C(0x50607080);
+    map_actor_relocation_test_case = "same-face different identity";
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, new_x, center, 4, 0, replacement_id, 75);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_pose(0, new_x, center, replacement_id, 0, true, 0) &&
+               map_actor_relocation_test_draw(surface, 0);
+    LastTick += MAP_VISIBILITY_FADE_DURATION_MS;
+    map_animate();
+    success &= map_actor_relocation_test_pose(
+                   0, new_x, center, replacement_id, UINT8_MAX, true, 0) &&
+               map_actor_relocation_test_draw(surface, 1);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    map_actor_relocation_test_case = "authorized disappearance midpoint";
+    base = packet_new(0, 16, 16);
+    map_actor_relocation_test_clear(base, new_x, center);
+    success &= map_actor_relocation_test_send(
+        MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL);
+    map_cell_layer_record_t *departed = map_actor_relocation_test_record(0, new_x, center);
+    success &= departed != NULL && departed->face == 4 && !departed->visibility.authorized &&
+               departed->visibility.alpha == UINT8_MAX &&
+               map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(new_x, center), 0)
+                       ->target_object_count == 0 &&
+               map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(new_x, center), 0)->probe == 0 &&
+               map_actor_relocation_test_draw(surface, 1);
+    LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+    map_animate();
+    departed = map_actor_relocation_test_record(0, new_x, center);
+    success &= departed != NULL && departed->visibility.alpha == 127 &&
+               map_actor_relocation_test_draw(surface, 1);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    int reentry_x = center + 3;
+    map_actor_relocation_test_case = "delayed same-identity reentry";
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, reentry_x, center, 4, 0, replacement_id, 75);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_absent(0, new_x, center) &&
+               map_actor_relocation_test_pose(0, reentry_x, center, replacement_id, 0, true, 0) &&
+               map_actor_relocation_test_draw(surface, 0);
+    LastTick += MAP_VISIBILITY_FADE_DURATION_MS;
+    map_animate();
+    success &= map_actor_relocation_test_pose(
+        0, reentry_x, center, replacement_id, UINT8_MAX, true, 0);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    map_actor_relocation_test_case = "authorized disappearance expiry";
+    base = packet_new(0, 16, 16);
+    map_actor_relocation_test_clear(base, reentry_x, center);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 0, base, NULL) &&
+               map_actor_relocation_test_draw(surface, 1);
+    LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+    map_animate();
+    departed = map_actor_relocation_test_record(0, reentry_x, center);
+    success &= departed != NULL && departed->visibility.alpha == 127 &&
+               map_actor_relocation_test_draw(surface, 1);
+    LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+    map_animate();
+    success &= map_actor_relocation_test_absent(0, reentry_x, center) &&
+               map_actor_relocation_test_draw(surface, 0);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+    const uint32_t continued_id = UINT32_C(0x90a0b0c0);
+    old_x = center - 2;
+    new_x = center + 2;
+    map_actor_relocation_test_case = "buffered continuation abort";
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, old_x, center, 4, 0, continued_id, 60);
+    success &= map_actor_relocation_test_send(
+        MAP_UPDATE_CMD_NEW, initial_position, initial_position, 0, base, NULL);
+    base = packet_new(0, 16, 16);
+    map_actor_relocation_test_clear(base, old_x, center);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_SAME, initial_position, initial_position, 1, base, NULL) &&
+               socket_command_map_buffered_generation_test_pending() &&
+               map_actor_relocation_test_pose(
+                   0, old_x, center, continued_id, UINT8_MAX, true, 0);
+    socket_command_map_abort_pending();
+    success &= !socket_command_map_buffered_generation_test_pending() &&
+               map_actor_relocation_test_pose(
+                   0, old_x, center, continued_id, UINT8_MAX, true, 0);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+    map_actor_relocation_test_case = "buffered continuation publication";
+    base = packet_new(0, 16, 16);
+    map_actor_relocation_test_clear(base, old_x, center);
+    success &= map_actor_relocation_test_send(
+        MAP_UPDATE_CMD_SAME, initial_position, initial_position, 1, base, NULL);
+    base = packet_new(0, 32, 32);
+    map_actor_relocation_test_actor(base, new_x, center, 4, 0, continued_id, 60);
+    success &= map_actor_relocation_test_send(
+                   MAP_UPDATE_CMD_PARTIAL, initial_position, initial_position, 1, base, NULL) &&
+               !socket_command_map_buffered_generation_test_pending() &&
+               map_actor_relocation_test_absent(0, old_x, center) &&
+               map_actor_relocation_test_pose(
+                   0, new_x, center, continued_id, UINT8_MAX, true, 0) &&
+               map_actor_relocation_test_draw(surface, 1);
+    MAP_ACTOR_RELOCATION_CHECKPOINT();
+
+done:
+    socket_command_map_abort_pending();
+    map_select_level(0, true);
+    SDL_DestroySurface(surface);
+#undef MAP_ACTOR_RELOCATION_CHECKPOINT
+    return success;
+}
+
 bool widget_map_projection_contract_test(void) {
     int saved_width = map_width;
     int saved_height = map_height;

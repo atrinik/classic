@@ -4165,9 +4165,16 @@ int gpu_player_view_main(int argc, char *argv[]) {
         map_benchmark_statistics_reset();
     }
 #ifdef ATRINIK_WIDGET_TESTS
-    if (manifest.visibility_fade_test && !widget_map_visibility_test()) {
-        fprintf(stderr, "gpu-player-view: visibility fade regression failed\n");
-        goto cleanup;
+    if (manifest.visibility_fade_test) {
+        bool actor_relocation = widget_map_actor_relocation_test();
+        /* The relocation suite intentionally replaces the complete published
+         * map. Restore the immutable fixture before the existing fade checks
+         * and every later retained-render or pixel comparison. */
+        socket_command_map(snapshot, snapshot_size, 0);
+        if (!actor_relocation || !widget_map_visibility_test()) {
+            fprintf(stderr, "gpu-player-view: visibility fade regression failed\n");
+            goto cleanup;
+        }
     }
     if (manifest.damage_animation || manifest.kill_animation) {
         widget_map_animation_test_begin();
