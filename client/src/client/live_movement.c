@@ -239,6 +239,9 @@ static bool capture_checkpoint_request(size_t index, uint64_t now, uint64_t gpu_
     checkpoint->publication = socket_command_map_publication_generation();
     checkpoint->gpu_publication = gpu_publication;
     checkpoint->game_time_valid = telemetry_game_time_seconds(&checkpoint->game_seconds);
+    fprintf(report, "{\"type\":\"capture_requested\",\"kind\":\"%s\","
+                    "\"frame_sequence\":%" PRIu64 ",\"elapsed_us\":%" PRIu64 "}\n",
+            index == 0 ? "initial" : "final", frames, elapsed_us());
     if (!live_movement_capture_request(checkpoint->job)) {
         terminal(false, "could not queue diagnostic capture");
         return false;
