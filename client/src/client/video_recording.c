@@ -46,6 +46,7 @@ static struct {
     uint64_t stop_tick;
     uint32_t final_count;
     uint32_t submitted;
+    uint32_t last_submitted_index;
     uint32_t dropped;
     char error[192];
 } recording;
@@ -294,6 +295,9 @@ void video_recording_stop(void) {
         if (recording.final_count > RECORD_MAX_FRAMES) {
             recording.final_count = RECORD_MAX_FRAMES;
         }
+        if (recording.submitted != 0U && recording.final_count <= recording.last_submitted_index) {
+            recording.final_count = recording.last_submitted_index + 1U;
+        }
         recording.stopping = true;
         SDL_SignalCondition(recording.condition);
         notice("Finalizing recording", false);
@@ -318,6 +322,7 @@ static void capture_complete(SDL_Surface *surface, void *userdata) {
             recording.queue[recording.count++] =
                 (recording_frame_t){surface, recording.pending_index};
             recording.submitted++;
+            recording.last_submitted_index = recording.pending_index;
             surface = NULL;
             SDL_SignalCondition(recording.condition);
         } else {
@@ -339,6 +344,7 @@ void video_recording_frame(bool playing, bool presented, uint64_t now_ms) {
         recording.count = 0;
         recording.ready = recording.stopping = recording.finished = false;
         recording.submitted = recording.dropped = recording.final_count = 0;
+        recording.last_submitted_index = 0;
         recording.error[0] = '\0';
         recording.mutex = SDL_CreateMutex();
         recording.condition = SDL_CreateCondition();
