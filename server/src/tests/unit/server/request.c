@@ -20,6 +20,7 @@
 #include <object.h>
 #include <player.h>
 #include <tod.h>
+#include <commands.h>
 #include <exit.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
@@ -1330,6 +1331,42 @@ START_TEST(test_new_and_connected_map_updates_synchronize_world_clock) {
 }
 END_TEST
 
+START_TEST(test_brynknot_east_seam_emits_valid_connected_map) {
+    mapstruct *west = ready_map_name("/shattered_islands/world_0_68", NULL, 0);
+    ck_assert_ptr_nonnull(west);
+    mapstruct *east = get_map_from_tiled(west, TILED_EAST);
+    ck_assert_ptr_nonnull(east);
+    ck_assert_str_eq(east->path, "/shattered_islands/world_1_68");
+    object *pl = player_get_dummy(NULL, NULL);
+    request_move_player(&pl, west, 23, 18);
+    socket_struct *cs = CONTR(pl)->cs;
+    char afternoon[] = "15";
+    command_settime(NULL, "settime", afternoon);
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[0], MAP_UPDATE_CMD_NEW);
+
+    request_move_player(&pl, east, 0, 18);
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[0], MAP_UPDATE_CMD_CONNECTED);
+    ck_assert_ptr_eq(CONTR(pl)->last_update, east);
+
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[0], MAP_UPDATE_CMD_SAME);
+}
+END_TEST
+
 START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     mapstruct *map = ready_map_name("/shattered_islands/world_4_85", NULL, 0);
     ck_assert_ptr_nonnull(map);
@@ -2072,6 +2109,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_invalid_request_preserves_existing_queue);
     tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
     tcase_add_test(tc_core, test_new_and_connected_map_updates_synchronize_world_clock);
+    tcase_add_test(tc_core, test_brynknot_east_seam_emits_valid_connected_map);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
     tcase_add_test(tc_core, test_local_player_remains_visible_without_disclosing_dark_actors);
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
