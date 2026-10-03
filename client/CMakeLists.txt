@@ -1024,6 +1024,7 @@ if (BUILD_TESTING)
 
     add_executable(client-map-visibility-tests
         src/tests/map_visibility.c
+        src/client/lighting_transfer.c
         src/client/map_visibility.c)
     atrinik_configure_target(client-map-visibility-tests)
     target_compile_definitions(client-map-visibility-tests PRIVATE SDL_DISABLE_OLD_NAMES)
@@ -1080,6 +1081,10 @@ if (BUILD_TESTING)
         map-overlay-widget-state
         map-overlay-elevated
         visibility-fade-centered
+        presentation-day
+        presentation-dusk
+        presentation-night
+        presentation-saturated
         brynknot-movement
         gpu-qualification-town-25x25
         gpu-ui-closure)

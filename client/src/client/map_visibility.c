@@ -44,11 +44,54 @@ uint16_t map_visibility_field_weight(int dx, int dy) {
 
 uint16_t map_visibility_add_player_radiance(uint16_t radiance, uint16_t weight) {
     /* MAP2 samples and lighting vertices are Q5.11.  The contract's raw
-     * player contribution is 640, which encodes exactly as 1024. */
+     * player contribution is 80, which encodes exactly as 128. */
     const uint32_t player_radiance_q5_11 = (MAP_VISIBILITY_PLAYER_RADIANCE * 8U) / 5U;
     uint32_t addition = (player_radiance_q5_11 * weight + MAP_VISIBILITY_FIELD_UNIT / 2U) /
                         MAP_VISIBILITY_FIELD_UNIT;
     return (uint16_t)MIN(UINT16_MAX, (uint32_t)radiance + addition);
+}
+
+uint16_t map_visibility_window_weight(int x, int y, int width, int height) {
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+        return 0;
+    }
+    int distance = MIN(MIN(x, width - 1 - x), MIN(y, height - 1 - y));
+    /* A two-tile feather is dark at the outer sample and reaches full light
+     * inside the overscan. The fourth-power midpoint compensates for the
+     * low-radiance tone curve, which otherwise makes a linear taper look like
+     * a bright ledge. Spatial interpolation supplies the intermediate values. */
+    return distance == 0 ? 0 : distance == 1 ? 16 : MAP_VISIBILITY_FIELD_UNIT;
+}
+
+uint16_t map_visibility_scale_radiance(uint16_t radiance, uint16_t weight) {
+    return (uint16_t)(((uint32_t)radiance * MIN(weight, MAP_VISIBILITY_FIELD_UNIT) +
+                       MAP_VISIBILITY_FIELD_UNIT / 2U) /
+                      MAP_VISIBILITY_FIELD_UNIT);
+}
+
+void map_visibility_apply_window_fade(int x, int y, int width, int height,
+                                      uint16_t *radiance, uint16_t rgb[3]) {
+    HARD_ASSERT(radiance != NULL);
+    HARD_ASSERT(rgb != NULL);
+    uint16_t weight = map_visibility_window_weight(x, y, width, height);
+    bool boundary = x <= 2 || y <= 2 || x >= width - 3 || y >= height - 3;
+    /* Above Q5.11 daylight the neutral tone response is already white. In
+     * the feather band only, preserve channel/scalar ratios while removing
+     * that invisible HDR headroom before attenuation. Otherwise a maximum
+     * wire sample remains saturated almost to the black boundary. Include
+     * the full-weight inner vertex so interpolation cannot bring headroom
+     * back into the feather. Interior radiance remains authoritative. */
+    if (boundary && *radiance > 2048) {
+        uint32_t scalar = *radiance;
+        for (size_t channel = 0; channel < 3; channel++) {
+            rgb[channel] = (uint16_t)(((uint32_t)rgb[channel] * 2048U + scalar / 2U) / scalar);
+        }
+        *radiance = 2048;
+    }
+    *radiance = map_visibility_scale_radiance(*radiance, weight);
+    for (size_t channel = 0; channel < 3; channel++) {
+        rgb[channel] = map_visibility_scale_radiance(rgb[channel], weight);
+    }
 }
 
 uint16_t map_visibility_memory_floor(uint16_t radiance) {

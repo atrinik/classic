@@ -1,5 +1,39 @@
 # Frozen renderer migration fixtures
 
+The `presentation-day`, `presentation-dusk`, and `presentation-night` fixtures
+exercise the normal MAP2 decoder and `map_draw_map()` compositor with the same
+17-by-17 floor, opaque center player, viewport, and assets. Only authoritative
+neutral radiance changes: Q5.11 2048, 128, and 0. The analytic gray floor and
+white player are generated test geometry, not game artwork. Regenerate all
+three closed manifests and their pinned inputs with
+`python3 tools/generate_night_presentation_fixtures.py`.
+
+Run `atrinik --gpu-player-view src/tests/fixtures/player_view/presentation-night.xml`
+from the client directory (and the corresponding day/dusk manifests). Set
+`ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY` to a task-owned directory to export
+the actual completed GPU frames. The large viewport exposes all four map
+boundaries for inspection of the two-tile lighting feather. The zero golden
+hashes request measured evidence; they do not claim cross-backend approval.
+Check exported initial captures with
+`python3 tools/verify_night_presentation.py --day DAY.png --dusk DUSK.png --night NIGHT.png`.
+This rejects color contamination, missing or incorrectly lit player pixels,
+and day/night changes that fail to darken the fixed world-only rectangle
+`[350,240)..[701,401)`. The production captures include the HUD, so the checker
+uses coordinates from the pinned layout, never a color-based exclusion mask.
+It requires the
+actual completed GPU captures; manifest validation alone cannot pass it.
+Add `--saturated SATURATED.png` to compare three exposed boundary profiles
+against daylight (the inventory covers the fourth). A difference above two
+sRGB codes fails; this catches a steep saturated edge despite successful
+rendering and capture.
+
+The `presentation-saturated` companion uses Q5.11 65535 on every tile and
+120-pixel-tall colored structural sprites one tile inside each of the four
+edges. It exposes saturation in the tone curve and verifies that structural
+sprites use their owning floor sample instead of changing brightness with
+screen height. It is deliberately a stress diagnostic; a zero golden hash
+does not establish that the brightness taper has passed visual review.
+
 These XML manifests preserve the pre-cutover renderer's viewport, logical map
 size, lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
 MAP command, and every image by SHA-256. They are immutable inputs for schema
@@ -276,11 +310,24 @@ rejection avoids mask allocation when no actor is occluded.
 `tools/generate_living_outline_fixtures.py` recreates every snapshot.
 
 The centered visibility-fade scene places authoritative item, living, and
-effect records on the MAP2 player cell. Its normal 320-by-240 player-view run
+effect records on the MAP2 player cell. Its normal 1024-by-640 player-view run
 advances the presentation clock and asserts that current records remain at
 full alpha, while the local player cannot enter a presentation fade. It then
 expires one revoked item to its zero-alpha generation tombstone and verifies
 that authoritative re-entry interpolates from zero instead of snapping opaque.
+Its GPU manifest uses `visibility-fade-retained.map2.hex`, which preserves the
+center records and adds 168 static floor neighbors within the same 13-by-13
+wire window. The subsequent retained-cohort insertion/deletion check must reuse
+actual unchanged commands; the original single-cell scene had none and could
+never satisfy that assertion. The original `visibility-fade-centered.map2.hex`
+remains unchanged as historical input. Its archived software pixel hash remains
+in the manifest's Git history and is not asserted for the expanded scene.
+The viewport leaves the center world cell exposed within the real HUD layout;
+the former 320-by-240 viewport allowed HUD panels to obscure every changed
+sprite. The logical look size remains 9-by-9, which negotiates the fixture's
+13-by-13 wire window including two overscan tiles on each side. Deletion must
+still change the actual completed-frame hash, and restoring the settled
+opaque records must reproduce the initial hash.
 
 The remembered-floor smooth and discrete scenes first authorize a zero-radiance
 floor beside a zero-radiance local actor, then soft-clear only that floor cell.

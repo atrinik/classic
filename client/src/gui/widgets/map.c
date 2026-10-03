@@ -292,6 +292,7 @@ static void
 map_cell_store_set_fow(map_cell_store_t *store, size_t index, bool fow, bool structural_fow);
 static void map_mark_stretch_dirty(int x, int y);
 static int map_level_support_height(int x, int y, int depth);
+static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, int object_layer);
 
 static void *map_cell_record_allocate(size_t size) {
     void *record = xcalloc(1, size);
@@ -872,6 +873,42 @@ bool widget_map_sparse_state_test(void) {
     map_cell_store_trim_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index);
     success = success && map_cell_retained_bytes == before_trim &&
               stores[MAP2_DEPTH_INDEX(0)]->headers[trim_index].occupancy == 0;
+
+    /* Expiry must clear only the visual payload, not the sparse record's
+     * lookup key or next pointer. Exercise tail, middle and head records
+     * with remembered floor geometry interleaved in the same cell. */
+    map_cell_t *expired_owner = map_cell_store_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index, true);
+    const int expiry_layers[] = {LAYER_ITEM, LAYER_LIVING, LAYER_EFFECT};
+    map_cell_layer_record_t *expiry_records[arraysize(expiry_layers)];
+    for (size_t index = 0; index < arraysize(expiry_layers); index++) {
+        map_cell_layer_record_t *record =
+            map_cell_layer_record(expired_owner, GET_MAP_LAYER(expiry_layers[index], 0), true);
+        record->face = (uint16_t)(index + 2);
+        record->visibility.initialized = true;
+        expiry_records[index] = record;
+        if (index == 0) {
+            map_cell_layer_record(expired_owner, GET_MAP_LAYER(LAYER_FLOOR, 0), true)->face = 1;
+        }
+    }
+    uint64_t before_expiry = map_cell_retained_bytes;
+    for (size_t index = 0; index < arraysize(expiry_layers); index++) {
+        map_clear_expired_visibility_layer(expired_owner, 0, expiry_layers[index]);
+        map_cell_layer_record_t *record =
+            map_cell_layer_record(expired_owner, GET_MAP_LAYER(expiry_layers[index], 0), false);
+        success = success && record == expiry_records[index] && record->face == 0 &&
+                  record->visibility.initialized && !record->visibility.authorized &&
+                  record->visibility.alpha == 0 && map_cell_retained_bytes == before_expiry;
+        for (size_t other = 0; other < arraysize(expiry_layers); other++) {
+            success = success &&
+                      map_cell_layer_record(expired_owner,
+                                            GET_MAP_LAYER(expiry_layers[other], 0), false) ==
+                          expiry_records[other];
+        }
+        success = success &&
+                  map_cell_layer_record_read(expired_owner, GET_MAP_LAYER(LAYER_FLOOR, 0))->face == 1;
+    }
+    map_cell_store_clear_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index);
+    success = success && map_cell_retained_bytes == before_trim;
 
     for (size_t level = 0; level < MAP2_LEVELS; level++) {
         map_cell_store_destroy(stores[level]);
@@ -2580,9 +2617,11 @@ static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, 
         /* Preserve a zero-alpha tombstone for this cache generation.  A later
          * authoritative reappearance can then fade in from zero instead of
          * being mistaken for the initial complete-snapshot baseline. */
-        map_visibility_fade_t visibility = record->visibility;
-        memset(record, 0, sizeof(*record));
-        record->visibility = visibility;
+        *record = (map_cell_layer_record_t){
+            .next = record->next,
+            .layer = record->layer,
+            .visibility = record->visibility,
+        };
     }
 }
 
@@ -3948,6 +3987,11 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
         if (data->cell->fow && remembered) {
             radiance = map_visibility_memory_floor(radiance);
+        } else if (data->world_surface && data->primary_level && data->depth == 0 &&
+                   !data->cell->fow) {
+            radiance = map_visibility_add_player_radiance(
+                radiance,
+                map_visibility_field_weight(data->x - data->midx, data->y - data->midy));
         }
         effects.dark_level =
             (UINT8_MAX - lighting_radiance_to_level(radiance)) *
@@ -5125,6 +5169,11 @@ bool map_lighting_diagnostic_get(int depth,
         }
     }
 
+    if (diagnostic->working_available && smooth_lighting) {
+        map_visibility_apply_window_fade(x, y, map_width, map_height,
+                                          &diagnostic->working_scalar, diagnostic->working_rgb);
+    }
+
     if (!diagnostic->working_available) {
         diagnostic->reasons |= MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE;
     } else if (diagnostic->working_scalar == 0) {
@@ -5795,6 +5844,12 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
             rgb[channel] = map_visibility_add_player_radiance(rgb[channel], weight);
         }
     }
+    /* Nearest-known light borrowing must not extend a bright field to the
+     * clipped wire-window boundary. Feather the completed presentation sample,
+     * including the local field and remembered floor, before interpolation. */
+    map_visibility_apply_window_fade(x - (data->midx - map_width / 2),
+                                      y - (data->midy - map_height / 2),
+                                      map_width, map_height, &vertex.scalar, rgb);
     vertex.red = rgb[0];
     vertex.green = rgb[1];
     vertex.blue = rgb[2];
@@ -8608,6 +8663,19 @@ bool widget_map_visibility_test(void) {
                         item->visibility.alpha);
                 success = false;
             }
+            /* The retained deletion/restore comparison starts from a settled
+             * opaque scene. Finish the real fade through the normal animator
+             * after checking its midpoint; never force the endpoint alpha. */
+            LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
+            map_animate();
+            item = map_cell_layer_record(center, item_layer, false);
+            if (item == NULL || item->face != face || !item->visibility.authorized ||
+                item->visibility.alpha != UINT8_MAX ||
+                item->visibility.target_alpha != UINT8_MAX) {
+                fprintf(stderr,
+                        "map visibility test: re-entry did not settle opaque at 250 ms\n");
+                success = false;
+            }
         }
     }
 
@@ -8758,12 +8826,66 @@ bool widget_map_projection_contract_test(void) {
                           remembered_vertex.blue == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
 
                 cell->fow = false;
+                remembered_context.commands_num = 0;
+                draw_map_object(surface, &remembered);
+                success = success && remembered_context.commands_num == 1 &&
+                          remembered_context.commands[0].effects.dark_level ==
+                              (UINT8_MAX - lighting_radiance_to_level(
+                                               map_visibility_add_player_radiance(0, 256))) *
+                                  DARK_LEVELS / UINT8_MAX;
                 lighting_vertex_t visible_vertex =
                     map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
                 success = success &&
                           visible_vertex.scalar ==
                               map_visibility_add_player_radiance(
                                   0, map_visibility_field_weight(0, 0));
+
+                /* Production light vertices must feather each side even when
+                 * authoritative daylight or colored samples reach the window
+                 * boundary. Neither the cache nor the interior is attenuated. */
+                const int edge_offsets[4][2] = {
+                    {-map_width / 2, 0}, {map_width / 2, 0},
+                    {0, -map_height / 2}, {0, map_height / 2},
+                };
+                for (size_t side = 0; side < arraysize(edge_offsets); side++) {
+                    for (int step = 0; step <= 2; step++) {
+                        int dx = edge_offsets[side][0];
+                        int dy = edge_offsets[side][1];
+                        dx += dx < 0 ? step : dx > 0 ? -step : 0;
+                        dy += dy < 0 ? step : dy > 0 ? -step : 0;
+                        int sample_x = lighting.midx + dx;
+                        int sample_y = lighting.midy + dy;
+                        map_cell_t *edge_cell = MAP_CELL_GET_MUTABLE(sample_x, sample_y);
+                        map_cell_light_record_t *edge_light =
+                            map_cell_light_record(edge_cell, 0, true);
+                        edge_light->known = 1;
+                        edge_light->radiance = 2048;
+                        edge_light->rgb_explicit = 1;
+                        edge_light->rgb_radiance[0] = 2048;
+                        edge_light->rgb_radiance[1] = 1024;
+                        edge_light->rgb_radiance[2] = 512;
+                        lighting_vertex_t edge =
+                            map_lighting_vertex(surface, &lighting, sample_x, sample_y);
+                        uint16_t weight = step == 0 ? 0 : step == 1 ? 16 : 256;
+                        success = success && edge.scalar == 2048 * weight / 256 &&
+                                  edge.red == 2048 * weight / 256 &&
+                                  edge.green == 1024 * weight / 256 &&
+                                  edge.blue == 512 * weight / 256 &&
+                                  edge_light->radiance == 2048 &&
+                                  edge_light->rgb_radiance[0] == 2048;
+                        edge_light->radiance = UINT16_MAX;
+                        edge_light->rgb_radiance[0] = UINT16_MAX;
+                        edge_light->rgb_radiance[1] = 32768;
+                        edge_light->rgb_radiance[2] = 16384;
+                        edge = map_lighting_vertex(surface, &lighting, sample_x, sample_y);
+                        success = success && edge.scalar == 2048 * weight / 256 &&
+                                  edge.red == 2048 * weight / 256 &&
+                                  edge.green == 1024 * weight / 256 &&
+                                  edge.blue == 512 * weight / 256 &&
+                                  edge_light->radiance == UINT16_MAX &&
+                                  edge_light->rgb_radiance[0] == UINT16_MAX;
+                    }
+                }
 
                 cell->fow = saved_fow;
                 light->radiance = saved_radiance;

@@ -14,10 +14,10 @@
 #define MAP_VISIBILITY_FIELD_UNIT UINT16_C(256)
 #define MAP_VISIBILITY_INNER_RADIUS_SQUARED UINT16_C(16)
 #define MAP_VISIBILITY_OUTER_RADIUS_SQUARED UINT16_C(64)
-#define MAP_VISIBILITY_MEMORY_FLOOR_RAW UINT16_C(512)
-/* Q5.11 round-half-up encoding of the 512-raw remembered-world floor. */
-#define MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE UINT16_C(819)
-#define MAP_VISIBILITY_PLAYER_RADIANCE UINT16_C(640)
+#define MAP_VISIBILITY_MEMORY_FLOOR_RAW UINT16_C(40)
+/* Q5.11 encoding of the 40-raw remembered-world floor. */
+#define MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE UINT16_C(64)
+#define MAP_VISIBILITY_PLAYER_RADIANCE UINT16_C(80)
 #define MAP_VISIBILITY_FADE_DURATION_MS UINT32_C(250)
 #define MAP_VISIBILITY_INTERACTION_CUTOFF UINT8_C(192)
 
@@ -36,6 +36,16 @@ uint16_t map_visibility_field_weight(int dx, int dy);
 
 /** Return the fixed-point radial field weight for an exact squared distance. */
 uint16_t map_visibility_field_weight_squared(uint32_t distance_squared);
+
+/** Presentation-only attenuation at the edge of the negotiated map window. */
+uint16_t map_visibility_window_weight(int x, int y, int width, int height);
+
+/** Apply a Q0.8 presentation weight without modifying the authoritative cache. */
+uint16_t map_visibility_scale_radiance(uint16_t radiance, uint16_t weight);
+
+/** Feather display samples, normalizing HDR only inside the boundary band. */
+void map_visibility_apply_window_fade(int x, int y, int width, int height,
+                                      uint16_t *radiance, uint16_t rgb[3]);
 
 /** Add the presentation-only player contribution to one radiance sample. */
 uint16_t map_visibility_add_player_radiance(uint16_t radiance, uint16_t weight);

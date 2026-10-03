@@ -39,3 +39,14 @@ Use `ctest --preset PRESET --schedule-random --repeat until-fail:COUNT` for a
 stress pass. A failure's working files are attributable at
 `build/PRESET/server-test-runtimes/TEST-NAME`; CTest stdout/stderr remains in
 `Testing/Temporary/LastTest.log`.
+
+For a runtime idle/hang reproduction at Brynknot, the offline
+`--provision_scenario` interface accepts `--provision_preset brynknot-idle`.
+Use the wrapper's scenario workflow with an isolated state and protected password
+file. This preset saves a normal player and savebed at
+`/shattered_islands/world_0_70` `(20,8)` through `player_provision_scenario()`,
+adds no extra inventory item, and preserves the world's current clock. It rejects
+existing account/player destinations. `basic-player` retains its empty character
+record and normal tutorial first-login behavior; lighting presets retain their
+explicit clock and lamp setup. Provisioning opens no listener or live command
+channel and must not be run against an active server's state.
