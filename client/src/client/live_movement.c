@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define LIVE_REPORT_MAX_BYTES (UINT64_C(127) * 1024 * 1024)
 #define LIVE_REPORT_MAX_FRAMES UINT64_C(900000)
@@ -113,8 +115,14 @@ bool live_movement_initialize(const char *route_path, const char *report_path) {
         fprintf(stderr, "live movement: %s\n", error);
         return false;
     }
-    report = fopen(report_path, "wx");
+    int output_flags = O_WRONLY | O_CREAT | O_EXCL;
+#ifdef WIN32
+    output_flags |= O_BINARY;
+#endif
+    int output_fd = open(report_path, output_flags, 0600);
+    report = output_fd >= 0 ? fdopen(output_fd, "wb") : NULL;
     if (report == NULL) {
+        if (output_fd >= 0) close(output_fd);
         fprintf(stderr, "live movement cannot exclusively create its report\n");
         live_movement_route_free(route);
         route = NULL;
