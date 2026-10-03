@@ -48,14 +48,21 @@ static unsigned int readback_requests;
 static gpu_renderer_readback_callback_t readback_complete;
 static gpu_renderer_readback_cancel_callback_t readback_cancel;
 static void *readback_userdata;
+static SDL_AtomicInt input_blocked;
+static SDL_AtomicInt input_gate;
 
 static size_t SDLCALL fake_input_write(void *userdata,
                                        const void *ptr,
                                        size_t size,
                                        SDL_IOStatus *status) {
     fake_process_state_t *state = userdata;
+    if (state->wire_size >= 4U && SDL_GetAtomicInt(&input_gate) != 0) {
+        SDL_SetAtomicInt(&input_blocked, 1);
+        *status = SDL_IO_STATUS_NOT_READY;
+        return 0;
+    }
     if (size > sizeof(state->wire) - state->wire_size) {
-        *status = SDL_IO_STATUS_WRITEONLY;
+        *status = SDL_IO_STATUS_ERROR;
         return 0;
     }
     memcpy(state->wire + state->wire_size, ptr, size);
@@ -207,6 +214,8 @@ static void reset_fakes(void) {
     readback_complete = NULL;
     readback_cancel = NULL;
     readback_userdata = NULL;
+    SDL_SetAtomicInt(&input_blocked, 0);
+    SDL_SetAtomicInt(&input_gate, 0);
 }
 
 static void consume_message(const char *fragment, bool expected_failed) {
@@ -223,6 +232,13 @@ static void wait_for_readback(unsigned int expected, uint64_t now_ms) {
         SDL_Delay(1);
     }
     TEST_CHECK(readback_requests == expected);
+}
+
+static void wait_for_blocked_input(void) {
+    for (unsigned int i = 0; i < 1000U && SDL_GetAtomicInt(&input_blocked) == 0; i++) {
+        SDL_Delay(1);
+    }
+    TEST_CHECK(SDL_GetAtomicInt(&input_blocked) != 0);
 }
 
 static void finish_readback(unsigned char seed) {
@@ -338,11 +354,57 @@ static void test_bounded_pending_and_shutdown_callback(void) {
     consume_message("Recording canceled", false);
 }
 
+static void test_encoder_backpressure_bounds_queue(void) {
+    reset_fakes();
+    SDL_SetAtomicInt(&input_gate, 1);
+    TEST_CHECK(video_recording_start("/tmp/backpressure.avi"));
+    uint64_t epoch = SDL_GetTicks();
+    wait_for_readback(1U, epoch);
+    finish_readback(0x30U);
+    wait_for_blocked_input();
+
+    wait_for_readback(2U, epoch + 100U);
+    finish_readback(0x40U);
+    wait_for_readback(3U, epoch + 250U);
+    finish_readback(0x50U);
+    for (unsigned int i = 6U; i <= 1000U; i++) {
+        video_recording_frame(true, true, epoch + (uint64_t)i * 50U);
+    }
+    TEST_CHECK(readback_requests == 3U);
+
+    SDL_SetAtomicInt(&input_gate, 0);
+    video_recording_stop();
+    video_recording_shutdown();
+    TEST_CHECK(process_state.destroyed && !process_state.killed);
+    TEST_CHECK(process_state.wire_size == 4U + 3U * 28U + 8U);
+    TEST_CHECK(memcmp(process_state.wire, "AVR1FRAM", 8U) == 0);
+    TEST_CHECK(get_u32(process_state.wire + 8U) == 0U);
+    TEST_CHECK(memcmp(process_state.wire + 32U, "FRAM", 4U) == 0);
+    TEST_CHECK(get_u32(process_state.wire + 36U) == 2U);
+    TEST_CHECK(memcmp(process_state.wire + 60U, "FRAM", 4U) == 0);
+    TEST_CHECK(get_u32(process_state.wire + 64U) == 5U);
+    TEST_CHECK(memcmp(process_state.wire + 88U, "STOP", 4U) == 0);
+    TEST_CHECK(get_u32(process_state.wire + 92U) >= 6U);
+    consume_message("Recording saved", false);
+}
+
 static void test_capture_failures(void) {
+    reset_fakes();
+    process_state.create_failed = true;
+    TEST_CHECK(video_recording_start("/tmp/process-create.avi"));
+    uint64_t now = SDL_GetTicks();
+    for (unsigned int i = 0; i < 100U; i++) {
+        video_recording_frame(true, true, now);
+        SDL_Delay(1);
+    }
+    video_recording_shutdown();
+    consume_message("Encoder could not", true);
+    process_state.create_failed = false;
+
     reset_fakes();
     output_width = 4097;
     TEST_CHECK(video_recording_start("/tmp/oversize.avi"));
-    uint64_t now = SDL_GetTicks();
+    now = SDL_GetTicks();
     for (unsigned int i = 0; i < 100U; i++) {
         video_recording_frame(true, true, now);
         SDL_Delay(1);
@@ -378,6 +440,7 @@ int main(void) {
     test_validation_and_cancel();
     test_protocol_timestamps_and_isolation();
     test_bounded_pending_and_shutdown_callback();
+    test_encoder_backpressure_bounds_queue();
     test_capture_failures();
     video_recording_shutdown();
     SDL_Quit();
