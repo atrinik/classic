@@ -321,6 +321,12 @@ static bool clioptions_option_content_benchmark(const char *arg, char **errmsg) 
     return true;
 }
 
+/* Route stdout is a strict framed XML artifact; retain diagnostics separately. */
+static void content_route_log_stderr(const char *message) {
+    fputs(message, stderr);
+    fflush(stderr);
+}
+
 static const char *clioptions_option_content_benchmark_route_desc =
     "Exports the fixed offline authoritative brynknot-v1 walking route, then exits.";
 static bool clioptions_option_content_benchmark_route(const char *arg, char **errmsg) {
@@ -331,6 +337,7 @@ static bool clioptions_option_content_benchmark_route(const char *arg, char **er
     }
     settings.content_benchmark = true;
     snprintf(VS(settings.content_benchmark_maps), "%s", arg);
+    logger_set_print_func(content_route_log_stderr);
     return true;
 }
 
