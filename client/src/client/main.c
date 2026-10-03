@@ -472,9 +472,7 @@ static presentation_clock_t presentation_clock_start(uint32_t wall_tick, bool ac
 }
 
 /** Advance only the interval that began while presentation was active. */
-static void presentation_clock_step(presentation_clock_t *clock,
-                                    uint32_t wall_tick,
-                                    bool active) {
+static void presentation_clock_step(presentation_clock_t *clock, uint32_t wall_tick, bool active) {
     if (clock->active) {
         clock->tick += wall_tick - clock->wall_tick;
     }
@@ -629,9 +627,7 @@ static bool clioptions_option_connect_password_file(const char *arg, char **errm
         return false;
     }
     if (permissive_mode) {
-        *errmsg = xstrdup(
-            "Connect password file must be readable only by the owner (mode 0600)"
-        );
+        *errmsg = xstrdup("Connect password file must be readable only by the owner (mode 0600)");
         OPENSSL_cleanse(password, sizeof(password));
         return false;
     }
@@ -749,8 +745,7 @@ static const char *clioptions_option_game_news_url_desc =
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_game_news_url(const char *arg, char **errmsg) {
     free(clioption_settings.game_news_url);
-    clioption_settings.game_news_url =
-        strcasecmp(arg, "off") == 0 ? NULL : xstrdup(arg);
+    clioption_settings.game_news_url = strcasecmp(arg, "off") == 0 ? NULL : xstrdup(arg);
     return true;
 }
 
@@ -809,8 +804,8 @@ static bool clioptions_option_live_final_capture(const char *arg, char **errmsg)
 }
 
 static bool clioptions_option_live_lighting_phase(const char *arg, char **errmsg) {
-    if (live_lighting_phase != NULL ||
-        (strcmp(arg, "day") != 0 && strcmp(arg, "new-moon") != 0 && strcmp(arg, "full-moon") != 0)) {
+    if (live_lighting_phase != NULL || (strcmp(arg, "day") != 0 && strcmp(arg, "new-moon") != 0 &&
+                                        strcmp(arg, "full-moon") != 0)) {
         *errmsg = xstrdup("Lighting phase must be day, new-moon, or full-moon");
         return false;
     }
@@ -1087,24 +1082,31 @@ int main(int argc, char *argv[]) {
     CLIOPTIONS_CREATE(cli, reconnect, "Reconnect automatically");
     cli = clioptions_create("live-movement-route", clioptions_option_live_route);
     clioptions_enable_argument(cli);
-    clioptions_set_description(cli, "Run a bounded live movement route",
+    clioptions_set_description(cli,
+                               "Run a bounded live movement route",
                                "Execute an isolated route through normal movement commands.");
     cli = clioptions_create("live-movement-report", clioptions_option_live_report);
     clioptions_enable_argument(cli);
-    clioptions_set_description(cli, "Exclusive JSONL report for the live route",
+    clioptions_set_description(cli,
+                               "Exclusive JSONL report for the live route",
                                "Create a new report of observed arrivals and frame timings.");
-    cli = clioptions_create("live-movement-initial-capture", clioptions_option_live_initial_capture);
+    cli =
+        clioptions_create("live-movement-initial-capture", clioptions_option_live_initial_capture);
     clioptions_enable_argument(cli);
-    clioptions_set_description(cli, "Initial live route diagnostic PNG",
+    clioptions_set_description(cli,
+                               "Initial live route diagnostic PNG",
                                "Pair with a final capture in the exclusive report directory.");
     cli = clioptions_create("live-movement-final-capture", clioptions_option_live_final_capture);
     clioptions_enable_argument(cli);
-    clioptions_set_description(cli, "Final live route diagnostic PNG",
+    clioptions_set_description(cli,
+                               "Final live route diagnostic PNG",
                                "Pair with an initial capture in the exclusive report directory.");
     cli = clioptions_create("live-movement-lighting-phase", clioptions_option_live_lighting_phase);
     clioptions_enable_argument(cli);
-    clioptions_set_description(cli, "Fixed day, new-moon, or full-moon diagnostic",
-                               "Requires captures and normal server permission for clock commands.");
+    clioptions_set_description(
+        cli,
+        "Fixed day, new-moon, or full-moon diagnostic",
+        "Requires captures and normal server permission for clock commands.");
 
     memset(&clioption_settings, 0, sizeof(clioption_settings));
     client_stun_config_init(&clioption_settings.stun);

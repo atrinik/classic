@@ -899,13 +899,13 @@ bool widget_map_sparse_state_test(void) {
                   record->visibility.initialized && !record->visibility.authorized &&
                   record->visibility.alpha == 0 && map_cell_retained_bytes == before_expiry;
         for (size_t other = 0; other < arraysize(expiry_layers); other++) {
-            success = success &&
-                      map_cell_layer_record(expired_owner,
-                                            GET_MAP_LAYER(expiry_layers[other], 0), false) ==
-                          expiry_records[other];
+            success = success && map_cell_layer_record(expired_owner,
+                                                       GET_MAP_LAYER(expiry_layers[other], 0),
+                                                       false) == expiry_records[other];
         }
-        success = success &&
-                  map_cell_layer_record_read(expired_owner, GET_MAP_LAYER(LAYER_FLOOR, 0))->face == 1;
+        success =
+            success &&
+            map_cell_layer_record_read(expired_owner, GET_MAP_LAYER(LAYER_FLOOR, 0))->face == 1;
     }
     map_cell_store_clear_slot(stores[MAP2_DEPTH_INDEX(0)], trim_index);
     success = success && map_cell_retained_bytes == before_trim;
@@ -3832,12 +3832,16 @@ static bool map_object_uses_projected_lighting(const map_render_data_t *data,
     return data->ground_pass || record->roof;
 }
 
-static void map_lighting_radiance(int x, int y, const map_cell_t *cell,
-                                  uint8_t sub_layer, uint16_t *scalar, uint16_t rgb[3]);
+static void map_lighting_radiance(int x,
+                                  int y,
+                                  const map_cell_t *cell,
+                                  uint8_t sub_layer,
+                                  uint16_t *scalar,
+                                  uint16_t rgb[3]);
 
 /** Historical scalar storage is not current lighting authority after a soft clear. */
-static uint16_t map_remembered_discrete_radiance(int x, int y, const map_cell_t *cell,
-                                                uint8_t sub_layer) {
+static uint16_t
+map_remembered_discrete_radiance(int x, int y, const map_cell_t *cell, uint8_t sub_layer) {
     const map_cell_light_record_t *light = map_cell_light_record_read(cell, sub_layer);
     uint16_t radiance = light->radiance;
     if (!light->known) {
@@ -4001,8 +4005,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
         uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
         if (data->cell->fow && remembered) {
-            radiance = map_remembered_discrete_radiance(
-                data->x, data->y, data->cell, data->sub_layer);
+            radiance =
+                map_remembered_discrete_radiance(data->x, data->y, data->cell, data->sub_layer);
         } else if (data->world_surface && data->primary_level && data->depth == 0 &&
                    !data->cell->fow) {
             radiance = map_visibility_add_player_radiance(
@@ -4010,8 +4014,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
                 map_visibility_field_weight(data->x - data->midx, data->y - data->midy));
         }
         effects.dark_level =
-            (UINT8_MAX - lighting_radiance_to_level(radiance)) *
-            DARK_LEVELS / UINT8_MAX;
+            (UINT8_MAX - lighting_radiance_to_level(radiance)) * DARK_LEVELS / UINT8_MAX;
     }
 
     effects.alpha = map_cell_layer_record_read(data->cell, map_layer)->alpha;
@@ -5103,9 +5106,9 @@ bool map_lighting_diagnostic_get(int depth,
     diagnostic->smooth_lighting = smooth_lighting;
 
     if (map_state_transaction.active || map_light_keyframe_transaction.active || map_width <= 0 ||
-        map_height <= 0 ||
-        depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || x < 0 || x >= map_width || y < 0 ||
-        y >= map_height || sub_layer < 0 || sub_layer >= NUM_SUB_LAYERS) {
+        map_height <= 0 || depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || x < 0 ||
+        x >= map_width || y < 0 || y >= map_height || sub_layer < 0 ||
+        sub_layer >= NUM_SUB_LAYERS) {
         return false;
     }
 
@@ -5186,8 +5189,12 @@ bool map_lighting_diagnostic_get(int depth,
     }
 
     if (diagnostic->working_available && smooth_lighting) {
-        map_visibility_apply_window_fade(x, y, map_width, map_height,
-                                          &diagnostic->working_scalar, diagnostic->working_rgb);
+        map_visibility_apply_window_fade(x,
+                                         y,
+                                         map_width,
+                                         map_height,
+                                         &diagnostic->working_scalar,
+                                         diagnostic->working_rgb);
     }
 
     if (!diagnostic->working_available) {
@@ -5598,14 +5605,15 @@ bool widget_map_temporal_lighting_test(void) {
     /* Current authoritative samples keep their established discrete transfer. */
     historical->known = 1;
     historical->radiance = 2048;
-    success = success &&
-              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 2048;
+    success =
+        success && map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 2048;
     historical->known = 0;
     historical->radiance = UINT16_MAX;
     light->known = 0;
     success = success &&
               map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) ==
-                  MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE && historical->radiance == UINT16_MAX;
+                  MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+              historical->radiance == UINT16_MAX;
     light->known = 1;
 
     uint64_t revision = level_lighting_revision[current_level_index];
@@ -5754,7 +5762,8 @@ bool widget_map_lighting_diagnostic_test(void) {
               diagnostic.working_scalar == 0 &&
               (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_STALE) != 0;
 
-    success = success && map_light_keyframe_transaction_begin(8, 100, 200, MAP2_LIGHT_KEYFRAME_CONTINUOUS) &&
+    success = success &&
+              map_light_keyframe_transaction_begin(8, 100, 200, MAP2_LIGHT_KEYFRAME_CONTINUOUS) &&
               !map_lighting_diagnostic_get(0, 8, 8, 0, false, &diagnostic);
     map_light_keyframe_transaction_abort();
 
@@ -5779,22 +5788,21 @@ bool widget_map_lighting_diagnostic_test(void) {
               diagnostic.working_scalar == 200 &&
               (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED) != 0;
 
-    const uint32_t all_reasons = MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO |
-                                 MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE |
-                                 MAP_LIGHTING_DIAGNOSTIC_REASON_STALE |
-                                 MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED |
-                                 MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED |
-                                 MAP_LIGHTING_DIAGNOSTIC_REASON_BORROWED;
+    const uint32_t all_reasons =
+        MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO | MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE |
+        MAP_LIGHTING_DIAGNOSTIC_REASON_STALE | MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED |
+        MAP_LIGHTING_DIAGNOSTIC_REASON_REPLACED | MAP_LIGHTING_DIAGNOSTIC_REASON_BORROWED;
     char reason_text[96];
     map_lighting_diagnostic_reason_text(0, reason_text, sizeof(reason_text));
     success = success && strcmp(reason_text, "none") == 0;
     map_lighting_diagnostic_reason_text(all_reasons, reason_text, sizeof(reason_text));
-    success = success && strstr(reason_text, "zero") != NULL &&
-              strstr(reason_text, "borrowed") != NULL;
+    success =
+        success && strstr(reason_text, "zero") != NULL && strstr(reason_text, "borrowed") != NULL;
     map_lighting_diagnostic_reason_text(all_reasons, reason_text, 1);
     map_lighting_diagnostic_reason_text(all_reasons, NULL, sizeof(reason_text));
-    success = success && strcmp(map_lighting_diagnostic_reason_name(MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO),
-                                 "zero") == 0 &&
+    success = success &&
+              strcmp(map_lighting_diagnostic_reason_name(MAP_LIGHTING_DIAGNOSTIC_REASON_ZERO),
+                     "zero") == 0 &&
               strcmp(map_lighting_diagnostic_reason_name(UINT32_C(0)), "unknown") == 0;
 
     const char *cursor = "  -12 tail";
@@ -5885,8 +5893,11 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
      * clipped wire-window boundary. Feather the completed presentation sample,
      * including the local field and remembered floor, before interpolation. */
     map_visibility_apply_window_fade(x - (data->midx - map_width / 2),
-                                      y - (data->midy - map_height / 2),
-                                      map_width, map_height, &vertex.scalar, rgb);
+                                     y - (data->midy - map_height / 2),
+                                     map_width,
+                                     map_height,
+                                     &vertex.scalar,
+                                     rgb);
     vertex.red = rgb[0];
     vertex.green = rgb[1];
     vertex.blue = rgb[2];
@@ -7550,14 +7561,13 @@ static void map_retained_animation_prepare(map_render_context_t *context,
         if (level_available) {
             header = cells->headers[map_cache_physical_index(old->tile_x, old->tile_y)];
         }
-        bool stable = level_available &&
-                      map_retained_cell_matches(old->depth,
-                                                old->tile_x,
-                                                old->tile_y,
-                                                old->record_identity,
-                                                old->cell_generation,
-                                                old->cell_revision,
-                                                &cell);
+        bool stable = level_available && map_retained_cell_matches(old->depth,
+                                                                   old->tile_x,
+                                                                   old->tile_y,
+                                                                   old->record_identity,
+                                                                   old->cell_generation,
+                                                                   old->cell_revision,
+                                                                   &cell);
         if (stable) {
             if (old->commands_num != 0) {
                 memcpy(&context->commands[context->commands_num],
@@ -7725,8 +7735,8 @@ void map_draw_map(SDL_Surface *surface) {
         return;
     }
     if (primary_surface) {
-        gpu_renderer_map_set_invalidation_hint(map_gpu_invalidation_reason(pending_redraw_reasons,
-                                                                            animation_only));
+        gpu_renderer_map_set_invalidation_hint(
+            map_gpu_invalidation_reason(pending_redraw_reasons, animation_only));
     }
     if (primary_surface && pending_redraw_reasons == MAP_REDRAW_REASON_EXTERNAL &&
         map_retained_projection_matches(surface) &&
@@ -8329,11 +8339,10 @@ static void widget_draw(widgetdata *widget) {
     }
 
     SDL_Surface *displayed = map_displayed_surface(widget);
-    if (gpu_renderer_map_available() &&
-        !gpu_renderer_draw_map((float)widget_x(widget),
-                               (float)widget_y(widget),
-                               (float)widget_w(widget),
-                               (float)widget_h(widget))) {
+    if (gpu_renderer_map_available() && !gpu_renderer_draw_map((float)widget_x(widget),
+                                                               (float)widget_y(widget),
+                                                               (float)widget_w(widget),
+                                                               (float)widget_h(widget))) {
         LOG(ERROR, "Could not submit retained GPU map target: %s", SDL_GetError());
     }
 
@@ -8561,8 +8570,8 @@ bool widget_map_visibility_test(void) {
     bool center_effect = false;
 
     map_cell_t *initial_center = MAP_CELL_GET_MIDDLE(center_view_x, center_view_y);
-    int player_layer = GET_MAP_LAYER(LAYER_LIVING,
-                                     MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1));
+    int player_layer =
+        GET_MAP_LAYER(LAYER_LIVING, MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1));
     const map_cell_layer_record_t *initial_player =
         map_cell_layer_record_read(initial_center, player_layer);
     if (initial_player->face == 0 || !initial_player->visibility.initialized ||
@@ -8707,10 +8716,8 @@ bool widget_map_visibility_test(void) {
             map_animate();
             item = map_cell_layer_record(center, item_layer, false);
             if (item == NULL || item->face != face || !item->visibility.authorized ||
-                item->visibility.alpha != UINT8_MAX ||
-                item->visibility.target_alpha != UINT8_MAX) {
-                fprintf(stderr,
-                        "map visibility test: re-entry did not settle opaque at 250 ms\n");
+                item->visibility.alpha != UINT8_MAX || item->visibility.target_alpha != UINT8_MAX) {
+                fprintf(stderr, "map visibility test: re-entry did not settle opaque at 250 ms\n");
                 success = false;
             }
         }
@@ -8813,14 +8820,12 @@ bool widget_map_projection_contract_test(void) {
             draw_map_object(surface, &production);
             production.layer = LAYER_WALL;
             draw_map_object(surface, &production);
-            success = success && context.commands_num == 3 &&
-                      BIT_QUERY(context.commands[0].effects.flags,
-                                SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
-                      BIT_QUERY(context.commands[1].effects.flags,
-                                SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
-                      BIT_QUERY(context.commands[2].effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
-                      !BIT_QUERY(context.commands[2].effects.flags,
-                                 SPRITE_FLAG_SMOOTH_DARK_SURFACE);
+            success =
+                success && context.commands_num == 3 &&
+                BIT_QUERY(context.commands[0].effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
+                BIT_QUERY(context.commands[1].effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
+                BIT_QUERY(context.commands[2].effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
+                !BIT_QUERY(context.commands[2].effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
 
             map_cell_light_record_t *light = map_cell_light_record(cell, 0, true);
             uint8_t saved_fow = cell->fow;
@@ -8840,13 +8845,12 @@ bool widget_map_projection_contract_test(void) {
                 remembered.lightmap_pending = false;
                 draw_map_object(surface, &remembered);
                 uint8_t expected_dark_level =
-                    (UINT8_MAX - lighting_radiance_to_level(
-                                    MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE)) *
+                    (UINT8_MAX - lighting_radiance_to_level(MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE)) *
                     DARK_LEVELS / UINT8_MAX;
-                success = success && remembered_context.commands_num == 1 &&
-                          BIT_QUERY(remembered_context.commands[0].effects.flags,
-                                    SPRITE_FLAG_DARK) &&
-                          remembered_context.commands[0].effects.dark_level == expected_dark_level;
+                success =
+                    success && remembered_context.commands_num == 1 &&
+                    BIT_QUERY(remembered_context.commands[0].effects.flags, SPRITE_FLAG_DARK) &&
+                    remembered_context.commands[0].effects.dark_level == expected_dark_level;
 
                 map_render_data_t lighting = {
                     .midx = MAP_STARTX,
@@ -8868,9 +8872,10 @@ bool widget_map_projection_contract_test(void) {
                 light->known = 0;
                 remembered_context.commands_num = 0;
                 draw_map_object(surface, &remembered);
-                success = success && remembered_context.commands_num == 1 &&
-                          remembered_context.commands[0].effects.dark_level == expected_dark_level &&
-                          light->radiance == UINT16_MAX && !light->known;
+                success =
+                    success && remembered_context.commands_num == 1 &&
+                    remembered_context.commands[0].effects.dark_level == expected_dark_level &&
+                    light->radiance == UINT16_MAX && !light->known;
                 light->radiance = 0;
 
                 cell->fow = false;
@@ -8883,17 +8888,19 @@ bool widget_map_projection_contract_test(void) {
                                   DARK_LEVELS / UINT8_MAX;
                 lighting_vertex_t visible_vertex =
                     map_lighting_vertex(surface, &lighting, MAP_STARTX, MAP_STARTY);
-                success = success &&
-                          visible_vertex.scalar ==
-                              map_visibility_add_player_radiance(
-                                  0, map_visibility_field_weight(0, 0));
+                success =
+                    success &&
+                    visible_vertex.scalar ==
+                        map_visibility_add_player_radiance(0, map_visibility_field_weight(0, 0));
 
                 /* Production light vertices must feather each side even when
                  * authoritative daylight or colored samples reach the window
                  * boundary. Neither the cache nor the interior is attenuated. */
                 const int edge_offsets[4][2] = {
-                    {-map_width / 2, 0}, {map_width / 2, 0},
-                    {0, -map_height / 2}, {0, map_height / 2},
+                    {-map_width / 2, 0},
+                    {map_width / 2, 0},
+                    {0, -map_height / 2},
+                    {0, map_height / 2},
                 };
                 for (size_t side = 0; side < arraysize(edge_offsets); side++) {
                     for (int step = 0; step <= 2; step++) {
@@ -8918,20 +8925,18 @@ bool widget_map_projection_contract_test(void) {
                         success = success && edge.scalar == 2048 * weight / 256 &&
                                   edge.red == 2048 * weight / 256 &&
                                   edge.green == 1024 * weight / 256 &&
-                                  edge.blue == 512 * weight / 256 &&
-                                  edge_light->radiance == 2048 &&
+                                  edge.blue == 512 * weight / 256 && edge_light->radiance == 2048 &&
                                   edge_light->rgb_radiance[0] == 2048;
                         edge_light->radiance = UINT16_MAX;
                         edge_light->rgb_radiance[0] = UINT16_MAX;
                         edge_light->rgb_radiance[1] = 32768;
                         edge_light->rgb_radiance[2] = 16384;
                         edge = map_lighting_vertex(surface, &lighting, sample_x, sample_y);
-                        success = success && edge.scalar == 2048 * weight / 256 &&
-                                  edge.red == 2048 * weight / 256 &&
-                                  edge.green == 1024 * weight / 256 &&
-                                  edge.blue == 512 * weight / 256 &&
-                                  edge_light->radiance == UINT16_MAX &&
-                                  edge_light->rgb_radiance[0] == UINT16_MAX;
+                        success =
+                            success && edge.scalar == 2048 * weight / 256 &&
+                            edge.red == 2048 * weight / 256 && edge.green == 1024 * weight / 256 &&
+                            edge.blue == 512 * weight / 256 && edge_light->radiance == UINT16_MAX &&
+                            edge_light->rgb_radiance[0] == UINT16_MAX;
                     }
                 }
 
