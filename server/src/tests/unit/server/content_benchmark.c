@@ -71,6 +71,15 @@ static object *route_fixture(mapstruct *maps[WALKING_ROUTE_MAPS]) {
     for (int i = 0; i < WALKING_ROUTE_MAPS; i++) {
         maps[i] = get_empty_map(24, 24);
         ck_assert_ptr_nonnull(maps[i]);
+        for (int y = 0; y < 24; y++) {
+            for (int x = 0; x < 24; x++) {
+                object *floor = arch_get("floor_cave1");
+                ck_assert_int_eq(floor->layer, LAYER_FLOOR);
+                floor->x = x;
+                floor->y = y;
+                ck_assert_ptr_nonnull(object_insert_map(floor, maps[i], NULL, 0));
+            }
+        }
     }
     for (int i = 0; i < WALKING_ROUTE_MAPS; i++) {
         for (int dir = 0; dir < 8; dir++) {
@@ -80,10 +89,8 @@ static object *route_fixture(mapstruct *maps[WALKING_ROUTE_MAPS]) {
             }
         }
     }
-    object *human = arch_get("human_male");
+    object *human = walking_route_candidate_create(arch_find("human_male"));
     ck_assert_ptr_nonnull(human);
-    human->custom_attrset = mempool_get(pool_player);
-    CONTR(human)->ob = human;
     return human;
 }
 
@@ -106,6 +113,11 @@ START_TEST(test_walking_route_normal_geometry_coverage_and_owned_cleanup) {
     SET_MAP_FLAGS(maps[16], 20, 9, P_DOOR_CLOSED);
     SET_MAP_FLAGS(maps[16], 21, 9, P_IS_EXIT);
     SET_MAP_FLAGS(maps[16], 21, 8, P_WALK_ON);
+    SET_MAP_FLAGS(maps[16], 19, 7, P_WALK_OFF);
+    object *missing_floor = GET_MAP_OB_LAYER(maps[16], 20, 7, LAYER_FLOOR, 0);
+    ck_assert_ptr_nonnull(missing_floor);
+    object_remove(missing_floor, REMOVE_NO_WALK_OFF);
+    object_destroy(missing_floor);
     walking_route_point *points;
     size_t count;
     ck_assert(walking_route_plan(maps, human, &points, &count));
@@ -126,7 +138,9 @@ START_TEST(test_walking_route_normal_geometry_coverage_and_owned_cleanup) {
         visited[p.map] = true;
         ck_assert_int_eq(object_blocked(human, maps[p.map], p.x, p.y), 0);
         ck_assert_int_eq(GET_MAP_FLAGS(maps[p.map], p.x, p.y) &
-                             (P_DOOR_CLOSED | P_IS_EXIT | P_WALK_ON), 0);
+                             (P_DOOR_CLOSED | P_IS_EXIT | P_WALK_ON | P_WALK_OFF),
+                         0);
+        ck_assert_ptr_nonnull(GET_MAP_OB_LAYER(maps[p.map], p.x, p.y, LAYER_FLOOR, 0));
         if (i > 0) {
             walking_route_point prev = points[i - 1];
             ck_assert_uint_ge(p.direction, 1);
@@ -205,15 +219,61 @@ START_TEST(test_walking_route_rejects_false_world_seams_and_invalid_dimensions) 
 }
 END_TEST
 
+START_TEST(test_walking_route_rejects_floorless_and_walkoff_start) {
+    mapstruct *maps[WALKING_ROUTE_MAPS];
+    object *human = route_fixture(maps);
+    walking_route_point *points;
+    size_t count;
+    SET_MAP_FLAGS(maps[16], 20, 8, P_WALK_OFF);
+    ck_assert_int_eq(object_blocked(human, maps[16], 20, 8), 0);
+    ck_assert(!walking_route_plan(maps, human, &points, &count));
+    ck_assert_ptr_null(points);
+    ck_assert_uint_eq(count, 0);
+    SET_MAP_FLAGS(maps[16], 20, 8, 0);
+    object *floor = GET_MAP_OB_LAYER(maps[16], 20, 8, LAYER_FLOOR, 0);
+    ck_assert_ptr_nonnull(floor);
+    object_remove(floor, REMOVE_NO_WALK_OFF);
+    object_destroy(floor);
+    maps[16]->tile_map[TILED_DOWN] = maps[0];
+    ck_assert_ptr_nonnull(GET_MAP_OB_LAYER(maps[0], 20, 8, LAYER_FLOOR, 0));
+    ck_assert_int_eq(object_blocked(human, maps[16], 20, 8), 0);
+    ck_assert(!walking_route_plan(maps, human, &points, &count));
+    ck_assert_ptr_null(points);
+    ck_assert_uint_eq(count, 0);
+    route_fixture_destroy(maps, human);
+}
+END_TEST
+
+START_TEST(test_walking_route_candidate_rejects_missing_and_wrong_archetype) {
+    ck_assert_ptr_null(walking_route_candidate_create(NULL));
+    archetype_t *sword = arch_find("sword");
+    ck_assert_ptr_nonnull(sword);
+    ck_assert_ptr_null(walking_route_candidate_create(sword));
+    object *human = walking_route_candidate_create(arch_find("human_male"));
+    ck_assert_ptr_nonnull(human);
+    ck_assert_ptr_nonnull(CONTR(human));
+    ck_assert_ptr_eq(CONTR(human)->ob, human);
+    ck_assert_ptr_null(human->map);
+    ck_assert(QUERY_FLAG(human, FLAG_REMOVED));
+    object_destroy(human);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("content_benchmark");
     TCase *tc_core = tcase_create("Core");
     tcase_add_test(tc_core, test_map_list_accepts_canonical_unique_logical_ids);
     tcase_add_test(tc_core, test_map_list_rejects_ambiguous_or_unsafe_ids);
     tcase_add_test(tc_core, test_map_list_enforces_count_and_component_bounds);
-    tcase_add_test(tc_core, test_walking_route_normal_geometry_coverage_and_owned_cleanup);
-    tcase_add_test(tc_core, test_walking_route_rejects_blocked_start_finish_and_missing_coverage);
-    tcase_add_test(tc_core, test_walking_route_rejects_false_world_seams_and_invalid_dimensions);
+    TCase *tc_route = tcase_create("Walking route");
+    tcase_add_unchecked_fixture(tc_route, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_route, check_test_setup, check_test_teardown);
+    tcase_add_test(tc_route, test_walking_route_normal_geometry_coverage_and_owned_cleanup);
+    tcase_add_test(tc_route, test_walking_route_rejects_blocked_start_finish_and_missing_coverage);
+    tcase_add_test(tc_route, test_walking_route_rejects_false_world_seams_and_invalid_dimensions);
+    tcase_add_test(tc_route, test_walking_route_rejects_floorless_and_walkoff_start);
+    tcase_add_test(tc_route, test_walking_route_candidate_rejects_missing_and_wrong_archetype);
+    suite_add_tcase(s, tc_route);
     suite_add_tcase(s, tc_core);
     return s;
 }

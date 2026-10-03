@@ -43,10 +43,19 @@ static bool tile_passable(object *human, mapstruct *map, int x, int y) {
     /* Doors require a separate action; exits and walk-on callbacks may change
      * the destination. Neither is safe for a one-command/one-arrival trace.
      * Keep authored NPCs: an unreachable route must fail, not erase blockers. */
-    if (GET_MAP_FLAGS(map, x, y) & (P_DOOR_CLOSED | P_IS_EXIT | P_WALK_ON)) {
+    if (GET_MAP_FLAGS(map, x, y) & (P_DOOR_CLOSED | P_IS_EXIT | P_WALK_ON | P_WALK_OFF)) {
         return false;
     }
-    return object_blocked(human, map, x, y) == 0;
+    /* INS_FALL_THROUGH in normal movement searches TILED_DOWN when no
+     * floor exists. Such a tile cannot promise this map as its arrival. */
+    bool has_floor = false;
+    object *floor;
+    FOR_MAP_LAYER_BEGIN(map, x, y, LAYER_FLOOR, -1, floor) {
+        has_floor = floor != NULL;
+        FOR_MAP_LAYER_BREAK;
+    }
+    FOR_MAP_LAYER_END
+    return has_floor && object_blocked(human, map, x, y) == 0;
 }
 
 static void search_from(route_search *search, int start) {
@@ -79,8 +88,7 @@ static bool append_target(route_search *search, int map, int x, int y, int radiu
         for (int tx = 0; tx < ROUTE_SIDE; tx++) {
             int distance = abs(tx - x) + abs(ty - y);
             int candidate = state_id(map, tx, ty);
-            if (distance <= radius && distance < best_distance &&
-                search->parent[candidate] >= 0) {
+            if (distance <= radius && distance < best_distance && search->parent[candidate] >= 0) {
                 target = candidate;
                 best_distance = distance;
             }
@@ -145,14 +153,19 @@ bool walking_route_plan(mapstruct *const maps[WALKING_ROUTE_MAPS],
             int m = (gy / ROUTE_SIDE) * 4 + gx / ROUTE_SIDE;
             int x = p.x + freearr_x[dir], y = p.y + freearr_y[dir];
             if (m != p.map) {
-                int tile = x < 0 ? (y < 0 ? 7 : y >= ROUTE_SIDE ? 6 : 3)
-                                 : x >= ROUTE_SIDE ? (y < 0 ? 4 : y >= ROUTE_SIDE ? 5 : 1)
-                                                  : y < 0 ? 0 : 2;
+                int tile = x < 0             ? (y < 0             ? 7
+                                                : y >= ROUTE_SIDE ? 6
+                                                                  : 3)
+                           : x >= ROUTE_SIDE ? (y < 0             ? 4
+                                                : y >= ROUTE_SIDE ? 5
+                                                                  : 1)
+                           : y < 0           ? 0
+                                             : 2;
                 /* Do not let malformed/foreign authored links expand the
                  * bounded map set through the resolver's lazy loader. */
                 if (maps[p.map]->tile_map[tile] != maps[m] &&
-                    (maps[p.map]->tile_map[tile] != NULL ||
-                     maps[p.map]->tile_path[tile] == NULL || maps[m]->path == NULL ||
+                    (maps[p.map]->tile_map[tile] != NULL || maps[p.map]->tile_path[tile] == NULL ||
+                     maps[m]->path == NULL ||
                      strcmp(maps[p.map]->tile_path[tile], maps[m]->path) != 0)) {
                     continue;
                 }
@@ -183,15 +196,19 @@ bool walking_route_plan(mapstruct *const maps[WALKING_ROUTE_MAPS],
         }
     }
     /* Two distinct adjacent wilderness chunks north of town. */
-    if (!append_target(search, 0, 12, 20, 24) ||
-        !append_target(search, 1, 12, 20, 24)) {
+    if (!append_target(search, 0, 12, 20, 24) || !append_target(search, 1, 12, 20, 24)) {
         goto done;
     }
     /* Outside walking checkpoints near bank, apartments, barracks, smith,
      * tavern, church, and library; never enter buildings to satisfy a target. */
     static const int landmarks[][3] = {
-        {4, 7, 13}, {8, 3, 3}, {8, 14, 6}, {12, 14, 3},
-        {5, 1, 12}, {9, 21, 4}, {10, 8, 13},
+        {4, 7, 13},
+        {8, 3, 3},
+        {8, 14, 6},
+        {12, 14, 3},
+        {5, 1, 12},
+        {9, 21, 4},
+        {10, 8, 13},
     };
     for (size_t i = 0; i < arraysize(landmarks); i++) {
         if (!append_target(search, landmarks[i][0], landmarks[i][1], landmarks[i][2], 4)) {
@@ -224,19 +241,28 @@ done:
     return ok;
 }
 
+object *walking_route_candidate_create(archetype_t *archetype) {
+    if (archetype == NULL || archetype->clone.type != PLAYER ||
+        strcmp(archetype->name, "human_male") != 0) {
+        return NULL;
+    }
+    object *human = arch_to_object(archetype);
+    /* The normal object destructor owns this pool-allocated controller. No
+     * player-list membership, socket, account, save, or inventory is created. */
+    human->custom_attrset = mempool_get(pool_player);
+    CONTR(human)->ob = human;
+    return human;
+}
+
 int walking_route_export(void) {
     mapstruct *maps[WALKING_ROUTE_MAPS] = {NULL};
     walking_route_point *points = NULL;
     size_t count = 0;
     int result = EXIT_FAILURE;
-    object *human = arch_get("human_male");
+    object *human = walking_route_candidate_create(arch_find("human_male"));
     if (human == NULL) {
         return result;
     }
-    /* The normal object destructor owns this pool-allocated controller. No
-     * player-list membership, socket, account, save, or inventory is created. */
-    human->custom_attrset = mempool_get(pool_player);
-    CONTR(human)->ob = human;
     for (int m = 0; m < WALKING_ROUTE_MAPS; m++) {
         char path[MAX_BUF];
         snprintf(VS(path), "/shattered_islands/world_%d_%d", m % 4, m / 4 + 66);
@@ -254,8 +280,13 @@ int walking_route_export(void) {
     puts("<live-movement-route version=\"1\" timeout-ms=\"1800000\" step-timeout-ms=\"10000\">");
     for (size_t i = 0; i < count; i++) {
         walking_route_point p = points[i];
-        printf("  <checkpoint map=\"/shattered_islands/world_%d_%d\" x=\"%d\" y=\"%d\" direction=\"%d\"/>\n",
-               p.map % 4, p.map / 4 + 66, p.x, p.y, p.direction);
+        printf("  <checkpoint map=\"/shattered_islands/world_%d_%d\" x=\"%d\" y=\"%d\" "
+               "direction=\"%d\"/>\n",
+               p.map % 4,
+               p.map / 4 + 66,
+               p.x,
+               p.y,
+               p.direction);
     }
     puts("</live-movement-route>");
     puts("ATRINIK_WALKING_ROUTE_END");

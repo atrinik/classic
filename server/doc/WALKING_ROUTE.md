@@ -14,8 +14,8 @@ candidate is never inserted into a map or registered as a connected player.
 
 A bounded breadth-first search uses `object_blocked`, the collision check used
 by `move_ob`. Every seam is verified through `get_map_from_coord` against the
-loaded destination; filename adjacency alone cannot admit an edge. Closed
-doors, exits and walk-on callbacks are excluded because they may require an
+loaded destination; filename adjacency alone cannot admit an edge. Tiles without floors, closed
+doors, exits and walk-on/off callbacks are excluded because they may require an
 extra action or change the expected destination. Authored NPCs remain blockers.
 The planner rejects missing maps, non-24-by-24 dimensions, unreachable targets,
 an invalid start, missing required coverage, or more than 8192 checkpoints.

@@ -22,6 +22,9 @@ bool walking_route_plan(mapstruct *const maps[WALKING_ROUTE_MAPS],
                         object *human,
                         walking_route_point **points,
                         size_t *count);
+/* Returns an unplaced owned human candidate or NULL for a missing/wrong
+ * archetype. Release with object_destroy(), including its owned controller. */
+object *walking_route_candidate_create(archetype_t *archetype);
 int walking_route_export(void);
 
 #endif
