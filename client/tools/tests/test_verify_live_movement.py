@@ -269,8 +269,17 @@ class VerifyLiveMovementTests(unittest.TestCase):
         records[-1]["elapsed_us"] = 60_000_001
         self.assert_rejected(records, "route timeout")
         records = good_records()
-        records[3]["elapsed_us"] = 5_000_001
+        records[2]["elapsed_us"] = 5_000_010
+        records[3]["elapsed_us"] = 5_000_011
         self.assert_rejected(records, "step timeout")
+
+    def test_login_time_uses_global_not_initial_step_deadline(self) -> None:
+        records = good_records()
+        offset = 20_000_000
+        for record in records[1:]:
+            record["elapsed_us"] += offset
+        summary = self.verify(records)
+        self.assertEqual(summary["presented_checkpoints"], 2)
 
     def test_rejects_unhealthy_network_after_arrival(self) -> None:
         records = good_records()

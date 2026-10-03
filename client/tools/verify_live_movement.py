@@ -496,6 +496,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
             _require(generation > last_arrival_generation,
                      "arrival publication_generation is not fresh")
             last_arrival_generation = generation
+            if arrivals == 0:
+                step_started_elapsed = elapsed
             pending_arrival = record
             presentation_frame_generation = None
             presentation_gpu_generation = None
