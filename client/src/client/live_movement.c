@@ -419,6 +419,14 @@ void live_movement_abort(const char *reason) {
     terminal(false, reason);
 }
 
+bool live_movement_renderer_recovery(void) {
+    if (!enabled) return true;
+    if (!finished && frames == 0 && arrivals == 0 &&
+        socket_command_map_publication_generation() == 0) return true;
+    terminal(false, "renderer recreation or recovery interrupted the route");
+    return false;
+}
+
 void live_movement_tick(void) {
     if (!enabled || !ready || finished)
         return;

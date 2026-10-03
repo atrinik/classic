@@ -19,6 +19,8 @@ bool live_movement_enabled(void);
 void live_movement_tick(void);
 void live_movement_frame_finished(bool presented, const client_keepalive_statistics_t *keepalive);
 void live_movement_abort(const char *reason);
+/** Allow initial renderer setup only before any diagnostic frame or world publication. */
+bool live_movement_renderer_recovery(void);
 bool live_movement_finished(void);
 int live_movement_exit_status(void);
 void live_movement_close(void);

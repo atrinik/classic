@@ -893,8 +893,7 @@ bool gpu_renderer_recovery_republish_test(void) {
 #endif
 
 static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *context) {
-    if (live_movement_enabled()) {
-        live_movement_abort("renderer recreation or recovery interrupted the route");
+    if (!live_movement_renderer_recovery()) {
         return false;
     }
     HARD_ASSERT(attempts != NULL);
