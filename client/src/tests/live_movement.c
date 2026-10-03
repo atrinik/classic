@@ -47,6 +47,8 @@ static struct live_movement_capture captures[2];
 static size_t capture_create_count;
 static bool missing_faces, telemetry_valid;
 static uint64_t telemetry_seconds;
+static uint64_t telemetry_increment;
+static unsigned int telemetry_calls;
 static unsigned int redraw_count, command_count;
 static char commands[3][32];
 
@@ -109,6 +111,8 @@ void image_face_statistics_get(image_face_statistics_t *statistics) {
 }
 bool telemetry_game_time_seconds(uint64_t *game_seconds) {
     *game_seconds = telemetry_seconds;
+    telemetry_seconds += telemetry_increment;
+    telemetry_calls++;
     return telemetry_valid;
 }
 bool image_missing_faces_detected(void) { return missing_faces; }
@@ -232,6 +236,7 @@ static void adapter_reset(void) {
     capture_create_count = 0;
     missing_faces = telemetry_valid = false;
     telemetry_seconds = 0;
+    telemetry_increment = telemetry_calls = 0;
     redraw_count = command_count = 0;
     memset(commands, 0, sizeof(commands));
     memset(capture_checkpoints, 0, sizeof(capture_checkpoints));
@@ -473,8 +478,13 @@ static int test_capture_barriers(void) {
     live_movement_ready();
     publication_generation = 1;
     live_movement_tick();
+    telemetry_valid = true;
+    telemetry_seconds = 41;
+    telemetry_increment = 1;
     capture_settled_frame(true);
     CHECK(captures[0].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
+    CHECK(telemetry_calls == 1U && capture_checkpoints[0].game_time_valid &&
+          capture_checkpoints[0].game_seconds == 41U);
     CHECK(presented_checkpoints == 0U && move_count == 0U);
     uint64_t initial_request_frame = frames;
     frame(true);
