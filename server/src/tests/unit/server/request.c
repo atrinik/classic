@@ -107,7 +107,15 @@ static bool map_packet_level_size(const packet_struct *packet, int expected_dept
     (void)packet_reader_read_uint8(&reader);
     (void)packet_reader_read_uint8(&reader);
     (void)packet_reader_read_uint8(&reader);
-    (void)packet_reader_read_uint16(&reader);
+    uint16_t continuation_marker = packet_reader_read_uint16(&reader);
+    if ((continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT) != 0) {
+        /* The celestial field may prepend its generation, hourly interval,
+         * and transition flags before the framed level count. */
+        (void)packet_reader_read_uint64(&reader);
+        (void)packet_reader_read_uint64(&reader);
+        (void)packet_reader_read_uint64(&reader);
+        (void)packet_reader_read_uint8(&reader);
+    }
     uint8_t level_count = packet_reader_read_uint8(&reader);
 
     for (uint8_t level = 0; level < level_count; level++) {
@@ -1307,6 +1315,8 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
     ck_assert_ptr_nonnull(packet);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, cs->mapx, cs->mapy));
+    uint16_t continuation_marker = ((uint16_t)packet->data[4] << 8) | packet->data[5];
+    ck_assert_uint_ne(continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT, 0);
     uint32_t roof_delta_size = 0;
     ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
     ck_assert_uint_gt(roof_delta_size, 0);
