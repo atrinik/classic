@@ -21,6 +21,10 @@ MAX_REPORT_BYTES = 128 * 1024 * 1024
 MAX_REPORT_LINES = 1_000_000
 MAX_LINE_BYTES = 1024 * 1024
 MAX_COUNTER = (1 << 64) - 1
+GPU_INVALIDATION_REASONS = (
+    "unchanged", "animation", "actor_effect", "camera_scroll", "map_publication",
+    "lighting", "resize", "resource_replacement", "reset", "device_recovery",
+)
 HEX_40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 MAP_PATH = re.compile(r"/(?:[^/\x00-\x1f]+/)*[^/\x00-\x1f]+\Z")
@@ -42,8 +46,12 @@ PRESENTATION_FIELDS = {
 }
 FRAME_FIELDS = {
     "type", "sequence", "elapsed_us", "frame_us", "presented", "map_path", "x", "y",
-    "map_publication_generation", "map_ready", "cpu_totals_us", "gpu_host_totals_ns",
-    "gpu_invalidation_totals", "map_totals", "gpu_totals", "network", "assets",
+    "map_publication_generation", "gpu_primary_publication_generation", "map_ready",
+    "cpu_totals_us", "gpu_host_totals_ns", "gpu_invalidation_totals", "map_totals",
+    "gpu_totals", "network", "assets", "world_time",
+}
+WORLD_TIME_FIELDS = {
+    "valid", "game_seconds", "light_keyframe_valid", "light_keyframe_generation",
 }
 TERMINAL_FIELDS = {
     "type", "status", "reason", "arrivals", "presented_checkpoints",
@@ -226,6 +234,16 @@ def _network_health(value: object) -> dict[str, int | bool]:
     return result
 
 
+def _world_time(value: object) -> dict[str, int | bool]:
+    _require(isinstance(value, dict), "frame world_time must be an object")
+    _closed(value, WORLD_TIME_FIELDS, "frame world_time")
+    for field in ("valid", "light_keyframe_valid"):
+        _require(type(value[field]) is bool, f"frame world_time.{field} must be boolean")
+    for field in ("game_seconds", "light_keyframe_generation"):
+        _integer(value[field], f"frame world_time.{field}")
+    return value
+
+
 def _stage_names(value: object, label: str) -> list[str]:
     _require(isinstance(value, list), f"{label} must be an array")
     _require(bool(value), f"{label} must not be empty")
@@ -301,6 +319,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
     last_gpu_generation = 0
     pending_arrival: dict | None = None
     presentation_frame_generation: int | None = None
+    presentation_gpu_generation: int | None = None
     step_started_elapsed = 0
     frame_times = array("Q")
     presented_spacings = array("Q")
@@ -315,8 +334,12 @@ def verify(route_path: Path, report_path: Path) -> dict:
     previous_gpu_totals: dict[str, int] | None = None
     network_maxima: dict[str, int | bool] = {}
     asset_maxima: dict[str, int] = {}
+    world_time_first: dict[str, int | bool] | None = None
+    world_time_last: dict[str, int | bool] | None = None
     covered_maps: list[str] = []
     covered_tiles: set[tuple[str, int, int]] = set()
+    final_presentation_elapsed: int | None = None
+    post_route_presented_frame = False
 
     record_count = 0
     for line_number, record in _records(report_path):
@@ -355,6 +378,9 @@ def verify(route_path: Path, report_path: Path) -> dict:
             y = _integer(record["y"], "frame y", 0, 255)
             generation = _integer(record["map_publication_generation"],
                                   "frame map_publication_generation")
+            gpu_primary_generation = _integer(
+                record["gpu_primary_publication_generation"],
+                "frame gpu_primary_publication_generation")
             cpu = record["cpu_totals_us"]
             gpu_host = record["gpu_host_totals_ns"]
             _require(isinstance(cpu, list) and len(cpu) == len(identity["cpu_stage_names"]),
@@ -383,8 +409,9 @@ def verify(route_path: Path, report_path: Path) -> dict:
             previous_cpu = cpu
             previous_gpu_host = gpu_host
             gpu_invalidations = record["gpu_invalidation_totals"]
-            _require(isinstance(gpu_invalidations, list) and len(gpu_invalidations) == 11,
-                     "frame gpu_invalidation_totals must contain 11 counters")
+            _require(isinstance(gpu_invalidations, list) and
+                     len(gpu_invalidations) == len(GPU_INVALIDATION_REASONS),
+                     "frame gpu_invalidation_totals must contain 10 counters")
             gpu_invalidations = [
                 _integer(item, "frame GPU invalidation total") for item in gpu_invalidations
             ]
@@ -405,6 +432,11 @@ def verify(route_path: Path, report_path: Path) -> dict:
             previous_map_totals = map_totals
             previous_gpu_totals = gpu_totals
             network = _network_health(record["network"])
+            _require(network["shutdown_pending"] is False,
+                     "frame network shutdown is pending")
+            if arrivals > 0:
+                _require(network["connected"] is True,
+                         "frame network disconnected after first arrival")
             for key, value in network.items():
                 if type(value) is bool:
                     network_maxima[key] = bool(network_maxima.get(key, False)) or value
@@ -416,6 +448,10 @@ def verify(route_path: Path, report_path: Path) -> dict:
             assets = _counter_map(record["assets"], "frame assets")
             for key, value in assets.items():
                 asset_maxima[key] = max(asset_maxima.get(key, 0), value)
+            world_time = dict(_world_time(record["world_time"]))
+            if world_time_first is None:
+                world_time_first = world_time
+            world_time_last = world_time
             frame_times.append(frame_us)
             if record["presented"]:
                 presented_frames += 1
@@ -431,6 +467,11 @@ def verify(route_path: Path, report_path: Path) -> dict:
                         generation >= pending_arrival["publication_generation"]
                     )
                     presentation_frame_generation = generation if qualifying_frame else None
+                    presentation_gpu_generation = (
+                        gpu_primary_generation if qualifying_frame else None
+                    )
+                elif presentations == len(checkpoints):
+                    post_route_presented_frame = True
             continue
 
         elapsed = _integer(record.get("elapsed_us"), f"{record_type} elapsed_us")
@@ -457,6 +498,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
             last_arrival_generation = generation
             pending_arrival = record
             presentation_frame_generation = None
+            presentation_gpu_generation = None
             arrivals += 1
         elif record_type == "checkpoint_presented":
             _closed(record, PRESENTATION_FIELDS, "checkpoint_presented")
@@ -473,6 +515,9 @@ def verify(route_path: Path, report_path: Path) -> dict:
                      "checkpoint presentation generation does not match its presented frame")
             generation = _integer(record["gpu_published_generation"],
                                   "checkpoint gpu_published_generation", 1)
+            _require(presentation_gpu_generation is not None and
+                     generation == presentation_gpu_generation,
+                     "checkpoint GPU generation does not match its presented primary frame")
             _require(generation > last_gpu_generation,
                      "checkpoint GPU published generation is not fresh")
             _require(elapsed - step_started_elapsed <= route_limits["step_timeout_us"],
@@ -483,8 +528,12 @@ def verify(route_path: Path, report_path: Path) -> dict:
                                pending_arrival["y"]))
             pending_arrival = None
             presentation_frame_generation = None
+            presentation_gpu_generation = None
             step_started_elapsed = elapsed
             presentations += 1
+            if presentations == len(checkpoints):
+                final_presentation_elapsed = elapsed
+                post_route_presented_frame = False
         elif record_type == "terminal":
             _closed(record, TERMINAL_FIELDS, "terminal")
             _require(isinstance(record["status"], str) and
@@ -516,6 +565,10 @@ def verify(route_path: Path, report_path: Path) -> dict:
     _require(terminal["elapsed_us"] == last_elapsed,
              "terminal elapsed_us does not match the report duration")
     _require(frame_count > 0 and presented_frames > 0, "successful report has no presented frames")
+    _require(final_presentation_elapsed is not None and post_route_presented_frame,
+             "successful report lacks a presented frame after the final checkpoint")
+    _require(terminal["elapsed_us"] >= final_presentation_elapsed + 1_000_000,
+             "successful report ended before the final checkpoint drain completed")
     _require(bool(presented_spacings),
              "successful report needs at least two presented frames for FPS evidence")
     _require(first_presented_elapsed is not None and last_presented_elapsed is not None,
@@ -525,6 +578,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
     unique_maps = list(dict.fromkeys(covered_maps))
     return {
         "status": "success",
+        "identity": dict(identity),
         "route_sha256": route_digest,
         "source_revision": identity["source_revision"],
         "source_dirty": identity["source_dirty"],
@@ -558,6 +612,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
         "gpu_invalidation_totals": previous_gpu_invalidations,
         "network_maxima": network_maxima,
         "asset_maxima": asset_maxima,
+        "world_time_first": world_time_first,
+        "world_time_last": world_time_last,
     }
 
 

@@ -51,7 +51,9 @@ def identity() -> dict:
 
 
 def frame(sequence: int, elapsed_us: int, map_path: str, x: int, y: int,
-          generation: int) -> dict:
+          generation: int, primary_generation: int | None = None) -> dict:
+    if primary_generation is None:
+        primary_generation = generation
     return {
         "type": "frame",
         "sequence": sequence,
@@ -62,15 +64,19 @@ def frame(sequence: int, elapsed_us: int, map_path: str, x: int, y: int,
         "x": x,
         "y": y,
         "map_publication_generation": generation,
+        "gpu_primary_publication_generation": primary_generation,
         "map_ready": True,
         "cpu_totals_us": [sequence * 10, sequence * 20],
         "gpu_host_totals_ns": [sequence * 100],
-        "gpu_invalidation_totals": [sequence * value for value in range(1, 12)],
+        "gpu_invalidation_totals": [sequence * value for value in range(1, 11)],
         "map_totals": {"draws": sequence, "uploads": sequence + 1},
         "gpu_totals": {"submissions": sequence},
         "network": {"connected": True, "shutdown_pending": False,
                     "queued_packets": 3 - sequence},
         "assets": {"pending": sequence - 1},
+        "world_time": {"valid": True, "game_seconds": sequence * 60,
+                       "light_keyframe_valid": True,
+                       "light_keyframe_generation": sequence},
     }
 
 
@@ -87,9 +93,10 @@ def good_records() -> list[dict]:
         frame(2, 200, "/brynknot/wilderness", 11, 21, 2),
         {"type": "checkpoint_presented", "index": 1, "map_publication_generation": 2,
          "gpu_published_generation": 2, "elapsed_us": 201},
+        frame(3, 1_000_201, "/brynknot/wilderness", 11, 21, 2),
         {"type": "terminal", "status": "success", "reason": "", "arrivals": 2,
-         "presented_checkpoints": 2, "expected_checkpoints": 2, "frames": 2,
-         "presented_frames": 2, "elapsed_us": 202},
+         "presented_checkpoints": 2, "expected_checkpoints": 2, "frames": 3,
+         "presented_frames": 3, "elapsed_us": 1_000_201},
     ]
 
 
@@ -111,6 +118,7 @@ class VerifyLiveMovementTests(unittest.TestCase):
     def test_accepts_and_aggregates_complete_report(self) -> None:
         summary = self.verify(good_records())
         self.assertEqual(summary["status"], "success")
+        self.assertEqual(summary["identity"], identity())
         self.assertEqual(summary["coverage"], {
             "maps": ["/brynknot/city", "/brynknot/wilderness"],
             "unique_maps": 2,
@@ -119,14 +127,16 @@ class VerifyLiveMovementTests(unittest.TestCase):
         })
         self.assertEqual(summary["frame_us"],
                          {"p50": 100, "p90": 100, "p95": 100, "p99": 100, "max": 100})
-        self.assertEqual(summary["presented_frame_spacing_us"]["p95"], 100)
-        self.assertEqual(summary["cpu_stages"]["map"]["total_us"], 20)
-        self.assertEqual(summary["gpu_host_stages"]["submit"]["total_ns"], 200)
+        self.assertEqual(summary["presented_frame_spacing_us"]["p50"], 100)
+        self.assertEqual(summary["cpu_stages"]["map"]["total_us"], 30)
+        self.assertEqual(summary["gpu_host_stages"]["submit"]["total_ns"], 300)
         self.assertEqual(summary["network_maxima"], {
             "connected": True, "shutdown_pending": False, "queued_packets": 2,
         })
-        self.assertEqual(summary["asset_maxima"], {"pending": 1})
-        self.assertEqual(summary["gpu_invalidation_totals"], list(range(2, 24, 2)))
+        self.assertEqual(summary["asset_maxima"], {"pending": 2})
+        self.assertEqual(summary["gpu_invalidation_totals"], list(range(3, 33, 3)))
+        self.assertEqual(summary["world_time_first"]["game_seconds"], 60)
+        self.assertEqual(summary["world_time_last"]["game_seconds"], 180)
 
     def test_cli_writes_same_stable_summary_as_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -190,6 +200,7 @@ class VerifyLiveMovementTests(unittest.TestCase):
         records[4]["publication_generation"] = 1
         self.assert_rejected(records, "publication_generation is not fresh")
         records = good_records()
+        records[5]["gpu_primary_publication_generation"] = 1
         records[6]["gpu_published_generation"] = 1
         self.assert_rejected(records, "GPU published generation is not fresh")
 
@@ -201,10 +212,14 @@ class VerifyLiveMovementTests(unittest.TestCase):
     def test_accepts_newer_qualifying_frame_generation(self) -> None:
         records = good_records()
         records[2]["map_publication_generation"] = 3
+        records[2]["gpu_primary_publication_generation"] = 3
         records[3]["map_publication_generation"] = 3
+        records[3]["gpu_published_generation"] = 3
         records[4]["publication_generation"] = 4
         records[5]["map_publication_generation"] = 5
+        records[5]["gpu_primary_publication_generation"] = 5
         records[6]["map_publication_generation"] = 5
+        records[6]["gpu_published_generation"] = 5
         summary = self.verify(records)
         self.assertEqual(summary["presented_checkpoints"], 2)
 
@@ -214,14 +229,19 @@ class VerifyLiveMovementTests(unittest.TestCase):
         records[3]["map_publication_generation"] = 2
         self.assert_rejected(records, "does not match its presented frame")
 
+    def test_rejects_auxiliary_gpu_publication_as_checkpoint_proof(self) -> None:
+        records = good_records()
+        records[2]["gpu_primary_publication_generation"] = 7
+        self.assert_rejected(records, "does not match its presented primary frame")
+
     def test_accepts_equal_event_timestamps(self) -> None:
         records = good_records()
         records[3]["elapsed_us"] = records[2]["elapsed_us"]
         records[4]["elapsed_us"] = records[2]["elapsed_us"]
         records[6]["elapsed_us"] = records[5]["elapsed_us"]
-        records[7]["elapsed_us"] = records[5]["elapsed_us"]
+        records[8]["elapsed_us"] = records[7]["elapsed_us"]
         summary = self.verify(records)
-        self.assertEqual(summary["elapsed_us"], 200)
+        self.assertEqual(summary["elapsed_us"], 1_000_201)
 
     def test_rejects_nonfinite_number(self) -> None:
         records = good_records()
@@ -252,6 +272,33 @@ class VerifyLiveMovementTests(unittest.TestCase):
         records[3]["elapsed_us"] = 5_000_001
         self.assert_rejected(records, "step timeout")
 
+    def test_rejects_unhealthy_network_after_arrival(self) -> None:
+        records = good_records()
+        records[2]["network"]["connected"] = False
+        self.assert_rejected(records, "disconnected after first arrival")
+        records = good_records()
+        records[7]["network"]["shutdown_pending"] = True
+        self.assert_rejected(records, "shutdown is pending")
+
+    def test_rejects_invalid_world_time_schema(self) -> None:
+        records = good_records()
+        records[2]["world_time"]["valid"] = 1
+        self.assert_rejected(records, "world_time.valid must be boolean")
+        records = good_records()
+        records[2]["world_time"]["extra"] = 0
+        self.assert_rejected(records, "world_time fields are not closed")
+
+    def test_rejects_success_without_completed_post_route_drain(self) -> None:
+        records = good_records()
+        records.pop(7)
+        records[-1]["frames"] = 2
+        records[-1]["presented_frames"] = 2
+        self.assert_rejected(records, "lacks a presented frame after the final checkpoint")
+        records = good_records()
+        records[7]["elapsed_us"] = 1_000_200
+        records[-1]["elapsed_us"] = 1_000_200
+        self.assert_rejected(records, "drain completed")
+
     def test_rejects_oversized_report_line_before_json_decode(self) -> None:
         original = verifier.MAX_LINE_BYTES
         verifier.MAX_LINE_BYTES = 100
@@ -278,8 +325,7 @@ class VerifyLiveMovementTests(unittest.TestCase):
 
     def test_rejects_unknown_record_and_false_success_counts(self) -> None:
         records = good_records()
-        records.insert(-1, {"type": "mystery", "elapsed_us": 202})
-        records[-1]["elapsed_us"] = 203
+        records.insert(-1, {"type": "mystery", "elapsed_us": 1_000_201})
         self.assert_rejected(records, "unknown record type")
         records = good_records()
         records[-1]["arrivals"] = 1
