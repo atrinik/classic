@@ -284,6 +284,8 @@ void live_movement_tick(void) {
         if (final_drain_started_us == 0) {
             final_drain_started_us = now;
             final_drain_presented_frames = presented_frames;
+            /* A static world still needs the independently observed final frame. */
+            map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
         }
         if (now - final_drain_started_us >= LIVE_FINAL_DRAIN_US &&
             presented_frames > final_drain_presented_frames && observation.published_ready) {
