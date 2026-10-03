@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Include the adapter so the test can reset its process-lifetime state. */
@@ -207,7 +208,17 @@ static int test_initialize_and_abort(void) {
     CHECK(!live_movement_enabled());
     CHECK(!live_movement_initialize(paths.route, NULL));
     CHECK(!live_movement_initialize("relative", paths.report));
+#ifndef WIN32
+    mode_t previous_umask = umask(0002);
+    bool initialized = live_movement_initialize(paths.route, paths.report);
+    umask(previous_umask);
+    CHECK(initialized);
+    struct stat report_status;
+    CHECK(stat(paths.report, &report_status) == 0);
+    CHECK((report_status.st_mode & 0777) == 0600);
+#else
     CHECK(live_movement_initialize(paths.route, paths.report));
+#endif
     CHECK(live_movement_enabled());
     CHECK(!live_movement_initialize(paths.route, paths.report));
     CHECK(live_movement_enabled());
@@ -223,11 +234,13 @@ static int test_initialize_and_abort(void) {
     live_movement_close();
     fixture_destroy(&paths);
 
+    adapter_reset();
     CHECK(fixture_create(&paths, "<broken/>"));
     CHECK(!live_movement_initialize(paths.route, paths.report));
     CHECK(!live_movement_enabled());
     fixture_destroy(&paths);
 
+    adapter_reset();
     CHECK(fixture_create(&paths, route_xml));
     FILE *occupied = fopen(paths.report, "w");
     CHECK(occupied != NULL);
