@@ -1524,7 +1524,7 @@ static bool validate_topology(mapstruct *map,
     }
     mapstruct *bottom = map;
     size_t descent = 0;
-    while (bottom->tile_path[TILED_DOWN] != NULL) {
+    while (!local_field && bottom->tile_path[TILED_DOWN] != NULL) {
         if (bottom->tile_map[TILED_DOWN] == NULL || ++descent >= MAP2_LEVELS) {
             return set_error(error,
                              error_size,
@@ -1543,7 +1543,8 @@ static bool validate_topology(mapstruct *map,
             return false;
         }
         for (size_t i = 0; i < TILED_NUM; i++) {
-            if (cursor->tile_path[i] == NULL) {
+            if (cursor->tile_path[i] == NULL ||
+                (local_field && cursor == map && i == TILED_DOWN)) {
                 continue;
             }
             /* Filename-derived horizontal neighbors are travel links, not

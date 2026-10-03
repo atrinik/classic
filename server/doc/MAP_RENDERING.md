@@ -614,7 +614,12 @@ which either `(0,0)` or `(width-1,height-1)` does not map identically is invalid
 fixtures cover 64x64/64x64 success, 64x64/63x64 failure, and attempted `(1,0)`
 offset failure.  Adding a vertical transform requires a new schema version.
 
-Every vertical dependency must be resident for field construction; v1 treats an
+Local field construction visits the requested map and its upward sky chain,
+then evaluates that chain top-down. Maps below the requested map cannot affect
+its sky exposure or radiance, need not be resident, and are neither rebuilt nor
+published by that solve. Each lower map resolves its own upper dependencies when
+needed. Full inventory validation still checks the complete vertical component.
+Every upward dependency must be resident for field construction; v1 treats an
 unloaded upper target as unresolved rather than guessing from its path or last
 cache. Continuous horizontal seams also retain their residency and reciprocal
 validation requirements. Discontinuous horizontal neighbors are independent

@@ -407,16 +407,10 @@ static uint64_t celestial_key(const mapstruct *map,
 }
 
 static bool collect_stack(mapstruct *map, mapstruct *levels[MAP2_LEVELS], size_t *count) {
-    mapstruct *bottom = map;
-    size_t seen = 0;
-    while (bottom->tile_map[TILED_DOWN] != NULL) {
-        if (seen++ >= MAP2_LEVELS || bottom->tile_map[TILED_DOWN]->in_memory != MAP_IN_MEMORY) {
-            return false;
-        }
-        bottom = bottom->tile_map[TILED_DOWN];
-    }
-
-    mapstruct *cursor = bottom;
+    /* Sky exposure and injection flow down from the resolved upper maps.
+     * A lower map cannot affect this map, and may be hidden/unloaded beneath
+     * an opaque floor. Solve only the requested map and its upper chain. */
+    mapstruct *cursor = map;
     while (cursor != NULL) {
         if (*count >= MAP2_LEVELS || cursor->in_memory != MAP_IN_MEMORY) {
             return false;

@@ -40,8 +40,9 @@ bool celestial_structure_validate_header(mapstruct *map, char *error, size_t err
 /** Validate all authored seam declarations and the complete resident stack. */
 bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t error_size);
 /** Validate local lighting dependencies without loading maps. Discontinuous
- * horizontal neighbors are independent; vertical coverage and continuous
- * seams retain full validation. Server-thread only, retains no pointers. */
+ * horizontal neighbors and maps below the requested map are independent;
+ * upward coverage, reciprocal links within that chain and continuous
+ * horizontal seams retain full validation. Server-thread only, retains no pointers. */
 bool celestial_structure_validate_light_dependencies(mapstruct *map,
                                                      char *error,
                                                      size_t error_size);
