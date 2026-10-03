@@ -196,14 +196,13 @@ static int test_parser(void) {
     REQUIRE(boundary_size > 0 && (size_t)boundary_size < sizeof(boundary_xml));
     REQUIRE(!load_xml(boundary_xml, &route));
 
-    char *maximum = build_route(LIVE_MOVEMENT_ROUTE_STEPS_MAX + 1U);
+    char *maximum = build_route(LIVE_MOVEMENT_ROUTE_STEPS_MAX);
     REQUIRE(maximum != NULL);
     REQUIRE(load_xml(maximum, &route));
-    REQUIRE(live_movement_route_checkpoint_count(route) ==
-            LIVE_MOVEMENT_ROUTE_STEPS_MAX + 1U);
+    REQUIRE(live_movement_route_checkpoint_count(route) == LIVE_MOVEMENT_ROUTE_STEPS_MAX);
     live_movement_route_free(route);
     free(maximum);
-    char *too_many = build_route(LIVE_MOVEMENT_ROUTE_STEPS_MAX + 2U);
+    char *too_many = build_route(LIVE_MOVEMENT_ROUTE_STEPS_MAX + 1U);
     REQUIRE(too_many != NULL);
     REQUIRE(!load_xml(too_many, &route));
     free(too_many);

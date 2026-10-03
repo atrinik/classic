@@ -322,7 +322,7 @@ bool live_movement_route_load(const char *path,
     size_t checkpoints_count = 0;
     for (xmlNodePtr node = valid ? root->children : NULL; node != NULL; node = node->next) {
         if (node->type != XML_ELEMENT_NODE ||
-            checkpoints_count == LIVE_MOVEMENT_ROUTE_STEPS_MAX + 1U) {
+            checkpoints_count == LIVE_MOVEMENT_ROUTE_STEPS_MAX) {
             valid = false;
             break;
         }
