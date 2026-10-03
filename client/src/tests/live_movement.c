@@ -18,6 +18,7 @@ struct live_movement_capture {
 };
 
 /* Include the adapter so the test can reset its process-lifetime state. */
+#define ATRINIK_LIVE_MOVEMENT_TESTS 1
 #include "../client/live_movement.c"
 
 #define CHECK(expression)                                                    \
@@ -32,6 +33,13 @@ typedef struct fixture_paths {
     char route[64];
     char report[64];
 } fixture_paths_t;
+
+typedef struct rejected_map_fixture_paths {
+    char directory[64];
+    char route[96];
+    char report[96];
+    char capture[96];
+} rejected_map_fixture_paths_t;
 
 static uint64_t now_us;
 static uint64_t publication_generation;
@@ -246,6 +254,54 @@ static void fixture_destroy(const fixture_paths_t *paths) {
     unlink(paths->report);
 }
 
+static bool rejected_map_fixture_create(rejected_map_fixture_paths_t *paths) {
+    strcpy(paths->directory, "/tmp/atrinik-rejected-map-XXXXXX");
+    if (mkdtemp(paths->directory) == NULL)
+        return false;
+    snprintf(paths->route, sizeof(paths->route), "%s/route.xml", paths->directory);
+    snprintf(paths->report, sizeof(paths->report), "%s/report.jsonl", paths->directory);
+    snprintf(paths->capture,
+             sizeof(paths->capture),
+             "%s/%s",
+             paths->directory,
+             LIVE_REJECTED_MAP_BASENAME);
+    int route_fd = open(paths->route, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    bool valid = route_fd >= 0 && write_all(route_fd, route_xml);
+    if (route_fd >= 0 && close(route_fd) != 0)
+        valid = false;
+    if (!valid) {
+        unlink(paths->route);
+        rmdir(paths->directory);
+        return false;
+    }
+    return true;
+}
+
+static void rejected_map_fixture_destroy(const rejected_map_fixture_paths_t *paths) {
+    unlink(paths->capture);
+    unlink(paths->report);
+    unlink(paths->route);
+    rmdir(paths->directory);
+}
+
+static bool read_file(const char *path, uint8_t *buffer, size_t capacity, size_t *size) {
+    FILE *stream = fopen(path, "rb");
+    if (stream == NULL)
+        return false;
+    *size = fread(buffer, 1, capacity, stream);
+    bool complete = !ferror(stream) && fgetc(stream) == EOF;
+    return fclose(stream) == 0 && complete;
+}
+
+static bool report_contains(const char *path, const char *needle) {
+    uint8_t buffer[4096];
+    size_t size;
+    if (!read_file(path, buffer, sizeof(buffer) - 1U, &size))
+        return false;
+    buffer[size] = '\0';
+    return strstr((const char *)buffer, needle) != NULL;
+}
+
 static void adapter_reset(void) {
     live_movement_close();
     route = NULL;
@@ -259,6 +315,8 @@ static void adapter_reset(void) {
     arrival_map_draws = arrival_gpu_generation = previous_profile_frames = step_started_us = 0;
     arrival_index = 0;
     memset(arrival_map, 0, sizeof(arrival_map));
+    memset(rejected_map_path, 0, sizeof(rejected_map_path));
+    rejected_map_test_fail_after = 0;
     arrival_x = arrival_y = 0;
     now_us = 1000;
     publication_generation = primary_gpu_generation = 0;
@@ -369,6 +427,82 @@ static int test_initialize_and_abort(void) {
     CHECK(!live_movement_initialize(paths.route, paths.report));
     fixture_destroy(&paths);
 
+    return 0;
+}
+
+static int test_rejected_map_capture(void) {
+    static const uint8_t payload[] = {CLIENT_CMD_MAP, 0xde, 0xad, 0xbe, 0xef};
+    rejected_map_fixture_paths_t paths;
+
+    adapter_reset();
+    CHECK(rejected_map_fixture_create(&paths));
+    live_movement_rejected_map(payload, sizeof(payload), 1);
+    CHECK(access(paths.capture, F_OK) != 0 && access(paths.report, F_OK) != 0);
+    rejected_map_fixture_destroy(&paths);
+
+    adapter_reset();
+    CHECK(rejected_map_fixture_create(&paths));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+#ifndef WIN32
+    mode_t previous_umask = umask(0002);
+#endif
+    live_movement_rejected_map(payload, sizeof(payload), 1);
+#ifndef WIN32
+    umask(previous_umask);
+#endif
+    CHECK(live_movement_finished() && live_movement_exit_status() == 8);
+    struct stat status;
+    CHECK(stat(paths.capture, &status) == 0 && S_ISREG(status.st_mode));
+#ifndef WIN32
+    CHECK((status.st_mode & 0777) == 0600);
+#endif
+    uint8_t captured[sizeof(payload)];
+    size_t captured_size;
+    CHECK(read_file(paths.capture, captured, sizeof(captured), &captured_size));
+    CHECK(captured_size == sizeof(payload) && memcmp(captured, payload, sizeof(payload)) == 0);
+    CHECK(report_contains(paths.report,
+                          "rejected malformed MAP payload_len=5 cursor_offset=1 capture=saved"));
+    CHECK(!report_contains(paths.report, paths.directory));
+    live_movement_close();
+    rejected_map_fixture_destroy(&paths);
+
+    adapter_reset();
+    CHECK(rejected_map_fixture_create(&paths));
+    int existing_fd = open(paths.capture, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    CHECK(existing_fd >= 0);
+    bool existing_written = write_all(existing_fd, "keep");
+    CHECK(close(existing_fd) == 0 && existing_written);
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    live_movement_rejected_map(payload, sizeof(payload), 1);
+    uint8_t existing[4];
+    CHECK(read_file(paths.capture, existing, sizeof(existing), &captured_size));
+    CHECK(captured_size == sizeof(existing) && memcmp(existing, "keep", sizeof(existing)) == 0);
+    CHECK(report_contains(paths.report, "capture=exists-refused"));
+    live_movement_close();
+    rejected_map_fixture_destroy(&paths);
+
+    adapter_reset();
+    CHECK(rejected_map_fixture_create(&paths));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    live_movement_rejected_map(payload, LIVE_REJECTED_MAP_MAX_BYTES + 1U, 1);
+    CHECK(access(paths.capture, F_OK) != 0);
+    CHECK(report_contains(paths.report, "payload_len=1048577 cursor_offset=1 capture=over-limit"));
+    live_movement_close();
+    rejected_map_fixture_destroy(&paths);
+
+    adapter_reset();
+    CHECK(rejected_map_fixture_create(&paths));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    rejected_map_test_fail_after = 2;
+    live_movement_rejected_map(payload, sizeof(payload), 1);
+    rejected_map_test_fail_after = 0;
+    CHECK(stat(paths.capture, &status) == 0 && status.st_size == 2);
+    uint8_t partial[2];
+    CHECK(read_file(paths.capture, partial, sizeof(partial), &captured_size));
+    CHECK(captured_size == sizeof(partial) && memcmp(partial, payload, sizeof(partial)) == 0);
+    CHECK(report_contains(paths.report, "capture=write-failed"));
+    live_movement_close();
+    rejected_map_fixture_destroy(&paths);
     return 0;
 }
 
@@ -773,6 +907,8 @@ static int test_lighting_phase_barrier(void) {
 
 int main(void) {
     if (test_initialize_and_abort() != 0)
+        return 1;
+    if (test_rejected_map_capture() != 0)
         return 1;
     if (test_publication_and_movement() != 0)
         return 1;

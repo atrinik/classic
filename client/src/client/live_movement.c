@@ -22,6 +22,7 @@
 #include <settings.h>
 #include <toolkit/datetime.h>
 #include <cmake.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -34,6 +35,9 @@
 #define LIVE_FINAL_DRAIN_US UINT64_C(1000000)
 #define LIVE_STARTUP_TIMEOUT_US UINT64_C(120000000)
 #define LIVE_MOVEMENT_EPOCH UINT32_C(0x7fffffff)
+#define LIVE_REJECTED_MAP_MAX_BYTES (1024U * 1024U)
+#define LIVE_REJECTED_MAP_PATH_MAX 4095U
+#define LIVE_REJECTED_MAP_BASENAME "rejected-map.bin"
 
 static live_movement_route_t *route;
 static live_movement_route_state_t *route_state;
@@ -49,7 +53,11 @@ static uint64_t previous_profile_frames;
 static uint64_t step_started_us;
 static size_t arrival_index;
 static char arrival_map[LIVE_MOVEMENT_ROUTE_MAP_MAX + 1];
+static char rejected_map_path[LIVE_REJECTED_MAP_PATH_MAX + 1];
 static uint8_t arrival_x, arrival_y;
+#ifdef ATRINIK_LIVE_MOVEMENT_TESTS
+static size_t rejected_map_test_fail_after;
+#endif
 
 typedef struct live_capture_checkpoint {
     live_movement_capture_t *job;
@@ -98,6 +106,23 @@ static void json_string(const char *value) {
 static uint64_t elapsed_us(void) {
     uint64_t now = datetime_monotonic_us();
     return now >= started_us ? now - started_us : 0;
+}
+
+static bool rejected_map_path_set(const char *report_path) {
+    const char *slash = strrchr(report_path, '/');
+    if (slash == NULL) {
+        return false;
+    }
+    size_t directory_size = (size_t)(slash - report_path) + 1U;
+    size_t basename_size = strlen(LIVE_REJECTED_MAP_BASENAME);
+    if (directory_size + basename_size >= sizeof(rejected_map_path)) {
+        return false;
+    }
+    memcpy(rejected_map_path, report_path, directory_size);
+    memcpy(rejected_map_path + directory_size,
+           LIVE_REJECTED_MAP_BASENAME,
+           basename_size + 1U);
+    return true;
 }
 
 static void terminal(bool success, const char *reason) {
@@ -151,6 +176,12 @@ bool live_movement_initialize(const char *route_path, const char *report_path) {
     started_utc_us = (uint64_t)utc.tv_sec * UINT64_C(1000000) + (uint64_t)utc.tv_nsec / 1000;
     if (!live_movement_route_load(route_path, &route, error, sizeof(error))) {
         fprintf(stderr, "live movement: %s\n", error);
+        return false;
+    }
+    if (!rejected_map_path_set(report_path)) {
+        fprintf(stderr, "live movement report path is too long for private diagnostics\n");
+        live_movement_route_free(route);
+        route = NULL;
         return false;
     }
     int output_flags = O_WRONLY | O_CREAT | O_EXCL;
@@ -418,6 +449,64 @@ int live_movement_exit_status(void) {
     return enabled && !succeeded ? 8 : 0;
 }
 void live_movement_abort(const char *reason) {
+    terminal(false, reason);
+}
+
+void live_movement_rejected_map(const uint8_t *data, size_t len, size_t cursor_offset) {
+    if (!enabled || finished || report == NULL) {
+        return;
+    }
+    const char *capture_status;
+    if (cursor_offset > len || (data == NULL && len != 0U)) {
+        capture_status = "invalid-input";
+    } else if (len > LIVE_REJECTED_MAP_MAX_BYTES) {
+        capture_status = "over-limit";
+    } else {
+        int flags = O_WRONLY | O_CREAT | O_EXCL;
+#ifdef WIN32
+        flags |= O_BINARY;
+#endif
+        int descriptor = open(rejected_map_path, flags, 0600);
+        if (descriptor < 0) {
+            capture_status = errno == EEXIST ? "exists-refused" : "create-failed";
+        } else {
+            size_t written = 0;
+            bool complete = true;
+            while (written < len) {
+                size_t remaining = len - written;
+#ifdef ATRINIK_LIVE_MOVEMENT_TESTS
+                if (rejected_map_test_fail_after != 0U) {
+                    if (written >= rejected_map_test_fail_after) {
+                        complete = false;
+                        break;
+                    }
+                    if (remaining > rejected_map_test_fail_after - written)
+                        remaining = rejected_map_test_fail_after - written;
+                }
+#endif
+                ssize_t amount = write(descriptor, data + written, remaining);
+                if (amount < 0 && errno == EINTR) {
+                    continue;
+                }
+                if (amount <= 0) {
+                    complete = false;
+                    break;
+                }
+                written += (size_t)amount;
+            }
+            if (close(descriptor) != 0) {
+                complete = false;
+            }
+            capture_status = complete ? "saved" : "write-failed";
+        }
+    }
+    char reason[192];
+    snprintf(reason,
+             sizeof(reason),
+             "rejected malformed MAP payload_len=%zu cursor_offset=%zu capture=%s",
+             len,
+             cursor_offset,
+             capture_status);
     terminal(false, reason);
 }
 
@@ -764,4 +853,5 @@ void live_movement_close(void) {
         live_movement_capture_destroy(capture_checkpoints[i].job);
         capture_checkpoints[i].job = NULL;
     }
+    rejected_map_path[0] = '\0';
 }

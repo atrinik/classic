@@ -39,6 +39,7 @@
 #include <item.h>
 #include <keybind.h>
 #include <lighting.h>
+#include <live_movement.h>
 #include <main.h>
 #include <map.h>
 #include <menu.h>
@@ -1554,6 +1555,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
     map_protocol_packet_info_t info;
     if (!map_protocol_inspect(data, len, pos, wire_width, wire_height, &info)) {
+        live_movement_rejected_map(data, len, pos);
         LOG(PACKET, "Rejected malformed map packet.");
         socket_command_map_abort_pending();
         return;
