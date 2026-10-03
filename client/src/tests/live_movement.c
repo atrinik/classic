@@ -411,6 +411,7 @@ static int test_capture_barriers(void) {
     CHECK(live_movement_initialize(paths.route, paths.report));
     CHECK(!live_movement_configure_review(paths.report, "/tmp/initial.png", NULL, NULL));
     CHECK(!live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/initial.png", NULL));
+    CHECK(!live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", "invalid"));
     CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", NULL));
     live_movement_ready();
     publication_generation = 1;
@@ -418,6 +419,9 @@ static int test_capture_barriers(void) {
     capture_settled_frame(true);
     CHECK(captures[0].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
     CHECK(presented_checkpoints == 0U && move_count == 0U);
+    uint64_t initial_request_frame = frames;
+    frame(true);
+    CHECK(frames == initial_request_frame + 1U && presented_checkpoints == 0U);
     capture_complete(0);
     live_movement_tick();
     CHECK(redraw_count == 1U && presented_checkpoints == 0U);
@@ -431,7 +435,8 @@ static int test_capture_barriers(void) {
     publication_generation++;
     live_movement_tick();
     capture_settled_frame(true);
-    CHECK(captures[1].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
+    CHECK(captures[1].result.status == LIVE_MOVEMENT_CAPTURE_PENDING &&
+          presented_checkpoints == 2U);
     live_movement_tick();
     CHECK(!live_movement_finished());
     capture_complete(1);
@@ -470,6 +475,7 @@ static int test_capture_failure_and_deadline(void) {
     publication_generation = 1;
     live_movement_tick();
     capture_settled_frame(true);
+    step_started_us = now_us;
     now_us += 5000000;
     live_movement_tick();
     CHECK(live_movement_finished());
