@@ -9,6 +9,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <live_movement_capture.h>
+
+struct live_movement_capture {
+    live_movement_capture_result_t result;
+    char path[128];
+    bool request_ok;
+};
+
 /* Include the adapter so the test can reset its process-lifetime state. */
 #include "../client/live_movement.c"
 
@@ -35,6 +43,12 @@ static bool shutdown_pending;
 static bool map_transaction_active;
 static unsigned int move_count, stop_count;
 static int last_move;
+static struct live_movement_capture captures[2];
+static size_t capture_create_count;
+static bool missing_faces, telemetry_valid;
+static uint64_t telemetry_seconds;
+static unsigned int redraw_count, command_count;
+static char commands[3][32];
 
 Client_Player cpl;
 _mapdata MapData;
@@ -94,9 +108,42 @@ void image_face_statistics_get(image_face_statistics_t *statistics) {
     *statistics = (image_face_statistics_t){0};
 }
 bool telemetry_game_time_seconds(uint64_t *game_seconds) {
-    *game_seconds = 0;
-    return false;
+    *game_seconds = telemetry_seconds;
+    return telemetry_valid;
 }
+bool image_missing_faces_detected(void) { return missing_faces; }
+void map_redraw_request(map_redraw_reason_t reason) {
+    if (reason != MAP_REDRAW_REASON_EXTERNAL) abort();
+    redraw_count++;
+}
+void send_command(const char *command) {
+    if (command_count >= arraysize(commands)) abort();
+    snprintf(commands[command_count++], sizeof(commands[0]), "%s", command);
+}
+live_movement_capture_t *
+live_movement_capture_create(const char *path, char *error, size_t error_size) {
+    if (capture_create_count >= arraysize(captures)) {
+        snprintf(error, error_size, "test capture capacity");
+        return NULL;
+    }
+    struct live_movement_capture *capture = &captures[capture_create_count++];
+    snprintf(capture->path, sizeof(capture->path), "%s", path);
+    capture->result = (live_movement_capture_result_t){
+        .status = LIVE_MOVEMENT_CAPTURE_READY, .path = capture->path};
+    capture->request_ok = true;
+    return capture;
+}
+bool live_movement_capture_request(live_movement_capture_t *capture) {
+    if (capture == NULL || !capture->request_ok ||
+        capture->result.status != LIVE_MOVEMENT_CAPTURE_READY) return false;
+    capture->result.status = LIVE_MOVEMENT_CAPTURE_PENDING;
+    return true;
+}
+const live_movement_capture_result_t *
+live_movement_capture_result(const live_movement_capture_t *capture) {
+    return capture == NULL ? NULL : &capture->result;
+}
+void live_movement_capture_destroy(live_movement_capture_t *capture) { (void)capture; }
 int64_t setting_get_int(int category, int setting) {
     (void)category;
     (void)setting;
@@ -181,6 +228,16 @@ static void adapter_reset(void) {
     shutdown_pending = map_transaction_active = false;
     move_count = stop_count = 0;
     last_move = 0;
+    memset(captures, 0, sizeof(captures));
+    capture_create_count = 0;
+    missing_faces = telemetry_valid = false;
+    telemetry_seconds = 0;
+    redraw_count = command_count = 0;
+    memset(commands, 0, sizeof(commands));
+    memset(capture_checkpoints, 0, sizeof(capture_checkpoints));
+    review_lighting_phase = NULL;
+    review_lighting_stage = 0;
+    review_lighting_generation = capture_settle_started_us = 0;
     cpl = (Client_Player){0};
     MapData = (_mapdata){0};
     cpl.state = ST_PLAY;
