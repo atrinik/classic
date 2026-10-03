@@ -46,6 +46,14 @@ static bool tile_passable(object *human, mapstruct *map, int x, int y) {
     if (GET_MAP_FLAGS(map, x, y) & (P_DOOR_CLOSED | P_IS_EXIT | P_WALK_ON | P_WALK_OFF)) {
         return false;
     }
+    /* Offline initialization does not run spawn-point ticks. Reserve their
+     * authored cells instead of routing through a guard that appears as soon
+     * as the live map activates. This does not remove or move any actor. */
+    for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+        if (op->type == SPAWN_POINT) {
+            return false;
+        }
+    }
     /* INS_FALL_THROUGH in normal movement searches TILED_DOWN when no
      * floor exists. Such a tile cannot promise this map as its arrival. */
     bool has_floor = false;

@@ -19,6 +19,7 @@
 #include <arch.h>
 #include <map.h>
 #include <object.h>
+#include <object_methods.h>
 #include <player.h>
 
 START_TEST(test_map_list_accepts_canonical_unique_logical_ids) {
@@ -244,6 +245,44 @@ START_TEST(test_walking_route_rejects_floorless_and_walkoff_start) {
 }
 END_TEST
 
+START_TEST(test_walking_route_reserves_authored_spawn_cells_before_live_activation) {
+    mapstruct *maps[WALKING_ROUTE_MAPS];
+    object *human = route_fixture(maps);
+    object *spawn = arch_get("spawn_point");
+    ck_assert_int_eq(spawn->type, SPAWN_POINT);
+    spawn->x = 12;
+    spawn->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(spawn, maps[16], NULL, 0));
+    object *template = arch_get("guard");
+    template->type = SPAWN_POINT_MOB;
+    ck_assert_ptr_nonnull(object_insert_into(template, spawn, 0));
+    /* The offline tile is geometrically passable, but will hold a living
+     * guard after normal spawn processing. The route must reserve it now. */
+    ck_assert_int_eq(object_blocked(human, maps[16], 12, 12), 0);
+    walking_route_point *points;
+    size_t count;
+    ck_assert(walking_route_plan(maps, human, &points, &count));
+    for (size_t i = 0; i < count; i++) {
+        ck_assert(!(points[i].map == 16 && points[i].x == 12 && points[i].y == 12));
+    }
+    free(points);
+    object_process(spawn);
+    ck_assert_ptr_nonnull(spawn->enemy);
+    ck_assert_int_eq(spawn->enemy->x, 12);
+    ck_assert_int_eq(spawn->enemy->y, 12);
+    ck_assert_int_ne(object_blocked(human, maps[16], 12, 12), 0);
+    /* A scenario starting on a reserved spawn cell must also fail honestly. */
+    object *start_spawn = arch_get("spawn_point");
+    start_spawn->x = 20;
+    start_spawn->y = 8;
+    ck_assert_ptr_nonnull(object_insert_map(start_spawn, maps[16], NULL, 0));
+    ck_assert(!walking_route_plan(maps, human, &points, &count));
+    ck_assert_ptr_null(points);
+    ck_assert_uint_eq(count, 0);
+    route_fixture_destroy(maps, human);
+}
+END_TEST
+
 START_TEST(test_walking_route_candidate_rejects_missing_and_wrong_archetype) {
     ck_assert_ptr_null(walking_route_candidate_create(NULL));
     archetype_t *sword = arch_find("sword");
@@ -273,6 +312,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_route, test_walking_route_rejects_false_world_seams_and_invalid_dimensions);
     tcase_add_test(tc_route, test_walking_route_rejects_floorless_and_walkoff_start);
     tcase_add_test(tc_route, test_walking_route_candidate_rejects_missing_and_wrong_archetype);
+    tcase_add_test(tc_route,
+                   test_walking_route_reserves_authored_spawn_cells_before_live_activation);
     suite_add_tcase(s, tc_route);
     suite_add_tcase(s, tc_core);
     return s;
