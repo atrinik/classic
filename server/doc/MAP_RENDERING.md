@@ -2002,6 +2002,19 @@ cache generation; coordinate reuse cannot resurrect a prior map.
 | Stale expiry | Unchanged. | Remove the revoked visual/interaction payload while retaining a zero-alpha, generation-bound presentation tombstone for later fade-in. | The delta protocol never treats elapsed time without a packet as authoritative absence; expiry is deterministic and cannot schedule continuous redraw after alpha reaches zero. |
 | Teleport, reconnect, logout, renderer shutdown, or reset | Hard clear the affected map/session generation. | Hard clear all live records and annotations. | Reconnect invalidates both retained world and minimap targets before a split first update can render; no client cache is trusted across identity change. |
 
+Living actor fades follow identity across a complete MAP2 publication. A visible
+move of the same server object count transfers its current alpha to the new
+pose and removes the previous pose immediately, including multipart changes
+and linked-depth moves. Names and face IDs are not identities. If an actor is
+absent from the resulting authorized view (including fog, darkness, or an exit),
+its last pose may fade for the bounded interval. Later re-entry removes any old
+stale pose and follows the ordinary visibility-enter fade. The local player is
+identified at primary depth and retains that ownership through cache scrolling;
+its previous pose is removed immediately on movement or any clear and never
+leaves a disappearance ghost. Interaction metadata is revoked immediately even
+while another actor's noninteractive visual pose fades. Identity matching never
+crosses NEW/reset map generations or grants authorization to a stale pose.
+
 The local render clock is an injected monotonic integer-millisecond clock. It
 advances only while the presentation window is active, so minimizing or hiding
 the client suspends rather than completes in-progress fades. It does not use

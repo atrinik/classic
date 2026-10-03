@@ -2893,7 +2893,9 @@ void map_set_data(int x,
         return;
     }
 
-    if (face == 0 && layer_record->visibility_local_player) {
+    if ((face == 0 && layer_record->visibility_local_player) ||
+        (face != 0 && object_layer == LAYER_LIVING &&
+         layer_record->visibility_actor_id != target_object_count)) {
         map_visibility_fade_init(&layer_record->visibility);
     }
     layer_record->visibility_actor_id = object_layer == LAYER_LIVING ? target_object_count : 0;
@@ -6565,6 +6567,8 @@ static bool map_render_command_covers(const map_render_command_t *covered_comman
 
 /** Mark nearby doors that are actually covered in the final painter order. */
 static void map_render_commands_find_door_hints(map_render_context_t *context) {
+    int player_x = map_width * MAP_FOW_SIZE / 2;
+    int player_y = map_height * MAP_FOW_SIZE / 2;
 
     for (size_t door_index = 0; door_index < context->commands_num; door_index++) {
         map_render_command_t *door = &context->commands[door_index];
