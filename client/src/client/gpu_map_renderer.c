@@ -2869,6 +2869,10 @@ bool gpu_map_renderer_retain(int width, int height, bool auxiliary) {
     return true;
 }
 
+uint64_t gpu_map_renderer_primary_publication_generation(void) {
+    return map_targets[0].published ? map_targets[0].published_generation : 0;
+}
+
 bool gpu_map_renderer_active(void) {
     return map_command_buffer != NULL;
 }

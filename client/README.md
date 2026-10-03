@@ -288,6 +288,28 @@ environment variables never synthesize a selected-adapter identity.
  actor-effect source and instance deltas. Stable-slot uniforms remain one
  16 to 1024-byte push per submitted world batch.
 
+ Live movement diagnostics use `--live-movement-route /absolute/route.xml`
+ and `--live-movement-report /absolute/new-report.jsonl` with the normal client
+ startup and authenticated connection. Run them through an isolated wrapper
+ scenario; the report path must not exist. A closed `live-movement-route`
+ version-1 XML document specifies `timeout-ms`, `step-timeout-ms`, and ordered
+ `checkpoint` elements with absolute server `map`, `x`, `y`, and keypad
+ `direction`. The first checkpoint has direction 0 and verifies the start;
+ later checkpoints use directions 1–9 except 5 and identify each destination.
+ The route allows at most 50,000 checkpoints and one hour. It issues one normal
+ movement command at a time, without retries, and fails on divergence,
+ disconnect, deadline, or incomplete evidence. Gameplay input is suppressed
+ during this dedicated run; window and quit events retain normal behavior.
+
+ `python3 tools/verify_live_movement.py ROUTE REPORT` checks the exact route
+ hash, every observed arrival, primary-map presentation, and successful final
+ observation period before producing coverage and frame-time quantiles.
+ CPU stage totals, renderer work, uploads, asset queues, and connection health
+ are recorded separately. GPU host submission and fence timings are not
+ hardware GPU execution time. The wrapper binds content, scenario, source and
+ runtime settings to the report. Live routes exercise the server, map changes,
+ assets and NPCs; snapshot benchmarks remain separate renderer diagnostics.
+
  The client deliberately uses a 1:1 logical-to-output-pixel window contract.
  High-density backing stores are not requested: one SDL window coordinate is
  one renderer output pixel, which preserves nearest-neighbor pixel-art sampling

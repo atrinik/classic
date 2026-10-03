@@ -30,6 +30,8 @@ void gpu_map_renderer_destroy(void);
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary);
 /** Reuse a complete published target without opening a command buffer. */
 bool gpu_map_renderer_retain(int width, int height, bool auxiliary);
+/** Main-thread identity of the published primary target, zero if unavailable. */
+uint64_t gpu_map_renderer_primary_publication_generation(void);
 bool gpu_map_renderer_active(void);
 void gpu_map_renderer_set_invalidation_hint(gpu_renderer_map_invalidation_reason_t reason);
 void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected);

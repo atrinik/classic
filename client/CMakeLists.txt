@@ -758,6 +758,28 @@ if (BUILD_TESTING)
     target_link_libraries(client-move-stream-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-move-stream COMMAND client-move-stream-tests)
 
+    add_executable(client-live-movement-route-tests
+        src/tests/live_movement_route.c src/client/live_movement_route.c)
+    atrinik_configure_target(client-live-movement-route-tests)
+    target_include_directories(client-live-movement-route-tests PRIVATE src/include)
+    target_link_libraries(client-live-movement-route-tests PRIVATE Atrinik::Core OpenSSL::Crypto)
+    if (TARGET LibXml2::LibXml2)
+        target_link_libraries(client-live-movement-route-tests PRIVATE LibXml2::LibXml2)
+    else ()
+        target_include_directories(client-live-movement-route-tests PRIVATE ${LIBXML2_INCLUDE_DIR})
+        target_link_libraries(client-live-movement-route-tests PRIVATE ${LIBXML2_LIBRARIES})
+    endif ()
+    add_test(NAME client-live-movement-route COMMAND client-live-movement-route-tests)
+    add_test(NAME client-live-movement-report
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_verify_live_movement.py")
+
+    add_executable(client-live-movement-input-tests src/tests/live_movement_input.c)
+    atrinik_configure_target(client-live-movement-input-tests)
+    target_include_directories(client-live-movement-input-tests PRIVATE src/include)
+    target_link_libraries(client-live-movement-input-tests PRIVATE SDL3::SDL3)
+    add_test(NAME client-live-movement-input COMMAND client-live-movement-input-tests)
+
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
         src/client/commands.c

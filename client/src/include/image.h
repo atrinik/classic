@@ -107,6 +107,15 @@ const char *image_get_face_name(int face);
 /** Monotonic generation of face bitmap content visible to map rendering. */
 uint64_t image_face_content_generation(void);
 
+/** Main-thread counters for live asset-loading diagnostics. */
+typedef struct image_face_statistics {
+    uint64_t installed_total;
+    size_t pending;
+    size_t admitted;
+    size_t unprepared;
+} image_face_statistics_t;
+void image_face_statistics_get(image_face_statistics_t *statistics);
+
 /** Reset unavailable-face detection before replaying an immutable snapshot. */
 void image_missing_faces_reset(void);
 

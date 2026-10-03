@@ -772,6 +772,10 @@ static bool map_continuation_visible_change;
 static bool map_continuation_region_fow_update;
 static uint64_t map_publication_generation;
 
+uint64_t socket_command_map_publication_generation(void) {
+    return map_publication_generation;
+}
+
 typedef struct map_pending_packet {
     uint8_t *data;
     size_t len;

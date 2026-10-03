@@ -82,6 +82,8 @@ extern void socket_command_player_status(uint8_t *data, size_t len, size_t pos);
 extern void socket_command_mapstats(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_map(uint8_t *data, size_t len, size_t pos);
+/** Main-thread count of completely committed MAP2 publications. */
+uint64_t socket_command_map_publication_generation(void);
 /** Roll back an unpublished multi-envelope MAP2 update. */
 extern void socket_command_map_abort_pending(void);
 #ifdef ATRINIK_WIDGET_TESTS

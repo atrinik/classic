@@ -34,6 +34,11 @@
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.
+- Live movement diagnostics use normal authenticated connections and movement
+  commands in an isolated wrapper scenario. Their closed route owns gameplay
+  input, accepts only complete server map publications, and fails on divergence
+  or deadlines. Arrival and presentation are separate evidence; offline snapshot
+  replays do not prove live travel or movement performance.
 - Client user data lives below `.atrinik/<major>.x/`. When that stable directory
   is first created, the client may migrate the highest valid same-major legacy
   directory; the migration is collision-safe and marker-backed, leaves other

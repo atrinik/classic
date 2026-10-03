@@ -124,6 +124,16 @@ static uint64_t face_asset_next_urgent_sequence;
 static uint64_t face_asset_loader_retry_at_ms;
 static uint64_t face_asset_demand_generation = 1;
 static uint64_t face_asset_content_generation = 1;
+static uint64_t face_asset_installed_total;
+
+void image_face_statistics_get(image_face_statistics_t *statistics) {
+    *statistics = (image_face_statistics_t){
+        .installed_total = face_asset_installed_total,
+        .pending = face_asset_request_count,
+        .admitted = face_asset_admitted_count,
+        .unprepared = face_asset_unprepared_count,
+    };
+}
 
 static void image_face_content_changed(void) {
     face_asset_content_generation++;
@@ -1183,6 +1193,7 @@ face_asset_requests_complete_loader(uint64_t now_ms, uint64_t started_us, bool *
                 }
                 sprite_free_rendered(FaceList[request->face].sprite);
                 FaceList[request->face].sprite = result->sprite;
+                face_asset_installed_total++;
                 image_face_content_changed();
                 result->sprite = NULL;
                 FaceList[request->face].flags &= ~FACE_REQUESTED;
@@ -1193,6 +1204,7 @@ face_asset_requests_complete_loader(uint64_t now_ms, uint64_t started_us, bool *
             face_cache_enqueue(FaceList[request->face].name, result->data, result->size);
             sprite_free_rendered(FaceList[request->face].sprite);
             FaceList[request->face].sprite = result->sprite;
+            face_asset_installed_total++;
             image_face_content_changed();
             result->sprite = NULL;
             LOG(DEBUG,
