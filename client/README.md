@@ -300,6 +300,10 @@ environment variables never synthesize a selected-adapter identity.
  movement command at a time, without retries, and fails on divergence,
  disconnect, deadline, or incomplete evidence. Gameplay input is suppressed
  during this dedicated run; window and quit events retain normal behavior.
+ A visible diagnostic window renders and animates without keyboard focus;
+ hiding or minimizing it fails the run. The first complete world checkpoint
+ must arrive within 120 seconds of initialization, or the shorter route
+ deadline. Startup, lighting setup, and captures never reset the global deadline.
 
  `python3 tools/verify_live_movement.py ROUTE REPORT` checks the exact route
  hash, every observed arrival, primary-map presentation, and successful final

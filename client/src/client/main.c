@@ -41,6 +41,7 @@
 #include <keybind.h>
 #include <lighting.h>
 #include <main.h>
+#include <live_movement_input.h>
 #include <map.h>
 #include <player.h>
 #include <server_files.h>
@@ -457,8 +458,7 @@ static void sound_background_hook(void) {
 /** Whether the window is available for normal-rate rendering. */
 static bool window_is_active(void) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(ScreenWindow);
-    return (flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0 &&
-           (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
+    return live_movement_window_is_active(flags, live_movement_enabled());
 }
 
 typedef struct presentation_clock {
@@ -488,7 +488,16 @@ static bool presentation_clock_suspend_test(void) {
     presentation_clock_step(&clock, 5000, true);
     success = success && clock.tick == 600;
     presentation_clock_step(&clock, 5050, true);
-    return success && clock.tick == 650;
+    success = success && clock.tick == 650;
+    clock = presentation_clock_start(500,
+        live_movement_window_is_active(SDL_WINDOW_INPUT_FOCUS, true));
+    presentation_clock_step(&clock, 600, live_movement_window_is_active(0, true));
+    presentation_clock_step(&clock, 900, live_movement_window_is_active(0, true));
+    success = success && clock.tick == 900;
+    presentation_clock_step(&clock, 1000,
+        live_movement_window_is_active(SDL_WINDOW_MINIMIZED, true));
+    presentation_clock_step(&clock, 5000, live_movement_window_is_active(0, true));
+    return success && clock.tick == 1000;
 }
 #endif
 

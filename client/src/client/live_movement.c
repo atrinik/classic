@@ -5,6 +5,7 @@
 #include <live_movement.h>
 #include <live_movement_route.h>
 #include <live_movement_capture.h>
+#include <live_movement_input.h>
 #include <client.h>
 #include <client_command_queue.h>
 #include <client_socket.h>
@@ -31,6 +32,7 @@
 #define LIVE_REPORT_MAX_BYTES (UINT64_C(127) * 1024 * 1024)
 #define LIVE_REPORT_MAX_FRAMES UINT64_C(900000)
 #define LIVE_FINAL_DRAIN_US UINT64_C(1000000)
+#define LIVE_STARTUP_TIMEOUT_US UINT64_C(120000000)
 #define LIVE_MOVEMENT_EPOCH UINT32_C(0x7fffffff)
 
 static live_movement_route_t *route;
@@ -435,6 +437,14 @@ void live_movement_tick(void) {
     uint64_t now = datetime_monotonic_us();
     if (now < started_us || now - started_us >= live_movement_route_timeout_ms(route) * 1000) {
         terminal(false, "global route deadline exceeded");
+        return;
+    }
+    if (arrivals == 0 && now - started_us >= LIVE_STARTUP_TIMEOUT_US) {
+        terminal(false, "initial world publication deadline exceeded");
+        return;
+    }
+    if (!live_movement_window_is_active(SDL_GetWindowFlags(ScreenWindow), true)) {
+        terminal(false, "diagnostic window is hidden or minimized");
         return;
     }
     if (step_started_us != 0 &&

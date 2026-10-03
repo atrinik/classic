@@ -14,6 +14,13 @@
     } while (0)
 
 int main(void) {
+    for (unsigned int bits = 0; bits < 8; bits++) {
+        SDL_WindowFlags flags = (bits & 1 ? SDL_WINDOW_INPUT_FOCUS : 0) |
+                                (bits & 2 ? SDL_WINDOW_HIDDEN : 0) |
+                                (bits & 4 ? SDL_WINDOW_MINIMIZED : 0);
+        CHECK(live_movement_window_is_active(flags, false) == (bits == 1));
+        CHECK(live_movement_window_is_active(flags, true) == ((bits & 6) == 0));
+    }
     /* Held keys, run/fire toggles, click-to-move and text commands must never
      * acquire the movement stream owned by a live route. */
     const Uint32 gameplay[] = {SDL_EVENT_KEY_DOWN,

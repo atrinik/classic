@@ -55,6 +55,11 @@ static char commands[3][32];
 Client_Player cpl;
 _mapdata MapData;
 SDL_Window *ScreenWindow;
+static SDL_WindowFlags window_flags;
+SDL_WindowFlags SDL_GetWindowFlags(SDL_Window *window) {
+    (void)window;
+    return window_flags;
+}
 
 uint64_t datetime_monotonic_us(void) {
     return now_us;
@@ -247,6 +252,7 @@ static void adapter_reset(void) {
     route_state = NULL;
     report = NULL;
     enabled = ready = finished = succeeded = arrival_waiting = false;
+    window_flags = 0;
     started_us = previous_frame_us = previous_service_us = service_gap_us = 0;
     max_service_gap_us = final_drain_started_us = final_drain_presented_frames = 0;
     frames = presented_frames = arrivals = presented_checkpoints = 0;
@@ -497,6 +503,33 @@ static int test_final_drain_disconnect(void) {
     return 0;
 }
 
+static int test_unfocused_startup_deadline_and_visibility(void) {
+    const char *startup_route =
+        "<live-movement-route version=\"1\" timeout-ms=\"180000\" step-timeout-ms=\"5000\">"
+        "<checkpoint map=\"/maps/start\" x=\"10\" y=\"10\" direction=\"0\"/>"
+        "<checkpoint map=\"/maps/start\" x=\"11\" y=\"10\" direction=\"6\"/>"
+        "</live-movement-route>";
+    for (unsigned int scenario = 0; scenario < 3; scenario++) {
+        fixture_paths_t paths;
+        adapter_reset();
+        CHECK(fixture_create(&paths, startup_route));
+        CHECK(fixture_ready(&paths));
+        cpl.state = ST_WAITFORPLAY;
+        now_us = started_us + LIVE_STARTUP_TIMEOUT_US - 1;
+        live_movement_tick();
+        CHECK(!live_movement_finished() && arrivals == 0);
+        if (scenario == 0) now_us++;
+        if (scenario == 1) window_flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_INPUT_FOCUS;
+        if (scenario == 2) window_flags = SDL_WINDOW_MINIMIZED;
+        live_movement_tick();
+        CHECK(live_movement_finished() && live_movement_exit_status() == 8);
+        CHECK(move_count == 0);
+        live_movement_close();
+        fixture_destroy(&paths);
+    }
+    return 0;
+}
+
 static int test_renderer_startup_and_recovery(void) {
     adapter_reset();
     CHECK(live_movement_renderer_recovery());
@@ -710,6 +743,8 @@ int main(void) {
     if (test_final_drain() != 0)
         return 1;
     if (test_final_drain_disconnect() != 0)
+        return 1;
+    if (test_unfocused_startup_deadline_and_visibility() != 0)
         return 1;
     if (test_renderer_startup_and_recovery() != 0)
         return 1;
