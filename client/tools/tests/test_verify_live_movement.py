@@ -137,6 +137,15 @@ class VerifyLiveMovementTests(unittest.TestCase):
         self.assertEqual(summary["gpu_invalidation_totals"], list(range(3, 33, 3)))
         self.assertEqual(summary["world_time_first"]["game_seconds"], 60)
         self.assertEqual(summary["world_time_last"]["game_seconds"], 180)
+        self.assertEqual(summary["movement_frames"], 1)
+        self.assertEqual(summary["movement_presented_frames"], 1)
+        self.assertEqual(summary["movement_elapsed_us"], 100)
+        self.assertEqual(summary["movement_frame_us"]["p95"], 100)
+        self.assertEqual(summary["movement_presented_fps"], 10_000.0)
+        self.assertEqual(summary["movement_cpu_stages"]["map"]["total_us"], 10)
+        self.assertEqual(summary["movement_gpu_host_stages"]["submit"]["total_ns"], 100)
+        self.assertEqual(summary["per_map_frames"], {"/brynknot/wilderness": 1})
+        self.assertEqual(summary["per_map_frame_us"]["/brynknot/wilderness"]["max"], 100)
 
     def test_cli_writes_same_stable_summary_as_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -280,6 +289,31 @@ class VerifyLiveMovementTests(unittest.TestCase):
             record["elapsed_us"] += offset
         summary = self.verify(records)
         self.assertEqual(summary["presented_checkpoints"], 2)
+
+    def test_movement_metrics_exclude_login_and_post_route_drain(self) -> None:
+        records = good_records()
+        records[2]["elapsed_us"] = 100_000
+        records[2]["frame_us"] = 100_000
+        records[3]["elapsed_us"] = 100_001
+        records[4]["elapsed_us"] = 100_002
+        records[5]["elapsed_us"] = 100_100
+        records[6]["elapsed_us"] = 100_101
+        records[7]["elapsed_us"] = 1_100_101
+        records[8]["elapsed_us"] = 1_100_101
+        summary = self.verify(records)
+        self.assertEqual(summary["frame_us"]["max"], 100_000)
+        self.assertEqual(summary["movement_frame_us"]["max"], 100)
+        self.assertEqual(summary["movement_frames"], 1)
+
+    def test_rejects_zero_duration_movement_window(self) -> None:
+        records = good_records()
+        records[3]["elapsed_us"] = 200
+        records[4]["elapsed_us"] = 200
+        records[5]["elapsed_us"] = 200
+        records[6]["elapsed_us"] = 200
+        records[7]["elapsed_us"] = 1_000_200
+        records[8]["elapsed_us"] = 1_000_200
+        self.assert_rejected(records, "no positive-duration presented movement evidence")
 
     def test_rejects_unhealthy_network_after_arrival(self) -> None:
         records = good_records()

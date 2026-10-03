@@ -327,6 +327,12 @@ def verify(route_path: Path, report_path: Path) -> dict:
     last_presented_elapsed: int | None = None
     cpu_deltas: list[array] = []
     gpu_host_deltas: list[array] = []
+    movement_frame_times = array("Q")
+    movement_cpu_deltas: list[array] = []
+    movement_gpu_host_deltas: list[array] = []
+    movement_per_map: dict[str, array] = {}
+    movement_frames = 0
+    movement_presented_frames = 0
     previous_cpu: list[int] | None = None
     previous_gpu_host: list[int] | None = None
     previous_gpu_invalidations: list[int] | None = None
@@ -339,6 +345,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
     covered_maps: list[str] = []
     covered_tiles: set[tuple[str, int, int]] = set()
     final_presentation_elapsed: int | None = None
+    initial_presentation_elapsed: int | None = None
     post_route_presented_frame = False
 
     record_count = 0
@@ -350,6 +357,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
             identity = _validate_identity(record, route_digest, len(checkpoints))
             cpu_deltas = [array("Q") for _ in identity["cpu_stage_names"]]
             gpu_host_deltas = [array("Q") for _ in identity["gpu_host_stage_names"]]
+            movement_cpu_deltas = [array("Q") for _ in identity["cpu_stage_names"]]
+            movement_gpu_host_deltas = [array("Q") for _ in identity["gpu_host_stage_names"]]
             continue
         _require(identity is not None, "report identity is missing")
         _require(record_type != "identity", f"duplicate identity at line {line_number}")
@@ -408,6 +417,15 @@ def verify(route_path: Path, report_path: Path) -> dict:
                     samples.append(item)
             previous_cpu = cpu
             previous_gpu_host = gpu_host
+            movement_active = 1 <= presentations < len(checkpoints)
+            if movement_active:
+                movement_frames += 1
+                movement_frame_times.append(frame_us)
+                movement_per_map.setdefault(map_path, array("Q")).append(frame_us)
+                for values, delta in ((movement_cpu_deltas, cpu_delta),
+                                      (movement_gpu_host_deltas, gpu_host_delta)):
+                    for samples, item in zip(values, delta):
+                        samples.append(item)
             gpu_invalidations = record["gpu_invalidation_totals"]
             _require(isinstance(gpu_invalidations, list) and
                      len(gpu_invalidations) == len(GPU_INVALIDATION_REASONS),
@@ -455,6 +473,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
             frame_times.append(frame_us)
             if record["presented"]:
                 presented_frames += 1
+                if movement_active:
+                    movement_presented_frames += 1
                 if first_presented_elapsed is None:
                     first_presented_elapsed = elapsed
                 if last_presented_elapsed is not None:
@@ -533,6 +553,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
             presentation_gpu_generation = None
             step_started_elapsed = elapsed
             presentations += 1
+            if presentations == 1:
+                initial_presentation_elapsed = elapsed
             if presentations == len(checkpoints):
                 final_presentation_elapsed = elapsed
                 post_route_presented_frame = False
@@ -577,6 +599,12 @@ def verify(route_path: Path, report_path: Path) -> dict:
              "presented frame timing is incomplete")
     duration_us = last_presented_elapsed - first_presented_elapsed
     _require(duration_us > 0, "presented frame duration is not positive")
+    _require(initial_presentation_elapsed is not None,
+             "initial checkpoint presentation timing is missing")
+    movement_elapsed_us = final_presentation_elapsed - initial_presentation_elapsed
+    _require(movement_elapsed_us > 0 and movement_frames > 0 and
+             movement_presented_frames > 0,
+             "successful report has no positive-duration presented movement evidence")
     unique_maps = list(dict.fromkeys(covered_maps))
     return {
         "status": "success",
@@ -611,6 +639,23 @@ def verify(route_path: Path, report_path: Path) -> dict:
         "cpu_stages": _stage_summary(identity["cpu_stage_names"], cpu_deltas, "us"),
         "gpu_host_stages": _stage_summary(identity["gpu_host_stage_names"],
                                            gpu_host_deltas, "ns"),
+        "movement_frames": movement_frames,
+        "movement_presented_frames": movement_presented_frames,
+        "movement_elapsed_us": movement_elapsed_us,
+        "movement_frame_us": _quantiles(movement_frame_times),
+        "movement_presented_fps": movement_presented_frames * 1_000_000.0 /
+                                  movement_elapsed_us,
+        "movement_cpu_stages": _stage_summary(
+            identity["cpu_stage_names"], movement_cpu_deltas, "us"),
+        "movement_gpu_host_stages": _stage_summary(
+            identity["gpu_host_stage_names"], movement_gpu_host_deltas, "ns"),
+        "per_map_frames": {
+            map_path: len(values) for map_path, values in sorted(movement_per_map.items())
+        },
+        "per_map_frame_us": {
+            map_path: _quantiles(values)
+            for map_path, values in sorted(movement_per_map.items())
+        },
         "gpu_invalidation_totals": previous_gpu_invalidations,
         "network_maxima": network_maxima,
         "asset_maxima": asset_maxima,
