@@ -32,6 +32,7 @@
 #include <client_socket.h>
 #include <button.h>
 #include <client.h>
+#include <live_movement.h>
 #include <event.h>
 #include <join_credentials.h>
 #include <list.h>
@@ -99,6 +100,73 @@ static int text_input_character_check(text_input_struct *text_input, char c) {
     return 1;
 }
 
+/** Submit the existing form through the same validation as keyboard login. */
+static int login_submit(void) {
+    if (cpl.state != ST_LOGIN || !file_updates_finished()) {
+        return -1;
+    }
+    packet_struct *packet;
+    uint32_t lower, upper;
+
+    if (button_tab_register.pressed_forced &&
+        strcmp(text_inputs[LOGIN_TEXT_INPUT_PASSWORD].str,
+               text_inputs[LOGIN_TEXT_INPUT_PASSWORD2].str) != 0) {
+        draw_info(COLOR_RED, "The passwords do not match.");
+        return 1;
+    }
+
+    packet = packet_new(SERVER_CMD_ACCOUNT, 64, 64);
+
+    if (button_tab_login.pressed_forced) {
+        packet_writer_write_uint8(packet, CMD_ACCOUNT_LOGIN);
+    } else {
+        packet_writer_write_uint8(packet, CMD_ACCOUNT_REGISTER);
+    }
+
+    for (size_t i = 0; i < LOGIN_TEXT_INPUT_MAX; i++) {
+        if (*text_inputs[i].str == '\0') {
+            draw_info(COLOR_RED, "You must enter a valid value for all text inputs.");
+            packet_free(packet);
+            return 1;
+        } else if (sscanf(
+                       s_settings->text[i == LOGIN_TEXT_INPUT_NAME
+                                            ? SERVER_TEXT_ALLOWED_CHARS_ACCOUNT_MAX
+                                            : SERVER_TEXT_ALLOWED_CHARS_PASSWORD_MAX],
+                       "%u-%u",
+                       &lower,
+                       &upper) == 2 &&
+                   (text_inputs[i].num < lower || text_inputs[i].num > upper)) {
+            draw_info_format(COLOR_RED,
+                             "%s must be between %d and %d characters long.",
+                             i == LOGIN_TEXT_INPUT_NAME ? "Account name" : "Password",
+                             lower,
+                             upper);
+            packet_free(packet);
+            return 1;
+        }
+
+        packet_writer_write_cstring(packet, text_inputs[i].str);
+    }
+
+    strncpy(cpl.password,
+            text_inputs[LOGIN_TEXT_INPUT_PASSWORD].str,
+            sizeof(cpl.password) - 1);
+    cpl.password[sizeof(cpl.password) - 1] = '\0';
+
+    for (size_t i = 0; i < LOGIN_TEXT_INPUT_MAX; i++) {
+        text_input_reset(&text_inputs[i]);
+    }
+
+    text_inputs[text_input_current].focus = 0;
+    text_input_current = LOGIN_TEXT_INPUT_NAME;
+    text_inputs[text_input_current].focus = 1;
+
+    socket_send_packet(packet);
+    cpl.state = ST_WAITLOGIN;
+
+    return 1;
+}
+
 /** @copydoc popup_struct::popup_draw_func */
 static int popup_draw(popup_struct *popup) {
     SDL_Rect box;
@@ -143,6 +211,10 @@ static int popup_draw(popup_struct *popup) {
     if ((string_isempty(clioption_settings.connect[0]) ||
          strcasecmp(selected_server->name, clioption_settings.connect[0]) == 0) &&
         cpl.state < ST_WAITLOGIN) {
+        bool diagnostic_submit = live_movement_enabled() &&
+                                 clioption_settings.connect[1] != NULL &&
+                                 clioption_settings.connect[2] != NULL &&
+                                 button_tab_login.pressed_forced;
         if (clioption_settings.connect[1]) {
             text_input_set(&text_inputs[LOGIN_TEXT_INPUT_NAME], clioption_settings.connect[1]);
 
@@ -151,7 +223,9 @@ static int popup_draw(popup_struct *popup) {
                 clioption_settings.connect[1] = NULL;
             }
 
-            event_push_key_once(SDLK_RETURN, 0);
+            if (!live_movement_enabled()) {
+                event_push_key_once(SDLK_RETURN, 0);
+            }
         }
 
         if (clioption_settings.connect[2]) {
@@ -161,7 +235,12 @@ static int popup_draw(popup_struct *popup) {
                 client_join_credentials_clear(NULL, &clioption_settings.connect[2]);
             }
 
-            event_push_key_once(SDLK_RETURN, 0);
+            if (!live_movement_enabled()) {
+                event_push_key_once(SDLK_RETURN, 0);
+            }
+        }
+        if (diagnostic_submit) {
+            login_submit();
         }
     }
 
@@ -241,66 +320,7 @@ static int popup_event(popup_struct *popup, SDL_Event *event) {
     if (event->type == SDL_EVENT_KEY_DOWN) {
         if (IS_NEXT(event->key.key)) {
             if (text_input_current == LOGIN_TEXT_INPUT_MAX - 1 && IS_ENTER(event->key.key)) {
-                packet_struct *packet;
-                uint32_t lower, upper;
-
-                if (button_tab_register.pressed_forced &&
-                    strcmp(text_inputs[LOGIN_TEXT_INPUT_PASSWORD].str,
-                           text_inputs[LOGIN_TEXT_INPUT_PASSWORD2].str) != 0) {
-                    draw_info(COLOR_RED, "The passwords do not match.");
-                    return 1;
-                }
-
-                packet = packet_new(SERVER_CMD_ACCOUNT, 64, 64);
-
-                if (button_tab_login.pressed_forced) {
-                    packet_writer_write_uint8(packet, CMD_ACCOUNT_LOGIN);
-                } else {
-                    packet_writer_write_uint8(packet, CMD_ACCOUNT_REGISTER);
-                }
-
-                for (i = 0; i < LOGIN_TEXT_INPUT_MAX; i++) {
-                    if (*text_inputs[i].str == '\0') {
-                        draw_info(COLOR_RED, "You must enter a valid value for all text inputs.");
-                        packet_free(packet);
-                        return 1;
-                    } else if (sscanf(
-                                   s_settings->text[i == LOGIN_TEXT_INPUT_NAME
-                                                        ? SERVER_TEXT_ALLOWED_CHARS_ACCOUNT_MAX
-                                                        : SERVER_TEXT_ALLOWED_CHARS_PASSWORD_MAX],
-                                   "%u-%u",
-                                   &lower,
-                                   &upper) == 2 &&
-                               (text_inputs[i].num < lower || text_inputs[i].num > upper)) {
-                        draw_info_format(COLOR_RED,
-                                         "%s must be between %d and %d characters long.",
-                                         i == LOGIN_TEXT_INPUT_NAME ? "Account name" : "Password",
-                                         lower,
-                                         upper);
-                        packet_free(packet);
-                        return 1;
-                    }
-
-                    packet_writer_write_cstring(packet, text_inputs[i].str);
-                }
-
-                strncpy(cpl.password,
-                        text_inputs[LOGIN_TEXT_INPUT_PASSWORD].str,
-                        sizeof(cpl.password) - 1);
-                cpl.password[sizeof(cpl.password) - 1] = '\0';
-
-                for (i = 0; i < LOGIN_TEXT_INPUT_MAX; i++) {
-                    text_input_reset(&text_inputs[i]);
-                }
-
-                text_inputs[text_input_current].focus = 0;
-                text_input_current = LOGIN_TEXT_INPUT_NAME;
-                text_inputs[text_input_current].focus = 1;
-
-                socket_send_packet(packet);
-                cpl.state = ST_WAITLOGIN;
-
-                return 1;
+                return login_submit();
             }
 
             text_inputs[text_input_current].focus = 0;
