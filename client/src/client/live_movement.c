@@ -265,8 +265,13 @@ static bool capture_checkpoint_request(size_t index,
                                        bool game_time_valid,
                                        uint64_t game_seconds) {
     live_capture_checkpoint_t *checkpoint = &capture_checkpoints[index];
+    const char *map_end = memchr(MapData.map_path, '\0', sizeof(checkpoint->map));
+    if (map_end == NULL) {
+        terminal(false, "capture map path exceeds the route identity limit");
+        return false;
+    }
     checkpoint->requested_us = now;
-    snprintf(checkpoint->map, sizeof(checkpoint->map), "%s", MapData.map_path);
+    memcpy(checkpoint->map, MapData.map_path, (size_t)(map_end - MapData.map_path) + 1);
     checkpoint->x = MapData.posx;
     checkpoint->y = MapData.posy;
     checkpoint->publication = socket_command_map_publication_generation();

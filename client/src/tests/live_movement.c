@@ -20,12 +20,12 @@ struct live_movement_capture {
 /* Include the adapter so the test can reset its process-lifetime state. */
 #include "../client/live_movement.c"
 
-#define CHECK(expression)                                                    \
-    do {                                                                     \
-        if (!(expression)) {                                                 \
+#define CHECK(expression)                                                       \
+    do {                                                                        \
+        if (!(expression)) {                                                    \
             fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #expression); \
-            return 1;                                                        \
-        }                                                                    \
+            return 1;                                                           \
+        }                                                                       \
     } while (0)
 
 typedef struct fixture_paths {
@@ -56,42 +56,28 @@ Client_Player cpl;
 _mapdata MapData;
 SDL_Window *ScreenWindow;
 
-uint64_t datetime_monotonic_us(void) {
-    return now_us;
-}
+uint64_t datetime_monotonic_us(void) { return now_us; }
 
-bool client_socket_active(void) {
-    return socket_active;
-}
-bool client_socket_shutdown_pending(void) {
-    return shutdown_pending;
-}
+bool client_socket_active(void) { return socket_active; }
+bool client_socket_shutdown_pending(void) { return shutdown_pending; }
 uint64_t socket_command_map_publication_generation(void) {
     return publication_generation;
 }
-bool map_state_transaction_active(void) {
-    return map_transaction_active;
-}
+bool map_state_transaction_active(void) { return map_transaction_active; }
 
 void move_keys_stream(int direction, uint32_t epoch) {
-    if (epoch != LIVE_MOVEMENT_EPOCH)
-        abort();
+    if (epoch != LIVE_MOVEMENT_EPOCH) abort();
     move_count++;
     last_move = direction;
 }
 
 void move_keys_stream_stop(uint32_t epoch) {
-    if (epoch != LIVE_MOVEMENT_EPOCH)
-        abort();
+    if (epoch != LIVE_MOVEMENT_EPOCH) abort();
     stop_count++;
 }
 
-void render_profiler_set_enabled(bool enabled_value) {
-    (void)enabled_value;
-}
-void render_profiler_statistics_reset(void) {
-    profile_statistics.frames = 0;
-}
+void render_profiler_set_enabled(bool enabled_value) { (void)enabled_value; }
+void render_profiler_statistics_reset(void) { profile_statistics.frames = 0; }
 void render_profiler_statistics_get(render_profile_snapshot_t *statistics) {
     *statistics = profile_statistics;
 }
@@ -103,15 +89,9 @@ bool render_profiler_stage_metadata_get(render_profile_stage_t stage,
     return true;
 }
 
-const char *gpu_renderer_backend(void) {
-    return "test";
-}
-const char *gpu_renderer_device_name(void) {
-    return "test-device";
-}
-const char *gpu_renderer_driver_name(void) {
-    return "test-driver";
-}
+const char *gpu_renderer_backend(void) { return "test"; }
+const char *gpu_renderer_device_name(void) { return "test-device"; }
+const char *gpu_renderer_driver_name(void) { return "test-driver"; }
 void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics) {
     *statistics = (gpu_renderer_statistics_t){0};
 }
@@ -135,17 +115,13 @@ bool telemetry_game_time_seconds(uint64_t *game_seconds) {
     telemetry_calls++;
     return telemetry_valid;
 }
-bool image_missing_faces_detected(void) {
-    return missing_faces;
-}
+bool image_missing_faces_detected(void) { return missing_faces; }
 void map_redraw_request(map_redraw_reason_t reason) {
-    if (reason != MAP_REDRAW_REASON_EXTERNAL)
-        abort();
+    if (reason != MAP_REDRAW_REASON_EXTERNAL) abort();
     redraw_count++;
 }
 void send_command(const char *command) {
-    if (command_count >= arraysize(commands))
-        abort();
+    if (command_count >= arraysize(commands)) abort();
     snprintf(commands[command_count++], sizeof(commands[0]), "%s", command);
 }
 live_movement_capture_t *
@@ -156,15 +132,14 @@ live_movement_capture_create(const char *path, char *error, size_t error_size) {
     }
     struct live_movement_capture *capture = &captures[capture_create_count++];
     snprintf(capture->path, sizeof(capture->path), "%s", path);
-    capture->result = (live_movement_capture_result_t){.status = LIVE_MOVEMENT_CAPTURE_READY,
-                                                       .path = capture->path};
+    capture->result = (live_movement_capture_result_t){
+        .status = LIVE_MOVEMENT_CAPTURE_READY, .path = capture->path};
     capture->request_ok = true;
     return capture;
 }
 bool live_movement_capture_request(live_movement_capture_t *capture) {
     if (capture == NULL || !capture->request_ok ||
-        capture->result.status != LIVE_MOVEMENT_CAPTURE_READY)
-        return false;
+        capture->result.status != LIVE_MOVEMENT_CAPTURE_READY) return false;
     capture->result.status = LIVE_MOVEMENT_CAPTURE_PENDING;
     return true;
 }
@@ -172,9 +147,7 @@ const live_movement_capture_result_t *
 live_movement_capture_result(const live_movement_capture_t *capture) {
     return capture == NULL ? NULL : &capture->result;
 }
-void live_movement_capture_destroy(live_movement_capture_t *capture) {
-    (void)capture;
-}
+void live_movement_capture_destroy(live_movement_capture_t *capture) { (void)capture; }
 int64_t setting_get_int(int category, int setting) {
     (void)category;
     (void)setting;
@@ -204,8 +177,7 @@ static bool write_all(int fd, const char *value) {
     size_t length = strlen(value);
     while (offset < length) {
         ssize_t written = write(fd, value + offset, length - offset);
-        if (written <= 0)
-            return false;
+        if (written <= 0) return false;
         offset += (size_t)written;
     }
     return true;
@@ -217,10 +189,8 @@ static bool fixture_create(fixture_paths_t *paths, const char *xml) {
     int route_fd = mkstemp(paths->route);
     int report_fd = mkstemp(paths->report);
     if (route_fd < 0 || report_fd < 0) {
-        if (route_fd >= 0)
-            close(route_fd);
-        if (report_fd >= 0)
-            close(report_fd);
+        if (route_fd >= 0) close(route_fd);
+        if (report_fd >= 0) close(report_fd);
         unlink(paths->route);
         unlink(paths->report);
         return false;
@@ -282,8 +252,7 @@ static void adapter_reset(void) {
 }
 
 static bool fixture_ready(const fixture_paths_t *paths) {
-    if (!live_movement_initialize(paths->route, paths->report))
-        return false;
+    if (!live_movement_initialize(paths->route, paths->report)) return false;
     live_movement_ready();
     return true;
 }
@@ -497,20 +466,39 @@ static int test_final_drain_disconnect(void) {
     return 0;
 }
 
+static int test_capture_map_path_boundaries(void) {
+    const size_t lengths[] = {511, 512, sizeof(MapData.map_path)};
+    for (size_t i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+        fixture_paths_t paths;
+        adapter_reset();
+        CHECK(fixture_create(&paths, capture_route_xml));
+        CHECK(live_movement_initialize(paths.route, paths.report));
+        CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", NULL));
+        memset(MapData.map_path, 'a', sizeof(MapData.map_path));
+        if (lengths[i] < sizeof(MapData.map_path)) MapData.map_path[lengths[i]] = '\0';
+        bool accepted = capture_checkpoint_request(0, now_us, 1, false, 0);
+        if (lengths[i] == 511) {
+            CHECK(accepted && captures[0].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
+            CHECK(memcmp(capture_checkpoints[0].map, MapData.map_path, 512) == 0);
+        } else {
+            CHECK(!accepted && live_movement_finished() && live_movement_exit_status() == 8);
+            CHECK(captures[0].result.status == LIVE_MOVEMENT_CAPTURE_READY);
+            CHECK(capture_checkpoints[0].requested_us == 0 && capture_checkpoints[0].map[0] == '\0');
+        }
+        live_movement_close();
+        fixture_destroy(&paths);
+    }
+    return 0;
+}
+
 static int test_capture_barriers(void) {
     fixture_paths_t paths;
     adapter_reset();
     CHECK(fixture_create(&paths, capture_route_xml));
     CHECK(live_movement_initialize(paths.route, paths.report));
     CHECK(!live_movement_configure_review(paths.report, "/tmp/initial.png", NULL, NULL));
-    CHECK(!live_movement_configure_review(paths.report,
-                                          "/tmp/initial.png",
-                                          "/tmp/initial.png",
-                                          NULL));
-    CHECK(!live_movement_configure_review(paths.report,
-                                          "/tmp/initial.png",
-                                          "/tmp/final.png",
-                                          "invalid"));
+    CHECK(!live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/initial.png", NULL));
+    CHECK(!live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", "invalid"));
     CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", NULL));
     live_movement_ready();
     publication_generation = 1;
@@ -587,8 +575,7 @@ static int test_capture_failure_and_deadline(void) {
     publication_generation++;
     live_movement_tick();
     capture_settled_frame(true);
-    CHECK(presented_checkpoints == 2U &&
-          captures[1].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
+    CHECK(presented_checkpoints == 2U && captures[1].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
     live_movement_tick();
     now_us += 5000000;
     live_movement_tick();
@@ -603,10 +590,7 @@ static int test_lighting_phase_barrier(void) {
     adapter_reset();
     CHECK(fixture_create(&paths, capture_route_xml));
     CHECK(live_movement_initialize(paths.route, paths.report));
-    CHECK(live_movement_configure_review(paths.report,
-                                         "/tmp/initial.png",
-                                         "/tmp/final.png",
-                                         "new-moon"));
+    CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", "new-moon"));
     live_movement_ready();
     publication_generation = 1;
     live_movement_tick();
@@ -639,22 +623,15 @@ static int test_lighting_phase_barrier(void) {
 }
 
 int main(void) {
-    if (test_initialize_and_abort() != 0)
-        return 1;
-    if (test_publication_and_movement() != 0)
-        return 1;
-    if (test_deadline_and_report_failure() != 0)
-        return 1;
-    if (test_final_drain() != 0)
-        return 1;
-    if (test_final_drain_disconnect() != 0)
-        return 1;
-    if (test_capture_barriers() != 0)
-        return 1;
-    if (test_capture_failure_and_deadline() != 0)
-        return 1;
-    if (test_lighting_phase_barrier() != 0)
-        return 1;
+    if (test_initialize_and_abort() != 0) return 1;
+    if (test_publication_and_movement() != 0) return 1;
+    if (test_deadline_and_report_failure() != 0) return 1;
+    if (test_final_drain() != 0) return 1;
+    if (test_final_drain_disconnect() != 0) return 1;
+    if (test_capture_map_path_boundaries() != 0) return 1;
+    if (test_capture_barriers() != 0) return 1;
+    if (test_capture_failure_and_deadline() != 0) return 1;
+    if (test_lighting_phase_barrier() != 0) return 1;
     adapter_reset();
     return 0;
 }
