@@ -229,13 +229,19 @@ class VerifyLiveMovementTests(unittest.TestCase):
             initial = capture_event("initial", initial_path, contents, initial_source,
                                     initial_source["elapsed_us"])
             final = capture_event("final", final_path, contents, final_source, 201)
+            initial_request = {"type": "capture_requested", "kind": "initial",
+                               "frame_sequence": initial_source["sequence"],
+                               "elapsed_us": initial_source["elapsed_us"]}
+            final_request = {"type": "capture_requested", "kind": "final",
+                             "frame_sequence": final_source["sequence"], "elapsed_us": 201}
             initial_position = records.index(initial_source) + 1
-            records.insert(initial_position, initial)
+            records[initial_position:initial_position] = [initial_request, initial]
             final_presentation = next(
                 record for record in records
                 if record.get("type") == "checkpoint_presented" and record["index"] == 1
             )
-            records.insert(records.index(final_presentation) + 1, final)
+            final_position = records.index(final_presentation) + 1
+            records[final_position:final_position] = [final_request, final]
             if mutate is not None:
                 mutate(records, root)
             route_path.write_bytes(ROUTE)
@@ -286,13 +292,18 @@ class VerifyLiveMovementTests(unittest.TestCase):
 
     def test_rejects_missing_duplicate_and_unrequested_captures(self) -> None:
         def missing(records, _root):
-            records.pop(8)
+            records.remove(next(record for record in records
+                                if record.get("type") == "capture" and
+                                record.get("kind") == "final"))
 
-        with self.assertRaisesRegex(verifier.ReportError, "missing a capture callback"):
+        with self.assertRaisesRegex(verifier.ReportError, "missing a capture request or callback"):
             self.verify_capture(missing)
 
         def duplicate(records, _root):
-            records.insert(4, copy.deepcopy(records[3]))
+            initial = next(record for record in records
+                           if record.get("type") == "capture" and
+                           record.get("kind") == "initial")
+            records.insert(records.index(initial) + 1, copy.deepcopy(initial))
 
         with self.assertRaisesRegex(verifier.ReportError, "duplicate initial capture"):
             self.verify_capture(duplicate)
@@ -302,6 +313,24 @@ class VerifyLiveMovementTests(unittest.TestCase):
 
         with self.assertRaisesRegex(verifier.ReportError, "forbidden without"):
             self.verify_capture(unrequested)
+
+    def test_rejects_missing_or_duplicate_capture_requests(self) -> None:
+        def missing(records, _root):
+            records.remove(next(record for record in records
+                                if record.get("type") == "capture_requested" and
+                                record.get("kind") == "initial"))
+
+        with self.assertRaisesRegex(verifier.ReportError, "has no matching request"):
+            self.verify_capture(missing)
+
+        def duplicate(records, _root):
+            request = next(record for record in records
+                           if record.get("type") == "capture_requested" and
+                           record.get("kind") == "initial")
+            records.insert(records.index(request) + 1, copy.deepcopy(request))
+
+        with self.assertRaisesRegex(verifier.ReportError, "duplicate initial capture request"):
+            self.verify_capture(duplicate)
 
     def test_rejects_capture_path_and_file_identity_failures(self) -> None:
         def outside(records, root):
@@ -319,7 +348,9 @@ class VerifyLiveMovementTests(unittest.TestCase):
         def alias_path(records, root):
             alias = str(root) + "/./initial.png"
             records[0]["capture_paths"]["final"] = alias
-            records[8]["path"] = alias
+            final = next(record for record in records
+                         if record.get("type") == "capture" and record.get("kind") == "final")
+            final["path"] = alias
 
         with self.assertRaisesRegex(verifier.ReportError, "must be canonical"):
             self.verify_capture(alias_path)
@@ -332,7 +363,10 @@ class VerifyLiveMovementTests(unittest.TestCase):
         for field, value, message in cases:
             with self.subTest(field=field):
                 def invalid(records, _root, field=field, value=value):
-                    records[3][field] = value
+                    initial = next(record for record in records
+                                   if record.get("type") == "capture" and
+                                   record.get("kind") == "initial")
+                    initial[field] = value
 
                 with self.assertRaisesRegex(verifier.ReportError, message):
                     self.verify_capture(invalid)
@@ -349,18 +383,117 @@ class VerifyLiveMovementTests(unittest.TestCase):
 
     def test_rejects_capture_source_mismatch_and_wrong_order(self) -> None:
         def source_mismatch(records, _root):
-            records[3]["x"] += 1
+            initial = next(record for record in records
+                           if record.get("type") == "capture" and
+                           record.get("kind") == "initial")
+            initial["x"] += 1
 
         with self.assertRaisesRegex(verifier.ReportError, "does not match its presented frame"):
             self.verify_capture(source_mismatch)
 
         def wrong_order(records, _root):
-            initial = records.pop(3)
-            initial["elapsed_us"] = 102
-            records.insert(5, initial)
+            initial = next(record for record in records
+                           if record.get("type") == "capture" and
+                           record.get("kind") == "initial")
+            records.remove(initial)
+            presentation = next(record for record in records
+                                if record.get("type") == "checkpoint_presented" and
+                                record.get("index") == 0)
+            initial["elapsed_us"] = presentation["elapsed_us"]
+            records.insert(records.index(presentation) + 1, initial)
 
         with self.assertRaisesRegex(verifier.ReportError, "outside its checkpoint"):
             self.verify_capture(wrong_order)
+
+    def test_delayed_capture_callback_uses_requested_frame_snapshot(self) -> None:
+        def delay_callback(records, _root, mismatch=False):
+            request = next(record for record in records
+                           if record.get("type") == "capture_requested" and
+                           record.get("kind") == "initial")
+            callback = next(record for record in records
+                            if record.get("type") == "capture" and
+                            record.get("kind") == "initial")
+            first_frame = next(record for record in records
+                               if record.get("type") == "frame" and record["sequence"] == 1)
+            newer = copy.deepcopy(first_frame)
+            newer.update({"sequence": 2, "elapsed_us": 101, "frame_us": 1,
+                          "map_publication_generation": 2,
+                          "gpu_primary_publication_generation": 2})
+            newer["world_time"]["game_seconds"] = 999
+            records.insert(records.index(callback), newer)
+            callback["elapsed_us"] = 101
+            first_presentation = next(
+                record for record in records
+                if record.get("type") == "checkpoint_presented" and record["index"] == 0
+            )
+            first_presentation["map_publication_generation"] = 2
+            first_presentation["gpu_published_generation"] = 2
+            later_frames = [record for record in records
+                            if record.get("type") == "frame" and record is not first_frame and
+                            record is not newer]
+            later_frames[0]["sequence"] = 3
+            later_frames[0]["elapsed_us"] = 201
+            later_frames[0]["map_publication_generation"] = 3
+            later_frames[0]["gpu_primary_publication_generation"] = 3
+            later_frames[1]["sequence"] = 4
+            later_frames[1]["elapsed_us"] = 1_000_202
+            final_presentation = next(
+                record for record in records
+                if record.get("type") == "checkpoint_presented" and record["index"] == 1
+            )
+            final_presentation.update({"map_publication_generation": 3,
+                                       "gpu_published_generation": 3,
+                                       "elapsed_us": 202})
+            final_request = next(record for record in records
+                                 if record.get("type") == "capture_requested" and
+                                 record.get("kind") == "final")
+            final_request.update({"frame_sequence": 3, "elapsed_us": 202})
+            final_callback = next(record for record in records
+                                  if record.get("type") == "capture" and
+                                  record.get("kind") == "final")
+            final_callback.update({"map_publication_generation": 3,
+                                   "gpu_primary_publication_generation": 3,
+                                   "elapsed_us": 202})
+            terminal = records[-1]
+            terminal.update({"frames": 4, "presented_frames": 4,
+                             "elapsed_us": 1_000_202})
+            self.assertEqual(request["frame_sequence"], 1)
+            if mismatch:
+                callback["map_publication_generation"] = 2
+                callback["gpu_primary_publication_generation"] = 2
+                callback["game_seconds"] = 999
+
+        summary = self.verify_capture(delay_callback)
+        self.assertEqual(summary["captures"]["initial"]["map_publication_generation"], 1)
+
+        with self.assertRaisesRegex(verifier.ReportError, "does not match its presented frame"):
+            self.verify_capture(lambda records, root: delay_callback(records, root, True))
+
+    def test_rejects_delayed_final_request_from_stale_generation(self) -> None:
+        def stale_final_request(records, _root):
+            request = next(record for record in records
+                           if record.get("type") == "capture_requested" and
+                           record.get("kind") == "final")
+            callback = next(record for record in records
+                            if record.get("type") == "capture" and
+                            record.get("kind") == "final")
+            records.remove(request)
+            records.remove(callback)
+            drain = next(record for record in records
+                         if record.get("type") == "frame" and record["sequence"] == 3)
+            drain["map_publication_generation"] = 1
+            drain["gpu_primary_publication_generation"] = 1
+            request.update({"frame_sequence": 3, "elapsed_us": drain["elapsed_us"]})
+            callback.update({"map_publication_generation": 1,
+                             "gpu_primary_publication_generation": 1,
+                             "game_seconds": drain["world_time"]["game_seconds"],
+                             "elapsed_us": drain["elapsed_us"]})
+            insert_at = records.index(drain) + 1
+            records[insert_at:insert_at] = [request, callback]
+
+        with self.assertRaisesRegex(verifier.ReportError,
+                                    "predates the final checkpoint presentation"):
+            self.verify_capture(stale_final_request)
 
     def test_accepts_typed_lighting_barrier_proof(self) -> None:
         for phase, target_hour in (("day", 15), ("new-moon", 0), ("full-moon", 0)):
@@ -468,7 +601,8 @@ class VerifyLiveMovementTests(unittest.TestCase):
                 barrier["elapsed_us"] = 100
             records[initial_capture_index:initial_capture_index] = barriers
 
-        with self.assertRaisesRegex(verifier.ReportError, "outside its checkpoint"):
+        with self.assertRaisesRegex(verifier.ReportError,
+                                    "does not reference the latest reported frame"):
             self.verify_capture(stale_frame, lighting_phase="day")
 
     def test_cli_writes_same_stable_summary_as_stdout(self) -> None:

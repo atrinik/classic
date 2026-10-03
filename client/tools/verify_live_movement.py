@@ -88,6 +88,7 @@ CAPTURE_FIELDS = {
     "x", "y", "map_publication_generation", "gpu_primary_publication_generation",
     "game_time_valid", "game_seconds", "elapsed_us",
 }
+CAPTURE_REQUESTED_FIELDS = {"type", "kind", "frame_sequence", "elapsed_us"}
 LIGHTING_BARRIER_FIELDS = {
     "type", "stage", "requested_hour", "game_seconds", "map_publication_generation",
     "light_keyframe_generation", "light_keyframe_start_seconds",
@@ -475,9 +476,11 @@ def verify(route_path: Path, report_path: Path) -> dict:
     presentation_frame_generation: int | None = None
     presentation_gpu_generation: int | None = None
     presentation_frame_evidence: dict[str, object] | None = None
-    final_capture_source: dict[str, object] | None = None
     captures: dict[str, dict] = {}
+    capture_requests: dict[str, dict] = {}
+    capture_sources: dict[str, dict[str, object]] = {}
     lighting_barriers: list[dict] = []
+    last_frame_evidence: dict[str, object] | None = None
     step_started_elapsed = 0
     frame_times = array("Q")
     presented_spacings = array("Q")
@@ -506,6 +509,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
     covered_tiles: set[tuple[str, int, int]] = set()
     final_presentation_elapsed: int | None = None
     initial_presentation_elapsed: int | None = None
+    final_checkpoint_map_generation: int | None = None
+    final_checkpoint_gpu_generation: int | None = None
     post_route_presented_frame = False
 
     record_count = 0
@@ -642,6 +647,20 @@ def verify(route_path: Path, report_path: Path) -> dict:
             if world_time_first is None:
                 world_time_first = world_time
             world_time_last = world_time
+            last_frame_evidence = {
+                "frame_sequence": frame_count,
+                "presented": record["presented"],
+                "map_ready": record["map_ready"],
+                "map_path": map_path,
+                "x": x,
+                "y": y,
+                "map_publication_generation": generation,
+                "gpu_primary_publication_generation": gpu_primary_generation,
+                "game_time_valid": world_time["valid"],
+                "game_seconds": world_time["game_seconds"],
+                "light_keyframe_valid": world_time["light_keyframe_valid"],
+                "light_keyframe_generation": world_time["light_keyframe_generation"],
+            }
             frame_times.append(frame_us)
             if record["presented"]:
                 presented_frames += 1
@@ -681,13 +700,71 @@ def verify(route_path: Path, report_path: Path) -> dict:
         _require(elapsed <= route_limits["timeout_us"], "report exceeded route timeout")
         _require(elapsed >= last_elapsed, "record elapsed_us decreased")
         last_elapsed = elapsed
-        if record_type == "lighting_barrier":
+        if record_type == "capture_requested":
+            _closed(record, CAPTURE_REQUESTED_FIELDS, "capture_requested")
+            capture_paths = identity.get("capture_paths")
+            _require(isinstance(capture_paths, dict),
+                     "capture request is forbidden without identity capture_paths")
+            kind = record.get("kind")
+            _require(isinstance(kind, str) and kind in {"initial", "final"},
+                     "capture request kind is invalid")
+            _require(kind not in capture_requests, f"duplicate {kind} capture request")
+            _require(last_frame_evidence is not None and
+                     type(record["frame_sequence"]) is int and
+                     record["frame_sequence"] == frame_count ==
+                     last_frame_evidence["frame_sequence"],
+                     "capture request does not reference the latest reported frame")
+            _require(last_frame_evidence["presented"] is True and
+                     last_frame_evidence["map_ready"] is True,
+                     "capture request frame was not presented and map-ready")
+            expected_index = 0 if kind == "initial" else len(checkpoints) - 1
+            expected = checkpoints[expected_index]
+            _require(last_frame_evidence["map_path"] == expected["map_path"] and
+                     last_frame_evidence["x"] == expected["x"] and
+                     last_frame_evidence["y"] == expected["y"],
+                     "capture request frame does not match its route checkpoint")
+            if kind == "initial":
+                _require(presentations == 0 and pending_arrival is not None and
+                         pending_arrival["index"] == 0,
+                         "initial capture request is outside its checkpoint window")
+                _require(last_frame_evidence["map_publication_generation"] >=
+                         pending_arrival["publication_generation"],
+                         "initial capture request predates its arrival")
+                if "lighting_phase" in identity:
+                    _require(len(lighting_barriers) == 2,
+                             "initial capture request is missing lighting barriers")
+                    target_hour = _lighting_hours(identity["lighting_phase"])[1]
+                    target_barrier = lighting_barriers[-1]
+                    _require(last_frame_evidence["map_publication_generation"] >=
+                             target_barrier["map_publication_generation"],
+                             "initial capture request predates the target lighting barrier")
+                    _require(last_frame_evidence["game_time_valid"] is True and
+                             (last_frame_evidence["game_seconds"] // 3600) % 24 == target_hour,
+                             "initial capture request does not show the target lighting hour")
+                    _require(last_frame_evidence["light_keyframe_valid"] is True and
+                             last_frame_evidence["light_keyframe_generation"] >=
+                             target_barrier["light_keyframe_generation"],
+                             "initial capture request does not show the target light keyframe")
+            else:
+                _require(presentations == len(checkpoints) and pending_arrival is None,
+                         "final capture request is outside its checkpoint window")
+                _require(final_checkpoint_map_generation is not None and
+                         final_checkpoint_gpu_generation is not None and
+                         last_frame_evidence["map_publication_generation"] >=
+                         final_checkpoint_map_generation and
+                         last_frame_evidence["gpu_primary_publication_generation"] >=
+                         final_checkpoint_gpu_generation,
+                         "final capture request predates the final checkpoint presentation")
+            capture_requests[kind] = {key: value for key, value in record.items()
+                                      if key != "type"}
+            capture_sources[kind] = dict(last_frame_evidence)
+        elif record_type == "lighting_barrier":
             _closed(record, LIGHTING_BARRIER_FIELDS, "lighting_barrier")
             phase = identity.get("lighting_phase")
             _require(isinstance(phase, str),
                      "lighting_barrier is forbidden without identity lighting_phase")
             _require(presentations == 0 and pending_arrival is not None and
-                     pending_arrival["index"] == 0 and "initial" not in captures,
+                     pending_arrival["index"] == 0 and "initial" not in capture_requests,
                      "lighting_barrier is outside the initial checkpoint window")
             _require(len(lighting_barriers) < 2, "duplicate lighting_barrier record")
             expected_stage = ("opposite", "target")[len(lighting_barriers)]
@@ -726,6 +803,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
             presentation_frame_generation = None
             presentation_gpu_generation = None
             presentation_frame_evidence = None
+            last_frame_evidence = None
         elif record_type == "capture":
             capture_paths = identity.get("capture_paths")
             _require(isinstance(capture_paths, dict),
@@ -734,17 +812,15 @@ def verify(route_path: Path, report_path: Path) -> dict:
             _require(isinstance(kind, str) and kind in {"initial", "final"},
                      "capture kind is invalid")
             _require(kind not in captures, f"duplicate {kind} capture record")
+            _require(kind in capture_sources, f"{kind} capture has no matching request")
             if kind == "initial":
                 _require(presentations == 0 and pending_arrival is not None and
-                         pending_arrival["index"] == 0 and
-                         presentation_frame_evidence is not None,
+                         pending_arrival["index"] == 0,
                          "initial capture is outside its checkpoint presentation window")
-                source = presentation_frame_evidence
             else:
-                _require(presentations == len(checkpoints) and pending_arrival is None and
-                         final_capture_source is not None,
+                _require(presentations == len(checkpoints) and pending_arrival is None,
                          "final capture is outside its checkpoint presentation window")
-                source = final_capture_source
+            source = capture_sources[kind]
             captures[kind] = _validate_capture(record, kind, capture_paths, source)
             if kind == "initial" and "lighting_phase" in identity:
                 _require(len(lighting_barriers) == 2,
@@ -781,6 +857,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
             if arrivals == 0:
                 step_started_elapsed = elapsed
             pending_arrival = record
+            last_frame_evidence = None
             presentation_frame_generation = None
             presentation_gpu_generation = None
             presentation_frame_evidence = None
@@ -808,8 +885,6 @@ def verify(route_path: Path, report_path: Path) -> dict:
             _require(elapsed - step_started_elapsed <= route_limits["step_timeout_us"],
                      "checkpoint presentation exceeded route step timeout")
             last_gpu_generation = generation
-            if presentations + 1 == len(checkpoints):
-                final_capture_source = dict(presentation_frame_evidence or {})
             covered_maps.append(pending_arrival["map_path"])
             covered_tiles.add((pending_arrival["map_path"], pending_arrival["x"],
                                pending_arrival["y"]))
@@ -823,6 +898,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
                 initial_presentation_elapsed = elapsed
             if presentations == len(checkpoints):
                 final_presentation_elapsed = elapsed
+                final_checkpoint_map_generation = presentation_map_generation
+                final_checkpoint_gpu_generation = generation
                 post_route_presented_frame = False
         elif record_type == "terminal":
             _closed(record, TERMINAL_FIELDS, "terminal")
@@ -842,8 +919,9 @@ def verify(route_path: Path, report_path: Path) -> dict:
     _require(terminal["status"] == "success", f"terminal reported failure: {terminal['reason']}")
     capture_paths = identity.get("capture_paths")
     if capture_paths is not None:
-        _require(set(captures) == {"initial", "final"},
-                 "successful capture report is missing a capture callback")
+        _require(set(capture_requests) == {"initial", "final"} and
+                 set(captures) == {"initial", "final"},
+                 "successful capture report is missing a capture request or callback")
     lighting_phase = identity.get("lighting_phase")
     if lighting_phase is not None:
         _require(len(lighting_barriers) == 2,
