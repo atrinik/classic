@@ -254,12 +254,26 @@ static void test_nonzero_start_and_jpeg_copy(void) {
 }
 
 #ifdef __GLIBC__
+#define TEST_AVI_HEADER_SIZE 224U
+#define TEST_AVI_MAX_FRAMES 108000U
+#define TEST_AVI_FILE_LIMIT UINT32_C(0x7fffffff)
+
 typedef struct test_stream {
     unsigned char data[512];
     off64_t position;
     size_t length;
     size_t fail_after;
 } test_stream_t;
+
+typedef struct test_virtual_stream {
+    unsigned char header[TEST_AVI_HEADER_SIZE];
+    unsigned char *index;
+    size_t index_capacity;
+    size_t index_size;
+    off64_t index_start;
+    off64_t position;
+    off64_t length;
+} test_virtual_stream_t;
 
 static ssize_t test_stream_write(void *context, const char *data, size_t size) {
     test_stream_t *stream = context;
@@ -300,6 +314,79 @@ static int test_stream_seek(void *context, off64_t *offset, int origin) {
     return 0;
 }
 
+static ssize_t test_virtual_stream_write(void *context, const char *data, size_t size) {
+    test_virtual_stream_t *stream = context;
+
+    if (stream->position < TEST_AVI_HEADER_SIZE) {
+        size_t offset = (size_t) stream->position;
+        size_t copy_size = size;
+
+        if (copy_size > TEST_AVI_HEADER_SIZE - offset) {
+            copy_size = TEST_AVI_HEADER_SIZE - offset;
+        }
+        memcpy(stream->header + offset, data, copy_size);
+    }
+    if (size == 4U && memcmp(data, "idx1", 4U) == 0) {
+        stream->index_start = stream->position;
+        stream->index_size = 0U;
+    }
+    if (stream->index_start >= 0 && stream->position >= stream->index_start) {
+        uint64_t offset = (uint64_t) (stream->position - stream->index_start);
+
+        TEST_CHECK(offset <= stream->index_capacity);
+        TEST_CHECK(size <= stream->index_capacity - (size_t) offset);
+        memcpy(stream->index + offset, data, size);
+        if ((size_t) offset + size > stream->index_size) {
+            stream->index_size = (size_t) offset + size;
+        }
+    }
+    stream->position += (off64_t) size;
+    if (stream->position > stream->length) {
+        stream->length = stream->position;
+    }
+    return (ssize_t) size;
+}
+
+static int test_virtual_stream_seek(void *context, off64_t *offset, int origin) {
+    test_virtual_stream_t *stream = context;
+    off64_t position;
+
+    if (origin == SEEK_SET) {
+        position = *offset;
+    } else if (origin == SEEK_CUR) {
+        position = stream->position + *offset;
+    } else if (origin == SEEK_END) {
+        position = stream->length + *offset;
+    } else {
+        return -1;
+    }
+    if (position < 0) {
+        return -1;
+    }
+    stream->position = position;
+    *offset = position;
+    return 0;
+}
+
+static FILE *test_virtual_stream_open(test_virtual_stream_t *stream) {
+    cookie_io_functions_t functions = {
+        .read = NULL,
+        .write = test_virtual_stream_write,
+        .seek = test_virtual_stream_seek,
+        .close = NULL,
+    };
+    FILE *file;
+
+    stream->index_capacity = 8U + TEST_AVI_MAX_FRAMES * 16U;
+    stream->index = malloc(stream->index_capacity);
+    TEST_CHECK(stream->index != NULL);
+    stream->index_start = -1;
+    file = fopencookie(stream, "w+b", functions);
+    TEST_CHECK(file != NULL);
+    TEST_CHECK(setvbuf(file, NULL, _IONBF, 0) == 0);
+    return file;
+}
+
 static void test_partial_frame_write_preserves_prefix(void) {
     static const unsigned char jpeg[] = {0xffU, 0xd8U, 0xffU, 0xd9U};
     static const unsigned char next_jpeg[64] = {0xffU, 0xd8U, 0xffU, 0xd9U};
@@ -334,6 +421,86 @@ static void test_partial_frame_write_preserves_prefix(void) {
     video_avi_free(avi);
     TEST_CHECK(fclose(stream) == 0);
 }
+
+static void test_virtual_file_size_boundary(void) {
+    const size_t jpeg_size = 1024U * 1024U;
+    const uint64_t record_size = 8U + jpeg_size;
+    const uint32_t expected_frames =
+        (uint32_t) ((TEST_AVI_FILE_LIMIT - TEST_AVI_HEADER_SIZE - 8U) /
+                    (record_size + 16U));
+    unsigned char *jpeg = calloc(1U, jpeg_size);
+    test_virtual_stream_t backing = {0};
+    FILE *stream = test_virtual_stream_open(&backing);
+    video_avi_t *avi;
+    uint64_t expected_size;
+    size_t last_entry;
+
+    TEST_CHECK(jpeg != NULL);
+    avi = video_avi_open(stream, 512U, 512U, 30U);
+    TEST_CHECK(avi != NULL);
+    for (uint32_t i = 0U; i < expected_frames; i++) {
+        TEST_CHECK(video_avi_frame(avi, jpeg, jpeg_size, i));
+    }
+    TEST_CHECK(!video_avi_frame(avi, jpeg, jpeg_size, expected_frames));
+    TEST_CHECK(strstr(video_avi_error(avi), "recording limit") != NULL);
+    TEST_CHECK(video_avi_frames(avi) == expected_frames);
+    expected_size = TEST_AVI_HEADER_SIZE + (uint64_t) expected_frames * record_size + 8U +
+                    (uint64_t) expected_frames * 16U;
+    TEST_CHECK(expected_size <= TEST_AVI_FILE_LIMIT);
+    TEST_CHECK(expected_size + record_size + 16U > TEST_AVI_FILE_LIMIT);
+    TEST_CHECK((uint64_t) backing.length == expected_size);
+    TEST_CHECK(test_u32(backing.header + 4U) == expected_size - 8U);
+    TEST_CHECK(test_u32(backing.header + 48U) == expected_frames);
+    TEST_CHECK(test_u32(backing.header + 216U) ==
+               4U + expected_frames * (uint32_t) record_size);
+    TEST_CHECK(backing.index_size == 8U + expected_frames * 16U);
+    TEST_CHECK(memcmp(backing.index, "idx1", 4U) == 0);
+    TEST_CHECK(test_u32(backing.index + 4U) == expected_frames * 16U);
+    TEST_CHECK(test_u32(backing.index + 16U) == 4U);
+    TEST_CHECK(test_u32(backing.index + 20U) == jpeg_size);
+    last_entry = 8U + (expected_frames - 1U) * 16U;
+    TEST_CHECK(test_u32(backing.index + last_entry + 8U) ==
+               4U + (expected_frames - 1U) * (uint32_t) record_size);
+    TEST_CHECK(test_u32(backing.index + last_entry + 12U) == jpeg_size);
+    TEST_CHECK(!video_avi_finish(avi, expected_frames));
+
+    video_avi_free(avi);
+    free(jpeg);
+    free(backing.index);
+    TEST_CHECK(fclose(stream) == 0);
+}
+
+static void test_virtual_frame_count_boundary(void) {
+    static const unsigned char jpeg[] = {1U, 2U, 3U, 4U};
+    test_virtual_stream_t backing = {0};
+    FILE *stream = test_virtual_stream_open(&backing);
+    video_avi_t *avi = video_avi_open(stream, 1U, 1U, 30U);
+    uint64_t expected_size;
+    size_t last_entry;
+
+    TEST_CHECK(avi != NULL);
+    for (uint32_t i = 0U; i < TEST_AVI_MAX_FRAMES; i++) {
+        TEST_CHECK(video_avi_frame(avi, jpeg, sizeof(jpeg), i));
+    }
+    TEST_CHECK(!video_avi_frame(avi, jpeg, sizeof(jpeg), TEST_AVI_MAX_FRAMES));
+    TEST_CHECK(strstr(video_avi_error(avi), "frame limit") != NULL);
+    TEST_CHECK(video_avi_frames(avi) == TEST_AVI_MAX_FRAMES);
+    expected_size = TEST_AVI_HEADER_SIZE + (uint64_t) TEST_AVI_MAX_FRAMES * 12U + 8U +
+                    (uint64_t) TEST_AVI_MAX_FRAMES * 16U;
+    TEST_CHECK((uint64_t) backing.length == expected_size);
+    TEST_CHECK(test_u32(backing.header + 4U) == expected_size - 8U);
+    TEST_CHECK(test_u32(backing.header + 48U) == TEST_AVI_MAX_FRAMES);
+    TEST_CHECK(backing.index_size == 8U + TEST_AVI_MAX_FRAMES * 16U);
+    TEST_CHECK(test_u32(backing.index + 4U) == TEST_AVI_MAX_FRAMES * 16U);
+    last_entry = 8U + (TEST_AVI_MAX_FRAMES - 1U) * 16U;
+    TEST_CHECK(test_u32(backing.index + last_entry + 8U) ==
+               4U + (TEST_AVI_MAX_FRAMES - 1U) * 12U);
+    TEST_CHECK(test_u32(backing.index + last_entry + 12U) == sizeof(jpeg));
+
+    video_avi_free(avi);
+    free(backing.index);
+    TEST_CHECK(fclose(stream) == 0);
+}
 #endif
 
 int main(void) {
@@ -345,6 +512,8 @@ int main(void) {
     test_nonzero_start_and_jpeg_copy();
 #ifdef __GLIBC__
     test_partial_frame_write_preserves_prefix();
+    test_virtual_file_size_boundary();
+    test_virtual_frame_count_boundary();
 #endif
     return 0;
 }
