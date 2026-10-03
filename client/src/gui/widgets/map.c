@@ -9221,7 +9221,8 @@ bool widget_map_actor_relocation_test(void) {
     LastTick += MAP_VISIBILITY_FADE_DURATION_MS / 2U;
     map_animate();
     success &= map_actor_relocation_test_pose(0, old_x, center, actor_id, 128, true, 0);
-    base = packet_new(0, 32, 32);
+    base = packet_new(0, 48, 48);
+    map_actor_relocation_test_clear(base, old_x, center);
     map_actor_relocation_test_actor(base, new_x, center, 4, 0, actor_id, 80);
     success &= map_actor_relocation_test_send(
                    MAP_UPDATE_CMD_CONNECTED, initial_position, initial_position, 0, base, NULL) &&
