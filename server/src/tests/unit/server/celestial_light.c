@@ -157,6 +157,9 @@ START_TEST(test_brynknot_and_outside_fields_follow_settime) {
         char afternoon[] = "15";
         command_settime(NULL, "settime", afternoon);
         ck_assert_uint_eq(todtick, 5 * HOURS_PER_MONTH + 15);
+        char dependency_error[HUGE_BUF];
+        ck_assert_msg(celestial_structure_validate_light_dependencies(map, VS(dependency_error)),
+                      "%s afternoon dependency: %s", paths[i], dependency_error);
         ck_assert_msg(celestial_light_keyframe_ensure(map, (uint64_t)todtick),
                       "%s afternoon field failed", paths[i]);
         int day = GET_MAP_SPACE_PTR(map, x, y)->celestial_light_value;
