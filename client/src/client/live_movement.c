@@ -257,7 +257,9 @@ static void review_lighting_tick(bool map_ready) {
     if (!telemetry_game_time_seconds(&game_seconds) || game_seconds / 3600 % 24 != expected_hour ||
         !MapData.light_keyframe_valid || MapData.light_keyframe_generation == 0 ||
         MapData.light_keyframe_start_seconds / 3600 % 24 != expected_hour ||
-        MapData.light_keyframe_start_seconds >= MapData.light_keyframe_end_seconds) return;
+        MapData.light_keyframe_start_seconds >= MapData.light_keyframe_end_seconds ||
+        game_seconds < MapData.light_keyframe_start_seconds ||
+        game_seconds >= MapData.light_keyframe_end_seconds) return;
     review_lighting_generation = socket_command_map_publication_generation();
     fprintf(report, "{\"type\":\"lighting_barrier\",\"stage\":\"%s\",\"requested_hour\":%u,"
                     "\"game_seconds\":%" PRIu64 ",\"map_publication_generation\":%" PRIu64
