@@ -768,6 +768,12 @@ static bool gpu_renderer_create_internal(SDL_Window *window, bool require_hardwa
         gpu_renderer_failure_preserve("unable to create the GPU map pipeline");
         return false;
     }
+    LOG(INFO,
+        "GPU renderer created (backend: %s; device: %s; driver: %s %s).",
+        backend,
+        device_name,
+        driver_name,
+        driver_version);
     return true;
 }
 
