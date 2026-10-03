@@ -90,6 +90,8 @@ typedef struct map_cell_layer_record {
     int16_t align;
     int16_t rotate;
     map_visibility_fade_t visibility;
+    uint32_t visibility_actor_id;
+    bool visibility_local_player;
     char glow[COLOR_BUF];
 } map_cell_layer_record_t;
 
@@ -1558,6 +1560,8 @@ bool map_state_transaction_active(void) {
     return map_state_transaction.active;
 }
 
+static void map_visibility_reconcile_actors(void);
+
 void map_state_transaction_commit(void) {
     if (!map_state_transaction.active) {
         return;
@@ -1571,6 +1575,8 @@ void map_state_transaction_commit(void) {
             }
         }
     }
+
+    map_visibility_reconcile_actors();
 
     bool region_changed =
         strcmp(map_state_transaction.map_data.region_name, MapData.region_name) != 0;
@@ -2551,6 +2557,9 @@ static void map_clear_live_cell(map_cell_t *cell) {
             map_visibility_fade_t *fade = &record->visibility;
             if (fade->initialized && fade->authorized) {
                 map_visibility_fade_revoke(fade, LastTick);
+                if (record->visibility_local_player) {
+                    fade->alpha = 0;
+                }
             }
         }
     }
@@ -2565,7 +2574,8 @@ static bool map_visibility_transient_layer(int layer) {
 
 /** Return whether a decoded transient is the local player's living record. */
 static bool map_visibility_is_local_player(int x, int y, int object_layer, int sub_layer) {
-    return x == map_width - map_width / 2 - 1 && y == map_height - map_height / 2 - 1 &&
+    return current_level_index == MAP2_DEPTH_INDEX(0) &&
+           x == map_width - map_width / 2 - 1 && y == map_height - map_height / 2 - 1 &&
            object_layer == LAYER_LIVING &&
            sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
 }
@@ -2623,6 +2633,144 @@ static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, 
             .visibility = record->visibility,
         };
     }
+}
+
+/** One currently authorized actor in the bounded, published map cache. */
+typedef struct map_visible_actor {
+    uint32_t id;
+    map_cell_layer_record_t *record;
+    map_cell_header_t *header;
+} map_visible_actor_t;
+
+static int map_visible_actor_compare(const void *left, const void *right) {
+    uint32_t a = ((const map_visible_actor_t *)left)->id;
+    uint32_t b = ((const map_visible_actor_t *)right)->id;
+    return (a > b) - (a < b);
+}
+
+static void map_visibility_record_changed(map_cell_header_t *header) {
+    if (++header->revision == 0) {
+        header->generation++;
+    }
+    map_redraw_request(MAP_REDRAW_REASON_MAP_PACKET);
+}
+
+/** Preserve an existing actor's transition when its authorized position moves. */
+static void map_visibility_transfer_actors(const map_cell_t *before,
+                                            map_visible_actor_t *actors,
+                                            size_t count) {
+    if (before == NULL || before->fow || count == 0) {
+        return;
+    }
+    for (const map_cell_layer_record_t *old = before->layers; old != NULL; old = old->next) {
+        if (old->visibility_actor_id == 0 || old->face == 0 || !old->visibility.authorized) {
+            continue;
+        }
+        map_visible_actor_t key = {.id = old->visibility_actor_id};
+        map_visible_actor_t *current =
+            bsearch(&key, actors, count, sizeof(*actors), map_visible_actor_compare);
+        if (current == NULL) {
+            continue;
+        }
+        map_visibility_fade_t visibility = old->visibility;
+        map_visibility_fade_advance(&visibility, LastTick);
+        if (memcmp(&current->record->visibility, &visibility, sizeof(visibility)) != 0) {
+            current->record->visibility = visibility;
+            map_visibility_record_changed(current->header);
+        }
+    }
+}
+
+/** Reconcile identity only after every MAP2 continuation has been applied.
+ *
+ * Non-local living records carry the server's stable object count. A removed
+ * pose is a disappearance only while that identity has no current authorized
+ * pose. No face/name matching or new visibility authority is involved. The
+ * cache scan also retires a prior disappearance if re-entry is published in
+ * a later transaction. All storage is bounded by the existing MAP2 cache.
+ */
+static void map_visibility_reconcile_actors(void) {
+    map_visible_actor_t *actors = NULL;
+    size_t count = 0, capacity = 0;
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        map_cell_store_t *store = level_cells[level];
+        if (store == NULL || !(map_level_mask & (UINT16_C(1) << level))) {
+            continue;
+        }
+        for (size_t index = 0; index < store->count; index++) {
+            map_cell_t *cell = store->slots[index];
+            if (cell == NULL || cell->fow) {
+                continue;
+            }
+            for (map_cell_layer_record_t *record = cell->layers; record != NULL;
+                 record = record->next) {
+                if (record->visibility_actor_id == 0 || record->face == 0 ||
+                    !record->visibility.authorized) {
+                    continue;
+                }
+                if (count == capacity) {
+                    capacity = capacity == 0 ? 16 : capacity * 2;
+                    actors = xreallocarray(actors, capacity, sizeof(*actors));
+                }
+                actors[count++] = (map_visible_actor_t){
+                    .id = record->visibility_actor_id,
+                    .record = record,
+                    .header = &store->headers[index],
+                };
+            }
+        }
+    }
+    if (count == 0) {
+        free(actors);
+        return;
+    }
+    qsort(actors, count, sizeof(*actors), map_visible_actor_compare);
+    /* NEW/reset starts a different identity domain. CONNECTED snapshots may
+     * still contain the same actors and must preserve their presentation. */
+    if (!map_state_transaction.ambient_clear) {
+        if (map_state_transaction.full_snapshot) {
+            for (size_t level = 0; level < arraysize(level_cells); level++) {
+                map_cell_store_t *store = map_state_transaction.full_snapshot_levels[level];
+                if (store == NULL) {
+                    continue;
+                }
+                for (size_t index = 0; index < store->count; index++) {
+                    map_visibility_transfer_actors(store->slots[index], actors, count);
+                }
+            }
+        } else {
+            for (size_t i = 0; i < map_state_transaction.cells_count; i++) {
+                map_visibility_transfer_actors(map_state_transaction.cells[i].value, actors, count);
+            }
+        }
+    }
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        map_cell_store_t *store = level_cells[level];
+        if (store == NULL) {
+            continue;
+        }
+        for (size_t index = 0; index < store->count; index++) {
+            map_cell_t *cell = store->slots[index];
+            if (cell == NULL) {
+                continue;
+            }
+            for (map_cell_layer_record_t *record = cell->layers; record != NULL;
+                 record = record->next) {
+                if (record->visibility_actor_id == 0 || record->face == 0 ||
+                    record->visibility.authorized) {
+                    continue;
+                }
+                map_visible_actor_t key = {.id = record->visibility_actor_id};
+                if (bsearch(&key, actors, count, sizeof(*actors), map_visible_actor_compare) == NULL) {
+                    continue;
+                }
+                map_visibility_fade_init(&record->visibility);
+                map_clear_expired_visibility_layer(cell, record->layer / NUM_LAYERS, LAYER_LIVING);
+                map_visibility_record_changed(&store->headers[index]);
+            }
+        }
+    }
+    free(actors);
 }
 
 /**
@@ -2723,7 +2871,8 @@ void map_set_data(int x,
 
     bool retain_visibility_fade = face == 0 && map_visibility_transient_layer(object_layer) &&
                                   old_layer->face != 0 && old_layer->visibility.initialized &&
-                                  old_layer->visibility.alpha != 0;
+                                  old_layer->visibility.alpha != 0 &&
+                                  !old_layer->visibility_local_player;
     if (retain_visibility_fade) {
         map_visibility_fade_revoke(&layer_record->visibility, LastTick);
         sub_record->door &= (uint8_t)~object_layer_mask;
@@ -2744,6 +2893,13 @@ void map_set_data(int x,
         return;
     }
 
+    if (face == 0 && layer_record->visibility_local_player) {
+        map_visibility_fade_init(&layer_record->visibility);
+    }
+    layer_record->visibility_actor_id = object_layer == LAYER_LIVING ? target_object_count : 0;
+    layer_record->visibility_local_player =
+        face != 0 && target_object_count == 0 &&
+        map_visibility_is_local_player(x, y, object_layer, sub_layer);
     layer_record->face = face;
     layer_record->flags = obj_flags;
     layer_record->roof = roof;
@@ -2771,7 +2927,7 @@ void map_set_data(int x,
         } else {
             map_visibility_authorize_record(
                 layer_record,
-                map_visibility_is_local_player(x, y, object_layer, sub_layer));
+                layer_record->visibility_local_player);
         }
     }
     layer_record->rotate = rotate;
@@ -3232,10 +3388,8 @@ static bool map_animate_object(map_cell_t *cell, int layer) {
 }
 
 /** Advance presentation-only live alpha without mutating MAP2 authority. */
-static bool map_animate_visibility(int depth, int cache_x, int cache_y, map_cell_t *cell) {
+static bool map_animate_visibility(map_cell_t *cell) {
     bool changed = false;
-    int player_x = map_width * MAP_FOW_SIZE / 2;
-    int player_y = map_height * MAP_FOW_SIZE / 2;
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         for (int object_layer = LAYER_ITEM; object_layer <= LAYER_EFFECT; object_layer++) {
             if (!map_visibility_transient_layer(object_layer)) {
@@ -3250,11 +3404,14 @@ static bool map_animate_visibility(int depth, int cache_x, int cache_y, map_cell
             if (!fade->initialized) {
                 continue;
             }
-            bool local_player = depth == 0 && cache_x == player_x && cache_y == player_y &&
-                                object_layer == LAYER_LIVING &&
-                                sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
+            bool local_player = record->visibility_local_player;
             if (!fade->authorized || record->face == 0 || cell->fow) {
                 map_visibility_fade_revoke(fade, LastTick);
+                if (local_player) {
+                    changed |= fade->alpha != 0;
+                    fade->alpha = 0;
+                    fade->from_alpha = 0;
+                }
             } else {
                 if (local_player) {
                     changed |= fade->alpha != UINT8_MAX || fade->target_alpha != UINT8_MAX;
@@ -3378,7 +3535,7 @@ void map_animate(void) {
                 cell = MAP_CELL_GET_MIDDLE(x, y);
                 size_t physical_index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
                 bool cell_changed =
-                    map_animate_visibility(depth, x + MAP_STARTX, y + MAP_STARTY, cell);
+                    map_animate_visibility(cell);
 
                 if (cell->fow) {
                     map_cell_store_trim_slot(cells, physical_index);
@@ -6408,8 +6565,6 @@ static bool map_render_command_covers(const map_render_command_t *covered_comman
 
 /** Mark nearby doors that are actually covered in the final painter order. */
 static void map_render_commands_find_door_hints(map_render_context_t *context) {
-    int player_x = map_width * MAP_FOW_SIZE / 2;
-    int player_y = map_height * MAP_FOW_SIZE / 2;
 
     for (size_t door_index = 0; door_index < context->commands_num; door_index++) {
         map_render_command_t *door = &context->commands[door_index];
