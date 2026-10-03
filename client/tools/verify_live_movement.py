@@ -7,9 +7,12 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
+import stat
 import sys
 import xml.etree.ElementTree as ET
+import zlib
 from array import array
 from collections.abc import Sequence
 from pathlib import Path
@@ -21,6 +24,7 @@ MAX_REPORT_BYTES = 128 * 1024 * 1024
 MAX_REPORT_LINES = 1_000_000
 MAX_LINE_BYTES = 1024 * 1024
 MAX_COUNTER = (1 << 64) - 1
+MAX_CAPTURE_BYTES = 64 * 1024 * 1024
 GPU_INVALIDATION_REASONS = (
     "unchanged", "animation", "actor_effect", "camera_scroll", "map_publication",
     "lighting", "resize", "resource_replacement", "reset", "device_recovery",
@@ -78,6 +82,11 @@ ASSET_MONOTONIC_FIELDS = {"installed_total"}
 TERMINAL_FIELDS = {
     "type", "status", "reason", "arrivals", "presented_checkpoints",
     "expected_checkpoints", "frames", "presented_frames", "elapsed_us",
+}
+CAPTURE_FIELDS = {
+    "type", "kind", "path", "sha256", "width", "height", "size_bytes", "map_path",
+    "x", "y", "map_publication_generation", "gpu_primary_publication_generation",
+    "game_time_valid", "game_seconds", "elapsed_us",
 }
 
 
@@ -270,6 +279,101 @@ def _world_time(value: object) -> dict[str, int | bool]:
     return value
 
 
+def _capture_paths(value: object, report_path: Path) -> dict[str, str]:
+    _require(isinstance(value, dict), "identity capture_paths must be an object")
+    _closed(value, {"initial", "final"}, "identity capture_paths")
+    report_parent = report_path.absolute().parent
+    paths: dict[str, str] = {}
+    for kind in ("initial", "final"):
+        capture_path = _string(value[kind], f"identity capture_paths.{kind}")
+        path = Path(capture_path)
+        _require(path.is_absolute() and path.suffix.lower() == ".png",
+                 f"identity capture_paths.{kind} must be an absolute PNG path")
+        _require(capture_path == str(path),
+                 f"identity capture_paths.{kind} must be canonical")
+        _require(path.parent == report_parent,
+                 f"identity capture_paths.{kind} must share the report parent directory")
+        paths[kind] = capture_path
+    _require(Path(paths["initial"]) != Path(paths["final"]),
+             "identity capture paths must be distinct")
+    return paths
+
+
+def _capture_png(path: Path, expected_size: int, width: int, height: int) -> str:
+    try:
+        path_metadata = path.lstat()
+    except OSError as error:
+        raise ReportError(f"cannot inspect capture PNG {path}: {error}") from error
+    _require(not stat.S_ISLNK(path_metadata.st_mode),
+             f"capture PNG must not be a symlink: {path}")
+    _require(stat.S_ISREG(path_metadata.st_mode), f"capture PNG is not a regular file: {path}")
+    flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) |
+             getattr(os, "O_NONBLOCK", 0))
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ReportError(f"cannot open capture PNG {path}: {error}") from error
+    try:
+        metadata = os.fstat(descriptor)
+        _require(stat.S_ISREG(metadata.st_mode), f"capture PNG is not a regular file: {path}")
+        _require((metadata.st_dev, metadata.st_ino) ==
+                 (path_metadata.st_dev, path_metadata.st_ino),
+                 f"capture PNG changed before opening: {path}")
+        _require(metadata.st_size == expected_size,
+                 f"capture PNG size does not match event: {path}")
+        _require(0 < metadata.st_size <= MAX_CAPTURE_BYTES,
+                 f"capture PNG exceeds the 64 MiB bound: {path}")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            contents = stream.read(MAX_CAPTURE_BYTES + 1)
+        _require(len(contents) == expected_size, f"capture PNG changed while reading: {path}")
+    except OSError as error:
+        raise ReportError(f"cannot read capture PNG {path}: {error}") from error
+    finally:
+        os.close(descriptor)
+    _require(len(contents) >= 33 and contents[:8] == b"\x89PNG\r\n\x1a\n",
+             f"capture is not a PNG: {path}")
+    _require(int.from_bytes(contents[8:12], "big") == 13 and contents[12:16] == b"IHDR",
+             f"capture PNG has no leading IHDR: {path}")
+    ihdr = contents[16:29]
+    _require(int.from_bytes(ihdr[:4], "big") == width and
+             int.from_bytes(ihdr[4:8], "big") == height,
+             f"capture PNG dimensions do not match event: {path}")
+    expected_crc = int.from_bytes(contents[29:33], "big")
+    _require((zlib.crc32(b"IHDR" + ihdr) & 0xffffffff) == expected_crc,
+             f"capture PNG IHDR checksum is invalid: {path}")
+    return hashlib.sha256(contents).hexdigest()
+
+
+def _validate_capture(record: dict, kind: str, capture_paths: dict[str, str],
+                      source: dict[str, object]) -> dict:
+    _closed(record, CAPTURE_FIELDS, "capture")
+    _require(record["kind"] == kind, f"capture kind must be {kind}")
+    _require(record["path"] == capture_paths[kind], "capture path does not match identity")
+    _require(isinstance(record["sha256"], str) and
+             HEX_64.fullmatch(record["sha256"]) is not None and
+             record["sha256"] != "0" * 64,
+             "capture sha256 must be a nonzero lowercase digest")
+    width = _integer(record["width"], "capture width", 1, 4096)
+    height = _integer(record["height"], "capture height", 1, 4096)
+    size_bytes = _integer(record["size_bytes"], "capture size_bytes", 1, MAX_CAPTURE_BYTES)
+    _integer(record["x"], "capture x", 0, 255)
+    _integer(record["y"], "capture y", 0, 255)
+    _integer(record["map_publication_generation"], "capture map_publication_generation", 1)
+    _integer(record["gpu_primary_publication_generation"],
+             "capture gpu_primary_publication_generation", 1)
+    _require(type(record["game_time_valid"]) is bool,
+             "capture game_time_valid must be boolean")
+    _integer(record["game_seconds"], "capture game_seconds")
+    for field in ("map_path", "x", "y", "map_publication_generation",
+                  "gpu_primary_publication_generation", "game_time_valid", "game_seconds"):
+        _require(record[field] == source[field],
+                 f"capture {field} does not match its presented frame")
+    capture_path = Path(record["path"])
+    digest = _capture_png(capture_path, size_bytes, width, height)
+    _require(digest == record["sha256"], "capture PNG SHA-256 does not match event")
+    return {key: value for key, value in record.items() if key not in {"type", "kind"}}
+
+
 def _stage_names(value: object, label: str) -> list[str]:
     _require(isinstance(value, list), f"{label} must be an array")
     _require(bool(value), f"{label} must not be empty")
@@ -299,8 +403,11 @@ def _stage_summary(names: list[str], samples: list[array], unit: str) -> dict:
     return result
 
 
-def _validate_identity(record: dict, route_digest: str, checkpoint_count: int) -> dict:
-    _closed(record, IDENTITY_FIELDS, "identity")
+def _validate_identity(record: dict, route_digest: str, checkpoint_count: int,
+                       report_path: Path) -> dict:
+    fields = set(record)
+    _require(fields in (IDENTITY_FIELDS, IDENTITY_FIELDS | {"capture_paths"}),
+             "identity fields are not closed")
     _require(record["type"] == "identity" and type(record["schema_version"]) is int and
              record["schema_version"] == 1,
              "first record must be schema-version-1 identity")
@@ -330,6 +437,8 @@ def _validate_identity(record: dict, route_digest: str, checkpoint_count: int) -
                                               "identity cpu_stage_names")
     record["gpu_host_stage_names"] = _stage_names(record["gpu_host_stage_names"],
                                                    "identity gpu_host_stage_names")
+    if "capture_paths" in record:
+        record["capture_paths"] = _capture_paths(record["capture_paths"], report_path)
     return record
 
 
@@ -349,6 +458,9 @@ def verify(route_path: Path, report_path: Path) -> dict:
     pending_arrival: dict | None = None
     presentation_frame_generation: int | None = None
     presentation_gpu_generation: int | None = None
+    presentation_frame_evidence: dict[str, object] | None = None
+    final_capture_source: dict[str, object] | None = None
+    captures: dict[str, dict] = {}
     step_started_elapsed = 0
     frame_times = array("Q")
     presented_spacings = array("Q")
@@ -385,7 +497,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
         record_type = record.get("type")
         _require(terminal is None, f"record after terminal at line {line_number}")
         if record_count == 1:
-            identity = _validate_identity(record, route_digest, len(checkpoints))
+            identity = _validate_identity(record, route_digest, len(checkpoints), report_path)
             cpu_deltas = [array("Q") for _ in identity["cpu_stage_names"]]
             gpu_host_deltas = [array("Q") for _ in identity["gpu_host_stage_names"]]
             movement_cpu_deltas = [array("Q") for _ in identity["cpu_stage_names"]]
@@ -533,6 +645,15 @@ def verify(route_path: Path, report_path: Path) -> dict:
                     presentation_gpu_generation = (
                         gpu_primary_generation if qualifying_frame else None
                     )
+                    presentation_frame_evidence = ({
+                        "map_path": map_path,
+                        "x": x,
+                        "y": y,
+                        "map_publication_generation": generation,
+                        "gpu_primary_publication_generation": gpu_primary_generation,
+                        "game_time_valid": world_time["valid"],
+                        "game_seconds": world_time["game_seconds"],
+                    } if qualifying_frame else None)
                 elif presentations == len(checkpoints):
                     post_route_presented_frame = True
             continue
@@ -541,7 +662,27 @@ def verify(route_path: Path, report_path: Path) -> dict:
         _require(elapsed <= route_limits["timeout_us"], "report exceeded route timeout")
         _require(elapsed >= last_elapsed, "record elapsed_us decreased")
         last_elapsed = elapsed
-        if record_type == "arrival":
+        if record_type == "capture":
+            capture_paths = identity.get("capture_paths")
+            _require(isinstance(capture_paths, dict),
+                     "capture record is forbidden without identity capture_paths")
+            kind = record.get("kind")
+            _require(isinstance(kind, str) and kind in {"initial", "final"},
+                     "capture kind is invalid")
+            _require(kind not in captures, f"duplicate {kind} capture record")
+            if kind == "initial":
+                _require(presentations == 0 and pending_arrival is not None and
+                         pending_arrival["index"] == 0 and
+                         presentation_frame_evidence is not None,
+                         "initial capture is outside its checkpoint presentation window")
+                source = presentation_frame_evidence
+            else:
+                _require(presentations == len(checkpoints) and pending_arrival is None and
+                         final_capture_source is not None,
+                         "final capture is outside its checkpoint presentation window")
+                source = final_capture_source
+            captures[kind] = _validate_capture(record, kind, capture_paths, source)
+        elif record_type == "arrival":
             _closed(record, ARRIVAL_FIELDS, "arrival")
             _require(pending_arrival is None,
                      "arrival occurred before prior checkpoint presentation")
@@ -564,6 +705,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
             pending_arrival = record
             presentation_frame_generation = None
             presentation_gpu_generation = None
+            presentation_frame_evidence = None
             arrivals += 1
         elif record_type == "checkpoint_presented":
             _closed(record, PRESENTATION_FIELDS, "checkpoint_presented")
@@ -588,12 +730,15 @@ def verify(route_path: Path, report_path: Path) -> dict:
             _require(elapsed - step_started_elapsed <= route_limits["step_timeout_us"],
                      "checkpoint presentation exceeded route step timeout")
             last_gpu_generation = generation
+            if presentations + 1 == len(checkpoints):
+                final_capture_source = dict(presentation_frame_evidence or {})
             covered_maps.append(pending_arrival["map_path"])
             covered_tiles.add((pending_arrival["map_path"], pending_arrival["x"],
                                pending_arrival["y"]))
             pending_arrival = None
             presentation_frame_generation = None
             presentation_gpu_generation = None
+            presentation_frame_evidence = None
             step_started_elapsed = elapsed
             presentations += 1
             if presentations == 1:
@@ -617,6 +762,10 @@ def verify(route_path: Path, report_path: Path) -> dict:
     _require(identity is not None, "report is empty or missing identity")
     _require(terminal is not None, "report is truncated: terminal record is missing")
     _require(terminal["status"] == "success", f"terminal reported failure: {terminal['reason']}")
+    capture_paths = identity.get("capture_paths")
+    if capture_paths is not None:
+        _require(set(captures) == {"initial", "final"},
+                 "successful capture report is missing a capture callback")
     expected_count = len(checkpoints)
     _require(pending_arrival is None and arrivals == presentations == expected_count,
              "report did not present every route checkpoint")
@@ -649,7 +798,7 @@ def verify(route_path: Path, report_path: Path) -> dict:
              movement_presented_frames > 0,
              "successful report has no positive-duration presented movement evidence")
     unique_maps = list(dict.fromkeys(covered_maps))
-    return {
+    summary = {
         "status": "success",
         "identity": dict(identity),
         "route_sha256": route_digest,
@@ -705,6 +854,9 @@ def verify(route_path: Path, report_path: Path) -> dict:
         "world_time_first": world_time_first,
         "world_time_last": world_time_last,
     }
+    if capture_paths is not None:
+        summary["captures"] = {kind: captures[kind] for kind in ("initial", "final")}
+    return summary
 
 
 def main(argv: list[str] | None = None) -> int:

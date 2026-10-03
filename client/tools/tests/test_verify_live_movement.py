@@ -6,10 +6,12 @@ import copy
 import hashlib
 import importlib.util
 import json
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 
@@ -133,6 +135,38 @@ def good_records() -> list[dict]:
     ]
 
 
+def png(width: int = 2, height: int = 1) -> bytes:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + kind + data +
+                struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    pixels = b"".join(b"\0" + b"\0\0\0\xff" * width for _ in range(height))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) +
+            chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b""))
+
+
+def capture_event(kind: str, path: Path, contents: bytes, source: dict,
+                  elapsed_us: int) -> dict:
+    return {
+        "type": "capture",
+        "kind": kind,
+        "path": str(path),
+        "sha256": hashlib.sha256(contents).hexdigest(),
+        "width": 2,
+        "height": 1,
+        "size_bytes": len(contents),
+        "map_path": source["map_path"],
+        "x": source["x"],
+        "y": source["y"],
+        "map_publication_generation": source["map_publication_generation"],
+        "gpu_primary_publication_generation": source["gpu_primary_publication_generation"],
+        "game_time_valid": source["world_time"]["valid"],
+        "game_seconds": source["world_time"]["game_seconds"],
+        "elapsed_us": elapsed_us,
+    }
+
+
 class VerifyLiveMovementTests(unittest.TestCase):
     def verify(self, records: list[dict], route: bytes = ROUTE) -> dict:
         with tempfile.TemporaryDirectory() as directory:
@@ -147,6 +181,31 @@ class VerifyLiveMovementTests(unittest.TestCase):
     def assert_rejected(self, records: list[dict], message: str) -> None:
         with self.assertRaisesRegex(verifier.ReportError, message):
             self.verify(records)
+
+    def verify_capture(self, mutate=None) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route_path = root / "route.xml"
+            report_path = root / "report.jsonl"
+            initial_path = root / "initial.png"
+            final_path = root / "final.png"
+            contents = png()
+            initial_path.write_bytes(contents)
+            final_path.write_bytes(contents)
+            records = good_records()
+            records[0]["capture_paths"] = {
+                "initial": str(initial_path), "final": str(final_path),
+            }
+            initial = capture_event("initial", initial_path, contents, records[2], 100)
+            final = capture_event("final", final_path, contents, records[5], 201)
+            records.insert(3, initial)
+            records.insert(8, final)
+            if mutate is not None:
+                mutate(records, root)
+            route_path.write_bytes(ROUTE)
+            report_path.write_text("".join(json.dumps(record) + "\n" for record in records),
+                                   encoding="utf-8")
+            return verifier.verify(route_path, report_path)
 
     def test_accepts_and_aggregates_complete_report(self) -> None:
         summary = self.verify(good_records())
@@ -180,6 +239,92 @@ class VerifyLiveMovementTests(unittest.TestCase):
         self.assertEqual(summary["movement_gpu_host_stages"]["submit"]["total_ns"], 100)
         self.assertEqual(summary["per_map_frames"], {"/brynknot/wilderness": 1})
         self.assertEqual(summary["per_map_frame_us"]["/brynknot/wilderness"]["max"], 100)
+        self.assertNotIn("captures", summary)
+
+    def test_accepts_paired_capture_artifacts(self) -> None:
+        summary = self.verify_capture()
+        self.assertEqual(set(summary["captures"]), {"initial", "final"})
+        self.assertEqual(summary["captures"]["initial"]["width"], 2)
+        self.assertNotIn("type", summary["captures"]["initial"])
+        self.assertNotIn("kind", summary["captures"]["initial"])
+
+    def test_rejects_missing_duplicate_and_unrequested_captures(self) -> None:
+        def missing(records, _root):
+            records.pop(8)
+
+        with self.assertRaisesRegex(verifier.ReportError, "missing a capture callback"):
+            self.verify_capture(missing)
+
+        def duplicate(records, _root):
+            records.insert(4, copy.deepcopy(records[3]))
+
+        with self.assertRaisesRegex(verifier.ReportError, "duplicate initial capture"):
+            self.verify_capture(duplicate)
+
+        def unrequested(records, _root):
+            del records[0]["capture_paths"]
+
+        with self.assertRaisesRegex(verifier.ReportError, "forbidden without"):
+            self.verify_capture(unrequested)
+
+    def test_rejects_capture_path_and_file_identity_failures(self) -> None:
+        def outside(records, root):
+            records[0]["capture_paths"]["initial"] = str(root.parent / "initial.png")
+
+        with self.assertRaisesRegex(verifier.ReportError, "report parent directory"):
+            self.verify_capture(outside)
+
+        def duplicate_path(records, _root):
+            records[0]["capture_paths"]["final"] = records[0]["capture_paths"]["initial"]
+
+        with self.assertRaisesRegex(verifier.ReportError, "must be distinct"):
+            self.verify_capture(duplicate_path)
+
+        def alias_path(records, root):
+            alias = str(root) + "/./initial.png"
+            records[0]["capture_paths"]["final"] = alias
+            records[8]["path"] = alias
+
+        with self.assertRaisesRegex(verifier.ReportError, "must be canonical"):
+            self.verify_capture(alias_path)
+
+        cases = (
+            ("sha256", "f" * 64, "SHA-256"),
+            ("size_bytes", len(png()) + 1, "size does not match"),
+            ("width", 3, "dimensions do not match"),
+        )
+        for field, value, message in cases:
+            with self.subTest(field=field):
+                def invalid(records, _root, field=field, value=value):
+                    records[3][field] = value
+
+                with self.assertRaisesRegex(verifier.ReportError, message):
+                    self.verify_capture(invalid)
+
+        def symlink(records, root):
+            target = root / "target.png"
+            target.write_bytes(png())
+            initial = root / "initial.png"
+            initial.unlink()
+            initial.symlink_to(target)
+
+        with self.assertRaisesRegex(verifier.ReportError, "must not be a symlink"):
+            self.verify_capture(symlink)
+
+    def test_rejects_capture_source_mismatch_and_wrong_order(self) -> None:
+        def source_mismatch(records, _root):
+            records[3]["x"] += 1
+
+        with self.assertRaisesRegex(verifier.ReportError, "does not match its presented frame"):
+            self.verify_capture(source_mismatch)
+
+        def wrong_order(records, _root):
+            initial = records.pop(3)
+            initial["elapsed_us"] = 102
+            records.insert(5, initial)
+
+        with self.assertRaisesRegex(verifier.ReportError, "outside its checkpoint"):
+            self.verify_capture(wrong_order)
 
     def test_cli_writes_same_stable_summary_as_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
