@@ -195,7 +195,13 @@ static bool route_checkpoint_parse(xmlNodePtr node,
 }
 
 static bool route_read_file(const char *path, char **body, size_t *body_size) {
-    int fd = open(path, O_RDONLY | O_NONBLOCK);
+    int flags = O_RDONLY;
+#ifdef WIN32
+    flags |= O_BINARY;
+#else
+    flags |= O_NONBLOCK;
+#endif
+    int fd = open(path, flags);
     if (fd < 0) {
         return false;
     }

@@ -1,3 +1,5 @@
+#include <toolkit/porting.h>
+
 #include <live_movement_route.h>
 
 #include <fcntl.h>
@@ -15,6 +17,12 @@
         }                                      \
     } while (0)
 
+#ifdef WIN32
+#define LIVE_ROUTE_TEST_TEMP "atrinik-live-route-XXXXXX"
+#else
+#define LIVE_ROUTE_TEST_TEMP "/tmp/atrinik-live-route-XXXXXX"
+#endif
+
 static const char route_xml[] =
     "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
     "<checkpoint map=\"/maps/a\" x=\"10\" y=\"10\" direction=\"0\"/>"
@@ -24,7 +32,7 @@ static const char route_xml[] =
     "</live-movement-route>";
 
 static bool load_xml(const char *xml, live_movement_route_t **route) {
-    char path[] = "/tmp/atrinik-live-route-XXXXXX";
+    char path[] = LIVE_ROUTE_TEST_TEMP;
     int fd = mkstemp(path);
     if (fd < 0) {
         return false;
@@ -138,6 +146,7 @@ static int test_parser(void) {
     REQUIRE(strlen(live_movement_route_sha256(route)) == 64U);
     live_movement_route_free(route);
 
+#ifndef WIN32
     char fifo_path[] = "/tmp/atrinik-live-route-fifo-XXXXXX";
     int fifo_fd = mkstemp(fifo_path);
     REQUIRE(fifo_fd >= 0);
@@ -146,12 +155,17 @@ static int test_parser(void) {
     REQUIRE(mkfifo(fifo_path, 0600) == 0);
     REQUIRE(!live_movement_route_load(fifo_path, &route, NULL, 0));
     REQUIRE(unlink(fifo_path) == 0);
+#endif
 
-    char oversized_path[] = "/tmp/atrinik-live-route-large-XXXXXX";
+    char oversized_path[] = LIVE_ROUTE_TEST_TEMP;
     int oversized_fd = mkstemp(oversized_path);
     REQUIRE(oversized_fd >= 0);
-    REQUIRE(ftruncate(oversized_fd, LIVE_MOVEMENT_ROUTE_FILE_MAX + 1U) == 0);
     close(oversized_fd);
+    FILE *oversized = fopen(oversized_path, "wb");
+    REQUIRE(oversized != NULL);
+    REQUIRE(fseek(oversized, (long)LIVE_MOVEMENT_ROUTE_FILE_MAX, SEEK_SET) == 0);
+    REQUIRE(fputc(0, oversized) == 0);
+    REQUIRE(fclose(oversized) == 0);
     REQUIRE(!live_movement_route_load(oversized_path, &route, NULL, 0));
     REQUIRE(unlink(oversized_path) == 0);
 
