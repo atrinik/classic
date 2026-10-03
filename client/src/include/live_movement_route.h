@@ -40,7 +40,7 @@ typedef struct live_movement_route_action {
     uint8_t direction;
 } live_movement_route_action_t;
 
-/** Load a bounded, closed live-movement-route XML file. */
+/** Load a bounded, closed route with an initial checkpoint and at least one move. */
 bool live_movement_route_load(const char *path,
                               live_movement_route_t **route,
                               char *error,

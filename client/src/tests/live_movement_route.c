@@ -77,6 +77,28 @@ static char *build_route(size_t checkpoints) {
     return xml;
 }
 
+static char *add_destination(const char *xml) {
+    static const char close[] = "</live-movement-route>";
+    static const char destination[] =
+        "<checkpoint map=\"/destination\" x=\"0\" y=\"0\" direction=\"6\"/>";
+    const char *position = strstr(xml, close);
+    if (position == NULL) {
+        return NULL;
+    }
+    size_t prefix = (size_t)(position - xml);
+    size_t size = strlen(xml) + sizeof(destination);
+    char *result = malloc(size);
+    if (result == NULL) {
+        return NULL;
+    }
+    memcpy(result, xml, prefix);
+    memcpy(result + prefix, destination, sizeof(destination) - 1U);
+    memcpy(result + prefix + sizeof(destination) - 1U,
+           position,
+           strlen(position) + 1U);
+    return result;
+}
+
 static live_movement_route_observation_t observation(uint64_t now,
                                                       const char *map,
                                                       uint8_t x,
@@ -142,7 +164,8 @@ static int test_parser(void) {
                                  sizeof(boundary_xml),
                                  "<live-movement-route version=\"1\" timeout-ms=\"3600000\" "
                                  "step-timeout-ms=\"60000\"><checkpoint map=\"%s\" x=\"255\" "
-                                 "y=\"255\" direction=\"0\"/></live-movement-route>",
+                                 "y=\"255\" direction=\"0\"/><checkpoint map=\"/destination\" "
+                                 "x=\"0\" y=\"0\" direction=\"6\"/></live-movement-route>",
                                  map);
     REQUIRE(boundary_size > 0 && (size_t)boundary_size < sizeof(boundary_xml));
     REQUIRE(load_xml(boundary_xml, &route));
@@ -153,7 +176,8 @@ static int test_parser(void) {
                              sizeof(boundary_xml),
                              "<live-movement-route version=\"1\" timeout-ms=\"1\" "
                              "step-timeout-ms=\"1\"><checkpoint map=\"%s\" x=\"0\" y=\"0\" "
-                             "direction=\"0\"/></live-movement-route>",
+                             "direction=\"0\"/><checkpoint map=\"/destination\" x=\"0\" "
+                             "y=\"0\" direction=\"6\"/></live-movement-route>",
                              map);
     REQUIRE(boundary_size > 0 && (size_t)boundary_size < sizeof(boundary_xml));
     REQUIRE(!load_xml(boundary_xml, &route));
@@ -172,6 +196,9 @@ static int test_parser(void) {
 
     static const char *const malformed[] = {
         "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\"/>",
+        "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
+        "<checkpoint map=\"/a\" x=\"0\" y=\"0\" direction=\"0\"/>"
+        "</live-movement-route>",
         "<live-movement-route version=\"2\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
         "<checkpoint map=\"/a\" x=\"0\" y=\"0\" direction=\"0\"/></live-movement-route>",
         "<live-movement-route version=\"1\" timeout-ms=\"0\" step-timeout-ms=\"1\">"
@@ -219,9 +246,12 @@ static int test_parser(void) {
         "</live-movement-route>",
     };
     for (size_t i = 0; i < sizeof(malformed) / sizeof(malformed[0]); i++) {
+        char *expanded = i >= 2U ? add_destination(malformed[i]) : NULL;
+        const char *candidate = expanded != NULL ? expanded : malformed[i];
         route = NULL;
-        REQUIRE(!load_xml(malformed[i], &route));
+        REQUIRE(!load_xml(candidate, &route));
         REQUIRE(route == NULL);
+        free(expanded);
     }
     return 0;
 }
@@ -234,6 +264,15 @@ static int test_state_progression(const live_movement_route_t *route) {
     REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_NONE);
     current.connected = true;
     current.play = true;
+    current.published_ready = true;
+    current.map = "/maps/a";
+    current.x = 10;
+    current.y = 10;
+    REQUIRE(current.publication_generation == 0U);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_NONE);
+    current.connected = true;
+    current.play = true;
+    current.published_ready = false;
     current.map = "/maps/wrong";
     current.x = 99;
     current.y = 99;
@@ -372,6 +411,7 @@ static int test_final_presentation(void) {
     static const char final_xml[] =
         "<live-movement-route version=\"1\" timeout-ms=\"100\" step-timeout-ms=\"10\">"
         "<checkpoint map=\"/only\" x=\"1\" y=\"2\" direction=\"0\"/>"
+        "<checkpoint map=\"/only\" x=\"2\" y=\"2\" direction=\"6\"/>"
         "</live-movement-route>";
     live_movement_route_t *route = NULL;
     REQUIRE(load_xml(final_xml, &route));
@@ -379,9 +419,12 @@ static int test_final_presentation(void) {
     REQUIRE(state != NULL);
     live_movement_route_observation_t current = observation(1, "/only", 1, 2, 1);
     REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
+    REQUIRE(live_movement_route_arrival_presented(state));
     current.now_ms = 2;
-    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_NONE);
-    live_movement_route_observation_t wrong = observation(2, "/only", 2, 2, 2);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_MOVE);
+    current = observation(3, "/only", 2, 2, 2);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
+    live_movement_route_observation_t wrong = observation(4, "/only", 3, 2, 3);
     REQUIRE(live_movement_route_tick(state, &wrong).type == LIVE_MOVEMENT_ROUTE_ACTION_FAILED);
     live_movement_route_state_free(state);
 
@@ -390,7 +433,12 @@ static int test_final_presentation(void) {
     current = observation(1, "/only", 1, 2, 1);
     REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
     REQUIRE(live_movement_route_arrival_presented(state));
-    current.now_ms = 3;
+    current.now_ms = 2;
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_MOVE);
+    current = observation(3, "/only", 2, 2, 2);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
+    REQUIRE(live_movement_route_arrival_presented(state));
+    current.now_ms = 4;
     REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_DONE);
     live_movement_route_state_free(state);
 
@@ -399,7 +447,12 @@ static int test_final_presentation(void) {
     current = observation(1, "/only", 1, 2, 1);
     REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
     REQUIRE(live_movement_route_arrival_presented(state));
-    current = observation(2, "/only", 2, 2, 2);
+    current.now_ms = 2;
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_MOVE);
+    current = observation(3, "/only", 2, 2, 2);
+    REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_ARRIVAL);
+    REQUIRE(live_movement_route_arrival_presented(state));
+    current = observation(4, "/only", 3, 2, 3);
     REQUIRE(live_movement_route_tick(state, &current).type == LIVE_MOVEMENT_ROUTE_ACTION_FAILED);
     live_movement_route_state_free(state);
     live_movement_route_free(route);

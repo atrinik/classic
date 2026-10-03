@@ -322,7 +322,7 @@ bool live_movement_route_load(const char *path,
         }
         checkpoints_count++;
     }
-    valid = valid && checkpoints_count != 0U;
+    valid = valid && checkpoints_count >= 2U;
     live_movement_route_t *parsed = valid ? calloc(1, sizeof(*parsed)) : NULL;
     if (valid && parsed == NULL) {
         valid = false;
@@ -464,7 +464,7 @@ live_movement_route_tick(live_movement_route_state_t *state,
         return route_action(state, LIVE_MOVEMENT_ROUTE_ACTION_NONE, 0);
     }
     if (!observation->connected || !observation->play || !observation->published_ready ||
-        observation->map == NULL) {
+        observation->publication_generation == 0U || observation->map == NULL) {
         if (state->phase == LIVE_MOVEMENT_ROUTE_PHASE_WAITING &&
             observation->now_ms - state->move_started_ms >= state->route->step_timeout_ms) {
             return route_fail(state, "movement step deadline expired");
