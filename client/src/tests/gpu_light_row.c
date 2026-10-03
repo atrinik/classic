@@ -15,12 +15,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define TEST_CHECK(condition) \
-    do {                      \
-        if (!(condition)) {   \
-            fprintf(stderr, "gpu light-row assertion failed at line %d\\n", __LINE__); \
-            abort();          \
-        }                     \
+#define TEST_CHECK(condition)                                                            \
+    do {                                                                                 \
+        if (!(condition)) {                                                              \
+            fprintf(stderr, "gpu light-row assertion failed at line %d\n", __LINE__);    \
+            abort();                                                                     \
+        }                                                                                \
     } while (0)
 
 static int64_t reference_edge(const int32_t xs[4],
@@ -96,6 +96,8 @@ static void check_row(const int32_t xs[4],
 
     TEST_CHECK(gpu_light_row_quad_mask(xs, ys, sample_y, first_x, width, &mask, &work));
     TEST_CHECK(mask == reference_row_mask(xs, ys, sample_y, first_x, width));
+    /* Three half-planes per triangle, two endpoints plus at most six bisections. */
+    TEST_CHECK(work.halfplane_evaluations <= 2U * 3U * 8U);
 }
 
 static void reverse_vertices(const int32_t input_xs[4],
@@ -127,6 +129,11 @@ static void test_scalar_oracle_against_deterministic_quads(void) {
         int first_x;
         unsigned int width;
     } cases[] = {
+        {{-GPU_LIGHT_ROW_COORDINATE_LIMIT, GPU_LIGHT_ROW_COORDINATE_LIMIT,
+          GPU_LIGHT_ROW_COORDINATE_LIMIT, -GPU_LIGHT_ROW_COORDINATE_LIMIT},
+         {-GPU_LIGHT_ROW_COORDINATE_LIMIT, -GPU_LIGHT_ROW_COORDINATE_LIMIT,
+          GPU_LIGHT_ROW_COORDINATE_LIMIT, GPU_LIGHT_ROW_COORDINATE_LIMIT},
+         0, GPU_LIGHT_ROW_COORDINATE_LIMIT - 63, 64},
         {{2, 25, 25, 2}, {2, 2, 25, 25}, 2, 0, 64},
         {{2, 25, 25, 2}, {2, 2, 25, 25}, 24, 0, 63},
         {{2, 25, 25, 2}, {2, 2, 25, 25}, 12, 12, 1},

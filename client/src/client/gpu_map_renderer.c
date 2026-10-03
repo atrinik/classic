@@ -14,6 +14,7 @@
  * Raw SDL_GPU albedo/owner map passes and retained source textures.
  */
 
+#include <gpu_light_row.h>
 #include <gpu_shader_data.h>
 #include <gpu_sprite_effect.h>
 
@@ -28,6 +29,7 @@
 #include <toolkit/socket.h>
 #include <gpu_renderer.h>
 #include <lighting.h>
+#include <render_profiler.h>
 #include <toolkit/logger.h>
 #include <toolkit/memory.h>
 #include <toolkit/toolkit.h>
@@ -3049,6 +3051,8 @@ static bool gpu_map_light_bucket_index_build(void) {
     return true;
 }
 
+#ifdef ATRINIK_GPU_LIGHT_ROW_ORACLE
+/* Preserve the original per-pixel lookup as an independent integration oracle. */
 static size_t gpu_map_light_quad_find_exact(uint8_t owner, int x, int y) {
     if (!light_bucket_index_valid && !gpu_map_light_bucket_index_build()) {
         return SIZE_MAX;
@@ -3069,6 +3073,20 @@ static size_t gpu_map_light_quad_find_exact(uint8_t owner, int x, int y) {
         }
     }
     return SIZE_MAX;
+}
+
+#endif
+
+/** Index a single set bit without compiler-specific count-trailing-zero intrinsics. */
+static unsigned gpu_map_light_bit_index(uint64_t bit) {
+    unsigned index = 0;
+    for (unsigned shift = 32; shift != 0; shift /= 2) {
+        if (bit >> shift) {
+            bit >>= shift;
+            index += shift;
+        }
+    }
+    return index;
 }
 
 static bool gpu_map_light_span_append(int first_x, int last_x, size_t quad) {
@@ -3121,17 +3139,64 @@ static const gpu_map_light_horizontal_row_t *gpu_map_light_horizontal_row_build(
     uint32_t offset = (uint32_t)light_spans_num;
     size_t active_quad = SIZE_MAX;
     int active_first = 0;
-    for (int x = 0; x < target_width; x++) {
-        size_t quad = gpu_map_light_quad_find_exact(owner, x, y);
-        if (quad == active_quad) {
-            continue;
+    size_t spatial_buckets = (size_t)light_bucket_columns * light_bucket_rows;
+    size_t first_bucket = (size_t)owner * spatial_buckets +
+                          (size_t)((uint32_t)y / GPU_MAP_LIGHT_BUCKET_SIZE) * light_bucket_columns;
+    for (uint32_t column = 0; column < light_bucket_columns; column++) {
+        int first_x = (int)(column * GPU_MAP_LIGHT_BUCKET_SIZE);
+        unsigned width = MIN(GPU_MAP_LIGHT_BUCKET_SIZE, (unsigned)(target_width - first_x));
+        uint64_t unassigned = UINT64_MAX >> (64U - width);
+        size_t winners[GPU_MAP_LIGHT_BUCKET_SIZE];
+        for (unsigned offset_x = 0; offset_x < width; offset_x++) {
+            winners[offset_x] = SIZE_MAX;
         }
-        if (active_quad != SIZE_MAX &&
-            !gpu_map_light_span_append(active_first, x - 1, active_quad)) {
-            return NULL;
+        size_t bucket = first_bucket + column;
+        /* Last submitted quad wins, exactly as in the original pixel lookup.
+         * Each candidate contributes at most two intervals; each pixel is
+         * assigned once, regardless of the number of overlapping quads. */
+        for (uint32_t entry = light_bucket_offsets[bucket + 1U];
+             entry > light_bucket_offsets[bucket] && unassigned != 0;) {
+            size_t index = light_bucket_indices[--entry];
+            const gpu_map_light_quad_t *quad = &light_quads[index];
+            if (quad->owner != owner) {
+                continue;
+            }
+            uint64_t coverage;
+            if (!gpu_light_row_quad_mask(quad->x, quad->y, y, first_x, width, &coverage, NULL)) {
+                /* Preserve the original arithmetic for exceptional coordinates
+                 * outside the bounded helper's proved-safe fast-path range. */
+                coverage = 0;
+                for (unsigned offset_x = 0; offset_x < width; offset_x++) {
+                    if ((unassigned & (UINT64_C(1) << offset_x)) != 0 &&
+                        gpu_map_light_quad_contains(quad, first_x + (int)offset_x, y)) {
+                        coverage |= UINT64_C(1) << offset_x;
+                    }
+                }
+            }
+            coverage &= unassigned;
+            unassigned &= ~coverage;
+            while (coverage != 0) {
+                uint64_t bit = coverage & (~coverage + UINT64_C(1));
+                winners[gpu_map_light_bit_index(bit)] = index;
+                coverage &= coverage - UINT64_C(1);
+            }
         }
-        active_quad = quad;
-        active_first = x;
+        for (unsigned offset_x = 0; offset_x < width; offset_x++) {
+            int x = first_x + (int)offset_x;
+            size_t quad = winners[offset_x];
+#ifdef ATRINIK_GPU_LIGHT_ROW_ORACLE
+            HARD_ASSERT(quad == gpu_map_light_quad_find_exact(owner, x, y));
+#endif
+            if (quad == active_quad) {
+                continue;
+            }
+            if (active_quad != SIZE_MAX &&
+                !gpu_map_light_span_append(active_first, x - 1, active_quad)) {
+                return NULL;
+            }
+            active_quad = quad;
+            active_first = x;
+        }
     }
     if (active_quad != SIZE_MAX &&
         !gpu_map_light_span_append(active_first, target_width - 1, active_quad)) {
@@ -3158,12 +3223,7 @@ static size_t gpu_map_light_row_find(uint8_t owner, int sample_y) {
     return light_row_lookup[(size_t)owner * target_height + (size_t)sample_y];
 }
 
-static size_t gpu_map_light_row_build(uint8_t owner, int sample_y) {
-    sample_y = MAX(0, MIN(target_height - 1, sample_y));
-    size_t existing = gpu_map_light_row_find(owner, sample_y);
-    if (existing != SIZE_MAX) {
-        return existing;
-    }
+static size_t gpu_map_light_row_build_uncached(uint8_t owner, int sample_y) {
     const gpu_map_light_horizontal_row_t *requested =
         gpu_map_light_horizontal_row_build(owner, sample_y);
     if (requested == NULL) {
@@ -3240,6 +3300,18 @@ static size_t gpu_map_light_row_build(uint8_t owner, int sample_y) {
         gpu_map_contract_hash_append(map_frame_lighting_generation, row, sizeof(*row));
     light_row_lookup[(size_t)owner * target_height + (size_t)sample_y] = light_rows_num;
     return light_rows_num++;
+}
+
+static size_t gpu_map_light_row_build(uint8_t owner, int sample_y) {
+    sample_y = MAX(0, MIN(target_height - 1, sample_y));
+    size_t existing = gpu_map_light_row_find(owner, sample_y);
+    if (existing != SIZE_MAX) {
+        return existing;
+    }
+    uint64_t started = render_profiler_begin();
+    size_t row = gpu_map_light_row_build_uncached(owner, sample_y);
+    render_profiler_end(RENDER_PROFILE_MAP_LIGHT_ROWS, started);
+    return row;
 }
 
 bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
