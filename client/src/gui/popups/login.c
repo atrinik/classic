@@ -170,7 +170,7 @@ static int popup_draw(popup_struct *popup) {
     size_t i;
 
     /* Connection terminated while we were trying to login. */
-    if (cpl.state < ST_STARTCONNECT || cpl.state == ST_CHARACTERS) {
+    if (cpl.state < ST_STARTCONNECT || cpl.state >= ST_CHARACTERS) {
         return 0;
     }
 
@@ -354,7 +354,7 @@ static int popup_event(popup_struct *popup, SDL_Event *event) {
 
 /** @copydoc popup_struct::destroy_callback_func */
 static int popup_destroy_callback(popup_struct *popup) {
-    if (cpl.state != ST_CHARACTERS) {
+    if (cpl.state < ST_CHARACTERS) {
         cpl.state = ST_START;
     }
 

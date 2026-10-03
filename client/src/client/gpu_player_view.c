@@ -2026,7 +2026,39 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         SDL_SetError("ready login form did not render its production controls");
         return false;
     }
+    /* Login stays visible while authentication is pending, but a direct
+     * character selection may advance beyond ST_CHARACTERS before any draw. */
+    popup_struct *login_popup = popup_get_head();
+    if (login_popup == NULL) {
+        SDL_SetError("ready login popup was unexpectedly destroyed");
+        return false;
+    }
+    cpl.state = ST_WAITLOGIN;
+    if (!gpu_player_view_render_complete() || popup_get_head() != login_popup ||
+        cpl.state != ST_WAITLOGIN) {
+        SDL_SetError("pending login popup did not remain visible");
+        return false;
+    }
     popup_destroy_all();
+    if (cpl.state != ST_START) {
+        SDL_SetError("canceling pending login did not return to startup");
+        return false;
+    }
+    const int authenticated_states[] = {ST_CHARACTERS, ST_WAITFORPLAY, ST_PLAY};
+    for (size_t i = 0; i < arraysize(authenticated_states); i++) {
+        login_start();
+        login_popup = popup_get_head();
+        cpl.state = authenticated_states[i];
+        if (login_popup == NULL || login_popup->draw_func(login_popup) != 0) {
+            SDL_SetError("completed login popup did not request removal");
+            return false;
+        }
+        popup_destroy(login_popup);
+        if (popup_get_head() != NULL || cpl.state != authenticated_states[i]) {
+            SDL_SetError("completed login popup destruction changed gameplay state");
+            return false;
+        }
+    }
 
     packet_struct *characters_packet = packet_new(0, 256, 32);
     char connection_id[SOCKET_CONNECTION_ID_SIZE];
