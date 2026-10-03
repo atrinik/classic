@@ -367,6 +367,11 @@ void video_recording_frame(bool playing, bool presented, uint64_t now_ms) {
     if (!playing) {
         video_recording_stop();
     }
+    /* Duration limits apply even while idle or waiting on a GPU readback. */
+    if (recording.epoch_set && now_ms >= recording.epoch &&
+        now_ms - recording.epoch >= 3600000U) {
+        video_recording_stop();
+    }
     SDL_LockMutex(recording.mutex);
     bool finished = recording.finished;
     bool capture = recording.ready && !recording.stopping && recording.count < RECORD_QUEUE;

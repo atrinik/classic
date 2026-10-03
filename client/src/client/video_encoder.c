@@ -46,24 +46,53 @@
 #define VIDEO_ENCODER_FPS 20U
 
 static bool encoder_close_inherited(void) {
-#ifdef WIN32
-    /* Recording stays unavailable until an explicit handle allowlist exists. */
-    return false;
-#else
 #if defined(__linux__) && defined(SYS_close_range)
-    if (syscall(SYS_close_range, 3U, UINT_MAX, 0U) == 0) {
-        return true;
-    }
+    /* Linux 5.9+ closes the entire descriptor space, including descriptors
+     * above a lowered RLIMIT_NOFILE. A bounded scan cannot guarantee that. */
+    return syscall(SYS_close_range, 3U, UINT_MAX, 0U) == 0;
+#else
+    /* Other platforms need their own qualified handle/descriptor allowlist. */
+    return false;
 #endif
-    long maximum = sysconf(_SC_OPEN_MAX);
-    if (maximum < 0 || maximum > 1048576L) {
-        return false;
+}
+
+typedef struct encoder_output {
+    unsigned char *data;
+    size_t capacity;
+    size_t position;
+    size_t size;
+    bool failed;
+} encoder_output_t;
+
+/* libjpeg's SDL_image destination may ignore a short SDL_WriteIO. Remember any
+ * overflow independently so truncated output can never become an AVI frame. */
+static size_t SDLCALL encoder_output_write(void *userdata, const void *data,
+                                           size_t size, SDL_IOStatus *status) {
+    encoder_output_t *output = userdata;
+    if (size > output->capacity - output->position) {
+        output->failed = true;
+        *status = SDL_IO_STATUS_ERROR;
+        return 0U;
     }
-    for (int descriptor = 3; descriptor < (int)maximum; descriptor++) {
-        (void)close(descriptor);
+    memcpy(output->data + output->position, data, size);
+    output->position += size;
+    if (output->position > output->size) {
+        output->size = output->position;
     }
-    return true;
-#endif
+    return size;
+}
+
+static Sint64 SDLCALL encoder_output_seek(void *userdata, Sint64 offset, SDL_IOWhence whence) {
+    encoder_output_t *output = userdata;
+    Sint64 base = whence == SDL_IO_SEEK_SET ? 0 :
+                  whence == SDL_IO_SEEK_CUR ? (Sint64)output->position :
+                  whence == SDL_IO_SEEK_END ? (Sint64)output->size : -1;
+    if (base < 0 || offset < -base || offset > (Sint64)output->capacity - base) {
+        output->failed = true;
+        return -1;
+    }
+    output->position = (size_t)(base + offset);
+    return base + offset;
 }
 
 static bool encoder_prepare_process(void) {
@@ -294,17 +323,24 @@ int video_encoder_main(const char *output_path) {
                                   SDL_PIXELFORMAT_RGBA32,
                                   pixels,
                                   (int)(width * VIDEO_ENCODER_BYTES_PER_PIXEL));
-        SDL_IOStream *io = surface != NULL ? SDL_IOFromMem(jpeg, jpeg_capacity) : NULL;
+        encoder_output_t encoded_output = {.data = jpeg, .capacity = jpeg_capacity};
+        SDL_IOStreamInterface interface;
+        SDL_INIT_INTERFACE(&interface);
+        interface.write = encoder_output_write;
+        interface.seek = encoder_output_seek;
+        SDL_IOStream *io = surface != NULL ? SDL_OpenIO(&interface, &encoded_output) : NULL;
         bool encoded = io != NULL && IMG_SaveJPG_IO(surface, io, false, 85);
-        Sint64 encoded_size = io != NULL ? SDL_TellIO(io) : -1;
+        size_t encoded_size = encoded_output.size;
         bool io_closed = io == NULL || SDL_CloseIO(io);
         if (surface != NULL) {
             SDL_DestroySurface(surface);
         }
-        if (!encoded || !io_closed || encoded_size <= 0 || (uint64_t)encoded_size > jpeg_capacity) {
+        if (!encoded || !io_closed || encoded_output.failed || encoded_size < 4U ||
+            jpeg[0] != 0xffU || jpeg[1] != 0xd8U ||
+            jpeg[encoded_size - 2U] != 0xffU || jpeg[encoded_size - 1U] != 0xd9U) {
             return encoder_failed(output, writer, pixels, jpeg, "JPEG encoding failed");
         }
-        if (!video_avi_frame(writer, jpeg, (size_t)encoded_size, frame_index)) {
+        if (!video_avi_frame(writer, jpeg, encoded_size, frame_index)) {
             return encoder_failed(output, writer, pixels, jpeg, "AVI frame write failed");
         }
         previous_index = frame_index;

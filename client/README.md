@@ -358,7 +358,8 @@ environment variables never synthesize a selected-adapter identity.
  errors preserve the partial file and report failure. Stop allows five seconds
  for the owned encoder to finish before terminating it; forceful termination can
  leave an incomplete AVI. Wait for the saved message before using the file.
- Recording currently requires Linux process isolation. Windows and macOS client
+ Recording currently requires Linux 5.9 or newer with the `close_range` syscall
+ permitted for descriptor isolation. Windows and macOS client
  builds remain supported, but recording requests fail explicitly until their
  descriptor/handle isolation is qualified. The private `--video-encoder` mode
  is an internal bounded pixel-stream endpoint, not a gameplay launch option.
