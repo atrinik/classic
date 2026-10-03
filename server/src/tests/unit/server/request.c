@@ -1298,7 +1298,10 @@ START_TEST(test_new_and_connected_map_updates_synchronize_world_clock) {
     socket_struct *cs = CONTR(pl)->cs;
     update_los(pl);
     static const uint8_t updates[] = {
-        MAP_UPDATE_CMD_NEW, MAP_UPDATE_CMD_SAME, MAP_UPDATE_CMD_CONNECTED, MAP_UPDATE_CMD_NEW,
+        MAP_UPDATE_CMD_NEW,
+        MAP_UPDATE_CMD_SAME,
+        MAP_UPDATE_CMD_CONNECTED,
+        MAP_UPDATE_CMD_NEW,
     };
     for (size_t i = 0; i < arraysize(updates); i++) {
         socket_buffer_clear(cs);
@@ -1319,7 +1322,7 @@ START_TEST(test_new_and_connected_map_updates_synchronize_world_clock) {
         packet_reader_init(&reader, clock_packet->data, clock_packet->len);
         ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_MAPSTATS_TIME);
         uint64_t expected_seconds = (uint64_t)todtick * 3600 +
-                                   (uint64_t)(pticks % PTICKS_PER_CLOCK) * 3600 / PTICKS_PER_CLOCK;
+                                    (uint64_t)(pticks % PTICKS_PER_CLOCK) * 3600 / PTICKS_PER_CLOCK;
         ck_assert_uint_eq(packet_reader_read_uint64(&reader), expected_seconds);
         ck_assert_uint_gt(packet_reader_read_uint32(&reader), 0);
         ck_assert(packet_reader_finish(&reader));
