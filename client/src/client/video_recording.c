@@ -70,8 +70,7 @@ static void fail_locked(const char *text) {
 
 static bool stop_expired(void) {
     SDL_LockMutex(recording.mutex);
-    bool expired = recording.stopping &&
-                   SDL_GetTicks() - recording.stop_tick >= RECORD_TIMEOUT_MS;
+    bool expired = recording.stopping && SDL_GetTicks() - recording.stop_tick >= RECORD_TIMEOUT_MS;
     SDL_UnlockMutex(recording.mutex);
     return expired;
 }
@@ -133,14 +132,23 @@ static int recording_worker(void *unused) {
     /* Preserve only the loader's explicit library search path. In particular,
      * no HOME, client configuration, scenario variables or preload is passed. */
     const char *library_path = SDL_getenv("LD_LIBRARY_PATH");
-    bool properties_ok = properties != 0 && environment != NULL &&
+    bool properties_ok =
+        properties != 0 && environment != NULL &&
         (library_path == NULL ||
          SDL_SetEnvironmentVariable(environment, "LD_LIBRARY_PATH", library_path, true)) &&
-        SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ENVIRONMENT_POINTER, environment) &&
+        SDL_SetPointerProperty(properties,
+                               SDL_PROP_PROCESS_CREATE_ENVIRONMENT_POINTER,
+                               environment) &&
         SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, (void *)args) &&
-        SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, SDL_PROCESS_STDIO_APP) &&
-        SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_APP) &&
-        SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, SDL_PROCESS_STDIO_NULL);
+        SDL_SetNumberProperty(properties,
+                              SDL_PROP_PROCESS_CREATE_STDIN_NUMBER,
+                              SDL_PROCESS_STDIO_APP) &&
+        SDL_SetNumberProperty(properties,
+                              SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER,
+                              SDL_PROCESS_STDIO_APP) &&
+        SDL_SetNumberProperty(properties,
+                              SDL_PROP_PROCESS_CREATE_STDERR_NUMBER,
+                              SDL_PROCESS_STDIO_NULL);
     SDL_Process *process = properties_ok ? SDL_CreateProcessWithProperties(properties) : NULL;
     SDL_DestroyProperties(properties);
     SDL_DestroyEnvironment(environment);
@@ -216,7 +224,8 @@ static int recording_worker(void *unused) {
             }
             if (!reaped) {
                 SDL_LockMutex(recording.mutex);
-                SDL_strlcpy(recording.error, "Encoder termination could not be confirmed",
+                SDL_strlcpy(recording.error,
+                            "Encoder termination could not be confirmed",
                             sizeof(recording.error));
                 SDL_UnlockMutex(recording.mutex);
             }
@@ -255,10 +264,9 @@ bool video_recording_start(const char *path) {
     }
     bool absolute = path != NULL && path[0] == '/';
 #ifdef WIN32
-    absolute = path != NULL &&
-               ((isalpha((unsigned char)path[0]) && path[1] == ':' &&
-                 (path[2] == '/' || path[2] == '\\')) ||
-                (path[0] == '\\' && path[1] == '\\'));
+    absolute = path != NULL && ((isalpha((unsigned char)path[0]) && path[1] == ':' &&
+                                 (path[2] == '/' || path[2] == '\\')) ||
+                                (path[0] == '\\' && path[1] == '\\'));
 #endif
     if (!absolute || strlen(path) >= sizeof(recording.path)) {
         return SDL_SetError("Recording requires an absolute new output path (maximum 4095 bytes)");
@@ -288,10 +296,10 @@ void video_recording_stop(void) {
     SDL_LockMutex(recording.mutex);
     if (!recording.stopping) {
         recording.stop_tick = SDL_GetTicks();
-        recording.final_count = recording.epoch_set
-                                    ? (uint32_t)((recording.stop_tick - recording.epoch) * RECORD_FPS /
-                                                 1000U) + 1U
-                                    : 0U;
+        recording.final_count =
+            recording.epoch_set
+                ? (uint32_t)((recording.stop_tick - recording.epoch) * RECORD_FPS / 1000U) + 1U
+                : 0U;
         if (recording.final_count > RECORD_MAX_FRAMES) {
             recording.final_count = RECORD_MAX_FRAMES;
         }
@@ -314,8 +322,8 @@ static void capture_complete(SDL_Surface *surface, void *userdata) {
     }
     SDL_LockMutex(recording.mutex);
     if (!recording.stopping) {
-        if (surface == NULL || surface->format != SDL_PIXELFORMAT_RGBA32 ||
-            surface->w <= 0 || surface->h <= 0 || surface->w > 4096 || surface->h > 4096 ||
+        if (surface == NULL || surface->format != SDL_PIXELFORMAT_RGBA32 || surface->w <= 0 ||
+            surface->h <= 0 || surface->w > 4096 || surface->h > 4096 ||
             (uint64_t)surface->w * surface->h > RECORD_MAX_PIXELS) {
             fail_locked("Recording frame readback failed or exceeded dimension limits");
         } else if (recording.count < RECORD_QUEUE) {
@@ -368,8 +376,7 @@ void video_recording_frame(bool playing, bool presented, uint64_t now_ms) {
         video_recording_stop();
     }
     /* Duration limits apply even while idle or waiting on a GPU readback. */
-    if (recording.epoch_set && now_ms >= recording.epoch &&
-        now_ms - recording.epoch >= 3600000U) {
+    if (recording.epoch_set && now_ms >= recording.epoch && now_ms - recording.epoch >= 3600000U) {
         video_recording_stop();
     }
     SDL_LockMutex(recording.mutex);
@@ -393,8 +400,11 @@ void video_recording_frame(bool playing, bool presented, uint64_t now_ms) {
             uint32_t repeats = recording.final_count > recording.submitted
                                    ? recording.final_count - recording.submitted
                                    : 0U;
-            snprintf(status, sizeof(status), "Recording saved (%u captured frames, %u repeated slots)",
-                     recording.submitted, repeats);
+            snprintf(status,
+                     sizeof(status),
+                     "Recording saved (%u captured frames, %u repeated slots)",
+                     recording.submitted,
+                     repeats);
             notice(status, false);
         }
         return;
@@ -411,8 +421,8 @@ void video_recording_frame(bool playing, bool presented, uint64_t now_ms) {
         return;
     }
     int width, height;
-    if (!gpu_renderer_output_size(&width, &height) || width < 1 || height < 1 ||
-        width > 4096 || height > 4096 || (uint64_t)width * height > RECORD_MAX_PIXELS) {
+    if (!gpu_renderer_output_size(&width, &height) || width < 1 || height < 1 || width > 4096 ||
+        height > 4096 || (uint64_t)width * height > RECORD_MAX_PIXELS) {
         SDL_LockMutex(recording.mutex);
         fail_locked("Recording window exceeds 4096 pixels per side or 8 megapixels");
         SDL_UnlockMutex(recording.mutex);

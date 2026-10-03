@@ -47,15 +47,15 @@ struct video_avi {
 };
 
 static void video_avi_put_u16(unsigned char *data, uint16_t value) {
-    data[0] = (unsigned char) value;
-    data[1] = (unsigned char) (value >> 8U);
+    data[0] = (unsigned char)value;
+    data[1] = (unsigned char)(value >> 8U);
 }
 
 static void video_avi_put_u32(unsigned char *data, uint32_t value) {
-    data[0] = (unsigned char) value;
-    data[1] = (unsigned char) (value >> 8U);
-    data[2] = (unsigned char) (value >> 16U);
-    data[3] = (unsigned char) (value >> 24U);
+    data[0] = (unsigned char)value;
+    data[1] = (unsigned char)(value >> 8U);
+    data[2] = (unsigned char)(value >> 16U);
+    data[3] = (unsigned char)(value >> 24U);
 }
 
 static bool video_avi_fail(video_avi_t *avi, const char *format, ...) {
@@ -63,7 +63,7 @@ static bool video_avi_fail(video_avi_t *avi, const char *format, ...) {
         va_list args;
 
         va_start(args, format);
-        (void) vsnprintf(avi->error, sizeof(avi->error), format, args);
+        (void)vsnprintf(avi->error, sizeof(avi->error), format, args);
         va_end(args);
     }
     return false;
@@ -77,8 +77,8 @@ static bool video_avi_write(video_avi_t *avi, const void *data, size_t size) {
 }
 
 static bool video_avi_seek(video_avi_t *avi, uint32_t offset) {
-    if (avi->start > LONG_MAX - (long) offset ||
-        fseek(avi->stream, avi->start + (long) offset, SEEK_SET) != 0) {
+    if (avi->start > LONG_MAX - (long)offset ||
+        fseek(avi->stream, avi->start + (long)offset, SEEK_SET) != 0) {
         return video_avi_fail(avi, "failed to seek AVI stream");
     }
     return true;
@@ -118,8 +118,8 @@ static void video_avi_make_header(video_avi_t *avi, unsigned char *header) {
     video_avi_put_u32(header + 132U, avi->fps);
     video_avi_put_u32(header + 144U, avi->maximum_jpeg_size);
     video_avi_put_u32(header + 148U, UINT32_MAX);
-    video_avi_put_u16(header + 160U, (uint16_t) avi->width);
-    video_avi_put_u16(header + 162U, (uint16_t) avi->height);
+    video_avi_put_u16(header + 160U, (uint16_t)avi->width);
+    video_avi_put_u16(header + 162U, (uint16_t)avi->height);
 
     memcpy(header + 164U, "strf", 4U);
     video_avi_put_u32(header + 168U, 40U);
@@ -141,16 +141,16 @@ video_avi_t *video_avi_open(FILE *stream, uint32_t width, uint32_t height, uint3
     uint64_t maximum_jpeg_size;
     long start;
 
-    if (stream == NULL || width == 0U || height == 0U || width > INT16_MAX ||
-        height > INT16_MAX || fps == 0U || fps > VIDEO_AVI_MAX_FPS) {
+    if (stream == NULL || width == 0U || height == 0U || width > INT16_MAX || height > INT16_MAX ||
+        fps == 0U || fps > VIDEO_AVI_MAX_FPS) {
         return NULL;
     }
-    maximum_jpeg_size = (uint64_t) width * height * 4U + 64U * 1024U;
+    maximum_jpeg_size = (uint64_t)width * height * 4U + 64U * 1024U;
     if (maximum_jpeg_size > VIDEO_AVI_MAX_JPEG_SIZE) {
         maximum_jpeg_size = VIDEO_AVI_MAX_JPEG_SIZE;
     }
     start = ftell(stream);
-    if (start < 0 || start > LONG_MAX - (long) VIDEO_AVI_HEADER_SIZE - 8L) {
+    if (start < 0 || start > LONG_MAX - (long)VIDEO_AVI_HEADER_SIZE - 8L) {
         return NULL;
     }
     avi = calloc(1U, sizeof(*avi));
@@ -168,10 +168,10 @@ video_avi_t *video_avi_open(FILE *stream, uint32_t width, uint32_t height, uint3
     avi->width = width;
     avi->height = height;
     avi->fps = fps;
-    avi->maximum_jpeg_size = (uint32_t) maximum_jpeg_size;
+    avi->maximum_jpeg_size = (uint32_t)maximum_jpeg_size;
     avi->file_limit = VIDEO_AVI_MAX_FILE_SIZE;
-    if ((uint64_t) (LONG_MAX - start) < avi->file_limit) {
-        avi->file_limit = (uint32_t) (LONG_MAX - start);
+    if ((uint64_t)(LONG_MAX - start) < avi->file_limit) {
+        avi->file_limit = (uint32_t)(LONG_MAX - start);
     }
     video_avi_make_header(avi, header);
     if (!video_avi_write(avi, header, sizeof(header)) ||
@@ -191,11 +191,10 @@ static bool video_avi_can_append(video_avi_t *avi, size_t jpeg_size) {
     if (avi->frame_count != 0U) {
         uint32_t last = avi->frame_count - 1U;
 
-        body_end = (uint64_t) avi->offsets[last] + VIDEO_AVI_MOVI_TYPE_OFFSET +
-                   8U + avi->sizes[last] + (avi->sizes[last] & 1U);
+        body_end = (uint64_t)avi->offsets[last] + VIDEO_AVI_MOVI_TYPE_OFFSET + 8U +
+                   avi->sizes[last] + (avi->sizes[last] & 1U);
     }
-    final_size = body_end + 8U + padded_size + 8U +
-                 ((uint64_t) avi->frame_count + 1U) * 16U;
+    final_size = body_end + 8U + padded_size + 8U + ((uint64_t)avi->frame_count + 1U) * 16U;
     return avi->frame_count < VIDEO_AVI_MAX_FRAMES && final_size <= avi->file_limit;
 }
 
@@ -211,17 +210,17 @@ static bool video_avi_emit(video_avi_t *avi, const unsigned char *jpeg, size_t s
     if (avi->frame_count != 0U) {
         uint32_t last = avi->frame_count - 1U;
 
-        position = (uint64_t) avi->offsets[last] + VIDEO_AVI_MOVI_TYPE_OFFSET +
-                   8U + avi->sizes[last] + (avi->sizes[last] & 1U);
+        position = (uint64_t)avi->offsets[last] + VIDEO_AVI_MOVI_TYPE_OFFSET + 8U +
+                   avi->sizes[last] + (avi->sizes[last] & 1U);
     }
     memcpy(chunk, "00dc", 4U);
-    video_avi_put_u32(chunk + 4U, (uint32_t) size);
+    video_avi_put_u32(chunk + 4U, (uint32_t)size);
     if (!video_avi_write(avi, chunk, sizeof(chunk)) || !video_avi_write(avi, jpeg, size) ||
         ((size & 1U) != 0U && !video_avi_write(avi, &padding, 1U))) {
         return false;
     }
-    avi->offsets[avi->frame_count] = (uint32_t) position - VIDEO_AVI_MOVI_TYPE_OFFSET;
-    avi->sizes[avi->frame_count] = (uint32_t) size;
+    avi->offsets[avi->frame_count] = (uint32_t)position - VIDEO_AVI_MOVI_TYPE_OFFSET;
+    avi->sizes[avi->frame_count] = (uint32_t)size;
     avi->frame_count++;
     return true;
 }
@@ -234,11 +233,10 @@ static bool video_avi_finalize(video_avi_t *avi) {
     if (avi->frame_count != 0U) {
         uint32_t last = avi->frame_count - 1U;
 
-        movi_end = (uint64_t) avi->offsets[last] + VIDEO_AVI_MOVI_TYPE_OFFSET +
-                   8U + avi->sizes[last] + (avi->sizes[last] & 1U);
+        movi_end = (uint64_t)avi->offsets[last] + VIDEO_AVI_MOVI_TYPE_OFFSET + 8U +
+                   avi->sizes[last] + (avi->sizes[last] & 1U);
     }
-    if (!video_avi_seek(avi, (uint32_t) movi_end) ||
-        !video_avi_write(avi, "idx1", 4U) ||
+    if (!video_avi_seek(avi, (uint32_t)movi_end) || !video_avi_write(avi, "idx1", 4U) ||
         !video_avi_write_u32(avi, avi->frame_count * 16U)) {
         return false;
     }
@@ -251,16 +249,16 @@ static bool video_avi_finalize(video_avi_t *avi) {
             return false;
         }
     }
-    final_size = movi_end + 8U + (uint64_t) avi->frame_count * 16U;
+    final_size = movi_end + 8U + (uint64_t)avi->frame_count * 16U;
     if (!video_avi_seek(avi, VIDEO_AVI_RIFF_SIZE_OFFSET) ||
-        !video_avi_write_u32(avi, (uint32_t) final_size - 8U) ||
+        !video_avi_write_u32(avi, (uint32_t)final_size - 8U) ||
         !video_avi_seek(avi, VIDEO_AVI_TOTAL_FRAMES_OFFSET) ||
         !video_avi_write_u32(avi, avi->frame_count) ||
         !video_avi_seek(avi, VIDEO_AVI_STREAM_LENGTH_OFFSET) ||
         !video_avi_write_u32(avi, avi->frame_count) ||
         !video_avi_seek(avi, VIDEO_AVI_MOVI_SIZE_OFFSET) ||
-        !video_avi_write_u32(avi, (uint32_t) movi_end - VIDEO_AVI_MOVI_TYPE_OFFSET) ||
-        !video_avi_seek(avi, (uint32_t) final_size) || fflush(avi->stream) != 0) {
+        !video_avi_write_u32(avi, (uint32_t)movi_end - VIDEO_AVI_MOVI_TYPE_OFFSET) ||
+        !video_avi_seek(avi, (uint32_t)final_size) || fflush(avi->stream) != 0) {
         return video_avi_fail(avi, "failed to finalize AVI stream");
     }
     return true;
@@ -270,7 +268,7 @@ static bool video_avi_stop_and_finalize(video_avi_t *avi, const char *message) {
     video_avi_fail(avi, "%s", message);
     avi->finished = true;
     clearerr(avi->stream);
-    (void) video_avi_finalize(avi);
+    (void)video_avi_finalize(avi);
     avi->finish_result = false;
     return false;
 }
@@ -330,7 +328,7 @@ bool video_avi_finish(video_avi_t *avi, uint32_t frame_count) {
     }
     if (avi->error[0] != '\0') {
         avi->finished = true;
-        (void) video_avi_finalize(avi);
+        (void)video_avi_finalize(avi);
         return false;
     }
     if ((!avi->have_frame && frame_count != 0U) || frame_count < avi->frame_count) {

@@ -28,12 +28,12 @@
     } while (0)
 
 static uint16_t test_u16(const unsigned char *data) {
-    return (uint16_t) data[0] | (uint16_t) data[1] << 8U;
+    return (uint16_t)data[0] | (uint16_t)data[1] << 8U;
 }
 
 static uint32_t test_u32(const unsigned char *data) {
-    return (uint32_t) data[0] | (uint32_t) data[1] << 8U | (uint32_t) data[2] << 16U |
-           (uint32_t) data[3] << 24U;
+    return (uint32_t)data[0] | (uint32_t)data[1] << 8U | (uint32_t)data[2] << 16U |
+           (uint32_t)data[3] << 24U;
 }
 
 static unsigned char *test_read_file(FILE *stream, size_t *size) {
@@ -44,10 +44,10 @@ static unsigned char *test_read_file(FILE *stream, size_t *size) {
     end = ftell(stream);
     TEST_CHECK(end >= 0);
     TEST_CHECK(fseek(stream, 0L, SEEK_SET) == 0);
-    data = malloc((size_t) end);
+    data = malloc((size_t)end);
     TEST_CHECK(data != NULL);
-    TEST_CHECK(fread(data, 1U, (size_t) end, stream) == (size_t) end);
-    *size = (size_t) end;
+    TEST_CHECK(fread(data, 1U, (size_t)end, stream) == (size_t)end);
+    *size = (size_t)end;
     return data;
 }
 
@@ -55,8 +55,11 @@ static void test_sparse_timeline_and_structure(void) {
     static const unsigned char first[] = {0xffU, 0xd8U, 'A', 0xffU, 0xd9U};
     static const unsigned char second[] = {0xffU, 0xd8U, 'B', 'B', 0xffU, 0xd9U};
     static const unsigned char *expected[] = {first, first, first, second, second};
-    static const uint32_t expected_sizes[] = {
-        sizeof(first), sizeof(first), sizeof(first), sizeof(second), sizeof(second)};
+    static const uint32_t expected_sizes[] = {sizeof(first),
+                                              sizeof(first),
+                                              sizeof(first),
+                                              sizeof(second),
+                                              sizeof(second)};
     FILE *stream = tmpfile();
     video_avi_t *avi;
     unsigned char *data;
@@ -78,7 +81,7 @@ static void test_sparse_timeline_and_structure(void) {
     data = test_read_file(stream, &size);
     TEST_CHECK(size >= 224U + 8U + 5U * 16U);
     TEST_CHECK(memcmp(data, "RIFF", 4U) == 0);
-    TEST_CHECK(test_u32(data + 4U) == (uint32_t) size - 8U);
+    TEST_CHECK(test_u32(data + 4U) == (uint32_t)size - 8U);
     TEST_CHECK(memcmp(data + 8U, "AVI ", 4U) == 0);
     TEST_CHECK(memcmp(data + 12U, "LIST", 4U) == 0);
     TEST_CHECK(test_u32(data + 16U) == 192U);
@@ -108,13 +111,13 @@ static void test_sparse_timeline_and_structure(void) {
     TEST_CHECK(memcmp(data + 220U, "movi", 4U) == 0);
 
     for (size_t i = 0U; i < 5U; i++) {
-        offsets[i] = (uint32_t) cursor - 220U;
+        offsets[i] = (uint32_t)cursor - 220U;
         TEST_CHECK(memcmp(data + cursor, "00dc", 4U) == 0);
         TEST_CHECK(test_u32(data + cursor + 4U) == expected_sizes[i]);
         TEST_CHECK(memcmp(data + cursor + 8U, expected[i], expected_sizes[i]) == 0);
         cursor += 8U + expected_sizes[i] + (expected_sizes[i] & 1U);
     }
-    TEST_CHECK(test_u32(data + 216U) == (uint32_t) cursor - 220U);
+    TEST_CHECK(test_u32(data + 216U) == (uint32_t)cursor - 220U);
     TEST_CHECK(memcmp(data + cursor, "idx1", 4U) == 0);
     TEST_CHECK(test_u32(data + cursor + 4U) == 5U * 16U);
     cursor += 8U;
@@ -219,7 +222,7 @@ static void test_frame_cap_finalizes_complete_prefix(void) {
     TEST_CHECK(strstr(video_avi_error(avi), "frame limit") != NULL);
     TEST_CHECK(video_avi_frames(avi) == 1U);
     data = test_read_file(stream, &size);
-    TEST_CHECK(test_u32(data + 4U) == (uint32_t) size - 8U);
+    TEST_CHECK(test_u32(data + 4U) == (uint32_t)size - 8U);
     TEST_CHECK(test_u32(data + 48U) == 1U);
     TEST_CHECK(memcmp(data + 236U, "idx1", 4U) == 0);
     TEST_CHECK(test_u32(data + 240U) == 16U);
@@ -245,7 +248,7 @@ static void test_nonzero_start_and_jpeg_copy(void) {
     data = test_read_file(stream, &size);
     TEST_CHECK(size > 3U + 224U);
     TEST_CHECK(memcmp(data, "preRIFF", 7U) == 0);
-    TEST_CHECK(test_u32(data + 7U) == (uint32_t) size - 3U - 8U);
+    TEST_CHECK(test_u32(data + 7U) == (uint32_t)size - 3U - 8U);
     TEST_CHECK(memcmp(data + 3U + 232U, "\xff\xd8\x41\xff\xd9", sizeof(jpeg)) == 0);
     TEST_CHECK(memcmp(data + 3U + 246U, "\xff\xd8\x41\xff\xd9", sizeof(jpeg)) == 0);
     free(data);
@@ -279,18 +282,18 @@ static ssize_t test_stream_write(void *context, const char *data, size_t size) {
     test_stream_t *stream = context;
     size_t allowed = size;
 
-    if ((size_t) stream->position >= stream->fail_after) {
+    if ((size_t)stream->position >= stream->fail_after) {
         return -1;
     }
-    if (allowed > stream->fail_after - (size_t) stream->position) {
-        allowed = stream->fail_after - (size_t) stream->position;
+    if (allowed > stream->fail_after - (size_t)stream->position) {
+        allowed = stream->fail_after - (size_t)stream->position;
     }
     memcpy(stream->data + stream->position, data, allowed);
-    stream->position += (off64_t) allowed;
-    if ((size_t) stream->position > stream->length) {
-        stream->length = (size_t) stream->position;
+    stream->position += (off64_t)allowed;
+    if ((size_t)stream->position > stream->length) {
+        stream->length = (size_t)stream->position;
     }
-    return (ssize_t) allowed;
+    return (ssize_t)allowed;
 }
 
 static int test_stream_seek(void *context, off64_t *offset, int origin) {
@@ -302,11 +305,11 @@ static int test_stream_seek(void *context, off64_t *offset, int origin) {
     } else if (origin == SEEK_CUR) {
         position = stream->position + *offset;
     } else if (origin == SEEK_END) {
-        position = (off64_t) stream->length + *offset;
+        position = (off64_t)stream->length + *offset;
     } else {
         return -1;
     }
-    if (position < 0 || (uint64_t) position > sizeof(stream->data)) {
+    if (position < 0 || (uint64_t)position > sizeof(stream->data)) {
         return -1;
     }
     stream->position = position;
@@ -318,7 +321,7 @@ static ssize_t test_virtual_stream_write(void *context, const char *data, size_t
     test_virtual_stream_t *stream = context;
 
     if (stream->position < TEST_AVI_HEADER_SIZE) {
-        size_t offset = (size_t) stream->position;
+        size_t offset = (size_t)stream->position;
         size_t copy_size = size;
 
         if (copy_size > TEST_AVI_HEADER_SIZE - offset) {
@@ -331,20 +334,20 @@ static ssize_t test_virtual_stream_write(void *context, const char *data, size_t
         stream->index_size = 0U;
     }
     if (stream->index_start >= 0 && stream->position >= stream->index_start) {
-        uint64_t offset = (uint64_t) (stream->position - stream->index_start);
+        uint64_t offset = (uint64_t)(stream->position - stream->index_start);
 
         TEST_CHECK(offset <= stream->index_capacity);
-        TEST_CHECK(size <= stream->index_capacity - (size_t) offset);
+        TEST_CHECK(size <= stream->index_capacity - (size_t)offset);
         memcpy(stream->index + offset, data, size);
-        if ((size_t) offset + size > stream->index_size) {
-            stream->index_size = (size_t) offset + size;
+        if ((size_t)offset + size > stream->index_size) {
+            stream->index_size = (size_t)offset + size;
         }
     }
-    stream->position += (off64_t) size;
+    stream->position += (off64_t)size;
     if (stream->position > stream->length) {
         stream->length = stream->position;
     }
-    return (ssize_t) size;
+    return (ssize_t)size;
 }
 
 static int test_virtual_stream_seek(void *context, off64_t *offset, int origin) {
@@ -426,8 +429,7 @@ static void test_virtual_file_size_boundary(void) {
     const size_t jpeg_size = 1024U * 1024U;
     const uint64_t record_size = 8U + jpeg_size;
     const uint32_t expected_frames =
-        (uint32_t) ((TEST_AVI_FILE_LIMIT - TEST_AVI_HEADER_SIZE - 8U) /
-                    (record_size + 16U));
+        (uint32_t)((TEST_AVI_FILE_LIMIT - TEST_AVI_HEADER_SIZE - 8U) / (record_size + 16U));
     unsigned char *jpeg = calloc(1U, jpeg_size);
     test_virtual_stream_t backing = {0};
     FILE *stream = test_virtual_stream_open(&backing);
@@ -444,15 +446,14 @@ static void test_virtual_file_size_boundary(void) {
     TEST_CHECK(!video_avi_frame(avi, jpeg, jpeg_size, expected_frames));
     TEST_CHECK(strstr(video_avi_error(avi), "recording limit") != NULL);
     TEST_CHECK(video_avi_frames(avi) == expected_frames);
-    expected_size = TEST_AVI_HEADER_SIZE + (uint64_t) expected_frames * record_size + 8U +
-                    (uint64_t) expected_frames * 16U;
+    expected_size = TEST_AVI_HEADER_SIZE + (uint64_t)expected_frames * record_size + 8U +
+                    (uint64_t)expected_frames * 16U;
     TEST_CHECK(expected_size <= TEST_AVI_FILE_LIMIT);
     TEST_CHECK(expected_size + record_size + 16U > TEST_AVI_FILE_LIMIT);
-    TEST_CHECK((uint64_t) backing.length == expected_size);
+    TEST_CHECK((uint64_t)backing.length == expected_size);
     TEST_CHECK(test_u32(backing.header + 4U) == expected_size - 8U);
     TEST_CHECK(test_u32(backing.header + 48U) == expected_frames);
-    TEST_CHECK(test_u32(backing.header + 216U) ==
-               4U + expected_frames * (uint32_t) record_size);
+    TEST_CHECK(test_u32(backing.header + 216U) == 4U + expected_frames * (uint32_t)record_size);
     TEST_CHECK(backing.index_size == 8U + expected_frames * 16U);
     TEST_CHECK(memcmp(backing.index, "idx1", 4U) == 0);
     TEST_CHECK(test_u32(backing.index + 4U) == expected_frames * 16U);
@@ -460,7 +461,7 @@ static void test_virtual_file_size_boundary(void) {
     TEST_CHECK(test_u32(backing.index + 20U) == jpeg_size);
     last_entry = 8U + (expected_frames - 1U) * 16U;
     TEST_CHECK(test_u32(backing.index + last_entry + 8U) ==
-               4U + (expected_frames - 1U) * (uint32_t) record_size);
+               4U + (expected_frames - 1U) * (uint32_t)record_size);
     TEST_CHECK(test_u32(backing.index + last_entry + 12U) == jpeg_size);
     TEST_CHECK(!video_avi_finish(avi, expected_frames));
 
@@ -485,16 +486,15 @@ static void test_virtual_frame_count_boundary(void) {
     TEST_CHECK(!video_avi_frame(avi, jpeg, sizeof(jpeg), TEST_AVI_MAX_FRAMES));
     TEST_CHECK(strstr(video_avi_error(avi), "frame limit") != NULL);
     TEST_CHECK(video_avi_frames(avi) == TEST_AVI_MAX_FRAMES);
-    expected_size = TEST_AVI_HEADER_SIZE + (uint64_t) TEST_AVI_MAX_FRAMES * 12U + 8U +
-                    (uint64_t) TEST_AVI_MAX_FRAMES * 16U;
-    TEST_CHECK((uint64_t) backing.length == expected_size);
+    expected_size = TEST_AVI_HEADER_SIZE + (uint64_t)TEST_AVI_MAX_FRAMES * 12U + 8U +
+                    (uint64_t)TEST_AVI_MAX_FRAMES * 16U;
+    TEST_CHECK((uint64_t)backing.length == expected_size);
     TEST_CHECK(test_u32(backing.header + 4U) == expected_size - 8U);
     TEST_CHECK(test_u32(backing.header + 48U) == TEST_AVI_MAX_FRAMES);
     TEST_CHECK(backing.index_size == 8U + TEST_AVI_MAX_FRAMES * 16U);
     TEST_CHECK(test_u32(backing.index + 4U) == TEST_AVI_MAX_FRAMES * 16U);
     last_entry = 8U + (TEST_AVI_MAX_FRAMES - 1U) * 16U;
-    TEST_CHECK(test_u32(backing.index + last_entry + 8U) ==
-               4U + (TEST_AVI_MAX_FRAMES - 1U) * 12U);
+    TEST_CHECK(test_u32(backing.index + last_entry + 8U) == 4U + (TEST_AVI_MAX_FRAMES - 1U) * 12U);
     TEST_CHECK(test_u32(backing.index + last_entry + 12U) == sizeof(jpeg));
 
     video_avi_free(avi);

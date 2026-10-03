@@ -71,9 +71,9 @@ static size_t SDLCALL fake_input_write(void *userdata,
 }
 
 static size_t SDLCALL fake_output_read(void *userdata,
-                                      void *ptr,
-                                      size_t size,
-                                      SDL_IOStatus *status) {
+                                       void *ptr,
+                                       size_t size,
+                                       SDL_IOStatus *status) {
     fake_process_state_t *state = userdata;
     const char *response;
     if (state->response++ == 0U) {
@@ -107,15 +107,15 @@ SDL_Process *SDL_CreateProcessWithProperties(SDL_PropertiesID properties) {
     if (process_state.create_failed) {
         return NULL;
     }
-    const char *const *args = SDL_GetPointerProperty(
-        properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, NULL);
+    const char *const *args =
+        SDL_GetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, NULL);
     TEST_CHECK(args != NULL);
     TEST_CHECK(args[0] != NULL && args[1] != NULL && args[2] != NULL && args[3] == NULL);
     SDL_strlcpy(process_state.executable, args[0], sizeof(process_state.executable));
     SDL_strlcpy(process_state.mode, args[1], sizeof(process_state.mode));
     SDL_strlcpy(process_state.path, args[2], sizeof(process_state.path));
-    SDL_Environment *environment = SDL_GetPointerProperty(
-        properties, SDL_PROP_PROCESS_CREATE_ENVIRONMENT_POINTER, NULL);
+    SDL_Environment *environment =
+        SDL_GetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ENVIRONMENT_POINTER, NULL);
     TEST_CHECK(environment != NULL);
     const char *library_path = SDL_GetEnvironmentVariable(environment, "LD_LIBRARY_PATH");
     SDL_strlcpy(process_state.library_path,
@@ -124,12 +124,12 @@ SDL_Process *SDL_CreateProcessWithProperties(SDL_PropertiesID properties) {
     process_state.environment_isolated =
         SDL_GetEnvironmentVariable(environment, "HOME") == NULL &&
         SDL_GetEnvironmentVariable(environment, "ATRINIK_RECORDING_TEST_SECRET") == NULL;
-    process_state.stdin_mode = SDL_GetNumberProperty(
-        properties, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, -1);
-    process_state.stdout_mode = SDL_GetNumberProperty(
-        properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, -1);
-    process_state.stderr_mode = SDL_GetNumberProperty(
-        properties, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, -1);
+    process_state.stdin_mode =
+        SDL_GetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, -1);
+    process_state.stdout_mode =
+        SDL_GetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, -1);
+    process_state.stderr_mode =
+        SDL_GetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, -1);
     process_state.input = open_fake_stream(true);
     process_state.output = open_fake_stream(false);
     TEST_CHECK(process_state.input != NULL && process_state.output != NULL);
@@ -287,9 +287,12 @@ static void test_validation_and_cancel(void) {
 
 static void test_protocol_timestamps_and_isolation(void) {
     reset_fakes();
-    TEST_CHECK(SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "LD_LIBRARY_PATH", "/test/lib", true));
-    TEST_CHECK(SDL_SetEnvironmentVariable(
-        SDL_GetEnvironment(), "ATRINIK_RECORDING_TEST_SECRET", "do-not-copy", true));
+    TEST_CHECK(
+        SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "LD_LIBRARY_PATH", "/test/lib", true));
+    TEST_CHECK(SDL_SetEnvironmentVariable(SDL_GetEnvironment(),
+                                          "ATRINIK_RECORDING_TEST_SECRET",
+                                          "do-not-copy",
+                                          true));
     TEST_CHECK(video_recording_start("/tmp/capture.avi"));
     consume_message("Recording armed", false);
     uint64_t epoch = SDL_GetTicks();
@@ -305,8 +308,8 @@ static void test_protocol_timestamps_and_isolation(void) {
     TEST_CHECK(process_state.destroyed && !process_state.killed);
     size_t executable_length = strlen(process_state.executable);
     TEST_CHECK(executable_length >= strlen("atrinik"));
-    TEST_CHECK(strcmp(process_state.executable + executable_length - strlen("atrinik"),
-                      "atrinik") == 0);
+    TEST_CHECK(
+        strcmp(process_state.executable + executable_length - strlen("atrinik"), "atrinik") == 0);
     TEST_CHECK(strcmp(process_state.mode, "--video-encoder") == 0);
     TEST_CHECK(strcmp(process_state.path, "/tmp/capture.avi") == 0);
     TEST_CHECK(strcmp(process_state.library_path, "/test/lib") == 0);

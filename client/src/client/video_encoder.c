@@ -66,8 +66,10 @@ typedef struct encoder_output {
 
 /* libjpeg's SDL_image destination may ignore a short SDL_WriteIO. Remember any
  * overflow independently so truncated output can never become an AVI frame. */
-static size_t SDLCALL encoder_output_write(void *userdata, const void *data,
-                                           size_t size, SDL_IOStatus *status) {
+static size_t SDLCALL encoder_output_write(void *userdata,
+                                           const void *data,
+                                           size_t size,
+                                           SDL_IOStatus *status) {
     encoder_output_t *output = userdata;
     if (size > output->capacity - output->position) {
         output->failed = true;
@@ -84,9 +86,10 @@ static size_t SDLCALL encoder_output_write(void *userdata, const void *data,
 
 static Sint64 SDLCALL encoder_output_seek(void *userdata, Sint64 offset, SDL_IOWhence whence) {
     encoder_output_t *output = userdata;
-    Sint64 base = whence == SDL_IO_SEEK_SET ? 0 :
-                  whence == SDL_IO_SEEK_CUR ? (Sint64)output->position :
-                  whence == SDL_IO_SEEK_END ? (Sint64)output->size : -1;
+    Sint64 base = whence == SDL_IO_SEEK_SET   ? 0
+                  : whence == SDL_IO_SEEK_CUR ? (Sint64)output->position
+                  : whence == SDL_IO_SEEK_END ? (Sint64)output->size
+                                              : -1;
     if (base < 0 || offset < -base || offset > (Sint64)output->capacity - base) {
         output->failed = true;
         return -1;
@@ -278,13 +281,11 @@ int video_encoder_main(const char *output_path) {
         uint32_t frame_width = encoder_u32_le(fields + 4);
         uint32_t frame_height = encoder_u32_le(fields + 8);
         uint32_t frame_bytes = encoder_u32_le(fields + 12);
-        if ((!have_frame && frame_index != 0U) ||
-            (have_frame && frame_index <= previous_index) ||
+        if ((!have_frame && frame_index != 0U) || (have_frame && frame_index <= previous_index) ||
             frame_index >= VIDEO_ENCODER_FRAME_COUNT_MAX) {
             return encoder_failed(output, writer, pixels, jpeg, "invalid frame index");
         }
-        if (frame_width == 0U || frame_height == 0U ||
-            frame_width > VIDEO_ENCODER_DIMENSION_MAX ||
+        if (frame_width == 0U || frame_height == 0U || frame_width > VIDEO_ENCODER_DIMENSION_MAX ||
             frame_height > VIDEO_ENCODER_DIMENSION_MAX ||
             frame_height > VIDEO_ENCODER_PIXELS_MAX / frame_width) {
             return encoder_failed(output, writer, pixels, jpeg, "invalid frame dimensions");
@@ -317,12 +318,11 @@ int video_encoder_main(const char *output_path) {
             return encoder_failed(output, writer, pixels, jpeg, "truncated frame pixels");
         }
 
-        SDL_Surface *surface =
-            SDL_CreateSurfaceFrom((int)width,
-                                  (int)height,
-                                  SDL_PIXELFORMAT_RGBA32,
-                                  pixels,
-                                  (int)(width * VIDEO_ENCODER_BYTES_PER_PIXEL));
+        SDL_Surface *surface = SDL_CreateSurfaceFrom((int)width,
+                                                     (int)height,
+                                                     SDL_PIXELFORMAT_RGBA32,
+                                                     pixels,
+                                                     (int)(width * VIDEO_ENCODER_BYTES_PER_PIXEL));
         encoder_output_t encoded_output = {.data = jpeg, .capacity = jpeg_capacity};
         SDL_IOStreamInterface interface;
         SDL_INIT_INTERFACE(&interface);
@@ -336,8 +336,8 @@ int video_encoder_main(const char *output_path) {
             SDL_DestroySurface(surface);
         }
         if (!encoded || !io_closed || encoded_output.failed || encoded_size < 4U ||
-            jpeg[0] != 0xffU || jpeg[1] != 0xd8U ||
-            jpeg[encoded_size - 2U] != 0xffU || jpeg[encoded_size - 1U] != 0xd9U) {
+            jpeg[0] != 0xffU || jpeg[1] != 0xd8U || jpeg[encoded_size - 2U] != 0xffU ||
+            jpeg[encoded_size - 1U] != 0xd9U) {
             return encoder_failed(output, writer, pixels, jpeg, "JPEG encoding failed");
         }
         if (!video_avi_frame(writer, jpeg, encoded_size, frame_index)) {

@@ -1119,7 +1119,10 @@ int main(int argc, char *argv[]) {
     video_recording_initialize(argv[0]);
     cli = clioptions_create("record-video", clioptions_option_record_video);
     clioptions_enable_argument(cli);
-    clioptions_set_description(cli, "PATH", "Record gameplay to a new absolute Motion JPEG AVI path; /record stop finishes it.");
+    clioptions_set_description(
+        cli,
+        "PATH",
+        "Record gameplay to a new absolute Motion JPEG AVI path; /record stop finishes it.");
     CLIOPTIONS_CREATE(cli, nometa, "Disable querying the metaserver");
     CLIOPTIONS_CREATE(cli, text_debug, "Enable text API debugging");
     CLIOPTIONS_CREATE(cli, widget_render_debug, "Enable widget debugging");
@@ -1454,7 +1457,9 @@ int main(int argc, char *argv[]) {
         video_recording_frame(cpl.state == ST_PLAY, frame_presented, SDL_GetTicks());
         char recording_notice[4352];
         bool recording_failed;
-        if (video_recording_message(recording_notice, sizeof(recording_notice), &recording_failed)) {
+        if (video_recording_message(recording_notice,
+                                    sizeof(recording_notice),
+                                    &recording_failed)) {
             if (recording_failed) {
                 LOG(ERROR, "%s", recording_notice);
             } else {

@@ -173,7 +173,9 @@ int client_command_check(const char *cmd) {
                 draw_info_format(COLOR_RED, "Recording: %s", SDL_GetError());
             }
         } else {
-            draw_info(COLOR_GREEN, "Usage: /record start /absolute/new-file.avi or /record stop (gameplay only)");
+            draw_info(
+                COLOR_GREEN,
+                "Usage: /record start /absolute/new-file.avi or /record stop (gameplay only)");
         }
         return 1;
     } else if (!strncasecmp(cmd, "/screenshot", 11)) {

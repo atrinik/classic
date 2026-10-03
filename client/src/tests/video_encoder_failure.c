@@ -70,8 +70,8 @@ static void put_u32(unsigned char *destination, uint32_t value) {
 }
 
 static uint32_t get_u32(const unsigned char *source) {
-    return (uint32_t)source[0] | (uint32_t)source[1] << 8U |
-           (uint32_t)source[2] << 16U | (uint32_t)source[3] << 24U;
+    return (uint32_t)source[0] | (uint32_t)source[1] << 8U | (uint32_t)source[2] << 16U |
+           (uint32_t)source[3] << 24U;
 }
 
 static bool fixture_path(char path[FIXTURE_PATH_MAX], const char *label, bool preserve) {
@@ -108,10 +108,8 @@ static bool write_packet(const char *path) {
     return fclose(stream) == 0 && written;
 }
 
-static bool read_exact_file(const char *path,
-                            unsigned char *contents,
-                            size_t capacity,
-                            size_t *size) {
+static bool
+read_exact_file(const char *path, unsigned char *contents, size_t capacity, size_t *size) {
     FILE *stream = fopen(path, "rb");
     if (stream == NULL) {
         return false;
@@ -124,12 +122,10 @@ static bool read_exact_file(const char *path,
 static bool empty_partial_avi(const char *path) {
     unsigned char contents[AVI_EMPTY_SIZE];
     size_t size = 0U;
-    return read_exact_file(path, contents, sizeof(contents), &size) &&
-           size == sizeof(contents) && memcmp(contents, "RIFF", 4U) == 0 &&
-           get_u32(contents + 4U) == AVI_EMPTY_SIZE - 8U &&
-           memcmp(contents + 8U, "AVI ", 4U) == 0 &&
-           get_u32(contents + 48U) == 0U && get_u32(contents + 140U) == 0U &&
-           memcmp(contents + 212U, "LIST", 4U) == 0 &&
+    return read_exact_file(path, contents, sizeof(contents), &size) && size == sizeof(contents) &&
+           memcmp(contents, "RIFF", 4U) == 0 && get_u32(contents + 4U) == AVI_EMPTY_SIZE - 8U &&
+           memcmp(contents + 8U, "AVI ", 4U) == 0 && get_u32(contents + 48U) == 0U &&
+           get_u32(contents + 140U) == 0U && memcmp(contents + 212U, "LIST", 4U) == 0 &&
            get_u32(contents + 216U) == 4U && memcmp(contents + 220U, "movi", 4U) == 0 &&
            memcmp(contents + 224U, "idx1", 4U) == 0 && get_u32(contents + 228U) == 0U;
 }
@@ -179,10 +175,8 @@ static int run_failure_case(const char *mode) {
 
     unsigned char output_status[32];
     size_t output_status_size = 0U;
-    REQUIRE(read_exact_file(status_path,
-                            output_status,
-                            sizeof(output_status),
-                            &output_status_size));
+    REQUIRE(
+        read_exact_file(status_path, output_status, sizeof(output_status), &output_status_size));
     REQUIRE(output_status_size == sizeof("READY\nFAILED\n") - 1U);
     REQUIRE(memcmp(output_status, "READY\nFAILED\n", output_status_size) == 0);
     REQUIRE(empty_partial_avi(output_path));
