@@ -31,10 +31,14 @@
 - `install_data/` defines new-runtime defaults. Never handcraft, replace, or
   delete initialized account/player/key/identity state unless the task owns
   that mutable data.
-- Keep `--content_benchmark` and `--provision_scenario` offline: no listeners,
+- Keep `--content_benchmark`, `--content_benchmark_route`, and
+  `--provision_scenario` offline: no listeners,
   plugins, metaserver, or console. Benchmark canonical logical map IDs; scenario
   provisioning persists through normal account/password APIs. Use wrapper
-  profiles/states/scenarios.
+  profiles/states/scenarios. Fixed `brynknot-v1` walking routes use initialized
+  maps and normal collision checks; static export is planning evidence, while
+  traversal requires the live client to acknowledge each normal movement step.
+  See [walking-route export](doc/WALKING_ROUTE.md).
 
 ## Dependencies, protocols, and generated files
 

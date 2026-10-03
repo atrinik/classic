@@ -304,8 +304,9 @@ static bool clioptions_option_provision_password_file(const char *arg, char **er
 static const char *clioptions_option_content_benchmark_desc =
     "Runs the offline authored-content benchmark for comma-separated logical map IDs, then exits.";
 static bool clioptions_option_content_benchmark(const char *arg, char **errmsg) {
-    if (settings.celestial_inventory) {
-        string_fmt(*errmsg, "%s", "--content_benchmark and --celestial_inventory are exclusive");
+    if (settings.celestial_inventory ||
+        strcmp(settings.content_benchmark_maps, "brynknot-v1") == 0) {
+        string_fmt(*errmsg, "%s", "Offline content modes are exclusive");
         return false;
     }
     if (!content_benchmark_maps_valid(arg)) {
@@ -315,6 +316,19 @@ static bool clioptions_option_content_benchmark(const char *arg, char **errmsg) 
         return false;
     }
 
+    settings.content_benchmark = true;
+    snprintf(VS(settings.content_benchmark_maps), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_content_benchmark_route_desc =
+    "Exports the fixed offline authoritative brynknot-v1 walking route, then exits.";
+static bool clioptions_option_content_benchmark_route(const char *arg, char **errmsg) {
+    if (strcmp(arg, "brynknot-v1") != 0 || settings.content_benchmark ||
+        settings.celestial_inventory) {
+        string_fmt(*errmsg, "%s", "Expected exclusive offline route mode brynknot-v1");
+        return false;
+    }
     settings.content_benchmark = true;
     snprintf(VS(settings.content_benchmark_maps), "%s", arg);
     return true;
@@ -1094,6 +1108,7 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_preset, "Scenario server-owned preset");
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_password_file, "Scenario password file");
     CLIOPTIONS_CREATE_ARGUMENT(cli, content_benchmark, "Authored-content benchmark map IDs");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, content_benchmark_route, "Authoritative offline walking route");
     CLIOPTIONS_CREATE_ARGUMENT(cli,
                                content_benchmark_iterations,
                                "Authored-content benchmark samples");
@@ -1138,6 +1153,12 @@ static void init_library(int argc, char *argv[]) {
 
     if (argv != NULL) {
         clioptions_parse(argc, argv);
+    }
+    if (strcmp(settings.content_benchmark_maps, "brynknot-v1") == 0 &&
+        (settings.provision_scenario || settings.unit_tests || settings.plugin_unit_tests ||
+         settings.world_maker || settings.celestial_inventory)) {
+        LOG(ERROR, "Walking route export is exclusive with other offline modes.");
+        exit(EXIT_FAILURE);
     }
     if (removed_httppath_seen) {
         LOG(ERROR, "httppath was removed; use assetspath");
