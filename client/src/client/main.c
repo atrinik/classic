@@ -768,6 +768,9 @@ static bool clioptions_option_reconnect(const char *arg, char **errmsg) {
 
 static char *live_route_path;
 static char *live_report_path;
+static char *live_initial_capture_path;
+static char *live_final_capture_path;
+static char *live_lighting_phase;
 
 static bool clioptions_option_live_route(const char *arg, char **errmsg) {
     if (live_route_path != NULL || arg[0] != '/') {
@@ -784,6 +787,34 @@ static bool clioptions_option_live_report(const char *arg, char **errmsg) {
         return false;
     }
     live_report_path = xstrdup(arg);
+    return true;
+}
+
+static bool clioptions_option_live_initial_capture(const char *arg, char **errmsg) {
+    if (live_initial_capture_path != NULL || arg[0] != '/') {
+        *errmsg = xstrdup("Initial capture requires one absolute path");
+        return false;
+    }
+    live_initial_capture_path = xstrdup(arg);
+    return true;
+}
+
+static bool clioptions_option_live_final_capture(const char *arg, char **errmsg) {
+    if (live_final_capture_path != NULL || arg[0] != '/') {
+        *errmsg = xstrdup("Final capture requires one absolute path");
+        return false;
+    }
+    live_final_capture_path = xstrdup(arg);
+    return true;
+}
+
+static bool clioptions_option_live_lighting_phase(const char *arg, char **errmsg) {
+    if (live_lighting_phase != NULL ||
+        (strcmp(arg, "day") != 0 && strcmp(arg, "new-moon") != 0 && strcmp(arg, "full-moon") != 0)) {
+        *errmsg = xstrdup("Lighting phase must be day, new-moon, or full-moon");
+        return false;
+    }
+    live_lighting_phase = xstrdup(arg);
     return true;
 }
 
@@ -1063,6 +1094,18 @@ int main(int argc, char *argv[]) {
     clioptions_enable_argument(cli);
     clioptions_set_description(cli, "Exclusive JSONL report for the live route",
                                "Create a new report of observed arrivals and frame timings.");
+    cli = clioptions_create("live-movement-initial-capture", clioptions_option_live_initial_capture);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(cli, "Initial live route diagnostic PNG",
+                               "Pair with a final capture in the exclusive report directory.");
+    cli = clioptions_create("live-movement-final-capture", clioptions_option_live_final_capture);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(cli, "Final live route diagnostic PNG",
+                               "Pair with an initial capture in the exclusive report directory.");
+    cli = clioptions_create("live-movement-lighting-phase", clioptions_option_live_lighting_phase);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(cli, "Fixed day, new-moon, or full-moon diagnostic",
+                               "Requires captures and normal server permission for clock commands.");
 
     memset(&clioption_settings, 0, sizeof(clioption_settings));
     client_stun_config_init(&clioption_settings.stun);
@@ -1076,9 +1119,20 @@ int main(int argc, char *argv[]) {
 
     clioptions_parse(argc, argv);
     bool live_initialized = live_movement_initialize(live_route_path, live_report_path);
+    if (live_initialized) {
+        live_initialized = live_movement_configure_review(live_report_path,
+                                                          live_initial_capture_path,
+                                                          live_final_capture_path,
+                                                          live_lighting_phase);
+    }
     free(live_route_path);
     free(live_report_path);
+    free(live_initial_capture_path);
+    free(live_final_capture_path);
+    free(live_lighting_phase);
     if (!live_initialized) {
+        live_movement_abort("invalid or unavailable live review outputs");
+        live_movement_close();
         return 8;
     }
     if (live_movement_enabled()) {

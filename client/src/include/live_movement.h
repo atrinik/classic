@@ -9,6 +9,11 @@
 
 /** Optional, main-thread-only live route adapter. No effect unless configured. */
 bool live_movement_initialize(const char *route_path, const char *report_path);
+/** Optional fixed lighting setup and paired diagnostic PNGs in the report directory. */
+bool live_movement_configure_review(const char *report_path,
+                                     const char *initial_path,
+                                     const char *final_path,
+                                     const char *lighting_phase);
 void live_movement_ready(void);
 bool live_movement_enabled(void);
 void live_movement_tick(void);

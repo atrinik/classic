@@ -310,6 +310,19 @@ environment variables never synthesize a selected-adapter identity.
  runtime settings to the report. Live routes exercise the server, map changes,
  assets and NPCs; snapshot benchmarks remain separate renderer diagnostics.
 
+ Optional `--live-movement-initial-capture /absolute/initial.png` and
+ `--live-movement-final-capture /absolute/final.png` create private, exclusive
+ PNGs in the report directory. They wait for normal visibility fades and asset
+ completion; readback and PNG encoding run outside the walking measurement
+ interval. Each bounded asynchronous capture records its exact file digest,
+ location, server time, and primary-map publication. Missing or failed captures
+ fail the run. With captures, `--live-movement-lighting-phase` accepts only
+ `day`, `new-moon`, or `full-moon`. In an isolated scenario with normal command
+ permission, it uses fixed `/settime` and `/celestial` commands at the starting
+ checkpoint. Opposite-hour and target-hour observations must each have a fresh
+ complete map publication before the target view can be captured. These options
+ do not grant permissions or modify account or saved-player files.
+
  The client deliberately uses a 1:1 logical-to-output-pixel window contract.
  High-density backing stores are not requested: one SDL window coordinate is
  one renderer output pixel, which preserves nearest-neighbor pixel-art sampling

@@ -798,6 +798,20 @@ if (BUILD_TESTING)
     endif ()
     add_test(NAME client-live-movement COMMAND client-live-movement-tests)
 
+    add_executable(client-live-movement-capture-tests
+        src/tests/live_movement_capture.c src/client/live_movement_capture.c)
+    atrinik_configure_target(client-live-movement-capture-tests)
+    target_compile_definitions(client-live-movement-capture-tests PRIVATE
+        ATRINIK_LIVE_MOVEMENT_CAPTURE_TESTING)
+    target_include_directories(client-live-movement-capture-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-live-movement-capture-tests PRIVATE
+        Atrinik::Core SDL3::SDL3 OpenSSL::Crypto)
+    add_test(NAME client-live-movement-capture COMMAND client-live-movement-capture-tests)
+
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
         src/client/commands.c
