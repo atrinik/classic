@@ -2615,7 +2615,8 @@ void draw_client_map2(object *pl) {
     packet_header->data[continuation_count_pos] = continuation_marker >> 8;
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
-    bool connected = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
+    bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
+                            CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     socket_send_packet(CONTR(pl)->cs, packet_header);
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
@@ -2635,7 +2636,9 @@ void draw_client_map2(object *pl) {
         CONTR(pl)->cs->lastmap_light_generation = timed_light_generation;
     }
 
-    if (connected) {
+    if (synchronize_time) {
+        /* Initial login and teleports need the clock immediately, just like
+         * tiled transitions; timed radiance descriptors do not carry its rate. */
         send_game_time(CONTR(pl));
     }
 

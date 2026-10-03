@@ -19,6 +19,7 @@
 #include <movement.h>
 #include <object.h>
 #include <player.h>
+#include <tod.h>
 #include <exit.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
@@ -1289,6 +1290,43 @@ START_TEST(test_version_requires_exact_match) {
 }
 END_TEST
 
+START_TEST(test_new_and_connected_map_updates_synchronize_world_clock) {
+    mapstruct *map = ready_map_name("/shattered_islands/world_0_70", NULL, MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(map);
+    object *pl = player_get_dummy(NULL, NULL);
+    request_move_player(&pl, map, 20, 8);
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    static const uint8_t updates[] = {
+        MAP_UPDATE_CMD_NEW, MAP_UPDATE_CMD_SAME, MAP_UPDATE_CMD_CONNECTED, MAP_UPDATE_CMD_NEW,
+    };
+    for (size_t i = 0; i < arraysize(updates); i++) {
+        socket_buffer_clear(cs);
+        CONTR(pl)->map_update_cmd = updates[i];
+        CONTR(pl)->map_update_tile = TILED_SOUTH + 1;
+        draw_client_map2(pl);
+        ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+        packet_struct *map_packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+        ck_assert_ptr_nonnull(map_packet);
+        ck_assert_uint_eq(map_packet->data[0], updates[i]);
+        packet_struct *clock_packet = queued_command_payload_find(cs, CLIENT_CMD_MAPSTATS);
+        if (updates[i] == MAP_UPDATE_CMD_SAME) {
+            ck_assert_ptr_null(clock_packet);
+            continue;
+        }
+        ck_assert_ptr_nonnull(clock_packet);
+        packet_reader_t reader;
+        packet_reader_init(&reader, clock_packet->data, clock_packet->len);
+        ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_MAPSTATS_TIME);
+        uint64_t expected_seconds = (uint64_t)todtick * 3600 +
+                                   (uint64_t)(pticks % PTICKS_PER_CLOCK) * 3600 / PTICKS_PER_CLOCK;
+        ck_assert_uint_eq(packet_reader_read_uint64(&reader), expected_seconds);
+        ck_assert_uint_gt(packet_reader_read_uint32(&reader), 0);
+        ck_assert(packet_reader_finish(&reader));
+    }
+}
+END_TEST
+
 START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     mapstruct *map = ready_map_name("/shattered_islands/world_4_85", NULL, 0);
     ck_assert_ptr_nonnull(map);
@@ -2030,6 +2068,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_opening_door_retains_queue_for_retry);
     tcase_add_test(tc_core, test_move_path_invalid_request_preserves_existing_queue);
     tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
+    tcase_add_test(tc_core, test_new_and_connected_map_updates_synchronize_world_clock);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
     tcase_add_test(tc_core, test_local_player_remains_visible_without_disclosing_dark_actors);
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);

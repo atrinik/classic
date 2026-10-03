@@ -2011,6 +2011,12 @@ record. Resume consumes the next authoritative update and then advances from
 the saved clock value. A new map, renderer reset, or reconnect starts a new
 clock generation.
 
+The server sends the ordinary `CMD_MAPSTATS_TIME` clock sample and rate after
+both NEW map publications (login and teleport) and CONNECTED tile transitions.
+The existing periodic clock updates continue unchanged. A timed-light MAP2
+endpoint describes celestial samples; it does not establish the client's world
+clock or replace that synchronization message.
+
 ### Fixed visibility and light transfer
 
 All distances and transfers use map-coordinate integer arithmetic. The field is
