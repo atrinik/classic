@@ -44,6 +44,7 @@ def identity() -> dict:
         "look_height": 17,
         "fps_limit": 60,
         "smooth_lighting": True,
+        "started_utc_us": 1_800_000_000_000_000,
         "gpu_hardware_timing_available": False,
         "cpu_stage_names": ["map", "ui"],
         "gpu_host_stage_names": ["submit"],
@@ -69,11 +70,43 @@ def frame(sequence: int, elapsed_us: int, map_path: str, x: int, y: int,
         "cpu_totals_us": [sequence * 10, sequence * 20],
         "gpu_host_totals_ns": [sequence * 100],
         "gpu_invalidation_totals": [sequence * value for value in range(1, 11)],
-        "map_totals": {"draws": sequence, "uploads": sequence + 1},
-        "gpu_totals": {"submissions": sequence},
+        "map_totals": {
+            "primary_map_draws": sequence,
+            "compiled_render_commands": sequence * 2,
+            "reused_render_commands": sequence * 3,
+            "living_commands": sequence * 4,
+            "animation_draws": sequence * 5,
+            "level_draws": sequence * 6,
+            "render_commands": sequence * 7,
+        },
+        "gpu_totals": {
+            "map_submissions": sequence,
+            "map_completions": sequence,
+            "map_dropped_updates": 0,
+            "map_merged_updates": sequence - 1,
+            "map_full_redraws": sequence,
+            "map_retained_frames": sequence - 1,
+            "source_upload_count": sequence,
+            "source_upload_bytes": sequence * 100,
+            "instance_upload_count": sequence,
+            "instance_upload_bytes": sequence * 10,
+            "map_queue_age_total_ns": sequence * 1000,
+            "map_frame_latency_total_ns": sequence * 2000,
+            "resource_creations": sequence,
+        },
         "network": {"connected": True, "shutdown_pending": False,
-                    "queued_packets": 3 - sequence},
-        "assets": {"pending": sequence - 1},
+                    "main_service_gap_us": 10,
+                    "main_service_gap_max_us": sequence * 10,
+                    "queue_depth": 3 - sequence,
+                    "queue_oldest_age_us": sequence,
+                    "queue_processing_total_us": sequence * 10,
+                    "queue_budget_yields_total": sequence - 1,
+                    "keepalive_tx_total": sequence,
+                    "keepalive_rx_total": sequence,
+                    "keepalive_timeout_total": 0,
+                    "keepalive_last_rtt_us": 50},
+        "assets": {"installed_total": sequence * 10, "pending": sequence - 1,
+                   "admitted": sequence, "unprepared": 0},
         "world_time": {"valid": True, "game_seconds": sequence * 60,
                        "light_keyframe_valid": True,
                        "light_keyframe_generation": sequence},
@@ -130,10 +163,11 @@ class VerifyLiveMovementTests(unittest.TestCase):
         self.assertEqual(summary["presented_frame_spacing_us"]["p50"], 100)
         self.assertEqual(summary["cpu_stages"]["map"]["total_us"], 30)
         self.assertEqual(summary["gpu_host_stages"]["submit"]["total_ns"], 300)
-        self.assertEqual(summary["network_maxima"], {
-            "connected": True, "shutdown_pending": False, "queued_packets": 2,
+        self.assertEqual(summary["network_maxima"]["queue_depth"], 2)
+        self.assertEqual(summary["network_maxima"]["connected"], True)
+        self.assertEqual(summary["asset_maxima"], {
+            "installed_total": 30, "pending": 2, "admitted": 3, "unprepared": 0,
         })
-        self.assertEqual(summary["asset_maxima"], {"pending": 2})
         self.assertEqual(summary["gpu_invalidation_totals"], list(range(3, 33, 3)))
         self.assertEqual(summary["world_time_first"]["game_seconds"], 60)
         self.assertEqual(summary["world_time_last"]["game_seconds"], 180)
@@ -163,6 +197,15 @@ class VerifyLiveMovementTests(unittest.TestCase):
             )
             self.assertEqual(result.stdout, output_path.read_text(encoding="utf-8"))
             self.assertEqual(json.loads(result.stdout)["source_revision"], "a" * 40)
+
+    def test_accepts_uncapped_fps_and_rejects_unknown_limit(self) -> None:
+        records = good_records()
+        records[0]["fps_limit"] = 0
+        summary = self.verify(records)
+        self.assertEqual(summary["settings"]["fps_limit"], 0)
+        records = good_records()
+        records[0]["fps_limit"] = 75
+        self.assert_rejected(records, "fps_limit is unsupported")
 
     def test_rejects_truncated_report(self) -> None:
         self.assert_rejected(good_records()[:-1], "truncated")
@@ -267,6 +310,9 @@ class VerifyLiveMovementTests(unittest.TestCase):
         records = good_records()
         records[-1]["elapsed_us"] = 1 << 80
         self.assert_rejected(records, "must be <=")
+        records = good_records()
+        records[0]["started_utc_us"] = 0
+        self.assert_rejected(records, "started_utc_us")
 
     def test_rejects_invalid_terminal_status_type(self) -> None:
         records = good_records()
@@ -330,6 +376,26 @@ class VerifyLiveMovementTests(unittest.TestCase):
         records = good_records()
         records[2]["world_time"]["extra"] = 0
         self.assert_rejected(records, "world_time fields are not closed")
+
+    def test_rejects_missing_nested_metric_fields(self) -> None:
+        for group in ("map_totals", "gpu_totals", "network", "assets"):
+            with self.subTest(group=group):
+                records = good_records()
+                records[2][group].pop(next(iter(records[2][group])))
+                self.assert_rejected(records, f"frame {group} fields are not closed")
+
+    def test_rejects_nested_cumulative_counter_resets(self) -> None:
+        for field in ("main_service_gap_max_us", "queue_processing_total_us",
+                      "queue_budget_yields_total", "keepalive_tx_total",
+                      "keepalive_rx_total", "keepalive_timeout_total"):
+            with self.subTest(group="network", field=field):
+                records = good_records()
+                records[2]["network"][field] = 1
+                records[5]["network"][field] = 0
+                self.assert_rejected(records, "network cumulative counter reset")
+        records = good_records()
+        records[5]["assets"]["installed_total"] = 0
+        self.assert_rejected(records, "asset cumulative counter reset")
 
     def test_rejects_success_without_completed_post_route_drain(self) -> None:
         records = good_records()

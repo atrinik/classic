@@ -34,8 +34,8 @@ IDENTITY_FIELDS = {
     "type", "schema_version", "route_sha256", "route_checkpoints",
     "source_revision", "source_dirty", "gpu_backend", "gpu_device", "gpu_driver",
     "viewport_width", "viewport_height", "look_width", "look_height", "fps_limit",
-    "smooth_lighting", "gpu_hardware_timing_available", "cpu_stage_names",
-    "gpu_host_stage_names",
+    "smooth_lighting", "started_utc_us", "gpu_hardware_timing_available",
+    "cpu_stage_names", "gpu_host_stage_names",
 }
 ARRIVAL_FIELDS = {
     "type", "index", "map_path", "x", "y", "publication_generation", "elapsed_us",
@@ -53,6 +53,28 @@ FRAME_FIELDS = {
 WORLD_TIME_FIELDS = {
     "valid", "game_seconds", "light_keyframe_valid", "light_keyframe_generation",
 }
+MAP_TOTAL_FIELDS = {
+    "primary_map_draws", "compiled_render_commands", "reused_render_commands",
+    "living_commands", "animation_draws", "level_draws", "render_commands",
+}
+GPU_TOTAL_FIELDS = {
+    "map_submissions", "map_completions", "map_dropped_updates", "map_merged_updates",
+    "map_full_redraws", "map_retained_frames", "source_upload_count",
+    "source_upload_bytes", "instance_upload_count", "instance_upload_bytes",
+    "map_queue_age_total_ns", "map_frame_latency_total_ns", "resource_creations",
+}
+NETWORK_FIELDS = {
+    "connected", "shutdown_pending", "main_service_gap_us", "main_service_gap_max_us",
+    "queue_depth", "queue_oldest_age_us", "queue_processing_total_us",
+    "queue_budget_yields_total", "keepalive_tx_total", "keepalive_rx_total",
+    "keepalive_timeout_total", "keepalive_last_rtt_us",
+}
+ASSET_FIELDS = {"installed_total", "pending", "admitted", "unprepared"}
+NETWORK_MONOTONIC_FIELDS = {
+    "main_service_gap_max_us", "queue_processing_total_us", "queue_budget_yields_total",
+    "keepalive_tx_total", "keepalive_rx_total", "keepalive_timeout_total",
+}
+ASSET_MONOTONIC_FIELDS = {"installed_total"}
 TERMINAL_FIELDS = {
     "type", "status", "reason", "arrivals", "presented_checkpoints",
     "expected_checkpoints", "frames", "presented_frames", "elapsed_us",
@@ -212,8 +234,11 @@ def _string(value: object, label: str, allow_empty: bool = False) -> str:
     return value
 
 
-def _counter_map(value: object, label: str) -> dict[str, int]:
+def _counter_map(value: object, label: str,
+                 expected_fields: set[str] | None = None) -> dict[str, int]:
     _require(isinstance(value, dict), f"{label} must be an object")
+    if expected_fields is not None:
+        _closed(value, expected_fields, label)
     result: dict[str, int] = {}
     for key, item in value.items():
         _require(isinstance(key, str) and bool(key), f"{label} has an invalid field name")
@@ -223,6 +248,7 @@ def _counter_map(value: object, label: str) -> dict[str, int]:
 
 def _network_health(value: object) -> dict[str, int | bool]:
     _require(isinstance(value, dict), "frame network must be an object")
+    _closed(value, NETWORK_FIELDS, "frame network")
     result: dict[str, int | bool] = {}
     for field in ("connected", "shutdown_pending"):
         _require(type(value.get(field)) is bool, f"frame network.{field} must be boolean")
@@ -288,8 +314,11 @@ def _validate_identity(record: dict, route_digest: str, checkpoint_count: int) -
     _require(type(record["source_dirty"]) is bool, "identity source_dirty must be boolean")
     for field in ("gpu_backend", "gpu_device", "gpu_driver"):
         _string(record[field], f"identity {field}")
-    for field in ("viewport_width", "viewport_height", "look_width", "look_height", "fps_limit"):
+    for field in ("viewport_width", "viewport_height", "look_width", "look_height"):
         _integer(record[field], f"identity {field}", 1)
+    _require(type(record["fps_limit"]) is int and record["fps_limit"] in {0, 30, 60, 120},
+             "identity fps_limit is unsupported")
+    _integer(record["started_utc_us"], "identity started_utc_us", 1)
     _require(record["look_width"] <= record["viewport_width"] and
              record["look_height"] <= record["viewport_height"],
              "identity look dimensions exceed viewport")
@@ -338,6 +367,8 @@ def verify(route_path: Path, report_path: Path) -> dict:
     previous_gpu_invalidations: list[int] | None = None
     previous_map_totals: dict[str, int] | None = None
     previous_gpu_totals: dict[str, int] | None = None
+    previous_network: dict[str, int | bool] | None = None
+    previous_assets: dict[str, int] | None = None
     network_maxima: dict[str, int | bool] = {}
     asset_maxima: dict[str, int] = {}
     world_time_first: dict[str, int | bool] | None = None
@@ -438,8 +469,10 @@ def verify(route_path: Path, report_path: Path) -> dict:
                              zip(gpu_invalidations, previous_gpu_invalidations)),
                          "frame GPU invalidation cumulative counter reset")
             previous_gpu_invalidations = gpu_invalidations
-            map_totals = _counter_map(record["map_totals"], "frame map_totals")
-            gpu_totals = _counter_map(record["gpu_totals"], "frame gpu_totals")
+            map_totals = _counter_map(record["map_totals"], "frame map_totals",
+                                      MAP_TOTAL_FIELDS)
+            gpu_totals = _counter_map(record["gpu_totals"], "frame gpu_totals",
+                                      GPU_TOTAL_FIELDS)
             for current, previous, label in ((map_totals, previous_map_totals, "map"),
                                               (gpu_totals, previous_gpu_totals, "GPU")):
                 if previous is not None:
@@ -455,6 +488,11 @@ def verify(route_path: Path, report_path: Path) -> dict:
             if arrivals > 0:
                 _require(network["connected"] is True,
                          "frame network disconnected after first arrival")
+            if previous_network is not None:
+                _require(all(network[field] >= previous_network[field]
+                             for field in NETWORK_MONOTONIC_FIELDS),
+                         "frame network cumulative counter reset")
+            previous_network = network
             for key, value in network.items():
                 if type(value) is bool:
                     network_maxima[key] = bool(network_maxima.get(key, False)) or value
@@ -463,7 +501,12 @@ def verify(route_path: Path, report_path: Path) -> dict:
                     _require(type(previous_maximum) is int,
                              f"frame network.{key} changed type")
                     network_maxima[key] = max(previous_maximum, value)
-            assets = _counter_map(record["assets"], "frame assets")
+            assets = _counter_map(record["assets"], "frame assets", ASSET_FIELDS)
+            if previous_assets is not None:
+                _require(all(assets[field] >= previous_assets[field]
+                             for field in ASSET_MONOTONIC_FIELDS),
+                         "frame asset cumulative counter reset")
+            previous_assets = assets
             for key, value in assets.items():
                 asset_maxima[key] = max(asset_maxima.get(key, 0), value)
             world_time = dict(_world_time(record["world_time"]))
