@@ -1730,6 +1730,48 @@ START_TEST(test_map_exit_semantic_not_disclosed_by_boundary_geometry) {
 }
 END_TEST
 
+START_TEST(test_timed_endpoint_refresh_keeps_colored_scalar_present) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    request_move_player(&pl, map, 4, 4);
+    object *source = arch_get("letter");
+    source->x = pl->x;
+    source->y = pl->y;
+    source->glow_radius = 1;
+    source->light_color = UINT32_C(0xff0000);
+    source = object_insert_map(source, map, NULL, 0);
+    ck_assert_ptr_nonnull(source);
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->light_next_generation, 0);
+    ck_assert_uint_ne(cell->light_next_rgb_explicit & (UINT8_C(1) << pl->sub_layer), 0);
+
+    /* Refresh another endpoint while the colored source remains steady.
+     * Connected updates can repeat the same generation without clearing the
+     * translated endpoint cache. RGB endpoints still need scalar ownership. */
+    cell->light_next_known[(pl->sub_layer + 1) % NUM_SUB_LAYERS] = 0;
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_CONNECTED;
+    CONTR(pl)->map_update_tile = TILED_EAST + 1;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+}
+END_TEST
+
 START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
     mapstruct *map;
     object *pl;
@@ -2115,6 +2157,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
+    tcase_add_test(tc_core, test_timed_endpoint_refresh_keeps_colored_scalar_present);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
     tcase_add_test(tc_core,
