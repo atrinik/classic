@@ -505,7 +505,7 @@ static int test_capture_barriers(void) {
     CHECK(captures[1].result.status == LIVE_MOVEMENT_CAPTURE_PENDING &&
           presented_checkpoints == 2U);
     live_movement_tick();
-    CHECK(!live_movement_finished());
+    CHECK(!live_movement_finished() && redraw_count == 2U);
     capture_complete(1);
     live_movement_tick();
     now_us += LIVE_FINAL_DRAIN_US;
@@ -542,7 +542,16 @@ static int test_capture_failure_and_deadline(void) {
     publication_generation = 1;
     live_movement_tick();
     capture_settled_frame(true);
-    step_started_us = now_us;
+    capture_complete(0);
+    live_movement_tick();
+    capture_settled_frame(true);
+    live_movement_tick();
+    MapData.posx = 11;
+    publication_generation++;
+    live_movement_tick();
+    capture_settled_frame(true);
+    CHECK(presented_checkpoints == 2U && captures[1].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
+    live_movement_tick();
     now_us += 5000000;
     live_movement_tick();
     CHECK(live_movement_finished());
@@ -571,13 +580,15 @@ static int test_lighting_phase_barrier(void) {
     live_movement_tick();
     CHECK(command_count == 3U && strcmp(commands[1], "/celestial phase new") == 0 &&
           strcmp(commands[2], "/settime 0") == 0);
-    telemetry_seconds = 0;
+    telemetry_seconds = 24 * 3600;
+    MapData.light_keyframe_start_seconds = 0;
+    MapData.light_keyframe_end_seconds = 3600;
     publication_generation++;
     live_movement_tick();
     CHECK(review_lighting_stage == 2U);
     MapData.light_keyframe_generation++;
-    MapData.light_keyframe_start_seconds = 0;
-    MapData.light_keyframe_end_seconds = 3600;
+    MapData.light_keyframe_start_seconds = 24 * 3600;
+    MapData.light_keyframe_end_seconds = 25 * 3600;
     publication_generation++;
     live_movement_tick();
     CHECK(review_lighting_stage == 3U);
