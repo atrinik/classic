@@ -55,8 +55,7 @@ bool image_codec_save_png_io(SDL_Surface *surface, SDL_IOStream *stream, bool cl
     if (!encoder_success || surface == NULL || stream == NULL || close_stream) {
         return false;
     }
-    return SDL_WriteIO(stream, encoded_png, sizeof(encoded_png) - 1U) ==
-           sizeof(encoded_png) - 1U;
+    return SDL_WriteIO(stream, encoded_png, sizeof(encoded_png) - 1U) == sizeof(encoded_png) - 1U;
 }
 
 static void mock_reset(void) {
@@ -131,8 +130,7 @@ static int test_create_exclusive(void) {
 #ifndef WIN32
     mode_t previous = umask(0002);
 #endif
-    live_movement_capture_t *capture =
-        live_movement_capture_create(path, error, sizeof(error));
+    live_movement_capture_t *capture = live_movement_capture_create(path, error, sizeof(error));
 #ifndef WIN32
     umask(previous);
 #endif
@@ -166,8 +164,7 @@ static int test_success(void) {
     REQUIRE(result->width == 2U && result->height == 2U);
     REQUIRE(result->size_bytes == sizeof(encoded_png) - 1U);
     REQUIRE(strcmp(result->sha256,
-                   "299dbbe8bea67192ea4eba822553df9ba00b97ba42e5e36a8dad0e7aefee9dac") ==
-            0);
+                   "299dbbe8bea67192ea4eba822553df9ba00b97ba42e5e36a8dad0e7aefee9dac") == 0);
     REQUIRE(result->error[0] == '\0');
     FILE *stream = fopen(path, "rb");
     REQUIRE(stream != NULL);

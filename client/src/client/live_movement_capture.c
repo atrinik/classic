@@ -39,10 +39,7 @@ struct live_movement_capture {
     bool release_requested;
 };
 
-static void capture_text(char *destination,
-                         size_t destination_size,
-                         const char *format,
-                         ...) {
+static void capture_text(char *destination, size_t destination_size, const char *format, ...) {
     if (destination == NULL || destination_size == 0U) {
         return;
     }
@@ -96,8 +93,7 @@ static bool capture_dimensions(SDL_Surface *surface, size_t *capacity) {
                      LIVE_MOVEMENT_CAPTURE_BYTES_PER_PIXEL) {
         return false;
     }
-    *capacity = pixels * LIVE_MOVEMENT_CAPTURE_BYTES_PER_PIXEL +
-                LIVE_MOVEMENT_CAPTURE_PNG_OVERHEAD;
+    *capacity = pixels * LIVE_MOVEMENT_CAPTURE_BYTES_PER_PIXEL + LIVE_MOVEMENT_CAPTURE_PNG_OVERHEAD;
     return *capacity <= LIVE_MOVEMENT_CAPTURE_PNG_MAX;
 }
 
@@ -192,7 +188,9 @@ live_movement_capture_create(const char *absolute_path, char *error, size_t erro
     }
     size_t path_size = strlen(absolute_path);
     if (path_size > LIVE_MOVEMENT_CAPTURE_PATH_MAX) {
-        capture_text(error, error_size, "capture path exceeds %u bytes",
+        capture_text(error,
+                     error_size,
+                     "capture path exceeds %u bytes",
                      LIVE_MOVEMENT_CAPTURE_PATH_MAX);
         return NULL;
     }
