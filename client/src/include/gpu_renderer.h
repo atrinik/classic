@@ -194,8 +194,10 @@ typedef struct gpu_renderer_recreation_diagnostic {
     uint32_t window_id;
     int32_t data1, data2;
 } gpu_renderer_recreation_diagnostic_t;
-void gpu_renderer_recreation_request_at(const char *origin, uint32_t line,
-                                         const SDL_Event *event, const char *error_snapshot);
+void gpu_renderer_recreation_request_at(const char *origin,
+                                        uint32_t line,
+                                        const SDL_Event *event,
+                                        const char *error_snapshot);
 #define gpu_renderer_recreation_request() \
     gpu_renderer_recreation_request_at(__func__, __LINE__, NULL, SDL_GetError())
 #define gpu_renderer_recreation_request_event(event, error_snapshot) \
@@ -330,8 +332,8 @@ void gpu_renderer_statistics_map_frame(bool full_redraw,
                                        size_t damage_bytes,
                                        bool skipped_pass,
                                        const gpu_renderer_map_frame_diagnostics_t *diagnostics);
-const char *gpu_renderer_map_invalidation_reason_name(
-    gpu_renderer_map_invalidation_reason_t reason);
+const char *
+gpu_renderer_map_invalidation_reason_name(gpu_renderer_map_invalidation_reason_t reason);
 void gpu_renderer_statistics_recovery(bool succeeded);
 /** Record one map submission and the number of map submissions already queued. */
 void gpu_renderer_statistics_map_submission(size_t queue_depth);

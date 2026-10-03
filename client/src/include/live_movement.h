@@ -22,9 +22,11 @@ void live_movement_frame_finished(bool presented, const client_keepalive_statist
 void live_movement_abort(const char *reason);
 /** Allow initial renderer setup only before any diagnostic frame or world publication. */
 bool live_movement_renderer_recovery(const char *context,
-                                      const gpu_renderer_recreation_diagnostic_t *diagnostic,
-                                      const char *error_snapshot, uint64_t window_flags,
-                                      int width, int height);
+                                     const gpu_renderer_recreation_diagnostic_t *diagnostic,
+                                     const char *error_snapshot,
+                                     uint64_t window_flags,
+                                     int width,
+                                     int height);
 bool live_movement_finished(void);
 int live_movement_exit_status(void);
 void live_movement_close(void);

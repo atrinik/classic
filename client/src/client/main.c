@@ -897,7 +897,8 @@ bool gpu_renderer_recovery_republish_test(void) {
 }
 #endif
 
-static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *context,
+static bool gpu_renderer_recover_frame(unsigned int *attempts,
+                                       const char *context,
                                        const gpu_renderer_recreation_diagnostic_t *consumed) {
     HARD_ASSERT(attempts != NULL);
     HARD_ASSERT(context != NULL);
@@ -911,8 +912,12 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *conte
     }
     int width = 0, height = 0;
     SDL_GetWindowSizeInPixels(ScreenWindow, &width, &height);
-    if (!live_movement_renderer_recovery(context, &diagnostic, error_snapshot,
-                                          SDL_GetWindowFlags(ScreenWindow), width, height)) {
+    if (!live_movement_renderer_recovery(context,
+                                         &diagnostic,
+                                         error_snapshot,
+                                         SDL_GetWindowFlags(ScreenWindow),
+                                         width,
+                                         height)) {
         return false;
     }
 
@@ -1264,8 +1269,9 @@ int main(int argc, char *argv[]) {
 
         gpu_renderer_recreation_diagnostic_t recreation_diagnostic;
         if (gpu_renderer_recreation_take_diagnostic(&recreation_diagnostic) &&
-            !gpu_renderer_recover_frame(&gpu_recovery_attempts, "a renderer recreation request",
-                                         &recreation_diagnostic)) {
+            !gpu_renderer_recover_frame(&gpu_recovery_attempts,
+                                        "a renderer recreation request",
+                                        &recreation_diagnostic)) {
             break;
         }
 
@@ -1410,7 +1416,9 @@ int main(int argc, char *argv[]) {
             map_benchmark_statistics_present(presented);
             if (!presented) {
                 LOG(ERROR, "Could not present the GPU frame: %s", SDL_GetError());
-                if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "presenting a frame", NULL)) {
+                if (!gpu_renderer_recover_frame(&gpu_recovery_attempts,
+                                                "presenting a frame",
+                                                NULL)) {
                     done = 1;
                 }
             } else {

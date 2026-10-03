@@ -422,24 +422,39 @@ void live_movement_abort(const char *reason) {
 }
 
 bool live_movement_renderer_recovery(const char *context,
-                                      const gpu_renderer_recreation_diagnostic_t *diagnostic,
-                                      const char *error_snapshot, uint64_t window_flags,
-                                      int width, int height) {
-    if (!enabled) return true;
+                                     const gpu_renderer_recreation_diagnostic_t *diagnostic,
+                                     const char *error_snapshot,
+                                     uint64_t window_flags,
+                                     int width,
+                                     int height) {
+    if (!enabled)
+        return true;
     if (!finished && frames == 0 && arrivals == 0 &&
-        socket_command_map_publication_generation() == 0) return true;
+        socket_command_map_publication_generation() == 0)
+        return true;
     gpu_renderer_recreation_diagnostic_t empty = {0};
-    if (diagnostic == NULL) diagnostic = &empty;
+    if (diagnostic == NULL)
+        diagnostic = &empty;
     char reason[1536];
-    snprintf(reason, sizeof(reason),
+    snprintf(reason,
+             sizeof(reason),
              "renderer recovery interrupted route: context=%.80s origin=%.63s:%" PRIu32
-             " requests=%" PRIu32 " event=%" PRIu32 " window=%" PRIu32
-             " data=%" PRId32 ",%" PRId32 " flags=%" PRIu64 " size=%d,%d"
+             " requests=%" PRIu32 " event=%" PRIu32 " window=%" PRIu32 " data=%" PRId32 ",%" PRId32
+             " flags=%" PRIu64 " size=%d,%d"
              " request_error_snapshot=%.255s current_error_snapshot=%.255s",
-             context != NULL ? context : "unknown", diagnostic->origin, diagnostic->line,
-             diagnostic->request_count, diagnostic->event_type, diagnostic->window_id,
-             diagnostic->data1, diagnostic->data2, window_flags, width, height,
-             diagnostic->error_snapshot, error_snapshot != NULL ? error_snapshot : "");
+             context != NULL ? context : "unknown",
+             diagnostic->origin,
+             diagnostic->line,
+             diagnostic->request_count,
+             diagnostic->event_type,
+             diagnostic->window_id,
+             diagnostic->data1,
+             diagnostic->data2,
+             window_flags,
+             width,
+             height,
+             diagnostic->error_snapshot,
+             error_snapshot != NULL ? error_snapshot : "");
     terminal(false, reason);
     return false;
 }
