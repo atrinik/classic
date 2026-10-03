@@ -19,6 +19,9 @@ doors, exits and walk-on/off callbacks are excluded because they may require an
 extra action or change the expected destination. Authored NPCs remain blockers.
 Spawn-point cells are reserved even before their first live tick, so an
 unspawned guard cannot make its authored position look safely traversable.
+The exact initial scenario position overlaps the dock captain's spawn cell:
+its ordinary floor/collision checks still apply, but the route may depart
+that already-occupied initial cell. The reservation prevents all later entry.
 The planner rejects missing maps, non-24-by-24 dimensions, unreachable targets,
 an invalid start, missing required coverage, or more than 8192 checkpoints.
 

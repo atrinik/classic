@@ -277,11 +277,23 @@ START_TEST(test_walking_route_reserves_authored_spawn_cells_before_live_activati
     ck_assert_int_eq(spawn->enemy->x, 12);
     ck_assert_int_eq(spawn->enemy->y, 12);
     ck_assert_int_ne(object_blocked(human, maps[16], 12, 12), 0);
-    /* A scenario starting on a reserved spawn cell must also fail honestly. */
+    /* The real scenario starts on the captain's authored spawn cell. It may
+     * leave that initial position, but must never plan to enter it again. */
     object *start_spawn = arch_get("spawn_point");
     start_spawn->x = 20;
     start_spawn->y = 8;
     ck_assert_ptr_nonnull(object_insert_map(start_spawn, maps[16], NULL, 0));
+    ck_assert(walking_route_plan(maps, human, &points, &count));
+    ck_assert_uint_gt(count, 1);
+    ck_assert_int_eq(points[0].map, 16);
+    ck_assert_int_eq(points[0].x, 20);
+    ck_assert_int_eq(points[0].y, 8);
+    for (size_t i = 1; i < count; i++) {
+        ck_assert(!(points[i].map == 16 && points[i].x == 20 && points[i].y == 8));
+        ck_assert(!(points[i].map == 16 && points[i].x == 12 && points[i].y == 12));
+    }
+    free(points);
+    SET_MAP_FLAGS(maps[16], 20, 8, P_NO_PASS);
     ck_assert(!walking_route_plan(maps, human, &points, &count));
     ck_assert_ptr_null(points);
     ck_assert_uint_eq(count, 0);

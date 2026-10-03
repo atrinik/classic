@@ -46,14 +46,6 @@ static bool tile_passable(object *human, mapstruct *map, int x, int y) {
     if (GET_MAP_FLAGS(map, x, y) & (P_DOOR_CLOSED | P_IS_EXIT | P_WALK_ON | P_WALK_OFF)) {
         return false;
     }
-    /* Offline initialization does not run spawn-point ticks. Reserve their
-     * authored cells instead of routing through a guard that appears as soon
-     * as the live map activates. This does not remove or move any actor. */
-    for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
-        if (op->type == SPAWN_POINT) {
-            return false;
-        }
-    }
     /* INS_FALL_THROUGH in normal movement searches TILED_DOWN when no
      * floor exists. Such a tile cannot promise this map as its arrival. */
     bool has_floor = false;
@@ -64,6 +56,17 @@ static bool tile_passable(object *human, mapstruct *map, int x, int y) {
     }
     FOR_MAP_LAYER_END
     return has_floor && object_blocked(human, map, x, y) == 0;
+}
+
+static bool tile_reserved_for_spawn(mapstruct *map, int x, int y) {
+    /* Offline initialization does not run spawn-point ticks. Never enter an
+     * authored spawn cell that may hold a guard when its live map activates. */
+    for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+        if (op->type == SPAWN_POINT) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void search_from(route_search *search, int start) {
@@ -139,10 +142,19 @@ bool walking_route_plan(mapstruct *const maps[WALKING_ROUTE_MAPS],
         }
         for (int y = 0; y < ROUTE_SIDE; y++) {
             for (int x = 0; x < ROUTE_SIDE; x++) {
-                search->passable[state_id(m, x, y)] = tile_passable(human, maps[m], x, y);
+                search->passable[state_id(m, x, y)] =
+                    tile_passable(human, maps[m], x, y) && !tile_reserved_for_spawn(maps[m], x, y);
             }
         }
     }
+    int start = state_id(16, 20, 8); /* Brynknot scenario dock: world_0_70. */
+    if (!tile_passable(human, maps[16], 20, 8)) {
+        LOG(ERROR, "Walking route start world_0_70 (20,8) is not walkable.");
+        goto done;
+    }
+    /* The scenario already occupies the dock captain's spawn cell. Permit
+     * departure from this exact initial position, without making it an
+     * admissible destination: its passable entry remains false when reserved. */
     /* Restrict exploration before calling the normal tiled-map resolver. The
      * resolver, not guessed world-grid adjacency, verifies every accepted seam. */
     for (int state = 0; state < ROUTE_STATES; state++) {
@@ -150,7 +162,7 @@ bool walking_route_plan(mapstruct *const maps[WALKING_ROUTE_MAPS],
         for (int dir = 1; dir <= 8; dir++) {
             int *edge = &search->next[state][dir - 1];
             *edge = -1;
-            if (!search->passable[state]) {
+            if (!search->passable[state] && state != start) {
                 continue;
             }
             int gx = (p.map % 4) * ROUTE_SIDE + p.x + freearr_x[dir];
@@ -187,11 +199,6 @@ bool walking_route_plan(mapstruct *const maps[WALKING_ROUTE_MAPS],
                 *edge = next;
             }
         }
-    }
-    int start = state_id(16, 20, 8); /* Brynknot scenario dock: world_0_70. */
-    if (!search->passable[start]) {
-        LOG(ERROR, "Walking route start world_0_70 (20,8) is not walkable.");
-        goto done;
     }
     search->points[search->count++] = state_point(start, 0);
     /* All twelve city chunks, including their less frequently visited edges. */
