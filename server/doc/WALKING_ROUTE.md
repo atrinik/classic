@@ -1,6 +1,6 @@
 # Offline Brynknot walking-route export
 
-`--content_benchmark_route brynknot-v1` reuses the offline content-benchmark
+`--content_benchmark_route=brynknot-v1` reuses the offline content-benchmark
 initialization and shutdown. Run it through the workspace's managed scenario
 route preparation, with disposable data and the selected Classic content
 artifact. It opens no listener, starts no plugins, and invokes no account or
