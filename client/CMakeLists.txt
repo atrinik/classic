@@ -812,6 +812,31 @@ if (BUILD_TESTING)
         Atrinik::Core SDL3::SDL3 OpenSSL::Crypto)
     add_test(NAME client-live-movement-capture COMMAND client-live-movement-capture-tests)
 
+    add_executable(client-video-avi-tests
+        src/tests/video_avi.c src/client/video_avi.c)
+    atrinik_configure_target(client-video-avi-tests)
+    target_include_directories(client-video-avi-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-video-avi COMMAND client-video-avi-tests)
+
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(client-video-recording-tests
+            src/tests/video_recording.c src/client/video_recording.c)
+        atrinik_configure_target(client-video-recording-tests)
+        target_include_directories(client-video-recording-tests BEFORE PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/src/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(client-video-recording-tests PRIVATE Atrinik::Core SDL3::SDL3)
+        add_test(NAME client-video-recording COMMAND client-video-recording-tests)
+        add_test(NAME client-video-encoder
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_video_encoder.py"
+                "$<TARGET_FILE:${EXECUTABLE}>")
+        set_tests_properties(client-video-recording client-video-encoder PROPERTIES TIMEOUT 60)
+    endif ()
+
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
         src/client/commands.c

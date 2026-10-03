@@ -327,6 +327,42 @@ environment variables never synthesize a selected-adapter identity.
  complete map publication before the target view can be captured. These options
  do not grant permissions or modify account or saved-player files.
 
+ Linux clients can record the complete composed gameplay window, including UI,
+ with `--record-video=/absolute/new-recording.avi`. Recording waits for gameplay
+ so login and character-selection screens are excluded, and stops when gameplay
+ ends. During play, `/record start /absolute/new-recording.avi` starts another
+ recording and `/record stop` finishes it asynchronously. These are local client
+ commands. The chat window and log report armed, active, finalizing, saved and
+ failed states, including the output path. Normal client exit finishes the file.
+ Existing output files and symlinks are never overwritten; new files have mode
+ 0600. Choose an existing private output directory. Recording includes visible
+ gameplay chat and UI; it does not export configuration or authentication data.
+
+ The format is video-only Motion JPEG AVI at 20 frames per second, with JPEG
+ quality 85. It needs no FFmpeg installation or additional codec dependency.
+ Standard AVI players can replay the file on other platforms. JPEG compression
+ produces larger files than H.264, but frames remain independently decodable for
+ visual diagnostics. Capture uses the final composed GPU frame after successful
+ presentation, and encoding runs in an isolated process fed by a worker thread.
+ One pending GPU readback, two queued surfaces and one transmitting surface bound
+ parent pixel storage to 128 MiB at the maximum 8-megapixel window; helper storage
+ is separately bounded. Busy capture/encoding drops new samples and repeats the
+ previous encoded frame for those elapsed 50-ms slots, preserving chronological
+ real-time playback rather than speeding up a slow client. The first captured
+ gameplay frame starts the movie clock. Recording changes performance and must
+ be reported separately from unrecorded benchmarks.
+
+ A recording stops at one hour or the AVI writer's 2-GiB limit. Window dimensions
+ must stay fixed, at most 4096 pixels per side and 8,388,608 pixels in total;
+ resizing during recording reports an encoder failure. Disk, readback and encoder
+ errors preserve the partial file and report failure. Stop allows five seconds
+ for the owned encoder to finish before terminating it; forceful termination can
+ leave an incomplete AVI. Wait for the saved message before using the file.
+ Recording currently requires Linux process isolation. Windows and macOS client
+ builds remain supported, but recording requests fail explicitly until their
+ descriptor/handle isolation is qualified. The private `--video-encoder` mode
+ is an internal bounded pixel-stream endpoint, not a gameplay launch option.
+
  The client deliberately uses a 1:1 logical-to-output-pixel window contract.
  High-density backing stores are not requested: one SDL window coordinate is
  one renderer output pixel, which preserves nearest-neighbor pixel-art sampling

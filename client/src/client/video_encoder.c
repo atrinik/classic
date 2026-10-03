@@ -47,8 +47,8 @@
 
 static bool encoder_close_inherited(void) {
 #ifdef WIN32
-    /* The parent uses a CreateProcess handle allowlist on Windows. */
-    return true;
+    /* Recording stays unavailable until an explicit handle allowlist exists. */
+    return false;
 #else
 #if defined(__linux__) && defined(SYS_close_range)
     if (syscall(SYS_close_range, 3U, UINT_MAX, 0U) == 0) {
@@ -56,7 +56,7 @@ static bool encoder_close_inherited(void) {
     }
 #endif
     long maximum = sysconf(_SC_OPEN_MAX);
-    if (maximum < 0 || maximum > INT_MAX) {
+    if (maximum < 0 || maximum > 1048576L) {
         return false;
     }
     for (int descriptor = 3; descriptor < (int)maximum; descriptor++) {
@@ -160,9 +160,14 @@ int video_encoder_main(const char *output_path) {
         return encoder_failed(NULL, NULL, NULL, NULL, "invalid output path");
     }
     size_t path_size = strlen(output_path);
-    if (path_size > VIDEO_ENCODER_PATH_MAX || strchr(output_path, '\n') != NULL ||
-        strchr(output_path, '\r') != NULL) {
+    if (path_size > VIDEO_ENCODER_PATH_MAX) {
         return encoder_failed(NULL, NULL, NULL, NULL, "invalid output path");
+    }
+    for (size_t i = 0; i < path_size; i++) {
+        unsigned char byte = (unsigned char)output_path[i];
+        if (byte < 32U || byte == 127U) {
+            return encoder_failed(NULL, NULL, NULL, NULL, "invalid output path");
+        }
     }
 
 #ifdef WIN32

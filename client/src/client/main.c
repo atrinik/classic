@@ -53,6 +53,8 @@
 #include <textwin.h>
 #include <wrapper.h>
 #include <video.h>
+#include <video_recording.h>
+#include <video_encoder.h>
 #include <metaserver.h>
 #include <misc.h>
 #include <popup.h>
@@ -777,6 +779,17 @@ static char *live_initial_capture_path;
 static char *live_final_capture_path;
 static char *live_lighting_phase;
 
+static bool clioption_recording_invalid;
+
+static bool clioptions_option_record_video(const char *arg, char **errmsg) {
+    if (!video_recording_start(arg)) {
+        clioption_recording_invalid = true;
+        *errmsg = xstrdup(SDL_GetError());
+        return false;
+    }
+    return true;
+}
+
 static bool clioptions_option_live_route(const char *arg, char **errmsg) {
     if (live_route_path != NULL || arg[0] != '/') {
         *errmsg = xstrdup("Live route requires one absolute path");
@@ -977,6 +990,10 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts,
  * 0
  */
 int main(int argc, char *argv[]) {
+    /* Encoder children never initialize config, credentials, networking or GPU. */
+    if (argc == 3 && strcmp(argv[1], "--video-encoder") == 0) {
+        return video_encoder_main(argv[2]);
+    }
     char *path;
     int done = 0, update, frames;
     int old_cursor_x = -1, old_cursor_y = -1;
@@ -1099,6 +1116,10 @@ int main(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "Direct rendezvous STUN endpoint");
 
     /* Argument options*/
+    video_recording_initialize(argv[0]);
+    cli = clioptions_create("record-video", clioptions_option_record_video);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(cli, "PATH", "Record gameplay to a new absolute Motion JPEG AVI path; /record stop finishes it.");
     CLIOPTIONS_CREATE(cli, nometa, "Disable querying the metaserver");
     CLIOPTIONS_CREATE(cli, text_debug, "Enable text API debugging");
     CLIOPTIONS_CREATE(cli, widget_render_debug, "Enable widget debugging");
@@ -1142,6 +1163,9 @@ int main(int argc, char *argv[]) {
     free(path);
 
     clioptions_parse(argc, argv);
+    if (clioption_recording_invalid) {
+        return 10;
+    }
     bool live_initialized = live_movement_initialize(live_route_path, live_report_path);
     if (live_initialized) {
         live_initialized = live_movement_configure_review(live_report_path,
@@ -1213,6 +1237,7 @@ int main(int argc, char *argv[]) {
     button_init();
 
     atexit(system_end);
+    atexit(video_recording_shutdown);
 
     cursor_texture = texture_get(TEXTURE_TYPE_CLIENT, "cursor_default");
 
@@ -1426,6 +1451,17 @@ int main(int argc, char *argv[]) {
             }
         }
         render_profiler_end(RENDER_PROFILE_PRESENT, profile_present_started);
+        video_recording_frame(cpl.state == ST_PLAY, frame_presented, SDL_GetTicks());
+        char recording_notice[4352];
+        bool recording_failed;
+        if (video_recording_message(recording_notice, sizeof(recording_notice), &recording_failed)) {
+            if (recording_failed) {
+                LOG(ERROR, "%s", recording_notice);
+            } else {
+                LOG(INFO, "%s", recording_notice);
+            }
+            draw_info(recording_failed ? COLOR_RED : COLOR_GREEN, recording_notice);
+        }
 
         if (window_is_active()) {
             frames++;
@@ -1466,6 +1502,17 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    video_recording_shutdown();
+    char recording_notice[4352];
+    bool recording_failed;
+    if (video_recording_message(recording_notice, sizeof(recording_notice), &recording_failed)) {
+        if (recording_failed) {
+            LOG(ERROR, "%s", recording_notice);
+        } else {
+            LOG(INFO, "%s", recording_notice);
+        }
+    }
     live_movement_close();
-    return live_movement_exit_status();
+    int live_status = live_movement_exit_status();
+    return live_status != 0 ? live_status : (video_recording_failed() ? 10 : 0);
 }
