@@ -58,8 +58,8 @@ const char *live_movement_route_sha256(const live_movement_route_t *route);
  * Create pure execution state. start_ms starts the total deadline before login.
  * The route must outlive the returned state. Neither object is thread-safe.
  */
-live_movement_route_state_t *
-live_movement_route_state_create(const live_movement_route_t *route, uint64_t start_ms);
+live_movement_route_state_t *live_movement_route_state_create(const live_movement_route_t *route,
+                                                              uint64_t start_ms);
 
 void live_movement_route_state_free(live_movement_route_state_t *state);
 

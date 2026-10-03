@@ -12,12 +12,12 @@
 /* Include the adapter so the test can reset its process-lifetime state. */
 #include "../client/live_movement.c"
 
-#define CHECK(expression)                                                       \
-    do {                                                                        \
-        if (!(expression)) {                                                    \
+#define CHECK(expression)                                                    \
+    do {                                                                     \
+        if (!(expression)) {                                                 \
             fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #expression); \
-            return 1;                                                           \
-        }                                                                       \
+            return 1;                                                        \
+        }                                                                    \
     } while (0)
 
 typedef struct fixture_paths {
@@ -40,28 +40,42 @@ Client_Player cpl;
 _mapdata MapData;
 SDL_Window *ScreenWindow;
 
-uint64_t datetime_monotonic_us(void) { return now_us; }
+uint64_t datetime_monotonic_us(void) {
+    return now_us;
+}
 
-bool client_socket_active(void) { return socket_active; }
-bool client_socket_shutdown_pending(void) { return shutdown_pending; }
+bool client_socket_active(void) {
+    return socket_active;
+}
+bool client_socket_shutdown_pending(void) {
+    return shutdown_pending;
+}
 uint64_t socket_command_map_publication_generation(void) {
     return publication_generation;
 }
-bool map_state_transaction_active(void) { return map_transaction_active; }
+bool map_state_transaction_active(void) {
+    return map_transaction_active;
+}
 
 void move_keys_stream(int direction, uint32_t epoch) {
-    if (epoch != LIVE_MOVEMENT_EPOCH) abort();
+    if (epoch != LIVE_MOVEMENT_EPOCH)
+        abort();
     move_count++;
     last_move = direction;
 }
 
 void move_keys_stream_stop(uint32_t epoch) {
-    if (epoch != LIVE_MOVEMENT_EPOCH) abort();
+    if (epoch != LIVE_MOVEMENT_EPOCH)
+        abort();
     stop_count++;
 }
 
-void render_profiler_set_enabled(bool enabled_value) { (void)enabled_value; }
-void render_profiler_statistics_reset(void) { profile_statistics.frames = 0; }
+void render_profiler_set_enabled(bool enabled_value) {
+    (void)enabled_value;
+}
+void render_profiler_statistics_reset(void) {
+    profile_statistics.frames = 0;
+}
 void render_profiler_statistics_get(render_profile_snapshot_t *statistics) {
     *statistics = profile_statistics;
 }
@@ -73,9 +87,15 @@ bool render_profiler_stage_metadata_get(render_profile_stage_t stage,
     return true;
 }
 
-const char *gpu_renderer_backend(void) { return "test"; }
-const char *gpu_renderer_device_name(void) { return "test-device"; }
-const char *gpu_renderer_driver_name(void) { return "test-driver"; }
+const char *gpu_renderer_backend(void) {
+    return "test";
+}
+const char *gpu_renderer_device_name(void) {
+    return "test-device";
+}
+const char *gpu_renderer_driver_name(void) {
+    return "test-driver";
+}
 void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics) {
     *statistics = (gpu_renderer_statistics_t){0};
 }
@@ -120,7 +140,8 @@ static bool write_all(int fd, const char *value) {
     size_t length = strlen(value);
     while (offset < length) {
         ssize_t written = write(fd, value + offset, length - offset);
-        if (written <= 0) return false;
+        if (written <= 0)
+            return false;
         offset += (size_t)written;
     }
     return true;
@@ -132,8 +153,10 @@ static bool fixture_create(fixture_paths_t *paths, const char *xml) {
     int route_fd = mkstemp(paths->route);
     int report_fd = mkstemp(paths->report);
     if (route_fd < 0 || report_fd < 0) {
-        if (route_fd >= 0) close(route_fd);
-        if (report_fd >= 0) close(report_fd);
+        if (route_fd >= 0)
+            close(route_fd);
+        if (report_fd >= 0)
+            close(report_fd);
         unlink(paths->route);
         unlink(paths->report);
         return false;
@@ -184,7 +207,8 @@ static void adapter_reset(void) {
 }
 
 static bool fixture_ready(const fixture_paths_t *paths) {
-    if (!live_movement_initialize(paths->route, paths->report)) return false;
+    if (!live_movement_initialize(paths->route, paths->report))
+        return false;
     live_movement_ready();
     return true;
 }
@@ -383,11 +407,16 @@ static int test_final_drain_disconnect(void) {
 }
 
 int main(void) {
-    if (test_initialize_and_abort() != 0) return 1;
-    if (test_publication_and_movement() != 0) return 1;
-    if (test_deadline_and_report_failure() != 0) return 1;
-    if (test_final_drain() != 0) return 1;
-    if (test_final_drain_disconnect() != 0) return 1;
+    if (test_initialize_and_abort() != 0)
+        return 1;
+    if (test_publication_and_movement() != 0)
+        return 1;
+    if (test_deadline_and_report_failure() != 0)
+        return 1;
+    if (test_final_drain() != 0)
+        return 1;
+    if (test_final_drain_disconnect() != 0)
+        return 1;
     adapter_reset();
     return 0;
 }

@@ -82,9 +82,7 @@ static bool route_uint(const char *value, uint64_t minimum, uint64_t maximum, ui
     return true;
 }
 
-static bool route_attributes_closed(xmlNodePtr node,
-                                    const char *const *names,
-                                    size_t names_count) {
+static bool route_attributes_closed(xmlNodePtr node, const char *const *names, size_t names_count) {
     size_t count = 0;
     for (xmlAttrPtr attribute = node->properties; attribute != NULL; attribute = attribute->next) {
         if (attribute->ns != NULL) {
@@ -124,8 +122,7 @@ static bool route_map_valid(const char *map) {
         unsigned char ch = (unsigned char)*cp;
         if (ch == '/' || ch == '\0') {
             size_t component_size = (size_t)(cp - component);
-            if (component_size == 0U ||
-                (component_size == 1U && component[0] == '.') ||
+            if (component_size == 0U || (component_size == 1U && component[0] == '.') ||
                 (component_size == 2U && component[0] == '.' && component[1] == '.')) {
                 return false;
             }
@@ -135,8 +132,8 @@ static bool route_map_valid(const char *map) {
             component = cp + 1;
             continue;
         }
-        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-              (ch >= '0' && ch <= '9') || ch == '_' || ch == '.' || ch == '-')) {
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+              ch == '_' || ch == '.' || ch == '-')) {
             return false;
         }
     }
@@ -160,9 +157,8 @@ static bool route_adjacent(const live_movement_checkpoint_t *previous,
            checkpoint->y == (uint8_t)expected_y;
 }
 
-static bool route_checkpoint_parse(xmlNodePtr node,
-                                   size_t index,
-                                   live_movement_checkpoint_t *checkpoint) {
+static bool
+route_checkpoint_parse(xmlNodePtr node, size_t index, live_movement_checkpoint_t *checkpoint) {
     static const char *const names[] = {"map", "x", "y", "direction"};
     if (node->type != XML_ELEMENT_NODE || node->ns != NULL || node->nsDef != NULL ||
         !xmlStrEqual(node->name, BAD_CAST "checkpoint") || node->children != NULL ||
@@ -179,8 +175,7 @@ static bool route_checkpoint_parse(xmlNodePtr node,
     bool valid = route_map_valid(map) && route_uint(x, 0, UINT8_MAX, &parsed_x) &&
                  route_uint(y, 0, UINT8_MAX, &parsed_y) &&
                  route_uint(direction, 0, 9, &parsed_direction) &&
-                 (index == 0U ? parsed_direction == 0U
-                              : route_direction_valid(parsed_direction));
+                 (index == 0U ? parsed_direction == 0U : route_direction_valid(parsed_direction));
     if (valid) {
         memcpy(checkpoint->map, map, strlen(map) + 1U);
         checkpoint->x = (uint8_t)parsed_x;
@@ -265,7 +260,9 @@ bool live_movement_route_load(const char *path,
     char *body = NULL;
     size_t body_size = 0;
     if (path == NULL || !route_read_file(path, &body, &body_size)) {
-        route_error(error, error_size, "route must be a regular file of 1..%u bytes",
+        route_error(error,
+                    error_size,
+                    "route must be a regular file of 1..%u bytes",
                     LIVE_MOVEMENT_ROUTE_FILE_MAX);
         return false;
     }
@@ -276,22 +273,16 @@ bool live_movement_route_load(const char *path,
     }
     unsigned char digest[32];
     unsigned int digest_size = 0;
-    bool digest_valid = EVP_Digest(body,
-                                   body_size,
-                                   digest,
-                                   &digest_size,
-                                   EVP_sha256(),
-                                   NULL) == 1 &&
-                        digest_size == sizeof(digest);
-    xmlDocPtr document =
-        digest_valid
-            ? xmlReadMemory(body,
-                            (int)body_size,
-                            path,
-                            NULL,
-                            XML_PARSE_NONET | XML_PARSE_NOBLANKS | XML_PARSE_NOERROR |
-                                XML_PARSE_NOWARNING)
-            : NULL;
+    bool digest_valid =
+        EVP_Digest(body, body_size, digest, &digest_size, EVP_sha256(), NULL) == 1 &&
+        digest_size == sizeof(digest);
+    xmlDocPtr document = digest_valid ? xmlReadMemory(body,
+                                                      (int)body_size,
+                                                      path,
+                                                      NULL,
+                                                      XML_PARSE_NONET | XML_PARSE_NOBLANKS |
+                                                          XML_PARSE_NOERROR | XML_PARSE_NOWARNING)
+                                      : NULL;
     free(body);
     if (document == NULL || document->intSubset != NULL || document->extSubset != NULL) {
         xmlFreeDoc(document);
@@ -300,12 +291,11 @@ bool live_movement_route_load(const char *path,
     }
     xmlNodePtr root = xmlDocGetRootElement(document);
     static const char *const root_names[] = {"version", "timeout-ms", "step-timeout-ms"};
-    bool valid = root != NULL && document->children == root && document->last == root &&
-                 root->type == XML_ELEMENT_NODE && root->ns == NULL && root->nsDef == NULL &&
-                 xmlStrEqual(root->name, BAD_CAST "live-movement-route") &&
-                 route_attributes_closed(root,
-                                         root_names,
-                                         sizeof(root_names) / sizeof(root_names[0]));
+    bool valid =
+        root != NULL && document->children == root && document->last == root &&
+        root->type == XML_ELEMENT_NODE && root->ns == NULL && root->nsDef == NULL &&
+        xmlStrEqual(root->name, BAD_CAST "live-movement-route") &&
+        route_attributes_closed(root, root_names, sizeof(root_names) / sizeof(root_names[0]));
     char *version = valid ? route_property(root, "version") : NULL;
     char *timeout = valid ? route_property(root, "timeout-ms") : NULL;
     char *step_timeout = valid ? route_property(root, "step-timeout-ms") : NULL;
@@ -321,8 +311,7 @@ bool live_movement_route_load(const char *path,
 
     size_t checkpoints_count = 0;
     for (xmlNodePtr node = valid ? root->children : NULL; node != NULL; node = node->next) {
-        if (node->type != XML_ELEMENT_NODE ||
-            checkpoints_count == LIVE_MOVEMENT_ROUTE_STEPS_MAX) {
+        if (node->type != XML_ELEMENT_NODE || checkpoints_count == LIVE_MOVEMENT_ROUTE_STEPS_MAX) {
             valid = false;
             break;
         }
@@ -390,8 +379,8 @@ void live_movement_route_free(live_movement_route_t *route) {
     }
 }
 
-live_movement_route_state_t *
-live_movement_route_state_create(const live_movement_route_t *route, uint64_t start_ms) {
+live_movement_route_state_t *live_movement_route_state_create(const live_movement_route_t *route,
+                                                              uint64_t start_ms) {
     if (route == NULL || route->checkpoints_count == 0U) {
         return NULL;
     }
@@ -460,8 +449,7 @@ live_movement_route_tick(live_movement_route_state_t *state,
     if (state->play_started && !observation->connected) {
         return route_fail(state, "disconnected after play started");
     }
-    const live_movement_checkpoint_t *current =
-        &state->route->checkpoints[state->checkpoint_index];
+    const live_movement_checkpoint_t *current = &state->route->checkpoints[state->checkpoint_index];
     if (state->phase == LIVE_MOVEMENT_ROUTE_PHASE_ARRIVAL) {
         if (observation->connected && observation->play && observation->published_ready &&
             observation->map != NULL && !route_observation_matches(observation, current)) {
@@ -535,5 +523,5 @@ bool live_movement_route_arrival_presented(live_movement_route_state_t *state) {
 
 const char *live_movement_route_failure(const live_movement_route_state_t *state) {
     return state != NULL && state->phase == LIVE_MOVEMENT_ROUTE_PHASE_FAILED ? state->failure
-                                                                            : NULL;
+                                                                             : NULL;
 }

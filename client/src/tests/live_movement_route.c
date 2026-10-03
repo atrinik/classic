@@ -101,17 +101,12 @@ static char *add_destination(const char *xml) {
     }
     memcpy(result, xml, prefix);
     memcpy(result + prefix, destination, sizeof(destination) - 1U);
-    memcpy(result + prefix + sizeof(destination) - 1U,
-           position,
-           strlen(position) + 1U);
+    memcpy(result + prefix + sizeof(destination) - 1U, position, strlen(position) + 1U);
     return result;
 }
 
-static live_movement_route_observation_t observation(uint64_t now,
-                                                      const char *map,
-                                                      uint8_t x,
-                                                      uint8_t y,
-                                                      uint64_t generation) {
+static live_movement_route_observation_t
+observation(uint64_t now, const char *map, uint8_t x, uint8_t y, uint64_t generation) {
     return (live_movement_route_observation_t){
         .now_ms = now,
         .connected = true,
