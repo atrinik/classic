@@ -9101,20 +9101,22 @@ static bool map_actor_relocation_test_absent(int depth, int x, int y) {
 /** Exercise the production painter and require its exact living-command count. */
 static bool map_actor_relocation_test_draw(SDL_Surface *surface, uint64_t living) {
     map_benchmark_statistics_reset();
-    map_draw_map_gpu_auxiliary(surface);
+    map_draw_map(surface);
     map_benchmark_statistics_t statistics;
     map_benchmark_statistics_get(&statistics);
-    bool success = statistics.map_draws == 1 && statistics.auxiliary_map_draws == 1 &&
+    bool success = statistics.map_draws == 1 && statistics.primary_map_draws == 1 &&
+                   statistics.auxiliary_map_draws == 0 &&
                    statistics.living_commands == living && statistics.render_failures == 0;
     if (!success) {
         fprintf(stderr,
                 "map actor relocation test: %s draw mismatch expected-living=%" PRIu64
-                " got-living=%" PRIu64 " draws=%" PRIu64 " auxiliary=%" PRIu64 " failures=%" PRIu64
-                "\n",
+                " got-living=%" PRIu64 " draws=%" PRIu64 " primary=%" PRIu64 " auxiliary=%" PRIu64
+                " failures=%" PRIu64 "\n",
                 map_actor_relocation_test_case,
                 living,
                 statistics.living_commands,
                 statistics.map_draws,
+                statistics.primary_map_draws,
                 statistics.auxiliary_map_draws,
                 statistics.render_failures);
     }
@@ -9136,7 +9138,10 @@ bool widget_map_actor_relocation_test(void) {
     const int center = map_width - map_width / 2 - 1;
     const uint8_t initial_position = (uint8_t)center;
     bool success = true;
-    SDL_Surface *surface = SDL_CreateSurface(640, 480, SDL_PIXELFORMAT_RGBA32);
+    /* Exercise the primary world path. Auxiliary destinations deliberately
+     * draw a second translucent living cue and have different command counts.
+     * This surface belongs to the widget; the caller restores its fixture. */
+    SDL_Surface *surface = cur_widget[MAP_ID] != NULL ? cur_widget[MAP_ID]->surface : NULL;
     if (surface == NULL) {
         return false;
     }
@@ -9456,7 +9461,6 @@ bool widget_map_actor_relocation_test(void) {
 done:
     socket_command_map_abort_pending();
     map_select_level(0, true);
-    SDL_DestroySurface(surface);
 #undef MAP_ACTOR_RELOCATION_CHECKPOINT
     return success;
 }

@@ -4166,6 +4166,12 @@ int gpu_player_view_main(int argc, char *argv[]) {
     }
 #ifdef ATRINIK_WIDGET_TESTS
     if (manifest.visibility_fade_test) {
+        /* Materialize the primary map surface through its normal widget draw
+         * before the relocation suite borrows it for production world draws. */
+        if (!gpu_player_view_render(map_widget, manifest.widget_render)) {
+            fprintf(stderr, "gpu-player-view: actor relocation setup render failed\n");
+            goto cleanup;
+        }
         bool actor_relocation = widget_map_actor_relocation_test();
         /* The relocation suite intentionally replaces the complete published
          * map. Restore the immutable fixture before the existing fade checks
