@@ -316,7 +316,7 @@ environment variables never synthesize a selected-adapter identity.
  completion; readback and PNG encoding run outside the walking measurement
  interval. Each bounded asynchronous capture records its exact file digest,
  location, server time, and primary-map publication. Missing or failed captures
- fail the run. With captures, `--live-movement-lighting-phase` accepts only
+ fail the run. With captures, `--live-movement-lighting-phase=PHASE` accepts only
  `day`, `new-moon`, or `full-moon`. In an isolated scenario with normal command
  permission, it uses fixed `/settime` and `/celestial` commands at the starting
  checkpoint. Opposite-hour and target-hour observations must each have a fresh
