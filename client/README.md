@@ -288,8 +288,8 @@ environment variables never synthesize a selected-adapter identity.
  actor-effect source and instance deltas. Stable-slot uniforms remain one
  16 to 1024-byte push per submitted world batch.
 
- Live movement diagnostics use `--live-movement-route /absolute/route.xml`
- and `--live-movement-report /absolute/new-report.jsonl` with the normal client
+ Live movement diagnostics use `--live-movement-route=/absolute/route.xml`
+ and `--live-movement-report=/absolute/new-report.jsonl` with the normal client
  startup and authenticated connection. Run them through an isolated wrapper
  scenario; the report path must not exist. A closed `live-movement-route`
  version-1 XML document specifies `timeout-ms`, `step-timeout-ms`, and ordered
@@ -310,8 +310,8 @@ environment variables never synthesize a selected-adapter identity.
  runtime settings to the report. Live routes exercise the server, map changes,
  assets and NPCs; snapshot benchmarks remain separate renderer diagnostics.
 
- Optional `--live-movement-initial-capture /absolute/initial.png` and
- `--live-movement-final-capture /absolute/final.png` create private, exclusive
+ Optional `--live-movement-initial-capture=/absolute/initial.png` and
+ `--live-movement-final-capture=/absolute/final.png` create private, exclusive
  PNGs in the report directory. They wait for normal visibility fades and asset
  completion; readback and PNG encoding run outside the walking measurement
  interval. Each bounded asynchronous capture records its exact file digest,
