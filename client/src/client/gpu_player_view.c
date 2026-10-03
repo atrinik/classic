@@ -4173,11 +4173,15 @@ int gpu_player_view_main(int argc, char *argv[]) {
             goto cleanup;
         }
         bool actor_relocation = widget_map_actor_relocation_test();
-        /* The relocation suite intentionally replaces the complete published
+        bool connected_seam = socket_command_map_connected_seam_test();
+        if (!connected_seam) {
+            fprintf(stderr, "gpu-player-view: connected MAP seam regression failed\n");
+        }
+        /* The relocation and seam suites replace the complete published
          * map. Restore the immutable fixture before the existing fade checks
          * and every later retained-render or pixel comparison. */
         socket_command_map(snapshot, snapshot_size, 0);
-        if (!actor_relocation || !widget_map_visibility_test()) {
+        if (!actor_relocation || !connected_seam || !widget_map_visibility_test()) {
             fprintf(stderr, "gpu-player-view: visibility fade regression failed\n");
             goto cleanup;
         }

@@ -90,6 +90,8 @@ extern void socket_command_map_abort_pending(void);
 bool socket_command_map_timed_light_same_test(void);
 /** Verify complete-to-partial MAP2 publication and malformed-sequence rollback. */
 bool socket_command_map_continuation_transaction_test(void);
+/** Exercise real same-name connected MAP decoding in the initialized widget fixture. */
+bool socket_command_map_connected_seam_test(void);
 /** Seed/query a buffered MAP2 generation at lifecycle reset boundaries. */
 bool socket_command_map_buffered_generation_test_begin(void);
 bool socket_command_map_buffered_generation_test_pending(void);
