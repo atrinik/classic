@@ -207,8 +207,20 @@ static int test_initialize_and_abort(void) {
     CHECK(!live_movement_enabled());
     CHECK(!live_movement_initialize(paths.route, NULL));
     CHECK(!live_movement_initialize("relative", paths.report));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    CHECK(live_movement_enabled());
     CHECK(!live_movement_initialize(paths.route, paths.report));
-    CHECK(!live_movement_enabled());
+    CHECK(live_movement_enabled());
+    live_movement_ready();
+    publication_generation = 1;
+    live_movement_tick();
+    CHECK(!live_movement_finished());
+    live_movement_abort("renderer recreation or recovery interrupted the route");
+    CHECK(live_movement_finished());
+    CHECK(live_movement_exit_status() == 8);
+    CHECK(stop_count == 1U);
+    live_movement_close();
+    live_movement_close();
     fixture_destroy(&paths);
 
     CHECK(fixture_create(&paths, "<broken/>"));
@@ -223,15 +235,6 @@ static int test_initialize_and_abort(void) {
     CHECK(!live_movement_initialize(paths.route, paths.report));
     fixture_destroy(&paths);
 
-    CHECK(fixture_create(&paths, route_xml));
-    CHECK(fixture_ready(&paths));
-    live_movement_abort("renderer recreation or recovery interrupted the route");
-    CHECK(live_movement_finished());
-    CHECK(live_movement_exit_status() == 8);
-    CHECK(stop_count == 1U);
-    live_movement_close();
-    live_movement_close();
-    fixture_destroy(&paths);
     return 0;
 }
 
@@ -282,7 +285,7 @@ static int test_deadline_and_report_failure(void) {
     CHECK(fixture_ready(&paths));
     publication_generation = 1;
     live_movement_tick();
-    now_us = 100000;
+    now_us = 101000;
     frame(true);
     CHECK(live_movement_finished() && live_movement_exit_status() == 8);
     live_movement_close();
@@ -316,6 +319,7 @@ static int test_final_drain(void) {
     live_movement_tick();
     CHECK(move_count == 1U);
     MapData.posx = 11;
+    publication_generation++;
     live_movement_tick();
     present_arrival();
     live_movement_tick();
@@ -351,6 +355,7 @@ static int test_final_drain_disconnect(void) {
     present_arrival();
     live_movement_tick();
     MapData.posx = 11;
+    publication_generation++;
     live_movement_tick();
     present_arrival();
     live_movement_tick();
