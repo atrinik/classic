@@ -12,6 +12,10 @@ import sys
 import tempfile
 import unittest
 
+if sys.platform.startswith("linux"):
+    import fcntl
+    import resource
+
 
 if len(sys.argv) < 2:
     raise SystemExit("usage: test_video_encoder.py CLIENT_EXECUTABLE")
@@ -78,13 +82,25 @@ def avi_chunks(data: bytes):
 class VideoEncoderTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform.startswith("linux") and Path("/proc/self/fd").is_dir(),
                          "requires Linux procfs descriptor inspection")
-    def test_closes_inherited_descriptors_before_ready(self) -> None:
+    def test_closes_high_inherited_descriptor_above_lowered_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             secret = root / "private-input"
             secret.write_bytes(b"must not be inherited")
             output = root / "recording.avi"
-            descriptor = os.open(secret, os.O_RDONLY)
+            soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if soft_limit <= 256 or (hard_limit != resource.RLIM_INFINITY and hard_limit < 64):
+                self.skipTest("descriptor limit cannot provide the required high descriptor")
+            source_descriptor = os.open(secret, os.O_RDONLY)
+            try:
+                descriptor = fcntl.fcntl(source_descriptor, fcntl.F_DUPFD, 256)
+            finally:
+                os.close(source_descriptor)
+            self.assertGreaterEqual(descriptor, 256)
+
+            def lower_descriptor_limit() -> None:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (64, hard_limit))
+
             process = None
             try:
                 process = subprocess.Popen(
@@ -93,6 +109,7 @@ class VideoEncoderTests(unittest.TestCase):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     pass_fds=(descriptor,),
+                    preexec_fn=lower_descriptor_limit,
                 )
                 self.assertIsNotNone(process.stdout)
                 readable, _, _ = select.select([process.stdout], [], [], 15)
