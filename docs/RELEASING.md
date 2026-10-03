@@ -153,7 +153,15 @@ index and complete file-list digest when present. If the current coordinate is
 the authenticated legacy line or its release has disappeared from the complete
 published history, the updater uses that historical evidence as a one-time
 cross-line cutover and still requires the replacement's complete release
-evidence before changing the lock. Once a published coordinate is restored,
+evidence before changing the lock. Before writing tracked inputs, both the
+content and sound updaters generate the dependency bundle descriptor from the
+updated locks and verified archives in a temporary staging tree. Content updates
+also derive the selected GPU fixture provenance from the verified runtime
+manifest, preserving the original fixture and observed-issue coordinates.
+Archive acquisition or generation failure leaves the tracked inputs untouched.
+Routine CI and publication acquire checksum-verified canonical archives directly;
+the optional attested recovery helper is reserved for unavailable historical inputs.
+Once a published coordinate is restored,
 later candidates must be strict descendants of it. Draft, unpublished,
 incomplete, or invalid candidates are recorded and skipped; incomplete
 discovery or an invalid current coordinate stops the run.
@@ -212,16 +220,14 @@ digest preserved. It has package write access only in its publication job.
 Pull-request and other untrusted workflows have no publication trigger or
 credential. An existing material tag at a different digest fails closed.
 
-If an unchanged locked origin is temporarily unavailable during the Content
-history cutover, the workflow first runs
-`tools/release/recover_attested_dependency_bundle.sh` and passes its extracted
-directory as `--trusted-bundle`. The script verifies the exact prior OCI
-attestation. Before it runs, each workflow logs into GHCR with the scoped
-job token in a runner-temporary `DOCKER_CONFIG`; the Python staging boundary
-reuses only manifest-listed archives
-whose names and SHA-256 values still match the current locks. The new Content
-archive is still acquired and verified from its published release, and a
-missing or mismatched trusted file fails closed.
+If a locked origin is temporarily unavailable, an operator can supply a
+previously attested bundle through `--trusted-bundle`. The Python staging
+boundary reuses only manifest-listed archives whose names and SHA-256 values
+still match the current locks; missing or mismatched files fail closed.
+`tools/release/recover_attested_dependency_bundle.sh` records the historical
+Content-cutover bundle and requires its exact OCI attestation. Its historical
+digest may no longer exist, so routine CI and publication do not depend on it.
+Use an available, independently attested bundle for any manual recovery.
 
 The first merge containing this contract is the bootstrap: wait for `Publish
 Dependency Bundle` to publish and attest the checked descriptor before
