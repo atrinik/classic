@@ -17,6 +17,42 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
+        workflow = self.text("check.yml")
+        jobs = dict(
+            re.findall(
+                r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)",
+                workflow[workflow.index("jobs:\n") :],
+                re.MULTILINE | re.DOTALL,
+            )
+        )
+        producer = jobs["windows-test-build"]
+        consumer = jobs["windows-test"]
+        self.assertIn(
+            'cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"',
+            producer,
+        )
+        self.assertIn(
+            '& (Join-Path $bundle "libatrinik-metaserver-publisher.exe") $publisher',
+            consumer,
+        )
+        fixture_paths = re.findall(
+            r'\$publisher = Join-Path \$bundle "fixtures/([^"/]+)"', consumer
+        )
+        self.assertEqual(len(fixture_paths), 1)
+        fixture_path = ROOT / "libatrinik/tests/fixtures" / fixture_paths[0]
+        self.assertTrue(fixture_path.is_file(), f"unstaged publisher fixture: {fixture_path}")
+        cmake = (ROOT / "libatrinik/CMakeLists.txt").read_text(encoding="utf-8")
+        ctest_fixtures = re.findall(
+            r'add_test\(NAME libatrinik-metaserver-publisher\s+'
+            r'COMMAND libatrinik-metaserver-publisher\s+'
+            r'"\$\{CMAKE_CURRENT_SOURCE_DIR\}/tests/fixtures/([^"/]+)"\)',
+            cmake,
+        )
+        self.assertEqual(fixture_paths, ctest_fixtures)
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(fixture["body"])["schema"], "atrinik-classic-publish-v3")
+
     def test_check_routes_immutable_inputs_to_the_consumers_revision(self) -> None:
         workflow = self.text("check.yml")
         # Job boundaries keep an unrelated checkout or artifact declaration from
@@ -1513,7 +1549,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("$process.Kill($true)", smoke)
         self.assertIn("$process.Dispose()", smoke)
         self.assertIn('"Server ready\\. Waiting for connections"', smoke)
-        self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
+        self.assertIn('"fixtures/metaserver-classic-publisher-v3.json"', run)
 
         self.assertIn("- windows-test", aggregate)
         self.assertIn("--windows-required", aggregate)
