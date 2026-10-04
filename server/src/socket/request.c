@@ -2466,6 +2466,10 @@ void draw_client_map2(object *pl) {
                 }
 
                 if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
+                    /* Every explicit RGB endpoint owns a scalar endpoint in
+                     * this record, including unchanged colored sub-layers
+                     * carried alongside another refreshed endpoint. */
+                    light_next_bitmap |= light_next_rgb_bitmap;
                     packet_debug_data(packet, 1, "Next-hour scalar endpoint bitmap");
                     packet_writer_write_uint8(packet, light_next_bitmap);
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {

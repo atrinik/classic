@@ -2029,6 +2029,12 @@ both NEW map publications (login and teleport) and CONNECTED tile transitions.
 The existing periodic clock updates continue unchanged. A timed-light MAP2
 endpoint describes celestial samples; it does not establish the client's world
 clock or replace that synchronization message.
+Every timed-light record's RGB endpoint bitmap is a subset of its scalar
+endpoint bitmap. The producer includes the corresponding scalar even for an
+unchanged colored endpoint carried with another refreshed sub-layer; a
+CONNECTED publication may reuse the generation and translated endpoint cache.
+The decoder rejects records that violate this ownership contract before
+applying map metadata or geometry.
 
 ### Fixed visibility and light transfer
 
