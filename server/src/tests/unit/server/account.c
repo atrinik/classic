@@ -332,53 +332,34 @@ START_TEST(test_checked_logout_propagates_save_failures) {
 }
 END_TEST
 
-START_TEST(test_access_admin_boundary_preserves_moderation) {
-    char saved_allowlist[sizeof(settings.access_admin_accounts)];
+START_TEST(test_access_preserves_normal_command_permissions) {
     char saved_groups[sizeof(settings.default_permission_groups)];
-    memcpy(saved_allowlist, settings.access_admin_accounts, sizeof(saved_allowlist));
     memcpy(saved_groups, settings.default_permission_groups, sizeof(saved_groups));
     bool saved_required = settings.access_required;
     player pl = {0};
-    socket_struct cs = {0};
-    pl.cs = &cs;
-    cs.account = "ordinaryoperator";
     settings.access_required = true;
-    settings.access_admin_accounts[0] = '\0';
     snprintf(VS(settings.default_permission_groups), "[OP]");
-    const char *dangerous[] = {"console", "create", "patch", "config", "password", "/console"};
-    for (size_t i = 0; i < arraysize(dangerous); i++)
-        ck_assert_int_eq(commands_check_permission(&pl, dangerous[i]), 0);
-    ck_assert_int_eq(commands_check_permission(&pl, "kick"), 1);
-    ck_assert_int_eq(commands_check_permission(&pl, "ban"), 1);
-    ck_assert_int_eq(commands_check_permission(&pl, "freeze"), 1);
+    const char *commands[] = {"console", "create", "patch", "config", "password", "/console",
+                              "kick", "ban", "freeze"};
+    for (size_t i = 0; i < arraysize(commands); i++)
+        ck_assert_int_eq(commands_check_permission(&pl, commands[i]), 1);
 
-    /* An explicit delegated grant cannot override a missing root grant. */
     settings.default_permission_groups[0] = '\0';
+    ck_assert_int_eq(commands_check_permission(&pl, "console"), 0);
     char *permissions[] = {"console", "create", "patch", "config", "password", "kick"};
     pl.cmd_permissions = permissions;
     pl.num_cmd_permissions = arraysize(permissions);
-    for (size_t i = 0; i < arraysize(dangerous); i++)
-        ck_assert_int_eq(commands_check_permission(&pl, dangerous[i]), 0);
-    ck_assert_int_eq(commands_check_permission(&pl, "kick"), 1);
+    for (size_t i = 0; i < arraysize(permissions); i++)
+        ck_assert_int_eq(commands_check_permission(&pl, permissions[i]), 1);
+    ck_assert_int_eq(commands_check_permission(&pl, "ban"), 0);
     settings.access_required = saved_required;
-    memcpy(settings.access_admin_accounts, saved_allowlist, sizeof(saved_allowlist));
     memcpy(settings.default_permission_groups, saved_groups, sizeof(saved_groups));
 }
 END_TEST
 
-START_TEST(test_access_registration_denies_unavailable_allowlist) {
-    char saved_allowlist[sizeof(settings.access_admin_accounts)];
-    memcpy(saved_allowlist, settings.access_admin_accounts, sizeof(saved_allowlist));
-    char allowlist[HUGE_BUF];
-    snprintf(VS(allowlist), "%s/registration-allowlist", settings.datapath);
-    unlink(allowlist);
-    if (_i != 0) {
-        FILE *fp = fopen(allowlist, "w");
-        ck_assert_ptr_nonnull(fp);
-        ck_assert_int_gt(fputs("fixtureadmin\nUppercase\n", fp), 0);
-        ck_assert_int_eq(fclose(fp), 0);
-    }
-    snprintf(VS(settings.access_admin_accounts), "%s", allowlist);
+START_TEST(test_access_preserves_ordinary_registration) {
+    bool saved_required = settings.access_required;
+    settings.access_required = true;
     object *ob = player_get_dummy("Registration Proof", NULL);
     socket_struct *cs = CONTR(ob)->cs;
     free(cs->account);
@@ -388,52 +369,12 @@ START_TEST(test_access_registration_denies_unavailable_allowlist) {
     char *path = account_make_path(name);
     unlink(path);
     account_register(cs, name, password, password);
-    ck_assert_ptr_null(cs->account);
-    ck_assert(!path_exists(path));
+    ck_assert_ptr_nonnull(cs->account);
+    ck_assert_str_eq(cs->account, name);
+    ck_assert(path_exists(path));
+    ck_assert_int_eq(unlink(path), 0);
     free(path);
-    unlink(allowlist);
-    memcpy(settings.access_admin_accounts, saved_allowlist, sizeof(saved_allowlist));
-}
-END_TEST
-
-START_TEST(test_access_registration_with_root_allowlist) {
-#ifndef WIN32
-    const char *fixture = getenv("ATRINIK_TEST_ROOT_ALLOWLIST_DIR");
-    if (fixture == NULL || geteuid() != 0)
-        return;
-    char saved_allowlist[sizeof(settings.access_admin_accounts)];
-    memcpy(saved_allowlist, settings.access_admin_accounts, sizeof(saved_allowlist));
-    char allowlist[HUGE_BUF];
-    snprintf(VS(allowlist), "%s/accounts", fixture);
-    FILE *fp = fopen(allowlist, "w");
-    ck_assert_ptr_nonnull(fp);
-    if (_i != 0)
-        ck_assert_int_gt(fputs(_i == 1 ? "fixtureadmin\n" : "reservationproof\n", fp), 0);
-    ck_assert_int_eq(fclose(fp), 0);
-    ck_assert_int_eq(chmod(allowlist, 0600), 0);
-    snprintf(VS(settings.access_admin_accounts), "%s", allowlist);
-    object *ob = player_get_dummy("Registration Proof", NULL);
-    socket_struct *cs = CONTR(ob)->cs;
-    free(cs->account);
-    cs->account = NULL;
-    char name[] = "reservationproof";
-    char password[] = "local-test-7!";
-    char *path = account_make_path(name);
-    unlink(path);
-    account_register(cs, name, password, password);
-    if (_i == 2) {
-        ck_assert_ptr_null(cs->account);
-        ck_assert(!path_exists(path));
-    } else {
-        ck_assert_ptr_nonnull(cs->account);
-        ck_assert_str_eq(cs->account, name);
-        ck_assert(path_exists(path));
-        ck_assert_int_eq(unlink(path), 0);
-    }
-    free(path);
-    unlink(allowlist);
-    memcpy(settings.access_admin_accounts, saved_allowlist, sizeof(saved_allowlist));
-#endif
+    settings.access_required = saved_required;
 }
 END_TEST
 
@@ -445,9 +386,8 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_set_timeout(tc_core, 30);
     tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 4);
-    tcase_add_test(tc_core, test_access_admin_boundary_preserves_moderation);
-    tcase_add_loop_test(tc_core, test_access_registration_denies_unavailable_allowlist, 0, 2);
-    tcase_add_loop_test(tc_core, test_access_registration_with_root_allowlist, 0, 3);
+    tcase_add_test(tc_core, test_access_preserves_normal_command_permissions);
+    tcase_add_test(tc_core, test_access_preserves_ordinary_registration);
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);

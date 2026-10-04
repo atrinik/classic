@@ -50,9 +50,10 @@
   `access_admin.c` owns strict bounded management JSON; `access_server.c` owns
   copied worker jobs and main-loop session checks. Keep socket/player pointers
   out of worker ownership, and propagate failed saves into shutdown receipts.
-- Access administration requires canonical authenticated accounts in the
-  root-managed allowlist. General OP/default grants cannot confer it through
-  forced password changes, script execution or configuration commands.
+- In-game access administration uses the current character’s existing
+  `/cmd_permission` grant for `access`; `[OP]` grants it automatically. Local
+  root administration remains available for bootstrap. Access policy/store
+  settings are startup-only and cannot be changed through `/config`.
 - See `doc/ACCESS_TOKEN_STORE.md` and `doc/LOCAL_ADMIN_SHUTDOWN.md` for durability,
   root bootstrap, private responses, exact online/offline status and backups.
   Never expose raw codes to command logs or ordinary packet dumps.

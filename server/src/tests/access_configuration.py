@@ -21,11 +21,9 @@ with tempfile.TemporaryDirectory(prefix="atrinik-access-config-") as temporary:
         (["--access_required=tru", "--access_required=false"], ""),
         (["--access_initialize=maybe", "--access_initialize=false"], ""),
         (["--access_store=relative", "--access_store=/absent-fixture-store"], ""),
-        (["--access_admin_accounts=relative", "--access_admin_accounts=/absent-fixture-list"], ""),
         ([], "access_required = tru\naccess_required = false\n"),
         ([], "access_initialize = maybe\naccess_initialize = false\n"),
         ([], "access_store = relative\n"),
-        ([], "access_admin_accounts = relative\n"),
     ]
     for arguments, configuration in cases:
         (root / "server-custom.cfg").write_text(configuration)
@@ -33,6 +31,19 @@ with tempfile.TemporaryDirectory(prefix="atrinik-access-config-") as temporary:
                                 stderr=subprocess.STDOUT, timeout=10, check=False)
         assert result.returncode != 0, arguments
         assert b"Invalid access configuration; refusing game startup" in result.stdout, result.stdout
+        assert not (root / "data").exists()
+    # Removed account authorization must fail closed in both parser paths.
+    obsolete_cases = [
+        (["--access_admin_accounts=/obsolete-account-list"], "", b"Unknown option"),
+        ([], "access_admin_accounts = /obsolete-account-list\n",
+         b"Invalid access configuration; refusing game startup"),
+    ]
+    for arguments, configuration, message in obsolete_cases:
+        (root / "server-custom.cfg").write_text(configuration)
+        result = subprocess.run([binary, *arguments], cwd=root, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, timeout=10, check=False)
+        assert result.returncode != 0, arguments
+        assert message in result.stdout, result.stdout
         assert not (root / "data").exists()
     (root / "descriptor-value").write_text("7")
     (root / "nested.cfg").write_text("datapath_fd = 7\n")

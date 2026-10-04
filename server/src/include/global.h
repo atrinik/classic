@@ -376,7 +376,6 @@ typedef struct settings_struct {
     bool access_required;
     bool access_initialize;
     char access_store[HUGE_BUF];
-    char access_admin_accounts[HUGE_BUF];
     char admin_shutdown_socket[108];
 
     /**

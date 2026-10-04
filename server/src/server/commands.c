@@ -30,7 +30,6 @@
  */
 
 #include <global.h>
-#include <access_tokens.h>
 #include <server_main.h>
 #include <server.h>
 #include <initialization.h>
@@ -278,18 +277,6 @@ int commands_check_permission(player *pl, const char *command) {
 
     while (*command == '/') {
         command++;
-    }
-
-    /* General OP grants cannot confer process execution, arbitrary object
-     * scripting or configuration writes across the access-admin boundary. */
-    if ((settings.access_required || settings.access_initialize || *settings.access_store != '\0' ||
-         *settings.access_admin_accounts != '\0') &&
-        (strcmp(command, "console") == 0 || strcmp(command, "create") == 0 ||
-         strcmp(command, "patch") == 0 || strcmp(command, "config") == 0 ||
-         strcmp(command, "password") == 0) &&
-        (pl == NULL || pl->cs == NULL || pl->cs->account == NULL ||
-         !access_operator_allowed(settings.access_admin_accounts, pl->cs->account))) {
-        return 0;
     }
 
     if (*settings.default_permission_groups != '\0') {

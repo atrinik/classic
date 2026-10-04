@@ -211,22 +211,5 @@ access_outcome_t access_store_flush_for_shutdown(access_store_t *store);
 void access_result_cleanse(access_result_t *result);
 const char *access_outcome_name(access_outcome_t outcome);
 
-/* Root-owned regular no-symlink file (0600 for root, or 0440/0640
- * with effective service group), <= 16 KiB; canonical account
- * names one per LF line, no comments/blank lines/duplicates. Missing or invalid
- * file denies. Exact canonical account identity, never character/display/OP.
- * Account rename requires an explicit root-managed allowlist update.
- */
-typedef enum {
-    ACCESS_OPERATOR_UNAVAILABLE,
-    ACCESS_OPERATOR_UNLISTED,
-    ACCESS_OPERATOR_LISTED
-} access_operator_lookup_t;
-/* Distinguishes a valid unlisted identity from an unavailable trust anchor.
- * Public registration must reject unavailable and listed results. An empty,
- * securely owned file is valid and lists no identities. */
-access_operator_lookup_t access_operator_lookup(const char *allowlist_path,
-                                                const char *canonical_account);
-bool access_operator_allowed(const char *allowlist_path, const char *canonical_account);
 
 #endif

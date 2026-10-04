@@ -644,8 +644,8 @@ static bool clioptions_option_port_mapping(const char *arg, char **errmsg) {
     return true;
 }
 
-/* Admission configuration is immutable after startup. In particular default OP
- * and /config must never grant access administration or open the server. */
+/* Admission policy and store configuration are immutable after startup,
+ * including through /config invoked by an OP character. */
 static bool access_configuration_locked;
 static bool invalid_access_configuration;
 static bool removed_access_configuration;
@@ -699,19 +699,6 @@ static bool clioptions_option_access_store(const char *arg, char **errmsg) {
         return false;
     }
     snprintf(VS(settings.access_store), "%s", arg);
-    return true;
-}
-static const char *clioptions_option_access_admin_accounts_desc =
-    "Root-owned explicit canonical account allowlist for access administration.";
-static bool clioptions_option_access_admin_accounts(const char *arg, char **errmsg) {
-    if (!access_setting_mutable(errmsg))
-        return false;
-    if (arg[0] != '/' || strlen(arg) >= sizeof(settings.access_admin_accounts)) {
-        invalid_access_configuration = true;
-        *errmsg = xstrdup("Expected a bounded absolute file");
-        return false;
-    }
-    snprintf(VS(settings.access_admin_accounts), "%s", arg);
     return true;
 }
 /* Recognize removed settings solely to fail startup, never fall back to open. */
@@ -1186,7 +1173,6 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, access_required, "Access code admission policy");
     CLIOPTIONS_CREATE_ARGUMENT(cli, access_initialize, "Initialize empty access store");
     CLIOPTIONS_CREATE_ARGUMENT(cli, access_store, "Private access store directory");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, access_admin_accounts, "Access administrator allowlist");
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Removed admission option");
     clioptions_enable_sensitive(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Removed admission option");
@@ -1281,7 +1267,7 @@ static void init_library(int argc, char *argv[]) {
 
 #ifdef WIN32
     if (settings.datapath_fd >= 0 || settings.access_required || settings.access_initialize ||
-        *settings.access_store != '\0' || *settings.access_admin_accounts != '\0') {
+        *settings.access_store != '\0') {
         LOG(ERROR, "Access token administration is unsupported on Windows servers");
         exit(EXIT_FAILURE);
     }

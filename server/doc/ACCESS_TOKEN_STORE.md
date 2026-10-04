@@ -29,7 +29,7 @@ transaction implementation as ordinary paths. Opening a child compares fresh
 before/opened/after directory identities; subsequent operations use its pinned
 descriptor. Renaming the data pathname cannot redirect these operations. These
 APIs do not create a `/proc/self/fd` exception in ordinary path traversal,
-external store selection, offline helpers, or the root-managed allowlist.
+external store selection or offline helpers.
 
 A directory `flock` provides exclusive ownership. The enclosing game state lock
 must also be held by the runtime and offline inspector so an absent token store
@@ -96,14 +96,14 @@ shutdown flush fences new writes/admissions before checking durability; the call
 still performs normal checked player/account/world saves and transport draining.
 Close requires callers to have drained all outstanding API users/callbacks.
 
-The root-managed account allowlist is independent of inherited OP permissions.
-Its path has root-owned, non-writable ancestry. The file is regular, single-link,
-root-owned and either 0600 when read by root or 0440/0640 with the service effective
-group. No group-write/other access is allowed. It contains at most 256 distinct
-canonical lowercase ASCII account names, one per LF-terminated line, at most
-16 KiB. Missing/invalid files deny. Renaming an account requires root to update
-this file. The adapters must authenticate the local peer or canonical account
-before calling management operations; token possession is never authorization.
+In-game administration uses the current playing character’s existing
+`/cmd_permission` grant for `access`; `[OP]` grants it automatically. The main
+loop checks permission on each request and again before delivering its result.
+Workers receive only a copied permission decision, never player/socket pointers.
+The local Unix adapter authenticates root peers for bootstrap. Token possession
+alone is never administration authorization. Account registration, passwords and
+saved OP permissions retain their ordinary behavior. Access policy/store settings
+remain startup-only and cannot be changed through `/config`.
 
 ## Focused fixtures
 
@@ -127,8 +127,7 @@ remaining budget. Terminal revocations have priority in the bounded outbox page.
 Remaining integration boundaries: native
 Windows private state/IPC has no supported implementation in this POSIX module;
 parent platform selection must explicitly reject protected operation, while
-preserving the existing open-server build. Root-owned allowlist positive fixtures
-require a root-capable isolated test environment. Full server/client builds,
+preserving the existing open-server build. Full server/client builds,
 actual account/player behavior, and adapter deadline/dispatch proofs belong to
 the coordinated integration acceptance.
 
@@ -161,8 +160,8 @@ The original descriptor remains open for the entire process and is marked
 close-on-exec. The server retains its own close-on-exec duplicate of the same
 locked open-file description; cleanup closes its duplicate and never unlocks the
 supervisor's lease. Default token-store children are opened relative to this
-pinned descriptor with the usual no-follow checks. Explicit store paths and the
-root-managed allowlist retain their ordinary strict path checks.
+pinned descriptor with the usual no-follow checks. Explicit store paths retain
+their ordinary strict path checks.
 
 Configuration files (including nested includes), value-file expansion, offline
 initialization/scenario/test modes, and Windows cannot supply this capability.

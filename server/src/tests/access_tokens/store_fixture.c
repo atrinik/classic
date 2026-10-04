@@ -318,8 +318,6 @@ static void bounds(void) {
     assert(access_store_authorize(s, active.code, identity, 102, &ref) == ACCESS_DENIED);
     access_result_cleanse(&active);
     cleanup(directory, s);
-    assert(!access_operator_allowed("/does/not/exist", "default-op"));
-    assert(!access_operator_allowed("relative", "default-op"));
 }
 
 static access_outcome_t activation_fault(void *context, const access_route_t *request) {

@@ -17,7 +17,7 @@ cmake --build /tmp/access-windows
 Use private writable `CCACHE_DIR` and `CCACHE_TEMPDIR` paths for the MXE compiler.
 The CMake configuration checks actual Linux/Windows backend source selection.
 The native executable covers all 16 combinations of required, initialize, store
-and allowlist settings for both public and private visibility, plus rejected
+and inherited data descriptor settings for both public and private visibility, plus rejected
 admin/auth requests, output clearing and save-failure fencing. Only all-default
 open settings succeed. Cross-compilation checks the real MinGW declarations and
 links every public server-backend entry point; executing the Windows binary

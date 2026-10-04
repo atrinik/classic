@@ -14,7 +14,7 @@ static bool failed;
 bool access_server_init(const char identity_hex[65]) {
     (void)identity_hex;
     failed = settings.datapath_fd >= 0 || settings.access_required || settings.access_initialize ||
-             settings.access_store[0] != '\0' || settings.access_admin_accounts[0] != '\0';
+             settings.access_store[0] != '\0';
     return !failed;
 }
 
@@ -36,10 +36,10 @@ uint64_t access_server_root_submit(const char *data, size_t length) {
     return 0;
 }
 
-uint64_t access_server_admin_submit(const char *data, size_t length, const char *account) {
+uint64_t access_server_admin_submit(const char *data, size_t length, bool permitted) {
     (void)data;
     (void)length;
-    (void)account;
+    (void)permitted;
     return 0;
 }
 
@@ -50,6 +50,12 @@ bool access_server_admin_poll(uint64_t id, char *out, size_t capacity, size_t *l
     if (length != NULL)
         *length = 0;
     return false;
+}
+
+bool access_server_admin_poll_permitted(
+    uint64_t id, bool permitted, char *out, size_t capacity, size_t *length) {
+    (void)permitted;
+    return access_server_admin_poll(id, out, capacity, length);
 }
 
 void access_server_cancel(uint64_t id) {
@@ -73,16 +79,4 @@ bool access_server_auth_poll(uint64_t id, access_outcome_t *out, access_token_re
 access_session_state_t access_server_session_check(const access_token_ref_t *ref) {
     (void)ref;
     return ACCESS_SESSION_DENIED;
-}
-
-bool access_operator_allowed(const char *allowlist, const char *account) {
-    (void)allowlist;
-    (void)account;
-    return false;
-}
-
-access_operator_lookup_t access_operator_lookup(const char *allowlist, const char *account) {
-    (void)allowlist;
-    (void)account;
-    return ACCESS_OPERATOR_UNAVAILABLE;
 }

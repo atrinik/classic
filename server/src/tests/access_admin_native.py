@@ -136,38 +136,3 @@ try:
 finally:
     library.access_store_close(store)
 print('PASS strict native parser, real-store issue/list/history/revoke, durable result recovery and response bounds')
-
-# Positive authorization requires a root-owned fixture, just like production
-# configuration. Non-root fixture runs cannot manufacture this trust anchor.
-if os.geteuid() == 0:
-    library.access_operator_allowed.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-    library.access_operator_allowed.restype = ctypes.c_bool
-    library.access_operator_lookup.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-    library.access_operator_lookup.restype = ctypes.c_int
-    allowlist = root / 'access-admin-accounts'
-    allowlist.write_text('fixtureadmin\nsecondadmin\n')
-    for mode in (0o600, 0o440, 0o640):
-        allowlist.chmod(mode)
-        assert library.access_operator_allowed(os.fsencode(allowlist), b'fixtureadmin')
-        assert not library.access_operator_allowed(os.fsencode(allowlist), b'FixtureAdmin')
-        assert library.access_operator_lookup(os.fsencode(allowlist), b'ordinaryoperator') == 1
-        assert library.access_operator_lookup(os.fsencode(allowlist), b'fixtureadmin') == 2
-        assert not library.access_operator_allowed(os.fsencode(allowlist), b'ordinaryoperator')
-    for mode in (0o660, 0o644, 0o444, 0o666):
-        allowlist.chmod(mode)
-        assert not library.access_operator_allowed(os.fsencode(allowlist), b'fixtureadmin')
-    allowlist.chmod(0o600)
-    for malformed in ('fixtureadmin\nfixtureadmin\n', 'fixtureadmin', 'fixtureadmin\nUppercase\n'):
-        allowlist.write_text(malformed)
-        assert library.access_operator_lookup(os.fsencode(allowlist), b'ordinaryoperator') == 0
-        assert not library.access_operator_allowed(os.fsencode(allowlist), b'fixtureadmin')
-    allowlist.write_text('')
-    assert library.access_operator_lookup(os.fsencode(allowlist), b'ordinaryoperator') == 1
-    allowlist.unlink()
-    assert library.access_operator_lookup(os.fsencode(allowlist), b'ordinaryoperator') == 0
-    allowlist.write_text('fixtureadmin\n')
-    allowlist.chmod(0o600)
-    linked = root / 'access-admin-symlink'
-    linked.symlink_to(allowlist.name)
-    assert not library.access_operator_allowed(os.fsencode(linked), b'fixtureadmin')
-    print('PASS root-managed canonical account allowlist and fail-closed permissions')

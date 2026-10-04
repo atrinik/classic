@@ -425,9 +425,10 @@ for registry, persistence, event, privacy, and analytics semantics.
  invocation requires the existing QUIC identity and exits before listeners,
  plugins or publication. Remove that setting before normal startup. Root local
  administration can issue the first code while
- the protected server remains locked. In-game administrators must appear in
- the root-managed `access_admin_accounts` file; general OP grants do not confer
- token administration. Codes appear only in the private issuance result and
+ the protected server remains locked. In-game administration uses the current
+ character’s existing `/cmd_permission` grant for `access`; `[OP]` grants it
+ automatically. Access policy/store settings remain startup-only and cannot
+ be changed through `/config`. Codes appear only in the private issuance result and
  can be deliberately copied by their issuer. Never put them in ordinary chat,
  configuration, command lines or logs.
 
