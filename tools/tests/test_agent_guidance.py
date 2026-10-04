@@ -57,7 +57,7 @@ class AgentGuidanceTests(unittest.TestCase):
     def test_external_skill_provider_contract_is_pinned_offline(self) -> None:
         provider = json.loads((ROOT / ".agents/skill-provider.json").read_text(encoding="utf-8"))
         self.assertEqual(provider["schema_version"], 1)
-        self.assertEqual(provider["repository"], "https://github.com/atrinik/codex-integration")
+        self.assertEqual(provider["repository"], "https://github.com/atrinik/agent-integrations")
         self.assertRegex(provider["revision"], r"^[0-9a-f]{40}$")
         self.assertNotEqual(provider["revision"], "0" * 40)
         self.assertEqual(provider["marketplace"], "atrinik")
