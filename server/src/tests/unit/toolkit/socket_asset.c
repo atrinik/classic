@@ -1298,7 +1298,7 @@ START_TEST(test_metaserver_rendezvous_retry_policy) {
     metaserver_rendezvous_headers_t headers = {0};
     char status[] = "HTTP/1.1 429 Too Many Requests\r\n";
     char retry[] = "Retry-After: 120\r\n";
-    char protocol[] = "Sec-WebSocket-Protocol: " RENDEZVOUS_INVITE_SUBPROTOCOL "\r\n";
+    char protocol[] = "Sec-WebSocket-Protocol: " RENDEZVOUS_ACCESS_SUBPROTOCOL "\r\n";
     ck_assert(metaserver_rendezvous_protocol_allows(&headers, false));
     ck_assert(!metaserver_rendezvous_protocol_allows(&headers, true));
     ck_assert_uint_eq(metaserver_rendezvous_header(status, 1, strlen(status), &headers),
@@ -1734,8 +1734,8 @@ START_TEST(test_metaserver_rendezvous_ticket_isolation) {
                      METASERVER_RENDEZVOUS_AUTH_CLAIM_OK);
     ck_assert_ptr_nonnull(job_a);
     ck_assert_ptr_nonnull(job_b);
-    job_a->state = RENDEZVOUS_SERVER_AUTH_WAIT_PROOF;
-    job_b->state = RENDEZVOUS_SERVER_AUTH_WAIT_PROOF;
+    job_a->state = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
+    job_b->state = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
 
     ck_assert_int_eq(
         metaserver_rendezvous_auth_claim(jobs, arraysize(jobs), ticket_a, 300, &claimed),
@@ -1744,12 +1744,12 @@ START_TEST(test_metaserver_rendezvous_ticket_isolation) {
     ck_assert_ptr_eq(metaserver_rendezvous_auth_find(jobs,
                                                      arraysize(jobs),
                                                      ticket_b,
-                                                     RENDEZVOUS_SERVER_AUTH_WAIT_PROOF),
+                                                     RENDEZVOUS_SERVER_AUTH_AUTHORIZED),
                      job_b);
     ck_assert_ptr_null(metaserver_rendezvous_auth_find(jobs,
                                                        arraysize(jobs),
                                                        "malformed",
-                                                       RENDEZVOUS_SERVER_AUTH_WAIT_PROOF));
+                                                       RENDEZVOUS_SERVER_AUTH_AUTHORIZED));
     ck_assert_int_eq(
         metaserver_rendezvous_auth_claim(jobs, arraysize(jobs), "malformed", 300, &claimed),
         METASERVER_RENDEZVOUS_AUTH_CLAIM_INVALID);
@@ -1801,7 +1801,7 @@ END_TEST
 START_TEST(test_metaserver_generation_cancellation) {
     const rendezvous_server_auth_state_t stages[] = {
         RENDEZVOUS_SERVER_AUTH_NEW,
-        RENDEZVOUS_SERVER_AUTH_WAIT_PROOF,
+        RENDEZVOUS_SERVER_AUTH_AUTHORIZED,
         RENDEZVOUS_SERVER_AUTH_AUTHORIZED,
     };
     for (size_t i = 0; i < arraysize(stages); i++) {
@@ -1966,35 +1966,22 @@ START_TEST(test_socket_rendezvous_messages) {
     static const char ticket[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     static const char other_ticket[] =
         "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    rendezvous_invite_t invite = {
+    rendezvous_access_grant_t grant = {
         .server_id = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-        .invite_id = "00112233445566778899aabbccddeeff",
-        .expiry = UINT64_MAX,
+        .generation = "00112233445566778899aabbccddeeff",
+        .client_nonce = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        .grant = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        .expiry = (uint64_t)time(NULL) + 15,
     };
-    memset(invite.secret, 0x42, sizeof(invite.secret));
     socket_rendezvous_attempt_t *attempt =
-        socket_rendezvous_attempt_create(server_id, ticket, &invite, UINT64_MAX);
+        socket_rendezvous_attempt_create(server_id, ticket, &grant, UINT64_MAX);
     ck_assert_ptr_nonnull(attempt);
-
     char message[RENDEZVOUS_FRAME_MAX + 1U], proof_frame[RENDEZVOUS_FRAME_MAX + 1U];
+    char parsed_ticket[65];
     ck_assert(socket_rendezvous_attempt_auth_init(attempt, VS(message)));
-    char parsed_ticket[65], invite_id[33];
-    ck_assert(rendezvous_auth_init_parse(message, parsed_ticket, invite_id));
-    ck_assert_str_eq(parsed_ticket, ticket);
-    ck_assert_str_eq(invite_id, invite.invite_id);
-
-    unsigned char challenge[RENDEZVOUS_CHALLENGE_SIZE];
-    memset(challenge, 0x24, sizeof(challenge));
-    ck_assert(rendezvous_auth_challenge_render(VS(message), ticket, challenge));
-    rendezvous_server_auth_state_t server_auth = RENDEZVOUS_SERVER_AUTH_NEW;
-    ck_assert(rendezvous_server_auth_challenge_sent(&server_auth));
-    ck_assert_int_eq(
-        socket_rendezvous_attempt_challenge(attempt, message, strlen(message), VS(proof_frame)),
-        SOCKET_RENDEZVOUS_FRAME_CHALLENGE);
-    unsigned char proof[RENDEZVOUS_PROOF_SIZE];
-    ck_assert(rendezvous_auth_proof_parse(proof_frame, ticket, proof));
-    ck_assert(rendezvous_auth_result_render(VS(message), ticket, true));
-    ck_assert(rendezvous_server_auth_result_sent(&server_auth, true));
+    ck_assert_ptr_nonnull(strstr(message, "access_init"));
+    snprintf(VS(message), "{\"type\":\"access_ready\",\"version\":1}");
+    rendezvous_server_auth_state_t server_auth = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
     ck_assert_int_eq(socket_rendezvous_attempt_auth_result(attempt, message, strlen(message)),
                      SOCKET_RENDEZVOUS_FRAME_AUTHORIZED);
     ck_assert(socket_rendezvous_attempt_client_candidate(attempt, "192.0.2.10", 1730, VS(message)));
@@ -2068,9 +2055,7 @@ START_TEST(test_socket_rendezvous_messages) {
         &port,
         parsed_ticket));
     socket_rendezvous_attempt_destroy(attempt);
-    rendezvous_invite_cleanse(&invite);
-    OPENSSL_cleanse(challenge, sizeof(challenge));
-    OPENSSL_cleanse(proof, sizeof(proof));
+    rendezvous_access_grant_clear(&grant);
     OPENSSL_cleanse(proof_frame, sizeof(proof_frame));
 }
 END_TEST

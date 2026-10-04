@@ -41,6 +41,7 @@
 #include <server.h>
 #include <metaserver_internal.h>
 #include <openssl/rand.h>
+#include <openssl/evp.h>
 #include <curl/curl.h>
 #include <ctype.h>
 
@@ -93,7 +94,7 @@ typedef struct metaserver_public_snapshot {
     uint32_t players_count;
     uint16_t port;
     bool is_public;
-    bool password_required;
+    bool access_required;
 } metaserver_public_snapshot_t;
 
 static metaserver_public_snapshot_t published_snapshot;
@@ -101,114 +102,6 @@ static metaserver_public_snapshot_t attempted_snapshot;
 static metaserver_public_snapshot_t blocked_snapshot;
 static bool published_snapshot_valid;
 static bool blocked_snapshot_valid;
-static rendezvous_invite_t metaserver_invite;
-static bool metaserver_invite_active;
-static unsigned char metaserver_synthetic_invite_secret[RENDEZVOUS_SECRET_SIZE];
-
-#define METASERVER_INVITE_FILE "rendezvous-invite"
-
-static void metaserver_invite_path(char *path, size_t path_size) {
-    if (*settings.rendezvous_invite_file != '\0') {
-        snprintf(path, path_size, "%s", settings.rendezvous_invite_file);
-    } else {
-        snprintf(path, path_size, "%s/%s", settings.datapath, METASERVER_INVITE_FILE);
-    }
-}
-
-static bool metaserver_invite_read(const char *path, const char *server_id, bool *not_found) {
-    HARD_ASSERT(not_found != NULL);
-
-    *not_found = false;
-    char text[RENDEZVOUS_INVITE_TEXT_SIZE];
-    bool permissive_mode = false;
-    path_secret_error_t error = path_read_secret(path, VS(text), &permissive_mode);
-    *not_found = error == PATH_SECRET_NOT_FOUND;
-    bool ok = error == PATH_SECRET_OK && !permissive_mode &&
-              rendezvous_invite_parse(text, &metaserver_invite) &&
-              rendezvous_invite_valid_at(&metaserver_invite, server_id, (uint64_t)time(NULL));
-    OPENSSL_cleanse(text, sizeof(text));
-    if (!ok) {
-        rendezvous_invite_cleanse(&metaserver_invite);
-        if (*not_found) {
-            return false;
-        }
-        if (error != PATH_SECRET_OK) {
-            LOG(ERROR,
-                "Cannot load rendezvous invite file %s: %s",
-                path,
-                path_secret_error_string(error));
-        } else if (permissive_mode) {
-            LOG(ERROR,
-                "Rendezvous invite file %s must be accessible only to the current OS user",
-                path);
-        } else {
-            LOG(ERROR,
-                "Rendezvous invite file %s is malformed, expired, too long-lived, or belongs "
-                "to another server; delete it and restart to rotate",
-                path);
-        }
-    }
-    return ok;
-}
-
-static bool metaserver_invite_create(const char *path, const char *server_id) {
-    uint64_t now = (uint64_t)time(NULL);
-    char text[RENDEZVOUS_INVITE_TEXT_SIZE];
-    if (now > UINT64_MAX - RENDEZVOUS_INVITE_LIFETIME_MAX ||
-        !rendezvous_invite_generate(server_id,
-                                    now + RENDEZVOUS_INVITE_LIFETIME_MAX,
-                                    &metaserver_invite) ||
-        !rendezvous_invite_render(&metaserver_invite, VS(text))) {
-        goto out;
-    }
-
-    path_secret_create_result_t result = path_secret_create_atomic(path, text, strlen(text));
-    if (result == PATH_SECRET_CREATE_OK) {
-        LOG(SYSTEM,
-            "Created protected rendezvous invite file %s; share this file with invited players",
-            path);
-        OPENSSL_cleanse(text, sizeof(text));
-        return true;
-    }
-    if (result == PATH_SECRET_CREATE_EXISTS) {
-        bool not_found;
-        rendezvous_invite_cleanse(&metaserver_invite);
-        OPENSSL_cleanse(text, sizeof(text));
-        return metaserver_invite_read(path, server_id, &not_found);
-    }
-    LOG(ERROR, "Cannot securely create rendezvous invite file %s", path);
-
-out:
-    rendezvous_invite_cleanse(&metaserver_invite);
-    OPENSSL_cleanse(text, sizeof(text));
-    return false;
-}
-
-static bool metaserver_invite_init(void) {
-    rendezvous_invite_cleanse(&metaserver_invite);
-    OPENSSL_cleanse(metaserver_synthetic_invite_secret, sizeof(metaserver_synthetic_invite_secret));
-    metaserver_invite_active = false;
-    if (*settings.join_password == '\0') {
-        return true;
-    }
-    if (RAND_priv_bytes(VS(metaserver_synthetic_invite_secret)) != 1) {
-        return false;
-    }
-    char server_id[65], path[HUGE_BUF];
-    if (!socket_server_quic_identity(server_id)) {
-        return false;
-    }
-    metaserver_invite_path(VS(path));
-    bool not_found;
-    bool ok = metaserver_invite_read(path, server_id, &not_found);
-    if (!ok && not_found) {
-        ok = metaserver_invite_create(path, server_id);
-    }
-    metaserver_invite_active = ok;
-    OPENSSL_cleanse(server_id, sizeof(server_id));
-    return ok;
-}
-
 static bool metaserver_identity(char *identity, size_t identity_size) {
     HARD_ASSERT(identity_size >= 65);
     return socket_server_quic_identity(identity);
@@ -316,103 +209,6 @@ static CURLcode metaserver_rendezvous_ping(CURL *curl, uint64_t generation) {
     pthread_mutex_unlock(&rendezvous_disclosure_lock);
     return result == CURLE_OK && sent == 0 ? CURLE_OK
                                           : result == CURLE_OK ? CURLE_WRITE_ERROR : result;
-}
-
-static metaserver_rendezvous_frame_result_t
-metaserver_rendezvous_auth_init(CURL *curl,
-                                metaserver_rendezvous_auth_job_t *jobs,
-                                const char *ticket,
-                                const char *invite_id,
-                                uint64_t generation) {
-    metaserver_rendezvous_auth_job_t *job = NULL;
-    metaserver_rendezvous_auth_claim_t claim =
-        metaserver_rendezvous_auth_claim(jobs,
-                                         METASERVER_RENDEZVOUS_AUTH_JOBS_MAX,
-                                         ticket,
-                                         datetime_monotonic_ms() + RENDEZVOUS_AUTH_DEADLINE_MS,
-                                         &job);
-    if (claim != METASERVER_RENDEZVOUS_AUTH_CLAIM_OK) {
-        return METASERVER_RENDEZVOUS_FRAME_IGNORED;
-    }
-    if (RAND_priv_bytes(VS(job->challenge)) != 1) {
-        metaserver_rendezvous_auth_clear(job);
-        return METASERVER_RENDEZVOUS_FRAME_CONTROL_ERROR;
-    }
-
-    uint64_t now = (uint64_t)time(NULL);
-    job->known_invite =
-        metaserver_invite_active &&
-        rendezvous_invite_valid_at(&metaserver_invite, metaserver_invite.server_id, now) &&
-        CRYPTO_memcmp(invite_id, metaserver_invite.invite_id, RENDEZVOUS_INVITE_ID_HEX_SIZE) == 0;
-    if (job->known_invite) {
-        job->invite = metaserver_invite;
-    } else {
-        char server_id[65];
-        if (!socket_server_quic_identity(server_id)) {
-            metaserver_rendezvous_auth_clear(job);
-            return METASERVER_RENDEZVOUS_FRAME_CONTROL_ERROR;
-        }
-        snprintf(VS(job->invite.server_id), "%s", server_id);
-        snprintf(VS(job->invite.invite_id), "%s", invite_id);
-        memcpy(job->invite.secret, metaserver_synthetic_invite_secret, sizeof(job->invite.secret));
-        job->invite.expiry = now == UINT64_MAX ? now : now + 1U;
-        OPENSSL_cleanse(server_id, sizeof(server_id));
-    }
-    char response[RENDEZVOUS_FRAME_MAX + 1U];
-    metaserver_rendezvous_frame_result_t result = METASERVER_RENDEZVOUS_FRAME_CONTROL_ERROR;
-    if (rendezvous_auth_challenge_render(VS(response), ticket, job->challenge)) {
-        result = metaserver_rendezvous_send(curl, response, generation);
-        if (result == METASERVER_RENDEZVOUS_FRAME_HANDLED &&
-            !rendezvous_server_auth_challenge_sent(&job->state)) {
-            result = METASERVER_RENDEZVOUS_FRAME_CONTROL_ERROR;
-        }
-    }
-    OPENSSL_cleanse(response, sizeof(response));
-    if (result != METASERVER_RENDEZVOUS_FRAME_HANDLED) {
-        metaserver_rendezvous_auth_clear(job);
-    }
-    return result;
-}
-
-static metaserver_rendezvous_frame_result_t
-metaserver_rendezvous_auth_proof(CURL *curl,
-                                 metaserver_rendezvous_auth_job_t *jobs,
-                                 const char *message,
-                                 uint64_t generation) {
-    metaserver_rendezvous_auth_job_t *job = NULL;
-    unsigned char proof[RENDEZVOUS_PROOF_SIZE] = {0};
-    for (size_t i = 0; i < METASERVER_RENDEZVOUS_AUTH_JOBS_MAX; i++) {
-        if (jobs[i].active && jobs[i].state == RENDEZVOUS_SERVER_AUTH_WAIT_PROOF &&
-            rendezvous_auth_proof_parse(message, jobs[i].ticket, proof)) {
-            job = &jobs[i];
-            break;
-        }
-    }
-    if (job == NULL) {
-        OPENSSL_cleanse(proof, sizeof(proof));
-        return METASERVER_RENDEZVOUS_FRAME_IGNORED;
-    }
-
-    bool proof_matches =
-        rendezvous_invite_proof_verify(&job->invite, job->ticket, job->challenge, proof);
-    bool authorized =
-        proof_matches && job->known_invite && datetime_monotonic_ms() < job->deadline_ms &&
-        rendezvous_invite_valid_at(&job->invite, job->invite.server_id, (uint64_t)time(NULL));
-    char response[RENDEZVOUS_FRAME_MAX + 1U];
-    metaserver_rendezvous_frame_result_t result = METASERVER_RENDEZVOUS_FRAME_CONTROL_ERROR;
-    if (rendezvous_auth_result_render(VS(response), job->ticket, authorized)) {
-        result = metaserver_rendezvous_send(curl, response, generation);
-    }
-    OPENSSL_cleanse(proof, sizeof(proof));
-    OPENSSL_cleanse(response, sizeof(response));
-    OPENSSL_cleanse(&job->invite, sizeof(job->invite));
-    OPENSSL_cleanse(job->challenge, sizeof(job->challenge));
-    job->known_invite = false;
-    if (result != METASERVER_RENDEZVOUS_FRAME_HANDLED ||
-        !rendezvous_server_auth_result_sent(&job->state, authorized) || !authorized) {
-        metaserver_rendezvous_auth_clear(job);
-    }
-    return result;
 }
 
 static metaserver_rendezvous_frame_result_t
@@ -598,12 +394,12 @@ static void *metaserver_rendezvous_thread(void *data) {
             headers = curl_slist_append(NULL, authorization);
             if (headers == NULL) {
                 LOG(ERROR, "Cannot allocate rendezvous request headers");
-            } else if (args->authorization_required) {
+            } else {
                 struct curl_slist *protocol_headers =
                     curl_slist_append(headers,
-                                      "Sec-WebSocket-Protocol: " RENDEZVOUS_INVITE_SUBPROTOCOL);
+                                      "Sec-WebSocket-Protocol: " RENDEZVOUS_ACCESS_SUBPROTOCOL);
                 if (protocol_headers == NULL) {
-                    LOG(ERROR, "Cannot allocate rendezvous invite request headers");
+                    LOG(ERROR, "Cannot allocate rendezvous access request headers");
                     curl_slist_free_all(headers);
                     headers = NULL;
                 } else {
@@ -639,8 +435,7 @@ static void *metaserver_rendezvous_thread(void *data) {
             retry_after_seconds =
                 response_headers.has_retry_after ? response_headers.retry_after_seconds : 0;
             bool protocol_valid =
-                metaserver_rendezvous_protocol_allows(&response_headers,
-                                                      args->authorization_required);
+                metaserver_rendezvous_protocol_allows(&response_headers, true);
             bool connected = result == CURLE_OK && http_code == 101 && protocol_valid;
             if (!connected) {
                 retryable =
@@ -657,7 +452,7 @@ static void *metaserver_rendezvous_thread(void *data) {
                         "Rendezvous connection failed: passwordless control selected an "
                         "unexpected subprotocol");
                 } else {
-                    LOG(ERROR, "Rendezvous connection failed: invite subprotocol was not selected");
+                    LOG(ERROR, "Rendezvous connection failed: access subprotocol was not selected");
                 }
             } else {
                 uint64_t connected_at = datetime_monotonic_ms();
@@ -750,53 +545,23 @@ static void *metaserver_rendezvous_thread(void *data) {
                         break;
                     }
 
-                    char host[65], ticket[65], invite_id[33];
+                    char host[65], ticket[65];
                     uint16_t port;
-                    if (args->authorization_required &&
-                        rendezvous_auth_init_parse(message, ticket, invite_id)) {
-                        frame_result = metaserver_rendezvous_auth_init(curl,
-                                                                       auth_jobs,
-                                                                       ticket,
-                                                                       invite_id,
-                                                                       args->generation);
-                        stop_control = frame_result == METASERVER_RENDEZVOUS_FRAME_CONTROL_ERROR ||
-                                       frame_result == METASERVER_RENDEZVOUS_FRAME_CANCELLED;
-                    } else if (args->authorization_required &&
-                               metaserver_rendezvous_message_type(message, "auth_proof")) {
-                        frame_result = metaserver_rendezvous_auth_proof(curl,
-                                                                        auth_jobs,
-                                                                        message,
-                                                                        args->generation);
-                        stop_control = frame_result == METASERVER_RENDEZVOUS_FRAME_CONTROL_ERROR ||
-                                       frame_result == METASERVER_RENDEZVOUS_FRAME_CANCELLED;
-                    } else {
+                    {
                         bool authorization_required = args->authorization_required;
                         metaserver_rendezvous_auth_job_t *authorized = NULL;
-                        bool candidate_parsed = false;
-                        if (authorization_required) {
-                            for (size_t i = 0; i < arraysize(auth_jobs); i++) {
-                                if (auth_jobs[i].active &&
-                                    socket_rendezvous_client_candidate_parse(message,
-                                                                             auth_jobs[i].ticket,
-                                                                             true,
-                                                                             auth_jobs[i].state,
-                                                                             VS(host),
-                                                                             &port,
-                                                                             ticket)) {
-                                    authorized = &auth_jobs[i];
-                                    candidate_parsed = true;
-                                    break;
-                                }
-                            }
-                        } else {
-                            candidate_parsed =
-                                socket_rendezvous_client_candidate_parse(message,
-                                                                         NULL,
-                                                                         false,
-                                                                         RENDEZVOUS_SERVER_AUTH_NEW,
-                                                                         VS(host),
-                                                                         &port,
-                                                                         ticket);
+                        /* The authenticated control receives candidates only after
+                         * the metaserver atomically redeems the bound grant. Keep
+                         * a bounded consumed-ticket set on this control generation. */
+                        bool candidate_parsed = socket_rendezvous_client_candidate_parse(
+                            message, NULL, false, RENDEZVOUS_SERVER_AUTH_NEW,
+                            VS(host), &port, ticket);
+                        if (candidate_parsed) {
+                            candidate_parsed = metaserver_rendezvous_auth_claim(
+                                auth_jobs, arraysize(auth_jobs), ticket,
+                                datetime_monotonic_ms() + 15000U, &authorized) ==
+                                METASERVER_RENDEZVOUS_AUTH_CLAIM_OK;
+                            if (candidate_parsed) authorized->state = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
                         }
                         if (!candidate_parsed &&
                             (metaserver_rendezvous_message_type(message, "auth_init") ||
@@ -853,7 +618,7 @@ static void *metaserver_rendezvous_thread(void *data) {
                                 if (!rendezvous_server_auth_candidate_consume(&authorized->state)) {
                                     LOG(ERROR, "Cannot consume an authorized rendezvous ticket");
                                 }
-                                metaserver_rendezvous_auth_clear(authorized);
+                                /* Retain consumed ticket until its bounded expiry. */
                             }
                         }
                     }
@@ -915,7 +680,7 @@ static void *metaserver_rendezvous_thread(void *data) {
 
 static bool metaserver_rendezvous_url(char *url, size_t url_size) {
     char quic_fingerprint[65];
-    if (!settings.server_public || !socket_server_quic_identity(quic_fingerprint)) {
+    if ((!settings.server_public && !settings.access_required) || !socket_server_quic_identity(quic_fingerprint)) {
         return false;
     }
 
@@ -929,7 +694,7 @@ static bool metaserver_rendezvous_url(char *url, size_t url_size) {
 static void metaserver_rendezvous_start(const char *token) {
     rendezvous_args_t *args = xcalloc(1, sizeof(*args));
     snprintf(VS(args->token), "%s", token);
-    args->authorization_required = *settings.join_password != '\0';
+    args->authorization_required = settings.access_required;
     if (!metaserver_rendezvous_url(VS(args->url))) {
         OPENSSL_cleanse(args->token, sizeof(args->token));
         free(args);
@@ -978,7 +743,7 @@ static bool metaserver_rendezvous_response(curl_request_t *request) {
     if (!metaserver_rendezvous_token_parse(body, body_size, value)) {
         return false;
     }
-    if (settings.server_public) {
+    if (settings.server_public || settings.access_required) {
         metaserver_rendezvous_start(value);
     } else {
         metaserver_rendezvous_stop();
@@ -1031,7 +796,7 @@ static void metaserver_public_snapshot(metaserver_public_snapshot_t *snapshot) {
         snapshot->port = settings.port_quic;
     }
     snapshot->is_public = settings.server_public;
-    snapshot->password_required = *settings.join_password != '\0';
+    snapshot->access_required = settings.access_required;
     for (player *pl = first_player; pl != NULL; pl = pl->next) {
         snapshot->players_count++;
     }
@@ -1043,7 +808,7 @@ static bool metaserver_public_snapshot_equal(const metaserver_public_snapshot_t 
     HARD_ASSERT(rhs != NULL);
 
     return lhs->players_count == rhs->players_count && lhs->port == rhs->port &&
-           lhs->is_public == rhs->is_public && lhs->password_required == rhs->password_required &&
+           lhs->is_public == rhs->is_public && lhs->access_required == rhs->access_required &&
            strcmp(lhs->name, rhs->name) == 0 && strcmp(lhs->description, rhs->description) == 0 &&
            strcmp(lhs->hostname, rhs->hostname) == 0;
 }
@@ -1099,9 +864,6 @@ void metaserver_init(void) {
     rendezvous_generation = 0;
     metaserver_attempt_budget_init(&rendezvous_attempt_budget, server_monotonic_now());
 #endif
-    if (!metaserver_invite_init()) {
-        LOG(ERROR, "Protected rendezvous is disabled until the invite capability problem is fixed");
-    }
     metaserver_service();
 }
 
@@ -1146,9 +908,6 @@ void metaserver_deinit(void) {
     pthread_mutex_destroy(&rendezvous_disclosure_lock);
 #endif
 
-    rendezvous_invite_cleanse(&metaserver_invite);
-    metaserver_invite_active = false;
-    OPENSSL_cleanse(metaserver_synthetic_invite_secret, sizeof(metaserver_synthetic_invite_secret));
 
     pthread_mutex_lock(&request_lock);
     metaserver_initialized = false;
@@ -1246,7 +1005,7 @@ static void metaserver_update_request_locked(curl_request_t *request) {
         blocked_snapshot_valid = false;
         metaserver_publish_cadence_succeeded(&publish_cadence,
                                              server_monotonic_now(),
-                                             attempted_snapshot.is_public,
+                                             true,
                                              settings.metaserver_heartbeat,
                                              metaserver_publish_random());
         pthread_mutex_lock(&stats_lock);
@@ -1332,7 +1091,7 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
         .version = PACKAGE_VERSION,
         .text_comment = settings.server_desc,
         .is_public = settings.server_public,
-        .password_required = *settings.join_password != '\0',
+        .access_required = settings.access_required,
         .hostname = *settings.metaserver_hostname != '\0' ? settings.metaserver_hostname : NULL,
         .port = *settings.metaserver_hostname != '\0' ? settings.port_quic : 0,
     };
@@ -1360,7 +1119,7 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
     time_t now = time(NULL);
     if (now < 0 ||
         !metaserver_url_publish(settings.metaserver_publish_origin, "/", VS(url), VS(authority)) ||
-        !metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+        !metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                     authority,
                                     server_id,
                                     sequence,
@@ -1416,7 +1175,7 @@ out:
 }
 /** Mark public metaserver state dirty and debounce a new observation. */
 void metaserver_info_update(void) {
-    if (!metaserver_initialized || !settings.server_public) {
+    if (!metaserver_initialized) {
         return;
     }
 
@@ -1527,4 +1286,179 @@ void metaserver_stats(char *buf, size_t size) {
 
     snprintfcat(buf, size, "\n");
     pthread_mutex_unlock(&stats_lock);
+}
+
+/* Private route bodies never enter the public publication or its diagnostics. */
+typedef struct access_route_response {
+    char body[1025];
+    size_t size;
+} access_route_response_t;
+
+static size_t metaserver_access_route_body(char *data, size_t size, size_t count, void *context) {
+    access_route_response_t *response = context;
+    if (size != 0 && count > SIZE_MAX / size) return 0;
+    size_t n = size * count;
+    if (n > sizeof(response->body) - 1 - response->size) return 0;
+    memcpy(response->body + response->size, data, n);
+    response->size += n;
+    response->body[response->size] = 0;
+    return n;
+}
+
+static bool metaserver_access_request_id(const char *request, const char *operation, char out[33]) {
+    /* Independent business IDs per phase, stable across network retries. */
+    static const char domain[] = "atrinik-access-native-route-request-v1";
+    unsigned char digest[32];
+    unsigned int n = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    bool ok = ctx != NULL && EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+              EVP_DigestUpdate(ctx, domain, sizeof(domain)) == 1 &&
+              EVP_DigestUpdate(ctx, request, 32) == 1 &&
+              EVP_DigestUpdate(ctx, operation, strlen(operation)) == 1 &&
+              EVP_DigestFinal_ex(ctx, digest, &n) == 1 && n == 32 &&
+              string_tohex(digest, 16, out, 33, false) == 32;
+    EVP_MD_CTX_free(ctx);
+    OPENSSL_cleanse(digest, sizeof(digest));
+    if (ok) string_tolower(out);
+    return ok;
+}
+
+static access_outcome_t metaserver_access_operation(const access_route_t *route,
+                                                     const char *operation,
+                                                     char reservation[33],
+                                                     uint64_t deadline_ms) {
+    access_outcome_t outcome = ACCESS_PENDING;
+    char server_id[65], request_id[33], index[65], expiry[24] = "null", handle[36] = "null";
+    char body[4097], signature[METASERVER_PUBLISH_SIGNATURE_HEADER_MAX], url[MAX_BUF], authority[MAX_BUF];
+    unsigned char nonce[16];
+    metaserver_publisher_components_t components;
+    metaserver_publisher_identity_t *identity = NULL;
+    CURL *curl = NULL;
+    struct curl_slist *headers = NULL;
+    access_route_response_t response = {0};
+    uint64_t sequence = 0;
+    uint64_t now_ms = datetime_monotonic_ms();
+    time_t now = time(NULL);
+    if (now < 0 || now_ms >= deadline_ms || !metaserver_identity(VS(server_id)) ||
+        !string_is_hex_fixed(route->request_id, 32, true) ||
+        !string_is_hex_fixed(route->token.token_id, 32, true) || route->token.revision == 0 ||
+        !metaserver_access_request_id(route->request_id, operation, request_id) ||
+        string_tohex(route->index, 32, VS(index), false) != 64 || RAND_bytes(nonce, 16) != 1 ||
+        !metaserver_url_access(settings.metaserver_publish_origin, NULL, false, VS(url))) goto out;
+    string_tolower(index);
+    if (route->has_expiry) {
+        if (route->expires_at <= 0) goto out;
+        snprintf(VS(expiry), "\"%" PRId64 "\"", route->expires_at);
+    }
+    if (reservation[0] != 0) {
+        if (!string_is_hex_fixed(reservation, 32, true)) goto out;
+        snprintf(VS(handle), "\"%s\"", reservation);
+    }
+    identity = socket_server_quic_publisher_identity();
+    if (identity == NULL) goto out;
+    int n = snprintf(VS(body),
+        "{\"schema\":\"atrinik-access-route-v1\",\"profile\":\"classic\",\"serverId\":\"%s\","
+        "\"certificate\":\"%s\",\"operation\":\"%s\",\"requestId\":\"%s\",\"tokenId\":\"%s\","
+        "\"tokenRevision\":\"%" PRIu64 "\",\"index\":\"%s\",\"reservationId\":%s,\"expiresAt\":%s}",
+        server_id, metaserver_publisher_identity_certificate(identity), operation, request_id,
+        route->token.token_id, route->token.revision, index, handle, expiry);
+    if (n <= 0 || (size_t)n >= sizeof(body)) goto out;
+    /* Publication/recovery use request_lock around the same durable lineage. */
+    pthread_mutex_lock(&request_lock);
+    metaserver_publish_sequence_result_t seq = metaserver_publish_sequence_reserve(
+        settings.datapath, server_id, 1, &sequence);
+    pthread_mutex_unlock(&request_lock);
+    if (seq != METASERVER_PUBLISH_SEQUENCE_OK ||
+        !metaserver_url_publish(settings.metaserver_publish_origin, "/", VS(url), VS(authority)) ||
+        !metaserver_publisher_build(METASERVER_PUBLISHER_ACCESS_CLASSIC_V1, authority,
+            server_id, sequence, nonce, (uint64_t)now, body, (size_t)n, &components) ||
+        !metaserver_publisher_identity_sign(identity, components.signature_base, signature) ||
+        !metaserver_url_publish(settings.metaserver_publish_origin, components.path, VS(url), VS(authority))) goto out;
+    const char *names[] = {"Content-Type", "Content-Digest", "Signature-Input", "Signature", "Atrinik-Server-ID", "Atrinik-Publish-Sequence"};
+    char sequence_text[21];
+    snprintf(VS(sequence_text), "%" PRIu64, sequence);
+    const char *values[] = {"application/json", components.content_digest, components.signature_input, signature, server_id, sequence_text};
+    for (size_t i = 0; i < arraysize(names); i++) {
+        char line[1200];
+        int length = snprintf(VS(line), "%s: %s", names[i], values[i]);
+        if (length <= 0 || (size_t)length >= sizeof(line)) goto out;
+        struct curl_slist *next = curl_slist_append(headers, line);
+        if (next == NULL) goto out;
+        headers = next;
+    }
+    now_ms = datetime_monotonic_ms();
+    if (now_ms >= deadline_ms) goto out;
+    curl = curl_easy_init();
+    if (curl == NULL) goto out;
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)n);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_NETRC, CURL_NETRC_IGNORED);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)MIN(deadline_ms - now_ms, 14000U));
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, metaserver_access_route_body);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+#ifdef WIN32
+    curl_easy_setopt(curl, CURLOPT_CAINFO, "ca-bundle.crt");
+#endif
+    CURLcode result = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    if (result != CURLE_OK || status != 200 || memchr(response.body, 0, response.size) != NULL) goto out;
+    char reply_id[33], reply_outcome[16], reply_handle[36], reply_expiry[24], revision[21];
+    int consumed = 0;
+    if (sscanf(response.body,
+        "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":\"%32[0-9a-f]\","
+        "\"outcome\":\"%15[a-z_]\",\"reservationId\":%35[^,],\"reservationExpiresAt\":%23[^,],"
+        "\"tokenRevision\":\"%20[0-9]\"}%n",
+        reply_id, reply_outcome, reply_handle, reply_expiry, revision, &consumed) != 5 ||
+        consumed < 0 || (size_t)consumed != response.size || strcmp(reply_id, request_id) != 0) goto out;
+    char expected_revision[21];
+    snprintf(VS(expected_revision), "%" PRIu64, route->token.revision);
+    if (strcmp(revision, expected_revision) != 0) goto out;
+    bool null_handle = strcmp(reply_handle, "null") == 0;
+    if (!null_handle && (strlen(reply_handle) != 34 || reply_handle[0] != '"' || reply_handle[33] != '"')) goto out;
+    if (!null_handle) { reply_handle[33] = 0; if (!string_is_hex_fixed(reply_handle + 1, 32, true)) goto out; }
+    if (strcmp(reply_expiry, "null") != 0) {
+        size_t length = strlen(reply_expiry);
+        uint64_t expires;
+        if (length < 3 || reply_expiry[0] != '"' || reply_expiry[length - 1] != '"') goto out;
+        reply_expiry[length - 1] = 0;
+        if (reply_expiry[1] < '1' || reply_expiry[1] > '9' ||
+            !string_parse_uint64(reply_expiry + 1, 10, 1, INT64_MAX, &expires)) goto out;
+        if (strcmp(operation, "reserve") == 0 && (expires <= (uint64_t)now || expires - (uint64_t)now > 60)) goto out;
+    } else if (strcmp(operation, "reserve") == 0) goto out;
+    if (strcmp(reply_outcome, "conflict") == 0) { outcome = ACCESS_CONFLICT; goto out; }
+    const char *wanted = strcmp(operation, "reserve") == 0 ? "reserved" : strcmp(operation, "activate") == 0 ? "active" : "revoked";
+    if (strcmp(reply_outcome, wanted) != 0) goto out;
+    if (strcmp(operation, "reserve") == 0) {
+        if (null_handle) goto out;
+        memcpy(reservation, reply_handle + 1, 33);
+    } else if (strcmp(operation, "activate") == 0 && (null_handle || strcmp(reservation, reply_handle + 1) != 0)) goto out;
+    outcome = ACCESS_COMMITTED;
+out:
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(headers);
+    metaserver_publisher_identity_free(identity);
+    OPENSSL_cleanse(body, sizeof(body));
+    OPENSSL_cleanse(index, sizeof(index));
+    OPENSSL_cleanse(&response, sizeof(response));
+    return outcome;
+}
+
+access_outcome_t metaserver_access_route(void *context, const access_route_t *route) {
+    (void)context;
+    if (route == NULL || !metaserver_initialized || !metaserver_enabled()) return ACCESS_UNAVAILABLE;
+    char reservation[33] = {0};
+    uint64_t now = datetime_monotonic_ms();
+    if (now > UINT64_MAX - 29000U) return ACCESS_UNAVAILABLE;
+    uint64_t deadline = now + 29000U;
+    access_outcome_t outcome = metaserver_access_operation(route, route->revoke ? "revoke" : "reserve", reservation, deadline);
+    if (outcome == ACCESS_COMMITTED && !route->revoke) outcome = metaserver_access_operation(route, "activate", reservation, deadline);
+    OPENSSL_cleanse(reservation, sizeof(reservation));
+    return outcome;
 }

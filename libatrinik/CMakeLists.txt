@@ -524,6 +524,20 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     endif ()
     add_test(NAME libatrinik-access-code COMMAND libatrinik-access-code)
 
+    add_executable(libatrinik-access-resolve tests/access_resolve.c)
+    atrinik_configure_target(libatrinik-access-resolve)
+    target_link_libraries(libatrinik-access-resolve PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-access-resolve COMMAND libatrinik-access-resolve)
+
+    add_executable(libatrinik-sensitive-packet tests/sensitive_packet.c)
+    atrinik_configure_target(libatrinik-sensitive-packet)
+    target_link_libraries(libatrinik-sensitive-packet PRIVATE Atrinik::Core)
+    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_definitions(libatrinik-sensitive-packet PRIVATE PACKET_TEST_FREE)
+        target_link_options(libatrinik-sensitive-packet PRIVATE "-Wl,--wrap=free")
+    endif ()
+    add_test(NAME libatrinik-sensitive-packet COMMAND libatrinik-sensitive-packet)
+
     add_executable(libatrinik-smoke tests/smoke.c)
     atrinik_configure_target(libatrinik-smoke)
     target_link_libraries(libatrinik-smoke PRIVATE Atrinik::Core)
@@ -579,7 +593,7 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-metaserver-publisher PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-metaserver-publisher
         COMMAND libatrinik-metaserver-publisher
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-publisher-v1.json")
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-classic-publisher-v3.json")
 
     add_executable(libatrinik-metaserver-url tests/metaserver_url.c)
     atrinik_configure_target(libatrinik-metaserver-url)

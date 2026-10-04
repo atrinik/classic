@@ -233,7 +233,7 @@ static void fixture_vector_verify(const char *json,
     require(string_parse_uint64(sequence_text, 10, 1, UINT64_MAX, &sequence));
     require(string_decode_hex_fixed(nonce_hex, sizeof(nonce) * 2U, true, VS(nonce)));
     metaserver_publisher_components_t components;
-    require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                        fixture->authority,
                                        fixture->server_id,
                                        sequence,
@@ -468,7 +468,7 @@ int main(int argc, char **argv) {
         .version = "5.7.0",
         .text_comment = "Fixture",
         .is_public = true,
-        .password_required = true,
+        .access_required = true,
     };
     require(metaserver_publisher_classic_body(&payload, body, &body_size));
     require(body_size == strlen(fixture.body));
@@ -488,7 +488,7 @@ int main(int argc, char **argv) {
     payload.port = 1730;
     require(metaserver_publisher_classic_body(&payload, body, &body_size));
     require(strstr(body,
-                   "\"passwordRequired\":true,\"hostname\":\"play.example.net\",\"port\":1730}") !=
+                   "\"accessRequired\":true,\"hostname\":\"play.example.net\",\"port\":1730}") !=
             NULL);
     payload.hostname = "192.0.2.1";
     require(!metaserver_publisher_classic_body(&payload, body, &body_size));
@@ -501,7 +501,7 @@ int main(int argc, char **argv) {
     payload.port = 0;
 
     metaserver_publisher_components_t classic;
-    require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                        fixture.authority,
                                        fixture.server_id,
                                        sequence,
@@ -535,7 +535,7 @@ int main(int argc, char **argv) {
     }
 
     metaserver_publisher_components_t game;
-    require(metaserver_publisher_build(METASERVER_PUBLISHER_GAME_V1,
+    require(metaserver_publisher_build(METASERVER_PUBLISHER_GAME_V2,
                                        fixture.authority,
                                        fixture.server_id,
                                        sequence,
@@ -567,7 +567,7 @@ int main(int argc, char **argv) {
                                          fixture.server_id,
                                          classic.signature_base,
                                          signature));
-    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                         "Publish.meta.atrinik.org",
                                         fixture.server_id,
                                         sequence,
@@ -576,7 +576,7 @@ int main(int argc, char **argv) {
                                         fixture.body,
                                         strlen(fixture.body),
                                         &classic));
-    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                         fixture.authority,
                                         fixture.server_id,
                                         0,
@@ -586,7 +586,7 @@ int main(int argc, char **argv) {
                                         strlen(fixture.body),
                                         &classic));
     memset(nonce, 0, sizeof(nonce));
-    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                         fixture.authority,
                                         fixture.server_id,
                                         sequence,

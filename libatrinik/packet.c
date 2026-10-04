@@ -527,7 +527,7 @@ void packet_writer_write_bytes(packet_struct *packet, const uint8_t *data, size_
     packet_writer_write_bytes_internal(packet, data, len);
 
 #ifndef NDEBUG
-    if (packet->len != old_len) {
+    if (!packet->sensitive && packet->len != old_len) {
         char *hex;
 
         hex = xmalloc(sizeof(*hex) * (len * 3 + 1));

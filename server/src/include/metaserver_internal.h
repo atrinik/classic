@@ -15,6 +15,7 @@
 #include <toolkit/curl.h>
 #include <toolkit/rendezvous.h>
 #include <server_clock.h>
+#include <access_tokens.h>
 #include <curl/curl.h>
 
 #define METASERVER_RENDEZVOUS_AUTH_JOBS_MAX 64U
@@ -64,13 +65,10 @@ typedef struct metaserver_rendezvous_headers {
 } metaserver_rendezvous_headers_t;
 
 typedef struct metaserver_rendezvous_auth_job {
-    rendezvous_invite_t invite;
-    unsigned char challenge[RENDEZVOUS_CHALLENGE_SIZE];
     char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
     uint64_t deadline_ms;
     rendezvous_server_auth_state_t state;
     bool active;
-    bool known_invite;
 } metaserver_rendezvous_auth_job_t;
 
 typedef enum metaserver_rendezvous_auth_claim {
@@ -166,5 +164,8 @@ bool metaserver_public_endpoint_from_config(const char *configured_host,
                                             char *published_host,
                                             size_t published_host_size,
                                             uint16_t *published_port);
+
+/* Serialized access worker only; bounded remote route mutation. */
+access_outcome_t metaserver_access_route(void *context, const access_route_t *route);
 
 #endif
