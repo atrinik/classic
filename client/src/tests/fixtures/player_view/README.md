@@ -43,8 +43,12 @@ Regenerate its closed manifest and snapshot from the client directory with
 `atrinik --gpu-player-view src/tests/fixtures/player_view/edge-lighting.xml` on
 a qualified GPU lane. Its `type="edge-lighting"` JSONL rows report the full and
 retained phases, each marker's submitted foot and decoded sample row, structural
-and adjacent-ground probes, the four contributing light vertices, and asset
-counters. A passing diagnostic establishes correct owning-cell sampling,
+and adjacent-ground probes, and asset counters. Separate
+`type="edge-lighting-vertex"` rows describe the four contributing light vertices
+through the visibility-redacted tile diagnostic. `lighting_key`, `albedo`, and
+`final_rgba` come from GPU readback; `sample_y` decodes the uploaded row selected
+by that key, and `cpu_reconstructed_light` reconstructs its light from the
+uploaded CPU row/span mirror. A passing diagnostic establishes correct owning-cell sampling,
 vertical marker consistency, no pending assets, and identical full/retained
 results. The zero expected-pixels hash requests measured diagnostic evidence
 and is not a calibrated cross-backend golden.

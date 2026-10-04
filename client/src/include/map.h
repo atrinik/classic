@@ -658,6 +658,10 @@ extern void widget_map_animation_test_death_texture_set(SDL_Surface *texture);
 extern bool widget_map_visibility_test(void);
 /** Verify actor relocation, identity, and fade behavior through production MAP2 and drawing. */
 extern bool widget_map_actor_relocation_test(void);
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+/** Probe static foot-row versus projected-ground lighting in the closed edge fixture. */
+extern bool widget_map_edge_lighting_test(void);
+#endif
 /** Toggle the centered transient cohort for retained insertion/deletion evidence. */
 extern bool widget_map_retained_visibility_test_set(bool visible);
 /** Set the synthetic pointer owner used by the cursor redraw benchmark. */

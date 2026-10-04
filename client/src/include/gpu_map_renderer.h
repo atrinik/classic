@@ -71,6 +71,8 @@ bool gpu_map_renderer_wait_idle(void);
 typedef struct gpu_map_renderer_probe {
     uint8_t albedo[4];
     uint32_t lighting_key;
+    /** Uploaded row selected by the actual GPU owner key. */
+    int32_t sample_y;
     uint16_t light[4];
     /** Post-tone ground multiplier; 255 for commands without coverage. */
     uint8_t ground_coverage;

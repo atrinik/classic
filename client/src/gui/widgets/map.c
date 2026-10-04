@@ -9488,6 +9488,137 @@ done:
     return success;
 }
 
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+/** Report only values allowed by the existing visibility-redacted diagnostic. */
+static void map_edge_lighting_vertex(const char *phase, int marker, int x, int y) {
+    map_lighting_diagnostic_t value;
+    bool available = map_lighting_diagnostic_get(0, x, y, 0, true, &value);
+    printf("{\"type\":\"edge-lighting-vertex\",\"phase\":\"%s\",\"marker\":%d,"
+           "\"tile\":[%d,%d],\"available\":%s,\"weight\":%u",
+           phase, marker, x, y, available ? "true" : "false",
+           (unsigned)map_visibility_window_weight(x, y, map_width, map_height));
+    if (available) {
+        printf(",\"visible\":%s,\"fogged\":%s,\"remembered\":%s,\"reasons\":%u",
+               value.visible ? "true" : "false", value.fogged ? "true" : "false",
+               value.remembered ? "true" : "false", value.reasons);
+        if (value.visible && !value.fogged) {
+            printf(",\"received\":%s,\"received_scalar\":%u,\"received_rgb\":[%u,%u,%u],"
+                   "\"working_available\":%s,\"working_scalar\":%u,\"working_rgb\":[%u,%u,%u],"
+                   "\"presentation_available\":%s,\"presentation_rgb\":[%u,%u,%u]",
+                   value.received ? "true" : "false", value.received_scalar,
+                   value.received_rgb[0], value.received_rgb[1], value.received_rgb[2],
+                   value.working_available ? "true" : "false", value.working_scalar,
+                   value.working_rgb[0], value.working_rgb[1], value.working_rgb[2],
+                   value.presentation_available ? "true" : "false",
+                   value.presentation_rgb[0], value.presentation_rgb[1], value.presentation_rgb[2]);
+        }
+    }
+    printf("}\n");
+}
+
+/** Closed fixture only: compare fixed sprite-foot and projected ground rows. */
+bool widget_map_edge_lighting_test(void) {
+    static const int markers[3][2] = {{3, 16}, {8, 15}, {13, 14}};
+    static const int vertices[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    static const uint8_t marker_albedo[4] = {255, 192, 128, 255};
+    static const uint8_t ground_albedo[4] = {192, 192, 192, 255};
+    gpu_map_renderer_probe_t baseline[3][3];
+    if (map_width != 17 || map_height != 17 || cur_widget[MAP_ID] == NULL ||
+        cur_widget[MAP_ID]->surface == NULL || image_get_sprite(3) == NULL) {
+        return SDL_SetError("edge lighting fixture requires its primary surface and marker face");
+    }
+    SDL_Surface *surface = cur_widget[MAP_ID]->surface;
+    for (int phase = 0; phase < 2; phase++) {
+        const char *phase_name = phase == 0 ? "full" : "retained";
+        map_redraw_consume();
+        map_redraw_request(phase == 0 ? MAP_REDRAW_REASON_MAP_PACKET : MAP_REDRAW_REASON_ANIMATION);
+        map_benchmark_statistics_reset();
+        map_draw_map(surface);
+        map_benchmark_statistics_t statistics;
+        map_benchmark_statistics_get(&statistics);
+        if (statistics.primary_map_draws != 1 || statistics.auxiliary_map_draws != 0 ||
+            statistics.render_failures != 0 ||
+            (phase == 1 && (statistics.animation_draws != 1 ||
+                           statistics.reused_render_commands == 0 ||
+                           statistics.compiled_render_commands != 0))) {
+            return SDL_SetError("edge lighting fixture did not exercise the requested primary draw");
+        }
+        image_face_statistics_t assets;
+        image_face_statistics_get(&assets);
+        if (assets.pending != 0) {
+            return SDL_SetError("edge lighting fixture has pending assets");
+        }
+        for (int marker = 0; marker < 3; marker++) {
+            const map_render_command_t *command = NULL;
+            size_t matches = 0;
+            for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
+                const map_render_command_t *candidate = &map_retained_primary_context.commands[index];
+                if (candidate->depth == 0 && candidate->object_layer == LAYER_WALL &&
+                    candidate->tile_x - MAP_STARTX == markers[marker][0] &&
+                    candidate->tile_y - MAP_STARTY == markers[marker][1] &&
+                    candidate->source == image_get_sprite(3)->bitmap) {
+                    command = candidate;
+                    matches++;
+                }
+            }
+            if (matches != 1 || command->fogged || command->ground ||
+                !BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
+                BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)) {
+                return SDL_SetError("edge lighting marker %d has no unique visible fixed-row command", marker);
+            }
+            for (size_t vertex = 0; vertex < arraysize(vertices); vertex++) {
+                map_edge_lighting_vertex(phase_name, marker,
+                                         markers[marker][0] + vertices[vertex][0],
+                                         markers[marker][1] + vertices[vertex][1]);
+            }
+            gpu_map_renderer_probe_t samples[3];
+            for (int sample = 0; sample < 3; sample++) {
+                int x = command->bounds_x + command->bounds_w / 2;
+                int y = command->bounds_y + command->bounds_h * (sample == 0 ? 1 : 2) / 3;
+                if (sample == 2) {
+                    x = command->bounds_x + command->bounds_w + 4;
+                }
+                gpu_map_renderer_probe_t *probe = &samples[sample];
+                if (!gpu_map_renderer_probe(x, y, MAP2_DEPTH_INDEX(0), probe)) {
+                    return SDL_SetError("edge lighting marker %d sample %d has no valid owner row", marker, sample);
+                }
+                printf("{\"type\":\"edge-lighting\",\"phase\":\"%s\",\"marker\":%d,"
+                       "\"tile\":[%d,%d],\"sample\":%d,\"pixel\":[%d,%d],"
+                       "\"record_identity\":%" PRIu64 ",\"cell_generation\":%u,\"cell_revision\":%u,"
+                       "\"flags\":%u,\"submitted_foot_y\":%d,\"sample_y\":%d,\"lighting_key\":%u,"
+                       "\"albedo\":[%u,%u,%u,%u],\"cpu_reconstructed_light\":[%u,%u,%u,%u],"
+                       "\"final_rgba\":[%u,%u,%u,%u],\"installed\":%" PRIu64 ",\"pending\":%zu}\n",
+                       phase_name, marker, markers[marker][0], markers[marker][1], sample, x, y,
+                       command->record_identity, command->cell_generation, command->cell_revision,
+                       (unsigned)command->effects.flags, command->effects.smooth_dark_y,
+                       probe->sample_y, probe->lighting_key,
+                       probe->albedo[0], probe->albedo[1], probe->albedo[2], probe->albedo[3],
+                       probe->light[0], probe->light[1], probe->light[2], probe->light[3],
+                       probe->final_color[0], probe->final_color[1], probe->final_color[2], probe->final_color[3],
+                       assets.installed_total, assets.pending);
+                const uint8_t *expected_albedo = sample == 2 ? ground_albedo : marker_albedo;
+                int expected_y = sample == 2 ? y : MAX(0, MIN(surface->h - 1, command->effects.smooth_dark_y));
+                if (memcmp(probe->albedo, expected_albedo, sizeof(probe->albedo)) != 0 ||
+                    probe->sample_y != expected_y) {
+                    return SDL_SetError("edge lighting marker %d sample %d selected unexpected albedo or row", marker, sample);
+                }
+                if (phase == 0) {
+                    baseline[marker][sample] = *probe;
+                } else if (memcmp(&baseline[marker][sample], probe, sizeof(*probe)) != 0) {
+                    return SDL_SetError("edge lighting marker %d sample %d changed on retained redraw", marker, sample);
+                }
+            }
+            if (samples[0].lighting_key != samples[1].lighting_key ||
+                memcmp(samples[0].light, samples[1].light, sizeof(samples[0].light)) != 0) {
+                return SDL_SetError("edge lighting marker %d did not retain one vertical foot row", marker);
+            }
+        }
+    }
+    map_redraw_consume();
+    return true;
+}
+#endif
+
 bool widget_map_projection_contract_test(void) {
     int saved_width = map_width;
     int saved_height = map_height;

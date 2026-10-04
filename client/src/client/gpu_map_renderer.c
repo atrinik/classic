@@ -4058,6 +4058,8 @@ bool gpu_map_renderer_probe(int x, int y, uint8_t light_owner, gpu_map_renderer_
         memcpy(probe->light, sample, sizeof(probe->light));
         probe->ground_coverage = (probe->lighting_key & GPU_MAP_LIGHT_KEY_GROUND_COVERAGE) != 0 ?
                                      (uint8_t)sample[4] : UINT8_C(255);
+        size_t row = (probe->lighting_key & GPU_MAP_LIGHT_KEY_MASK) - 1U;
+        probe->sample_y = uploaded_light_rows[row].sample_y;
     }
     /* A probe is an explicit synchronous readback checkpoint. Retire the map
      * fence it ordered behind so completion statistics and asset lifetimes

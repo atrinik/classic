@@ -1147,6 +1147,7 @@ if (BUILD_TESTING)
         presentation-dusk
         presentation-night
         presentation-saturated
+        edge-lighting
         brynknot-movement
         gpu-qualification-town-25x25
         gpu-ui-closure)
