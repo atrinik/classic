@@ -346,8 +346,8 @@ socket_command_account(socket_struct *ns, player *pl, uint8_t *data, size_t len,
  * @param cs
  * Client connection.
  * @return
- * True after the version and initial setup exchanges completed and any
- * configured join password was accepted, false otherwise.
+ * True after version, authenticated policy and initial setup exchanges complete,
+ * including a valid access-code admission when required; false otherwise.
  */
 extern bool socket_connection_admitted(const socket_struct *cs);
 
