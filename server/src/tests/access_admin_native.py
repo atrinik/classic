@@ -55,6 +55,26 @@ assert parse(raw.replace(b'"x"', b'"\\ud83d\\ude00"'))
 
 store = ctypes.c_void_p()
 identity = (ctypes.c_ubyte * 32)(*range(32))
+
+class Status(ctypes.Structure):
+    _fields_ = [('schema_version', ctypes.c_uint), ('server_identity', ctypes.c_ubyte * 32),
+                ('protected_policy', ctypes.c_bool), ('integrity_ok', ctypes.c_bool),
+                ('durability_ok', ctypes.c_bool), ('fenced', ctypes.c_bool),
+                ('revision', ctypes.c_uint64), ('pending_route_sync', ctypes.c_size_t)]
+
+library.access_admin_status_encode.argtypes = [ctypes.POINTER(Status), ctypes.c_bool,
+    ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+library.access_admin_status_encode.restype = ctypes.c_bool
+status_boundary = Status(schema_version=1, server_identity=identity, protected_policy=True,
+                         integrity_ok=True, durability_ok=True, pending_route_sync=1024)
+status_output = ctypes.create_string_buffer(1024)
+status_length = ctypes.c_size_t()
+assert library.access_admin_status_encode(ctypes.byref(status_boundary), False, status_output,
+    len(status_output), ctypes.byref(status_length))
+assert json.loads(status_output.raw[:status_length.value])['pendingRouteSync'] == 1024
+status_boundary.pending_route_sync = 1025
+assert not library.access_admin_status_encode(ctypes.byref(status_boundary), False, status_output,
+    len(status_output), ctypes.byref(status_length))
 library.access_store_open.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p, ctypes.c_void_p, ctypes.c_bool, ctypes.c_bool]
 library.access_store_open.restype = ctypes.c_int
 library.access_store_close.argtypes = [ctypes.c_void_p]

@@ -96,7 +96,7 @@ def validate_response(value, request):
             decimal(result['revision'])
             if result['revision'] != value.get('revision') or result['integrity'] not in {'ok', 'failed'} or result['durability'] not in {'ok', 'indeterminate'}:
                 raise ProtocolError('invalid store status')
-            if type(result['pendingRouteSync']) is not int or not 0 <= result['pendingRouteSync'] <= 32:
+            if type(result['pendingRouteSync']) is not int or not 0 <= result['pendingRouteSync'] <= 1024:
                 raise ProtocolError('invalid pending route count')
         if type(result['schemaVersion']) is not int or result['schemaVersion'] != 1 or result['policy'] not in {'open', 'protected'} or not isinstance(result['serverIdentity'], str) or not re.fullmatch('[0-9a-f]{64}', result['serverIdentity']):
             raise ProtocolError('invalid store identity')

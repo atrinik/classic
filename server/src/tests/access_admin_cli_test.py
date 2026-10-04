@@ -56,7 +56,9 @@ class AdminClientTest(unittest.TestCase):
             'serverIdentity': 'b' * 64, 'policy': 'protected', 'integrity': 'ok',
             'durability': 'ok', 'revision': '0', 'pendingRouteSync': 0}
         self.assertEqual(self.exchange(self.frame(self.response)), self.response)
-        self.response['result']['pendingRouteSync'] = 33
+        self.response['result']['pendingRouteSync'] = 1024
+        self.assertEqual(self.exchange(self.frame(self.response)), self.response)
+        self.response['result']['pendingRouteSync'] = 1025
         with self.assertRaises(cli.ProtocolError):
             self.exchange(self.frame(self.response))
 

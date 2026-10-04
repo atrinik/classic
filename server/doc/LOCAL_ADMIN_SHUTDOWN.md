@@ -146,7 +146,8 @@ that every temporary immutable string is erased from its process memory.
 Status results are exact tagged unions. Initialized stores contain `state`
 (`initialized`), `schemaVersion` (1), certificate `serverIdentity` (64 lowercase
 hex), `policy` (`open` or `protected`), `integrity` (`ok` or `failed`), `durability`
-(`ok` or `indeterminate`), `revision`, and integer `pendingRouteSync` (0–32).
+(`ok` or `indeterminate`), `revision`, and integer `pendingRouteSync` (0–1024). The durable count includes all retained
+per-token route work; each worker dispatch batch remains bounded to 32.
 Absent open stores contain only `state:"absent_open"`, `schemaVersion`,
 `serverIdentity`, and `policy:"open"`. Missing protected state fails. Empty or
 fully expired initialized protected stores remain protected and valid for update

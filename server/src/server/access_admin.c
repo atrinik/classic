@@ -208,7 +208,7 @@ static void status(writer *w, const access_status_t *s, bool absent) {
     else append(w, ",\"integrity\":\"%s\",\"durability\":\"%s\",\"revision\":\"%" PRIu64 "\",\"pendingRouteSync\":%zu}", s->integrity_ok ? "ok" : "failed", s->durability_ok ? "ok" : "indeterminate", s->revision, s->pending_route_sync);
 }
 bool access_admin_status_encode(const access_status_t *s, bool absent, char *response, size_t capacity, size_t *length) {
-    if (!s || !response || !length || !capacity || s->schema_version != ACCESS_STORE_SCHEMA || s->pending_route_sync > ACCESS_OUTBOX_LIMIT || (absent && s->protected_policy)) return false;
+    if (!s || !response || !length || !capacity || s->schema_version != ACCESS_STORE_SCHEMA || s->pending_route_sync > ACCESS_TOKEN_LIMIT || (absent && s->protected_policy)) return false;
     writer w = {response, 0, capacity, true};
     status(&w, s, absent);
     if (!w.ok) { memset(response, 0, capacity); *length = 0; return false; }
