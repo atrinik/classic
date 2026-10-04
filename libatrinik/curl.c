@@ -31,6 +31,7 @@
 
 #include "clioptions.h"
 #include "curl.h"
+#include "datetime.h"
 #include "path.h"
 #include "string.h"
 
@@ -39,7 +40,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-TOOLKIT_API(DEPENDS(clioptions));
+TOOLKIT_API(DEPENDS(clioptions), DEPENDS(datetime));
 
 /**
  * Wrapper around curl_easy_setopt() that performs error checking.
@@ -217,6 +218,7 @@ static CURLSH *handle_share = NULL;
 static pthread_mutex_t handle_share_mutex;
 /** Mutex to protect the certificate chains file IO. */
 static pthread_mutex_t certchains_mutex;
+
 /** Data processing callback function. Can be used for statistics. */
 static curl_request_process_cb process_cb;
 /** User agent to use for cURL requests.. */
@@ -225,6 +227,21 @@ static char *curl_user_agent = NULL;
 static curl_trust_store_t *curl_trust_pkeys[CURL_PKEY_TRUST_NUM] = {};
 /** cURL data directory. */
 static char *curl_data_dir = NULL;
+
+/** Log rare blocking lifecycle boundaries using only sanitized labels. */
+static uint64_t curl_lifecycle_begin(const char *origin, const char *phase) {
+    LOG(INFO, "HTTP lifecycle origin=%s phase=%s status=begin", origin, phase);
+    return datetime_monotonic_us();
+}
+
+static void curl_lifecycle_end(const char *origin, const char *phase, uint64_t started) {
+    uint64_t now = datetime_monotonic_us();
+    LOG(INFO,
+        "HTTP lifecycle origin=%s phase=%s status=end elapsed_us=%" PRIu64,
+        origin,
+        phase,
+        now >= started ? now - started : 0);
+}
 
 static bool curl_request_origin_char_valid(unsigned char cp) {
     return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9') ||
@@ -407,10 +424,14 @@ TOOLKIT_INIT_FUNC_FINISH
  * Deinitialize the cURL API.
  */
 TOOLKIT_DEINIT_FUNC(curl) {
+    uint64_t started = curl_lifecycle_begin("toolkit", "share-cleanup");
     curl_share_cleanup(handle_share);
+    curl_lifecycle_end("toolkit", "share-cleanup", started);
     pthread_mutex_destroy(&handle_share_mutex);
     pthread_mutex_destroy(&certchains_mutex);
+    started = curl_lifecycle_begin("toolkit", "global-cleanup");
     curl_global_cleanup();
+    curl_lifecycle_end("toolkit", "global-cleanup", started);
 
     for (curl_pkey_trust_t trust = 0; trust < CURL_PKEY_TRUST_NUM; trust++) {
         curl_trust_store_t *store, *tmp;
@@ -1153,7 +1174,9 @@ void curl_request_free(curl_request_t *request) {
     pthread_mutex_unlock(&request->mutex);
 
     if (request->threaded) {
+        uint64_t started = curl_lifecycle_begin(request->origin, "worker-join");
         int rc = pthread_join(request->thread_id, NULL);
+        curl_lifecycle_end(request->origin, "worker-join", started);
         if (rc != 0) {
             LOG(ERROR, "Failed to join HTTP request thread: %s (%d)", strerror(rc), rc);
             return;
@@ -1744,7 +1767,9 @@ done:
     pthread_mutex_unlock(&request->mutex);
 
     if (request->handle != NULL) {
+        uint64_t started = curl_lifecycle_begin(request->origin, "easy-cleanup");
         curl_easy_cleanup(request->handle);
+        curl_lifecycle_end(request->origin, "easy-cleanup", started);
     }
 
     if (chunk != NULL) {
@@ -1901,7 +1926,9 @@ done:
 
     if (request->handle != NULL) {
         curl_mime_free(mime);
+        uint64_t started = curl_lifecycle_begin(request->origin, "easy-cleanup");
         curl_easy_cleanup(request->handle);
+        curl_lifecycle_end(request->origin, "easy-cleanup", started);
     }
     curl_slist_free_all(headers);
 
