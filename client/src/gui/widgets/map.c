@@ -3666,6 +3666,7 @@ typedef struct map_render_command {
     bool local_player;
     bool fogged; ///< The cached tile is outside the current visible area.
     bool ground;
+    bool ground_coverage;
     bool smooth_lighting;
     bool primary_level;
     SDL_Surface *living_occlusion_mask;
@@ -3975,14 +3976,9 @@ typedef struct map_visible_tile {
     map_cell_t *cell;
 } map_visible_tile_t;
 
-/**
- * Draw a single object on the map.
- *
- * @param surface
- * Surface to render on.
- * @param data
- * Rendering data. May be modified.
- */
+static uint8_t map_lighting_sub_layer(const map_cell_t *cell);
+
+/** Ground and authored roofs sample the projected light field. */
 static bool map_object_uses_projected_lighting(const map_render_data_t *data,
                                                const map_cell_layer_record_t *record) {
     return data->ground_pass || record->roof;
@@ -4297,6 +4293,10 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
                             data->sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1),
             .fogged = data->cell->fow && !remembered,
             .ground = data->ground_pass,
+            .ground_coverage = data->ground_pass && data->layer >= LAYER_FLOOR &&
+                               data->layer <= LAYER_FMASK &&
+                               data->sub_layer == map_lighting_sub_layer(data->cell) &&
+                               !map_cell_layer_record_read(data->cell, map_layer)->roof,
             .smooth_lighting = data->smooth_lighting,
             .primary_level = data->primary_level,
             .transformed = transformed,
@@ -6060,6 +6060,19 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     return vertex;
 }
 
+/** Known ground is geometry authority, independent of light and image readiness. */
+static bool map_ground_coverage_known(const map_cell_t *cell) {
+    uint8_t sub_layer = map_lighting_sub_layer(cell);
+    for (int layer = LAYER_FLOOR; layer <= LAYER_FMASK; layer++) {
+        const map_cell_layer_record_t *record =
+            map_cell_layer_record_read(cell, GET_MAP_LAYER(layer, sub_layer));
+        if (record->face != 0 && !record->roof) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Rasterize and composite the interpolated map light field. */
 static void
 map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, int w, int h) {
@@ -6074,11 +6087,13 @@ map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, i
     int vertex_height = end_y - start_y + 1;
     lighting_vertex_t *vertices =
         xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*vertices));
+    bool *known_ground = xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*known_ground));
     for (int vertex_x = start_x; vertex_x <= end_x; vertex_x++) {
         for (int vertex_y = start_y; vertex_y <= end_y; vertex_y++) {
-            vertices[(size_t)(vertex_x - start_x) * (size_t)vertex_height +
-                     (size_t)(vertex_y - start_y)] =
-                map_lighting_vertex(surface, data, vertex_x, vertex_y);
+            size_t index = (size_t)(vertex_x - start_x) * (size_t)vertex_height +
+                           (size_t)(vertex_y - start_y);
+            vertices[index] = map_lighting_vertex(surface, data, vertex_x, vertex_y);
+            known_ground[index] = map_ground_coverage_known(MAP_CELL_GET(vertex_x, vertex_y));
         }
     }
 
@@ -6100,9 +6115,16 @@ map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, i
                 vertices[vertex + (size_t)vertex_height + 1],
                 vertices[vertex + 1],
             };
-            gpu_renderer_map_light_quad((uint8_t)MAP2_DEPTH_INDEX(data->depth), quad);
+            bool known[4] = {known_ground[vertex],
+                             known_ground[vertex + (size_t)vertex_height],
+                             known_ground[vertex + (size_t)vertex_height + 1],
+                             known_ground[vertex + 1]};
+            uint8_t coverage[9];
+            map_visibility_ground_coverage(known, coverage);
+            gpu_renderer_map_light_quad_coverage((uint8_t)MAP2_DEPTH_INDEX(data->depth), quad, coverage);
         }
     }
+    free(known_ground);
     free(vertices);
 }
 
@@ -7270,6 +7292,7 @@ static void map_render_commands(SDL_Surface *surface,
                                              : GPU_RENDERER_OWNER_UNLIT,
                                    command->effects.smooth_dark_y,
                                    projected_light);
+        gpu_renderer_map_set_ground_coverage(projected_light && command->ground_coverage);
         gpu_renderer_map_set_instance_identity(command->record_identity,
                                                (uint32_t)command->record_layer << 2U);
         surface_show_effects(surface,

@@ -2123,6 +2123,33 @@ also bounds nearest-known light borrowing and leaves authoritative cache samples
 unchanged. Discrete lighting retains its per-tile transfer without this spatial
 taper. The interior values above and below describe full-weight samples.
 
+Known ground also has an independent geometric coverage channel in smooth mode.
+It applies only to FLOOR/FMASK commands on the selected projected lighting plane,
+excluding authored roofs. Walls, roofs, actors, and ITEM decorations retain their
+existing lighting. A cell is known for this channel when it stores a non-roof
+FLOOR or FMASK on that plane; light availability, fog state, and image upload
+readiness do not grant or revoke geometry coverage. Remembered ground therefore
+continues to participate.
+
+The light-grid vertices are cell centers. Each quad stores a 3x3 coverage lattice:
+its four corner samples are the corresponding known-cell bits, an edge midpoint
+is known only when both incident cells are known, and the center is known only
+when all four are known. True samples encode 255 and false samples encode zero.
+Piecewise bilinear interpolation over the four half-cell subquads tapers inward
+to black at a known/unknown boundary while preserving a known cell center,
+isolated islands, and narrow corridors. Fully known ground has coverage 255
+everywhere. Missing cells never submit a face.
+
+After the existing per-contributor tone mapping, multiply each eligible RGB
+channel by coverage with round-half-up division by 255; preserve alpha. Coverage
+thus cannot expose a lower linked level through opaque ground, change light
+color ratios, or attenuate structural owners. It does not change radiance,
+nearest-known light borrowing, the player field, remembered-light lift, or the
+wire-window taper above. Coverage bytes are part of the retained light-quad
+identity, so geometry-only exploration invalidates final lighting even when
+radiance is unchanged. Full, retained, scrolled, and light-only draws use the same
+coverage channel.
+
 Fade alpha is integer and monotonic for one authoritative transition:
 
 ```text
