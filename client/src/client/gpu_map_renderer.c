@@ -3635,14 +3635,16 @@ static bool gpu_map_world_command_append(const gpu_map_world_command_t *command)
 
 static bool gpu_map_presentation_copy_quad(uint32_t source, uint32_t *destination) {
     if (source >= presented_scene->quads_num) {
-        return SDL_SetError("frozen light quad is outside the presented cohort");
+        SDL_SetError("frozen light quad is outside the presented cohort");
+        return false;
     }
     if (presentation_quad_remap[source] != UINT32_MAX) {
         *destination = presentation_quad_remap[source];
         return true;
     }
     if (light_quads_num >= GPU_MAP_LIGHT_QUAD_KEY_MAX) {
-        return SDL_SetError("frozen light quads exceed the compact key limit");
+        SDL_SetError("frozen light quads exceed the compact key limit");
+        return false;
     }
     if (light_quads_num == light_quads_capacity) {
         light_quads_capacity = light_quads_capacity == 0 ? 1024U : light_quads_capacity * 2U;
