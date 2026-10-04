@@ -2035,6 +2035,11 @@ unchanged colored endpoint carried with another refreshed sub-layer; a
 CONNECTED publication may reuse the generation and translated endpoint cache.
 The decoder rejects records that violate this ownership contract before
 applying map metadata or geometry.
+Endpoint aggregation compares both celestial scalar and RGB values; equal
+scalar intensity does not imply equal color. A refreshed descriptor compares
+cached endpoint RGB channels as well as scalar, generation, knowledge, and
+bitmap state. A hue-only change is published once, while an unchanged repeat
+retains the cached endpoint without another tile update.
 
 ### Fixed visibility and light transfer
 
