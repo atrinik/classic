@@ -94,6 +94,12 @@ struct curl_request {
     /** Total request timeout in milliseconds, or zero for no deadline. */
     long timeout_ms;
 
+    /** Worker-owned progress snapshots, protected by mutex. Readers never
+     * access the easy handle, including while the worker is cleaning it up. */
+    int64_t download_length;
+    int64_t download_speed;
+    int64_t download_size;
+
     /** HTTP headers. */
     char *header;
 
@@ -1079,37 +1085,33 @@ int64_t curl_request_sizeinfo(curl_request_t *request, curl_info_t info) {
     HARD_ASSERT(request != NULL);
     TOOLKIT_PROTECT();
 
-    if (curl_request_get_state(request) != CURL_STATE_INPROGRESS || request->handle == NULL) {
+    pthread_mutex_lock(&request->mutex);
+    if (request->state != CURL_STATE_INPROGRESS) {
+        pthread_mutex_unlock(&request->mutex);
         return 0;
     }
 
-    CURLINFO info_code;
+    int64_t value;
     switch (info) {
         case CURL_INFO_DL_LENGTH:
-            info_code = CURLINFO_CONTENT_LENGTH_DOWNLOAD_T;
+            value = request->download_length;
             break;
 
         case CURL_INFO_DL_SPEED:
-            info_code = CURLINFO_SPEED_DOWNLOAD_T;
+            value = request->download_speed;
             break;
 
         case CURL_INFO_DL_SIZE:
-            info_code = CURLINFO_SIZE_DOWNLOAD_T;
+            value = request->download_size;
             break;
 
         default:
+            pthread_mutex_unlock(&request->mutex);
             LOG(ERROR, "Invalid info ID: %d", info);
             return 0;
     }
-
-    curl_off_t val;
-    CURLcode res = curl_easy_getinfo(request->handle, info_code, &val);
-
-    if (res == CURLE_OK) {
-        return (int64_t)val;
-    }
-
-    return 0;
+    pthread_mutex_unlock(&request->mutex);
+    return value;
 }
 
 /**
@@ -1573,6 +1575,18 @@ static int curl_progress(void *userdata,
     pthread_mutex_lock(&request->mutex);
 
     bool cancelled = request->cancelled || !curl_verify_cert_chain(request);
+    /* Only the worker may query its active libcurl handle. Publish copies for
+     * the owner's progress display and retain them throughout cleanup. */
+    curl_off_t value;
+    if (curl_easy_getinfo(request->handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &value) == CURLE_OK) {
+        request->download_length = (int64_t)value;
+    }
+    if (curl_easy_getinfo(request->handle, CURLINFO_SPEED_DOWNLOAD_T, &value) == CURLE_OK) {
+        request->download_speed = (int64_t)value;
+    }
+    if (curl_easy_getinfo(request->handle, CURLINFO_SIZE_DOWNLOAD_T, &value) == CURLE_OK) {
+        request->download_size = (int64_t)value;
+    }
     pthread_mutex_unlock(&request->mutex);
     return cancelled ? 1 : 0;
 }
@@ -1762,13 +1776,10 @@ void *curl_request_do_get(void *user_data) {
     state = curl_request_complete(request);
 
 done:
-    pthread_mutex_lock(&request->mutex);
-    request->state = state;
-    pthread_mutex_unlock(&request->mutex);
-
     if (request->handle != NULL) {
         uint64_t started = curl_lifecycle_begin(request->origin, "easy-cleanup");
         curl_easy_cleanup(request->handle);
+        request->handle = NULL;
         curl_lifecycle_end(request->origin, "easy-cleanup", started);
     }
 
@@ -1776,6 +1787,11 @@ done:
         curl_slist_free_all(chunk);
     }
 
+    /* A terminal state lets polling owners free the request. Publish it only
+     * after potentially slow handle cleanup, so that polling cannot join it. */
+    pthread_mutex_lock(&request->mutex);
+    request->state = state;
+    pthread_mutex_unlock(&request->mutex);
     curl_request_notify(request);
 
     return NULL;
@@ -1920,18 +1936,18 @@ void *curl_request_do_post(void *user_data) {
     state = curl_request_complete(request);
 
 done:
-    pthread_mutex_lock(&request->mutex);
-    request->state = state;
-    pthread_mutex_unlock(&request->mutex);
-
     if (request->handle != NULL) {
         curl_mime_free(mime);
         uint64_t started = curl_lifecycle_begin(request->origin, "easy-cleanup");
         curl_easy_cleanup(request->handle);
+        request->handle = NULL;
         curl_lifecycle_end(request->origin, "easy-cleanup", started);
     }
     curl_slist_free_all(headers);
 
+    pthread_mutex_lock(&request->mutex);
+    request->state = state;
+    pthread_mutex_unlock(&request->mutex);
     curl_request_notify(request);
 
     return NULL;
