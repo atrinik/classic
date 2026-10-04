@@ -55,6 +55,7 @@ extern void cleanup(void);
 extern void init_globals(void);
 
 extern void write_todclock(void);
+bool write_todclock_checked(void);
 extern bool todclock_set(unsigned long value);
 extern bool todclock_parse(const char *input, unsigned long *value);
 

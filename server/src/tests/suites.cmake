@@ -2,6 +2,7 @@
 set(ATRINIK_SERVER_TEST_SUITES
     "bugs.cursed_treasures|check_bug_cursed_treasures|src/tests/bugs/cursed_treasures.c"
     "commands.object|check_commands_object|src/tests/unit/commands/object.c"
+    "server.admin_shutdown|check_server_admin_shutdown|src/tests/unit/server/admin_shutdown.c"
     "server.account|check_server_account|src/tests/unit/server/account.c"
     "server.arch|check_server_arch|src/tests/unit/server/arch.c"
     "server.assets|check_server_assets|src/tests/unit/server/assets.c"

@@ -89,6 +89,10 @@ extern void account_new_char(socket_struct *ns, char *name, char *archname);
 extern void account_login_char(socket_struct *ns, char *name);
 
 extern void account_logout_char(socket_struct *ns, player *pl);
+bool account_logout_char_checked(socket_struct *ns, player *pl);
+#ifdef ATRINIK_TESTING
+void account_fail_saves_for_test(bool fail);
+#endif
 
 extern void account_character_session_start(socket_struct *ns, player *pl);
 
