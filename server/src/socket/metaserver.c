@@ -564,9 +564,7 @@ static void *metaserver_rendezvous_thread(void *data) {
                             if (candidate_parsed) authorized->state = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
                         }
                         if (!candidate_parsed &&
-                            (metaserver_rendezvous_message_type(message, "auth_init") ||
-                             metaserver_rendezvous_message_type(message, "auth_proof") ||
-                             metaserver_rendezvous_message_type(message, "client_candidate"))) {
+                            metaserver_rendezvous_message_type(message, "client_candidate")) {
                             LOG(DEBUG, "Ignoring an invalid or stale rendezvous ticket frame");
                         } else if (!candidate_parsed) {
                             stop_control = true;

@@ -985,7 +985,6 @@ typedef struct socket_rendezvous_attempt socket_rendezvous_attempt_t;
 /** Result of consuming one server-to-client rendezvous frame. */
 typedef enum socket_rendezvous_frame_result {
     SOCKET_RENDEZVOUS_FRAME_INVALID,
-    SOCKET_RENDEZVOUS_FRAME_CHALLENGE,
     SOCKET_RENDEZVOUS_FRAME_AUTHORIZED,
     SOCKET_RENDEZVOUS_FRAME_DENIED,
     SOCKET_RENDEZVOUS_FRAME_CANDIDATE,
@@ -1208,7 +1207,7 @@ uint32_t socket_rendezvous_attempt_retry_after(const socket_rendezvous_attempt_t
 bool socket_rendezvous_attempt_directory_probe_allowed(const socket_rendezvous_attempt_t *attempt);
 /** True only after the attempt has consumed its one authorized client candidate. */
 bool socket_rendezvous_attempt_peer_traffic_allowed(const socket_rendezvous_attempt_t *attempt);
-/** Render and consume the one auth_init transition. */
+/** Render and consume the one access_init transition. */
 bool socket_rendezvous_attempt_auth_init(socket_rendezvous_attempt_t *attempt,
                                          char *frame,
                                          size_t frame_size);
