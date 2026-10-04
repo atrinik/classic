@@ -34,6 +34,21 @@ sprites use their owning floor sample instead of changing brightness with
 screen height. It is deliberately a stress diagnostic; a zero golden hash
 does not establish that the brightness taper has passed visual review.
 
+The `edge-lighting` fixture isolates the smooth-lighting wire-window feather at
+south-edge distances zero, one, and two. It fills the 17-by-17 MAP2 window with
+neutral Q5.11 2048 floor samples, keeps the local player at the center, and uses
+widely separated 120-pixel structural markers for the three boundary rings.
+Regenerate its closed manifest and snapshot from the client directory with
+`python3 tools/generate_edge_lighting_fixture.py`. Run
+`atrinik --gpu-player-view src/tests/fixtures/player_view/edge-lighting.xml` on
+a qualified GPU lane. Its `type="edge-lighting"` JSONL rows report the full and
+retained phases, each marker's submitted foot and decoded sample row, structural
+and adjacent-ground probes, the four contributing light vertices, and asset
+counters. A passing diagnostic establishes correct owning-cell sampling,
+vertical marker consistency, no pending assets, and identical full/retained
+results. The zero expected-pixels hash requests measured diagnostic evidence
+and is not a calibrated cross-backend golden.
+
 These XML manifests preserve the pre-cutover renderer's viewport, logical map
 size, lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
 MAP command, and every image by SHA-256. They are immutable inputs for schema
