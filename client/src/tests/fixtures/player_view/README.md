@@ -109,7 +109,10 @@ python3 tools/verify_gpu_fixture_provenance.py \
 The generated `gpu-qualification-town-25x25` snapshot supplies seven active
 depths, nearly three thousand ordered sprite layers, mixed owner depths,
 roof/door/exit/FOW and transform semantics, plus exactly 64 animated live
-actors through the normal MAP2 decoder. Its zero expected hash is an explicit
+actors through the normal MAP2 decoder. Exactly one actor (`0x47700000`) carries the MAP2 HP
+probe value 64, so the requested target overlay has a selected target as well
+as targetable actor identities. Actor identities alone do not select the HP
+overlay. The pixel hash remains an explicit
 pending-hardware marker: qualified runs record `golden_verified:false` until
 reviewers approve and pin the cross-backend rendering contract.
 
