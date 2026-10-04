@@ -37,10 +37,14 @@
 - Local root-only update shutdown is opt-in; preserve the bounded protocol,
   idempotent countdown, and checked persistence/receipt contract in
   [`doc/LOCAL_ADMIN_SHUTDOWN.md`](doc/LOCAL_ADMIN_SHUTDOWN.md).
-- Keep `--content_benchmark` and `--provision_scenario` offline: no listeners,
+- Keep `--content_benchmark`, `--content_benchmark_route`, and
+  `--provision_scenario` offline: no listeners,
   plugins, metaserver, or console. Benchmark canonical logical map IDs; scenario
   provisioning persists through normal account/password APIs. Use wrapper
-  profiles/states/scenarios.
+  profiles/states/scenarios. Fixed `brynknot-v1` walking routes use initialized
+  maps and normal collision checks; static export is planning evidence, while
+  traversal requires the live client to acknowledge each normal movement step.
+  See [walking-route export](doc/WALKING_ROUTE.md).
 
 ## Access admission and administration
 

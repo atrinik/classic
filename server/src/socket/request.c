@@ -1801,7 +1801,9 @@ void draw_client_map2(object *pl) {
                                                     light_rgb_radiance[sub_layer]);
                         }
 
-                        if (tmp != NULL && raw_light[sub_layer] <= 0 &&
+                        /* The viewer remains visible even in total darkness. This
+                         * exception grants no visibility to other live objects. */
+                        if (tmp != NULL && tmp != pl && raw_light[sub_layer] <= 0 &&
                             !map_layer_is_remembered_geometry(layer) && !roof_surface) {
                             tmp = NULL;
                         }
@@ -2240,8 +2242,11 @@ void draw_client_map2(object *pl) {
                            sizeof(light_next_rgb_radiance[sub_layer]));
 
                     if (light_set[sub_layer] && light_spaces[sub_layer] != NULL &&
-                        light_spaces[sub_layer]->celestial_light_next_value !=
-                            light_spaces[sub_layer]->celestial_light_value) {
+                        (light_spaces[sub_layer]->celestial_light_next_value !=
+                             light_spaces[sub_layer]->celestial_light_value ||
+                         memcmp(light_spaces[sub_layer]->celestial_light_next_rgb,
+                                light_spaces[sub_layer]->celestial_light_rgb,
+                                sizeof(light_spaces[sub_layer]->celestial_light_rgb)) != 0)) {
                         MapSpace next_space = *light_spaces[sub_layer];
                         int next_raw = raw_light[sub_layer] -
                                        light_spaces[sub_layer]->celestial_light_value +
@@ -2285,7 +2290,10 @@ void draw_client_map2(object *pl) {
                         (light_state_discarded ||
                          mp->light_next_generation != timed_light_generation ||
                          !mp->light_next_known[sub_layer] ||
-                         mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer])) {
+                         mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer] ||
+                         memcmp(mp->light_next_rgb_radiance[sub_layer],
+                                light_next_rgb_radiance[sub_layer],
+                                sizeof(light_next_rgb_radiance[sub_layer])) != 0)) {
                         light_next_changed = true;
                     }
                 }
@@ -2452,6 +2460,10 @@ void draw_client_map2(object *pl) {
                 }
 
                 if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
+                    /* Every explicit RGB endpoint owns a scalar endpoint in
+                     * this record, including unchanged colored sub-layers
+                     * carried alongside another refreshed endpoint. */
+                    light_next_bitmap |= light_next_rgb_bitmap;
                     packet_debug_data(packet, 1, "Next-hour scalar endpoint bitmap");
                     packet_writer_write_uint8(packet, light_next_bitmap);
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
@@ -2607,7 +2619,8 @@ void draw_client_map2(object *pl) {
     packet_header->data[continuation_count_pos] = continuation_marker >> 8;
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
-    bool connected = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
+    bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
+                            CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     socket_send_packet(CONTR(pl)->cs, packet_header);
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
@@ -2627,7 +2640,9 @@ void draw_client_map2(object *pl) {
         CONTR(pl)->cs->lastmap_light_generation = timed_light_generation;
     }
 
-    if (connected) {
+    if (synchronize_time) {
+        /* Initial login and teleports need the clock immediately, just like
+         * tiled transitions; timed radiance descriptors do not carry its rate. */
         send_game_time(CONTR(pl));
     }
 

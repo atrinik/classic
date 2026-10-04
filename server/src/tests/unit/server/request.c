@@ -20,6 +20,8 @@
 #include <movement.h>
 #include <object.h>
 #include <player.h>
+#include <tod.h>
+#include <commands.h>
 #include <exit.h>
 
 START_TEST(test_access_attempt_budget_has_no_connection_identity) {
@@ -122,7 +124,15 @@ static bool map_packet_level_size(const packet_struct *packet, int expected_dept
     (void)packet_reader_read_uint8(&reader);
     (void)packet_reader_read_uint8(&reader);
     (void)packet_reader_read_uint8(&reader);
-    (void)packet_reader_read_uint16(&reader);
+    uint16_t continuation_marker = packet_reader_read_uint16(&reader);
+    if ((continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT) != 0) {
+        /* The celestial field may prepend its generation, hourly interval,
+         * and transition flags before the framed level count. */
+        (void)packet_reader_read_uint64(&reader);
+        (void)packet_reader_read_uint64(&reader);
+        (void)packet_reader_read_uint64(&reader);
+        (void)packet_reader_read_uint8(&reader);
+    }
     uint8_t level_count = packet_reader_read_uint8(&reader);
 
     for (uint8_t level = 0; level < level_count; level++) {
@@ -1412,6 +1422,82 @@ START_TEST(test_version_requires_exact_match) {
 }
 END_TEST
 
+START_TEST(test_new_and_connected_map_updates_synchronize_world_clock) {
+    mapstruct *map = ready_map_name("/shattered_islands/world_0_70", NULL, MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(map);
+    object *pl = player_get_dummy(NULL, NULL);
+    request_move_player(&pl, map, 20, 8);
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    static const uint8_t updates[] = {
+        MAP_UPDATE_CMD_NEW,
+        MAP_UPDATE_CMD_SAME,
+        MAP_UPDATE_CMD_CONNECTED,
+        MAP_UPDATE_CMD_NEW,
+    };
+    for (size_t i = 0; i < arraysize(updates); i++) {
+        socket_buffer_clear(cs);
+        CONTR(pl)->map_update_cmd = updates[i];
+        CONTR(pl)->map_update_tile = TILED_SOUTH + 1;
+        draw_client_map2(pl);
+        ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+        packet_struct *map_packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+        ck_assert_ptr_nonnull(map_packet);
+        ck_assert_uint_eq(map_packet->data[0], updates[i]);
+        packet_struct *clock_packet = queued_command_payload_find(cs, CLIENT_CMD_MAPSTATS);
+        if (updates[i] == MAP_UPDATE_CMD_SAME) {
+            ck_assert_ptr_null(clock_packet);
+            continue;
+        }
+        ck_assert_ptr_nonnull(clock_packet);
+        packet_reader_t reader;
+        packet_reader_init(&reader, clock_packet->data, clock_packet->len);
+        ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_MAPSTATS_TIME);
+        uint64_t expected_seconds = (uint64_t)todtick * 3600 +
+                                    (uint64_t)(pticks % PTICKS_PER_CLOCK) * 3600 / PTICKS_PER_CLOCK;
+        ck_assert_uint_eq(packet_reader_read_uint64(&reader), expected_seconds);
+        ck_assert_uint_gt(packet_reader_read_uint32(&reader), 0);
+        ck_assert(packet_reader_finish(&reader));
+    }
+}
+END_TEST
+
+START_TEST(test_brynknot_east_seam_emits_valid_connected_map) {
+    mapstruct *west = ready_map_name("/shattered_islands/world_0_68", NULL, 0);
+    ck_assert_ptr_nonnull(west);
+    mapstruct *east = get_map_from_tiled(west, TILED_EAST);
+    ck_assert_ptr_nonnull(east);
+    ck_assert_str_eq(east->path, "/shattered_islands/world_1_68");
+    object *pl = player_get_dummy(NULL, NULL);
+    request_move_player(&pl, west, 23, 18);
+    socket_struct *cs = CONTR(pl)->cs;
+    char afternoon[] = "15";
+    command_settime(NULL, "settime", afternoon);
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[0], MAP_UPDATE_CMD_NEW);
+
+    request_move_player(&pl, east, 0, 18);
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[0], MAP_UPDATE_CMD_CONNECTED);
+    ck_assert_ptr_eq(CONTR(pl)->last_update, east);
+
+    socket_buffer_clear(cs);
+    draw_client_map(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[0], MAP_UPDATE_CMD_SAME);
+}
+END_TEST
+
 START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     mapstruct *map = ready_map_name("/shattered_islands/world_4_85", NULL, 0);
     ck_assert_ptr_nonnull(map);
@@ -1438,6 +1524,8 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
     ck_assert_ptr_nonnull(packet);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, cs->mapx, cs->mapy));
+    uint16_t continuation_marker = ((uint16_t)packet->data[4] << 8) | packet->data[5];
+    ck_assert_uint_ne(continuation_marker & MAP2_CONTINUATION_TIMED_LIGHT, 0);
     uint32_t roof_delta_size = 0;
     ck_assert(map_packet_level_size(packet, 1, &roof_delta_size));
     ck_assert_uint_gt(roof_delta_size, 0);
@@ -1526,6 +1614,44 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     }
     ck_assert_msg(dock_stable_roof_level_found,
                   "Incuna dock roof level did not reach a stable empty delta");
+}
+END_TEST
+
+START_TEST(test_local_player_remains_visible_without_disclosing_dark_actors) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    request_move_player(&pl, map, 12, 12);
+    CONTR(pl)->tli = 0;
+    CLEAR_FLAG(pl, FLAG_XRAYS);
+    CLEAR_FLAG(pl, FLAG_SEE_IN_DARK);
+    object *monster = arch_get("kobold");
+    ck_assert_ptr_nonnull(monster);
+    monster->x = pl->x + 1;
+    monster->y = pl->y;
+    monster = object_insert_map(monster, map, NULL, 0);
+    ck_assert_ptr_nonnull(monster);
+    socket_struct *cs = CONTR(pl)->cs;
+    size_t player_layer = NUM_LAYERS * pl->sub_layer + pl->layer - 1;
+    size_t monster_layer = NUM_LAYERS * monster->sub_layer + monster->layer - 1;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+
+    for (int darkness = 0; darkness >= -80; darkness -= 80) {
+        map->light_value = darkness;
+        ck_assert_int_le(map_get_darkness(map, pl->x, pl->y, NULL), 0);
+        map_client_cache_clear(&cs->lastmap);
+        socket_buffer_clear(cs);
+        draw_client_map2(pl);
+        ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
+        MapCell *self = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
+        MapCell *other = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2 + 1, cs->mapy_2, false);
+        ck_assert_ptr_nonnull(self);
+        ck_assert_ptr_nonnull(other);
+        ck_assert_uint_ne(self->faces[player_layer], 0);
+        ck_assert_uint_eq(self->light_radiance[pl->sub_layer], 0);
+        ck_assert_uint_eq(other->faces[monster_layer], 0);
+    }
 }
 END_TEST
 
@@ -1732,6 +1858,118 @@ START_TEST(test_map_exit_semantic_not_disclosed_by_boundary_geometry) {
 
     size_t socket_layer = NUM_LAYERS * exit->sub_layer + LAYER_WALL - 1;
     ck_assert_uint_eq(cell->exit[socket_layer], 0);
+}
+END_TEST
+
+START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    request_move_player(&pl, map, 4, 4);
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    MapSpace *space = GET_MAP_SPACE_PTR(map, pl->x, pl->y);
+    /* Supply a color-only celestial transition to the real aggregate producer.
+     * The validated field keys and generation stay fixed throughout this test. */
+    space->celestial_light_value = 100;
+    space->celestial_light_next_value = 100;
+    space->celestial_light_rgb[0] = 100;
+    space->celestial_light_rgb[1] = 0;
+    space->celestial_light_rgb[2] = 0;
+    space->celestial_light_next_rgb[0] = 0;
+    space->celestial_light_next_rgb[1] = 0;
+    space->celestial_light_next_rgb[2] = 100;
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    int sub = pl->sub_layer;
+    ck_assert_uint_gt(cell->light_rgb_radiance[sub][0], cell->light_rgb_radiance[sub][2]);
+    ck_assert_uint_gt(cell->light_next_rgb_radiance[sub][2], cell->light_next_rgb_radiance[sub][0]);
+    uint64_t generation = cell->light_next_generation;
+    uint16_t scalar = cell->light_next_radiance[sub];
+    uint8_t bitmap = cell->light_next_rgb_explicit;
+    ck_assert_uint_ne(generation, 0);
+
+    /* The ordinary server post-process settles the initial title refresh over
+     * two passes. These direct drawing calls isolate lighting after that
+     * unrelated player-name lifecycle has completed. */
+    cs->ext_title_flag = 0;
+
+    /* A refreshed descriptor does not imply a new field generation. */
+    space->celestial_light_next_rgb[1] = 100;
+    space->celestial_light_next_rgb[2] = 0;
+    for (int repeat = 0; repeat < 2; repeat++) {
+        cs->lastmap_light_generation = 0;
+        socket_buffer_clear(cs);
+        draw_client_map2(pl);
+        ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+        ck_assert_uint_eq(cell->light_next_generation, generation);
+        ck_assert_uint_eq(cell->light_next_radiance[sub], scalar);
+        ck_assert_uint_eq(cell->light_next_rgb_explicit, bitmap);
+        ck_assert_uint_gt(cell->light_next_rgb_radiance[sub][1],
+                          cell->light_next_rgb_radiance[sub][2]);
+        packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+        ck_assert_ptr_nonnull(packet);
+        uint32_t size = UINT32_MAX;
+        ck_assert(map_packet_level_size(packet, 0, &size));
+        if (repeat == 0) {
+            ck_assert_uint_gt(size, 0);
+        } else {
+            ck_assert_uint_eq(size, 0);
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_timed_endpoint_refresh_keeps_colored_scalar_present) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    request_move_player(&pl, map, 4, 4);
+    object *source = arch_get("letter");
+    source->x = pl->x;
+    source->y = pl->y;
+    source->glow_radius = 1;
+    source->light_color = UINT32_C(0xff0000);
+    source = object_insert_map(source, map, NULL, 0);
+    ck_assert_ptr_nonnull(source);
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->light_next_generation, 0);
+    ck_assert_uint_ne(cell->light_next_rgb_explicit & (UINT8_C(1) << pl->sub_layer), 0);
+
+    /* Refresh another endpoint while the colored source remains steady.
+     * Request the descriptor again without clearing the per-cell cache, as
+     * occurs after light knowledge is revoked elsewhere in the view. */
+    cell->light_next_known[(pl->sub_layer + 1) % NUM_SUB_LAYERS] = 0;
+    cs->lastmap_light_generation = 0;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
 }
 END_TEST
 
@@ -2117,10 +2355,15 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_path_opening_door_retains_queue_for_retry);
     tcase_add_test(tc_core, test_move_path_invalid_request_preserves_existing_queue);
     tcase_add_test(tc_core, test_move_path_new_blockage_stops_without_displacement);
+    tcase_add_test(tc_core, test_new_and_connected_map_updates_synchronize_world_clock);
+    tcase_add_test(tc_core, test_brynknot_east_seam_emits_valid_connected_map);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
+    tcase_add_test(tc_core, test_local_player_remains_visible_without_disclosing_dark_actors);
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
+    tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
+    tcase_add_test(tc_core, test_timed_endpoint_refresh_keeps_colored_scalar_present);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
     tcase_add_test(tc_core,

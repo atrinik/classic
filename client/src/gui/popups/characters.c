@@ -34,6 +34,7 @@
 #include <animations.h>
 #include <button.h>
 #include <client.h>
+#include <live_movement.h>
 #include <event.h>
 #include <image.h>
 #include <list.h>
@@ -823,6 +824,7 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
     uint16_t anim_id;
     uint8_t level;
     size_t race, gender;
+    bool diagnostic_select = false;
 
     if (len == pos) {
         cpl.state = ST_LOGIN;
@@ -886,7 +888,11 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
                 clioption_settings.connect[3] = NULL;
             }
 
-            event_push_key_once(SDLK_RETURN, 0);
+            if (live_movement_enabled()) {
+                diagnostic_select = true;
+            } else {
+                event_push_key_once(SDLK_RETURN, 0);
+            }
         }
 
         snprintf(buf, sizeof(buf), "%d", anim_id);
@@ -902,7 +908,9 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
         list_add(list_characters, list_characters->rows - 1, 1, buf);
     }
 
-    (void)packet_reader_finish(&reader);
+    if (!packet_reader_finish(&reader)) {
+        return;
+    }
 
     /* No characters yet, so switch to the character creation tab. */
     if (list_characters->rows == 0) {
@@ -910,5 +918,9 @@ void socket_command_characters(uint8_t *data, size_t len, size_t pos) {
     } /* Characters tab otherwise. */
     else {
         button_tab_switch(&button_tab_characters);
+    }
+    if (diagnostic_select && list_characters->row_selected > 0 &&
+        list_characters->row_selected <= list_characters->rows) {
+        list_handle_enter(list_characters, NULL);
     }
 }

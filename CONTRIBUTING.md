@@ -100,6 +100,12 @@ the ignored OCI layout. Only the trusted current-`main` publisher may create a
 material bundle. Release consumers reverify every inner digest and build with
 dependency networking disabled.
 
+Pull-request Check builds separate dependency and shader input cohorts for the
+merge revision used by Linux validation and the exact head used by Windows
+packages. Producers verify their checkout and name uploaded artifacts with that
+revision; consumers select the matching revision before verifying locked inputs.
+Push, merge-group, and manual runs build one cohort for the event revision.
+
 Linux Check compiles protocol/libatrinik, server, and client inside the exact
 digest-pinned `ghcr.io/atrinik/classic-build` image declared in
 `.github/workflows/check.yml`. Each job restores only its own ccache directory,

@@ -656,6 +656,18 @@ extern bool widget_map_animation_test_end(bool expect_damage,
 extern void widget_map_animation_test_death_texture_set(SDL_Surface *texture);
 /** Verify player-centered transient visibility targets in the real map path. */
 extern bool widget_map_visibility_test(void);
+/** Verify actor relocation, identity, and fade behavior through production MAP2 and drawing. */
+extern bool widget_map_actor_relocation_test(void);
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+/** Probe static foot-row versus projected-ground lighting in the closed edge fixture. */
+extern bool widget_map_edge_lighting_test(void);
+/** Verify ground coverage through the production MAP2 and GPU draw path. */
+extern bool widget_map_ground_coverage_test(void);
+/** Compare soft-clear fades with their last authorized rendered contribution. */
+extern bool widget_map_soft_clear_fade_test(uint8_t *snapshot, size_t snapshot_size);
+/** Verify sparse scroll and fading FOW items through the production compositor. */
+extern bool widget_map_floor_composition_test(void);
+#endif
 /** Toggle the centered transient cohort for retained insertion/deletion evidence. */
 extern bool widget_map_retained_visibility_test_set(bool visible);
 /** Set the synthetic pointer owner used by the cursor redraw benchmark. */

@@ -24,6 +24,15 @@
 #include <server_main.h>
 #include <initialization.h>
 #include <network_metrics.h>
+#include <map.h>
+#include <object.h>
+#include <player.h>
+#include <commands.h>
+#include <movement.h>
+#include <tod.h>
+#include <plugin.h>
+#include <account.h>
+#include <toolkit/packet.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -453,14 +462,143 @@ START_TEST(test_deadline_driven_quic_service_benchmark) {
 }
 END_TEST
 
+/** Phase markers survive a stuck callback; the isolated runner bounds the child. */
+static void strakewood_progress(unsigned int tick, const char *phase) {
+    fprintf(stderr, "STRAKEWOOD tick=%u phase=%s\n", tick, phase);
+    fflush(stderr);
+}
+
+static bool strakewood_python_loaded(object *pl) {
+    static const char identification[] = "Python, ";
+    socket_buffer_clear(CONTR(pl)->cs);
+    display_plugins_list(pl);
+    for (packet_struct *packet = CONTR(pl)->cs->packets; packet != NULL;
+         packet = packet->next) {
+        for (size_t i = 0; i + sizeof(identification) - 1 <= packet->len; i++) {
+            if (memcmp(packet->data + i, identification, sizeof(identification) - 1) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+START_TEST(test_strakewood_idle_simulation) {
+    bool plugins = getenv("ATRINIK_DIAGNOSTIC_PLUGINS") != NULL;
+    if (plugins) {
+        strakewood_progress(0, "plugins-init");
+        init_plugins();
+    }
+    const char *paths[] = {
+        "/shattered_islands/world_1_61",
+        "/shattered_islands/world_2_61",
+        "/shattered_islands/world_0_70",
+    };
+    mapstruct *town = NULL;
+    for (size_t i = 0; i < arraysize(paths); i++) {
+        strakewood_progress(0, paths[i]);
+        mapstruct *map = ready_map_name(paths[i], NULL, 0);
+        ck_assert_ptr_nonnull(map);
+        if (i + 1 == arraysize(paths)) {
+            town = map;
+        }
+    }
+    strakewood_progress(0, "player-create");
+    char provision_error[HUGE_BUF];
+    ck_assert_msg(account_provision("hangdiagnostic", "local-test-7!", "Hang Diagnostic",
+                                   "human_male", VS(provision_error)),
+                  "%s", provision_error);
+    object *pl = player_get_dummy("Hang Diagnostic", NULL);
+    ck_assert_ptr_nonnull(pl);
+    free(CONTR(pl)->cs->account);
+    CONTR(pl)->cs->account = xstrdup("hangdiagnostic");
+    if (plugins) {
+        ck_assert_msg(strakewood_python_loaded(pl), "Python plugin did not load");
+    }
+    SET_FLAG(pl, FLAG_INVULNERABLE);
+    ck_assert(object_enter_map(pl, NULL, town, 20, 8, false));
+    strakewood_progress(0, "initial-save");
+    ck_assert(player_save_checked(pl));
+    char *checkpoint_path = player_make_path(pl->name, "player.dat");
+    FILE *checkpoint = fopen(checkpoint_path, "rb");
+    ck_assert_ptr_nonnull(checkpoint);
+    CONTR(pl)->last_save_tick = pticks;
+    long last_save_tick = CONTR(pl)->last_save_tick;
+    unsigned int autosaves = 0;
+    socket_buffer_clear(CONTR(pl)->cs);
+
+    /* Default is idle, matching the report. A separate opt-in run explores
+     * movement and clock changes without claiming they caused the idle hang. */
+    bool actions = getenv("ATRINIK_DIAGNOSTIC_ACTIONS") != NULL;
+    unsigned int ticks = 12000;
+    const char *tick_option = getenv("ATRINIK_DIAGNOSTIC_TICKS");
+    if (tick_option != NULL) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(tick_option, &end, 10);
+        ck_assert_msg(end != tick_option && *end == '\0' && parsed > 0 && parsed <= 20000,
+                      "ATRINIK_DIAGNOSTIC_TICKS must be between 1 and 20000");
+        ticks = (unsigned int)parsed;
+    }
+    for (unsigned int tick = 0; tick < ticks; tick++) {
+        if (actions && tick % 128 == 0) {
+            strakewood_progress(tick, "settime");
+            char hour[16];
+            snprintf(VS(hour), "%u", (tick / 128) % HOURS_PER_DAY);
+            command_settime(pl, "settime", hour);
+            strakewood_progress(tick, "movement");
+            (void)move_ob(pl, (tick / 128) % 8 + 1, pl);
+        }
+        strakewood_progress(tick, "main-process");
+        main_process();
+        ck_assert_ptr_nonnull(pl->map);
+        if (CONTR(pl)->last_save_tick != last_save_tick) {
+            struct stat before, after;
+            ck_assert_int_eq(fstat(fileno(checkpoint), &before), 0);
+            ck_assert_int_eq(stat(checkpoint_path, &after), 0);
+            ck_assert_int_gt(after.st_size, 0);
+            /* Keep the previous file open until comparison so its inode cannot
+             * be recycled: an advanced timer alone does not prove a save. */
+            ck_assert(before.st_dev != after.st_dev || before.st_ino != after.st_ino);
+            ck_assert_int_eq(fclose(checkpoint), 0);
+            checkpoint = fopen(checkpoint_path, "rb");
+            ck_assert_ptr_nonnull(checkpoint);
+            last_save_tick = CONTR(pl)->last_save_tick;
+            autosaves++;
+            strakewood_progress(tick, "autosave-returned");
+        }
+        strakewood_progress(tick, "map2");
+        draw_client_map(pl);
+        strakewood_progress(tick, "queue-drain");
+        /* This offline player has no authenticated peer. Exercise MAP2 and
+         * simulation, but do not pass its dummy socket through live transport. */
+        socket_buffer_clear(CONTR(pl)->cs);
+    }
+    ck_assert_uint_eq(autosaves, ticks / (AUTOSAVE + 1));
+    ck_assert_int_eq(fclose(checkpoint), 0);
+    free(checkpoint_path);
+    strakewood_progress(ticks, "final-save");
+    ck_assert(player_save_checked(pl));
+    if (plugins) {
+        strakewood_progress(ticks, "plugins-remove");
+        remove_plugins();
+    }
+    strakewood_progress(ticks, "complete");
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("transport_benchmark");
     TCase *tc_core = tcase_create("Core");
-    tcase_set_timeout(tc_core, 30);
+    bool diagnostic = getenv("ATRINIK_DIAGNOSTIC_STRAKEWOOD") != NULL;
+    tcase_set_timeout(tc_core, diagnostic ? 240 : 30);
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
-    tcase_add_test(tc_core, test_deadline_driven_quic_service_benchmark);
+    if (diagnostic) {
+        tcase_add_test(tc_core, test_strakewood_idle_simulation);
+    } else {
+        tcase_add_test(tc_core, test_deadline_driven_quic_service_benchmark);
+    }
     return s;
 }
 
@@ -477,5 +615,9 @@ void check_server_transport_benchmark(void) {
     check_run_suite(suite(), __FILE__);
 #else
     (void)suite;
+    if (getenv("ATRINIK_DIAGNOSTIC_STRAKEWOOD") != NULL) {
+        fputs("Strakewood diagnostic requires the OpenSSL 3.5 test runner\n", stderr);
+        exit(EXIT_FAILURE);
+    }
 #endif
 }

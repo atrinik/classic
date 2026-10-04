@@ -515,6 +515,37 @@ class DependencyTests(unittest.TestCase):
         ):
             dependencies.verify_bundle([material], bundle)
 
+    def test_separate_revision_bundles_preserve_divergent_locked_inputs(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        head_material = {
+            "kind": "dependency",
+            "owner": "client",
+            **self.dependency(archive),
+        }
+        # A base-branch lock update can differ from the PR head even when the
+        # immutable archive bytes happen to match; all lock metadata still binds.
+        merge_material = {**head_material, "commit": "2" * 40}
+        self.assertNotEqual(
+            dependencies.bundle_digest([head_material]),
+            dependencies.bundle_digest([merge_material]),
+        )
+        head_bundle = self.root / "head-bundle"
+        merge_bundle = self.root / "merge-bundle"
+        dependencies.stage_bundle([head_material], self.root / "cache", head_bundle)
+        dependencies.stage_bundle([merge_material], self.root / "cache", merge_bundle)
+        dependencies.verify_bundle([head_material], head_bundle)
+        dependencies.verify_bundle([merge_material], merge_bundle)
+        for material, mismatched_bundle in (
+            (head_material, merge_bundle),
+            (merge_material, head_bundle),
+        ):
+            with self.subTest(bundle=mismatched_bundle.name):
+                with self.assertRaisesRegex(
+                    dependencies.DependencyError,
+                    "sound: dependency bundle manifest material does not match the current lock",
+                ):
+                    dependencies.verify_bundle([material], mismatched_bundle)
+
     def test_bundle_reports_the_mismatched_material_name(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
         material = {

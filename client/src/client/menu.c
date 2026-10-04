@@ -35,6 +35,7 @@
 #include <effects.h>
 #include <event.h>
 #include <gpu_renderer.h>
+#include <video_recording.h>
 #include <inventory.h>
 #include <commands.h>
 #include <client_socket.h>
@@ -167,6 +168,19 @@ int client_command_check(const char *cmd) {
         return 1;
     } else if (!strncmp(cmd, "/invfilter ", 11)) {
         inventory_filter_set_names(cmd + 11);
+        return 1;
+    } else if (strncmp(cmd, "/record", 7) == 0 && (cmd[7] == '\0' || cmd[7] == ' ')) {
+        if (strcmp(cmd + 7, " stop") == 0) {
+            video_recording_stop();
+        } else if (strncmp(cmd + 7, " start ", 7) == 0 && cpl.state == ST_PLAY) {
+            if (!video_recording_start(cmd + 14)) {
+                draw_info_format(COLOR_RED, "Recording: %s", SDL_GetError());
+            }
+        } else {
+            draw_info(
+                COLOR_GREEN,
+                "Usage: /record start /absolute/new-file.avi or /record stop (gameplay only)");
+        }
         return 1;
     } else if (!strncasecmp(cmd, "/screenshot", 11)) {
         if (book_sensitive_visible()) {

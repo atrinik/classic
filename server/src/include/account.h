@@ -67,6 +67,8 @@ extern bool account_provision(const char *name,
  * current user, and mode 0600. It may have no terminator or one LF/CRLF.
  * The preset must be one of the server-owned deterministic scenario
  * presets; `basic-player` preserves the empty first-login character.
+ * `brynknot-idle` saves a player at Brynknot (20,8), without an extra item
+ * or a world-clock change.
  *
  * @see account_provision
  */

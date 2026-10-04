@@ -35,7 +35,8 @@
  module decoders are deliberately absent. Sound effects and music are required
  on every supported platform. The production client requires a hardware GPU
  supported by SDL_GPU through Vulkan, Direct3D 12, or Metal, including RGBA8
- and R32_UINT render-target support plus fragment storage buffers. There is no
+ and R32_UINT render-target support, D32_FLOAT depth attachments, and fragment
+ storage buffers. There is no
  software renderer or fallback;
  startup reports the selected backend, device, and driver failure and exits if
  the required GPU contract is unavailable.
@@ -296,6 +297,82 @@ environment variables never synthesize a selected-adapter identity.
  retained world pass; animation rows additionally permit only bounded
  actor-effect source and instance deltas. Stable-slot uniforms remain one
  16 to 1024-byte push per submitted world batch.
+
+ Live movement diagnostics use `--live-movement-route=/absolute/route.xml`
+ and `--live-movement-report=/absolute/new-report.jsonl` with the normal client
+ startup and authenticated connection. Run them through an isolated wrapper
+ scenario; the report path must not exist. A closed `live-movement-route`
+ version-1 XML document specifies `timeout-ms`, `step-timeout-ms`, and ordered
+ `checkpoint` elements with absolute server `map`, `x`, `y`, and keypad
+ `direction`. The first checkpoint has direction 0 and verifies the start;
+ later checkpoints use directions 1–9 except 5 and identify each destination.
+ The route allows at most 50,000 checkpoints and one hour. It issues one normal
+ movement command at a time, without retries, and fails on divergence,
+ disconnect, deadline, or incomplete evidence. Gameplay input is suppressed
+ during this dedicated run; window and quit events retain normal behavior.
+ A visible diagnostic window renders and animates without keyboard focus;
+ hiding or minimizing it fails the run. The first complete world checkpoint
+ must arrive within 120 seconds of initialization, or the shorter route
+ deadline. Startup, lighting setup, and captures never reset the global deadline.
+
+ `python3 tools/verify_live_movement.py ROUTE REPORT` checks the exact route
+ hash, every observed arrival, primary-map presentation, and successful final
+ observation period before producing coverage and frame-time quantiles.
+ CPU stage totals, renderer work, uploads, asset queues, and connection health
+ are recorded separately. GPU host submission and fence timings are not
+ hardware GPU execution time. The wrapper binds content, scenario, source and
+ runtime settings to the report. Live routes exercise the server, map changes,
+ assets and NPCs; snapshot benchmarks remain separate renderer diagnostics.
+
+ Optional `--live-movement-initial-capture=/absolute/initial.png` and
+ `--live-movement-final-capture=/absolute/final.png` create private, exclusive
+ PNGs in the report directory. They wait for normal visibility fades and asset
+ completion; readback and PNG encoding run outside the walking measurement
+ interval. Each bounded asynchronous capture records its exact file digest,
+ location, server time, and primary-map publication. Missing or failed captures
+ fail the run. With captures, `--live-movement-lighting-phase=PHASE` accepts only
+ `day`, `new-moon`, or `full-moon`. In an isolated scenario with normal command
+ permission, it uses fixed `/settime` and `/celestial` commands at the starting
+ checkpoint. Opposite-hour and target-hour observations must each have a fresh
+ complete map publication before the target view can be captured. These options
+ do not grant permissions or modify account or saved-player files.
+
+ Linux clients can record the complete composed gameplay window, including UI,
+ with `--record-video=/absolute/new-recording.avi`. Recording waits for gameplay
+ so login and character-selection screens are excluded, and stops when gameplay
+ ends. During play, `/record start /absolute/new-recording.avi` starts another
+ recording and `/record stop` finishes it asynchronously. These are local client
+ commands. The chat window and log report armed, active, finalizing, saved and
+ failed states, including the output path. Normal client exit finishes the file.
+ Existing output files and symlinks are never overwritten; new files have mode
+ 0600. Choose an existing private output directory. Recording includes visible
+ gameplay chat and UI; it does not export configuration or authentication data.
+
+ The format is video-only Motion JPEG AVI at 20 frames per second, with JPEG
+ quality 85. It needs no FFmpeg installation or additional codec dependency.
+ Standard AVI players can replay the file on other platforms. JPEG compression
+ produces larger files than H.264, but frames remain independently decodable for
+ visual diagnostics. Capture uses the final composed GPU frame after successful
+ presentation, and encoding runs in an isolated process fed by a worker thread.
+ One pending GPU readback, two queued surfaces and one transmitting surface bound
+ parent pixel storage to 128 MiB at the maximum 8-megapixel window; helper storage
+ is separately bounded. Busy capture/encoding drops new samples and repeats the
+ previous encoded frame for those elapsed 50-ms slots, preserving chronological
+ real-time playback rather than speeding up a slow client. The first captured
+ gameplay frame starts the movie clock. Recording changes performance and must
+ be reported separately from unrecorded benchmarks.
+
+ A recording stops at one hour or the AVI writer's 2-GiB limit. Window dimensions
+ must stay fixed, at most 4096 pixels per side and 8,388,608 pixels in total;
+ resizing during recording reports an encoder failure. Disk, readback and encoder
+ errors preserve the partial file and report failure. Stop allows five seconds
+ for the owned encoder to finish before terminating it; forceful termination can
+ leave an incomplete AVI. Wait for the saved message before using the file.
+ Recording currently requires Linux 5.9 or newer with the `close_range` syscall
+ permitted for descriptor isolation. Windows and macOS client
+ builds remain supported, but recording requests fail explicitly until their
+ descriptor/handle isolation is qualified. The private `--video-encoder` mode
+ is an internal bounded pixel-stream endpoint, not a gameplay launch option.
 
  The client deliberately uses a 1:1 logical-to-output-pixel window contract.
  High-density backing stores are not requested: one SDL window coordinate is

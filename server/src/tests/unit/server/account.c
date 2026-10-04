@@ -246,6 +246,68 @@ START_TEST(test_account_provision_lighting_preset) {
 }
 END_TEST
 
+START_TEST(test_account_provision_brynknot_idle_preserves_clock_and_existing_player) {
+    const char *account_name = "scenariobrynknot";
+    const char *character_name = "Scenario Brynknot";
+    char error[HUGE_BUF];
+    char password_path[HUGE_BUF];
+    snprintf(VS(password_path), "%s/scenario-brynknot-password", settings.datapath);
+    char *account_path = account_make_path(account_name);
+    char *player_path = player_make_path(character_name, "player.dat");
+    char *metrics_path = player_make_path(character_name, "metrics.dat");
+    unlink(account_path);
+    unlink(player_path);
+    unlink(metrics_path);
+    unlink(password_path);
+    const char password[] = "local-brynknot-9!\n";
+    ck_assert_int_eq(path_secret_create_atomic(password_path, password, sizeof(password) - 1),
+                     PATH_SECRET_CREATE_OK);
+    unsigned long previous_hour = todtick;
+    ck_assert_msg(account_provision_from_file(account_name,
+                                               password_path,
+                                               character_name,
+                                               "human_male",
+                                               "brynknot-idle",
+                                               VS(error)),
+                  "%s", error);
+    ck_assert_uint_eq(todtick, previous_hour);
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    char contents[HUGE_BUF * 4];
+    size_t length = fread(contents, 1, sizeof(contents) - 1, fp);
+    ck_assert(!ferror(fp));
+    contents[length] = '\0';
+    fclose(fp);
+    ck_assert_ptr_nonnull(strstr(contents, "map /shattered_islands/world_0_70\n"));
+    ck_assert_ptr_nonnull(strstr(contents, "bed_x 20\nbed_y 8\n"));
+    ck_assert_ptr_nonnull(strstr(contents, "x 20\ny 8\n"));
+    ck_assert_ptr_null(strstr(contents, "arch mithril_lamp"));
+    ck_assert(!account_provision_from_file(account_name,
+                                           password_path,
+                                           character_name,
+                                           "human_male",
+                                           "brynknot-idle",
+                                           VS(error)));
+    ck_assert_ptr_nonnull(strstr(error, "cannot reserve"));
+    fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    char retained[sizeof(contents)];
+    size_t retained_length = fread(retained, 1, sizeof(retained), fp);
+    ck_assert(!ferror(fp));
+    fclose(fp);
+    ck_assert_uint_eq(retained_length, length);
+    ck_assert_int_eq(memcmp(contents, retained, length), 0);
+    ck_assert_uint_eq(todtick, previous_hour);
+    ck_assert_int_eq(unlink(account_path), 0);
+    ck_assert_int_eq(unlink(player_path), 0);
+    unlink(metrics_path);
+    ck_assert_int_eq(unlink(password_path), 0);
+    free(account_path);
+    free(player_path);
+    free(metrics_path);
+}
+END_TEST
+
 START_TEST(test_account_provision_lighting_preset_rolls_back) {
     const char *account_name = "ScenarioRollback";
     const char *account_name_canonical = "scenariorollback";
@@ -392,6 +454,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);
     tcase_add_test(tc_core, test_account_provision_lighting_preset);
+    tcase_add_test(tc_core, test_account_provision_brynknot_idle_preserves_clock_and_existing_player);
     tcase_add_test(tc_core, test_account_provision_lighting_preset_rolls_back);
     return s;
 }

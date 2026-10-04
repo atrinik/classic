@@ -633,7 +633,12 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         add_executable(libatrinik-curl tests/curl.c)
         atrinik_configure_target(libatrinik-curl)
         target_link_libraries(libatrinik-curl PRIVATE Atrinik::Core Threads::Threads)
+        if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_definitions(libatrinik-curl PRIVATE ATRINIK_TEST_CURL_CLEANUP)
+            target_link_options(libatrinik-curl PRIVATE "-Wl,--wrap=curl_easy_cleanup")
+        endif ()
         add_test(NAME libatrinik-curl COMMAND libatrinik-curl)
+        set_tests_properties(libatrinik-curl PROPERTIES TIMEOUT 45)
     endif ()
 
     add_executable(libatrinik-stun tests/stun.c)

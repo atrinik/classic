@@ -314,13 +314,15 @@ static void socket_quic_log_io_failure(socket_t *sc, const char *operation, int 
     if (SSL_get_conn_close_info(sc->quic, &close_info, sizeof(close_info)) == 1) {
         LOG(ERROR,
             "Connection %s QUIC %s failed: SSL error %d, close origin=%s, "
-            "type=%s, code=%" PRIu64 ", frame=%" PRIu64 ", reason=%.*s",
+            "type=%s, code=%" PRIu64 " (%s), frame=%" PRIu64 ", reason=%.*s",
             socket_get_id(sc),
             operation,
             error,
             close_info.flags & SSL_CONN_CLOSE_FLAG_LOCAL ? "local" : "peer",
             close_info.flags & SSL_CONN_CLOSE_FLAG_TRANSPORT ? "transport" : "application",
             close_info.error_code,
+            close_info.error_code == OSSL_QUIC_LOCAL_ERR_IDLE_TIMEOUT ? "idle timeout"
+                                                                     : "connection close",
             close_info.frame_type,
             (int)close_info.reason_len,
             close_info.reason != NULL ? close_info.reason : "");

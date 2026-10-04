@@ -80,6 +80,47 @@ static void quic_test_timeout_deadline(void) {
     REQUIRE(socket_quic_timeout(&connection, 5000U) == 0U);
 }
 
+/* OpenSSL sends transport PINGs while application traffic is idle. Servicing
+ * both peers must preserve the connection; an unserviced peer must time out. */
+static void quic_test_idle_timeout(socket_t *client, socket_t *server) {
+    uint64_t idle_timeout = 0;
+    REQUIRE(SSL_get_feature_negotiated_uint(client->quic,
+                                            SSL_VALUE_QUIC_IDLE_TIMEOUT,
+                                            &idle_timeout) == 1);
+    REQUIRE(idle_timeout == SOCKET_QUIC_IDLE_TIMEOUT_MS);
+    uint64_t active_until = datetime_monotonic_ms() + idle_timeout + 1000U;
+    while (datetime_monotonic_ms() < active_until) {
+        socket_quic_service(client, socket_wait(client, true, false, 1), false);
+        socket_quic_service(server, socket_wait(server, true, false, 1), false);
+        uint8_t value;
+        size_t amount = 0;
+        REQUIRE(socket_read(client, &value, sizeof(value), &amount));
+        REQUIRE(amount == 0);
+    }
+    SSL_CONN_CLOSE_INFO info;
+    REQUIRE(SSL_get_conn_close_info(client->quic, &info, sizeof(info)) == 0);
+    REQUIRE(SSL_get_conn_close_info(server->quic, &info, sizeof(info)) == 0);
+
+    /* Stop servicing the server without a graceful close or ICMP error. This
+     * reproduces a silent transport peer while the client's loop stays live. */
+    bool disconnected = false;
+    uint64_t deadline = datetime_monotonic_ms() + idle_timeout + 5000U;
+    while (datetime_monotonic_ms() < deadline) {
+        socket_quic_service(client, socket_wait(client, true, false, 1), false);
+        uint8_t value;
+        size_t amount = 0;
+        if (!socket_read(client, &value, sizeof(value), &amount)) {
+            disconnected = true;
+            break;
+        }
+    }
+    REQUIRE(disconnected);
+    REQUIRE(SSL_get_conn_close_info(client->quic, &info, sizeof(info)) == 1);
+    REQUIRE((info.flags & SSL_CONN_CLOSE_FLAG_LOCAL) != 0);
+    REQUIRE((info.flags & SSL_CONN_CLOSE_FLAG_TRANSPORT) != 0);
+    REQUIRE(info.error_code == OSSL_QUIC_LOCAL_ERR_IDLE_TIMEOUT);
+}
+
 static void quic_test_pending_stream_timeout(socket_t *client, socket_t *server) {
     socket_stream_t *asset = socket_stream_open(client, SOCKET_STREAM_ASSET);
     REQUIRE(asset != NULL);
@@ -298,6 +339,10 @@ static void quic_test_run(size_t count, bool delay_accept) {
     REQUIRE(repeat_written == sizeof(repeat));
     REQUIRE(repeat_read == sizeof(repeat_received));
     REQUIRE(repeat_received == repeat);
+
+    if (count == 1U) {
+        quic_test_idle_timeout(clients[0].connection, selected);
+    }
 
     socket_destroy(clients[0].connection);
     socket_destroy(selected);

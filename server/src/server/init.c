@@ -205,31 +205,41 @@ static void console_command_active_objects(const char *params) {
  * Free all data before exiting.
  */
 void cleanup(void) {
-    admin_shutdown_deinit();
-    access_server_deinit();
-    cache_remove_all();
-    remove_plugins();
-    gameplay_journal_deinit();
-    player_deinit();
-    account_deinit();
-    socket_assets_deinit();
-    resources_deinit();
-    free_all_maps();
-    free_style_maps();
-    arch_deinit();
-    free_all_treasures();
-    artifact_deinit();
-    free_all_images();
-    free_socket_images();
-    free_all_readable();
-    free_all_anim();
-    free_strings();
-    race_free();
-    regions_free();
-    objectlink_deinit();
-    object_deinit();
-    metaserver_deinit();
-    party_deinit();
+    /* Emit each boundary before entering it so an interrupted shutdown still
+     * identifies the outstanding owner. No logs may follow toolkit_deinit(),
+     * which releases the logger itself. */
+#define CLEANUP_STAGE(function)                           \
+    do {                                                  \
+        LOG(INFO, "Server cleanup stage: %s", #function); \
+        function();                                       \
+    } while (0)
+    CLEANUP_STAGE(admin_shutdown_deinit);
+    CLEANUP_STAGE(access_server_deinit);
+    CLEANUP_STAGE(cache_remove_all);
+    CLEANUP_STAGE(remove_plugins);
+    CLEANUP_STAGE(gameplay_journal_deinit);
+    CLEANUP_STAGE(player_deinit);
+    CLEANUP_STAGE(account_deinit);
+    CLEANUP_STAGE(socket_assets_deinit);
+    CLEANUP_STAGE(resources_deinit);
+    CLEANUP_STAGE(free_all_maps);
+    CLEANUP_STAGE(free_style_maps);
+    CLEANUP_STAGE(arch_deinit);
+    CLEANUP_STAGE(free_all_treasures);
+    CLEANUP_STAGE(artifact_deinit);
+    CLEANUP_STAGE(free_all_images);
+    CLEANUP_STAGE(free_socket_images);
+    CLEANUP_STAGE(free_all_readable);
+    CLEANUP_STAGE(free_all_anim);
+    CLEANUP_STAGE(free_strings);
+    CLEANUP_STAGE(race_free);
+    CLEANUP_STAGE(regions_free);
+    CLEANUP_STAGE(objectlink_deinit);
+    CLEANUP_STAGE(object_deinit);
+    CLEANUP_STAGE(metaserver_deinit);
+    CLEANUP_STAGE(party_deinit);
+    LOG(INFO, "Server resources released; deinitializing toolkit.");
+#undef CLEANUP_STAGE
     toolkit_deinit();
     free_object_loader();
     free_random_map_loader();
@@ -331,8 +341,9 @@ static bool clioptions_option_provision_password_file(const char *arg, char **er
 static const char *clioptions_option_content_benchmark_desc =
     "Runs the offline authored-content benchmark for comma-separated logical map IDs, then exits.";
 static bool clioptions_option_content_benchmark(const char *arg, char **errmsg) {
-    if (settings.celestial_inventory) {
-        string_fmt(*errmsg, "%s", "--content_benchmark and --celestial_inventory are exclusive");
+    if (settings.celestial_inventory ||
+        strcmp(settings.content_benchmark_maps, "brynknot-v1") == 0) {
+        string_fmt(*errmsg, "%s", "Offline content modes are exclusive");
         return false;
     }
     if (!content_benchmark_maps_valid(arg)) {
@@ -344,6 +355,26 @@ static bool clioptions_option_content_benchmark(const char *arg, char **errmsg) 
 
     settings.content_benchmark = true;
     snprintf(VS(settings.content_benchmark_maps), "%s", arg);
+    return true;
+}
+
+/* Route stdout is a strict framed XML artifact; retain diagnostics separately. */
+static void content_route_log_stderr(const char *message) {
+    fputs(message, stderr);
+    fflush(stderr);
+}
+
+static const char *clioptions_option_content_benchmark_route_desc =
+    "Exports the fixed offline authoritative brynknot-v1 walking route, then exits.";
+static bool clioptions_option_content_benchmark_route(const char *arg, char **errmsg) {
+    if (strcmp(arg, "brynknot-v1") != 0 || settings.content_benchmark ||
+        settings.celestial_inventory) {
+        string_fmt(*errmsg, "%s", "Expected exclusive offline route mode brynknot-v1");
+        return false;
+    }
+    settings.content_benchmark = true;
+    snprintf(VS(settings.content_benchmark_maps), "%s", arg);
+    logger_set_print_func(content_route_log_stderr);
     return true;
 }
 
@@ -1096,6 +1127,15 @@ static void init_library(int argc, char *argv[]) {
     toolkit_import(datetime);
     content_benchmark_startup_begin();
     toolkit_import(logger);
+    /* Configuration loading logs before option callbacks run. Select only
+     * the fixed route invocation here so its stdout stays a framed artifact;
+     * the ordinary CLI parser still validates and activates the mode. */
+    for (int i = 1; argv != NULL && i < argc; i++) {
+        if (strcmp(argv[i], "--content_benchmark_route=brynknot-v1") == 0) {
+            logger_set_print_func(content_route_log_stderr);
+            break;
+        }
+    }
     toolkit_import(math);
     toolkit_import(mempool);
     toolkit_import(packet);
@@ -1190,6 +1230,7 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_preset, "Scenario server-owned preset");
     CLIOPTIONS_CREATE_ARGUMENT(cli, provision_password_file, "Scenario password file");
     CLIOPTIONS_CREATE_ARGUMENT(cli, content_benchmark, "Authored-content benchmark map IDs");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, content_benchmark_route, "Authoritative offline walking route");
     CLIOPTIONS_CREATE_ARGUMENT(cli,
                                content_benchmark_iterations,
                                "Authored-content benchmark samples");
@@ -1253,6 +1294,12 @@ static void init_library(int argc, char *argv[]) {
     }
     if (removed_access_configuration) {
         LOG(ERROR, "Legacy admission configuration requires offline migration");
+        exit(EXIT_FAILURE);
+    }
+    if (strcmp(settings.content_benchmark_maps, "brynknot-v1") == 0 &&
+        (settings.provision_scenario || settings.unit_tests || settings.plugin_unit_tests ||
+         settings.world_maker || settings.celestial_inventory)) {
+        LOG(ERROR, "Walking route export is exclusive with other offline modes.");
         exit(EXIT_FAILURE);
     }
     if (removed_httppath_seen) {

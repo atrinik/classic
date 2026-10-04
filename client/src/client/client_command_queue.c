@@ -300,6 +300,10 @@ bool client_command_queue_statistics_reset(void) {
 void client_command_queue_statistics_get(uint64_t now_us,
                                          client_command_queue_statistics_t *statistics) {
     HARD_ASSERT(statistics != NULL);
+    if (queue_mutex == NULL) {
+        *statistics = (client_command_queue_statistics_t){0};
+        return;
+    }
     queue_lock();
     *statistics = queue_statistics;
     statistics->due = queue_statistics.depth != 0;

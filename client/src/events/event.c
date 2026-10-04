@@ -34,6 +34,8 @@
 #include <event.h>
 #include <gpu_renderer.h>
 #include <keybind.h>
+#include <live_movement.h>
+#include <live_movement_input.h>
 #include <main.h>
 #include <map.h>
 #include <misc.h>
@@ -163,7 +165,7 @@ int Event_PollInputDevice(void) {
 
     /* Execute mouse actions, even if mouse button is being held. */
     if ((SDL_GetTicks() - Ticks > 125) || !Ticks) {
-        if (cpl.state >= ST_PLAY) {
+        if (cpl.state >= ST_PLAY && !live_movement_enabled()) {
             /* Mouse gesture: hold right+left buttons or middle button
              * to fire. */
             if (widget_mouse_event.owner == cur_widget[MAP_ID]) {
@@ -175,6 +177,9 @@ int Event_PollInputDevice(void) {
     }
 
     while (SDL_PollEvent(&event)) {
+        if (live_movement_enabled() && live_movement_input_is_gameplay(event.type)) {
+            continue;
+        }
         if (event.type == SDL_EVENT_MOUSE_WHEEL) {
             x = (int)event.wheel.mouse_x;
             y = (int)event.wheel.mouse_y;
@@ -220,12 +225,12 @@ int Event_PollInputDevice(void) {
                         "Unable to query logical window size after resize: %s",
                         SDL_GetError());
                     resize_window_recovery_request();
-                    gpu_renderer_recreation_request();
+                    gpu_renderer_recreation_request_event(&event, SDL_GetError());
                     map_redraw_request(MAP_REDRAW_REASON_RESIZE);
                     break;
                 }
                 resize_window(width, height);
-                gpu_renderer_recreation_request();
+                gpu_renderer_recreation_request_event(&event, NULL);
                 map_redraw_request(MAP_REDRAW_REASON_RESIZE);
                 break;
 
@@ -239,7 +244,7 @@ int Event_PollInputDevice(void) {
             case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
             case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             case SDL_EVENT_DID_ENTER_FOREGROUND:
-                gpu_renderer_recreation_request();
+                gpu_renderer_recreation_request_event(&event, NULL);
                 map_redraw_request(MAP_REDRAW_REASON_EXTERNAL);
                 break;
 
@@ -299,8 +304,10 @@ int Event_PollInputDevice(void) {
         }
     }
 
-    keybind_state_ensure();
-    keybind_movement_flush();
+    if (!live_movement_enabled()) {
+        keybind_state_ensure();
+        keybind_movement_flush();
+    }
 
     return done;
 }

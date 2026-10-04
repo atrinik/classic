@@ -1196,7 +1196,7 @@ try {
             }
             $ServerLogExists = Test-Path -LiteralPath $ServerLog
             $ReadyMarker = $ServerLogText -match "Server ready\. Waiting for connections"
-            $ShutdownMarker = $ServerLogText -match "Server shutdown complete\."
+            $ShutdownMarker = $ServerLogText -match "Server saves complete; releasing resources\."
             $EndpointSummary = @(
                 $Endpoint | ForEach-Object {
                     "$($_.LocalAddress):$($_.LocalPort)"
@@ -1349,7 +1349,7 @@ try {
             throw "Server exited with code $($Server.ExitCode)"
         }
         if (-not (Test-Path -LiteralPath $ServerLog) -or
-            ([System.IO.File]::ReadAllText($ServerLog) -notmatch "Server shutdown complete\.")) {
+            ([System.IO.File]::ReadAllText($ServerLog) -notmatch "Server saves complete; releasing resources\.")) {
             throw "Server did not report a clean shutdown"
         }
         $LauncherSucceeded = $true

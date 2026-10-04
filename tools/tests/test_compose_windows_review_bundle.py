@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import runpy
 from pathlib import Path
 import stat
@@ -159,7 +160,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "$ClientData",
                     "StandardInput.WriteLine(\"shutdown\")",
                     "Client shutdown complete",
-                    "Server shutdown complete",
+                    "Server saves complete; releasing resources",
                     "ServerDiagnostics",
                     "identity_recent",
                     "ready_marker",
@@ -247,6 +248,108 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 manifest = json.loads(archive.read(prefix + "BUNDLE-MANIFEST.json"))
                 self.assertEqual(manifest["revision"], self.revision)
                 self.assertEqual(manifest["udp_port"], 1731)
+
+    def test_shutdown_consumers_require_checked_saves_and_successful_exit(self) -> None:
+        root = MODULE_PATH.parents[2]
+        server_main = (root / "server/src/server/main.c").read_text(encoding="utf-8")
+        shutdown = server_main.split("void server_shutdown(void) {", 1)[1].split("\n}", 1)[0]
+        success = re.search(r'if \(ok\) \{\s*LOG\(INFO, "([^"]+)"\);', shutdown)
+        failure = re.search(r'LOG\(ERROR, "([^"]+)"\);', shutdown)
+        self.assertIsNotNone(success)
+        self.assertIsNotNone(failure)
+        launcher = bundle.POWERSHELL_LAUNCHER
+        smoke = (root / "tools/ci/smoke_windows_review_bundle.ps1").read_text(encoding="utf-8")
+        for script in (launcher, smoke):
+            markers = re.findall(r'-(?:notmatch|match) "(Server (?:shutdown|saves|resources)[^"]+)"', script)
+            self.assertEqual(len(markers), 2)
+            for marker in markers:
+                self.assertRegex(success.group(1), marker)
+                self.assertNotRegex(failure.group(1), marker)
+                self.assertNotRegex("Server resources released; deinitializing toolkit.", marker)
+
+        # These guards must reject a timeout/nonzero exit before the success
+        # marker can authorize completion; a log message alone is insufficient.
+        launcher_finish = launcher.split('$Server.StandardInput.WriteLine("shutdown")', 1)[1]
+        launcher_finish = launcher_finish.split('$LauncherSucceeded = $true', 1)[0]
+        self.assertRegex(launcher_finish, r'if \(-not \$Server\.WaitForExit\(30000\)\) \{\s*throw ')
+        self.assertRegex(launcher_finish, r'if \(\$Server\.ExitCode -ne 0\) \{\s*throw ')
+        self.assertLess(launcher_finish.index('$Server.WaitForExit(30000)'),
+                        launcher_finish.index('$Server.ExitCode -ne 0'))
+        self.assertLess(launcher_finish.index('$Server.ExitCode -ne 0'),
+                        launcher_finish.index('-notmatch'))
+        flat_finish = smoke.split('    if ($shutdownTimedOut) {')[-1].split('$launcherStartInfo =', 1)[0]
+        self.assertTrue(flat_finish.lstrip().startswith('throw ('))
+        self.assertRegex(flat_finish, r'if \(\$process\.ExitCode -ne 0\) \{\s*throw ')
+        self.assertLess(flat_finish.index('$process.ExitCode -ne 0'), flat_finish.index('-notmatch'))
+        launcher_wait = 'if (-not $launcherServer.HasExited -and -not $launcherServer.WaitForExit(45000))'
+        launcher_smoke = smoke[smoke.index(launcher_wait):]
+        launcher_smoke = launcher_smoke.split('$bodySucceeded = $true', 1)[0]
+        self.assertIn('$launcherServer.WaitForExit(45000)', launcher_smoke)
+        self.assertIn('$launcherServerExitCode -ne 0', launcher_smoke)
+        self.assertLess(launcher_smoke.index('$launcherServerExitCode -ne 0'),
+                        launcher_smoke.index('-notmatch'))
+        self.assertRegex(launcher_smoke, r'if \(-not \$launcherProcess\.WaitForExit\(60000\)\) \{\s*throw ')
+        self.assertRegex(launcher_smoke, r'if \(\$launcherProcess\.ExitCode -ne 0\) \{\s*throw ')
+
+    def test_close_failure_diagnostics_preserve_shutdown_acceptance(self) -> None:
+        # Source contracts only: HWND interop and actual normal close still
+        # require the native Windows smoke job.
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        close = smoke.split("    $clientCloseStarted = $true", 1)[1]
+        acceptance, containment = close.split("} finally {", 1)
+        self.assertEqual(smoke.count("$launcherClient.CloseMainWindow()"), 1)
+        self.assertRegex(acceptance, r"if \(-not \$launcherClient.CloseMainWindow\(\)\) \{\s*throw ")
+        self.assertRegex(acceptance, r"if \(-not \$launcherClient.WaitForExit\(30000\)\) \{\s*throw ")
+        self.assertIn("$launcherClientExitCode -ne 0", acceptance)
+        self.assertIn('Client shutdown complete', acceptance)
+        self.assertRegex(acceptance, r"} catch \{\s*if \(\$clientCloseStarted\)")
+        self.assertRegex(acceptance, r"Write-CloseFailureDiagnostics\s*}\s*throw\s*$")
+        self.assertNotIn(".Kill(", acceptance)
+        self.assertIn("$launched.Kill($true)", containment)
+        diagnostics = smoke.split("function Write-CloseFailureDiagnostics", 1)[1].split("\ntry {", 1)[0]
+        for path in ("$launcherClientLog", "$launcherServerLog", "$launcherFailureLog", "$launcherProgressLog"):
+            self.assertIn(path, diagnostics)
+        self.assertIn("Get-LauncherLogTail $entry.Path", diagnostics)
+        self.assertNotIn("ReadToEnd", diagnostics)
+        self.assertIn("-Tail 40", smoke)
+        self.assertIn("[redacted]", smoke)
+        self.assertIn("[redacted-url]", smoke)
+        self.assertIn("[System.Math]::Min($safeLine.Length, 2048)", smoke)
+
+    def test_close_log_patterns_redact_credentials_urls_and_controls(self) -> None:
+        # Exercise the script's literal portable regular expressions. Native
+        # PowerShell execution remains part of the Windows smoke acceptance.
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        patterns = re.findall(r'\$safeLine = (?:\$_|\$safeLine) -replace "([^"]+)", "([^"]*)"', smoke)
+        self.assertEqual(len(patterns), 3)
+        def sanitized(value: str) -> str:
+            for pattern, replacement in patterns:
+                value = re.sub(pattern, replacement, value)
+            return value[:2048]
+        for value in (
+            'password=fixture-value', 'passwd: fixture-value',
+            '"token": "fixture-value with spaces"', 'secret = fixture-value',
+            'Authorization: Basic fixture-value', 'Bearer fixture-value',
+            'auth=fixture-value', 'auth: fixture-value',
+            '"auth" : "fixture-value with spaces"', 'AUTH = fixture-value',
+            '--connect_password_file=fixture-value',
+        ):
+            self.assertNotIn('fixture-value', sanitized(value))
+        self.assertEqual(sanitized('https://example.invalid/private?value=1'), '[redacted-url]')
+        self.assertEqual(sanitized('ready\x1b[31m\r\n\x00'), 'ready?[31m???')
+        self.assertEqual(len(sanitized('x' * 4096)), 2048)
+
+    def test_window_diagnostics_are_bounded_read_only_and_process_scoped(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("function Get-ClientWindowSnapshot", 1)[1].split("function Write-CloseFailureDiagnostics", 1)[0]
+        self.assertIn("if (++visited > 4096 || rows.Count >= 32) return false;", probe)
+        self.assertLess(probe.index("if (owner != (uint)processId) return true;"), probe.index("GetClassNameW(window"))
+        self.assertIn("new StringBuilder(256)", probe)
+        self.assertIn('"[^A-Za-z0-9_.#-]"', probe)
+        self.assertIn("Snapshot($Client.Id, $Client.MainWindowHandle)", probe)
+        self.assertIn("<client window snapshot unavailable>", probe)
+        for forbidden in ("GetWindowText", "MainWindowTitle", "SendMessage", "PostMessage", "CloseMainWindow()", "Get-Process", ".Kill("):
+            self.assertNotIn(forbidden, probe)
 
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
