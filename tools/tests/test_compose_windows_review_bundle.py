@@ -291,6 +291,64 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         self.assertRegex(launcher_smoke, r'if \(-not \$launcherProcess\.WaitForExit\(60000\)\) \{\s*throw ')
         self.assertRegex(launcher_smoke, r'if \(\$launcherProcess\.ExitCode -ne 0\) \{\s*throw ')
 
+    def test_close_failure_diagnostics_preserve_shutdown_acceptance(self) -> None:
+        # Source contracts only: HWND interop and actual normal close still
+        # require the native Windows smoke job.
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        close = smoke.split("    $clientCloseStarted = $true", 1)[1]
+        acceptance, containment = close.split("} finally {", 1)
+        self.assertEqual(smoke.count("$launcherClient.CloseMainWindow()"), 1)
+        self.assertRegex(acceptance, r"if \(-not \$launcherClient.CloseMainWindow\(\)\) \{\s*throw ")
+        self.assertRegex(acceptance, r"if \(-not \$launcherClient.WaitForExit\(30000\)\) \{\s*throw ")
+        self.assertIn("$launcherClientExitCode -ne 0", acceptance)
+        self.assertIn('Client shutdown complete', acceptance)
+        self.assertRegex(acceptance, r"} catch \{\s*if \(\$clientCloseStarted\)")
+        self.assertRegex(acceptance, r"Write-CloseFailureDiagnostics\s*}\s*throw\s*$")
+        self.assertNotIn(".Kill(", acceptance)
+        self.assertIn("$launched.Kill($true)", containment)
+        diagnostics = smoke.split("function Write-CloseFailureDiagnostics", 1)[1].split("\ntry {", 1)[0]
+        for path in ("$launcherClientLog", "$launcherServerLog", "$launcherFailureLog", "$launcherProgressLog"):
+            self.assertIn(path, diagnostics)
+        self.assertIn("Get-LauncherLogTail $entry.Path", diagnostics)
+        self.assertNotIn("ReadToEnd", diagnostics)
+        self.assertIn("-Tail 40", smoke)
+        self.assertIn("[redacted]", smoke)
+        self.assertIn("[redacted-url]", smoke)
+        self.assertIn("[System.Math]::Min($safeLine.Length, 2048)", smoke)
+
+    def test_close_log_patterns_redact_credentials_urls_and_controls(self) -> None:
+        # Exercise the script's literal portable regular expressions. Native
+        # PowerShell execution remains part of the Windows smoke acceptance.
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        patterns = re.findall(r'\$safeLine = (?:\$_|\$safeLine) -replace "([^"]+)", "([^"]*)"', smoke)
+        self.assertEqual(len(patterns), 3)
+        def sanitized(value: str) -> str:
+            for pattern, replacement in patterns:
+                value = re.sub(pattern, replacement, value)
+            return value[:2048]
+        for value in (
+            'password=fixture-value', 'passwd: fixture-value',
+            '"token": "fixture-value with spaces"', 'secret = fixture-value',
+            'Authorization: Basic fixture-value', 'Bearer fixture-value',
+            '--connect_password_file=fixture-value',
+        ):
+            self.assertNotIn('fixture-value', sanitized(value))
+        self.assertEqual(sanitized('https://example.invalid/private?value=1'), '[redacted-url]')
+        self.assertEqual(sanitized('ready\x1b[31m\r\n\x00'), 'ready?[31m???')
+        self.assertEqual(len(sanitized('x' * 4096)), 2048)
+
+    def test_window_diagnostics_are_bounded_read_only_and_process_scoped(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("function Get-ClientWindowSnapshot", 1)[1].split("function Write-CloseFailureDiagnostics", 1)[0]
+        self.assertIn("if (++visited > 4096 || rows.Count >= 32) return false;", probe)
+        self.assertLess(probe.index("if (owner != (uint)processId) return true;"), probe.index("GetClassNameW(window"))
+        self.assertIn("new StringBuilder(256)", probe)
+        self.assertIn('"[^A-Za-z0-9_.#-]"', probe)
+        self.assertIn("Snapshot($Client.Id, $Client.MainWindowHandle)", probe)
+        self.assertIn("<client window snapshot unavailable>", probe)
+        for forbidden in ("GetWindowText", "MainWindowTitle", "SendMessage", "PostMessage", "CloseMainWindow()", "Get-Process", ".Kill("):
+            self.assertNotIn(forbidden, probe)
+
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
