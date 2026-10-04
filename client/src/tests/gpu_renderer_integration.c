@@ -1718,9 +1718,9 @@ int main(void) {
     }
 
     GPU_REQUIRE(gpu_map_renderer_target_payload_bytes(1920, 1080, 5) ==
-                UINT64_C(1920) * 1080U * 12U);
+                UINT64_C(1920) * 1080U * 16U);
     GPU_REQUIRE(gpu_map_renderer_target_payload_bytes(2560, 1440, 7) ==
-                UINT64_C(2560) * 1440U * 12U);
+                UINT64_C(2560) * 1440U * 16U);
     GPU_REQUIRE(gpu_map_renderer_target_retained_bytes(1920, 1080, 5) >
                 gpu_map_renderer_target_payload_bytes(1920, 1080, 5));
     GPU_REQUIRE(gpu_map_renderer_target_retained_bytes(2560, 1440, 7) >
