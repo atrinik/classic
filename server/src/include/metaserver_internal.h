@@ -165,6 +165,11 @@ bool metaserver_public_endpoint_from_config(const char *configured_host,
                                             size_t published_host_size,
                                             uint16_t *published_port);
 
+/* Strict bounded acknowledgment parser; reservation changes only on success. */
+access_outcome_t metaserver_access_response_parse(const char *body, size_t body_size,
+                                                  const char *request_id, uint64_t token_revision,
+                                                  const char *operation, char reservation[33],
+                                                  uint64_t now);
 /* Serialized access worker only; bounded remote route mutation. */
 access_outcome_t metaserver_access_route(void *context, const access_route_t *route);
 

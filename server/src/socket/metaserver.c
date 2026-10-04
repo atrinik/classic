@@ -1409,38 +1409,10 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     if (result != CURLE_OK || status != 200 || memchr(response.body, 0, response.size) != NULL) goto out;
-    char reply_id[33], reply_outcome[16], reply_handle[36], reply_expiry[24], revision[21];
-    int consumed = 0;
-    if (sscanf(response.body,
-        "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":\"%32[0-9a-f]\","
-        "\"outcome\":\"%15[a-z_]\",\"reservationId\":%35[^,],\"reservationExpiresAt\":%23[^,],"
-        "\"tokenRevision\":\"%20[0-9]\"}%n",
-        reply_id, reply_outcome, reply_handle, reply_expiry, revision, &consumed) != 5 ||
-        consumed < 0 || (size_t)consumed != response.size || strcmp(reply_id, request_id) != 0) goto out;
-    char expected_revision[21];
-    snprintf(VS(expected_revision), "%" PRIu64, route->token.revision);
-    if (strcmp(revision, expected_revision) != 0) goto out;
-    bool null_handle = strcmp(reply_handle, "null") == 0;
-    if (!null_handle && (strlen(reply_handle) != 34 || reply_handle[0] != '"' || reply_handle[33] != '"')) goto out;
-    if (!null_handle) { reply_handle[33] = 0; if (!string_is_hex_fixed(reply_handle + 1, 32, true)) goto out; }
-    if (strcmp(reply_expiry, "null") != 0) {
-        size_t length = strlen(reply_expiry);
-        uint64_t expires;
-        if (length < 3 || reply_expiry[0] != '"' || reply_expiry[length - 1] != '"') goto out;
-        reply_expiry[length - 1] = 0;
-        if (reply_expiry[1] < '1' || reply_expiry[1] > '9' ||
-            !string_parse_uint64(reply_expiry + 1, 10, 1, INT64_MAX, &expires)) goto out;
-        if (strcmp(operation, "reserve") == 0 && (expires <= (uint64_t)now || expires - (uint64_t)now > 60)) goto out;
-    }
-    if (strcmp(reply_outcome, "conflict") == 0) { outcome = ACCESS_CONFLICT; goto out; }
-    if (strcmp(operation, "reserve") == 0 && strcmp(reply_expiry, "null") == 0) goto out;
-    const char *wanted = strcmp(operation, "reserve") == 0 ? "reserved" : strcmp(operation, "activate") == 0 ? "active" : "revoked";
-    if (strcmp(reply_outcome, wanted) != 0) goto out;
-    if (strcmp(operation, "reserve") == 0) {
-        if (null_handle) goto out;
-        memcpy(reservation, reply_handle + 1, 33);
-    } else if (strcmp(operation, "activate") == 0 && (null_handle || strcmp(reservation, reply_handle + 1) != 0)) goto out;
-    outcome = ACCESS_COMMITTED;
+    outcome = metaserver_access_response_parse(response.body, response.size, request_id,
+                                                route->token.revision, operation, reservation,
+                                                (uint64_t)now);
+
 out:
     curl_easy_cleanup(curl);
     curl_slist_free_all(headers);

@@ -775,3 +775,50 @@ bool metaserver_public_endpoint_from_config(const char *configured_host,
     (void)configured_host;
     return false;
 }
+
+
+access_outcome_t metaserver_access_response_parse(const char *input, size_t body_size,
+                                                  const char *request_id, uint64_t token_revision,
+                                                  const char *operation, char reservation[33],
+                                                  uint64_t now) {
+    if (input == NULL || body_size == 0 || body_size > 1024 ||
+        memchr(input, 0, body_size) != NULL || request_id == NULL || operation == NULL ||
+        reservation == NULL || !string_is_hex_fixed(request_id, 32, true) || token_revision == 0 ||
+        (strcmp(operation, "reserve") != 0 && strcmp(operation, "activate") != 0 &&
+         strcmp(operation, "revoke") != 0)) return ACCESS_PENDING;
+    char body[1025];
+    memcpy(body, input, body_size);
+    body[body_size] = 0;
+    char reply_id[33], reply_outcome[16], reply_handle[36], reply_expiry[24], revision[21];
+    int consumed = 0;
+    if (sscanf(body,
+        "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":\"%32[0-9a-f]\","
+        "\"outcome\":\"%15[a-z_]\",\"reservationId\":%35[^,],\"reservationExpiresAt\":%23[^,],"
+        "\"tokenRevision\":\"%20[0-9]\"}%n",
+        reply_id, reply_outcome, reply_handle, reply_expiry, revision, &consumed) != 5 ||
+        consumed < 0 || (size_t)consumed != body_size || strcmp(reply_id, request_id) != 0) return ACCESS_PENDING;
+    char expected_revision[21];
+    snprintf(VS(expected_revision), "%" PRIu64, token_revision);
+    if (strcmp(revision, expected_revision) != 0) return ACCESS_PENDING;
+    bool null_handle = strcmp(reply_handle, "null") == 0;
+    if (!null_handle && (strlen(reply_handle) != 34 || reply_handle[0] != '"' || reply_handle[33] != '"')) return ACCESS_PENDING;
+    if (!null_handle) { reply_handle[33] = 0; if (!string_is_hex_fixed(reply_handle + 1, 32, true)) return ACCESS_PENDING; }
+    if (strcmp(reply_expiry, "null") != 0) {
+        size_t length = strlen(reply_expiry);
+        uint64_t expires;
+        if (length < 3 || reply_expiry[0] != '"' || reply_expiry[length - 1] != '"') return ACCESS_PENDING;
+        reply_expiry[length - 1] = 0;
+        if (reply_expiry[1] < '1' || reply_expiry[1] > '9' ||
+            !string_parse_uint64(reply_expiry + 1, 10, 1, INT64_MAX, &expires)) return ACCESS_PENDING;
+        if (strcmp(operation, "reserve") == 0 && (expires <= (uint64_t)now || expires - (uint64_t)now > 60)) return ACCESS_PENDING;
+    }
+    if (strcmp(reply_outcome, "conflict") == 0) return ACCESS_CONFLICT;
+    if (strcmp(operation, "reserve") == 0 && strcmp(reply_expiry, "null") == 0) return ACCESS_PENDING;
+    const char *wanted = strcmp(operation, "reserve") == 0 ? "reserved" : strcmp(operation, "activate") == 0 ? "active" : "revoked";
+    if (strcmp(reply_outcome, wanted) != 0) return ACCESS_PENDING;
+    if (strcmp(operation, "reserve") == 0) {
+        if (null_handle) return ACCESS_PENDING;
+        memcpy(reservation, reply_handle + 1, 33);
+    } else if (strcmp(operation, "activate") == 0 && (null_handle || strcmp(reservation, reply_handle + 1) != 0)) return ACCESS_PENDING;
+    return ACCESS_COMMITTED;
+}
