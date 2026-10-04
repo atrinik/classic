@@ -172,9 +172,10 @@ typedef struct packet_writer_mark {
 #define PACKET_EXPAND 10
 
 #ifndef NDEBUG
-#define packet_debug(_packet, _indent, _fmt, ...)                                            \
-    do {                                                                                     \
-        if (!(_packet)->sensitive) stringbuffer_append_printf((_packet)->sb, "%*s" _fmt, (_indent), "", ##__VA_ARGS__); \
+#define packet_debug(_packet, _indent, _fmt, ...)                                                \
+    do {                                                                                         \
+        if (!(_packet)->sensitive)                                                               \
+            stringbuffer_append_printf((_packet)->sb, "%*s" _fmt, (_indent), "", ##__VA_ARGS__); \
     } while (0)
 #define packet_debug_data(_packet, _indent, _fmt, ...) \
     packet_debug(_packet, _indent, _fmt ": ", ##__VA_ARGS__)

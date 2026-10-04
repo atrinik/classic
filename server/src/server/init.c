@@ -619,28 +619,44 @@ static bool access_setting_mutable(char **errmsg) {
 static const char *clioptions_option_access_required_desc =
     "Require an operator-issued access code before account authentication.";
 static bool clioptions_option_access_required(const char *arg, char **errmsg) {
-    if (!access_setting_mutable(errmsg)) return false;
-    if (KEYWORD_IS_TRUE(arg)) settings.access_required = true;
-    else if (KEYWORD_IS_FALSE(arg)) settings.access_required = false;
-    else { invalid_access_configuration = true; *errmsg = xstrdup("Expected a boolean"); return false; }
+    if (!access_setting_mutable(errmsg))
+        return false;
+    if (KEYWORD_IS_TRUE(arg))
+        settings.access_required = true;
+    else if (KEYWORD_IS_FALSE(arg))
+        settings.access_required = false;
+    else {
+        invalid_access_configuration = true;
+        *errmsg = xstrdup("Expected a boolean");
+        return false;
+    }
     return true;
 }
 static const char *clioptions_option_access_initialize_desc =
     "Explicitly initialize a new empty access store; refuses existing state.";
 static bool clioptions_option_access_initialize(const char *arg, char **errmsg) {
-    if (!access_setting_mutable(errmsg)) return false;
-    if (KEYWORD_IS_TRUE(arg)) settings.access_initialize = true;
-    else if (KEYWORD_IS_FALSE(arg)) settings.access_initialize = false;
-    else { invalid_access_configuration = true; *errmsg = xstrdup("Expected a boolean"); return false; }
+    if (!access_setting_mutable(errmsg))
+        return false;
+    if (KEYWORD_IS_TRUE(arg))
+        settings.access_initialize = true;
+    else if (KEYWORD_IS_FALSE(arg))
+        settings.access_initialize = false;
+    else {
+        invalid_access_configuration = true;
+        *errmsg = xstrdup("Expected a boolean");
+        return false;
+    }
     return true;
 }
 static const char *clioptions_option_access_store_desc =
     "Private existing directory containing durable admission state.";
 static bool clioptions_option_access_store(const char *arg, char **errmsg) {
-    if (!access_setting_mutable(errmsg)) return false;
+    if (!access_setting_mutable(errmsg))
+        return false;
     if (arg[0] != '/' || strlen(arg) >= sizeof(settings.access_store)) {
         invalid_access_configuration = true;
-        *errmsg = xstrdup("Expected a bounded absolute directory"); return false;
+        *errmsg = xstrdup("Expected a bounded absolute directory");
+        return false;
     }
     snprintf(VS(settings.access_store), "%s", arg);
     return true;
@@ -648,10 +664,12 @@ static bool clioptions_option_access_store(const char *arg, char **errmsg) {
 static const char *clioptions_option_access_admin_accounts_desc =
     "Root-owned explicit canonical account allowlist for access administration.";
 static bool clioptions_option_access_admin_accounts(const char *arg, char **errmsg) {
-    if (!access_setting_mutable(errmsg)) return false;
+    if (!access_setting_mutable(errmsg))
+        return false;
     if (arg[0] != '/' || strlen(arg) >= sizeof(settings.access_admin_accounts)) {
         invalid_access_configuration = true;
-        *errmsg = xstrdup("Expected a bounded absolute file"); return false;
+        *errmsg = xstrdup("Expected a bounded absolute file");
+        return false;
     }
     snprintf(VS(settings.access_admin_accounts), "%s", arg);
     return true;
@@ -1217,8 +1235,8 @@ static void init_library(int argc, char *argv[]) {
     }
 
 #ifdef WIN32
-    if (settings.access_required || settings.access_initialize ||
-        *settings.access_store != '\0' || *settings.access_admin_accounts != '\0') {
+    if (settings.access_required || settings.access_initialize || *settings.access_store != '\0' ||
+        *settings.access_admin_accounts != '\0') {
         LOG(ERROR, "Access token administration is unsupported on Windows servers");
         exit(EXIT_FAILURE);
     }
@@ -1227,11 +1245,13 @@ static void init_library(int argc, char *argv[]) {
         bool initialized = access_bootstrap_initialize(settings.datapath,
                                                        settings.access_store,
                                                        settings.access_required);
-        if (!initialized) LOG(ERROR, "Offline access store initialization failed");
+        if (!initialized)
+            LOG(ERROR, "Offline access store initialization failed");
         exit(initialized ? EXIT_SUCCESS : EXIT_FAILURE);
     }
     if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
-        !settings.provision_scenario && !settings.content_benchmark && !settings.celestial_inventory &&
+        !settings.provision_scenario && !settings.content_benchmark &&
+        !settings.celestial_inventory &&
         (access_state_descriptor = access_state_lock(settings.datapath)) < 0) {
         LOG(ERROR, "Cannot exclusively lock private server state");
         exit(EXIT_FAILURE);

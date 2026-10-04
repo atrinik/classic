@@ -848,7 +848,8 @@ socket_t *socket_quic_client_create(const char *host,
                          RENDEZVOUS_TICKET_HEX_SIZE;
     if (ticket_ok) {
         string_tolower(ticket);
-        if (grant != NULL) memcpy(ticket, grant->grant, sizeof(ticket));
+        if (grant != NULL)
+            memcpy(ticket, grant->grant, sizeof(ticket));
         attempt = socket_rendezvous_attempt_create(certificate_sha256, ticket, grant, deadline_ms);
     }
     OPENSSL_cleanse(ticket_bytes, sizeof(ticket_bytes));

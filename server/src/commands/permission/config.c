@@ -46,7 +46,8 @@ void command_config(object *op, const char *command, char *params) {
     /* These root-managed policy coordinates are not an OP-readable config
      * surface. Handler guards independently reject runtime writes. */
     const char *key = params;
-    while (*key == ' ' || *key == '\t') key++;
+    while (*key == ' ' || *key == '\t')
+        key++;
     if (strncmp(key, "access_", 7) == 0) {
         draw_info(COLOR_WHITE, op, "Access configuration is root-managed at startup.");
         return;

@@ -361,7 +361,8 @@ void clean_tmp_files(void) {
  */
 void server_shutdown(void) {
     bool ok = access_server_shutdown();
-    if (!player_disconnect_all_checked()) ok = false;
+    if (!player_disconnect_all_checked())
+        ok = false;
     if (!clean_tmp_files_checked()) {
         ok = false;
     }
@@ -756,7 +757,9 @@ int server_run(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    admin_shutdown_set_access(access_server_root_submit, access_server_admin_poll, access_server_cancel);
+    admin_shutdown_set_access(access_server_root_submit,
+                              access_server_admin_poll,
+                              access_server_cancel);
 
     if (!settings.no_console) {
         console_start_thread();

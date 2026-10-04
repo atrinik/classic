@@ -28,8 +28,7 @@ bool admin_shutdown_init(const char *path, admin_shutdown_schedule_fn schedule);
 typedef uint64_t (*admin_access_start_fn)(const char *, size_t);
 typedef bool (*admin_access_poll_fn)(uint64_t, char *, size_t, size_t *);
 typedef void (*admin_access_cancel_fn)(uint64_t);
-void admin_shutdown_set_access(admin_access_start_fn, admin_access_poll_fn,
-    admin_access_cancel_fn);
+void admin_shutdown_set_access(admin_access_start_fn, admin_access_poll_fn, admin_access_cancel_fn);
 void admin_shutdown_poll(void);
 void admin_shutdown_deinit(void);
 /* Timer changes cancel a pending updater request. Expiry authorizes completion. */

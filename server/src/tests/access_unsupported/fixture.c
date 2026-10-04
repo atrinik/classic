@@ -6,8 +6,7 @@
 
 settings_struct settings;
 
-static void denied(void)
-{
+static void denied(void) {
     char output[8] = "secret";
     size_t length = 6;
     access_outcome_t outcome = ACCESS_COMMITTED;
@@ -20,7 +19,8 @@ static void denied(void)
     assert(length == 0 && output[0] == '\0');
     assert(!access_server_auth_poll(1, &outcome, &ref));
     assert(outcome == ACCESS_UNAVAILABLE && ref.revision == 0);
-    for (size_t i = 0; i < sizeof(ref.token_id); i++) assert(ref.token_id[i] == 0);
+    for (size_t i = 0; i < sizeof(ref.token_id); i++)
+        assert(ref.token_id[i] == 0);
     assert(access_server_session_check(&ref) == ACCESS_SESSION_DENIED);
     assert(!access_operator_allowed("/unused", "root"));
     assert(!access_operator_allowed(NULL, NULL));
@@ -30,8 +30,7 @@ static void denied(void)
     access_server_tick();
 }
 
-int main(void)
-{
+int main(void) {
     denied();
     /* Every combination of startup settings, for public and private servers. */
     for (unsigned visibility = 0; visibility < 2; visibility++) {
@@ -40,8 +39,10 @@ int main(void)
             settings.server_public = visibility != 0;
             settings.access_required = (mask & 1) != 0;
             settings.access_initialize = (mask & 2) != 0;
-            if (mask & 4) strcpy(settings.access_store, "/unused/store");
-            if (mask & 8) strcpy(settings.access_admin_accounts, "/unused/accounts");
+            if (mask & 4)
+                strcpy(settings.access_store, "/unused/store");
+            if (mask & 8)
+                strcpy(settings.access_admin_accounts, "/unused/accounts");
             assert(access_server_init(NULL) == (mask == 0));
             assert(access_server_healthy() == (mask == 0));
             denied();

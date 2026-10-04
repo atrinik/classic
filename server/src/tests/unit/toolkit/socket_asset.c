@@ -1280,30 +1280,73 @@ END_TEST
 
 START_TEST(test_metaserver_access_route_acknowledgments) {
     const char *request = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const char *reply = "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"reserved\",\"reservationId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"reservationExpiresAt\":\"160\",\"tokenRevision\":\"1\"}";
+    const char *reply = "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":"
+                        "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"reserved\","
+                        "\"reservationId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\","
+                        "\"reservationExpiresAt\":\"160\",\"tokenRevision\":\"1\"}";
     char reservation[33] = {0};
-    ck_assert_int_eq(metaserver_access_response_parse(reply, strlen(reply), request, 1,
-                                                     "reserve", reservation, 100), ACCESS_COMMITTED);
+    ck_assert_int_eq(metaserver_access_response_parse(reply,
+                                                      strlen(reply),
+                                                      request,
+                                                      1,
+                                                      "reserve",
+                                                      reservation,
+                                                      100),
+                     ACCESS_COMMITTED);
     ck_assert_str_eq(reservation, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     for (size_t n = 0; n < strlen(reply); n++) {
         reservation[0] = 0;
-        ck_assert_int_eq(metaserver_access_response_parse(reply, n, request, 1,
-                                                         "reserve", reservation, 100), ACCESS_PENDING);
+        ck_assert_int_eq(
+            metaserver_access_response_parse(reply, n, request, 1, "reserve", reservation, 100),
+            ACCESS_PENDING);
         ck_assert_str_eq(reservation, "");
     }
-    ck_assert_int_eq(metaserver_access_response_parse(reply, strlen(reply), request, 2,
-                                                     "reserve", reservation, 100), ACCESS_PENDING);
-    ck_assert_int_eq(metaserver_access_response_parse(reply, strlen(reply), request, 1,
-                                                     "reserve", reservation, 160), ACCESS_PENDING);
-    ck_assert_int_eq(metaserver_access_response_parse(reply, strlen(reply), request, 1,
-                                                     "activate", reservation, 100), ACCESS_PENDING);
-    const char *collision = "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"conflict\",\"reservationId\":null,\"reservationExpiresAt\":null,\"tokenRevision\":\"1\"}";
-    ck_assert_int_eq(metaserver_access_response_parse(collision, strlen(collision), request, 1,
-                                                     "reserve", reservation, 100), ACCESS_CONFLICT);
+    ck_assert_int_eq(metaserver_access_response_parse(reply,
+                                                      strlen(reply),
+                                                      request,
+                                                      2,
+                                                      "reserve",
+                                                      reservation,
+                                                      100),
+                     ACCESS_PENDING);
+    ck_assert_int_eq(metaserver_access_response_parse(reply,
+                                                      strlen(reply),
+                                                      request,
+                                                      1,
+                                                      "reserve",
+                                                      reservation,
+                                                      160),
+                     ACCESS_PENDING);
+    ck_assert_int_eq(metaserver_access_response_parse(reply,
+                                                      strlen(reply),
+                                                      request,
+                                                      1,
+                                                      "activate",
+                                                      reservation,
+                                                      100),
+                     ACCESS_PENDING);
+    const char *collision =
+        "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":"
+        "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"conflict\",\"reservationId\":null,"
+        "\"reservationExpiresAt\":null,\"tokenRevision\":\"1\"}";
+    ck_assert_int_eq(metaserver_access_response_parse(collision,
+                                                      strlen(collision),
+                                                      request,
+                                                      1,
+                                                      "reserve",
+                                                      reservation,
+                                                      100),
+                     ACCESS_CONFLICT);
     char changed[1025];
     snprintf(VS(changed), "%s ", reply);
-    ck_assert_int_eq(metaserver_access_response_parse(changed, strlen(changed), request, 1,
-                                                     "reserve", reservation, 100), ACCESS_PENDING);
+    ck_assert_int_eq(metaserver_access_response_parse(changed,
+                                                      strlen(changed),
+                                                      request,
+                                                      1,
+                                                      "reserve",
+                                                      reservation,
+                                                      100),
+                     ACCESS_PENDING);
 }
 END_TEST
 

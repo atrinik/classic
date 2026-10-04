@@ -148,7 +148,8 @@ void packet_mark_sensitive(packet_struct *packet) {
 void packet_free(packet_struct *packet) {
     TOOLKIT_PROTECT();
 
-    if (packet->sensitive && packet->data != NULL) OPENSSL_cleanse(packet->data, packet->size);
+    if (packet->sensitive && packet->data != NULL)
+        OPENSSL_cleanse(packet->data, packet->size);
     free(packet->data);
 
 #ifndef NDEBUG
@@ -169,7 +170,8 @@ void packet_compress(packet_struct *packet) {
     TOOLKIT_PROTECT();
     HARD_ASSERT(packet != NULL);
 
-    if (packet->sensitive) return;
+    if (packet->sensitive)
+        return;
 #if defined(COMPRESS_DATA_PACKETS) && COMPRESS_DATA_PACKETS
     if (packet->len <= COMPRESS_DATA_PACKETS_SIZE) {
         return;
@@ -210,7 +212,8 @@ packet_struct *packet_dup(packet_struct *packet) {
     cp = packet_new(packet->type, packet->size, packet->expand);
     cp->limit = packet->limit;
     cp->error = packet->error;
-    if (packet->sensitive) packet_mark_sensitive(cp);
+    if (packet->sensitive)
+        packet_mark_sensitive(cp);
 
     if (packet->data != NULL) {
         packet_writer_write_bytes(cp, packet->data, packet->len);
@@ -232,7 +235,8 @@ void packet_delete(packet_struct *packet, size_t pos, size_t len) {
     }
 
     packet->len -= len;
-    if (packet->sensitive) OPENSSL_cleanse(packet->data + packet->len, len);
+    if (packet->sensitive)
+        OPENSSL_cleanse(packet->data + packet->len, len);
 }
 
 void packet_writer_mark(packet_writer_t *writer, packet_writer_mark_t *mark) {
@@ -312,7 +316,8 @@ static bool packet_ensure(packet_struct *packet, size_t size) {
 }
 
 char *packet_get_debug(packet_struct *packet) {
-    if (packet != NULL && packet->sensitive) return xstrdup("[sensitive packet]");
+    if (packet != NULL && packet->sensitive)
+        return xstrdup("[sensitive packet]");
     char *cp;
 
     TOOLKIT_PROTECT();
@@ -600,7 +605,8 @@ void packet_writer_write_packet(packet_struct *packet, packet_struct *src) {
     HARD_ASSERT(packet != NULL);
     HARD_ASSERT(src != NULL);
 
-    if (src->sensitive) packet_mark_sensitive(packet);
+    if (src->sensitive)
+        packet_mark_sensitive(packet);
     if (src->data != NULL) {
         packet_writer_write_bytes_internal(packet, src->data, src->len);
     }

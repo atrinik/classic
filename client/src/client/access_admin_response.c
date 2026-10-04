@@ -22,7 +22,13 @@ typedef struct json_parser {
 } json_parser_t;
 
 static const char *const operation_names[] = {
-    "issue", "list", "history", "revoke", "remove", "status", "result",
+    "issue",
+    "list",
+    "history",
+    "revoke",
+    "remove",
+    "status",
+    "result",
 };
 
 static const char *const outcome_names[] = {
@@ -165,8 +171,7 @@ static bool json_string(json_parser_t *parser, char *output, size_t capacity) {
                     if (!json_hex4(parser, &low) || low < 0xdc00U || low > 0xdfffU) {
                         return false;
                     }
-                    codepoint =
-                        0x10000U + ((codepoint - 0xd800U) << 10U) + low - 0xdc00U;
+                    codepoint = 0x10000U + ((codepoint - 0xd800U) << 10U) + low - 0xdc00U;
                 }
                 if (codepoint == 0 || (codepoint >= 0xdc00U && codepoint <= 0xdfffU)) {
                     return false;
@@ -202,10 +207,8 @@ static bool json_string(json_parser_t *parser, char *output, size_t capacity) {
     return false;
 }
 
-static bool json_named_string(json_parser_t *parser,
-                              const char *name,
-                              char *output,
-                              size_t capacity) {
+static bool
+json_named_string(json_parser_t *parser, const char *name, char *output, size_t capacity) {
     char key[32];
     return json_string(parser, key, sizeof(key)) && strcmp(key, name) == 0 &&
            json_character(parser, ':') && json_string(parser, output, capacity);
@@ -267,9 +270,8 @@ static bool json_nullable_timestamp(json_parser_t *parser) {
 
 static bool json_token(json_parser_t *parser, bool history) {
     char text[129];
-    if (!json_character(parser, '{') ||
-        !json_named_string(parser, "tokenId", text, sizeof(text)) || !fixed_hex(text, 32) ||
-        !json_character(parser, ',') ||
+    if (!json_character(parser, '{') || !json_named_string(parser, "tokenId", text, sizeof(text)) ||
+        !fixed_hex(text, 32) || !json_character(parser, ',') ||
         !json_named_string(parser, "revision", text, sizeof(text)) ||
         !decimal_value(text, UINT64_MAX, true) || !json_character(parser, ',') ||
         !json_named_string(parser, "label", text, sizeof(text)) || *text == '\0' ||
@@ -281,15 +283,14 @@ static bool json_token(json_parser_t *parser, bool history) {
     char key[32];
     if (!json_string(parser, key, sizeof(key)) || strcmp(key, "expiresAt") != 0 ||
         !json_character(parser, ':') || !json_nullable_timestamp(parser) ||
-        !json_character(parser, ',') ||
-        !json_named_string(parser, "state", text, sizeof(text)) ||
+        !json_character(parser, ',') || !json_named_string(parser, "state", text, sizeof(text)) ||
         (strcmp(text, "pending") != 0 && strcmp(text, "active") != 0 &&
          strcmp(text, "revoked") != 0 && strcmp(text, "expired") != 0) ||
         !json_character(parser, ',') || !json_string(parser, key, sizeof(key)) ||
-        strcmp(key, "routePending") != 0 || !json_character(parser, ':') ||
-        !json_boolean(parser) || !json_character(parser, ',') ||
-        !json_string(parser, key, sizeof(key)) || strcmp(key, "lastAdmittedAt") != 0 ||
-        !json_character(parser, ':') || !json_nullable_timestamp(parser)) {
+        strcmp(key, "routePending") != 0 || !json_character(parser, ':') || !json_boolean(parser) ||
+        !json_character(parser, ',') || !json_string(parser, key, sizeof(key)) ||
+        strcmp(key, "lastAdmittedAt") != 0 || !json_character(parser, ':') ||
+        !json_nullable_timestamp(parser)) {
         return false;
     }
     if (history) {
@@ -348,8 +349,7 @@ static bool json_list_result(json_parser_t *parser) {
     }
     if (!json_literal(parser, "null")) {
         char cursor[21];
-        if (!json_decimal_string(
-                parser, cursor, sizeof(cursor), ACCESS_ADMIN_TOKEN_LIMIT, true)) {
+        if (!json_decimal_string(parser, cursor, sizeof(cursor), ACCESS_ADMIN_TOKEN_LIMIT, true)) {
             return false;
         }
     }
@@ -387,12 +387,10 @@ static bool json_mutation_result(json_parser_t *parser,
     return valid;
 }
 
-static bool json_status_result(json_parser_t *parser,
-                               bool revision_present,
-                               const char *outer_revision) {
+static bool
+json_status_result(json_parser_t *parser, bool revision_present, const char *outer_revision) {
     char value[65];
-    if (!json_character(parser, '{') ||
-        !json_named_string(parser, "state", value, sizeof(value))) {
+    if (!json_character(parser, '{') || !json_named_string(parser, "state", value, sizeof(value))) {
         return false;
     }
     bool absent = strcmp(value, "absent_open") == 0;
@@ -422,9 +420,8 @@ static bool json_status_result(json_parser_t *parser,
         !json_character(parser, ',') ||
         !json_named_string(parser, "revision", value, sizeof(value)) ||
         !decimal_value(value, UINT64_MAX, false) || strcmp(value, outer_revision) != 0 ||
-        !json_character(parser, ',') ||
-        !json_string(parser, key, sizeof(key)) || strcmp(key, "pendingRouteSync") != 0 ||
-        !json_character(parser, ':')) {
+        !json_character(parser, ',') || !json_string(parser, key, sizeof(key)) ||
+        strcmp(key, "pendingRouteSync") != 0 || !json_character(parser, ':')) {
         return false;
     }
     uint64_t pending = 0;
@@ -455,19 +452,19 @@ static bool json_result(json_parser_t *parser,
         return !committed && json_empty_object(parser);
     }
     switch (operation) {
-    case CLIENT_ACCESS_ADMIN_STATUS:
-        return committed && json_status_result(parser, true, revision);
-    case CLIENT_ACCESS_ADMIN_LIST:
-        return json_list_result(parser);
-    case CLIENT_ACCESS_ADMIN_HISTORY:
-        return committed ? json_token(parser, true) : json_empty_object(parser);
-    case CLIENT_ACCESS_ADMIN_ISSUE:
-    case CLIENT_ACCESS_ADMIN_REVOKE:
-    case CLIENT_ACCESS_ADMIN_REMOVE:
-    case CLIENT_ACCESS_ADMIN_RESULT:
-        return json_mutation_result(parser, operation, committed);
-    default:
-        return false;
+        case CLIENT_ACCESS_ADMIN_STATUS:
+            return committed && json_status_result(parser, true, revision);
+        case CLIENT_ACCESS_ADMIN_LIST:
+            return json_list_result(parser);
+        case CLIENT_ACCESS_ADMIN_HISTORY:
+            return committed ? json_token(parser, true) : json_empty_object(parser);
+        case CLIENT_ACCESS_ADMIN_ISSUE:
+        case CLIENT_ACCESS_ADMIN_REVOKE:
+        case CLIENT_ACCESS_ADMIN_REMOVE:
+        case CLIENT_ACCESS_ADMIN_RESULT:
+            return json_mutation_result(parser, operation, committed);
+        default:
+            return false;
     }
 }
 
@@ -495,8 +492,10 @@ bool client_access_admin_response_parse(const uint8_t *data,
     }
     if (response->operation == CLIENT_ACCESS_ADMIN_OPERATION_COUNT ||
         !json_character(&parser, ',') ||
-        !json_named_string(
-            &parser, "requestId", response->request_id, sizeof(response->request_id)) ||
+        !json_named_string(&parser,
+                           "requestId",
+                           response->request_id,
+                           sizeof(response->request_id)) ||
         !fixed_hex(response->request_id, 32) || !json_character(&parser, ',') ||
         !json_named_string(&parser, "outcome", value, sizeof(value))) {
         return false;
@@ -518,8 +517,11 @@ bool client_access_admin_response_parse(const uint8_t *data,
     }
     if (json_literal(&parser, "null")) {
         response->revision_present = false;
-    } else if (!json_decimal_string(
-                   &parser, response->revision, sizeof(response->revision), UINT64_MAX, false)) {
+    } else if (!json_decimal_string(&parser,
+                                    response->revision,
+                                    sizeof(response->revision),
+                                    UINT64_MAX,
+                                    false)) {
         return false;
     } else {
         response->revision_present = true;

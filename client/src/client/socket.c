@@ -553,16 +553,15 @@ bool client_socket_open(client_socket_t *csock,
     if (metaserver_rendezvous_url(selected_server, VS(rendezvous_url))) {
         rendezvous = rendezvous_url;
     }
-    csock->sc = socket_quic_client_create(host,
-                                          port,
-                                          quic_certificate_sha256,
-                                          rendezvous,
-                                          clioption_settings.stun.endpoint,
-                                          selected_server->private_access
-                                              ? &selected_server->access_grant
-                                              : NULL,
-                                          preference,
-                                          &csock->failure);
+    csock->sc = socket_quic_client_create(
+        host,
+        port,
+        quic_certificate_sha256,
+        rendezvous,
+        clioption_settings.stun.endpoint,
+        selected_server->private_access ? &selected_server->access_grant : NULL,
+        preference,
+        &csock->failure);
     rendezvous_access_grant_clear(&selected_server->access_grant);
     if (csock->sc == NULL) {
         client_access_attempt_clear(&selected_server->access_attempt);

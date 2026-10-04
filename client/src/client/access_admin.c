@@ -53,10 +53,7 @@ static void remember_recovery(void) {
         return;
     }
     snprintf(recovery_request_id, sizeof(recovery_request_id), "%s", last_request_id);
-    snprintf(recovery_server_id,
-             sizeof(recovery_server_id),
-             "%s",
-             selected_server->server_id);
+    snprintf(recovery_server_id, sizeof(recovery_server_id), "%s", selected_server->server_id);
 }
 
 static bool fixed_hex(const char *text, size_t size) {
@@ -117,9 +114,8 @@ static bool json_escape(const char *input, char *output, size_t capacity) {
     return true;
 }
 
-static bool send_json(const char *json,
-                      const char *request_id,
-                      client_access_admin_operation_t operation) {
+static bool
+send_json(const char *json, const char *request_id, client_access_admin_operation_t operation) {
     size_t size = strlen(json);
     if (size == 0 || size > ACCESS_ADMIN_REQUEST_MAX ||
         !client_socket_send_access_admin(json, size)) {
@@ -170,25 +166,23 @@ static bool send_token_operation(const char *operation,
     if (!fixed_hex(token_id, 32) || !request_id_generate(id)) {
         return false;
     }
-    int length = mutation
-                     ? snprintf(json,
-                                sizeof(json),
-                                "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"%s\","
-                                "\"requestId\":\"%s\",\"expectedRevision\":\"%s\","
-                                "\"tokenId\":\"%s\"}",
-                                operation,
-                                id,
-                                revision,
-                                token_id)
-                     : snprintf(json,
-                                sizeof(json),
-                                "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"%s\","
-                                "\"requestId\":\"%s\",\"tokenId\":\"%s\"}",
-                                operation,
-                                id,
-                                token_id);
-    return length > 0 && (size_t)length < sizeof(json) &&
-           send_json(json, id, operation_id);
+    int length = mutation ? snprintf(json,
+                                     sizeof(json),
+                                     "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"%s\","
+                                     "\"requestId\":\"%s\",\"expectedRevision\":\"%s\","
+                                     "\"tokenId\":\"%s\"}",
+                                     operation,
+                                     id,
+                                     revision,
+                                     token_id)
+                          : snprintf(json,
+                                     sizeof(json),
+                                     "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"%s\","
+                                     "\"requestId\":\"%s\",\"tokenId\":\"%s\"}",
+                                     operation,
+                                     id,
+                                     token_id);
+    return length > 0 && (size_t)length < sizeof(json) && send_json(json, id, operation_id);
 }
 
 static bool send_issue(const char *arguments) {
@@ -283,9 +277,8 @@ static bool send_list(const char *arguments) {
 
 static bool send_result(const char *target_request_id) {
     if (!fixed_hex(target_request_id, 32) ||
-        (recovery_request_id[0] != '\0' &&
-         (!recovery_for_selected_server() ||
-          strcmp(target_request_id, recovery_request_id) != 0))) {
+        (recovery_request_id[0] != '\0' && (!recovery_for_selected_server() ||
+                                            strcmp(target_request_id, recovery_request_id) != 0))) {
         return false;
     }
     char id[33];
@@ -339,8 +332,7 @@ bool client_access_admin_command(const char *command) {
         }
         sent = send_list(arguments);
     } else if (strncmp(operation, "history ", 8) == 0) {
-        sent = send_token_operation(
-            "history", CLIENT_ACCESS_ADMIN_HISTORY, operation + 8, false);
+        sent = send_token_operation("history", CLIENT_ACCESS_ADMIN_HISTORY, operation + 8, false);
     } else if (strncmp(operation, "result ", 7) == 0) {
         sent = send_result(operation + 7);
     } else if (strncmp(operation, "issue ", 6) == 0) {
@@ -349,8 +341,7 @@ bool client_access_admin_command(const char *command) {
         } else {
             return true;
         }
-    } else if (strncmp(operation, "revoke ", 7) == 0 ||
-               strncmp(operation, "remove ", 7) == 0) {
+    } else if (strncmp(operation, "revoke ", 7) == 0 || strncmp(operation, "remove ", 7) == 0) {
         if (mutation_revision_ready(command)) {
             bool revoke = operation[2] == 'v';
             sent = send_token_operation(revoke ? "revoke" : "remove",
@@ -378,8 +369,7 @@ bool client_access_admin_response(const uint8_t *data, size_t size) {
     }
     client_access_admin_response_t response;
     if (!client_access_admin_response_parse(data, size, &response) ||
-        response.operation != last_operation ||
-        strcmp(response.request_id, last_request_id) != 0) {
+        response.operation != last_operation || strcmp(response.request_id, last_request_id) != 0) {
         return false;
     }
 

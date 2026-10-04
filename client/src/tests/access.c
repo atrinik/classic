@@ -27,8 +27,7 @@ static void require_cleared(const client_access_attempt_t *attempt) {
 }
 
 static bool parse_admin(const char *json, client_access_admin_response_t *response) {
-    return client_access_admin_response_parse(
-        (const uint8_t *)json, strlen(json), response);
+    return client_access_admin_response_parse((const uint8_t *)json, strlen(json), response);
 }
 
 int main(void) {

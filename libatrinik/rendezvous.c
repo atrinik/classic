@@ -47,37 +47,45 @@ bool rendezvous_websocket_protocol_valid(const rendezvous_websocket_protocol_t *
     return protocol != NULL && protocol->echoes == 1U && !protocol->invalid;
 }
 
-
 void rendezvous_access_grant_clear(rendezvous_access_grant_t *grant) {
-    if (grant != NULL) OPENSSL_cleanse(grant, sizeof(*grant));
+    if (grant != NULL)
+        OPENSSL_cleanse(grant, sizeof(*grant));
 }
 
 bool rendezvous_access_grant_valid(const rendezvous_access_grant_t *grant,
-                                   const char *server_id, uint64_t now) {
+                                   const char *server_id,
+                                   uint64_t now) {
     return grant != NULL && string_is_hex_fixed(server_id, 64, true) &&
            string_is_hex_fixed(grant->server_id, 64, true) &&
            CRYPTO_memcmp(server_id, grant->server_id, 64) == 0 &&
            string_is_hex_fixed(grant->generation, 64, true) &&
            string_is_hex_fixed(grant->client_nonce, 64, true) &&
-           string_is_hex_fixed(grant->grant, 64, true) &&
-           grant->expiry > now && grant->expiry - now <= RENDEZVOUS_GRANT_LIFETIME_MAX;
+           string_is_hex_fixed(grant->grant, 64, true) && grant->expiry > now &&
+           grant->expiry - now <= RENDEZVOUS_GRANT_LIFETIME_MAX;
 }
 
 bool rendezvous_server_auth_candidate_consume(rendezvous_server_auth_state_t *state) {
-    if (state == NULL || *state != RENDEZVOUS_SERVER_AUTH_AUTHORIZED) return false;
+    if (state == NULL || *state != RENDEZVOUS_SERVER_AUTH_AUTHORIZED)
+        return false;
     *state = RENDEZVOUS_SERVER_AUTH_CONSUMED;
     return true;
 }
 
-bool rendezvous_access_init_render(char *frame, size_t frame_size,
+bool rendezvous_access_init_render(char *frame,
+                                   size_t frame_size,
                                    const rendezvous_access_grant_t *grant) {
-    if (frame == NULL || frame_size == 0) return false;
+    if (frame == NULL || frame_size == 0)
+        return false;
     frame[0] = 0;
     if (grant == NULL || !string_is_hex_fixed(grant->grant, 64, true) ||
-        !string_is_hex_fixed(grant->client_nonce, 64, true)) return false;
-    int n = snprintf(frame, frame_size,
-                     "{\"type\":\"access_init\",\"version\":1,\"grant\":\"%s\",\"client_nonce\":\"%s\"}",
-                     grant->grant, grant->client_nonce);
+        !string_is_hex_fixed(grant->client_nonce, 64, true))
+        return false;
+    int n = snprintf(
+        frame,
+        frame_size,
+        "{\"type\":\"access_init\",\"version\":1,\"grant\":\"%s\",\"client_nonce\":\"%s\"}",
+        grant->grant,
+        grant->client_nonce);
     if (n <= 0 || (size_t)n >= frame_size || n > 256) {
         OPENSSL_cleanse(frame, frame_size);
         return false;

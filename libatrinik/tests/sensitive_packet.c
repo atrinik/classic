@@ -1,7 +1,11 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include <toolkit/packet.h>
-#define REQUIRE(x) do { if (!(x)) abort(); } while (0)
+#define REQUIRE(x)   \
+    do {             \
+        if (!(x))    \
+            abort(); \
+    } while (0)
 #ifdef PACKET_TEST_FREE
 static void *watched;
 static size_t watched_size;
@@ -10,8 +14,10 @@ void __real_free(void *ptr);
 void __wrap_free(void *ptr) {
     if (ptr != NULL && ptr == watched) {
         const unsigned char *p = ptr;
-        for (size_t i = 0; i < watched_size; i++) REQUIRE(p[i] == 0);
-        watched = NULL; observed = true;
+        for (size_t i = 0; i < watched_size; i++)
+            REQUIRE(p[i] == 0);
+        watched = NULL;
+        observed = true;
     }
     __real_free(ptr);
 }
@@ -22,7 +28,8 @@ int main(void) {
     packet_mark_sensitive(p);
     packet_writer_write_string(p, "synthetic-secret");
     char *debug = packet_get_debug(p);
-    REQUIRE(strstr(debug, "synthetic") == NULL); free(debug);
+    REQUIRE(strstr(debug, "synthetic") == NULL);
+    free(debug);
     packet_struct *copy = packet_dup(p);
     REQUIRE(copy->sensitive && copy->len == p->len);
     packet_struct *joined = packet_new(2, 0, 0);
@@ -34,15 +41,18 @@ int main(void) {
     packet_writer_mark(p, &mark);
     packet_writer_write_string(p, "tail");
     packet_writer_rollback(p, &mark);
-    for (size_t i = 0; i < 4; i++) REQUIRE(p->data[p->len + i] == 0);
+    for (size_t i = 0; i < 4; i++)
+        REQUIRE(p->data[p->len + i] == 0);
 #ifdef PACKET_TEST_FREE
-    watched = p->data; watched_size = p->size;
+    watched = p->data;
+    watched_size = p->size;
 #endif
     packet_free(p);
 #ifdef PACKET_TEST_FREE
     REQUIRE(observed);
 #endif
-    packet_free(copy); packet_free(joined);
+    packet_free(copy);
+    packet_free(joined);
     toolkit_deinit();
     return 0;
 }

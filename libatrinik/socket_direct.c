@@ -555,10 +555,11 @@ static bool socket_rendezvous_attempt_input(socket_rendezvous_attempt_t *attempt
     return true;
 }
 
-socket_rendezvous_attempt_t *socket_rendezvous_attempt_create(const char *server_id,
-                                                              const char *ticket,
-                                                              const rendezvous_access_grant_t *grant,
-                                                              uint64_t deadline_ms) {
+socket_rendezvous_attempt_t *
+socket_rendezvous_attempt_create(const char *server_id,
+                                 const char *ticket,
+                                 const rendezvous_access_grant_t *grant,
+                                 uint64_t deadline_ms) {
     if (!string_is_hex_fixed(server_id, RENDEZVOUS_SERVER_ID_HEX_SIZE, true) ||
         !socket_rendezvous_ticket_valid(ticket) || deadline_ms == 0 ||
         (grant != NULL && (!rendezvous_access_grant_valid(grant, server_id, (uint64_t)time(NULL)) ||
@@ -580,7 +581,8 @@ socket_rendezvous_attempt_t *socket_rendezvous_attempt_create(const char *server
             free(attempt);
             return NULL;
         }
-        attempt->deadline_ms = MIN(deadline_ms, monotonic + (grant->expiry - (uint64_t)now) * 1000U);
+        attempt->deadline_ms =
+            MIN(deadline_ms, monotonic + (grant->expiry - (uint64_t)now) * 1000U);
     }
     attempt->authorization_required = grant != NULL;
     attempt->state =

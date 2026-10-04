@@ -1189,10 +1189,11 @@ bool socket_rendezvous_complete_parse(const char *message, const char *expected_
  * not safe for concurrent calls; independent objects may be used concurrently.
  * A protected attempt rejects a grant for a different `server_id`.
  */
-socket_rendezvous_attempt_t *socket_rendezvous_attempt_create(const char *server_id,
-                                                              const char *ticket,
-                                                              const rendezvous_access_grant_t *grant,
-                                                              uint64_t deadline_ms);
+socket_rendezvous_attempt_t *
+socket_rendezvous_attempt_create(const char *server_id,
+                                 const char *ticket,
+                                 const rendezvous_access_grant_t *grant,
+                                 uint64_t deadline_ms);
 /** Cleanse and free an attempt. Accepts NULL. */
 void socket_rendezvous_attempt_destroy(socket_rendezvous_attempt_t *attempt);
 /** True once the single absolute monotonic deadline has elapsed. */

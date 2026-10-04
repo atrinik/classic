@@ -85,8 +85,7 @@ static void settings_button_handle(popup_struct *popup, size_t button) {
     } else if (button == BUTTON_LOGOUT) {
         clioption_settings.connect[1] = xstrdup(cpl.account);
         if (clioption_settings.connect[2] != NULL) {
-            access_code_clear(clioption_settings.connect[2],
-                              strlen(clioption_settings.connect[2]));
+            access_code_clear(clioption_settings.connect[2], strlen(clioption_settings.connect[2]));
             free(clioption_settings.connect[2]);
             clioption_settings.connect[2] = NULL;
         }

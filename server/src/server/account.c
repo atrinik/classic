@@ -914,7 +914,10 @@ void account_register(socket_struct *ns, char *name, char *password, char *passw
      * unavailable trust anchor cannot prove that an identity is unreserved. */
     if (settings.access_admin_accounts[0] != '\0' &&
         access_operator_lookup(settings.access_admin_accounts, name) != ACCESS_OPERATOR_UNLISTED) {
-        draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_RED, ns,
+        draw_info_send(CHAT_TYPE_GAME,
+                       NULL,
+                       COLOR_RED,
+                       ns,
                        "Account name is reserved by the system.");
         return;
     }
@@ -1304,11 +1307,10 @@ void account_password_force(object *op, char *name, const char *password) {
      * credentials and thereby inherit the independent root-managed grant.
      * When that boundary is configured, every forced reset uses the same
      * authenticated-account allowlist; malformed/unreadable lists deny. */
-    if ((settings.access_required || settings.access_initialize ||
-         *settings.access_store != '\0' || *settings.access_admin_accounts != '\0') &&
+    if ((settings.access_required || settings.access_initialize || *settings.access_store != '\0' ||
+         *settings.access_admin_accounts != '\0') &&
         (CONTR(op) == NULL || CONTR(op)->cs == NULL || CONTR(op)->cs->account == NULL ||
-         !access_operator_allowed(settings.access_admin_accounts,
-                                  CONTR(op)->cs->account))) {
+         !access_operator_allowed(settings.access_admin_accounts, CONTR(op)->cs->account))) {
         draw_info(COLOR_RED, op, "Account administration permission required.");
         return;
     }

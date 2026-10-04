@@ -357,8 +357,12 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
     }
     metaserver_publisher_hex_lower(nonce_hex);
 
-    int path_length = snprintf(VS(components->path), "%s/%s/%s", prefix, server_id,
-                               profile == METASERVER_PUBLISHER_ACCESS_CLASSIC_V1 ? "routes" : "publish");
+    int path_length =
+        snprintf(VS(components->path),
+                 "%s/%s/%s",
+                 prefix,
+                 server_id,
+                 profile == METASERVER_PUBLISHER_ACCESS_CLASSIC_V1 ? "routes" : "publish");
     int digest_length = snprintf(VS(components->content_digest), "sha-256=:%s:", digest_base64);
     int input_length =
         snprintf(VS(components->signature_input),

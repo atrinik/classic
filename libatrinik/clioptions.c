@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -604,10 +604,12 @@ bool clioptions_load(const char *path, const char *category) {
     int read_error = complete ? 0 : errno;
     if (fclose(fp) != 0) {
         complete = false;
-        if (read_error == 0) read_error = errno;
+        if (read_error == 0)
+            read_error = errno;
     }
     if (!complete) {
-        if (!clioptions_runtime) clioptions_startup_errors = true;
+        if (!clioptions_runtime)
+            clioptions_startup_errors = true;
         errno = read_error != 0 ? read_error : EIO;
     }
     return complete;
@@ -666,7 +668,8 @@ bool clioptions_load_str(const char *str, char **errmsg) {
     ret = clioptions_call_handler(cli, cli_arg, errmsg);
 
 out:
-    if (!ret && !clioptions_runtime) clioptions_startup_errors = true;
+    if (!ret && !clioptions_runtime)
+        clioptions_startup_errors = true;
     if (!ret && cli != NULL && cli->sensitive) {
         if (*errmsg != NULL) {
             OPENSSL_cleanse(*errmsg, strlen(*errmsg) + 1U);

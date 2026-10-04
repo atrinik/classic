@@ -147,21 +147,24 @@ void socket_access_attempt_failed(socket_struct *ns) {
     }
 }
 
-void socket_command_access_auth(socket_struct *ns, player *pl,
-                                uint8_t *data, size_t len, size_t pos) {
+void socket_command_access_auth(socket_struct *ns,
+                                player *pl,
+                                uint8_t *data,
+                                size_t len,
+                                size_t pos) {
     (void)pl;
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     ns->access_attempted = true;
-    if (len - pos != 17 || packet_reader_read_uint8(&reader) != 1 ||
-        !access_attempt_allowed(ns)) {
+    if (len - pos != 17 || packet_reader_read_uint8(&reader) != 1 || !access_attempt_allowed(ns)) {
         ns->state = ST_ZOMBIE;
         return;
     }
     /* Reserve the bounded attempt budget before asynchronous authorization. */
     socket_access_attempt_failed(ns);
     char code[16];
-    for (size_t i = 0; i < sizeof(code); i++) code[i] = packet_reader_read_uint8(&reader);
+    for (size_t i = 0; i < sizeof(code); i++)
+        code[i] = packet_reader_read_uint8(&reader);
     ns->access_auth_job = access_server_auth_submit(code);
     OPENSSL_cleanse(code, sizeof(code));
     OPENSSL_cleanse(data, len);
@@ -174,8 +177,11 @@ void socket_command_access_auth(socket_struct *ns, player *pl,
     }
 }
 
-void socket_command_access_admin(socket_struct *ns, player *pl,
-                                 uint8_t *data, size_t len, size_t pos) {
+void socket_command_access_admin(socket_struct *ns,
+                                 player *pl,
+                                 uint8_t *data,
+                                 size_t len,
+                                 size_t pos) {
     (void)pl;
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
@@ -187,10 +193,12 @@ void socket_command_access_admin(socket_struct *ns, player *pl,
     }
     /* Identity originates in the authenticated account socket; never a client
      * field, character name, OP group, or a permission command. */
-    ns->access_admin_job = access_server_admin_submit((const char *)data + pos,
-                                                     len - pos, ns->account);
-    while (pos < len) (void)packet_reader_read_uint8(&reader);
-    if (ns->access_admin_job == 0) ns->state = ST_ZOMBIE;
+    ns->access_admin_job =
+        access_server_admin_submit((const char *)data + pos, len - pos, ns->account);
+    while (pos < len)
+        (void)packet_reader_read_uint8(&reader);
+    if (ns->access_admin_job == 0)
+        ns->state = ST_ZOMBIE;
 }
 
 void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {

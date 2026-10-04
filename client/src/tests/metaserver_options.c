@@ -40,16 +40,15 @@ int main(void) {
                       "https://classic.meta.atrinik.org/index.xml") == 0);
     TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin,
                       "https://rendezvous.meta.atrinik.org/v1/classic") == 0);
-    TEST_CHECK(strcmp(options.endpoints[0].access_origin,
-                      "https://rendezvous.meta.atrinik.org") == 0);
+    TEST_CHECK(strcmp(options.endpoints[0].access_origin, "https://rendezvous.meta.atrinik.org") ==
+               0);
 
     char *errmsg = NULL;
-    TEST_CHECK(
-        !client_metaserver_options_parse(&options,
-                                         "https://classic.meta.atrinik.org/index.xml "
-                                         "https://rendezvous.meta.atrinik.org/v1/classic "
-                                         "https://rendezvous.meta.atrinik.org extra",
-                                         &errmsg));
+    TEST_CHECK(!client_metaserver_options_parse(&options,
+                                                "https://classic.meta.atrinik.org/index.xml "
+                                                "https://rendezvous.meta.atrinik.org/v1/classic "
+                                                "https://rendezvous.meta.atrinik.org extra",
+                                                &errmsg));
     TEST_CHECK(errmsg != NULL);
     free(errmsg);
     errmsg = NULL;
@@ -83,8 +82,8 @@ int main(void) {
                       "https://classic-directory-canary.atrinik.org/index.xml") == 0);
     TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin,
                       "https://rendezvous-canary.meta.atrinik.org/v1/classic") == 0);
-    TEST_CHECK(strcmp(options.endpoints[0].access_origin,
-                      "https://access-canary.meta.atrinik.org") == 0);
+    TEST_CHECK(
+        strcmp(options.endpoints[0].access_origin, "https://access-canary.meta.atrinik.org") == 0);
 
     TEST_CHECK(client_metaserver_options_parse(
         &options,

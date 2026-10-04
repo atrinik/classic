@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -102,7 +102,6 @@ TOOLKIT_FUNCS_DECLARE(clioptions);
 /** Sticky initialization parse failures, including value-file preprocessing.
  * Runtime edits do not set this flag; toolkit initialization clears it. */
 bool clioptions_had_startup_errors(void);
-
 
 /**
  * Creates a new CLI option.

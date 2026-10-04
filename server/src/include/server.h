@@ -390,8 +390,8 @@ typedef enum {
 #ifdef ATRINIK_TESTING
 void socket_server_process_received_for_test(socket_struct *cs);
 #endif
-extern socket_command_result_t socket_server_handle_command(socket_struct *cs, player *pl,
-                                                             uint8_t *data, size_t len);
+extern socket_command_result_t
+socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);
 
 extern bool socket_server_command_queue_append(socket_struct *cs, const uint8_t *data, size_t len);
 

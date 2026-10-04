@@ -258,8 +258,7 @@ static int popup_event(popup_struct *popup, SDL_Event *event) {
         return 1;
     }
     if (!identity_confirmation && resolve_job == NULL &&
-        event->type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-        event->button.button == SDL_BUTTON_LEFT &&
+        event->type == SDL_EVENT_MOUSE_BUTTON_DOWN && event->button.button == SDL_BUTTON_LEFT &&
         text_input_mouse_over(&code_input, event->button.x, event->button.y)) {
         code_input.focus = 1;
         return 1;

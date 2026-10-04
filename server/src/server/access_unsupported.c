@@ -11,78 +11,77 @@
  */
 static bool failed;
 
-bool access_server_init(const char identity_hex[65])
-{
+bool access_server_init(const char identity_hex[65]) {
     (void)identity_hex;
     failed = settings.access_required || settings.access_initialize ||
-        settings.access_store[0] != '\0' ||
-        settings.access_admin_accounts[0] != '\0';
+             settings.access_store[0] != '\0' || settings.access_admin_accounts[0] != '\0';
     return !failed;
 }
 
-void access_server_deinit(void) { }
-bool access_server_shutdown(void) { return !failed; }
-bool access_server_healthy(void) { return !failed; }
-void access_server_save_failed(void) { failed = true; }
-void access_server_tick(void) { }
+void access_server_deinit(void) {}
+bool access_server_shutdown(void) {
+    return !failed;
+}
+bool access_server_healthy(void) {
+    return !failed;
+}
+void access_server_save_failed(void) {
+    failed = true;
+}
+void access_server_tick(void) {}
 
-uint64_t access_server_root_submit(const char *data, size_t length)
-{
+uint64_t access_server_root_submit(const char *data, size_t length) {
     (void)data;
     (void)length;
     return 0;
 }
 
-uint64_t access_server_admin_submit(const char *data, size_t length,
-                                   const char *account)
-{
+uint64_t access_server_admin_submit(const char *data, size_t length, const char *account) {
     (void)data;
     (void)length;
     (void)account;
     return 0;
 }
 
-bool access_server_admin_poll(uint64_t id, char *out, size_t capacity,
-                              size_t *length)
-{
+bool access_server_admin_poll(uint64_t id, char *out, size_t capacity, size_t *length) {
     (void)id;
-    if (out != NULL && capacity != 0) out[0] = '\0';
-    if (length != NULL) *length = 0;
+    if (out != NULL && capacity != 0)
+        out[0] = '\0';
+    if (length != NULL)
+        *length = 0;
     return false;
 }
 
-void access_server_cancel(uint64_t id) { (void)id; }
+void access_server_cancel(uint64_t id) {
+    (void)id;
+}
 
-uint64_t access_server_auth_submit(const char code[16])
-{
+uint64_t access_server_auth_submit(const char code[16]) {
     (void)code;
     return 0;
 }
 
-bool access_server_auth_poll(uint64_t id, access_outcome_t *out,
-                             access_token_ref_t *ref)
-{
+bool access_server_auth_poll(uint64_t id, access_outcome_t *out, access_token_ref_t *ref) {
     (void)id;
-    if (out != NULL) *out = ACCESS_UNAVAILABLE;
-    if (ref != NULL) memset(ref, 0, sizeof(*ref));
+    if (out != NULL)
+        *out = ACCESS_UNAVAILABLE;
+    if (ref != NULL)
+        memset(ref, 0, sizeof(*ref));
     return false;
 }
 
-access_session_state_t access_server_session_check(const access_token_ref_t *ref)
-{
+access_session_state_t access_server_session_check(const access_token_ref_t *ref) {
     (void)ref;
     return ACCESS_SESSION_DENIED;
 }
 
-bool access_operator_allowed(const char *allowlist, const char *account)
-{
+bool access_operator_allowed(const char *allowlist, const char *account) {
     (void)allowlist;
     (void)account;
     return false;
 }
 
-access_operator_lookup_t access_operator_lookup(const char *allowlist, const char *account)
-{
+access_operator_lookup_t access_operator_lookup(const char *allowlist, const char *account) {
     (void)allowlist;
     (void)account;
     return ACCESS_OPERATOR_UNAVAILABLE;

@@ -51,6 +51,9 @@ bool metaserver_url_rendezvous(const char *origin,
 
 /* Build secret-free resolve or protected Classic rendezvous URL from a trusted
  * root origin. HTTPS is mandatory except explicit numeric loopback fixtures. */
-bool metaserver_url_access(const char *origin, const char *server_id, bool websocket,
-                            char *url, size_t url_size);
+bool metaserver_url_access(const char *origin,
+                           const char *server_id,
+                           bool websocket,
+                           char *url,
+                           size_t url_size);
 #endif

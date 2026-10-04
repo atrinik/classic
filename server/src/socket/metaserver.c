@@ -434,8 +434,7 @@ static void *metaserver_rendezvous_thread(void *data) {
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
             retry_after_seconds =
                 response_headers.has_retry_after ? response_headers.retry_after_seconds : 0;
-            bool protocol_valid =
-                metaserver_rendezvous_protocol_allows(&response_headers, true);
+            bool protocol_valid = metaserver_rendezvous_protocol_allows(&response_headers, true);
             bool connected = result == CURLE_OK && http_code == 101 && protocol_valid;
             if (!connected) {
                 retryable =
@@ -553,15 +552,24 @@ static void *metaserver_rendezvous_thread(void *data) {
                         /* The authenticated control receives candidates only after
                          * the metaserver atomically redeems the bound grant. Keep
                          * a bounded consumed-ticket set on this control generation. */
-                        bool candidate_parsed = socket_rendezvous_client_candidate_parse(
-                            message, NULL, false, RENDEZVOUS_SERVER_AUTH_NEW,
-                            VS(host), &port, ticket);
+                        bool candidate_parsed =
+                            socket_rendezvous_client_candidate_parse(message,
+                                                                     NULL,
+                                                                     false,
+                                                                     RENDEZVOUS_SERVER_AUTH_NEW,
+                                                                     VS(host),
+                                                                     &port,
+                                                                     ticket);
                         if (candidate_parsed) {
-                            candidate_parsed = metaserver_rendezvous_auth_claim(
-                                auth_jobs, arraysize(auth_jobs), ticket,
-                                datetime_monotonic_ms() + 15000U, &authorized) ==
+                            candidate_parsed =
+                                metaserver_rendezvous_auth_claim(auth_jobs,
+                                                                 arraysize(auth_jobs),
+                                                                 ticket,
+                                                                 datetime_monotonic_ms() + 15000U,
+                                                                 &authorized) ==
                                 METASERVER_RENDEZVOUS_AUTH_CLAIM_OK;
-                            if (candidate_parsed) authorized->state = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
+                            if (candidate_parsed)
+                                authorized->state = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
                         }
                         if (!candidate_parsed &&
                             metaserver_rendezvous_message_type(message, "client_candidate")) {
@@ -678,7 +686,8 @@ static void *metaserver_rendezvous_thread(void *data) {
 
 static bool metaserver_rendezvous_url(char *url, size_t url_size) {
     char quic_fingerprint[65];
-    if ((!settings.server_public && !settings.access_required) || !socket_server_quic_identity(quic_fingerprint)) {
+    if ((!settings.server_public && !settings.access_required) ||
+        !socket_server_quic_identity(quic_fingerprint)) {
         return false;
     }
 
@@ -1294,9 +1303,11 @@ typedef struct access_route_response {
 
 static size_t metaserver_access_route_body(char *data, size_t size, size_t count, void *context) {
     access_route_response_t *response = context;
-    if (size != 0 && count > SIZE_MAX / size) return 0;
+    if (size != 0 && count > SIZE_MAX / size)
+        return 0;
     size_t n = size * count;
-    if (n > sizeof(response->body) - 1 - response->size) return 0;
+    if (n > sizeof(response->body) - 1 - response->size)
+        return 0;
     memcpy(response->body + response->size, data, n);
     response->size += n;
     response->body[response->size] = 0;
@@ -1317,17 +1328,19 @@ static bool metaserver_access_request_id(const char *request, const char *operat
               string_tohex(digest, 16, out, 33, false) == 32;
     EVP_MD_CTX_free(ctx);
     OPENSSL_cleanse(digest, sizeof(digest));
-    if (ok) string_tolower(out);
+    if (ok)
+        string_tolower(out);
     return ok;
 }
 
 static access_outcome_t metaserver_access_operation(const access_route_t *route,
-                                                     const char *operation,
-                                                     char reservation[33],
-                                                     uint64_t deadline_ms) {
+                                                    const char *operation,
+                                                    char reservation[33],
+                                                    uint64_t deadline_ms) {
     access_outcome_t outcome = ACCESS_PENDING;
     char server_id[65], request_id[33], index[65], expiry[24] = "null", handle[36] = "null";
-    char body[4097], signature[METASERVER_PUBLISH_SIGNATURE_HEADER_MAX], url[MAX_BUF], authority[MAX_BUF];
+    char body[4097], signature[METASERVER_PUBLISH_SIGNATURE_HEADER_MAX], url[MAX_BUF],
+        authority[MAX_BUF];
     unsigned char nonce[16];
     metaserver_publisher_components_t components;
     metaserver_publisher_identity_t *identity = NULL;
@@ -1342,52 +1355,90 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
         !string_is_hex_fixed(route->token.token_id, 32, true) || route->token.revision == 0 ||
         !metaserver_access_request_id(route->request_id, operation, request_id) ||
         string_tohex(route->index, 32, VS(index), false) != 64 || RAND_bytes(nonce, 16) != 1 ||
-        !metaserver_url_access(settings.metaserver_publish_origin, NULL, false, VS(url))) goto out;
+        !metaserver_url_access(settings.metaserver_publish_origin, NULL, false, VS(url)))
+        goto out;
     string_tolower(index);
     if (route->has_expiry) {
-        if (route->expires_at <= 0) goto out;
+        if (route->expires_at <= 0)
+            goto out;
         snprintf(VS(expiry), "\"%" PRId64 "\"", route->expires_at);
     }
     if (reservation[0] != 0) {
-        if (!string_is_hex_fixed(reservation, 32, true)) goto out;
+        if (!string_is_hex_fixed(reservation, 32, true))
+            goto out;
         snprintf(VS(handle), "\"%s\"", reservation);
     }
     identity = socket_server_quic_publisher_identity();
-    if (identity == NULL) goto out;
-    int n = snprintf(VS(body),
+    if (identity == NULL)
+        goto out;
+    int n = snprintf(
+        VS(body),
         "{\"schema\":\"atrinik-access-route-v1\",\"profile\":\"classic\",\"serverId\":\"%s\","
         "\"certificate\":\"%s\",\"operation\":\"%s\",\"requestId\":\"%s\",\"tokenId\":\"%s\","
         "\"tokenRevision\":\"%" PRIu64 "\",\"index\":\"%s\",\"reservationId\":%s,\"expiresAt\":%s}",
-        server_id, metaserver_publisher_identity_certificate(identity), operation, request_id,
-        route->token.token_id, route->token.revision, index, handle, expiry);
-    if (n <= 0 || (size_t)n >= sizeof(body)) goto out;
+        server_id,
+        metaserver_publisher_identity_certificate(identity),
+        operation,
+        request_id,
+        route->token.token_id,
+        route->token.revision,
+        index,
+        handle,
+        expiry);
+    if (n <= 0 || (size_t)n >= sizeof(body))
+        goto out;
     /* Publication/recovery use request_lock around the same durable lineage. */
     pthread_mutex_lock(&request_lock);
-    metaserver_publish_sequence_result_t seq = metaserver_publish_sequence_reserve(
-        settings.datapath, server_id, 1, &sequence);
+    metaserver_publish_sequence_result_t seq =
+        metaserver_publish_sequence_reserve(settings.datapath, server_id, 1, &sequence);
     pthread_mutex_unlock(&request_lock);
     if (seq != METASERVER_PUBLISH_SEQUENCE_OK ||
         !metaserver_url_publish(settings.metaserver_publish_origin, "/", VS(url), VS(authority)) ||
-        !metaserver_publisher_build(METASERVER_PUBLISHER_ACCESS_CLASSIC_V1, authority,
-            server_id, sequence, nonce, (uint64_t)now, body, (size_t)n, &components) ||
+        !metaserver_publisher_build(METASERVER_PUBLISHER_ACCESS_CLASSIC_V1,
+                                    authority,
+                                    server_id,
+                                    sequence,
+                                    nonce,
+                                    (uint64_t)now,
+                                    body,
+                                    (size_t)n,
+                                    &components) ||
         !metaserver_publisher_identity_sign(identity, components.signature_base, signature) ||
-        !metaserver_url_publish(settings.metaserver_publish_origin, components.path, VS(url), VS(authority))) goto out;
-    const char *names[] = {"Content-Type", "Content-Digest", "Signature-Input", "Signature", "Atrinik-Server-ID", "Atrinik-Publish-Sequence"};
+        !metaserver_url_publish(settings.metaserver_publish_origin,
+                                components.path,
+                                VS(url),
+                                VS(authority)))
+        goto out;
+    const char *names[] = {"Content-Type",
+                           "Content-Digest",
+                           "Signature-Input",
+                           "Signature",
+                           "Atrinik-Server-ID",
+                           "Atrinik-Publish-Sequence"};
     char sequence_text[21];
     snprintf(VS(sequence_text), "%" PRIu64, sequence);
-    const char *values[] = {"application/json", components.content_digest, components.signature_input, signature, server_id, sequence_text};
+    const char *values[] = {"application/json",
+                            components.content_digest,
+                            components.signature_input,
+                            signature,
+                            server_id,
+                            sequence_text};
     for (size_t i = 0; i < arraysize(names); i++) {
         char line[1200];
         int length = snprintf(VS(line), "%s: %s", names[i], values[i]);
-        if (length <= 0 || (size_t)length >= sizeof(line)) goto out;
+        if (length <= 0 || (size_t)length >= sizeof(line))
+            goto out;
         struct curl_slist *next = curl_slist_append(headers, line);
-        if (next == NULL) goto out;
+        if (next == NULL)
+            goto out;
         headers = next;
     }
     now_ms = datetime_monotonic_ms();
-    if (now_ms >= deadline_ms) goto out;
+    if (now_ms >= deadline_ms)
+        goto out;
     curl = curl_easy_init();
-    if (curl == NULL) goto out;
+    if (curl == NULL)
+        goto out;
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -1406,10 +1457,15 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
     CURLcode result = curl_easy_perform(curl);
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    if (result != CURLE_OK || status != 200 || memchr(response.body, 0, response.size) != NULL) goto out;
-    outcome = metaserver_access_response_parse(response.body, response.size, request_id,
-                                                route->token.revision, operation, reservation,
-                                                (uint64_t)now);
+    if (result != CURLE_OK || status != 200 || memchr(response.body, 0, response.size) != NULL)
+        goto out;
+    outcome = metaserver_access_response_parse(response.body,
+                                               response.size,
+                                               request_id,
+                                               route->token.revision,
+                                               operation,
+                                               reservation,
+                                               (uint64_t)now);
 
 out:
     curl_easy_cleanup(curl);
@@ -1423,20 +1479,27 @@ out:
 
 access_outcome_t metaserver_access_route(void *context, const access_route_t *route) {
     (void)context;
-    if (route == NULL || !metaserver_initialized || !metaserver_enabled()) return ACCESS_UNAVAILABLE;
+    if (route == NULL || !metaserver_initialized || !metaserver_enabled())
+        return ACCESS_UNAVAILABLE;
     char reservation[33] = {0};
     uint64_t now = datetime_monotonic_ms();
-    if (now > UINT64_MAX - 29000U) return ACCESS_UNAVAILABLE;
+    if (now > UINT64_MAX - 29000U)
+        return ACCESS_UNAVAILABLE;
     uint64_t deadline = now + 29000U;
-    if (route->deadline_monotonic_ms < 0) return ACCESS_UNAVAILABLE;
-    if (route->deadline_monotonic_ms > 0 &&
-        (uint64_t)route->deadline_monotonic_ms < deadline)
+    if (route->deadline_monotonic_ms < 0)
+        return ACCESS_UNAVAILABLE;
+    if (route->deadline_monotonic_ms > 0 && (uint64_t)route->deadline_monotonic_ms < deadline)
         deadline = (uint64_t)route->deadline_monotonic_ms;
-    if (now >= deadline) return ACCESS_UNAVAILABLE;
-    access_outcome_t outcome = metaserver_access_operation(route, route->revoke ? "revoke" : "reserve", reservation, deadline);
+    if (now >= deadline)
+        return ACCESS_UNAVAILABLE;
+    access_outcome_t outcome = metaserver_access_operation(route,
+                                                           route->revoke ? "revoke" : "reserve",
+                                                           reservation,
+                                                           deadline);
     /* Only a rejected reservation proves this tuple never acquired ownership.
      * Activation conflicts remain ambiguous and must retain pending state. */
-    if (!route->revoke && outcome == ACCESS_CONFLICT) outcome = ACCESS_ROUTE_COLLISION;
+    if (!route->revoke && outcome == ACCESS_CONFLICT)
+        outcome = ACCESS_ROUTE_COLLISION;
     else if (outcome == ACCESS_COMMITTED && !route->revoke)
         outcome = metaserver_access_operation(route, "activate", reservation, deadline);
     OPENSSL_cleanse(reservation, sizeof(reservation));

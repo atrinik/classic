@@ -309,13 +309,17 @@ bool metaserver_url_rendezvous(const char *origin,
     return ok;
 }
 
-
-bool metaserver_url_access(const char *origin, const char *server_id, bool websocket,
-                            char *url, size_t url_size) {
-    if (url == NULL || url_size == 0) return false;
+bool metaserver_url_access(const char *origin,
+                           const char *server_id,
+                           bool websocket,
+                           char *url,
+                           size_t url_size) {
+    if (url == NULL || url_size == 0)
+        return false;
     *url = 0;
     metaserver_parsed_url_t parsed;
-    if (!metaserver_url_parse(origin, &parsed)) return false;
+    if (!metaserver_url_parse(origin, &parsed))
+        return false;
     bool secure = strcmp(parsed.scheme, "https") == 0;
     bool loopback = strcmp(parsed.host, "127.0.0.1") == 0 || strcmp(parsed.host, "[::1]") == 0;
     bool ok = (secure || loopback) && strcmp(parsed.path, "/") == 0 &&
@@ -335,7 +339,8 @@ bool metaserver_url_access(const char *origin, const char *server_id, bool webso
                           : snprintf(url, url_size, "%s", rendered);
         ok = n > 0 && (size_t)n < url_size;
     }
-    if (!ok) *url = 0;
+    if (!ok)
+        *url = 0;
     curl_free(rendered);
     metaserver_parsed_url_free(&parsed);
     return ok;

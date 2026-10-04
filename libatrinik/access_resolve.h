@@ -17,8 +17,13 @@ typedef struct access_resolved {
  * Result is one-attempt private state, never a public directory/cache entry.
  * The configured origin is the trusted first-contact routing authority.
  * Existing pins must be checked separately before sending C to the server. */
-bool access_resolve(const char *origin, const char code[ACCESS_CODE_LENGTH], access_resolved_t *out);
-bool access_resolve_parse(const char *body, size_t size, const char nonce[65],
-                          uint64_t now, access_resolved_t *out);
+bool access_resolve(const char *origin,
+                    const char code[ACCESS_CODE_LENGTH],
+                    access_resolved_t *out);
+bool access_resolve_parse(const char *body,
+                          size_t size,
+                          const char nonce[65],
+                          uint64_t now,
+                          access_resolved_t *out);
 void access_resolved_clear(access_resolved_t *resolved);
 #endif

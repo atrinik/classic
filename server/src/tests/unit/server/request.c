@@ -1219,8 +1219,10 @@ START_TEST(test_access_busy_retains_received_and_queued_frames) {
     socket_buffer_clear(cs);
     ck_assert(socket_server_command_queue_append(cs, frame + 2, sizeof(frame) - 2));
     /* Authority becomes busy after the loop's preliminary valid check. */
-    access_session_state_t queued[] = {ACCESS_SESSION_VALID, ACCESS_SESSION_BUSY,
-                                      ACCESS_SESSION_VALID, ACCESS_SESSION_VALID};
+    access_session_state_t queued[] = {ACCESS_SESSION_VALID,
+                                       ACCESS_SESSION_BUSY,
+                                       ACCESS_SESSION_VALID,
+                                       ACCESS_SESSION_VALID};
     access_server_session_sequence_for_test(queued, arraysize(queued));
     socket_server_handle_client(pl);
     ck_assert_uint_eq(cs->packet_recv_cmd->len, sizeof(frame));

@@ -82,10 +82,7 @@ bool client_metaserver_options_parse(client_metaserver_options_t *options,
                                    client_metaserver_identity,
                                    "client",
                                    VS(rendered)) ||
-        !metaserver_url_publish(access_origin,
-                                "/v1/access/resolve",
-                                VS(rendered),
-                                VS(authority))) {
+        !metaserver_url_publish(access_origin, "/v1/access/resolve", VS(rendered), VS(authority))) {
         if (errmsg != NULL) {
             *errmsg = xstrdup("metaserver requires canonical directory, rendezvous, and "
                               "access-service endpoints; the former two-value format is no "

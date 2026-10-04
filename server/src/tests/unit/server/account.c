@@ -399,14 +399,16 @@ END_TEST
 START_TEST(test_access_registration_with_root_allowlist) {
 #ifndef WIN32
     const char *fixture = getenv("ATRINIK_TEST_ROOT_ALLOWLIST_DIR");
-    if (fixture == NULL || geteuid() != 0) return;
+    if (fixture == NULL || geteuid() != 0)
+        return;
     char saved_allowlist[sizeof(settings.access_admin_accounts)];
     memcpy(saved_allowlist, settings.access_admin_accounts, sizeof(saved_allowlist));
     char allowlist[HUGE_BUF];
     snprintf(VS(allowlist), "%s/accounts", fixture);
     FILE *fp = fopen(allowlist, "w");
     ck_assert_ptr_nonnull(fp);
-    if (_i != 0) ck_assert_int_gt(fputs(_i == 1 ? "fixtureadmin\n" : "reservationproof\n", fp), 0);
+    if (_i != 0)
+        ck_assert_int_gt(fputs(_i == 1 ? "fixtureadmin\n" : "reservationproof\n", fp), 0);
     ck_assert_int_eq(fclose(fp), 0);
     ck_assert_int_eq(chmod(allowlist, 0600), 0);
     snprintf(VS(settings.access_admin_accounts), "%s", allowlist);

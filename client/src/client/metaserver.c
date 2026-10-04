@@ -107,8 +107,8 @@ static char *metaserver_cache_path(const client_metaserver_endpoint_t *endpoint)
         EVP_DigestUpdate(context,
                          endpoint->rendezvous_origin,
                          strlen(endpoint->rendezvous_origin) + 1) == 1 &&
-        EVP_DigestUpdate(
-            context, endpoint->access_origin, strlen(endpoint->access_origin) + 1) == 1 &&
+        EVP_DigestUpdate(context, endpoint->access_origin, strlen(endpoint->access_origin) + 1) ==
+            1 &&
         EVP_DigestFinal_ex(context, digest, &digest_size) == 1 && digest_size == 32 &&
         string_tohex(digest, digest_size, VS(scope), false) == 64;
     EVP_MD_CTX_free(context);
@@ -178,11 +178,17 @@ bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t ur
         return false;
     }
     if (server->private_access) {
-        return metaserver_url_access(
-            server->rendezvous_origin, server->server_id, true, url, url_size);
+        return metaserver_url_access(server->rendezvous_origin,
+                                     server->server_id,
+                                     true,
+                                     url,
+                                     url_size);
     }
-    return metaserver_url_rendezvous(
-        server->rendezvous_origin, server->server_id, "client", url, url_size);
+    return metaserver_url_rendezvous(server->rendezvous_origin,
+                                     server->server_id,
+                                     "client",
+                                     url,
+                                     url_size);
 }
 
 server_struct *metaserver_access_resolve(const char *code) {

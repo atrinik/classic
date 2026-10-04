@@ -282,8 +282,8 @@ int commands_check_permission(player *pl, const char *command) {
 
     /* General OP grants cannot confer process execution, arbitrary object
      * scripting or configuration writes across the access-admin boundary. */
-    if ((settings.access_required || settings.access_initialize ||
-         *settings.access_store != '\0' || *settings.access_admin_accounts != '\0') &&
+    if ((settings.access_required || settings.access_initialize || *settings.access_store != '\0' ||
+         *settings.access_admin_accounts != '\0') &&
         (strcmp(command, "console") == 0 || strcmp(command, "create") == 0 ||
          strcmp(command, "patch") == 0 || strcmp(command, "config") == 0 ||
          strcmp(command, "password") == 0) &&

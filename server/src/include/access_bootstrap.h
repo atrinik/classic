@@ -13,7 +13,8 @@
  * committed snapshot for explicit operator inspection; never retries/reset.
  * No listeners, plugins, route callbacks, token issuance or publication. */
 bool access_bootstrap_initialize(const char *data_directory,
-    const char *store_directory, bool protected_policy);
+                                 const char *store_directory,
+                                 bool protected_policy);
 
 /* Read-only shared stopped-state helpers. Absolute, bounded paths only;
  * trusted root/euid ancestry, no links/dot components. Returned descriptor is

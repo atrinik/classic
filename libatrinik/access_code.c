@@ -79,9 +79,12 @@ bool access_code_generate(char out[ACCESS_CODE_BUFFER_SIZE]) {
     return true;
 }
 
-static bool digest(const char *domain, size_t domain_size,
-                   const void *first, size_t first_size,
-                   const void *second, size_t second_size,
+static bool digest(const char *domain,
+                   size_t domain_size,
+                   const void *first,
+                   size_t first_size,
+                   const void *second,
+                   size_t second_size,
                    unsigned char out[ACCESS_HASH_SIZE]) {
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     unsigned int size = 0;
@@ -116,11 +119,15 @@ bool access_code_derive(const char code[ACCESS_CODE_LENGTH],
     access_code_clear(index, ACCESS_HASH_SIZE);
     access_code_clear(verifier, ACCESS_HASH_SIZE);
     bool ok = server_identity != NULL && route != NULL && index != NULL && verifier != NULL &&
-              access_code_valid(code, ACCESS_CODE_LENGTH) &&
-              access_code_route(code, route) &&
+              access_code_valid(code, ACCESS_CODE_LENGTH) && access_code_route(code, route) &&
               digest(index_domain, sizeof(index_domain), route, ACCESS_HASH_SIZE, NULL, 0, index) &&
-              digest(join_domain, sizeof(join_domain), server_identity, ACCESS_HASH_SIZE,
-                     code, ACCESS_CODE_LENGTH, verifier);
+              digest(join_domain,
+                     sizeof(join_domain),
+                     server_identity,
+                     ACCESS_HASH_SIZE,
+                     code,
+                     ACCESS_CODE_LENGTH,
+                     verifier);
     if (!ok) {
         access_code_clear(route, ACCESS_HASH_SIZE);
         access_code_clear(index, ACCESS_HASH_SIZE);
