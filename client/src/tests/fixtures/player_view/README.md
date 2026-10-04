@@ -408,3 +408,25 @@ the explicit non-primary regression scene, these are pixel-exact references for
 the completed map output. `/screenshot map` asynchronously enqueues an explicit
 GPU readback of that map-widget rectangle and polls its fence on later client
 iterations; PNG encoder metadata is deliberately excluded.
+
+The `ground-coverage` fixture uses the closed `ground-coverage-test` switch to
+exercise an L-shaped hole, an isolated known floor, a one-cell corridor, and
+missing diagonal cells through the production MAP2 decoder and map painter.
+Its three boundary probes must have decreasing, nonzero coverage matching an
+independent pixel-center topology calculation. Actual GPU RGB must equal the
+CPU tone/LUT result multiplied by coverage with round-half-up division by 255;
+alpha stays opaque. An interior floor stays at full coverage, island/corridor
+centers remain visibly lit, and an unknown tile has neither remembered geometry
+nor a nonblack framebuffer pixel. FMASK receives coverage; actor, wall, and roof
+commands and pixels retain full coverage.
+
+Complete framebuffer comparisons require exact full/retained parity, an
+unchanged full rebuild, and SAME scroll-out/back parity. Normal light-only
+scalar/RGB and hue-only packets must change illumination without changing
+coverage or creating a floor. A layer-only exploration packet must increase
+coverage without changing the sampled light. Soft FOW must retain the explored
+floor and its coverage. Every updated scene also compares full and retained
+frames. The immutable original snapshot is restored before the harness's
+remaining comparisons. The pending backend golden does not waive these
+semantic and pixel assertions. The floor-composition fixture additionally
+checks the expired-item background against CPU tone multiplied by coverage.

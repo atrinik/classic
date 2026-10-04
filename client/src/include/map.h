@@ -661,6 +661,8 @@ extern bool widget_map_actor_relocation_test(void);
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
 /** Probe static foot-row versus projected-ground lighting in the closed edge fixture. */
 extern bool widget_map_edge_lighting_test(void);
+/** Verify ground coverage through the production MAP2 and GPU draw path. */
+extern bool widget_map_ground_coverage_test(void);
 /** Verify sparse scroll and fading FOW items through the production compositor. */
 extern bool widget_map_floor_composition_test(void);
 #endif

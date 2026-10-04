@@ -1148,6 +1148,7 @@ if (BUILD_TESTING)
         presentation-night
         presentation-saturated
         edge-lighting
+        ground-coverage
         floor-composition
         brynknot-movement
         gpu-qualification-town-25x25

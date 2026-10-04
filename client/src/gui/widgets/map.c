@@ -9548,6 +9548,23 @@ static bool map_floor_composition_capture(SDL_Surface *surface,
         capture != NULL &&
         SDL_ReadSurfacePixel(capture, *pixel_x, *pixel_y, &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
     SDL_DestroySurface(capture);
+    if (success && !marker_present) {
+        gpu_map_renderer_probe_t probe;
+        success = gpu_map_renderer_probe(*pixel_x, *pixel_y, MAP2_DEPTH_INDEX(0), &probe) &&
+                  probe.albedo[3] == UINT8_MAX && rgba[3] == UINT8_MAX;
+        if (success) {
+            uint16_t linear[3];
+            lighting_tone_map_linear(probe.light[0], &probe.light[1], linear);
+            for (size_t channel = 0; channel < 3; channel++) {
+                unsigned tone = lighting_multiply_channel(probe.albedo[channel], linear[channel]);
+                unsigned expected = (tone * probe.ground_coverage + 127U) / 255U;
+                success &= rgba[channel] == expected;
+            }
+        }
+        if (!success) {
+            SDL_SetError("floor composition expired item did not reveal CPU-tone ground coverage");
+        }
+    }
     return success;
 }
 
@@ -9722,6 +9739,251 @@ done:
     LastTick = initial_tick;
     map_select_level(0, true);
     map_redraw_consume();
+    return success;
+}
+
+/** Draw the normal primary world and capture its complete composed target. */
+static SDL_Surface *map_ground_coverage_capture(SDL_Surface *surface, bool retained) {
+    map_redraw_consume();
+    map_redraw_request(retained ? MAP_REDRAW_REASON_ANIMATION : MAP_REDRAW_REASON_MAP_PACKET);
+    map_benchmark_statistics_reset();
+    if (!gpu_renderer_begin_frame()) {
+        return NULL;
+    }
+    map_draw_map(surface);
+    map_benchmark_statistics_t statistics;
+    map_benchmark_statistics_get(&statistics);
+    if (statistics.primary_map_draws != 1 || statistics.render_failures != 0 ||
+        (retained && (statistics.animation_draws != 1 || statistics.reused_render_commands == 0 ||
+                      statistics.compiled_render_commands != 0))) {
+        SDL_SetError("ground coverage did not exercise the requested primary draw");
+        return NULL;
+    }
+    if (!gpu_renderer_draw_map(0.0f, 0.0f, (float)surface->w, (float)surface->h) ||
+        !gpu_renderer_present()) {
+        return NULL;
+    }
+    SDL_Surface *readback = gpu_renderer_readback(NULL);
+    SDL_Surface *rgba = readback != NULL ? SDL_ConvertSurface(readback, SDL_PIXELFORMAT_RGBA32) : NULL;
+    SDL_DestroySurface(readback);
+    return rgba;
+}
+
+/** Compare all actual framebuffer pixels, excluding allocator row padding. */
+static bool map_ground_coverage_equal(const SDL_Surface *left, const SDL_Surface *right) {
+    if (left == NULL || right == NULL || left->w != right->w || left->h != right->h) {
+        return false;
+    }
+    for (int y = 0; y < left->h; y++) {
+        if (memcmp((const uint8_t *)left->pixels + y * left->pitch,
+                   (const uint8_t *)right->pixels + y * right->pitch,
+                   (size_t)left->w * 4) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Probe a known ground pixel and check post-tone coverage against the CPU oracle. */
+static bool map_ground_coverage_sample(SDL_Surface *surface,
+                                       int x, int y, int dx, int dy,
+                                       gpu_map_renderer_probe_t *probe) {
+    map_render_data_t data = {.world_surface = true, .primary_level = true, .depth = 0};
+    map_setup_render_data(surface, &data, NULL, NULL, NULL, NULL);
+    lighting_vertex_t vertex = map_lighting_vertex(surface, &data, MAP_STARTX + x, MAP_STARTY + y);
+    if (!gpu_map_renderer_probe(vertex.x + dx, vertex.y + dy, MAP2_DEPTH_INDEX(0), probe) ||
+        probe->albedo[0] != 192 || probe->albedo[1] != 192 || probe->albedo[2] != 192 ||
+        probe->albedo[3] != UINT8_MAX || probe->final_color[3] != UINT8_MAX) {
+        return SDL_SetError("ground coverage missing opaque floor at %d,%d offset %d,%d", x, y, dx, dy);
+    }
+    uint16_t linear[3];
+    lighting_tone_map_linear(probe->light[0], &probe->light[1], linear);
+    for (size_t channel = 0; channel < 3; channel++) {
+        unsigned tone = lighting_multiply_channel(192, linear[channel]);
+        unsigned expected = (tone * probe->ground_coverage + 127U) / 255U;
+        if (probe->final_color[channel] != expected) {
+            return SDL_SetError("ground coverage tone oracle at %d,%d channel %zu: got %u expected %u coverage %u",
+                                x, y, channel, probe->final_color[channel], expected, probe->ground_coverage);
+        }
+    }
+    return true;
+}
+
+/** One complete MAP2 update, deliberately independent of any light setter. */
+static packet_struct *map_ground_coverage_floor(int x, int y) {
+    packet_struct *level = packet_new(0, 32, 32);
+    packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6));
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, GET_MAP_LAYER(LAYER_FLOOR, 0));
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 0);
+    return level;
+}
+
+/** Light-only packets may create sample records, but must never invent ground. */
+static packet_struct *map_ground_coverage_light(uint16_t red, uint16_t green, uint16_t blue) {
+    packet_struct *level = packet_new(0, 128, 128);
+    for (int x = 9; x <= 10; x++) {
+        for (int y = 5; y <= 6; y++) {
+            packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6 | MAP2_MASK_LIGHT_LEVEL));
+            packet_writer_write_uint16(level, 256);
+            packet_writer_write_uint8(level, 0);
+            packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16);
+            packet_writer_write_uint8(level, 1);
+            packet_writer_write_uint16(level, red);
+            packet_writer_write_uint16(level, green);
+            packet_writer_write_uint16(level, blue);
+        }
+    }
+    return level;
+}
+
+/** Closed MAP2 fixture: ground topology, owner exclusions, and cache lifecycle. */
+bool widget_map_ground_coverage_test(void) {
+#define GROUND_CHECK(expression)                                                               \
+    do {                                                                                        \
+        if (!(expression)) {                                                                    \
+            fprintf(stderr, "ground coverage checkpoint failed: %s: %s\n", #expression, SDL_GetError()); \
+            success = false;                                                                    \
+            goto done;                                                                          \
+        }                                                                                       \
+    } while (0)
+    bool success = true;
+    SDL_Surface *baseline = NULL;
+    SDL_Surface *capture = NULL;
+    SDL_Surface *other = NULL;
+    SDL_Surface *surface = cur_widget[MAP_ID] != NULL ? cur_widget[MAP_ID]->surface : NULL;
+    GROUND_CHECK(surface != NULL && map_width == 17 && map_height == 17 && map_select_level(0, false));
+    const uint8_t posx = MapData.posx;
+    const uint8_t posy = MapData.posy;
+    gpu_map_renderer_probe_t boundary[3], sample, lit, explored;
+    static const int offsets[3][2] = {{3, 2}, {6, 3}, {9, 5}};
+    baseline = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(baseline != NULL);
+    for (size_t index = 0; index < arraysize(boundary); index++) {
+        GROUND_CHECK(map_ground_coverage_sample(surface, 9, 5, offsets[index][0], offsets[index][1], &boundary[index]));
+        /* Pixel centers on this half-cell quad have u=(dx/24+dy/12)/2.
+         * Both right vertices are missing: coverage is 255*(1-2*u).
+         * This analytic topology oracle is independent of uploaded coverage. */
+        double u = ((offsets[index][0] + 0.5) / 24.0 + (offsets[index][1] + 0.5) / 12.0) / 2.0;
+        int expected = (int)(255.0 * (1.0 - 2.0 * u) + 0.5);
+        GROUND_CHECK(abs((int)boundary[index].ground_coverage - expected) <= 1);
+    }
+    GROUND_CHECK(boundary[0].ground_coverage > boundary[1].ground_coverage &&
+                 boundary[1].ground_coverage > boundary[2].ground_coverage &&
+                 boundary[2].ground_coverage > 0 && boundary[0].ground_coverage < UINT8_MAX &&
+                 boundary[0].final_color[0] > boundary[2].final_color[0] + 32);
+    GROUND_CHECK(map_ground_coverage_sample(surface, 7, 5, 0, 0, &sample) && sample.ground_coverage == UINT8_MAX);
+    GROUND_CHECK(map_ground_coverage_sample(surface, 4, 4, 0, 0, &sample) && sample.ground_coverage > 210 && sample.final_color[0] > 100);
+    GROUND_CHECK(map_ground_coverage_sample(surface, 4, 10, 0, 0, &sample) && sample.ground_coverage > 210 && sample.final_color[0] > 100);
+    GROUND_CHECK(map_ground_coverage_sample(surface, 10, 11, 6, 3, &sample) && sample.ground_coverage > 0 && sample.ground_coverage < 200);
+
+    /* Unknown geometry stays absent and the composed framebuffer stays black. */
+    map_render_data_t data = {.world_surface = true, .primary_level = true, .depth = 0};
+    map_setup_render_data(surface, &data, NULL, NULL, NULL, NULL);
+    lighting_vertex_t unknown = map_lighting_vertex(surface, &data, MAP_STARTX + 10, MAP_STARTY + 5);
+    uint8_t unknown_rgba[4];
+    GROUND_CHECK(!map_cell_has_remembered_geometry(MAP_CELL_GET_MIDDLE(10, 5)) &&
+                 SDL_ReadSurfacePixel(baseline, unknown.x, unknown.y, &unknown_rgba[0], &unknown_rgba[1], &unknown_rgba[2], &unknown_rgba[3]) &&
+                 unknown_rgba[0] == 0 && unknown_rgba[1] == 0 && unknown_rgba[2] == 0);
+
+    unsigned exclusions = 0, masks = 0;
+    for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
+        const map_render_command_t *command = &map_retained_primary_context.commands[index];
+        if (command->object_layer == LAYER_FMASK) {
+            GROUND_CHECK(command->ground_coverage);
+            masks++;
+        }
+        if (command->object_layer == LAYER_LIVING || command->object_layer == LAYER_WALL || command->roof) {
+            GROUND_CHECK(!command->ground_coverage);
+            int x = command->bounds_x + command->bounds_w / 2;
+            int y = command->bounds_y + command->bounds_h / 3;
+            GROUND_CHECK(gpu_map_renderer_probe(x, y, MAP2_DEPTH_INDEX(0), &sample) && sample.ground_coverage == UINT8_MAX);
+            GROUND_CHECK(sample.albedo[0] == UINT8_MAX);
+            exclusions |= command->object_layer == LAYER_LIVING ? 1U : (command->roof ? 4U : 2U);
+        }
+    }
+    GROUND_CHECK(exclusions == 7 && masks == 1);
+    capture = map_ground_coverage_capture(surface, true);
+    GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
+    SDL_DestroySurface(capture);
+    capture = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
+    SDL_DestroySurface(capture);
+    capture = NULL;
+
+    /* Sparse SAME scroll and return preserve topology without resending faces. */
+    GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, (uint8_t)(posx + 1), posy, 0, NULL, NULL));
+    capture = map_ground_coverage_capture(surface, false);
+    other = map_ground_coverage_capture(surface, true);
+    GROUND_CHECK(map_ground_coverage_equal(capture, other));
+    SDL_DestroySurface(capture);
+    SDL_DestroySurface(other);
+    capture = other = NULL;
+    GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, NULL, NULL));
+    capture = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
+    SDL_DestroySurface(capture);
+    capture = NULL;
+
+    /* Scalar/RGB and then hue-only updates preserve the independently known edge. */
+    for (int hue = 0; hue < 2; hue++) {
+        GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0,
+                     map_ground_coverage_light(hue == 0 ? 256 : 32, hue == 0 ? 64 : 256, hue == 0 ? 32 : 64), NULL));
+        capture = map_ground_coverage_capture(surface, false);
+        GROUND_CHECK(capture != NULL && map_ground_coverage_sample(surface, 9, 5, 6, 3, &lit));
+        GROUND_CHECK(lit.ground_coverage == boundary[1].ground_coverage &&
+                     memcmp(lit.light, boundary[1].light, sizeof(lit.light)) != 0 &&
+                     memcmp(lit.final_color, boundary[1].final_color, sizeof(lit.final_color)) != 0 &&
+                     !map_cell_has_remembered_geometry(MAP_CELL_GET_MIDDLE(10, 5)));
+        if (hue == 1) {
+            GROUND_CHECK(memcmp(lit.final_color, sample.final_color, sizeof(lit.final_color)) != 0);
+        }
+        sample = lit;
+        other = map_ground_coverage_capture(surface, true);
+        GROUND_CHECK(map_ground_coverage_equal(capture, other));
+        SDL_DestroySurface(capture);
+        SDL_DestroySurface(other);
+        capture = other = NULL;
+    }
+
+    /* A layer-only exploration update must invalidate coverage even with no light update. */
+    GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0,
+                                               map_ground_coverage_floor(10, 5), NULL));
+    capture = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(capture != NULL && map_ground_coverage_sample(surface, 9, 5, 6, 3, &explored) &&
+                 explored.ground_coverage > lit.ground_coverage + 32 &&
+                 memcmp(explored.light, lit.light, sizeof(lit.light)) == 0);
+    other = map_ground_coverage_capture(surface, true);
+    GROUND_CHECK(map_ground_coverage_equal(capture, other));
+    SDL_DestroySurface(capture);
+    SDL_DestroySurface(other);
+    capture = other = NULL;
+
+    /* Soft FOW keeps remembered floor coverage; it does not make a new hole. */
+    packet_struct *fow = packet_new(0, 32, 32);
+    map_actor_relocation_test_fow(fow, 10, 5);
+    GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, fow, NULL));
+    capture = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(capture != NULL && MAP_CELL_GET_MIDDLE(10, 5)->fow &&
+                 map_cell_has_remembered_geometry(MAP_CELL_GET_MIDDLE(10, 5)) &&
+                 map_ground_coverage_sample(surface, 9, 5, 6, 3, &sample) &&
+                 sample.ground_coverage == explored.ground_coverage);
+    other = map_ground_coverage_capture(surface, true);
+    GROUND_CHECK(map_ground_coverage_equal(capture, other));
+    printf("{\"type\":\"ground-coverage\",\"boundary\":[%u,%u,%u],\"explored\":%u,\"remembered\":%u,\"complete_frame_parity\":true}\n",
+           boundary[0].ground_coverage, boundary[1].ground_coverage, boundary[2].ground_coverage,
+           explored.ground_coverage, sample.ground_coverage);
+
+done:
+    SDL_DestroySurface(baseline);
+    SDL_DestroySurface(capture);
+    SDL_DestroySurface(other);
+    map_select_level(0, true);
+    map_redraw_consume();
+#undef GROUND_CHECK
     return success;
 }
 
