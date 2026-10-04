@@ -183,3 +183,13 @@ framing/output fixtures), `src/tests/access_admin_native.py LIBRARY PRIVATE_DIR`
 offline tagged union, exclusive locks, unchanged snapshots, and certificate
 protections. Each native fixture uses a separate empty mode-0700 directory in the pinned Linux
 worker; the original shutdown fixtures still run with root and non-root peers.
+
+For cross-consumer status acceptance, the existing offline fixture optionally
+accepts `--socket-library LIBRARY --evidence-dir NEW_DIRECTORY --source-sha SHA`.
+Run this mode in the isolated root fixture worker. It records exact inspector
+stdout and actual root-socket frames for initialized protected, initialized open,
+and absent open state, plus bounded provenance and hashes. The fixture creates no
+tokens; it verifies the exact status field sets before writing evidence. Export
+only the evidence directory, never its neighboring test certificate, key, or
+store directories. Record every native provider revision separately when a
+fixture binary combines unintegrated source branches.
