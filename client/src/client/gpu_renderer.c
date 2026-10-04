@@ -2035,6 +2035,11 @@ static void gpu_renderer_statistics_upload(size_t bytes) {
     statistics.upload_bytes += bytes;
 }
 
+void gpu_renderer_statistics_map_damage_clear(void) {
+    statistics.map_damage_clear_batches++;
+    gpu_renderer_statistics_commands(1, 1, 1);
+}
+
 void gpu_renderer_statistics_source_upload(size_t bytes) {
     gpu_renderer_statistics_upload(bytes);
     statistics.source_upload_count++;

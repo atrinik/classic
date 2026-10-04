@@ -1930,7 +1930,7 @@ static bool gpu_map_world_pass_begin(void) {
         SDL_BindGPUGraphicsPipeline(world_pass, world_clear_pipeline);
         SDL_SetGPUScissor(world_pass, &world_frame_damage);
         SDL_DrawGPUPrimitives(world_pass, 6, 1, 0, 0);
-        gpu_renderer_statistics_commands(1, 1, 1);
+        gpu_renderer_statistics_map_damage_clear();
     }
     SDL_BindGPUGraphicsPipeline(world_pass, world_pipeline);
     SDL_Rect scissor = map_clip_enabled ? map_clip : (SDL_Rect){0, 0, target_width, target_height};

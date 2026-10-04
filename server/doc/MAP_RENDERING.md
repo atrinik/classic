@@ -2247,7 +2247,9 @@ batches/draws, source and compact-light uploads, resource creation/destruction,
 albedo/owner work, final light/tone work, UI, submission, fenced completion,
 present wait, retained bytes, recovery, and fallbacks. Damage/dirty byte counts
 describe the logical albedo/owner/rank footprint (12 bytes per pixel), separately
-from actual upload traffic. After warmup an unchanged
+from actual upload traffic. The damage-clear batch counter records each actual
+opaque clear, including a frame whose simultaneous light change requires a
+full final resolve. After warmup an unchanged
 scene has no source/effect upload or resource churn. Idle after fades and timed
 buckets settle has no visibility, shadow, or map-state reconstruction work.
 Player screenshots enqueue a completed-frame GPU copy and return immediately;

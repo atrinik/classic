@@ -74,7 +74,7 @@ def record(name="dense-17x17-five-depth-1080p"):
     frames = [10_000] * 40
     depth_mask = (1 << depths) - 1
     map_statistics = {
-        "full_redraws": 0, "damage_frames": 0,
+        "full_redraws": 0, "damage_frames": 0, "damage_clear_batches": 0,
         "damage_pixels": 0, "damage_bytes": 0,
         "retained_frames": 44, "skipped_passes": 44,
         "dirty_commands": 0, "dirty_pixels": 0,
@@ -108,7 +108,7 @@ def record(name="dense-17x17-five-depth-1080p"):
     }
     if animation:
         map_statistics.update({
-            "full_redraws": 1, "damage_frames": 40,
+            "full_redraws": 1, "damage_frames": 40, "damage_clear_batches": 40,
             "damage_pixels": 100, "damage_bytes": 1200,
             "retained_frames": 43, "skipped_passes": 3,
             "dirty_commands": 1, "dirty_pixels": 200,

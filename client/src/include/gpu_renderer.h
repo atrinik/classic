@@ -99,6 +99,8 @@ typedef struct gpu_renderer_statistics {
     uint64_t fallbacks;
     uint64_t map_full_redraws;
     uint64_t map_damage_frames;
+    /** Actual scissored opaque clears, including frames with a full light resolve. */
+    uint64_t map_damage_clear_batches;
     uint64_t map_damage_pixels;
     /** Logical albedo/owner/rank footprint (12 bytes/pixel), not transfer traffic. */
     uint64_t map_damage_bytes;
@@ -320,6 +322,8 @@ void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics);
 uint64_t gpu_renderer_timing_begin(void);
 void gpu_renderer_timing_end(gpu_renderer_timing_stage_t stage, uint64_t started_ns);
 void gpu_renderer_statistics_commands(uint64_t commands, uint64_t batches, uint64_t draws);
+/** Record one scissored opaque albedo/owner/rank clear draw. */
+void gpu_renderer_statistics_map_damage_clear(void);
 void gpu_renderer_statistics_source_upload(size_t bytes);
 void gpu_renderer_statistics_instance_upload(size_t bytes);
 void gpu_renderer_statistics_light_upload(size_t bytes);

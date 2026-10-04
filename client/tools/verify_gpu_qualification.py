@@ -485,7 +485,7 @@ def validate_record(record: dict) -> str:
              "total GPU draws are below the retained map batch count")
     map_statistics = steady.get("map")
     expected_map_fields = {
-        "full_redraws", "damage_frames", "damage_pixels", "damage_bytes",
+        "full_redraws", "damage_frames", "damage_clear_batches", "damage_pixels", "damage_bytes",
         "retained_frames", "skipped_passes", "dirty_commands", "dirty_pixels",
         "dirty_bytes", "published_generation", "source_generation", "camera_generation",
         "lighting_generation", "effect_generation", "last_dirty", "invalidation_reasons",
@@ -495,7 +495,7 @@ def validate_record(record: dict) -> str:
     _require(isinstance(map_statistics, dict) and set(map_statistics) == expected_map_fields,
              "map retained-state evidence schema is incomplete")
     for field in (
-        "full_redraws", "damage_frames", "damage_pixels", "damage_bytes", "retained_frames",
+        "full_redraws", "damage_frames", "damage_clear_batches", "damage_pixels", "damage_bytes", "retained_frames",
         "skipped_passes", "dirty_commands", "dirty_pixels", "dirty_bytes",
         "published_generation", "source_generation", "camera_generation",
         "lighting_generation", "effect_generation",
@@ -547,7 +547,9 @@ def validate_record(record: dict) -> str:
     _require(sum(invalidation_reasons.values()) == measured_map_frames,
              "map invalidation reason accounting is inconsistent")
     map_passes = map_statistics["full_redraws"] + map_statistics["damage_frames"]
-    non_instance_batches = map_passes + map_statistics["damage_frames"]
+    _require(map_statistics["damage_frames"] <= map_statistics["damage_clear_batches"] <=
+             map_passes, "opaque damage-clear accounting is inconsistent")
+    non_instance_batches = map_passes + map_statistics["damage_clear_batches"]
     _require(steady["batches"] >= non_instance_batches and
              steady["slot_uniform_uploads"] == steady["batches"] - non_instance_batches,
              "slot-uniform uploads do not match world batch submissions")
