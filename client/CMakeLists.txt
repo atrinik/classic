@@ -646,6 +646,17 @@ if (BUILD_TESTING)
     target_link_libraries(client-metaserver-options-tests PRIVATE Atrinik::Core)
     add_test(NAME client-metaserver-options COMMAND client-metaserver-options-tests)
 
+    add_executable(client-access-tests
+        src/tests/access.c
+        src/client/access_admin_response.c
+        src/client/access_attempt.c
+        src/client/access_protocol.c)
+    atrinik_configure_target(client-access-tests)
+    target_include_directories(client-access-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-access-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-access COMMAND client-access-tests)
+
     add_executable(client-window-title-tests
         src/tests/window_title.c
         src/client/window_title.c)
@@ -672,12 +683,11 @@ if (BUILD_TESTING)
     endif ()
     add_test(NAME client-metaserver-directory
         COMMAND client-metaserver-directory-tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/classic-directory-v4.xml")
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/classic-directory-v6.xml")
 
     add_executable(client-connection-failure-tests
         src/tests/connection_failure.c
         src/client/connection_failure.c
-        src/client/join_credentials.c
         src/client/metaserver_identity.c)
     atrinik_configure_target(client-connection-failure-tests)
     target_include_directories(client-connection-failure-tests PRIVATE

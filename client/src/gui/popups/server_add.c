@@ -47,6 +47,7 @@ static text_input_struct text_input_server_host, text_input_server_port,
     text_input_server_fingerprint;
 /** Add button. */
 static button_struct button_add;
+static button_struct button_private;
 
 /** @copydoc popup_struct::draw_func */
 static int popup_draw(popup_struct *popup) {
@@ -115,11 +116,22 @@ static int popup_draw(popup_struct *popup) {
     button_add.surface = popup->surface;
     button_show(&button_add, "Add");
 
+    button_set_parent(&button_private, popup->x, popup->y);
+    button_private.x = 100;
+    button_private.y = 190;
+    button_private.surface = popup->surface;
+    button_show(&button_private, "Access code");
+
     return 1;
 }
 
 /** @copydoc popup_struct::event_func */
 static int popup_event(popup_struct *popup, SDL_Event *event) {
+    if (button_event(&button_private, event)) {
+        popup_destroy(popup);
+        access_code_open(NULL);
+        return 1;
+    }
     if (button_event(&button_add, event) ||
         (event->type == SDL_EVENT_KEY_DOWN && IS_ENTER(event->key.key))) {
         uint64_t port;
@@ -201,6 +213,7 @@ static int popup_destroy_callback(popup_struct *popup) {
     text_input_destroy(&text_input_server_fingerprint);
 
     button_destroy(&button_add);
+    button_destroy(&button_private);
 
     return 1;
 }
@@ -228,4 +241,5 @@ void server_add_open(void) {
     text_input_set(&text_input_server_port, "1730");
 
     button_create(&button_add);
+    button_create(&button_private);
 }

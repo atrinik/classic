@@ -43,6 +43,9 @@ extern server_struct *server_get_id(size_t num);
 
 bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t url_size);
 
+/** Resolve and add one session-only private server by access code. */
+server_struct *metaserver_access_resolve(const char *code);
+
 extern size_t server_get_count(void);
 
 extern int ms_connecting(int val);

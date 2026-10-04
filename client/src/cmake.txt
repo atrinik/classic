@@ -1,4 +1,7 @@
 set(SOURCES
+	src/client/access_admin.c
+	src/client/access_admin_response.c
+	src/client/access_protocol.c
 	src/client/asset.c
 	src/client/asset_source.c
 	src/client/audio_log.c
@@ -19,7 +22,7 @@ set(SOURCES
 	src/client/image_codec.c
 	src/client/item.c
 	src/client/item_packet.c
-	src/client/join_credentials.c
+	src/client/access_attempt.c
 	src/client/keepalive.c
 	src/client/keybind.c
 	src/client/keybind_event.c
@@ -76,7 +79,7 @@ set(SOURCES
 	src/gui/popups/help.c
 	src/gui/popups/interface.c
 	src/gui/popups/interface_packet.c
-	src/gui/popups/join_password.c
+	src/gui/popups/access_code.c
 	src/gui/popups/login.c
 	src/gui/popups/painting.c
 	src/gui/popups/region_map.c

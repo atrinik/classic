@@ -94,6 +94,9 @@ typedef struct command_buffer {
     /** Length of the data. */
     size_t len;
 
+    /** Cleanse the payload before releasing this buffer. */
+    bool sensitive;
+
     /** The data. */
     uint8_t data[1];
 } command_buffer;
@@ -147,11 +150,6 @@ typedef struct clioption_settings_struct {
     char *connect[4];
 
     char *game_news_url;
-
-    char *join_password;
-
-    /** Path to a protected rendezvous invite file; never the capability. */
-    char *rendezvous_invite_file;
 
     /** Direct-rendezvous STUN endpoint and its configured provenance. */
     client_stun_config_t stun;

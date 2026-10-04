@@ -26,23 +26,29 @@ int main(void) {
 
     char directory[] = "https://classic.meta.atrinik.org/index.xml";
     char rendezvous[] = "https://rendezvous.meta.atrinik.org/v1/classic";
-    client_metaserver_options_add(&options, directory, rendezvous);
+    char access[] = "https://rendezvous.meta.atrinik.org";
+    client_metaserver_options_add(&options, directory, rendezvous, access);
     TEST_CHECK(client_metaserver_options_enabled(&options));
     TEST_CHECK(options.count == 1);
     TEST_CHECK(strcmp(options.endpoints[0].directory_url, directory) == 0);
     TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin, rendezvous) == 0);
+    TEST_CHECK(strcmp(options.endpoints[0].access_origin, access) == 0);
     directory[8] = 'X';
     rendezvous[8] = 'X';
+    access[8] = 'X';
     TEST_CHECK(strcmp(options.endpoints[0].directory_url,
                       "https://classic.meta.atrinik.org/index.xml") == 0);
     TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin,
                       "https://rendezvous.meta.atrinik.org/v1/classic") == 0);
+    TEST_CHECK(strcmp(options.endpoints[0].access_origin,
+                      "https://rendezvous.meta.atrinik.org") == 0);
 
     char *errmsg = NULL;
     TEST_CHECK(
         !client_metaserver_options_parse(&options,
                                          "https://classic.meta.atrinik.org/index.xml "
-                                         "https://rendezvous.meta.atrinik.org/v1/classic extra",
+                                         "https://rendezvous.meta.atrinik.org/v1/classic "
+                                         "https://rendezvous.meta.atrinik.org extra",
                                          &errmsg));
     TEST_CHECK(errmsg != NULL);
     free(errmsg);
@@ -52,7 +58,7 @@ int main(void) {
     TEST_CHECK(!client_metaserver_options_parse(&options,
                                                 "https://classic.meta.atrinik.org/index.xml "
                                                 "https://only-signal.example.org/v1/classic"
-                                                "?query=forbidden",
+                                                "?query=forbidden https://access.example.org",
                                                 &errmsg));
     TEST_CHECK(errmsg != NULL);
     free(errmsg);
@@ -67,7 +73,8 @@ int main(void) {
     TEST_CHECK(
         client_metaserver_options_parse(&options,
                                         "https://classic-directory-canary.atrinik.org/index.xml "
-                                        "https://rendezvous-canary.meta.atrinik.org/v1/classic",
+                                        "https://rendezvous-canary.meta.atrinik.org/v1/classic "
+                                        "https://access-canary.meta.atrinik.org",
                                         &errmsg));
     TEST_CHECK(errmsg == NULL);
     TEST_CHECK(client_metaserver_options_enabled(&options));
@@ -76,10 +83,13 @@ int main(void) {
                       "https://classic-directory-canary.atrinik.org/index.xml") == 0);
     TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin,
                       "https://rendezvous-canary.meta.atrinik.org/v1/classic") == 0);
+    TEST_CHECK(strcmp(options.endpoints[0].access_origin,
+                      "https://access-canary.meta.atrinik.org") == 0);
 
     TEST_CHECK(client_metaserver_options_parse(
         &options,
-        "https://backup.example.org/index.xml https://signal.example.org/v1/classic",
+        "https://backup.example.org/index.xml https://signal.example.org/v1/classic "
+        "https://access.example.org",
         NULL));
     TEST_CHECK(options.count == 2);
 
@@ -87,7 +97,8 @@ int main(void) {
     TEST_CHECK(
         !client_metaserver_options_parse(&options,
                                          "https://only.example.org/index.xml?query=forbidden "
-                                         "https://only-signal.example.org/v1/classic",
+                                         "https://only-signal.example.org/v1/classic "
+                                         "https://access.example.org",
                                          &errmsg));
     TEST_CHECK(errmsg != NULL);
     free(errmsg);
@@ -97,7 +108,8 @@ int main(void) {
 
     TEST_CHECK(client_metaserver_options_parse(
         &options,
-        "https://only.example.org/index.xml https://only-signal.example.org/v1/classic",
+        "https://only.example.org/index.xml https://only-signal.example.org/v1/classic "
+        "https://access.example.org",
         &errmsg));
     TEST_CHECK(errmsg == NULL);
     TEST_CHECK(client_metaserver_options_enabled(&options));

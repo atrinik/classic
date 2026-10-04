@@ -19,13 +19,13 @@
 #include <metaserver.h>
 #include <metaserver_options.h>
 #include <client.h>
-#include <join_credentials.h>
+#include <access_attempt.h>
 #include <main.h>
 #include <wrapper.h>
 #include <toolkit/logger.h>
+#include <toolkit/access_resolve.h>
 #include <toolkit/memory.h>
 #include <toolkit/toolkit.h>
-#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <toolkit/curl.h>
 #include <toolkit/datetime.h>
@@ -107,6 +107,8 @@ static char *metaserver_cache_path(const client_metaserver_endpoint_t *endpoint)
         EVP_DigestUpdate(context,
                          endpoint->rendezvous_origin,
                          strlen(endpoint->rendezvous_origin) + 1) == 1 &&
+        EVP_DigestUpdate(
+            context, endpoint->access_origin, strlen(endpoint->access_origin) + 1) == 1 &&
         EVP_DigestFinal_ex(context, digest, &digest_size) == 1 && digest_size == 32 &&
         string_tohex(digest, digest_size, VS(scope), false) == 64;
     EVP_MD_CTX_free(context);
@@ -114,7 +116,7 @@ static char *metaserver_cache_path(const client_metaserver_endpoint_t *endpoint)
         return NULL;
     }
     char relative[HUGE_BUF];
-    if (snprintf(VS(relative), DIRECTORY_CACHE "/metaserver-v4-%s.xml", scope) >=
+    if (snprintf(VS(relative), DIRECTORY_CACHE "/metaserver-v6-%s.xml", scope) >=
         (int)sizeof(relative)) {
         return NULL;
     }
@@ -154,7 +156,8 @@ void metaserver_server_free(server_struct *server) {
     free(server->server_id);
     free(server->quic_certificate_sha256);
     free(server->rendezvous_origin);
-    client_attempt_secrets_clear(&server->join_password, NULL, &server->rendezvous_invite);
+    client_access_attempt_clear(&server->access_attempt);
+    rendezvous_access_grant_clear(&server->access_grant);
     free(server->name);
     free(server->version);
     free(server->desc);
@@ -174,11 +177,49 @@ bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t ur
     if (server == NULL || server->server_id == NULL || server->rendezvous_origin == NULL) {
         return false;
     }
-    return metaserver_url_rendezvous(server->rendezvous_origin,
-                                     server->server_id,
-                                     "client",
-                                     url,
-                                     url_size);
+    if (server->private_access) {
+        return metaserver_url_access(
+            server->rendezvous_origin, server->server_id, true, url, url_size);
+    }
+    return metaserver_url_rendezvous(
+        server->rendezvous_origin, server->server_id, "client", url, url_size);
+}
+
+server_struct *metaserver_access_resolve(const char *code) {
+    if (!access_code_valid(code, ACCESS_CODE_LENGTH)) {
+        return NULL;
+    }
+    for (size_t i = clioption_settings.metaservers.count; i > 0; i--) {
+        const client_metaserver_endpoint_t *endpoint =
+            &clioption_settings.metaservers.endpoints[i - 1];
+        access_resolved_t resolved;
+        if (!access_resolve(endpoint->access_origin, code, &resolved)) {
+            continue;
+        }
+
+        server_struct *server = xcalloc(1, sizeof(*server));
+        server->is_meta = true;
+        server->direct = true;
+        server->access_required = true;
+        server->private_access = true;
+        server->player_known = false;
+        server->server_id = xstrdup(resolved.server_id);
+        server->quic_certificate_sha256 = xstrdup(resolved.server_id);
+        server->rendezvous_origin = xstrdup(endpoint->access_origin);
+        server->name = xstrdup(resolved.name);
+        server->version = xstrdup("");
+        server->desc = xstrdup("Private server resolved by access code.");
+        if (resolved.hostname[0] != '\0') {
+            server->hostname = xstrdup(resolved.hostname);
+            server->port = resolved.port;
+        }
+        server->access_grant = resolved.grant;
+        memset(&resolved.grant, 0, sizeof(resolved.grant));
+        access_resolved_clear(&resolved);
+        metaserver_server_add(server);
+        return server;
+    }
+    return NULL;
 }
 
 server_struct *server_get_id(size_t num) {
@@ -214,9 +255,7 @@ int ms_connecting(int val) {
 
 void metaserver_clear_data(void) {
     if (selected_server != NULL) {
-        client_attempt_secrets_clear(&selected_server->join_password,
-                                     &clioption_settings.join_password,
-                                     &selected_server->rendezvous_invite);
+        client_access_attempt_clear(&selected_server->access_attempt);
         selected_server = NULL;
     }
     SDL_LockMutex(server_head_mutex);

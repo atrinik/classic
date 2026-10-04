@@ -36,6 +36,7 @@ static void client_metaserver_options_clear(client_metaserver_options_t *options
     for (size_t i = 0; i < options->count; i++) {
         free(options->endpoints[i].directory_url);
         free(options->endpoints[i].rendezvous_origin);
+        free(options->endpoints[i].access_origin);
     }
     free(options->endpoints);
     options->endpoints = NULL;
@@ -44,16 +45,19 @@ static void client_metaserver_options_clear(client_metaserver_options_t *options
 
 void client_metaserver_options_add(client_metaserver_options_t *options,
                                    const char *directory_url,
-                                   const char *rendezvous_origin) {
+                                   const char *rendezvous_origin,
+                                   const char *access_origin) {
     HARD_ASSERT(options != NULL);
     HARD_ASSERT(directory_url != NULL);
     HARD_ASSERT(rendezvous_origin != NULL);
+    HARD_ASSERT(access_origin != NULL);
 
     options->endpoints =
         xreallocarray(options->endpoints, options->count + 1, sizeof(*options->endpoints));
     client_metaserver_endpoint_t *endpoint = &options->endpoints[options->count];
     endpoint->directory_url = xstrdup(directory_url);
     endpoint->rendezvous_origin = xstrdup(rendezvous_origin);
+    endpoint->access_origin = xstrdup(access_origin);
     options->count++;
     options->disabled = false;
 }
@@ -66,23 +70,31 @@ bool client_metaserver_options_parse(client_metaserver_options_t *options,
 
     char directory_url[MAX_BUF];
     char rendezvous_origin[MAX_BUF];
+    char access_origin[MAX_BUF];
     char rendered[MAX_BUF];
+    char authority[MAX_BUF];
     const char *cursor = value;
     if (!client_metaserver_options_word(&cursor, VS(directory_url)) ||
-        !client_metaserver_options_word(&cursor, VS(rendezvous_origin)) || *cursor != '\0' ||
+        !client_metaserver_options_word(&cursor, VS(rendezvous_origin)) ||
+        !client_metaserver_options_word(&cursor, VS(access_origin)) || *cursor != '\0' ||
         !metaserver_url_directory_valid(directory_url) ||
         !metaserver_url_rendezvous(rendezvous_origin,
                                    client_metaserver_identity,
                                    "client",
-                                   VS(rendered))) {
+                                   VS(rendered)) ||
+        !metaserver_url_publish(access_origin,
+                                "/v1/access/resolve",
+                                VS(rendered),
+                                VS(authority))) {
         if (errmsg != NULL) {
-            *errmsg = xstrdup("metaserver requires one canonical directory URL and one canonical "
-                              "rendezvous origin");
+            *errmsg = xstrdup("metaserver requires canonical directory, rendezvous, and "
+                              "access-service endpoints; the former two-value format is no "
+                              "longer accepted");
         }
         return false;
     }
 
-    client_metaserver_options_add(options, directory_url, rendezvous_origin);
+    client_metaserver_options_add(options, directory_url, rendezvous_origin, access_origin);
     return true;
 }
 

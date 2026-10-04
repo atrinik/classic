@@ -28,6 +28,7 @@
  */
 
 #include <mouse.h>
+#include <access_admin.h>
 #include <animations.h>
 #include <client.h>
 #include <commands.h>
@@ -35,7 +36,7 @@
 #include <effects.h>
 #include <event.h>
 #include <image.h>
-#include <join_credentials.h>
+#include <access_attempt.h>
 #include <inventory.h>
 #include <item.h>
 #include <keybind.h>
@@ -323,9 +324,7 @@ static int game_status_chain(void) {
                              "The server %s does not have a valid QUIC certificate "
                              "fingerprint, refusing to connect.",
                              selected_server->name);
-            client_attempt_secrets_clear(&selected_server->join_password,
-                                         &clioption_settings.join_password,
-                                         &selected_server->rendezvous_invite);
+            client_access_attempt_clear(&selected_server->access_attempt);
             cpl.state = ST_START;
             return 1;
         }
@@ -340,9 +339,7 @@ static int game_status_chain(void) {
                 snprintf(VS(failure_message), "Connection failed; please try again.");
             }
             draw_info(COLOR_RED, failure_message);
-            client_attempt_secrets_clear(&selected_server->join_password,
-                                         &clioption_settings.join_password,
-                                         &selected_server->rendezvous_invite);
+            client_access_attempt_clear(&selected_server->access_attempt);
             cpl.state = ST_START;
             return 1;
         }
@@ -373,11 +370,6 @@ static int game_status_chain(void) {
             MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT)));
         packet_writer_write_uint8(packet, CMD_SETUP_DATA_URL);
         packet_writer_write_cstring(packet, "");
-        packet_writer_write_uint8(packet, CMD_SETUP_JOIN_PASSWORD);
-        const char *join_password = selected_server->join_password != NULL
-                                        ? selected_server->join_password
-                                        : clioption_settings.join_password;
-        packet_writer_write_cstring(packet, join_password != NULL ? join_password : "");
         if (cpl.server_socket_version >= ASSET_TRANSPORT_SOCKET_VERSION) {
             packet_writer_write_uint8(packet, CMD_SETUP_ASSET_TRANSPORT);
         }
@@ -526,10 +518,6 @@ void clioption_settings_deinit(void) {
 
     free(clioption_settings.game_news_url);
 
-    client_join_credentials_clear(NULL, &clioption_settings.join_password);
-
-    free(clioption_settings.rendezvous_invite_file);
-
     client_stun_config_deinit(&clioption_settings.stun);
 }
 
@@ -555,10 +543,10 @@ static bool clioptions_option_server(const char *arg, char **errmsg) {
  * Description of the --metaserver command.
  */
 static const char *const clioptions_option_metaserver_desc =
-    "Adds a paired static directory and rendezvous service to the list tried.\n\n"
+    "Adds a static directory, rendezvous service, and access service to the list tried.\n\n"
     "Usage:\n"
     " --metaserver=\"https://classic.meta.example/index.xml "
-    "https://rendezvous.meta.example/v1/classic\"";
+    "https://rendezvous.meta.example/v1/classic https://access.meta.example\"";
 
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_metaserver(const char *arg, char **errmsg) {
@@ -639,62 +627,6 @@ static bool clioptions_option_connect_password_file(const char *arg, char **errm
     clioption_settings.connect[2] = xstrdup(password);
     clioption_connect_password_file_loaded = true;
     OPENSSL_cleanse(password, sizeof(password));
-    return true;
-}
-
-/**
- * Description of the --join_password command.
- */
-static const char *const clioptions_option_join_password_desc =
-    "Password used to join a private game server.";
-/** @copydoc clioptions_handler_func */
-static bool clioptions_option_join_password(const char *arg, char **errmsg) {
-    if (strlen(arg) >= MAX_BUF) {
-        *errmsg = xstrdup("Join password is too long");
-        return false;
-    }
-
-    client_join_credentials_clear(NULL, &clioption_settings.join_password);
-    clioption_settings.join_password = xstrdup(arg);
-    return true;
-}
-
-static const char *const clioptions_option_join_password_file_desc =
-    "Read the private server password from a file.";
-
-static bool clioptions_option_join_password_file(const char *arg, char **errmsg) {
-    char password[MAX_BUF];
-    bool permissive_mode;
-    path_secret_error_t error = path_read_secret(arg, VS(password), &permissive_mode);
-    if (error != PATH_SECRET_OK) {
-        string_fmt(*errmsg,
-                   "Cannot use join password file %s: %s",
-                   arg,
-                   path_secret_error_string(error));
-        return false;
-    }
-    if (permissive_mode) {
-        LOG(SYSTEM,
-            "Join password file %s is readable or writable by group/other; "
-            "use mode 0600",
-            arg);
-    }
-
-    bool ok = clioptions_option_join_password(password, errmsg);
-    OPENSSL_cleanse(password, sizeof(password));
-    return ok;
-}
-
-static const char *const clioptions_option_rendezvous_invite_file_desc =
-    "Read a protected rendezvous invite through this file path when connecting.";
-
-static bool clioptions_option_rendezvous_invite_file(const char *arg, char **errmsg) {
-    if (arg[0] == '\0' || strlen(arg) >= HUGE_BUF) {
-        *errmsg = xstrdup("Rendezvous invite file path is empty or too long");
-        return false;
-    }
-    free(clioption_settings.rendezvous_invite_file);
-    clioption_settings.rendezvous_invite_file = xstrdup(arg);
     return true;
 }
 
@@ -1016,12 +948,6 @@ int main(int argc, char *argv[]) {
     clioptions_enable_sensitive(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, connect_password_file, "Protected account password file");
     CLIOPTIONS_CREATE_ARGUMENT(cli, game_news_url, "Set game news URL");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
-    clioptions_enable_sensitive(cli);
-    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Private server password file");
-    CLIOPTIONS_CREATE_ARGUMENT(cli,
-                               rendezvous_invite_file,
-                               "Protected rendezvous invite file path");
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "Direct rendezvous STUN endpoint");
 
     /* Argument options*/
@@ -1115,13 +1041,15 @@ int main(int argc, char *argv[]) {
 
         uint64_t profile_game_started = render_profiler_begin();
 
+        client_access_admin_update();
+
         /* Have we been shutdown? */
         if (handle_socket_shutdown()) {
             image_face_requests_clear();
-            client_attempt_secrets_clear(
-                selected_server != NULL ? &selected_server->join_password : NULL,
-                &clioption_settings.join_password,
-                selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
+            if (selected_server != NULL) {
+                client_access_attempt_clear(&selected_server->access_attempt);
+            }
+            client_access_admin_reset();
             if (cpl.state != ST_STARTCONNECT) {
                 cpl.state = ST_START;
                 /* Make sure no popup is visible. */

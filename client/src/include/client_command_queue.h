@@ -78,6 +78,7 @@ void client_command_queue_deinitialize(void);
 
 /** Allocate or free one copied command envelope. */
 command_buffer *command_buffer_new(size_t len, uint8_t *data);
+void command_buffer_mark_sensitive(command_buffer *buf);
 void command_buffer_free(command_buffer *buf);
 
 /**

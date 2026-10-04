@@ -86,6 +86,12 @@ extern void book_name_change(const char *name, size_t len);
 /** Load book state and create its popup, returning false on canvas failure. */
 extern bool book_load(const char *data, int len);
 
+/** Load private access-management output and cleanse it when the popup closes. */
+bool book_load_sensitive(const char *data, int len, const char *title);
+
+/** Whether private access-management output is currently visible. */
+bool book_sensitive_visible(void);
+
 #ifdef ATRINIK_WIDGET_TESTS
 /** Whether book content remains owned after an allocation-failure path. */
 extern bool book_test_content_retained(void);

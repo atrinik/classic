@@ -29,6 +29,9 @@
  */
 
 #include <animations.h>
+#include <access_attempt.h>
+#include <access_admin.h>
+#include <access_protocol.h>
 #include <asset.h>
 #include <book.h>
 #include <client.h>
@@ -60,7 +63,6 @@
 #include <client_socket.h>
 #include <packet_payload.h>
 #include <item_packet.h>
-#include <join_credentials.h>
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -116,17 +118,6 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
             asset_capabilities_present = true;
         } else if (type == CMD_SETUP_CONNECTION_MODE) {
             packet_reader_read_uint8(&reader);
-        } else if (type == CMD_SETUP_JOIN_PASSWORD) {
-            bool accepted = packet_reader_read_uint8(&reader) != 0;
-            client_attempt_secrets_clear(
-                selected_server != NULL ? &selected_server->join_password : NULL,
-                &clioption_settings.join_password,
-                selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
-            if (!accepted) {
-                draw_info(COLOR_RED, "The server rejected the join password.");
-                cpl.state = ST_START;
-                return;
-            }
         } else {
             packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         }
@@ -1710,15 +1701,96 @@ void socket_command_version(uint8_t *data, size_t len, size_t pos) {
     cpl.server_socket_version = packet_reader_read_uint32(&reader);
     if (cpl.server_socket_version != SOCKET_VERSION) {
         draw_info(COLOR_RED, "The client and server use incompatible gameplay protocol versions.");
-        client_attempt_secrets_clear(
-            selected_server != NULL ? &selected_server->join_password : NULL,
-            &clioption_settings.join_password,
-            selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
+        if (selected_server != NULL) {
+            client_access_attempt_clear(&selected_server->access_attempt);
+        }
+        client_socket_request_shutdown();
         cpl.state = ST_START;
         return;
     }
 
+    cpl.state = ST_WAITACCESS_POLICY;
+}
+
+static void access_protocol_reject(packet_reader_t *reader) {
+    packet_reader_set_error(reader, PACKET_ERROR_UNSUPPORTED);
+    if (selected_server != NULL) {
+        client_access_attempt_clear(&selected_server->access_attempt);
+    }
+    client_socket_request_shutdown();
+    cpl.state = ST_START;
+}
+
+/** @copydoc socket_command_struct::handle_func */
+void socket_command_access_policy(uint8_t *data, size_t len, size_t pos) {
+    packet_reader_t reader;
+    packet_reader_init_cursor(&reader, data, len, &pos);
+    packet_view_t payload =
+        packet_reader_read_view(&reader, packet_reader_remaining(&reader));
+    bool required;
+    if (!packet_reader_finish(&reader) || cpl.state != ST_WAITACCESS_POLICY ||
+        !client_access_policy_parse(payload.data, payload.len, &required) ||
+        selected_server == NULL) {
+        access_protocol_reject(&reader);
+        return;
+    }
+
+    selected_server->access_required = required;
+    if (!required) {
+        client_access_attempt_clear(&selected_server->access_attempt);
+        cpl.state = ST_VERSION;
+        return;
+    }
+    if (!selected_server->access_attempt.present) {
+        draw_info(COLOR_RED, "This server requires an access code.");
+        client_socket_request_shutdown();
+        cpl.state = ST_START;
+        return;
+    }
+    if (!client_socket_send_access_auth(selected_server->access_attempt.code)) {
+        client_access_attempt_clear(&selected_server->access_attempt);
+        client_socket_request_shutdown();
+        cpl.state = ST_START;
+        return;
+    }
+    client_access_attempt_clear(&selected_server->access_attempt);
+    cpl.state = ST_WAITACCESS_RESULT;
+}
+
+/** @copydoc socket_command_struct::handle_func */
+void socket_command_access_result(uint8_t *data, size_t len, size_t pos) {
+    packet_reader_t reader;
+    packet_reader_init_cursor(&reader, data, len, &pos);
+    packet_view_t payload =
+        packet_reader_read_view(&reader, packet_reader_remaining(&reader));
+    bool accepted;
+    if (!packet_reader_finish(&reader) || cpl.state != ST_WAITACCESS_RESULT ||
+        !client_access_result_parse(payload.data, payload.len, &accepted)) {
+        access_protocol_reject(&reader);
+        return;
+    }
+
+    if (!accepted) {
+        draw_info(COLOR_RED, "Access unavailable. Check the code and try again.");
+        client_socket_request_shutdown();
+        cpl.state = ST_START;
+        return;
+    }
     cpl.state = ST_VERSION;
+}
+
+/** @copydoc socket_command_struct::handle_func */
+void socket_command_access_admin_result(uint8_t *data, size_t len, size_t pos) {
+    packet_reader_t reader;
+    packet_reader_init_cursor(&reader, data, len, &pos);
+    uint8_t version = packet_reader_read_uint8(&reader);
+    packet_view_t payload =
+        packet_reader_read_view(&reader, packet_reader_remaining(&reader));
+    if (!packet_reader_finish(&reader) || version != 1 || payload.len == 0 ||
+        payload.len > 32768U || !client_access_admin_response(payload.data, payload.len)) {
+        packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
+        client_socket_request_shutdown();
+    }
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -1734,7 +1806,7 @@ void socket_command_compressed(uint8_t *data, size_t len, size_t pos) {
     packet_view_t compressed = packet_reader_read_view(&reader, packet_reader_remaining(&reader));
     if (packet_reader_error(&reader) != PACKET_ERROR_NONE ||
         declared_len > PACKET_PAYLOAD_MAX - 1 || type >= CLIENT_CMD_NROF ||
-        type == CLIENT_CMD_REGION_MAP) {
+        type == CLIENT_CMD_REGION_MAP || type == CLIENT_CMD_ACCESS_ADMIN_RESULT) {
         packet_reader_set_error(&reader,
                                 declared_len > PACKET_PAYLOAD_MAX - 1 ? PACKET_ERROR_LIMIT_EXCEEDED
                                                                       : PACKET_ERROR_UNSUPPORTED);

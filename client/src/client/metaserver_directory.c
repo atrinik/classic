@@ -1,6 +1,6 @@
 /**
  * @file
- * Transactional classic static-directory protocol 4 parser.
+ * Transactional classic static-directory protocol 6 parser.
  */
 
 #include "metaserver_directory.h"
@@ -136,19 +136,19 @@ static bool directory_parse_server(xmlNodePtr node, metaserver_directory_entry_t
     }
 
     char *certificate = NULL;
-    char *password_required = NULL;
+    char *access_required = NULL;
     ok = directory_node_exact(field, "CertificateSha256", false, &certificate);
     field = field != NULL ? field->next : NULL;
-    ok = ok && directory_node_exact(field, "PasswordRequired", false, &password_required);
+    ok = ok && directory_node_exact(field, "AccessRequired", false, &access_required);
     field = field != NULL ? field->next : NULL;
     ok = ok && field == NULL && directory_identity_valid(certificate) &&
          strcmp(certificate, entry->server_id) == 0 &&
-         (strcmp(password_required, "true") == 0 || strcmp(password_required, "false") == 0);
+         (strcmp(access_required, "true") == 0 || strcmp(access_required, "false") == 0);
     if (ok) {
-        entry->password_required = strcmp(password_required, "true") == 0;
+        entry->access_required = strcmp(access_required, "true") == 0;
     }
     xmlFree(certificate);
-    xmlFree(password_required);
+    xmlFree(access_required);
 
 out:
     for (size_t i = 0; i < arraysize(values); i++) {
@@ -195,8 +195,8 @@ static bool directory_parse_root(xmlNodePtr root, metaserver_directory_snapshot_
     uint64_t generation = 0;
     uint64_t generated_at = 0;
     uint64_t expires_at = 0;
-    ok = ok && attribute == NULL && strcmp(values[0], "4") == 0 &&
-         strcmp(values[1], "atrinik-classic-directory-v4") == 0 &&
+    ok = ok && attribute == NULL && strcmp(values[0], "6") == 0 &&
+         strcmp(values[1], "atrinik-classic-directory-v6") == 0 &&
          directory_decimal(values[2], 1, UINT64_MAX, &generation) &&
          directory_decimal(values[3], 0, UINT64_MAX, &generated_at) &&
          directory_decimal(values[4], 1, UINT64_MAX, &expires_at) && expires_at > generated_at &&
@@ -226,7 +226,7 @@ bool metaserver_directory_parse(const char *body,
 
     xmlDocPtr doc = xmlReadMemory(body,
                                   (int)body_size,
-                                  "classic-directory-v4.xml",
+                                  "classic-directory-v6.xml",
                                   NULL,
                                   XML_PARSE_NONET | XML_PARSE_NOBLANKS | XML_PARSE_NOERROR |
                                       XML_PARSE_NOWARNING);

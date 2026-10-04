@@ -28,6 +28,7 @@
  */
 
 #include <image_codec.h>
+#include <book.h>
 #include <gpu_renderer.h>
 #include <main.h>
 #include <misc.h>
@@ -179,6 +180,10 @@ static void screenshot_cancel(void *userdata) {
  * Optional completed-frame rectangle. NULL captures the complete window.
  */
 void screenshot_create(const SDL_Rect *rect) {
+    if (book_sensitive_visible()) {
+        draw_info(COLOR_RED, "Close the private access result before taking a screenshot.");
+        return;
+    }
     char timebuf[64];
     struct timeval tv;
     struct tm *tm;

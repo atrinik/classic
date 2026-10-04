@@ -2246,12 +2246,6 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     }
     popup_destroy_all();
 
-    join_password_open(selected_server);
-    if (!gpu_player_view_ui_capture("popup_join_password", false)) {
-        return false;
-    }
-    popup_destroy_all();
-
     credits_test_show("[b]Atrinik GPU qualification[/b]\nRetained scrolling credits text.");
     if (!gpu_player_view_ui_capture("popup_credits", false)) {
         return false;

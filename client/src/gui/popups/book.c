@@ -39,11 +39,13 @@
 #include <texture.h>
 #include <sprite.h>
 #include <toolkit/toolkit.h>
+#include <toolkit/access_code.h>
 #include <widget.h>
 #include <toolkit/string.h>
 
 /** The book's content. */
 static char *book_content = NULL;
+static bool book_sensitive;
 /** Name of the book. */
 static char book_name[HUGE_BUF];
 /** Number of lines in the book. */
@@ -77,8 +79,12 @@ static void book_state_clear(void) {
         book_help_history = NULL;
     }
     book_help_history_enabled = 0;
+    if (book_sensitive && book_content != NULL) {
+        access_code_clear(book_content, strlen(book_content));
+    }
     free(book_content);
     book_content = NULL;
+    book_sensitive = false;
     book_lines = 0;
     book_scroll_lines = 0;
     book_scroll = 0;
@@ -241,17 +247,25 @@ static const char *popup_clipboard_copy_func(popup_struct *popup) {
  * @param len
  * Length of 'data'.
  */
-bool book_load(const char *data, int len) {
+static bool book_load_internal(const char *data, int len, bool sensitive, const char *title) {
     SDL_Rect box;
     int pos;
     popup_struct *popup;
 
-    /* Nothing to do. */
-    if (!data || !len) {
+    if (data == NULL || len <= 0) {
+        popup = book_popup_get();
+        if (popup != NULL) {
+            popup_destroy(popup);
+        } else {
+            book_state_clear();
+        }
         return true;
     }
 
     /* Free old book data and reset the values. */
+    if (book_sensitive && book_content != NULL) {
+        access_code_clear(book_content, strlen(book_content));
+    }
     free(book_content);
 
     book_lines = 0;
@@ -260,7 +274,8 @@ bool book_load(const char *data, int len) {
 
     /* Store the data. */
     book_content = xstrdup(data);
-    book_name_change("Book", 4);
+    book_sensitive = sensitive;
+    book_name_change(title, strlen(title));
 
     /* Strip trailing newlines. */
     for (pos = len - 1; pos >= 0; pos--) {
@@ -334,6 +349,18 @@ bool book_load(const char *data, int len) {
 
     popup->redraw = 1;
     return true;
+}
+
+bool book_load(const char *data, int len) {
+    return book_load_internal(data, len, false, "Book");
+}
+
+bool book_load_sensitive(const char *data, int len, const char *title) {
+    return data != NULL && title != NULL && book_load_internal(data, len, true, title);
+}
+
+bool book_sensitive_visible(void) {
+    return book_sensitive && book_popup_get() != NULL;
 }
 
 #ifdef ATRINIK_WIDGET_TESTS

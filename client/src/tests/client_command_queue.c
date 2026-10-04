@@ -262,6 +262,33 @@ static void test_deinitialize_resets_reconnect_state(void) {
     TEST_CHECK(!statistics.due);
 }
 
+static void test_sensitive_digest_excludes_payload(void) {
+    client_command_queue_statistics_t statistics;
+    const uint8_t first[] = {CLIENT_CMD_ACCESS_ADMIN_RESULT, 1, 2, 3};
+    const uint8_t second[] = {CLIENT_CMD_ACCESS_ADMIN_RESULT, 9, 8, 7};
+
+    TEST_CHECK(client_command_queue_statistics_reset());
+    command_buffer *buffer = command_buffer_new(sizeof(first), (uint8_t *)first);
+    command_buffer_mark_sensitive(buffer);
+    TEST_CHECK(client_command_queue_enqueue_buffer_at(buffer, 1));
+    client_command_queue_statistics_get(1, &statistics);
+    uint64_t first_digest = statistics.enqueued_order_digest;
+    buffer = get_next_input_command();
+    TEST_CHECK(buffer != NULL && buffer->sensitive);
+    command_buffer_free(buffer);
+
+    TEST_CHECK(client_command_queue_statistics_reset());
+    buffer = command_buffer_new(sizeof(second), (uint8_t *)second);
+    command_buffer_mark_sensitive(buffer);
+    TEST_CHECK(client_command_queue_enqueue_buffer_at(buffer, 1));
+    client_command_queue_statistics_get(1, &statistics);
+    TEST_CHECK(statistics.enqueued_order_digest == first_digest);
+    buffer = get_next_input_command();
+    TEST_CHECK(buffer != NULL && buffer->sensitive);
+    command_buffer_free(buffer);
+    TEST_CHECK(client_command_queue_statistics_reset());
+}
+
 int main(void) {
     toolkit_import(datetime);
     TEST_CHECK(client_command_queue_initialize());
@@ -271,6 +298,7 @@ int main(void) {
     test_unbounded_drain_and_clear();
     test_dispatch_pause_preserves_remaining_commands();
     test_deinitialize_resets_reconnect_state();
+    test_sensitive_digest_excludes_payload();
     client_command_queue_deinitialize();
     toolkit_deinit();
     return 0;
