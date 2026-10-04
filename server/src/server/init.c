@@ -187,30 +187,40 @@ static void console_command_active_objects(const char *params) {
  * Free all data before exiting.
  */
 void cleanup(void) {
-    cache_remove_all();
-    remove_plugins();
-    gameplay_journal_deinit();
-    player_deinit();
-    account_deinit();
-    socket_assets_deinit();
-    resources_deinit();
-    free_all_maps();
-    free_style_maps();
-    arch_deinit();
-    free_all_treasures();
-    artifact_deinit();
-    free_all_images();
-    free_socket_images();
-    free_all_readable();
-    free_all_anim();
-    free_strings();
-    race_free();
-    regions_free();
-    objectlink_deinit();
-    object_deinit();
-    metaserver_deinit();
-    party_deinit();
+    /* Emit each boundary before entering it so an interrupted shutdown still
+     * identifies the outstanding owner. No logs may follow toolkit_deinit(),
+     * which releases the logger itself. */
+#define CLEANUP_STAGE(function)                                \
+    do {                                                       \
+        LOG(INFO, "Server cleanup stage: %s", #function);       \
+        function();                                            \
+    } while (0)
+    CLEANUP_STAGE(cache_remove_all);
+    CLEANUP_STAGE(remove_plugins);
+    CLEANUP_STAGE(gameplay_journal_deinit);
+    CLEANUP_STAGE(player_deinit);
+    CLEANUP_STAGE(account_deinit);
+    CLEANUP_STAGE(socket_assets_deinit);
+    CLEANUP_STAGE(resources_deinit);
+    CLEANUP_STAGE(free_all_maps);
+    CLEANUP_STAGE(free_style_maps);
+    CLEANUP_STAGE(arch_deinit);
+    CLEANUP_STAGE(free_all_treasures);
+    CLEANUP_STAGE(artifact_deinit);
+    CLEANUP_STAGE(free_all_images);
+    CLEANUP_STAGE(free_socket_images);
+    CLEANUP_STAGE(free_all_readable);
+    CLEANUP_STAGE(free_all_anim);
+    CLEANUP_STAGE(free_strings);
+    CLEANUP_STAGE(race_free);
+    CLEANUP_STAGE(regions_free);
+    CLEANUP_STAGE(objectlink_deinit);
+    CLEANUP_STAGE(object_deinit);
+    CLEANUP_STAGE(metaserver_deinit);
+    CLEANUP_STAGE(party_deinit);
     OPENSSL_cleanse(settings.join_password, sizeof(settings.join_password));
+    LOG(INFO, "Server resources released; deinitializing toolkit.");
+#undef CLEANUP_STAGE
     toolkit_deinit();
     free_object_loader();
     free_random_map_loader();
