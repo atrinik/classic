@@ -43,6 +43,10 @@
   input, accepts only complete server map publications, and fails on divergence
   or deadlines. Arrival and presentation are separate evidence; offline snapshot
   replays do not prove live travel or movement performance.
+- Capture privacy is owned by `capture_privacy`: private UI retention and frame
+  composition deny new screenshots, video frames, and diagnostic captures until
+  a successfully presented clean frame. UI close/reset and renderer recovery
+  must not clear this latch; already submitted safe copies may complete.
 - Linux video recording owns `video_recording`, `video_encoder`, and `video_avi`.
   Capture only completed gameplay frames with bounded asynchronous readbacks;
   transport and process-isolated JPEG encoding must not block the render loop.

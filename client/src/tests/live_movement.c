@@ -174,10 +174,14 @@ live_movement_capture_create(const char *path, char *error, size_t error_size) {
     capture->request_ok = true;
     return capture;
 }
-bool live_movement_capture_request(live_movement_capture_t *capture) {
+bool live_movement_capture_request(live_movement_capture_t *capture, bool capture_allowed) {
     if (capture == NULL || !capture->request_ok ||
         capture->result.status != LIVE_MOVEMENT_CAPTURE_READY)
         return false;
+    if (!capture_allowed) {
+        capture->result.status = LIVE_MOVEMENT_CAPTURE_FAILED;
+        return false;
+    }
     capture->result.status = LIVE_MOVEMENT_CAPTURE_PENDING;
     return true;
 }
@@ -354,7 +358,7 @@ static bool fixture_ready(const fixture_paths_t *paths) {
 
 static void frame(bool presented) {
     profile_statistics.frames++;
-    live_movement_frame_finished(presented, &(client_keepalive_statistics_t){0});
+    live_movement_frame_finished(presented, true, &(client_keepalive_statistics_t){0});
 }
 
 static void present_arrival(void) {
@@ -568,7 +572,7 @@ static int test_deadline_and_report_failure(void) {
     CHECK(report != NULL && setvbuf(report, NULL, _IONBF, 0) == 0);
     publication_generation = 1;
     profile_statistics.frames = 1;
-    live_movement_frame_finished(true, &(client_keepalive_statistics_t){0});
+    live_movement_frame_finished(true, true, &(client_keepalive_statistics_t){0});
     CHECK(live_movement_finished() && live_movement_exit_status() == 8);
     live_movement_close();
     fixture_destroy(&paths);
@@ -748,7 +752,7 @@ static int test_capture_map_path_boundaries(void) {
         memset(MapData.map_path, 'a', sizeof(MapData.map_path));
         if (lengths[i] < sizeof(MapData.map_path))
             MapData.map_path[lengths[i]] = '\0';
-        bool accepted = capture_checkpoint_request(0, now_us, 1, false, 0);
+        bool accepted = capture_checkpoint_request(0, true, now_us, 1, false, 0);
         if (lengths[i] == 511) {
             CHECK(accepted && captures[0].result.status == LIVE_MOVEMENT_CAPTURE_PENDING);
             CHECK(memcmp(capture_checkpoints[0].map, MapData.map_path, 512) == 0);
@@ -816,6 +820,28 @@ static int test_capture_barriers(void) {
     frame(true);
     live_movement_tick();
     CHECK(live_movement_finished() && live_movement_exit_status() == 0);
+    live_movement_close();
+    fixture_destroy(&paths);
+    return 0;
+}
+
+static int test_private_capture_failure(void) {
+    fixture_paths_t paths;
+    adapter_reset();
+    CHECK(fixture_create(&paths, capture_route_xml));
+    CHECK(live_movement_initialize(paths.route, paths.report));
+    CHECK(live_movement_configure_review(paths.report, "/tmp/initial.png", "/tmp/final.png", NULL));
+    live_movement_ready();
+    publication_generation = 1;
+    live_movement_tick();
+    now_us += (MAP_VISIBILITY_FADE_DURATION_MS + UINT64_C(125)) * 1000;
+    map_statistics.primary_map_draws++;
+    primary_gpu_generation++;
+    live_movement_frame_finished(true, false, &(client_keepalive_statistics_t){0});
+    CHECK(live_movement_finished() && live_movement_exit_status() != 0);
+    CHECK(captures[0].result.status == LIVE_MOVEMENT_CAPTURE_FAILED);
+    CHECK(presented_checkpoints == 0);
+    CHECK(report_contains(paths.report, "could not queue diagnostic capture"));
     live_movement_close();
     fixture_destroy(&paths);
     return 0;
@@ -925,6 +951,8 @@ int main(void) {
     if (test_capture_map_path_boundaries() != 0)
         return 1;
     if (test_capture_barriers() != 0)
+        return 1;
+    if (test_private_capture_failure() != 0)
         return 1;
     if (test_capture_failure_and_deadline() != 0)
         return 1;

@@ -345,8 +345,8 @@ static void capture_cancel(void *userdata) {
     capture_complete(NULL, userdata);
 }
 
-void video_recording_frame(bool playing, bool presented, uint64_t now_ms) {
-    if (recording.armed && playing && presented) {
+void video_recording_frame(bool playing, bool presented, bool capture_allowed, uint64_t now_ms) {
+    if (recording.armed && playing && presented && capture_allowed) {
         recording.armed = false;
         recording.epoch_set = false;
         recording.count = 0;
@@ -409,7 +409,7 @@ void video_recording_frame(bool playing, bool presented, uint64_t now_ms) {
         }
         return;
     }
-    if (!capture || !playing || !presented || recording.pending) {
+    if (!capture || !playing || !presented || !capture_allowed || recording.pending) {
         return;
     }
     uint64_t index = recording.epoch_set ? (now_ms - recording.epoch) * RECORD_FPS / 1000U : 0U;

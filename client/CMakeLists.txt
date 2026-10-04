@@ -588,6 +588,12 @@ if (BUILD_TESTING)
 
     add_test(NAME client-access-lifecycle COMMAND ${EXECUTABLE} --access-lifecycle-test)
 
+    add_executable(client-capture-privacy-tests
+        src/tests/capture_privacy.c src/client/capture_privacy.c)
+    atrinik_configure_target(client-capture-privacy-tests)
+    target_include_directories(client-capture-privacy-tests PRIVATE src/include)
+    add_test(NAME client-capture-privacy COMMAND client-capture-privacy-tests)
+
     add_test(NAME client-cli-options
         COMMAND ${EXECUTABLE}
             --connect=example:account:password:character
@@ -819,7 +825,8 @@ if (BUILD_TESTING)
     add_test(NAME client-live-movement COMMAND client-live-movement-tests)
 
     add_executable(client-live-movement-capture-tests
-        src/tests/live_movement_capture.c src/client/live_movement_capture.c)
+        src/tests/live_movement_capture.c src/client/live_movement_capture.c
+        src/client/capture_privacy.c)
     atrinik_configure_target(client-live-movement-capture-tests)
     target_compile_definitions(client-live-movement-capture-tests PRIVATE
         ATRINIK_LIVE_MOVEMENT_CAPTURE_TESTING)
@@ -844,7 +851,7 @@ if (BUILD_TESTING)
 
     if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(client-video-recording-tests
-            src/tests/video_recording.c src/client/video_recording.c)
+            src/tests/video_recording.c src/client/video_recording.c src/client/capture_privacy.c)
         atrinik_configure_target(client-video-recording-tests)
         target_include_directories(client-video-recording-tests BEFORE PRIVATE
             ${CMAKE_CURRENT_BINARY_DIR}/src/include

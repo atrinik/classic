@@ -31,6 +31,7 @@
 #include <access_admin.h>
 #include <animations.h>
 #include <book.h>
+#include <capture_privacy.h>
 #include <client.h>
 #include <commands.h>
 #include <config.h>
@@ -846,6 +847,7 @@ bool gpu_renderer_recovery_republish_test(void) {
 static bool gpu_renderer_recover_frame(unsigned int *attempts,
                                        const char *context,
                                        const gpu_renderer_recreation_diagnostic_t *consumed) {
+    capture_privacy_block();
     HARD_ASSERT(attempts != NULL);
     HARD_ASSERT(context != NULL);
     char error_snapshot[256];
@@ -919,20 +921,28 @@ static bool client_access_lifecycle_test(void) {
     static const char private_result[] =
         "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";
 
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
     if (!book_test_state_seed(ordinary, false)) {
         return false;
     }
     client_access_admin_reset();
     bool ordinary_preserved =
-        book_test_content_retained() && !book_test_clear_was_observed();
+        book_test_content_retained() && !book_test_clear_was_observed() &&
+        capture_privacy_allowed(book_sensitive_active());
     book_test_state_discard();
 
     if (!book_test_state_seed(private_result, true)) {
         return false;
     }
+    bool retained_denied = book_sensitive_active() &&
+                           !capture_privacy_allowed(book_sensitive_active());
+    capture_privacy_frame_begin(book_sensitive_active());
     client_access_admin_reset();
+    capture_privacy_frame_end(true);
     bool reset_cleared =
-        !book_test_content_retained() && book_test_clear_was_observed();
+        !book_test_content_retained() && book_test_clear_was_observed() &&
+        !capture_privacy_allowed(book_sensitive_active());
 
     if (!book_test_state_seed(private_result, true)) {
         return false;
@@ -944,7 +954,14 @@ static bool client_access_lifecycle_test(void) {
                               book_test_clear_was_observed() && cpl.state == ST_LOGIN;
     book_test_state_discard();
 
-    return ordinary_preserved && reset_cleared && characters_cleared;
+    bool closed_denied = !capture_privacy_allowed(book_sensitive_active());
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(false);
+    bool failed_denied = !capture_privacy_allowed(book_sensitive_active());
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
+    return ordinary_preserved && retained_denied && reset_cleared && characters_cleared &&
+           closed_denied && failed_denied && capture_privacy_allowed(book_sensitive_active());
 }
 #endif
 
@@ -1338,7 +1355,11 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        if (update) {
+            capture_privacy_frame_begin(book_sensitive_active());
+        }
         if (update && !gpu_renderer_begin_frame()) {
+            capture_privacy_frame_end(false);
             LOG(ERROR, "Could not begin GPU frame: %s", SDL_GetError());
             if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "beginning a frame", NULL)) {
                 break;
@@ -1409,6 +1430,7 @@ int main(int argc, char *argv[]) {
         if (update) {
             bool presented = gpu_renderer_present();
             frame_presented = presented;
+            capture_privacy_frame_end(presented);
             map_benchmark_statistics_present(presented);
             if (!presented) {
                 LOG(ERROR, "Could not present the GPU frame: %s", SDL_GetError());
@@ -1422,7 +1444,10 @@ int main(int argc, char *argv[]) {
             }
         }
         render_profiler_end(RENDER_PROFILE_PRESENT, profile_present_started);
-        video_recording_frame(cpl.state == ST_PLAY, frame_presented, SDL_GetTicks());
+        video_recording_frame(cpl.state == ST_PLAY,
+                              frame_presented,
+                              capture_privacy_allowed(book_sensitive_active()),
+                              SDL_GetTicks());
         char recording_notice[4352];
         bool recording_failed;
         if (video_recording_message(recording_notice,
@@ -1471,7 +1496,9 @@ int main(int argc, char *argv[]) {
         if (live_movement_enabled()) {
             client_keepalive_statistics_t keepalive_statistics;
             client_keepalive_statistics(&keepalive_state, &keepalive_statistics);
-            live_movement_frame_finished(frame_presented, &keepalive_statistics);
+            live_movement_frame_finished(frame_presented,
+                                         capture_privacy_allowed(book_sensitive_active()),
+                                         &keepalive_statistics);
         }
     }
 

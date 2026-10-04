@@ -31,6 +31,7 @@
 
 #include <SDL3/SDL.h>
 #include <book.h>
+#include <capture_privacy.h>
 #include <event.h>
 #include <main.h>
 #include <popup.h>
@@ -292,6 +293,9 @@ static bool book_load_internal(const char *data, int len, bool sensitive, const 
     /* Store the data. */
     book_content = xstrdup(data);
     book_sensitive = sensitive;
+    if (sensitive) {
+        capture_privacy_block();
+    }
     book_name_change(title, strlen(title));
 
     /* Strip trailing newlines. */
@@ -389,6 +393,10 @@ void book_sensitive_clear(void) {
     }
 }
 
+bool book_sensitive_active(void) {
+    return book_sensitive;
+}
+
 bool book_sensitive_visible(void) {
     return book_sensitive && book_popup_get() != NULL;
 }
@@ -405,6 +413,9 @@ bool book_test_state_seed(const char *content, bool sensitive) {
     book_state_clear();
     book_content = xstrdup(content);
     book_sensitive = sensitive;
+    if (sensitive) {
+        capture_privacy_block();
+    }
     book_test_clear_observed = false;
     return true;
 }

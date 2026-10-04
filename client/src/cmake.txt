@@ -66,6 +66,7 @@ set(SOURCES
 	src/client/updates.c
 	src/client/user_data.c
 	src/client/video.c
+	src/client/capture_privacy.c
 	src/client/video_recording.c
 	src/client/video_encoder.c
 	src/client/video_avi.c

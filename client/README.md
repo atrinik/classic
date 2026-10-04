@@ -221,7 +221,12 @@ environment variables never synthesize a selected-adapter identity.
 
  Administration results use a private book that is cleansed when it closes and
  across logout, account selection, and character entry. This targeted cleanup
- leaves ordinary books open. A code that was already displayed, copied, or
+ leaves ordinary books open. Built-in screenshots, recordings, and diagnostic
+ captures deny new submissions while private results are retained and until a
+ fresh clean frame is successfully presented after closing them. Recordings
+ pause capture while their bounded queues and shutdown continue; safe frames
+ already submitted may finish. External screen capture cannot be prevented.
+ A code that was already displayed, copied, or
  captured cannot be recalled by later permission or token revocation.
 
  Directory entries may intentionally omit a public hostname and port. Those

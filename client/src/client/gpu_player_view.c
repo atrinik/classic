@@ -20,6 +20,7 @@
 #include <commands.h>
 #include <client_socket.h>
 #include <book.h>
+#include <capture_privacy.h>
 #include <config.h>
 #include <color_picker.h>
 #include <effects.h>
@@ -1486,7 +1487,9 @@ static bool gpu_player_view_render(widgetdata *widget, bool widget_render) {
 }
 
 static bool gpu_player_view_render_complete(void) {
+    capture_privacy_frame_begin(book_sensitive_active());
     if (!gpu_renderer_begin_frame()) {
+        capture_privacy_frame_end(false);
         return false;
     }
 #ifdef ATRINIK_WIDGET_TESTS
@@ -1514,9 +1517,12 @@ static bool gpu_player_view_render_complete(void) {
     }
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_UI, ui_started);
 #else
+    capture_privacy_frame_end(false);
     return false;
 #endif
-    return gpu_renderer_frame_valid() && gpu_renderer_present() && gpu_renderer_wait_idle();
+    bool presented = gpu_renderer_frame_valid() && gpu_renderer_present() && gpu_renderer_wait_idle();
+    capture_privacy_frame_end(presented);
+    return presented;
 }
 
 static char gpu_player_view_review_prefix[256];

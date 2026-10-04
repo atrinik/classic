@@ -92,6 +92,9 @@ bool book_load_sensitive(const char *data, int len, const char *title);
 /** Close and cleanse private access-management output without affecting an ordinary book. */
 void book_sensitive_clear(void);
 
+/** Whether private output remains retained, including without a popup. */
+bool book_sensitive_active(void);
+
 /** Whether private access-management output is currently visible. */
 bool book_sensitive_visible(void);
 

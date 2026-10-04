@@ -3,6 +3,7 @@
 
 #include <gpu_renderer.h>
 #include <video_recording.h>
+#include <capture_privacy.h>
 
 #include <SDL3/SDL.h>
 #include <stdio.h>
@@ -228,7 +229,7 @@ static void consume_message(const char *fragment, bool expected_failed) {
 
 static void wait_for_readback(unsigned int expected, uint64_t now_ms) {
     for (unsigned int i = 0; i < 1000U && readback_requests < expected; i++) {
-        video_recording_frame(true, true, now_ms);
+        video_recording_frame(true, true, true, now_ms);
         SDL_Delay(1);
     }
     TEST_CHECK(readback_requests == expected);
@@ -279,7 +280,7 @@ static void test_validation_and_cancel(void) {
     TEST_CHECK(video_recording_start("/tmp/armed.avi"));
     consume_message("Recording armed", false);
     TEST_CHECK(!video_recording_start("/tmp/second.avi"));
-    video_recording_frame(false, true, SDL_GetTicks());
+    video_recording_frame(false, true, true, SDL_GetTicks());
     TEST_CHECK(readback_requests == 0U);
     video_recording_stop();
     consume_message("Recording canceled", false);
@@ -298,7 +299,7 @@ static void test_protocol_timestamps_and_isolation(void) {
     uint64_t epoch = SDL_GetTicks();
     wait_for_readback(1U, epoch);
     finish_readback(0x10U);
-    video_recording_frame(true, true, epoch + 49U);
+    video_recording_frame(true, true, true, epoch + 49U);
     TEST_CHECK(readback_requests == 1U);
     wait_for_readback(2U, epoch + 50U);
     finish_readback(0x20U);
@@ -345,7 +346,7 @@ static void test_bounded_pending_and_shutdown_callback(void) {
     uint64_t epoch = SDL_GetTicks();
     wait_for_readback(1U, epoch);
     for (unsigned int i = 1; i <= 1000U; i++) {
-        video_recording_frame(true, true, epoch + (uint64_t)i * 50U);
+        video_recording_frame(true, true, true, epoch + (uint64_t)i * 50U);
     }
     TEST_CHECK(readback_requests == 1U);
     video_recording_shutdown();
@@ -371,7 +372,7 @@ static void test_encoder_backpressure_bounds_queue(void) {
     wait_for_readback(3U, epoch + 250U);
     finish_readback(0x50U);
     for (unsigned int i = 6U; i <= 1000U; i++) {
-        video_recording_frame(true, true, epoch + (uint64_t)i * 50U);
+        video_recording_frame(true, true, true, epoch + (uint64_t)i * 50U);
     }
     TEST_CHECK(readback_requests == 3U);
 
@@ -391,13 +392,58 @@ static void test_encoder_backpressure_bounds_queue(void) {
     consume_message("Recording saved", false);
 }
 
+static void test_private_capture_pause(void) {
+    reset_fakes();
+    capture_privacy_block();
+    TEST_CHECK(video_recording_start("/tmp/privacy.avi"));
+    consume_message("Recording armed", false);
+    uint64_t epoch = SDL_GetTicks();
+    for (unsigned int i = 0; i < 10U; i++) {
+        video_recording_frame(true, true, capture_privacy_allowed(true), epoch);
+    }
+    TEST_CHECK(readback_requests == 0U && process_state.input == NULL);
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(false);
+    video_recording_frame(true, false, capture_privacy_allowed(false), epoch);
+    TEST_CHECK(process_state.input == NULL);
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
+    TEST_CHECK(capture_privacy_allowed(false));
+    wait_for_readback(1U, epoch);
+    capture_privacy_block();
+    capture_privacy_frame_begin(true);
+    capture_privacy_frame_end(true);
+    /* Previously submitted safe bytes still complete while private UI is open. */
+    finish_readback(0x60U);
+    for (unsigned int i = 1; i <= 10U; i++) {
+        video_recording_frame(true, true, capture_privacy_allowed(false), epoch + i * 50U);
+    }
+    TEST_CHECK(readback_requests == 1U); /* Close/reset before clean redraw. */
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(false);
+    video_recording_frame(true, false, capture_privacy_allowed(false), epoch + 550U);
+    TEST_CHECK(readback_requests == 1U);
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
+    TEST_CHECK(capture_privacy_allowed(false));
+    wait_for_readback(2U, epoch + 600U);
+    finish_readback(0x70U);
+    capture_privacy_block();
+    video_recording_stop();
+    video_recording_shutdown();
+    TEST_CHECK(process_state.destroyed && !process_state.killed);
+    TEST_CHECK(process_state.wire_size == 4U + 2U * 28U + 8U);
+    TEST_CHECK(process_state.wire[24U] == 0x60U && process_state.wire[52U] == 0x70U);
+    consume_message("Recording saved", false);
+}
+
 static void test_capture_failures(void) {
     reset_fakes();
     process_state.create_failed = true;
     TEST_CHECK(video_recording_start("/tmp/process-create.avi"));
     uint64_t now = SDL_GetTicks();
     for (unsigned int i = 0; i < 100U; i++) {
-        video_recording_frame(true, true, now);
+        video_recording_frame(true, true, true, now);
         SDL_Delay(1);
     }
     video_recording_shutdown();
@@ -409,7 +455,7 @@ static void test_capture_failures(void) {
     TEST_CHECK(video_recording_start("/tmp/oversize.avi"));
     now = SDL_GetTicks();
     for (unsigned int i = 0; i < 100U; i++) {
-        video_recording_frame(true, true, now);
+        video_recording_frame(true, true, true, now);
         SDL_Delay(1);
     }
     video_recording_shutdown();
@@ -428,7 +474,7 @@ static void test_capture_failures(void) {
     TEST_CHECK(video_recording_start("/tmp/not-ready.avi"));
     now = SDL_GetTicks();
     for (unsigned int i = 0; i < 100U; i++) {
-        video_recording_frame(true, true, now);
+        video_recording_frame(true, true, true, now);
         SDL_Delay(1);
     }
     video_recording_shutdown();
@@ -444,6 +490,7 @@ int main(void) {
     test_protocol_timestamps_and_isolation();
     test_bounded_pending_and_shutdown_callback();
     test_encoder_backpressure_bounds_queue();
+    test_private_capture_pause();
     test_capture_failures();
     video_recording_shutdown();
     SDL_Quit();

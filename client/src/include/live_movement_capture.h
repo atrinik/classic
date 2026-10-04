@@ -39,8 +39,9 @@ typedef struct live_movement_capture_result {
 live_movement_capture_t *
 live_movement_capture_create(const char *absolute_path, char *error, size_t error_size);
 
-/** Queue one full-frame asynchronous GPU readback. Main thread only. */
-bool live_movement_capture_request(live_movement_capture_t *capture);
+/** Queue one full-frame asynchronous GPU readback. Main thread only.
+ * A denied admission fails the job without submitting any GPU work. */
+bool live_movement_capture_request(live_movement_capture_t *capture, bool capture_allowed);
 
 /** Stable result storage owned by capture. */
 const live_movement_capture_result_t *
