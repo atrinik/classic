@@ -190,10 +190,10 @@ void cleanup(void) {
     /* Emit each boundary before entering it so an interrupted shutdown still
      * identifies the outstanding owner. No logs may follow toolkit_deinit(),
      * which releases the logger itself. */
-#define CLEANUP_STAGE(function)                                \
-    do {                                                       \
-        LOG(INFO, "Server cleanup stage: %s", #function);       \
-        function();                                            \
+#define CLEANUP_STAGE(function)                           \
+    do {                                                  \
+        LOG(INFO, "Server cleanup stage: %s", #function); \
+        function();                                       \
     } while (0)
     CLEANUP_STAGE(cache_remove_all);
     CLEANUP_STAGE(remove_plugins);
