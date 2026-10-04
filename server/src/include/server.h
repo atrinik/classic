@@ -355,8 +355,8 @@ extern bool socket_connection_admitted(const socket_struct *cs);
  * Check whether a gameplay command is valid in the connection's current
  * protocol phase.
  *
- * The separate control command still requires its IP allowlist check at the
- * central dispatch boundary.
+ * Remote control commands are always denied; local administration uses the
+ * independently authenticated Unix socket.
  *
  * @param cs
  * Client connection.
@@ -444,6 +444,10 @@ socket_command_request_update(socket_struct *ns, player *pl, uint8_t *data, size
 /* Access operations are dispatched only on authenticated QUIC connections. */
 void socket_command_access_auth(socket_struct *, player *, uint8_t *, size_t, size_t);
 void socket_command_access_admin(socket_struct *, player *, uint8_t *, size_t, size_t);
+bool socket_access_admin_permitted(socket_struct *, player *);
+#ifdef ATRINIK_TESTING
+void socket_access_poll_for_test(socket_struct *, player *);
+#endif
 void socket_server_access_poll(void);
 
 #endif

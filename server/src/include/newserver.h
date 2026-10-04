@@ -237,6 +237,7 @@ typedef struct socket_struct {
     access_token_ref_t access_token;
     uint64_t access_auth_job;
     uint64_t access_admin_job;
+    uint64_t access_admin_actor_tag;
 
     /** Whether the initial client setup exchange completed successfully. */
     bool setup_completed;

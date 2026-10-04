@@ -35,6 +35,8 @@ bool access_admin_execute(access_store_t *,
                           size_t,
                           size_t *);
 bool access_admin_status_encode(const access_status_t *, bool, char *, size_t, size_t *);
+/* Correlated oracle-resistant denial; request must have passed the parser. */
+bool access_admin_denied_encode(const access_admin_request_t *, char *, size_t, size_t *);
 bool access_admin_execute_absent(const access_status_t *,
                                  const char *,
                                  size_t,

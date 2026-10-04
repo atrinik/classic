@@ -1426,7 +1426,12 @@ static void socket_server_service_player_connections(socket_server_transport_sta
  * scheduled independently by sleep_delta_timeout_us(), so QUIC readiness and
  * timer events do not inherit the simulation tick cadence.
  */
-static void socket_access_poll_one(socket_struct *cs) {
+bool socket_access_admin_permitted(socket_struct *cs, player *pl) {
+    return cs != NULL && pl != NULL && pl->ob != NULL && cs->state == ST_PLAYING && pl->cs == cs &&
+           commands_check_permission(pl, "access");
+}
+
+static void socket_access_poll_one(socket_struct *cs, player *pl) {
     if (cs->access_auth_job != 0) {
         access_outcome_t outcome;
         access_token_ref_t ref;
@@ -1448,11 +1453,21 @@ static void socket_access_poll_one(socket_struct *cs) {
             }
         }
     }
+    if (cs->access_admin_job != 0 &&
+        (pl == NULL || pl->ob == NULL || pl->cs != cs || cs->state != ST_PLAYING ||
+         pl->ob->count != cs->access_admin_actor_tag)) {
+        access_server_cancel(cs->access_admin_job);
+        cs->access_admin_job = 0;
+        cs->access_admin_actor_tag = 0;
+    }
     if (cs->access_admin_job != 0) {
         char response[ACCESS_ADMIN_RESPONSE_MAX + 1];
         size_t length = 0;
-        if (access_server_admin_poll(cs->access_admin_job, VS(response), &length)) {
+        if (access_server_admin_poll_permitted(cs->access_admin_job,
+                                              socket_access_admin_permitted(cs, pl),
+                                              VS(response), &length)) {
             cs->access_admin_job = 0;
+            cs->access_admin_actor_tag = 0;
             if (length > 0 && socket_connection_admitted(cs)) {
                 packet_struct *packet = packet_new(CLIENT_CMD_ACCESS_ADMIN_RESULT, length + 1, 0);
                 packet_mark_sensitive(packet);
@@ -1468,14 +1483,20 @@ static void socket_access_poll_one(socket_struct *cs) {
         cs->state = ST_DEAD;
 }
 
+#ifdef ATRINIK_TESTING
+void socket_access_poll_for_test(socket_struct *cs, player *pl) {
+    socket_access_poll_one(cs, pl);
+}
+#endif
+
 void socket_server_access_poll(void) {
     access_server_tick();
     csocket_entry_t *entry;
     DL_FOREACH(client_sockets, entry)
-        socket_access_poll_one(entry->cs);
+        socket_access_poll_one(entry->cs, NULL);
     player *pl, *next;
     DL_FOREACH_SAFE(first_player, pl, next) {
-        socket_access_poll_one(pl->cs);
+        socket_access_poll_one(pl->cs, pl);
         if (pl->cs->state == ST_DEAD && settings.access_required && pl->cs->access_authenticated) {
             if (!player_logout_checked(pl))
                 access_server_save_failed();

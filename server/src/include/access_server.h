@@ -14,14 +14,16 @@ bool access_server_shutdown(void);
 bool access_server_healthy(void);
 void access_server_save_failed(void);
 uint64_t access_server_root_submit(const char *, size_t);
-uint64_t access_server_admin_submit(const char *, size_t, const char *account);
+uint64_t access_server_admin_submit(const char *, size_t, bool permitted);
 bool access_server_admin_poll(uint64_t, char *, size_t, size_t *);
+bool access_server_admin_poll_permitted(uint64_t, bool, char *, size_t, size_t *);
 void access_server_cancel(uint64_t);
 uint64_t access_server_auth_submit(const char code[16]);
 bool access_server_auth_poll(uint64_t, access_outcome_t *, access_token_ref_t *);
 access_session_state_t access_server_session_check(const access_token_ref_t *);
 void access_server_tick(void);
 #ifdef ATRINIK_TESTING
+uint64_t access_server_admin_result_for_test(bool, const char *, const char *);
 void access_server_session_sequence_for_test(const access_session_state_t *, size_t);
 #endif
 #endif

@@ -131,19 +131,20 @@ void socket_command_access_admin(socket_struct *ns,
                                  uint8_t *data,
                                  size_t len,
                                  size_t pos) {
-    (void)pl;
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     if (len - pos < 2 || len - pos > ACCESS_ADMIN_REQUEST_MAX + 1 ||
         packet_reader_read_uint8(&reader) != 1 || ns->access_admin_job != 0 ||
-        ns->account == NULL) {
+        ns->account == NULL || ns->state != ST_PLAYING || pl == NULL || pl->ob == NULL || pl->cs != ns) {
         ns->state = ST_ZOMBIE;
         return;
     }
-    /* Identity originates in the authenticated account socket; never a client
-     * field, character name, OP group, or a permission command. */
+    /* Each operation uses this active character's ordinary command permissions,
+     * including explicit grants and [OP]. Never trust a client identity field. */
     ns->access_admin_job =
-        access_server_admin_submit((const char *)data + pos, len - pos, ns->account);
+        access_server_admin_submit((const char *)data + pos, len - pos,
+                                   socket_access_admin_permitted(ns, pl));
+    ns->access_admin_actor_tag = ns->access_admin_job == 0 ? 0 : pl->ob->count;
     while (pos < len)
         (void)packet_reader_read_uint8(&reader);
     if (ns->access_admin_job == 0)

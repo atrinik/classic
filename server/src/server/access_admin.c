@@ -383,9 +383,9 @@ static void status(writer *w, const access_status_t *s, bool absent) {
 }
 bool access_admin_status_encode(const access_status_t *s,
                                 bool absent,
-                                char *response,
-                                size_t capacity,
-                                size_t *length) {
+                               char *response,
+                               size_t capacity,
+                               size_t *length) {
     if (!s || !response || !length || !capacity || s->schema_version != ACCESS_STORE_SCHEMA ||
         s->pending_route_sync > ACCESS_TOKEN_LIMIT || (absent && s->protected_policy))
         return false;
@@ -399,6 +399,23 @@ bool access_admin_status_encode(const access_status_t *s,
     *length = w.used;
     return true;
 }
+bool access_admin_denied_encode(const access_admin_request_t *request,
+                               char *response,
+                               size_t capacity,
+                               size_t *length) {
+    if (!request || !response || !length || !capacity ||
+        (unsigned)request->operation > ACCESS_ADMIN_RESULT || request->request_id[32] != '\0' ||
+        !hex_id(request->request_id))
+        return false;
+    writer w = {response, 0, capacity, true};
+    append(&w,
+           "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"%s\",\"requestId\":\"%s\","
+           "\"outcome\":\"unavailable\",\"revision\":null,\"result\":{}",
+           operations[request->operation],
+           request->request_id);
+    return finish(&w, length);
+}
+
 bool access_admin_execute_absent(const access_status_t *configured,
                                  const char *data,
                                  size_t size,

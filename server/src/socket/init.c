@@ -80,6 +80,7 @@ bool init_connection(socket_struct *ns) {
     access_server_cancel(ns->access_auth_job);
     access_server_cancel(ns->access_admin_job);
     ns->access_auth_job = ns->access_admin_job = 0;
+    ns->access_admin_actor_tag = 0;
     ns->access_authenticated = false;
     ns->access_attempted = false;
     ns->access_policy_sent = false;

@@ -1249,6 +1249,103 @@ START_TEST(test_access_busy_retains_received_and_queued_frames) {
 }
 END_TEST
 
+START_TEST(test_access_permissions_follow_the_active_character) {
+    char saved[sizeof(settings.default_permission_groups)];
+    memcpy(saved, settings.default_permission_groups, sizeof(saved));
+    settings.default_permission_groups[0] = '\0';
+    socket_struct first = {0}, second = {0};
+    player allowed = {0}, denied = {0};
+    object allowed_object = {0}, denied_object = {0};
+    allowed.ob = &allowed_object;
+    denied.ob = &denied_object;
+    char *permissions[] = {"access"};
+    allowed.cs = &first;
+    denied.cs = &second;
+    first.state = second.state = ST_PLAYING;
+    first.account = second.account = "same-account";
+    allowed.cmd_permissions = permissions;
+    allowed.num_cmd_permissions = 1;
+    ck_assert(socket_access_admin_permitted(&first, &allowed));
+    ck_assert(!socket_access_admin_permitted(&second, &denied));
+    permissions[0] = "/access";
+    ck_assert(socket_access_admin_permitted(&first, &allowed));
+    permissions[0] = "[OP]";
+    ck_assert(socket_access_admin_permitted(&first, &allowed));
+    allowed.num_cmd_permissions = 0;
+    ck_assert(!socket_access_admin_permitted(&first, &allowed));
+    allowed.num_cmd_permissions = 1;
+    ck_assert(socket_access_admin_permitted(&first, &allowed));
+    ck_assert(!socket_access_admin_permitted(&first, &denied));
+    ck_assert(!socket_access_admin_permitted(&first, NULL));
+    first.state = ST_LOGIN;
+    ck_assert(!socket_access_admin_permitted(&first, &allowed));
+    memcpy(settings.default_permission_groups, saved, sizeof(saved));
+}
+END_TEST
+
+START_TEST(test_access_revocation_denies_queued_private_result) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    cs->state = ST_PLAYING;
+    bool saved_required = settings.access_required;
+    settings.access_required = false;
+    char saved[sizeof(settings.default_permission_groups)];
+    memcpy(saved, settings.default_permission_groups, sizeof(saved));
+    settings.default_permission_groups[0] = '\0';
+    const char *request = "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"issue\","
+                          "\"requestId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+                          "\"expectedRevision\":\"1\",\"label\":\"fixture\"}";
+    const char *secret = "fixture-private-result";
+    uint64_t job = access_server_admin_result_for_test(true, request, secret);
+    cs->access_admin_job = job;
+    cs->access_admin_actor_tag = pl->ob->count;
+    socket_buffer_clear(cs);
+    socket_access_poll_for_test(cs, pl);
+    ck_assert_uint_eq(cs->access_admin_job, 0);
+    packet_struct *packet = queued_command_find(cs, CLIENT_CMD_ACCESS_ADMIN_RESULT);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_ptr_null(memmem(packet->data, packet->len, secret, strlen(secret)));
+    ck_assert_ptr_nonnull(memmem(packet->data, packet->len, "unavailable", 11));
+    ck_assert_ptr_nonnull(memmem(packet->data, packet->len,
+                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 32));
+    char response[512];
+    size_t length = 0;
+    ck_assert(!access_server_admin_poll(job, response, sizeof(response), &length));
+    /* A root-local callback has its independent peer-credential authority. */
+    job = access_server_admin_result_for_test(true, request, secret);
+    ck_assert(access_server_admin_poll(job, response, sizeof(response), &length));
+    ck_assert_str_eq(response, secret);
+    /* A denial at admission cannot become authority merely because a grant was
+     * added while that denied operation was queued. */
+    job = access_server_admin_result_for_test(false, request, secret);
+    ck_assert(access_server_admin_poll_permitted(job, true, response, sizeof(response), &length));
+    ck_assert_ptr_null(strstr(response, secret));
+    ck_assert_ptr_nonnull(strstr(response, "unavailable"));
+    /* Losing the character cancels delivery rather than migrating the response
+     * onto the account-selection connection or a different character. */
+    object replacement = {0};
+    replacement.count = op->count + 1;
+    for (unsigned int i = 0; i < 3; i++) {
+        cs->access_admin_job = access_server_admin_result_for_test(true, request, secret);
+        job = cs->access_admin_job;
+        cs->access_admin_actor_tag = op->count;
+        pl->ob = i == 2 ? &replacement : op;
+        socket_buffer_clear(cs);
+        cs->state = i == 0 ? ST_LOGIN : ST_PLAYING;
+        socket_access_poll_for_test(cs, i == 1 ? NULL : pl);
+        pl->ob = op;
+        ck_assert_uint_eq(cs->access_admin_job, 0);
+        ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_ACCESS_ADMIN_RESULT), 0);
+        ck_assert(!access_server_admin_poll(job, response, sizeof(response), &length));
+    }
+    memcpy(settings.default_permission_groups, saved, sizeof(saved));
+    settings.access_required = saved_required;
+}
+END_TEST
+
 START_TEST(test_keepalive_echoes_identifier) {
     mapstruct *map;
     object *pl;
@@ -2004,6 +2101,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_access_busy_retains_received_and_queued_frames);
     tcase_add_test(tc_core, test_access_attempt_budget_has_no_connection_identity);
+    tcase_add_test(tc_core, test_access_permissions_follow_the_active_character);
+    tcase_add_test(tc_core, test_access_revocation_denies_queued_private_result);
     tcase_add_test(tc_core, test_keepalive_echoes_identifier);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);
