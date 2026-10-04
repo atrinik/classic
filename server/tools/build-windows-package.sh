@@ -111,7 +111,8 @@ fi
 package_root=build/windows-package-root
 region_build=build/windows-region-generator
 region_runtime=${package_root}/region-runtime
-region_data=${package_root}/region-data
+# server.cfg resolves its checked public key files relative to the runtime cwd.
+region_data=${region_runtime}/data
 cmake -E remove_directory "${package_root}"
 cmake -E remove_directory build/windows-release
 cmake -E make_directory "${package_root}"
@@ -165,7 +166,6 @@ test -d "${region_assets}/client-maps"
 cmake -E copy_directory "${region_assets}/client-maps" \
   "${package_root}/client-maps"
 cmake -E remove_directory "${region_runtime}"
-cmake -E remove_directory "${region_data}"
 cmake -E remove_directory "${region_assets}"
 
 "${mxe_cmake}" -S . -B build/windows-release -G Ninja \
