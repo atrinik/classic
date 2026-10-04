@@ -48,6 +48,7 @@ struct access_store {
     pthread_mutex_t mutex;
     int directory;
     bool protected_policy, poisoned, fenced;
+    int64_t observed_clock;
     snapshot_t *state;
 };
 typedef struct { uint8_t *data; size_t pos, size; bool ok; } codec_t;
@@ -168,8 +169,7 @@ static size_t pending_count(const snapshot_t *s)
 static bool validate(const snapshot_t *s, bool uniqueness)
 {
     if (s->revision == 0 || s->commit_sequence < s->revision || s->clock < 0 || s->token_count > ACCESS_TOKEN_LIMIT ||
-            s->receipt_count > ACCESS_RECEIPT_LIMIT || s->tombstone_count > ACCESS_TOMBSTONE_LIMIT ||
-            pending_count(s) > ACCESS_OUTBOX_LIMIT) return false;
+            s->receipt_count > ACCESS_RECEIPT_LIMIT || s->tombstone_count > ACCESS_TOMBSTONE_LIMIT) return false;
     for (size_t i = 0; i < s->token_count; i++) {
         const token_t *t = &s->tokens[i]; const access_token_info_t *a = &t->info;
         if (!hex_id(a->ref.token_id) || !hex_id(t->route_request) || !label_valid(a->label) ||
@@ -328,6 +328,9 @@ static snapshot_t *read_snapshot(int directory, const uint8_t identity[32])
 static access_outcome_t commit(access_store_t *store, snapshot_t *next, bool initial)
 {
     if (!validate(next, false)) return ACCESS_INVALID;
+    struct stat directory_stat;
+    if (fstat(store->directory, &directory_stat) != 0 || directory_stat.st_uid != geteuid() ||
+            !S_ISDIR(directory_stat.st_mode) || (directory_stat.st_mode & 07777) != 0700) return ACCESS_SAVE_FAILED;
     size_t n = 0; uint8_t *data = encode(next, &n);
     if (data == NULL) return ACCESS_SAVE_FAILED;
     char id[33], temporary[64];
@@ -366,6 +369,7 @@ static access_outcome_t commit(access_store_t *store, snapshot_t *next, bool ini
     if (next_bytes) { OPENSSL_cleanse(next_bytes, next_n); free(next_bytes); }
     if (!ok) { OPENSSL_cleanse(check, sizeof(*check)); free(check); store->poisoned = true; return ACCESS_INDETERMINATE; }
     OPENSSL_cleanse(store->state, sizeof(*store->state)); free(store->state); store->state = check;
+    if (check->clock > store->observed_clock) store->observed_clock = check->clock;
     return ACCESS_COMMITTED;
 }
 static token_t *find_token(snapshot_t *s, const char *id)
@@ -384,6 +388,7 @@ static snapshot_t *candidate(access_store_t *s, int64_t now)
     snapshot_t *n = malloc(sizeof(*n)); if (n == NULL) return NULL;
     memcpy(n, s->state, sizeof(*n)); n->revision++; n->commit_sequence++;
     if (now > n->clock) n->clock = now;
+    if (s->observed_clock > n->clock) n->clock = s->observed_clock;
     return n;
 }
 static void discard(snapshot_t *s) { if (s) { OPENSSL_cleanse(s, sizeof(*s)); free(s); } }
@@ -473,6 +478,7 @@ access_outcome_t access_store_open(access_store_t **out, const char *directory,
         if (r) { r->outcome = ACCESS_LOCALLY_REVOKED; r->revision = n->revision; r->token_revision = t->info.ref.revision; }
     }
     if (n) { outcome = commit(s, n, false); discard(n); if (outcome != ACCESS_COMMITTED) goto fail; }
+    s->observed_clock = s->state->clock;
     *out = s; return ACCESS_COMMITTED;
 fail:
     access_store_close(s); return outcome;
@@ -531,16 +537,17 @@ access_result_t access_store_issue(access_store_t *s, const char *id, uint64_t e
 {
     access_result_t out = { .outcome = ACCESS_INVALID }; uint8_t hash[32];
     if (!s || !hex_id(id) || !label_valid(label) || now <= 0 ||
-            (has_expiry && (expires <= now || expires > INT64_C(253402300799))) || !fingerprint(ACCESS_OP_ISSUE, expected, label, has_expiry, expires, hash)) return out;
+            (has_expiry && (expires <= 0 || expires > INT64_C(253402300799))) || !fingerprint(ACCESS_OP_ISSUE, expected, label, has_expiry, expires, hash)) return out;
     pthread_mutex_lock(&s->mutex);
     receipt_t *old = find_receipt(s->state, id);
     if (s->poisoned || s->fenced) { out = result(s, ACCESS_UNAVAILABLE); goto done; }
     if (old) { out = CRYPTO_memcmp(hash, old->fingerprint, 32) ? result(s, ACCESS_CONFLICT) : receipt_result(s, old); goto done; }
+    if (has_expiry && expires <= now) { out = result(s, ACCESS_INVALID); goto done; }
     if (expected != s->state->revision || now < s->state->clock) { out = result(s, ACCESS_CONFLICT); goto done; }
     snapshot_t *n = candidate(s, now);
     if (!n) { out = result(s, ACCESS_UNAVAILABLE); goto done; }
     prune(n, now);
-    if (n->token_count == ACCESS_TOKEN_LIMIT || n->receipt_count == ACCESS_RECEIPT_LIMIT || pending_count(n) == ACCESS_OUTBOX_LIMIT) {
+    if (n->token_count == ACCESS_TOKEN_LIMIT || n->receipt_count == ACCESS_RECEIPT_LIMIT || pending_count(n) >= ACCESS_OUTBOX_LIMIT) {
         out = result(s, ACCESS_LIMIT); discard(n); goto done;
     }
     token_t *t = &n->tokens[n->token_count]; memset(t, 0, sizeof(*t));
@@ -599,28 +606,46 @@ static access_result_t mutate(access_store_t *s, const char *id, uint64_t expect
     access_operation_t op = remove_token ? ACCESS_OP_REMOVE : ACCESS_OP_REVOKE;
     if (!s || !hex_id(id) || !hex_id(token_id) || now <= 0 || !fingerprint(op, expected, token_id, false, 0, hash)) return out;
     pthread_mutex_lock(&s->mutex); receipt_t *old = find_receipt(s->state, id);
+    bool resume_remove = false;
     if (s->poisoned || s->fenced) { out = result(s, ACCESS_UNAVAILABLE); goto done; }
-    if (old) { out = CRYPTO_memcmp(hash, old->fingerprint, 32) ? result(s, ACCESS_CONFLICT) : receipt_result(s, old); goto done; }
-    if (expected != s->state->revision || now < s->state->clock) { out = result(s, ACCESS_CONFLICT); goto done; }
+    if (old) {
+        if (CRYPTO_memcmp(hash, old->fingerprint, 32)) { out = result(s, ACCESS_CONFLICT); goto done; }
+        token_t *retained = find_token(s->state, token_id);
+        resume_remove = remove_token && old->outcome == ACCESS_PENDING && retained &&
+            retained->info.state == ACCESS_TOKEN_REVOKED && !retained->info.route_pending;
+        if (!resume_remove) { out = receipt_result(s, old); goto done; }
+    }
+    if ((!resume_remove && expected != s->state->revision) || now < s->state->clock) { out = result(s, ACCESS_CONFLICT); goto done; }
     token_t *current = find_token(s->state, token_id);
     if (!current) { out = result(s, ACCESS_NOT_FOUND); goto done; }
     snapshot_t *n = candidate(s, now);
     if (!n) { out = result(s, ACCESS_UNAVAILABLE); goto done; }
     prune(n, now); token_t *t = find_token(n, token_id);
-    if (n->receipt_count == ACCESS_RECEIPT_LIMIT) { out = result(s, ACCESS_LIMIT); discard(n); goto done; }
+    if (!resume_remove && n->receipt_count == ACCESS_RECEIPT_LIMIT) { out = result(s, ACCESS_LIMIT); discard(n); goto done; }
     if (remove_token) {
-        if (t->info.state != ACCESS_TOKEN_REVOKED || t->info.route_pending) {
-            out = result(s, ACCESS_PENDING); out.token = t->info.ref; out.route_pending = t->info.route_pending;
-            discard(n); goto done;
+        if (t->info.state != ACCESS_TOKEN_REVOKED) {
+            t->info.state = ACCESS_TOKEN_REVOKED; t->info.ref.revision++; t->info.route_pending = true;
+            memcpy(t->route_request, id, 33);
+            for (size_t i = 0; i < n->receipt_count; i++) {
+                receipt_t *r = &n->receipts[i];
+                if (!strcmp(r->token, token_id) && r->operation == ACCESS_OP_ISSUE && r->outcome == ACCESS_PENDING) {
+                    r->outcome = ACCESS_LOCALLY_REVOKED; r->revision = n->revision; r->token_revision = t->info.ref.revision;
+                }
+            }
         }
-        if (n->tombstone_count == ACCESS_TOMBSTONE_LIMIT) { out = result(s, ACCESS_LIMIT); discard(n); goto done; }
-        tombstone_t *dead = &n->tombstones[n->tombstone_count++]; memcpy(dead->id, token_id, 33);
-        dead->removed = now; dead->revision = n->revision;
-        new_receipt(n, id, hash, t, op, ACCESS_COMMITTED, now);
-        *t = n->tokens[--n->token_count]; memset(&n->tokens[n->token_count], 0, sizeof(*t));
+        if (t->info.route_pending) new_receipt(n, id, hash, t, op, ACCESS_PENDING, now);
+        else {
+            if (n->tombstone_count == ACCESS_TOMBSTONE_LIMIT) { out = result(s, ACCESS_LIMIT); discard(n); goto done; }
+            tombstone_t *dead = &n->tombstones[n->tombstone_count++]; memcpy(dead->id, token_id, 33);
+            dead->removed = now; dead->revision = n->revision;
+            if (resume_remove) {
+                receipt_t *r = find_receipt(n, id); r->outcome = ACCESS_COMMITTED; r->revision = n->revision;
+            } else new_receipt(n, id, hash, t, op, ACCESS_COMMITTED, now);
+            *t = n->tokens[--n->token_count]; memset(&n->tokens[n->token_count], 0, sizeof(*t));
+        }
     } else {
         if (t->info.state != ACCESS_TOKEN_REVOKED) {
-            if ((!t->info.route_pending && pending_count(n) == ACCESS_OUTBOX_LIMIT) || t->info.ref.revision == UINT64_MAX) {
+            if (t->info.ref.revision == UINT64_MAX) {
                 out = result(s, ACCESS_LIMIT); discard(n); goto done;
             }
             t->info.state = ACCESS_TOKEN_REVOKED; t->info.ref.revision++; t->info.route_pending = true;
@@ -680,6 +705,24 @@ access_outcome_t access_store_route_ack(access_store_t *s, const access_route_t 
             r->revision = n->revision;
         }
     }
+    bool removing = false;
+    for (size_t i = 0; i < n->receipt_count; i++)
+        if (!strcmp(n->receipts[i].token, t->info.ref.token_id) &&
+                n->receipts[i].operation == ACCESS_OP_REMOVE && n->receipts[i].outcome == ACCESS_PENDING) removing = true;
+    if (removing) {
+        prune(n, now);
+        if (n->tombstone_count < ACCESS_TOMBSTONE_LIMIT) {
+            tombstone_t *dead = &n->tombstones[n->tombstone_count++];
+            memcpy(dead->id, t->info.ref.token_id, 33); dead->removed = now; dead->revision = n->revision;
+            for (size_t i = 0; i < n->receipt_count; i++) {
+                receipt_t *r = &n->receipts[i];
+                if (!strcmp(r->token, dead->id) && r->operation == ACCESS_OP_REMOVE && r->outcome == ACCESS_PENDING) {
+                    r->outcome = ACCESS_COMMITTED; r->revision = n->revision;
+                }
+            }
+            *t = n->tokens[--n->token_count]; memset(&n->tokens[n->token_count], 0, sizeof(*t));
+        }
+    }
     o = commit(s, n, false); discard(n);
 done:
     pthread_mutex_unlock(&s->mutex); return o;
@@ -693,7 +736,7 @@ access_outcome_t access_store_authorize(access_store_t *s, const char code[16],
     if (!access_code_derive(code, identity, route, index, verifier)) return ACCESS_DENIED;
     OPENSSL_cleanse(route, sizeof(route)); OPENSSL_cleanse(index, sizeof(index));
     pthread_mutex_lock(&s->mutex); access_outcome_t o = ACCESS_DENIED;
-    if (!s->protected_policy || s->poisoned || s->fenced || now < s->state->clock || CRYPTO_memcmp(identity, s->state->identity, 32)) goto done;
+    if (!s->protected_policy || s->poisoned || s->fenced || now < s->state->clock || now < s->observed_clock || CRYPTO_memcmp(identity, s->state->identity, 32)) goto done;
     token_t *t = NULL;
     for (size_t i = 0; i < s->state->token_count; i++) {
         token_t *a = &s->state->tokens[i];
@@ -701,13 +744,15 @@ access_outcome_t access_store_authorize(access_store_t *s, const char code[16],
         if (equal) t = a;
     }
     if (!t || t->info.state != ACCESS_TOKEN_ACTIVE) goto done;
-    if (t->info.has_expiry && (now >= t->info.expires_at || s->state->clock >= t->info.expires_at)) {
+    if (now > s->observed_clock) s->observed_clock = now;
+    if (t->info.has_expiry && (now >= t->info.expires_at || s->observed_clock >= t->info.expires_at || s->state->clock >= t->info.expires_at)) {
         snapshot_t *expired = candidate(s, now);
-        if (!expired) { o = ACCESS_UNAVAILABLE; goto done; }
+        if (!expired) { s->poisoned = true; o = ACCESS_UNAVAILABLE; goto done; }
         token_t *ended = find_token(expired, t->info.ref.token_id);
         ended->info.state = ACCESS_TOKEN_EXPIRED; ended->info.ref.revision++;
         o = commit(s, expired, false); discard(expired);
         if (o == ACCESS_COMMITTED) o = ACCESS_DENIED;
+        else s->poisoned = true;
         goto done;
     }
     snapshot_t *n = candidate(s, now); if (!n) { o = ACCESS_UNAVAILABLE; goto done; }
@@ -730,7 +775,7 @@ static bool session_valid_locked(access_store_t *s, const access_token_ref_t *re
     token_t *t = find_token(s->state, ref->token_id);
     return !s->poisoned && !s->fenced && t && t->info.state == ACCESS_TOKEN_ACTIVE &&
         t->info.ref.revision == ref->revision && (!t->info.has_expiry ||
-        (now >= s->state->clock && now < t->info.expires_at && s->state->clock < t->info.expires_at));
+        (now >= s->state->clock && now >= s->observed_clock && now < t->info.expires_at && s->observed_clock < t->info.expires_at && s->state->clock < t->info.expires_at));
 }
 bool access_store_session_valid(access_store_t *s, const access_token_ref_t *ref, int64_t now)
 {
@@ -742,10 +787,11 @@ access_session_state_t access_store_session_check(access_store_t *s, const acces
 {
     if (!s || !ref || !hex_id(ref->token_id) || now <= 0) return ACCESS_SESSION_DENIED;
     if (pthread_mutex_trylock(&s->mutex) != 0) return ACCESS_SESSION_BUSY;
+    if (now > s->observed_clock) s->observed_clock = now;
     token_t *t = find_token(s->state, ref->token_id);
     bool expiry_pending = !s->poisoned && !s->fenced && t &&
         t->info.state == ACCESS_TOKEN_ACTIVE && t->info.ref.revision == ref->revision &&
-        t->info.has_expiry && now >= t->info.expires_at;
+        t->info.has_expiry && s->observed_clock >= t->info.expires_at;
     bool valid = session_valid_locked(s, ref, now); pthread_mutex_unlock(&s->mutex);
     return expiry_pending ? ACCESS_SESSION_BUSY : valid ? ACCESS_SESSION_VALID : ACCESS_SESSION_DENIED;
 }
@@ -754,16 +800,17 @@ access_outcome_t access_store_expire(access_store_t *s, int64_t now)
     if (!s || now <= 0) return ACCESS_INVALID;
     pthread_mutex_lock(&s->mutex); access_outcome_t o = ACCESS_COMMITTED;
     if (s->poisoned || s->fenced) { o = ACCESS_UNAVAILABLE; goto done; }
+    if (now > s->observed_clock) s->observed_clock = now;
     snapshot_t *n = NULL;
     for (size_t i = 0; i < s->state->token_count; i++) {
         token_t *t = &s->state->tokens[i];
         if (t->info.state != ACCESS_TOKEN_ACTIVE || !t->info.has_expiry ||
-                (now < t->info.expires_at && s->state->clock < t->info.expires_at)) continue;
+                (s->observed_clock < t->info.expires_at && s->state->clock < t->info.expires_at)) continue;
         if (n == NULL) n = candidate(s, now);
-        if (n == NULL) { o = ACCESS_UNAVAILABLE; goto done; }
+        if (n == NULL) { s->poisoned = true; o = ACCESS_UNAVAILABLE; goto done; }
         n->tokens[i].info.state = ACCESS_TOKEN_EXPIRED; n->tokens[i].info.ref.revision++;
     }
-    if (n) { o = commit(s, n, false); discard(n); }
+    if (n) { o = commit(s, n, false); discard(n); if (o != ACCESS_COMMITTED) s->poisoned = true; }
 done:
     pthread_mutex_unlock(&s->mutex); return o;
 }

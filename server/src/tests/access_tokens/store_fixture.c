@@ -78,6 +78,7 @@ static void basic(void)
     assert(access_store_authorize(s, "0000000000000000", identity, 101, &ref) == ACCESS_DENIED);
     assert(revision(s) == first_revision);
     assert(access_store_authorize(s, a.code, identity, 101, &ref) == ACCESS_COMMITTED);
+    assert(revision(s) == first_revision);
     assert(access_store_session_check(s, &ref, 101) == ACCESS_SESSION_VALID);
     access_token_info_t row;
     assert(access_store_history(s, a.token.token_id, revision(s), &row) == ACCESS_COMMITTED);
@@ -85,24 +86,28 @@ static void basic(void)
     access_store_close(s); s = NULL;
     assert(access_store_open(&s, directory, identity, true, false) == ACCESS_COMMITTED);
     assert(access_store_authorize(s, a.code, identity, 102, &ref) == ACCESS_COMMITTED);
-    access_result_t b = access_store_issue(s, request2, revision(s), "Temporary", true, 110, 102, accepted, NULL);
+    uint64_t issue_revision = revision(s);
+    access_result_t b = access_store_issue(s, request2, issue_revision, "Temporary", true, 110, 102, accepted, NULL);
     assert(b.outcome == ACCESS_COMMITTED);
     assert(access_store_authorize(s, b.code, identity, 103, &ref) == ACCESS_COMMITTED);
     assert(access_store_authorize(s, b.code, identity, 102, &ref) == ACCESS_DENIED);
     assert(access_store_authorize(s, b.code, identity, 110, &ref) == ACCESS_DENIED);
     assert(access_store_authorize(s, b.code, identity, 109, &ref) == ACCESS_DENIED);
     assert(access_store_expire(s, 110) == ACCESS_COMMITTED);
+    replay = access_store_issue(s, request2, issue_revision, "Temporary", true, 110, 111, accepted, NULL);
+    assert(replay.outcome == ACCESS_SECRET_UNAVAILABLE && replay.code[0] == '\0');
     access_result_t revoked = access_store_revoke(s, request3, revision(s), a.token.token_id, 110);
     assert(revoked.outcome == ACCESS_LOCALLY_REVOKED && revoked.route_pending);
     assert(access_store_authorize(s, a.code, identity, 111, &ref) == ACCESS_DENIED);
-    access_result_t removed = access_store_remove(s, request4, revision(s), a.token.token_id, 111);
+    uint64_t remove_revision = revision(s);
+    access_result_t removed = access_store_remove(s, request4, remove_revision, a.token.token_id, 111);
     assert(removed.outcome == ACCESS_PENDING);
     access_route_t outbox[ACCESS_OUTBOX_LIMIT]; size_t count = 0;
     assert(access_store_outbox(s, outbox, ACCESS_OUTBOX_LIMIT, &count) == ACCESS_COMMITTED && count == 1);
     access_route_t incorrect = outbox[0]; incorrect.token.revision--;
     assert(access_store_route_ack(s, &incorrect, 111) == ACCESS_CONFLICT);
     assert(access_store_route_ack(s, outbox, 111) == ACCESS_COMMITTED);
-    removed = access_store_remove(s, request4, revision(s), a.token.token_id, 111);
+    removed = access_store_remove(s, request4, remove_revision, a.token.token_id, 111);
     assert(removed.outcome == ACCESS_COMMITTED && !removed.route_pending);
     assert(access_store_history(s, a.token.token_id, revision(s), &row) == ACCESS_NOT_FOUND);
     assert(access_store_status(s).protected_policy);
@@ -115,7 +120,14 @@ static void crash_recovery(void)
     char directory[64]; access_store_t *s = fresh(directory);
     access_result_t a = access_store_issue(s, request1, revision(s), "Interrupted", false, 0, 100, NULL, NULL);
     assert(a.outcome == ACCESS_PENDING && a.code[0] == '\0');
-    access_store_close(s); assert(access_store_open(&s, directory, identity, true, false) == ACCESS_COMMITTED);
+    access_status_t status;
+    assert(access_store_inspect(directory, identity, true, &status) == ACCESS_UNAVAILABLE);
+    access_store_close(s);
+    assert(access_store_inspect(directory, identity, true, &status) == ACCESS_COMMITTED);
+    assert(status.pending_route_sync == 1 && status.revision == 2);
+    assert(access_store_inspect(directory, identity, true, &status) == ACCESS_COMMITTED);
+    assert(status.revision == 2); /* Inspection does not reconcile pending issuance. */
+    assert(access_store_open(&s, directory, identity, true, false) == ACCESS_COMMITTED);
     access_token_info_t row; assert(access_store_history(s, a.token.token_id, revision(s), &row) == ACCESS_COMMITTED);
     assert(row.state == ACCESS_TOKEN_REVOKED && row.history_count == 0 && row.route_pending);
     a = access_store_result(s, request1); assert(a.outcome == ACCESS_LOCALLY_REVOKED && a.code[0] == '\0');
@@ -176,19 +188,130 @@ static void races(void)
 static void bounds(void)
 {
     char directory[64]; access_store_t *s = fresh(directory);
+    access_result_t active = access_store_issue(s, request2, revision(s), "Active before outage", false, 0, 100, accepted, NULL);
+    assert(active.outcome == ACCESS_COMMITTED);
     for (unsigned i = 0; i < ACCESS_OUTBOX_LIMIT; i++) {
         char request[33]; snprintf(request, sizeof(request), "%032x", i + 1);
         access_result_t a = access_store_issue(s, request, revision(s), "Pending", false, 0, 100, NULL, NULL);
         assert(a.outcome == ACCESS_PENDING && a.code[0] == '\0');
     }
     access_result_t a = access_store_issue(s, request1, revision(s), "Full", false, 0, 100, NULL, NULL);
-    assert(a.outcome == ACCESS_LIMIT); cleanup(directory, s);
+    assert(a.outcome == ACCESS_LIMIT);
+    a = access_store_revoke(s, request3, revision(s), active.token.token_id, 101);
+    assert(a.outcome == ACCESS_LOCALLY_REVOKED && access_store_status(s).pending_route_sync == 33);
+    access_token_ref_t ref;
+    assert(access_store_authorize(s, active.code, identity, 102, &ref) == ACCESS_DENIED);
+    access_result_cleanse(&active); cleanup(directory, s);
     assert(!access_operator_allowed("/does/not/exist", "default-op"));
     assert(!access_operator_allowed("relative", "default-op"));
 }
-int main(void)
+
+static access_outcome_t activation_fault(void *context, const access_route_t *request)
 {
+    (void) request; *(int *) context = 1; return ACCESS_COMMITTED;
+}
+static void activation_failures(void)
+{
+    for (unsigned i = 0; i < 2; i++) {
+        char directory[64]; access_store_t *s = fresh(directory);
+        int *fault = i ? &fail_directory_sync : &fail_file_sync;
+        access_result_t a = access_store_issue(s, request1, revision(s), "Activation fault", false, 0, 100, activation_fault, fault);
+        assert(a.outcome == (i ? ACCESS_INDETERMINATE : ACCESS_SAVE_FAILED) && a.code[0] == '\0');
+        *fault = 0; access_store_close(s);
+        assert(access_store_open(&s, directory, identity, true, false) == ACCESS_COMMITTED);
+        a = access_store_result(s, request1);
+        assert(a.outcome == (i ? ACCESS_SECRET_UNAVAILABLE : ACCESS_LOCALLY_REVOKED) && a.code[0] == '\0');
+        cleanup(directory, s);
+    }
+}
+static void paths(void)
+{
+    char directory[64]; access_store_t *s = fresh(directory);
+    int cwd = open(".", O_RDONLY | O_DIRECTORY); assert(cwd >= 0);
+    char child[128]; snprintf(child, sizeof(child), "%s/missing", directory);
+    assert(access_store_absent(child));
+    snprintf(child, sizeof(child), "%s/missing/leaf", directory); assert(!access_store_absent(child));
+    assert(chdir(directory) == 0); assert(access_store_absent("./missing"));
+    assert(symlink("absent", "dangling") == 0); assert(!access_store_absent("./dangling"));
+    assert(unlink("dangling") == 0);
+    access_store_close(s); assert(access_store_open(&s, "./", identity, true, false) == ACCESS_UNAVAILABLE);
+    assert(mkdir("child", 0700) == 0); int lock = access_state_lock("./child"); assert(lock >= 0); access_state_unlock(lock);
+    assert(rmdir("child") == 0);
+    assert(fchdir(cwd) == 0); assert(close(cwd) == 0);
+    assert(access_store_open(&s, directory, identity, true, false) == ACCESS_COMMITTED);
+    cleanup(directory, s);
+}
+
+
+
+static void expiry_faults_and_remove(void)
+{
+    for (unsigned i = 0; i < 3; i++) {
+        char directory[64]; access_store_t *s = fresh(directory);
+        access_result_t a = access_store_issue(s, request1, revision(s), "Expiry failure", true, 110, 100, accepted, NULL);
+        assert(a.outcome == ACCESS_COMMITTED); access_token_ref_t ref;
+        assert(access_store_authorize(s, a.code, identity, 101, &ref) == ACCESS_COMMITTED);
+        if (i == 2) {
+            assert(access_store_session_check(s, &ref, 110) == ACCESS_SESSION_BUSY);
+            assert(access_store_session_check(s, &ref, 109) == ACCESS_SESSION_BUSY);
+            assert(access_store_expire(s, 109) == ACCESS_COMMITTED);
+            assert(access_store_session_check(s, &ref, 109) == ACCESS_SESSION_DENIED);
+        } else {
+            fail_file_sync = 1;
+            assert((i ? access_store_expire(s, 110) : access_store_authorize(s, a.code, identity, 110, &ref)) == ACCESS_SAVE_FAILED);
+            fail_file_sync = 0;
+            assert(!access_store_status(s).durability_ok);
+            assert(access_store_authorize(s, a.code, identity, 109, &ref) == ACCESS_DENIED);
+        }
+        access_result_cleanse(&a); cleanup(directory, s);
+    }
+    char directory[64]; access_store_t *s = fresh(directory);
+    access_result_t a = access_store_issue(s, request1, revision(s), "Remove directly", false, 0, 100, accepted, NULL);
+    access_result_t removed = access_store_remove(s, request2, revision(s), a.token.token_id, 101);
+    assert(removed.outcome == ACCESS_PENDING && removed.route_pending);
+    access_token_ref_t ref; assert(access_store_authorize(s, a.code, identity, 102, &ref) == ACCESS_DENIED);
+    access_route_t page[ACCESS_OUTBOX_LIMIT]; size_t count;
+    assert(access_store_outbox(s, page, ACCESS_OUTBOX_LIMIT, &count) == ACCESS_COMMITTED && count == 1 && page[0].revoke);
+    assert(access_store_route_ack(s, page, 102) == ACCESS_COMMITTED);
+    assert(access_store_result(s, request2).outcome == ACCESS_COMMITTED);
+    assert(access_store_status(s).protected_policy && s->state->token_count == 0 && s->state->tombstone_count == 1);
+    access_result_cleanse(&a); cleanup(directory, s);
+}
+
+static void full_capacity(void)
+{
+    char directory[64]; access_store_t *s = fresh(directory);
+    snapshot_t *n = candidate(s, 100); assert(n);
+    n->token_count = ACCESS_TOKEN_LIMIT;
+    for (unsigned i = 0; i < ACCESS_TOKEN_LIMIT; i++) {
+        token_t *t = &n->tokens[i]; snprintf(t->info.ref.token_id, 33, "%032x", i + 1);
+        snprintf(t->route_request, 33, "%032x", i + 1);
+        strcpy(t->info.label, "Capacity fixture"); t->info.ref.revision = 1;
+        t->info.created_at = 100; t->info.state = ACCESS_TOKEN_ACTIVE;
+        assert(digest(t->info.ref.token_id, 32, t->index));
+        assert(digest(t->index, 32, t->verifier));
+    }
+    assert(commit(s, n, false) == ACCESS_COMMITTED); discard(n);
+    access_result_t a = access_store_issue(s, request1, revision(s), "No eviction", false, 0, 101, accepted, NULL);
+    assert(a.outcome == ACCESS_LIMIT);
+    for (unsigned i = 0; i < ACCESS_TOKEN_LIMIT; i++) {
+        char id[33], request[33]; snprintf(id, sizeof(id), "%032x", i + 1);
+        snprintf(request, sizeof(request), "%032x", i + 2000);
+        a = access_store_revoke(s, request, revision(s), id, 102);
+        assert(a.outcome == ACCESS_LOCALLY_REVOKED);
+    }
+    assert(access_store_status(s).pending_route_sync == ACCESS_TOKEN_LIMIT);
+    access_route_t page[ACCESS_OUTBOX_LIMIT]; size_t count;
+    assert(access_store_outbox(s, page, ACCESS_OUTBOX_LIMIT, &count) == ACCESS_COMMITTED && count == ACCESS_OUTBOX_LIMIT);
+    access_store_close(s); assert(access_store_open(&s, directory, identity, true, false) == ACCESS_COMMITTED);
+    assert(access_store_status(s).pending_route_sync == ACCESS_TOKEN_LIMIT);
+    cleanup(directory, s);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 2 && !strcmp(argv[1], "--capacity")) { full_capacity(); puts("1024-token outage capacity passed"); return 0; }
     basic(); crash_recovery(); fault_case(&fail_write, false); fault_case(&fail_file_sync, false);
-    fault_case(&fail_directory_sync, true); fault_case(&fail_rename, false); privacy(); races(); bounds();
+    fault_case(&fail_directory_sync, true); fault_case(&fail_rename, false); privacy(); races(); bounds(); activation_failures(); paths(); expiry_faults_and_remove();
     puts("access token store fixtures passed"); return 0;
 }

@@ -112,10 +112,13 @@ access_result_t access_store_issue(access_store_t *store, const char *request_id
     int64_t expires_at, int64_t now, access_route_callback_t route, void *context);
 access_result_t access_store_revoke(access_store_t *store, const char *request_id,
     uint64_t expected_revision, const char *token_id, int64_t now);
-/* Remove only succeeds after revoke + durable route acknowledgement. */
+/* Remove stages local revoke and keeps the original request receipt pending.
+ * Route acknowledgement finishes erasure/tombstone atomically; result recovers
+ * completion. At tombstone capacity, identical retry can finish after pruning. */
 access_result_t access_store_remove(access_store_t *store, const char *request_id,
     uint64_t expected_revision, const char *token_id, int64_t now);
-/* Outbox items include private I, never C/R/V; do not expose in operator UI. */
+/* Outbox dispatch page <=32; retained per-token pending state <=1024.
+ * Items include private I, never C/R/V; do not expose in operator UI. */
 access_outcome_t access_store_outbox(access_store_t *store, access_route_t *rows,
     size_t capacity, size_t *count);
 access_outcome_t access_store_route_ack(access_store_t *store,
