@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -99,8 +99,12 @@ static void book_state_clear(void) {
  */
 void book_name_change(const char *name, size_t len) {
     len = MIN(sizeof(book_name) - 1, len);
-    strncpy(book_name, name, len);
-    book_name[len] = '\0';
+    size_t copied = 0;
+    while (copied < len && name[copied] != '\0') {
+        book_name[copied] = name[copied];
+        copied++;
+    }
+    book_name[copied] = '\0';
 }
 
 /** @copydoc popup_struct::draw_func */
