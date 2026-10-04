@@ -60,6 +60,7 @@
 #define GPU_MAP_DAMAGE_FULL_REDRAW_NUMERATOR 1U
 #define GPU_MAP_DAMAGE_FULL_REDRAW_DENOMINATOR 2U
 #define GPU_MAP_MAX_IN_FLIGHT 3U
+#define GPU_MAP_PAINTER_RANK_LIMIT (1U << 24U)
 
 typedef struct gpu_map_atlas_region {
     uint32_t x;
@@ -1989,7 +1990,7 @@ static void gpu_map_world_draw(SDL_GPURenderPass *pass, bool full_redraw) {
     gpu_map_target_set_t *target = &map_targets[active_target_index];
     gpu_map_vertex_uniforms_t vertex = {
         .viewport = {(float)target_width, (float)target_height},
-        .order_scale = 1.0f / (float)(world_commands_num + 1U),
+        .order_scale = 1.0f / (float)GPU_MAP_PAINTER_RANK_LIMIT,
     };
     SDL_BindGPUVertexStorageBuffers(pass, 0, &target->world_instance_buffer, 1);
 
@@ -2051,9 +2052,9 @@ static void gpu_map_world_draw(SDL_GPURenderPass *pass, bool full_redraw) {
 }
 
 static bool gpu_map_world_commands_submit(void) {
-    /* Binary32 has exact distinct integer ranks through 2^24. Leave an
-     * endpoint above the final command so every interpolated Z is in (0,1). */
-    if (world_commands_num >= (1U << 24U)) {
+    /* Integer rank times the exact binary fraction 2^-24 is representable
+     * without rounding. Reserve zero for clear and keep every rank below one. */
+    if (world_commands_num >= GPU_MAP_PAINTER_RANK_LIMIT) {
         SDL_SetError("GPU map painter rank exceeds exact depth representation");
         return false;
     }
