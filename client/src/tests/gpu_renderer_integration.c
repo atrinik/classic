@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <surface_primitives.h>
+#include <toolkit/datetime.h>
 #include <toolkit/memory.h>
 #include <toolkit/socket.h>
 #include <toolkit/toolkit.h>
@@ -2100,6 +2101,13 @@ int main(void) {
             return EXIT_FAILURE;                                    \
         }                                                           \
     } while (0)
+    toolkit_import(datetime);
+    toolkit_import(logger);
+    if (atexit(toolkit_deinit) != 0) {
+        toolkit_deinit();
+        fprintf(stderr, "GPU conformance could not register toolkit teardown\n");
+        return EXIT_FAILURE;
+    }
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         return conformance_unavailable("SDL video initialization");
     }
