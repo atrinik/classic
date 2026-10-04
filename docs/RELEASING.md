@@ -3,10 +3,95 @@
 Classic uses one repository version, commit, tag, GitHub release, and artifact
 set. The first post-consolidation release is `v5.6.0`; later versions stay on
 the `v5.x.x` line and follow a branch-aware Conventional Commits policy through
-semantic-release. On `main`, every accepted release-driving commit starts the
+semantic-release. When stable publication is enabled on `main`, every accepted release-driving commit starts the
 next minor line. A numeric `X.Y.x` branch is cut from its published `vX.Y.0`
 tag and accepts only patch releases (`vX.Y.1`, then later point fixes);
 feature/breaking transitions fail closed instead of leaving the range.
+
+## Current main publication mode: development only
+
+Stable publication from `main` is held while its protocol and access changes
+are qualified for development. `release.yml` excludes main pushes and rejects
+manual main runs at both the job and branch-validation boundaries. Re-enabling
+main stable publication requires a reviewed source change paired with the
+public client/server upgrade. Numeric maintenance branches retain their existing
+release policy. The stable pipeline below describes that retained contract;
+it does not authorize main publication while the hold is present.
+
+Merge this hold and the development publisher atomically before merging a
+protocol change that the public server cannot accept. A push evaluates the
+workflow definition at the pushed revision. Before merging, audit and drain
+already queued/running Semantic Release, Package Release, Recover Missing
+Release and Promote Latest Release runs: the new definition cannot stop an
+old run that already crossed its final current-main check. Do not dispatch
+stable packaging, recovery or promotion as part of development delivery.
+
+`Publish Development Server` runs on main pushes and manual current-main
+dispatches. Its read-only preflight binds a successful `Classic validation`
+aggregate to the exact repository/main/push Check workflow run and source
+commit. Forks, other branches/events, stale revisions and dirty tracked source
+fail closed. The publisher uses the existing root-context server Dockerfile,
+the exact attested dependency bundle, and its offline dependency/build step.
+Base-image and distribution-package acquisition retain the existing build
+contract. No server compilation occurs on deployment hosts.
+
+| Coordinate | Development contract |
+| --- | --- |
+| Image package | Existing public `ghcr.io/atrinik/classic-server` |
+| Immutable image tag | `source-FULL_40_CHARACTER_MAIN_COMMIT` |
+| Discovery alias | `development`; never a runtime/rollback identity |
+| CMake and OCI package version | `0.0.0`, an honest non-release source build |
+| Source identity | Full main commit, also compiled into native version metadata; clean source |
+| Channel label | `org.atrinik.release-channel=development` |
+| Signed builder | `atrinik/classic/.github/workflows/publish-development-server.yml` |
+| Signed source ref | `refs/heads/main` |
+| Runtime pin | Exact index, Linux/amd64 child and config digests |
+
+The new tags are disjoint from stable numeric tags and `latest`. Development
+publication creates no Git tag, GitHub release, unified artifact bundle or
+public Windows-client release. Existing stable discovery continues to select
+GitHub releases and numeric image tags. Development clients use qualified
+clean-source exports matching their server protocol.
+
+A single non-cancelling workflow lock covers every development image and alias
+write. An absent source tag can be built once. Before attesting this run's
+new index, the publisher verifies its digest, source/channel/version/platform,
+locked-input labels, BuildKit SLSA provenance and SPDX SBOM. GitHub attests the
+exact built index; the publisher verifies the repository, workflow, source
+commit and main ref before promotion. An existing source tag must already
+pass those same checks, including its GitHub attestation; it is never rebuilt,
+overwritten or retroactively attested. Missing packages, malformed API data,
+authentication failures and inventory limits are failures, not permission to
+recreate a package or overwrite a coordinate.
+
+Promotion rechecks current main and verifies any existing development alias
+and its source tag. A new source must descend from that previous source; the
+same source must retain exactly the same digest. Only the verified index is
+copied to `development`, and the resulting digest is checked. If main advances
+during a build, the old immutable source image may finish publishing, but the
+stale run cannot promote it after observing that advance. GitHub/registry
+cannot atomically compare a branch ref and write an alias; the shared writer
+lock and ancestry check prevent a delayed run from replacing a newer published
+source. Consumers independently enforce accepted-source ancestry.
+
+A failure after image push but before GitHub attestation leaves an incomplete
+immutable source tag that is never eligible for promotion. A new run must not
+reattest or replace those bytes. Investigate the failed run; publication of a
+later reviewed main commit uses a fresh source coordinate. A fully attested
+image whose promotion failed may be verified and promoted by rerunning the
+workflow while that source is still current main. If main has advanced,
+publish its new source instead. Never restore runtime state from a mutable
+alias; retain the exact prior image and complete state backup.
+
+The generic service updater's reviewed Classic development channel must select
+`development`, verify its immutable source tag and exact signed source identity,
+and pin the digest graph before activation. It orders accepted versions by
+source ancestry, not by `0.0.0`; the existing durable-save, compatibility,
+backup, fencing and explicit activation gates still apply. Source publication
+is not runtime acceptance. Verify anonymous pulls, signed provenance, image
+capabilities and actual isolated private-map/access behavior before enabling
+a deployment or its update timer. Public game and metaserver changes remain
+separate operations.
 
 ## Historical boundary
 

@@ -123,6 +123,15 @@ class DevelopmentServerTests(unittest.TestCase):
                 else:
                     self.assertFalse(development_server.checked(REVISION))
 
+    def test_checked_rejects_missing_or_nonpositive_run_and_suite_ids(self) -> None:
+        for field in ("id", "check_suite_id"):
+            for value in (None, True, "10", 0, -1):
+                with self.subTest(field=field, value=value), patch.object(
+                    development_server, "api", return_value={"workflow_runs": [run(**{field: value})]}
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "invalid Check run or suite identity"):
+                        development_server.checked(REVISION)
+
     def test_checked_requires_one_trusted_matching_aggregate(self) -> None:
         failures = (
             aggregate(name="Classic validation (copy)"),
@@ -140,6 +149,25 @@ class DevelopmentServerTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "trusted aggregate"):
                     development_server.checked(REVISION)
 
+    def test_checked_rejects_missing_or_noninteger_aggregate_suite_id(self) -> None:
+        for value in (None, True, "20", 0, -1):
+            candidate = aggregate(check_suite={} if value is None else {"id": value})
+            with self.subTest(value=value), patch.object(
+                development_server,
+                "api",
+                side_effect=[{"workflow_runs": [run()]}, {"check_runs": [candidate]}],
+            ):
+                with self.assertRaisesRegex(RuntimeError, "trusted aggregate"):
+                    development_server.checked(REVISION)
+
+    def test_checked_accepts_exact_positive_run_and_aggregate_identities(self) -> None:
+        with patch.object(
+            development_server,
+            "api",
+            side_effect=[{"workflow_runs": [run()]}, {"check_runs": [aggregate()]}],
+        ):
+            self.assertTrue(development_server.checked(REVISION))
+
     def test_find_tag_accepts_only_exact_first_page_package_404(self) -> None:
         absent = (1, {"status": "404", "message": "Package not found."}, "not found")
         with patch.object(development_server.registry, "request", return_value=absent):
@@ -155,6 +183,13 @@ class DevelopmentServerTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "cannot audit|non-list"):
                     development_server.find_tag("development")
+
+    def test_find_tag_rejects_stable_and_malformed_development_aliases(self) -> None:
+        for tag in ("latest", "5.78.0", "source-" + "a" * 39):
+            with self.subTest(tag=tag), patch.object(development_server.registry, "request") as request:
+                with self.assertRaisesRegex(RuntimeError, "invalid development image tag"):
+                    development_server.find_tag(tag)
+            request.assert_not_called()
 
     def test_find_tag_rejects_pagination_exhaustion_and_later_page_errors(self) -> None:
         full = [{"metadata": {"container": {"tags": []}}, "name": DIGEST}] * 100

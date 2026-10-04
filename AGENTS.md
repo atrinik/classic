@@ -78,6 +78,12 @@
   minor line; a numeric `X.Y.x` branch is cut from `vX.Y.0` and publishes only
   later patches. Never hand-edit tags, images, drafts, or release assets; use
   the checked publication/recovery procedures in `docs/RELEASING.md`.
+- Main stable publication is currently held in `release.yml`; a reviewed public
+  client/server upgrade must explicitly re-enable it. Checked main source builds
+  publish only `classic-server:source-COMMIT` and the `development` discovery
+  alias through `publish-development-server.yml`, with version `0.0.0`, exact
+  source identity, locked inputs, SBOM and signed provenance. See
+  `docs/RELEASING.md`; never substitute a source build for a semantic release.
 - `tools/ci/classify_changes.py` is the single path-selection contract for
   native Check and CodeQL work. Pull requests are path-aware; protocol,
   libatrinik, and validation-contract changes select both client and server.

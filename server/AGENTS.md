@@ -77,6 +77,9 @@
   without network access. Independently pinned third-party FetchContent sources
   retain their checksum-verified fallback unless a release contract explicitly
   bundles them.
+- Development server images use the root publisher, honest source version
+  `0.0.0`, full source revision and digest-pinned provenance. They do not advance
+  stable releases or the public `latest` alias; see `../docs/RELEASING.md`.
 - Commits/PR titles use Conventional Commits. Preserve unrelated work, keep
   generated output under `build/`, and finish with `git diff --check`.
 - Update this guide when ownership, layout, commands, persistence/runtime, or
