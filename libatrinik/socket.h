@@ -197,7 +197,7 @@ typedef enum socket_role {
 /** URL of the data files to use. */
 #define CMD_SETUP_DATA_URL 2
 /** Password used to join a private game server. */
-#define CMD_SETUP_JOIN_PASSWORD 3
+/* Setup subtype 3 is retired; never reuse it. */
 /** Whether in-band asset downloads are available on this connection. */
 #define CMD_SETUP_ASSET_TRANSPORT 4
 /** Direct connection mode selected by the client. */
@@ -1005,7 +1005,7 @@ typedef enum socket_connect_failure_code {
     SOCKET_CONNECT_FAILURE_NONE,
     SOCKET_CONNECT_FAILURE_UNAVAILABLE,
     SOCKET_CONNECT_FAILURE_AUTHORIZATION,
-    SOCKET_CONNECT_FAILURE_INVITE_EXPIRED,
+    SOCKET_CONNECT_FAILURE_ACCESS_UNAVAILABLE,
     SOCKET_CONNECT_FAILURE_RATE_LIMITED,
     SOCKET_CONNECT_FAILURE_SERVER_OFFLINE,
     SOCKET_CONNECT_FAILURE_TIMEOUT,
@@ -1020,7 +1020,7 @@ typedef enum socket_connect_failure_code {
  * Bounded failure detail returned by ::socket_quic_client_create.
  *
  * `retry_after_seconds` is nonzero only for RATE_LIMITED and never exceeds one
- * day. The structure contains no endpoint, ticket, invite, or credential.
+ * day. The structure contains no endpoint, ticket, grant, or credential.
  */
 typedef struct socket_connect_failure {
     socket_connect_failure_code_t code;
@@ -1156,7 +1156,7 @@ socket_t *socket_quic_client_create(const char *host,
                                     const char *certificate_sha256,
                                     const char *rendezvous_url,
                                     const char *stun_endpoint,
-                                    const rendezvous_invite_t *invite,
+                                    const rendezvous_access_grant_t *grant,
                                     socket_connection_preference_t preference,
                                     socket_connect_failure_t *failure);
 const char *socket_connection_preference_name(socket_connection_preference_t preference);
@@ -1183,16 +1183,16 @@ bool socket_rendezvous_complete_parse(const char *message, const char *expected_
 /**
  * Allocate one client rendezvous attempt.
  *
- * The returned object copies and owns the server ID, ticket, optional invite,
+ * The returned object copies and owns the server ID, ticket, optional grant,
  * absolute monotonic deadline, protocol-selection state, authorization state,
- * and all signaling counters. `invite` remains caller-owned. The object is
+ * and all signaling counters. `grant` remains caller-owned. The object is
  * mutable, must be destroyed with ::socket_rendezvous_attempt_destroy, and is
  * not safe for concurrent calls; independent objects may be used concurrently.
- * A protected attempt rejects an invite for a different `server_id`.
+ * A protected attempt rejects a grant for a different `server_id`.
  */
 socket_rendezvous_attempt_t *socket_rendezvous_attempt_create(const char *server_id,
                                                               const char *ticket,
-                                                              const rendezvous_invite_t *invite,
+                                                              const rendezvous_access_grant_t *grant,
                                                               uint64_t deadline_ms);
 /** Cleanse and free an attempt. Accepts NULL. */
 void socket_rendezvous_attempt_destroy(socket_rendezvous_attempt_t *attempt);
@@ -1213,16 +1213,8 @@ bool socket_rendezvous_attempt_auth_init(socket_rendezvous_attempt_t *attempt,
                                          char *frame,
                                          size_t frame_size);
 /**
- * Consume one complete auth_challenge and render the matching proof.
- * Failure is terminal and clears `proof_frame`.
+ * Consume exactly one access_ready frame. Failure is terminal.
  */
-socket_rendezvous_frame_result_t
-socket_rendezvous_attempt_challenge(socket_rendezvous_attempt_t *attempt,
-                                    const char *frame,
-                                    size_t frame_size,
-                                    char *proof_frame,
-                                    size_t proof_frame_size);
-/** Consume the one canonical auth_result; denial and all parse failures are terminal. */
 socket_rendezvous_frame_result_t
 socket_rendezvous_attempt_auth_result(socket_rendezvous_attempt_t *attempt,
                                       const char *frame,

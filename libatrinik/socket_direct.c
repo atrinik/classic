@@ -35,7 +35,6 @@
 typedef enum socket_rendezvous_attempt_state {
     SOCKET_RENDEZVOUS_ATTEMPT_READY,
     SOCKET_RENDEZVOUS_ATTEMPT_NEW,
-    SOCKET_RENDEZVOUS_ATTEMPT_WAIT_CHALLENGE,
     SOCKET_RENDEZVOUS_ATTEMPT_WAIT_RESULT,
     SOCKET_RENDEZVOUS_ATTEMPT_AUTHORIZED,
     SOCKET_RENDEZVOUS_ATTEMPT_WAIT_SERVER,
@@ -233,7 +232,7 @@ uint64_t socket_rendezvous_stun_deadline(uint64_t now_ms, uint64_t attempt_deadl
 struct socket_rendezvous_attempt {
     char server_id[RENDEZVOUS_SERVER_ID_HEX_SIZE + 1U];
     char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
-    rendezvous_invite_t invite;
+    rendezvous_access_grant_t grant;
     rendezvous_websocket_protocol_t protocol;
     uint64_t deadline_ms;
     socket_rendezvous_attempt_state_t state;
@@ -242,7 +241,7 @@ struct socket_rendezvous_attempt {
     size_t authorization_bytes;
     uint32_t retry_after_seconds;
     bool authorization_required;
-    bool has_invite;
+    bool has_grant;
 };
 
 typedef struct socket_punch_job {
@@ -506,9 +505,9 @@ static void socket_rendezvous_attempt_fail(socket_rendezvous_attempt_t *attempt)
         return;
     }
     attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_TERMINAL;
-    if (attempt->has_invite) {
-        rendezvous_invite_cleanse(&attempt->invite);
-        attempt->has_invite = false;
+    if (attempt->has_grant) {
+        rendezvous_access_grant_clear(&attempt->grant);
+        attempt->has_grant = false;
     }
 }
 
@@ -558,11 +557,11 @@ static bool socket_rendezvous_attempt_input(socket_rendezvous_attempt_t *attempt
 
 socket_rendezvous_attempt_t *socket_rendezvous_attempt_create(const char *server_id,
                                                               const char *ticket,
-                                                              const rendezvous_invite_t *invite,
+                                                              const rendezvous_access_grant_t *grant,
                                                               uint64_t deadline_ms) {
     if (!string_is_hex_fixed(server_id, RENDEZVOUS_SERVER_ID_HEX_SIZE, true) ||
         !socket_rendezvous_ticket_valid(ticket) || deadline_ms == 0 ||
-        (invite != NULL && !rendezvous_invite_matches_server(invite, server_id))) {
+        (grant != NULL && !rendezvous_access_grant_valid(grant, server_id, (uint64_t)time(NULL)))) {
         return NULL;
     }
     socket_rendezvous_attempt_t *attempt = calloc(1, sizeof(*attempt));
@@ -572,12 +571,12 @@ socket_rendezvous_attempt_t *socket_rendezvous_attempt_create(const char *server
     memcpy(attempt->server_id, server_id, sizeof(attempt->server_id));
     memcpy(attempt->ticket, ticket, sizeof(attempt->ticket));
     attempt->deadline_ms = deadline_ms;
-    attempt->authorization_required = invite != NULL;
+    attempt->authorization_required = grant != NULL;
     attempt->state =
-        invite != NULL ? SOCKET_RENDEZVOUS_ATTEMPT_NEW : SOCKET_RENDEZVOUS_ATTEMPT_READY;
-    if (invite != NULL) {
-        attempt->invite = *invite;
-        attempt->has_invite = true;
+        grant != NULL ? SOCKET_RENDEZVOUS_ATTEMPT_NEW : SOCKET_RENDEZVOUS_ATTEMPT_READY;
+    if (grant != NULL) {
+        attempt->grant = *grant;
+        attempt->has_grant = true;
     }
     return attempt;
 }
@@ -662,52 +661,14 @@ bool socket_rendezvous_attempt_auth_init(socket_rendezvous_attempt_t *attempt,
     frame[0] = '\0';
     if (attempt == NULL || attempt->state != SOCKET_RENDEZVOUS_ATTEMPT_NEW ||
         socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms()) ||
-        !rendezvous_auth_init_render(frame,
-                                     frame_size,
-                                     attempt->ticket,
-                                     attempt->invite.invite_id) ||
+        !rendezvous_access_init_render(frame, frame_size, &attempt->grant) ||
         !socket_rendezvous_attempt_record(attempt, false, true, strlen(frame))) {
         socket_rendezvous_attempt_fail(attempt);
         frame[0] = '\0';
         return false;
     }
-    attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_WAIT_CHALLENGE;
-    return true;
-}
-
-socket_rendezvous_frame_result_t
-socket_rendezvous_attempt_challenge(socket_rendezvous_attempt_t *attempt,
-                                    const char *frame,
-                                    size_t frame_size,
-                                    char *proof_frame,
-                                    size_t proof_frame_size) {
-    unsigned char challenge[RENDEZVOUS_CHALLENGE_SIZE] = {0};
-    unsigned char proof[RENDEZVOUS_PROOF_SIZE] = {0};
-    char canonical[RENDEZVOUS_FRAME_MAX + 1U];
-    if (proof_frame != NULL && proof_frame_size != 0) {
-        proof_frame[0] = '\0';
-    }
-    bool ok = attempt != NULL && proof_frame != NULL && proof_frame_size != 0 &&
-              attempt->state == SOCKET_RENDEZVOUS_ATTEMPT_WAIT_CHALLENGE &&
-              !socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms()) &&
-              socket_rendezvous_attempt_input(attempt, frame, frame_size, true, canonical) &&
-              rendezvous_auth_challenge_parse(canonical, attempt->ticket, challenge) &&
-              attempt->has_invite &&
-              rendezvous_invite_proof(&attempt->invite, attempt->ticket, challenge, proof) &&
-              rendezvous_auth_proof_render(proof_frame, proof_frame_size, attempt->ticket, proof) &&
-              socket_rendezvous_attempt_record(attempt, false, true, strlen(proof_frame));
-    OPENSSL_cleanse(challenge, sizeof(challenge));
-    OPENSSL_cleanse(proof, sizeof(proof));
-    OPENSSL_cleanse(canonical, sizeof(canonical));
-    if (!ok) {
-        socket_rendezvous_attempt_fail(attempt);
-        if (proof_frame != NULL && proof_frame_size != 0) {
-            proof_frame[0] = '\0';
-        }
-        return SOCKET_RENDEZVOUS_FRAME_INVALID;
-    }
     attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_WAIT_RESULT;
-    return SOCKET_RENDEZVOUS_FRAME_CHALLENGE;
+    return true;
 }
 
 socket_rendezvous_frame_result_t
@@ -715,22 +676,17 @@ socket_rendezvous_attempt_auth_result(socket_rendezvous_attempt_t *attempt,
                                       const char *frame,
                                       size_t frame_size) {
     char canonical[RENDEZVOUS_FRAME_MAX + 1U];
-    bool authorized = false;
     bool ok = attempt != NULL && attempt->state == SOCKET_RENDEZVOUS_ATTEMPT_WAIT_RESULT &&
               !socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms()) &&
               socket_rendezvous_attempt_input(attempt, frame, frame_size, true, canonical) &&
-              rendezvous_auth_result_parse(canonical, attempt->ticket, &authorized);
+              rendezvous_access_ready_parse(canonical);
     OPENSSL_cleanse(canonical, sizeof(canonical));
     if (!ok) {
         socket_rendezvous_attempt_fail(attempt);
         return SOCKET_RENDEZVOUS_FRAME_INVALID;
     }
-    if (!authorized) {
-        socket_rendezvous_attempt_fail(attempt);
-        return SOCKET_RENDEZVOUS_FRAME_DENIED;
-    }
-    rendezvous_invite_cleanse(&attempt->invite);
-    attempt->has_invite = false;
+    rendezvous_access_grant_clear(&attempt->grant);
+    attempt->has_grant = false;
     attempt->state = SOCKET_RENDEZVOUS_ATTEMPT_AUTHORIZED;
     return SOCKET_RENDEZVOUS_FRAME_AUTHORIZED;
 }
@@ -1591,7 +1547,6 @@ static socket_connect_failure_code_t
 socket_rendezvous_authorize(CURL *curl, socket_rendezvous_attempt_t *attempt) {
     char frame[RENDEZVOUS_FRAME_MAX + 1U];
     size_t used = 0;
-    char proof_frame[RENDEZVOUS_FRAME_MAX + 1U];
     socket_connect_failure_code_t failure = SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
 
     if (!socket_rendezvous_attempt_auth_init(attempt, VS(frame))) {
@@ -1601,37 +1556,6 @@ socket_rendezvous_authorize(CURL *curl, socket_rendezvous_attempt_t *attempt) {
         failure = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
         goto out;
     }
-    while (!socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
-        socket_websocket_receive_state_t state = socket_websocket_receive(curl, VS(frame), &used);
-        if (state == SOCKET_WEBSOCKET_EMPTY) {
-            usleep(20000);
-            continue;
-        }
-        if (state == SOCKET_WEBSOCKET_PARTIAL) {
-            continue;
-        }
-        if (state == SOCKET_WEBSOCKET_CLOSED) {
-            failure = socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())
-                          ? SOCKET_CONNECT_FAILURE_TIMEOUT
-                          : SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
-            goto out;
-        }
-        if (state != SOCKET_WEBSOCKET_MESSAGE ||
-            socket_rendezvous_attempt_challenge(attempt, frame, used, VS(proof_frame)) !=
-                SOCKET_RENDEZVOUS_FRAME_CHALLENGE) {
-            goto out;
-        }
-        if (!socket_websocket_send_text(curl, proof_frame)) {
-            failure = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
-            goto out;
-        }
-        break;
-    }
-    if (socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
-        failure = SOCKET_CONNECT_FAILURE_TIMEOUT;
-        goto out;
-    }
-
     used = 0;
     while (!socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
         socket_websocket_receive_state_t state = socket_websocket_receive(curl, VS(frame), &used);
@@ -1665,7 +1589,6 @@ socket_rendezvous_authorize(CURL *curl, socket_rendezvous_attempt_t *attempt) {
 
 out:
     OPENSSL_cleanse(frame, sizeof(frame));
-    OPENSSL_cleanse(proof_frame, sizeof(proof_frame));
     return failure;
 }
 
@@ -1804,7 +1727,7 @@ size_t socket_rendezvous_client(socket_t *sc,
     }
     struct curl_slist *headers = NULL;
     if (attempt->authorization_required) {
-        headers = curl_slist_append(NULL, "Sec-WebSocket-Protocol: " RENDEZVOUS_INVITE_SUBPROTOCOL);
+        headers = curl_slist_append(NULL, "Sec-WebSocket-Protocol: " RENDEZVOUS_ACCESS_SUBPROTOCOL);
         if (headers == NULL) {
             failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
             curl_easy_cleanup(curl);
@@ -1854,7 +1777,7 @@ size_t socket_rendezvous_client(socket_t *sc,
         if (result != CURLE_OK) {
             LOG(ERROR, "Rendezvous connection failed: %s", curl_easy_strerror(result));
         } else {
-            LOG(ERROR, "Rendezvous connection failed: invite subprotocol was not selected");
+            LOG(ERROR, "Rendezvous connection failed: grant subprotocol was not selected");
         }
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
@@ -1865,7 +1788,7 @@ size_t socket_rendezvous_client(socket_t *sc,
         socket_connect_failure_code_t authorization = socket_rendezvous_authorize(curl, attempt);
         if (authorization != SOCKET_CONNECT_FAILURE_NONE) {
             failure->code = authorization;
-            LOG(ERROR, "Rendezvous invite authorization failed");
+            LOG(ERROR, "Rendezvous grant authorization failed");
             curl_slist_free_all(headers);
             curl_easy_cleanup(curl);
             return 0;
@@ -1873,7 +1796,7 @@ size_t socket_rendezvous_client(socket_t *sc,
     }
     if (socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
         failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
-        LOG(ERROR, "Rendezvous invite authorization failed");
+        LOG(ERROR, "Rendezvous grant authorization failed");
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
         return 0;

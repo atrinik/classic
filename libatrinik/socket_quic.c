@@ -811,7 +811,7 @@ socket_t *socket_quic_client_create(const char *host,
                                     const char *certificate_sha256,
                                     const char *rendezvous_url,
                                     const char *stun_endpoint,
-                                    const rendezvous_invite_t *invite,
+                                    const rendezvous_access_grant_t *grant,
                                     socket_connection_preference_t preference,
                                     socket_connect_failure_t *failure) {
     socket_connect_failure_t local_failure = {0};
@@ -831,11 +831,11 @@ socket_t *socket_quic_client_create(const char *host,
         return NULL;
     }
     uint64_t now = (uint64_t)wall_time;
-    if (invite != NULL && rendezvous_invite_expired_at(invite, now)) {
-        failure->code = SOCKET_CONNECT_FAILURE_INVITE_EXPIRED;
+    if (grant != NULL && grant->expiry <= now) {
+        failure->code = SOCKET_CONNECT_FAILURE_ACCESS_UNAVAILABLE;
         return NULL;
     }
-    if (invite != NULL && !rendezvous_invite_valid_at(invite, certificate_sha256, now)) {
+    if (grant != NULL && !rendezvous_access_grant_valid(grant, certificate_sha256, now)) {
         failure->code = SOCKET_CONNECT_FAILURE_AUTHORIZATION;
         return NULL;
     }
@@ -848,7 +848,8 @@ socket_t *socket_quic_client_create(const char *host,
                          RENDEZVOUS_TICKET_HEX_SIZE;
     if (ticket_ok) {
         string_tolower(ticket);
-        attempt = socket_rendezvous_attempt_create(certificate_sha256, ticket, invite, deadline_ms);
+        if (grant != NULL) memcpy(ticket, grant->grant, sizeof(ticket));
+        attempt = socket_rendezvous_attempt_create(certificate_sha256, ticket, grant, deadline_ms);
     }
     OPENSSL_cleanse(ticket_bytes, sizeof(ticket_bytes));
     OPENSSL_cleanse(ticket, sizeof(ticket));
@@ -1230,14 +1231,14 @@ socket_t *socket_quic_client_create(const char *host,
                                     const char *certificate_sha256,
                                     const char *rendezvous_url,
                                     const char *stun_endpoint,
-                                    const rendezvous_invite_t *invite,
+                                    const rendezvous_access_grant_t *grant,
                                     socket_connection_preference_t preference,
                                     socket_connect_failure_t *failure) {
     if (failure != NULL) {
         failure->code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
         failure->retry_after_seconds = 0;
     }
-    (void)invite;
+    (void)grant;
     (void)preference;
     LOG(ERROR, "QUIC requires OpenSSL 3.5 or newer");
     return NULL;

@@ -313,6 +313,7 @@ endif ()
 
 set(LIBATRINIK_PUBLIC_HEADER_NAMES
     access_code.h
+    access_resolve.h
     binreloc.h
     bresenham.h
     clioptions.h
@@ -379,6 +380,7 @@ endif ()
 
 set(TOOLKIT_SOURCES
     access_code.c
+    access_resolve.c
     binreloc.c
     clioptions.c
     colorspace.c
@@ -569,9 +571,7 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     add_executable(libatrinik-rendezvous tests/rendezvous.c)
     atrinik_configure_target(libatrinik-rendezvous)
     target_link_libraries(libatrinik-rendezvous PRIVATE Atrinik::Core)
-    add_test(NAME libatrinik-rendezvous COMMAND libatrinik-rendezvous
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1.json"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1-negative.json")
+    add_test(NAME libatrinik-rendezvous COMMAND libatrinik-rendezvous)
 
     add_executable(libatrinik-metaserver-publisher
         tests/metaserver_publisher.c)

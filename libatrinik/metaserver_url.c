@@ -308,3 +308,35 @@ bool metaserver_url_rendezvous(const char *origin,
     }
     return ok;
 }
+
+
+bool metaserver_url_access(const char *origin, const char *server_id, bool websocket,
+                            char *url, size_t url_size) {
+    if (url == NULL || url_size == 0) return false;
+    *url = 0;
+    metaserver_parsed_url_t parsed;
+    if (!metaserver_url_parse(origin, &parsed)) return false;
+    bool secure = strcmp(parsed.scheme, "https") == 0;
+    bool loopback = strcmp(parsed.host, "127.0.0.1") == 0 || strcmp(parsed.host, "[::1]") == 0;
+    bool ok = (secure || loopback) && strcmp(parsed.path, "/") == 0 &&
+              (!websocket || metaserver_identity_valid(server_id));
+    char path[128];
+    if (ok) {
+        int n = websocket ? snprintf(VS(path), "/v1/access/rendezvous/classic/%s", server_id)
+                          : snprintf(VS(path), "/v1/access/resolve");
+        ok = n > 0 && (size_t)n < sizeof(path);
+    }
+    char *rendered = NULL;
+    ok = ok && curl_url_set(parsed.handle, CURLUPART_PATH, path, 0) == CURLUE_OK &&
+         curl_url_get(parsed.handle, CURLUPART_URL, &rendered, 0) == CURLUE_OK;
+    if (ok) {
+        const char *scheme_end = strstr(rendered, "://");
+        int n = websocket ? snprintf(url, url_size, "%s%s", secure ? "wss" : "ws", scheme_end)
+                          : snprintf(url, url_size, "%s", rendered);
+        ok = n > 0 && (size_t)n < url_size;
+    }
+    if (!ok) *url = 0;
+    curl_free(rendered);
+    metaserver_parsed_url_free(&parsed);
+    return ok;
+}
