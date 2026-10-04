@@ -44,6 +44,7 @@
 #define GPU_MAP_LIGHT_KEY_UNLIT GPU_SPRITE_LIGHTING_KEY_UNLIT
 #define GPU_MAP_LIGHT_QUAD_KEY_MAX (GPU_MAP_LIGHT_KEY_MASK - 2U)
 #define GPU_MAP_LIGHT_KEY_PROJECTED GPU_SPRITE_LIGHTING_KEY_PROJECTED
+#define GPU_MAP_LIGHT_KEY_GROUND_COVERAGE GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE
 #define GPU_MAP_LIGHT_QUAD_INITIAL_CAPACITY 1024U
 #define GPU_MAP_LIGHT_ROW_INITIAL_CAPACITY 128U
 #define GPU_MAP_LIGHT_SPAN_INITIAL_CAPACITY 1024U
@@ -130,8 +131,13 @@ typedef struct gpu_map_light_quad {
     uint32_t green[4];
     uint32_t blue[4];
     uint32_t owner;
-    uint32_t padding[3];
+    /* Nine row-major coverage bytes, packed least-significant byte first. */
+    uint32_t coverage[3];
 } gpu_map_light_quad_t;
+
+_Static_assert(sizeof(gpu_map_light_quad_t) == 112, "compact light quad stride");
+_Static_assert(offsetof(gpu_map_light_quad_t, owner) == 96, "light quad owner offset");
+_Static_assert(offsetof(gpu_map_light_quad_t, coverage) == 100, "light quad coverage offset");
 
 typedef struct gpu_map_light_span {
     int32_t first_x;
@@ -250,6 +256,7 @@ static int target_height;
 static uint8_t current_light_owner = GPU_RENDERER_OWNER_UNLIT;
 static int current_light_sample_y;
 static bool current_light_projected;
+static bool current_ground_coverage;
 static bool world_pass_load_existing;
 static gpu_map_world_command_t *world_commands;
 static size_t world_commands_num;
@@ -2822,6 +2829,7 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
     current_light_owner = GPU_RENDERER_OWNER_UNLIT;
     current_light_sample_y = 0;
     current_light_projected = false;
+    current_ground_coverage = false;
     light_quads_num = 0;
     light_rows_num = 0;
     light_spans_num = 0;
@@ -2869,6 +2877,11 @@ void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected) {
     current_light_owner = owner;
     current_light_sample_y = sample_y;
     current_light_projected = projected && owner != GPU_RENDERER_OWNER_UNLIT;
+    current_ground_coverage = false;
+}
+
+void gpu_map_renderer_set_ground_coverage(bool enabled) {
+    current_ground_coverage = enabled && current_light_projected;
 }
 
 void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
@@ -2877,7 +2890,15 @@ void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t d
 }
 
 void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
+    static const uint8_t full_coverage[9] = {255, 255, 255, 255, 255, 255, 255, 255, 255};
+    gpu_map_renderer_light_quad_coverage(owner, vertices, full_coverage);
+}
+
+void gpu_map_renderer_light_quad_coverage(uint8_t owner,
+                                          const lighting_vertex_t vertices[4],
+                                          const uint8_t coverage[9]) {
     HARD_ASSERT(vertices != NULL);
+    HARD_ASSERT(coverage != NULL);
     if (map_command_buffer == NULL) {
         return;
     }
@@ -2900,7 +2921,10 @@ void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices
         quad->blue[i] = vertices[i].blue;
     }
     quad->owner = owner;
-    memset(quad->padding, 0, sizeof(quad->padding));
+    memset(quad->coverage, 0, sizeof(quad->coverage));
+    for (size_t i = 0; i < 9; i++) {
+        quad->coverage[i / 4] |= (uint32_t)coverage[i] << ((i % 4) * 8);
+    }
     map_frame_lighting_generation =
         gpu_map_contract_hash_append(map_frame_lighting_generation, quad, sizeof(*quad));
     light_bucket_index_valid = false;
@@ -3364,6 +3388,9 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
             }
             projected_light_rows_used = true;
             instance.lighting_key = GPU_MAP_LIGHT_KEY_PROJECTED | current_light_owner;
+            if (current_ground_coverage) {
+                instance.lighting_key |= GPU_MAP_LIGHT_KEY_GROUND_COVERAGE;
+            }
         } else {
             int sample_y = MAX(0, MIN(target_height - 1, current_light_sample_y));
             size_t row = gpu_map_light_row_build(current_light_owner, sample_y);
@@ -3833,7 +3860,12 @@ static bool gpu_map_renderer_download_pixel(SDL_GPUTexture *texture,
     return completed && mapped != NULL;
 }
 
-static bool gpu_map_renderer_probe_quad(size_t index, int x, int y, uint16_t light[4]) {
+/** Test oracle: decode a packed row-major coverage sample. */
+static uint16_t gpu_map_renderer_probe_coverage(const gpu_map_light_quad_t *quad, size_t index) {
+    return (uint16_t)((quad->coverage[index / 4] >> ((index % 4) * 8)) & UINT32_C(255));
+}
+
+static bool gpu_map_renderer_probe_quad(size_t index, int x, int y, uint16_t light[5]) {
     if (!uploaded_light_quads_valid || index >= uploaded_light_quads_num) {
         return false;
     }
@@ -3870,6 +3902,16 @@ static bool gpu_map_renderer_probe_quad(size_t index, int x, int y, uint16_t lig
                                                            v,
                                                            scale);
             }
+            size_t column = u * 2 >= scale ? 1 : 0;
+            size_t row = v * 2 >= scale ? 1 : 0;
+            size_t first = row * 3 + column;
+            light[4] = lighting_bilinear_channel(gpu_map_renderer_probe_coverage(quad, first),
+                                                  gpu_map_renderer_probe_coverage(quad, first + 1),
+                                                  gpu_map_renderer_probe_coverage(quad, first + 4),
+                                                  gpu_map_renderer_probe_coverage(quad, first + 3),
+                                                  u * 2 - column * scale,
+                                                  v * 2 - row * scale,
+                                                  scale);
             return true;
         }
         int min_x = MIN(MIN(quad->x[0], quad->x[1]), MIN(quad->x[2], quad->x[3]));
@@ -3894,6 +3936,8 @@ static bool gpu_map_renderer_probe_quad(size_t index, int x, int y, uint16_t lig
     for (size_t channel = 0; channel < 4; channel++) {
         light[channel] = (uint16_t)channels[channel][closest];
     }
+    static const size_t corner_samples[4] = {0, 2, 8, 6};
+    light[4] = gpu_map_renderer_probe_coverage(quad, corner_samples[closest]);
     return true;
 }
 
@@ -3911,7 +3955,7 @@ static bool gpu_map_renderer_probe_horizontal(uint32_t offset,
                                               uint32_t count,
                                               int row_y,
                                               int x,
-                                              uint16_t light[4]) {
+                                              uint16_t light[5]) {
     const gpu_map_light_span_t *left = NULL;
     const gpu_map_light_span_t *right = NULL;
     for (uint32_t index = 0; index < count; index++) {
@@ -3931,15 +3975,15 @@ static bool gpu_map_renderer_probe_horizontal(uint32_t offset,
     if (right == NULL) {
         return gpu_map_renderer_probe_quad(left->quad, left->last_x, row_y, light);
     }
-    uint16_t left_light[4];
-    uint16_t right_light[4];
+    uint16_t left_light[5];
+    uint16_t right_light[5];
     if (!gpu_map_renderer_probe_quad(left->quad, left->last_x, row_y, left_light) ||
         !gpu_map_renderer_probe_quad(right->quad, right->first_x, row_y, right_light)) {
         return false;
     }
     uint64_t duration = (uint64_t)(right->first_x - left->last_x);
     uint64_t progress = (uint64_t)(x - left->last_x);
-    for (size_t channel = 0; channel < 4; channel++) {
+    for (size_t channel = 0; channel < 5; channel++) {
         light[channel] = gpu_map_renderer_probe_interpolate(left_light[channel],
                                                             right_light[channel],
                                                             progress,
@@ -3948,7 +3992,7 @@ static bool gpu_map_renderer_probe_horizontal(uint32_t offset,
     return true;
 }
 
-static bool gpu_map_renderer_probe_light(uint32_t key, int x, uint8_t owner, uint16_t light[4]) {
+static bool gpu_map_renderer_probe_light(uint32_t key, int x, uint8_t owner, uint16_t light[5]) {
     uint32_t encoded_row = key & GPU_MAP_LIGHT_KEY_MASK;
     if (encoded_row == 0 || encoded_row > GPU_MAP_LIGHT_QUAD_KEY_MAX ||
         encoded_row - 1U >= uploaded_light_rows_num) {
@@ -3960,7 +4004,7 @@ static bool gpu_map_renderer_probe_light(uint32_t key, int x, uint8_t owner, uin
         row->lower_count == 0) {
         return false;
     }
-    uint16_t upper[4];
+    uint16_t upper[5];
     if (!gpu_map_renderer_probe_horizontal(row->upper_offset,
                                            row->upper_count,
                                            row->upper_y,
@@ -3972,7 +4016,7 @@ static bool gpu_map_renderer_probe_light(uint32_t key, int x, uint8_t owner, uin
         memcpy(light, upper, sizeof(upper));
         return true;
     }
-    uint16_t lower[4];
+    uint16_t lower[5];
     if (!gpu_map_renderer_probe_horizontal(row->lower_offset,
                                            row->lower_count,
                                            row->lower_y,
@@ -3983,7 +4027,7 @@ static bool gpu_map_renderer_probe_light(uint32_t key, int x, uint8_t owner, uin
     uint64_t duration = (uint64_t)(row->lower_y - row->upper_y);
     uint64_t progress =
         (uint64_t)(MAX(row->upper_y, MIN(row->lower_y, row->sample_y)) - row->upper_y);
-    for (size_t channel = 0; channel < 4; channel++) {
+    for (size_t channel = 0; channel < 5; channel++) {
         light[channel] =
             gpu_map_renderer_probe_interpolate(upper[channel], lower[channel], progress, duration);
     }
@@ -4007,8 +4051,14 @@ bool gpu_map_renderer_probe(int x, int y, uint8_t light_owner, gpu_map_renderer_
                                                       &probe->lighting_key) &&
                       gpu_map_renderer_download_pixel(final_target, 0, x, y, 4, probe->final_color);
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMPLETION, completion_started);
+    uint16_t sample[5];
     bool valid = downloaded &&
-                 gpu_map_renderer_probe_light(probe->lighting_key, x, light_owner, probe->light);
+                 gpu_map_renderer_probe_light(probe->lighting_key, x, light_owner, sample);
+    if (valid) {
+        memcpy(probe->light, sample, sizeof(probe->light));
+        probe->ground_coverage = (probe->lighting_key & GPU_MAP_LIGHT_KEY_GROUND_COVERAGE) != 0 ?
+                                     (uint8_t)sample[4] : UINT8_C(255);
+    }
     /* A probe is an explicit synchronous readback checkpoint. Retire the map
      * fence it ordered behind so completion statistics and asset lifetimes
      * stay current for the conformance caller. */

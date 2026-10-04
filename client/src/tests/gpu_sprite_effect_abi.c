@@ -164,6 +164,32 @@ static bool test_effect_matrix(void) {
     return true;
 }
 
+static bool test_ground_coverage_key(void) {
+    gpu_sprite_instance_t instance;
+    gpu_sprite_instance_init(&instance);
+    instance.texture_flags = valid_texture_flags();
+    CHECK(GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE == UINT32_C(1048576));
+    CHECK((GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE & GPU_SPRITE_LIGHTING_KEY_MASK) == 0);
+    CHECK((GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE & GPU_SPRITE_LIGHTING_KEY_PROJECTED) == 0);
+    for (uint32_t owner = 0; owner < 13; owner++) {
+        instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_PROJECTED | owner;
+        CHECK(gpu_sprite_instance_valid(&instance));
+        instance.lighting_key |= GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE;
+        CHECK(gpu_sprite_instance_valid(&instance));
+    }
+    /* Uploaded sprite commands may opt in only with a projected owner. The
+     * shader retains coverage separately when resolving that owner to a row. */
+    instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE | UINT32_C(1);
+    CHECK(!gpu_sprite_instance_valid(&instance));
+    instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE |
+                            GPU_SPRITE_LIGHTING_KEY_UNLIT;
+    CHECK(!gpu_sprite_instance_valid(&instance));
+    instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_PROJECTED |
+                            GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE | (UINT32_C(1) << 21);
+    CHECK(!gpu_sprite_instance_valid(&instance));
+    return true;
+}
+
 static bool test_texture_metadata_matrix(void) {
     gpu_sprite_instance_t instance;
     gpu_sprite_instance_init(&instance);
@@ -233,7 +259,8 @@ static bool test_serialized_value_is_pointer_free(void) {
 
 int main(void) {
     if (!test_layout() || !test_default_and_owner_depth() || !test_effect_matrix() ||
-        !test_texture_metadata_matrix() || !test_serialized_value_is_pointer_free()) {
+        !test_ground_coverage_key() || !test_texture_metadata_matrix() ||
+        !test_serialized_value_is_pointer_free()) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

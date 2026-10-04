@@ -1119,12 +1119,22 @@ void gpu_renderer_map_set_owner(uint8_t owner, int sample_y, bool projected) {
     gpu_map_renderer_set_owner(owner, sample_y, projected);
 }
 
+void gpu_renderer_map_set_ground_coverage(bool enabled) {
+    gpu_map_renderer_set_ground_coverage(enabled);
+}
+
 void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
     gpu_map_renderer_set_instance_identity(record_identity, draw_variant);
 }
 
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
     gpu_map_renderer_light_quad(owner, vertices);
+}
+
+void gpu_renderer_map_light_quad_coverage(uint8_t owner,
+                                          const lighting_vertex_t vertices[4],
+                                          const uint8_t coverage[9]) {
+    gpu_map_renderer_light_quad_coverage(owner, vertices, coverage);
 }
 
 bool gpu_renderer_map_end(void) {

@@ -85,6 +85,12 @@ def validate() -> dict[str, object]:
             fail(f"shader is missing stable bit declaration {name}")
         if f"#define GPU_{name}" not in header:
             fail(f"C ABI is missing stable bit declaration {name}")
+    for name, value in (
+        ("WORLD_PROJECTED_LIGHT_FLAG", 524288),
+        ("WORLD_GROUND_COVERAGE_FLAG", 1048576),
+    ):
+        if f"static const uint {name} = {value}u;" not in shader:
+            fail(f"shader is missing stable light-key flag {name}")
     for name in (
         "effect_flags",
         "texture_flags",
