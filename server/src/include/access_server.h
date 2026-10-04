@@ -21,4 +21,7 @@ uint64_t access_server_auth_submit(const char code[16]);
 bool access_server_auth_poll(uint64_t, access_outcome_t *, access_token_ref_t *);
 access_session_state_t access_server_session_check(const access_token_ref_t *);
 void access_server_tick(void);
+#ifdef ATRINIK_TESTING
+void access_server_session_sequence_for_test(const access_session_state_t *, size_t);
+#endif
 #endif

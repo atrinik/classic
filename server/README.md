@@ -421,8 +421,10 @@ for registry, persistence, event, privacy, and analytics semantics.
  Account names, account passwords, characters and maps remain separate.
 
  Each code has a person/group label and optional expiry (default: never).
- Initialize an empty store once with `access_initialize = true`, then remove
- that setting. Root local administration can bootstrap the first code while
+ Initialize an absent store once with `access_initialize = true`; this offline
+ invocation requires the existing QUIC identity and exits before listeners,
+ plugins or publication. Remove that setting before normal startup. Root local
+ administration can issue the first code while
  the protected server remains locked. In-game administrators must appear in
  the root-managed `access_admin_accounts` file; general OP grants do not confer
  token administration. Codes appear only in the private issuance result and

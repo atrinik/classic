@@ -30,6 +30,9 @@
 #include <global.h>
 #include <admin_shutdown.h>
 #include <access_server.h>
+#ifndef WIN32
+#include <access_bootstrap.h>
+#endif
 #include <weather.h>
 #include <swap.h>
 #include <server_main.h>
@@ -97,7 +100,9 @@ int first_map_y;
 static void init_beforeplay(void);
 static void init_dynamic(void);
 static void init_clocks(void);
+#ifndef WIN32
 static int access_state_descriptor = -1;
+#endif
 static bool removed_httppath_seen;
 /* Handler failures do not stop CLI parsing; reject startup even after a valid option. */
 static bool oversized_assetspath_seen;
@@ -220,8 +225,10 @@ void cleanup(void) {
     free_random_map_loader();
     free_map_header_loader();
     celestial_structure_release_writer_lease();
+#ifndef WIN32
     access_state_unlock(access_state_descriptor);
     access_state_descriptor = -1;
+#endif
 }
 
 /**
@@ -600,6 +607,7 @@ static bool clioptions_option_port_mapping(const char *arg, char **errmsg) {
 /* Admission configuration is immutable after startup. In particular default OP
  * and /config must never grant access administration or open the server. */
 static bool access_configuration_locked;
+static bool invalid_access_configuration;
 static bool removed_access_configuration;
 static bool access_setting_mutable(char **errmsg) {
     if (access_configuration_locked) {
@@ -614,7 +622,7 @@ static bool clioptions_option_access_required(const char *arg, char **errmsg) {
     if (!access_setting_mutable(errmsg)) return false;
     if (KEYWORD_IS_TRUE(arg)) settings.access_required = true;
     else if (KEYWORD_IS_FALSE(arg)) settings.access_required = false;
-    else { *errmsg = xstrdup("Expected a boolean"); return false; }
+    else { invalid_access_configuration = true; *errmsg = xstrdup("Expected a boolean"); return false; }
     return true;
 }
 static const char *clioptions_option_access_initialize_desc =
@@ -623,7 +631,7 @@ static bool clioptions_option_access_initialize(const char *arg, char **errmsg) 
     if (!access_setting_mutable(errmsg)) return false;
     if (KEYWORD_IS_TRUE(arg)) settings.access_initialize = true;
     else if (KEYWORD_IS_FALSE(arg)) settings.access_initialize = false;
-    else { *errmsg = xstrdup("Expected a boolean"); return false; }
+    else { invalid_access_configuration = true; *errmsg = xstrdup("Expected a boolean"); return false; }
     return true;
 }
 static const char *clioptions_option_access_store_desc =
@@ -631,6 +639,7 @@ static const char *clioptions_option_access_store_desc =
 static bool clioptions_option_access_store(const char *arg, char **errmsg) {
     if (!access_setting_mutable(errmsg)) return false;
     if (arg[0] != '/' || strlen(arg) >= sizeof(settings.access_store)) {
+        invalid_access_configuration = true;
         *errmsg = xstrdup("Expected a bounded absolute directory"); return false;
     }
     snprintf(VS(settings.access_store), "%s", arg);
@@ -641,6 +650,7 @@ static const char *clioptions_option_access_admin_accounts_desc =
 static bool clioptions_option_access_admin_accounts(const char *arg, char **errmsg) {
     if (!access_setting_mutable(errmsg)) return false;
     if (arg[0] != '/' || strlen(arg) >= sizeof(settings.access_admin_accounts)) {
+        invalid_access_configuration = true;
         *errmsg = xstrdup("Expected a bounded absolute file"); return false;
     }
     snprintf(VS(settings.access_admin_accounts), "%s", arg);
@@ -1172,14 +1182,26 @@ static void init_library(int argc, char *argv[]) {
     settings.celestial_inventory_limit = 8192;
 
     access_configuration_locked = false;
+    invalid_access_configuration = false;
     removed_access_configuration = false;
-    clioptions_load("server.cfg", NULL);
-    clioptions_load("server-custom.cfg", NULL);
+    if (!clioptions_load("server.cfg", NULL)) {
+        LOG(ERROR, "Cannot read required server configuration; refusing game startup");
+        exit(EXIT_FAILURE);
+    }
+    errno = 0;
+    if (!clioptions_load("server-custom.cfg", NULL) && errno != ENOENT) {
+        LOG(ERROR, "Cannot read custom server configuration; refusing game startup");
+        exit(EXIT_FAILURE);
+    }
 
     if (argv != NULL) {
         clioptions_parse(argc, argv);
     }
     access_configuration_locked = true;
+    if (invalid_access_configuration || clioptions_had_startup_errors()) {
+        LOG(ERROR, "Invalid access configuration; refusing game startup");
+        exit(EXIT_FAILURE);
+    }
     if (removed_access_configuration) {
         LOG(ERROR, "Legacy admission configuration requires offline migration");
         exit(EXIT_FAILURE);
@@ -1194,12 +1216,28 @@ static void init_library(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+#ifdef WIN32
+    if (settings.access_required || settings.access_initialize ||
+        *settings.access_store != '\0' || *settings.access_admin_accounts != '\0') {
+        LOG(ERROR, "Access token administration is unsupported on Windows servers");
+        exit(EXIT_FAILURE);
+    }
+#else
+    if (settings.access_initialize) {
+        bool initialized = access_bootstrap_initialize(settings.datapath,
+                                                       settings.access_store,
+                                                       settings.access_required);
+        if (!initialized) LOG(ERROR, "Offline access store initialization failed");
+        exit(initialized ? EXIT_SUCCESS : EXIT_FAILURE);
+    }
     if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
         !settings.provision_scenario && !settings.content_benchmark && !settings.celestial_inventory &&
         (access_state_descriptor = access_state_lock(settings.datapath)) < 0) {
         LOG(ERROR, "Cannot exclusively lock private server state");
         exit(EXIT_FAILURE);
     }
+
+#endif
 
     /* Verify the data directory is valid. */
     DIR *dir = opendir(settings.datapath);

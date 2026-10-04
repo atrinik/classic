@@ -1,6 +1,7 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include <global.h>
+#include <initialization.h>
 #include <access_server.h>
 #include <access_admin.h>
 #include <toolkit/access_code.h>
@@ -148,7 +149,7 @@ static void *run_expiry(void *unused) {
 }
 
 bool access_server_init(const char identity_hex[65]) {
-    if (worker.started || strlen(identity_hex)!=64) return false;
+    if (worker.started || settings.access_initialize || strlen(identity_hex)!=64) return false;
     memset(&worker.absent,0,sizeof(worker.absent));
     worker.absent.schema_version=ACCESS_STORE_SCHEMA;
     worker.absent.protected_policy=settings.access_required;
@@ -166,13 +167,9 @@ bool access_server_init(const char identity_hex[65]) {
     if (*settings.access_store != '\0') snprintf(VS(path),"%s",settings.access_store);
     else if (snprintf(VS(path),"%s/access-tokens",settings.datapath)>=(int)sizeof(path)) return false;
     bool absent=access_store_absent(path);
-    if (absent && settings.access_initialize) {
-        if (mkdir(path,0700)!=0) return false;
-        absent=false;
-    }
-    if (!absent || settings.access_required || settings.access_initialize) {
+    if (!absent || settings.access_required) {
         if (access_store_open(&worker.store,path,worker.absent.server_identity,
-            settings.access_required,settings.access_initialize)!=ACCESS_COMMITTED) return false;
+            settings.access_required,false)!=ACCESS_COMMITTED) return false;
     }
     worker.stopping=false;
     atomic_store(&worker.failed,false);
@@ -261,7 +258,21 @@ bool access_server_auth_poll(uint64_t id,access_outcome_t *out,access_token_ref_
     pthread_mutex_unlock(&worker.mutex);
     return done;
 }
+#ifdef ATRINIK_TESTING
+static access_session_state_t test_session_sequence[8];
+static size_t test_session_count, test_session_position;
+void access_server_session_sequence_for_test(const access_session_state_t *states, size_t count) {
+    HARD_ASSERT(count <= arraysize(test_session_sequence));
+    if (count != 0) memcpy(test_session_sequence, states, count * sizeof(*states));
+    test_session_count = count;
+    test_session_position = 0;
+}
+#endif
 access_session_state_t access_server_session_check(const access_token_ref_t *ref) {
+#ifdef ATRINIK_TESTING
+    if (test_session_position < test_session_count)
+        return test_session_sequence[test_session_position++];
+#endif
     if (atomic_load(&worker.failed) || worker.store==NULL) return ACCESS_SESSION_DENIED;
     return access_store_session_check(worker.store,ref,access_clock_now());
 }

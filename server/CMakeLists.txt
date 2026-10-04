@@ -210,6 +210,9 @@ endforeach ()
 
 include(src/cmake.txt)
 find_package(PkgConfig REQUIRED)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+endif ()
 
 if (NOT MINGW)
     pkg_check_modules(MINIUPNPC REQUIRED IMPORTED_TARGET miniupnpc)
@@ -284,7 +287,8 @@ target_link_libraries(${EXECUTABLE} PRIVATE atrinik-server-core Atrinik::Core)
 # link the simulation core or initialize listeners, plugins, or a publisher.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(atrinik-access-status
-        tools/access_status.c src/server/access_admin.c src/server/access_tokens.c)
+        tools/access_status.c src/server/access_admin.c src/server/access_tokens.c
+        src/server/access_bootstrap.c)
     atrinik_configure_target(atrinik-access-status)
     target_include_directories(atrinik-access-status PRIVATE src/include)
     target_link_libraries(atrinik-access-status PRIVATE Atrinik::Core Threads::Threads)
@@ -350,7 +354,23 @@ endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME server-access-configuration
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/access_configuration.py
+            $<TARGET_FILE:${EXECUTABLE}>)
+    set_tests_properties(server-access-configuration PROPERTIES TIMEOUT 90)
     if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(atrinik-access-bootstrap-tests
+            src/tests/access_tokens/bootstrap_fixture.c)
+        atrinik_configure_target(atrinik-access-bootstrap-tests)
+        target_include_directories(atrinik-access-bootstrap-tests PRIVATE src/include)
+        target_link_libraries(atrinik-access-bootstrap-tests PRIVATE Atrinik::Core Threads::Threads)
+        target_compile_options(atrinik-access-bootstrap-tests PRIVATE -UNDEBUG)
+        target_link_options(atrinik-access-bootstrap-tests PRIVATE
+            -Wl,--wrap=socket,--wrap=connect,--wrap=bind,--wrap=listen)
+        add_test(NAME server-access-bootstrap COMMAND atrinik-access-bootstrap-tests
+            ${CMAKE_CURRENT_BINARY_DIR})
+        set_tests_properties(server-access-bootstrap PROPERTIES TIMEOUT 90)
         add_executable(atrinik-access-store-tests src/tests/access_tokens/store_fixture.c)
         atrinik_configure_target(atrinik-access-store-tests)
         target_include_directories(atrinik-access-store-tests PRIVATE src/include)

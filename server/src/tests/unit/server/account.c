@@ -366,6 +366,75 @@ START_TEST(test_access_admin_boundary_preserves_moderation) {
 }
 END_TEST
 
+START_TEST(test_access_registration_denies_unavailable_allowlist) {
+    char saved_allowlist[sizeof(settings.access_admin_accounts)];
+    memcpy(saved_allowlist, settings.access_admin_accounts, sizeof(saved_allowlist));
+    char allowlist[HUGE_BUF];
+    snprintf(VS(allowlist), "%s/registration-allowlist", settings.datapath);
+    unlink(allowlist);
+    if (_i != 0) {
+        FILE *fp = fopen(allowlist, "w");
+        ck_assert_ptr_nonnull(fp);
+        ck_assert_int_gt(fputs("fixtureadmin\nUppercase\n", fp), 0);
+        ck_assert_int_eq(fclose(fp), 0);
+    }
+    snprintf(VS(settings.access_admin_accounts), "%s", allowlist);
+    object *ob = player_get_dummy("Registration Proof", NULL);
+    socket_struct *cs = CONTR(ob)->cs;
+    free(cs->account);
+    cs->account = NULL;
+    char name[] = "reservationproof";
+    char password[] = "local-test-7!";
+    char *path = account_make_path(name);
+    unlink(path);
+    account_register(cs, name, password, password);
+    ck_assert_ptr_null(cs->account);
+    ck_assert(!path_exists(path));
+    free(path);
+    unlink(allowlist);
+    memcpy(settings.access_admin_accounts, saved_allowlist, sizeof(saved_allowlist));
+}
+END_TEST
+
+START_TEST(test_access_registration_with_root_allowlist) {
+#ifndef WIN32
+    const char *fixture = getenv("ATRINIK_TEST_ROOT_ALLOWLIST_DIR");
+    if (fixture == NULL || geteuid() != 0) return;
+    char saved_allowlist[sizeof(settings.access_admin_accounts)];
+    memcpy(saved_allowlist, settings.access_admin_accounts, sizeof(saved_allowlist));
+    char allowlist[HUGE_BUF];
+    snprintf(VS(allowlist), "%s/accounts", fixture);
+    FILE *fp = fopen(allowlist, "w");
+    ck_assert_ptr_nonnull(fp);
+    if (_i != 0) ck_assert_int_gt(fputs(_i == 1 ? "fixtureadmin\n" : "reservationproof\n", fp), 0);
+    ck_assert_int_eq(fclose(fp), 0);
+    ck_assert_int_eq(chmod(allowlist, 0600), 0);
+    snprintf(VS(settings.access_admin_accounts), "%s", allowlist);
+    object *ob = player_get_dummy("Registration Proof", NULL);
+    socket_struct *cs = CONTR(ob)->cs;
+    free(cs->account);
+    cs->account = NULL;
+    char name[] = "reservationproof";
+    char password[] = "local-test-7!";
+    char *path = account_make_path(name);
+    unlink(path);
+    account_register(cs, name, password, password);
+    if (_i == 2) {
+        ck_assert_ptr_null(cs->account);
+        ck_assert(!path_exists(path));
+    } else {
+        ck_assert_ptr_nonnull(cs->account);
+        ck_assert_str_eq(cs->account, name);
+        ck_assert(path_exists(path));
+        ck_assert_int_eq(unlink(path), 0);
+    }
+    free(path);
+    unlink(allowlist);
+    memcpy(settings.access_admin_accounts, saved_allowlist, sizeof(saved_allowlist));
+#endif
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("account");
     TCase *tc_core = tcase_create("Core");
@@ -375,6 +444,8 @@ static Suite *suite(void) {
     tcase_set_timeout(tc_core, 30);
     tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 4);
     tcase_add_test(tc_core, test_access_admin_boundary_preserves_moderation);
+    tcase_add_loop_test(tc_core, test_access_registration_denies_unavailable_allowlist, 0, 2);
+    tcase_add_loop_test(tc_core, test_access_registration_with_root_allowlist, 0, 3);
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);

@@ -54,7 +54,43 @@ static int test_crlf_category(void) {
     return 0;
 }
 
+static int test_startup_failure_latch(void) {
+    toolkit_import(clioptions);
+    clioption_t *option = clioptions_create("policy", sensitive_handler);
+    clioptions_enable_argument(option);
+    require(!clioptions_had_startup_errors());
+    char *error = NULL;
+    require(!clioptions_load_str("policy = <missing-atrinik-startup-option", &error));
+    free(error);
+    require(clioptions_had_startup_errors());
+    error = NULL;
+    require(clioptions_load_str("policy = valid", &error));
+    require(clioptions_had_startup_errors());
+    toolkit_deinit();
+
+    toolkit_import(clioptions);
+    require(!clioptions_had_startup_errors());
+    option = clioptions_create("policy", sensitive_handler);
+    clioptions_enable_argument(option);
+    char executable[] = "test";
+    char missing[] = "--policy=<missing-atrinik-startup-option";
+    char valid[] = "--policy=valid";
+    char *arguments[] = {executable, missing, valid};
+    clioptions_parse(3, arguments);
+    require(clioptions_had_startup_errors());
+    toolkit_deinit();
+#ifndef WIN32
+    toolkit_import(clioptions);
+    require(!clioptions_had_startup_errors());
+    require(!clioptions_load(".", NULL));
+    require(clioptions_had_startup_errors());
+    toolkit_deinit();
+#endif
+    return 0;
+}
+
 int main(void) {
+    require(test_startup_failure_latch() == 0);
     toolkit_import(clioptions);
 
     clioption_t *option = clioptions_create("secret", sensitive_handler);

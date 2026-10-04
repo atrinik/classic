@@ -656,10 +656,10 @@ static bool socket_server_control_authorized(socket_struct *cs) {
  * Attempt to handle a command from the client.
  *
  * @return
- * True if the command was handled or rejected. False only when a valid
- * playing-only command must be queued for its player.
+ * HANDLED for consumed/rejected commands, QUEUE for a playing-only command,
+ * or DEFER when authority is busy and the original frame must be retained.
  */
-bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len) {
+socket_command_result_t socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len) {
     size_t pos = 0;
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
@@ -678,19 +678,20 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
 
     if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
         LOG(DEVEL, "Malformed command envelope: %s", packet_error_string(reader.error));
-        return true;
+        return SOCKET_COMMAND_HANDLED;
     }
 
     if (type >= SERVER_CMD_NROF || socket_commands[type].handle_func == NULL) {
         LOG(DEVEL, "Unknown command type: %" PRIu8, type);
-        return true;
+        return SOCKET_COMMAND_HANDLED;
     }
 
     if (settings.access_required && cs->access_authenticated) {
         access_session_state_t admission = access_server_session_check(&cs->access_token);
         if (admission != ACCESS_SESSION_VALID) {
-            if (admission == ACCESS_SESSION_DENIED) cs->state = ST_DEAD;
-            return true;
+            if (admission == ACCESS_SESSION_BUSY) return SOCKET_COMMAND_DEFER;
+            cs->state = ST_DEAD;
+            return SOCKET_COMMAND_HANDLED;
         }
     }
     if (!socket_server_command_phase_allowed(cs, type)) {
@@ -699,18 +700,18 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
             socket_commands[type].name,
             cs->state);
         cs->state = ST_ZOMBIE;
-        return true;
+        return SOCKET_COMMAND_HANDLED;
     }
 
     if (socket_commands[type].policy == SOCKET_COMMAND_POLICY_CONTROL &&
         !socket_server_control_authorized(cs)) {
-        return true;
+        return SOCKET_COMMAND_HANDLED;
     }
 
     /* Playing-only commands read directly from the transport are queued for
      * the associated player. The phase check above drops them before login. */
     if (socket_commands[type].flags & SOCKET_COMMAND_PLAYER_ONLY && pl == NULL) {
-        return false;
+        return SOCKET_COMMAND_QUEUE;
     }
 
     if (pl == NULL && socket_commands[type].policy == SOCKET_COMMAND_POLICY_PLAYING) {
@@ -731,7 +732,7 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
         socket_login_deadline_refresh(cs);
     }
 
-    return true;
+    return SOCKET_COMMAND_HANDLED;
 }
 
 static void socket_server_csocket_create(socket_t *server_socket) {
@@ -1124,7 +1125,8 @@ void socket_server_handle_client(player *pl) {
             pl->cs->keepalive = 0;
         }
 
-        socket_server_handle_command(pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2);
+        if (socket_server_handle_command(pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2) ==
+            SOCKET_COMMAND_DEFER) break;
         packet_delete(pl->cs->packet_recv_cmd, 0, len);
         pl->cs->packet_recv_cmd_base += len;
         socket_server_command_queue_prune(pl->cs);
@@ -1173,28 +1175,13 @@ static inline bool server_socket_csocket_is_zombie(socket_struct *cs) {
  * @param cs
  * Client socket.
  */
-static inline void socket_server_csocket_read(socket_struct *cs) {
-    HARD_ASSERT(cs != NULL);
+static bool socket_server_has_received_command(const socket_struct *cs) {
+    return cs->packet_recv->len >= 2 &&
+        (size_t)(2 + (cs->packet_recv->data[0] << 8) + cs->packet_recv->data[1]) <=
+            cs->packet_recv->len;
+}
 
-    if (cs->state == ST_DEAD) {
-        return;
-    }
-
-    size_t previous_len = cs->packet_recv->len;
-    size_t amt;
-    if (!socket_read(cs->sc,
-                     (void *)(cs->packet_recv->data + cs->packet_recv->len),
-                     cs->packet_recv->size - cs->packet_recv->len,
-                     &amt)) {
-        cs->state = ST_DEAD;
-        return;
-    }
-
-    cs->packet_recv->len += amt;
-    if (amt != 0 && previous_len == 0) {
-        cs->packet_receive_started_us = datetime_monotonic_us();
-    }
-
+static void socket_server_process_received(socket_struct *cs) {
     while (cs->packet_recv->len >= 2) {
         size_t size = 2 + (cs->packet_recv->data[0] << 8) + cs->packet_recv->data[1];
         if (size > cs->packet_recv->len) {
@@ -1208,7 +1195,10 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
         size_t decrypted_len = len - 2;
 
         /* Try to handle the command. */
-        if (!socket_server_handle_command(cs, NULL, decrypted_data, decrypted_len)) {
+        socket_command_result_t dispatch =
+            socket_server_handle_command(cs, NULL, decrypted_data, decrypted_len);
+        if (dispatch == SOCKET_COMMAND_DEFER) break;
+        if (dispatch == SOCKET_COMMAND_QUEUE) {
             /* Couldn't handle it immediately, add it to the commands
              * packet. */
             if (!socket_server_command_queue_append(cs, decrypted_data, decrypted_len)) {
@@ -1227,6 +1217,41 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
     if (cs->packet_recv->len == 0) {
         cs->packet_receive_started_us = 0;
     }
+}
+#ifdef ATRINIK_TESTING
+void socket_server_process_received_for_test(socket_struct *cs) {
+    socket_server_process_received(cs);
+}
+#endif
+
+static inline void socket_server_csocket_read(socket_struct *cs) {
+    HARD_ASSERT(cs != NULL);
+
+    if (cs->state == ST_DEAD) {
+        return;
+    }
+
+    /* Retry retained complete frames before reading into a potentially full
+     * buffer. A deferred frame keeps its original bytes and ordering. */
+    socket_server_process_received(cs);
+    if (cs->state == ST_DEAD || socket_server_has_received_command(cs)) return;
+
+    size_t previous_len = cs->packet_recv->len;
+    size_t amt;
+    if (!socket_read(cs->sc,
+                     (void *)(cs->packet_recv->data + cs->packet_recv->len),
+                     cs->packet_recv->size - cs->packet_recv->len,
+                     &amt)) {
+        cs->state = ST_DEAD;
+        return;
+    }
+
+    cs->packet_recv->len += amt;
+    if (amt != 0 && previous_len == 0) {
+        cs->packet_receive_started_us = datetime_monotonic_us();
+    }
+
+    socket_server_process_received(cs);
 }
 
 typedef struct socket_server_transport_stats {
@@ -1248,7 +1273,8 @@ static bool socket_server_pending_application(void) {
     csocket_entry_t *entry;
     DL_FOREACH(client_sockets, entry) {
         if (!server_socket_csocket_is_zombie(entry->cs) &&
-            (entry->cs->packets != NULL || socket_assets_pending(entry->cs))) {
+            (entry->cs->packets != NULL || socket_assets_pending(entry->cs) ||
+             socket_server_has_received_command(entry->cs))) {
             return true;
         }
     }
@@ -1256,7 +1282,8 @@ static bool socket_server_pending_application(void) {
     player *pl;
     DL_FOREACH(first_player, pl) {
         if (!server_socket_csocket_is_zombie(pl->cs) &&
-            (pl->cs->packets != NULL || socket_assets_pending(pl->cs))) {
+            (pl->cs->packets != NULL || socket_assets_pending(pl->cs) ||
+             socket_server_has_received_command(pl->cs))) {
             return true;
         }
     }
@@ -1320,7 +1347,8 @@ static bool socket_server_service_connection(socket_struct *cs,
                                              socket_server_transport_stats_t *stats) {
     bool transport_ready = socket_quic_timeout(cs->sc, 1U) == 0;
     bool timer_due = socket_quic_timer_due(cs->sc);
-    bool application_pending = cs->packets != NULL || socket_assets_pending(cs);
+    bool application_pending = cs->packets != NULL || socket_assets_pending(cs) ||
+        socket_server_has_received_command(cs);
     bool application_ready = application_wakeup_armed && application_pending;
     if (!network_ready && !transport_ready && !application_ready) {
         return false;

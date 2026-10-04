@@ -99,6 +99,11 @@ typedef struct clioption clioption_t;
 
 TOOLKIT_FUNCS_DECLARE(clioptions);
 
+/** Sticky initialization parse failures, including value-file preprocessing.
+ * Runtime edits do not set this flag; toolkit initialization clears it. */
+bool clioptions_had_startup_errors(void);
+
+
 /**
  * Creates a new CLI option.
  *

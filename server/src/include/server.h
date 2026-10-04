@@ -379,10 +379,19 @@ extern bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t
  * @param len
  * Length of data.
  * @return
- * True if the command was handled or rejected. False only when an admitted
- * playing-only command must be queued for the associated player.
+ * HANDLED for consumed/rejected commands, QUEUE for a playing-only command,
+ * or DEFER when authority is busy and the original frame must be retained.
  */
-extern bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);
+typedef enum {
+    SOCKET_COMMAND_QUEUE = 0,
+    SOCKET_COMMAND_HANDLED = 1,
+    SOCKET_COMMAND_DEFER = 2
+} socket_command_result_t;
+#ifdef ATRINIK_TESTING
+void socket_server_process_received_for_test(socket_struct *cs);
+#endif
+extern socket_command_result_t socket_server_handle_command(socket_struct *cs, player *pl,
+                                                             uint8_t *data, size_t len);
 
 extern bool socket_server_command_queue_append(socket_struct *cs, const uint8_t *data, size_t len);
 

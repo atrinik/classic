@@ -1,6 +1,8 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <access_bootstrap.h>
 #include <access_tokens.h>
 #include <errno.h>

@@ -910,8 +910,10 @@ void account_register(socket_struct *ns, char *name, char *password, char *passw
 
     string_tolower(name);
     /* Root-managed administrator identities must be provisioned locally;
-     * public registration cannot claim a listed identity after deletion. */
-    if (access_operator_allowed(settings.access_admin_accounts, name)) {
+     * public registration cannot claim a listed identity after deletion. An
+     * unavailable trust anchor cannot prove that an identity is unreserved. */
+    if (settings.access_admin_accounts[0] != '\0' &&
+        access_operator_lookup(settings.access_admin_accounts, name) != ACCESS_OPERATOR_UNLISTED) {
         draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_RED, ns,
                        "Account name is reserved by the system.");
         return;

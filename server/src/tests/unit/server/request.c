@@ -5,6 +5,7 @@
 #include <global.h>
 #include <server_main.h>
 #include <server.h>
+#include <access_server.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -1186,6 +1187,52 @@ START_TEST(test_only_valid_post_setup_activity_refreshes_login_deadline) {
 }
 END_TEST
 
+START_TEST(test_access_busy_retains_received_and_queued_frames) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    bool saved_required = settings.access_required;
+    settings.access_required = true;
+    cs->access_authenticated = true;
+    cs->access_policy_sent = true;
+    cs->access_transport_authenticated = true;
+    cs->socket_version = SOCKET_VERSION;
+    cs->setup_completed = true;
+    cs->state = ST_PLAYING;
+    op->speed_left = 1;
+    const uint8_t frame[] = {0, 5, SERVER_CMD_KEEPALIVE, 0, 0, 0, 7};
+    ck_assert_uint_ge(cs->packet_recv->size, sizeof(frame));
+    memcpy(cs->packet_recv->data, frame, sizeof(frame));
+    cs->packet_recv->len = sizeof(frame);
+    socket_buffer_clear(cs);
+    access_session_state_t received[] = {ACCESS_SESSION_BUSY, ACCESS_SESSION_VALID};
+    access_server_session_sequence_for_test(received, arraysize(received));
+    socket_server_process_received_for_test(cs);
+    ck_assert_uint_eq(cs->packet_recv->len, sizeof(frame));
+    ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_KEEPALIVE), 0);
+    socket_server_process_received_for_test(cs);
+    ck_assert_uint_eq(cs->packet_recv->len, 0);
+    ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_KEEPALIVE), 1);
+
+    socket_buffer_clear(cs);
+    ck_assert(socket_server_command_queue_append(cs, frame + 2, sizeof(frame) - 2));
+    /* Authority becomes busy after the loop's preliminary valid check. */
+    access_session_state_t queued[] = {ACCESS_SESSION_VALID, ACCESS_SESSION_BUSY,
+                                      ACCESS_SESSION_VALID, ACCESS_SESSION_VALID};
+    access_server_session_sequence_for_test(queued, arraysize(queued));
+    socket_server_handle_client(pl);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, sizeof(frame));
+    ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_KEEPALIVE), 0);
+    socket_server_handle_client(pl);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
+    ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_KEEPALIVE), 1);
+    access_server_session_sequence_for_test(NULL, 0);
+    settings.access_required = saved_required;
+}
+END_TEST
+
 START_TEST(test_keepalive_echoes_identifier) {
     mapstruct *map;
     object *pl;
@@ -1939,6 +1986,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_and_fire_require_exact_v1078_payloads);
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
+    tcase_add_test(tc_core, test_access_busy_retains_received_and_queued_frames);
     tcase_add_test(tc_core, test_keepalive_echoes_identifier);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);

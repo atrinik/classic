@@ -80,3 +80,10 @@ bool access_operator_allowed(const char *allowlist, const char *account)
     (void)account;
     return false;
 }
+
+access_operator_lookup_t access_operator_lookup(const char *allowlist, const char *account)
+{
+    (void)allowlist;
+    (void)account;
+    return ACCESS_OPERATOR_UNAVAILABLE;
+}

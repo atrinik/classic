@@ -5,6 +5,7 @@
 #include <toolkit/datetime.h>
 #define REQUIRE(x) do { if (!(x)) { fprintf(stderr, "line %d\n", __LINE__); return 1; } } while (0)
 int main(void) {
+    toolkit_import(datetime);
     rendezvous_access_grant_t grant = {0};
     memset(grant.server_id, 'a', 64);
     memset(grant.generation, 'b', 64);
@@ -39,5 +40,6 @@ int main(void) {
     for (size_t i = 0; i < sizeof(bad)/sizeof(*bad); i++) REQUIRE(!rendezvous_access_ready_parse(bad[i]));
     rendezvous_access_grant_clear(&grant);
     REQUIRE(grant.expiry == 0 && grant.grant[0] == 0);
+    toolkit_deinit();
     return 0;
 }
