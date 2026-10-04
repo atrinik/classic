@@ -1829,11 +1829,10 @@ START_TEST(test_timed_endpoint_refresh_keeps_colored_scalar_present) {
     ck_assert_uint_ne(cell->light_next_rgb_explicit & (UINT8_C(1) << pl->sub_layer), 0);
 
     /* Refresh another endpoint while the colored source remains steady.
-     * Connected updates can repeat the same generation without clearing the
-     * translated endpoint cache. RGB endpoints still need scalar ownership. */
+     * Request the descriptor again without clearing the per-cell cache, as
+     * occurs after light knowledge is revoked elsewhere in the view. */
     cell->light_next_known[(pl->sub_layer + 1) % NUM_SUB_LAYERS] = 0;
-    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_CONNECTED;
-    CONTR(pl)->map_update_tile = TILED_EAST + 1;
+    cs->lastmap_light_generation = 0;
     socket_buffer_clear(cs);
     draw_client_map2(pl);
     ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
