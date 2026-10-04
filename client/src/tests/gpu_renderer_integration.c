@@ -1898,6 +1898,578 @@ static bool projected_alpha_checkpoint(void) {
     return success;
 }
 
+typedef enum presentation_draw_mode {
+    PRESENTATION_DRAW_NONE,
+    PRESENTATION_DRAW_LIVE,
+    PRESENTATION_DRAW_REPLAY,
+} presentation_draw_mode_t;
+
+static void presentation_light_quad(uint8_t owner,
+                                    uint16_t top_red,
+                                    uint16_t top_green,
+                                    uint16_t top_blue,
+                                    uint16_t bottom_red,
+                                    uint16_t bottom_green,
+                                    uint16_t bottom_blue) {
+    const int map_size = 32;
+    lighting_vertex_t quad[4] = {
+        {.x = 0,
+         .y = 0,
+         .scalar = MAX(top_red, MAX(top_green, top_blue)),
+         .red = top_red,
+         .green = top_green,
+         .blue = top_blue},
+        {.x = map_size,
+         .y = 0,
+         .scalar = MAX(top_blue, MAX(top_red, top_green)),
+         .red = top_blue,
+         .green = top_red,
+         .blue = top_green},
+        {.x = map_size,
+         .y = map_size,
+         .scalar = MAX(bottom_blue, MAX(bottom_red, bottom_green)),
+         .red = bottom_blue,
+         .green = bottom_red,
+         .blue = bottom_green},
+        {.x = 0,
+         .y = map_size,
+         .scalar = MAX(bottom_red, MAX(bottom_green, bottom_blue)),
+         .red = bottom_red,
+         .green = bottom_green,
+         .blue = bottom_blue},
+    };
+    gpu_renderer_map_light_quad(owner, quad);
+}
+
+static bool presentation_scene_build(SDL_Surface *floor,
+                                     SDL_Surface *foreground,
+                                     presentation_draw_mode_t mode,
+                                     bool old_light,
+                                     uint64_t token,
+                                     int anchor_x,
+                                     int anchor_y,
+                                     Uint8 live_alpha,
+                                     Uint8 effective_alpha,
+                                     Uint8 effective_start) {
+    const int map_size = 32;
+    const uint64_t floor_identity = UINT64_C(0x47750001);
+    const uint64_t transient_identity = UINT64_C(0x47750002);
+    SDL_FRect floor_destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
+    SDL_FRect foreground_destination = {(float)anchor_x, (float)anchor_y, 8.0f, 16.0f};
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(map_size, map_size)) {
+        return false;
+    }
+    presentation_light_quad(0, 384, 384, 384, 384, 384, 384);
+    if (old_light) {
+        presentation_light_quad(1, 1792, 640, 320, 512, 1280, 2048);
+    } else {
+        presentation_light_quad(1, 256, 1792, 1536, 2048, 384, 256);
+    }
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
+    gpu_renderer_map_set_instance_identity(floor_identity, 0);
+    if (!gpu_renderer_draw_surface(floor, NULL, &floor_destination)) {
+        return false;
+    }
+    if (mode == PRESENTATION_DRAW_LIVE) {
+        if (!SDL_SetSurfaceAlphaMod(foreground, live_alpha)) {
+            return false;
+        }
+        gpu_renderer_map_set_owner(1, 0, true);
+        gpu_renderer_map_set_instance_identity(transient_identity, 0);
+        if (token != 0) {
+            gpu_renderer_map_set_presentation(token, foreground, anchor_x, anchor_y);
+        }
+        if (!gpu_renderer_draw_surface(foreground, NULL, &foreground_destination)) {
+            return false;
+        }
+    } else if (mode == PRESENTATION_DRAW_REPLAY &&
+               !gpu_renderer_map_replay_presentation(transient_identity,
+                                                     0,
+                                                     token,
+                                                     anchor_x,
+                                                     anchor_y,
+                                                     effective_alpha,
+                                                     effective_start)) {
+        return false;
+    }
+    return gpu_renderer_map_end();
+}
+
+static SDL_Surface *presentation_scene_present(SDL_Surface *floor,
+                                               SDL_Surface *foreground,
+                                               presentation_draw_mode_t mode,
+                                               bool old_light,
+                                               uint64_t token,
+                                               int anchor_x,
+                                               int anchor_y,
+                                               Uint8 live_alpha,
+                                               Uint8 effective_alpha,
+                                               Uint8 effective_start) {
+    if (!presentation_scene_build(floor,
+                                  foreground,
+                                  mode,
+                                  old_light,
+                                  token,
+                                  anchor_x,
+                                  anchor_y,
+                                  live_alpha,
+                                  effective_alpha,
+                                  effective_start) ||
+        !gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) || !gpu_renderer_present()) {
+        return NULL;
+    }
+    return gpu_renderer_readback(NULL);
+}
+
+static bool presentation_samples_match(SDL_Surface *actual,
+                                       SDL_Surface *floor,
+                                       SDL_Surface *opaque,
+                                       int actual_x,
+                                       int actual_y,
+                                       int reference_x,
+                                       int reference_y,
+                                       Uint8 alpha) {
+    const int offsets[2] = {2, 13};
+    for (size_t i = 0; i < SDL_arraysize(offsets); i++) {
+        Uint8 actual_pixel[4], floor_pixel[4], opaque_pixel[4];
+        if (!surface_read_rgba(actual, actual_x + 4, actual_y + offsets[i], actual_pixel) ||
+            !surface_read_rgba(floor, actual_x + 4, actual_y + offsets[i], floor_pixel) ||
+            !surface_read_rgba(opaque,
+                               reference_x + 4,
+                               reference_y + offsets[i],
+                               opaque_pixel) ||
+            !compositor_alpha_matches(actual_pixel, floor_pixel, opaque_pixel, alpha, 3)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool presentation_floor_samples_match(SDL_Surface *actual,
+                                             SDL_Surface *floor,
+                                             int x,
+                                             int y) {
+    const int offsets[2] = {2, 13};
+    for (size_t i = 0; i < SDL_arraysize(offsets); i++) {
+        Uint8 actual_pixel[4], floor_pixel[4];
+        if (!surface_read_rgba(actual, x + 4, y + offsets[i], actual_pixel) ||
+            !surface_read_rgba(floor, x + 4, y + offsets[i], floor_pixel) ||
+            memcmp(actual_pixel, floor_pixel, sizeof(actual_pixel)) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool presentation_replay_matches(SDL_Surface *floor,
+                                        SDL_Surface *foreground,
+                                        SDL_Surface *floor_reference,
+                                        SDL_Surface *opaque_reference,
+                                        uint64_t token,
+                                        int x,
+                                        int y,
+                                        Uint8 alpha) {
+    SDL_Surface *replayed = presentation_scene_present(floor,
+                                                       foreground,
+                                                       PRESENTATION_DRAW_REPLAY,
+                                                       false,
+                                                       token,
+                                                       x,
+                                                       y,
+                                                       0,
+                                                       80,
+                                                       SDL_ALPHA_OPAQUE);
+    bool success = replayed != NULL &&
+                   presentation_samples_match(replayed,
+                                              floor_reference,
+                                              opaque_reference,
+                                              x,
+                                              y,
+                                              6,
+                                              7,
+                                              alpha);
+    SDL_DestroySurface(replayed);
+    return success;
+}
+
+static bool presentation_unpresented_floor_matches(SDL_Surface *floor,
+                                                   SDL_Surface *floor_reference,
+                                                   uint64_t token,
+                                                   int x,
+                                                   int y) {
+    if (!presentation_scene_build(floor,
+                                  NULL,
+                                  PRESENTATION_DRAW_REPLAY,
+                                  false,
+                                  token,
+                                  x,
+                                  y,
+                                  0,
+                                  80,
+                                  SDL_ALPHA_OPAQUE)) {
+        return false;
+    }
+    gpu_map_renderer_probe_t probe;
+    Uint8 floor_pixel[4];
+    return gpu_map_renderer_probe(x + 4, y + 8, 0, &probe) &&
+           surface_read_rgba(floor_reference, x + 4, y + 8, floor_pixel) &&
+           surface_channel_is_near(probe.final_color[0], floor_pixel[0], 1) &&
+           surface_channel_is_near(probe.final_color[1], floor_pixel[1], 1) &&
+           surface_channel_is_near(probe.final_color[2], floor_pixel[2], 1) &&
+           surface_channel_is_near(probe.final_color[3], floor_pixel[3], 1);
+}
+
+/** Receipts advance only with a successfully presented primary-map draw. */
+static bool presentation_lifecycle_checkpoint(void) {
+    const uint64_t token = UINT64_C(0x50455253454e5401);
+    const uint64_t initial_token = token - 1U;
+    const uint64_t translation_token = token - 2U;
+    const uint64_t replacement_token = token + 1U;
+    const Uint8 replay_alpha = (Uint8)((128U * 80U + 127U) / 255U);
+    SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *replacement = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    bool success =
+        floor != NULL && foreground != NULL && replacement != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 176, 160, 128, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(foreground, 208, 112, 64, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(replacement,
+                            NULL,
+                            SDL_MapSurfaceRGBA(replacement, 48, 144, 224, SDL_ALPHA_OPAQUE)) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND) &&
+        SDL_SetSurfaceBlendMode(replacement, SDL_BLENDMODE_BLEND);
+    SDL_Surface *floor_reference =
+        success ? presentation_scene_present(floor,
+                                             foreground,
+                                             PRESENTATION_DRAW_NONE,
+                                             false,
+                                             0,
+                                             0,
+                                             0,
+                                             0,
+                                             0,
+                                             0)
+                : NULL;
+    SDL_Surface *opaque_reference =
+        floor_reference != NULL ? presentation_scene_present(floor,
+                                                             foreground,
+                                                             PRESENTATION_DRAW_LIVE,
+                                                             true,
+                                                             0,
+                                                             6,
+                                                             7,
+                                                             SDL_ALPHA_OPAQUE,
+                                                             0,
+                                                             0)
+                                : NULL;
+    SDL_Surface *translation_presented =
+        opaque_reference != NULL ? presentation_scene_present(floor,
+                                                              foreground,
+                                                              PRESENTATION_DRAW_LIVE,
+                                                              true,
+                                                              translation_token,
+                                                              6,
+                                                              7,
+                                                              SDL_ALPHA_OPAQUE,
+                                                              0,
+                                                              0)
+                                 : NULL;
+    SDL_Surface *translation_replayed =
+        translation_presented != NULL ? presentation_scene_present(floor,
+                                                                   foreground,
+                                                                   PRESENTATION_DRAW_REPLAY,
+                                                                   false,
+                                                                   translation_token,
+                                                                   18,
+                                                                   7,
+                                                                   0,
+                                                                   SDL_ALPHA_OPAQUE,
+                                                                   SDL_ALPHA_OPAQUE)
+                                      : NULL;
+    success = translation_replayed != NULL &&
+              presentation_samples_match(translation_replayed,
+                                         floor_reference,
+                                         opaque_reference,
+                                         18,
+                                         7,
+                                         6,
+                                         7,
+                                         SDL_ALPHA_OPAQUE);
+    SDL_Surface *presented =
+        success ? presentation_scene_present(floor,
+                                                              foreground,
+                                                              PRESENTATION_DRAW_LIVE,
+                                                              true,
+                                                              initial_token,
+                                                              6,
+                                                              7,
+                                                              128,
+                                                              0,
+                                                              0)
+                                 : NULL;
+    success = presented != NULL &&
+              presentation_samples_match(presented,
+                                         floor_reference,
+                                         opaque_reference,
+                                         6,
+                                         7,
+                                         6,
+                                         7,
+                                         128);
+
+    gpu_renderer_statistics_reset();
+    SDL_Surface *refreshed =
+        success ? presentation_scene_present(floor,
+                                             foreground,
+                                             PRESENTATION_DRAW_LIVE,
+                                             true,
+                                             token,
+                                             6,
+                                             7,
+                                             128,
+                                             0,
+                                             0)
+                : NULL;
+    gpu_renderer_statistics_t refresh_statistics;
+    gpu_renderer_statistics_get(&refresh_statistics);
+    success = refreshed != NULL && refresh_statistics.map_skipped_passes == 1 &&
+              presentation_samples_match(refreshed,
+                                         floor_reference,
+                                         opaque_reference,
+                                         6,
+                                         7,
+                                         6,
+                                         7,
+                                         128) &&
+              presentation_unpresented_floor_matches(floor,
+                                                     floor_reference,
+                                                     initial_token,
+                                                     10,
+                                                     9);
+
+    /* A completed map submission that never reaches the window must not replace the receipt. */
+    success = success && presentation_scene_build(floor,
+                                                  replacement,
+                                                  PRESENTATION_DRAW_LIVE,
+                                                  false,
+                                                  token,
+                                                  6,
+                                                  7,
+                                                  SDL_ALPHA_OPAQUE,
+                                                  0,
+                                                  0) &&
+              presentation_replay_matches(floor,
+                                          foreground,
+                                          floor_reference,
+                                          opaque_reference,
+                                          token,
+                                          10,
+                                          9,
+                                          replay_alpha);
+
+    /* A swapchain rejection after drawing the primary map also leaves the bank untouched. */
+    success = success && presentation_scene_build(floor,
+                                                  replacement,
+                                                  PRESENTATION_DRAW_LIVE,
+                                                  false,
+                                                  token,
+                                                  6,
+                                                  7,
+                                                  SDL_ALPHA_OPAQUE,
+                                                  0,
+                                                  0) &&
+              gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f);
+    if (success) {
+        gpu_renderer_conformance_fault_set(GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN);
+        success = !gpu_renderer_present() &&
+                  presentation_replay_matches(floor,
+                                              foreground,
+                                              floor_reference,
+                                              opaque_reference,
+                                              token,
+                                              10,
+                                              9,
+                                              replay_alpha);
+    }
+
+    /* UI-only and auxiliary-only presents cannot promote an undisplayed primary generation. */
+    SDL_FRect ui = {0.0f, 0.0f, 4.0f, 4.0f};
+    success = success && presentation_scene_build(floor,
+                                                  replacement,
+                                                  PRESENTATION_DRAW_LIVE,
+                                                  false,
+                                                  token,
+                                                  6,
+                                                  7,
+                                                  SDL_ALPHA_OPAQUE,
+                                                  0,
+                                                  0) &&
+              gpu_renderer_begin_frame() &&
+              gpu_renderer_draw_rect(&ui, 4, 8, 12, SDL_ALPHA_OPAQUE, true) &&
+              gpu_renderer_present() && presentation_scene_build(floor,
+                                                                 replacement,
+                                                                 PRESENTATION_DRAW_LIVE,
+                                                                 false,
+                                                                 token,
+                                                                 6,
+                                                                 7,
+                                                                 SDL_ALPHA_OPAQUE,
+                                                                 0,
+                                                                 0) &&
+              gpu_renderer_map_begin_auxiliary(8, 8) && gpu_renderer_map_end() &&
+              gpu_renderer_present() && presentation_replay_matches(floor,
+                                                                    foreground,
+                                                                    floor_reference,
+                                                                    opaque_reference,
+                                                                    token,
+                                                                    10,
+                                                                    9,
+                                                                    replay_alpha);
+
+    /* The logical opacity may advance without a draw; replay scales the actual alpha-128 receipt. */
+    success = success && presentation_replay_matches(floor,
+                                                     foreground,
+                                                     floor_reference,
+                                                     opaque_reference,
+                                                     token,
+                                                     10,
+                                                     9,
+                                                     replay_alpha);
+
+    SDL_Surface *no_match =
+        success ? presentation_scene_present(floor,
+                                             foreground,
+                                             PRESENTATION_DRAW_REPLAY,
+                                             false,
+                                             replacement_token,
+                                             10,
+                                             9,
+                                             0,
+                                             80,
+                                             SDL_ALPHA_OPAQUE)
+                : NULL;
+    success = no_match != NULL &&
+              presentation_floor_samples_match(no_match, floor_reference, 10, 9);
+
+    SDL_Surface *reestablished =
+        success ? presentation_scene_present(floor,
+                                             foreground,
+                                             PRESENTATION_DRAW_LIVE,
+                                             true,
+                                             token,
+                                             6,
+                                             7,
+                                             128,
+                                             0,
+                                             0)
+                : NULL;
+    success = reestablished != NULL;
+    /* Destroying the original SDL surface invalidates receipts without touching retained assets. */
+    SDL_DestroySurface(foreground);
+    foreground = NULL;
+    SDL_Surface *invalidated =
+        success ? presentation_scene_present(floor,
+                                             foreground,
+                                             PRESENTATION_DRAW_REPLAY,
+                                             false,
+                                             token,
+                                             10,
+                                             9,
+                                             0,
+                                             80,
+                                             SDL_ALPHA_OPAQUE)
+                : NULL;
+    success = invalidated != NULL &&
+              presentation_floor_samples_match(invalidated, floor_reference, 10, 9);
+
+    /* A new semantic token is invisible until presented, then owns its fresh source and light. */
+    SDL_Surface *replacement_reference =
+        success ? presentation_scene_present(floor,
+                                             replacement,
+                                             PRESENTATION_DRAW_LIVE,
+                                             false,
+                                             0,
+                                             6,
+                                             7,
+                                             SDL_ALPHA_OPAQUE,
+                                             0,
+                                             0)
+                : NULL;
+    SDL_Surface *reentered =
+        replacement_reference != NULL ? presentation_scene_present(floor,
+                                                                    replacement,
+                                                                    PRESENTATION_DRAW_LIVE,
+                                                                    false,
+                                                                    replacement_token,
+                                                                    6,
+                                                                    7,
+                                                                    128,
+                                                                    0,
+                                                                    0)
+                                      : NULL;
+    SDL_Surface *reentered_replay =
+        reentered != NULL ? presentation_scene_present(floor,
+                                                       replacement,
+                                                       PRESENTATION_DRAW_REPLAY,
+                                                       true,
+                                                       replacement_token,
+                                                       10,
+                                                       9,
+                                                       0,
+                                                       80,
+                                                       SDL_ALPHA_OPAQUE)
+                          : NULL;
+    success = reentered_replay != NULL &&
+              presentation_samples_match(reentered_replay,
+                                         floor_reference,
+                                         replacement_reference,
+                                         10,
+                                         9,
+                                         6,
+                                         7,
+                                         replay_alpha);
+
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *reset =
+        success ? presentation_scene_present(floor,
+                                             replacement,
+                                             PRESENTATION_DRAW_REPLAY,
+                                             true,
+                                             replacement_token,
+                                             10,
+                                             9,
+                                             0,
+                                             80,
+                                             SDL_ALPHA_OPAQUE)
+                : NULL;
+    success = reset != NULL && presentation_floor_samples_match(reset, floor_reference, 10, 9);
+    if (!success) {
+        SDL_SetError("last-presented transient lifecycle or frozen-light checkpoint failed");
+    }
+    SDL_DestroySurface(reset);
+    SDL_DestroySurface(reentered_replay);
+    SDL_DestroySurface(reentered);
+    SDL_DestroySurface(replacement_reference);
+    SDL_DestroySurface(invalidated);
+    SDL_DestroySurface(reestablished);
+    SDL_DestroySurface(no_match);
+    SDL_DestroySurface(refreshed);
+    SDL_DestroySurface(presented);
+    SDL_DestroySurface(translation_replayed);
+    SDL_DestroySurface(translation_presented);
+    SDL_DestroySurface(opaque_reference);
+    SDL_DestroySurface(floor_reference);
+    SDL_DestroySurface(replacement);
+    SDL_DestroySurface(foreground);
+    SDL_DestroySurface(floor);
+    return success;
+}
+
 static bool surface_sha256(SDL_Surface *surface, char digest[65]) {
     SDL_Surface *canonical = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
     if (canonical == NULL) {
@@ -2349,6 +2921,7 @@ int main(void) {
     GPU_REQUIRE(projected_changed.projected_light_upload_bytes == sizeof(uint32_t));
     GPU_REQUIRE(projected_alpha_checkpoint());
     GPU_REQUIRE(projected_alpha_recovery_checkpoint(window, qualified));
+    GPU_REQUIRE(presentation_lifecycle_checkpoint());
     GPU_REQUIRE(retained_primary_auxiliary_checkpoint(source, sources[3], false));
     GPU_REQUIRE(gpu_map_renderer_texture(false) != NULL);
     GPU_REQUIRE(gpu_map_renderer_texture(true) != NULL);
