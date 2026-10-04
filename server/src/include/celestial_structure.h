@@ -75,6 +75,10 @@ bool celestial_structure_acquire_writer_lease(char *error, size_t error_size);
 void celestial_structure_release_writer_lease(void);
 /** Whether startup has selected the fail-closed celestial-v1 runtime. */
 bool celestial_structure_v1_runtime_active(void);
+#ifdef ATRINIK_TESTING
+/** Select persistence policy for isolated tests; never activates runtime state. */
+void celestial_structure_set_runtime_active_for_test(bool active);
+#endif
 /** Publish the digest-addressed mutable-map provenance sidecar. */
 bool celestial_structure_write_provenance(const mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_begin_map_transaction(const mapstruct *map,

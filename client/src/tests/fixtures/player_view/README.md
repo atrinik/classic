@@ -82,11 +82,11 @@ zero, +1, and +2.
 `content-provenance.json` is the machine-readable coordinate for this fixture
 family. It binds the static Classic `data/archdef.dat` input, the selected
 `atrinik/content@main` runtime release and manifest, the generated archetype
-artifact, and the worldmaker output boundary. The selected content coordinate
-is `v1.7.0` at
-`08e8bc869d5d727d3862997176a137275f349869`; the 2026-09-01 issue observation
-(`v1.5.0` at `b9580ce4b920644494a9912f6ea4f37b4a4e7aa6`) remains recorded as
-historical evidence.
+artifact, and the worldmaker output boundary. Read its `content.selected`
+record for the current release, commit, and artifact digests; the verified
+content updater derives that record from the selected runtime. The 2026-09-01
+issue observation (`v1.5.0` at `b9580ce4b920644494a9912f6ea4f37b4a4e7aa6`)
+remains recorded as historical evidence.
 
 `archdef.dat` is a static Classic client input. Worldmaker does not generate
 or replace it; its generated `client-maps` and `data/*.zz` outputs are

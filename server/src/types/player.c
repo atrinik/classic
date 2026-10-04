@@ -3311,12 +3311,15 @@ bool player_save_checked(object *op) {
     player *pl = CONTR(op);
     char map_value[MAX_BUF], bed_value[MAX_BUF];
     const char *saved_map = op->map != NULL ? op->map->path : EMERGENCY_MAPPATH;
-    if (op->map != NULL && MAP_UNIQUE(op->map) &&
-        !player_unique_token_from_path(pl, saved_map, map_value)) {
-        LOG(ERROR, "Refusing to persist an unbound celestial unique map for %s.", STRING_SAFE(op->name));
-        goto out;
-    }
-    if (op->map != NULL && MAP_UNIQUE(op->map)) {
+    /* Physical private-map identities remain the save contract until the
+     * celestial runtime is active. Its token encoder deliberately rejects
+     * inactive runtimes, so requiring it here would prevent every legacy
+     * private-map character save. */
+    if (celestial_structure_v1_runtime_active() && op->map != NULL && MAP_UNIQUE(op->map)) {
+        if (!player_unique_token_from_path(pl, saved_map, map_value)) {
+            LOG(ERROR, "Refusing to persist an unbound celestial unique map for %s.", STRING_SAFE(op->name));
+            goto out;
+        }
         saved_map = map_value;
     }
     const char *saved_bed = pl->savebed_map;

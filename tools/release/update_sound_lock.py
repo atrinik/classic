@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -427,6 +428,7 @@ def preflight_current(
 
 def execute(
     root: Path, *, apply: bool, api: GitHubAPI | None = None,
+    cache: Path | None = None, trusted_bundle: Path | None = None,
     downloader: Callable[[str, BinaryIO, int], tuple[str, int]] = download_bounded,
 ) -> dict[str, object]:
     api = api or GitHubAPI()
@@ -477,7 +479,22 @@ def execute(
                 "rejected": rejected,
             }
         selected = max(accepted, key=lambda item: tuple(item["version"]))
-        mutation = update_lock(root, lock, current, selected, apply=apply)
+        mutation = update_lock(root, lock, current, selected, apply=False)
+        if apply and mutation["changed"]:
+            specification = importlib.util.spec_from_file_location(
+                "update_dependency_inputs", root / "tools/release/update_dependency_inputs.py"
+            )
+            assert specification is not None and specification.loader is not None
+            helper = importlib.util.module_from_spec(specification)
+            specification.loader.exec_module(helper)
+            try:
+                helper.apply_documents(
+                    root, {LOCK_PATH: lock},
+                    cache=cache or root / "build/dependency-update-cache",
+                    trusted_bundle=trusted_bundle,
+                )
+            except (RuntimeError, ValueError) as error:
+                raise UpdateError(f"cannot prepare derived dependency inputs: {error}") from error
         return {
             "schema_version": 1,
             "repository": SOUND_REPOSITORY,
@@ -536,8 +553,10 @@ def write_github_output(evidence: dict[str, object], path: Path) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
-    parser.add_argument("--apply", action="store_true", help="atomically update the verified lock")
+    parser.add_argument("--apply", action="store_true", help="update verified lock and derived dependency inputs")
     parser.add_argument("--verify", action="store_true", help="verify only the current published lock coordinate")
+    parser.add_argument("--cache", type=Path, help="verified archive cache")
+    parser.add_argument("--trusted-bundle", type=Path, help="previously attested recovery bundle")
     parser.add_argument("--evidence", type=Path, help="write machine-readable verification evidence")
     parser.add_argument("--pr-body", type=Path, help="write a complete pull-request body")
     parser.add_argument("--github-output", type=Path, help="append bounded workflow outputs")
@@ -554,7 +573,8 @@ def main() -> int:
         evidence = (
             preflight_current(root)
             if arguments.verify
-            else execute(root, apply=arguments.apply)
+            else execute(root, apply=arguments.apply, cache=arguments.cache,
+                         trusted_bundle=arguments.trusted_bundle)
         )
         serialized = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
         if arguments.evidence:

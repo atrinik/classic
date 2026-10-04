@@ -20,6 +20,7 @@
 #include <loader.h>
 #include <map.h>
 #include <object.h>
+#include <player.h>
 #include <swap.h>
 #include <toolkit/path.h>
 
@@ -1193,6 +1194,128 @@ START_TEST(test_private_map_provenance_writes_authored_source) {
 }
 END_TEST
 
+/* Keep the player on the private map: detaching it before saving would miss
+ * the unique-map persistence branch. Cover both legacy and v1 map schemas,
+ * because map schema does not select the process-wide persistence policy. */
+START_TEST(test_inactive_runtime_private_player_save_roundtrip) {
+    ck_assert(!celestial_structure_v1_runtime_active());
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(pl->name, "Private Save");
+    char *private_path = map_get_path(NULL, "/tests/apartment", 1, pl->name);
+    ck_assert_ptr_nonnull(private_path);
+    FREE_AND_COPY_HASH(map->path, private_path);
+    map->map_flags |= MAP_FLAG_UNIQUE;
+    map->celestial_schema = (uint8_t)(_i % 2);
+    if (_i >= 2) {
+        map->map_flags |= MAP_FLAG_OUTDOOR;
+    }
+    snprintf(VS(CONTR(pl)->savebed_map), "%s", private_path);
+    CONTR(pl)->bed_x = 3;
+    CONTR(pl)->bed_y = 4;
+    object *sack = arch_get("sack");
+    ck_assert_ptr_nonnull(sack);
+    FREE_AND_COPY_HASH(sack->name, "private save inventory");
+    sack = object_insert_into(sack, pl, 0);
+    ck_assert_ptr_nonnull(sack);
+    object *coins = arch_get("silvercoin");
+    ck_assert_ptr_nonnull(coins);
+    coins->nrof = 37;
+    object_set_value(coins, "private_save_sentinel", "unchanged", 1);
+    ck_assert_ptr_nonnull(object_insert_into(coins, sack, 0));
+
+    ck_assert(player_save_checked(pl));
+    char *player_path = player_make_path(pl->name, "player.dat");
+    char *metrics_path = player_make_path(pl->name, "metrics.dat");
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    object *placeholder = player_get_dummy("Private Restore", NULL);
+    player *state = CONTR(placeholder);
+    object_remove(placeholder, 0);
+    placeholder->custom_attrset = NULL;
+    object_destroy(placeholder);
+    state->ob = object_get();
+    ck_assert(player_load_stream(state, fp));
+    ck_assert_int_eq(fclose(fp), 0);
+    state->ob->custom_attrset = state;
+    ck_assert_str_eq(state->maplevel, private_path);
+    ck_assert_str_eq(state->savebed_map, private_path);
+    ck_assert_int_eq(state->bed_x, 3);
+    ck_assert_int_eq(state->bed_y, 4);
+    object *restored_sack = NULL;
+    for (object *item = state->ob->inv; item != NULL; item = item->below) {
+        if (strcmp(STRING_SAFE(item->name), "private save inventory") == 0) {
+            restored_sack = item;
+        }
+    }
+    ck_assert_ptr_nonnull(restored_sack);
+    ck_assert_ptr_nonnull(restored_sack->inv);
+    ck_assert_str_eq(restored_sack->inv->arch->name, "silvercoin");
+    ck_assert_uint_eq(restored_sack->inv->nrof, 37);
+    ck_assert_str_eq(object_get_value(restored_sack->inv, "private_save_sentinel"), "unchanged");
+    ck_assert_int_eq(unlink(player_path), 0);
+    ck_assert_int_eq(unlink(metrics_path), 0);
+    free(player_path);
+    free(metrics_path);
+    free(private_path);
+}
+END_TEST
+
+START_TEST(test_active_runtime_private_player_identity_remains_owner_bound) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(pl->name, "Alice");
+    free(CONTR(pl)->cs->account);
+    CONTR(pl)->cs->account = xstrdup("alice");
+    char *private_path = map_get_path(NULL, "/tests/apartment", 1, pl->name);
+    ck_assert_ptr_nonnull(private_path);
+    FREE_AND_COPY_HASH(map->path, private_path);
+    map->map_flags |= MAP_FLAG_UNIQUE;
+    snprintf(VS(CONTR(pl)->savebed_map), "%s", private_path);
+    celestial_structure_set_runtime_active_for_test(true);
+    ck_assert(player_save_checked(pl));
+    char *player_path = player_make_path(pl->name, "player.dat");
+    char *metrics_path = player_make_path(pl->name, "metrics.dat");
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    char saved[HUGE_BUF * 4];
+    size_t length = fread(saved, 1, sizeof(saved) - 1, fp);
+    ck_assert(feof(fp));
+    ck_assert(!ferror(fp));
+    saved[length] = '\0';
+    ck_assert_int_eq(fclose(fp), 0);
+    ck_assert_ptr_nonnull(strstr(saved, "\nmap unique-v1:alice:Alice:/tests/apartment\n"));
+    ck_assert_ptr_nonnull(strstr(saved, "\nbed_map unique-v1:alice:Alice:/tests/apartment\n"));
+
+    char *foreign_path = map_get_path(NULL, "/tests/apartment", 1, "Bob");
+    ck_assert_ptr_nonnull(foreign_path);
+    if (_i == 0) {
+        FREE_AND_COPY_HASH(map->path, foreign_path);
+    } else {
+        snprintf(VS(CONTR(pl)->savebed_map), "%s", foreign_path);
+    }
+    ck_assert(!player_save_checked(pl));
+    fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    char unchanged[sizeof(saved)];
+    size_t unchanged_length = fread(unchanged, 1, sizeof(unchanged), fp);
+    ck_assert(feof(fp));
+    ck_assert(!ferror(fp));
+    ck_assert_int_eq(fclose(fp), 0);
+    ck_assert_uint_eq(unchanged_length, length);
+    ck_assert_int_eq(memcmp(saved, unchanged, length), 0);
+    celestial_structure_set_runtime_active_for_test(false);
+    ck_assert_int_eq(unlink(player_path), 0);
+    ck_assert_int_eq(unlink(metrics_path), 0);
+    free(player_path);
+    free(metrics_path);
+    free(private_path);
+    free(foreign_path);
+}
+END_TEST
+
 START_TEST(test_private_map_loads_from_source_without_provenance) {
     char temporary_root[] = "/tmp/atrinik-celestial-map-load-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
@@ -1765,17 +1888,24 @@ START_TEST(test_character_transaction_rejects_path_escape) {
 END_TEST
 #endif
 
+static void celestial_test_teardown(void) {
+    celestial_structure_set_runtime_active_for_test(false);
+    check_test_teardown();
+}
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_structure");
     TCase *tc_core = tcase_create("Core");
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
-    tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
+    tcase_add_checked_fixture(tc_core, check_test_setup, celestial_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_header_round_trip_is_canonical_and_rejects_legacy_fields);
     tcase_add_test(tc_core, test_generated_factory_is_validated_and_bounded);
 #ifndef WIN32
     tcase_add_test(tc_core, test_private_map_provenance_writes_authored_source);
     tcase_add_test(tc_core, test_private_map_loads_from_source_without_provenance);
+    tcase_add_loop_test(tc_core, test_inactive_runtime_private_player_save_roundtrip, 0, 4);
+    tcase_add_loop_test(tc_core, test_active_runtime_private_player_identity_remains_owner_bound, 0, 2);
     tcase_add_test(tc_core, test_filename_tiling_restores_legacy_links);
     tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
     tcase_add_test(tc_core, test_character_transaction_recovery_quarantines_prepared_group);
