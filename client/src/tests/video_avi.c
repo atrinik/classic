@@ -181,7 +181,7 @@ static void test_index_rejections(void) {
     TEST_CHECK(fclose(stream) == 0);
 }
 
-static void test_input_limits_and_write_failure(void) {
+static void test_input_limits_and_write_failure(const char *readonly_path) {
     static const unsigned char byte = 0U;
     FILE *stream = tmpfile();
     video_avi_t *avi;
@@ -201,9 +201,10 @@ static void test_input_limits_and_write_failure(void) {
     video_avi_free(avi);
     TEST_CHECK(fclose(stream) == 0);
 
-    readonly = fopen(__FILE__, "rb");
+    readonly = fopen(readonly_path, "rb");
     TEST_CHECK(readonly != NULL);
     TEST_CHECK(video_avi_open(readonly, 1U, 1U, 30U) == NULL);
+    TEST_CHECK(ferror(readonly));
     TEST_CHECK(fclose(readonly) == 0);
 }
 
@@ -503,11 +504,12 @@ static void test_virtual_frame_count_boundary(void) {
 }
 #endif
 
-int main(void) {
+int main(int argc, char **argv) {
+    TEST_CHECK(argc == 2);
     test_sparse_timeline_and_structure();
     test_empty_file();
     test_index_rejections();
-    test_input_limits_and_write_failure();
+    test_input_limits_and_write_failure(argv[1]);
     test_frame_cap_finalizes_complete_prefix();
     test_nonzero_start_and_jpeg_copy();
 #ifdef __GLIBC__

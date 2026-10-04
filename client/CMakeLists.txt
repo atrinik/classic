@@ -825,7 +825,10 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-video-avi-tests)
     target_include_directories(client-video-avi-tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
-    add_test(NAME client-video-avi COMMAND client-video-avi-tests)
+    add_test(NAME client-video-avi
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_video_avi.py"
+            "$<TARGET_FILE:client-video-avi-tests>")
 
     if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(client-video-recording-tests
