@@ -76,6 +76,8 @@ int process_delay;
 
 static long shutdown_time;
 static uint8_t shutdown_active = 0;
+static bool shutdown_warning_sent;
+static long shutdown_warning_tick;
 static volatile sig_atomic_t shutdown_requested;
 
 static void dequeue_path_requests(void);
@@ -562,11 +564,13 @@ void shutdown_timer_start(long secs) {
     (void)admin_shutdown_cancel();
     shutdown_time = pticks + secs * MAX_TICKS;
     shutdown_active = 1;
+    shutdown_warning_sent = false;
 }
 
 void shutdown_timer_stop(void) {
     (void)admin_shutdown_cancel();
     shutdown_active = 0;
+    shutdown_warning_sent = false;
 }
 
 static bool admin_shutdown_schedule(unsigned seconds, const char *reason) {
@@ -591,8 +595,15 @@ static int shutdown_timer_check(void) {
         return 1;
     }
 
+    /* Transport readiness can poll this many times before the game tick advances. */
+    if (shutdown_warning_sent && shutdown_warning_tick == pticks) {
+        return 0;
+    }
+
     if (((shutdown_time - pticks) % (long)(60 * MAX_TICKS)) == 0 ||
         pticks == shutdown_time - (long)(5 * MAX_TICKS)) {
+        shutdown_warning_tick = pticks;
+        shutdown_warning_sent = true;
         draw_info_type_format(CHAT_TYPE_CHAT,
                               NULL,
                               COLOR_GREEN,
@@ -605,6 +616,12 @@ static int shutdown_timer_check(void) {
 
     return 0;
 }
+
+#ifdef ATRINIK_TESTING
+int shutdown_timer_check_for_test(void) {
+    return shutdown_timer_check();
+}
+#endif
 
 /**
  * Main processing function, called from main().
