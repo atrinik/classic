@@ -30,6 +30,8 @@ int main(void) {
     for (size_t i = 0; i < 32; i++) identity[i] = (unsigned char)i;
     REQUIRE(access_code_normalize(" \t000g40r40m30e209\r\n", 20, code));
     REQUIRE(strcmp(code, "000G40R40M30E209") == 0);
+    REQUIRE(access_code_route(code, route));
+    REQUIRE(matches(route, "b0bb0cb469e574fc840ada88796841765251c2647adfe54a01672f125555140c"));
     REQUIRE(access_code_derive(code, identity, route, index, verifier));
     /* Independently computed hashlib vectors; domains include exactly one NUL. */
     REQUIRE(matches(route, "b0bb0cb469e574fc840ada88796841765251c2647adfe54a01672f125555140c"));

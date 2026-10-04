@@ -94,12 +94,22 @@ static bool digest(const char *domain, size_t domain_size,
     return ok;
 }
 
+bool access_code_route(const char code[ACCESS_CODE_LENGTH], unsigned char route[ACCESS_HASH_SIZE]) {
+    static const char domain[] = "atrinik-access-route-v1";
+    access_code_clear(route, ACCESS_HASH_SIZE);
+    bool ok = route != NULL && access_code_valid(code, ACCESS_CODE_LENGTH) &&
+              digest(domain, sizeof(domain), code, ACCESS_CODE_LENGTH, NULL, 0, route);
+    if (!ok) {
+        access_code_clear(route, ACCESS_HASH_SIZE);
+    }
+    return ok;
+}
+
 bool access_code_derive(const char code[ACCESS_CODE_LENGTH],
                         const unsigned char server_identity[ACCESS_HASH_SIZE],
                         unsigned char route[ACCESS_HASH_SIZE],
                         unsigned char index[ACCESS_HASH_SIZE],
                         unsigned char verifier[ACCESS_HASH_SIZE]) {
-    static const char route_domain[] = "atrinik-access-route-v1";
     static const char index_domain[] = "atrinik-access-index-v1";
     static const char join_domain[] = "atrinik-access-join-v1";
     access_code_clear(route, ACCESS_HASH_SIZE);
@@ -107,7 +117,7 @@ bool access_code_derive(const char code[ACCESS_CODE_LENGTH],
     access_code_clear(verifier, ACCESS_HASH_SIZE);
     bool ok = server_identity != NULL && route != NULL && index != NULL && verifier != NULL &&
               access_code_valid(code, ACCESS_CODE_LENGTH) &&
-              digest(route_domain, sizeof(route_domain), code, ACCESS_CODE_LENGTH, NULL, 0, route) &&
+              access_code_route(code, route) &&
               digest(index_domain, sizeof(index_domain), route, ACCESS_HASH_SIZE, NULL, 0, index) &&
               digest(join_domain, sizeof(join_domain), server_identity, ACCESS_HASH_SIZE,
                      code, ACCESS_CODE_LENGTH, verifier);

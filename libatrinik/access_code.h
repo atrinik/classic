@@ -17,6 +17,8 @@
 bool access_code_valid(const char *code, size_t len);
 bool access_code_normalize(const char *input, size_t len, char out[ACCESS_CODE_BUFFER_SIZE]);
 bool access_code_generate(char out[ACCESS_CODE_BUFFER_SIZE]);
+/* Derive discovery capability before the server identity is known. */
+bool access_code_route(const char code[ACCESS_CODE_LENGTH], unsigned char route[ACCESS_HASH_SIZE]);
 bool access_code_derive(const char code[ACCESS_CODE_LENGTH],
                         const unsigned char server_identity[ACCESS_HASH_SIZE],
                         unsigned char route[ACCESS_HASH_SIZE],
