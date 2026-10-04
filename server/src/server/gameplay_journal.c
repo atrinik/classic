@@ -71,6 +71,8 @@ static journal_state_t journal = {.lock_fd = -1};
 
 #ifdef ATRINIK_TESTING
 static bool journal_test_fail_writes;
+static bool journal_test_fail_shutdown_sync;
+static bool journal_test_fail_shutdown_close;
 static size_t journal_test_writes_before_failure = SIZE_MAX;
 static size_t journal_test_file_limit = JOURNAL_FILE_LIMIT;
 static size_t journal_test_hard_limit = JOURNAL_FILE_HARD_LIMIT;
@@ -81,6 +83,12 @@ typedef struct journal_test_count {
 } journal_test_count_t;
 
 static journal_test_count_t journal_test_counts[JOURNAL_PENDING_LIMIT];
+
+
+void gameplay_journal_fail_shutdown_for_test(bool sync, bool close_file) {
+    journal_test_fail_shutdown_sync = sync;
+    journal_test_fail_shutdown_close = close_file;
+}
 
 void gameplay_journal_fail_writes_for_test(bool fail) {
     journal_test_fail_writes = fail;
@@ -720,7 +728,7 @@ static bool journal_digest(const void *data, size_t length, char output[65]) {
 }
 
 static bool journal_sync(void) {
-    if (fflush(journal.fp) != 0) {
+    if (ferror(journal.fp) || fflush(journal.fp) != 0) {
         return false;
     }
 #ifdef WIN32
@@ -775,7 +783,9 @@ static bool journal_rotate(size_t next_size) {
                next_size <= journal_hard_limit() - journal.file_size;
     }
     if (journal.fp != NULL) {
-        if (!journal_sync() || fclose(journal.fp) != 0) {
+        bool synced = journal_sync();
+        int closed = fclose(journal.fp);
+        if (!synced || closed != 0) {
             journal.fp = NULL;
             return false;
         }
@@ -931,10 +941,22 @@ bool gameplay_journal_init(const char *datapath,
     return true;
 }
 
-void gameplay_journal_deinit(void) {
+bool gameplay_journal_deinit_checked(void) {
+    bool saved = !journal.failed && journal.pending_count == 0;
+    if (journal.required && journal.fp == NULL) {
+        saved = false;
+    }
     if (journal.fp != NULL) {
-        if (!journal_sync() || fclose(journal.fp) != 0) {
-            LOG(ERROR, "Gameplay journal could not complete its shutdown flush.");
+        bool synced = journal_sync();
+        int closed = fclose(journal.fp);
+#ifdef ATRINIK_TESTING
+        synced = synced && !journal_test_fail_shutdown_sync;
+        if (journal_test_fail_shutdown_close) {
+            closed = EOF;
+        }
+#endif
+        if (!synced || closed != 0) {
+            saved = false;
         }
     }
     if (journal.lock_fd >= 0) {
@@ -948,10 +970,20 @@ void gameplay_journal_deinit(void) {
         struct flock lock = {.l_type = F_UNLCK, .l_whence = SEEK_SET, .l_start = 0, .l_len = 1};
         (void)fcntl(journal.lock_fd, F_SETLK, &lock);
 #endif
-        (void)close(journal.lock_fd);
+        if (close(journal.lock_fd) != 0) {
+            saved = false;
+        }
+    }
+    if (!saved) {
+        LOG(ERROR, "Gameplay journal could not complete a clean shutdown.");
     }
     memset(&journal, 0, sizeof(journal));
     journal.lock_fd = -1;
+    return saved;
+}
+
+void gameplay_journal_deinit(void) {
+    (void)gameplay_journal_deinit_checked();
 }
 
 bool gameplay_journal_available(void) {

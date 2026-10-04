@@ -768,6 +768,27 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh server /workspace
+      - name: Cover local admin socket with root and unauthorized peers
+        run: |
+          test "$(id -u)" -ne 0
+          for fixture_uid in 0 "$(id -u)"; do
+            fixture_name=root
+            if [[ ${fixture_uid} -ne 0 ]]; then fixture_name=nonroot; fi
+            docker run --rm \
+              --user "${fixture_uid}:${fixture_uid}" \
+              --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges \
+              --cpus 1 --memory 512m --memory-swap 512m \
+              --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777,size=128m \
+              --tmpfs "/run/atrinik-admin-tests:rw,nosuid,nodev,mode=0700,uid=${fixture_uid},gid=${fixture_uid},size=1m" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/server/admin_shutdown.c,target=/workspace/server/src/server/admin_shutdown.c,readonly" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/include/admin_shutdown.h,target=/workspace/server/src/include/admin_shutdown.h,readonly" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/tests/admin_shutdown_socket.py,target=/workspace/server/src/tests/admin_shutdown_socket.py,readonly" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/server/tools/admin_shutdown_coverage.sh,target=/workspace/server/tools/admin_shutdown_coverage.sh,readonly" \
+              "${CLASSIC_LINUX_IMAGE}" \
+              bash /workspace/server/tools/admin_shutdown_coverage.sh \
+              > "server/coverage-admin-${fixture_name}.xml"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: linux-server-ccache-${{ github.run_attempt }}
@@ -780,7 +801,7 @@ jobs:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
-          files: server/coverage.xml
+          files: server/coverage.xml,server/coverage-admin-root.xml,server/coverage-admin-nonroot.xml
           flags: server
           use_oidc: true
 

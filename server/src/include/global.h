@@ -377,6 +377,7 @@ typedef struct settings_struct {
 
     /** Protected file containing the current rendezvous invite capability. */
     char rendezvous_invite_file[HUGE_BUF];
+    char admin_shutdown_socket[108];
 
     /**
      * Whether this server should be listed publicly.

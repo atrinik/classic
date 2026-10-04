@@ -516,6 +516,8 @@ extern mempool_struct *pool_player;
 void player_init(void);
 void player_deinit(void);
 void player_disconnect_all(void);
+/** Disconnect each player once, reporting every failed or deferred save. */
+bool player_disconnect_all_checked(void);
 player *find_player(const char *plname);
 player *find_player_sh(shstr *plname);
 void display_motd(object *op);
@@ -554,7 +556,7 @@ int player_exists(const char *name);
 void player_mark_combat(player *pl);
 /** Save a player, preserving the legacy fire-and-forget API. */
 void player_save(object *op);
-/** Save a player and report whether the player record was committed. */
+/** Save a player and report whether the player record and metrics were committed. */
 bool player_save_checked(object *op);
 bool player_load_stream(player *pl, FILE *fp);
 object *player_get_dummy(const char *name, const char *host);
@@ -574,6 +576,8 @@ void player_set_killer(player *pl, const char *killer);
 void player_clear_killer(player *pl);
 void player_login(socket_struct *ns, const char *name, struct archetype *at);
 void player_logout(player *pl);
+/** Logout with the usual cleanup, returning false for failed or deferred saves. */
+bool player_logout_checked(player *pl);
 void object_type_init_player(void);
 
 #endif

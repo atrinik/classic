@@ -1529,7 +1529,7 @@ static bool map_atomic_open(map_atomic_file_t *file, const char *target) {
 }
 
 static bool map_atomic_publish(map_atomic_file_t *file) {
-    bool ok = fflush(file->fp) == 0;
+    bool ok = !ferror(file->fp) && fflush(file->fp) == 0;
 #ifdef WIN32
     if (ok) {
         ok = _commit(_fileno(file->fp)) == 0;
@@ -1759,6 +1759,8 @@ int new_save_map(mapstruct *m, int flag) {
                 "Celestial map transaction for %s committed but could not be retired: %s",
                 m->path != NULL ? m->path : "<runtime>",
                 transaction_error);
+            m->in_memory = previous_in_memory;
+            return -1;
         }
     }
 

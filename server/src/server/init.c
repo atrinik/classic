@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <admin_shutdown.h>
 #include <weather.h>
 #include <swap.h>
 #include <server_main.h>
@@ -187,6 +188,7 @@ static void console_command_active_objects(const char *params) {
  * Free all data before exiting.
  */
 void cleanup(void) {
+    admin_shutdown_deinit();
     cache_remove_all();
     remove_plugins();
     gameplay_journal_deinit();
@@ -366,6 +368,22 @@ static bool clioptions_option_celestial_inventory_limit(const char *arg, char **
 /**
  * Description of the --no_console command.
  */
+static const char *clioptions_option_admin_shutdown_socket_desc =
+    "Opt-in Linux root-only local shutdown socket (absolute path in a private directory).";
+static bool clioptions_option_admin_shutdown_socket(const char *arg, char **errmsg) {
+    if (arg[0] != '/' || strlen(arg) >= sizeof(settings.admin_shutdown_socket)) {
+        string_fmt(*errmsg, "%s", "Expected an absolute local socket path shorter than 108 bytes");
+        return false;
+    }
+#ifndef __linux__
+    string_fmt(*errmsg, "%s", "Local administrative shutdown is supported only on Linux");
+    return false;
+#else
+    snprintf(VS(settings.admin_shutdown_socket), "%s", arg);
+    return true;
+#endif
+}
+
 static const char *clioptions_option_no_console_desc =
     "Disables the interactive console. Useful when debugging or "
     "running the server non-interactively.";
@@ -1061,6 +1079,7 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE(cli, version, "Displays the server version");
 
     /* Argument options */
+    CLIOPTIONS_CREATE_ARGUMENT(cli, admin_shutdown_socket, "Local administrative shutdown socket");
     CLIOPTIONS_CREATE_ARGUMENT(cli, port_quic, "Sets the QUIC UDP port");
     CLIOPTIONS_CREATE_ARGUMENT(cli, libpath, "Read-only data files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, datapath, "Read/write data files location");
@@ -1305,7 +1324,9 @@ static bool write_todclock_atomic(void) {
     char filename[HUGE_BUF];
     char contents[64];
 
-    snprintf(filename, sizeof(filename), "%s/clockdata", settings.datapath);
+    if (snprintf(VS(filename), "%s/clockdata", settings.datapath) >= (int)sizeof(filename)) {
+        return false;
+    }
 
     int length = snprintf(contents, sizeof(contents), "%lu", todtick);
     if (length < 0 || (size_t)length >= sizeof(contents) ||
@@ -1316,10 +1337,16 @@ static bool write_todclock_atomic(void) {
     return true;
 }
 
-void write_todclock(void) {
+bool write_todclock_checked(void) {
     if (!write_todclock_atomic()) {
         LOG(BUG, "Cannot atomically write persisted world clock.");
+        return false;
     }
+    return true;
+}
+
+void write_todclock(void) {
+    (void)write_todclock_checked();
 }
 
 bool todclock_set(unsigned long value) {
