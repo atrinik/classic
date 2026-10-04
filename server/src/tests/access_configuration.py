@@ -13,6 +13,8 @@ with tempfile.TemporaryDirectory(prefix="atrinik-access-config-") as temporary:
     root = Path(temporary)
     (root / "server.cfg").write_text("")
     cases = [
+        (["--control_allowed_ips=none"], ""),
+        ([], "control_allowed_ips = none\n"),
         (["--access_required=</absent-access-config", "--access_required=false"], ""),
         ([], "access_required = </absent-access-config\naccess_required = false\n"),
         ([], "access_required tru\naccess_required = false\n"),

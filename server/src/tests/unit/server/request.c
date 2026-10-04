@@ -22,6 +22,20 @@
 #include <player.h>
 #include <exit.h>
 
+START_TEST(test_access_attempt_budget_has_no_connection_identity) {
+    server_monotonic_t start = {.microseconds = 1000000};
+    ck_assert(socket_access_attempt_reserve_for_test(start, true));
+    for (unsigned int i = 1; i < 256; i++)
+        ck_assert(socket_access_attempt_reserve_for_test(start, false));
+    ck_assert(!socket_access_attempt_reserve_for_test(start, false));
+    ck_assert(
+        !socket_access_attempt_reserve_for_test((server_monotonic_t){.microseconds = 60999999},
+                                                false));
+    ck_assert(socket_access_attempt_reserve_for_test((server_monotonic_t){.microseconds = 61000000},
+                                                     false));
+}
+END_TEST
+
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
     size_t count = 0;
 
@@ -530,7 +544,7 @@ typedef struct command_policy_expectation {
     [SERVER_CMD_##_symbol] = {SERVER_CMD_NAME_##_symbol, (_without), (_with)}
 
 static const command_policy_expectation_t command_policy_expectations[] = {
-    COMMAND_POLICY(CONTROL, COMMAND_PHASE_LOGIN_MASK, COMMAND_PHASE_LOGIN_MASK),
+    COMMAND_POLICY(CONTROL, 0, 0),
     COMMAND_POLICY(ASK_FACE,
                    COMMAND_PHASE_SETUP_UNAUTHENTICATED | COMMAND_PHASE_ADMITTED_LOGIN |
                        COMMAND_PHASE_PLAYING_MASK,
@@ -1989,6 +2003,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_access_busy_retains_received_and_queued_frames);
+    tcase_add_test(tc_core, test_access_attempt_budget_has_no_connection_identity);
     tcase_add_test(tc_core, test_keepalive_echoes_identifier);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);

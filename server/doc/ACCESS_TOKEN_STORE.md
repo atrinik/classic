@@ -1,5 +1,7 @@
 # Access token store
 
+Admission and token history never collect network addresses or address-derived identifiers. The game process applies a shared limit of 256 authentication attempts per minute and allows one authentication attempt per connection; those bounds require no player-IP table. Retained admission history contains timestamps, not source addresses. Transport libraries may handle addresses transiently to route live traffic, but accepted application sockets do not retain them.
+
 The server owns one `access-tokens.snapshot` in its configured private access
 state directory. The directory must exist, belong to the service effective UID,
 and have mode 0700. The snapshot is a regular single-link service-owned 0600 file.

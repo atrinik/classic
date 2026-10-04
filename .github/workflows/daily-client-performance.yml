@@ -102,10 +102,6 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache"
-      - name: Bootstrap the immutable private Classic TLS cohort
-        run: >-
-          tools/ci/prepare_classic_tls.sh "${GITHUB_WORKSPACE}"
-          "${CLASSIC_LINUX_IMAGE}" "${RUNNER_TEMP}/classic-tls"
       - id: benchmark
         name: Run the pinned complete client benchmark matrix
         env:
@@ -115,8 +111,6 @@ jobs:
           ATRINIK_MOVEMENT_MATRIX: full
         run: |
           docker run --rm \
-            --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
-            --volume "${RUNNER_TEMP}/classic-tls:/opt/atrinik/tls:ro" \
             --user "$(id -u):$(id -g)" \
             --network none \
             --env ATRINIK_BENCHMARK_REVISION \

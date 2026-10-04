@@ -7,10 +7,6 @@
 !protocol/**
 !libatrinik/
 !libatrinik/**
-!tools/
-!tools/ci/
-!tools/ci/bootstrap_classic_tls.py
-!tools/ci/classic_tls.lock.json
 !server/
 !server/**
 

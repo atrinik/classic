@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -389,6 +389,7 @@ typedef enum {
 } socket_command_result_t;
 #ifdef ATRINIK_TESTING
 void socket_server_process_received_for_test(socket_struct *cs);
+bool socket_access_attempt_reserve_for_test(server_monotonic_t now, bool reset);
 #endif
 extern socket_command_result_t
 socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);
@@ -444,6 +445,5 @@ socket_command_request_update(socket_struct *ns, player *pl, uint8_t *data, size
 void socket_command_access_auth(socket_struct *, player *, uint8_t *, size_t, size_t);
 void socket_command_access_admin(socket_struct *, player *, uint8_t *, size_t, size_t);
 void socket_server_access_poll(void);
-void socket_access_attempt_failed(socket_struct *);
 
 #endif

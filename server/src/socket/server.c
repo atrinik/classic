@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -203,9 +203,9 @@ bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t type) 
 
     switch (socket_commands[type].policy) {
         case SOCKET_COMMAND_POLICY_CONTROL:
-            /* The central dispatcher separately applies the control
-             * protocol's source-IP authentication before invoking it. */
-            return cs->state == ST_LOGIN;
+            /* Privileged local control is available only through the root-authenticated
+             * Unix admin socket. The legacy network command remains reserved. */
+            return false;
 
         case SOCKET_COMMAND_POLICY_LIVENESS:
             return cs->state == ST_LOGIN || cs->state == ST_PLAYING;
@@ -613,45 +613,6 @@ static bool socket_server_quic_punch_receive(socket_t *server_socket) {
     return true;
 }
 
-/** Check whether the control protocol accepts the connection's source IP. */
-static bool socket_server_control_authorized(socket_struct *cs) {
-    if (strcasecmp(settings.control_allowed_ips, "none") == 0) {
-        LOG(PACKET, "Control command received but no IPs are allowed.");
-        return false;
-    }
-
-    char word[MAX_BUF];
-    size_t pos = 0;
-    while (string_get_word(settings.control_allowed_ips, &pos, ',', VS(word), 0)) {
-        char *split[2];
-        if (string_split(word, split, arraysize(split), '/') < 1) {
-            continue;
-        }
-
-        struct sockaddr_storage addr;
-        if (!socket_host2addr(split[0], &addr)) {
-            continue;
-        }
-
-        unsigned short plen = socket_addr_plen(&addr);
-        if (split[1] != NULL) {
-            uint64_t value;
-            if (!string_parse_uint64(split[1], 10, 0, plen, &value)) {
-                LOG(ERROR, "Ignoring invalid control CIDR prefix: %s", word);
-                continue;
-            }
-            plen = (unsigned short)value;
-        }
-
-        if (socket_cmp_addr(cs->sc, &addr, plen) == 0) {
-            return true;
-        }
-    }
-
-    LOG(PACKET, "Received control command from unauthorized IP: %s", socket_get_id(cs->sc));
-    return false;
-}
-
 /**
  * Attempt to handle a command from the client.
  *
@@ -705,11 +666,6 @@ socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_
             socket_commands[type].name,
             cs->state);
         cs->state = ST_ZOMBIE;
-        return SOCKET_COMMAND_HANDLED;
-    }
-
-    if (socket_commands[type].policy == SOCKET_COMMAND_POLICY_CONTROL &&
-        !socket_server_control_authorized(cs)) {
         return SOCKET_COMMAND_HANDLED;
     }
 

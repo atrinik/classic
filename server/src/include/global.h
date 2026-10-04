@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -490,11 +490,6 @@ typedef struct settings_struct {
      * Limits on the allowed characters.
      */
     size_t limits[ALLOWED_CHARS_NUM][2];
-
-    /**
-     * IPs allowed to remotely control the client.
-     */
-    char control_allowed_ips[HUGE_BUF];
 
     /**
      * Which player the remote command goes through, if applicable.

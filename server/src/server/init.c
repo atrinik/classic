@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -995,12 +995,14 @@ static bool clioptions_option_allowed_chars(const char *arg, char **errmsg) {
  * Description of the --control_allowed_ips command.
  */
 static const char *clioptions_option_control_allowed_ips_desc =
-    "Comma-separated list of IPs that are allowed to send special control-related "
-    "commands to the server.";
+    "Removed: use the root-authenticated local admin socket.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_control_allowed_ips(const char *arg, char **errmsg) {
-    snprintf(VS(settings.control_allowed_ips), "%s", arg);
-    return true;
+    (void)arg;
+    invalid_access_configuration = true;
+    *errmsg = xstrdup(
+        "Remote CONTROL is unavailable; remove control_allowed_ips and use the local admin socket");
+    return false;
 }
 
 /**
@@ -1221,7 +1223,7 @@ static void init_library(int argc, char *argv[]) {
                                default_permission_groups,
                                "Permission groups applied to all players");
     clioptions_enable_changeable(cli);
-    CLIOPTIONS_CREATE_ARGUMENT(cli, control_allowed_ips, "IP allowed to control the server");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, control_allowed_ips, "Removed remote control option");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, control_player, "Default player for control commands");
     clioptions_enable_changeable(cli);

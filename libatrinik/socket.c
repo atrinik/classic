@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -962,27 +962,8 @@ socket_t *socket_accept(socket_t *sc) {
         tmp->connection_mode = SOCKET_CONNECTION_MODE_QUIC;
         tmp->quic = connection;
         tmp->role = sc->role;
-        BIO *network = SSL_get_rbio(connection);
-        BIO_ADDR *peer = BIO_ADDR_new();
-        if (network != NULL && peer != NULL && BIO_dgram_get_peer(network, peer) > 0) {
-            int family = BIO_ADDR_family(peer);
-            if (family == AF_INET) {
-                struct sockaddr_in *address = (struct sockaddr_in *)&tmp->addr;
-                size_t address_size = sizeof(address->sin_addr);
-                address->sin_family = AF_INET;
-                address->sin_port = BIO_ADDR_rawport(peer);
-                BIO_ADDR_rawaddress(peer, &address->sin_addr, &address_size);
-#ifdef HAVE_IPV6
-            } else if (family == AF_INET6) {
-                struct sockaddr_in6 *address = (struct sockaddr_in6 *)&tmp->addr;
-                size_t address_size = sizeof(address->sin6_addr);
-                address->sin6_family = AF_INET6;
-                address->sin6_port = BIO_ADDR_rawport(peer);
-                BIO_ADDR_rawaddress(peer, &address->sin6_addr, &address_size);
-#endif
-            }
-        }
-        BIO_ADDR_free(peer);
+        /* Peer addresses remain inside the transport; application diagnostics use
+         * a random connection identifier and never collect network identities. */
         if (!socket_connection_id_generate(tmp)) {
             LOG(ERROR, "Failed to generate pending QUIC diagnostic ID");
             socket_destroy(tmp);
@@ -996,14 +977,12 @@ socket_t *socket_accept(socket_t *sc) {
 
     socket_t *tmp = xcalloc(1, sizeof(*tmp));
     tmp->owns_handle = true;
-    socklen_t addrlen = sizeof(tmp->addr);
-    tmp->handle = accept(sc->handle, (struct sockaddr *)&tmp->addr, &addrlen);
+    tmp->handle = accept(sc->handle, NULL, NULL);
     if (tmp->handle == -1) {
         free(tmp);
         return NULL;
     }
 
-    tmp->port = ((struct sockaddr_in *)&tmp->addr)->sin_port;
     tmp->connection_mode = SOCKET_CONNECTION_MODE_INTERNAL;
     /* And the role. */
     tmp->role = sc->role;

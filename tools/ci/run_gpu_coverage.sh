@@ -34,15 +34,7 @@ if [[ ! ${gpu_image} =~ ^ghcr\.io/atrinik/linux-build:[0-9]+\.[0-9]+\.[0-9]+@sha
 fi
 command -v docker >/dev/null
 
-# Build under the unchanged pinned native image, then mount the cohort into
-# both native compilation and the separate GPU runtime environment.
-tls_directory=${RUNNER_TEMP:-${source_root}/build}/classic-gpu-tls
-"${source_root}/tools/ci/prepare_classic_tls.sh" \
-  "${source_root}" "${build_image}" "${tls_directory}"
-
 docker run --rm \
-  --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
-  --volume "${tls_directory}:/opt/atrinik/tls:ro" \
   --user "$(id -u):$(id -g)" \
   --network none \
   --env ATRINIK_BENCHMARK_REVISION="${expected_revision}" \
@@ -52,7 +44,6 @@ docker run --rm \
   "${build_image}" \
   sh -c '
       set -eu
-      python3 tools/ci/bootstrap_classic_tls.py --verify-only
       python3 server/tools/dependencies.py bundle-verify \
         --client-lock client/dependencies.lock.json \
         --server-lock server/dependencies.lock.json \
@@ -92,8 +83,6 @@ fi
 # Keep the shell as PID 1: xvfb-run waits indefinitely for its readiness
 # signal when it directly owns the container's PID 1 slot.
 docker run --rm \
-  --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
-  --volume "${tls_directory}:/opt/atrinik/tls:ro" \
   --user "$(id -u):$(id -g)" \
   --network none \
   --env ATRINIK_GPU_CONFORMANCE_DRIVER=vulkan \
@@ -120,8 +109,6 @@ python3 "${client_root}/tools/verify_gpu_coverage_record.py" \
   --revision "${expected_revision}" "${coverage_record}"
 
 docker run --rm \
-  --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
-  --volume "${tls_directory}:/opt/atrinik/tls:ro" \
   --user "$(id -u):$(id -g)" \
   --network none \
   --volume "${source_root}:${compiled_root}" \

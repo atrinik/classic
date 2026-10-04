@@ -1,5 +1,9 @@
 # Local administrative shutdown
 
+The legacy network CONTROL command is reserved and rejected in every connection state. `control_allowed_ips` has been removed; an active occurrence in configuration or command-line arguments rejects startup and must be removed. Local administration uses this Unix socket and kernel peer credentials, never a loopback or source-address exception.
+
+In the image, the containing server directory and executables remain root-owned. The game process runs as UID 10001 and owns its private mutable data. Offline token initialization and inspection also run as UID 10001 so they validate the same data ownership. The host-root controller retains its normal filesystem traversal capability to reach the private socket; game and inspector containers require no extra capability. The optional account allowlist remains root-owned beneath root-managed ancestry and may be group-readable by GID 10001 (0440/0640).
+
 Linux operators may explicitly enable `--admin_shutdown_socket=/absolute/path/server.sock`.
 The Docker entrypoint forwards `ATRINIK_ADMIN_SHUTDOWN_SOCKET` when set. The default
 is disabled. A local `server/server-custom.cfg` overlay can set

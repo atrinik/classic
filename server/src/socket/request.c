@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -68,84 +68,34 @@
 #include <openssl/crypto.h>
 #define GET_CLIENT_FLAGS(_O_) ((_O_)->flags[0] & 0x7f)
 #define NO_FACE_SEND (-1)
-#define JOIN_FAILURES_PER_MINUTE 5U
-#define JOIN_FAILURES_UNKNOWN_PER_MINUTE 64U
-#define JOIN_FAILURES_GLOBAL_PER_MINUTE 256U
-#define JOIN_FAILURE_ENTRY_MAX 1024U
+/* Shared process budget; no network identity is collected or retained. */
+#define ACCESS_ATTEMPTS_PER_MINUTE 256U
+static server_monotonic_t access_attempt_window;
+static unsigned int access_attempt_count;
 
-typedef struct join_failure_entry {
-    UT_hash_handle hh;
-    char address[MAX_BUF];
-    server_monotonic_t window_started;
-    unsigned int failures;
-} join_failure_entry_t;
-
-static join_failure_entry_t *join_failures;
-static server_monotonic_t join_failure_global_window;
-static unsigned int join_failure_global_count;
-
-static bool access_attempt_allowed(socket_struct *ns) {
-    server_monotonic_t now = server_monotonic_now();
-    server_duration_t minute = server_duration_from_seconds(60);
-    server_duration_t stale = server_duration_from_seconds(120);
-    if (server_monotonic_elapsed_at_least(now, join_failure_global_window, minute)) {
-        join_failure_global_window = now;
-        join_failure_global_count = 0;
+static bool access_attempt_reserve(server_monotonic_t now) {
+    if (server_monotonic_elapsed_at_least(now,
+                                          access_attempt_window,
+                                          server_duration_from_seconds(60))) {
+        access_attempt_window = now;
+        access_attempt_count = 0;
     }
-    if (join_failure_global_count >= JOIN_FAILURES_GLOBAL_PER_MINUTE) {
+    if (access_attempt_count >= ACCESS_ATTEMPTS_PER_MINUTE) {
         return false;
     }
-
-    const char *address = socket_get_addr(ns->sc);
-    join_failure_entry_t *entry;
-    HASH_FIND_STR(join_failures, address, entry);
-    if (entry == NULL) {
-        join_failure_entry_t *old, *next;
-        HASH_ITER(hh, join_failures, old, next) {
-            if (server_monotonic_elapsed_at_least(now, old->window_started, stale)) {
-                HASH_DEL(join_failures, old);
-                free(old);
-            }
-        }
-        if (HASH_COUNT(join_failures) >= JOIN_FAILURE_ENTRY_MAX) {
-            join_failure_entry_t *oldest = NULL;
-            HASH_ITER(hh, join_failures, old, next) {
-                if (oldest == NULL ||
-                    server_monotonic_before(old->window_started, oldest->window_started)) {
-                    oldest = old;
-                }
-            }
-            if (oldest != NULL) {
-                HASH_DEL(join_failures, oldest);
-                free(oldest);
-            }
-        }
-        entry = xcalloc(1, sizeof(*entry));
-        snprintf(VS(entry->address), "%s", address);
-        entry->window_started = now;
-        HASH_ADD_STR(join_failures, address, entry);
-    }
-
-    if (server_monotonic_elapsed_at_least(now, entry->window_started, minute)) {
-        entry->window_started = now;
-        entry->failures = 0;
-    }
-    unsigned int limit = strcmp(address, "<no address>") == 0 ? JOIN_FAILURES_UNKNOWN_PER_MINUTE
-                                                              : JOIN_FAILURES_PER_MINUTE;
-    return entry->failures < limit;
+    access_attempt_count++;
+    return true;
 }
 
-void socket_access_attempt_failed(socket_struct *ns) {
-    if (join_failure_global_count < UINT_MAX) {
-        join_failure_global_count++;
+#ifdef ATRINIK_TESTING
+bool socket_access_attempt_reserve_for_test(server_monotonic_t now, bool reset) {
+    if (reset) {
+        access_attempt_window = now;
+        access_attempt_count = 0;
     }
-    const char *address = socket_get_addr(ns->sc);
-    join_failure_entry_t *entry;
-    HASH_FIND_STR(join_failures, address, entry);
-    if (entry != NULL && entry->failures < UINT_MAX) {
-        entry->failures++;
-    }
+    return access_attempt_reserve(now);
 }
+#endif
 
 void socket_command_access_auth(socket_struct *ns,
                                 player *pl,
@@ -156,12 +106,11 @@ void socket_command_access_auth(socket_struct *ns,
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     ns->access_attempted = true;
-    if (len - pos != 17 || packet_reader_read_uint8(&reader) != 1 || !access_attempt_allowed(ns)) {
+    if (len - pos != 17 || packet_reader_read_uint8(&reader) != 1 ||
+        !access_attempt_reserve(server_monotonic_now())) {
         ns->state = ST_ZOMBIE;
         return;
     }
-    /* Reserve the bounded attempt budget before asynchronous authorization. */
-    socket_access_attempt_failed(ns);
     char code[16];
     for (size_t i = 0; i < sizeof(code); i++)
         code[i] = packet_reader_read_uint8(&reader);
@@ -1406,9 +1355,10 @@ void draw_client_map2(object *pl) {
     if (pl->map->celestial_schema == 1 &&
         celestial_light_keyframe_ensure(pl->map, (uint64_t)todtick)) {
         timed_light_generation = celestial_light_generation(pl->map);
-        timed_light_descriptor = timed_light_generation != 0 &&
-                                 (CONTR(pl)->map_update_cmd != MAP_UPDATE_CMD_SAME ||
-                                  timed_light_generation != CONTR(pl)->cs->lastmap_light_generation);
+        timed_light_descriptor =
+            timed_light_generation != 0 &&
+            (CONTR(pl)->map_update_cmd != MAP_UPDATE_CMD_SAME ||
+             timed_light_generation != CONTR(pl)->cs->lastmap_light_generation);
         timed_light_start_seconds = (uint64_t)todtick * UINT64_C(60) * UINT64_C(60);
         timed_light_end_seconds = timed_light_start_seconds > UINT64_MAX - UINT64_C(3600)
                                       ? UINT64_MAX
@@ -1752,8 +1702,7 @@ void draw_client_map2(object *pl) {
                 if (!mp->fow_known || (mp->fow != 0) != tile_fow) {
                     mask |= MAP2_MASK_FOW;
                 }
-                bool light_state_discarded =
-                    tile_fow && (!mp->fow_known || mp->fow == 0);
+                bool light_state_discarded = tile_fow && (!mp->fow_known || mp->fow == 0);
 
                 /* Go through the visible layers. */
                 for (layer = LAYER_FLOOR; layer <= NUM_LAYERS; layer++) {
@@ -2282,9 +2231,7 @@ void draw_client_map2(object *pl) {
                     uint16_t current_scalar = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
                     uint16_t current_rgb[3] = {current_scalar, current_scalar, current_scalar};
                     if (light_set[sub_layer]) {
-                        memcpy(current_rgb,
-                               light_rgb_radiance[sub_layer],
-                               sizeof(current_rgb));
+                        memcpy(current_rgb, light_rgb_radiance[sub_layer], sizeof(current_rgb));
                     }
                     light_next_radiance[sub_layer] = current_scalar;
                     memcpy(light_next_rgb_radiance[sub_layer],
@@ -2310,7 +2257,9 @@ void draw_client_map2(object *pl) {
                     }
 
                     if (light_next_radiance[sub_layer] != current_scalar ||
-                        memcmp(light_next_rgb_radiance[sub_layer], current_rgb, sizeof(current_rgb)) != 0 ||
+                        memcmp(light_next_rgb_radiance[sub_layer],
+                               current_rgb,
+                               sizeof(current_rgb)) != 0 ||
                         (timed_light_descriptor &&
                          (light_state_discarded ||
                           mp->light_next_generation != timed_light_generation ||
@@ -2373,9 +2322,9 @@ void draw_client_map2(object *pl) {
                     if (light_state_discarded ||
                         (!mp->light_rgb_known[sub_layer] &&
                          (light_rgb_bitmap & (UINT8_C(1) << sub_layer))) ||
-                        (mp->light_rgb_known[sub_layer] &&
-                         memcmp(mp->light_rgb_radiance[sub_layer], resolved_rgb, sizeof(resolved_rgb)) !=
-                             0)) {
+                        (mp->light_rgb_known[sub_layer] && memcmp(mp->light_rgb_radiance[sub_layer],
+                                                                  resolved_rgb,
+                                                                  sizeof(resolved_rgb)) != 0)) {
                         light_rgb_changed = true;
                     }
                 }
@@ -2411,7 +2360,10 @@ void draw_client_map2(object *pl) {
                         continue;
                     }
 
-                    packet_debug_data(packet, 1, "Q5.11 scalar radiance (sub-layer: %d)", sub_layer);
+                    packet_debug_data(packet,
+                                      1,
+                                      "Q5.11 scalar radiance (sub-layer: %d)",
+                                      sub_layer);
                     mp->light_radiance[sub_layer] =
                         light_set[sub_layer] ? light_radiance[sub_layer] : 0;
                     mp->light_known[sub_layer] = 1;
@@ -2512,9 +2464,12 @@ void draw_client_map2(object *pl) {
                     packet_writer_write_uint8(packet, light_next_rgb_bitmap);
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                         if (light_next_rgb_bitmap & (UINT8_C(1) << sub_layer)) {
-                            packet_writer_write_uint16(packet, light_next_rgb_radiance[sub_layer][0]);
-                            packet_writer_write_uint16(packet, light_next_rgb_radiance[sub_layer][1]);
-                            packet_writer_write_uint16(packet, light_next_rgb_radiance[sub_layer][2]);
+                            packet_writer_write_uint16(packet,
+                                                       light_next_rgb_radiance[sub_layer][0]);
+                            packet_writer_write_uint16(packet,
+                                                       light_next_rgb_radiance[sub_layer][1]);
+                            packet_writer_write_uint16(packet,
+                                                       light_next_rgb_radiance[sub_layer][2]);
                         }
                         memcpy(mp->light_next_rgb_radiance[sub_layer],
                                light_next_rgb_radiance[sub_layer],
@@ -2646,8 +2601,8 @@ void draw_client_map2(object *pl) {
         continuation_packets[continuation_packet_count++] = continuation;
     }
 
-    uint16_t continuation_marker = continuation_packet_count |
-                                   (timed_light_descriptor ? MAP2_CONTINUATION_TIMED_LIGHT : 0);
+    uint16_t continuation_marker =
+        continuation_packet_count | (timed_light_descriptor ? MAP2_CONTINUATION_TIMED_LIGHT : 0);
     packet_header->data[continuation_count_pos] = continuation_marker >> 8;
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
