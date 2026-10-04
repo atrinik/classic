@@ -114,6 +114,7 @@ StructuredBuffer<uint> world_projected_light_rows : register(t1, space2);
 
 static const uint WORLD_PROJECTED_LIGHT_FLAG = 524288u;
 static const uint WORLD_GROUND_COVERAGE_FLAG = 1048576u;
+static const uint WORLD_FROZEN_PROJECTED_FLAG = 2097152u;
 static const uint WORLD_PROJECTED_LIGHT_OWNER_MASK = 15u;
 static const uint WORLD_LIGHT_OWNER_COUNT = 13u;
 
@@ -156,6 +157,14 @@ float4 world_color(WorldVertexOutput input) {
 }
 
 uint world_lighting_key(WorldVertexOutput input) {
+    if ((input.lighting_key & WORLD_FROZEN_PROJECTED_FLAG) != 0u) {
+        int row = int(input.position.y) - int(input.effect_parameters.z);
+        if (row < 0 || row >= int(input.effect_parameters.w)) {
+            return 0u;
+        }
+        return ((input.lighting_key & 524287u) + uint(row)) |
+               (input.lighting_key & WORLD_GROUND_COVERAGE_FLAG);
+    }
     if ((input.lighting_key & WORLD_PROJECTED_LIGHT_FLAG) != 0u) {
         uint owner = input.lighting_key & WORLD_PROJECTED_LIGHT_OWNER_MASK;
         uint row = uint(input.position.y);
@@ -474,6 +483,7 @@ uint4 final_light_horizontal(uint offset, uint count, int row_y, int x,
 
 uint4 final_light_row(uint row_id, int x, bool use_coverage, out uint coverage) {
     LightRow row = final_light_rows[row_id];
+    x += asint(row.padding.x);
     uint4 upper = final_light_horizontal(row.upper_offset, row.upper_count, row.upper_y, x,
                                          use_coverage, coverage);
     if (row.upper_y == row.lower_y) {
@@ -501,6 +511,13 @@ float4 light_contributor(float4 albedo, uint key, int x) {
     }
     if (encoded_quad == 524286u) {
         return float4(0.0, 0.0, 0.0, albedo.a);
+    }
+    LightRow row = final_light_rows[encoded_quad - 1u];
+    if (row.upper_count == 0u && row.lower_count == 0u) {
+        if (row.padding.y == 0u) {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        return row.padding.y == 524287u ? albedo : float4(0.0, 0.0, 0.0, albedo.a);
     }
     bool use_coverage = (key & WORLD_GROUND_COVERAGE_FLAG) != 0u;
     uint coverage;

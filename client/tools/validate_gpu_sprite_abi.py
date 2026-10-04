@@ -88,6 +88,7 @@ def validate() -> dict[str, object]:
     for name, value in (
         ("WORLD_PROJECTED_LIGHT_FLAG", 524288),
         ("WORLD_GROUND_COVERAGE_FLAG", 1048576),
+        ("WORLD_FROZEN_PROJECTED_FLAG", 2097152),
     ):
         if f"static const uint {name} = {value}u;" not in shader:
             fail(f"shader is missing stable light-key flag {name}")

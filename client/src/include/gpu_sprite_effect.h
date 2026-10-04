@@ -72,15 +72,18 @@
     (GPU_SPRITE_TEXTURE_STORAGE_MASK | GPU_SPRITE_TEXTURE_SOURCE_COLOR_KEY | \
      GPU_SPRITE_TEXTURE_ALPHA_MASK | GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE)
 
-/* Compact light keys retain 19 value bits and two presentation flags. */
+/* Compact light keys retain 19 value bits and three presentation flags. */
 #define GPU_SPRITE_LIGHTING_KEY_BITS UINT32_C(19)
 #define GPU_SPRITE_LIGHTING_KEY_MASK ((UINT32_C(1) << GPU_SPRITE_LIGHTING_KEY_BITS) - 1U)
 #define GPU_SPRITE_LIGHTING_KEY_KNOWN_MASK \
-    ((UINT32_C(1) << (GPU_SPRITE_LIGHTING_KEY_BITS + 2U)) - 1U)
+    ((UINT32_C(1) << (GPU_SPRITE_LIGHTING_KEY_BITS + 3U)) - 1U)
 #define GPU_SPRITE_LIGHTING_KEY_DARK (GPU_SPRITE_LIGHTING_KEY_MASK - 1U)
 #define GPU_SPRITE_LIGHTING_KEY_UNLIT GPU_SPRITE_LIGHTING_KEY_MASK
 #define GPU_SPRITE_LIGHTING_KEY_PROJECTED (UINT32_C(1) << GPU_SPRITE_LIGHTING_KEY_BITS)
 #define GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE (UINT32_C(1) << (GPU_SPRITE_LIGHTING_KEY_BITS + 1U))
+
+#define GPU_SPRITE_LIGHTING_KEY_FROZEN_PROJECTED \
+    (UINT32_C(1) << (GPU_SPRITE_LIGHTING_KEY_BITS + 2U))
 
 #define GPU_SPRITE_OWNER_UNSET UINT8_MAX
 #define GPU_SPRITE_DEPTH_UNSET UINT8_MAX
@@ -153,7 +156,10 @@ static inline bool gpu_sprite_instance_valid(const gpu_sprite_instance_t *instan
             (GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE) ||
         (instance->lighting_key & ~GPU_SPRITE_LIGHTING_KEY_KNOWN_MASK) != 0 ||
         ((instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE) != 0 &&
-         (instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_PROJECTED) == 0) ||
+         (instance->lighting_key & (GPU_SPRITE_LIGHTING_KEY_PROJECTED |
+                                    GPU_SPRITE_LIGHTING_KEY_FROZEN_PROJECTED)) == 0) ||
+        ((instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_PROJECTED) != 0 &&
+         (instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_FROZEN_PROJECTED) != 0) ||
         (instance->owner_depth & UINT32_C(0xffff0000)) != 0) {
         return false;
     }

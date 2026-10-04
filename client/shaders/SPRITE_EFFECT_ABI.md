@@ -36,7 +36,7 @@ representation bit must be set. `owner_depth` packs owner in bits 0-7 and
 depth in bits 8-15; bits 16-31 are zero.
 
 The compact lighting key uses value bits 0-18, projected-owner flag bit 19,
-and ground-coverage flag bit 20. Only explicitly eligible projected ground
+ground-coverage flag bit 20, and frozen-projected flag bit 21. Only explicitly eligible projected ground
 instances set coverage; setting the draw owner resets that eligibility. When
 resolving a projected owner to its row, the shader preserves the coverage flag.
 Walls, actors, roofs, and other structural owners retain their ordinary light.
@@ -50,6 +50,22 @@ division by 255. It preserves contributor alpha and opaque painter rank.
 Full coverage is exactly the previous result; legacy quad callers submit nine
 255 samples. Coverage changes invalidate retained lighting through the whole
 quad record without adding textures or per-depth pixel buffers.
+
+A frozen projected contributor uses a contiguous compact row run instead of a
+current physical-owner lookup. Its key value is the first encoded row;
+`effect_parameters.z` is the signed destination row origin and `.w` is the row
+count. These slots retain their ordinary effect meaning for other instances.
+Projected-owner and frozen-projected flags are mutually exclusive. The shader
+checks the signed row offset before selecting an encoded row and preserves the
+ground-coverage flag. The instance remains 144 bytes.
+
+Frozen light rows use the first spare row word as a signed X sample offset.
+Their source row Y, span endpoints, radiance, and quad coordinates stay frozen;
+scrolling changes the offset and projected run origin. Receipt-only quads use
+owner `UINT32_MAX` and are excluded from both current-owner spatial bucket
+passes. Referenced quads/span ranges are copied once per source index per map
+build. Rows with no spans preserve a special unlit/dark/transparent key in the
+second spare word. Row, span, and quad strides remain unchanged.
 
 ## Effect ownership matrix
 

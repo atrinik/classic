@@ -91,6 +91,7 @@ typedef struct map_cell_layer_record {
     int16_t rotate;
     map_visibility_fade_t visibility;
     uint32_t visibility_actor_id;
+    uint64_t presentation_token;
     bool visibility_local_player;
     char glow[COLOR_BUF];
 } map_cell_layer_record_t;
@@ -186,6 +187,7 @@ static uint64_t map_cell_allocation_bytes;
 static uint64_t map_cell_retained_bytes;
 static uint64_t map_cell_peak_retained_bytes;
 static uint64_t map_cell_next_painter_identity = 1;
+static uint64_t map_next_presentation_token = 1;
 static uint64_t level_lighting_revision[MAP2_LEVELS];
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 static uint16_t map_level_mask;
@@ -1590,6 +1592,7 @@ void map_state_transaction_commit(void) {
         region_map_update(MapData.region_map, MapData.region_name);
     }
     if (ambient_clear) {
+        gpu_map_renderer_invalidate_target(false);
         sound_ambient_clear();
     } else if (ambient_scroll_x != 0 || ambient_scroll_y != 0) {
         sound_ambient_mapcroll(ambient_scroll_x, ambient_scroll_y);
@@ -1935,6 +1938,7 @@ void clear_map(bool hard) {
         map_state_transaction.ambient_scroll_x = 0;
         map_state_transaction.ambient_scroll_y = 0;
     } else {
+        gpu_map_renderer_invalidate_target(false);
         sound_ambient_clear();
     }
     map_anims_clear();
@@ -2579,6 +2583,18 @@ static bool map_visibility_is_local_player(int x, int y, int object_layer, int s
            sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
 }
 
+/** Compare semantic appearance inputs, excluding timers and visibility state. */
+static bool map_presentation_payload_equal(const map_cell_layer_record_t *a,
+                                            const map_cell_layer_record_t *b) {
+    return a->face == b->face && a->quick_pos == b->quick_pos && a->flags == b->flags &&
+           a->roof == b->roof && a->draw_double == b->draw_double && a->alpha == b->alpha &&
+           a->infravision == b->infravision && a->height == b->height && a->zoom_x == b->zoom_x &&
+           a->zoom_y == b->zoom_y && a->align == b->align && a->rotate == b->rotate &&
+           a->anim_speed == b->anim_speed && a->anim_facing == b->anim_facing &&
+           a->anim_state == b->anim_state && a->glow_speed == b->glow_speed &&
+           strcmp(a->glow, b->glow) == 0 && a->visibility_actor_id == b->visibility_actor_id;
+}
+
 /** Authorize one decoded transient while distinguishing baseline from re-entry. */
 static void map_visibility_authorize_record(map_cell_layer_record_t *record, bool force_opaque) {
     map_visibility_fade_t *fade = &record->visibility;
@@ -2844,6 +2860,7 @@ void map_set_data(int x,
     sub_layer = layer / NUM_LAYERS;
     int object_layer = (layer % NUM_LAYERS) + 1;
     const map_cell_layer_record_t *old_layer = map_cell_layer_record_read(cell, layer);
+    map_cell_layer_record_t old_presentation = *old_layer;
     bool stretch_geometry_changed =
         object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height);
     bool lighting_geometry_changed =
@@ -2854,6 +2871,7 @@ void map_set_data(int x,
     map_cell_sublayer_record_t *sub_record = map_cell_sublayer_record(cell, sub_layer, true);
     map_cell_actor_record_t *actor_record =
         object_layer == LAYER_LIVING ? map_cell_actor_record(cell, sub_layer, true) : NULL;
+    uint8_t old_anim_flags = actor_record != NULL ? actor_record->anim_flags : 0;
 
     if (anim_speed != 0 && old_layer->face != face) {
         layer_record->anim_state = 0;
@@ -2977,6 +2995,15 @@ void map_set_data(int x,
         image_request_face(face);
     }
 
+    if (face != 0 && map_visibility_transient_layer(object_layer) &&
+        (old_presentation.presentation_token == 0 || !old_presentation.visibility.authorized ||
+         !map_presentation_payload_equal(&old_presentation, layer_record) ||
+         (object_layer == LAYER_LIVING && old_anim_flags != anim_flags))) {
+        layer_record->presentation_token = map_next_presentation_token++;
+        if (map_next_presentation_token == 0) {
+            map_next_presentation_token = 1;
+        }
+    }
     if (face == 0 && layer_record->visibility.initialized && !layer_record->visibility.authorized &&
         layer_record->visibility.alpha == 0) {
         memset(&layer_record->visibility, 0, sizeof(layer_record->visibility));
@@ -3646,6 +3673,11 @@ typedef struct map_render_command {
     int16_t tile_y;
     size_t sequence;
     uint64_t record_identity;
+    uint64_t presentation_token;
+    int32_t presentation_x;
+    int32_t presentation_y;
+    uint8_t presentation_start_alpha;
+    bool presentation_stale;
     uint32_t cell_generation;
     uint16_t cell_revision;
     uint8_t record_layer;
@@ -4170,6 +4202,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     effects.alpha = map_cell_layer_record_read(data->cell, map_layer)->alpha;
+    uint8_t authored_alpha = effects.alpha != 0 ? effects.alpha : UINT8_MAX;
     bool transient = map_visibility_transient_layer(data->layer);
     const map_visibility_fade_t *fade =
         &map_cell_layer_record_read(data->cell, map_layer)->visibility;
@@ -4190,6 +4223,11 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         } else {
             effects.alpha = data->alpha_forced;
         }
+    }
+
+    uint8_t presentation_start_alpha = transient ? MIN(authored_alpha, fade->from_alpha) : 0;
+    if (data->alpha_forced != 0) {
+        presentation_start_alpha = MIN(presentation_start_alpha, data->alpha_forced);
     }
 
     /* Stretch floor and floor mask layers. */
@@ -4261,6 +4299,13 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .sequence =
                 context->capture_candidates ? context->candidates_num - 1U : context->next_sequence,
             .record_identity = data->cell->painter_identity,
+            .presentation_token = transient && data->world_surface &&
+                                  !map_cell_layer_record_read(data->cell, map_layer)->visibility_local_player ?
+                                      map_cell_layer_record_read(data->cell, map_layer)->presentation_token : 0,
+            .presentation_x = data->xpos,
+            .presentation_y = data->ypos + data->player_height_offset,
+            .presentation_start_alpha = presentation_start_alpha,
+            .presentation_stale = transient && !fade->authorized,
             .cell_generation = cell_header->generation,
             .cell_revision = cell_header->revision,
             .record_layer = map_layer,
@@ -7288,6 +7333,22 @@ static void map_render_commands(SDL_Surface *surface,
             selected_depth = command->depth;
         }
 
+        if (primary_surface && command->presentation_stale) {
+            uint8_t alpha = command->effects.alpha != 0 ? command->effects.alpha : UINT8_MAX;
+            for (uint32_t variant = 0; variant <= (uint32_t)command->draw_double; variant++) {
+                if (!gpu_renderer_map_replay_presentation(command->record_identity,
+                                                          ((uint32_t)command->record_layer << 2U) | variant,
+                                                          command->presentation_token,
+                                                          command->presentation_x,
+                                                          command->presentation_y,
+                                                          alpha,
+                                                          command->presentation_start_alpha)) {
+                    return;
+                }
+            }
+            continue;
+        }
+
         bool scene_lit = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
                          BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         bool projected_light = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
@@ -7298,6 +7359,10 @@ static void map_render_commands(SDL_Surface *surface,
         gpu_renderer_map_set_ground_coverage(projected_light && command->ground_coverage);
         gpu_renderer_map_set_instance_identity(command->record_identity,
                                                (uint32_t)command->record_layer << 2U);
+        gpu_renderer_map_set_presentation(primary_surface ? command->presentation_token : 0,
+                                          command->source,
+                                          command->presentation_x,
+                                          command->presentation_y);
         surface_show_effects(surface,
                              command->x,
                              command->y,
@@ -7307,6 +7372,10 @@ static void map_render_commands(SDL_Surface *surface,
         if (command->draw_double) {
             gpu_renderer_map_set_instance_identity(command->record_identity,
                                                    ((uint32_t)command->record_layer << 2U) | 1U);
+            gpu_renderer_map_set_presentation(primary_surface ? command->presentation_token : 0,
+                                              command->source,
+                                              command->presentation_x,
+                                              command->presentation_y);
             surface_show_effects(surface,
                                  command->x,
                                  command->y - 22,
