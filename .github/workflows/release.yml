@@ -3,7 +3,6 @@ name: Semantic Release
 on:
   push:
     branches:
-      - main
       - '[0-9]+.[0-9]+.x'
   workflow_dispatch:
 
@@ -21,7 +20,8 @@ concurrency:
 jobs:
   release:
     name: Semantic release
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Main publication is held until a reviewed public-client/server upgrade.
+    if: github.ref_name != 'main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -32,7 +32,7 @@ jobs:
           RELEASE_BRANCH: ${{ github.ref_name }}
           RELEASE_TRIGGER_SHA: ${{ github.sha }}
         run: |
-          [[ ${RELEASE_BRANCH} == main || ${RELEASE_BRANCH} =~ ^[0-9]+\.[0-9]+\.x$ ]]
+          [[ ${RELEASE_BRANCH} =~ ^[0-9]+\.[0-9]+\.x$ ]]
           test "${GITHUB_REF}" = "refs/heads/${RELEASE_BRANCH}"
           test -n "${RELEASE_TRIGGER_SHA}"
       - name: Check out the release commit from the protected branch
