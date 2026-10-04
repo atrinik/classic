@@ -618,8 +618,8 @@ static bool instance_delta_upload_checkpoint(SDL_Surface *source) {
     }
     gpu_renderer_statistics_t changed;
     gpu_renderer_statistics_get(&changed);
-    if (changed.upload_count != 2 || changed.slot_uniform_upload_count != 1 ||
-        changed.slot_uniform_upload_bytes != 16 || changed.instance_upload_count != 1 ||
+    if (changed.upload_count != 3 || changed.slot_uniform_upload_count != 2 ||
+        changed.slot_uniform_upload_bytes != 32 || changed.instance_upload_count != 1 ||
         changed.instance_upload_bytes == 0 || changed.instance_upload_bytes > 256 ||
         changed.source_upload_count != 0 || changed.light_upload_count != 0) {
         SDL_SetError("one changed stable map record did not produce one bounded instance delta");
@@ -799,7 +799,7 @@ static bool atlas_batch_checkpoint(SDL_Surface *first, SDL_Surface *second) {
     }
     gpu_renderer_statistics_t statistics;
     gpu_renderer_statistics_get(&statistics);
-    if (statistics.commands != 3 || statistics.batches != 2 || statistics.draws != 4 ||
+    if (statistics.commands != 5 || statistics.batches != 3 || statistics.draws != 5 ||
         statistics.source_upload_count != 1 || statistics.source_upload_bytes == 0 ||
         statistics.resource_creations != 0) {
         SDL_SetError("atlas batch checkpoint: commands=%llu batches=%llu draws=%llu "
@@ -844,8 +844,8 @@ slot_fragmentation_frame(SDL_Surface *source, unsigned int phase, bool change_on
 
 static bool slot_fragmentation_checkpoint(SDL_Surface *source) {
     const unsigned int phases = 8;
-    const uint64_t commands = 1024 + 1; /* World commands plus the final pass. */
-    const uint64_t maximum_batches = 1024 / 256 + 1; /* Slot chunks plus final pass. */
+    const uint64_t commands = 2 * 1024 + 1; /* Opaque, transparent, and final passes. */
+    const uint64_t maximum_batches = 2 * (1024 / 256) + 1;
     for (unsigned int phase = 0; phase < phases; phase++) {
         gpu_renderer_statistics_reset();
         if (!slot_fragmentation_frame(source, phase, false)) {
@@ -891,8 +891,8 @@ static bool slot_fragmentation_checkpoint(SDL_Surface *source) {
     gpu_renderer_statistics_t changed;
     gpu_renderer_statistics_get(&changed);
     if (changed.commands >= commands || changed.batches > commands ||
-        changed.slot_uniform_upload_count != changed.batches - 1U ||
-        changed.slot_uniform_upload_bytes > 4096 || changed.instance_upload_count != 1 ||
+        changed.slot_uniform_upload_count != changed.batches - 2U ||
+        changed.slot_uniform_upload_bytes > 8192 || changed.instance_upload_count != 1 ||
         changed.instance_upload_bytes == 0 || changed.instance_upload_bytes > 256 ||
         changed.source_upload_count != 0 || changed.light_upload_count != 0 ||
         changed.map_damage_frames != 1 || changed.map_damage_pixels == 0 ||
@@ -1160,8 +1160,8 @@ static bool retained_primary_auxiliary_checkpoint(SDL_Surface *primary,
         if (statistics.resource_creations != 0 || statistics.resource_destructions != 0 ||
             statistics.upload_count != statistics.slot_uniform_upload_count ||
             statistics.upload_bytes != statistics.slot_uniform_upload_bytes ||
-            statistics.slot_uniform_upload_count != 2 ||
-            statistics.slot_uniform_upload_bytes != 32) {
+            statistics.slot_uniform_upload_count != 4 ||
+            statistics.slot_uniform_upload_bytes != 64) {
             SDL_SetError("retained primary/auxiliary map targets churned after warmup");
             return false;
         }
