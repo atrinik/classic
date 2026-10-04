@@ -167,6 +167,7 @@ static size_t response_header(char *data, size_t size, size_t count, void *conte
     size_t n = size * count;
     if (n > 8192 - r->header_bytes) return 0;
     r->header_bytes += n;
+    if (n >= 5 && memcmp(data, "HTTP/", 5) == 0) r->no_store = false;
     static const char prefix[] = "Cache-Control:";
     if (n >= sizeof(prefix) - 1 && strncasecmp(data, prefix, sizeof(prefix) - 1) == 0) {
         const char *p = data + sizeof(prefix) - 1, *end = data + n;

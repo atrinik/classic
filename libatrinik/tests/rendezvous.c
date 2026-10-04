@@ -18,6 +18,8 @@ int main(void) {
     char frame[513];
     socket_rendezvous_attempt_t *attempt = socket_rendezvous_attempt_create(
         grant.server_id, grant.grant, &grant, datetime_monotonic_ms() + 10000);
+    REQUIRE(socket_rendezvous_attempt_create(grant.server_id, grant.client_nonce, &grant,
+            datetime_monotonic_ms() + 10000) == NULL);
     REQUIRE(attempt != NULL);
     REQUIRE(!socket_rendezvous_attempt_directory_probe_allowed(attempt));
     REQUIRE(!socket_rendezvous_attempt_peer_traffic_allowed(attempt));

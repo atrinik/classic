@@ -75,22 +75,39 @@ route registration.
 ## Direct connection and rendezvous API
 
 `socket_quic_client_create` owns the complete client connection attempt. It
-pins any rendezvous invite's server ID to the expected QUIC certificate
+pins any one-use routing grant's server ID to the expected QUIC certificate
 fingerprint before discovery, and applies one absolute 15-second deadline to
 address resolution, STUN, WebSocket authorization, candidate collection, and
 the QUIC candidate race. Its optional `socket_connect_failure_t` output is a
 bounded, credential-free value owned by the caller. The function borrows all
-string and invite inputs only for the duration of the call.
+string and grant inputs only for the duration of the call.
 
 Lower-level rendezvous consumers allocate a `socket_rendezvous_attempt_t` with
 `socket_rendezvous_attempt_create`. The object copies its server ID, ticket,
-invite, deadline, protocol state, and counters. It is mutable, must be released
+grant, deadline, protocol state, and counters. It is mutable, must be released
 with `socket_rendezvous_attempt_destroy`, and is not safe to share between
 threads; independent attempts may run concurrently. Server candidate output is
 transactional and remains empty if any frame is malformed, out of order,
-over-budget, or belongs to another ticket. Invite and proof operations use
-OpenSSL's compatible EVP signing interface; QUIC transport itself is enabled
-only when building with OpenSSL 3.5 or newer.
+over-budget, or belongs to another ticket. The `access_init` / `access_ready` exchange consumes the metaserver's one-use
+grant; candidate tickets are bound to that same grant. Reusable game admission
+codes never enter these APIs. QUIC transport is enabled only with OpenSSL 3.5
+or newer.
+
+`access_resolve` performs one bounded nonredirecting HTTPS POST against an
+explicitly configured trusted root origin. The strict response parser validates
+its nonce, profile, policy, 15-second grant lifetime, canonical certificate and
+SHA-256 DER-leaf identity before publishing caller-owned private result state.
+Private results never enter public directory caches. Existing pins must still
+be checked by the client; a code alone does not authenticate first contact
+against a malicious trusted discovery service. Call `access_resolved_clear`
+when an attempt ends. Numeric HTTP loopback origins exist only for isolated
+fixtures; arbitrary plaintext origins are rejected.
+
+Credential packet producers call `packet_mark_sensitive` before writing bytes.
+That property propagates through duplicates and packet concatenation, suppresses
+content diagnostics and compression, and cleanses released allocation storage,
+including growth, deletion and rollback. Raw receive buffers remain owned by
+their consumers and must be cleansed there.
 
 Secret files use the shared `path_read_secret` primitive, which reads from the
 same verified file handle, rejects another owner and symbolic-link/reparse
@@ -104,8 +121,10 @@ their own secret material after use.
 ## Metaserver publisher API
 
 `metaserver_publisher_classic_body` and `metaserver_publisher_build` construct
-the exact bounded JSON, RFC 9530 digest, and RFC 9421 signature input owned by
-the shared metaserver-publisher fixture. Publisher identities are immutable,
+the exact bounded Classic publisher-v3 JSON, RFC 9530 digest, and RFC 9421
+signature input owned by the shared metaserver-classic-publisher-v3 fixture.
+The public body exposes `accessRequired`; private routing mutations use the
+separate `atrinik-access-routes-v1` signature domain and route endpoint. Publisher identities are immutable,
 caller-owned P-256 certificate/private-key pairs; signing borrows them and
 returns only the public request signature. The matching verifier checks the
 certificate's exact DER fingerprint and raw P1363 signature without retaining

@@ -1431,8 +1431,9 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
         if (reply_expiry[1] < '1' || reply_expiry[1] > '9' ||
             !string_parse_uint64(reply_expiry + 1, 10, 1, INT64_MAX, &expires)) goto out;
         if (strcmp(operation, "reserve") == 0 && (expires <= (uint64_t)now || expires - (uint64_t)now > 60)) goto out;
-    } else if (strcmp(operation, "reserve") == 0) goto out;
+    }
     if (strcmp(reply_outcome, "conflict") == 0) { outcome = ACCESS_CONFLICT; goto out; }
+    if (strcmp(operation, "reserve") == 0 && strcmp(reply_expiry, "null") == 0) goto out;
     const char *wanted = strcmp(operation, "reserve") == 0 ? "reserved" : strcmp(operation, "activate") == 0 ? "active" : "revoked";
     if (strcmp(reply_outcome, wanted) != 0) goto out;
     if (strcmp(operation, "reserve") == 0) {
