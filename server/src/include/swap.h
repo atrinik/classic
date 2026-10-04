@@ -35,10 +35,12 @@
 /** Public API implemented in src/server/swap.c. */
 
 extern void write_map_log(void);
+bool write_map_log_checked(void);
 
 extern void read_map_log(void);
 
 extern void swap_map(mapstruct *map, int force_flag);
+bool swap_map_checked(mapstruct *map, int force_flag);
 
 extern void check_active_maps(void);
 

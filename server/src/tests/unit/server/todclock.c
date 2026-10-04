@@ -17,6 +17,7 @@
 #include <check_utils.h>
 #include <commands.h>
 #include <initialization.h>
+#include <swap.h>
 #include <limits.h>
 #include <object.h>
 #include <player.h>
@@ -373,6 +374,46 @@ START_TEST(test_time_reports_phase_separately_from_visibility_and_moonlight) {
 }
 END_TEST
 
+START_TEST(test_checked_shutdown_clock_and_maplog_failures) {
+    char directory[] = "/tmp/atrinik-shutdown-metadata-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    char previous_datapath[MAX_BUF];
+    snprintf(VS(previous_datapath), "%s", settings.datapath);
+    snprintf(VS(settings.datapath), "%s", directory);
+    char clock_path[HUGE_BUF], maplog_path[HUGE_BUF];
+    snprintf(VS(clock_path), "%s/clockdata", directory);
+    snprintf(VS(maplog_path), "%s/temp.maps", directory);
+    ck_assert(write_todclock_checked());
+    ck_assert(write_map_log_checked());
+    ck_assert_int_eq(unlink(clock_path), 0);
+    ck_assert_int_eq(unlink(maplog_path), 0);
+    /* An occupied destination reliably fails publication, even as root. */
+    ck_assert_int_eq(mkdir(clock_path, 0700), 0);
+    ck_assert_int_eq(mkdir(maplog_path, 0700), 0);
+    ck_assert(!write_todclock_checked());
+    ck_assert(!write_map_log_checked());
+    ck_assert_int_eq(rmdir(clock_path), 0);
+    ck_assert_int_eq(rmdir(maplog_path), 0);
+    snprintf(VS(settings.datapath), "%s", previous_datapath);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+
+START_TEST(test_checked_swap_retains_map_after_save_failure) {
+    char directory[] = "/tmp/atrinik-shutdown-map-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    mapstruct *map = get_empty_map(2, 2);
+    FREE_AND_COPY_HASH(map->path, directory);
+    map->map_flags |= MAP_FLAG_UNIQUE | MAP_FLAG_FIXED_RTIME;
+    map->reset_time = UINT32_MAX;
+    ck_assert(!swap_map_checked(map, 0));
+    ck_assert_int_eq(map->in_memory, MAP_IN_MEMORY);
+    ck_assert_ptr_nonnull(map->spaces);
+    delete_map(map);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("todclock");
     TCase *tc_calendar = tcase_create("Calendar");
@@ -397,6 +438,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_persistence, test_write_replaces_clockdata_with_complete_value);
     tcase_add_test(tc_persistence, test_set_persists_clockdata);
     tcase_add_test(tc_persistence, test_persisted_tick_reconstructs_without_rewrite);
+    tcase_add_test(tc_persistence, test_checked_shutdown_clock_and_maplog_failures);
+    tcase_add_test(tc_persistence, test_checked_swap_retains_map_after_save_failure);
     suite_add_tcase(s, tc_persistence);
     return s;
 }

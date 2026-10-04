@@ -187,7 +187,20 @@ static password_verify_result_t account_check_password(account_struct *account,
     return password_record_verify(password, account->password_record);
 }
 
+#ifdef ATRINIK_TESTING
+static bool test_account_save_failure;
+
+void account_fail_saves_for_test(bool fail) {
+    test_account_save_failure = fail;
+}
+#endif
+
 static int account_save(account_struct *account, const char *path) {
+#ifdef ATRINIK_TESTING
+    if (test_account_save_failure) {
+        return 0;
+    }
+#endif
     StringBuffer *buffer;
     char *contents;
     size_t i;
@@ -1104,7 +1117,7 @@ void account_login_char(socket_struct *ns, char *name) {
     account_free(&account);
 }
 
-void account_logout_char(socket_struct *ns, player *pl) {
+bool account_logout_char_checked(socket_struct *ns, player *pl) {
     char *path;
     account_struct account;
     size_t i;
@@ -1113,7 +1126,7 @@ void account_logout_char(socket_struct *ns, player *pl) {
 
     if (!account_load(&account, path)) {
         free(path);
-        return;
+        return false;
     }
 
     for (i = 0; i < account.characters_num; i++) {
@@ -1142,9 +1155,14 @@ void account_logout_char(socket_struct *ns, player *pl) {
                 metrics_get(&pl->metrics, METRIC_CHARACTER_LAST_LOGOUT_AT));
     account_metrics_merge_character(&account.metrics, &pl->metrics);
 
-    account_save(&account, path);
+    bool saved = account_save(&account, path) != 0;
     account_free(&account);
     free(path);
+    return saved;
+}
+
+void account_logout_char(socket_struct *ns, player *pl) {
+    (void)account_logout_char_checked(ns, pl);
 }
 
 void account_character_session_start(socket_struct *ns, player *pl) {

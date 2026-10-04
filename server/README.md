@@ -712,3 +712,8 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Opt-in Linux local administrative update shutdown is documented in
+[Local administrative shutdown](doc/LOCAL_ADMIN_SHUTDOWN.md)
+(CLI `--admin_shutdown_socket`, Docker environment
+`ATRINIK_ADMIN_SHUTDOWN_SOCKET`). It is disabled by default.

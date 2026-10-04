@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 The Atrinik Project                         *
+ *   Copyright 2009-2026 The Atrinik Project                         *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -32,40 +32,45 @@
 #include <server_main.h>
 #include <initialization.h>
 #include <toolkit/string.h>
+#include <toolkit/stringbuffer.h>
+#include <toolkit/path.h>
 #include <plugin.h>
 #include <celestial_structure.h>
 
 /**
  * Write maps log.
  */
-void write_map_log(void) {
-    FILE *fp;
-    mapstruct *map;
-    char buf[HUGE_BUF];
-    long current_time = time(NULL);
-
-    snprintf(buf, sizeof(buf), "%s/temp.maps", settings.datapath);
-
-    if (!(fp = fopen(buf, "w"))) {
-        LOG(BUG, "Could not open %s for writing", buf);
-        return;
+bool write_map_log_checked(void) {
+    char path[HUGE_BUF];
+    if (snprintf(VS(path), "%s/temp.maps", settings.datapath) >= (int)sizeof(path)) {
+        return false;
     }
-
+    long current_time = time(NULL);
+    StringBuffer *buffer = stringbuffer_new();
+    mapstruct *map;
     DL_FOREACH(first_map, map) {
-        /* If tmpname is null, it is probably a unique player map,
-         * so don't save information on it. */
+        /* Unique player maps have no temporary name. */
         if (map->in_memory != MAP_IN_MEMORY && map->tmpname && strncmp(map->path, "/random", 7)) {
-            fprintf(fp,
-                    "%s:%s:%ld:%d:%d\n",
-                    map->path,
-                    map->tmpname,
-                    (map->reset_time - current_time),
-                    map->difficulty,
-                    map->darkness);
+            stringbuffer_append_printf(buffer,
+                                       "%s:%s:%ld:%d:%d\n",
+                                       map->path,
+                                       map->tmpname,
+                                       (map->reset_time - current_time),
+                                       map->difficulty,
+                                       map->darkness);
         }
     }
+    char *contents = stringbuffer_finish(buffer);
+    bool saved = path_write_atomic(path, contents, strlen(contents), SAVE_MODE);
+    free(contents);
+    if (!saved) {
+        LOG(BUG, "Could not atomically write %s", path);
+    }
+    return saved;
+}
 
-    fclose(fp);
+void write_map_log(void) {
+    (void)write_map_log_checked();
 }
 
 /**
@@ -135,16 +140,16 @@ static int swap_map_check(mapstruct *tiled, mapstruct *map) {
  * @param force_flag
  * Force flag. If set, will not check for players.
  */
-void swap_map(mapstruct *map, int force_flag) {
+bool swap_map_checked(mapstruct *map, int force_flag) {
     if (map->in_memory != MAP_IN_MEMORY) {
         LOG(BUG, "Tried to swap out map which was not in memory (%s).", map->path);
-        return;
+        return false;
     }
 
     if (!force_flag) {
         MAP_TILES_WALK_START(map, swap_map_check) {
             if (MAP_TILES_WALK_RETVAL != 0) {
-                return;
+                return false;
             }
         }
         MAP_TILES_WALK_END
@@ -164,14 +169,20 @@ void swap_map(mapstruct *map, int force_flag) {
         }
 
         delete_map(map);
-        return;
+        return true;
     }
 
     if (new_save_map(map, 0) != 0) {
         LOG(BUG, "Failed to swap map %s.", map->path);
+        return false;
     } else {
         free_map(map, 1);
     }
+    return true;
+}
+
+void swap_map(mapstruct *map, int force_flag) {
+    (void)swap_map_checked(map, force_flag);
 }
 
 /**

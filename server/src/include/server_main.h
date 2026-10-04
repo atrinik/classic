@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -51,6 +51,11 @@ extern int swap_apartments(const char *mapold, const char *mapnew, int x, int y,
 extern void shutdown_timer_start(long secs);
 
 extern void shutdown_timer_stop(void);
+
+#ifdef ATRINIK_TESTING
+/* Exercise the actual timer poll without running or exiting the game loop. */
+int shutdown_timer_check_for_test(void);
+#endif
 
 extern void main_process(void);
 
