@@ -63,6 +63,9 @@ typedef struct packet_reader {
     size_t len;
     size_t pos;
     packet_error_t error;
+
+    /** Secret payload: no dumps/compression; cleanse released storage. */
+    bool sensitive;
     /** Optional position mirror used only during whole-tree migration. */
     size_t *position;
     struct packet_reader_scope *scope;
@@ -74,6 +77,9 @@ typedef struct packet_reader_scope {
     size_t len;
     size_t pos;
     packet_error_t error;
+
+    /** Secret payload: no dumps/compression; cleanse released storage. */
+    bool sensitive;
     bool initialized;
     struct packet_reader_scope *previous;
 } packet_reader_scope_t;
@@ -123,6 +129,9 @@ struct packet_struct {
     /** Sticky writer failure. */
     packet_error_t error;
 
+    /** Secret payload: no dumps/compression; cleanse released storage. */
+    bool sensitive;
+
     /**
      * The packet's command type.
      */
@@ -165,7 +174,7 @@ typedef struct packet_writer_mark {
 #ifndef NDEBUG
 #define packet_debug(_packet, _indent, _fmt, ...)                                            \
     do {                                                                                     \
-        stringbuffer_append_printf((_packet)->sb, "%*s" _fmt, (_indent), "", ##__VA_ARGS__); \
+        if (!(_packet)->sensitive) stringbuffer_append_printf((_packet)->sb, "%*s" _fmt, (_indent), "", ##__VA_ARGS__); \
     } while (0)
 #define packet_debug_data(_packet, _indent, _fmt, ...) \
     packet_debug(_packet, _indent, _fmt ": ", ##__VA_ARGS__)
@@ -181,6 +190,8 @@ TOOLKIT_FUNCS_DECLARE(packet);
 void toolkit_packet_deinit(void);
 packet_struct *packet_new(uint8_t type, size_t size, size_t expand);
 void packet_free(packet_struct *packet);
+/** Mark before writing any secret bytes. Duplicates/concatenations inherit it. */
+void packet_mark_sensitive(packet_struct *packet);
 void packet_compress(packet_struct *packet);
 packet_struct *packet_dup(packet_struct *packet);
 void packet_delete(packet_struct *packet, size_t pos, size_t len);

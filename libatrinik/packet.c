@@ -34,6 +34,7 @@
 #include "mempool.h"
 
 #include <zlib.h>
+#include <openssl/crypto.h>
 
 /**
  * The packets memory pool.
@@ -72,7 +73,7 @@ static void packet_debugger(void *ptr, char *buf, size_t size) {
              (uint64_t)packet->len,
              (uint64_t)packet->size);
 
-    if (packet->data != NULL && packet->len != 0) {
+    if (!packet->sensitive && packet->data != NULL && packet->len != 0) {
 #define MAXHEXLEN 256
         char hexbuf[MAXHEXLEN * 3 + 1];
 
@@ -112,6 +113,7 @@ packet_struct *packet_new(uint8_t type, size_t size, size_t expand) {
     packet->expand = expand;
     packet->limit = PACKET_PAYLOAD_MAX;
     packet->error = PACKET_ERROR_NONE;
+    packet->sensitive = false;
 
     /* Allocate the initial data block. */
     if (packet->size) {
@@ -132,9 +134,21 @@ packet_struct *packet_new(uint8_t type, size_t size, size_t expand) {
  * @param packet
  * Packet to free.
  */
+void packet_mark_sensitive(packet_struct *packet) {
+    HARD_ASSERT(packet != NULL);
+    packet->sensitive = true;
+#ifndef NDEBUG
+    if (packet->sb != NULL) {
+        OPENSSL_cleanse((void *)stringbuffer_data(packet->sb), stringbuffer_length(packet->sb));
+        stringbuffer_seek(packet->sb, 0);
+    }
+#endif
+}
+
 void packet_free(packet_struct *packet) {
     TOOLKIT_PROTECT();
 
+    if (packet->sensitive && packet->data != NULL) OPENSSL_cleanse(packet->data, packet->size);
     free(packet->data);
 
 #ifndef NDEBUG
@@ -155,6 +169,7 @@ void packet_compress(packet_struct *packet) {
     TOOLKIT_PROTECT();
     HARD_ASSERT(packet != NULL);
 
+    if (packet->sensitive) return;
 #if defined(COMPRESS_DATA_PACKETS) && COMPRESS_DATA_PACKETS
     if (packet->len <= COMPRESS_DATA_PACKETS_SIZE) {
         return;
@@ -195,6 +210,7 @@ packet_struct *packet_dup(packet_struct *packet) {
     cp = packet_new(packet->type, packet->size, packet->expand);
     cp->limit = packet->limit;
     cp->error = packet->error;
+    if (packet->sensitive) packet_mark_sensitive(cp);
 
     if (packet->data != NULL) {
         packet_writer_write_bytes(cp, packet->data, packet->len);
@@ -216,6 +232,7 @@ void packet_delete(packet_struct *packet, size_t pos, size_t len) {
     }
 
     packet->len -= len;
+    if (packet->sensitive) OPENSSL_cleanse(packet->data + packet->len, len);
 }
 
 void packet_writer_mark(packet_writer_t *writer, packet_writer_mark_t *mark) {
@@ -234,6 +251,8 @@ void packet_writer_rollback(packet_writer_t *writer, const packet_writer_mark_t 
     HARD_ASSERT(mark != NULL);
     HARD_ASSERT(mark->pos <= writer->len);
 
+    if (writer->sensitive && writer->data != NULL)
+        OPENSSL_cleanse(writer->data + mark->pos, writer->len - mark->pos);
     writer->len = mark->pos;
 
 #ifndef NDEBUG
@@ -276,12 +295,24 @@ static bool packet_ensure(packet_struct *packet, size_t size) {
         return false;
     }
 
-    packet->size += growth;
-    packet->data = xrealloc(packet->data, packet->size);
+    if (packet->sensitive) {
+        uint8_t *data = xmalloc(packet->size + growth);
+        if (packet->data != NULL) {
+            memcpy(data, packet->data, packet->len);
+            OPENSSL_cleanse(packet->data, packet->size);
+            free(packet->data);
+        }
+        packet->data = data;
+        packet->size += growth;
+    } else {
+        packet->size += growth;
+        packet->data = xrealloc(packet->data, packet->size);
+    }
     return true;
 }
 
 char *packet_get_debug(packet_struct *packet) {
+    if (packet != NULL && packet->sensitive) return xstrdup("[sensitive packet]");
     char *cp;
 
     TOOLKIT_PROTECT();
@@ -569,12 +600,13 @@ void packet_writer_write_packet(packet_struct *packet, packet_struct *src) {
     HARD_ASSERT(packet != NULL);
     HARD_ASSERT(src != NULL);
 
+    if (src->sensitive) packet_mark_sensitive(packet);
     if (src->data != NULL) {
         packet_writer_write_bytes_internal(packet, src->data, src->len);
     }
 
 #ifndef NDEBUG
-    if (packet->sb != NULL && src->sb != NULL) {
+    if (!packet->sensitive && packet->sb != NULL && src->sb != NULL) {
         char *cp;
 
         cp = stringbuffer_sub(src->sb, 0, 0);
