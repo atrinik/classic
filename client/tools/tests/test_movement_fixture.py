@@ -149,10 +149,11 @@ def dense_records(payload: bytes) -> tuple[list[dict[str, object]], int]:
     return records, cursor
 
 
-def qualification_floor_heights(payload: bytes) -> dict[tuple[int, int], int]:
-    """Decode floor heights from the closed qualification encoder subset."""
+def qualification_details(payload: bytes) -> tuple[dict[tuple[int, int], int], list[tuple[int, int, int]]]:
+    """Decode floor heights and selected-target probes from the closed encoder subset."""
     cursor = 0
     heights: dict[tuple[int, int], int] = {}
+    probes: list[tuple[int, int, int]] = []
     for _ in range(len(generator.QUALIFICATION_COORDINATES) ** 2):
         mask = struct.unpack_from(">H", payload, cursor)[0]
         cursor += 2
@@ -184,16 +185,37 @@ def qualification_floor_heights(payload: bytes) -> dict[tuple[int, int], int]:
                 cursor += bool(flags2 & 0x00000001)
                 cursor += 2 * bool(flags2 & 0x00000002)
                 cursor += 4 * bool(flags2 & 0x00000004)
-                cursor += 5 * bool(flags2 & 0x00000008)
+                target = None
+                if flags2 & 0x00000008:
+                    target = struct.unpack_from(">I", payload, cursor)[0]
+                    cursor += 5
+                if flags2 & 0x00000010:
+                    if target is None:
+                        raise ValueError("selected target is missing its identity")
+                    probes.append((socket_layer, target, payload[cursor]))
+                    cursor += 1
         if payload[cursor] != 0:
             raise ValueError("qualification extended cell flags are not closed")
         cursor += 1
     if cursor != len(payload):
         raise ValueError("qualification payload has trailing bytes")
-    return heights
+    return heights, probes
 
 
 class MovementFixtureTests(unittest.TestCase):
+    def test_qualification_probe_wire_encoding_and_bounds(self) -> None:
+        for probe in (0, 64, 100):
+            with self.subTest(probe=probe):
+                self.assertEqual(
+                    generator.qualification_layer(5, 10, target=0x47700000, probe=probe),
+                    struct.pack(">BHBBIIBB", 5, 10, 0, 0x80, 0x58, 0x47700000, 0, probe),
+                )
+        for probe in (-1, 101, True, 64.5):
+            with self.subTest(invalid_probe=probe), self.assertRaises(ValueError):
+                generator.qualification_layer(5, 10, target=0x47700000, probe=probe)
+        with self.assertRaises(ValueError):
+            generator.qualification_layer(5, 10, probe=64)
+
     def test_gpu_manifests_pin_shared_widget_inputs(self) -> None:
         expected = {
             "interface": (
@@ -254,7 +276,11 @@ class MovementFixtureTests(unittest.TestCase):
         self.assertEqual(pinned.count(b"Actor "), 64)
         self.assertGreater(len(pinned), 50_000)
         zero_depth = dict(levels)[0]
-        heights = qualification_floor_heights(zero_depth)
+        heights, probes = qualification_details(zero_depth)
+        self.assertEqual(probes, [(5, 0x47700000, 64)])
+        for depth, payload in levels:
+            if depth != 0:
+                self.assertEqual(qualification_details(payload)[1], [])
         self.assertGreaterEqual(len(heights), 50)
         self.assertTrue(
             any(

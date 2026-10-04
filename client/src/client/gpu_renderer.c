@@ -1057,6 +1057,7 @@ static bool gpu_renderer_frame_target_create(void) {
 }
 
 bool gpu_renderer_begin_frame(void) {
+    gpu_map_renderer_presentation_begin();
     if (recreation_requested) {
         SDL_SetError("GPU resource recovery is pending");
         return gpu_renderer_frame_result(false);
@@ -1072,11 +1073,13 @@ bool gpu_renderer_begin_frame(void) {
 
 bool gpu_renderer_present(void) {
     if (renderer == NULL || frame_failed) {
+        gpu_map_renderer_presentation_finish(false);
         return false;
     }
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
     if (gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN) ||
         gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_DEVICE_LOSS)) {
+        gpu_map_renderer_presentation_finish(false);
         return gpu_renderer_frame_result(false);
     }
 #endif
@@ -1088,6 +1091,7 @@ bool gpu_renderer_present(void) {
         SDL_RenderTexture(renderer, frame_target, NULL, NULL) && SDL_RenderPresent(renderer);
     statistics.draws++;
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_PRESENT_WAIT, started);
+    gpu_map_renderer_presentation_finish(result);
     gpu_map_renderer_poll();
     return gpu_renderer_frame_result(result);
 }
@@ -1127,6 +1131,25 @@ void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t d
     gpu_map_renderer_set_instance_identity(record_identity, draw_variant);
 }
 
+void gpu_renderer_map_set_presentation(uint64_t token, SDL_Surface *source, int x, int y) {
+    gpu_map_renderer_set_presentation(token, source, x, y);
+}
+
+SDL_Surface *gpu_renderer_map_presentation_source(uint64_t identity, uint32_t variant, uint64_t token) {
+    return gpu_map_renderer_presentation_source(identity, variant, token);
+}
+
+bool gpu_renderer_map_replay_presentation(uint64_t identity,
+                                           uint32_t variant,
+                                           uint64_t token,
+                                           int x,
+                                           int y,
+                                           uint8_t alpha,
+                                           uint8_t start_alpha) {
+    return gpu_renderer_frame_result(gpu_map_renderer_replay_presentation(identity, variant, token,
+                                                                          x, y, alpha, start_alpha));
+}
+
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
     gpu_map_renderer_light_quad(owner, vertices);
 }
@@ -1148,11 +1171,14 @@ bool gpu_renderer_draw_map(float x, float y, float width, float height) {
     }
     SDL_FRect destination = {x, y, width, height};
     statistics.draws++;
-    return gpu_renderer_frame_result(
-        SDL_SetTextureScaleMode(
-            map_target,
-            zoom_filter_to_scale_mode(setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER))) &&
-        SDL_RenderTexture(renderer, map_target, NULL, &destination));
+    bool drawn = SDL_SetTextureScaleMode(
+                     map_target,
+                     zoom_filter_to_scale_mode(setting_get_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER))) &&
+                 SDL_RenderTexture(renderer, map_target, NULL, &destination);
+    if (drawn && !frame_failed && SDL_GetRenderTarget(renderer) == frame_target) {
+        gpu_map_renderer_presentation_stage();
+    }
+    return gpu_renderer_frame_result(drawn);
 }
 
 bool gpu_renderer_map_available(void) {

@@ -2158,6 +2158,44 @@ fade_in(elapsed)  = min(255, floor((elapsed * 255 + 125) / 250))
 fade_out(elapsed) = max(0, 255 - floor((elapsed * 255 + 125) / 250))
 ```
 
+A revoked transient fades its last successfully presented contributor. The
+receipt binds the map/cache record identity, draw variant, semantic appearance
+token, original source-image identity, immutable GPU asset/effect instance, and
+selected compact light cohort. Identical positive payload refreshes keep the
+token; reauthorization, a changed visual payload, or a new actor identity mints
+a new token. A payload that has never reached a successful primary window
+presentation has no receipt and must not fabricate a disappearing ghost.
+
+A primary map draw stages its receipt bank; only a successful window present
+promotes it. Failed or omitted presents, auxiliary draws, and UI-only frames do
+not replace the last presented bank. Decoder rollback does not mutate receipts.
+The renderer retains at most a presented and a staged compact CPU cohort plus
+the existing submitted map data. These are proportional to compact records,
+not viewport pixels times levels; no new render target or CPU pixel-light field
+is allocated. Referenced frozen rows/spans/quads enter the existing light buffers
+with the same packed-key and allocation limits. They are excluded from current
+owner spatial lookup and cannot light another contributor.
+
+Replay preserves the already presented source/effects and sampled scalar/RGB,
+including the historical player contribution and window attenuation that were
+part of that visible sample. It never recalculates a current player boost,
+current hidden-cell light, or fresh animation/effect state. The frozen world
+anchor translates with an authorized SAME/CONNECTED scroll; signed row offsets
+retain the original sampled coordinates and captured extent across repeated
+scroll-out/back. NEW map identity, primary resize/device rebuild, source-image
+invalidation, expiry, and reentry discard the relevant receipt. No target/name,
+interaction state, or live lighting authority is restored by a receipt.
+
+Let `effective_start` and `effective_current` be the authored/forced/visibility
+alpha minima at revocation and at replay. A replay's modulation alpha is its
+immutable last-presented modulation alpha multiplied by
+`min(effective_current, effective_start) / effective_start`. Zero start or current
+alpha emits nothing. This retains the actual shown opacity even if logical
+fade-in advanced without a presentation, preserves intrinsic texture alpha and
+authored-alpha plateaus, and avoids cumulative rounding through repeated draws.
+Opaque and translucent replay use the ordinary tone and ordered composition
+passes. Structural FOW keeps its independent geometry/light semantics.
+
 An authoritative reappearance cancels fade-out and starts from the current
 alpha without overshoot. A newer authoritative absence replaces the prior
 target and timestamp. At alpha zero the record and any redraw request are

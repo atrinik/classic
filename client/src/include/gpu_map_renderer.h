@@ -25,6 +25,10 @@ typedef struct SDL_Renderer SDL_Renderer;
 typedef struct SDL_Surface SDL_Surface;
 typedef struct SDL_Texture SDL_Texture;
 typedef enum gpu_renderer_map_invalidation_reason gpu_renderer_map_invalidation_reason_t;
+/** Window-frame lifecycle: only a successful primary draw/present promotes receipts. */
+void gpu_map_renderer_presentation_begin(void);
+void gpu_map_renderer_presentation_stage(void);
+void gpu_map_renderer_presentation_finish(bool presented);
 bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer);
 void gpu_map_renderer_destroy(void);
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary);
@@ -40,6 +44,22 @@ void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected);
 void gpu_map_renderer_set_ground_coverage(bool enabled);
 /** Bind the stable semantic record identity for the next world draw. */
 void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant);
+/** Tag the next authorized primary draw with its semantic payload and world anchor.
+ * source is an invalidation identity only; the renderer retains its GPU asset. */
+void gpu_map_renderer_set_presentation(uint64_t token, SDL_Surface *source, int x, int y);
+/** Borrow the last presented original bitmap for immediate main-thread admission.
+ * Do not retain/mutate it; source destruction/invalidation synchronously fences it. */
+SDL_Surface *gpu_map_renderer_presentation_source(uint64_t identity, uint32_t variant, uint64_t token);
+/** Replay the last successfully presented matching contributor, or draw nothing.
+ * Alpha arguments are effective authored/forced/visibility minima. All calls are
+ * main-thread only; failure invalidates this frame, and never publishes a receipt. */
+bool gpu_map_renderer_replay_presentation(uint64_t identity,
+                                    uint32_t variant,
+                                    uint64_t token,
+                                    int x,
+                                    int y,
+                                    uint8_t alpha,
+                                    uint8_t start_alpha);
 /** Submit a light quad with full coverage, preserving existing callers. */
 void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
 /** Copy nine row-major U=x, V=y coverage bytes at 0, 1/2 and 1 of the quad.

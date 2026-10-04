@@ -37,6 +37,32 @@ bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer) {
 }
 
 void gpu_map_renderer_destroy(void) {}
+void gpu_map_renderer_presentation_begin(void) {}
+void gpu_map_renderer_presentation_stage(void) {}
+void gpu_map_renderer_presentation_finish(bool presented) { (void)presented; }
+void gpu_map_renderer_set_presentation(uint64_t token, SDL_Surface *source, int x, int y) {
+    (void)token;
+    (void)source;
+    (void)x;
+    (void)y;
+}
+SDL_Surface *gpu_map_renderer_presentation_source(uint64_t identity, uint32_t variant, uint64_t token) {
+    (void)identity;
+    (void)variant;
+    (void)token;
+    return NULL;
+}
+bool gpu_map_renderer_replay_presentation(uint64_t identity, uint32_t variant, uint64_t token,
+                                           int x, int y, uint8_t alpha, uint8_t start_alpha) {
+    (void)identity;
+    (void)variant;
+    (void)token;
+    (void)x;
+    (void)y;
+    (void)alpha;
+    (void)start_alpha;
+    return true;
+}
 void gpu_map_renderer_poll(void) {}
 bool gpu_map_renderer_wait_idle(void) {
     return true;

@@ -109,7 +109,10 @@ python3 tools/verify_gpu_fixture_provenance.py \
 The generated `gpu-qualification-town-25x25` snapshot supplies seven active
 depths, nearly three thousand ordered sprite layers, mixed owner depths,
 roof/door/exit/FOW and transform semantics, plus exactly 64 animated live
-actors through the normal MAP2 decoder. Its zero expected hash is an explicit
+actors through the normal MAP2 decoder. Exactly one actor (`0x47700000`) carries the MAP2 HP
+probe value 64, so the requested target overlay has a selected target as well
+as targetable actor identities. Actor identities alone do not select the HP
+overlay. The pixel hash remains an explicit
 pending-hardware marker: qualified runs record `golden_verified:false` until
 reviewers approve and pin the cross-backend rendering contract.
 
@@ -435,3 +438,31 @@ The immutable original snapshot is restored before the harness's
 remaining comparisons. The pending backend golden does not waive these
 semantic and pixel assertions. The floor-composition fixture additionally
 checks the expired-item background against CPU tone multiplied by coverage.
+
+The `soft-clear-fade` fixture exercises ordinary `MAP2_MASK_CLEAR` independently
+of the structural-FOW fixture. Its dim colored field contains distinct ITEM,
+ITEM2, and named nonlocal LIVING markers. It first captures each fully opaque,
+authorized contributor and verifies its actual GPU pixel against CPU tone/LUT
+lighting. The first soft-clear frame must preserve the previously displayed
+pixel exactly. At 125, 249, and 250 ms the marker fades through opacity 127, 1,
+and 0. Intermediate pixels must match encoded-RGBA blending of the pre-clear
+contributor with an independently captured expired background; a recolored FOW
+pixel is never accepted as the contributor reference.
+
+Seven immutable-snapshot replays cover an ordinary clear, hidden scalar/RGB
+updates after clearing, clear and hidden light in one publication, SAME scroll,
+revocation during half-complete actor entry, authored ITEM alpha 80, and an
+identical positive actor publication followed by a rejected truncated packet.
+The alpha-80 case pins the existing minimum-of-authored-and-visibility rule;
+its effective opacity remains 80 at visibility 127. The partial-entry actor
+starts its disappearance at 128 and proceeds through 64, 1, and 0 without
+multiplying entry opacity twice. Hidden samples and player-field movement may
+change the background but cannot relight the saved contributor. Actor identity,
+name, and probe are revoked immediately, and fogged lighting diagnostics stay
+redacted. Re-entry under a new blue sample must discard the old warm result.
+
+Every changed scene is drawn retained first and compared pixel-for-pixel with
+a full rebuild; a changed scroll origin requires a full draw before its stable
+retained comparison. The helper restores its clock and the harness republishes
+the original snapshot before subsequent fixture checks. Its pending backend
+golden does not bypass these independent semantic and framebuffer assertions.

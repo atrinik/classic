@@ -91,6 +91,7 @@ typedef struct map_cell_layer_record {
     int16_t rotate;
     map_visibility_fade_t visibility;
     uint32_t visibility_actor_id;
+    uint64_t presentation_token;
     bool visibility_local_player;
     char glow[COLOR_BUF];
 } map_cell_layer_record_t;
@@ -186,6 +187,7 @@ static uint64_t map_cell_allocation_bytes;
 static uint64_t map_cell_retained_bytes;
 static uint64_t map_cell_peak_retained_bytes;
 static uint64_t map_cell_next_painter_identity = 1;
+static uint64_t map_next_presentation_token = 1;
 static uint64_t level_lighting_revision[MAP2_LEVELS];
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 static uint16_t map_level_mask;
@@ -1590,6 +1592,7 @@ void map_state_transaction_commit(void) {
         region_map_update(MapData.region_map, MapData.region_name);
     }
     if (ambient_clear) {
+        gpu_map_renderer_invalidate_target(false);
         sound_ambient_clear();
     } else if (ambient_scroll_x != 0 || ambient_scroll_y != 0) {
         sound_ambient_mapcroll(ambient_scroll_x, ambient_scroll_y);
@@ -1935,6 +1938,7 @@ void clear_map(bool hard) {
         map_state_transaction.ambient_scroll_x = 0;
         map_state_transaction.ambient_scroll_y = 0;
     } else {
+        gpu_map_renderer_invalidate_target(false);
         sound_ambient_clear();
     }
     map_anims_clear();
@@ -2579,6 +2583,18 @@ static bool map_visibility_is_local_player(int x, int y, int object_layer, int s
            sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
 }
 
+/** Compare semantic appearance inputs, excluding timers and visibility state. */
+static bool map_presentation_payload_equal(const map_cell_layer_record_t *a,
+                                            const map_cell_layer_record_t *b) {
+    return a->face == b->face && a->quick_pos == b->quick_pos && a->flags == b->flags &&
+           a->roof == b->roof && a->draw_double == b->draw_double && a->alpha == b->alpha &&
+           a->infravision == b->infravision && a->height == b->height && a->zoom_x == b->zoom_x &&
+           a->zoom_y == b->zoom_y && a->align == b->align && a->rotate == b->rotate &&
+           a->anim_speed == b->anim_speed && a->anim_facing == b->anim_facing &&
+           a->anim_state == b->anim_state && a->glow_speed == b->glow_speed &&
+           strcmp(a->glow, b->glow) == 0 && a->visibility_actor_id == b->visibility_actor_id;
+}
+
 /** Authorize one decoded transient while distinguishing baseline from re-entry. */
 static void map_visibility_authorize_record(map_cell_layer_record_t *record, bool force_opaque) {
     map_visibility_fade_t *fade = &record->visibility;
@@ -2844,6 +2860,7 @@ void map_set_data(int x,
     sub_layer = layer / NUM_LAYERS;
     int object_layer = (layer % NUM_LAYERS) + 1;
     const map_cell_layer_record_t *old_layer = map_cell_layer_record_read(cell, layer);
+    map_cell_layer_record_t old_presentation = *old_layer;
     bool stretch_geometry_changed =
         object_layer == LAYER_FLOOR && (old_layer->face != face || old_layer->height != height);
     bool lighting_geometry_changed =
@@ -2854,6 +2871,7 @@ void map_set_data(int x,
     map_cell_sublayer_record_t *sub_record = map_cell_sublayer_record(cell, sub_layer, true);
     map_cell_actor_record_t *actor_record =
         object_layer == LAYER_LIVING ? map_cell_actor_record(cell, sub_layer, true) : NULL;
+    uint8_t old_anim_flags = actor_record != NULL ? actor_record->anim_flags : 0;
 
     if (anim_speed != 0 && old_layer->face != face) {
         layer_record->anim_state = 0;
@@ -2977,6 +2995,15 @@ void map_set_data(int x,
         image_request_face(face);
     }
 
+    if (face != 0 && map_visibility_transient_layer(object_layer) &&
+        (old_presentation.presentation_token == 0 || !old_presentation.visibility.authorized ||
+         !map_presentation_payload_equal(&old_presentation, layer_record) ||
+         (object_layer == LAYER_LIVING && old_anim_flags != anim_flags))) {
+        layer_record->presentation_token = map_next_presentation_token++;
+        if (map_next_presentation_token == 0) {
+            map_next_presentation_token = 1;
+        }
+    }
     if (face == 0 && layer_record->visibility.initialized && !layer_record->visibility.authorized &&
         layer_record->visibility.alpha == 0) {
         memset(&layer_record->visibility, 0, sizeof(layer_record->visibility));
@@ -3646,6 +3673,11 @@ typedef struct map_render_command {
     int16_t tile_y;
     size_t sequence;
     uint64_t record_identity;
+    uint64_t presentation_token;
+    int32_t presentation_x;
+    int32_t presentation_y;
+    uint8_t presentation_start_alpha;
+    bool presentation_stale;
     uint32_t cell_generation;
     uint16_t cell_revision;
     uint8_t record_layer;
@@ -4040,14 +4072,31 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     uint8_t map_layer = GET_MAP_LAYER(data->layer, data->sub_layer);
     bool remembered = map_layer_is_remembered(data->layer);
-    uint16_t face = map_object_get_face(data->cell, map_layer);
-    if (face == 0 || face >= MAX_FACE_TILES) {
-        return;
-    }
-
-    sprite_struct *face_sprite = image_get_sprite(face);
-    if (face_sprite == NULL || face_sprite->bitmap == NULL) {
-        return;
+    bool transient = map_visibility_transient_layer(data->layer);
+    const map_cell_layer_record_t *record = map_cell_layer_record_read(data->cell, map_layer);
+    const map_visibility_fade_t *fade = &record->visibility;
+    bool stale = transient && !fade->authorized && data->world_surface;
+    sprite_struct *face_sprite = NULL;
+    SDL_Surface *source;
+    if (stale) {
+        /* Revocation clears actor animation flags. Do not resolve a new hidden
+         * face (or require it to be loaded) before replaying the shown source. */
+        source = gpu_renderer_map_presentation_source(data->cell->painter_identity,
+                                                       (uint32_t)map_layer << 2U,
+                                                       record->presentation_token);
+        if (source == NULL) {
+            return;
+        }
+    } else {
+        uint16_t face = map_object_get_face(data->cell, map_layer);
+        if (face == 0 || face >= MAX_FACE_TILES) {
+            return;
+        }
+        face_sprite = image_get_sprite(face);
+        if (face_sprite == NULL || face_sprite->bitmap == NULL) {
+            return;
+        }
+        source = face_sprite->bitmap;
     }
 
     /* When rendering on the map surface, avoid rendering the object
@@ -4059,8 +4108,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         return;
     }
 
-    int bitmap_h = face_sprite->bitmap->h;
-    int bitmap_w = face_sprite->bitmap->w;
+    int bitmap_h = source->h;
+    int bitmap_w = source->w;
 
     sprite_effects_t effects = {0};
     effects.rotate = map_cell_layer_record_read(data->cell, map_layer)->rotate;
@@ -4170,9 +4219,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
     }
 
     effects.alpha = map_cell_layer_record_read(data->cell, map_layer)->alpha;
-    bool transient = map_visibility_transient_layer(data->layer);
-    const map_visibility_fade_t *fade =
-        &map_cell_layer_record_read(data->cell, map_layer)->visibility;
+    uint8_t authored_alpha = effects.alpha != 0 ? effects.alpha : UINT8_MAX;
     if (transient) {
         if (!fade->initialized || fade->alpha == 0) {
             return;
@@ -4190,6 +4237,11 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         } else {
             effects.alpha = data->alpha_forced;
         }
+    }
+
+    uint8_t presentation_start_alpha = transient ? MIN(authored_alpha, fade->from_alpha) : 0;
+    if (data->alpha_forced != 0) {
+        presentation_start_alpha = MIN(presentation_start_alpha, data->alpha_forced);
     }
 
     /* Stretch floor and floor mask layers. */
@@ -4226,7 +4278,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
                                               context->commands_capacity,
                                               sizeof(*context->commands));
         }
-        bool transformed = effects.rotate != 0 || (effects.zoom_x != 0 && effects.zoom_x != 100) ||
+        bool transformed = stale || effects.rotate != 0 || (effects.zoom_x != 0 && effects.zoom_x != 100) ||
                            (effects.zoom_y != 0 && effects.zoom_y != 100);
         int bounds_x = xl;
         int bounds_y = yl;
@@ -4243,7 +4295,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             bounds_h += 22;
         }
         context->commands[context->commands_num] = (map_render_command_t){
-            .source = face_sprite->bitmap,
+            .source = source,
             .effects = effects,
             .x = xl,
             .y = yl,
@@ -4261,6 +4313,13 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             .sequence =
                 context->capture_candidates ? context->candidates_num - 1U : context->next_sequence,
             .record_identity = data->cell->painter_identity,
+            .presentation_token = transient && data->world_surface &&
+                                  !map_cell_layer_record_read(data->cell, map_layer)->visibility_local_player ?
+                                      map_cell_layer_record_read(data->cell, map_layer)->presentation_token : 0,
+            .presentation_x = data->xpos,
+            .presentation_y = data->ypos + data->player_height_offset,
+            .presentation_start_alpha = presentation_start_alpha,
+            .presentation_stale = transient && !fade->authorized,
             .cell_generation = cell_header->generation,
             .cell_revision = cell_header->revision,
             .record_layer = map_layer,
@@ -7288,6 +7347,22 @@ static void map_render_commands(SDL_Surface *surface,
             selected_depth = command->depth;
         }
 
+        if (primary_surface && command->presentation_stale) {
+            uint8_t alpha = command->effects.alpha != 0 ? command->effects.alpha : UINT8_MAX;
+            for (uint32_t variant = 0; variant <= (uint32_t)command->draw_double; variant++) {
+                if (!gpu_renderer_map_replay_presentation(command->record_identity,
+                                                          ((uint32_t)command->record_layer << 2U) | variant,
+                                                          command->presentation_token,
+                                                          command->presentation_x,
+                                                          command->presentation_y,
+                                                          alpha,
+                                                          command->presentation_start_alpha)) {
+                    return;
+                }
+            }
+            continue;
+        }
+
         bool scene_lit = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
                          BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
         bool projected_light = BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE);
@@ -7298,6 +7373,10 @@ static void map_render_commands(SDL_Surface *surface,
         gpu_renderer_map_set_ground_coverage(projected_light && command->ground_coverage);
         gpu_renderer_map_set_instance_identity(command->record_identity,
                                                (uint32_t)command->record_layer << 2U);
+        gpu_renderer_map_set_presentation(primary_surface ? command->presentation_token : 0,
+                                          command->source,
+                                          command->presentation_x,
+                                          command->presentation_y);
         surface_show_effects(surface,
                              command->x,
                              command->y,
@@ -7307,6 +7386,10 @@ static void map_render_commands(SDL_Surface *surface,
         if (command->draw_double) {
             gpu_renderer_map_set_instance_identity(command->record_identity,
                                                    ((uint32_t)command->record_layer << 2U) | 1U);
+            gpu_renderer_map_set_presentation(primary_surface ? command->presentation_token : 0,
+                                              command->source,
+                                              command->presentation_x,
+                                              command->presentation_y);
             surface_show_effects(surface,
                                  command->x,
                                  command->y - 22,
@@ -9999,6 +10082,322 @@ done:
     map_select_level(0, true);
     map_redraw_consume();
 #undef GROUND_CHECK
+    return success;
+}
+
+/** Closed fixture markers use separate pixels over unobstructed neighboring ground. */
+static const struct {
+    int x, y, layer, face;
+} map_soft_clear_markers[] = {
+    {5, 10, LAYER_ITEM, 3},
+    {12, 7, LAYER_ITEM2, 3},
+    {10, 10, LAYER_LIVING, 2},
+};
+
+static const map_render_command_t *map_soft_clear_command(size_t marker, int scroll) {
+    for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
+        const map_render_command_t *command = &map_retained_primary_context.commands[index];
+        if (command->depth == 0 && command->sub_layer == 0 &&
+            command->object_layer == map_soft_clear_markers[marker].layer &&
+            command->tile_x - MAP_STARTX == map_soft_clear_markers[marker].x - scroll &&
+            command->tile_y - MAP_STARTY == map_soft_clear_markers[marker].y) {
+            return command;
+        }
+    }
+    return NULL;
+}
+
+/** Reissue precisely the fixture's named actor, optionally with a new identity. */
+static void map_soft_clear_actor(packet_struct *level, uint32_t identity) {
+    packet_writer_write_uint16(level, (uint16_t)(10 << 11 | 10 << 6));
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, GET_MAP_LAYER(LAYER_LIVING, 0));
+    packet_writer_write_uint16(level, 2);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_NAME | MAP2_FLAG_MORE);
+    packet_writer_write_cstring(level, "Soft clear actor");
+    packet_writer_write_cstring(level, "ffffff");
+    packet_writer_write_uint32(level, MAP2_FLAG2_TARGET | MAP2_FLAG2_PROBE);
+    packet_writer_write_uint32(level, identity);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 80);
+    packet_writer_write_uint8(level, 0);
+}
+
+/** Change only hidden scalar/RGB samples, never a face or visibility flag. */
+static void map_soft_clear_recolor(packet_struct *level) {
+    for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+        int x = map_soft_clear_markers[marker].x;
+        int y = map_soft_clear_markers[marker].y;
+        packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6 | MAP2_MASK_LIGHT_LEVEL));
+        packet_writer_write_uint16(level, 4096);
+        packet_writer_write_uint8(level, 0);
+        packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16);
+        packet_writer_write_uint8(level, 1);
+        packet_writer_write_uint16(level, 32);
+        packet_writer_write_uint16(level, 256);
+        packet_writer_write_uint16(level, 4096);
+    }
+}
+
+static bool map_soft_clear_pixels(SDL_Surface *capture, int pixels[3][2], uint8_t rgba[3][4]) {
+    if (capture == NULL) {
+        return false;
+    }
+    for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+        if (!SDL_ReadSurfacePixel(capture, pixels[marker][0], pixels[marker][1],
+                                  &rgba[marker][0], &rgba[marker][1],
+                                  &rgba[marker][2], &rgba[marker][3])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Prove ordinary soft-clear continuity using pre-clear contributors, not FOW colors. */
+bool widget_map_soft_clear_fade_test(uint8_t *snapshot, size_t snapshot_size) {
+#define SOFT_CLEAR_CHECK(expression)                                                           \
+    do {                                                                                        \
+        if (!(expression)) {                                                                    \
+            fprintf(stderr, "soft-clear fade variant %d checkpoint %s: %s\n",                    \
+                    variant, #expression, SDL_GetError());                                      \
+            success = false;                                                                    \
+            goto done;                                                                          \
+        }                                                                                       \
+    } while (0)
+    static const uint32_t elapsed[] = {0, 125, 249, 250};
+    static const uint8_t opacity[] = {255, 127, 1, 0};
+    static const uint8_t partial_opacity[] = {128, 64, 1, 0};
+    const uint32_t saved_tick = LastTick;
+    bool success = true;
+    int variant = -1;
+    SDL_Surface *capture = NULL, *full = NULL;
+    SDL_Surface *surface = cur_widget[MAP_ID] != NULL ? cur_widget[MAP_ID]->surface : NULL;
+    SOFT_CLEAR_CHECK(surface != NULL && snapshot != NULL && map_width == 17 && map_height == 17);
+
+    /* Each replay starts from the same closed, fully authorized publication:
+     * 0 baseline; 1 hidden recolor after clear; 2 clear+recolor in one packet;
+     * 3 scroll; 4 partial entry; 5 authored alpha; 6 identical positive update. */
+    for (variant = 0; variant < 7; variant++) {
+        LastTick = saved_tick;
+        socket_command_map(snapshot, snapshot_size, 0);
+        SOFT_CLEAR_CHECK(map_select_level(0, false));
+        uint8_t posx = MapData.posx, posy = MapData.posy;
+        int pixels[3][2];
+        uint8_t authorized[3][4], before_clear[3][4], samples[4][3][4];
+        capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+        SOFT_CLEAR_CHECK(capture != NULL);
+        for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+            const map_render_command_t *command = map_soft_clear_command(marker, 0);
+            SOFT_CLEAR_CHECK(command != NULL && !command->fogged);
+            pixels[marker][0] = command->bounds_x + command->bounds_w / 2;
+            /* The short actor's upper interior pixel projects onto ground whose
+             * light quad excludes its own cleared cell. This keeps partial-alpha
+             * continuity independent of a legitimate background-light change. */
+            pixels[marker][1] = command->bounds_y + (marker == 2 ? 2 : command->bounds_h / 3);
+            gpu_map_renderer_probe_t probe;
+            SOFT_CLEAR_CHECK(gpu_map_renderer_probe(pixels[marker][0], pixels[marker][1],
+                                                    MAP2_DEPTH_INDEX(0), &probe) &&
+                             probe.albedo[0] == 255 && probe.albedo[3] == 255 &&
+                             probe.ground_coverage == 255 && probe.final_color[3] == 255);
+            uint16_t linear[3];
+            lighting_tone_map_linear(probe.light[0], &probe.light[1], linear);
+            for (size_t channel = 0; channel < 3; channel++) {
+                SOFT_CLEAR_CHECK(probe.final_color[channel] ==
+                                 lighting_multiply_channel(probe.albedo[channel], linear[channel]));
+            }
+            SOFT_CLEAR_CHECK(probe.final_color[0] > 20 &&
+                             probe.final_color[0] > probe.final_color[2] + 8);
+        }
+        SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, authorized));
+        memcpy(before_clear, authorized, sizeof(before_clear));
+        const map_cell_actor_record_t *actor = map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(10, 10), 0);
+        SOFT_CLEAR_CHECK(actor->target_object_count == UINT32_C(0x11223344) &&
+                         actor->probe == 80 && strcmp(actor->name, "Soft clear actor") == 0);
+        SDL_DestroySurface(capture);
+        capture = NULL;
+
+        if (variant >= 4) {
+            packet_struct *level = packet_new(0, 64, 64);
+            if (variant == 5) {
+                packet_writer_write_uint16(level, (uint16_t)(5 << 11 | 10 << 6));
+                packet_writer_write_uint8(level, 1);
+                packet_writer_write_uint8(level, GET_MAP_LAYER(LAYER_ITEM, 0));
+                packet_writer_write_uint16(level, 3);
+                packet_writer_write_uint8(level, 0);
+                packet_writer_write_uint8(level, MAP2_FLAG_MORE);
+                packet_writer_write_uint32(level, MAP2_FLAG2_ALPHA);
+                packet_writer_write_uint8(level, 80);
+                packet_writer_write_uint8(level, 0);
+            } else {
+                map_soft_clear_actor(level, variant == 4 ? UINT32_C(0x55667788) : UINT32_C(0x11223344));
+            }
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, level, NULL));
+            if (variant == 4) {
+                LastTick += 125;
+                map_animate();
+                const map_cell_layer_record_t *record = map_cell_layer_record_read(
+                    MAP_CELL_GET_MIDDLE(10, 10), GET_MAP_LAYER(LAYER_LIVING, 0));
+                SOFT_CLEAR_CHECK(record->visibility.alpha == 128 && record->visibility.authorized);
+            }
+            capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
+            SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, before_clear));
+            full = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+            SOFT_CLEAR_CHECK(map_ground_coverage_equal(capture, full));
+            if (variant == 6) {
+                SOFT_CLEAR_CHECK(memcmp(before_clear, authorized, sizeof(authorized)) == 0);
+            }
+            SDL_DestroySurface(capture);
+            SDL_DestroySurface(full);
+            capture = full = NULL;
+        }
+
+        if (variant == 6) {
+            /* A truncated publication containing a clear must not alter the
+             * published record or its last successful presentation. */
+            packet_struct *invalid = packet_new(0, 16, 16);
+            packet_writer_write_uint16(invalid, (uint16_t)(10 << 11 | 10 << 6 | MAP2_MASK_CLEAR));
+            packet_writer_write_uint8(invalid, 0);
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, invalid, NULL));
+            actor = map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(10, 10), 0);
+            SOFT_CLEAR_CHECK(!MAP_CELL_GET_MIDDLE(10, 10)->fow &&
+                             actor->target_object_count == UINT32_C(0x11223344));
+            capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_STABLE);
+            uint8_t after_invalid[3][4];
+            SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, after_invalid) &&
+                             memcmp(after_invalid, before_clear, sizeof(before_clear)) == 0);
+            SDL_DestroySurface(capture);
+            capture = NULL;
+        }
+
+        uint32_t revoked_at = LastTick;
+        packet_struct *clear = packet_new(0, 128, 128);
+        for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+            packet_writer_write_uint16(clear, (uint16_t)(map_soft_clear_markers[marker].x << 11 |
+                                                         map_soft_clear_markers[marker].y << 6 |
+                                                         MAP2_MASK_CLEAR));
+        }
+        if (variant == 2) {
+            map_soft_clear_recolor(clear);
+        }
+        SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, clear, NULL));
+        capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
+        SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, samples[0]) &&
+                         memcmp(before_clear, samples[0], sizeof(before_clear)) == 0);
+        full = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+        SOFT_CLEAR_CHECK(map_ground_coverage_equal(capture, full));
+        SDL_DestroySurface(capture);
+        SDL_DestroySurface(full);
+        capture = full = NULL;
+
+        int scroll = variant == 3 ? 1 : 0;
+        if (variant == 1) {
+            packet_struct *level = packet_new(0, 128, 128);
+            map_soft_clear_recolor(level);
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, level, NULL));
+        } else if (scroll != 0) {
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, (uint8_t)(posx + 1), posy, 0, NULL, NULL));
+            for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+                pixels[marker][0] -= MAP_TILE_YOFF;
+                pixels[marker][1] -= MAP_TILE_XOFF;
+            }
+        }
+        for (size_t phase = 0; phase < arraysize(elapsed); phase++) {
+            LastTick = revoked_at + elapsed[phase];
+            map_animate();
+            /* A changed projection requires one full compilation; other changes
+             * exercise retained invalidation before any full publication. */
+            bool projection_changed = scroll != 0 && phase == 0;
+            capture = map_ground_coverage_capture(surface, projection_changed ? MAP_GROUND_COVERAGE_FULL
+                                                                             : MAP_GROUND_COVERAGE_RETAINED_CHANGED);
+            SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, samples[phase]));
+            full = map_ground_coverage_capture(surface, projection_changed ? MAP_GROUND_COVERAGE_RETAINED_STABLE
+                                                                          : MAP_GROUND_COVERAGE_FULL);
+            SOFT_CLEAR_CHECK(map_ground_coverage_equal(capture, full));
+            for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+                map_cell_t *cell = MAP_CELL_GET_MIDDLE(map_soft_clear_markers[marker].x - scroll,
+                                                      map_soft_clear_markers[marker].y);
+                const map_cell_layer_record_t *record = map_cell_layer_record_read(
+                    cell, GET_MAP_LAYER(map_soft_clear_markers[marker].layer, 0));
+                uint8_t expected = variant == 4 && marker == 2 ? partial_opacity[phase] : opacity[phase];
+                SOFT_CLEAR_CHECK(cell->fow && !record->visibility.authorized &&
+                                 (expected == 0 ? record->face == 0 :
+                                  record->face == map_soft_clear_markers[marker].face &&
+                                  record->visibility.alpha == expected));
+                if (marker == 2) {
+                    actor = map_cell_actor_record_read(cell, 0);
+                    SOFT_CLEAR_CHECK(actor->target_object_count == 0 && actor->probe == 0 && actor->name[0] == '\0');
+                    map_lighting_diagnostic_t diagnostic;
+                    SOFT_CLEAR_CHECK(map_lighting_diagnostic_get(0, 10 - scroll, 10, 0, true, &diagnostic) &&
+                                     diagnostic.fogged && !diagnostic.received && !diagnostic.working_available &&
+                                     !diagnostic.presentation_available);
+                }
+                SOFT_CLEAR_CHECK(samples[phase][marker][3] == 255);
+            }
+            if (phase == 0) {
+                SOFT_CLEAR_CHECK(memcmp(before_clear, samples[0], sizeof(before_clear)) == 0);
+            }
+            SDL_DestroySurface(capture);
+            SDL_DestroySurface(full);
+            capture = full = NULL;
+        }
+        for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+            bool contrast = false;
+            for (size_t channel = 0; channel < 3; channel++) {
+                contrast |= abs((int)authorized[marker][channel] - (int)samples[3][marker][channel]) >= 8;
+            }
+            SOFT_CLEAR_CHECK(contrast);
+            for (size_t phase = 0; phase < 3; phase++) {
+                unsigned alpha = variant == 4 && marker == 2 ? partial_opacity[phase] : opacity[phase];
+                if (variant == 5 && marker == 0) {
+                    alpha = MIN(alpha, 80U);
+                }
+                for (size_t channel = 0; channel < 3; channel++) {
+                    unsigned expected = ((unsigned)authorized[marker][channel] * alpha +
+                                         (unsigned)samples[3][marker][channel] * (255U - alpha) + 127U) / 255U;
+                    SOFT_CLEAR_CHECK(abs((int)samples[phase][marker][channel] - (int)expected) <= 2);
+                }
+            }
+        }
+        if (variant == 1) {
+            /* Re-entry under the new blue sample must discard the expired
+             * warm receipt even when the stable image asset is unchanged. */
+            packet_struct *level = packet_new(0, 128, 128);
+            packet_writer_write_uint16(level, (uint16_t)(10 << 11 | 10 << 6 | MAP2_MASK_FOW));
+            packet_writer_write_uint8(level, 0);
+            packet_writer_write_uint8(level, 0);
+            packet_writer_write_uint8(level, 0);
+            map_soft_clear_actor(level, UINT32_C(0x55667788));
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, level, NULL));
+            LastTick += MAP_VISIBILITY_FADE_DURATION_MS;
+            map_animate();
+            capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
+            SOFT_CLEAR_CHECK(capture != NULL);
+            gpu_map_renderer_probe_t probe;
+            SOFT_CLEAR_CHECK(gpu_map_renderer_probe(pixels[2][0], pixels[2][1], MAP2_DEPTH_INDEX(0), &probe) &&
+                             probe.albedo[0] == 255 && probe.albedo[1] == 255 && probe.albedo[2] == 255 &&
+                             probe.final_color[2] > probe.final_color[0] + 16);
+            uint16_t linear[3];
+            lighting_tone_map_linear(probe.light[0], &probe.light[1], linear);
+            for (size_t channel = 0; channel < 3; channel++) {
+                SOFT_CLEAR_CHECK(probe.final_color[channel] == lighting_multiply_channel(255, linear[channel]));
+            }
+            full = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+            SOFT_CLEAR_CHECK(map_ground_coverage_equal(capture, full));
+            SDL_DestroySurface(capture);
+            SDL_DestroySurface(full);
+            capture = full = NULL;
+        }
+        printf("{\"type\":\"soft-clear-fade\",\"variant\":%d,\"markers\":3,\"preclear_continuity\":true,\"blend_oracle\":true,\"frame_parity\":true}\n", variant);
+    }
+
+done:
+    SDL_DestroySurface(capture);
+    SDL_DestroySurface(full);
+    LastTick = saved_tick;
+    map_select_level(0, true);
+    map_redraw_consume();
+#undef SOFT_CLEAR_CHECK
     return success;
 }
 

@@ -185,7 +185,21 @@ static bool test_ground_coverage_key(void) {
     instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE | GPU_SPRITE_LIGHTING_KEY_UNLIT;
     CHECK(!gpu_sprite_instance_valid(&instance));
     instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_PROJECTED |
-                            GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE | (UINT32_C(1) << 21);
+                            GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE | (UINT32_C(1) << 22);
+    CHECK(!gpu_sprite_instance_valid(&instance));
+    return true;
+}
+
+static bool test_frozen_projected_key(void) {
+    gpu_sprite_instance_t instance;
+    gpu_sprite_instance_init(&instance);
+    instance.texture_flags = valid_texture_flags();
+    CHECK(GPU_SPRITE_LIGHTING_KEY_FROZEN_PROJECTED == UINT32_C(2097152));
+    instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_FROZEN_PROJECTED | UINT32_C(1);
+    CHECK(gpu_sprite_instance_valid(&instance));
+    instance.lighting_key |= GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE;
+    CHECK(gpu_sprite_instance_valid(&instance));
+    instance.lighting_key |= GPU_SPRITE_LIGHTING_KEY_PROJECTED;
     CHECK(!gpu_sprite_instance_valid(&instance));
     return true;
 }
@@ -259,7 +273,7 @@ static bool test_serialized_value_is_pointer_free(void) {
 
 int main(void) {
     if (!test_layout() || !test_default_and_owner_depth() || !test_effect_matrix() ||
-        !test_ground_coverage_key() || !test_texture_metadata_matrix() ||
+        !test_ground_coverage_key() || !test_frozen_projected_key() || !test_texture_metadata_matrix() ||
         !test_serialized_value_is_pointer_free()) {
         return EXIT_FAILURE;
     }

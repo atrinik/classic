@@ -138,8 +138,11 @@ def qualification_layer(
     door: bool = False,
     exit_tile: bool = False,
     target: int | None = None,
+    probe: int | None = None,
 ) -> bytes:
     """Encode the bounded MAP2 layer combinations used by GPU qualification."""
+    if probe is not None and (target is None or type(probe) is not int or not 0 <= probe <= 100):
+        raise ValueError("a probe requires a target identity and HP percentage in 0..100")
     flags = 0
     flags2 = 0
     suffix = bytearray()
@@ -162,6 +165,8 @@ def qualification_layer(
         flags2 |= 0x00000004
     if target is not None:
         flags2 |= 0x00000008 | 0x00000040
+    if probe is not None:
+        flags2 |= 0x00000010
     if roof:
         flags2 |= 0x00000100
     if door:
@@ -179,10 +184,17 @@ def qualification_layer(
             suffix.extend(struct.pack(">HH", *zoom))
         if target is not None:
             suffix.extend(struct.pack(">IB", target, 0))
+        if probe is not None:
+            suffix.append(probe)
     return struct.pack(">BHBB", socket_layer, face, 0, flags) + suffix
 
 
-def qualification_payload(depth: int, coordinates: range = QUALIFICATION_COORDINATES) -> bytes:
+def qualification_payload(
+    depth: int,
+    coordinates: range = QUALIFICATION_COORDINATES,
+    *,
+    selected_target: bool = False,
+) -> bytes:
     """Build a 25-by-25 town level with dense mixed GPU painter semantics."""
     result = bytearray()
     actor = 0
@@ -241,6 +253,7 @@ def qualification_payload(depth: int, coordinates: range = QUALIFICATION_COORDIN
                         name=f"Actor {actor:02d}",
                         animation=True,
                         target=0x47700000 + actor,
+                        probe=64 if selected_target and actor == 0 else None,
                     )
                 )
                 actor += 1
@@ -381,7 +394,7 @@ def qualification_scene(packet: bytes) -> bytes:
     result.extend(b"\0\0")
     result.append(len(QUALIFICATION_DEPTHS))
     for depth in QUALIFICATION_DEPTHS:
-        payload = qualification_payload(depth)
+        payload = qualification_payload(depth, selected_target=True)
         result.extend(struct.pack(">bI", depth, len(payload)))
         result.extend(payload)
     return bytes(result)
