@@ -431,4 +431,9 @@ extern void updates_init(void);
 extern void
 socket_command_request_update(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos);
 
+/* Access operations are dispatched only on authenticated QUIC connections. */
+void socket_command_access_auth(socket_struct *, player *, uint8_t *, size_t, size_t);
+void socket_command_access_admin(socket_struct *, player *, uint8_t *, size_t, size_t);
+void socket_server_access_poll(void);
+
 #endif

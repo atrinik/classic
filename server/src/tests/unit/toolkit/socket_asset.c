@@ -96,7 +96,9 @@ static void *asset_loopback_server_main(void *data) {
     socket_struct ns = {
         .sc = connection,
         .socket_version = SOCKET_VERSION,
-        .join_authenticated = true,
+        .access_authenticated = true,
+        .access_transport_authenticated = true,
+        .access_policy_sent = true,
         .setup_completed = true,
         .state = ST_LOGIN,
     };

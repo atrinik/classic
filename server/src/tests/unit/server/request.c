@@ -497,7 +497,7 @@ typedef struct command_phase {
     int state;
     uint32_t socket_version;
     bool setup_completed;
-    bool join_authenticated;
+    bool access_authenticated;
 } command_phase_t;
 
 static const command_phase_t command_phases[] = {
@@ -521,8 +521,8 @@ static const command_phase_t command_phases[] = {
 
 typedef struct command_policy_expectation {
     const char *name;
-    unsigned int without_join_password;
-    unsigned int with_join_password;
+    unsigned int without_access_code;
+    unsigned int with_access_code;
 } command_policy_expectation_t;
 
 #define COMMAND_POLICY(_symbol, _without, _with) \
@@ -536,7 +536,7 @@ static const command_policy_expectation_t command_policy_expectations[] = {
                    COMMAND_PHASE_ADMITTED_LOGIN | COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(SETUP,
                    COMMAND_PHASE_VERSIONED | COMMAND_PHASE_PLAYING_MASK,
-                   COMMAND_PHASE_VERSIONED | COMMAND_PHASE_PLAYING),
+                   COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(VERSION, COMMAND_PHASE_CONNECTED, COMMAND_PHASE_CONNECTED),
     COMMAND_POLICY(CLEAR, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(REQUEST_UPDATE,
@@ -561,6 +561,8 @@ static const command_policy_expectation_t command_policy_expectations[] = {
     COMMAND_POLICY(TALK, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(MOVE, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(TARGET, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(ACCESS_AUTH, 0, COMMAND_PHASE_VERSIONED),
+    COMMAND_POLICY(ACCESS_ADMIN, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
 };
 
 #undef COMMAND_POLICY
@@ -624,7 +626,7 @@ START_TEST(test_setup_round_trip_uses_current_option_ids) {
     ck_assert_uint_eq(CMD_SETUP_SOUND, 0);
     ck_assert_uint_eq(CMD_SETUP_MAPSIZE, 1);
     ck_assert_uint_eq(CMD_SETUP_DATA_URL, 2);
-    ck_assert_uint_eq(CMD_SETUP_JOIN_PASSWORD, 3);
+    /* Setup subtype 3 is permanently reserved after access-code migration. */
     ck_assert_uint_eq(CMD_SETUP_ASSET_TRANSPORT, 4);
     ck_assert_uint_eq(CMD_SETUP_CONNECTION_MODE, 5);
     ck_assert_uint_ge(SOCKET_VERSION, ASSET_TRANSPORT_FACE_BATCH_VERSION);
@@ -683,7 +685,7 @@ START_TEST(test_initial_setup_completion_is_transactional) {
     cs->state = ST_LOGIN;
     cs->socket_version = SOCKET_VERSION;
     cs->setup_completed = false;
-    settings.join_password[0] = '\0';
+    settings.access_required = false;
     socket_buffer_clear(cs);
 
     uint8_t truncated[] = {CMD_SETUP_MAPSIZE, 13};
@@ -698,49 +700,24 @@ START_TEST(test_initial_setup_completion_is_transactional) {
 }
 END_TEST
 
-START_TEST(test_initial_setup_requires_valid_join_password) {
+START_TEST(test_retired_join_password_setup_is_rejected) {
     mapstruct *map;
     object *pl;
-
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
     cs->state = ST_LOGIN;
     cs->socket_version = SOCKET_VERSION;
-    cs->join_authenticated = false;
     cs->setup_completed = false;
-    memset(settings.join_password, 0, sizeof(settings.join_password));
-    snprintf(VS(settings.join_password), "%s", "secret");
+    cs->access_authenticated = false;
+    settings.access_required = true;
     socket_buffer_clear(cs);
-
-    packet_struct *request = packet_new(0, 32, 0);
-    packet_writer_write_uint8(request, CMD_SETUP_JOIN_PASSWORD);
-    packet_writer_write_cstring(request, "secret");
-    socket_command_setup(cs, CONTR(pl), request->data, request->len, 0);
-    packet_free(request);
-    ck_assert(cs->join_authenticated);
-    ck_assert(cs->setup_completed);
-    ck_assert_int_eq(cs->state, ST_LOGIN);
-
-    packet_struct *response = queued_command_find(cs, CLIENT_CMD_SETUP);
-    ck_assert_ptr_nonnull(response);
-    packet_reader_t reader;
-    packet_reader_init(&reader, response->data, response->len);
-    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_SETUP_JOIN_PASSWORD);
-    ck_assert_uint_eq(packet_reader_read_uint8(&reader), 1);
-    ck_assert(packet_reader_finish(&reader));
-
-    socket_buffer_clear(cs);
-    cs->state = ST_LOGIN;
-    cs->join_authenticated = false;
-    cs->setup_completed = false;
-    request = packet_new(0, 32, 0);
-    packet_writer_write_uint8(request, CMD_SETUP_JOIN_PASSWORD);
-    packet_writer_write_cstring(request, "wrong");
-    socket_command_setup(cs, CONTR(pl), request->data, request->len, 0);
-    packet_free(request);
-    ck_assert(!cs->join_authenticated);
-    ck_assert(!cs->setup_completed);
+    uint8_t retired[] = {3, 'o', 'l', 'd', 0};
+    socket_command_setup(cs, CONTR(pl), retired, sizeof(retired), 0);
     ck_assert_int_eq(cs->state, ST_ZOMBIE);
+    ck_assert(!cs->setup_completed);
+    ck_assert(!cs->access_authenticated);
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_SETUP));
+    settings.access_required = false;
 }
 END_TEST
 
@@ -752,25 +729,24 @@ START_TEST(test_command_policy_covers_every_connection_phase) {
     socket_struct *cs = CONTR(pl)->cs;
 
     for (size_t join_required = 0; join_required < 2; join_required++) {
-        memset(settings.join_password, 0, sizeof(settings.join_password));
-        snprintf(VS(settings.join_password), "%s", join_required ? "secret" : "");
+        settings.access_required = join_required != 0;
 
         for (size_t phase_index = 0; phase_index < arraysize(command_phases); phase_index++) {
             const command_phase_t *phase = &command_phases[phase_index];
             cs->state = phase->state;
             cs->socket_version = phase->socket_version;
             cs->setup_completed = phase->setup_completed;
-            cs->join_authenticated = phase->join_authenticated;
+            cs->access_authenticated = phase->access_authenticated;
 
             for (size_t command = 0; command < arraysize(command_policy_expectations); command++) {
                 const command_policy_expectation_t *expectation =
                     &command_policy_expectations[command];
-                unsigned int allowed = join_required ? expectation->with_join_password
-                                                     : expectation->without_join_password;
+                unsigned int allowed = join_required ? expectation->with_access_code
+                                                     : expectation->without_access_code;
                 bool expected = (allowed & phase->mask) != 0;
                 bool actual = socket_server_command_phase_allowed(cs, (uint8_t)command);
                 ck_assert_msg(actual == expected,
-                              "%s was unexpectedly %s in phase %s with join password %s",
+                              "%s was unexpectedly %s in phase %s with access code %s",
                               expectation->name,
                               actual ? "allowed" : "rejected",
                               phase->name,
@@ -787,7 +763,7 @@ START_TEST(test_out_of_order_player_command_is_not_queued) {
 
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
-    settings.join_password[0] = '\0';
+    settings.access_required = false;
     uint8_t request[] = {SERVER_CMD_MOVE};
 
     cs->state = ST_LOGIN;
@@ -1189,7 +1165,7 @@ START_TEST(test_only_valid_post_setup_activity_refreshes_login_deadline) {
 
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
-    settings.join_password[0] = '\0';
+    settings.access_required = false;
     uint8_t keepalive[] = {SERVER_CMD_KEEPALIVE};
 
     cs->state = ST_LOGIN;
@@ -1216,7 +1192,7 @@ START_TEST(test_keepalive_echoes_identifier) {
 
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
-    settings.join_password[0] = '\0';
+    settings.access_required = false;
     const uint32_t expected_id = UINT32_C(0x12345678);
     uint8_t keepalive[] = {
         SERVER_CMD_KEEPALIVE,
@@ -1269,15 +1245,10 @@ START_TEST(test_version_requires_exact_match) {
     cs->state = ST_LOGIN;
     cs->socket_version = 0;
     request_version(cs, CONTR(pl), SOCKET_VERSION);
-    ck_assert_int_eq(cs->state, ST_LOGIN);
-    ck_assert_uint_eq(cs->socket_version, SOCKET_VERSION);
-
-    packet_struct *response = queued_command_find(cs, CLIENT_CMD_VERSION);
-    ck_assert_ptr_nonnull(response);
-    packet_reader_t reader;
-    packet_reader_init(&reader, response->data, response->len);
-    ck_assert_uint_eq(packet_reader_read_uint32(&reader), SOCKET_VERSION);
-    ck_assert(packet_reader_finish(&reader));
+    ck_assert_int_eq(cs->state, ST_ZOMBIE);
+    ck_assert_uint_eq(cs->socket_version, 0);
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_VERSION));
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_ACCESS_POLICY));
 }
 END_TEST
 
@@ -1952,7 +1923,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_setup_round_trip_uses_current_option_ids);
     tcase_add_test(tc_core, test_setup_rejects_unknown_option);
     tcase_add_test(tc_core, test_initial_setup_completion_is_transactional);
-    tcase_add_test(tc_core, test_initial_setup_requires_valid_join_password);
+    tcase_add_test(tc_core, test_retired_join_password_setup_is_rejected);
     tcase_add_test(tc_core, test_command_policy_covers_every_connection_phase);
     tcase_add_test(tc_core, test_out_of_order_player_command_is_not_queued);
     tcase_add_test(tc_core, test_clear_immediately_discards_queued_commands_and_stops_run);

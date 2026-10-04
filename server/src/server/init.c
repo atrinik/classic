@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <admin_shutdown.h>
+#include <access_server.h>
 #include <weather.h>
 #include <swap.h>
 #include <server_main.h>
@@ -96,6 +97,7 @@ int first_map_y;
 static void init_beforeplay(void);
 static void init_dynamic(void);
 static void init_clocks(void);
+static int access_state_descriptor = -1;
 static bool removed_httppath_seen;
 /* Handler failures do not stop CLI parsing; reject startup even after a valid option. */
 static bool oversized_assetspath_seen;
@@ -189,6 +191,7 @@ static void console_command_active_objects(const char *params) {
  */
 void cleanup(void) {
     admin_shutdown_deinit();
+    access_server_deinit();
     cache_remove_all();
     remove_plugins();
     gameplay_journal_deinit();
@@ -212,12 +215,13 @@ void cleanup(void) {
     object_deinit();
     metaserver_deinit();
     party_deinit();
-    OPENSSL_cleanse(settings.join_password, sizeof(settings.join_password));
     toolkit_deinit();
     free_object_loader();
     free_random_map_loader();
     free_map_header_loader();
     celestial_structure_release_writer_lease();
+    access_state_unlock(access_state_descriptor);
+    access_state_descriptor = -1;
 }
 
 /**
@@ -593,59 +597,70 @@ static bool clioptions_option_port_mapping(const char *arg, char **errmsg) {
     return true;
 }
 
-/**
- * Description of the --join_password command.
- */
-static const char *clioptions_option_join_password_desc =
-    "Optional password required before clients may join this server.";
-/** @copydoc clioptions_handler_func */
+/* Admission configuration is immutable after startup. In particular default OP
+ * and /config must never grant access administration or open the server. */
+static bool access_configuration_locked;
+static bool removed_access_configuration;
+static bool access_setting_mutable(char **errmsg) {
+    if (access_configuration_locked) {
+        *errmsg = xstrdup("Access configuration is startup-only");
+        return false;
+    }
+    return true;
+}
+static const char *clioptions_option_access_required_desc =
+    "Require an operator-issued access code before account authentication.";
+static bool clioptions_option_access_required(const char *arg, char **errmsg) {
+    if (!access_setting_mutable(errmsg)) return false;
+    if (KEYWORD_IS_TRUE(arg)) settings.access_required = true;
+    else if (KEYWORD_IS_FALSE(arg)) settings.access_required = false;
+    else { *errmsg = xstrdup("Expected a boolean"); return false; }
+    return true;
+}
+static const char *clioptions_option_access_initialize_desc =
+    "Explicitly initialize a new empty access store; refuses existing state.";
+static bool clioptions_option_access_initialize(const char *arg, char **errmsg) {
+    if (!access_setting_mutable(errmsg)) return false;
+    if (KEYWORD_IS_TRUE(arg)) settings.access_initialize = true;
+    else if (KEYWORD_IS_FALSE(arg)) settings.access_initialize = false;
+    else { *errmsg = xstrdup("Expected a boolean"); return false; }
+    return true;
+}
+static const char *clioptions_option_access_store_desc =
+    "Private existing directory containing durable admission state.";
+static bool clioptions_option_access_store(const char *arg, char **errmsg) {
+    if (!access_setting_mutable(errmsg)) return false;
+    if (arg[0] != '/' || strlen(arg) >= sizeof(settings.access_store)) {
+        *errmsg = xstrdup("Expected a bounded absolute directory"); return false;
+    }
+    snprintf(VS(settings.access_store), "%s", arg);
+    return true;
+}
+static const char *clioptions_option_access_admin_accounts_desc =
+    "Root-owned explicit canonical account allowlist for access administration.";
+static bool clioptions_option_access_admin_accounts(const char *arg, char **errmsg) {
+    if (!access_setting_mutable(errmsg)) return false;
+    if (arg[0] != '/' || strlen(arg) >= sizeof(settings.access_admin_accounts)) {
+        *errmsg = xstrdup("Expected a bounded absolute file"); return false;
+    }
+    snprintf(VS(settings.access_admin_accounts), "%s", arg);
+    return true;
+}
+/* Recognize removed settings solely to fail startup, never fall back to open. */
+static const char *clioptions_option_join_password_desc = "Removed admission option.";
+static const char *clioptions_option_join_password_file_desc = "Removed admission option.";
+static const char *clioptions_option_rendezvous_invite_file_desc = "Removed admission option.";
 static bool clioptions_option_join_password(const char *arg, char **errmsg) {
-    if (strlen(arg) >= sizeof(settings.join_password)) {
-        *errmsg = xstrdup("Join password is too long");
-        return false;
-    }
-
-    OPENSSL_cleanse(settings.join_password, sizeof(settings.join_password));
-    snprintf(VS(settings.join_password), "%s", arg);
-    return true;
+    (void)arg;
+    removed_access_configuration = true;
+    *errmsg = xstrdup("Legacy admission configuration requires offline migration");
+    return false;
 }
-
-static const char *clioptions_option_join_password_file_desc =
-    "Read the private server password from a file.";
-
 static bool clioptions_option_join_password_file(const char *arg, char **errmsg) {
-    char password[MAX_BUF];
-    bool permissive_mode;
-    path_secret_error_t error = path_read_secret(arg, VS(password), &permissive_mode);
-    if (error != PATH_SECRET_OK) {
-        string_fmt(*errmsg,
-                   "Cannot use join password file %s: %s",
-                   arg,
-                   path_secret_error_string(error));
-        return false;
-    }
-    if (permissive_mode) {
-        LOG(SYSTEM,
-            "Join password file %s is readable or writable by group/other; "
-            "use mode 0600",
-            arg);
-    }
-
-    bool ok = clioptions_option_join_password(password, errmsg);
-    OPENSSL_cleanse(password, sizeof(password));
-    return ok;
+    return clioptions_option_join_password(arg, errmsg);
 }
-
-static const char *clioptions_option_rendezvous_invite_file_desc =
-    "Protected path for the generated rendezvous invite capability.";
-
 static bool clioptions_option_rendezvous_invite_file(const char *arg, char **errmsg) {
-    if (arg[0] == '\0' || strlen(arg) >= sizeof(settings.rendezvous_invite_file)) {
-        *errmsg = xstrdup("Rendezvous invite file path is empty or too long");
-        return false;
-    }
-    snprintf(VS(settings.rendezvous_invite_file), "%s", arg);
-    return true;
+    return clioptions_option_join_password(arg, errmsg);
 }
 
 /**
@@ -1096,12 +1111,16 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, http_url, "Operator-managed HTTP asset origin");
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "STUN discovery endpoint");
     CLIOPTIONS_CREATE_ARGUMENT(cli, port_mapping, "Router port mapping policy");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, access_required, "Access code admission policy");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, access_initialize, "Initialize empty access store");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, access_store, "Private access store directory");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, access_admin_accounts, "Access administrator allowlist");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Removed admission option");
     clioptions_enable_sensitive(cli);
-    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Private server password file");
-    CLIOPTIONS_CREATE_ARGUMENT(cli,
-                               rendezvous_invite_file,
-                               "Protected rendezvous invite capability path");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Removed admission option");
+    clioptions_enable_sensitive(cli);
+    CLIOPTIONS_CREATE_ARGUMENT(cli, rendezvous_invite_file, "Removed admission option");
+    clioptions_enable_sensitive(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_public, "Public server listing");
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_host, "Legacy public IP address (not published)");
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_name, "Name of the server");
@@ -1152,11 +1171,18 @@ static void init_library(int argc, char *argv[]) {
     settings.content_benchmark_iterations = 9;
     settings.celestial_inventory_limit = 8192;
 
+    access_configuration_locked = false;
+    removed_access_configuration = false;
     clioptions_load("server.cfg", NULL);
     clioptions_load("server-custom.cfg", NULL);
 
     if (argv != NULL) {
         clioptions_parse(argc, argv);
+    }
+    access_configuration_locked = true;
+    if (removed_access_configuration) {
+        LOG(ERROR, "Legacy admission configuration requires offline migration");
+        exit(EXIT_FAILURE);
     }
     if (removed_httppath_seen) {
         LOG(ERROR, "httppath was removed; use assetspath");
@@ -1165,6 +1191,13 @@ static void init_library(int argc, char *argv[]) {
 
     if (oversized_assetspath_seen) {
         LOG(ERROR, "Asset staging path is too long; --assetspath must be at most 255 bytes");
+        exit(EXIT_FAILURE);
+    }
+
+    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
+        !settings.provision_scenario && !settings.content_benchmark && !settings.celestial_inventory &&
+        (access_state_descriptor = access_state_lock(settings.datapath)) < 0) {
+        LOG(ERROR, "Cannot exclusively lock private server state");
         exit(EXIT_FAILURE);
     }
 

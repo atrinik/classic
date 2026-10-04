@@ -370,13 +370,11 @@ typedef struct settings_struct {
     /** Automatic router port mapping policy (auto or off). */
     char port_mapping[16];
 
-    /**
-     * Optional password required before a client may join this server.
-     */
-    char join_password[MAX_BUF];
-
-    /** Protected file containing the current rendezvous invite capability. */
-    char rendezvous_invite_file[HUGE_BUF];
+    /** Startup-only server admission policy and protected store coordinates. */
+    bool access_required;
+    bool access_initialize;
+    char access_store[HUGE_BUF];
+    char access_admin_accounts[HUGE_BUF];
     char admin_shutdown_socket[108];
 
     /**

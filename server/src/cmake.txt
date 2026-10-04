@@ -1,4 +1,7 @@
 set(SERVER_CORE_SOURCES
+	src/server/access_tokens.c
+	src/server/access_admin.c
+	src/server/access_server.c
 	src/commands/permission/arrest.c
 	src/commands/permission/ban.c
 	src/commands/permission/celestial.c

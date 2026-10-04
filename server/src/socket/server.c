@@ -43,6 +43,9 @@
 #include <ban.h>
 #include <metaserver_internal.h>
 #include <network_metrics.h>
+#include <access_server.h>
+#include <access_admin.h>
+#include <openssl/crypto.h>
 
 TOOLKIT_API(DEPENDS(socket), IMPORTS(logger));
 
@@ -61,6 +64,7 @@ typedef enum socket_command_policy {
     SOCKET_COMMAND_POLICY_CONTROL,
     SOCKET_COMMAND_POLICY_ADMITTED,
     SOCKET_COMMAND_POLICY_SETUP,
+    SOCKET_COMMAND_POLICY_ACCESS,
     SOCKET_COMMAND_POLICY_VERSION,
     SOCKET_COMMAND_POLICY_PLAYING,
     SOCKET_COMMAND_POLICY_LOGIN,
@@ -186,7 +190,8 @@ bool socket_connection_admitted(const socket_struct *cs) {
     HARD_ASSERT(cs != NULL);
 
     return cs->socket_version == SOCKET_VERSION && cs->setup_completed &&
-           (*settings.join_password == '\0' || cs->join_authenticated);
+           cs->access_policy_sent && cs->access_transport_authenticated &&
+           (!settings.access_required || cs->access_authenticated);
 }
 
 bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t type) {
@@ -208,9 +213,16 @@ bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t type) 
         case SOCKET_COMMAND_POLICY_VERSION:
             return cs->state == ST_LOGIN && cs->socket_version == 0 && !cs->setup_completed;
 
+        case SOCKET_COMMAND_POLICY_ACCESS:
+            return cs->state == ST_LOGIN && cs->socket_version == SOCKET_VERSION &&
+                   cs->access_policy_sent && settings.access_required &&
+                   !cs->access_attempted && !cs->setup_completed && cs->access_transport_authenticated;
+
         case SOCKET_COMMAND_POLICY_SETUP:
             if (cs->state == ST_LOGIN) {
-                return cs->socket_version == SOCKET_VERSION && !cs->setup_completed;
+                return cs->socket_version == SOCKET_VERSION && !cs->setup_completed &&
+                       cs->access_policy_sent && cs->access_transport_authenticated &&
+                       (!settings.access_required || cs->access_authenticated);
             }
             return cs->state == ST_PLAYING && socket_connection_admitted(cs);
 
@@ -382,6 +394,10 @@ TOOLKIT_INIT_FUNC(socket_server) {
             !socket_certificate_sha256(identity_socket, quic_certificate_sha256)) {
             LOG(ERROR, "Failed to initialize the QUIC listener");
             exit(1);
+        }
+        if (!access_server_init(quic_certificate_sha256)) {
+            LOG(ERROR, "Cannot initialize checked access state; refusing game startup");
+            exit(EXIT_FAILURE);
         }
         LOG(SYSTEM, "QUIC certificate SHA-256: %s", quic_certificate_sha256);
 
@@ -651,12 +667,13 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
 
 #ifndef DEBUG
     char *cp;
-
+    if (type != SERVER_CMD_ACCESS_AUTH && type != SERVER_CMD_ACCESS_ADMIN) {
     LOG(DUMPRX, "Received packet with command type %d (%" PRIu64 " bytes):", type, (uint64_t)len);
     cp = xmalloc(sizeof(*cp) * (len * 3 + 1));
     string_tohex(data, len, cp, len * 3 + 1, true);
     LOG(DUMPRX, "  Hexadecimal: %s", cp);
     free(cp);
+    }
 #endif
 
     if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
@@ -669,11 +686,19 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
         return true;
     }
 
+    if (settings.access_required && cs->access_authenticated) {
+        access_session_state_t admission = access_server_session_check(&cs->access_token);
+        if (admission != ACCESS_SESSION_VALID) {
+            if (admission == ACCESS_SESSION_DENIED) cs->state = ST_DEAD;
+            return true;
+        }
+    }
     if (!socket_server_command_phase_allowed(cs, type)) {
         LOG(DEVEL,
             "Rejected out-of-order %s command in connection state %d",
             socket_commands[type].name,
             cs->state);
+        cs->state = ST_ZOMBIE;
         return true;
     }
 
@@ -1078,6 +1103,8 @@ void socket_server_handle_client(player *pl) {
     }
 
     for (int num_cmds = 0; num_cmds < SOCKET_SERVER_PLAYER_MAX_COMMANDS; num_cmds++) {
+        if (settings.access_required && pl->cs->access_authenticated &&
+            access_server_session_check(&pl->cs->access_token) != ACCESS_SESSION_VALID) break;
         if (pl->cs->packet_recv_cmd->len == 0) {
             break;
         }
@@ -1402,7 +1429,61 @@ static void socket_server_service_player_connections(socket_server_transport_sta
  * scheduled independently by sleep_delta_timeout_us(), so QUIC readiness and
  * timer events do not inherit the simulation tick cadence.
  */
+static void socket_access_poll_one(socket_struct *cs) {
+    if (cs->access_auth_job != 0) {
+        access_outcome_t outcome;
+        access_token_ref_t ref;
+        if (access_server_auth_poll(cs->access_auth_job, &outcome, &ref)) {
+            cs->access_auth_job = 0;
+            bool accepted = outcome == ACCESS_COMMITTED &&
+                access_server_session_check(&ref) != ACCESS_SESSION_DENIED;
+            if (accepted) {
+                cs->access_token = ref;
+                cs->access_authenticated = true;
+                socket_login_deadline_refresh(cs);
+            }
+            packet_struct *packet = packet_new(CLIENT_CMD_ACCESS_RESULT, 2, 0);
+            packet_writer_write_uint8(packet, 1);
+            packet_writer_write_uint8(packet, accepted ? 0 : 1);
+            socket_send_packet(cs, packet);
+            if (!accepted) cs->state = ST_ZOMBIE;
+        }
+    }
+    if (cs->access_admin_job != 0) {
+        char response[ACCESS_ADMIN_RESPONSE_MAX + 1];
+        size_t length = 0;
+        if (access_server_admin_poll(cs->access_admin_job, VS(response), &length)) {
+            cs->access_admin_job = 0;
+            if (length > 0 && socket_connection_admitted(cs)) {
+                packet_struct *packet = packet_new(CLIENT_CMD_ACCESS_ADMIN_RESULT, length + 1, 0);
+                packet_mark_sensitive(packet);
+                packet_writer_write_uint8(packet, 1);
+                packet_writer_write_bytes(packet, (const uint8_t *)response, length);
+                socket_send_packet(cs, packet);
+            }
+            OPENSSL_cleanse(response, sizeof(response));
+        }
+    }
+    if (settings.access_required && cs->access_authenticated &&
+        access_server_session_check(&cs->access_token) == ACCESS_SESSION_DENIED)
+        cs->state = ST_DEAD;
+}
+
+void socket_server_access_poll(void) {
+    access_server_tick();
+    csocket_entry_t *entry;
+    DL_FOREACH(client_sockets, entry) socket_access_poll_one(entry->cs);
+    player *pl, *next;
+    DL_FOREACH_SAFE(first_player, pl, next) {
+        socket_access_poll_one(pl->cs);
+        if (pl->cs->state == ST_DEAD && settings.access_required && pl->cs->access_authenticated) {
+            if (!player_logout_checked(pl)) access_server_save_failed();
+        }
+    }
+}
+
 bool socket_server_process(void) {
+    socket_server_access_poll();
     static time_t heartbeat_last;
     time_t now = time(NULL);
     if (heartbeat_last == 0 || now - heartbeat_last >= 5) {

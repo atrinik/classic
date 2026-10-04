@@ -3843,7 +3843,9 @@ object *player_get_dummy(const char *name, const char *host) {
 
     pl->cs->state = ST_PLAYING;
     pl->cs->socket_version = SOCKET_VERSION;
-    pl->cs->join_authenticated = true;
+    pl->cs->access_authenticated = true;
+    pl->cs->access_transport_authenticated = true;
+    pl->cs->access_policy_sent = true;
     pl->cs->setup_completed = true;
     pl->cs->account = xstrdup(ACCOUNT_TESTING_NAME);
     pl->cs->sound = 1;
