@@ -262,8 +262,8 @@ static int test_completion_waits_for_cleanup(bool post, bool error) {
                                          "Content-Length: 7\r\n"
                                          "Connection: close\r\n\r\n"
                                          "failure";
-    http_fixture_t fixture = {
-        .listener = -1, .response = error ? error_response : success_response};
+    http_fixture_t fixture = {.listener = -1,
+                              .response = error ? error_response : success_response};
     char url[128];
     if (http_fixture_start(&fixture, url, sizeof(url)) != 0) {
         return 1;
@@ -315,8 +315,11 @@ static int test_completion_waits_for_cleanup(bool post, bool error) {
     valid = valid && notified && completion.valid && fixture.accepted &&
             !atomic_load(&cleanup_timed_out);
     if (!valid) {
-        fprintf(stderr, "cleanup completion fixture failed: post=%d error=%d pending=%d\n",
-                post, error, pending);
+        fprintf(stderr,
+                "cleanup completion fixture failed: post=%d error=%d pending=%d\n",
+                post,
+                error,
+                pending);
     }
     return !valid;
 }

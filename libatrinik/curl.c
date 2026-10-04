@@ -1578,7 +1578,8 @@ static int curl_progress(void *userdata,
     /* Only the worker may query its active libcurl handle. Publish copies for
      * the owner's progress display and retain them throughout cleanup. */
     curl_off_t value;
-    if (curl_easy_getinfo(request->handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &value) == CURLE_OK) {
+    if (curl_easy_getinfo(request->handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &value) ==
+        CURLE_OK) {
         request->download_length = (int64_t)value;
     }
     if (curl_easy_getinfo(request->handle, CURLINFO_SPEED_DOWNLOAD_T, &value) == CURLE_OK) {
