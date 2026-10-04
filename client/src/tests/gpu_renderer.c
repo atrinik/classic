@@ -64,6 +64,9 @@ void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected) {
     (void)sample_y;
     (void)projected;
 }
+void gpu_map_renderer_set_ground_coverage(bool enabled) {
+    (void)enabled;
+}
 void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
     (void)record_identity;
     (void)draw_variant;
@@ -71,6 +74,13 @@ void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t d
 void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
     (void)owner;
     (void)vertices;
+}
+void gpu_map_renderer_light_quad_coverage(uint8_t owner,
+                                         const lighting_vertex_t vertices[4],
+                                         const uint8_t coverage[9]) {
+    (void)owner;
+    (void)vertices;
+    (void)coverage;
 }
 bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                                    const SDL_Rect *source,
