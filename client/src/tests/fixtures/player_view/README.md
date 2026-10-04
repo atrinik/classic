@@ -425,8 +425,13 @@ unchanged full rebuild, and SAME scroll-out/back parity. Normal light-only
 scalar/RGB and hue-only packets must change illumination without changing
 coverage or creating a floor. A layer-only exploration packet must increase
 coverage without changing the sampled light. Soft FOW must retain the explored
-floor and its coverage. Every updated scene also compares full and retained
-frames. The immutable original snapshot is restored before the harness's
+floor and its coverage. Light, exploration, and FOW updates draw retained first,
+then compare every framebuffer pixel with a full rebuild, so full publication
+cannot mask missed retained invalidation. Changed retained draws must reuse
+commands; exploration must also compile newly exposed floor commands. Stable
+retained draws must compile zero commands. Scrolling changes the projection
+origin, which requires a full draw before checking stable retained parity.
+The immutable original snapshot is restored before the harness's
 remaining comparisons. The pending backend golden does not waive these
 semantic and pixel assertions. The floor-composition fixture additionally
 checks the expired-item background against CPU tone multiplied by coverage.

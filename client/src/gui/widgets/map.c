@@ -9742,8 +9742,16 @@ done:
     return success;
 }
 
+typedef enum map_ground_coverage_draw {
+    MAP_GROUND_COVERAGE_FULL,
+    MAP_GROUND_COVERAGE_RETAINED_STABLE,
+    MAP_GROUND_COVERAGE_RETAINED_CHANGED,
+} map_ground_coverage_draw_t;
+
 /** Draw the normal primary world and capture its complete composed target. */
-static SDL_Surface *map_ground_coverage_capture(SDL_Surface *surface, bool retained) {
+static SDL_Surface *map_ground_coverage_capture(SDL_Surface *surface,
+                                               map_ground_coverage_draw_t mode) {
+    bool retained = mode != MAP_GROUND_COVERAGE_FULL;
     map_redraw_consume();
     map_redraw_request(retained ? MAP_REDRAW_REASON_ANIMATION : MAP_REDRAW_REASON_MAP_PACKET);
     map_benchmark_statistics_reset();
@@ -9753,9 +9761,11 @@ static SDL_Surface *map_ground_coverage_capture(SDL_Surface *surface, bool retai
     map_draw_map(surface);
     map_benchmark_statistics_t statistics;
     map_benchmark_statistics_get(&statistics);
-    if (statistics.primary_map_draws != 1 || statistics.render_failures != 0 ||
+    if (statistics.primary_map_draws != 1 || statistics.auxiliary_map_draws != 0 ||
+        statistics.render_failures != 0 ||
         (retained && (statistics.animation_draws != 1 || statistics.reused_render_commands == 0 ||
-                      statistics.compiled_render_commands != 0))) {
+                      (mode == MAP_GROUND_COVERAGE_RETAINED_STABLE &&
+                       statistics.compiled_render_commands != 0)))) {
         SDL_SetError("ground coverage did not exercise the requested primary draw");
         return NULL;
     }
@@ -9860,7 +9870,7 @@ bool widget_map_ground_coverage_test(void) {
     const uint8_t posy = MapData.posy;
     gpu_map_renderer_probe_t boundary[3], sample, lit, explored;
     static const int offsets[3][2] = {{3, 2}, {6, 3}, {9, 5}};
-    baseline = map_ground_coverage_capture(surface, false);
+    baseline = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
     GROUND_CHECK(baseline != NULL);
     for (size_t index = 0; index < arraysize(boundary); index++) {
         GROUND_CHECK(map_ground_coverage_sample(surface, 9, 5, offsets[index][0], offsets[index][1], &boundary[index]));
@@ -9906,24 +9916,25 @@ bool widget_map_ground_coverage_test(void) {
         }
     }
     GROUND_CHECK(exclusions == 7 && masks == 1);
-    capture = map_ground_coverage_capture(surface, true);
+    capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_STABLE);
     GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
     SDL_DestroySurface(capture);
-    capture = map_ground_coverage_capture(surface, false);
+    capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
     GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
     SDL_DestroySurface(capture);
     capture = NULL;
 
-    /* Sparse SAME scroll and return preserve topology without resending faces. */
+    /* A scroll changes the projection origin and requires a full compilation.
+     * Compare its next stable retained draw, then require exact scroll-back parity. */
     GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, (uint8_t)(posx + 1), posy, 0, NULL, NULL));
-    capture = map_ground_coverage_capture(surface, false);
-    other = map_ground_coverage_capture(surface, true);
+    capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+    other = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_STABLE);
     GROUND_CHECK(map_ground_coverage_equal(capture, other));
     SDL_DestroySurface(capture);
     SDL_DestroySurface(other);
     capture = other = NULL;
     GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, NULL, NULL));
-    capture = map_ground_coverage_capture(surface, false);
+    capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
     GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
     SDL_DestroySurface(capture);
     capture = NULL;
@@ -9932,7 +9943,7 @@ bool widget_map_ground_coverage_test(void) {
     for (int hue = 0; hue < 2; hue++) {
         GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0,
                      map_ground_coverage_light(hue == 0 ? 256 : 32, hue == 0 ? 64 : 256, hue == 0 ? 32 : 64), NULL));
-        capture = map_ground_coverage_capture(surface, false);
+        capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
         GROUND_CHECK(capture != NULL && map_ground_coverage_sample(surface, 9, 5, 6, 3, &lit));
         GROUND_CHECK(lit.ground_coverage == boundary[1].ground_coverage &&
                      memcmp(lit.light, boundary[1].light, sizeof(lit.light)) != 0 &&
@@ -9942,21 +9953,25 @@ bool widget_map_ground_coverage_test(void) {
             GROUND_CHECK(memcmp(lit.final_color, sample.final_color, sizeof(lit.final_color)) != 0);
         }
         sample = lit;
-        other = map_ground_coverage_capture(surface, true);
+        other = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
         GROUND_CHECK(map_ground_coverage_equal(capture, other));
         SDL_DestroySurface(capture);
         SDL_DestroySurface(other);
         capture = other = NULL;
     }
 
-    /* A layer-only exploration update must invalidate coverage even with no light update. */
+    /* A layer-only exploration update must invalidate coverage even with no light update.
+     * Probe retained state first so a full draw cannot prime its coverage cache. */
     GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0,
                                                map_ground_coverage_floor(10, 5), NULL));
-    capture = map_ground_coverage_capture(surface, false);
+    capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
     GROUND_CHECK(capture != NULL && map_ground_coverage_sample(surface, 9, 5, 6, 3, &explored) &&
                  explored.ground_coverage > lit.ground_coverage + 32 &&
                  memcmp(explored.light, lit.light, sizeof(lit.light)) == 0);
-    other = map_ground_coverage_capture(surface, true);
+    map_benchmark_statistics_t exploration_statistics;
+    map_benchmark_statistics_get(&exploration_statistics);
+    GROUND_CHECK(exploration_statistics.compiled_render_commands > 0);
+    other = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
     GROUND_CHECK(map_ground_coverage_equal(capture, other));
     SDL_DestroySurface(capture);
     SDL_DestroySurface(other);
@@ -9966,12 +9981,12 @@ bool widget_map_ground_coverage_test(void) {
     packet_struct *fow = packet_new(0, 32, 32);
     map_actor_relocation_test_fow(fow, 10, 5);
     GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, fow, NULL));
-    capture = map_ground_coverage_capture(surface, false);
+    capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
     GROUND_CHECK(capture != NULL && MAP_CELL_GET_MIDDLE(10, 5)->fow &&
                  map_cell_has_remembered_geometry(MAP_CELL_GET_MIDDLE(10, 5)) &&
                  map_ground_coverage_sample(surface, 9, 5, 6, 3, &sample) &&
                  sample.ground_coverage == explored.ground_coverage);
-    other = map_ground_coverage_capture(surface, true);
+    other = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
     GROUND_CHECK(map_ground_coverage_equal(capture, other));
     printf("{\"type\":\"ground-coverage\",\"boundary\":[%u,%u,%u],\"explored\":%u,\"remembered\":%u,\"complete_frame_parity\":true}\n",
            boundary[0].ground_coverage, boundary[1].ground_coverage, boundary[2].ground_coverage,
