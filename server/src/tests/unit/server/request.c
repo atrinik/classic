@@ -21,6 +21,7 @@
 #include <player.h>
 #include <tod.h>
 #include <commands.h>
+#include <celestial_light.h>
 #include <exit.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
@@ -1730,6 +1731,73 @@ START_TEST(test_map_exit_semantic_not_disclosed_by_boundary_geometry) {
 }
 END_TEST
 
+START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    request_move_player(&pl, map, 4, 4);
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    MapSpace *space = GET_MAP_SPACE_PTR(map, pl->x, pl->y);
+    /* Supply a color-only celestial transition to the real aggregate producer.
+     * The validated field keys and generation stay fixed throughout this test. */
+    space->celestial_light_value = 100;
+    space->celestial_light_next_value = 100;
+    space->celestial_light_rgb[0] = 100;
+    space->celestial_light_rgb[1] = 0;
+    space->celestial_light_rgb[2] = 0;
+    space->celestial_light_next_rgb[0] = 0;
+    space->celestial_light_next_rgb[1] = 0;
+    space->celestial_light_next_rgb[2] = 100;
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    int sub = pl->sub_layer;
+    ck_assert_uint_gt(cell->light_rgb_radiance[sub][0], cell->light_rgb_radiance[sub][2]);
+    ck_assert_uint_gt(cell->light_next_rgb_radiance[sub][2],
+                      cell->light_next_rgb_radiance[sub][0]);
+    uint64_t generation = cell->light_next_generation;
+    uint16_t scalar = cell->light_next_radiance[sub];
+    uint8_t bitmap = cell->light_next_rgb_explicit;
+    ck_assert_uint_ne(generation, 0);
+
+    /* A refreshed descriptor does not imply a new field generation. */
+    space->celestial_light_next_rgb[1] = 100;
+    space->celestial_light_next_rgb[2] = 0;
+    for (int repeat = 0; repeat < 2; repeat++) {
+        cs->lastmap_light_generation = 0;
+        socket_buffer_clear(cs);
+        draw_client_map2(pl);
+        ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+        ck_assert_uint_eq(cell->light_next_generation, generation);
+        ck_assert_uint_eq(cell->light_next_radiance[sub], scalar);
+        ck_assert_uint_eq(cell->light_next_rgb_explicit, bitmap);
+        ck_assert_uint_gt(cell->light_next_rgb_radiance[sub][1],
+                          cell->light_next_rgb_radiance[sub][2]);
+        packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+        ck_assert_ptr_nonnull(packet);
+        uint32_t size = UINT32_MAX;
+        ck_assert(map_packet_level_size(packet, 0, &size));
+        if (repeat == 0) {
+            ck_assert_uint_gt(size, 0);
+        } else {
+            ck_assert_uint_eq(size, 0);
+        }
+    }
+}
+END_TEST
+
 START_TEST(test_timed_endpoint_refresh_keeps_colored_scalar_present) {
     mapstruct *map;
     object *pl;
@@ -2157,6 +2225,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
+    tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
     tcase_add_test(tc_core, test_timed_endpoint_refresh_keeps_colored_scalar_present);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
