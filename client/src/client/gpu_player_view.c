@@ -1626,7 +1626,8 @@ static void gpu_player_view_json_map_statistics(FILE *output,
     fputs("\"map\":{", output);
     fprintf(output,
             "\"full_redraws\":%" PRIu64 ",\"damage_frames\":%" PRIu64 ",\"damage_pixels\":%" PRIu64
-            ",\"damage_bytes\":%" PRIu64 ",\"retained_frames\":%" PRIu64
+            ",\"damage_bytes\":%" PRIu64 ",\"damage_clear_batches\":%" PRIu64
+            ",\"retained_frames\":%" PRIu64
             ",\"skipped_passes\":%" PRIu64 ",\"dirty_commands\":%" PRIu64
             ",\"dirty_pixels\":%" PRIu64 ",\"dirty_bytes\":%" PRIu64
             ",\"published_generation\":%" PRIu64 ",\"source_generation\":%" PRIu64
@@ -1636,6 +1637,7 @@ static void gpu_player_view_json_map_statistics(FILE *output,
             statistics->map_damage_frames,
             statistics->map_damage_pixels,
             statistics->map_damage_bytes,
+            statistics->map_damage_clear_batches,
             statistics->map_retained_frames,
             statistics->map_skipped_passes,
             statistics->map_dirty_commands,
@@ -2699,9 +2701,14 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
             : measured.source_upload_count == 0 && measured.source_upload_bytes == 0;
     uint64_t completed_maps = map_measured.primary_map_draws + map_measured.auxiliary_map_draws;
     uint64_t map_passes = measured.map_full_redraws + measured.map_damage_frames;
+    /* Resolve and opaque damage-clear draws have no sprite slot uniforms.
+     * A damage clear can accompany a full lighting resolve, so count actual
+     * clear draws rather than inferring them from final damage frames. */
     bool slot_uniform_uploads_verified =
         measured.batches >= map_passes &&
-        measured.slot_uniform_upload_count == measured.batches - map_passes &&
+        measured.batches - map_passes >= measured.map_damage_clear_batches &&
+        measured.slot_uniform_upload_count ==
+            measured.batches - map_passes - measured.map_damage_clear_batches &&
         gpu_player_view_slot_uniform_uploads_bounded(&measured);
     bool map_retention_verified =
         measured.map_full_redraws + measured.map_retained_frames == completed_maps &&
