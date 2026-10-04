@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -15,6 +16,70 @@ ROOT = Path(__file__).resolve().parents[2]
 class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+    def test_check_routes_immutable_inputs_to_the_consumers_revision(self) -> None:
+        workflow = self.text("check.yml")
+        # Job boundaries keep an unrelated checkout or artifact declaration from
+        # satisfying the producer/consumer identity contract.
+        jobs = dict(
+            re.findall(
+                r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)",
+                workflow[workflow.index("jobs:\n") :],
+                re.MULTILINE | re.DOTALL,
+            )
+        )
+        for producer, artifact in (
+            ("dependency-inputs", "classic-dependency-inputs"),
+            ("gpu-shaders", "classic-gpu-shaders"),
+        ):
+            with self.subTest(producer=producer):
+                job = jobs[producer]
+                self.assertIn("fail-fast: false", job)
+                self.assertIn(
+                    "cohort: ${{ fromJSON(github.event_name == 'pull_request' && "
+                    "'[\"validation\", \"windows-head\"]' || '[\"validation\"]') }}",
+                    job,
+                )
+                self.assertIn(
+                    "INPUT_REVISION: ${{ matrix.cohort == 'windows-head' && "
+                    "github.event.pull_request.head.sha || github.sha }}",
+                    job,
+                )
+                self.assertIn("ref: ${{ env.INPUT_REVISION }}", job)
+                self.assertIn(
+                    'test "$(git rev-parse HEAD)" = "${INPUT_REVISION}"', job
+                )
+                self.assertIn('test -z "$(git status --short)"', job)
+                self.assertIn("name: " + artifact + "-${{ env.INPUT_REVISION }}", job)
+                self.assertLess(
+                    job.index('test "$(git rev-parse HEAD)"'),
+                    job.index("actions/cache"),
+                )
+        self.assertIn(
+            "${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.cohort }}",
+            jobs["dependency-inputs"],
+        )
+        consumers = {
+            "server": ("classic-dependency-inputs",),
+            "client": ("classic-dependency-inputs", "classic-gpu-shaders"),
+            "gpu-coverage": ("classic-dependency-inputs", "classic-gpu-shaders"),
+            "integrated": ("classic-dependency-inputs", "classic-gpu-shaders"),
+            "windows-test-build": ("classic-dependency-inputs", "classic-gpu-shaders"),
+        }
+        for consumer, artifacts in consumers.items():
+            with self.subTest(consumer=consumer):
+                job = jobs[consumer]
+                if consumer == "windows-test-build":
+                    revision = "env.COVERAGE_SHA"
+                    self.assertIn("ref: ${{ env.COVERAGE_SHA }}", job)
+                else:
+                    revision = "github.sha"
+                    # These jobs retain the event checkout, including PR merges.
+                    self.assertNotIn("ref:", job)
+                for artifact in artifacts:
+                    self.assertIn("name: " + artifact + "-${{ " + revision + " }}", job)
+                self.assertNotIn("name: classic-dependency-inputs\n", job)
+                self.assertNotIn("name: classic-gpu-shaders\n", job)
 
     def test_client_linux_presets_consume_the_validated_shader_cohort(self) -> None:
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
