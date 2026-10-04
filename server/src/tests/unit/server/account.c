@@ -17,6 +17,7 @@
 #include <account.h>
 #include <initialization.h>
 #include <player.h>
+#include <object.h>
 #include <toolkit/path.h>
 
 START_TEST(test_account_provision) {
@@ -294,6 +295,43 @@ START_TEST(test_account_provision_lighting_preset_rolls_back) {
 }
 END_TEST
 
+START_TEST(test_checked_logout_propagates_save_failures) {
+    const char *account_name = "shutdownproof";
+    const char *character_name = "Shutdown Proof";
+    char error[HUGE_BUF];
+    char *account_path = account_make_path(account_name);
+    char *player_path = player_make_path(character_name, "player.dat");
+    unlink(account_path);
+    unlink(player_path);
+    ck_assert(account_provision(account_name,
+                                "local-test-7!",
+                                character_name,
+                                "human_male",
+                                VS(error)));
+    object *ob = player_get_dummy(character_name, NULL);
+    player *pl = CONTR(ob);
+    free(pl->cs->account);
+    pl->cs->account = xstrdup(account_name);
+
+    /* These independent failures must survive the logout cleanup. */
+    player_save_fail_for_test(_i == 1);
+    account_fail_saves_for_test(_i == 2);
+    if (_i == 3) {
+        pl->metrics_load_failed = true;
+    }
+    ck_assert_int_eq(player_disconnect_all_checked(), _i == 0);
+    ck_assert_ptr_null(first_player);
+    player_save_fail_for_test(false);
+    account_fail_saves_for_test(false);
+    ck_assert(player_disconnect_all_checked());
+
+    ck_assert_int_eq(unlink(account_path), 0);
+    ck_assert_int_eq(unlink(player_path), 0);
+    free(account_path);
+    free(player_path);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("account");
     TCase *tc_core = tcase_create("Core");
@@ -301,6 +339,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_set_timeout(tc_core, 30);
+    tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 4);
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);

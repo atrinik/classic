@@ -77,6 +77,8 @@ bool gameplay_journal_init(const char *datapath,
 
 /** Close the current journal without deleting retained records. */
 void gameplay_journal_deinit(void);
+/** Final sync/close after checkpoints; false on pending transactions or any failure. */
+bool gameplay_journal_deinit_checked(void);
 
 /** Whether journal-backed gameplay mutations may currently start. */
 bool gameplay_journal_available(void);
@@ -190,6 +192,7 @@ bool gameplay_journal_semantic_abort(const char *transaction_id, const char *rea
 #ifdef ATRINIK_TESTING
 /** Unit-test seam for the fail-stop write policy; unavailable in release builds. */
 void gameplay_journal_fail_writes_for_test(bool fail);
+void gameplay_journal_fail_shutdown_for_test(bool sync, bool close_file);
 void gameplay_journal_fail_after_writes_for_test(size_t writes);
 void gameplay_journal_file_limit_for_test(size_t limit);
 void gameplay_journal_hard_limit_for_test(size_t limit);

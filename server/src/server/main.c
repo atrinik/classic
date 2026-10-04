@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <admin_shutdown.h>
 #include <weather.h>
 #include <swap.h>
 #include <initialization.h>
@@ -312,7 +313,8 @@ void process_events(void) {
 /**
  * Clean temporary map files.
  */
-void clean_tmp_files(void) {
+static bool clean_tmp_files_checked(void) {
+    bool ok = true;
     mapstruct *m, *tmp;
 
     /* We save the maps - it may not be intuitive why, but if there are
@@ -320,11 +322,14 @@ void clean_tmp_files(void) {
     DL_FOREACH_SAFE(first_map, m, tmp) {
         if (m->in_memory == MAP_IN_MEMORY) {
             if (settings.recycle_tmp_maps) {
-                swap_map(m, 0);
+                if (!swap_map_checked(m, 0)) {
+                    ok = false;
+                }
             } else {
                 if (new_save_map(m, 0) == 0) {
                     clean_tmp_map(m);
                 } else {
+                    ok = false;
                     LOG(BUG,
                         "Keeping unsaved map %s resident during temporary-file cleanup.",
                         m->path != NULL ? m->path : "<runtime>");
@@ -334,21 +339,40 @@ void clean_tmp_files(void) {
     }
 
     /* Write the clock */
-    write_todclock();
-
-    if (settings.recycle_tmp_maps) {
-        write_map_log();
+    if (!write_todclock_checked()) {
+        ok = false;
     }
+
+    if (settings.recycle_tmp_maps && !write_map_log_checked()) {
+        ok = false;
+    }
+    return ok;
+}
+
+void clean_tmp_files(void) {
+    (void)clean_tmp_files_checked();
 }
 
 /**
  * Shut down the server, saving and freeing all data.
  */
 void server_shutdown(void) {
-    player_disconnect_all();
-    clean_tmp_files();
-    LOG(INFO, "Server shutdown complete.");
-    exit(0);
+    bool ok = player_disconnect_all_checked();
+    if (!clean_tmp_files_checked()) {
+        ok = false;
+    }
+    if (!gameplay_journal_deinit_checked()) {
+        ok = false;
+    }
+    if (!admin_shutdown_finish(ok)) {
+        ok = false;
+    }
+    if (ok) {
+        LOG(INFO, "Server shutdown complete.");
+    } else {
+        LOG(ERROR, "Server shutdown persistence failed; refusing successful completion.");
+    }
+    exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
 }
 
 /**
@@ -535,12 +559,26 @@ static void do_specials(void) {
 }
 
 void shutdown_timer_start(long secs) {
+    (void)admin_shutdown_cancel();
     shutdown_time = pticks + secs * MAX_TICKS;
     shutdown_active = 1;
 }
 
 void shutdown_timer_stop(void) {
+    (void)admin_shutdown_cancel();
     shutdown_active = 0;
+}
+
+static bool admin_shutdown_schedule(unsigned seconds, const char *reason) {
+    if (shutdown_active || shutdown_requested) {
+        return false;
+    }
+    shutdown_timer_start((long)seconds);
+    draw_info_type_format(CHAT_TYPE_CHAT, NULL, COLOR_GREEN, NULL,
+                          "[Server]: Server shut down started; will shut down in %02u:%02u minutes.",
+                          seconds / 60, seconds % 60);
+    draw_info_type_format(CHAT_TYPE_CHAT, NULL, COLOR_GREEN, NULL, "[Server]: %s", reason);
+    return true;
 }
 
 static int shutdown_timer_check(void) {
@@ -549,6 +587,7 @@ static int shutdown_timer_check(void) {
     }
 
     if (pticks >= shutdown_time) {
+        admin_shutdown_expired();
         return 1;
     }
 
@@ -693,6 +732,11 @@ int server_run(int argc, char **argv) {
 #endif
     }
 
+    if (!admin_shutdown_init(settings.admin_shutdown_socket, admin_shutdown_schedule)) {
+        LOG(ERROR, "Cannot initialize protected local administrative shutdown socket.");
+        return EXIT_FAILURE;
+    }
+
     if (!settings.no_console) {
         console_start_thread();
     }
@@ -713,6 +757,7 @@ int server_run(int argc, char **argv) {
             break;
         }
 
+        admin_shutdown_poll();
         console_command_handle();
         if (!socket_server_process()) {
             /* Transport wakeups are intentionally independent from the game

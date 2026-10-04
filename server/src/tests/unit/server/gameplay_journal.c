@@ -2709,9 +2709,62 @@ START_TEST(test_append_failure_disables_journal) {
     ck_assert(!gameplay_journal_available());
 
     gameplay_journal_fail_writes_for_test(false);
-    gameplay_journal_deinit();
+    ck_assert(!gameplay_journal_deinit_checked());
     remove_fixture(directory);
 #endif
+}
+END_TEST
+
+START_TEST(test_checked_journal_shutdown_reports_sync_and_close_failures) {
+    char directory[] = "/tmp/atrinik-journal-shutdown-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    gameplay_journal_fail_shutdown_for_test(_i == 1, _i == 2);
+    ck_assert_int_eq(gameplay_journal_deinit_checked(), _i == 0);
+    ck_assert(!gameplay_journal_available());
+    gameplay_journal_fail_shutdown_for_test(false, false);
+    /* Even a failed final sync must close the file and release its lock. */
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    ck_assert(gameplay_journal_deinit_checked());
+    remove_fixture(directory);
+}
+END_TEST
+
+START_TEST(test_checked_disconnect_does_not_loop_on_pending_transaction) {
+    mapstruct *map;
+    object *ob;
+    check_setup_env_pl(&map, &ob);
+    char directory[] = "/tmp/atrinik-journal-shutdown-pending-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    const gameplay_journal_profile_t profile = {
+        .id = "legacy-unknown",
+        .schema = 0,
+        .digest = "unknown",
+        .effective_axes = "unknown",
+    };
+    ck_assert(gameplay_journal_init(directory, "server", &profile));
+    char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
+    ck_assert(gameplay_journal_currency_begin(ob,
+                                              "test.shutdown-pending",
+                                              "currency:test",
+                                              0,
+                                              1,
+                                              1,
+                                              "service",
+                                              "ground",
+                                              "generated",
+                                              transaction));
+    ck_assert(!player_disconnect_all_checked());
+    ck_assert_ptr_eq(first_player, CONTR(ob));
+    ck_assert(!gameplay_journal_deinit_checked());
+    free_player(CONTR(ob));
+    remove_fixture(directory);
 }
 END_TEST
 
@@ -2719,6 +2772,11 @@ static Suite *suite(void) {
     Suite *s = suite_create("gameplay_journal");
     TCase *tc_core = tcase_create("Core");
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
+    tcase_add_loop_test(tc_core,
+                        test_checked_journal_shutdown_reports_sync_and_close_failures,
+                        0,
+                        3);
+    tcase_add_test(tc_core, test_checked_disconnect_does_not_loop_on_pending_transaction);
     tcase_add_test(tc_core, test_intent_commit_abort_and_private_storage);
     tcase_add_test(tc_core, test_plugin_journal_hooks_are_append_only);
     tcase_add_test(tc_core, test_init_fails_closed_for_unsafe_directory_or_profile);

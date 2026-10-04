@@ -34,6 +34,9 @@
 - `install_data/` defines new-runtime defaults. Never handcraft, replace, or
   delete initialized account/player/key/identity state unless the task owns
   that mutable data.
+- Local root-only update shutdown is opt-in; preserve the bounded protocol,
+  idempotent countdown, and checked persistence/receipt contract in
+  [`doc/LOCAL_ADMIN_SHUTDOWN.md`](doc/LOCAL_ADMIN_SHUTDOWN.md).
 - Keep `--content_benchmark` and `--provision_scenario` offline: no listeners,
   plugins, metaserver, or console. Benchmark canonical logical map IDs; scenario
   provisioning persists through normal account/password APIs. Use wrapper
