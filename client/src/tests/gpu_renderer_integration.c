@@ -1471,11 +1471,11 @@ static bool unlit_owner_alpha_checkpoint(void) {
 static SDL_Surface *transparent_damage_frame(SDL_Surface *floor,
                                              SDL_Surface *overlay,
                                              float overlay_x,
-                                             Uint8 overlay_alpha) {
+                                             Uint8 overlay_alpha,
+                                             uint16_t radiance) {
     const int map_size = 64;
     SDL_FRect floor_destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
     SDL_FRect overlay_destination = {overlay_x, 8.0f, 12.0f, 4.0f};
-    const uint16_t radiance = 32;
     lighting_vertex_t light_quad[4] = {
         {.x = 0, .y = 0, .scalar = radiance, .red = radiance, .green = radiance, .blue = radiance},
         {.x = map_size,
@@ -1553,9 +1553,11 @@ static bool transparent_damage_checkpoint(void) {
         SDL_SetSurfaceBlendMode(overlay, SDL_BLENDMODE_BLEND) &&
         SDL_SetSurfaceColorKey(overlay, true, key);
     gpu_map_renderer_invalidate_target(false);
-    SDL_Surface *baseline = success ? transparent_damage_frame(floor, NULL, 0.0f, 0) : NULL;
+    SDL_Surface *baseline = success ? transparent_damage_frame(floor, NULL, 0.0f, 0, 32) : NULL;
     SDL_Surface *initial =
-        baseline != NULL ? transparent_damage_frame(floor, overlay, 8.0f, SDL_ALPHA_OPAQUE) : NULL;
+        baseline != NULL
+            ? transparent_damage_frame(floor, overlay, 8.0f, SDL_ALPHA_OPAQUE, 32)
+            : NULL;
     Uint8 floor_red = 0, floor_green = 0, floor_blue = 0, floor_alpha = 0;
     success =
         initial != NULL &&
@@ -1579,12 +1581,12 @@ static bool transparent_damage_checkpoint(void) {
 
     gpu_renderer_statistics_reset();
     SDL_Surface *damage_faded =
-        success ? transparent_damage_frame(floor, overlay, 32.0f, 128) : NULL;
+        success ? transparent_damage_frame(floor, overlay, 32.0f, 128, 32) : NULL;
     gpu_renderer_statistics_t faded_statistics;
     gpu_renderer_statistics_get(&faded_statistics);
     gpu_map_renderer_invalidate_target(false);
     SDL_Surface *full_faded =
-        damage_faded != NULL ? transparent_damage_frame(floor, overlay, 32.0f, 128) : NULL;
+        damage_faded != NULL ? transparent_damage_frame(floor, overlay, 32.0f, 128, 32) : NULL;
     success = success && damage_faded != NULL && full_faded != NULL &&
               transparent_damage_is_bounded(&faded_statistics) &&
               surface_pixel_is_near(damage_faded,
@@ -1599,19 +1601,36 @@ static bool transparent_damage_checkpoint(void) {
 
     gpu_renderer_statistics_reset();
     SDL_Surface *damage_opaque =
-        success ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE) : NULL;
+        success ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE, 32) : NULL;
     gpu_renderer_statistics_t opaque_statistics;
     gpu_renderer_statistics_get(&opaque_statistics);
     gpu_map_renderer_invalidate_target(false);
     SDL_Surface *full_opaque =
-        damage_opaque != NULL ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE)
-                              : NULL;
+        damage_opaque != NULL
+            ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE, 32)
+            : NULL;
     success = success && damage_opaque != NULL && full_opaque != NULL &&
               transparent_damage_is_bounded(&opaque_statistics) &&
               surfaces_match(damage_opaque, full_opaque);
+
+    gpu_renderer_statistics_reset();
+    SDL_Surface *relit_damage =
+        success ? transparent_damage_frame(floor, overlay, 8.0f, 128, 96) : NULL;
+    gpu_renderer_statistics_t relit_statistics;
+    gpu_renderer_statistics_get(&relit_statistics);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *relit_full =
+        relit_damage != NULL ? transparent_damage_frame(floor, overlay, 8.0f, 128, 96) : NULL;
+    success = success && relit_damage != NULL && relit_full != NULL &&
+              relit_statistics.map_full_redraws == 1 &&
+              relit_statistics.map_damage_frames == 0 &&
+              relit_statistics.map_damage_clear_batches == 1 &&
+              surfaces_match(relit_damage, relit_full);
     if (!success) {
         SDL_SetError("mixed-alpha damage redraw diverged from forced full redraw");
     }
+    SDL_DestroySurface(relit_full);
+    SDL_DestroySurface(relit_damage);
     SDL_DestroySurface(full_opaque);
     SDL_DestroySurface(damage_opaque);
     SDL_DestroySurface(full_faded);
