@@ -1997,7 +1997,7 @@ START_TEST(test_socket_rendezvous_messages) {
         "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     rendezvous_access_grant_t grant = {
         .server_id = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-        .generation = "00112233445566778899aabbccddeeff",
+        .generation = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
         .client_nonce = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         .grant = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         .expiry = (uint64_t)time(NULL) + 15,

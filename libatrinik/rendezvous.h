@@ -13,7 +13,7 @@
  * an attempt owns its copy and clears it on completion or failure. */
 typedef struct rendezvous_access_grant {
     char server_id[65];
-    char generation[33];
+    char generation[65];
     char client_nonce[65];
     char grant[65];
     uint64_t expiry;

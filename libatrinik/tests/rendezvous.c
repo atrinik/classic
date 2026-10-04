@@ -7,7 +7,7 @@
 int main(void) {
     rendezvous_access_grant_t grant = {0};
     memset(grant.server_id, 'a', 64);
-    memset(grant.generation, 'b', 32);
+    memset(grant.generation, 'b', 64);
     memset(grant.client_nonce, 'c', 64);
     memset(grant.grant, 'd', 64);
     grant.expiry = (uint64_t)time(NULL) + 10;

@@ -57,7 +57,7 @@ bool rendezvous_access_grant_valid(const rendezvous_access_grant_t *grant,
     return grant != NULL && string_is_hex_fixed(server_id, 64, true) &&
            string_is_hex_fixed(grant->server_id, 64, true) &&
            CRYPTO_memcmp(server_id, grant->server_id, 64) == 0 &&
-           string_is_hex_fixed(grant->generation, 32, true) &&
+           string_is_hex_fixed(grant->generation, 64, true) &&
            string_is_hex_fixed(grant->client_nonce, 64, true) &&
            string_is_hex_fixed(grant->grant, 64, true) &&
            grant->expiry > now && grant->expiry - now <= RENDEZVOUS_GRANT_LIFETIME_MAX;
