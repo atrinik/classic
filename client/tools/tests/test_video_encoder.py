@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from pathlib import Path
 import select
@@ -11,15 +12,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 if sys.platform.startswith("linux"):
     import fcntl
     import resource
 
 
-if len(sys.argv) < 2:
-    raise SystemExit("usage: test_video_encoder.py CLIENT_EXECUTABLE")
-CLIENT_EXECUTABLE = Path(sys.argv.pop(1)).resolve(strict=True)
+CLIENT_EXECUTABLE: Path | None = None
 
 
 def frame(
@@ -80,6 +80,11 @@ def avi_chunks(data: bytes):
 
 
 class VideoEncoderTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        if CLIENT_EXECUTABLE is None:
+            raise unittest.SkipTest("requires the explicit CTest client executable")
+
     @unittest.skipUnless(sys.platform.startswith("linux") and Path("/proc/self/fd").is_dir(),
                          "requires Linux procfs descriptor inspection")
     def test_closes_high_inherited_descriptor_above_lowered_limit(self) -> None:
@@ -273,5 +278,29 @@ class VideoEncoderTests(unittest.TestCase):
             self.assertEqual(result.stdout, b"FAILED\n")
 
 
+class VideoEncoderDiscoveryTests(unittest.TestCase):
+    def test_discovery_preserves_arguments_and_defers_native_tests(self) -> None:
+        arguments = ["python", "discover", "-s", "tools/tests"]
+        specification = importlib.util.spec_from_file_location("encoder_import_probe", __file__)
+        self.assertIsNotNone(specification)
+        self.assertIsNotNone(specification.loader)
+        module = importlib.util.module_from_spec(specification)
+        with mock.patch.object(sys, "argv", arguments):
+            specification.loader.exec_module(module)
+        self.assertEqual(arguments, ["python", "discover", "-s", "tools/tests"])
+        self.assertIsNone(module.CLIENT_EXECUTABLE)
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(module.VideoEncoderTests)
+        self.assertGreater(suite.countTestCases(), 0)
+        result = unittest.TestResult()
+        with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("unexpected encoder")):
+            suite.run(result)
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(result.testsRun, 0)
+        self.assertEqual(len(result.skipped), 1)
+
+
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: test_video_encoder.py CLIENT_EXECUTABLE")
+    CLIENT_EXECUTABLE = Path(sys.argv.pop(1)).resolve(strict=True)
     unittest.main()
