@@ -17,14 +17,15 @@
 
 #include <gpu_sprite_effect.h>
 
-#define CHECK(_expression)                                                        \
-    do {                                                                          \
-        if (!(_expression)) {                                                     \
-            fprintf(stderr, "GPU sprite ABI check failed at line %d: %s\n",      \
-                    __LINE__,                                                    \
-                    #_expression);                                               \
-            return false;                                                         \
-        }                                                                         \
+#define CHECK(_expression)                                          \
+    do {                                                            \
+        if (!(_expression)) {                                       \
+            fprintf(stderr,                                         \
+                    "GPU sprite ABI check failed at line %d: %s\n", \
+                    __LINE__,                                       \
+                    #_expression);                                  \
+            return false;                                           \
+        }                                                           \
     } while (0)
 
 static uint32_t valid_texture_flags(void) {
@@ -181,8 +182,7 @@ static bool test_ground_coverage_key(void) {
      * shader retains coverage separately when resolving that owner to a row. */
     instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE | UINT32_C(1);
     CHECK(!gpu_sprite_instance_valid(&instance));
-    instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE |
-                            GPU_SPRITE_LIGHTING_KEY_UNLIT;
+    instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE | GPU_SPRITE_LIGHTING_KEY_UNLIT;
     CHECK(!gpu_sprite_instance_valid(&instance));
     instance.lighting_key = GPU_SPRITE_LIGHTING_KEY_PROJECTED |
                             GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE | (UINT32_C(1) << 21);
@@ -197,8 +197,8 @@ static bool test_texture_metadata_matrix(void) {
     instance.texture_flags = valid_texture_flags();
     CHECK(gpu_sprite_instance_valid(&instance));
 
-    instance.texture_flags = (valid_texture_flags() & ~GPU_SPRITE_TEXTURE_ATLAS) |
-                             GPU_SPRITE_TEXTURE_STANDALONE;
+    instance.texture_flags =
+        (valid_texture_flags() & ~GPU_SPRITE_TEXTURE_ATLAS) | GPU_SPRITE_TEXTURE_STANDALONE;
     CHECK(gpu_sprite_instance_valid(&instance));
 
     instance.texture_flags = (valid_texture_flags() & ~GPU_SPRITE_TEXTURE_STRAIGHT_ALPHA) |

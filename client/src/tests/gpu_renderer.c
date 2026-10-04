@@ -76,8 +76,8 @@ void gpu_map_renderer_light_quad(uint8_t owner, const lighting_vertex_t vertices
     (void)vertices;
 }
 void gpu_map_renderer_light_quad_coverage(uint8_t owner,
-                                         const lighting_vertex_t vertices[4],
-                                         const uint8_t coverage[9]) {
+                                          const lighting_vertex_t vertices[4],
+                                          const uint8_t coverage[9]) {
     (void)owner;
     (void)vertices;
     (void)coverage;

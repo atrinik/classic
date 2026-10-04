@@ -6087,11 +6087,12 @@ map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, i
     int vertex_height = end_y - start_y + 1;
     lighting_vertex_t *vertices =
         xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*vertices));
-    bool *known_ground = xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*known_ground));
+    bool *known_ground =
+        xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*known_ground));
     for (int vertex_x = start_x; vertex_x <= end_x; vertex_x++) {
         for (int vertex_y = start_y; vertex_y <= end_y; vertex_y++) {
-            size_t index = (size_t)(vertex_x - start_x) * (size_t)vertex_height +
-                           (size_t)(vertex_y - start_y);
+            size_t index =
+                (size_t)(vertex_x - start_x) * (size_t)vertex_height + (size_t)(vertex_y - start_y);
             vertices[index] = map_lighting_vertex(surface, data, vertex_x, vertex_y);
             known_ground[index] = map_ground_coverage_known(MAP_CELL_GET(vertex_x, vertex_y));
         }
@@ -6121,7 +6122,9 @@ map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, i
                              known_ground[vertex + 1]};
             uint8_t coverage[9];
             map_visibility_ground_coverage(known, coverage);
-            gpu_renderer_map_light_quad_coverage((uint8_t)MAP2_DEPTH_INDEX(data->depth), quad, coverage);
+            gpu_renderer_map_light_quad_coverage((uint8_t)MAP2_DEPTH_INDEX(data->depth),
+                                                 quad,
+                                                 coverage);
         }
     }
     free(known_ground);
@@ -9494,9 +9497,8 @@ static const map_render_command_t *map_floor_composition_command(int x, int laye
     const map_render_command_t *result = NULL;
     for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
         const map_render_command_t *command = &map_retained_primary_context.commands[index];
-        if (command->depth == 0 && command->sub_layer == 0 &&
-            command->tile_x - MAP_STARTX == x && command->tile_y - MAP_STARTY == 10 &&
-            command->object_layer == layer) {
+        if (command->depth == 0 && command->sub_layer == 0 && command->tile_x - MAP_STARTX == x &&
+            command->tile_y - MAP_STARTY == 10 && command->object_layer == layer) {
             if (result != NULL) {
                 return NULL;
             }
@@ -9542,9 +9544,9 @@ static bool map_floor_composition_capture(SDL_Surface *surface,
         return false;
     }
     SDL_Surface *capture = gpu_renderer_readback(NULL);
-    bool success = capture != NULL &&
-                   SDL_ReadSurfacePixel(capture, *pixel_x, *pixel_y,
-                                        &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
+    bool success =
+        capture != NULL &&
+        SDL_ReadSurfacePixel(capture, *pixel_x, *pixel_y, &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
     SDL_DestroySurface(capture);
     return success;
 }
@@ -9577,8 +9579,11 @@ bool widget_map_floor_composition_test(void) {
         int marker_x = 6 - offset;
         if (step != 0) {
             success = map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME,
-                                                       (uint8_t)(initial_x + offset),
-                                                       (uint8_t)initial_y, 0, NULL, NULL);
+                                                     (uint8_t)(initial_x + offset),
+                                                     (uint8_t)initial_y,
+                                                     0,
+                                                     NULL,
+                                                     NULL);
         }
         map_cell_t *item_cell = MAP_CELL_GET_MIDDLE(marker_x, 10);
         map_cell_t *mask_cell = MAP_CELL_GET_MIDDLE(10 - offset, 10);
@@ -9590,18 +9595,30 @@ bool widget_map_floor_composition_test(void) {
                   map_cell_layer_record_read(mask_cell, GET_MAP_LAYER(LAYER_FMASK, 0))->face == 2;
         uint8_t full[4];
         uint8_t retained[4];
-        if (!success ||
-            !map_floor_composition_capture(surface, false, marker_x, true, &pixel_x, &pixel_y, full)) {
+        if (!success || !map_floor_composition_capture(surface,
+                                                       false,
+                                                       marker_x,
+                                                       true,
+                                                       &pixel_x,
+                                                       &pixel_y,
+                                                       full)) {
             success = false;
             break;
         }
-        const map_render_command_t *item_command = map_floor_composition_command(marker_x, LAYER_ITEM);
-        const map_render_command_t *mask_command = map_floor_composition_command(10 - offset, LAYER_FMASK);
+        const map_render_command_t *item_command =
+            map_floor_composition_command(marker_x, LAYER_ITEM);
+        const map_render_command_t *mask_command =
+            map_floor_composition_command(10 - offset, LAYER_FMASK);
         success = item_command != NULL && mask_command != NULL && !item_command->fogged &&
                   BIT_QUERY(item_command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
                   BIT_QUERY(mask_command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
-                  map_floor_composition_capture(surface, true, marker_x, true,
-                                                &pixel_x, &pixel_y, retained) &&
+                  map_floor_composition_capture(surface,
+                                                true,
+                                                marker_x,
+                                                true,
+                                                &pixel_x,
+                                                &pixel_y,
+                                                retained) &&
                   memcmp(full, retained, sizeof(full)) == 0;
     }
     if (!success) {
@@ -9611,8 +9628,12 @@ bool widget_map_floor_composition_test(void) {
 
     packet_struct *base = packet_new(0, 16, 16);
     map_actor_relocation_test_fow(base, 6, 10);
-    if (!map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, (uint8_t)initial_x,
-                                        (uint8_t)initial_y, 0, base, NULL)) {
+    if (!map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME,
+                                        (uint8_t)initial_x,
+                                        (uint8_t)initial_y,
+                                        0,
+                                        base,
+                                        NULL)) {
         success = false;
         goto done;
     }
@@ -9625,34 +9646,53 @@ bool widget_map_floor_composition_test(void) {
         const map_cell_layer_record_t *item =
             map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_ITEM, 0));
         const map_cell_actor_record_t *actor = map_cell_actor_record_read(cell, 0);
-        if (!cell->fow || item->visibility.authorized ||
-            actor->target_object_count != 0 || actor->probe != 0 || actor->name[0] != '\0' ||
+        if (!cell->fow || item->visibility.authorized || actor->target_object_count != 0 ||
+            actor->probe != 0 || actor->name[0] != '\0' ||
             (alpha[phase] != 0 && (item->face != 3 || item->visibility.alpha != alpha[phase])) ||
             (alpha[phase] == 0 && item->face != 0)) {
-            success = SDL_SetError("floor composition FOW interaction/fade state failed at %u ms", elapsed[phase]);
+            success = SDL_SetError("floor composition FOW interaction/fade state failed at %u ms",
+                                   elapsed[phase]);
             goto done;
         }
         uint8_t retained[4];
-        if (!map_floor_composition_capture(surface, false, 6, alpha[phase] != 0,
-                                           &pixel_x, &pixel_y, samples[phase]) ||
-            !map_floor_composition_capture(surface, true, 6, alpha[phase] != 0,
-                                           &pixel_x, &pixel_y, retained) ||
+        if (!map_floor_composition_capture(surface,
+                                           false,
+                                           6,
+                                           alpha[phase] != 0,
+                                           &pixel_x,
+                                           &pixel_y,
+                                           samples[phase]) ||
+            !map_floor_composition_capture(surface,
+                                           true,
+                                           6,
+                                           alpha[phase] != 0,
+                                           &pixel_x,
+                                           &pixel_y,
+                                           retained) ||
             memcmp(samples[phase], retained, sizeof(retained)) != 0) {
-            success = SDL_SetError("floor composition full/retained pixels differ at %u ms", elapsed[phase]);
+            success = SDL_SetError("floor composition full/retained pixels differ at %u ms",
+                                   elapsed[phase]);
             goto done;
         }
         printf("{\"type\":\"floor-composition\",\"elapsed_ms\":%u,\"alpha\":%u,"
                "\"pixel\":[%d,%d],\"final_rgba\":[%u,%u,%u,%u]}\n",
-               elapsed[phase], alpha[phase], pixel_x, pixel_y,
-               samples[phase][0], samples[phase][1], samples[phase][2], samples[phase][3]);
+               elapsed[phase],
+               alpha[phase],
+               pixel_x,
+               pixel_y,
+               samples[phase][0],
+               samples[phase][1],
+               samples[phase][2],
+               samples[phase][3]);
     }
     bool distinct_contribution = false;
     for (size_t channel = 0; channel < 3; channel++) {
         distinct_contribution |= abs((int)samples[0][channel] - (int)samples[3][channel]) >= 16;
     }
-    if (!distinct_contribution || samples[0][3] != UINT8_MAX ||
-        samples[1][3] != UINT8_MAX || samples[2][3] != UINT8_MAX) {
-        success = SDL_SetError("floor composition probe did not capture a distinct opaque fog item");
+    if (!distinct_contribution || samples[0][3] != UINT8_MAX || samples[1][3] != UINT8_MAX ||
+        samples[2][3] != UINT8_MAX) {
+        success =
+            SDL_SetError("floor composition probe did not capture a distinct opaque fog item");
         goto done;
     }
     /* The tall item's upper pixel covers a still-visible neighboring floor.
@@ -9661,10 +9701,15 @@ bool widget_map_floor_composition_test(void) {
     for (size_t phase = 1; phase < 3; phase++) {
         for (size_t channel = 0; channel < 3; channel++) {
             unsigned expected = ((unsigned)samples[0][channel] * alpha[phase] +
-                                 (unsigned)samples[3][channel] * (255U - alpha[phase]) + 127U) / 255U;
+                                 (unsigned)samples[3][channel] * (255U - alpha[phase]) + 127U) /
+                                255U;
             if (abs((int)samples[phase][channel] - (int)expected) > 2) {
-                success = SDL_SetError("floor composition brightness pop at %u ms channel %zu: got %u expected %u",
-                                       elapsed[phase], channel, samples[phase][channel], expected);
+                success = SDL_SetError(
+                    "floor composition brightness pop at %u ms channel %zu: got %u expected %u",
+                    elapsed[phase],
+                    channel,
+                    samples[phase][channel],
+                    expected);
                 goto done;
             }
         }
@@ -9686,22 +9731,36 @@ static void map_edge_lighting_vertex(const char *phase, int marker, int x, int y
     bool available = map_lighting_diagnostic_get(0, x, y, 0, true, &value);
     printf("{\"type\":\"edge-lighting-vertex\",\"phase\":\"%s\",\"marker\":%d,"
            "\"tile\":[%d,%d],\"available\":%s,\"weight\":%u",
-           phase, marker, x, y, available ? "true" : "false",
+           phase,
+           marker,
+           x,
+           y,
+           available ? "true" : "false",
            (unsigned)map_visibility_window_weight(x, y, map_width, map_height));
     if (available) {
         printf(",\"visible\":%s,\"fogged\":%s,\"remembered\":%s,\"reasons\":%u",
-               value.visible ? "true" : "false", value.fogged ? "true" : "false",
-               value.remembered ? "true" : "false", value.reasons);
+               value.visible ? "true" : "false",
+               value.fogged ? "true" : "false",
+               value.remembered ? "true" : "false",
+               value.reasons);
         if (value.visible && !value.fogged) {
             printf(",\"received\":%s,\"received_scalar\":%u,\"received_rgb\":[%u,%u,%u],"
                    "\"working_available\":%s,\"working_scalar\":%u,\"working_rgb\":[%u,%u,%u],"
                    "\"presentation_available\":%s,\"presentation_rgb\":[%u,%u,%u]",
-                   value.received ? "true" : "false", value.received_scalar,
-                   value.received_rgb[0], value.received_rgb[1], value.received_rgb[2],
-                   value.working_available ? "true" : "false", value.working_scalar,
-                   value.working_rgb[0], value.working_rgb[1], value.working_rgb[2],
+                   value.received ? "true" : "false",
+                   value.received_scalar,
+                   value.received_rgb[0],
+                   value.received_rgb[1],
+                   value.received_rgb[2],
+                   value.working_available ? "true" : "false",
+                   value.working_scalar,
+                   value.working_rgb[0],
+                   value.working_rgb[1],
+                   value.working_rgb[2],
                    value.presentation_available ? "true" : "false",
-                   value.presentation_rgb[0], value.presentation_rgb[1], value.presentation_rgb[2]);
+                   value.presentation_rgb[0],
+                   value.presentation_rgb[1],
+                   value.presentation_rgb[2]);
         }
     }
     printf("}\n");
@@ -9729,10 +9788,11 @@ bool widget_map_edge_lighting_test(void) {
         map_benchmark_statistics_get(&statistics);
         if (statistics.primary_map_draws != 1 || statistics.auxiliary_map_draws != 0 ||
             statistics.render_failures != 0 ||
-            (phase == 1 && (statistics.animation_draws != 1 ||
-                           statistics.reused_render_commands == 0 ||
-                           statistics.compiled_render_commands != 0))) {
-            return SDL_SetError("edge lighting fixture did not exercise the requested primary draw");
+            (phase == 1 &&
+             (statistics.animation_draws != 1 || statistics.reused_render_commands == 0 ||
+              statistics.compiled_render_commands != 0))) {
+            return SDL_SetError(
+                "edge lighting fixture did not exercise the requested primary draw");
         }
         image_face_statistics_t assets;
         image_face_statistics_get(&assets);
@@ -9743,7 +9803,8 @@ bool widget_map_edge_lighting_test(void) {
             const map_render_command_t *command = NULL;
             size_t matches = 0;
             for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
-                const map_render_command_t *candidate = &map_retained_primary_context.commands[index];
+                const map_render_command_t *candidate =
+                    &map_retained_primary_context.commands[index];
                 if (candidate->depth == 0 && candidate->object_layer == LAYER_WALL &&
                     candidate->tile_x - MAP_STARTX == markers[marker][0] &&
                     candidate->tile_y - MAP_STARTY == markers[marker][1] &&
@@ -9755,10 +9816,13 @@ bool widget_map_edge_lighting_test(void) {
             if (matches != 1 || command->fogged || command->ground ||
                 !BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
                 BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)) {
-                return SDL_SetError("edge lighting marker %d has no unique visible fixed-row command", marker);
+                return SDL_SetError(
+                    "edge lighting marker %d has no unique visible fixed-row command",
+                    marker);
             }
             for (size_t vertex = 0; vertex < arraysize(vertices); vertex++) {
-                map_edge_lighting_vertex(phase_name, marker,
+                map_edge_lighting_vertex(phase_name,
+                                         marker,
                                          markers[marker][0] + vertices[vertex][0],
                                          markers[marker][1] + vertices[vertex][1]);
             }
@@ -9771,37 +9835,68 @@ bool widget_map_edge_lighting_test(void) {
                 }
                 gpu_map_renderer_probe_t *probe = &samples[sample];
                 if (!gpu_map_renderer_probe(x, y, MAP2_DEPTH_INDEX(0), probe)) {
-                    return SDL_SetError("edge lighting marker %d sample %d has no valid owner row", marker, sample);
+                    return SDL_SetError("edge lighting marker %d sample %d has no valid owner row",
+                                        marker,
+                                        sample);
                 }
                 printf("{\"type\":\"edge-lighting\",\"phase\":\"%s\",\"marker\":%d,"
                        "\"tile\":[%d,%d],\"sample\":%d,\"pixel\":[%d,%d],"
-                       "\"record_identity\":%" PRIu64 ",\"cell_generation\":%u,\"cell_revision\":%u,"
+                       "\"record_identity\":%" PRIu64
+                       ",\"cell_generation\":%u,\"cell_revision\":%u,"
                        "\"flags\":%u,\"submitted_foot_y\":%d,\"sample_y\":%d,\"lighting_key\":%u,"
                        "\"albedo\":[%u,%u,%u,%u],\"cpu_reconstructed_light\":[%u,%u,%u,%u],"
                        "\"final_rgba\":[%u,%u,%u,%u],\"installed\":%" PRIu64 ",\"pending\":%zu}\n",
-                       phase_name, marker, markers[marker][0], markers[marker][1], sample, x, y,
-                       command->record_identity, command->cell_generation, command->cell_revision,
-                       (unsigned)command->effects.flags, command->effects.smooth_dark_y,
-                       probe->sample_y, probe->lighting_key,
-                       probe->albedo[0], probe->albedo[1], probe->albedo[2], probe->albedo[3],
-                       probe->light[0], probe->light[1], probe->light[2], probe->light[3],
-                       probe->final_color[0], probe->final_color[1], probe->final_color[2], probe->final_color[3],
-                       assets.installed_total, assets.pending);
+                       phase_name,
+                       marker,
+                       markers[marker][0],
+                       markers[marker][1],
+                       sample,
+                       x,
+                       y,
+                       command->record_identity,
+                       command->cell_generation,
+                       command->cell_revision,
+                       (unsigned)command->effects.flags,
+                       command->effects.smooth_dark_y,
+                       probe->sample_y,
+                       probe->lighting_key,
+                       probe->albedo[0],
+                       probe->albedo[1],
+                       probe->albedo[2],
+                       probe->albedo[3],
+                       probe->light[0],
+                       probe->light[1],
+                       probe->light[2],
+                       probe->light[3],
+                       probe->final_color[0],
+                       probe->final_color[1],
+                       probe->final_color[2],
+                       probe->final_color[3],
+                       assets.installed_total,
+                       assets.pending);
                 const uint8_t *expected_albedo = sample == 2 ? ground_albedo : marker_albedo;
-                int expected_y = sample == 2 ? y : MAX(0, MIN(surface->h - 1, command->effects.smooth_dark_y));
+                int expected_y =
+                    sample == 2 ? y : MAX(0, MIN(surface->h - 1, command->effects.smooth_dark_y));
                 if (memcmp(probe->albedo, expected_albedo, sizeof(probe->albedo)) != 0 ||
                     probe->sample_y != expected_y) {
-                    return SDL_SetError("edge lighting marker %d sample %d selected unexpected albedo or row", marker, sample);
+                    return SDL_SetError(
+                        "edge lighting marker %d sample %d selected unexpected albedo or row",
+                        marker,
+                        sample);
                 }
                 if (phase == 0) {
                     baseline[marker][sample] = *probe;
                 } else if (memcmp(&baseline[marker][sample], probe, sizeof(*probe)) != 0) {
-                    return SDL_SetError("edge lighting marker %d sample %d changed on retained redraw", marker, sample);
+                    return SDL_SetError(
+                        "edge lighting marker %d sample %d changed on retained redraw",
+                        marker,
+                        sample);
                 }
             }
             if (samples[0].lighting_key != samples[1].lighting_key ||
                 memcmp(samples[0].light, samples[1].light, sizeof(samples[0].light)) != 0) {
-                return SDL_SetError("edge lighting marker %d did not retain one vertical foot row", marker);
+                return SDL_SetError("edge lighting marker %d did not retain one vertical foot row",
+                                    marker);
             }
         }
     }

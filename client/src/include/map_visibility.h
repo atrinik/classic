@@ -53,8 +53,12 @@ uint16_t map_visibility_window_weight(int x, int y, int width, int height);
 uint16_t map_visibility_scale_radiance(uint16_t radiance, uint16_t weight);
 
 /** Feather display samples, normalizing HDR only inside the boundary band. */
-void map_visibility_apply_window_fade(int x, int y, int width, int height,
-                                      uint16_t *radiance, uint16_t rgb[3]);
+void map_visibility_apply_window_fade(int x,
+                                      int y,
+                                      int width,
+                                      int height,
+                                      uint16_t *radiance,
+                                      uint16_t rgb[3]);
 
 /** Add the presentation-only player contribution to one radiance sample. */
 uint16_t map_visibility_add_player_radiance(uint16_t radiance, uint16_t weight);

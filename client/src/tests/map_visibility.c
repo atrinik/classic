@@ -161,8 +161,7 @@ int main(void) {
         CHECK(rgb[2] == (x == 3 ? 16384 : expected_boundary[x] / 4));
     }
 
-    CHECK(MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE ==
-          (MAP_VISIBILITY_MEMORY_FLOOR_RAW * 8U + 2U) / 5U);
+    CHECK(MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE == (MAP_VISIBILITY_MEMORY_FLOOR_RAW * 8U + 2U) / 5U);
     CHECK(map_visibility_memory_floor(0) == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);
     CHECK(map_visibility_memory_floor(MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE) ==
           MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE);

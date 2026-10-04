@@ -84,8 +84,12 @@ uint16_t map_visibility_scale_radiance(uint16_t radiance, uint16_t weight) {
                       MAP_VISIBILITY_FIELD_UNIT);
 }
 
-void map_visibility_apply_window_fade(int x, int y, int width, int height,
-                                      uint16_t *radiance, uint16_t rgb[3]) {
+void map_visibility_apply_window_fade(int x,
+                                      int y,
+                                      int width,
+                                      int height,
+                                      uint16_t *radiance,
+                                      uint16_t rgb[3]) {
     HARD_ASSERT(radiance != NULL);
     HARD_ASSERT(rgb != NULL);
     uint16_t weight = map_visibility_window_weight(x, y, width, height);

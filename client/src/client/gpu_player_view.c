@@ -4273,7 +4273,9 @@ int gpu_player_view_main(int argc, char *argv[]) {
         bool composition = widget_map_floor_composition_test();
         socket_command_map(snapshot, snapshot_size, 0);
         if (!composition || !gpu_player_view_render(map_widget, manifest.widget_render)) {
-            fprintf(stderr, "gpu-player-view: floor composition regression failed: %s\n", SDL_GetError());
+            fprintf(stderr,
+                    "gpu-player-view: floor composition regression failed: %s\n",
+                    SDL_GetError());
             goto cleanup;
         }
     }

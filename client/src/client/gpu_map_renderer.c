@@ -3906,12 +3906,12 @@ static bool gpu_map_renderer_probe_quad(size_t index, int x, int y, uint16_t lig
             size_t row = v * 2 >= scale ? 1 : 0;
             size_t first = row * 3 + column;
             light[4] = lighting_bilinear_channel(gpu_map_renderer_probe_coverage(quad, first),
-                                                  gpu_map_renderer_probe_coverage(quad, first + 1),
-                                                  gpu_map_renderer_probe_coverage(quad, first + 4),
-                                                  gpu_map_renderer_probe_coverage(quad, first + 3),
-                                                  u * 2 - column * scale,
-                                                  v * 2 - row * scale,
-                                                  scale);
+                                                 gpu_map_renderer_probe_coverage(quad, first + 1),
+                                                 gpu_map_renderer_probe_coverage(quad, first + 4),
+                                                 gpu_map_renderer_probe_coverage(quad, first + 3),
+                                                 u * 2 - column * scale,
+                                                 v * 2 - row * scale,
+                                                 scale);
             return true;
         }
         int min_x = MIN(MIN(quad->x[0], quad->x[1]), MIN(quad->x[2], quad->x[3]));
@@ -4052,12 +4052,13 @@ bool gpu_map_renderer_probe(int x, int y, uint8_t light_owner, gpu_map_renderer_
                       gpu_map_renderer_download_pixel(final_target, 0, x, y, 4, probe->final_color);
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_COMPLETION, completion_started);
     uint16_t sample[5];
-    bool valid = downloaded &&
-                 gpu_map_renderer_probe_light(probe->lighting_key, x, light_owner, sample);
+    bool valid =
+        downloaded && gpu_map_renderer_probe_light(probe->lighting_key, x, light_owner, sample);
     if (valid) {
         memcpy(probe->light, sample, sizeof(probe->light));
-        probe->ground_coverage = (probe->lighting_key & GPU_MAP_LIGHT_KEY_GROUND_COVERAGE) != 0 ?
-                                     (uint8_t)sample[4] : UINT8_C(255);
+        probe->ground_coverage = (probe->lighting_key & GPU_MAP_LIGHT_KEY_GROUND_COVERAGE) != 0
+                                     ? (uint8_t)sample[4]
+                                     : UINT8_C(255);
         size_t row = (probe->lighting_key & GPU_MAP_LIGHT_KEY_MASK) - 1U;
         probe->sample_y = uploaded_light_rows[row].sample_y;
     }
