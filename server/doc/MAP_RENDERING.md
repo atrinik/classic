@@ -2142,8 +2142,9 @@ everywhere. Missing cells never submit a face.
 
 After the existing per-contributor tone mapping, multiply each eligible RGB
 channel by coverage with round-half-up division by 255; preserve alpha. Coverage
-thus cannot expose a lower linked level through opaque ground, change light
-color ratios, or attenuate structural owners. It does not change radiance,
+thus cannot expose a lower linked level through opaque ground or attenuate
+structural owners. It uses the same multiplier for every RGB channel. It does
+not change radiance,
 nearest-known light borrowing, the player field, remembered-light lift, or the
 wire-window taper above. Coverage bytes are part of the retained light-quad
 identity, so geometry-only exploration invalidates final lighting even when
