@@ -35,6 +35,7 @@
 #include <region.h>
 #include <initialization.h>
 #include <account.h>
+#include <access_tokens.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <arch.h>
@@ -908,6 +909,13 @@ void account_register(socket_struct *ns, char *name, char *password, char *passw
     }
 
     string_tolower(name);
+    /* Root-managed administrator identities must be provisioned locally;
+     * public registration cannot claim a listed identity after deletion. */
+    if (access_operator_allowed(settings.access_admin_accounts, name)) {
+        draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_RED, ns,
+                       "Account name is reserved by the system.");
+        return;
+    }
     path = account_make_path(name);
 
     if (path_exists(path)) {
@@ -1289,6 +1297,19 @@ void account_password_force(object *op, char *name, const char *password) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(name != NULL);
     HARD_ASSERT(password != NULL);
+
+    /* A general game operator must not reset an access administrator's
+     * credentials and thereby inherit the independent root-managed grant.
+     * When that boundary is configured, every forced reset uses the same
+     * authenticated-account allowlist; malformed/unreadable lists deny. */
+    if ((settings.access_required || settings.access_initialize ||
+         *settings.access_store != '\0' || *settings.access_admin_accounts != '\0') &&
+        (CONTR(op) == NULL || CONTR(op)->cs == NULL || CONTR(op)->cs->account == NULL ||
+         !access_operator_allowed(settings.access_admin_accounts,
+                                  CONTR(op)->cs->account))) {
+        draw_info(COLOR_RED, op, "Account administration permission required.");
+        return;
+    }
 
     if (*password == '\0' ||
         string_contains_other(password, settings.allowed_chars[ALLOWED_CHARS_PASSWORD])) {

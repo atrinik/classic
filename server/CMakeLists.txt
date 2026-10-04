@@ -280,6 +280,16 @@ target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
 target_link_libraries(${EXECUTABLE} PRIVATE atrinik-server-core Atrinik::Core)
 
+# Read-only stopped-state acceptance for the updater. This program does not
+# link the simulation core or initialize listeners, plugins, or a publisher.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(atrinik-access-status
+        tools/access_status.c src/server/access_admin.c src/server/access_tokens.c)
+    atrinik_configure_target(atrinik-access-status)
+    target_include_directories(atrinik-access-status PRIVATE src/include)
+    target_link_libraries(atrinik-access-status PRIVATE Atrinik::Core Threads::Threads)
+endif ()
+
 add_library(plugin_arena MODULE
     src/plugins/plugin_arena/plugin_arena.c)
 atrinik_configure_target(plugin_arena)
@@ -340,6 +350,18 @@ endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(atrinik-access-store-tests src/tests/access_tokens/store_fixture.c)
+        atrinik_configure_target(atrinik-access-store-tests)
+        target_include_directories(atrinik-access-store-tests PRIVATE src/include)
+        target_link_libraries(atrinik-access-store-tests PRIVATE Atrinik::Core Threads::Threads)
+        # Fixture assertions remain active in the release-style validation build.
+        target_compile_options(atrinik-access-store-tests PRIVATE -UNDEBUG)
+        add_test(NAME server-access-store COMMAND atrinik-access-store-tests)
+        add_test(NAME server-access-store-capacity COMMAND atrinik-access-store-tests --capacity)
+        set_tests_properties(server-access-store server-access-store-capacity
+            PROPERTIES TIMEOUT 180)
+    endif ()
     pkg_check_modules(CHECK_PKG QUIET IMPORTED_TARGET check)
 
     if (CHECK_PKG_FOUND)

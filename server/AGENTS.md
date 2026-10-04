@@ -42,6 +42,21 @@
   provisioning persists through normal account/password APIs. Use wrapper
   profiles/states/scenarios.
 
+## Access admission and administration
+
+- Protocol 1081 uses mandatory authenticated access policy before setup/account
+  traffic. Retired SETUP subtype 3 stays reserved; no join-password fallback.
+- `access_tokens.c` owns checked snapshot/audit/receipt/outbox transactions;
+  `access_admin.c` owns strict bounded management JSON; `access_server.c` owns
+  copied worker jobs and main-loop session checks. Keep socket/player pointers
+  out of worker ownership, and propagate failed saves into shutdown receipts.
+- Access administration requires canonical authenticated accounts in the
+  root-managed allowlist. General OP/default grants cannot confer it through
+  forced password changes, script execution or configuration commands.
+- See `doc/ACCESS_TOKEN_STORE.md` and `doc/LOCAL_ADMIN_SHUTDOWN.md` for durability,
+  root bootstrap, private responses, exact online/offline status and backups.
+  Never expose raw codes to command logs or ordinary packet dumps.
+
 ## Dependencies, protocols, and generated files
 
 - Integrated builds use sibling `protocol/` and `libatrinik/`. Classic protocol

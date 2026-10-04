@@ -1337,7 +1337,11 @@ static bool socket_server_service_connection(socket_struct *cs,
         return false;
     }
 
-    socket_server_csocket_read(cs);
+    /* Keep servicing encrypted transport while a durable mutation owns the
+     * admission authority, but preserve application bytes for later dispatch. */
+    if (!settings.access_required || !cs->access_authenticated ||
+        access_server_session_check(&cs->access_token) == ACCESS_SESSION_VALID)
+        socket_server_csocket_read(cs);
     return true;
 }
 
@@ -1411,7 +1415,7 @@ static void socket_server_service_player_connections(socket_server_transport_sta
                 continue;
             }
             if (cs->state == ST_DEAD) {
-                player_logout(live);
+                if (!player_logout_checked(live)) access_server_save_failed();
             } else {
                 socket_buffer_write(cs);
             }
@@ -1436,7 +1440,7 @@ static void socket_access_poll_one(socket_struct *cs) {
         if (access_server_auth_poll(cs->access_auth_job, &outcome, &ref)) {
             cs->access_auth_job = 0;
             bool accepted = outcome == ACCESS_COMMITTED &&
-                access_server_session_check(&ref) != ACCESS_SESSION_DENIED;
+                access_server_session_check(&ref) == ACCESS_SESSION_VALID;
             if (accepted) {
                 cs->access_token = ref;
                 cs->access_authenticated = true;
@@ -1446,7 +1450,9 @@ static void socket_access_poll_one(socket_struct *cs) {
             packet_writer_write_uint8(packet, 1);
             packet_writer_write_uint8(packet, accepted ? 0 : 1);
             socket_send_packet(cs, packet);
-            if (!accepted) cs->state = ST_ZOMBIE;
+            if (!accepted) {
+                cs->state = ST_ZOMBIE;
+            }
         }
     }
     if (cs->access_admin_job != 0) {
@@ -1541,7 +1547,7 @@ bool socket_server_process(void) {
     player *pl, *pl_tmp;
     DL_FOREACH_SAFE(first_player, pl, pl_tmp) {
         if (pl->cs->state == ST_DEAD) {
-            player_logout(pl);
+            if (!player_logout_checked(pl)) access_server_save_failed();
             continue;
         }
 
@@ -1551,7 +1557,7 @@ bool socket_server_process(void) {
         }
 
         if (pl->cs->state == ST_DEAD) {
-            player_logout(pl);
+            if (!player_logout_checked(pl)) access_server_save_failed();
             continue;
         }
 
@@ -1662,7 +1668,7 @@ void socket_server_post_process(void) {
             pl->cs->state = ST_DEAD;
         }
         if (pl->cs->state == ST_DEAD) {
-            player_logout(pl);
+            if (!player_logout_checked(pl)) access_server_save_failed();
             continue;
         }
 
@@ -1673,7 +1679,7 @@ void socket_server_post_process(void) {
                 socket_get_id(pl->cs->sc),
                 socket_fd(pl->cs->sc));
             pl->cs->state = ST_DEAD;
-            player_logout(pl);
+            if (!player_logout_checked(pl)) access_server_save_failed();
             continue;
         }
 

@@ -332,6 +332,40 @@ START_TEST(test_checked_logout_propagates_save_failures) {
 }
 END_TEST
 
+START_TEST(test_access_admin_boundary_preserves_moderation) {
+    char saved_allowlist[sizeof(settings.access_admin_accounts)];
+    char saved_groups[sizeof(settings.default_permission_groups)];
+    memcpy(saved_allowlist, settings.access_admin_accounts, sizeof(saved_allowlist));
+    memcpy(saved_groups, settings.default_permission_groups, sizeof(saved_groups));
+    bool saved_required = settings.access_required;
+    player pl = {0};
+    socket_struct cs = {0};
+    pl.cs = &cs;
+    cs.account = "ordinaryoperator";
+    settings.access_required = true;
+    settings.access_admin_accounts[0] = '\0';
+    snprintf(VS(settings.default_permission_groups), "[OP]");
+    const char *dangerous[] = {"console", "create", "patch", "config", "password", "/console"};
+    for (size_t i = 0; i < arraysize(dangerous); i++)
+        ck_assert_int_eq(commands_check_permission(&pl, dangerous[i]), 0);
+    ck_assert_int_eq(commands_check_permission(&pl, "kick"), 1);
+    ck_assert_int_eq(commands_check_permission(&pl, "ban"), 1);
+    ck_assert_int_eq(commands_check_permission(&pl, "freeze"), 1);
+
+    /* An explicit delegated grant cannot override a missing root grant. */
+    settings.default_permission_groups[0] = '\0';
+    char *permissions[] = {"console", "create", "patch", "config", "password", "kick"};
+    pl.cmd_permissions = permissions;
+    pl.num_cmd_permissions = arraysize(permissions);
+    for (size_t i = 0; i < arraysize(dangerous); i++)
+        ck_assert_int_eq(commands_check_permission(&pl, dangerous[i]), 0);
+    ck_assert_int_eq(commands_check_permission(&pl, "kick"), 1);
+    settings.access_required = saved_required;
+    memcpy(settings.access_admin_accounts, saved_allowlist, sizeof(saved_allowlist));
+    memcpy(settings.default_permission_groups, saved_groups, sizeof(saved_groups));
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("account");
     TCase *tc_core = tcase_create("Core");
@@ -340,6 +374,7 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_set_timeout(tc_core, 30);
     tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 4);
+    tcase_add_test(tc_core, test_access_admin_boundary_preserves_moderation);
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);

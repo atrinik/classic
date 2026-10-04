@@ -26,7 +26,7 @@ typedef struct {
 static struct {
     pthread_mutex_t mutex;
     pthread_cond_t ready;
-    pthread_t thread;
+    pthread_t thread, expiry_thread;
     bool started, stopping, maintenance;
     uint64_t next_id;
     access_job jobs[ACCESS_OUTBOX_LIMIT];
@@ -37,6 +37,17 @@ static struct {
     int64_t tick;
 } worker = {.mutex=PTHREAD_MUTEX_INITIALIZER, .ready=PTHREAD_COND_INITIALIZER};
 
+/* Once a connection or maintenance pass observes a deadline, a backwards
+ * wall-clock step cannot reopen it before its durable expiry transaction. */
+static int64_t access_clock_now(void) {
+    static _Atomic int64_t observed;
+    int64_t now = (int64_t)time(NULL);
+    int64_t previous = atomic_load(&observed);
+    while (now > previous &&
+           !atomic_compare_exchange_weak(&observed, &previous, now)) {}
+    return now > previous ? now : previous;
+}
+
 static access_job *find_job(uint64_t id) {
     for (size_t i=0;i<ACCESS_OUTBOX_LIMIT;i++)
         if (worker.jobs[i].state != JOB_FREE && worker.jobs[i].id == id) return &worker.jobs[i];
@@ -46,7 +57,7 @@ static void clear_job(access_job *job) { access_code_clear(job,sizeof(*job)); }
 
 static void maintain_store(void) {
     if (worker.store == NULL) return;
-    access_outcome_t result = access_store_expire(worker.store,(int64_t)time(NULL));
+    access_outcome_t result = access_store_expire(worker.store,access_clock_now());
     if (result == ACCESS_SAVE_FAILED || result == ACCESS_INDETERMINATE)
         atomic_store(&worker.failed,true);
     access_route_t rows[ACCESS_OUTBOX_LIMIT];
@@ -57,7 +68,7 @@ static void maintain_store(void) {
     for (size_t i=0;i<count;i++) {
         if (!rows[i].revoke) continue;
         if (metaserver_access_route(NULL,&rows[i]) == ACCESS_COMMITTED) {
-            result=access_store_route_ack(worker.store,&rows[i],(int64_t)time(NULL));
+            result=access_store_route_ack(worker.store,&rows[i],access_clock_now());
             if (result == ACCESS_SAVE_FAILED || result == ACCESS_INDETERMINATE)
                 atomic_store(&worker.failed,true);
         }
@@ -87,7 +98,7 @@ static void *run_worker(void *unused) {
         if (job->auth) {
             job->outcome=worker.store == NULL ? ACCESS_UNAVAILABLE :
                 access_store_authorize(worker.store,job->input,worker.absent.server_identity,
-                                       (int64_t)time(NULL),&job->ref);
+                                       access_clock_now(),&job->ref);
         } else if (!job->root && !access_operator_allowed(worker.allowlist,job->account)) {
             /* No trusted client-supplied identity: account came from server login.
              * An unavailable result is encoded from the already validated request. */
@@ -112,9 +123,34 @@ static void *run_worker(void *unused) {
     return NULL;
 }
 
+/* Expiry durability cannot sit behind a slow remote route operation. Both
+ * threads use the store's same serialized transaction authority; only the
+ * admin worker performs remote IO. The game loop uses its nonblocking view. */
+static void *run_expiry(void *unused) {
+    (void)unused;
+    int64_t last = 0;
+    for (;;) {
+        pthread_mutex_lock(&worker.mutex);
+        bool stop = worker.stopping;
+        pthread_mutex_unlock(&worker.mutex);
+        if (stop) break;
+        int64_t now = access_clock_now();
+        if (worker.store != NULL && now != last) {
+            access_outcome_t result = access_store_expire(worker.store, now);
+            if (result == ACCESS_SAVE_FAILED || result == ACCESS_INDETERMINATE)
+                atomic_store(&worker.failed, true);
+            last = now;
+        }
+        struct timespec pause = {.tv_sec=0, .tv_nsec=100000000};
+        nanosleep(&pause, NULL);
+    }
+    return NULL;
+}
+
 bool access_server_init(const char identity_hex[65]) {
     if (worker.started || strlen(identity_hex)!=64) return false;
     memset(&worker.absent,0,sizeof(worker.absent));
+    worker.absent.schema_version=ACCESS_STORE_SCHEMA;
     worker.absent.protected_policy=settings.access_required;
     for (size_t i=0;i<32;i++) {
         unsigned value=0;
@@ -129,8 +165,7 @@ bool access_server_init(const char identity_hex[65]) {
     char path[HUGE_BUF];
     if (*settings.access_store != '\0') snprintf(VS(path),"%s",settings.access_store);
     else if (snprintf(VS(path),"%s/access-tokens",settings.datapath)>=(int)sizeof(path)) return false;
-    struct stat st;
-    bool absent=lstat(path,&st)!=0 && errno==ENOENT;
+    bool absent=access_store_absent(path);
     if (absent && settings.access_initialize) {
         if (mkdir(path,0700)!=0) return false;
         absent=false;
@@ -144,12 +179,21 @@ bool access_server_init(const char identity_hex[65]) {
     if (pthread_create(&worker.thread,NULL,run_worker,NULL)!=0) {
         access_store_close(worker.store);worker.store=NULL;return false;
     }
+    if (pthread_create(&worker.expiry_thread,NULL,run_expiry,NULL)!=0) {
+        pthread_mutex_lock(&worker.mutex);
+        worker.stopping=true;
+        pthread_cond_signal(&worker.ready);
+        pthread_mutex_unlock(&worker.mutex);
+        pthread_join(worker.thread,NULL);
+        access_store_close(worker.store);worker.store=NULL;
+        return false;
+    }
     worker.started=true;
     return true;
 }
 void access_server_tick(void) {
     if (!worker.started) return;
-    int64_t now=(int64_t)time(NULL);
+    int64_t now=access_clock_now();
     if (now==worker.tick) return;
     worker.tick=now;
     pthread_mutex_lock(&worker.mutex);
@@ -219,7 +263,7 @@ bool access_server_auth_poll(uint64_t id,access_outcome_t *out,access_token_ref_
 }
 access_session_state_t access_server_session_check(const access_token_ref_t *ref) {
     if (atomic_load(&worker.failed) || worker.store==NULL) return ACCESS_SESSION_DENIED;
-    return access_store_session_check(worker.store,ref,(int64_t)time(NULL));
+    return access_store_session_check(worker.store,ref,access_clock_now());
 }
 bool access_server_shutdown(void) {
     if (worker.started) {
@@ -228,6 +272,7 @@ bool access_server_shutdown(void) {
         pthread_cond_signal(&worker.ready);
         pthread_mutex_unlock(&worker.mutex);
         pthread_join(worker.thread,NULL);
+        pthread_join(worker.expiry_thread,NULL);
         worker.started=false;
         for (size_t i=0;i<ACCESS_OUTBOX_LIMIT;i++) clear_job(&worker.jobs[i]);
     }

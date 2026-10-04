@@ -1428,8 +1428,17 @@ access_outcome_t metaserver_access_route(void *context, const access_route_t *ro
     uint64_t now = datetime_monotonic_ms();
     if (now > UINT64_MAX - 29000U) return ACCESS_UNAVAILABLE;
     uint64_t deadline = now + 29000U;
+    if (route->deadline_monotonic_ms < 0) return ACCESS_UNAVAILABLE;
+    if (route->deadline_monotonic_ms > 0 &&
+        (uint64_t)route->deadline_monotonic_ms < deadline)
+        deadline = (uint64_t)route->deadline_monotonic_ms;
+    if (now >= deadline) return ACCESS_UNAVAILABLE;
     access_outcome_t outcome = metaserver_access_operation(route, route->revoke ? "revoke" : "reserve", reservation, deadline);
-    if (outcome == ACCESS_COMMITTED && !route->revoke) outcome = metaserver_access_operation(route, "activate", reservation, deadline);
+    /* Only a rejected reservation proves this tuple never acquired ownership.
+     * Activation conflicts remain ambiguous and must retain pending state. */
+    if (!route->revoke && outcome == ACCESS_CONFLICT) outcome = ACCESS_ROUTE_COLLISION;
+    else if (outcome == ACCESS_COMMITTED && !route->revoke)
+        outcome = metaserver_access_operation(route, "activate", reservation, deadline);
     OPENSSL_cleanse(reservation, sizeof(reservation));
     return outcome;
 }

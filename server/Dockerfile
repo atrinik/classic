@@ -30,7 +30,7 @@ RUN --network=none python3 tools/dependencies.py sync \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/src/protocol \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/src/libatrinik \
     && cmake --build build/release \
-        --target atrinik-server plugin_arena plugin_python --parallel
+        --target atrinik-server atrinik-access-status plugin_arena plugin_python --parallel
 
 RUN mkdir -p /tmp/worldmaker /tmp/atrinik-assets /tmp/atrinik-data/tmp \
     && cp build/release/atrinik-server \
@@ -71,6 +71,7 @@ COPY --from=build /src/server/permissions.cfg ./server/permissions.cfg
 COPY --from=build /src/server/server.cfg ./server/server.cfg
 COPY --from=build /src/server/tools ./server/tools
 COPY --from=build /src/server/build/release/atrinik-server ./server/atrinik-server
+COPY --from=build /src/server/build/release/atrinik-access-status ./server/atrinik-access-status
 COPY --from=build /src/server/build/release/libplugin_arena.so ./server/libplugin_arena.so
 COPY --from=build /src/server/build/release/libplugin_python.so ./server/libplugin_python.so
 COPY --from=build /src/LICENSE.md /usr/share/licenses/atrinik-classic/LICENSE.md

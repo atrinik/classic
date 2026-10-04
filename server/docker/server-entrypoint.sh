@@ -1,6 +1,15 @@
 #!/bin/sh
 set -eu
 
+# Legacy admission settings require explicit offline migration. Never forward
+# a removed secret through argv, and reject before touching persistent state.
+if [ -n "${ATRINIK_JOIN_PASSWORD:-}" ] ||
+   [ -n "${ATRINIK_JOIN_PASSWORD_FILE:-}" ] ||
+   [ -e /run/secrets/atrinik_join_password ]; then
+    echo "Legacy admission configuration requires offline migration to access tokens." >&2
+    exit 1
+fi
+
 # Initialize a new host data folder from the image defaults.
 if [ ! -e data/.atrinik-initialized ]; then
     cp -R install_data/. data/
@@ -12,11 +21,6 @@ fi
 # live below assets/client-maps.
 mkdir -p data/tmp
 
-if [ -r "${ATRINIK_JOIN_PASSWORD_FILE:-/run/secrets/atrinik_join_password}" ]; then
-    set -- --join_password_file="${ATRINIK_JOIN_PASSWORD_FILE:-/run/secrets/atrinik_join_password}" "$@"
-elif [ -n "${ATRINIK_JOIN_PASSWORD:-}" ]; then
-    set -- --join_password="${ATRINIK_JOIN_PASSWORD}" "$@"
-fi
 
 if [ -n "${ATRINIK_SERVER_HOST:-}" ]; then
     set -- --server_host="${ATRINIK_SERVER_HOST}" "$@"

@@ -135,7 +135,7 @@ static bool access_attempt_allowed(socket_struct *ns) {
     return entry->failures < limit;
 }
 
-static void access_attempt_failed(socket_struct *ns) {
+void socket_access_attempt_failed(socket_struct *ns) {
     if (join_failure_global_count < UINT_MAX) {
         join_failure_global_count++;
     }
@@ -158,13 +158,14 @@ void socket_command_access_auth(socket_struct *ns, player *pl,
         ns->state = ST_ZOMBIE;
         return;
     }
+    /* Reserve the bounded attempt budget before asynchronous authorization. */
+    socket_access_attempt_failed(ns);
     char code[16];
     for (size_t i = 0; i < sizeof(code); i++) code[i] = packet_reader_read_uint8(&reader);
     ns->access_auth_job = access_server_auth_submit(code);
     OPENSSL_cleanse(code, sizeof(code));
     OPENSSL_cleanse(data, len);
     if (ns->access_auth_job == 0) {
-        access_attempt_failed(ns);
         packet_struct *result = packet_new(CLIENT_CMD_ACCESS_RESULT, 2, 0);
         packet_writer_write_uint8(result, 1);
         packet_writer_write_uint8(result, 1);
