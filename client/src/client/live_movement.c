@@ -119,9 +119,7 @@ static bool rejected_map_path_set(const char *report_path) {
         return false;
     }
     memcpy(rejected_map_path, report_path, directory_size);
-    memcpy(rejected_map_path + directory_size,
-           LIVE_REJECTED_MAP_BASENAME,
-           basename_size + 1U);
+    memcpy(rejected_map_path + directory_size, LIVE_REJECTED_MAP_BASENAME, basename_size + 1U);
     return true;
 }
 

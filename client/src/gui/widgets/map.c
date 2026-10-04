@@ -9105,8 +9105,8 @@ static bool map_actor_relocation_test_draw(SDL_Surface *surface, uint64_t living
     map_benchmark_statistics_t statistics;
     map_benchmark_statistics_get(&statistics);
     bool success = statistics.map_draws == 1 && statistics.primary_map_draws == 1 &&
-                   statistics.auxiliary_map_draws == 0 &&
-                   statistics.living_commands == living && statistics.render_failures == 0;
+                   statistics.auxiliary_map_draws == 0 && statistics.living_commands == living &&
+                   statistics.render_failures == 0;
     if (!success) {
         fprintf(stderr,
                 "map actor relocation test: %s draw mismatch expected-living=%" PRIu64
