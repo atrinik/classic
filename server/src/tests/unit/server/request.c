@@ -21,7 +21,6 @@
 #include <player.h>
 #include <tod.h>
 #include <commands.h>
-#include <celestial_light.h>
 #include <exit.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
