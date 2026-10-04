@@ -31,6 +31,15 @@ typedef struct map_visibility_fade {
     bool authorized;
 } map_visibility_fade_t;
 
+/**
+ * Build the 3-by-3 floor coverage grid for one light quad.
+ *
+ * The input order is (x,y), (x+1,y), (x+1,y+1), (x,y+1).  A grid sample is
+ * opaque only when every floor incident to that sample is known, so a missing
+ * floor cannot leak lighting across a shared edge or centre vertex.
+ */
+void map_visibility_ground_coverage(const bool known[4], uint8_t coverage[9]);
+
 /** Return the fixed-point radial field weight for one map-coordinate vector. */
 uint16_t map_visibility_field_weight(int dx, int dy);
 
@@ -44,8 +53,12 @@ uint16_t map_visibility_window_weight(int x, int y, int width, int height);
 uint16_t map_visibility_scale_radiance(uint16_t radiance, uint16_t weight);
 
 /** Feather display samples, normalizing HDR only inside the boundary band. */
-void map_visibility_apply_window_fade(int x, int y, int width, int height,
-                                      uint16_t *radiance, uint16_t rgb[3]);
+void map_visibility_apply_window_fade(int x,
+                                      int y,
+                                      int width,
+                                      int height,
+                                      uint16_t *radiance,
+                                      uint16_t rgb[3]);
 
 /** Add the presentation-only player contribution to one radiance sample. */
 uint16_t map_visibility_add_player_radiance(uint16_t radiance, uint16_t weight);

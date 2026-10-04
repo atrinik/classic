@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <surface_primitives.h>
+#include <toolkit/datetime.h>
 #include <toolkit/memory.h>
 #include <toolkit/socket.h>
 #include <toolkit/toolkit.h>
@@ -495,6 +496,7 @@ static bool recover_and_republish(SDL_Window *window,
                                   SDL_Surface *source,
                                   bool qualified,
                                   uint16_t light_level);
+static bool projected_alpha_recovery_checkpoint(SDL_Window *window, bool qualified);
 
 static bool async_map_submission_checkpoint(SDL_Surface *source) {
     SDL_FRect destination = {0.0f, 0.0f, 32.0f, 32.0f};
@@ -618,8 +620,8 @@ static bool instance_delta_upload_checkpoint(SDL_Surface *source) {
     }
     gpu_renderer_statistics_t changed;
     gpu_renderer_statistics_get(&changed);
-    if (changed.upload_count != 2 || changed.slot_uniform_upload_count != 1 ||
-        changed.slot_uniform_upload_bytes != 16 || changed.instance_upload_count != 1 ||
+    if (changed.upload_count != 3 || changed.slot_uniform_upload_count != 2 ||
+        changed.slot_uniform_upload_bytes != 32 || changed.instance_upload_count != 1 ||
         changed.instance_upload_bytes == 0 || changed.instance_upload_bytes > 256 ||
         changed.source_upload_count != 0 || changed.light_upload_count != 0) {
         SDL_SetError("one changed stable map record did not produce one bounded instance delta");
@@ -799,7 +801,7 @@ static bool atlas_batch_checkpoint(SDL_Surface *first, SDL_Surface *second) {
     }
     gpu_renderer_statistics_t statistics;
     gpu_renderer_statistics_get(&statistics);
-    if (statistics.commands != 3 || statistics.batches != 2 || statistics.draws != 4 ||
+    if (statistics.commands != 5 || statistics.batches != 3 || statistics.draws != 5 ||
         statistics.source_upload_count != 1 || statistics.source_upload_bytes == 0 ||
         statistics.resource_creations != 0) {
         SDL_SetError("atlas batch checkpoint: commands=%llu batches=%llu draws=%llu "
@@ -844,8 +846,8 @@ slot_fragmentation_frame(SDL_Surface *source, unsigned int phase, bool change_on
 
 static bool slot_fragmentation_checkpoint(SDL_Surface *source) {
     const unsigned int phases = 8;
-    const uint64_t commands = 1024 + 1; /* World commands plus the final pass. */
-    const uint64_t maximum_batches = 1024 / 256 + 1; /* Slot chunks plus final pass. */
+    const uint64_t commands = 2 * 1024 + 1; /* Opaque, transparent, and final passes. */
+    const uint64_t maximum_batches = 2 * (1024 / 256) + 1;
     for (unsigned int phase = 0; phase < phases; phase++) {
         gpu_renderer_statistics_reset();
         if (!slot_fragmentation_frame(source, phase, false)) {
@@ -891,8 +893,8 @@ static bool slot_fragmentation_checkpoint(SDL_Surface *source) {
     gpu_renderer_statistics_t changed;
     gpu_renderer_statistics_get(&changed);
     if (changed.commands >= commands || changed.batches > commands ||
-        changed.slot_uniform_upload_count != changed.batches - 1U ||
-        changed.slot_uniform_upload_bytes > 4096 || changed.instance_upload_count != 1 ||
+        changed.slot_uniform_upload_count != changed.batches - 2U ||
+        changed.slot_uniform_upload_bytes > 8192 || changed.instance_upload_count != 1 ||
         changed.instance_upload_bytes == 0 || changed.instance_upload_bytes > 256 ||
         changed.source_upload_count != 0 || changed.light_upload_count != 0 ||
         changed.map_damage_frames != 1 || changed.map_damage_pixels == 0 ||
@@ -1160,8 +1162,8 @@ static bool retained_primary_auxiliary_checkpoint(SDL_Surface *primary,
         if (statistics.resource_creations != 0 || statistics.resource_destructions != 0 ||
             statistics.upload_count != statistics.slot_uniform_upload_count ||
             statistics.upload_bytes != statistics.slot_uniform_upload_bytes ||
-            statistics.slot_uniform_upload_count != 2 ||
-            statistics.slot_uniform_upload_bytes != 32) {
+            statistics.slot_uniform_upload_count != 4 ||
+            statistics.slot_uniform_upload_bytes != 64) {
             SDL_SetError("retained primary/auxiliary map targets churned after warmup");
             return false;
         }
@@ -1173,6 +1175,471 @@ static bool retained_primary_auxiliary_checkpoint(SDL_Surface *primary,
         SDL_SetError("auxiliary rendering replaced the retained primary map target");
     }
     return valid;
+}
+
+static bool unlit_owner_alpha_frame(SDL_Surface *floor,
+                                    SDL_Surface *foreground,
+                                    uint16_t radiance,
+                                    Uint8 foreground_alpha,
+                                    bool draw_foreground,
+                                    Uint8 pixel[4]) {
+    const int map_size = 8;
+    SDL_FRect destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
+    lighting_vertex_t light_quad[4] = {
+        {.x = 0, .y = 0, .scalar = radiance, .red = radiance, .green = radiance, .blue = radiance},
+        {.x = map_size,
+         .y = 0,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = map_size,
+         .y = map_size,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = 0,
+         .y = map_size,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+    };
+    bool success = gpu_renderer_begin_frame() && gpu_renderer_map_begin(map_size, map_size);
+    gpu_renderer_map_light_quad(0, light_quad);
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
+    success = success && gpu_renderer_draw_surface(floor, NULL, &destination);
+    if (draw_foreground) {
+        success = success && SDL_SetSurfaceAlphaMod(foreground, foreground_alpha);
+        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0, false);
+        success = success && gpu_renderer_draw_surface(foreground, NULL, &destination);
+    }
+    success = success && gpu_renderer_map_end() &&
+              gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
+              gpu_renderer_present();
+    SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
+    success = checkpoint != NULL && SDL_ReadSurfacePixel(checkpoint,
+                                                         map_size / 2,
+                                                         map_size / 2,
+                                                         &pixel[0],
+                                                         &pixel[1],
+                                                         &pixel[2],
+                                                         &pixel[3]);
+    SDL_DestroySurface(checkpoint);
+    return success;
+}
+
+static bool unlit_owner_alpha_retained_frame(Uint8 pixel[4]) {
+    const int map_size = 8;
+    bool success = gpu_renderer_begin_frame() && gpu_renderer_map_retain(map_size, map_size) &&
+                   gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
+                   gpu_renderer_present();
+    SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
+    success = checkpoint != NULL && SDL_ReadSurfacePixel(checkpoint,
+                                                         map_size / 2,
+                                                         map_size / 2,
+                                                         &pixel[0],
+                                                         &pixel[1],
+                                                         &pixel[2],
+                                                         &pixel[3]);
+    SDL_DestroySurface(checkpoint);
+    return success;
+}
+
+static bool transparent_owner_order_frame(SDL_Surface *floor,
+                                          SDL_Surface *lit_foreground,
+                                          SDL_Surface *unlit_foreground,
+                                          SDL_Surface *occluder,
+                                          Uint8 lit_alpha,
+                                          Uint8 unlit_alpha,
+                                          Uint8 pixel[4]) {
+    const int map_size = 8;
+    SDL_FRect destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
+    const uint16_t radiance[3] = {32, 512, 1024};
+    bool success = gpu_renderer_begin_frame() && gpu_renderer_map_begin(map_size, map_size);
+    for (uint8_t owner = 0; owner < SDL_arraysize(radiance); owner++) {
+        lighting_vertex_t quad[4] = {
+            {.x = 0,
+             .y = 0,
+             .scalar = radiance[owner],
+             .red = radiance[owner],
+             .green = radiance[owner],
+             .blue = radiance[owner]},
+            {.x = map_size,
+             .y = 0,
+             .scalar = radiance[owner],
+             .red = radiance[owner],
+             .green = radiance[owner],
+             .blue = radiance[owner]},
+            {.x = map_size,
+             .y = map_size,
+             .scalar = radiance[owner],
+             .red = radiance[owner],
+             .green = radiance[owner],
+             .blue = radiance[owner]},
+            {.x = 0,
+             .y = map_size,
+             .scalar = radiance[owner],
+             .red = radiance[owner],
+             .green = radiance[owner],
+             .blue = radiance[owner]},
+        };
+        gpu_renderer_map_light_quad(owner, quad);
+    }
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
+    success = success && gpu_renderer_draw_surface(floor, NULL, &destination);
+    if (lit_foreground != NULL) {
+        success = success && SDL_SetSurfaceAlphaMod(lit_foreground, lit_alpha);
+        gpu_renderer_map_set_owner(1, map_size / 2, false);
+        success = success && gpu_renderer_draw_surface(lit_foreground, NULL, &destination);
+    }
+    if (unlit_foreground != NULL) {
+        success = success && SDL_SetSurfaceAlphaMod(unlit_foreground, unlit_alpha);
+        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0, false);
+        success = success && gpu_renderer_draw_surface(unlit_foreground, NULL, &destination);
+    }
+    if (occluder != NULL) {
+        gpu_renderer_map_set_owner(2, map_size / 2, false);
+        success = success && gpu_renderer_draw_surface(occluder, NULL, &destination);
+    }
+    success = success && gpu_renderer_map_end() &&
+              gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
+              gpu_renderer_present();
+    SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
+    success = checkpoint != NULL && SDL_ReadSurfacePixel(checkpoint,
+                                                         map_size / 2,
+                                                         map_size / 2,
+                                                         &pixel[0],
+                                                         &pixel[1],
+                                                         &pixel[2],
+                                                         &pixel[3]);
+    SDL_DestroySurface(checkpoint);
+    return success;
+}
+
+static bool compositor_alpha_matches(const Uint8 actual[4],
+                                     const Uint8 floor[4],
+                                     const Uint8 foreground[4],
+                                     Uint8 alpha,
+                                     Uint8 tolerance) {
+    Uint8 expected[4] = {
+        alpha_blend_channel(foreground[0], floor[0], alpha),
+        alpha_blend_channel(foreground[1], floor[1], alpha),
+        alpha_blend_channel(foreground[2], floor[2], alpha),
+        SDL_ALPHA_OPAQUE,
+    };
+    for (size_t channel = 0; channel < SDL_arraysize(expected); channel++) {
+        if (!surface_channel_is_near(actual[channel], expected[channel], tolerance)) {
+            SDL_SetError("alpha %u composited %u,%u,%u,%u; expected %u,%u,%u,%u",
+                         alpha,
+                         actual[0],
+                         actual[1],
+                         actual[2],
+                         actual[3],
+                         expected[0],
+                         expected[1],
+                         expected[2],
+                         expected[3]);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool
+compositor_pixel_matches(const Uint8 actual[4], const Uint8 expected[4], const char *label) {
+    if (memcmp(actual, expected, 4) == 0) {
+        return true;
+    }
+    SDL_SetError("%s composited %u,%u,%u,%u; expected %u,%u,%u,%u",
+                 label,
+                 actual[0],
+                 actual[1],
+                 actual[2],
+                 actual[3],
+                 expected[0],
+                 expected[1],
+                 expected[2],
+                 expected[3]);
+    return false;
+}
+
+/** Preserve a lit backdrop when an unlit remembered-world fade overlaps it. */
+static bool unlit_owner_alpha_checkpoint(void) {
+    const uint16_t low_radiance = 32;
+    const uint16_t changed_radiance = 96;
+    SDL_ClearError();
+    SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *lit_foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *occluder = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    bool success =
+        floor != NULL && foreground != NULL && lit_foreground != NULL && occluder != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(foreground, 60, 60, 76, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(lit_foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(lit_foreground, 176, 48, 96, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(occluder,
+                            NULL,
+                            SDL_MapSurfaceRGBA(occluder, 40, 192, 80, SDL_ALPHA_OPAQUE)) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND) &&
+        SDL_SetSurfaceBlendMode(lit_foreground, SDL_BLENDMODE_BLEND) &&
+        SDL_SetSurfaceBlendMode(occluder, SDL_BLENDMODE_NONE);
+    Uint8 low_floor[4] = {0};
+    Uint8 opaque_foreground[4] = {0};
+    Uint8 half[4] = {0};
+    Uint8 retained[4] = {0};
+    Uint8 nearly_transparent[4] = {0};
+    Uint8 transparent[4] = {0};
+    Uint8 changed_half[4] = {0};
+    Uint8 changed_floor[4] = {0};
+    Uint8 restored_half[4] = {0};
+    Uint8 lit_opaque[4] = {0};
+    Uint8 mixed_owners[4] = {0};
+    Uint8 mixed_after_lit[4] = {0};
+    Uint8 occluder_opaque[4] = {0};
+    Uint8 occluded[4] = {0};
+
+    success =
+        success && unlit_owner_alpha_frame(floor, foreground, low_radiance, 0, false, low_floor) &&
+        unlit_owner_alpha_frame(floor,
+                                foreground,
+                                low_radiance,
+                                SDL_ALPHA_OPAQUE,
+                                true,
+                                opaque_foreground) &&
+        unlit_owner_alpha_frame(floor, foreground, low_radiance, 128, true, half) &&
+        compositor_alpha_matches(half, low_floor, opaque_foreground, 128, 2) &&
+        unlit_owner_alpha_retained_frame(retained) &&
+        compositor_pixel_matches(retained, half, "retained UNLIT alpha") &&
+        unlit_owner_alpha_frame(floor, foreground, low_radiance, 1, true, nearly_transparent) &&
+        compositor_alpha_matches(nearly_transparent, low_floor, opaque_foreground, 1, 2) &&
+        unlit_owner_alpha_frame(floor, foreground, low_radiance, 0, true, transparent) &&
+        compositor_pixel_matches(transparent, low_floor, "transparent UNLIT alpha") &&
+        unlit_owner_alpha_frame(floor, foreground, low_radiance, 128, true, restored_half) &&
+        compositor_pixel_matches(restored_half, half, "restored UNLIT alpha") &&
+        unlit_owner_alpha_frame(floor, foreground, changed_radiance, 128, true, changed_half) &&
+        unlit_owner_alpha_frame(floor, foreground, changed_radiance, 0, false, changed_floor) &&
+        compositor_alpha_matches(changed_half, changed_floor, opaque_foreground, 128, 2) &&
+        transparent_owner_order_frame(floor,
+                                      lit_foreground,
+                                      NULL,
+                                      NULL,
+                                      SDL_ALPHA_OPAQUE,
+                                      0,
+                                      lit_opaque);
+    if (success) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            mixed_after_lit[channel] =
+                alpha_blend_channel(lit_opaque[channel], low_floor[channel], 128);
+        }
+        mixed_after_lit[3] = SDL_ALPHA_OPAQUE;
+    }
+    success = success &&
+              transparent_owner_order_frame(floor,
+                                            lit_foreground,
+                                            foreground,
+                                            NULL,
+                                            128,
+                                            128,
+                                            mixed_owners) &&
+              compositor_alpha_matches(mixed_owners, mixed_after_lit, opaque_foreground, 128, 2) &&
+              transparent_owner_order_frame(floor, NULL, NULL, occluder, 0, 0, occluder_opaque) &&
+              transparent_owner_order_frame(floor,
+                                            lit_foreground,
+                                            foreground,
+                                            occluder,
+                                            128,
+                                            128,
+                                            occluded) &&
+              compositor_pixel_matches(occluded, occluder_opaque, "opaque occluder");
+    if (!success && SDL_GetError()[0] == '\0') {
+        SDL_SetError("UNLIT owner alpha compositor checkpoint failed");
+    }
+    SDL_DestroySurface(occluder);
+    SDL_DestroySurface(lit_foreground);
+    SDL_DestroySurface(foreground);
+    SDL_DestroySurface(floor);
+    return success;
+}
+
+static SDL_Surface *transparent_damage_frame(SDL_Surface *floor,
+                                             SDL_Surface *overlay,
+                                             float overlay_x,
+                                             Uint8 overlay_alpha,
+                                             uint16_t radiance) {
+    const int map_size = 64;
+    SDL_FRect floor_destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
+    SDL_FRect overlay_destination = {overlay_x, 8.0f, 12.0f, 4.0f};
+    lighting_vertex_t light_quad[4] = {
+        {.x = 0, .y = 0, .scalar = radiance, .red = radiance, .green = radiance, .blue = radiance},
+        {.x = map_size,
+         .y = 0,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = map_size,
+         .y = map_size,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = 0,
+         .y = map_size,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+    };
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(map_size, map_size)) {
+        return NULL;
+    }
+    gpu_renderer_map_light_quad(0, light_quad);
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
+    gpu_renderer_map_set_instance_identity(UINT64_C(0x47730001), 0);
+    if (!gpu_renderer_draw_surface(floor, NULL, &floor_destination)) {
+        return NULL;
+    }
+    if (overlay != NULL) {
+        if (!SDL_SetSurfaceAlphaMod(overlay, overlay_alpha)) {
+            return NULL;
+        }
+        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0, false);
+        gpu_renderer_map_set_instance_identity(UINT64_C(0x47730002), 0);
+        if (!gpu_renderer_draw_surface(overlay, NULL, &overlay_destination)) {
+            return NULL;
+        }
+    }
+    if (!gpu_renderer_map_end() ||
+        !gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) ||
+        !gpu_renderer_present()) {
+        return NULL;
+    }
+    return gpu_renderer_readback(NULL);
+}
+
+static bool transparent_damage_is_bounded(const gpu_renderer_statistics_t *statistics) {
+    return statistics->map_full_redraws == 0 && statistics->map_damage_frames == 1 &&
+           statistics->map_damage_pixels > 0 &&
+           statistics->map_damage_pixels < UINT64_C(64) * 64U &&
+           statistics->map_damage_bytes == statistics->map_damage_pixels * 12U;
+}
+
+/** Match mixed-alpha damage redraws to an independently forced full redraw. */
+static bool transparent_damage_checkpoint(void) {
+    SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *overlay = SDL_CreateSurface(3, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Rect opaque = {0, 0, 1, 1};
+    SDL_Rect partial = {1, 0, 1, 1};
+    SDL_Rect keyed = {2, 0, 1, 1};
+    Uint32 key = overlay != NULL ? SDL_MapSurfaceRGBA(overlay, 0, 0, 0, SDL_ALPHA_OPAQUE) : 0;
+    bool success =
+        floor != NULL && overlay != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(overlay,
+                            &opaque,
+                            SDL_MapSurfaceRGBA(overlay, 220, 40, 10, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(overlay, &partial, SDL_MapSurfaceRGBA(overlay, 60, 60, 76, 128)) &&
+        SDL_FillSurfaceRect(overlay, &keyed, key) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(overlay, SDL_BLENDMODE_BLEND) &&
+        SDL_SetSurfaceColorKey(overlay, true, key);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *baseline = success ? transparent_damage_frame(floor, NULL, 0.0f, 0, 32) : NULL;
+    SDL_Surface *initial =
+        baseline != NULL ? transparent_damage_frame(floor, overlay, 8.0f, SDL_ALPHA_OPAQUE, 32)
+                         : NULL;
+    Uint8 floor_red = 0, floor_green = 0, floor_blue = 0, floor_alpha = 0;
+    success =
+        initial != NULL &&
+        SDL_ReadSurfacePixel(baseline,
+                             14,
+                             10,
+                             &floor_red,
+                             &floor_green,
+                             &floor_blue,
+                             &floor_alpha) &&
+        surface_pixel_is_near(initial, 10, 10, 220, 40, 10, SDL_ALPHA_OPAQUE, 2) &&
+        surface_pixel_is_near(initial,
+                              14,
+                              10,
+                              alpha_blend_channel(60, floor_red, 128),
+                              alpha_blend_channel(60, floor_green, 128),
+                              alpha_blend_channel(76, floor_blue, 128),
+                              SDL_ALPHA_OPAQUE,
+                              2) &&
+        surface_pixel_is_near(initial, 18, 10, floor_red, floor_green, floor_blue, floor_alpha, 1);
+
+    gpu_renderer_statistics_reset();
+    SDL_Surface *damage_faded =
+        success ? transparent_damage_frame(floor, overlay, 32.0f, 128, 32) : NULL;
+    gpu_renderer_statistics_t faded_statistics;
+    gpu_renderer_statistics_get(&faded_statistics);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *full_faded =
+        damage_faded != NULL ? transparent_damage_frame(floor, overlay, 32.0f, 128, 32) : NULL;
+    success = success && damage_faded != NULL && full_faded != NULL &&
+              transparent_damage_is_bounded(&faded_statistics) &&
+              surface_pixel_is_near(damage_faded,
+                                    10,
+                                    10,
+                                    floor_red,
+                                    floor_green,
+                                    floor_blue,
+                                    floor_alpha,
+                                    1) &&
+              surfaces_match(damage_faded, full_faded);
+
+    gpu_renderer_statistics_reset();
+    SDL_Surface *damage_opaque =
+        success ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE, 32) : NULL;
+    gpu_renderer_statistics_t opaque_statistics;
+    gpu_renderer_statistics_get(&opaque_statistics);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *full_opaque =
+        damage_opaque != NULL
+            ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE, 32)
+            : NULL;
+    success = success && damage_opaque != NULL && full_opaque != NULL &&
+              transparent_damage_is_bounded(&opaque_statistics) &&
+              surfaces_match(damage_opaque, full_opaque);
+
+    gpu_renderer_statistics_reset();
+    SDL_Surface *relit_damage =
+        success ? transparent_damage_frame(floor, overlay, 8.0f, 128, 96) : NULL;
+    gpu_renderer_statistics_t relit_statistics;
+    gpu_renderer_statistics_get(&relit_statistics);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *relit_full =
+        relit_damage != NULL ? transparent_damage_frame(floor, overlay, 8.0f, 128, 96) : NULL;
+    success = success && relit_damage != NULL && relit_full != NULL &&
+              relit_statistics.map_full_redraws == 1 && relit_statistics.map_damage_frames == 0 &&
+              relit_statistics.map_damage_clear_batches == 1 &&
+              surfaces_match(relit_damage, relit_full);
+    if (!success) {
+        SDL_SetError("mixed-alpha damage redraw diverged from forced full redraw");
+    }
+    SDL_DestroySurface(relit_full);
+    SDL_DestroySurface(relit_damage);
+    SDL_DestroySurface(full_opaque);
+    SDL_DestroySurface(damage_opaque);
+    SDL_DestroySurface(full_faded);
+    SDL_DestroySurface(damage_faded);
+    SDL_DestroySurface(initial);
+    SDL_DestroySurface(baseline);
+    SDL_DestroySurface(overlay);
+    SDL_DestroySurface(floor);
+    return success;
 }
 
 static bool lighting_lookup_checkpoint(SDL_Surface *source) {
@@ -1299,6 +1766,138 @@ static bool projected_lighting_checkpoint(SDL_Surface *source, float height) {
     return gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f) && gpu_renderer_present();
 }
 
+static SDL_Surface *projected_alpha_frame(SDL_Surface *floor,
+                                          SDL_Surface *foreground,
+                                          Uint8 foreground_alpha,
+                                          uint16_t gradient_top,
+                                          uint16_t gradient_bottom) {
+    const int map_size = 32;
+    SDL_FRect destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
+    lighting_vertex_t floor_light[4] = {
+        {.x = 0, .y = 0, .scalar = 32, .red = 32, .green = 32, .blue = 32},
+        {.x = map_size, .y = 0, .scalar = 32, .red = 32, .green = 32, .blue = 32},
+        {.x = map_size, .y = map_size, .scalar = 32, .red = 32, .green = 32, .blue = 32},
+        {.x = 0, .y = map_size, .scalar = 32, .red = 32, .green = 32, .blue = 32},
+    };
+    lighting_vertex_t gradient[4] = {
+        {.x = 0,
+         .y = 0,
+         .scalar = gradient_top,
+         .red = gradient_top,
+         .green = gradient_top,
+         .blue = gradient_top},
+        {.x = map_size,
+         .y = 0,
+         .scalar = gradient_top,
+         .red = gradient_top,
+         .green = gradient_top,
+         .blue = gradient_top},
+        {.x = map_size,
+         .y = map_size,
+         .scalar = gradient_bottom,
+         .red = gradient_bottom,
+         .green = gradient_bottom,
+         .blue = gradient_bottom},
+        {.x = 0,
+         .y = map_size,
+         .scalar = gradient_bottom,
+         .red = gradient_bottom,
+         .green = gradient_bottom,
+         .blue = gradient_bottom},
+    };
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(map_size, map_size)) {
+        return NULL;
+    }
+    gpu_renderer_map_light_quad(0, floor_light);
+    gpu_renderer_map_light_quad(1, gradient);
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
+    gpu_renderer_map_set_instance_identity(UINT64_C(0x47740001), 0);
+    if (!gpu_renderer_draw_surface(floor, NULL, &destination)) {
+        return NULL;
+    }
+    if (foreground != NULL) {
+        if (!SDL_SetSurfaceAlphaMod(foreground, foreground_alpha)) {
+            return NULL;
+        }
+        gpu_renderer_map_set_owner(1, 0, true);
+        gpu_renderer_map_set_instance_identity(UINT64_C(0x47740002), 0);
+        if (!gpu_renderer_draw_surface(foreground, NULL, &destination)) {
+            return NULL;
+        }
+    }
+    if (!gpu_renderer_map_end() ||
+        !gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) ||
+        !gpu_renderer_present()) {
+        return NULL;
+    }
+    return gpu_renderer_readback(NULL);
+}
+
+static bool surface_read_rgba(SDL_Surface *surface, int x, int y, Uint8 pixel[4]) {
+    return surface != NULL &&
+           SDL_ReadSurfacePixel(surface, x, y, &pixel[0], &pixel[1], &pixel[2], &pixel[3]);
+}
+
+/** Blend projected-alpha samples after independently applying each gradient. */
+static bool projected_alpha_checkpoint(void) {
+    SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    bool success =
+        floor != NULL && foreground != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(foreground, 96, 208, 80, SDL_ALPHA_OPAQUE)) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *baseline = success ? projected_alpha_frame(floor, NULL, 0, 256, 2048) : NULL;
+    SDL_Surface *opaque_first =
+        baseline != NULL ? projected_alpha_frame(floor, foreground, SDL_ALPHA_OPAQUE, 256, 2048)
+                         : NULL;
+    SDL_Surface *half_first =
+        opaque_first != NULL ? projected_alpha_frame(floor, foreground, 128, 256, 2048) : NULL;
+    SDL_Surface *half_changed =
+        half_first != NULL ? projected_alpha_frame(floor, foreground, 128, 1024, 512) : NULL;
+    SDL_Surface *opaque_changed =
+        half_changed != NULL ? projected_alpha_frame(floor, foreground, SDL_ALPHA_OPAQUE, 1024, 512)
+                             : NULL;
+    Uint8 floor_upper[4], floor_lower[4];
+    Uint8 opaque_first_upper[4], opaque_first_lower[4];
+    Uint8 half_first_upper[4], half_first_lower[4];
+    Uint8 opaque_changed_upper[4], opaque_changed_lower[4];
+    Uint8 half_changed_upper[4], half_changed_lower[4];
+    success =
+        surface_read_rgba(baseline, 16, 4, floor_upper) &&
+        surface_read_rgba(baseline, 16, 28, floor_lower) &&
+        surface_read_rgba(opaque_first, 16, 4, opaque_first_upper) &&
+        surface_read_rgba(opaque_first, 16, 28, opaque_first_lower) &&
+        surface_read_rgba(half_first, 16, 4, half_first_upper) &&
+        surface_read_rgba(half_first, 16, 28, half_first_lower) &&
+        surface_read_rgba(opaque_changed, 16, 4, opaque_changed_upper) &&
+        surface_read_rgba(opaque_changed, 16, 28, opaque_changed_lower) &&
+        surface_read_rgba(half_changed, 16, 4, half_changed_upper) &&
+        surface_read_rgba(half_changed, 16, 28, half_changed_lower) &&
+        compositor_alpha_matches(half_first_upper, floor_upper, opaque_first_upper, 128, 2) &&
+        compositor_alpha_matches(half_first_lower, floor_lower, opaque_first_lower, 128, 2) &&
+        compositor_alpha_matches(half_changed_upper, floor_upper, opaque_changed_upper, 128, 2) &&
+        compositor_alpha_matches(half_changed_lower, floor_lower, opaque_changed_lower, 128, 2) &&
+        !surfaces_match(half_first, half_changed);
+    if (!success) {
+        SDL_SetError("projected mixed-alpha lighting did not preserve independently lit samples");
+    }
+    SDL_DestroySurface(opaque_changed);
+    SDL_DestroySurface(half_changed);
+    SDL_DestroySurface(half_first);
+    SDL_DestroySurface(opaque_first);
+    SDL_DestroySurface(baseline);
+    SDL_DestroySurface(foreground);
+    SDL_DestroySurface(floor);
+    return success;
+}
+
 static bool surface_sha256(SDL_Surface *surface, char digest[65]) {
     SDL_Surface *canonical = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_RGBA32);
     if (canonical == NULL) {
@@ -1351,6 +1950,64 @@ typedef struct recovery_scene {
 static bool recovery_window_apply(void *userdata) {
     (void)userdata;
     return true;
+}
+
+typedef struct projected_alpha_recovery_scene {
+    SDL_Surface *floor;
+    SDL_Surface *foreground;
+    SDL_Surface *checkpoint;
+} projected_alpha_recovery_scene_t;
+
+static bool projected_alpha_recovery_republish(void *userdata) {
+    projected_alpha_recovery_scene_t *scene = userdata;
+    scene->checkpoint = projected_alpha_frame(scene->floor, scene->foreground, 128, 1024, 512);
+    return scene->checkpoint != NULL;
+}
+
+/** Republish the same projected partial-alpha pixels after submission loss. */
+static bool projected_alpha_recovery_checkpoint(SDL_Window *window, bool qualified) {
+    SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    bool success =
+        floor != NULL && foreground != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(foreground, 96, 208, 80, SDL_ALPHA_OPAQUE)) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *expected =
+        success ? projected_alpha_frame(floor, foreground, 128, 1024, 512) : NULL;
+    gpu_map_renderer_invalidate_target(false);
+    gpu_renderer_conformance_fault_set(GPU_RENDERER_CONFORMANCE_FAULT_SUBMISSION);
+    SDL_Surface *failed =
+        expected != NULL ? projected_alpha_frame(floor, foreground, 128, 1024, 512) : NULL;
+    unsigned int attempts = 0;
+    projected_alpha_recovery_scene_t scene = {
+        .floor = floor,
+        .foreground = foreground,
+    };
+    success = expected != NULL && failed == NULL && !gpu_renderer_frame_valid() &&
+              gpu_renderer_recover_and_republish(window,
+                                                 &attempts,
+                                                 !qualified,
+                                                 recovery_window_apply,
+                                                 projected_alpha_recovery_republish,
+                                                 &scene) &&
+              attempts == 1U && scene.checkpoint != NULL &&
+              surfaces_match(expected, scene.checkpoint);
+    if (!success) {
+        SDL_SetError("submission recovery changed projected partial-alpha pixels");
+    }
+    SDL_DestroySurface(scene.checkpoint);
+    SDL_DestroySurface(failed);
+    SDL_DestroySurface(expected);
+    SDL_DestroySurface(foreground);
+    SDL_DestroySurface(floor);
+    return success;
 }
 
 static bool recovery_scene_republish(void *userdata) {
@@ -1431,14 +2088,21 @@ int main(void) {
             return EXIT_FAILURE;                                    \
         }                                                           \
     } while (0)
+    toolkit_import(datetime);
+    toolkit_import(logger);
+    if (atexit(toolkit_deinit) != 0) {
+        toolkit_deinit();
+        fprintf(stderr, "GPU conformance could not register toolkit teardown\n");
+        return EXIT_FAILURE;
+    }
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         return conformance_unavailable("SDL video initialization");
     }
 
     GPU_REQUIRE(gpu_map_renderer_target_payload_bytes(1920, 1080, 5) ==
-                UINT64_C(1920) * 1080U * 12U);
+                UINT64_C(1920) * 1080U * 16U);
     GPU_REQUIRE(gpu_map_renderer_target_payload_bytes(2560, 1440, 7) ==
-                UINT64_C(2560) * 1440U * 12U);
+                UINT64_C(2560) * 1440U * 16U);
     GPU_REQUIRE(gpu_map_renderer_target_retained_bytes(1920, 1080, 5) >
                 gpu_map_renderer_target_payload_bytes(1920, 1080, 5));
     GPU_REQUIRE(gpu_map_renderer_target_retained_bytes(2560, 1440, 7) >
@@ -1620,12 +2284,11 @@ int main(void) {
     GPU_REQUIRE(warmup.map_last_invalidation_reason ==
                     GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION ||
                 warmup.map_last_invalidation_reason == GPU_RENDERER_MAP_INVALIDATION_RESIZE);
-    GPU_REQUIRE(strcmp(gpu_renderer_map_invalidation_reason_name(
-                           warmup.map_last_invalidation_reason),
-                       warmup.map_last_invalidation_reason ==
-                               GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION
-                           ? "map_publication"
-                           : "resize") == 0);
+    GPU_REQUIRE(
+        strcmp(gpu_renderer_map_invalidation_reason_name(warmup.map_last_invalidation_reason),
+               warmup.map_last_invalidation_reason == GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION
+                   ? "map_publication"
+                   : "resize") == 0);
 
     GPU_REQUIRE(draw_checkpoint(source, 0, 255, 0, 2048));
     gpu_renderer_statistics_t retained;
@@ -1668,6 +2331,8 @@ int main(void) {
     GPU_REQUIRE(ui_atlas_fault_checkpoint());
     GPU_REQUIRE(ui_atlas_churn_plateau_checkpoint());
     GPU_REQUIRE(draw_checkpoint(source, 0, 255, 0, 2048));
+    GPU_REQUIRE(unlit_owner_alpha_checkpoint());
+    GPU_REQUIRE(transparent_damage_checkpoint());
     GPU_REQUIRE(lighting_lookup_checkpoint(source));
     GPU_REQUIRE(projected_lighting_checkpoint(source, 32.0f));
     gpu_renderer_statistics_reset();
@@ -1682,6 +2347,8 @@ int main(void) {
     gpu_renderer_statistics_get(&projected_changed);
     GPU_REQUIRE(projected_changed.projected_light_upload_count == 1);
     GPU_REQUIRE(projected_changed.projected_light_upload_bytes == sizeof(uint32_t));
+    GPU_REQUIRE(projected_alpha_checkpoint());
+    GPU_REQUIRE(projected_alpha_recovery_checkpoint(window, qualified));
     GPU_REQUIRE(retained_primary_auxiliary_checkpoint(source, sources[3], false));
     GPU_REQUIRE(gpu_map_renderer_texture(false) != NULL);
     GPU_REQUIRE(gpu_map_renderer_texture(true) != NULL);

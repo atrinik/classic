@@ -81,4 +81,9 @@ extern void remove_light_source_list(mapstruct *map);
 
 extern void recalculate_light_sources(mapstruct *map);
 
+#ifdef ATRINIK_TESTING
+/** Single-server-thread rebuild counter for deterministic teardown work tests. */
+extern uint64_t light_rebuild_count_for_test(void);
+#endif
+
 #endif

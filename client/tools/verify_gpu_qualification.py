@@ -485,7 +485,7 @@ def validate_record(record: dict) -> str:
              "total GPU draws are below the retained map batch count")
     map_statistics = steady.get("map")
     expected_map_fields = {
-        "full_redraws", "damage_frames", "damage_pixels", "damage_bytes",
+        "full_redraws", "damage_frames", "damage_clear_batches", "damage_pixels", "damage_bytes",
         "retained_frames", "skipped_passes", "dirty_commands", "dirty_pixels",
         "dirty_bytes", "published_generation", "source_generation", "camera_generation",
         "lighting_generation", "effect_generation", "last_dirty", "invalidation_reasons",
@@ -495,7 +495,7 @@ def validate_record(record: dict) -> str:
     _require(isinstance(map_statistics, dict) and set(map_statistics) == expected_map_fields,
              "map retained-state evidence schema is incomplete")
     for field in (
-        "full_redraws", "damage_frames", "damage_pixels", "damage_bytes", "retained_frames",
+        "full_redraws", "damage_frames", "damage_clear_batches", "damage_pixels", "damage_bytes", "retained_frames",
         "skipped_passes", "dirty_commands", "dirty_pixels", "dirty_bytes",
         "published_generation", "source_generation", "camera_generation",
         "lighting_generation", "effect_generation",
@@ -520,8 +520,8 @@ def validate_record(record: dict) -> str:
     _require(map_statistics["full_redraws"] + map_statistics["retained_frames"] ==
              measured_map_frames,
              "map full/retained frame accounting is inconsistent")
-    _require(map_statistics["damage_bytes"] == map_statistics["damage_pixels"] * 8 and
-             map_statistics["dirty_bytes"] == map_statistics["dirty_pixels"] * 8 and
+    _require(map_statistics["damage_bytes"] == map_statistics["damage_pixels"] * 12 and
+             map_statistics["dirty_bytes"] == map_statistics["dirty_pixels"] * 12 and
              map_statistics["skipped_passes"] <= map_statistics["retained_frames"],
              "map damage accounting is inconsistent")
     last_dirty = map_statistics["last_dirty"]
@@ -536,7 +536,7 @@ def validate_record(record: dict) -> str:
              all(type(value) is int and value >= 0 for value in rectangle),
              "map last-dirty rectangle is invalid")
     _require(last_dirty["pixels"] == rectangle[2] * rectangle[3] and
-             last_dirty["bytes"] == last_dirty["pixels"] * 8 and
+             last_dirty["bytes"] == last_dirty["pixels"] * 12 and
              last_dirty["invalidation_reason"] in MAP_INVALIDATION_REASONS,
              "map last-dirty accounting is inconsistent")
     invalidation_reasons = map_statistics["invalidation_reasons"]
@@ -547,8 +547,11 @@ def validate_record(record: dict) -> str:
     _require(sum(invalidation_reasons.values()) == measured_map_frames,
              "map invalidation reason accounting is inconsistent")
     map_passes = map_statistics["full_redraws"] + map_statistics["damage_frames"]
-    _require(steady["batches"] >= map_passes and
-             steady["slot_uniform_uploads"] == steady["batches"] - map_passes,
+    _require(map_statistics["damage_frames"] <= map_statistics["damage_clear_batches"] <=
+             map_passes, "opaque damage-clear accounting is inconsistent")
+    non_instance_batches = map_passes + map_statistics["damage_clear_batches"]
+    _require(steady["batches"] >= non_instance_batches and
+             steady["slot_uniform_uploads"] == steady["batches"] - non_instance_batches,
              "slot-uniform uploads do not match world batch submissions")
     _require(steady["slot_uniform_upload_bytes"] >= steady["slot_uniform_uploads"] * 16 and
              steady["slot_uniform_upload_bytes"] <= steady["slot_uniform_uploads"] * 1024,

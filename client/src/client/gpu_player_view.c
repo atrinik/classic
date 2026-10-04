@@ -207,6 +207,9 @@ typedef struct player_view_manifest {
     bool damage_animation;
     bool kill_animation;
     bool visibility_fade_test;
+    bool edge_lighting_test;
+    bool ground_coverage_test;
+    bool floor_composition_test;
     bool map_interaction_test;
     bool animation_elevated;
     bool animation_layer_content;
@@ -591,6 +594,9 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "damage-animation",
                                            "kill-animation",
                                            "visibility-fade-test",
+                                           "edge-lighting-test",
+                                           "ground-coverage-test",
+                                           "floor-composition-test",
                                            "map-interaction-test",
                                            "animation-depth",
                                            "animation-sub-layer",
@@ -655,6 +661,12 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *kill_animation = success ? player_view_xml_property(root, "kill-animation") : NULL;
     char *visibility_fade_test =
         success ? player_view_xml_property(root, "visibility-fade-test") : NULL;
+    char *floor_composition_test =
+        success ? player_view_xml_property(root, "floor-composition-test") : NULL;
+    char *ground_coverage_test =
+        success ? player_view_xml_property(root, "ground-coverage-test") : NULL;
+    char *edge_lighting_test =
+        success ? player_view_xml_property(root, "edge-lighting-test") : NULL;
     char *map_interaction_test =
         success ? player_view_xml_property(root, "map-interaction-test") : NULL;
     char *animation_depth = success ? player_view_xml_property(root, "animation-depth") : NULL;
@@ -742,6 +754,12 @@ static bool player_view_manifest_parse(const char *manifest_path,
          player_view_parse_bool(kill_animation, &manifest->kill_animation)) &&
         (visibility_fade_test == NULL ||
          player_view_parse_bool(visibility_fade_test, &manifest->visibility_fade_test)) &&
+        (floor_composition_test == NULL ||
+         player_view_parse_bool(floor_composition_test, &manifest->floor_composition_test)) &&
+        (ground_coverage_test == NULL ||
+         player_view_parse_bool(ground_coverage_test, &manifest->ground_coverage_test)) &&
+        (edge_lighting_test == NULL ||
+         player_view_parse_bool(edge_lighting_test, &manifest->edge_lighting_test)) &&
         (map_interaction_test == NULL ||
          player_view_parse_bool(map_interaction_test, &manifest->map_interaction_test)) &&
         ((animation_depth == NULL && animation_sub_layer == NULL) ||
@@ -1040,6 +1058,9 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(damage_animation);
     free(kill_animation);
     free(visibility_fade_test);
+    free(edge_lighting_test);
+    free(ground_coverage_test);
+    free(floor_composition_test);
     free(map_interaction_test);
     free(animation_depth);
     free(animation_sub_layer);
@@ -1626,9 +1647,9 @@ static void gpu_player_view_json_map_statistics(FILE *output,
     fputs("\"map\":{", output);
     fprintf(output,
             "\"full_redraws\":%" PRIu64 ",\"damage_frames\":%" PRIu64 ",\"damage_pixels\":%" PRIu64
-            ",\"damage_bytes\":%" PRIu64 ",\"retained_frames\":%" PRIu64
-            ",\"skipped_passes\":%" PRIu64 ",\"dirty_commands\":%" PRIu64
-            ",\"dirty_pixels\":%" PRIu64 ",\"dirty_bytes\":%" PRIu64
+            ",\"damage_bytes\":%" PRIu64 ",\"damage_clear_batches\":%" PRIu64
+            ",\"retained_frames\":%" PRIu64 ",\"skipped_passes\":%" PRIu64
+            ",\"dirty_commands\":%" PRIu64 ",\"dirty_pixels\":%" PRIu64 ",\"dirty_bytes\":%" PRIu64
             ",\"published_generation\":%" PRIu64 ",\"source_generation\":%" PRIu64
             ",\"camera_generation\":%" PRIu64 ",\"lighting_generation\":%" PRIu64
             ",\"effect_generation\":%" PRIu64,
@@ -1636,6 +1657,7 @@ static void gpu_player_view_json_map_statistics(FILE *output,
             statistics->map_damage_frames,
             statistics->map_damage_pixels,
             statistics->map_damage_bytes,
+            statistics->map_damage_clear_batches,
             statistics->map_retained_frames,
             statistics->map_skipped_passes,
             statistics->map_dirty_commands,
@@ -2699,9 +2721,14 @@ static bool gpu_player_view_benchmark(const player_view_manifest_t *manifest,
             : measured.source_upload_count == 0 && measured.source_upload_bytes == 0;
     uint64_t completed_maps = map_measured.primary_map_draws + map_measured.auxiliary_map_draws;
     uint64_t map_passes = measured.map_full_redraws + measured.map_damage_frames;
+    /* Resolve and opaque damage-clear draws have no sprite slot uniforms.
+     * A damage clear can accompany a full lighting resolve, so count actual
+     * clear draws rather than inferring them from final damage frames. */
     bool slot_uniform_uploads_verified =
         measured.batches >= map_passes &&
-        measured.slot_uniform_upload_count == measured.batches - map_passes &&
+        measured.batches - map_passes >= measured.map_damage_clear_batches &&
+        measured.slot_uniform_upload_count ==
+            measured.batches - map_passes - measured.map_damage_clear_batches &&
         gpu_player_view_slot_uniform_uploads_bounded(&measured);
     bool map_retention_verified =
         measured.map_full_redraws + measured.map_retained_frames == completed_maps &&
@@ -4248,6 +4275,30 @@ int gpu_player_view_main(int argc, char *argv[]) {
         result = 0;
         goto cleanup;
     }
+#if defined(ATRINIK_WIDGET_TESTS) && defined(ATRINIK_GPU_CONFORMANCE_TESTS)
+    if (manifest.ground_coverage_test) {
+        bool coverage = widget_map_ground_coverage_test();
+        socket_command_map(snapshot, snapshot_size, 0);
+        if (!coverage || !gpu_player_view_render(map_widget, manifest.widget_render)) {
+            fprintf(stderr, "gpu-player-view: ground coverage regression failed: %s\n", SDL_GetError());
+            goto cleanup;
+        }
+    }
+    if (manifest.floor_composition_test) {
+        bool composition = widget_map_floor_composition_test();
+        socket_command_map(snapshot, snapshot_size, 0);
+        if (!composition || !gpu_player_view_render(map_widget, manifest.widget_render)) {
+            fprintf(stderr,
+                    "gpu-player-view: floor composition regression failed: %s\n",
+                    SDL_GetError());
+            goto cleanup;
+        }
+    }
+    if (manifest.edge_lighting_test && !widget_map_edge_lighting_test()) {
+        fprintf(stderr, "gpu-player-view: edge lighting probe failed: %s\n", SDL_GetError());
+        goto cleanup;
+    }
+#endif
     if (manifest.ui_closure && !gpu_player_view_ui_closure_run(map_widget, &manifest)) {
         fprintf(stderr,
                 "gpu-player-view: complete-screen GPU closure failed: %s\n",

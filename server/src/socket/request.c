@@ -2254,8 +2254,11 @@ void draw_client_map2(object *pl) {
                            sizeof(light_next_rgb_radiance[sub_layer]));
 
                     if (light_set[sub_layer] && light_spaces[sub_layer] != NULL &&
-                        light_spaces[sub_layer]->celestial_light_next_value !=
-                            light_spaces[sub_layer]->celestial_light_value) {
+                        (light_spaces[sub_layer]->celestial_light_next_value !=
+                             light_spaces[sub_layer]->celestial_light_value ||
+                         memcmp(light_spaces[sub_layer]->celestial_light_next_rgb,
+                                light_spaces[sub_layer]->celestial_light_rgb,
+                                sizeof(light_spaces[sub_layer]->celestial_light_rgb)) != 0)) {
                         MapSpace next_space = *light_spaces[sub_layer];
                         int next_raw = raw_light[sub_layer] -
                                        light_spaces[sub_layer]->celestial_light_value +
@@ -2299,7 +2302,10 @@ void draw_client_map2(object *pl) {
                         (light_state_discarded ||
                          mp->light_next_generation != timed_light_generation ||
                          !mp->light_next_known[sub_layer] ||
-                         mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer])) {
+                         mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer] ||
+                         memcmp(mp->light_next_rgb_radiance[sub_layer],
+                                light_next_rgb_radiance[sub_layer],
+                                sizeof(light_next_rgb_radiance[sub_layer])) != 0)) {
                         light_next_changed = true;
                     }
                 }
@@ -2466,6 +2472,10 @@ void draw_client_map2(object *pl) {
                 }
 
                 if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
+                    /* Every explicit RGB endpoint owns a scalar endpoint in
+                     * this record, including unchanged colored sub-layers
+                     * carried alongside another refreshed endpoint. */
+                    light_next_bitmap |= light_next_rgb_bitmap;
                     packet_debug_data(packet, 1, "Next-hour scalar endpoint bitmap");
                     packet_writer_write_uint8(packet, light_next_bitmap);
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {

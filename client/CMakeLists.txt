@@ -47,7 +47,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 set(ATRINIK_GPU_SHADER_NAMES
     final_fragment final_vertex
     light_fragment light_vertex
-    world_fragment world_vertex)
+    world_clear_fragment world_fragment world_transparent_fragment world_vertex)
 set(ATRINIK_GPU_SHADER_ARTIFACTS)
 foreach (name IN LISTS ATRINIK_GPU_SHADER_NAMES)
     foreach (extension IN ITEMS dxil msl spv)
@@ -506,6 +506,12 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
     add_test(NAME client-lighting-transfer COMMAND client-lighting-transfer-tests)
 
+    add_executable(client-gpu-light-row-tests src/tests/gpu_light_row.c)
+    atrinik_configure_target(client-gpu-light-row-tests)
+    target_include_directories(client-gpu-light-row-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-gpu-light-row COMMAND client-gpu-light-row-tests)
+
     add_executable(client-gpu-sprite-effect-abi-tests
         src/tests/gpu_sprite_effect_abi.c)
     atrinik_configure_target(client-gpu-sprite-effect-abi-tests)
@@ -533,6 +539,7 @@ if (BUILD_TESTING)
 
     add_executable(client-gpu-renderer-integration-tests
         src/tests/gpu_renderer_integration.c
+        src/tests/gpu_light_row_profiler_stub.c
         src/client/gpu_renderer.c
         src/client/gpu_map_renderer.c
         src/client/lighting_transfer.c)
@@ -540,6 +547,7 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-gpu-renderer-integration-tests)
     target_compile_definitions(client-gpu-renderer-integration-tests PRIVATE
         ATRINIK_GPU_CONFORMANCE_TESTS
+        ATRINIK_GPU_LIGHT_ROW_ORACLE
         "ATRINIK_GPU_SHADER_COHORT=\"${ATRINIK_GPU_SHADER_COHORT}\""
         SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-gpu-renderer-integration-tests BEFORE PRIVATE
@@ -1173,6 +1181,9 @@ if (BUILD_TESTING)
         presentation-dusk
         presentation-night
         presentation-saturated
+        edge-lighting
+        ground-coverage
+        floor-composition
         brynknot-movement
         gpu-qualification-town-25x25
         gpu-ui-closure)

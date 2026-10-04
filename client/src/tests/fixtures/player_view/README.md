@@ -34,6 +34,40 @@ sprites use their owning floor sample instead of changing brightness with
 screen height. It is deliberately a stress diagnostic; a zero golden hash
 does not establish that the brightness taper has passed visual review.
 
+The `edge-lighting` fixture isolates the smooth-lighting wire-window feather at
+south-edge distances zero, one, and two. It fills the 17-by-17 MAP2 window with
+neutral Q5.11 2048 floor samples, keeps the local player at the center, and uses
+widely separated 120-pixel structural markers for the three boundary rings.
+Regenerate its closed manifest and snapshot from the client directory with
+`python3 tools/generate_edge_lighting_fixture.py`. Run
+`atrinik --gpu-player-view src/tests/fixtures/player_view/edge-lighting.xml` on
+a qualified GPU lane. Its `type="edge-lighting"` JSONL rows report the full and
+retained phases, each marker's submitted foot and decoded sample row, structural
+and adjacent-ground probes, and asset counters. Separate
+`type="edge-lighting-vertex"` rows describe the four contributing light vertices
+through the visibility-redacted tile diagnostic. `lighting_key`, `albedo`, and
+`final_rgba` come from GPU readback; `sample_y` decodes the uploaded row selected
+by that key, and `cpu_reconstructed_light` reconstructs its light from the
+uploaded CPU row/span mirror. A passing diagnostic establishes correct owning-cell sampling,
+vertical marker consistency, no pending assets, and identical full/retained
+results. The zero expected-pixels hash requests measured diagnostic evidence
+and is not a calibrated cross-backend golden.
+
+The `floor-composition` fixture exercises night floor decorations through the
+normal MAP2 decoder and primary map painter. Empty movement packets scroll a
+persistent ITEM and FMASK out and back without resending their faces. Soft fog
+then revokes a remote actor's targeting metadata immediately and fades the ITEM
+at 0, 125, 249, and 250 ms. The tall analytic ITEM overlaps a still-visible dark
+floor pixel so its nearly transparent fog palette cannot conceal an accidental
+unlit background. Full and animation-retained draws must agree at every state.
+Intermediate final RGB must match encoded-RGBA source-over of the independently
+measured opaque fog sprite and expired-sprite background, within two code values.
+This is a composition regression, not a tone calibration change. Regenerate with
+`python3 tools/generate_floor_composition_fixture.py` and run
+`atrinik --gpu-player-view src/tests/fixtures/player_view/floor-composition.xml`.
+Its four `type="floor-composition"` JSONL rows contain final composed pixels;
+a single lighting-owner key cannot describe a mixed transparent pixel.
+
 These XML manifests preserve the pre-cutover renderer's viewport, logical map
 size, lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
 MAP command, and every image by SHA-256. They are immutable inputs for schema
@@ -374,3 +408,25 @@ the explicit non-primary regression scene, these are pixel-exact references for
 the completed map output. `/screenshot map` asynchronously enqueues an explicit
 GPU readback of that map-widget rectangle and polls its fence on later client
 iterations; PNG encoder metadata is deliberately excluded.
+
+The `ground-coverage` fixture uses the closed `ground-coverage-test` switch to
+exercise an L-shaped hole, an isolated known floor, a one-cell corridor, and
+missing diagonal cells through the production MAP2 decoder and map painter.
+Its three boundary probes must have decreasing, nonzero coverage matching an
+independent pixel-center topology calculation. Actual GPU RGB must equal the
+CPU tone/LUT result multiplied by coverage with round-half-up division by 255;
+alpha stays opaque. An interior floor stays at full coverage, island/corridor
+centers remain visibly lit, and an unknown tile has neither remembered geometry
+nor a nonblack framebuffer pixel. FMASK receives coverage; actor, wall, and roof
+commands and pixels retain full coverage.
+
+Complete framebuffer comparisons require exact full/retained parity, an
+unchanged full rebuild, and SAME scroll-out/back parity. Normal light-only
+scalar/RGB and hue-only packets must change illumination without changing
+coverage or creating a floor. A layer-only exploration packet must increase
+coverage without changing the sampled light. Soft FOW must retain the explored
+floor and its coverage. Every updated scene also compares full and retained
+frames. The immutable original snapshot is restored before the harness's
+remaining comparisons. The pending backend golden does not waive these
+semantic and pixel assertions. The floor-composition fixture additionally
+checks the expired-item background against CPU tone multiplied by coverage.

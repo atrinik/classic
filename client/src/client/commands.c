@@ -883,11 +883,7 @@ static void socket_command_map_abort_timed_light(void) {
     socket_command_map_abort_pending();
 }
 
-static bool socket_command_map_movement_delta(int mapstat,
-                                              int xpos,
-                                              int ypos,
-                                              int *dx,
-                                              int *dy) {
+static bool socket_command_map_movement_delta(int mapstat, int xpos, int ypos, int *dx, int *dy) {
     *dx = xpos - MapData.posx;
     *dy = ypos - MapData.posy;
     return mapstat == MAP_UPDATE_CMD_SAME && (*dx != 0 || *dy != 0);
@@ -1036,7 +1032,6 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
             map_pending_effects.footstep = true;
             map_visible_change = true;
         }
-
     }
 
     uint8_t player_sub_layer = packet_reader_read_uint8(&reader);
@@ -1640,9 +1635,10 @@ static packet_struct *map_seam_test_packet(uint8_t mapstat, uint16_t continuatio
         packet_writer_write_uint8(packet, 0);
         packet_writer_write_cstring(packet, "");
         packet_writer_write_cstring(packet, "");
-        packet_writer_write_cstring(packet, mapstat == MAP_UPDATE_CMD_NEW
-                                               ? "/shattered_islands/world_0_68"
-                                               : "/shattered_islands/world_1_68");
+        packet_writer_write_cstring(packet,
+                                    mapstat == MAP_UPDATE_CMD_NEW
+                                        ? "/shattered_islands/world_0_68"
+                                        : "/shattered_islands/world_1_68");
         if (mapstat == MAP_UPDATE_CMD_NEW) {
             packet_writer_write_uint8(packet, 24);
             packet_writer_write_uint8(packet, 24);
@@ -1657,9 +1653,9 @@ static packet_struct *map_seam_test_packet(uint8_t mapstat, uint16_t continuatio
     packet_writer_write_uint8(packet, mapstat == MAP_UPDATE_CMD_NEW ? 23 : 0);
     packet_writer_write_uint8(packet, 18);
     packet_writer_write_uint8(packet, 0);
-    packet_writer_write_uint16(packet, continuation |
-                                          (mapstat == MAP_UPDATE_CMD_PARTIAL
-                                               ? 0 : MAP2_CONTINUATION_TIMED_LIGHT));
+    packet_writer_write_uint16(
+        packet,
+        continuation | (mapstat == MAP_UPDATE_CMD_PARTIAL ? 0 : MAP2_CONTINUATION_TIMED_LIGHT));
     if (mapstat != MAP_UPDATE_CMD_PARTIAL) {
         packet_writer_write_uint64(packet, mapstat == MAP_UPDATE_CMD_NEW ? 700 : 701);
         packet_writer_write_uint64(packet, 3600);
@@ -1684,15 +1680,15 @@ static packet_struct *map_seam_test_packet(uint8_t mapstat, uint16_t continuatio
 
 static bool map_seam_test_state(bool destination, uint64_t generation, bool buffered) {
     return map_publication_generation == generation &&
-           strcmp(MapData.map_path, destination ? "/shattered_islands/world_1_68"
-                                               : "/shattered_islands/world_0_68") == 0 &&
-           strcmp(MapData.name_new, "Brynknot") == 0 &&
-           MapData.posx == (destination ? 0 : 23) && MapData.posy == 18 &&
-           MapData.light_keyframe_valid &&
+           strcmp(MapData.map_path,
+                  destination ? "/shattered_islands/world_1_68"
+                              : "/shattered_islands/world_0_68") == 0 &&
+           strcmp(MapData.name_new, "Brynknot") == 0 && MapData.posx == (destination ? 0 : 23) &&
+           MapData.posy == 18 && MapData.light_keyframe_valid &&
            MapData.light_keyframe_generation == (destination ? 701 : 700) &&
            MapData.light_keyframe_start_seconds == 3600 &&
-           MapData.light_keyframe_end_seconds == 7200 &&
-           !map_state_transaction_active() && !MapData.continuation.pending &&
+           MapData.light_keyframe_end_seconds == 7200 && !map_state_transaction_active() &&
+           !MapData.continuation.pending &&
            socket_command_map_buffered_generation_test_pending() == buffered;
 }
 
@@ -1776,8 +1772,7 @@ bool socket_command_map_continuation_transaction_test(void) {
                    cpl.target_object_index == saved_target && !map_pending_effects.active;
     socket_command_map_abort_pending();
     success = success && !socket_command_map_buffered_generation_test_pending() &&
-              MapData.posx == 17 && MapData.posy == 23 &&
-              cpl.target_object_index == saved_target;
+              MapData.posx == 17 && MapData.posy == 23 && cpl.target_object_index == saved_target;
 
     map_state_transaction_begin(false);
     MapData.posx = 18;
@@ -1802,12 +1797,11 @@ bool socket_command_map_continuation_transaction_test(void) {
     success = success && map_state_transaction_active() && MapData.continuation.pending;
     socket_command_map_abort_pending();
     int retry_dx, retry_dy;
-    success = success && !map_state_transaction_active() && !MapData.continuation.pending &&
-              !map_pending_effects.active &&
-              MapData.posx == 18 && MapData.posy == 24 &&
-              socket_command_map_movement_delta(
-                  MAP_UPDATE_CMD_SAME, 19, 25, &retry_dx, &retry_dy) &&
-              retry_dx == 1 && retry_dy == 1;
+    success =
+        success && !map_state_transaction_active() && !MapData.continuation.pending &&
+        !map_pending_effects.active && MapData.posx == 18 && MapData.posy == 24 &&
+        socket_command_map_movement_delta(MAP_UPDATE_CMD_SAME, 19, 25, &retry_dx, &retry_dy) &&
+        retry_dx == 1 && retry_dy == 1;
     MapData.posx = saved_posx;
     MapData.posy = saved_posy;
     cpl.target_object_index = saved_target;

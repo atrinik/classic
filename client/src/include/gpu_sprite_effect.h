@@ -47,15 +47,14 @@
 #define GPU_SPRITE_EFFECT_MASK_INPUT (UINT32_C(1) << 11)
 #define GPU_SPRITE_EFFECT_LIGHT_INPUT (UINT32_C(1) << 12)
 
-#define GPU_SPRITE_EFFECT_COLOR_MODE_MASK \
+#define GPU_SPRITE_EFFECT_COLOR_MODE_MASK                                      \
     (GPU_SPRITE_EFFECT_DARK | GPU_SPRITE_EFFECT_GRAY | GPU_SPRITE_EFFECT_RED | \
      GPU_SPRITE_EFFECT_FOG)
-#define GPU_SPRITE_EFFECT_KNOWN_MASK \
-    (GPU_SPRITE_EFFECT_TINT | GPU_SPRITE_EFFECT_COLOR_MODE_MASK | \
-     GPU_SPRITE_EFFECT_TRANSIENT_OVERLAY | GPU_SPRITE_EFFECT_ROTATE | \
-     GPU_SPRITE_EFFECT_SCALE | GPU_SPRITE_EFFECT_STRETCH | GPU_SPRITE_EFFECT_GLOW | \
-     GPU_SPRITE_EFFECT_OUTLINE | GPU_SPRITE_EFFECT_MASK_INPUT | \
-     GPU_SPRITE_EFFECT_LIGHT_INPUT)
+#define GPU_SPRITE_EFFECT_KNOWN_MASK                                                            \
+    (GPU_SPRITE_EFFECT_TINT | GPU_SPRITE_EFFECT_COLOR_MODE_MASK |                               \
+     GPU_SPRITE_EFFECT_TRANSIENT_OVERLAY | GPU_SPRITE_EFFECT_ROTATE | GPU_SPRITE_EFFECT_SCALE | \
+     GPU_SPRITE_EFFECT_STRETCH | GPU_SPRITE_EFFECT_GLOW | GPU_SPRITE_EFFECT_OUTLINE |           \
+     GPU_SPRITE_EFFECT_MASK_INPUT | GPU_SPRITE_EFFECT_LIGHT_INPUT)
 
 /* Texture flags describe the immutable binding selected by the CPU. The
  * shader never receives a texture pointer or a surface address. */
@@ -66,23 +65,22 @@
 #define GPU_SPRITE_TEXTURE_PREMULTIPLIED_ALPHA (UINT32_C(1) << 4)
 #define GPU_SPRITE_TEXTURE_NEAREST (UINT32_C(1) << 5)
 #define GPU_SPRITE_TEXTURE_CLAMP_EDGE (UINT32_C(1) << 6)
-#define GPU_SPRITE_TEXTURE_STORAGE_MASK \
-    (GPU_SPRITE_TEXTURE_ATLAS | GPU_SPRITE_TEXTURE_STANDALONE)
+#define GPU_SPRITE_TEXTURE_STORAGE_MASK (GPU_SPRITE_TEXTURE_ATLAS | GPU_SPRITE_TEXTURE_STANDALONE)
 #define GPU_SPRITE_TEXTURE_ALPHA_MASK \
     (GPU_SPRITE_TEXTURE_STRAIGHT_ALPHA | GPU_SPRITE_TEXTURE_PREMULTIPLIED_ALPHA)
-#define GPU_SPRITE_TEXTURE_KNOWN_MASK \
+#define GPU_SPRITE_TEXTURE_KNOWN_MASK                                        \
     (GPU_SPRITE_TEXTURE_STORAGE_MASK | GPU_SPRITE_TEXTURE_SOURCE_COLOR_KEY | \
-     GPU_SPRITE_TEXTURE_ALPHA_MASK | GPU_SPRITE_TEXTURE_NEAREST | \
-     GPU_SPRITE_TEXTURE_CLAMP_EDGE)
+     GPU_SPRITE_TEXTURE_ALPHA_MASK | GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE)
 
-/* The existing compact light key uses 19 value bits and one projected bit. */
+/* Compact light keys retain 19 value bits and two presentation flags. */
 #define GPU_SPRITE_LIGHTING_KEY_BITS UINT32_C(19)
 #define GPU_SPRITE_LIGHTING_KEY_MASK ((UINT32_C(1) << GPU_SPRITE_LIGHTING_KEY_BITS) - 1U)
 #define GPU_SPRITE_LIGHTING_KEY_KNOWN_MASK \
-    ((UINT32_C(1) << (GPU_SPRITE_LIGHTING_KEY_BITS + 1U)) - 1U)
+    ((UINT32_C(1) << (GPU_SPRITE_LIGHTING_KEY_BITS + 2U)) - 1U)
 #define GPU_SPRITE_LIGHTING_KEY_DARK (GPU_SPRITE_LIGHTING_KEY_MASK - 1U)
 #define GPU_SPRITE_LIGHTING_KEY_UNLIT GPU_SPRITE_LIGHTING_KEY_MASK
 #define GPU_SPRITE_LIGHTING_KEY_PROJECTED (UINT32_C(1) << GPU_SPRITE_LIGHTING_KEY_BITS)
+#define GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE (UINT32_C(1) << (GPU_SPRITE_LIGHTING_KEY_BITS + 1U))
 
 #define GPU_SPRITE_OWNER_UNSET UINT8_MAX
 #define GPU_SPRITE_DEPTH_UNSET UINT8_MAX
@@ -110,8 +108,7 @@ _Static_assert(offsetof(gpu_sprite_instance_t, effect_color) == 96, "effect colo
 _Static_assert(offsetof(gpu_sprite_instance_t, effect_parameters) == 112,
                "effect parameters ABI offset");
 _Static_assert(offsetof(gpu_sprite_instance_t, effect_time) == 128, "effect time ABI offset");
-_Static_assert(offsetof(gpu_sprite_instance_t, effect_phase) == 132,
-               "effect phase ABI offset");
+_Static_assert(offsetof(gpu_sprite_instance_t, effect_phase) == 132, "effect phase ABI offset");
 _Static_assert(offsetof(gpu_sprite_instance_t, effect_seed) == 136, "effect seed ABI offset");
 _Static_assert(offsetof(gpu_sprite_instance_t, abi_version) == 140, "ABI version offset");
 _Static_assert(sizeof(gpu_sprite_instance_t) == GPU_SPRITE_INSTANCE_STRIDE,
@@ -152,10 +149,11 @@ static inline bool gpu_sprite_instance_valid(const gpu_sprite_instance_t *instan
         (instance->texture_flags & GPU_SPRITE_TEXTURE_ALPHA_MASK) == 0 ||
         (instance->texture_flags & GPU_SPRITE_TEXTURE_ALPHA_MASK) ==
             GPU_SPRITE_TEXTURE_ALPHA_MASK ||
-        (instance->texture_flags & (GPU_SPRITE_TEXTURE_NEAREST |
-                                    GPU_SPRITE_TEXTURE_CLAMP_EDGE)) !=
+        (instance->texture_flags & (GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE)) !=
             (GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE) ||
         (instance->lighting_key & ~GPU_SPRITE_LIGHTING_KEY_KNOWN_MASK) != 0 ||
+        ((instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE) != 0 &&
+         (instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_PROJECTED) == 0) ||
         (instance->owner_depth & UINT32_C(0xffff0000)) != 0) {
         return false;
     }

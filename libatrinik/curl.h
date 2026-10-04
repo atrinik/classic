@@ -44,8 +44,8 @@
  */
 typedef enum curl_state {
     CURL_STATE_NONE, ///< No state.
-    CURL_STATE_INPROGRESS, ///< Requesting data.
-    CURL_STATE_OK, ///< cURL thread finished and the data is ready to be used.
+    CURL_STATE_INPROGRESS, ///< Transferring data or cleaning up the transfer.
+    CURL_STATE_OK, ///< Transfer cleanup finished and response data is ready.
     CURL_STATE_ERROR, ///< An error occurred trying to process the request.
 } curl_state_t;
 
@@ -163,6 +163,9 @@ char *curl_request_get_header(curl_request_t *request, size_t *header_size);
 void curl_request_clear_response(curl_request_t *request);
 int curl_request_get_http_code(curl_request_t *request);
 const char *curl_request_get_url(curl_request_t *request);
+/** Read the worker's latest progress snapshot without accessing its libcurl
+ * handle. Snapshots remain available during transfer cleanup; terminal
+ * requests return zero. Callbacks may still run after a terminal state. */
 int64_t curl_request_sizeinfo(curl_request_t *request, curl_info_t info);
 char *curl_request_speedinfo(curl_request_t *request, char *buf, size_t bufsize);
 /** Cancel and free a caller-owned request, joining its worker and any admitted

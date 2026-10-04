@@ -1807,6 +1807,14 @@ void free_map(mapstruct *m, int flag) {
 
     remove_light_source_list(m);
 
+    /* Teardown is not a sequence of gameplay geometry edits. new_save_map()
+     * restores MAP_IN_MEMORY for its non-destructive callers, so swapping must
+     * enter the teardown state here before removing floors and walls. Withdraw
+     * outgoing light while the original resident topology still exists, then
+     * invalidate surviving celestial dependencies once before unlinking it. */
+    celestial_light_invalidate(m);
+    m->in_memory = MAP_SAVING;
+
     if (m->buttons) {
         free_objectlinkpt(m->buttons);
     }
@@ -1867,9 +1875,6 @@ void delete_map(mapstruct *m) {
     HARD_ASSERT(m != NULL);
 
     if (m->in_memory == MAP_IN_MEMORY) {
-        /* Change to MAP_SAVING, even though we are not,
-         * so that object_remove doesn't do as much work. */
-        m->in_memory = MAP_SAVING;
         free_map(m, 1);
     } else {
         remove_light_source_list(m);

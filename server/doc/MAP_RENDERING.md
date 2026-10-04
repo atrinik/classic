@@ -10,7 +10,8 @@ SDL GPU device and uses its GPU-backed 2D renderer for the complete window,
 with raw SDL_GPU passes for the ordered map albedo/owner and integer
 light/tone stages. Supported production backends are Vulkan, Direct3D 12, and
 Metal on hardware devices that provide RGBA8 and R32_UINT render targets plus
-fragment storage buffers. There is no window-surface presentation,
+fragment storage buffers and a D32_FLOAT painter-rank depth attachment. There
+is no window-surface presentation,
 CPU-completed frame, renderer selection, or software fallback.
 
 Decoded faces, immutable effects, glyphs, region maps, minimap output, and
@@ -25,9 +26,12 @@ encoding. It does not establish a retained CPU framebuffer.
 
 The primary map keeps semantic state in sparse pointer slots and allocates a
 cell only when a validated generation publishes content for that coordinate.
-The GPU albedo pass preserves painter order and writes an exact integer owner
-and compact-light index; the final pass consumes compact Q5.11 quad vertices
-directly with the checked tone/LUT rules. It does not allocate viewport-pixel
+The GPU opaque albedo pass preserves painter order and writes an exact integer
+owner, compact-light index, and per-pixel painter rank; the final opaque pass
+consumes compact Q5.11 quad vertices
+directly with the checked tone/LUT rules. Partially transparent fragments then
+use their own authorized light sample and the same tone/LUT rules before
+ordered source-over composition. It does not allocate viewport-pixel
 light fields per physical depth. The production logical setting remains 17.
 The 25-by-25 and 28-by-28 views are qualification-only fixtures until their
 hardware, correctness, and performance release gates pass; empty state for 28
@@ -2029,6 +2033,17 @@ both NEW map publications (login and teleport) and CONNECTED tile transitions.
 The existing periodic clock updates continue unchanged. A timed-light MAP2
 endpoint describes celestial samples; it does not establish the client's world
 clock or replace that synchronization message.
+Every timed-light record's RGB endpoint bitmap is a subset of its scalar
+endpoint bitmap. The producer includes the corresponding scalar even for an
+unchanged colored endpoint carried with another refreshed sub-layer; a
+CONNECTED publication may reuse the generation and translated endpoint cache.
+The decoder rejects records that violate this ownership contract before
+applying map metadata or geometry.
+Endpoint aggregation compares both celestial scalar and RGB values; equal
+scalar intensity does not imply equal color. A refreshed descriptor compares
+cached endpoint RGB channels as well as scalar, generation, knowledge, and
+bitmap state. A hue-only change is published once, while an unchanged repeat
+retains the cached endpoint without another tile update.
 
 ### Fixed visibility and light transfer
 
@@ -2108,6 +2123,34 @@ also bounds nearest-known light borrowing and leaves authoritative cache samples
 unchanged. Discrete lighting retains its per-tile transfer without this spatial
 taper. The interior values above and below describe full-weight samples.
 
+Known ground also has an independent geometric coverage channel in smooth mode.
+It applies only to FLOOR/FMASK commands on the selected projected lighting plane,
+excluding authored roofs. Walls, roofs, actors, and ITEM decorations retain their
+existing lighting. A cell is known for this channel when it stores a non-roof
+FLOOR or FMASK on that plane; light availability, fog state, and image upload
+readiness do not grant or revoke geometry coverage. Remembered ground therefore
+continues to participate.
+
+The light-grid vertices are cell centers. Each quad stores a 3x3 coverage lattice:
+its four corner samples are the corresponding known-cell bits, an edge midpoint
+is known only when both incident cells are known, and the center is known only
+when all four are known. True samples encode 255 and false samples encode zero.
+Piecewise bilinear interpolation over the four half-cell subquads tapers inward
+to black at a known/unknown boundary while preserving a known cell center,
+isolated islands, and narrow corridors. Fully known ground has coverage 255
+everywhere. Missing cells never submit a face.
+
+After the existing per-contributor tone mapping, multiply each eligible RGB
+channel by coverage with round-half-up division by 255; preserve alpha. Coverage
+thus cannot expose a lower linked level through opaque ground or attenuate
+structural owners. It uses the same multiplier for every RGB channel. It does
+not change radiance,
+nearest-known light borrowing, the player field, remembered-light lift, or the
+wire-window taper above. Coverage bytes are part of the retained light-quad
+identity, so geometry-only exploration invalidates final lighting even when
+radiance is unchanged. Full, retained, scrolled, and light-only draws use the same
+coverage channel.
+
 Fade alpha is integer and monotonic for one authoritative transition:
 
 ```text
@@ -2174,21 +2217,35 @@ path. The compositor performs these phases in order:
 1. Validate and publish MAP2 state, including current fog/clear, depth, owner,
    alpha, transform, and server Q5.11 samples.
 2. Resolve the bounded remembered/live scene without synthesizing absent cells.
-3. Paint albedo, alpha, color-key, transformed, double-face, stretch, and
-   multipart geometry in the established global isometric order.
-4. For every final visible pixel/span, retain the physical depth/elevation
-   owner (or an equivalent surface-light coordinate) and select its authorized
-   interpolated sample.
-5. Apply the player contribution or remembered memory lift, then perform one
-   scene-linear tone-map/multiply traversal for the complete primary map.
+3. Evaluate source alpha and all sprite effects per fragment. Paint fully opaque
+   fragments in the established global isometric order into albedo and exact
+   owner/light-key targets, retaining the last opaque painter rank in D32_FLOAT.
+   Color-key and zero-alpha fragments write no color, owner, or rank.
+4. Select each opaque pixel's authorized interpolated sample and apply the
+   player contribution or remembered memory lift through the checked integer
+   tone/LUT multiplication rules.
+5. Replay partially transparent fragments in that same painter order. Each
+   contributor selects its own physical-depth/elevation owner and fixed or
+   projected light row, applies the identical tone/LUT rules, then blends with
+   encoded-RGBA source-over. A contributor behind the final opaque rank is
+   rejected; transparent fragments never change the rank. This preserves the
+   established display blending convention without assigning a blended pixel
+   to a single lighting owner.
 6. Draw names, probes, target bars, pointer cues, exits, and other annotations
    in one documented post-light phase only when their current cutoff permits.
 
-Color-key pixels remain transparent and write no owner. True alpha and surface
-alpha modulate the final albedo contribution; they do not discard the owner
-metadata of a partially transparent surface unless the existing painter marks
-the span transparent. Outlines and glows use the same owner/light result as
-their source sprite. UI annotations are unlit. A texture, allocation, shader,
+The effective post-effect alpha determines the opaque/transparent split per
+fragment, including textures that contain both kinds of pixels. Outlines and
+glows use the same owner/light selection as their source sprite. UI annotations
+are unlit. Stable GPU instance slots do not determine painter rank: the sorted
+command index does, with an explicit exact-rank limit below 2^24 commands.
+Order changes invalidate the full retained world. A bounded damage update clears
+and repaints opaque albedo, owner, and rank in its rectangle, resolves its light,
+and replays all intersecting transparent contributors in order. A lighting-only
+update preserves opaque geometry/ranks but resolves and replays transparency
+across the full target. An unchanged target retains the complete result.
+
+A texture, allocation, shader,
 target, submission, swapchain, device, or output failure discards the partial
 frame, stops presentation, and performs at most one complete GPU
 device/resource reconstruction followed by a complete scene republish. It
@@ -2204,18 +2261,23 @@ must satisfy these hard formulas, including pitch and allocator overhead:
 | Albedo target | one RGBA8 `N`-pixel GPU texture |
 | Owner/sample target | one R32_UINT `N`-pixel GPU texture |
 | Final map target | one RGBA8 `N`-pixel GPU texture |
+| Opaque painter rank | one D32_FLOAT `N`-pixel GPU depth texture |
 | Compact scalar/RGB light data | one record per projected populated light cell; record-count proportional and never `N * D` |
 | Compact spatial lookup | one coarse viewport bucket table plus bounded quad/bucket overlaps |
 | Static transformed/effect cache | existing explicit byte/entry cap; no uncapped fallback cache |
 | Live records | at most the bounded MAP2 command/object count for the active generation |
 | Painter submission | retained primary/auxiliary command arrays plus one persistent, cycled GPU instance stream; only adjacent equal texture/scissor state is batched |
 | Retained physical depths | `D <= MAP2_LEVELS == 2 * MAP2_MAX_DEPTH + 1` |
-| Compositions | one ordered albedo/owner pass and one final integer light/tone pass per complete primary draw |
+| Compositions | one ordered opaque albedo/owner/rank pass, one integer opaque light/tone resolve, and one ordered independently lit transparent pass per complete primary draw |
 
 The implementation exposes GPU counters for command construction,
 batches/draws, source and compact-light uploads, resource creation/destruction,
 albedo/owner work, final light/tone work, UI, submission, fenced completion,
-present wait, retained bytes, recovery, and fallbacks. After warmup an unchanged
+present wait, retained bytes, recovery, and fallbacks. Damage/dirty byte counts
+describe the logical albedo/owner/rank footprint (12 bytes per pixel), separately
+from actual upload traffic. The damage-clear batch counter records each actual
+opaque clear, including a frame whose simultaneous light change requires a
+full final resolve. After warmup an unchanged
 scene has no source/effect upload or resource churn. Idle after fades and timed
 buckets settle has no visibility, shadow, or map-state reconstruction work.
 Player screenshots enqueue a completed-frame GPU copy and return immediately;

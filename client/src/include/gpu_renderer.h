@@ -99,12 +99,16 @@ typedef struct gpu_renderer_statistics {
     uint64_t fallbacks;
     uint64_t map_full_redraws;
     uint64_t map_damage_frames;
+    /** Actual scissored opaque clears, including frames with a full light resolve. */
+    uint64_t map_damage_clear_batches;
     uint64_t map_damage_pixels;
+    /** Logical albedo/owner/rank footprint (12 bytes/pixel), not transfer traffic. */
     uint64_t map_damage_bytes;
     uint64_t map_retained_frames;
     uint64_t map_skipped_passes;
     uint64_t map_dirty_commands;
     uint64_t map_dirty_pixels;
+    /** Dirty-region albedo/owner/rank footprint, including full light resolves. */
     uint64_t map_dirty_bytes;
     uint64_t map_published_generation;
     uint64_t map_source_generation;
@@ -230,10 +234,19 @@ bool gpu_renderer_map_begin_auxiliary(int width, int height);
 bool gpu_renderer_map_retain(int width, int height);
 /** Supply the production map invalidation reason for the next map target. */
 void gpu_renderer_map_set_invalidation_hint(gpu_renderer_map_invalidation_reason_t reason);
+/** Set the draw owner and reset ground-coverage eligibility to false. */
 void gpu_renderer_map_set_owner(uint8_t owner, int sample_y, bool projected);
+/** Enable coverage for subsequent projected ground draws; main thread only. */
+void gpu_renderer_map_set_ground_coverage(bool enabled);
 /** Bind the stable semantic map-record identity for the next painter draw. */
 void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t draw_variant);
+/** Submit a light quad with full coverage, preserving existing callers. */
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]);
+/** Copy nine row-major U=x, V=y coverage bytes at 0, 1/2 and 1 of the quad.
+ * Uses existing quad storage; inputs remain caller-owned. Main thread only. */
+void gpu_renderer_map_light_quad_coverage(uint8_t owner,
+                                          const lighting_vertex_t vertices[4],
+                                          const uint8_t coverage[9]);
 bool gpu_renderer_map_end(void);
 bool gpu_renderer_draw_map(float x, float y, float width, float height);
 /** Return whether a primary retained map generation is safe to display. */
@@ -318,6 +331,8 @@ void gpu_renderer_statistics_get(gpu_renderer_statistics_t *statistics);
 uint64_t gpu_renderer_timing_begin(void);
 void gpu_renderer_timing_end(gpu_renderer_timing_stage_t stage, uint64_t started_ns);
 void gpu_renderer_statistics_commands(uint64_t commands, uint64_t batches, uint64_t draws);
+/** Record one scissored opaque albedo/owner/rank clear draw. */
+void gpu_renderer_statistics_map_damage_clear(void);
 void gpu_renderer_statistics_source_upload(size_t bytes);
 void gpu_renderer_statistics_instance_upload(size_t bytes);
 void gpu_renderer_statistics_light_upload(size_t bytes);

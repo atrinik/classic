@@ -407,7 +407,11 @@ static bool gpu_renderer_formats_supported(SDL_GPUDevice *candidate) {
            SDL_GPUTextureSupportsFormat(candidate,
                                         SDL_GPU_TEXTUREFORMAT_R32_UINT,
                                         SDL_GPU_TEXTURETYPE_2D,
-                                        integer_usage);
+                                        integer_usage) &&
+           SDL_GPUTextureSupportsFormat(candidate,
+                                        SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
+                                        SDL_GPU_TEXTURETYPE_2D,
+                                        SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
 }
 
 static void gpu_renderer_atlas_regions_destroy(gpu_texture_atlas_t *atlas) {
@@ -746,9 +750,10 @@ static bool gpu_renderer_create_internal(SDL_Window *window, bool require_hardwa
     if (!capabilities_supported || (require_hardware && !hardware_verified)) {
         if (!(require_hardware && selected_backend != NULL &&
               strcmp(selected_backend, "direct3d12") == 0 && !d3d12_identity_resolved)) {
-            SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with "
-                         "verified hardware acceleration plus R8G8B8A8_UNORM and R32_UINT "
-                         "render targets");
+            SDL_SetError(
+                "GPU renderer requires Vulkan, Direct3D 12, or Metal with "
+                "verified hardware acceleration plus R8G8B8A8_UNORM, R32_UINT, and D32_FLOAT "
+                "render targets");
         }
         gpu_renderer_failure_preserve("unsupported GPU renderer capabilities");
         return false;
@@ -1114,12 +1119,22 @@ void gpu_renderer_map_set_owner(uint8_t owner, int sample_y, bool projected) {
     gpu_map_renderer_set_owner(owner, sample_y, projected);
 }
 
+void gpu_renderer_map_set_ground_coverage(bool enabled) {
+    gpu_map_renderer_set_ground_coverage(enabled);
+}
+
 void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t draw_variant) {
     gpu_map_renderer_set_instance_identity(record_identity, draw_variant);
 }
 
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {
     gpu_map_renderer_light_quad(owner, vertices);
+}
+
+void gpu_renderer_map_light_quad_coverage(uint8_t owner,
+                                          const lighting_vertex_t vertices[4],
+                                          const uint8_t coverage[9]) {
+    gpu_map_renderer_light_quad_coverage(owner, vertices, coverage);
 }
 
 bool gpu_renderer_map_end(void) {
@@ -2031,6 +2046,11 @@ static void gpu_renderer_statistics_upload(size_t bytes) {
     statistics.upload_bytes += bytes;
 }
 
+void gpu_renderer_statistics_map_damage_clear(void) {
+    statistics.map_damage_clear_batches++;
+    gpu_renderer_statistics_commands(1, 1, 1);
+}
+
 void gpu_renderer_statistics_source_upload(size_t bytes) {
     gpu_renderer_statistics_upload(bytes);
     statistics.source_upload_count++;
@@ -2092,7 +2112,7 @@ void gpu_renderer_statistics_map_frame(bool full_redraw,
     statistics.map_skipped_passes += skipped_pass;
     uint64_t dirty_pixels =
         (uint64_t)diagnostics->dirty_width * (uint64_t)diagnostics->dirty_height;
-    uint64_t dirty_bytes = dirty_pixels <= UINT64_MAX / 8U ? dirty_pixels * 8U : UINT64_MAX;
+    uint64_t dirty_bytes = dirty_pixels <= UINT64_MAX / 12U ? dirty_pixels * 12U : UINT64_MAX;
     statistics.map_dirty_commands += diagnostics->dirty_commands;
     statistics.map_dirty_pixels += dirty_pixels;
     statistics.map_dirty_bytes += dirty_bytes;

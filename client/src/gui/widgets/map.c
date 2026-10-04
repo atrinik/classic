@@ -3666,6 +3666,7 @@ typedef struct map_render_command {
     bool local_player;
     bool fogged; ///< The cached tile is outside the current visible area.
     bool ground;
+    bool ground_coverage;
     bool smooth_lighting;
     bool primary_level;
     SDL_Surface *living_occlusion_mask;
@@ -3975,14 +3976,9 @@ typedef struct map_visible_tile {
     map_cell_t *cell;
 } map_visible_tile_t;
 
-/**
- * Draw a single object on the map.
- *
- * @param surface
- * Surface to render on.
- * @param data
- * Rendering data. May be modified.
- */
+static uint8_t map_lighting_sub_layer(const map_cell_t *cell);
+
+/** Ground and authored roofs sample the projected light field. */
 static bool map_object_uses_projected_lighting(const map_render_data_t *data,
                                                const map_cell_layer_record_t *record) {
     return data->ground_pass || record->roof;
@@ -4297,6 +4293,10 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
                             data->sub_layer == MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1),
             .fogged = data->cell->fow && !remembered,
             .ground = data->ground_pass,
+            .ground_coverage = data->ground_pass && data->layer >= LAYER_FLOOR &&
+                               data->layer <= LAYER_FMASK &&
+                               data->sub_layer == map_lighting_sub_layer(data->cell) &&
+                               !map_cell_layer_record_read(data->cell, map_layer)->roof,
             .smooth_lighting = data->smooth_lighting,
             .primary_level = data->primary_level,
             .transformed = transformed,
@@ -6060,6 +6060,19 @@ map_lighting_vertex(SDL_Surface *surface, const map_render_data_t *data, int x, 
     return vertex;
 }
 
+/** Known ground is geometry authority, independent of light and image readiness. */
+static bool map_ground_coverage_known(const map_cell_t *cell) {
+    uint8_t sub_layer = map_lighting_sub_layer(cell);
+    for (int layer = LAYER_FLOOR; layer <= LAYER_FMASK; layer++) {
+        const map_cell_layer_record_t *record =
+            map_cell_layer_record_read(cell, GET_MAP_LAYER(layer, sub_layer));
+        if (record->face != 0 && !record->roof) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Rasterize and composite the interpolated map light field. */
 static void
 map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, int w, int h) {
@@ -6074,11 +6087,14 @@ map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, i
     int vertex_height = end_y - start_y + 1;
     lighting_vertex_t *vertices =
         xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*vertices));
+    bool *known_ground =
+        xmalloc((size_t)vertex_width * (size_t)vertex_height * sizeof(*known_ground));
     for (int vertex_x = start_x; vertex_x <= end_x; vertex_x++) {
         for (int vertex_y = start_y; vertex_y <= end_y; vertex_y++) {
-            vertices[(size_t)(vertex_x - start_x) * (size_t)vertex_height +
-                     (size_t)(vertex_y - start_y)] =
-                map_lighting_vertex(surface, data, vertex_x, vertex_y);
+            size_t index =
+                (size_t)(vertex_x - start_x) * (size_t)vertex_height + (size_t)(vertex_y - start_y);
+            vertices[index] = map_lighting_vertex(surface, data, vertex_x, vertex_y);
+            known_ground[index] = map_ground_coverage_known(MAP_CELL_GET(vertex_x, vertex_y));
         }
     }
 
@@ -6100,9 +6116,18 @@ map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, i
                 vertices[vertex + (size_t)vertex_height + 1],
                 vertices[vertex + 1],
             };
-            gpu_renderer_map_light_quad((uint8_t)MAP2_DEPTH_INDEX(data->depth), quad);
+            bool known[4] = {known_ground[vertex],
+                             known_ground[vertex + (size_t)vertex_height],
+                             known_ground[vertex + (size_t)vertex_height + 1],
+                             known_ground[vertex + 1]};
+            uint8_t coverage[9];
+            map_visibility_ground_coverage(known, coverage);
+            gpu_renderer_map_light_quad_coverage((uint8_t)MAP2_DEPTH_INDEX(data->depth),
+                                                 quad,
+                                                 coverage);
         }
     }
+    free(known_ground);
     free(vertices);
 }
 
@@ -7270,6 +7295,7 @@ static void map_render_commands(SDL_Surface *surface,
                                              : GPU_RENDERER_OWNER_UNLIT,
                                    command->effects.smooth_dark_y,
                                    projected_light);
+        gpu_renderer_map_set_ground_coverage(projected_light && command->ground_coverage);
         gpu_renderer_map_set_instance_identity(command->record_identity,
                                                (uint32_t)command->record_layer << 2U);
         surface_show_effects(surface,
@@ -9105,8 +9131,8 @@ static bool map_actor_relocation_test_draw(SDL_Surface *surface, uint64_t living
     map_benchmark_statistics_t statistics;
     map_benchmark_statistics_get(&statistics);
     bool success = statistics.map_draws == 1 && statistics.primary_map_draws == 1 &&
-                   statistics.auxiliary_map_draws == 0 &&
-                   statistics.living_commands == living && statistics.render_failures == 0;
+                   statistics.auxiliary_map_draws == 0 && statistics.living_commands == living &&
+                   statistics.render_failures == 0;
     if (!success) {
         fprintf(stderr,
                 "map actor relocation test: %s draw mismatch expected-living=%" PRIu64
@@ -9464,6 +9490,682 @@ done:
 #undef MAP_ACTOR_RELOCATION_CHECKPOINT
     return success;
 }
+
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+/** Find one closed-fixture command after the working painter list was consumed. */
+static const map_render_command_t *map_floor_composition_command(int x, int layer) {
+    const map_render_command_t *result = NULL;
+    for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
+        const map_render_command_t *command = &map_retained_primary_context.commands[index];
+        if (command->depth == 0 && command->sub_layer == 0 && command->tile_x - MAP_STARTX == x &&
+            command->tile_y - MAP_STARTY == 10 && command->object_layer == layer) {
+            if (result != NULL) {
+                return NULL;
+            }
+            result = command;
+        }
+    }
+    return result;
+}
+
+/** Capture final composed pixels, without attributing a mixed pixel to one owner. */
+static bool map_floor_composition_capture(SDL_Surface *surface,
+                                          bool retained,
+                                          int marker_x,
+                                          bool marker_present,
+                                          int *pixel_x,
+                                          int *pixel_y,
+                                          uint8_t rgba[4]) {
+    map_redraw_consume();
+    map_redraw_request(retained ? MAP_REDRAW_REASON_ANIMATION : MAP_REDRAW_REASON_MAP_PACKET);
+    map_benchmark_statistics_reset();
+    if (!gpu_renderer_begin_frame()) {
+        return false;
+    }
+    map_draw_map(surface);
+    map_benchmark_statistics_t statistics;
+    map_benchmark_statistics_get(&statistics);
+    if (statistics.primary_map_draws != 1 || statistics.auxiliary_map_draws != 0 ||
+        statistics.render_failures != 0 ||
+        (retained && (statistics.animation_draws != 1 || statistics.reused_render_commands == 0 ||
+                      statistics.compiled_render_commands != 0))) {
+        return SDL_SetError("floor composition did not exercise its primary draw path");
+    }
+    const map_render_command_t *command = map_floor_composition_command(marker_x, LAYER_ITEM);
+    if ((command != NULL) != marker_present) {
+        return SDL_SetError("floor composition item command lifetime mismatch");
+    }
+    if (command != NULL) {
+        *pixel_x = command->bounds_x + command->bounds_w / 2;
+        *pixel_y = command->bounds_y + command->bounds_h / 3;
+    }
+    if (!gpu_renderer_draw_map(0.0f, 0.0f, (float)surface->w, (float)surface->h) ||
+        !gpu_renderer_present()) {
+        return false;
+    }
+    SDL_Surface *capture = gpu_renderer_readback(NULL);
+    bool success =
+        capture != NULL &&
+        SDL_ReadSurfacePixel(capture, *pixel_x, *pixel_y, &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
+    SDL_DestroySurface(capture);
+    if (success && !marker_present) {
+        gpu_map_renderer_probe_t probe;
+        success = gpu_map_renderer_probe(*pixel_x, *pixel_y, MAP2_DEPTH_INDEX(0), &probe) &&
+                  probe.albedo[3] == UINT8_MAX && rgba[3] == UINT8_MAX;
+        if (success) {
+            uint16_t linear[3];
+            lighting_tone_map_linear(probe.light[0], &probe.light[1], linear);
+            for (size_t channel = 0; channel < 3; channel++) {
+                unsigned tone = lighting_multiply_channel(probe.albedo[channel], linear[channel]);
+                unsigned expected = (tone * probe.ground_coverage + 127U) / 255U;
+                success &= rgba[channel] == expected;
+            }
+        }
+        if (!success) {
+            SDL_SetError("floor composition expired item did not reveal CPU-tone ground coverage");
+        }
+    }
+    return success;
+}
+
+/** Exercise night decorations through sparse scroll, soft FOW, and retained draws. */
+bool widget_map_floor_composition_test(void) {
+    if (map_width != 17 || map_height != 17 || cur_widget[MAP_ID] == NULL ||
+        cur_widget[MAP_ID]->surface == NULL || !map_select_level(0, false)) {
+        return SDL_SetError("floor composition requires its closed primary fixture");
+    }
+    SDL_Surface *surface = cur_widget[MAP_ID]->surface;
+    uint32_t initial_tick = LastTick;
+    int initial_x = MapData.posx;
+    int initial_y = MapData.posy;
+    uint64_t item_identity = MAP_CELL_GET_MIDDLE(6, 10)->painter_identity;
+    uint64_t mask_identity = MAP_CELL_GET_MIDDLE(10, 10)->painter_identity;
+    const map_cell_actor_record_t *initial_actor =
+        map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(6, 10), 0);
+    if (initial_actor->target_object_count != UINT32_C(0x11223344) || initial_actor->probe != 80) {
+        return SDL_SetError("floor composition requires live interaction metadata before FOW");
+    }
+    uint8_t samples[4][4];
+    bool success = true;
+    int pixel_x = 0;
+    int pixel_y = 0;
+
+    /* Empty SAME payloads scroll cached records without resending their faces. */
+    for (int step = 0; success && step < 3; step++) {
+        int offset = step == 1 ? 1 : 0;
+        int marker_x = 6 - offset;
+        if (step != 0) {
+            success = map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME,
+                                                     (uint8_t)(initial_x + offset),
+                                                     (uint8_t)initial_y,
+                                                     0,
+                                                     NULL,
+                                                     NULL);
+        }
+        map_cell_t *item_cell = MAP_CELL_GET_MIDDLE(marker_x, 10);
+        map_cell_t *mask_cell = MAP_CELL_GET_MIDDLE(10 - offset, 10);
+        const map_cell_layer_record_t *item =
+            map_cell_layer_record_read(item_cell, GET_MAP_LAYER(LAYER_ITEM, 0));
+        success = success && item_cell->painter_identity == item_identity &&
+                  mask_cell->painter_identity == mask_identity && item->face == 3 &&
+                  item->visibility.authorized && item->visibility.alpha == UINT8_MAX &&
+                  map_cell_layer_record_read(mask_cell, GET_MAP_LAYER(LAYER_FMASK, 0))->face == 2;
+        uint8_t full[4];
+        uint8_t retained[4];
+        if (!success || !map_floor_composition_capture(surface,
+                                                       false,
+                                                       marker_x,
+                                                       true,
+                                                       &pixel_x,
+                                                       &pixel_y,
+                                                       full)) {
+            success = false;
+            break;
+        }
+        const map_render_command_t *item_command =
+            map_floor_composition_command(marker_x, LAYER_ITEM);
+        const map_render_command_t *mask_command =
+            map_floor_composition_command(10 - offset, LAYER_FMASK);
+        success = item_command != NULL && mask_command != NULL && !item_command->fogged &&
+                  BIT_QUERY(item_command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
+                  BIT_QUERY(mask_command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
+                  map_floor_composition_capture(surface,
+                                                true,
+                                                marker_x,
+                                                true,
+                                                &pixel_x,
+                                                &pixel_y,
+                                                retained) &&
+                  memcmp(full, retained, sizeof(full)) == 0;
+    }
+    if (!success) {
+        SDL_SetError("floor composition sparse-scroll decoration retention failed");
+        goto done;
+    }
+
+    packet_struct *base = packet_new(0, 16, 16);
+    map_actor_relocation_test_fow(base, 6, 10);
+    if (!map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME,
+                                        (uint8_t)initial_x,
+                                        (uint8_t)initial_y,
+                                        0,
+                                        base,
+                                        NULL)) {
+        success = false;
+        goto done;
+    }
+    static const uint32_t elapsed[] = {0, 125, 249, 250};
+    static const uint8_t alpha[] = {255, 127, 1, 0};
+    for (size_t phase = 0; phase < arraysize(elapsed); phase++) {
+        LastTick = initial_tick + elapsed[phase];
+        map_animate();
+        map_cell_t *cell = MAP_CELL_GET_MIDDLE(6, 10);
+        const map_cell_layer_record_t *item =
+            map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_ITEM, 0));
+        const map_cell_actor_record_t *actor = map_cell_actor_record_read(cell, 0);
+        if (!cell->fow || item->visibility.authorized || actor->target_object_count != 0 ||
+            actor->probe != 0 || actor->name[0] != '\0' ||
+            (alpha[phase] != 0 && (item->face != 3 || item->visibility.alpha != alpha[phase])) ||
+            (alpha[phase] == 0 && item->face != 0)) {
+            success = SDL_SetError("floor composition FOW interaction/fade state failed at %u ms",
+                                   elapsed[phase]);
+            goto done;
+        }
+        uint8_t retained[4];
+        if (!map_floor_composition_capture(surface,
+                                           false,
+                                           6,
+                                           alpha[phase] != 0,
+                                           &pixel_x,
+                                           &pixel_y,
+                                           samples[phase]) ||
+            !map_floor_composition_capture(surface,
+                                           true,
+                                           6,
+                                           alpha[phase] != 0,
+                                           &pixel_x,
+                                           &pixel_y,
+                                           retained) ||
+            memcmp(samples[phase], retained, sizeof(retained)) != 0) {
+            success = SDL_SetError("floor composition full/retained pixels differ at %u ms",
+                                   elapsed[phase]);
+            goto done;
+        }
+        printf("{\"type\":\"floor-composition\",\"elapsed_ms\":%u,\"alpha\":%u,"
+               "\"pixel\":[%d,%d],\"final_rgba\":[%u,%u,%u,%u]}\n",
+               elapsed[phase],
+               alpha[phase],
+               pixel_x,
+               pixel_y,
+               samples[phase][0],
+               samples[phase][1],
+               samples[phase][2],
+               samples[phase][3]);
+    }
+    bool distinct_contribution = false;
+    for (size_t channel = 0; channel < 3; channel++) {
+        distinct_contribution |= abs((int)samples[0][channel] - (int)samples[3][channel]) >= 16;
+    }
+    if (!distinct_contribution || samples[0][3] != UINT8_MAX || samples[1][3] != UINT8_MAX ||
+        samples[2][3] != UINT8_MAX) {
+        success =
+            SDL_SetError("floor composition probe did not capture a distinct opaque fog item");
+        goto done;
+    }
+    /* The tall item's upper pixel covers a still-visible neighboring floor.
+     * Full FOW opacity and expired item provide independent contributor colors;
+     * intermediate encoded-RGBA source-over must converge on that dark floor. */
+    for (size_t phase = 1; phase < 3; phase++) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            unsigned expected = ((unsigned)samples[0][channel] * alpha[phase] +
+                                 (unsigned)samples[3][channel] * (255U - alpha[phase]) + 127U) /
+                                255U;
+            if (abs((int)samples[phase][channel] - (int)expected) > 2) {
+                success = SDL_SetError(
+                    "floor composition brightness pop at %u ms channel %zu: got %u expected %u",
+                    elapsed[phase],
+                    channel,
+                    samples[phase][channel],
+                    expected);
+                goto done;
+            }
+        }
+    }
+    if (samples[3][3] != UINT8_MAX ||
+        (samples[3][0] >= 150 && samples[3][1] >= 150 && samples[3][2] >= 150)) {
+        success = SDL_SetError("floor composition background probe was not opaque night ground");
+    }
+done:
+    LastTick = initial_tick;
+    map_select_level(0, true);
+    map_redraw_consume();
+    return success;
+}
+
+/** Draw the normal primary world and capture its complete composed target. */
+static SDL_Surface *map_ground_coverage_capture(SDL_Surface *surface, bool retained) {
+    map_redraw_consume();
+    map_redraw_request(retained ? MAP_REDRAW_REASON_ANIMATION : MAP_REDRAW_REASON_MAP_PACKET);
+    map_benchmark_statistics_reset();
+    if (!gpu_renderer_begin_frame()) {
+        return NULL;
+    }
+    map_draw_map(surface);
+    map_benchmark_statistics_t statistics;
+    map_benchmark_statistics_get(&statistics);
+    if (statistics.primary_map_draws != 1 || statistics.render_failures != 0 ||
+        (retained && (statistics.animation_draws != 1 || statistics.reused_render_commands == 0 ||
+                      statistics.compiled_render_commands != 0))) {
+        SDL_SetError("ground coverage did not exercise the requested primary draw");
+        return NULL;
+    }
+    if (!gpu_renderer_draw_map(0.0f, 0.0f, (float)surface->w, (float)surface->h) ||
+        !gpu_renderer_present()) {
+        return NULL;
+    }
+    SDL_Surface *readback = gpu_renderer_readback(NULL);
+    SDL_Surface *rgba = readback != NULL ? SDL_ConvertSurface(readback, SDL_PIXELFORMAT_RGBA32) : NULL;
+    SDL_DestroySurface(readback);
+    return rgba;
+}
+
+/** Compare all actual framebuffer pixels, excluding allocator row padding. */
+static bool map_ground_coverage_equal(const SDL_Surface *left, const SDL_Surface *right) {
+    if (left == NULL || right == NULL || left->w != right->w || left->h != right->h) {
+        return false;
+    }
+    for (int y = 0; y < left->h; y++) {
+        if (memcmp((const uint8_t *)left->pixels + y * left->pitch,
+                   (const uint8_t *)right->pixels + y * right->pitch,
+                   (size_t)left->w * 4) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Probe a known ground pixel and check post-tone coverage against the CPU oracle. */
+static bool map_ground_coverage_sample(SDL_Surface *surface,
+                                       int x, int y, int dx, int dy,
+                                       gpu_map_renderer_probe_t *probe) {
+    map_render_data_t data = {.world_surface = true, .primary_level = true, .depth = 0};
+    map_setup_render_data(surface, &data, NULL, NULL, NULL, NULL);
+    lighting_vertex_t vertex = map_lighting_vertex(surface, &data, MAP_STARTX + x, MAP_STARTY + y);
+    if (!gpu_map_renderer_probe(vertex.x + dx, vertex.y + dy, MAP2_DEPTH_INDEX(0), probe) ||
+        probe->albedo[0] != 192 || probe->albedo[1] != 192 || probe->albedo[2] != 192 ||
+        probe->albedo[3] != UINT8_MAX || probe->final_color[3] != UINT8_MAX) {
+        return SDL_SetError("ground coverage missing opaque floor at %d,%d offset %d,%d", x, y, dx, dy);
+    }
+    uint16_t linear[3];
+    lighting_tone_map_linear(probe->light[0], &probe->light[1], linear);
+    for (size_t channel = 0; channel < 3; channel++) {
+        unsigned tone = lighting_multiply_channel(192, linear[channel]);
+        unsigned expected = (tone * probe->ground_coverage + 127U) / 255U;
+        if (probe->final_color[channel] != expected) {
+            return SDL_SetError("ground coverage tone oracle at %d,%d channel %zu: got %u expected %u coverage %u",
+                                x, y, channel, probe->final_color[channel], expected, probe->ground_coverage);
+        }
+    }
+    return true;
+}
+
+/** One complete MAP2 update, deliberately independent of any light setter. */
+static packet_struct *map_ground_coverage_floor(int x, int y) {
+    packet_struct *level = packet_new(0, 32, 32);
+    packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6));
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, GET_MAP_LAYER(LAYER_FLOOR, 0));
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 0);
+    return level;
+}
+
+/** Light-only packets may create sample records, but must never invent ground. */
+static packet_struct *map_ground_coverage_light(uint16_t red, uint16_t green, uint16_t blue) {
+    packet_struct *level = packet_new(0, 128, 128);
+    for (int x = 9; x <= 10; x++) {
+        for (int y = 5; y <= 6; y++) {
+            packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6 | MAP2_MASK_LIGHT_LEVEL));
+            packet_writer_write_uint16(level, 256);
+            packet_writer_write_uint8(level, 0);
+            packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16);
+            packet_writer_write_uint8(level, 1);
+            packet_writer_write_uint16(level, red);
+            packet_writer_write_uint16(level, green);
+            packet_writer_write_uint16(level, blue);
+        }
+    }
+    return level;
+}
+
+/** Closed MAP2 fixture: ground topology, owner exclusions, and cache lifecycle. */
+bool widget_map_ground_coverage_test(void) {
+#define GROUND_CHECK(expression)                                                               \
+    do {                                                                                        \
+        if (!(expression)) {                                                                    \
+            fprintf(stderr, "ground coverage checkpoint failed: %s: %s\n", #expression, SDL_GetError()); \
+            success = false;                                                                    \
+            goto done;                                                                          \
+        }                                                                                       \
+    } while (0)
+    bool success = true;
+    SDL_Surface *baseline = NULL;
+    SDL_Surface *capture = NULL;
+    SDL_Surface *other = NULL;
+    SDL_Surface *surface = cur_widget[MAP_ID] != NULL ? cur_widget[MAP_ID]->surface : NULL;
+    GROUND_CHECK(surface != NULL && map_width == 17 && map_height == 17 && map_select_level(0, false));
+    const uint8_t posx = MapData.posx;
+    const uint8_t posy = MapData.posy;
+    gpu_map_renderer_probe_t boundary[3], sample, lit, explored;
+    static const int offsets[3][2] = {{3, 2}, {6, 3}, {9, 5}};
+    baseline = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(baseline != NULL);
+    for (size_t index = 0; index < arraysize(boundary); index++) {
+        GROUND_CHECK(map_ground_coverage_sample(surface, 9, 5, offsets[index][0], offsets[index][1], &boundary[index]));
+        /* Pixel centers on this half-cell quad have u=(dx/24+dy/12)/2.
+         * Both right vertices are missing: coverage is 255*(1-2*u).
+         * This analytic topology oracle is independent of uploaded coverage. */
+        double u = ((offsets[index][0] + 0.5) / 24.0 + (offsets[index][1] + 0.5) / 12.0) / 2.0;
+        int expected = (int)(255.0 * (1.0 - 2.0 * u) + 0.5);
+        GROUND_CHECK(abs((int)boundary[index].ground_coverage - expected) <= 1);
+    }
+    GROUND_CHECK(boundary[0].ground_coverage > boundary[1].ground_coverage &&
+                 boundary[1].ground_coverage > boundary[2].ground_coverage &&
+                 boundary[2].ground_coverage > 0 && boundary[0].ground_coverage < UINT8_MAX &&
+                 boundary[0].final_color[0] > boundary[2].final_color[0] + 32);
+    GROUND_CHECK(map_ground_coverage_sample(surface, 7, 5, 0, 0, &sample) && sample.ground_coverage == UINT8_MAX);
+    GROUND_CHECK(map_ground_coverage_sample(surface, 4, 4, 0, 0, &sample) && sample.ground_coverage > 210 && sample.final_color[0] > 100);
+    GROUND_CHECK(map_ground_coverage_sample(surface, 4, 10, 0, 0, &sample) && sample.ground_coverage > 210 && sample.final_color[0] > 100);
+    GROUND_CHECK(map_ground_coverage_sample(surface, 10, 11, 6, 3, &sample) && sample.ground_coverage > 0 && sample.ground_coverage < 200);
+
+    /* Unknown geometry stays absent and the composed framebuffer stays black. */
+    map_render_data_t data = {.world_surface = true, .primary_level = true, .depth = 0};
+    map_setup_render_data(surface, &data, NULL, NULL, NULL, NULL);
+    lighting_vertex_t unknown = map_lighting_vertex(surface, &data, MAP_STARTX + 10, MAP_STARTY + 5);
+    uint8_t unknown_rgba[4];
+    GROUND_CHECK(!map_cell_has_remembered_geometry(MAP_CELL_GET_MIDDLE(10, 5)) &&
+                 SDL_ReadSurfacePixel(baseline, unknown.x, unknown.y, &unknown_rgba[0], &unknown_rgba[1], &unknown_rgba[2], &unknown_rgba[3]) &&
+                 unknown_rgba[0] == 0 && unknown_rgba[1] == 0 && unknown_rgba[2] == 0);
+
+    unsigned exclusions = 0, masks = 0;
+    for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
+        const map_render_command_t *command = &map_retained_primary_context.commands[index];
+        if (command->object_layer == LAYER_FMASK) {
+            GROUND_CHECK(command->ground_coverage);
+            masks++;
+        }
+        if (command->object_layer == LAYER_LIVING || command->object_layer == LAYER_WALL || command->roof) {
+            GROUND_CHECK(!command->ground_coverage);
+            int x = command->bounds_x + command->bounds_w / 2;
+            int y = command->bounds_y + command->bounds_h / 3;
+            GROUND_CHECK(gpu_map_renderer_probe(x, y, MAP2_DEPTH_INDEX(0), &sample) && sample.ground_coverage == UINT8_MAX);
+            GROUND_CHECK(sample.albedo[0] == UINT8_MAX);
+            exclusions |= command->object_layer == LAYER_LIVING ? 1U : (command->roof ? 4U : 2U);
+        }
+    }
+    GROUND_CHECK(exclusions == 7 && masks == 1);
+    capture = map_ground_coverage_capture(surface, true);
+    GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
+    SDL_DestroySurface(capture);
+    capture = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
+    SDL_DestroySurface(capture);
+    capture = NULL;
+
+    /* Sparse SAME scroll and return preserve topology without resending faces. */
+    GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, (uint8_t)(posx + 1), posy, 0, NULL, NULL));
+    capture = map_ground_coverage_capture(surface, false);
+    other = map_ground_coverage_capture(surface, true);
+    GROUND_CHECK(map_ground_coverage_equal(capture, other));
+    SDL_DestroySurface(capture);
+    SDL_DestroySurface(other);
+    capture = other = NULL;
+    GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, NULL, NULL));
+    capture = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(map_ground_coverage_equal(baseline, capture));
+    SDL_DestroySurface(capture);
+    capture = NULL;
+
+    /* Scalar/RGB and then hue-only updates preserve the independently known edge. */
+    for (int hue = 0; hue < 2; hue++) {
+        GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0,
+                     map_ground_coverage_light(hue == 0 ? 256 : 32, hue == 0 ? 64 : 256, hue == 0 ? 32 : 64), NULL));
+        capture = map_ground_coverage_capture(surface, false);
+        GROUND_CHECK(capture != NULL && map_ground_coverage_sample(surface, 9, 5, 6, 3, &lit));
+        GROUND_CHECK(lit.ground_coverage == boundary[1].ground_coverage &&
+                     memcmp(lit.light, boundary[1].light, sizeof(lit.light)) != 0 &&
+                     memcmp(lit.final_color, boundary[1].final_color, sizeof(lit.final_color)) != 0 &&
+                     !map_cell_has_remembered_geometry(MAP_CELL_GET_MIDDLE(10, 5)));
+        if (hue == 1) {
+            GROUND_CHECK(memcmp(lit.final_color, sample.final_color, sizeof(lit.final_color)) != 0);
+        }
+        sample = lit;
+        other = map_ground_coverage_capture(surface, true);
+        GROUND_CHECK(map_ground_coverage_equal(capture, other));
+        SDL_DestroySurface(capture);
+        SDL_DestroySurface(other);
+        capture = other = NULL;
+    }
+
+    /* A layer-only exploration update must invalidate coverage even with no light update. */
+    GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0,
+                                               map_ground_coverage_floor(10, 5), NULL));
+    capture = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(capture != NULL && map_ground_coverage_sample(surface, 9, 5, 6, 3, &explored) &&
+                 explored.ground_coverage > lit.ground_coverage + 32 &&
+                 memcmp(explored.light, lit.light, sizeof(lit.light)) == 0);
+    other = map_ground_coverage_capture(surface, true);
+    GROUND_CHECK(map_ground_coverage_equal(capture, other));
+    SDL_DestroySurface(capture);
+    SDL_DestroySurface(other);
+    capture = other = NULL;
+
+    /* Soft FOW keeps remembered floor coverage; it does not make a new hole. */
+    packet_struct *fow = packet_new(0, 32, 32);
+    map_actor_relocation_test_fow(fow, 10, 5);
+    GROUND_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, fow, NULL));
+    capture = map_ground_coverage_capture(surface, false);
+    GROUND_CHECK(capture != NULL && MAP_CELL_GET_MIDDLE(10, 5)->fow &&
+                 map_cell_has_remembered_geometry(MAP_CELL_GET_MIDDLE(10, 5)) &&
+                 map_ground_coverage_sample(surface, 9, 5, 6, 3, &sample) &&
+                 sample.ground_coverage == explored.ground_coverage);
+    other = map_ground_coverage_capture(surface, true);
+    GROUND_CHECK(map_ground_coverage_equal(capture, other));
+    printf("{\"type\":\"ground-coverage\",\"boundary\":[%u,%u,%u],\"explored\":%u,\"remembered\":%u,\"complete_frame_parity\":true}\n",
+           boundary[0].ground_coverage, boundary[1].ground_coverage, boundary[2].ground_coverage,
+           explored.ground_coverage, sample.ground_coverage);
+
+done:
+    SDL_DestroySurface(baseline);
+    SDL_DestroySurface(capture);
+    SDL_DestroySurface(other);
+    map_select_level(0, true);
+    map_redraw_consume();
+#undef GROUND_CHECK
+    return success;
+}
+
+/** Report only values allowed by the existing visibility-redacted diagnostic. */
+static void map_edge_lighting_vertex(const char *phase, int marker, int x, int y) {
+    map_lighting_diagnostic_t value;
+    bool available = map_lighting_diagnostic_get(0, x, y, 0, true, &value);
+    printf("{\"type\":\"edge-lighting-vertex\",\"phase\":\"%s\",\"marker\":%d,"
+           "\"tile\":[%d,%d],\"available\":%s,\"weight\":%u",
+           phase,
+           marker,
+           x,
+           y,
+           available ? "true" : "false",
+           (unsigned)map_visibility_window_weight(x, y, map_width, map_height));
+    if (available) {
+        printf(",\"visible\":%s,\"fogged\":%s,\"remembered\":%s,\"reasons\":%u",
+               value.visible ? "true" : "false",
+               value.fogged ? "true" : "false",
+               value.remembered ? "true" : "false",
+               value.reasons);
+        if (value.visible && !value.fogged) {
+            printf(",\"received\":%s,\"received_scalar\":%u,\"received_rgb\":[%u,%u,%u],"
+                   "\"working_available\":%s,\"working_scalar\":%u,\"working_rgb\":[%u,%u,%u],"
+                   "\"presentation_available\":%s,\"presentation_rgb\":[%u,%u,%u]",
+                   value.received ? "true" : "false",
+                   value.received_scalar,
+                   value.received_rgb[0],
+                   value.received_rgb[1],
+                   value.received_rgb[2],
+                   value.working_available ? "true" : "false",
+                   value.working_scalar,
+                   value.working_rgb[0],
+                   value.working_rgb[1],
+                   value.working_rgb[2],
+                   value.presentation_available ? "true" : "false",
+                   value.presentation_rgb[0],
+                   value.presentation_rgb[1],
+                   value.presentation_rgb[2]);
+        }
+    }
+    printf("}\n");
+}
+
+/** Closed fixture only: compare fixed sprite-foot and projected ground rows. */
+bool widget_map_edge_lighting_test(void) {
+    static const int markers[3][2] = {{3, 16}, {8, 15}, {13, 14}};
+    static const int vertices[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    static const uint8_t marker_albedo[4] = {255, 192, 128, 255};
+    static const uint8_t ground_albedo[4] = {192, 192, 192, 255};
+    gpu_map_renderer_probe_t baseline[3][3];
+    if (map_width != 17 || map_height != 17 || cur_widget[MAP_ID] == NULL ||
+        cur_widget[MAP_ID]->surface == NULL || image_get_sprite(3) == NULL) {
+        return SDL_SetError("edge lighting fixture requires its primary surface and marker face");
+    }
+    SDL_Surface *surface = cur_widget[MAP_ID]->surface;
+    for (int phase = 0; phase < 2; phase++) {
+        const char *phase_name = phase == 0 ? "full" : "retained";
+        map_redraw_consume();
+        map_redraw_request(phase == 0 ? MAP_REDRAW_REASON_MAP_PACKET : MAP_REDRAW_REASON_ANIMATION);
+        map_benchmark_statistics_reset();
+        map_draw_map(surface);
+        map_benchmark_statistics_t statistics;
+        map_benchmark_statistics_get(&statistics);
+        if (statistics.primary_map_draws != 1 || statistics.auxiliary_map_draws != 0 ||
+            statistics.render_failures != 0 ||
+            (phase == 1 &&
+             (statistics.animation_draws != 1 || statistics.reused_render_commands == 0 ||
+              statistics.compiled_render_commands != 0))) {
+            return SDL_SetError(
+                "edge lighting fixture did not exercise the requested primary draw");
+        }
+        image_face_statistics_t assets;
+        image_face_statistics_get(&assets);
+        if (assets.pending != 0) {
+            return SDL_SetError("edge lighting fixture has pending assets");
+        }
+        for (int marker = 0; marker < 3; marker++) {
+            const map_render_command_t *command = NULL;
+            size_t matches = 0;
+            for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
+                const map_render_command_t *candidate =
+                    &map_retained_primary_context.commands[index];
+                if (candidate->depth == 0 && candidate->object_layer == LAYER_WALL &&
+                    candidate->tile_x - MAP_STARTX == markers[marker][0] &&
+                    candidate->tile_y - MAP_STARTY == markers[marker][1] &&
+                    candidate->source == image_get_sprite(3)->bitmap) {
+                    command = candidate;
+                    matches++;
+                }
+            }
+            if (matches != 1 || command->fogged || command->ground ||
+                !BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) ||
+                BIT_QUERY(command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE)) {
+                return SDL_SetError(
+                    "edge lighting marker %d has no unique visible fixed-row command",
+                    marker);
+            }
+            for (size_t vertex = 0; vertex < arraysize(vertices); vertex++) {
+                map_edge_lighting_vertex(phase_name,
+                                         marker,
+                                         markers[marker][0] + vertices[vertex][0],
+                                         markers[marker][1] + vertices[vertex][1]);
+            }
+            gpu_map_renderer_probe_t samples[3];
+            for (int sample = 0; sample < 3; sample++) {
+                int x = command->bounds_x + command->bounds_w / 2;
+                int y = command->bounds_y + command->bounds_h * (sample == 0 ? 1 : 2) / 3;
+                if (sample == 2) {
+                    x = command->bounds_x + command->bounds_w + 4;
+                }
+                gpu_map_renderer_probe_t *probe = &samples[sample];
+                if (!gpu_map_renderer_probe(x, y, MAP2_DEPTH_INDEX(0), probe)) {
+                    return SDL_SetError("edge lighting marker %d sample %d has no valid owner row",
+                                        marker,
+                                        sample);
+                }
+                printf("{\"type\":\"edge-lighting\",\"phase\":\"%s\",\"marker\":%d,"
+                       "\"tile\":[%d,%d],\"sample\":%d,\"pixel\":[%d,%d],"
+                       "\"record_identity\":%" PRIu64
+                       ",\"cell_generation\":%u,\"cell_revision\":%u,"
+                       "\"flags\":%u,\"submitted_foot_y\":%d,\"sample_y\":%d,\"lighting_key\":%u,"
+                       "\"albedo\":[%u,%u,%u,%u],\"cpu_reconstructed_light\":[%u,%u,%u,%u],"
+                       "\"final_rgba\":[%u,%u,%u,%u],\"installed\":%" PRIu64 ",\"pending\":%zu}\n",
+                       phase_name,
+                       marker,
+                       markers[marker][0],
+                       markers[marker][1],
+                       sample,
+                       x,
+                       y,
+                       command->record_identity,
+                       command->cell_generation,
+                       command->cell_revision,
+                       (unsigned)command->effects.flags,
+                       command->effects.smooth_dark_y,
+                       probe->sample_y,
+                       probe->lighting_key,
+                       probe->albedo[0],
+                       probe->albedo[1],
+                       probe->albedo[2],
+                       probe->albedo[3],
+                       probe->light[0],
+                       probe->light[1],
+                       probe->light[2],
+                       probe->light[3],
+                       probe->final_color[0],
+                       probe->final_color[1],
+                       probe->final_color[2],
+                       probe->final_color[3],
+                       assets.installed_total,
+                       assets.pending);
+                const uint8_t *expected_albedo = sample == 2 ? ground_albedo : marker_albedo;
+                int expected_y =
+                    sample == 2 ? y : MAX(0, MIN(surface->h - 1, command->effects.smooth_dark_y));
+                if (memcmp(probe->albedo, expected_albedo, sizeof(probe->albedo)) != 0 ||
+                    probe->sample_y != expected_y) {
+                    return SDL_SetError(
+                        "edge lighting marker %d sample %d selected unexpected albedo or row",
+                        marker,
+                        sample);
+                }
+                if (phase == 0) {
+                    baseline[marker][sample] = *probe;
+                } else if (memcmp(&baseline[marker][sample], probe, sizeof(*probe)) != 0) {
+                    return SDL_SetError(
+                        "edge lighting marker %d sample %d changed on retained redraw",
+                        marker,
+                        sample);
+                }
+            }
+            if (samples[0].lighting_key != samples[1].lighting_key ||
+                memcmp(samples[0].light, samples[1].light, sizeof(samples[0].light)) != 0) {
+                return SDL_SetError("edge lighting marker %d did not retain one vertical foot row",
+                                    marker);
+            }
+        }
+    }
+    map_redraw_consume();
+    return true;
+}
+#endif
 
 bool widget_map_projection_contract_test(void) {
     int saved_width = map_width;
