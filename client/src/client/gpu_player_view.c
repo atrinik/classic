@@ -4287,7 +4287,9 @@ int gpu_player_view_main(int argc, char *argv[]) {
         bool fade = widget_map_soft_clear_fade_test(snapshot, snapshot_size);
         socket_command_map(snapshot, snapshot_size, 0);
         if (!fade || !gpu_player_view_render(map_widget, manifest.widget_render)) {
-            fprintf(stderr, "gpu-player-view: soft-clear fade regression failed: %s\n", SDL_GetError());
+            fprintf(stderr,
+                    "gpu-player-view: soft-clear fade regression failed: %s\n",
+                    SDL_GetError());
             goto cleanup;
         }
     }

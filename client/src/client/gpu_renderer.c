@@ -1135,19 +1135,20 @@ void gpu_renderer_map_set_presentation(uint64_t token, SDL_Surface *source, int 
     gpu_map_renderer_set_presentation(token, source, x, y);
 }
 
-SDL_Surface *gpu_renderer_map_presentation_source(uint64_t identity, uint32_t variant, uint64_t token) {
+SDL_Surface *
+gpu_renderer_map_presentation_source(uint64_t identity, uint32_t variant, uint64_t token) {
     return gpu_map_renderer_presentation_source(identity, variant, token);
 }
 
 bool gpu_renderer_map_replay_presentation(uint64_t identity,
-                                           uint32_t variant,
-                                           uint64_t token,
-                                           int x,
-                                           int y,
-                                           uint8_t alpha,
-                                           uint8_t start_alpha) {
-    return gpu_renderer_frame_result(gpu_map_renderer_replay_presentation(identity, variant, token,
-                                                                          x, y, alpha, start_alpha));
+                                          uint32_t variant,
+                                          uint64_t token,
+                                          int x,
+                                          int y,
+                                          uint8_t alpha,
+                                          uint8_t start_alpha) {
+    return gpu_renderer_frame_result(
+        gpu_map_renderer_replay_presentation(identity, variant, token, x, y, alpha, start_alpha));
 }
 
 void gpu_renderer_map_light_quad(uint8_t owner, const lighting_vertex_t vertices[4]) {

@@ -416,17 +416,19 @@ static int gpu_map_presentation_compare(const void *left, const void *right) {
 
 /** The borrowed original bitmap stays valid until its synchronous SDL cleanup
  * invalidates the token. Calls and source destruction are on the main thread. */
-SDL_Surface *gpu_map_renderer_presentation_source(uint64_t identity, uint32_t variant,
-                                                  uint64_t token) {
+SDL_Surface *
+gpu_map_renderer_presentation_source(uint64_t identity, uint32_t variant, uint64_t token) {
     if (presented_scene == NULL || presented_scene->commands_num == 0 || token == 0) {
         return NULL;
     }
     gpu_map_world_command_t key = {.record_identity = identity, .draw_variant = variant};
-    const gpu_map_world_command_t *command = bsearch(&key, presented_scene->commands,
+    const gpu_map_world_command_t *command = bsearch(&key,
+                                                     presented_scene->commands,
                                                      presented_scene->commands_num,
                                                      sizeof(*presented_scene->commands),
                                                      gpu_map_presentation_compare);
-    return command != NULL && command->presentation_token == token ? command->presentation_source : NULL;
+    return command != NULL && command->presentation_token == token ? command->presentation_source
+                                                                   : NULL;
 }
 
 void gpu_map_renderer_presentation_begin(void) {
@@ -461,18 +463,22 @@ void gpu_map_renderer_presentation_stage(void) {
                 gpu_map_asset_retain(scene->commands[count++].asset);
             }
         }
-        qsort(scene->commands, scene->commands_num, sizeof(*scene->commands),
+        qsort(scene->commands,
+              scene->commands_num,
+              sizeof(*scene->commands),
               gpu_map_presentation_compare);
         scene->quads_num = uploaded_light_quads_num;
         scene->rows_num = uploaded_light_rows_num;
         scene->spans_num = uploaded_light_spans_num;
         scene->projected_rows_num = uploaded_projected_light_rows_num;
-        scene->quads = gpu_map_presentation_copy(uploaded_light_quads, scene->quads_num,
-                                                sizeof(*scene->quads));
-        scene->rows = gpu_map_presentation_copy(uploaded_light_rows, scene->rows_num,
-                                               sizeof(*scene->rows));
-        scene->spans = gpu_map_presentation_copy(uploaded_light_spans, scene->spans_num,
-                                                sizeof(*scene->spans));
+        scene->quads = gpu_map_presentation_copy(uploaded_light_quads,
+                                                 scene->quads_num,
+                                                 sizeof(*scene->quads));
+        scene->rows =
+            gpu_map_presentation_copy(uploaded_light_rows, scene->rows_num, sizeof(*scene->rows));
+        scene->spans = gpu_map_presentation_copy(uploaded_light_spans,
+                                                 scene->spans_num,
+                                                 sizeof(*scene->spans));
         scene->projected_rows = gpu_map_presentation_copy(uploaded_projected_light_rows,
                                                           scene->projected_rows_num,
                                                           sizeof(*scene->projected_rows));
@@ -2062,7 +2068,8 @@ static void gpu_map_world_commands_commit(void) {
             metadata_changed = true;
         } else if (pending_world_active[slot]) {
             const gpu_map_world_command_t *old = &target->world_commands[slot];
-            const gpu_map_world_command_t *next = &world_commands[pending_world_command_indices[slot]];
+            const gpu_map_world_command_t *next =
+                &world_commands[pending_world_command_indices[slot]];
             metadata_changed = old->presentation_token != next->presentation_token ||
                                old->presentation_source != next->presentation_source ||
                                old->presentation_x != next->presentation_x ||
@@ -3058,11 +3065,14 @@ bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
         presentation_span_counts = xreallocarray(presentation_span_counts,
                                                  MAX(presented_scene->spans_num, (size_t)1),
                                                  sizeof(*presentation_span_counts));
-        memset(presentation_quad_remap, 0xff,
+        memset(presentation_quad_remap,
+               0xff,
                presented_scene->quads_num * sizeof(*presentation_quad_remap));
-        memset(presentation_span_remap, 0xff,
+        memset(presentation_span_remap,
+               0xff,
                presented_scene->spans_num * sizeof(*presentation_span_remap));
-        memset(presentation_span_counts, 0,
+        memset(presentation_span_counts,
+               0,
                presented_scene->spans_num * sizeof(*presentation_span_counts));
     }
     light_horizontal_rows_num = 0;
@@ -3128,9 +3138,13 @@ void gpu_map_renderer_set_instance_identity(uint64_t record_identity, uint32_t d
 void gpu_map_renderer_set_presentation(uint64_t token, SDL_Surface *source, int x, int y) {
     if (token != 0 && source != NULL) {
         SDL_PropertiesID properties = SDL_GetSurfaceProperties(source);
-        if (SDL_GetPointerProperty(properties, GPU_MAP_PRESENTATION_SOURCE_PROPERTY, NULL) != source &&
-            !SDL_SetPointerPropertyWithCleanup(properties, GPU_MAP_PRESENTATION_SOURCE_PROPERTY,
-                                                source, gpu_map_presentation_source_cleanup, NULL)) {
+        if (SDL_GetPointerProperty(properties, GPU_MAP_PRESENTATION_SOURCE_PROPERTY, NULL) !=
+                source &&
+            !SDL_SetPointerPropertyWithCleanup(properties,
+                                               GPU_MAP_PRESENTATION_SOURCE_PROPERTY,
+                                               source,
+                                               gpu_map_presentation_source_cleanup,
+                                               NULL)) {
             gpu_map_command_cancel();
             return;
         }
@@ -3585,9 +3599,10 @@ static size_t gpu_map_light_row_build(uint8_t owner, int sample_y) {
 /** Append an instance, retaining its immutable asset through submission. */
 static bool gpu_map_world_command_append(const gpu_map_world_command_t *command) {
     if (world_commands_num == world_commands_capacity) {
-        world_commands_capacity = world_commands_capacity == 0 ? 1024U : world_commands_capacity * 2U;
-        world_commands = xreallocarray(world_commands, world_commands_capacity,
-                                       sizeof(*world_commands));
+        world_commands_capacity =
+            world_commands_capacity == 0 ? 1024U : world_commands_capacity * 2U;
+        world_commands =
+            xreallocarray(world_commands, world_commands_capacity, sizeof(*world_commands));
     }
     const gpu_map_world_instance_t *instance = &command->instance;
     map_frame_source_generation = MAX(map_frame_source_generation, command->asset->generation);
@@ -3595,12 +3610,14 @@ static bool gpu_map_world_command_append(const gpu_map_world_command_t *command)
                                                                instance->destination,
                                                                sizeof(instance->destination));
     map_frame_camera_generation = gpu_map_contract_hash_append(map_frame_camera_generation,
-                                                               &command->clip, sizeof(command->clip));
+                                                               &command->clip,
+                                                               sizeof(command->clip));
     map_frame_effect_generation = gpu_map_contract_hash_append(map_frame_effect_generation,
                                                                &command->asset->generation,
                                                                sizeof(command->asset->generation));
     map_frame_effect_generation = gpu_map_contract_hash_append(map_frame_effect_generation,
-                                                               &instance->uv, sizeof(instance->uv));
+                                                               &instance->uv,
+                                                               sizeof(instance->uv));
     map_frame_effect_generation = gpu_map_contract_hash_append(map_frame_effect_generation,
                                                                &instance->modulation,
                                                                sizeof(instance->modulation));
@@ -3647,7 +3664,8 @@ static bool gpu_map_presentation_copy_spans(uint32_t offset, uint32_t count, uin
         count > presented_scene->spans_num - offset) {
         return SDL_SetError("frozen light spans are outside the presented cohort");
     }
-    if (presentation_span_remap[offset] != UINT32_MAX && presentation_span_counts[offset] == count) {
+    if (presentation_span_remap[offset] != UINT32_MAX &&
+        presentation_span_counts[offset] == count) {
         *out = presentation_span_remap[offset];
         return true;
     }
@@ -3684,9 +3702,12 @@ static bool gpu_map_presentation_copy_row(uint32_t key, int dx, uint32_t *out) {
             return SDL_SetError("frozen light row translation exceeds the coordinate limit");
         }
         row.padding[0] = (uint32_t)(int32_t)offset;
-        if (row.upper_count != 0 &&
-            (!gpu_map_presentation_copy_spans(row.upper_offset, row.upper_count, &row.upper_offset) ||
-             !gpu_map_presentation_copy_spans(row.lower_offset, row.lower_count, &row.lower_offset))) {
+        if (row.upper_count != 0 && (!gpu_map_presentation_copy_spans(row.upper_offset,
+                                                                      row.upper_count,
+                                                                      &row.upper_offset) ||
+                                     !gpu_map_presentation_copy_spans(row.lower_offset,
+                                                                      row.lower_count,
+                                                                      &row.lower_offset))) {
             return false;
         }
     }
@@ -3700,27 +3721,28 @@ static bool gpu_map_presentation_copy_row(uint32_t key, int dx, uint32_t *out) {
     }
     *out = (uint32_t)light_rows_num + 1U;
     light_rows[light_rows_num++] = row;
-    map_frame_lighting_generation = gpu_map_contract_hash_append(map_frame_lighting_generation,
-                                                                 &row, sizeof(row));
+    map_frame_lighting_generation =
+        gpu_map_contract_hash_append(map_frame_lighting_generation, &row, sizeof(row));
     return true;
 }
 
 bool gpu_map_renderer_replay_presentation(uint64_t identity,
-                                           uint32_t variant,
-                                           uint64_t token,
-                                           int x,
-                                           int y,
-                                           uint8_t alpha,
-                                           uint8_t start_alpha) {
+                                          uint32_t variant,
+                                          uint64_t token,
+                                          int x,
+                                          int y,
+                                          uint8_t alpha,
+                                          uint8_t start_alpha) {
     if (map_command_buffer == NULL || active_target_index != 0) {
         return SDL_SetError("presentation replay requires an active primary map");
     }
-    if (presented_scene == NULL || presented_scene->commands_num == 0 || token == 0 ||
-        alpha == 0 || start_alpha == 0) {
+    if (presented_scene == NULL || presented_scene->commands_num == 0 || token == 0 || alpha == 0 ||
+        start_alpha == 0) {
         return true;
     }
     gpu_map_world_command_t key = {.record_identity = identity, .draw_variant = variant};
-    const gpu_map_world_command_t *old = bsearch(&key, presented_scene->commands,
+    const gpu_map_world_command_t *old = bsearch(&key,
+                                                 presented_scene->commands,
                                                  presented_scene->commands_num,
                                                  sizeof(*presented_scene->commands),
                                                  gpu_map_presentation_compare);
@@ -3744,22 +3766,25 @@ bool gpu_map_renderer_replay_presentation(uint64_t identity,
     command.presentation_x = x;
     command.presentation_y = y;
     command.presentation_frozen = true;
-    command.instance.modulation[3] = command.presentation_alpha * (float)MIN(alpha, start_alpha) /
-                                      (float)start_alpha;
+    command.instance.modulation[3] =
+        command.presentation_alpha * (float)MIN(alpha, start_alpha) / (float)start_alpha;
     uint32_t lighting_key = old->instance.lighting_key;
     if ((lighting_key & (GPU_MAP_LIGHT_KEY_PROJECTED | GPU_MAP_LIGHT_KEY_FROZEN_PROJECTED)) != 0) {
         bool frozen = (lighting_key & GPU_MAP_LIGHT_KEY_FROZEN_PROJECTED) != 0;
-        int first_y = frozen ? (int)old->instance.effect_parameters[2] :
-                               MAX(MAX(0, old->clip.y), (int)floorf(old->instance.destination[1]));
-        int count = frozen ? (int)old->instance.effect_parameters[3] :
-                             MIN(MIN(presented_scene->height, old->clip.y + old->clip.h),
-                                 (int)ceilf(old->instance.destination[1] + old->instance.destination[3])) - first_y;
+        int first_y = frozen ? (int)old->instance.effect_parameters[2]
+                             : MAX(MAX(0, old->clip.y), (int)floorf(old->instance.destination[1]));
+        int count =
+            frozen ? (int)old->instance.effect_parameters[3]
+                   : MIN(MIN(presented_scene->height, old->clip.y + old->clip.h),
+                         (int)ceilf(old->instance.destination[1] + old->instance.destination[3])) -
+                         first_y;
         int64_t origin = (int64_t)first_y + dy;
         if (count <= 0) {
             return true;
         }
         if (count >= (int)GPU_MAP_LIGHT_QUAD_KEY_MAX || origin < -(INT64_C(1) << 23) ||
-            origin > (INT64_C(1) << 23) || light_rows_num > GPU_MAP_LIGHT_QUAD_KEY_MAX - (size_t)count) {
+            origin > (INT64_C(1) << 23) ||
+            light_rows_num > GPU_MAP_LIGHT_QUAD_KEY_MAX - (size_t)count) {
             return SDL_SetError("frozen projected run exceeds the row limit");
         }
         uint32_t base = (uint32_t)light_rows_num + 1U;
@@ -3768,8 +3793,8 @@ bool gpu_map_renderer_replay_presentation(uint64_t identity,
             if (frozen) {
                 source_key = (lighting_key & GPU_MAP_LIGHT_KEY_MASK) + (uint32_t)row;
             } else {
-                size_t index = (size_t)(first_y + row) * MAP2_LEVELS +
-                               (lighting_key & UINT32_C(15));
+                size_t index =
+                    (size_t)(first_y + row) * MAP2_LEVELS + (lighting_key & UINT32_C(15));
                 if (index >= presented_scene->projected_rows_num) {
                     return SDL_SetError("frozen projected lookup is outside the presented cohort");
                 }
@@ -3781,7 +3806,7 @@ bool gpu_map_renderer_replay_presentation(uint64_t identity,
             }
         }
         command.instance.lighting_key = GPU_MAP_LIGHT_KEY_FROZEN_PROJECTED | base |
-                                         (lighting_key & GPU_MAP_LIGHT_KEY_GROUND_COVERAGE);
+                                        (lighting_key & GPU_MAP_LIGHT_KEY_GROUND_COVERAGE);
         command.instance.effect_parameters[2] = (float)origin;
         command.instance.effect_parameters[3] = (float)count;
     } else if ((lighting_key & GPU_MAP_LIGHT_KEY_MASK) < GPU_MAP_LIGHT_KEY_DARK &&
