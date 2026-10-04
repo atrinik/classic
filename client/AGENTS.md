@@ -43,6 +43,13 @@
   input, accepts only complete server map publications, and fails on divergence
   or deadlines. Arrival and presentation are separate evidence; offline snapshot
   replays do not prove live travel or movement performance.
+- Linux video recording owns `video_recording`, `video_encoder`, and `video_avi`.
+  Capture only completed gameplay frames with bounded asynchronous readbacks;
+  transport and process-isolated JPEG encoding must not block the render loop.
+  Preserve the codec process's closed input grammar, private exclusive outputs,
+  minimized environment, descriptor closure and bounded lifecycle. Other platforms
+  must reject recording until process handle isolation is qualified. Validate
+  timing, backpressure, cancellation, failure and actual AVI decoding separately.
 - Client user data lives below `.atrinik/<major>.x/`. When that stable directory
   is first created, the client may migrate the highest valid same-major legacy
   directory; the migration is collision-safe and marker-backed, leaves other
