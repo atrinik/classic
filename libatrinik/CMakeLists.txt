@@ -312,6 +312,7 @@ if (NOT DEFINED HAVE_IPV6)
 endif ()
 
 set(LIBATRINIK_PUBLIC_HEADER_NAMES
+    access_code.h
     binreloc.h
     bresenham.h
     clioptions.h
@@ -377,6 +378,7 @@ else ()
 endif ()
 
 set(TOOLKIT_SOURCES
+    access_code.c
     binreloc.c
     clioptions.c
     colorspace.c
@@ -511,6 +513,15 @@ endif ()
 
 if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         ATRINIK_INTEGRATED_BUILD) AND BUILD_TESTING)
+    add_executable(libatrinik-access-code tests/access_code.c)
+    atrinik_configure_target(libatrinik-access-code)
+    target_link_libraries(libatrinik-access-code PRIVATE Atrinik::Core)
+    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_definitions(libatrinik-access-code PRIVATE ACCESS_CODE_TEST_ENTROPY)
+        target_link_options(libatrinik-access-code PRIVATE "-Wl,--wrap=RAND_priv_bytes")
+    endif ()
+    add_test(NAME libatrinik-access-code COMMAND libatrinik-access-code)
+
     add_executable(libatrinik-smoke tests/smoke.c)
     atrinik_configure_target(libatrinik-smoke)
     target_link_libraries(libatrinik-smoke PRIVATE Atrinik::Core)
