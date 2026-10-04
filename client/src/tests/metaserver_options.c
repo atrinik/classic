@@ -18,7 +18,44 @@
         }                                                                           \
     } while (0)
 
+static void test_access_origin_validation(void) {
+    client_metaserver_options_t options = {0};
+    const char *prefix = "https://classic.meta.atrinik.org/index.xml "
+                         "https://rendezvous.meta.atrinik.org/v1/classic ";
+    const char *valid[] = {
+        "https://rendezvous.meta.atrinik.org",
+        "https://access.example.org:8443",
+        "http://127.0.0.1:8080",
+        "http://[::1]:8080",
+    };
+    const char *invalid[] = {
+        "http://access.example.org", "http://localhost:8080",
+        "https://access.example.org/path", "https://access.example.org?query=1",
+        "https://access.example.org#fragment", "https://user@access.example.org",
+    };
+    char value[1024];
+    for (size_t i = 0; i < sizeof(valid) / sizeof(*valid); i++) {
+        int size = snprintf(value, sizeof(value), "%s%s", prefix, valid[i]);
+        TEST_CHECK(size > 0 && (size_t)size < sizeof(value));
+        TEST_CHECK(client_metaserver_options_parse(&options, value, NULL));
+        TEST_CHECK(strcmp(options.endpoints[i].access_origin, valid[i]) == 0);
+    }
+    size_t admitted = options.count;
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(*invalid); i++) {
+        int size = snprintf(value, sizeof(value), "%s%s", prefix, invalid[i]);
+        TEST_CHECK(size > 0 && (size_t)size < sizeof(value));
+        TEST_CHECK(!client_metaserver_options_parse(&options, value, NULL));
+        TEST_CHECK(options.count == admitted);
+    }
+    TEST_CHECK(!client_metaserver_options_parse(&options,
+        "https://classic.meta.atrinik.org/index.xml "
+        "https://rendezvous.meta.atrinik.org/v1/classic", NULL));
+    TEST_CHECK(options.count == admitted);
+    client_metaserver_options_deinit(&options);
+}
+
 int main(void) {
+    test_access_origin_validation();
     client_metaserver_options_t options = {0};
     TEST_CHECK(client_metaserver_options_enabled(&options));
     TEST_CHECK(options.endpoints == NULL);

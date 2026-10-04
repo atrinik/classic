@@ -72,7 +72,6 @@ bool client_metaserver_options_parse(client_metaserver_options_t *options,
     char rendezvous_origin[MAX_BUF];
     char access_origin[MAX_BUF];
     char rendered[MAX_BUF];
-    char authority[MAX_BUF];
     const char *cursor = value;
     if (!client_metaserver_options_word(&cursor, VS(directory_url)) ||
         !client_metaserver_options_word(&cursor, VS(rendezvous_origin)) ||
@@ -82,7 +81,7 @@ bool client_metaserver_options_parse(client_metaserver_options_t *options,
                                    client_metaserver_identity,
                                    "client",
                                    VS(rendered)) ||
-        !metaserver_url_publish(access_origin, "/v1/access/resolve", VS(rendered), VS(authority))) {
+        !metaserver_url_access(access_origin, NULL, false, VS(rendered))) {
         if (errmsg != NULL) {
             *errmsg = xstrdup("metaserver requires canonical directory, rendezvous, and "
                               "access-service endpoints; the former two-value format is no "
