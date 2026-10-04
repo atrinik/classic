@@ -156,8 +156,8 @@ static inline bool gpu_sprite_instance_valid(const gpu_sprite_instance_t *instan
             (GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE) ||
         (instance->lighting_key & ~GPU_SPRITE_LIGHTING_KEY_KNOWN_MASK) != 0 ||
         ((instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_GROUND_COVERAGE) != 0 &&
-         (instance->lighting_key & (GPU_SPRITE_LIGHTING_KEY_PROJECTED |
-                                    GPU_SPRITE_LIGHTING_KEY_FROZEN_PROJECTED)) == 0) ||
+         (instance->lighting_key &
+          (GPU_SPRITE_LIGHTING_KEY_PROJECTED | GPU_SPRITE_LIGHTING_KEY_FROZEN_PROJECTED)) == 0) ||
         ((instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_PROJECTED) != 0 &&
          (instance->lighting_key & GPU_SPRITE_LIGHTING_KEY_FROZEN_PROJECTED) != 0) ||
         (instance->owner_depth & UINT32_C(0xffff0000)) != 0) {

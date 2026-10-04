@@ -2034,10 +2034,7 @@ static bool presentation_samples_match(SDL_Surface *actual,
         Uint8 actual_pixel[4], floor_pixel[4], opaque_pixel[4];
         if (!surface_read_rgba(actual, actual_x + 4, actual_y + offsets[i], actual_pixel) ||
             !surface_read_rgba(floor, actual_x + 4, actual_y + offsets[i], floor_pixel) ||
-            !surface_read_rgba(opaque,
-                               reference_x + 4,
-                               reference_y + offsets[i],
-                               opaque_pixel) ||
+            !surface_read_rgba(opaque, reference_x + 4, reference_y + offsets[i], opaque_pixel) ||
             !compositor_alpha_matches(actual_pixel, floor_pixel, opaque_pixel, alpha, 3)) {
             return false;
         }
@@ -2045,10 +2042,8 @@ static bool presentation_samples_match(SDL_Surface *actual,
     return true;
 }
 
-static bool presentation_floor_samples_match(SDL_Surface *actual,
-                                             SDL_Surface *floor,
-                                             int x,
-                                             int y) {
+static bool
+presentation_floor_samples_match(SDL_Surface *actual, SDL_Surface *floor, int x, int y) {
     const int offsets[2] = {2, 13};
     for (size_t i = 0; i < SDL_arraysize(offsets); i++) {
         Uint8 actual_pixel[4], floor_pixel[4];
@@ -2079,15 +2074,9 @@ static bool presentation_replay_matches(SDL_Surface *floor,
                                                        0,
                                                        80,
                                                        SDL_ALPHA_OPAQUE);
-    bool success = replayed != NULL &&
-                   presentation_samples_match(replayed,
-                                              floor_reference,
-                                              opaque_reference,
-                                              x,
-                                              y,
-                                              6,
-                                              7,
-                                              alpha);
+    bool success =
+        replayed != NULL &&
+        presentation_samples_match(replayed, floor_reference, opaque_reference, x, y, 6, 7, alpha);
     SDL_DestroySurface(replayed);
     return success;
 }
@@ -2143,126 +2132,107 @@ static bool presentation_lifecycle_checkpoint(void) {
         SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
         SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND) &&
         SDL_SetSurfaceBlendMode(replacement, SDL_BLENDMODE_BLEND);
-    SDL_Surface *floor_reference =
-        success ? presentation_scene_present(floor,
-                                             foreground,
-                                             PRESENTATION_DRAW_NONE,
-                                             false,
-                                             0,
-                                             0,
-                                             0,
-                                             0,
-                                             0,
-                                             0)
-                : NULL;
-    SDL_Surface *opaque_reference =
-        floor_reference != NULL ? presentation_scene_present(floor,
-                                                             foreground,
-                                                             PRESENTATION_DRAW_LIVE,
-                                                             true,
-                                                             0,
-                                                             6,
-                                                             7,
-                                                             SDL_ALPHA_OPAQUE,
-                                                             0,
-                                                             0)
-                                : NULL;
-    SDL_Surface *translation_presented =
-        opaque_reference != NULL ? presentation_scene_present(floor,
-                                                              foreground,
-                                                              PRESENTATION_DRAW_LIVE,
-                                                              true,
-                                                              translation_token,
-                                                              6,
-                                                              7,
-                                                              SDL_ALPHA_OPAQUE,
-                                                              0,
-                                                              0)
-                                 : NULL;
-    SDL_Surface *translation_replayed =
-        translation_presented != NULL ? presentation_scene_present(floor,
-                                                                   foreground,
-                                                                   PRESENTATION_DRAW_REPLAY,
-                                                                   false,
-                                                                   translation_token,
-                                                                   18,
-                                                                   7,
-                                                                   0,
-                                                                   SDL_ALPHA_OPAQUE,
-                                                                   SDL_ALPHA_OPAQUE)
-                                      : NULL;
-    success = translation_replayed != NULL &&
-              presentation_samples_match(translation_replayed,
-                                         floor_reference,
-                                         opaque_reference,
-                                         18,
-                                         7,
-                                         6,
-                                         7,
-                                         SDL_ALPHA_OPAQUE);
-    SDL_Surface *presented =
-        success ? presentation_scene_present(floor,
-                                                              foreground,
-                                                              PRESENTATION_DRAW_LIVE,
-                                                              true,
-                                                              initial_token,
-                                                              6,
-                                                              7,
-                                                              128,
-                                                              0,
-                                                              0)
-                                 : NULL;
-    success = presented != NULL &&
-              presentation_samples_match(presented,
-                                         floor_reference,
-                                         opaque_reference,
-                                         6,
-                                         7,
-                                         6,
-                                         7,
-                                         128);
+    SDL_Surface *floor_reference = success ? presentation_scene_present(floor,
+                                                                        foreground,
+                                                                        PRESENTATION_DRAW_NONE,
+                                                                        false,
+                                                                        0,
+                                                                        0,
+                                                                        0,
+                                                                        0,
+                                                                        0,
+                                                                        0)
+                                           : NULL;
+    SDL_Surface *opaque_reference = floor_reference != NULL
+                                        ? presentation_scene_present(floor,
+                                                                     foreground,
+                                                                     PRESENTATION_DRAW_LIVE,
+                                                                     true,
+                                                                     0,
+                                                                     6,
+                                                                     7,
+                                                                     SDL_ALPHA_OPAQUE,
+                                                                     0,
+                                                                     0)
+                                        : NULL;
+    SDL_Surface *translation_presented = opaque_reference != NULL
+                                             ? presentation_scene_present(floor,
+                                                                          foreground,
+                                                                          PRESENTATION_DRAW_LIVE,
+                                                                          true,
+                                                                          translation_token,
+                                                                          6,
+                                                                          7,
+                                                                          SDL_ALPHA_OPAQUE,
+                                                                          0,
+                                                                          0)
+                                             : NULL;
+    SDL_Surface *translation_replayed = translation_presented != NULL
+                                            ? presentation_scene_present(floor,
+                                                                         foreground,
+                                                                         PRESENTATION_DRAW_REPLAY,
+                                                                         false,
+                                                                         translation_token,
+                                                                         18,
+                                                                         7,
+                                                                         0,
+                                                                         SDL_ALPHA_OPAQUE,
+                                                                         SDL_ALPHA_OPAQUE)
+                                            : NULL;
+    success = translation_replayed != NULL && presentation_samples_match(translation_replayed,
+                                                                         floor_reference,
+                                                                         opaque_reference,
+                                                                         18,
+                                                                         7,
+                                                                         6,
+                                                                         7,
+                                                                         SDL_ALPHA_OPAQUE);
+    SDL_Surface *presented = success ? presentation_scene_present(floor,
+                                                                  foreground,
+                                                                  PRESENTATION_DRAW_LIVE,
+                                                                  true,
+                                                                  initial_token,
+                                                                  6,
+                                                                  7,
+                                                                  128,
+                                                                  0,
+                                                                  0)
+                                     : NULL;
+    success =
+        presented != NULL &&
+        presentation_samples_match(presented, floor_reference, opaque_reference, 6, 7, 6, 7, 128);
 
     gpu_renderer_statistics_reset();
-    SDL_Surface *refreshed =
-        success ? presentation_scene_present(floor,
-                                             foreground,
-                                             PRESENTATION_DRAW_LIVE,
-                                             true,
-                                             token,
-                                             6,
-                                             7,
-                                             128,
-                                             0,
-                                             0)
-                : NULL;
+    SDL_Surface *refreshed = success ? presentation_scene_present(floor,
+                                                                  foreground,
+                                                                  PRESENTATION_DRAW_LIVE,
+                                                                  true,
+                                                                  token,
+                                                                  6,
+                                                                  7,
+                                                                  128,
+                                                                  0,
+                                                                  0)
+                                     : NULL;
     gpu_renderer_statistics_t refresh_statistics;
     gpu_renderer_statistics_get(&refresh_statistics);
-    success = refreshed != NULL && refresh_statistics.map_skipped_passes == 1 &&
-              presentation_samples_match(refreshed,
-                                         floor_reference,
-                                         opaque_reference,
-                                         6,
-                                         7,
-                                         6,
-                                         7,
-                                         128) &&
-              presentation_unpresented_floor_matches(floor,
-                                                     floor_reference,
-                                                     initial_token,
-                                                     10,
-                                                     9);
+    success =
+        refreshed != NULL && refresh_statistics.map_skipped_passes == 1 &&
+        presentation_samples_match(refreshed, floor_reference, opaque_reference, 6, 7, 6, 7, 128) &&
+        presentation_unpresented_floor_matches(floor, floor_reference, initial_token, 10, 9);
 
     /* A completed map submission that never reaches the window must not replace the receipt. */
-    success = success && presentation_scene_build(floor,
-                                                  replacement,
-                                                  PRESENTATION_DRAW_LIVE,
-                                                  false,
-                                                  token,
-                                                  6,
-                                                  7,
-                                                  SDL_ALPHA_OPAQUE,
-                                                  0,
-                                                  0) &&
+    success = success &&
+              presentation_scene_build(floor,
+                                       replacement,
+                                       PRESENTATION_DRAW_LIVE,
+                                       false,
+                                       token,
+                                       6,
+                                       7,
+                                       SDL_ALPHA_OPAQUE,
+                                       0,
+                                       0) &&
               presentation_replay_matches(floor,
                                           foreground,
                                           floor_reference,
@@ -2273,65 +2243,69 @@ static bool presentation_lifecycle_checkpoint(void) {
                                           replay_alpha);
 
     /* A swapchain rejection after drawing the primary map also leaves the bank untouched. */
-    success = success && presentation_scene_build(floor,
-                                                  replacement,
-                                                  PRESENTATION_DRAW_LIVE,
-                                                  false,
-                                                  token,
-                                                  6,
-                                                  7,
-                                                  SDL_ALPHA_OPAQUE,
-                                                  0,
-                                                  0) &&
+    success = success &&
+              presentation_scene_build(floor,
+                                       replacement,
+                                       PRESENTATION_DRAW_LIVE,
+                                       false,
+                                       token,
+                                       6,
+                                       7,
+                                       SDL_ALPHA_OPAQUE,
+                                       0,
+                                       0) &&
               gpu_renderer_draw_map(0.0f, 0.0f, 32.0f, 32.0f);
     if (success) {
         gpu_renderer_conformance_fault_set(GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN);
-        success = !gpu_renderer_present() &&
-                  presentation_replay_matches(floor,
-                                              foreground,
-                                              floor_reference,
-                                              opaque_reference,
-                                              token,
-                                              10,
-                                              9,
-                                              replay_alpha);
+        success = !gpu_renderer_present() && presentation_replay_matches(floor,
+                                                                         foreground,
+                                                                         floor_reference,
+                                                                         opaque_reference,
+                                                                         token,
+                                                                         10,
+                                                                         9,
+                                                                         replay_alpha);
     }
 
     /* UI-only and auxiliary-only presents cannot promote an undisplayed primary generation. */
     SDL_FRect ui = {0.0f, 0.0f, 4.0f, 4.0f};
-    success = success && presentation_scene_build(floor,
-                                                  replacement,
-                                                  PRESENTATION_DRAW_LIVE,
-                                                  false,
-                                                  token,
-                                                  6,
-                                                  7,
-                                                  SDL_ALPHA_OPAQUE,
-                                                  0,
-                                                  0) &&
+    success = success &&
+              presentation_scene_build(floor,
+                                       replacement,
+                                       PRESENTATION_DRAW_LIVE,
+                                       false,
+                                       token,
+                                       6,
+                                       7,
+                                       SDL_ALPHA_OPAQUE,
+                                       0,
+                                       0) &&
               gpu_renderer_begin_frame() &&
               gpu_renderer_draw_rect(&ui, 4, 8, 12, SDL_ALPHA_OPAQUE, true) &&
-              gpu_renderer_present() && presentation_scene_build(floor,
-                                                                 replacement,
-                                                                 PRESENTATION_DRAW_LIVE,
-                                                                 false,
-                                                                 token,
-                                                                 6,
-                                                                 7,
-                                                                 SDL_ALPHA_OPAQUE,
-                                                                 0,
-                                                                 0) &&
+              gpu_renderer_present() &&
+              presentation_scene_build(floor,
+                                       replacement,
+                                       PRESENTATION_DRAW_LIVE,
+                                       false,
+                                       token,
+                                       6,
+                                       7,
+                                       SDL_ALPHA_OPAQUE,
+                                       0,
+                                       0) &&
               gpu_renderer_map_begin_auxiliary(8, 8) && gpu_renderer_map_end() &&
-              gpu_renderer_present() && presentation_replay_matches(floor,
-                                                                    foreground,
-                                                                    floor_reference,
-                                                                    opaque_reference,
-                                                                    token,
-                                                                    10,
-                                                                    9,
-                                                                    replay_alpha);
+              gpu_renderer_present() &&
+              presentation_replay_matches(floor,
+                                          foreground,
+                                          floor_reference,
+                                          opaque_reference,
+                                          token,
+                                          10,
+                                          9,
+                                          replay_alpha);
 
-    /* The logical opacity may advance without a draw; replay scales the actual alpha-128 receipt. */
+    /* The logical opacity may advance without a draw; replay scales the actual alpha-128 receipt.
+     */
     success = success && presentation_replay_matches(floor,
                                                      foreground,
                                                      floor_reference,
@@ -2341,112 +2315,107 @@ static bool presentation_lifecycle_checkpoint(void) {
                                                      9,
                                                      replay_alpha);
 
-    SDL_Surface *no_match =
-        success ? presentation_scene_present(floor,
-                                             foreground,
-                                             PRESENTATION_DRAW_REPLAY,
-                                             false,
-                                             replacement_token,
-                                             10,
-                                             9,
-                                             0,
-                                             80,
-                                             SDL_ALPHA_OPAQUE)
-                : NULL;
-    success = no_match != NULL &&
-              presentation_floor_samples_match(no_match, floor_reference, 10, 9);
+    SDL_Surface *no_match = success ? presentation_scene_present(floor,
+                                                                 foreground,
+                                                                 PRESENTATION_DRAW_REPLAY,
+                                                                 false,
+                                                                 replacement_token,
+                                                                 10,
+                                                                 9,
+                                                                 0,
+                                                                 80,
+                                                                 SDL_ALPHA_OPAQUE)
+                                    : NULL;
+    success =
+        no_match != NULL && presentation_floor_samples_match(no_match, floor_reference, 10, 9);
 
-    SDL_Surface *reestablished =
-        success ? presentation_scene_present(floor,
-                                             foreground,
-                                             PRESENTATION_DRAW_LIVE,
-                                             true,
-                                             token,
-                                             6,
-                                             7,
-                                             128,
-                                             0,
-                                             0)
-                : NULL;
+    SDL_Surface *reestablished = success ? presentation_scene_present(floor,
+                                                                      foreground,
+                                                                      PRESENTATION_DRAW_LIVE,
+                                                                      true,
+                                                                      token,
+                                                                      6,
+                                                                      7,
+                                                                      128,
+                                                                      0,
+                                                                      0)
+                                         : NULL;
     success = reestablished != NULL;
     /* Destroying the original SDL surface invalidates receipts without touching retained assets. */
     SDL_DestroySurface(foreground);
     foreground = NULL;
-    SDL_Surface *invalidated =
-        success ? presentation_scene_present(floor,
-                                             foreground,
-                                             PRESENTATION_DRAW_REPLAY,
-                                             false,
-                                             token,
-                                             10,
-                                             9,
-                                             0,
-                                             80,
-                                             SDL_ALPHA_OPAQUE)
-                : NULL;
+    SDL_Surface *invalidated = success ? presentation_scene_present(floor,
+                                                                    foreground,
+                                                                    PRESENTATION_DRAW_REPLAY,
+                                                                    false,
+                                                                    token,
+                                                                    10,
+                                                                    9,
+                                                                    0,
+                                                                    80,
+                                                                    SDL_ALPHA_OPAQUE)
+                                       : NULL;
     success = invalidated != NULL &&
               presentation_floor_samples_match(invalidated, floor_reference, 10, 9);
 
     /* A new semantic token is invisible until presented, then owns its fresh source and light. */
-    SDL_Surface *replacement_reference =
-        success ? presentation_scene_present(floor,
-                                             replacement,
-                                             PRESENTATION_DRAW_LIVE,
-                                             false,
-                                             0,
-                                             6,
-                                             7,
-                                             SDL_ALPHA_OPAQUE,
-                                             0,
-                                             0)
-                : NULL;
-    SDL_Surface *reentered =
-        replacement_reference != NULL ? presentation_scene_present(floor,
-                                                                    replacement,
-                                                                    PRESENTATION_DRAW_LIVE,
-                                                                    false,
-                                                                    replacement_token,
-                                                                    6,
-                                                                    7,
-                                                                    128,
-                                                                    0,
-                                                                    0)
-                                      : NULL;
-    SDL_Surface *reentered_replay =
-        reentered != NULL ? presentation_scene_present(floor,
-                                                       replacement,
-                                                       PRESENTATION_DRAW_REPLAY,
-                                                       true,
-                                                       replacement_token,
-                                                       10,
-                                                       9,
-                                                       0,
-                                                       80,
-                                                       SDL_ALPHA_OPAQUE)
-                          : NULL;
-    success = reentered_replay != NULL &&
-              presentation_samples_match(reentered_replay,
-                                         floor_reference,
-                                         replacement_reference,
-                                         10,
-                                         9,
-                                         6,
-                                         7,
-                                         replay_alpha);
+    SDL_Surface *replacement_reference = success
+                                             ? presentation_scene_present(floor,
+                                                                          replacement,
+                                                                          PRESENTATION_DRAW_LIVE,
+                                                                          false,
+                                                                          0,
+                                                                          6,
+                                                                          7,
+                                                                          SDL_ALPHA_OPAQUE,
+                                                                          0,
+                                                                          0)
+                                             : NULL;
+    SDL_Surface *reentered = replacement_reference != NULL
+                                 ? presentation_scene_present(floor,
+                                                              replacement,
+                                                              PRESENTATION_DRAW_LIVE,
+                                                              false,
+                                                              replacement_token,
+                                                              6,
+                                                              7,
+                                                              128,
+                                                              0,
+                                                              0)
+                                 : NULL;
+    SDL_Surface *reentered_replay = reentered != NULL
+                                        ? presentation_scene_present(floor,
+                                                                     replacement,
+                                                                     PRESENTATION_DRAW_REPLAY,
+                                                                     true,
+                                                                     replacement_token,
+                                                                     10,
+                                                                     9,
+                                                                     0,
+                                                                     80,
+                                                                     SDL_ALPHA_OPAQUE)
+                                        : NULL;
+    success = reentered_replay != NULL && presentation_samples_match(reentered_replay,
+                                                                     floor_reference,
+                                                                     replacement_reference,
+                                                                     10,
+                                                                     9,
+                                                                     6,
+                                                                     7,
+                                                                     replay_alpha);
 
     gpu_map_renderer_invalidate_target(false);
-    SDL_Surface *reset =
-        success ? presentation_scene_present(floor,
-                                             replacement,
-                                             PRESENTATION_DRAW_REPLAY,
-                                             true,
-                                             replacement_token,
-                                             10,
-                                             9,
-                                             0,
-                                             80,
-                                             SDL_ALPHA_OPAQUE)
-                : NULL;
+    SDL_Surface *reset = success ? presentation_scene_present(floor,
+                                                              replacement,
+                                                              PRESENTATION_DRAW_REPLAY,
+                                                              true,
+                                                              replacement_token,
+                                                              10,
+                                                              9,
+                                                              0,
+                                                              80,
+                                                              SDL_ALPHA_OPAQUE)
+                                 : NULL;
     success = reset != NULL && presentation_floor_samples_match(reset, floor_reference, 10, 9);
     if (!success) {
         SDL_SetError("last-presented transient lifecycle or frozen-light checkpoint failed");

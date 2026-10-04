@@ -273,8 +273,8 @@ static bool test_serialized_value_is_pointer_free(void) {
 
 int main(void) {
     if (!test_layout() || !test_default_and_owner_depth() || !test_effect_matrix() ||
-        !test_ground_coverage_key() || !test_frozen_projected_key() || !test_texture_metadata_matrix() ||
-        !test_serialized_value_is_pointer_free()) {
+        !test_ground_coverage_key() || !test_frozen_projected_key() ||
+        !test_texture_metadata_matrix() || !test_serialized_value_is_pointer_free()) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
