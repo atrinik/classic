@@ -750,9 +750,10 @@ static bool gpu_renderer_create_internal(SDL_Window *window, bool require_hardwa
     if (!capabilities_supported || (require_hardware && !hardware_verified)) {
         if (!(require_hardware && selected_backend != NULL &&
               strcmp(selected_backend, "direct3d12") == 0 && !d3d12_identity_resolved)) {
-            SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with "
-                         "verified hardware acceleration plus R8G8B8A8_UNORM, R32_UINT, and D32_FLOAT "
-                         "render targets");
+            SDL_SetError(
+                "GPU renderer requires Vulkan, Direct3D 12, or Metal with "
+                "verified hardware acceleration plus R8G8B8A8_UNORM, R32_UINT, and D32_FLOAT "
+                "render targets");
         }
         gpu_renderer_failure_preserve("unsupported GPU renderer capabilities");
         return false;

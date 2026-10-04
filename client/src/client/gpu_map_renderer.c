@@ -495,13 +495,19 @@ static bool gpu_map_pipelines_create(void) {
                                                           1,
                                                           0);
     SDL_GPUShader *world_clear_fragment = gpu_map_shader_create("world_clear_fragment",
-                                                               "world_clear_fragment",
-                                                               SDL_GPU_SHADERSTAGE_FRAGMENT,
-                                                               0, 0, 0, 0);
+                                                                "world_clear_fragment",
+                                                                SDL_GPU_SHADERSTAGE_FRAGMENT,
+                                                                0,
+                                                                0,
+                                                                0,
+                                                                0);
     SDL_GPUShader *world_transparent_fragment = gpu_map_shader_create("world_transparent_fragment",
-                                                                     "world_transparent_fragment",
-                                                                     SDL_GPU_SHADERSTAGE_FRAGMENT,
-                                                                     1, 0, 6, 0);
+                                                                      "world_transparent_fragment",
+                                                                      SDL_GPU_SHADERSTAGE_FRAGMENT,
+                                                                      1,
+                                                                      0,
+                                                                      6,
+                                                                      0);
     SDL_GPUShader *final_vertex = gpu_map_shader_create("final_vertex",
                                                         "final_vertex",
                                                         SDL_GPU_SHADERSTAGE_VERTEX,
@@ -554,11 +560,12 @@ static bool gpu_map_pipelines_create(void) {
                 .cull_mode = SDL_GPU_CULLMODE_NONE,
                 .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
             },
-        .depth_stencil_state = {
-            .compare_op = SDL_GPU_COMPAREOP_ALWAYS,
-            .enable_depth_test = true,
-            .enable_depth_write = true,
-        },
+        .depth_stencil_state =
+            {
+                .compare_op = SDL_GPU_COMPAREOP_ALWAYS,
+                .enable_depth_test = true,
+                .enable_depth_write = true,
+            },
         .multisample_state = {.sample_count = SDL_GPU_SAMPLECOUNT_1},
         .target_info =
             {
@@ -1445,10 +1452,10 @@ static bool gpu_map_projected_light_rows_upload(void) {
     if (!gpu_map_projected_light_rows_reserve(required)) {
         return false;
     }
-    map_frame_lighting_generation = gpu_map_contract_hash_append(
-        map_frame_lighting_generation,
-        projected_light_rows,
-        projected_light_rows_num * sizeof(*projected_light_rows));
+    map_frame_lighting_generation =
+        gpu_map_contract_hash_append(map_frame_lighting_generation,
+                                     projected_light_rows,
+                                     projected_light_rows_num * sizeof(*projected_light_rows));
     bool cycle = pending_submissions != NULL;
     bool full_upload = cycle || !uploaded_projected_light_rows_valid ||
                        projected_light_rows_num != uploaded_projected_light_rows_num;
@@ -1692,13 +1699,11 @@ static void gpu_map_world_slot_hash_build(const gpu_map_target_set_t *target) {
 static bool gpu_map_world_command_changed(const gpu_map_world_command_t *old_command,
                                           const gpu_map_world_command_t *new_command) {
     return old_command->asset != new_command->asset ||
-           memcmp(&old_command->instance,
-                  &new_command->instance,
-                  sizeof(old_command->instance)) != 0 ||
+           memcmp(&old_command->instance, &new_command->instance, sizeof(old_command->instance)) !=
+               0 ||
            old_command->clip.x != new_command->clip.x ||
            old_command->clip.y != new_command->clip.y ||
-           old_command->clip.w != new_command->clip.w ||
-           old_command->clip.h != new_command->clip.h;
+           old_command->clip.w != new_command->clip.w || old_command->clip.h != new_command->clip.h;
 }
 
 /** Return one command's conservative visible screen bounds. */
@@ -1727,10 +1732,10 @@ static bool gpu_map_world_command_damage_rect(const gpu_map_world_command_t *com
 
     int64_t clip_left = MAX((int64_t)0, (int64_t)command->clip.x);
     int64_t clip_top = MAX((int64_t)0, (int64_t)command->clip.y);
-    int64_t clip_right = MIN((int64_t)target_width,
-                             (int64_t)command->clip.x + (int64_t)command->clip.w);
-    int64_t clip_bottom = MIN((int64_t)target_height,
-                              (int64_t)command->clip.y + (int64_t)command->clip.h);
+    int64_t clip_right =
+        MIN((int64_t)target_width, (int64_t)command->clip.x + (int64_t)command->clip.w);
+    int64_t clip_bottom =
+        MIN((int64_t)target_height, (int64_t)command->clip.y + (int64_t)command->clip.h);
     x1 = MAX(x1, (int)clip_left);
     y1 = MAX(y1, (int)clip_top);
     x2 = MIN(x2, (int)clip_right);
@@ -1852,10 +1857,9 @@ static bool gpu_map_world_damage_build(const gpu_map_target_set_t *target) {
         }
         if (pending_world_active[slot]) {
             size_t index = pending_world_command_indices[slot];
-            if (index == SIZE_MAX ||
-                !gpu_map_world_damage_add(&world_frame_damage,
-                                          &world_frame_damage_valid,
-                                          &world_commands[index])) {
+            if (index == SIZE_MAX || !gpu_map_world_damage_add(&world_frame_damage,
+                                                               &world_frame_damage_valid,
+                                                               &world_commands[index])) {
                 return false;
             }
         }
@@ -1922,7 +1926,8 @@ static bool gpu_map_world_pass_begin(void) {
         .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
         .cycle = !world_pass_load_existing,
     };
-    world_pass = SDL_BeginGPURenderPass(map_command_buffer, targets, SDL_arraysize(targets), &depth);
+    world_pass =
+        SDL_BeginGPURenderPass(map_command_buffer, targets, SDL_arraysize(targets), &depth);
     if (world_pass == NULL) {
         return false;
     }
@@ -1998,19 +2003,17 @@ static void gpu_map_world_draw(SDL_GPURenderPass *pass, bool full_redraw) {
     size_t drawn_commands = 0;
     for (size_t first = 0; first < world_commands_num;) {
         SDL_Rect first_scissor;
-        if (!full_redraw &&
-            !gpu_map_world_command_scissor(&world_commands[first],
-                                           &world_frame_damage,
-                                           &first_scissor)) {
+        if (!full_redraw && !gpu_map_world_command_scissor(&world_commands[first],
+                                                           &world_frame_damage,
+                                                           &first_scissor)) {
             first++;
             continue;
         }
         size_t end = first + 1U;
         while (end < world_commands_num &&
-               (full_redraw ||
-                gpu_map_world_command_scissor(&world_commands[end],
-                                              &world_frame_damage,
-                                              &first_scissor)) &&
+               (full_redraw || gpu_map_world_command_scissor(&world_commands[end],
+                                                             &world_frame_damage,
+                                                             &first_scissor)) &&
                world_commands[end].asset->texture == world_commands[first].asset->texture &&
                memcmp(&world_commands[end].clip,
                       &world_commands[first].clip,
@@ -2022,8 +2025,7 @@ static void gpu_map_world_draw(SDL_GPURenderPass *pass, bool full_redraw) {
             .sampler = map_sampler,
         };
         SDL_Rect scissor = world_commands[first].clip;
-        if (!full_redraw &&
-            !gpu_map_world_damage_clip_scissor(&world_commands[first], &scissor)) {
+        if (!full_redraw && !gpu_map_world_damage_clip_scissor(&world_commands[first], &scissor)) {
             first++;
             continue;
         }
@@ -2080,8 +2082,8 @@ static bool gpu_map_world_commands_submit(void) {
     bool projected_changed = gpu_map_projected_light_rows_are_changed();
     bool world_required = !target->published || !target->world_instance_valid || changed ||
                           order_changed || projected_changed;
-    world_frame_full_redraw = !target->published || !target->world_instance_valid ||
-                              order_changed || projected_changed;
+    world_frame_full_redraw =
+        !target->published || !target->world_instance_valid || order_changed || projected_changed;
     world_frame_projected_changed = projected_changed;
     world_frame_dirty_commands = changed_slots;
     if (world_frame_full_redraw && world_frame_dirty_commands == 0) {
@@ -2265,9 +2267,8 @@ static bool gpu_map_light_buffer_upload_delta(SDL_GPUBuffer *buffer,
     return true;
 }
 
-static gpu_renderer_map_invalidation_reason_t gpu_map_frame_invalidation_reason(
-    bool target_was_published,
-    bool light_changed) {
+static gpu_renderer_map_invalidation_reason_t
+gpu_map_frame_invalidation_reason(bool target_was_published, bool light_changed) {
     if (map_frame_target_resized) {
         return GPU_RENDERER_MAP_INVALIDATION_RESIZE;
     }
@@ -2299,11 +2300,10 @@ static void gpu_map_target_contract_commit(gpu_map_target_set_t *target) {
     target->effect_generation = map_frame_effect_generation;
 }
 
-static gpu_renderer_map_frame_diagnostics_t gpu_map_frame_diagnostics(
-    gpu_map_target_set_t *target,
-    bool target_was_published,
-    bool light_changed,
-    bool final_full_redraw) {
+static gpu_renderer_map_frame_diagnostics_t gpu_map_frame_diagnostics(gpu_map_target_set_t *target,
+                                                                      bool target_was_published,
+                                                                      bool light_changed,
+                                                                      bool final_full_redraw) {
     SDL_Rect dirty = {0, 0, 0, 0};
     if (final_full_redraw) {
         dirty = (SDL_Rect){0, 0, target_width, target_height};
@@ -2311,8 +2311,8 @@ static gpu_renderer_map_frame_diagnostics_t gpu_map_frame_diagnostics(
         dirty = world_frame_damage;
     }
     return (gpu_renderer_map_frame_diagnostics_t){
-        .invalidation_reason = gpu_map_frame_invalidation_reason(target_was_published,
-                                                                 light_changed),
+        .invalidation_reason =
+            gpu_map_frame_invalidation_reason(target_was_published, light_changed),
         .published_generation = target->published_generation,
         .source_generation = map_frame_source_generation,
         .camera_generation = map_frame_camera_generation,
@@ -2392,10 +2392,10 @@ static gpu_map_asset_t *gpu_map_asset_create(SDL_Surface *surface) {
     asset->bytes = (size_t)surface->w * (size_t)surface->h * 4U;
     asset->standalone =
         asset->width > GPU_MAP_ATLAS_MAX_ASSET_SIZE || asset->height > GPU_MAP_ATLAS_MAX_ASSET_SIZE;
-    asset->texture_flags = (asset->standalone ? GPU_SPRITE_TEXTURE_STANDALONE
-                                               : GPU_SPRITE_TEXTURE_ATLAS) |
-                           GPU_SPRITE_TEXTURE_STRAIGHT_ALPHA |
-                           GPU_SPRITE_TEXTURE_NEAREST | GPU_SPRITE_TEXTURE_CLAMP_EDGE;
+    asset->texture_flags =
+        (asset->standalone ? GPU_SPRITE_TEXTURE_STANDALONE : GPU_SPRITE_TEXTURE_ATLAS) |
+        GPU_SPRITE_TEXTURE_STRAIGHT_ALPHA | GPU_SPRITE_TEXTURE_NEAREST |
+        GPU_SPRITE_TEXTURE_CLAMP_EDGE;
     if (SDL_SurfaceHasColorKey(surface)) {
         asset->texture_flags |= GPU_SPRITE_TEXTURE_SOURCE_COLOR_KEY;
     }
@@ -2751,8 +2751,8 @@ bool gpu_map_renderer_wait_idle(void) {
 bool gpu_map_renderer_begin(int width, int height, bool auxiliary) {
     size_t target_index = auxiliary ? 1U : 0U;
     gpu_map_target_set_t *target = &map_targets[target_index];
-    map_frame_target_resized = target->albedo != NULL &&
-                               (target->width != width || target->height != height);
+    map_frame_target_resized =
+        target->albedo != NULL && (target->width != width || target->height != height);
     map_frame_resource_replaced = false;
     if (map_device == NULL || width <= 0 || height <= 0 || !SDL_FlushRenderer(map_renderer)) {
         return false;
@@ -3090,8 +3090,9 @@ static bool gpu_map_light_span_append(int first_x, int last_x, size_t quad) {
         .quad = (uint32_t)quad,
         .padding = 0,
     };
-    map_frame_lighting_generation = gpu_map_contract_hash_append(
-        map_frame_lighting_generation, &light_spans[light_spans_num - 1U], sizeof(*light_spans));
+    map_frame_lighting_generation = gpu_map_contract_hash_append(map_frame_lighting_generation,
+                                                                 &light_spans[light_spans_num - 1U],
+                                                                 sizeof(*light_spans));
     return true;
 }
 
@@ -3333,14 +3334,13 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
                        (float)alpha / 255.0f},
         .texture_flags = asset->texture_flags,
         .texture_metadata = {1.0f / texture_width,
-                              1.0f / texture_height,
-                              0.5f / texture_width,
-                              0.5f / texture_height},
+                             1.0f / texture_height,
+                             0.5f / texture_width,
+                             0.5f / texture_height},
         .transform = {0.0f, 1.0f, 1.0f, 0.0f},
         .effect_color = {1.0f, 1.0f, 1.0f, 1.0f},
         .effect_parameters = {1.0f, 0.0f, 0.0f, 0.0f},
-        .owner_depth =
-            gpu_sprite_owner_depth_pack(GPU_SPRITE_OWNER_UNSET, GPU_SPRITE_DEPTH_UNSET),
+        .owner_depth = gpu_sprite_owner_depth_pack(GPU_SPRITE_OWNER_UNSET, GPU_SPRITE_DEPTH_UNSET),
         .abi_version = GPU_SPRITE_INSTANCE_ABI_VERSION,
     };
 
@@ -3387,9 +3387,8 @@ bool gpu_map_renderer_draw_surface(SDL_Surface *surface,
     map_frame_camera_generation = gpu_map_contract_hash_append(map_frame_camera_generation,
                                                                instance.destination,
                                                                sizeof(instance.destination));
-    map_frame_camera_generation = gpu_map_contract_hash_append(map_frame_camera_generation,
-                                                               &base_clip,
-                                                               sizeof(base_clip));
+    map_frame_camera_generation =
+        gpu_map_contract_hash_append(map_frame_camera_generation, &base_clip, sizeof(base_clip));
     map_frame_effect_generation = gpu_map_contract_hash_append(map_frame_effect_generation,
                                                                &asset->generation,
                                                                sizeof(asset->generation));
@@ -3562,10 +3561,8 @@ bool gpu_map_renderer_end(void) {
     if (!world_frame_updated && !light_changed) {
         gpu_renderer_timing_end(GPU_RENDERER_TIMING_LIGHT_TONE, light_timing_started);
         gpu_map_target_contract_commit(target);
-        gpu_renderer_map_frame_diagnostics_t diagnostics = gpu_map_frame_diagnostics(target,
-                                                                                     target_was_published,
-                                                                                     false,
-                                                                                     false);
+        gpu_renderer_map_frame_diagnostics_t diagnostics =
+            gpu_map_frame_diagnostics(target, target_was_published, false, false);
         gpu_renderer_statistics_map_frame(false, false, 0, 0, true, &diagnostics);
         gpu_map_command_discard();
         return true;
@@ -3591,8 +3588,8 @@ bool gpu_map_renderer_end(void) {
         .max_depth = 1.0f,
     };
     SDL_SetGPUViewport(final_pass, &final_viewport);
-    SDL_Rect final_scissor = final_full_redraw ? (SDL_Rect){0, 0, target_width, target_height}
-                                                : world_frame_damage;
+    SDL_Rect final_scissor =
+        final_full_redraw ? (SDL_Rect){0, 0, target_width, target_height} : world_frame_damage;
     SDL_SetGPUScissor(final_pass, &final_scissor);
     SDL_GPUTextureSamplerBinding albedo_binding = {
         .texture = albedo_target,
@@ -3639,8 +3636,10 @@ bool gpu_map_renderer_end(void) {
         light_forward_lut_buffer,
         light_inverse_lut_buffer,
     };
-    SDL_BindGPUFragmentStorageBuffers(transparent_pass, 0,
-                                      transparent_buffers, SDL_arraysize(transparent_buffers));
+    SDL_BindGPUFragmentStorageBuffers(transparent_pass,
+                                      0,
+                                      transparent_buffers,
+                                      SDL_arraysize(transparent_buffers));
     gpu_map_world_draw(transparent_pass, final_full_redraw);
     SDL_EndGPURenderPass(transparent_pass);
 
@@ -3708,12 +3707,11 @@ bool gpu_map_renderer_end(void) {
     map_targets[target_index].published = true;
     gpu_map_target_contract_commit(target);
     bool damage_frame = !final_full_redraw && world_frame_damage_valid;
-    size_t damage_pixels = damage_frame ? (size_t)world_frame_damage.w * (size_t)world_frame_damage.h : 0;
+    size_t damage_pixels =
+        damage_frame ? (size_t)world_frame_damage.w * (size_t)world_frame_damage.h : 0;
     size_t damage_bytes = damage_pixels <= SIZE_MAX / 12U ? damage_pixels * 12U : SIZE_MAX;
-    gpu_renderer_map_frame_diagnostics_t diagnostics = gpu_map_frame_diagnostics(target,
-                                                                                 target_was_published,
-                                                                                 light_changed,
-                                                                                 final_full_redraw);
+    gpu_renderer_map_frame_diagnostics_t diagnostics =
+        gpu_map_frame_diagnostics(target, target_was_published, light_changed, final_full_redraw);
     gpu_renderer_statistics_map_frame(final_full_redraw,
                                       damage_frame,
                                       damage_pixels,

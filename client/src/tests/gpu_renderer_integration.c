@@ -1184,12 +1184,7 @@ static bool unlit_owner_alpha_frame(SDL_Surface *floor,
     const int map_size = 8;
     SDL_FRect destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
     lighting_vertex_t light_quad[4] = {
-        {.x = 0,
-         .y = 0,
-         .scalar = radiance,
-         .red = radiance,
-         .green = radiance,
-         .blue = radiance},
+        {.x = 0, .y = 0, .scalar = radiance, .red = radiance, .green = radiance, .blue = radiance},
         {.x = map_size,
          .y = 0,
          .scalar = radiance,
@@ -1222,9 +1217,13 @@ static bool unlit_owner_alpha_frame(SDL_Surface *floor,
               gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
               gpu_renderer_present();
     SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
-    success = checkpoint != NULL &&
-              SDL_ReadSurfacePixel(
-                  checkpoint, map_size / 2, map_size / 2, &pixel[0], &pixel[1], &pixel[2], &pixel[3]);
+    success = checkpoint != NULL && SDL_ReadSurfacePixel(checkpoint,
+                                                         map_size / 2,
+                                                         map_size / 2,
+                                                         &pixel[0],
+                                                         &pixel[1],
+                                                         &pixel[2],
+                                                         &pixel[3]);
     SDL_DestroySurface(checkpoint);
     return success;
 }
@@ -1235,9 +1234,13 @@ static bool unlit_owner_alpha_retained_frame(Uint8 pixel[4]) {
                    gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
                    gpu_renderer_present();
     SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
-    success = checkpoint != NULL &&
-              SDL_ReadSurfacePixel(
-                  checkpoint, map_size / 2, map_size / 2, &pixel[0], &pixel[1], &pixel[2], &pixel[3]);
+    success = checkpoint != NULL && SDL_ReadSurfacePixel(checkpoint,
+                                                         map_size / 2,
+                                                         map_size / 2,
+                                                         &pixel[0],
+                                                         &pixel[1],
+                                                         &pixel[2],
+                                                         &pixel[3]);
     SDL_DestroySurface(checkpoint);
     return success;
 }
@@ -1302,9 +1305,13 @@ static bool transparent_owner_order_frame(SDL_Surface *floor,
               gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
               gpu_renderer_present();
     SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
-    success = checkpoint != NULL &&
-              SDL_ReadSurfacePixel(
-                  checkpoint, map_size / 2, map_size / 2, &pixel[0], &pixel[1], &pixel[2], &pixel[3]);
+    success = checkpoint != NULL && SDL_ReadSurfacePixel(checkpoint,
+                                                         map_size / 2,
+                                                         map_size / 2,
+                                                         &pixel[0],
+                                                         &pixel[1],
+                                                         &pixel[2],
+                                                         &pixel[3]);
     SDL_DestroySurface(checkpoint);
     return success;
 }
@@ -1338,9 +1345,8 @@ static bool compositor_alpha_matches(const Uint8 actual[4],
     return true;
 }
 
-static bool compositor_pixel_matches(const Uint8 actual[4],
-                                     const Uint8 expected[4],
-                                     const char *label) {
+static bool
+compositor_pixel_matches(const Uint8 actual[4], const Uint8 expected[4], const char *label) {
     if (memcmp(actual, expected, 4) == 0) {
         return true;
     }
@@ -1366,26 +1372,24 @@ static bool unlit_owner_alpha_checkpoint(void) {
     SDL_Surface *foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
     SDL_Surface *lit_foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
     SDL_Surface *occluder = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
-    bool success = floor != NULL && foreground != NULL && lit_foreground != NULL &&
-                   occluder != NULL &&
-                   SDL_FillSurfaceRect(
-                       floor, NULL, SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
-                   SDL_FillSurfaceRect(foreground,
-                                       NULL,
-                                       SDL_MapSurfaceRGBA(
-                                           foreground, 60, 60, 76, SDL_ALPHA_OPAQUE)) &&
-                   SDL_FillSurfaceRect(lit_foreground,
-                                       NULL,
-                                       SDL_MapSurfaceRGBA(
-                                           lit_foreground, 176, 48, 96, SDL_ALPHA_OPAQUE)) &&
-                   SDL_FillSurfaceRect(occluder,
-                                       NULL,
-                                       SDL_MapSurfaceRGBA(
-                                           occluder, 40, 192, 80, SDL_ALPHA_OPAQUE)) &&
-                   SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
-                   SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND) &&
-                   SDL_SetSurfaceBlendMode(lit_foreground, SDL_BLENDMODE_BLEND) &&
-                   SDL_SetSurfaceBlendMode(occluder, SDL_BLENDMODE_NONE);
+    bool success =
+        floor != NULL && foreground != NULL && lit_foreground != NULL && occluder != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(foreground, 60, 60, 76, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(lit_foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(lit_foreground, 176, 48, 96, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(occluder,
+                            NULL,
+                            SDL_MapSurfaceRGBA(occluder, 40, 192, 80, SDL_ALPHA_OPAQUE)) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND) &&
+        SDL_SetSurfaceBlendMode(lit_foreground, SDL_BLENDMODE_BLEND) &&
+        SDL_SetSurfaceBlendMode(occluder, SDL_BLENDMODE_NONE);
     Uint8 low_floor[4] = {0};
     Uint8 opaque_foreground[4] = {0};
     Uint8 half[4] = {0};
@@ -1401,36 +1405,34 @@ static bool unlit_owner_alpha_checkpoint(void) {
     Uint8 occluder_opaque[4] = {0};
     Uint8 occluded[4] = {0};
 
-    success = success &&
-              unlit_owner_alpha_frame(
-                  floor, foreground, low_radiance, 0, false, low_floor) &&
-              unlit_owner_alpha_frame(floor,
-                                      foreground,
-                                      low_radiance,
+    success =
+        success && unlit_owner_alpha_frame(floor, foreground, low_radiance, 0, false, low_floor) &&
+        unlit_owner_alpha_frame(floor,
+                                foreground,
+                                low_radiance,
+                                SDL_ALPHA_OPAQUE,
+                                true,
+                                opaque_foreground) &&
+        unlit_owner_alpha_frame(floor, foreground, low_radiance, 128, true, half) &&
+        compositor_alpha_matches(half, low_floor, opaque_foreground, 128, 2) &&
+        unlit_owner_alpha_retained_frame(retained) &&
+        compositor_pixel_matches(retained, half, "retained UNLIT alpha") &&
+        unlit_owner_alpha_frame(floor, foreground, low_radiance, 1, true, nearly_transparent) &&
+        compositor_alpha_matches(nearly_transparent, low_floor, opaque_foreground, 1, 2) &&
+        unlit_owner_alpha_frame(floor, foreground, low_radiance, 0, true, transparent) &&
+        compositor_pixel_matches(transparent, low_floor, "transparent UNLIT alpha") &&
+        unlit_owner_alpha_frame(floor, foreground, low_radiance, 128, true, restored_half) &&
+        compositor_pixel_matches(restored_half, half, "restored UNLIT alpha") &&
+        unlit_owner_alpha_frame(floor, foreground, changed_radiance, 128, true, changed_half) &&
+        unlit_owner_alpha_frame(floor, foreground, changed_radiance, 0, false, changed_floor) &&
+        compositor_alpha_matches(changed_half, changed_floor, opaque_foreground, 128, 2) &&
+        transparent_owner_order_frame(floor,
+                                      lit_foreground,
+                                      NULL,
+                                      NULL,
                                       SDL_ALPHA_OPAQUE,
-                                      true,
-                                      opaque_foreground) &&
-              unlit_owner_alpha_frame(floor, foreground, low_radiance, 128, true, half) &&
-              compositor_alpha_matches(half, low_floor, opaque_foreground, 128, 2) &&
-              unlit_owner_alpha_retained_frame(retained) &&
-              compositor_pixel_matches(retained, half, "retained UNLIT alpha") &&
-              unlit_owner_alpha_frame(
-                  floor, foreground, low_radiance, 1, true, nearly_transparent) &&
-              compositor_alpha_matches(
-                  nearly_transparent, low_floor, opaque_foreground, 1, 2) &&
-              unlit_owner_alpha_frame(floor, foreground, low_radiance, 0, true, transparent) &&
-              compositor_pixel_matches(transparent, low_floor, "transparent UNLIT alpha") &&
-              unlit_owner_alpha_frame(
-                  floor, foreground, low_radiance, 128, true, restored_half) &&
-              compositor_pixel_matches(restored_half, half, "restored UNLIT alpha") &&
-              unlit_owner_alpha_frame(
-                  floor, foreground, changed_radiance, 128, true, changed_half) &&
-              unlit_owner_alpha_frame(
-                  floor, foreground, changed_radiance, 0, false, changed_floor) &&
-              compositor_alpha_matches(
-                  changed_half, changed_floor, opaque_foreground, 128, 2) &&
-              transparent_owner_order_frame(
-                  floor, lit_foreground, NULL, NULL, SDL_ALPHA_OPAQUE, 0, lit_opaque);
+                                      0,
+                                      lit_opaque);
     if (success) {
         for (size_t channel = 0; channel < 3; channel++) {
             mixed_after_lit[channel] =
@@ -1438,14 +1440,23 @@ static bool unlit_owner_alpha_checkpoint(void) {
         }
         mixed_after_lit[3] = SDL_ALPHA_OPAQUE;
     }
-    success = success && transparent_owner_order_frame(
-                  floor, lit_foreground, foreground, NULL, 128, 128, mixed_owners) &&
-              compositor_alpha_matches(
-                  mixed_owners, mixed_after_lit, opaque_foreground, 128, 2) &&
-              transparent_owner_order_frame(
-                  floor, NULL, NULL, occluder, 0, 0, occluder_opaque) &&
-              transparent_owner_order_frame(
-                  floor, lit_foreground, foreground, occluder, 128, 128, occluded) &&
+    success = success &&
+              transparent_owner_order_frame(floor,
+                                            lit_foreground,
+                                            foreground,
+                                            NULL,
+                                            128,
+                                            128,
+                                            mixed_owners) &&
+              compositor_alpha_matches(mixed_owners, mixed_after_lit, opaque_foreground, 128, 2) &&
+              transparent_owner_order_frame(floor, NULL, NULL, occluder, 0, 0, occluder_opaque) &&
+              transparent_owner_order_frame(floor,
+                                            lit_foreground,
+                                            foreground,
+                                            occluder,
+                                            128,
+                                            128,
+                                            occluded) &&
               compositor_pixel_matches(occluded, occluder_opaque, "opaque occluder");
     if (!success && SDL_GetError()[0] == '\0') {
         SDL_SetError("UNLIT owner alpha compositor checkpoint failed");
@@ -1466,12 +1477,7 @@ static SDL_Surface *transparent_damage_frame(SDL_Surface *floor,
     SDL_FRect overlay_destination = {overlay_x, 8.0f, 12.0f, 4.0f};
     const uint16_t radiance = 32;
     lighting_vertex_t light_quad[4] = {
-        {.x = 0,
-         .y = 0,
-         .scalar = radiance,
-         .red = radiance,
-         .green = radiance,
-         .blue = radiance},
+        {.x = 0, .y = 0, .scalar = radiance, .red = radiance, .green = radiance, .blue = radiance},
         {.x = map_size,
          .y = 0,
          .scalar = radiance,
@@ -1533,46 +1539,43 @@ static bool transparent_damage_checkpoint(void) {
     SDL_Rect partial = {1, 0, 1, 1};
     SDL_Rect keyed = {2, 0, 1, 1};
     Uint32 key = overlay != NULL ? SDL_MapSurfaceRGBA(overlay, 0, 0, 0, SDL_ALPHA_OPAQUE) : 0;
-    bool success = floor != NULL && overlay != NULL &&
-                   SDL_FillSurfaceRect(
-                       floor, NULL, SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
-                   SDL_FillSurfaceRect(overlay,
-                                       &opaque,
-                                       SDL_MapSurfaceRGBA(
-                                           overlay, 220, 40, 10, SDL_ALPHA_OPAQUE)) &&
-                   SDL_FillSurfaceRect(overlay,
-                                       &partial,
-                                       SDL_MapSurfaceRGBA(overlay, 60, 60, 76, 128)) &&
-                   SDL_FillSurfaceRect(overlay, &keyed, key) &&
-                   SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
-                   SDL_SetSurfaceBlendMode(overlay, SDL_BLENDMODE_BLEND) &&
-                   SDL_SetSurfaceColorKey(overlay, true, key);
+    bool success =
+        floor != NULL && overlay != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(overlay,
+                            &opaque,
+                            SDL_MapSurfaceRGBA(overlay, 220, 40, 10, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(overlay, &partial, SDL_MapSurfaceRGBA(overlay, 60, 60, 76, 128)) &&
+        SDL_FillSurfaceRect(overlay, &keyed, key) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(overlay, SDL_BLENDMODE_BLEND) &&
+        SDL_SetSurfaceColorKey(overlay, true, key);
     gpu_map_renderer_invalidate_target(false);
     SDL_Surface *baseline = success ? transparent_damage_frame(floor, NULL, 0.0f, 0) : NULL;
     SDL_Surface *initial =
         baseline != NULL ? transparent_damage_frame(floor, overlay, 8.0f, SDL_ALPHA_OPAQUE) : NULL;
     Uint8 floor_red = 0, floor_green = 0, floor_blue = 0, floor_alpha = 0;
-    success = initial != NULL &&
-              SDL_ReadSurfacePixel(
-                  baseline, 14, 10, &floor_red, &floor_green, &floor_blue, &floor_alpha) &&
-              surface_pixel_is_near(
-                  initial, 10, 10, 220, 40, 10, SDL_ALPHA_OPAQUE, 2) &&
-              surface_pixel_is_near(initial,
-                                    14,
-                                    10,
-                                    alpha_blend_channel(60, floor_red, 128),
-                                    alpha_blend_channel(60, floor_green, 128),
-                                    alpha_blend_channel(76, floor_blue, 128),
-                                    SDL_ALPHA_OPAQUE,
-                                    2) &&
-              surface_pixel_is_near(initial,
-                                    18,
-                                    10,
-                                    floor_red,
-                                    floor_green,
-                                    floor_blue,
-                                    floor_alpha,
-                                    1);
+    success =
+        initial != NULL &&
+        SDL_ReadSurfacePixel(baseline,
+                             14,
+                             10,
+                             &floor_red,
+                             &floor_green,
+                             &floor_blue,
+                             &floor_alpha) &&
+        surface_pixel_is_near(initial, 10, 10, 220, 40, 10, SDL_ALPHA_OPAQUE, 2) &&
+        surface_pixel_is_near(initial,
+                              14,
+                              10,
+                              alpha_blend_channel(60, floor_red, 128),
+                              alpha_blend_channel(60, floor_green, 128),
+                              alpha_blend_channel(76, floor_blue, 128),
+                              SDL_ALPHA_OPAQUE,
+                              2) &&
+        surface_pixel_is_near(initial, 18, 10, floor_red, floor_green, floor_blue, floor_alpha, 1);
 
     gpu_renderer_statistics_reset();
     SDL_Surface *damage_faded =
@@ -1580,9 +1583,8 @@ static bool transparent_damage_checkpoint(void) {
     gpu_renderer_statistics_t faded_statistics;
     gpu_renderer_statistics_get(&faded_statistics);
     gpu_map_renderer_invalidate_target(false);
-    SDL_Surface *full_faded = damage_faded != NULL
-                                  ? transparent_damage_frame(floor, overlay, 32.0f, 128)
-                                  : NULL;
+    SDL_Surface *full_faded =
+        damage_faded != NULL ? transparent_damage_frame(floor, overlay, 32.0f, 128) : NULL;
     success = success && damage_faded != NULL && full_faded != NULL &&
               transparent_damage_is_bounded(&faded_statistics) &&
               surface_pixel_is_near(damage_faded,
@@ -1602,9 +1604,8 @@ static bool transparent_damage_checkpoint(void) {
     gpu_renderer_statistics_get(&opaque_statistics);
     gpu_map_renderer_invalidate_target(false);
     SDL_Surface *full_opaque =
-        damage_opaque != NULL
-            ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE)
-            : NULL;
+        damage_opaque != NULL ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE)
+                              : NULL;
     success = success && damage_opaque != NULL && full_opaque != NULL &&
               transparent_damage_is_bounded(&opaque_statistics) &&
               surfaces_match(damage_opaque, full_opaque);
@@ -2067,12 +2068,11 @@ int main(void) {
     GPU_REQUIRE(warmup.map_last_invalidation_reason ==
                     GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION ||
                 warmup.map_last_invalidation_reason == GPU_RENDERER_MAP_INVALIDATION_RESIZE);
-    GPU_REQUIRE(strcmp(gpu_renderer_map_invalidation_reason_name(
-                           warmup.map_last_invalidation_reason),
-                       warmup.map_last_invalidation_reason ==
-                               GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION
-                           ? "map_publication"
-                           : "resize") == 0);
+    GPU_REQUIRE(
+        strcmp(gpu_renderer_map_invalidation_reason_name(warmup.map_last_invalidation_reason),
+               warmup.map_last_invalidation_reason == GPU_RENDERER_MAP_INVALIDATION_MAP_PUBLICATION
+                   ? "map_publication"
+                   : "resize") == 0);
 
     GPU_REQUIRE(draw_checkpoint(source, 0, 255, 0, 2048));
     gpu_renderer_statistics_t retained;

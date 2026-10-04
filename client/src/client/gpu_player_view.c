@@ -1627,9 +1627,8 @@ static void gpu_player_view_json_map_statistics(FILE *output,
     fprintf(output,
             "\"full_redraws\":%" PRIu64 ",\"damage_frames\":%" PRIu64 ",\"damage_pixels\":%" PRIu64
             ",\"damage_bytes\":%" PRIu64 ",\"damage_clear_batches\":%" PRIu64
-            ",\"retained_frames\":%" PRIu64
-            ",\"skipped_passes\":%" PRIu64 ",\"dirty_commands\":%" PRIu64
-            ",\"dirty_pixels\":%" PRIu64 ",\"dirty_bytes\":%" PRIu64
+            ",\"retained_frames\":%" PRIu64 ",\"skipped_passes\":%" PRIu64
+            ",\"dirty_commands\":%" PRIu64 ",\"dirty_pixels\":%" PRIu64 ",\"dirty_bytes\":%" PRIu64
             ",\"published_generation\":%" PRIu64 ",\"source_generation\":%" PRIu64
             ",\"camera_generation\":%" PRIu64 ",\"lighting_generation\":%" PRIu64
             ",\"effect_generation\":%" PRIu64,
