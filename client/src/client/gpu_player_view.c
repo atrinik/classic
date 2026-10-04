@@ -1751,7 +1751,7 @@ static void gpu_player_view_json_map_pacing(FILE *output,
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
-#define PLAYER_VIEW_UI_STATES 19
+#define PLAYER_VIEW_UI_STATES 18
 
 typedef struct gpu_player_view_ui_state {
     const char *name;
@@ -1772,6 +1772,15 @@ typedef struct gpu_player_view_ui_closure {
 } gpu_player_view_ui_closure_t;
 
 static gpu_player_view_ui_closure_t gpu_player_view_ui_closure;
+
+static const gpu_player_view_ui_state_t *gpu_player_view_ui_state_find(const char *name) {
+    for (size_t i = 0; i < gpu_player_view_ui_closure.states_num; i++) {
+        if (strcmp(gpu_player_view_ui_closure.states[i].name, name) == 0) {
+            return &gpu_player_view_ui_closure.states[i];
+        }
+    }
+    return NULL;
+}
 
 static bool gpu_player_view_root_glyphs_match(const gpu_player_view_ui_state_t *state) {
     uint64_t expected_count;
@@ -2417,9 +2426,16 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         !gpu_player_view_ui_capture("region_map_fow_retained", false)) {
         return false;
     }
-    gpu_player_view_ui_state_t *initial = &gpu_player_view_ui_closure.states[14];
-    gpu_player_view_ui_state_t *changed = &gpu_player_view_ui_closure.states[15];
-    gpu_player_view_ui_state_t *retained = &gpu_player_view_ui_closure.states[16];
+    const gpu_player_view_ui_state_t *initial =
+        gpu_player_view_ui_state_find("popup_region_map_minimap");
+    const gpu_player_view_ui_state_t *changed =
+        gpu_player_view_ui_state_find("region_map_fow_transition");
+    const gpu_player_view_ui_state_t *retained =
+        gpu_player_view_ui_state_find("region_map_fow_retained");
+    if (initial == NULL || changed == NULL || retained == NULL) {
+        SDL_SetError("region-map FOW closure states are missing");
+        return false;
+    }
     if (strcmp(initial->digest, changed->digest) == 0 ||
         strcmp(changed->digest, retained->digest) != 0) {
         SDL_SetError("region-map FOW hashes invalid: initial_changed=%d changed_retained=%d",
