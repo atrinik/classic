@@ -991,10 +991,10 @@ class WorkflowContractTests(unittest.TestCase):
                 "  server:\n    name: Server validation"
             )
         ]
-        self.assertIn(
-            "--release-history-ref \"${{ github.event_name == 'workflow_dispatch' && 'refs/remotes/origin/main' || 'HEAD' }}\"",
-            core,
-        )
+        self.assertIn("CHECK_EVENT_NAME: ${{ github.event_name }}", core)
+        self.assertIn("tools/ci/release_history_ref.py", core)
+        self.assertIn('--event "${CHECK_EVENT_NAME}"', core)
+        self.assertIn('--release-history-ref "${release_history_ref}"', core)
 
         workflow = self.text("pr-benchmarks.yml")
         triggers = workflow[: workflow.index("jobs:")]
