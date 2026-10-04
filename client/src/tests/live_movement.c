@@ -837,6 +837,7 @@ static int test_private_capture_failure(void) {
     now_us += (MAP_VISIBILITY_FADE_DURATION_MS + UINT64_C(125)) * 1000;
     map_statistics.primary_map_draws++;
     primary_gpu_generation++;
+    profile_statistics.frames++;
     live_movement_frame_finished(true, false, &(client_keepalive_statistics_t){0});
     CHECK(live_movement_finished() && live_movement_exit_status() != 0);
     CHECK(captures[0].result.status == LIVE_MOVEMENT_CAPTURE_FAILED);
