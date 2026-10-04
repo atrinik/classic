@@ -18,6 +18,8 @@
 #include <check_utils.h>
 #include <arch.h>
 #include <object.h>
+#include <swap.h>
+#include <server_main.h>
 
 START_TEST(test_light_level_anchors) {
     ck_assert_uint_eq(light_level_from_raw(-1), 0);
@@ -609,13 +611,20 @@ END_TEST
 START_TEST(test_saved_dense_map_teardown_does_not_rebuild_light_per_object) {
     enum { MAPS = 3, WIDTH = 24, HEIGHT = 24 };
     object *active_before = active_objects;
+    mapstruct *maps[MAPS];
+    char paths[MAPS][HUGE_BUF];
+
+    /* Only the maps owned by this fixture may expire in this tick. */
+    for (mapstruct *existing = first_map; existing != NULL; existing = existing->next) {
+        ck_assert(existing->in_memory != MAP_IN_MEMORY || existing->timeout != 1);
+    }
 
     for (int map_index = 0; map_index < MAPS; map_index++) {
         mapstruct *map = get_empty_map(WIDTH, HEIGHT);
-        char path[HUGE_BUF];
+        maps[map_index] = map;
         char label[32];
         snprintf(VS(label), "dense-%d", map_index);
-        assign_temporary_unique_path(map, VS(path), label);
+        assign_temporary_unique_path(map, paths[map_index], sizeof(paths[map_index]), label);
 
         map->in_memory = MAP_LOADING;
         for (int y = 0; y < HEIGHT; y++) {
@@ -629,18 +638,23 @@ START_TEST(test_saved_dense_map_teardown_does_not_rebuild_light_per_object) {
         }
         map->in_memory = MAP_IN_MEMORY;
 
-        ck_assert_int_eq(new_save_map(map, 0), 0);
-        ck_assert_int_eq(map->in_memory, MAP_IN_MEMORY);
-        uint64_t rebuilds = light_rebuild_count_for_test();
+        map->timeout = 1;
+        map->map_flags |= MAP_FLAG_FIXED_RTIME;
+        map->reset_time = (uint32_t)seconds() + 3600;
+    }
 
-        free_map(map, 1);
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    check_active_maps();
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
 
-        ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    for (int map_index = 0; map_index < MAPS; map_index++) {
+        mapstruct *map = maps[map_index];
+        ck_assert_int_eq(access(paths[map_index], F_OK), 0);
         ck_assert_int_eq(map->in_memory, MAP_SWAPPED);
         ck_assert_ptr_null(map->spaces);
         ck_assert_ptr_eq(active_objects, active_before);
         delete_map(map);
-        ck_assert_int_eq(unlink(path), 0);
+        ck_assert_int_eq(unlink(paths[map_index]), 0);
     }
 }
 END_TEST
