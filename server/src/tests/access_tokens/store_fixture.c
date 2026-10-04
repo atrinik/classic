@@ -459,6 +459,35 @@ static access_outcome_t remote_collision(void *opaque, const access_route_t *req
            : context->unavailable                ? ACCESS_UNAVAILABLE
                                                  : ACCESS_COMMITTED;
 }
+/* A missing receipt must fail closed even if an unexpected state fault is
+ * observed after the remote callback returns and before retry materialization. */
+static access_outcome_t collision_missing_receipt(void *opaque, const access_route_t *request) {
+    (void)request;
+    access_store_t *store = opaque;
+    pthread_mutex_lock(&store->mutex);
+    store->state->receipt_count = 0;
+    pthread_mutex_unlock(&store->mutex);
+    return ACCESS_ROUTE_COLLISION;
+}
+static void collision_receipt_fault(void) {
+    char directory[64];
+    access_store_t *store = fresh(directory);
+    access_result_t issued = access_store_issue(store,
+                                               request1,
+                                               revision(store),
+                                               "Missing retry receipt",
+                                               false,
+                                               0,
+                                               100,
+                                               collision_missing_receipt,
+                                               store);
+    assert(issued.outcome == ACCESS_PENDING && issued.code[0] == '\0');
+    assert(store->state->token_count == 1 &&
+           store->state->tokens[0].info.state == ACCESS_TOKEN_PENDING);
+    access_result_cleanse(&issued);
+    cleanup(directory, store);
+}
+
 static void collisions(void) {
     char directory[64];
     access_store_t *s = fresh(directory);
@@ -802,6 +831,7 @@ int main(int argc, char **argv) {
     paths();
     expiry_faults_and_remove();
     collisions();
+    collision_receipt_fault();
     removal_capacity_receipts();
     puts("access token store fixtures passed");
     return 0;

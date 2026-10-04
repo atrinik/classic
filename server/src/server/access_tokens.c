@@ -1069,12 +1069,13 @@ access_result_t access_store_issue(access_store_t *s,
             break;
         }
         t = find_token(n, request.token.token_id);
-        if (!issue_material(n, t, code, &generated) || !random_id(t->route_request)) {
+        receipt_t *retry = find_receipt(n, id);
+        if (!t || !retry || !issue_material(n, t, code, &generated) ||
+            !random_id(t->route_request)) {
             discard(n);
             remote = ACCESS_UNAVAILABLE;
             break;
         }
-        receipt_t *retry = find_receipt(n, id);
         memcpy(retry->token, t->info.ref.token_id, 33);
         retry->token_revision = t->info.ref.revision;
         retry->revision = n->revision;
@@ -1619,11 +1620,11 @@ access_operator_lookup_t access_operator_lookup(const char *path, const char *ac
     }
     char bytes[16385];
     size_t n = (size_t)st.st_size, pos = 0;
-    while (pos < n) {
-        ssize_t got = read(fd, bytes + pos, n - pos);
+    while (pos < n && pos < sizeof(bytes) - 1) {
+        ssize_t got = read(fd, bytes + pos, sizeof(bytes) - 1 - pos);
         if (got < 0 && errno == EINTR)
             continue;
-        if (got <= 0)
+        if (got <= 0 || (size_t)got > n - pos)
             break;
         pos += (size_t)got;
     }
