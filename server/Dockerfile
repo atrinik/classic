@@ -3,6 +3,8 @@
 FROM ubuntu@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78 AS build
 
 ARG ATRINIK_PACKAGE_VERSION
+ARG ATRINIK_SOURCE_REVISION=unknown
+ARG ATRINIK_SOURCE_DIRTY=unknown
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
@@ -27,6 +29,8 @@ RUN --network=none python3 tools/dependencies.py sync \
         -DBUILD_TESTING=OFF \
         -DPACKAGE_TYPE=none \
         -DATRINIK_PACKAGE_VERSION="${ATRINIK_PACKAGE_VERSION}" \
+        -DATRINIK_SOURCE_REVISION="${ATRINIK_SOURCE_REVISION}" \
+        -DATRINIK_SOURCE_DIRTY="${ATRINIK_SOURCE_DIRTY}" \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/src/protocol \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/src/libatrinik \
     && cmake --build build/release \
