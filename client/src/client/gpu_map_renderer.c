@@ -3467,7 +3467,10 @@ static const gpu_map_light_horizontal_row_t *gpu_map_light_horizontal_row_build(
             int x = first_x + (int)offset_x;
             size_t quad = winners[offset_x];
 #ifdef ATRINIK_GPU_LIGHT_ROW_ORACLE
-            HARD_ASSERT(quad == gpu_map_light_quad_find_exact(owner, x, y));
+            if (quad != gpu_map_light_quad_find_exact(owner, x, y)) {
+                SDL_SetError("GPU map compact light row differs from the per-pixel oracle");
+                return NULL;
+            }
 #endif
             if (quad == active_quad) {
                 continue;
