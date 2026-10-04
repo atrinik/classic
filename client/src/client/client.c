@@ -74,6 +74,9 @@ static socket_command_struct commands[CLIENT_CMD_NROF] = {
 CASSERT_ARRAY(commands, CLIENT_CMD_NROF);
 
 static bool client_command_allowed(uint8_t type) {
+    if (type == CLIENT_CMD_KEEPALIVE) {
+        return true;
+    }
     if (cpl.state == ST_WAITVERSION) {
         return type == CLIENT_CMD_VERSION;
     }
