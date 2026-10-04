@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import runpy
 from pathlib import Path
 import stat
@@ -159,7 +160,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                     "$ClientData",
                     "StandardInput.WriteLine(\"shutdown\")",
                     "Client shutdown complete",
-                    "Server shutdown complete",
+                    "Server saves complete; releasing resources",
                     "ServerDiagnostics",
                     "identity_recent",
                     "ready_marker",
@@ -247,6 +248,48 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                 manifest = json.loads(archive.read(prefix + "BUNDLE-MANIFEST.json"))
                 self.assertEqual(manifest["revision"], self.revision)
                 self.assertEqual(manifest["udp_port"], 1731)
+
+    def test_shutdown_consumers_require_checked_saves_and_successful_exit(self) -> None:
+        root = MODULE_PATH.parents[2]
+        server_main = (root / "server/src/server/main.c").read_text(encoding="utf-8")
+        shutdown = server_main.split("void server_shutdown(void) {", 1)[1].split("\n}", 1)[0]
+        success = re.search(r'if \(ok\) \{\s*LOG\(INFO, "([^"]+)"\);', shutdown)
+        failure = re.search(r'LOG\(ERROR, "([^"]+)"\);', shutdown)
+        self.assertIsNotNone(success)
+        self.assertIsNotNone(failure)
+        launcher = bundle.POWERSHELL_LAUNCHER
+        smoke = (root / "tools/ci/smoke_windows_review_bundle.ps1").read_text(encoding="utf-8")
+        for script in (launcher, smoke):
+            markers = re.findall(r'-(?:notmatch|match) "(Server (?:shutdown|saves|resources)[^"]+)"', script)
+            self.assertEqual(len(markers), 2)
+            for marker in markers:
+                self.assertRegex(success.group(1), marker)
+                self.assertNotRegex(failure.group(1), marker)
+                self.assertNotRegex("Server resources released; deinitializing toolkit.", marker)
+
+        # These guards must reject a timeout/nonzero exit before the success
+        # marker can authorize completion; a log message alone is insufficient.
+        launcher_finish = launcher.split('$Server.StandardInput.WriteLine("shutdown")', 1)[1]
+        launcher_finish = launcher_finish.split('$LauncherSucceeded = $true', 1)[0]
+        self.assertRegex(launcher_finish, r'if \(-not \$Server\.WaitForExit\(30000\)\) \{\s*throw ')
+        self.assertRegex(launcher_finish, r'if \(\$Server\.ExitCode -ne 0\) \{\s*throw ')
+        self.assertLess(launcher_finish.index('$Server.WaitForExit(30000)'),
+                        launcher_finish.index('$Server.ExitCode -ne 0'))
+        self.assertLess(launcher_finish.index('$Server.ExitCode -ne 0'),
+                        launcher_finish.index('-notmatch'))
+        flat_finish = smoke.split('    if ($shutdownTimedOut) {')[-1].split('$launcherStartInfo =', 1)[0]
+        self.assertTrue(flat_finish.lstrip().startswith('throw ('))
+        self.assertRegex(flat_finish, r'if \(\$process\.ExitCode -ne 0\) \{\s*throw ')
+        self.assertLess(flat_finish.index('$process.ExitCode -ne 0'), flat_finish.index('-notmatch'))
+        launcher_wait = 'if (-not $launcherServer.HasExited -and -not $launcherServer.WaitForExit(45000))'
+        launcher_smoke = smoke[smoke.index(launcher_wait):]
+        launcher_smoke = launcher_smoke.split('$bodySucceeded = $true', 1)[0]
+        self.assertIn('$launcherServer.WaitForExit(45000)', launcher_smoke)
+        self.assertIn('$launcherServerExitCode -ne 0', launcher_smoke)
+        self.assertLess(launcher_smoke.index('$launcherServerExitCode -ne 0'),
+                        launcher_smoke.index('-notmatch'))
+        self.assertRegex(launcher_smoke, r'if \(-not \$launcherProcess\.WaitForExit\(60000\)\) \{\s*throw ')
+        self.assertRegex(launcher_smoke, r'if \(\$launcherProcess\.ExitCode -ne 0\) \{\s*throw ')
 
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

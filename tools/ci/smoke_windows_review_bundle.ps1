@@ -237,7 +237,7 @@ try {
     if ($process.ExitCode -ne 0) {
         throw "Flat review-bundle server exited with code $($process.ExitCode):`n$output"
     }
-    if ($output -notmatch "Server shutdown complete\.") {
+    if ($output -notmatch "Server saves complete; releasing resources\.") {
         throw "Flat review-bundle server did not report a clean shutdown"
     }
 
@@ -411,7 +411,7 @@ try {
         throw "One-click server exited with code $launcherServerExitCode"
     }
     $launcherServerLogText = Get-Content -Raw -LiteralPath $launcherServerLog
-    if ($launcherServerLogText -notmatch "Server shutdown complete\.") {
+    if ($launcherServerLogText -notmatch "Server saves complete; releasing resources\.") {
         throw "One-click server did not report a clean shutdown"
     }
     if (-not $launcherProcess.WaitForExit(60000)) {
