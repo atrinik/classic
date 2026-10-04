@@ -9,6 +9,26 @@ sticky public ancestor such as `/tmp` is supported for isolated fixtures. Relati
 state paths are anchored at the current working directory without resolving
 symlinks. Embedded `.` and `..` components are rejected.
 
+The supervised runtime may explicitly borrow its launcher's already locked data
+file descriptor. `access_state_lock_fd` validates an effective-UID-owned 0700
+directory and retains the same open-file description with `F_DUPFD_CLOEXEC`,
+checking fresh device/inode, type and permissions across duplication. The native
+caller validates the command-line descriptor/path binding before invoking this
+API. It keeps the original descriptor open for ordinary game persistence paths
+and marks it close-on-exec; the supervisor remains responsible for preventing
+multiple intentional borrowers. Closing the native reference never explicitly
+unlocks the supervisor's lease. An independently opened descriptor still conflicts
+with the exclusive lock.
+
+`access_store_open_at` and `access_store_absent_at` accept a single child name
+beneath that locked private data capability. They reject slash, dot and dotdot
+names, do not follow child symlinks, and preserve the same store validation and
+transaction implementation as ordinary paths. Opening a child compares fresh
+before/opened/after directory identities; subsequent operations use its pinned
+descriptor. Renaming the data pathname cannot redirect these operations. These
+APIs do not create a `/proc/self/fd` exception in ordinary path traversal,
+external store selection, offline helpers, or the root-managed allowlist.
+
 A directory `flock` provides exclusive ownership. The enclosing game state lock
 must also be held by the runtime and offline inspector so an absent token store
 cannot bypass the stopped-state requirement. `access_store_absent` accepts only
@@ -109,3 +129,9 @@ preserving the existing open-server build. Root-owned allowlist positive fixture
 require a root-capable isolated test environment. Full server/client builds,
 actual account/player behavior, and adapter deadline/dispatch proofs belong to
 the coordinated integration acceptance.
+
+The store fixture also checks descriptor ownership/mode/type rejection, fresh
+identity mismatch, strict path and child-symlink rejection, retained state after
+pathname replacement, and shared-lock lifetime across a forked borrower. Wrong
+ownership and descriptor-rebinding observations are injected deterministically;
+these cases need no privileged filesystem changes.

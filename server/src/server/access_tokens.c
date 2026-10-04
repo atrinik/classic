@@ -1,4 +1,5 @@
-/* Copyright (c) 2026 The Atrinik Project. SPDX-License-Identifier: GPL-2.0-or-later */
+/* Copyright 2026 The Atrinik Project
+ * SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -445,6 +446,57 @@ static int open_directory(const char *path, bool private_leaf) {
     return fd;
 }
 
+/* Descriptor entry points accept an explicit caller-owned capability, never a
+ * magic path exception. Retain its open-file description, including its flock. */
+static bool private_directory_stat(int fd, struct stat *st) {
+    return fstat(fd, st) == 0 && S_ISDIR(st->st_mode) && st->st_uid == geteuid() &&
+           (st->st_mode & 07777) == 0700;
+}
+static bool same_directory(const struct stat *a, const struct stat *b) {
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_uid == b->st_uid &&
+           a->st_mode == b->st_mode;
+}
+static int duplicate_private_directory(int directory) {
+    struct stat before, opened, after;
+    if (!private_directory_stat(directory, &before))
+        return -1;
+    int fd = fcntl(directory, F_DUPFD_CLOEXEC, 3);
+    if (fd < 0)
+        return -1;
+    if (!private_directory_stat(fd, &opened) || !private_directory_stat(directory, &after) ||
+        !same_directory(&before, &opened) || !same_directory(&opened, &after)) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+static bool directory_leaf(const char *leaf) {
+    return leaf && *leaf && strlen(leaf) <= NAME_MAX && !strchr(leaf, '/') &&
+           strcmp(leaf, ".") && strcmp(leaf, "..");
+}
+static int open_private_directory_at(int directory, const char *leaf) {
+    if (!directory_leaf(leaf))
+        return -1;
+    int parent = duplicate_private_directory(directory);
+    if (parent < 0)
+        return -1;
+    struct stat before, opened, after;
+    int fd = -1;
+    if (fstatat(parent, leaf, &before, AT_SYMLINK_NOFOLLOW) == 0 &&
+        S_ISDIR(before.st_mode)) {
+        fd = openat(parent, leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd >= 0 &&
+            (!private_directory_stat(fd, &opened) || !same_directory(&before, &opened) ||
+             fstatat(parent, leaf, &after, AT_SYMLINK_NOFOLLOW) != 0 ||
+             !same_directory(&opened, &after))) {
+            close(fd);
+            fd = -1;
+        }
+    }
+    close(parent);
+    return fd;
+}
+
 static bool private_file(int fd, uid_t owner) {
     struct stat st;
     return fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == owner && st.st_nlink == 1 &&
@@ -687,17 +739,13 @@ static access_route_t route_for(const token_t *t) {
     return r;
 }
 
-access_outcome_t access_store_open(access_store_t **out,
-                                   const char *directory,
-                                   const uint8_t identity[32],
-                                   bool protected_policy,
-                                   bool initialize) {
-    if (out == NULL || identity == NULL)
-        return ACCESS_INVALID;
-    *out = NULL;
-    int fd = open_directory(directory, true);
-    if (fd < 0)
-        return ACCESS_UNAVAILABLE;
+/* Consumes fd on every outcome. Both public entry points use the same store
+ * lock, snapshot validation, initialization and recovery implementation. */
+static access_outcome_t store_open_descriptor(access_store_t **out,
+                                               int fd,
+                                               const uint8_t identity[32],
+                                               bool protected_policy,
+                                               bool initialize) {
     if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
         close(fd);
         return ACCESS_UNAVAILABLE;
@@ -776,6 +824,33 @@ access_outcome_t access_store_open(access_store_t **out,
 fail:
     access_store_close(s);
     return outcome;
+}
+access_outcome_t access_store_open(access_store_t **out,
+                                   const char *directory,
+                                   const uint8_t identity[32],
+                                   bool protected_policy,
+                                   bool initialize) {
+    if (out == NULL || identity == NULL)
+        return ACCESS_INVALID;
+    *out = NULL;
+    int fd = open_directory(directory, true);
+    if (fd < 0)
+        return ACCESS_UNAVAILABLE;
+    return store_open_descriptor(out, fd, identity, protected_policy, initialize);
+}
+access_outcome_t access_store_open_at(access_store_t **out,
+                                      int directory,
+                                      const char *leaf,
+                                      const uint8_t identity[32],
+                                      bool protected_policy,
+                                      bool initialize) {
+    if (out == NULL || identity == NULL)
+        return ACCESS_INVALID;
+    *out = NULL;
+    int fd = open_private_directory_at(directory, leaf);
+    if (fd < 0)
+        return ACCESS_UNAVAILABLE;
+    return store_open_descriptor(out, fd, identity, protected_policy, initialize);
 }
 void access_store_close(access_store_t *s) {
     if (s == NULL)
@@ -1599,6 +1674,20 @@ int access_state_lock(const char *directory) {
     }
     return fd;
 }
+int access_state_lock_fd(int directory) {
+    if (directory < 3)
+        return -1;
+    int fd = duplicate_private_directory(directory);
+    if (fd < 0)
+        return -1;
+    struct stat opened, current;
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0 || !private_directory_stat(fd, &opened) ||
+        !private_directory_stat(directory, &current) || !same_directory(&opened, &current)) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
 void access_state_unlock(int fd) {
     if (fd >= 0)
         close(fd);
@@ -1656,6 +1745,18 @@ bool access_store_absent(const char *directory) {
     struct stat st;
     int found = fstatat(fd, leaf, &st, AT_SYMLINK_NOFOLLOW);
     bool absent = found != 0 && errno == ENOENT;
+    close(fd);
+    return absent;
+}
+
+bool access_store_absent_at(int directory, const char *leaf) {
+    if (!directory_leaf(leaf))
+        return false;
+    int fd = duplicate_private_directory(directory);
+    if (fd < 0)
+        return false;
+    struct stat st;
+    bool absent = fstatat(fd, leaf, &st, AT_SYMLINK_NOFOLLOW) != 0 && errno == ENOENT;
     close(fd);
     return absent;
 }

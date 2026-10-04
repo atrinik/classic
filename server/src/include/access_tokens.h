@@ -1,4 +1,5 @@
-/* Copyright (c) 2026 The Atrinik Project. SPDX-License-Identifier: GPL-2.0-or-later */
+/* Copyright 2026 The Atrinik Project
+ * SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef ATRINIK_ACCESS_TOKENS_H
 #define ATRINIK_ACCESS_TOKENS_H
 
@@ -115,6 +116,17 @@ access_outcome_t access_store_open(access_store_t **out,
                                    const uint8_t identity[32],
                                    bool protected_policy,
                                    bool initialize);
+/* Explicit capability variant for a single child beneath the locked private
+ * data directory. The borrowed parent must remain open and must not be rebound
+ * during the call. It is duplicated with CLOEXEC; child links, slash/dot/dotdot
+ * leaves and non-private directories are rejected. The same store rules apply.
+ * No path-based API recognizes /proc/self/fd or any other symlink exception. */
+access_outcome_t access_store_open_at(access_store_t **out,
+                                      int data_directory,
+                                      const char *leaf,
+                                      const uint8_t identity[32],
+                                      bool protected_policy,
+                                      bool initialize);
 void access_store_close(access_store_t *store);
 /* Same validation and exclusive lock, with no creation, recovery or writes.
  * Caller also holds the outer data-directory state lock to verify absence. */
@@ -123,8 +135,17 @@ access_outcome_t access_store_inspect(const char *directory,
                                       bool protected_policy,
                                       access_status_t *status);
 int access_state_lock(const char *data_directory);
+/* Retain an explicitly supplied euid-owned 0700 directory capability (fd >=3)
+ * and its exclusive flock using a CLOEXEC duplicate of the same open-file
+ * description. Caller keeps its original descriptor alive and unrebound; the
+ * trusted supervisor owns single-runtime fencing for intentional borrowers.
+ * Release only through access_state_unlock (close, never LOCK_UN). */
+int access_state_lock_fd(int data_directory);
 /* True only for an absent final leaf under an existing trusted parent. */
 bool access_store_absent(const char *directory);
+/* Same absence rule for a single child beneath an explicitly supplied locked
+ * private data directory; caller retains the borrowed descriptor. */
+bool access_store_absent_at(int data_directory, const char *leaf);
 void access_state_unlock(int descriptor);
 access_status_t access_store_status(access_store_t *store);
 access_outcome_t access_store_list(access_store_t *store,

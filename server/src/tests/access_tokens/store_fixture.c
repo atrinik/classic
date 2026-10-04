@@ -1,4 +1,5 @@
-/* Copyright (c) 2026 The Atrinik Project. SPDX-License-Identifier: GPL-2.0-or-later */
+/* Copyright 2026 The Atrinik Project
+ * SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -10,6 +11,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <toolkit/access_code.h>
 
@@ -54,11 +56,27 @@ static int fixture_renameat(int a, const char *b, int c, const char *d) {
     }
     return renameat(a, b, c, d);
 }
+/* Model an ownership mismatch and descriptor rebound between observations
+ * without requiring privilege or racing a second thread nondeterministically. */
+static int stat_fault_fd = -1, stat_fault_call, stat_fault_seen;
+static bool stat_fault_owner;
+static int fixture_fstat(int fd, struct stat *st) {
+    int result = fstat(fd, st);
+    if (result == 0 && fd == stat_fault_fd && ++stat_fault_seen == stat_fault_call) {
+        if (stat_fault_owner)
+            st->st_uid = geteuid() == 0 ? 1 : 0;
+        else
+            st->st_ino ^= 1;
+    }
+    return result;
+}
+#define fstat fixture_fstat
 #define access_code_generate fixture_generate
 #define write fixture_write
 #define fsync fixture_fsync
 #define renameat fixture_renameat
 #include "../../server/access_tokens.c"
+#undef fstat
 #undef access_code_generate
 #undef write
 #undef fsync
@@ -606,12 +624,171 @@ static void full_capacity(void) {
     cleanup(directory, s);
 }
 
+static void descriptor_capabilities(void) {
+    char root[] = "/tmp/atrinik-access-fd-test-XXXXXX";
+    assert(mkdtemp(root));
+    int parent = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(parent >= 3 && flock(parent, LOCK_EX | LOCK_NB) == 0);
+    int retained = access_state_lock_fd(parent);
+    assert(retained >= 3 && retained != parent);
+    assert(fcntl(retained, F_GETFD) & FD_CLOEXEC);
+    struct stat original, copy;
+    assert(fstat(parent, &original) == 0 && fstat(retained, &copy) == 0);
+    assert(original.st_dev == copy.st_dev && original.st_ino == copy.st_ino);
+
+    /* The child borrows the wrapper's already locked open-file description.
+     * Its close must not release the supervisor's lock. */
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        int borrowed = access_state_lock_fd(parent);
+        if (borrowed < 0)
+            _exit(1);
+        access_state_unlock(borrowed);
+        _exit(0);
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    int independent = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(independent >= 3 && flock(independent, LOCK_EX | LOCK_NB) < 0);
+    assert(errno == EWOULDBLOCK || errno == EAGAIN);
+    assert(access_state_lock_fd(independent) < 0);
+    close(independent);
+
+    /* Ordinary path consumers still reject proc magic and arbitrary links. */
+    char proc[128], child_path[256], moved[256];
+    snprintf(proc, sizeof(proc), "/proc/self/fd/%d", parent);
+    assert(access_state_lock(proc) < 0);
+    snprintf(child_path, sizeof(child_path), "%s/access-tokens", proc);
+    assert(!access_store_absent(child_path));
+    access_store_t *store = NULL, *other = NULL;
+    assert(access_store_open(&store, child_path, identity, true, true) == ACCESS_UNAVAILABLE);
+    assert(access_store_absent_at(retained, "access-tokens"));
+    assert(access_store_open_at(&store, retained, "access-tokens", identity, true, false) ==
+           ACCESS_UNAVAILABLE && store == NULL);
+    assert(mkdirat(parent, "access-tokens", 0700) == 0);
+    assert(!access_store_absent_at(retained, "access-tokens"));
+    assert(access_store_open_at(&store, retained, "access-tokens", identity, true, true) ==
+           ACCESS_COMMITTED);
+    assert(access_store_open_at(&other, retained, "access-tokens", identity, true, false) ==
+           ACCESS_UNAVAILABLE && other == NULL);
+    assert(access_store_status(store).revision == 1);
+    access_store_close(store);
+    assert(access_store_open_at(&store, retained, "access-tokens", identity, true, false) ==
+           ACCESS_COMMITTED);
+    access_result_t issued = access_store_issue(store, request1, revision(store), "Descriptor",
+                                               false, 0, 100, accepted, NULL);
+    assert(issued.outcome == ACCESS_COMMITTED);
+    access_token_ref_t ref;
+    assert(access_store_authorize(store, issued.code, identity, 101, &ref) == ACCESS_COMMITTED);
+    uint64_t saved_revision = revision(store);
+    access_result_cleanse(&issued);
+    access_store_close(store);
+
+    const char *bad_leaves[] = {NULL, "", ".", "..", "/access-tokens", "a/b", "a/../b"};
+    for (size_t i = 0; i < sizeof(bad_leaves) / sizeof(*bad_leaves); i++) {
+        assert(!access_store_absent_at(retained, bad_leaves[i]));
+        assert(access_store_open_at(&store, retained, bad_leaves[i], identity, true, true) ==
+               ACCESS_UNAVAILABLE && store == NULL);
+    }
+    assert(symlinkat("access-tokens", parent, "linked") == 0);
+    assert(symlinkat("missing", parent, "dangling") == 0);
+    for (size_t i = 0; i < 2; i++) {
+        const char *name = i ? "dangling" : "linked";
+        assert(!access_store_absent_at(retained, name));
+        assert(access_store_open_at(&store, retained, name, identity, true, false) ==
+               ACCESS_UNAVAILABLE && store == NULL);
+        assert(unlinkat(parent, name, 0) == 0);
+    }
+    assert(fchmodat(parent, "access-tokens", 0750, 0) == 0);
+    assert(access_store_open_at(&store, retained, "access-tokens", identity, true, false) ==
+           ACCESS_UNAVAILABLE);
+    assert(fchmodat(parent, "access-tokens", 0700, 0) == 0);
+
+    /* Replacing the parent pathname cannot redirect child reads/writes. */
+    snprintf(moved, sizeof(moved), "%s-moved", root);
+    assert(rename(root, moved) == 0 && mkdir(root, 0700) == 0);
+    assert(access_store_open_at(&store, retained, "access-tokens", identity, true, false) ==
+           ACCESS_COMMITTED);
+    assert(access_store_status(store).revision == saved_revision);
+    assert(access_store_flush_for_shutdown(store) == ACCESS_COMMITTED);
+    access_store_close(store);
+    snprintf(child_path, sizeof(child_path), "%s/access-tokens", root);
+    assert(access_store_absent(child_path));
+    assert(rmdir(root) == 0);
+    assert(unlinkat(parent, "access-tokens/access-tokens.snapshot", 0) == 0);
+    assert(unlinkat(parent, "access-tokens", AT_REMOVEDIR) == 0);
+    independent = open(moved, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(independent >= 3);
+    close(parent);
+    assert(flock(independent, LOCK_EX | LOCK_NB) < 0);
+    access_state_unlock(retained);
+    assert(flock(independent, LOCK_EX | LOCK_NB) == 0);
+    close(independent);
+    assert(rmdir(moved) == 0);
+}
+
+static void descriptor_rejections(void) {
+    char root[] = "/tmp/atrinik-access-fd-negative-XXXXXX";
+    assert(mkdtemp(root));
+    int fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(fd >= 3);
+    assert(access_state_lock_fd(-1) < 0 && access_state_lock_fd(0) < 0 &&
+           access_state_lock_fd(1) < 0 && access_state_lock_fd(2) < 0);
+    int stale = dup(fd);
+    assert(stale >= 3 && close(stale) == 0 && access_state_lock_fd(stale) < 0);
+    int regular = openat(fd, "file", O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    assert(regular >= 3 && access_state_lock_fd(regular) < 0);
+    assert(!access_store_absent_at(regular, "missing"));
+    close(regular);
+    int pipes[2];
+    assert(pipe(pipes) == 0 && access_state_lock_fd(pipes[0]) < 0);
+    close(pipes[0]);
+    close(pipes[1]);
+    int pathonly = open(root, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    assert(pathonly >= 3 && access_state_lock_fd(pathonly) < 0);
+    close(pathonly);
+    const mode_t modes[] = {0755, 0750, 0770, 0707, 01700};
+    access_store_t *store = NULL;
+    for (size_t i = 0; i < sizeof(modes) / sizeof(*modes); i++) {
+        assert(fchmod(fd, modes[i]) == 0 && access_state_lock_fd(fd) < 0);
+        assert(!access_store_absent_at(fd, "missing"));
+        assert(access_store_open_at(&store, fd, "missing", identity, true, true) ==
+               ACCESS_UNAVAILABLE && store == NULL);
+    }
+    assert(fchmod(fd, 0700) == 0);
+    stat_fault_fd = fd;
+    stat_fault_call = 1;
+    stat_fault_seen = 0;
+    stat_fault_owner = true;
+    assert(access_state_lock_fd(fd) < 0);
+    stat_fault_seen = 0;
+    assert(!access_store_absent_at(fd, "missing"));
+    stat_fault_seen = 0;
+    assert(access_store_open_at(&store, fd, "missing", identity, true, true) == ACCESS_UNAVAILABLE);
+    stat_fault_owner = false;
+    stat_fault_call = 2;
+    stat_fault_seen = 0;
+    assert(access_state_lock_fd(fd) < 0);
+    stat_fault_seen = 0;
+    assert(!access_store_absent_at(fd, "missing"));
+    stat_fault_seen = 0;
+    assert(access_store_open_at(&store, fd, "missing", identity, true, true) == ACCESS_UNAVAILABLE);
+    stat_fault_fd = -1;
+    assert(unlinkat(fd, "file", 0) == 0);
+    close(fd);
+    assert(rmdir(root) == 0);
+}
+
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--capacity")) {
         full_capacity();
         puts("1024-token outage capacity passed");
         return 0;
     }
+    descriptor_capabilities();
+    descriptor_rejections();
+    routes = 0;
     basic();
     crash_recovery();
     fault_case(&fail_write, false);
