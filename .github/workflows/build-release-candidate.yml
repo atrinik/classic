@@ -196,9 +196,12 @@ jobs:
       - name: Build the extracted unified library and exact-version consumer
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          ATRINIK_CLASSIC_TLS_PREFIX: /opt/atrinik/tls
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libidn2-dev libssl-dev zlib1g-dev
+          sudo apt-get install -y build-essential ca-certificates cmake curl libidn2-dev ninja-build perl pkg-config python3 zlib1g-dev
+          sudo python3 tools/ci/bootstrap_classic_tls.py --jobs 2
+          python3 tools/ci/bootstrap_classic_tls.py --verify-only
           mkdir -p build/extracted
           tar -xzf \
             "build/release/atrinik-classic-libatrinik-${RELEASE_VERSION}.tar.gz" \

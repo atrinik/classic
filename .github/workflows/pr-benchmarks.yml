@@ -183,6 +183,9 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/pr-benchmarks.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/bootstrap_classic_tls.py \
+            --material tools/ci/classic_tls.lock.json \
+            --material tools/ci/prepare_classic_tls.sh \
             --material client/tools/benchmark_lighting_regression.py \
             --material client/tools/benchmark_movement_regression.py \
             --material client/tools/movement_benchmark_schema.py \
@@ -202,9 +205,15 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache/client-benchmark"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache/client-benchmark"
+      - name: Bootstrap the immutable private Classic TLS cohort
+        run: >-
+          tools/ci/prepare_classic_tls.sh "${GITHUB_WORKSPACE}"
+          "${CLASSIC_LINUX_IMAGE}" "${RUNNER_TEMP}/classic-tls"
       - name: Build and compare the selected client probes
         run: |
           docker run --rm \
+            --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
+            --volume "${RUNNER_TEMP}/classic-tls:/opt/atrinik/tls:ro" \
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \
@@ -273,6 +282,9 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/pr-benchmarks.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/bootstrap_classic_tls.py \
+            --material tools/ci/classic_tls.lock.json \
+            --material tools/ci/prepare_classic_tls.sh \
             --material server/CMakeLists.txt \
             --material server/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -287,9 +299,15 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache/server-benchmark"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache/server-benchmark"
+      - name: Bootstrap the immutable private Classic TLS cohort
+        run: >-
+          tools/ci/prepare_classic_tls.sh "${GITHUB_WORKSPACE}"
+          "${CLASSIC_LINUX_IMAGE}" "${RUNNER_TEMP}/classic-tls"
       - name: Build and compare the server content-loader probe
         run: |
           docker run --rm \
+            --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
+            --volume "${RUNNER_TEMP}/classic-tls:/opt/atrinik/tls:ro" \
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \

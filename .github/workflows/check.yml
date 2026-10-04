@@ -222,6 +222,9 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/bootstrap_classic_tls.py \
+            --material tools/ci/classic_tls.lock.json \
+            --material tools/ci/prepare_classic_tls.sh \
             --material protocol/CMakeLists.txt \
             --material libatrinik/CMakeLists.txt \
             --material libatrinik/CMakePresets.json \
@@ -237,9 +240,15 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache/core"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache/core"
+      - name: Bootstrap the immutable private Classic TLS cohort
+        run: >-
+          tools/ci/prepare_classic_tls.sh "${GITHUB_WORKSPACE}"
+          "${CLASSIC_LINUX_IMAGE}" "${RUNNER_TEMP}/classic-tls"
       - name: Build and test core packages in the pinned environment
         run: |
           docker run --rm \
+            --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
+            --volume "${RUNNER_TEMP}/classic-tls:/opt/atrinik/tls:ro" \
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \
@@ -741,6 +750,9 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/bootstrap_classic_tls.py \
+            --material tools/ci/classic_tls.lock.json \
+            --material tools/ci/prepare_classic_tls.sh \
             --material server/CMakeLists.txt \
             --material server/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -755,9 +767,15 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache/server"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache/server"
+      - name: Bootstrap the immutable private Classic TLS cohort
+        run: >-
+          tools/ci/prepare_classic_tls.sh "${GITHUB_WORKSPACE}"
+          "${CLASSIC_LINUX_IMAGE}" "${RUNNER_TEMP}/classic-tls"
       - name: Validate, build, and test
         run: |
           docker run --rm \
+            --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
+            --volume "${RUNNER_TEMP}/classic-tls:/opt/atrinik/tls:ro" \
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \
@@ -843,6 +861,9 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/bootstrap_classic_tls.py \
+            --material tools/ci/classic_tls.lock.json \
+            --material tools/ci/prepare_classic_tls.sh \
             --material tools/ci/run_gpu_coverage.sh \
             --material client/CMakeLists.txt \
             --material client/CMakePresets.json \
@@ -858,9 +879,15 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache/client"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache/client"
+      - name: Bootstrap the immutable private Classic TLS cohort
+        run: >-
+          tools/ci/prepare_classic_tls.sh "${GITHUB_WORKSPACE}"
+          "${CLASSIC_LINUX_IMAGE}" "${RUNNER_TEMP}/classic-tls"
       - name: Validate, build, and test
         run: |
           docker run --rm \
+            --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
+            --volume "${RUNNER_TEMP}/classic-tls:/opt/atrinik/tls:ro" \
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \
@@ -1029,6 +1056,9 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/bootstrap_classic_tls.py \
+            --material tools/ci/classic_tls.lock.json \
+            --material tools/ci/prepare_classic_tls.sh \
             --material CMakeLists.txt \
             --material CMakePresets.json \
             --material protocol/CMakeLists.txt \
@@ -1047,9 +1077,15 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/classic-ccache/integrated"
           chmod 1777 "${RUNNER_TEMP}/classic-ccache/integrated"
+      - name: Bootstrap the immutable private Classic TLS cohort
+        run: >-
+          tools/ci/prepare_classic_tls.sh "${GITHUB_WORKSPACE}"
+          "${CLASSIC_LINUX_IMAGE}" "${RUNNER_TEMP}/classic-tls"
       - name: Build shared Release graph
         run: |
           docker run --rm \
+            --env ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls \
+            --volume "${RUNNER_TEMP}/classic-tls:/opt/atrinik/tls:ro" \
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \

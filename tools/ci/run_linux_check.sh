@@ -79,6 +79,11 @@ if [[ ${component} == server || ${component} == server-benchmark || ${component}
   )
 fi
 
+# All native Classic dependency consumers select the verified private cohort.
+# Keep Python and every system executable on its existing SSL/provider setup.
+export ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls
+python3 "${source_root}/tools/ci/bootstrap_classic_tls.py" --verify-only
+
 ccache --zero-stats >/dev/null
 
 case "${component}" in

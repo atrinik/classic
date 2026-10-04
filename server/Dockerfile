@@ -1,9 +1,21 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
+FROM ubuntu@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78 AS tls
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential ca-certificates cmake curl libidn2-dev ninja-build \
+        perl pkg-config python3 zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY tools/ci/bootstrap_classic_tls.py tools/ci/classic_tls.lock.json ./tools/ci/
+RUN python3 tools/ci/bootstrap_classic_tls.py --jobs 2
+
 FROM ubuntu@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78 AS build
 
 ARG ATRINIK_PACKAGE_VERSION
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive ATRINIK_CLASSIC_TLS_PREFIX=/opt/atrinik/tls
+COPY --from=tls /opt/atrinik/tls /opt/atrinik/tls
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -58,6 +70,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 atrinik
 
+COPY --from=tls /opt/atrinik/tls /opt/atrinik/tls
+
 WORKDIR /opt/atrinik
 COPY --from=build /src/server/runtime/content/maps ./maps
 RUN rm ./maps/python/events/init/documentation.py
@@ -81,7 +95,7 @@ COPY --chmod=0755 server/docker/server-entrypoint.sh /usr/local/bin/atrinik-serv
 COPY --chmod=0755 server/docker/server-healthcheck.sh /usr/local/bin/atrinik-server-healthcheck
 
 RUN mkdir -p server/data \
-    && chown -R atrinik:atrinik /opt/atrinik
+    && chown -R atrinik:atrinik /opt/atrinik/server /opt/atrinik/maps
 USER atrinik
 WORKDIR /opt/atrinik/server
 EXPOSE 1730/udp
