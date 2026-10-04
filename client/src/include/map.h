@@ -664,7 +664,7 @@ extern bool widget_map_edge_lighting_test(void);
 /** Verify ground coverage through the production MAP2 and GPU draw path. */
 extern bool widget_map_ground_coverage_test(void);
 /** Compare soft-clear fades with their last authorized rendered contribution. */
-extern bool widget_map_soft_clear_fade_test(const uint8_t *snapshot, size_t snapshot_size);
+extern bool widget_map_soft_clear_fade_test(uint8_t *snapshot, size_t snapshot_size);
 /** Verify sparse scroll and fading FOW items through the production compositor. */
 extern bool widget_map_floor_composition_test(void);
 #endif

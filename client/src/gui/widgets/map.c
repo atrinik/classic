@@ -10155,7 +10155,7 @@ static bool map_soft_clear_pixels(SDL_Surface *capture, int pixels[3][2], uint8_
 }
 
 /** Prove ordinary soft-clear continuity using pre-clear contributors, not FOW colors. */
-bool widget_map_soft_clear_fade_test(const uint8_t *snapshot, size_t snapshot_size) {
+bool widget_map_soft_clear_fade_test(uint8_t *snapshot, size_t snapshot_size) {
 #define SOFT_CLEAR_CHECK(expression)                                                           \
     do {                                                                                        \
         if (!(expression)) {                                                                    \
