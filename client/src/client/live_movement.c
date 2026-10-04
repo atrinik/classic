@@ -26,7 +26,6 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -138,11 +137,11 @@ static void terminal(bool success, const char *reason) {
     json_string(reason);
     fprintf(report,
             ",\"arrivals\":%" PRIu64 ",\"presented_checkpoints\":%" PRIu64
-            ",\"expected_checkpoints\":%zu,\"frames\":%" PRIu64 ",\"presented_frames\":%" PRIu64
+            ",\"expected_checkpoints\":%" PRIu64 ",\"frames\":%" PRIu64 ",\"presented_frames\":%" PRIu64
             ",\"elapsed_us\":%" PRIu64 "}\n",
             arrivals,
             presented_checkpoints,
-            live_movement_route_checkpoint_count(route),
+            (uint64_t)live_movement_route_checkpoint_count(route),
             frames,
             presented_frames,
             elapsed_us());
@@ -166,12 +165,14 @@ bool live_movement_initialize(const char *route_path, const char *report_path) {
         return false;
     }
     started_us = datetime_monotonic_us();
-    struct timespec utc;
-    if (timespec_get(&utc, TIME_UTC) != TIME_UTC || utc.tv_sec < 0) {
+    struct timeval utc;
+    if (gettimeofday(&utc, NULL) != 0 || utc.tv_sec < 0 || utc.tv_usec < 0 ||
+        utc.tv_usec >= 1000000 ||
+        (uint64_t)utc.tv_sec > (UINT64_MAX - (uint64_t)utc.tv_usec) / UINT64_C(1000000)) {
         fprintf(stderr, "live movement cannot establish its UTC time anchor\n");
         return false;
     }
-    started_utc_us = (uint64_t)utc.tv_sec * UINT64_C(1000000) + (uint64_t)utc.tv_nsec / 1000;
+    started_utc_us = (uint64_t)utc.tv_sec * UINT64_C(1000000) + (uint64_t)utc.tv_usec;
     if (!live_movement_route_load(route_path, &route, error, sizeof(error))) {
         fprintf(stderr, "live movement: %s\n", error);
         return false;
@@ -265,11 +266,11 @@ static bool capture_checkpoints_poll(uint64_t now) {
         json_string(result->path);
         fprintf(report,
                 ",\"sha256\":\"%s\",\"width\":%" PRIu32 ",\"height\":%" PRIu32
-                ",\"size_bytes\":%zu,\"map_path\":",
+                ",\"size_bytes\":%" PRIu64 ",\"map_path\":",
                 result->sha256,
                 result->width,
                 result->height,
-                result->size_bytes);
+                (uint64_t)result->size_bytes);
         json_string(checkpoint->map);
         fprintf(report,
                 ",\"x\":%u,\"y\":%u,\"map_publication_generation\":%" PRIu64
@@ -385,8 +386,8 @@ void live_movement_ready(void) {
             started_utc_us);
     json_string(live_movement_route_sha256(route));
     fprintf(report,
-            ",\"route_checkpoints\":%zu,\"source_revision\":",
-            live_movement_route_checkpoint_count(route));
+            ",\"route_checkpoints\":%" PRIu64 ",\"source_revision\":",
+            (uint64_t)live_movement_route_checkpoint_count(route));
     json_string(ATRINIK_BENCHMARK_REVISION);
     fprintf(report,
             ",\"source_dirty\":%s,\"gpu_backend\":",
@@ -501,9 +502,9 @@ void live_movement_rejected_map(const uint8_t *data, size_t len, size_t cursor_o
     char reason[192];
     snprintf(reason,
              sizeof(reason),
-             "rejected malformed MAP payload_len=%zu cursor_offset=%zu capture=%s",
-             len,
-             cursor_offset,
+             "rejected malformed MAP payload_len=%" PRIu64 " cursor_offset=%" PRIu64 " capture=%s",
+             (uint64_t)len,
+             (uint64_t)cursor_offset,
              capture_status);
     terminal(false, reason);
 }
@@ -629,7 +630,9 @@ void live_movement_tick(void) {
         arrival_x = observation.x;
         arrival_y = observation.y;
         arrivals++;
-        fprintf(report, "{\"type\":\"arrival\",\"index\":%zu,\"map_path\":", arrival_index);
+        fprintf(report,
+                "{\"type\":\"arrival\",\"index\":%" PRIu64 ",\"map_path\":",
+                (uint64_t)arrival_index);
         json_string(observation.map);
         fprintf(report,
                 ",\"x\":%u,\"y\":%u,\"publication_generation\":%" PRIu64 ",\"elapsed_us\":%" PRIu64
@@ -744,8 +747,8 @@ void live_movement_frame_finished(bool presented, const client_keepalive_statist
             ",\"queue_budget_yields_total\":%" PRIu64 ",\"keepalive_tx_total\":%" PRIu64
             ",\"keepalive_rx_total\":%" PRIu64 ",\"keepalive_timeout_total\":%" PRIu64
             ",\"keepalive_last_rtt_us\":%" PRIu64 "},\"assets\":{"
-            "\"installed_total\":%" PRIu64 ",\"pending\":%zu,\"admitted\":%zu,"
-            "\"unprepared\":%zu},\"gpu_invalidation_totals\":[",
+            "\"installed_total\":%" PRIu64 ",\"pending\":%" PRIu64 ",\"admitted\":%" PRIu64 ","
+            "\"unprepared\":%" PRIu64 "},\"gpu_invalidation_totals\":[",
             gpu.resource_creations,
             primary_gpu_generation,
             client_socket_active() ? "true" : "false",
@@ -761,9 +764,9 @@ void live_movement_frame_finished(bool presented, const client_keepalive_statist
             keepalive->timed_out,
             keepalive->last_rtt_us,
             assets.installed_total,
-            assets.pending,
-            assets.admitted,
-            assets.unprepared);
+            (uint64_t)assets.pending,
+            (uint64_t)assets.admitted,
+            (uint64_t)assets.unprepared);
     for (size_t i = 0; i < GPU_RENDERER_MAP_INVALIDATION_REASON_NUM; i++)
         fprintf(report, "%s%" PRIu64, i != 0 ? "," : "", gpu.map_invalidation_counts[i]);
     uint64_t game_seconds = 0;
@@ -823,10 +826,10 @@ void live_movement_frame_finished(bool presented, const client_keepalive_statist
         presented_checkpoints++;
         step_started_us = now;
         fprintf(report,
-                "{\"type\":\"checkpoint_presented\",\"index\":%zu,"
+                "{\"type\":\"checkpoint_presented\",\"index\":%" PRIu64 ","
                 "\"map_publication_generation\":%" PRIu64 ",\"gpu_published_generation\":%" PRIu64
                 ",\"elapsed_us\":%" PRIu64 "}\n",
-                arrival_index,
+                (uint64_t)arrival_index,
                 socket_command_map_publication_generation(),
                 primary_gpu_generation,
                 elapsed_us());
