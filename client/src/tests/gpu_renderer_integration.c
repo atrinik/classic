@@ -1258,7 +1258,7 @@ static bool transparent_owner_order_frame(SDL_Surface *floor,
     SDL_FRect destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
     const uint16_t radiance[3] = {32, 512, 1024};
     bool success = gpu_renderer_begin_frame() && gpu_renderer_map_begin(map_size, map_size);
-    for (uint8_t owner = 0; owner < SDL_arraysize(radiance); owner++) {
+    for (size_t owner = 0; owner < SDL_arraysize(radiance); owner++) {
         lighting_vertex_t quad[4] = {
             {.x = 0,
              .y = 0,
@@ -1285,7 +1285,7 @@ static bool transparent_owner_order_frame(SDL_Surface *floor,
              .green = radiance[owner],
              .blue = radiance[owner]},
         };
-        gpu_renderer_map_light_quad(owner, quad);
+        gpu_renderer_map_light_quad((uint8_t)owner, quad);
     }
     gpu_renderer_map_set_owner(0, map_size / 2, false);
     success = success && gpu_renderer_draw_surface(floor, NULL, &destination);
