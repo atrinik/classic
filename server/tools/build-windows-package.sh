@@ -72,7 +72,7 @@ else
   python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
   python3 tools/dependencies.py verify
 fi
-provenance_arguments=(--content-runtime runtime/content)
+provenance_arguments=()
 if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
   provenance_arguments+=(
     --source-profile-qualification "${qualification}"
@@ -81,7 +81,7 @@ if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
     --profile-resources "${profile_resources}"
   )
 fi
-python3 ../client/tools/verify_gpu_fixture_provenance.py "${provenance_arguments[@]}"
+python3 ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runtime/content "${provenance_arguments[@]}"
 
 dependency_arguments=()
 native_compiler_arguments=()
