@@ -109,14 +109,14 @@ def record(name="dense-17x17-five-depth-1080p"):
     if animation:
         map_statistics.update({
             "full_redraws": 1, "damage_frames": 40,
-            "damage_pixels": 100, "damage_bytes": 800,
+            "damage_pixels": 100, "damage_bytes": 1200,
             "retained_frames": 43, "skipped_passes": 3,
             "dirty_commands": 1, "dirty_pixels": 200,
-            "dirty_bytes": 1600,
+            "dirty_bytes": 2400,
             "render_commands": 100, "compiled_render_commands": 40,
             "reused_render_commands": 60, "peak_render_commands": 10,
             "peak_active_levels": depths,
-            "last_dirty": {"commands": 1, "pixels": 100, "bytes": 800,
+            "last_dirty": {"commands": 1, "pixels": 100, "bytes": 1200,
                             "rect": [0, 0, 10, 10],
                             "invalidation_reason": "animation"},
             "invalidation_reasons": {
@@ -127,6 +127,7 @@ def record(name="dense-17x17-five-depth-1080p"):
             },
         })
         steady_state.update({
+            "commands": 140, "batches": 120, "draws": 120,
             "uploads": 119, "upload_bytes": 42_224,
             "source_uploads": 40, "source_upload_bytes": 40_960,
             "instance_uploads": 40, "instance_upload_bytes": 640,

@@ -2096,7 +2096,7 @@ void gpu_renderer_statistics_map_frame(bool full_redraw,
     statistics.map_skipped_passes += skipped_pass;
     uint64_t dirty_pixels =
         (uint64_t)diagnostics->dirty_width * (uint64_t)diagnostics->dirty_height;
-    uint64_t dirty_bytes = dirty_pixels <= UINT64_MAX / 8U ? dirty_pixels * 8U : UINT64_MAX;
+    uint64_t dirty_bytes = dirty_pixels <= UINT64_MAX / 12U ? dirty_pixels * 12U : UINT64_MAX;
     statistics.map_dirty_commands += diagnostics->dirty_commands;
     statistics.map_dirty_pixels += dirty_pixels;
     statistics.map_dirty_bytes += dirty_bytes;

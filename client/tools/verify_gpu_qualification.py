@@ -520,8 +520,8 @@ def validate_record(record: dict) -> str:
     _require(map_statistics["full_redraws"] + map_statistics["retained_frames"] ==
              measured_map_frames,
              "map full/retained frame accounting is inconsistent")
-    _require(map_statistics["damage_bytes"] == map_statistics["damage_pixels"] * 8 and
-             map_statistics["dirty_bytes"] == map_statistics["dirty_pixels"] * 8 and
+    _require(map_statistics["damage_bytes"] == map_statistics["damage_pixels"] * 12 and
+             map_statistics["dirty_bytes"] == map_statistics["dirty_pixels"] * 12 and
              map_statistics["skipped_passes"] <= map_statistics["retained_frames"],
              "map damage accounting is inconsistent")
     last_dirty = map_statistics["last_dirty"]
@@ -536,7 +536,7 @@ def validate_record(record: dict) -> str:
              all(type(value) is int and value >= 0 for value in rectangle),
              "map last-dirty rectangle is invalid")
     _require(last_dirty["pixels"] == rectangle[2] * rectangle[3] and
-             last_dirty["bytes"] == last_dirty["pixels"] * 8 and
+             last_dirty["bytes"] == last_dirty["pixels"] * 12 and
              last_dirty["invalidation_reason"] in MAP_INVALIDATION_REASONS,
              "map last-dirty accounting is inconsistent")
     invalidation_reasons = map_statistics["invalidation_reasons"]
@@ -547,8 +547,9 @@ def validate_record(record: dict) -> str:
     _require(sum(invalidation_reasons.values()) == measured_map_frames,
              "map invalidation reason accounting is inconsistent")
     map_passes = map_statistics["full_redraws"] + map_statistics["damage_frames"]
-    _require(steady["batches"] >= map_passes and
-             steady["slot_uniform_uploads"] == steady["batches"] - map_passes,
+    non_instance_batches = map_passes + map_statistics["damage_frames"]
+    _require(steady["batches"] >= non_instance_batches and
+             steady["slot_uniform_uploads"] == steady["batches"] - non_instance_batches,
              "slot-uniform uploads do not match world batch submissions")
     _require(steady["slot_uniform_upload_bytes"] >= steady["slot_uniform_uploads"] * 16 and
              steady["slot_uniform_upload_bytes"] <= steady["slot_uniform_uploads"] * 1024,

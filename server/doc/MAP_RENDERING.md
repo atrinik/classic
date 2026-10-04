@@ -10,7 +10,8 @@ SDL GPU device and uses its GPU-backed 2D renderer for the complete window,
 with raw SDL_GPU passes for the ordered map albedo/owner and integer
 light/tone stages. Supported production backends are Vulkan, Direct3D 12, and
 Metal on hardware devices that provide RGBA8 and R32_UINT render targets plus
-fragment storage buffers and a D32_FLOAT painter-rank depth attachment. There is no window-surface presentation,
+fragment storage buffers and a D32_FLOAT painter-rank depth attachment. There
+is no window-surface presentation,
 CPU-completed frame, renderer selection, or software fallback.
 
 Decoded faces, immutable effects, glyphs, region maps, minimap output, and
@@ -2244,7 +2245,9 @@ must satisfy these hard formulas, including pitch and allocator overhead:
 The implementation exposes GPU counters for command construction,
 batches/draws, source and compact-light uploads, resource creation/destruction,
 albedo/owner work, final light/tone work, UI, submission, fenced completion,
-present wait, retained bytes, recovery, and fallbacks. After warmup an unchanged
+present wait, retained bytes, recovery, and fallbacks. Damage/dirty byte counts
+describe the logical albedo/owner/rank footprint (12 bytes per pixel), separately
+from actual upload traffic. After warmup an unchanged
 scene has no source/effect upload or resource churn. Idle after fades and timed
 buckets settle has no visibility, shadow, or map-state reconstruction work.
 Player screenshots enqueue a completed-frame GPU copy and return immediately;

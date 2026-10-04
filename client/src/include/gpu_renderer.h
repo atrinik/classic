@@ -100,11 +100,13 @@ typedef struct gpu_renderer_statistics {
     uint64_t map_full_redraws;
     uint64_t map_damage_frames;
     uint64_t map_damage_pixels;
+    /** Logical albedo/owner/rank footprint (12 bytes/pixel), not transfer traffic. */
     uint64_t map_damage_bytes;
     uint64_t map_retained_frames;
     uint64_t map_skipped_passes;
     uint64_t map_dirty_commands;
     uint64_t map_dirty_pixels;
+    /** Dirty-region albedo/owner/rank footprint, including full light resolves. */
     uint64_t map_dirty_bytes;
     uint64_t map_published_generation;
     uint64_t map_source_generation;

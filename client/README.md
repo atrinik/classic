@@ -35,7 +35,8 @@
  module decoders are deliberately absent. Sound effects and music are required
  on every supported platform. The production client requires a hardware GPU
  supported by SDL_GPU through Vulkan, Direct3D 12, or Metal, including RGBA8
- and R32_UINT render-target support plus fragment storage buffers. There is no
+ and R32_UINT render-target support, D32_FLOAT depth attachments, and fragment
+ storage buffers. There is no
  software renderer or fallback;
  startup reports the selected backend, device, and driver failure and exits if
  the required GPU contract is unavailable.

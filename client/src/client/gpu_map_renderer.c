@@ -3708,7 +3708,7 @@ bool gpu_map_renderer_end(void) {
     gpu_map_target_contract_commit(target);
     bool damage_frame = !final_full_redraw && world_frame_damage_valid;
     size_t damage_pixels = damage_frame ? (size_t)world_frame_damage.w * (size_t)world_frame_damage.h : 0;
-    size_t damage_bytes = damage_pixels <= SIZE_MAX / 8U ? damage_pixels * 8U : SIZE_MAX;
+    size_t damage_bytes = damage_pixels <= SIZE_MAX / 12U ? damage_pixels * 12U : SIZE_MAX;
     gpu_renderer_map_frame_diagnostics_t diagnostics = gpu_map_frame_diagnostics(target,
                                                                                  target_was_published,
                                                                                  light_changed,
