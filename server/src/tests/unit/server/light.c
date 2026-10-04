@@ -64,6 +64,59 @@ static void add_roof_surface(mapstruct *map, int x, int y) {
     ck_assert(object_is_roof_surface(roof));
 }
 
+static void assign_temporary_unique_path(mapstruct *map,
+                                         char *path,
+                                         size_t path_size,
+                                         const char *label) {
+    int written = snprintf(path, path_size, "/tmp/atrinik-light-%s-XXXXXX", label);
+    ck_assert_int_ge(written, 0);
+    ck_assert_uint_lt((size_t)written, path_size);
+
+    int fd = mkstemp(path);
+    ck_assert_int_ge(fd, 0);
+    ck_assert_int_eq(close(fd), 0);
+    ck_assert_int_eq(unlink(path), 0);
+
+    map->map_flags |= MAP_FLAG_UNIQUE;
+    FREE_AND_COPY_HASH(map->path, path);
+}
+
+typedef struct test_light_snapshot {
+    int32_t scalar;
+    int32_t positive;
+    int64_t color[3];
+    int64_t color_weight;
+} test_light_snapshot;
+
+static void snapshot_local_light(const mapstruct *map, test_light_snapshot *snapshot) {
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            const MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+            size_t index = (size_t)y * MAP_WIDTH(map) + x;
+            snapshot[index].scalar = space->light_source_value;
+            snapshot[index].positive = space->light_source_positive_value;
+            memcpy(snapshot[index].color, space->light_source_color, sizeof(snapshot[index].color));
+            snapshot[index].color_weight = space->light_source_color_weight;
+        }
+    }
+}
+
+static void assert_local_light_matches(const mapstruct *map,
+                                       const test_light_snapshot *snapshot) {
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            const MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+            size_t index = (size_t)y * MAP_WIDTH(map) + x;
+            ck_assert_int_eq(space->light_source_value, snapshot[index].scalar);
+            ck_assert_int_eq(space->light_source_positive_value, snapshot[index].positive);
+            ck_assert_mem_eq(space->light_source_color,
+                             snapshot[index].color,
+                             sizeof(snapshot[index].color));
+            ck_assert_int_eq(space->light_source_color_weight, snapshot[index].color_weight);
+        }
+    }
+}
+
 START_TEST(test_radial_light_profile_is_symmetric_monotonic_and_exact) {
     mapstruct *map = get_empty_map(11, 11);
     adjust_light_source(map, 5, 5, 3);
@@ -553,6 +606,171 @@ START_TEST(test_remove_light_source_list_accepts_swapped_map) {
 }
 END_TEST
 
+START_TEST(test_saved_dense_map_teardown_does_not_rebuild_light_per_object) {
+    enum { MAPS = 3, WIDTH = 24, HEIGHT = 24 };
+    object *active_before = active_objects;
+
+    for (int map_index = 0; map_index < MAPS; map_index++) {
+        mapstruct *map = get_empty_map(WIDTH, HEIGHT);
+        char path[HUGE_BUF];
+        char label[32];
+        snprintf(VS(label), "dense-%d", map_index);
+        assign_temporary_unique_path(map, VS(path), label);
+
+        map->in_memory = MAP_LOADING;
+        for (int y = 0; y < HEIGHT; y++) {
+            for (int x = 0; x < WIDTH; x++) {
+                object *floor = arch_get("water_still");
+                ck_assert_ptr_nonnull(floor);
+                floor->x = x;
+                floor->y = y;
+                ck_assert_ptr_eq(object_insert_map(floor, map, NULL, 0), floor);
+            }
+        }
+        map->in_memory = MAP_IN_MEMORY;
+
+        ck_assert_int_eq(new_save_map(map, 0), 0);
+        ck_assert_int_eq(map->in_memory, MAP_IN_MEMORY);
+        uint64_t rebuilds = light_rebuild_count_for_test();
+
+        free_map(map, 1);
+
+        ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+        ck_assert_int_eq(map->in_memory, MAP_SWAPPED);
+        ck_assert_ptr_null(map->spaces);
+        ck_assert_ptr_eq(active_objects, active_before);
+        delete_map(map);
+        ck_assert_int_eq(unlink(path), 0);
+    }
+}
+END_TEST
+
+START_TEST(test_map_teardown_withdraws_linked_light_and_invalidates_celestial_once) {
+    enum { WIDTH = 9, HEIGHT = 9 };
+    mapstruct *departing = get_empty_map(WIDTH, HEIGHT);
+    mapstruct *survivor = get_empty_map(WIDTH, HEIGHT);
+    test_light_snapshot baseline[WIDTH * HEIGHT];
+    link_stacked_maps(departing, survivor);
+    snapshot_local_light(survivor, baseline);
+
+    object *source = add_colored_light(departing, 4, 4, 3, UINT32_C(0x40a0ff));
+    ck_assert_ptr_nonnull(source);
+    MapSpace *lit = GET_MAP_SPACE_PTR(survivor, 4, 4);
+    ck_assert_int_gt(lit->light_source_value, baseline[4 * WIDTH + 4].scalar);
+    ck_assert_int_gt(lit->light_source_positive_value, baseline[4 * WIDTH + 4].positive);
+    ck_assert_int_gt(lit->light_source_color_weight, baseline[4 * WIDTH + 4].color_weight);
+
+    survivor->celestial_structure_revision = 41;
+    survivor->celestial_light_valid = true;
+    survivor->celestial_light_keyframe_valid = true;
+    uint64_t rebuilds = light_rebuild_count_for_test();
+
+    free_map(departing, 1);
+
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    assert_local_light_matches(survivor, baseline);
+    ck_assert_uint_eq(survivor->celestial_structure_revision, 42);
+    ck_assert(!survivor->celestial_light_valid);
+    ck_assert(!survivor->celestial_light_keyframe_valid);
+    ck_assert_ptr_null(survivor->tile_map[TILED_DOWN]);
+    ck_assert_ptr_null(departing->tile_map[TILED_UP]);
+    ck_assert_int_eq(departing->in_memory, MAP_SWAPPED);
+    ck_assert_ptr_null(departing->spaces);
+
+    delete_map(departing);
+    delete_map(survivor);
+}
+END_TEST
+
+START_TEST(test_successful_map_save_preserves_light_and_future_gameplay_rebuilds) {
+    mapstruct *map = get_empty_map(9, 9);
+    char path[HUGE_BUF];
+    assign_temporary_unique_path(map, VS(path), "save-preserves-live");
+
+    object *source = add_colored_light(map, 4, 4, 3, UINT32_C(0xff8040));
+    object *floor = arch_get("water_still");
+    ck_assert_ptr_nonnull(source);
+    ck_assert_ptr_nonnull(floor);
+    floor->x = 1;
+    floor->y = 1;
+    ck_assert_ptr_eq(object_insert_map(floor, map, NULL, 0), floor);
+
+    MapSpace *lit = GET_MAP_SPACE_PTR(map, 4, 4);
+    int32_t scalar = lit->light_source_value;
+    int32_t positive = lit->light_source_positive_value;
+    int64_t color[3];
+    memcpy(color, lit->light_source_color, sizeof(color));
+    int64_t color_weight = lit->light_source_color_weight;
+    uint64_t rebuilds = light_rebuild_count_for_test();
+
+    ck_assert_int_eq(new_save_map(map, 0), 0);
+
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    ck_assert_int_eq(map->in_memory, MAP_IN_MEMORY);
+    ck_assert_ptr_nonnull(map->spaces);
+    ck_assert_ptr_eq(source->map, map);
+    ck_assert_ptr_eq(floor->map, map);
+    ck_assert_ptr_nonnull(map->first_light);
+    ck_assert_int_eq(lit->light_source_value, scalar);
+    ck_assert_int_eq(lit->light_source_positive_value, positive);
+    ck_assert_mem_eq(lit->light_source_color, color, sizeof(color));
+    ck_assert_int_eq(lit->light_source_color_weight, color_weight);
+
+    object_remove(floor, 0);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    object_destroy(floor);
+
+    delete_map(map);
+    ck_assert_int_eq(unlink(path), 0);
+}
+END_TEST
+
+START_TEST(test_failed_map_save_preserves_live_objects_state_and_light) {
+    char directory[] = "/tmp/atrinik-light-save-failure-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+
+    mapstruct *map = get_empty_map(9, 9);
+    FREE_AND_COPY_HASH(map->path, "/tests/light-save-failure");
+    char invalid_path[HUGE_BUF];
+    int written = snprintf(VS(invalid_path), "%s/missing/runtime.map", directory);
+    ck_assert_int_ge(written, 0);
+    ck_assert_uint_lt((size_t)written, sizeof(invalid_path));
+    map->tmpname = xstrdup(invalid_path);
+
+    object *source = add_colored_light(map, 4, 4, 3, UINT32_C(0x8040ff));
+    object *floor = arch_get("water_still");
+    ck_assert_ptr_nonnull(source);
+    ck_assert_ptr_nonnull(floor);
+    floor->x = 1;
+    floor->y = 1;
+    ck_assert_ptr_eq(object_insert_map(floor, map, NULL, 0), floor);
+
+    test_light_snapshot baseline[9 * 9];
+    snapshot_local_light(map, baseline);
+    MapSpace *source_space = GET_MAP_SPACE_PTR(map, 4, 4);
+    MapSpace *floor_space = GET_MAP_SPACE_PTR(map, 1, 1);
+    object *source_first = source_space->first;
+    object *floor_first = floor_space->first;
+    uint64_t rebuilds = light_rebuild_count_for_test();
+
+    ck_assert_int_eq(new_save_map(map, 0), -1);
+
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    ck_assert_int_eq(map->in_memory, MAP_IN_MEMORY);
+    ck_assert_ptr_nonnull(map->spaces);
+    ck_assert_ptr_eq(source->map, map);
+    ck_assert_ptr_eq(floor->map, map);
+    ck_assert_ptr_eq(source_space->first, source_first);
+    ck_assert_ptr_eq(floor_space->first, floor_first);
+    ck_assert_ptr_nonnull(map->first_light);
+    assert_local_light_matches(map, baseline);
+
+    clean_tmp_map(map);
+    delete_map(map);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+
 START_TEST(test_light_level_interpolation) {
     ck_assert_uint_eq(light_level_from_raw(10), 23);
     ck_assert_uint_eq(light_level_from_raw(30), 63);
@@ -595,6 +813,12 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_light_mask_recalculates_around_opaque_cells);
     tcase_add_test(tc_core, test_loaded_map_light_check_is_idempotent);
     tcase_add_test(tc_core, test_remove_light_source_list_accepts_swapped_map);
+    tcase_add_test(tc_core, test_saved_dense_map_teardown_does_not_rebuild_light_per_object);
+    tcase_add_test(tc_core,
+                   test_map_teardown_withdraws_linked_light_and_invalidates_celestial_once);
+    tcase_add_test(tc_core,
+                   test_successful_map_save_preserves_light_and_future_gameplay_rebuilds);
+    tcase_add_test(tc_core, test_failed_map_save_preserves_live_objects_state_and_light);
 
     return s;
 }
