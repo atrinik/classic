@@ -19,7 +19,6 @@
 #include <arch.h>
 #include <object.h>
 #include <swap.h>
-#include <server_main.h>
 
 START_TEST(test_light_level_anchors) {
     ck_assert_uint_eq(light_level_from_raw(-1), 0);
@@ -66,10 +65,8 @@ static void add_roof_surface(mapstruct *map, int x, int y) {
     ck_assert(object_is_roof_surface(roof));
 }
 
-static void assign_temporary_unique_path(mapstruct *map,
-                                         char *path,
-                                         size_t path_size,
-                                         const char *label) {
+static void
+assign_temporary_unique_path(mapstruct *map, char *path, size_t path_size, const char *label) {
     int written = snprintf(path, path_size, "/tmp/atrinik-light-%s-XXXXXX", label);
     ck_assert_int_ge(written, 0);
     ck_assert_uint_lt((size_t)written, path_size);
@@ -103,8 +100,7 @@ static void snapshot_local_light(const mapstruct *map, test_light_snapshot *snap
     }
 }
 
-static void assert_local_light_matches(const mapstruct *map,
-                                       const test_light_snapshot *snapshot) {
+static void assert_local_light_matches(const mapstruct *map, const test_light_snapshot *snapshot) {
     for (int y = 0; y < MAP_HEIGHT(map); y++) {
         for (int x = 0; x < MAP_WIDTH(map); x++) {
             const MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
@@ -426,8 +422,8 @@ START_TEST(test_darkness_subtracts_achromatically_from_colored_light) {
     reverse_space->light_value = 40;
     uint16_t reverse_levels[3];
     test_light_radiance(reverse_space,
-                          reverse_space->light_value + reverse_space->light_source_value,
-                          reverse_levels);
+                        reverse_space->light_value + reverse_space->light_source_value,
+                        reverse_levels);
     ck_assert_uint_eq(reverse_levels[0], test_raw_to_radiance(40));
     ck_assert_uint_eq(reverse_levels[1], 0);
     ck_assert_uint_eq(reverse_levels[2], 0);
@@ -438,8 +434,8 @@ START_TEST(test_darkness_subtracts_achromatically_from_colored_light) {
     MapSpace *overlap_space = GET_MAP_SPACE_PTR(overlap, 4, 4);
     overlap_space->light_value = 40;
     test_light_radiance(overlap_space,
-                          overlap_space->light_value + overlap_space->light_source_value,
-                          levels);
+                        overlap_space->light_value + overlap_space->light_source_value,
+                        levels);
     ck_assert_uint_gt(levels[0], levels[1]);
     ck_assert_uint_eq(levels[1], levels[2]);
 }
@@ -609,7 +605,11 @@ START_TEST(test_remove_light_source_list_accepts_swapped_map) {
 END_TEST
 
 START_TEST(test_saved_dense_map_teardown_does_not_rebuild_light_per_object) {
-    enum { MAPS = 3, WIDTH = 24, HEIGHT = 24 };
+    enum {
+        MAPS = 3,
+        WIDTH = 24,
+        HEIGHT = 24
+    };
     object *active_before = active_objects;
     mapstruct *maps[MAPS];
     char paths[MAPS][HUGE_BUF];
@@ -660,7 +660,10 @@ START_TEST(test_saved_dense_map_teardown_does_not_rebuild_light_per_object) {
 END_TEST
 
 START_TEST(test_map_teardown_withdraws_linked_light_and_invalidates_celestial_once) {
-    enum { WIDTH = 9, HEIGHT = 9 };
+    enum {
+        WIDTH = 9,
+        HEIGHT = 9
+    };
     mapstruct *departing = get_empty_map(WIDTH, HEIGHT);
     mapstruct *survivor = get_empty_map(WIDTH, HEIGHT);
     test_light_snapshot baseline[WIDTH * HEIGHT];
@@ -830,8 +833,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_saved_dense_map_teardown_does_not_rebuild_light_per_object);
     tcase_add_test(tc_core,
                    test_map_teardown_withdraws_linked_light_and_invalidates_celestial_once);
-    tcase_add_test(tc_core,
-                   test_successful_map_save_preserves_light_and_future_gameplay_rebuilds);
+    tcase_add_test(tc_core, test_successful_map_save_preserves_light_and_future_gameplay_rebuilds);
     tcase_add_test(tc_core, test_failed_map_save_preserves_live_objects_state_and_light);
 
     return s;
