@@ -1771,6 +1771,11 @@ START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates
     uint8_t bitmap = cell->light_next_rgb_explicit;
     ck_assert_uint_ne(generation, 0);
 
+    /* The ordinary server post-process settles the initial title refresh over
+     * two passes. These direct drawing calls isolate lighting after that
+     * unrelated player-name lifecycle has completed. */
+    cs->ext_title_flag = 0;
+
     /* A refreshed descriptor does not imply a new field generation. */
     space->celestial_light_next_rgb[1] = 100;
     space->celestial_light_next_rgb[2] = 0;
