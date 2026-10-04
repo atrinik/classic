@@ -283,6 +283,20 @@ target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
 target_link_libraries(${EXECUTABLE} PRIVATE atrinik-server-core Atrinik::Core)
 
+# The wrapper reads this without executing an unknown historical binary. Bind
+# advertised descriptor support to the exact linked executable.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(access_capabilities_script
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_server_capabilities.cmake")
+    set_property(TARGET ${EXECUTABLE} APPEND PROPERTY LINK_DEPENDS
+        "${access_capabilities_script}")
+    add_custom_command(TARGET ${EXECUTABLE} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            "-DSERVER_EXECUTABLE=$<TARGET_FILE:${EXECUTABLE}>"
+            -P "${access_capabilities_script}"
+        VERBATIM)
+endif ()
+
 # Read-only stopped-state acceptance for the updater. This program does not
 # link the simulation core or initialize listeners, plugins, or a publisher.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")

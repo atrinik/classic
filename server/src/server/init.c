@@ -70,6 +70,7 @@
 #include <toolkit/datetime.h>
 #include <cmake.h>
 #include <openssl/crypto.h>
+#include <limits.h>
 
 /**
  * The server's settings.
@@ -102,7 +103,16 @@ static void init_dynamic(void);
 static void init_clocks(void);
 #ifndef WIN32
 static int access_state_descriptor = -1;
+static int access_generation_descriptor = -1;
 #endif
+int initialization_data_descriptor(void) {
+#ifdef WIN32
+    return -1;
+#else
+    return access_state_descriptor;
+#endif
+}
+
 static bool removed_httppath_seen;
 /* Handler failures do not stop CLI parsing; reject startup even after a valid option. */
 static bool oversized_assetspath_seen;
@@ -228,6 +238,10 @@ void cleanup(void) {
 #ifndef WIN32
     access_state_unlock(access_state_descriptor);
     access_state_descriptor = -1;
+    if (access_generation_descriptor >= 0) {
+        close(access_generation_descriptor);
+        access_generation_descriptor = -1;
+    }
 #endif
 }
 
@@ -454,6 +468,32 @@ static const char *clioptions_option_datapath_desc =
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_datapath(const char *arg, char **errmsg) {
     snprintf(VS(settings.datapath), "%s", arg);
+    return true;
+}
+
+static const char *clioptions_option_datapath_fd_desc =
+    "Borrow an inherited private data-directory descriptor. Requires an exact "
+    "--datapath=./data whose generation symlink targets /proc/self/fd/N, and a literal "
+    "numeric command-line argument. "
+    "Unsupported for offline tools and Windows.";
+static bool clioptions_option_datapath_fd(const char *arg, char **errmsg) {
+    unsigned value = 0;
+    if (!arg || arg[0] < '1' || arg[0] > '9' || settings.datapath_fd >= 0) {
+        *errmsg = xstrdup("Expected one literal inherited directory descriptor greater than 2");
+        return false;
+    }
+    for (const char *p = arg; *p; p++) {
+        if (*p < '0' || *p > '9' || value > ((unsigned)INT_MAX - (unsigned)(*p - '0')) / 10U) {
+            *errmsg = xstrdup("Invalid inherited directory descriptor");
+            return false;
+        }
+        value = value * 10U + (unsigned)(*p - '0');
+    }
+    if (value <= 2U) {
+        *errmsg = xstrdup("Inherited directory descriptor must be greater than 2");
+        return false;
+    }
+    settings.datapath_fd = (int)value;
     return true;
 }
 
@@ -1126,6 +1166,8 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, port_quic, "Sets the QUIC UDP port");
     CLIOPTIONS_CREATE_ARGUMENT(cli, libpath, "Read-only data files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, datapath, "Read/write data files location");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, datapath_fd, "Inherited private data directory descriptor");
+    clioptions_enable_command_line_only(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, mapspath, "Map files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, assetspath, "Game asset staging location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, httppath, "Removed asset staging option");
@@ -1196,6 +1238,7 @@ static void init_library(int argc, char *argv[]) {
     toolkit_import(pathfinder);
 
     memset(&settings, 0, sizeof(settings));
+    settings.datapath_fd = -1;
     settings.content_benchmark_iterations = 9;
     settings.celestial_inventory_limit = 8192;
 
@@ -1235,12 +1278,64 @@ static void init_library(int argc, char *argv[]) {
     }
 
 #ifdef WIN32
-    if (settings.access_required || settings.access_initialize || *settings.access_store != '\0' ||
-        *settings.access_admin_accounts != '\0') {
+    if (settings.datapath_fd >= 0 || settings.access_required || settings.access_initialize ||
+        *settings.access_store != '\0' || *settings.access_admin_accounts != '\0') {
         LOG(ERROR, "Access token administration is unsupported on Windows servers");
         exit(EXIT_FAILURE);
     }
 #else
+    bool offline_state_mode = settings.world_maker || settings.unit_tests ||
+                              settings.plugin_unit_tests || settings.provision_scenario ||
+                              settings.content_benchmark || settings.celestial_inventory;
+    if (settings.datapath_fd >= 0) {
+        /* Validate the original before opening anything that could reuse a
+         * closed descriptor number supplied on the command line. */
+        int flags = fcntl(settings.datapath_fd, F_GETFD);
+        if (flags < 0 || fcntl(settings.datapath_fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
+            LOG(ERROR, "Cannot retain inherited private server state");
+            exit(EXIT_FAILURE);
+        }
+        char expected[MAX_BUF];
+        snprintf(VS(expected), "/proc/self/fd/%d", settings.datapath_fd);
+        struct stat generation;
+        access_generation_descriptor = open(".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (access_generation_descriptor < 0 ||
+            fstat(access_generation_descriptor, &generation) != 0 || !S_ISDIR(generation.st_mode) ||
+            (generation.st_uid != geteuid() && generation.st_uid != 0) ||
+            (generation.st_mode & 0022) != 0) {
+            LOG(ERROR, "Invalid inherited data descriptor generation directory");
+            exit(EXIT_FAILURE);
+        }
+        struct stat link_before, link_after, target, inherited;
+        char actual[MAX_BUF];
+        ssize_t length;
+        if (offline_state_mode || settings.access_initialize ||
+            strcmp(settings.datapath, "./data") != 0 ||
+            fstatat(access_generation_descriptor, "data", &link_before, AT_SYMLINK_NOFOLLOW) != 0 ||
+            !S_ISLNK(link_before.st_mode) ||
+            (length = readlinkat(access_generation_descriptor, "data", actual, sizeof(actual))) !=
+                (ssize_t)strlen(expected) ||
+            memcmp(actual, expected, (size_t)length) != 0 ||
+            fstatat(access_generation_descriptor, "data", &target, 0) != 0 ||
+            fstat(settings.datapath_fd, &inherited) != 0 || !S_ISDIR(target.st_mode) ||
+            target.st_uid != geteuid() || (target.st_mode & 07777) != 0700 ||
+            target.st_dev != inherited.st_dev || target.st_ino != inherited.st_ino ||
+            target.st_mode != inherited.st_mode || target.st_uid != inherited.st_uid ||
+            fstatat(access_generation_descriptor, "data", &link_after, AT_SYMLINK_NOFOLLOW) != 0 ||
+            link_before.st_dev != link_after.st_dev || link_before.st_ino != link_after.st_ino) {
+            LOG(ERROR, "Invalid inherited data descriptor mode or datapath binding");
+            exit(EXIT_FAILURE);
+        }
+        if ((access_state_descriptor = access_state_lock_fd(settings.datapath_fd)) < 0) {
+            LOG(ERROR, "Cannot retain inherited private server state");
+            exit(EXIT_FAILURE);
+        }
+        /* The wrapper pins the generation's ./data symlink. Preserve this
+         * logical spelling for existing private-map/savebed identities while
+         * token-store operations use the descriptor directly. Never close/reuse
+         * N; its CLOEXEC flag prevents child capability leaks.
+         * Cleanup closes only our lock duplicate, never explicitly unlocks it. */
+    }
     if (settings.access_initialize) {
         bool initialized = access_bootstrap_initialize(settings.datapath,
                                                        settings.access_store,
@@ -1249,9 +1344,7 @@ static void init_library(int argc, char *argv[]) {
             LOG(ERROR, "Offline access store initialization failed");
         exit(initialized ? EXIT_SUCCESS : EXIT_FAILURE);
     }
-    if (!settings.world_maker && !settings.unit_tests && !settings.plugin_unit_tests &&
-        !settings.provision_scenario && !settings.content_benchmark &&
-        !settings.celestial_inventory &&
+    if (!offline_state_mode && settings.datapath_fd < 0 &&
         (access_state_descriptor = access_state_lock(settings.datapath)) < 0) {
         LOG(ERROR, "Cannot exclusively lock private server state");
         exit(EXIT_FAILURE);

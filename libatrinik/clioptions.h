@@ -166,6 +166,13 @@ extern void clioptions_enable_argument(clioption_t *cli);
 extern void clioptions_enable_changeable(clioption_t *cli);
 
 /**
+ * Require the value directly in argv. Configuration files, runtime strings and
+ * <value-file> argument expansion are rejected before invoking the handler.
+ * This is intended for explicit inherited process capabilities.
+ */
+extern void clioptions_enable_command_line_only(clioption_t *cli);
+
+/**
  * Marks the CLI value as sensitive.
  *
  * Retained values are securely cleared when replaced or released, and

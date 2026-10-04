@@ -34,8 +34,9 @@ int main(void) {
     denied();
     /* Every combination of startup settings, for public and private servers. */
     for (unsigned visibility = 0; visibility < 2; visibility++) {
-        for (unsigned mask = 0; mask < 16; mask++) {
+        for (unsigned mask = 0; mask < 32; mask++) {
             memset(&settings, 0, sizeof(settings));
+            settings.datapath_fd = (mask & 16) ? 7 : -1;
             settings.server_public = visibility != 0;
             settings.access_required = (mask & 1) != 0;
             settings.access_initialize = (mask & 2) != 0;
@@ -51,11 +52,12 @@ int main(void) {
         }
     }
     memset(&settings, 0, sizeof(settings));
+    settings.datapath_fd = -1;
     assert(access_server_init(NULL));
     access_server_save_failed();
     assert(!access_server_healthy());
     assert(!access_server_shutdown());
     denied();
-    puts("PASS: 32 startup cases, all administration/authentication denied, save failure fenced");
+    puts("PASS: 64 startup cases, all administration/authentication denied, save failure fenced");
     return 0;
 }

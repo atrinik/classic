@@ -135,3 +135,32 @@ identity mismatch, strict path and child-symlink rejection, retained state after
 pathname replacement, and shared-lock lifetime across a forked borrower. Wrong
 ownership and descriptor-rebinding observations are injected deterministically;
 these cases need no privileged filesystem changes.
+
+### Supervised inherited data capability
+
+Linux builds emit `atrinik-server-capabilities.json` beside the linked executable.
+Its exact schema is `schema_version: 1`, `datapath_fd: true`, and `server_sha256`
+(the lowercase SHA-256 of that executable). A wrapper verifies the artifact and
+binary under its immutable-generation lease before selecting this contract.
+Windows builds do not advertise it.
+
+The supervisor may pass the literal command-line pair `--datapath_fd=N
+--datapath=./data`, where N is a canonical decimal descriptor greater than 2.
+Startup pins the generation working directory with a close-on-exec descriptor,
+requires root or effective-user ownership and no group/other write permission,
+and performs link checks relative to that descriptor. The generation's `./data` must be a symlink with the exact target
+`/proc/self/fd/N`; startup checks the link and target identity against the open,
+owned, mode-0700 directory. The supervisor must pin the generation, repeat the
+identity check immediately before launch, and retain its exclusive shared lock.
+Ordinary path opening never accepts this symlink exception. The logical `./data`
+spelling preserves existing private-map and savebed identities.
+
+The original descriptor remains open for the entire process and is marked
+close-on-exec. The server retains its own close-on-exec duplicate of the same
+locked open-file description; cleanup closes its duplicate and never unlocks the
+supervisor's lease. Default token-store children are opened relative to this
+pinned descriptor with the usual no-follow checks. Explicit store paths and the
+root-managed allowlist retain their ordinary strict path checks.
+
+Configuration files (including nested includes), value-file expansion, offline
+initialization/scenario/test modes, and Windows cannot supply this capability.

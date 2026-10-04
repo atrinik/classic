@@ -87,6 +87,9 @@ struct clioption {
     /** Whether the retained value must be redacted and securely cleared. */
     bool sensitive : 1;
 
+    /** Require a literal argv argument, excluding config and file indirection. */
+    bool command_line_only : 1;
+
     /**
      * Brief description.
      */
@@ -382,6 +385,13 @@ void clioptions_enable_changeable(clioption_t *cli) {
     cli->changeable = true;
 }
 
+void clioptions_enable_command_line_only(clioption_t *cli) {
+    TOOLKIT_PROTECT();
+    HARD_ASSERT(cli != NULL);
+    HARD_ASSERT(!cli->command_line_only);
+    cli->command_line_only = true;
+}
+
 void clioptions_enable_sensitive(clioption_t *cli) {
     TOOLKIT_PROTECT();
 
@@ -472,6 +482,10 @@ static bool clioptions_call_handler(clioption_t *cli, const char *cli_arg, char 
 
     char *contents = NULL;
     if (cli_arg != NULL && *cli_arg == '<') {
+        if (cli->command_line_only) {
+            *errmsg = xstrdup("Option requires a literal command-line argument");
+            return false;
+        }
         contents = path_file_contents(cli_arg + 1);
         if (contents == NULL) {
             string_fmt(*errmsg, "Cannot open %s", cli_arg + 1);
@@ -647,6 +661,11 @@ bool clioptions_load_str(const char *str, char **errmsg) {
     cli = clioptions_parse_find(2, argv, &idx, &cli_arg);
     if (cli == NULL) {
         *errmsg = xstrdup("No such option");
+        goto out;
+    }
+
+    if (cli->command_line_only) {
+        *errmsg = xstrdup("Option is command-line only");
         goto out;
     }
 

@@ -199,17 +199,28 @@ bool access_server_init(const char identity_hex[65]) {
     }
     snprintf(worker.allowlist, sizeof(worker.allowlist), "%s", settings.access_admin_accounts);
     char path[HUGE_BUF];
-    if (*settings.access_store != '\0')
+    bool relative_store = settings.access_store[0] == '\0' && initialization_data_descriptor() >= 0;
+    if (settings.access_store[0] != '\0')
         snprintf(VS(path), "%s", settings.access_store);
     else if (snprintf(VS(path), "%s/access-tokens", settings.datapath) >= (int)sizeof(path))
         return false;
-    bool absent = access_store_absent(path);
+    int data = initialization_data_descriptor();
+    bool absent =
+        relative_store ? access_store_absent_at(data, "access-tokens") : access_store_absent(path);
     if (!absent || settings.access_required) {
-        if (access_store_open(&worker.store,
-                              path,
-                              worker.absent.server_identity,
-                              settings.access_required,
-                              false) != ACCESS_COMMITTED)
+        access_outcome_t opened = relative_store
+                                      ? access_store_open_at(&worker.store,
+                                                             data,
+                                                             "access-tokens",
+                                                             worker.absent.server_identity,
+                                                             settings.access_required,
+                                                             false)
+                                      : access_store_open(&worker.store,
+                                                          path,
+                                                          worker.absent.server_identity,
+                                                          settings.access_required,
+                                                          false);
+        if (opened != ACCESS_COMMITTED)
             return false;
     }
     worker.stopping = false;

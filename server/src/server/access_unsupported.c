@@ -13,7 +13,7 @@ static bool failed;
 
 bool access_server_init(const char identity_hex[65]) {
     (void)identity_hex;
-    failed = settings.access_required || settings.access_initialize ||
+    failed = settings.datapath_fd >= 0 || settings.access_required || settings.access_initialize ||
              settings.access_store[0] != '\0' || settings.access_admin_accounts[0] != '\0';
     return !failed;
 }

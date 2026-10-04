@@ -71,6 +71,7 @@ COPY --from=build /src/server/permissions.cfg ./server/permissions.cfg
 COPY --from=build /src/server/server.cfg ./server/server.cfg
 COPY --from=build /src/server/tools ./server/tools
 COPY --from=build /src/server/build/release/atrinik-server ./server/atrinik-server
+COPY --from=build /src/server/build/release/atrinik-server-capabilities.json ./server/atrinik-server-capabilities.json
 COPY --from=build /src/server/build/release/atrinik-access-status ./server/atrinik-access-status
 COPY --from=build /src/server/build/release/libplugin_arena.so ./server/libplugin_arena.so
 COPY --from=build /src/server/build/release/libplugin_python.so ./server/libplugin_python.so

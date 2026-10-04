@@ -334,6 +334,8 @@ typedef struct settings_struct {
      * Player data, unique maps, etc.
      */
     char datapath[MAX_BUF];
+    /** Explicit inherited private-data capability; literal argv only, -1 if absent. */
+    int datapath_fd;
 
     /**
      * Where the map files are.
