@@ -27,6 +27,10 @@
   is the shared normative contract. Keep remembered static geometry separate
   from current/live MAP2 records, treat server clears and Q5.11 radiance as
   authoritative, and keep player light presentation-only.
+  Opaque fragments retain an exact owner and painter rank; translucent
+  contributors use their own light before ordered source-over blending. Damage
+  and lighting-only updates must replay transparency over the resolved opaque
+  target, with opaque-rank occlusion and the existing encoded-RGBA convention.
 - Keep offline player-view proofs on the normal MAP decoder and
   `map_draw_map()` path. Their closed manifests must pin every immutable input
   and renderer choice, remain bounded and network-free, and never read or

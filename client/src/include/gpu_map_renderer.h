@@ -58,6 +58,7 @@ void gpu_map_renderer_poll(void);
 /** Wait for all submitted map work during an explicit lifecycle transition. */
 bool gpu_map_renderer_wait_idle(void);
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+/** Opaque-pass diagnostics plus the final color including translucent contributors. */
 typedef struct gpu_map_renderer_probe {
     uint8_t albedo[4];
     uint32_t lighting_key;
