@@ -31,6 +31,15 @@ typedef struct map_visibility_fade {
     bool authorized;
 } map_visibility_fade_t;
 
+/**
+ * Build the 3-by-3 floor coverage grid for one light quad.
+ *
+ * The input order is (x,y), (x+1,y), (x+1,y+1), (x,y+1).  A grid sample is
+ * opaque only when every floor incident to that sample is known, so a missing
+ * floor cannot leak lighting across a shared edge or centre vertex.
+ */
+void map_visibility_ground_coverage(const bool known[4], uint8_t coverage[9]);
+
 /** Return the fixed-point radial field weight for one map-coordinate vector. */
 uint16_t map_visibility_field_weight(int dx, int dy);
 

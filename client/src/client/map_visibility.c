@@ -22,6 +22,21 @@ static uint8_t map_visibility_fade_value(uint8_t from, uint8_t target, uint32_t 
     return (uint8_t)(step > from ? 0 : from - step);
 }
 
+void map_visibility_ground_coverage(const bool known[4], uint8_t coverage[9]) {
+    HARD_ASSERT(known != NULL);
+    HARD_ASSERT(coverage != NULL);
+
+    coverage[0] = known[0] ? UINT8_MAX : 0;
+    coverage[1] = known[0] && known[1] ? UINT8_MAX : 0;
+    coverage[2] = known[1] ? UINT8_MAX : 0;
+    coverage[3] = known[0] && known[3] ? UINT8_MAX : 0;
+    coverage[4] = known[0] && known[1] && known[2] && known[3] ? UINT8_MAX : 0;
+    coverage[5] = known[1] && known[2] ? UINT8_MAX : 0;
+    coverage[6] = known[3] ? UINT8_MAX : 0;
+    coverage[7] = known[3] && known[2] ? UINT8_MAX : 0;
+    coverage[8] = known[2] ? UINT8_MAX : 0;
+}
+
 uint16_t map_visibility_field_weight_squared(uint32_t distance_squared) {
     if (distance_squared <= MAP_VISIBILITY_INNER_RADIUS_SQUARED) {
         return MAP_VISIBILITY_FIELD_UNIT;
