@@ -330,6 +330,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
             'password=fixture-value', 'passwd: fixture-value',
             '"token": "fixture-value with spaces"', 'secret = fixture-value',
             'Authorization: Basic fixture-value', 'Bearer fixture-value',
+            'auth=fixture-value', 'auth: fixture-value',
+            '"auth" : "fixture-value with spaces"', 'AUTH = fixture-value',
             '--connect_password_file=fixture-value',
         ):
             self.assertNotIn('fixture-value', sanitized(value))

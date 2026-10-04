@@ -50,7 +50,7 @@ function Get-LauncherLogTail([string]$Path) {
                 # Drop the rest of a credential-bearing line, including quoted
                 # or whitespace-separated values. Never print terminal controls.
                 $safeLine = $_ -replace "[\x00-\x1f\x7f-\x9f]", "?"
-                $safeLine = $safeLine -replace "(?i)(password|passwd|secret|token|authorization|bearer).*", "[redacted]"
+                $safeLine = $safeLine -replace "(?i)(password|passwd|secret|token|authorization|auth|bearer).*", "[redacted]"
                 $safeLine = $safeLine -replace "(?i)https?://\S+", "[redacted-url]"
                 $safeLine.Substring(0, [System.Math]::Min($safeLine.Length, 2048))
             }
