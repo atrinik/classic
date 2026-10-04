@@ -200,10 +200,12 @@ environment variables never synthesize a selected-adapter identity.
  codes, routing capabilities, grants, authorization transcripts, and private
  endpoints are never cached there.
 
- The raw access code is cleansed immediately after the single authentication
- packet is queued and on every earlier connection failure, cancellation,
- directory refresh, server replacement, or client shutdown. Rejected, missing,
- revoked, and expired codes produce the same bounded access-unavailable message.
+ The raw access-code attempt buffer is cleansed immediately after the single
+ authentication packet is queued and on every earlier connection failure,
+ cancellation, directory refresh, server replacement, or client shutdown. The
+ sensitive packet buffer is cleansed after transmission or teardown. Rejected,
+ missing, revoked, and expired codes produce the same bounded
+ access-unavailable message.
  Account passwords remain a separate account-login credential and retain their
  existing protected-file automation path.
 
