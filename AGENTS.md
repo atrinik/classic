@@ -13,11 +13,15 @@
 - Root `.github/` and `.releaserc.cjs` are the only active GitHub/release
   configuration. Retired nested component copies remain recoverable from Git
   history; do not reintroduce an independent module release train.
-- Use `.agents/skills/classic-native-change` for C17/CMake work,
-  `.agents/skills/classic-protocol-change` for wire contracts, and
-  `.agents/skills/classic-runtime` for integrated execution. Cross-repository
-  composition still follows the wrapper's `atrinik-multi-repo-workspace` skill;
-  repository policy follows `atrinik-github-governance`.
+- Use the `atrinik-development` plugin from the `atrinik` marketplace:
+  `classic-native-change` for C17/CMake work, `classic-protocol-change` for
+  wire contracts, and `classic-runtime` for integrated execution. The exact
+  provider revision and required skills are recorded in
+  [.agents/skill-provider.json](.agents/skill-provider.json). Cross-repository
+  composition uses `atrinik-multi-repo-workspace`; repository policy uses
+  `atrinik-github-governance` from the same plugin. Repository ownership,
+  licensing and subtree instructions remain authoritative. Ordinary offline
+  checks require neither an installed plugin nor network access.
 - Keep coordinated protocol, library, client, and server changes in one
   monorepo worktree and pull request. Never copy protocol identifiers or shared
   code between subtrees.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import unittest
 
@@ -14,11 +15,6 @@ class AgentGuidanceTests(unittest.TestCase):
         )
         contributing = " ".join(
             (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8").split()
-        )
-        native_skill = " ".join(
-            (
-                ROOT / ".agents/skills/classic-native-change/SKILL.md"
-            ).read_text(encoding="utf-8").split()
         )
 
         for marker in {
@@ -58,13 +54,26 @@ class AgentGuidanceTests(unittest.TestCase):
             with self.subTest(example=example):
                 self.assertIn(example, contributing)
 
-        for marker in {
-            "root `CONTRIBUTING.md` copyright-header contract",
-            "preserve named, mixed, and upstream attribution",
-            "update generated headers only at their source",
-        }:
-            with self.subTest(surface="classic-native-change", marker=marker):
-                self.assertIn(marker, native_skill)
+    def test_external_skill_provider_contract_is_pinned_offline(self) -> None:
+        provider = json.loads((ROOT / ".agents/skill-provider.json").read_text(encoding="utf-8"))
+        self.assertEqual(provider["schema_version"], 1)
+        self.assertEqual(provider["repository"], "https://github.com/atrinik/agent-skills")
+        self.assertRegex(provider["revision"], r"^[0-9a-f]{40}$")
+        self.assertNotEqual(provider["revision"], "0" * 40)
+        self.assertEqual(provider["marketplace"], "atrinik")
+        self.assertEqual(provider["plugin"], "atrinik-development")
+        self.assertEqual(provider["path"], "plugins/atrinik-development")
+        self.assertEqual(provider["required_skills"], [
+            "classic-native-change", "classic-protocol-change", "classic-runtime",
+        ])
+        guide = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for skill in provider["required_skills"]:
+            with self.subTest(skill=skill):
+                self.assertIn(f"`{skill}`", guide)
+                self.assertNotIn(f".agents/skills/{skill}", guide)
+        self.assertIn(".agents/skill-provider.json", guide)
+        # Provider-content validation belongs to its repository; this consumer
+        # verifies only its own immutable reference without fetching a plugin.
 
 
 if __name__ == "__main__":
