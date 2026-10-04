@@ -1457,6 +1457,171 @@ static bool unlit_owner_alpha_checkpoint(void) {
     return success;
 }
 
+static SDL_Surface *transparent_damage_frame(SDL_Surface *floor,
+                                             SDL_Surface *overlay,
+                                             float overlay_x,
+                                             Uint8 overlay_alpha) {
+    const int map_size = 64;
+    SDL_FRect floor_destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
+    SDL_FRect overlay_destination = {overlay_x, 8.0f, 12.0f, 4.0f};
+    const uint16_t radiance = 32;
+    lighting_vertex_t light_quad[4] = {
+        {.x = 0,
+         .y = 0,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = map_size,
+         .y = 0,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = map_size,
+         .y = map_size,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = 0,
+         .y = map_size,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+    };
+    if (!gpu_renderer_begin_frame() || !gpu_renderer_map_begin(map_size, map_size)) {
+        return NULL;
+    }
+    gpu_renderer_map_light_quad(0, light_quad);
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
+    gpu_renderer_map_set_instance_identity(UINT64_C(0x47730001), 0);
+    if (!gpu_renderer_draw_surface(floor, NULL, &floor_destination)) {
+        return NULL;
+    }
+    if (overlay != NULL) {
+        if (!SDL_SetSurfaceAlphaMod(overlay, overlay_alpha)) {
+            return NULL;
+        }
+        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0, false);
+        gpu_renderer_map_set_instance_identity(UINT64_C(0x47730002), 0);
+        if (!gpu_renderer_draw_surface(overlay, NULL, &overlay_destination)) {
+            return NULL;
+        }
+    }
+    if (!gpu_renderer_map_end() ||
+        !gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) ||
+        !gpu_renderer_present()) {
+        return NULL;
+    }
+    return gpu_renderer_readback(NULL);
+}
+
+static bool transparent_damage_is_bounded(const gpu_renderer_statistics_t *statistics) {
+    return statistics->map_full_redraws == 0 && statistics->map_damage_frames == 1 &&
+           statistics->map_damage_pixels > 0 &&
+           statistics->map_damage_pixels < UINT64_C(64) * 64U &&
+           statistics->map_damage_bytes == statistics->map_damage_pixels * 12U;
+}
+
+/** Match mixed-alpha damage redraws to an independently forced full redraw. */
+static bool transparent_damage_checkpoint(void) {
+    SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *overlay = SDL_CreateSurface(3, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Rect opaque = {0, 0, 1, 1};
+    SDL_Rect partial = {1, 0, 1, 1};
+    SDL_Rect keyed = {2, 0, 1, 1};
+    Uint32 key = overlay != NULL ? SDL_MapSurfaceRGBA(overlay, 0, 0, 0, SDL_ALPHA_OPAQUE) : 0;
+    bool success = floor != NULL && overlay != NULL &&
+                   SDL_FillSurfaceRect(
+                       floor, NULL, SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+                   SDL_FillSurfaceRect(overlay,
+                                       &opaque,
+                                       SDL_MapSurfaceRGBA(
+                                           overlay, 220, 40, 10, SDL_ALPHA_OPAQUE)) &&
+                   SDL_FillSurfaceRect(overlay,
+                                       &partial,
+                                       SDL_MapSurfaceRGBA(overlay, 60, 60, 76, 128)) &&
+                   SDL_FillSurfaceRect(overlay, &keyed, key) &&
+                   SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+                   SDL_SetSurfaceBlendMode(overlay, SDL_BLENDMODE_BLEND) &&
+                   SDL_SetSurfaceColorKey(overlay, true, key);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *baseline = success ? transparent_damage_frame(floor, NULL, 0.0f, 0) : NULL;
+    SDL_Surface *initial =
+        baseline != NULL ? transparent_damage_frame(floor, overlay, 8.0f, SDL_ALPHA_OPAQUE) : NULL;
+    Uint8 floor_red = 0, floor_green = 0, floor_blue = 0, floor_alpha = 0;
+    success = initial != NULL &&
+              SDL_ReadSurfacePixel(
+                  baseline, 14, 10, &floor_red, &floor_green, &floor_blue, &floor_alpha) &&
+              surface_pixel_is_near(
+                  initial, 10, 10, 220, 40, 10, SDL_ALPHA_OPAQUE, 2) &&
+              surface_pixel_is_near(initial,
+                                    14,
+                                    10,
+                                    alpha_blend_channel(60, floor_red, 128),
+                                    alpha_blend_channel(60, floor_green, 128),
+                                    alpha_blend_channel(76, floor_blue, 128),
+                                    SDL_ALPHA_OPAQUE,
+                                    2) &&
+              surface_pixel_is_near(initial,
+                                    18,
+                                    10,
+                                    floor_red,
+                                    floor_green,
+                                    floor_blue,
+                                    floor_alpha,
+                                    1);
+
+    gpu_renderer_statistics_reset();
+    SDL_Surface *damage_faded =
+        success ? transparent_damage_frame(floor, overlay, 32.0f, 128) : NULL;
+    gpu_renderer_statistics_t faded_statistics;
+    gpu_renderer_statistics_get(&faded_statistics);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *full_faded = damage_faded != NULL
+                                  ? transparent_damage_frame(floor, overlay, 32.0f, 128)
+                                  : NULL;
+    success = success && damage_faded != NULL && full_faded != NULL &&
+              transparent_damage_is_bounded(&faded_statistics) &&
+              surface_pixel_is_near(damage_faded,
+                                    10,
+                                    10,
+                                    floor_red,
+                                    floor_green,
+                                    floor_blue,
+                                    floor_alpha,
+                                    1) &&
+              surfaces_match(damage_faded, full_faded);
+
+    gpu_renderer_statistics_reset();
+    SDL_Surface *damage_opaque =
+        success ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE) : NULL;
+    gpu_renderer_statistics_t opaque_statistics;
+    gpu_renderer_statistics_get(&opaque_statistics);
+    gpu_map_renderer_invalidate_target(false);
+    SDL_Surface *full_opaque =
+        damage_opaque != NULL
+            ? transparent_damage_frame(floor, overlay, 32.0f, SDL_ALPHA_OPAQUE)
+            : NULL;
+    success = success && damage_opaque != NULL && full_opaque != NULL &&
+              transparent_damage_is_bounded(&opaque_statistics) &&
+              surfaces_match(damage_opaque, full_opaque);
+    if (!success) {
+        SDL_SetError("mixed-alpha damage redraw diverged from forced full redraw");
+    }
+    SDL_DestroySurface(full_opaque);
+    SDL_DestroySurface(damage_opaque);
+    SDL_DestroySurface(full_faded);
+    SDL_DestroySurface(damage_faded);
+    SDL_DestroySurface(initial);
+    SDL_DestroySurface(baseline);
+    SDL_DestroySurface(overlay);
+    SDL_DestroySurface(floor);
+    return success;
+}
+
 static bool lighting_lookup_checkpoint(SDL_Surface *source) {
     SDL_FRect full = {0.0f, 0.0f, 32.0f, 32.0f};
     SDL_FRect inset = {8.0f, 8.0f, 16.0f, 16.0f};
@@ -1951,6 +2116,7 @@ int main(void) {
     GPU_REQUIRE(ui_atlas_churn_plateau_checkpoint());
     GPU_REQUIRE(draw_checkpoint(source, 0, 255, 0, 2048));
     GPU_REQUIRE(unlit_owner_alpha_checkpoint());
+    GPU_REQUIRE(transparent_damage_checkpoint());
     GPU_REQUIRE(lighting_lookup_checkpoint(source));
     GPU_REQUIRE(projected_lighting_checkpoint(source, 32.0f));
     gpu_renderer_statistics_reset();
