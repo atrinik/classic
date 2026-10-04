@@ -75,6 +75,15 @@ static_assert(MAP2_PROTOCOL_METADATA_LONG_MAX == HUGE_BUF - 1,
 static_assert(MAP2_PROTOCOL_METADATA_SHORT_MAX == MAX_BUF - 1,
               "MAP short metadata bound must match its client destination");
 
+static void access_protocol_reject(packet_reader_t *reader) {
+    packet_reader_set_error(reader, PACKET_ERROR_UNSUPPORTED);
+    if (selected_server != NULL) {
+        client_access_attempt_clear(&selected_server->access_attempt);
+    }
+    client_socket_request_shutdown();
+    cpl.state = ST_START;
+}
+
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_book(uint8_t *data, size_t len, size_t pos) {
     if (!book_load((char *)data + pos, len)) {
@@ -89,6 +98,10 @@ void socket_command_book(uint8_t *data, size_t len, size_t pos) {
 void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
+    if (cpl.state != ST_WAITSETUP) {
+        access_protocol_reject(&reader);
+        return;
+    }
     uint8_t type;
     uint8_t asset_capabilities = 0;
     bool asset_capabilities_present = false;
@@ -131,9 +144,7 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
         asset_requests_set_capabilities(asset_capabilities);
     }
 
-    if (cpl.state != ST_PLAY) {
-        cpl.state = ST_REQUEST_FILES_LISTING;
-    }
+    cpl.state = ST_REQUEST_FILES_LISTING;
 }
 
 /** @copydoc socket_command_struct::handle_func */
@@ -1710,15 +1721,6 @@ void socket_command_version(uint8_t *data, size_t len, size_t pos) {
     }
 
     cpl.state = ST_WAITACCESS_POLICY;
-}
-
-static void access_protocol_reject(packet_reader_t *reader) {
-    packet_reader_set_error(reader, PACKET_ERROR_UNSUPPORTED);
-    if (selected_server != NULL) {
-        client_access_attempt_clear(&selected_server->access_attempt);
-    }
-    client_socket_request_shutdown();
-    cpl.state = ST_START;
 }
 
 /** @copydoc socket_command_struct::handle_func */

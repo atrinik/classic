@@ -24,6 +24,9 @@ bool client_access_policy_parse(const uint8_t *data, size_t size, bool *required
 }
 
 bool client_access_result_parse(const uint8_t *data, size_t size, bool *accepted) {
+    if (accepted == NULL) {
+        return false;
+    }
     bool unavailable;
     if (!access_boolean_payload(data, size, &unavailable)) {
         return false;

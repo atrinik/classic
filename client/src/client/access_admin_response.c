@@ -31,6 +31,9 @@ static const char *const outcome_names[] = {
     "pending",
     "conflict",
     "denied",
+    "limit",
+    "invalid",
+    "not_found",
     "unavailable",
     "save_failed",
     "indeterminate",
@@ -424,14 +427,19 @@ static bool json_status_result(json_parser_t *parser,
         !json_character(parser, ':')) {
         return false;
     }
-    unsigned int pending = 0;
+    uint64_t pending = 0;
     size_t digits = 0;
     const uint8_t *digits_start = parser->position;
     while (parser->position < parser->end && isdigit(*parser->position)) {
-        pending = pending * 10U + (*parser->position++ - '0');
+        uint64_t digit = (uint64_t)(*parser->position - '0');
+        if (pending > (UINT64_C(1024) - digit) / 10U) {
+            return false;
+        }
+        pending = pending * 10U + digit;
+        parser->position++;
         digits++;
     }
-    return digits != 0U && (digits == 1U || *digits_start != '0') && pending <= 32U &&
+    return digits != 0U && (digits == 1U || *digits_start != '0') && pending <= 1024U &&
            json_character(parser, '}');
 }
 

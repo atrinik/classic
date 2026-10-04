@@ -216,7 +216,6 @@ server_struct *metaserver_access_resolve(const char *code) {
         server->access_grant = resolved.grant;
         memset(&resolved.grant, 0, sizeof(resolved.grant));
         access_resolved_clear(&resolved);
-        metaserver_server_add(server);
         return server;
     }
     return NULL;

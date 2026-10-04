@@ -31,9 +31,11 @@
 static button_struct button_connect;
 static popup_struct *access_code_popup;
 static server_struct *access_code_server;
+static server_struct *access_code_existing_server;
 static text_input_struct code_input;
 static bool identity_confirmation;
 static bool connecting;
+static bool access_code_server_added;
 typedef struct access_resolve_job {
     client_access_attempt_t attempt;
     server_struct *server;
@@ -89,7 +91,31 @@ static bool resolve_finished(void) {
         draw_info(COLOR_RED, "Access unavailable. Check the code and try again.");
         return true;
     }
-    access_code_server = selected_server = server;
+    if (access_code_existing_server != NULL) {
+        if (strcmp(server->server_id, access_code_existing_server->server_id) != 0) {
+            metaserver_server_free(server);
+            draw_info(COLOR_RED, "The resolved server identity changed; access was not sent.");
+            return true;
+        }
+        free(access_code_existing_server->hostname);
+        access_code_existing_server->hostname = server->hostname;
+        server->hostname = NULL;
+        access_code_existing_server->port = server->port;
+        free(access_code_existing_server->rendezvous_origin);
+        access_code_existing_server->rendezvous_origin = server->rendezvous_origin;
+        server->rendezvous_origin = NULL;
+        rendezvous_access_grant_clear(&access_code_existing_server->access_grant);
+        access_code_existing_server->access_grant = server->access_grant;
+        memset(&server->access_grant, 0, sizeof(server->access_grant));
+        access_code_existing_server->access_attempt = server->access_attempt;
+        client_access_attempt_clear(&server->access_attempt);
+        metaserver_server_free(server);
+        access_code_server = access_code_existing_server;
+        access_code_server_added = true;
+    } else {
+        access_code_server = server;
+        access_code_server_added = false;
+    }
     identity_confirmation = true;
     return true;
 }
@@ -178,6 +204,11 @@ static int popup_event(popup_struct *popup, SDL_Event *event) {
             return 1;
         }
         if (identity_confirmation) {
+            if (!access_code_server_added) {
+                metaserver_server_add(access_code_server);
+                access_code_server_added = true;
+            }
+            selected_server = access_code_server;
             connecting = true;
             popup_destroy(popup);
             login_start();
@@ -248,7 +279,7 @@ static int popup_destroy_callback(popup_struct *popup) {
     }
     if (resolve_job != NULL) {
         if (resolve_job->server != NULL) {
-            client_access_attempt_clear(&resolve_job->server->access_attempt);
+            metaserver_server_free(resolve_job->server);
         }
         client_access_attempt_clear(&resolve_job->attempt);
         free(resolve_job);
@@ -258,17 +289,28 @@ static int popup_destroy_callback(popup_struct *popup) {
     access_code_clear(&code_input, sizeof(code_input));
     button_destroy(&button_connect);
     if (!connecting && access_code_server != NULL) {
-        client_access_attempt_clear(&access_code_server->access_attempt);
+        if (access_code_server_added) {
+            client_access_attempt_clear(&access_code_server->access_attempt);
+            if (access_code_server->private_access) {
+                rendezvous_access_grant_clear(&access_code_server->access_grant);
+            }
+        } else {
+            metaserver_server_free(access_code_server);
+        }
     }
     access_code_popup = NULL;
     access_code_server = NULL;
+    access_code_existing_server = NULL;
+    access_code_server_added = false;
     identity_confirmation = false;
     connecting = false;
     return 1;
 }
 
 void access_code_open(server_struct *server) {
-    access_code_server = server;
+    access_code_existing_server = server != NULL && server->private_access ? server : NULL;
+    access_code_server = access_code_existing_server == NULL ? server : NULL;
+    access_code_server_added = server != NULL;
     identity_confirmation = false;
     connecting = false;
     access_code_popup = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));

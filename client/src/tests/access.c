@@ -8,6 +8,7 @@
 #include <access_admin_response.h>
 #include <access_protocol.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -72,6 +73,33 @@ int main(void) {
     REQUIRE(response.operation == CLIENT_ACCESS_ADMIN_STATUS);
     REQUIRE(response.committed && response.revision_present);
     REQUIRE(strcmp(response.revision, "3") == 0);
+    const char *pending = strstr(status, "\"pendingRouteSync\":0");
+    REQUIRE(pending != NULL);
+    char overflowing_status[sizeof(status) + 16U];
+    int prefix = (int)(pending - status) + (int)strlen("\"pendingRouteSync\":");
+    REQUIRE(snprintf(overflowing_status,
+                     sizeof(overflowing_status),
+                     "%.*s4294967296%s",
+                     prefix,
+                     status,
+                     pending + strlen("\"pendingRouteSync\":0")) > 0);
+    REQUIRE(!parse_admin(overflowing_status, &response));
+    char maximum_pending_status[sizeof(status) + 4U];
+    REQUIRE(snprintf(maximum_pending_status,
+                     sizeof(maximum_pending_status),
+                     "%.*s1024%s",
+                     prefix,
+                     status,
+                     pending + strlen("\"pendingRouteSync\":0")) > 0);
+    REQUIRE(parse_admin(maximum_pending_status, &response));
+    char excessive_pending_status[sizeof(status) + 4U];
+    REQUIRE(snprintf(excessive_pending_status,
+                     sizeof(excessive_pending_status),
+                     "%.*s1025%s",
+                     prefix,
+                     status,
+                     pending + strlen("\"pendingRouteSync\":0")) > 0);
+    REQUIRE(!parse_admin(excessive_pending_status, &response));
 
     static const char issue[] =
         "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"issue\","

@@ -42,6 +42,7 @@
  */
 
 #include <animations.h>
+#include <access_attempt.h>
 #include <book.h>
 #include <client.h>
 #include <client_command_queue.h>
@@ -71,6 +72,19 @@ static socket_command_struct commands[CLIENT_CMD_NROF] = {
 #undef ATRINIK_CLIENT_COMMAND_HANDLER
 };
 CASSERT_ARRAY(commands, CLIENT_CMD_NROF);
+
+static bool client_command_allowed(uint8_t type) {
+    if (cpl.state == ST_WAITVERSION) {
+        return type == CLIENT_CMD_VERSION;
+    }
+    if (cpl.state == ST_WAITACCESS_POLICY) {
+        return type == CLIENT_CMD_ACCESS_POLICY;
+    }
+    if (cpl.state == ST_WAITACCESS_RESULT) {
+        return type == CLIENT_CMD_ACCESS_RESULT;
+    }
+    return true;
+}
 
 static const uint8_t *current_command_data;
 static size_t current_command_len;
@@ -106,6 +120,13 @@ static bool client_command_dispatch(uint8_t *data, size_t len, void *user_data) 
         LOG(ERROR, "Rejected command envelope: %s", packet_error_string(reader.error));
     } else if (type >= CLIENT_CMD_NROF || commands[type].handle_func == NULL) {
         LOG(ERROR, "Bad command from server (%d)", type);
+    } else if (!client_command_allowed(type)) {
+        LOG(ERROR, "Rejected out-of-order %s command in state %d", commands[type].name, cpl.state);
+        if (selected_server != NULL) {
+            client_access_attempt_clear(&selected_server->access_attempt);
+        }
+        client_socket_request_shutdown();
+        cpl.state = ST_START;
     } else {
         packet_reader_scope_t scope;
         packet_reader_scope_begin(&scope);
