@@ -735,8 +735,19 @@ void check_light_source_list(mapstruct *map) {
     recalculate_light_sources(map);
 }
 
+#ifdef ATRINIK_TESTING
+static uint64_t light_rebuild_count;
+
+uint64_t light_rebuild_count_for_test(void) {
+    return light_rebuild_count;
+}
+#endif
+
 /** Rebuild source illumination after opaque map geometry changes. */
 void recalculate_light_sources(mapstruct *map) {
+#ifdef ATRINIK_TESTING
+    light_rebuild_count++;
+#endif
     light_map_set maps;
     light_map_set_collect(&maps, map);
 
