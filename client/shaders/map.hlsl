@@ -43,7 +43,8 @@ struct WorldVertexOutput {
 
 cbuffer WorldVertexUniforms : register(b0, space1) {
     float2 world_viewport;
-    float2 world_vertex_padding;
+    float world_order_base;
+    float world_order_scale;
 };
 
 #define GPU_SPRITE_ABI_FLOAT4(_name) float4 _name;
@@ -89,7 +90,7 @@ WorldVertexOutput world_vertex(uint vertex_id : SV_VertexID, uint instance_id : 
     WorldVertexOutput output;
     output.position = float4(pixel.x * 2.0 / world_viewport.x - 1.0,
                              1.0 - pixel.y * 2.0 / world_viewport.y,
-                             0.0,
+                             (world_order_base + float(instance_id)) * world_order_scale,
                              1.0);
     float2 uv_min = instance.uv.xy + instance.texture_metadata.zw;
     float2 uv_max = instance.uv.xy + instance.uv.zw - instance.texture_metadata.zw;
@@ -120,7 +121,7 @@ struct WorldFragmentOutput {
     uint lighting_key : SV_Target1;
 };
 
-WorldFragmentOutput world_fragment(WorldVertexOutput input) {
+float4 world_color(WorldVertexOutput input) {
     float4 color = world_texture.Sample(world_sampler, input.uv);
     if ((input.texture_flags & SPRITE_TEXTURE_PREMULTIPLIED_ALPHA) != 0u) {
         color.rgb = color.a > 0.0 ? color.rgb / color.a : float3(0.0, 0.0, 0.0);
@@ -150,15 +151,34 @@ WorldFragmentOutput world_fragment(WorldVertexOutput input) {
     if (color.a <= 0.0) {
         discard;
     }
-    WorldFragmentOutput output;
-    output.albedo = color;
+    return color;
+}
+
+uint world_lighting_key(WorldVertexOutput input) {
     if ((input.lighting_key & WORLD_PROJECTED_LIGHT_FLAG) != 0u) {
         uint owner = input.lighting_key & WORLD_PROJECTED_LIGHT_OWNER_MASK;
         uint row = uint(input.position.y);
-        output.lighting_key = world_projected_light_rows[row * WORLD_LIGHT_OWNER_COUNT + owner];
-    } else {
-        output.lighting_key = input.lighting_key;
+        return world_projected_light_rows[row * WORLD_LIGHT_OWNER_COUNT + owner];
     }
+    return input.lighting_key;
+}
+
+WorldFragmentOutput world_fragment(WorldVertexOutput input) {
+    float4 color = world_color(input);
+    if (color.a < 1.0) {
+        discard;
+    }
+    WorldFragmentOutput output;
+    output.albedo = color;
+    output.lighting_key = world_lighting_key(input);
+    return output;
+}
+
+/* Used with a zero-depth fullscreen triangle pair and a damage scissor. */
+WorldFragmentOutput world_clear_fragment() {
+    WorldFragmentOutput output;
+    output.albedo = float4(0.0, 0.0, 0.0, 0.0);
+    output.lighting_key = 0u;
     return output;
 }
 
@@ -432,10 +452,8 @@ uint4 final_light_row(uint row_id, int x) {
                  light_extrapolate(upper.w, lower.w, progress, divisor));
 }
 
-float4 final_fragment(FinalVertexOutput input) : SV_Target0 {
-    uint key = final_lighting_key_load(int2(input.position.xy));
+float4 light_contributor(float4 albedo, uint key, int x) {
     uint encoded_quad = key & 524287u;
-    float4 albedo = final_albedo.Sample(final_sampler, input.uv);
     if (encoded_quad == 0u) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
@@ -445,12 +463,26 @@ float4 final_fragment(FinalVertexOutput input) : SV_Target0 {
     if (encoded_quad == 524286u) {
         return float4(0.0, 0.0, 0.0, albedo.a);
     }
-    uint4 light = final_light_row(encoded_quad - 1u, int(input.position.x));
+    uint4 light = final_light_row(encoded_quad - 1u, x);
     uint4 source = uint4(floor(saturate(albedo) * 255.0 + 0.5));
     uint3 lit = uint3(final_channel(source.r, light.x, light.y),
                       final_channel(source.g, light.x, light.z),
                       final_channel(source.b, light.x, light.w));
     return float4(float3(lit) / 255.0, albedo.a);
+}
+
+float4 final_fragment(FinalVertexOutput input) : SV_Target0 {
+    return light_contributor(final_albedo.Sample(final_sampler, input.uv),
+                             final_lighting_key_load(int2(input.position.xy)),
+                             int(input.position.x));
+}
+
+float4 world_transparent_fragment(WorldVertexOutput input) : SV_Target0 {
+    float4 color = world_color(input);
+    if (color.a >= 1.0) {
+        discard;
+    }
+    return light_contributor(color, world_lighting_key(input), int(input.position.x));
 }
 
 StructuredBuffer<LightQuad> vertex_light_quads : register(t0, space0);

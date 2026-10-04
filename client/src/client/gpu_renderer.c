@@ -407,7 +407,11 @@ static bool gpu_renderer_formats_supported(SDL_GPUDevice *candidate) {
            SDL_GPUTextureSupportsFormat(candidate,
                                         SDL_GPU_TEXTUREFORMAT_R32_UINT,
                                         SDL_GPU_TEXTURETYPE_2D,
-                                        integer_usage);
+                                        integer_usage) &&
+           SDL_GPUTextureSupportsFormat(candidate,
+                                        SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
+                                        SDL_GPU_TEXTURETYPE_2D,
+                                        SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
 }
 
 static void gpu_renderer_atlas_regions_destroy(gpu_texture_atlas_t *atlas) {
@@ -747,7 +751,7 @@ static bool gpu_renderer_create_internal(SDL_Window *window, bool require_hardwa
         if (!(require_hardware && selected_backend != NULL &&
               strcmp(selected_backend, "direct3d12") == 0 && !d3d12_identity_resolved)) {
             SDL_SetError("GPU renderer requires Vulkan, Direct3D 12, or Metal with "
-                         "verified hardware acceleration plus R8G8B8A8_UNORM and R32_UINT "
+                         "verified hardware acceleration plus R8G8B8A8_UNORM, R32_UINT, and D32_FLOAT "
                          "render targets");
         }
         gpu_renderer_failure_preserve("unsupported GPU renderer capabilities");

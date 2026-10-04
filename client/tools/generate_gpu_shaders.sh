@@ -75,6 +75,8 @@ compile_stage() {
 
 compile_stage world_vertex vs_6_0 world_vertex vert
 compile_stage world_fragment ps_6_0 world_fragment frag
+compile_stage world_clear_fragment ps_6_0 world_clear_fragment frag
+compile_stage world_transparent_fragment ps_6_0 world_transparent_fragment frag
 compile_stage final_vertex vs_6_0 final_vertex vert
 compile_stage final_fragment ps_6_0 final_fragment frag
 compile_stage light_vertex vs_6_0 light_vertex vert

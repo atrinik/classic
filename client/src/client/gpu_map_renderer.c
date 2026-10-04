@@ -57,7 +57,6 @@
 #define GPU_MAP_ATLAS_MAX_ASSET_SIZE 256U
 /* Matches the 64 uint4 WorldSlotUniforms entries in shaders/map.hlsl. */
 #define GPU_MAP_WORLD_SLOT_CHUNK 256U
-#define GPU_MAP_DAMAGE_CLEAR_INITIAL_CAPACITY (64U * 1024U)
 #define GPU_MAP_DAMAGE_FULL_REDRAW_NUMERATOR 1U
 #define GPU_MAP_DAMAGE_FULL_REDRAW_DENOMINATOR 2U
 #define GPU_MAP_MAX_IN_FLIGHT 3U
@@ -108,7 +107,8 @@ typedef struct gpu_map_shader_blob {
 
 typedef struct gpu_map_vertex_uniforms {
     float viewport[2];
-    float padding[2];
+    float order_base;
+    float order_scale;
 } gpu_map_vertex_uniforms_t;
 
 typedef gpu_sprite_instance_t gpu_map_world_instance_t;
@@ -164,6 +164,7 @@ typedef struct gpu_map_light_horizontal_row {
 typedef struct gpu_map_target_set {
     SDL_GPUTexture *albedo;
     SDL_GPUTexture *owner;
+    SDL_GPUTexture *opaque_rank;
     SDL_GPUTexture *final;
     SDL_Texture *wrapped_final;
     int width;
@@ -176,9 +177,6 @@ typedef struct gpu_map_target_set {
     size_t world_instance_capacity;
     size_t world_instance_bytes;
     bool world_instance_valid;
-    SDL_GPUTransferBuffer *damage_clear_transfer;
-    size_t damage_clear_capacity;
-    size_t damage_clear_bytes;
     gpu_map_world_command_t *world_commands;
     uint8_t *world_slot_active;
     size_t world_commands_num;
@@ -207,6 +205,8 @@ static SDL_GPUDevice *map_device;
 static SDL_Renderer *map_renderer;
 static SDL_GPUSampler *map_sampler;
 static SDL_GPUGraphicsPipeline *world_pipeline;
+static SDL_GPUGraphicsPipeline *world_clear_pipeline;
+static SDL_GPUGraphicsPipeline *world_transparent_pipeline;
 static SDL_GPUGraphicsPipeline *final_pipeline;
 static SDL_GPUBuffer *light_quad_buffer;
 static SDL_GPUTransferBuffer *light_quad_transfer;
@@ -441,6 +441,8 @@ static gpu_map_shader_blob_t gpu_map_shader_blob(const char *name, const char *e
     } while (0)
     GPU_SHADER_SELECT(world_vertex);
     GPU_SHADER_SELECT(world_fragment);
+    GPU_SHADER_SELECT(world_clear_fragment);
+    GPU_SHADER_SELECT(world_transparent_fragment);
     GPU_SHADER_SELECT(final_vertex);
     GPU_SHADER_SELECT(final_fragment);
     GPU_SHADER_SELECT(light_vertex);
@@ -491,6 +493,14 @@ static bool gpu_map_pipelines_create(void) {
                                                           0,
                                                           1,
                                                           0);
+    SDL_GPUShader *world_clear_fragment = gpu_map_shader_create("world_clear_fragment",
+                                                               "world_clear_fragment",
+                                                               SDL_GPU_SHADERSTAGE_FRAGMENT,
+                                                               0, 0, 0, 0);
+    SDL_GPUShader *world_transparent_fragment = gpu_map_shader_create("world_transparent_fragment",
+                                                                     "world_transparent_fragment",
+                                                                     SDL_GPU_SHADERSTAGE_FRAGMENT,
+                                                                     1, 0, 6, 0);
     SDL_GPUShader *final_vertex = gpu_map_shader_create("final_vertex",
                                                         "final_vertex",
                                                         SDL_GPU_SHADERSTAGE_VERTEX,
@@ -506,9 +516,12 @@ static bool gpu_map_pipelines_create(void) {
                                                           5,
                                                           0);
     if (world_vertex == NULL || world_fragment == NULL || final_vertex == NULL ||
-        final_fragment == NULL) {
+        final_fragment == NULL || world_clear_fragment == NULL ||
+        world_transparent_fragment == NULL) {
         SDL_ReleaseGPUShader(map_device, world_vertex);
         SDL_ReleaseGPUShader(map_device, world_fragment);
+        SDL_ReleaseGPUShader(map_device, world_clear_fragment);
+        SDL_ReleaseGPUShader(map_device, world_transparent_fragment);
         SDL_ReleaseGPUShader(map_device, final_vertex);
         SDL_ReleaseGPUShader(map_device, final_fragment);
         return false;
@@ -540,14 +553,33 @@ static bool gpu_map_pipelines_create(void) {
                 .cull_mode = SDL_GPU_CULLMODE_NONE,
                 .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
             },
+        .depth_stencil_state = {
+            .compare_op = SDL_GPU_COMPAREOP_ALWAYS,
+            .enable_depth_test = true,
+            .enable_depth_write = true,
+        },
         .multisample_state = {.sample_count = SDL_GPU_SAMPLECOUNT_1},
         .target_info =
             {
                 .color_target_descriptions = world_targets,
                 .num_color_targets = SDL_arraysize(world_targets),
+                .depth_stencil_format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
+                .has_depth_stencil_target = true,
             },
     };
     world_pipeline = SDL_CreateGPUGraphicsPipeline(map_device, &world_info);
+    world_info.vertex_shader = final_vertex;
+    world_info.fragment_shader = world_clear_fragment;
+    /* Replacement clears must write transparent black, without blending. */
+    world_targets[0].blend_state.enable_blend = false;
+    world_clear_pipeline = SDL_CreateGPUGraphicsPipeline(map_device, &world_info);
+    world_targets[0].blend_state.enable_blend = true;
+    world_info.vertex_shader = world_vertex;
+    world_info.fragment_shader = world_transparent_fragment;
+    world_info.target_info.num_color_targets = 1;
+    world_info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_GREATER;
+    world_info.depth_stencil_state.enable_depth_write = false;
+    world_transparent_pipeline = SDL_CreateGPUGraphicsPipeline(map_device, &world_info);
 
     SDL_GPUColorTargetDescription final_description = {
         .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
@@ -575,7 +607,10 @@ static bool gpu_map_pipelines_create(void) {
     SDL_ReleaseGPUShader(map_device, world_fragment);
     SDL_ReleaseGPUShader(map_device, final_vertex);
     SDL_ReleaseGPUShader(map_device, final_fragment);
-    return world_pipeline != NULL && final_pipeline != NULL;
+    SDL_ReleaseGPUShader(map_device, world_clear_fragment);
+    SDL_ReleaseGPUShader(map_device, world_transparent_fragment);
+    return world_pipeline != NULL && final_pipeline != NULL && world_clear_pipeline != NULL &&
+           world_transparent_pipeline != NULL;
 }
 
 static bool gpu_map_buffer_upload(SDL_GPUBuffer *buffer, const void *data, uint32_t size) {
@@ -844,10 +879,6 @@ static void gpu_map_target_destroy(gpu_map_target_set_t *target) {
         gpu_renderer_statistics_resource_destroy(target->world_instance_bytes);
         gpu_renderer_statistics_resource_destroy(target->world_instance_bytes);
     }
-    SDL_ReleaseGPUTransferBuffer(map_device, target->damage_clear_transfer);
-    if (target->damage_clear_bytes != 0) {
-        gpu_renderer_statistics_resource_destroy(target->damage_clear_bytes);
-    }
     if (target->wrapped_final != NULL) {
         SDL_DestroyTexture(target->wrapped_final);
     }
@@ -856,9 +887,11 @@ static void gpu_map_target_destroy(gpu_map_target_set_t *target) {
         gpu_renderer_statistics_resource_destroy(target_budget);
         gpu_renderer_statistics_resource_destroy(target_budget);
         gpu_renderer_statistics_resource_destroy(target_budget);
+        gpu_renderer_statistics_resource_destroy(target_budget);
     }
     SDL_ReleaseGPUTexture(map_device, target->albedo);
     SDL_ReleaseGPUTexture(map_device, target->owner);
+    SDL_ReleaseGPUTexture(map_device, target->opaque_rank);
     SDL_ReleaseGPUTexture(map_device, target->final);
     memset(target, 0, sizeof(*target));
 }
@@ -904,7 +937,11 @@ static bool gpu_map_target_create(gpu_map_target_set_t *target, int width, int h
     info.format = SDL_GPU_TEXTUREFORMAT_R32_UINT;
     info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ;
     replacement.owner = SDL_CreateGPUTexture(map_device, &info);
-    if (replacement.albedo == NULL || replacement.owner == NULL || replacement.final == NULL) {
+    info.format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+    info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    replacement.opaque_rank = SDL_CreateGPUTexture(map_device, &info);
+    if (replacement.albedo == NULL || replacement.owner == NULL || replacement.final == NULL ||
+        replacement.opaque_rank == NULL) {
         gpu_map_target_destroy(&replacement);
         return false;
     }
@@ -936,6 +973,7 @@ static bool gpu_map_target_create(gpu_map_target_set_t *target, int width, int h
     replacement.width = width;
     replacement.height = height;
     size_t target_budget = gpu_map_target_texture_budget(width, height);
+    gpu_renderer_statistics_resource_create(target_budget);
     gpu_renderer_statistics_resource_create(target_budget);
     gpu_renderer_statistics_resource_create(target_budget);
     gpu_renderer_statistics_resource_create(target_budget);
@@ -1576,48 +1614,6 @@ static void gpu_map_world_order_reserve(gpu_map_target_set_t *target, size_t req
     target->world_order_capacity = capacity;
 }
 
-static bool gpu_map_damage_clear_reserve(gpu_map_target_set_t *target, size_t required) {
-    if (required <= target->damage_clear_capacity) {
-        return true;
-    }
-    if (required > UINT32_MAX) {
-        SDL_SetError("GPU map damage clear exceeds the backend transfer limit");
-        return false;
-    }
-    size_t capacity = target->damage_clear_capacity;
-    if (capacity == 0) {
-        capacity = GPU_MAP_DAMAGE_CLEAR_INITIAL_CAPACITY;
-    }
-    while (capacity < required) {
-        if (capacity > SIZE_MAX / 2U) {
-            capacity = required;
-            break;
-        }
-        capacity *= 2U;
-    }
-    if (capacity > UINT32_MAX) {
-        capacity = required;
-    }
-    SDL_GPUTransferBufferCreateInfo transfer_info = {
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = (uint32_t)capacity,
-    };
-    SDL_GPUTransferBuffer *transfer = SDL_CreateGPUTransferBuffer(map_device, &transfer_info);
-    if (transfer == NULL) {
-        return false;
-    }
-    map_frame_resource_replaced |= target->damage_clear_bytes != 0;
-    SDL_ReleaseGPUTransferBuffer(map_device, target->damage_clear_transfer);
-    if (target->damage_clear_bytes != 0) {
-        gpu_renderer_statistics_resource_destroy(target->damage_clear_bytes);
-    }
-    target->damage_clear_transfer = transfer;
-    target->damage_clear_capacity = capacity;
-    target->damage_clear_bytes = capacity;
-    gpu_renderer_statistics_resource_create(capacity);
-    return true;
-}
-
 static void gpu_map_world_pending_reserve(size_t required) {
     if (required > world_command_slots_capacity) {
         world_command_slots_capacity = MAX(required, world_command_slots_capacity * 2U);
@@ -1916,59 +1912,28 @@ static bool gpu_map_world_pass_begin(void) {
             .cycle = !world_pass_load_existing,
         },
     };
-    world_pass = SDL_BeginGPURenderPass(map_command_buffer, targets, SDL_arraysize(targets), NULL);
+    SDL_GPUDepthStencilTargetInfo depth = {
+        .texture = map_targets[active_target_index].opaque_rank,
+        .clear_depth = 0.0f,
+        .load_op = world_pass_load_existing ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR,
+        .store_op = SDL_GPU_STOREOP_STORE,
+        .stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
+        .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
+        .cycle = !world_pass_load_existing,
+    };
+    world_pass = SDL_BeginGPURenderPass(map_command_buffer, targets, SDL_arraysize(targets), &depth);
     if (world_pass == NULL) {
         return false;
+    }
+    if (world_pass_load_existing && world_frame_damage_valid) {
+        SDL_BindGPUGraphicsPipeline(world_pass, world_clear_pipeline);
+        SDL_SetGPUScissor(world_pass, &world_frame_damage);
+        SDL_DrawGPUPrimitives(world_pass, 6, 1, 0, 0);
+        gpu_renderer_statistics_commands(1, 1, 1);
     }
     SDL_BindGPUGraphicsPipeline(world_pass, world_pipeline);
     SDL_Rect scissor = map_clip_enabled ? map_clip : (SDL_Rect){0, 0, target_width, target_height};
     SDL_SetGPUScissor(world_pass, &scissor);
-    return true;
-}
-
-/** Clear one conservative damage rectangle in both retained world targets. */
-static bool gpu_map_world_damage_clear(gpu_map_target_set_t *target) {
-    if (!world_frame_damage_valid) {
-        return true;
-    }
-    size_t pixels = (size_t)world_frame_damage.w * (size_t)world_frame_damage.h;
-    if (pixels > SIZE_MAX / 4U) {
-        SDL_SetError("GPU map damage rectangle exceeds the transfer limit");
-        return false;
-    }
-    size_t bytes = pixels * 4U;
-    if (!gpu_map_damage_clear_reserve(target, bytes)) {
-        return false;
-    }
-    Uint8 *mapped = SDL_MapGPUTransferBuffer(map_device, target->damage_clear_transfer, true);
-    if (mapped == NULL) {
-        return false;
-    }
-    memset(mapped, 0, bytes);
-    SDL_UnmapGPUTransferBuffer(map_device, target->damage_clear_transfer);
-
-    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(map_command_buffer);
-    if (copy == NULL) {
-        return false;
-    }
-    SDL_GPUTextureTransferInfo source = {
-        .transfer_buffer = target->damage_clear_transfer,
-        .pixels_per_row = (uint32_t)world_frame_damage.w,
-        .rows_per_layer = (uint32_t)world_frame_damage.h,
-    };
-    SDL_GPUTextureRegion albedo = {
-        .texture = target->albedo,
-        .x = (uint32_t)world_frame_damage.x,
-        .y = (uint32_t)world_frame_damage.y,
-        .w = (uint32_t)world_frame_damage.w,
-        .h = (uint32_t)world_frame_damage.h,
-        .d = 1,
-    };
-    SDL_GPUTextureRegion owner = albedo;
-    owner.texture = target->owner;
-    SDL_UploadToGPUTexture(copy, &source, &albedo, false);
-    SDL_UploadToGPUTexture(copy, &source, &owner, false);
-    SDL_EndGPUCopyPass(copy);
     return true;
 }
 
@@ -2019,7 +1984,79 @@ static bool gpu_map_world_damage_requires_full_redraw(void) {
            total_pixels * GPU_MAP_DAMAGE_FULL_REDRAW_NUMERATOR;
 }
 
+/** Replay painter order without changing stable instance-slot contents. */
+static void gpu_map_world_draw(SDL_GPURenderPass *pass, bool full_redraw) {
+    gpu_map_target_set_t *target = &map_targets[active_target_index];
+    gpu_map_vertex_uniforms_t vertex = {
+        .viewport = {(float)target_width, (float)target_height},
+        .order_scale = 1.0f / (float)(world_commands_num + 1U),
+    };
+    SDL_BindGPUVertexStorageBuffers(pass, 0, &target->world_instance_buffer, 1);
+
+    uint64_t batches = 0;
+    size_t drawn_commands = 0;
+    for (size_t first = 0; first < world_commands_num;) {
+        SDL_Rect first_scissor;
+        if (!full_redraw &&
+            !gpu_map_world_command_scissor(&world_commands[first],
+                                           &world_frame_damage,
+                                           &first_scissor)) {
+            first++;
+            continue;
+        }
+        size_t end = first + 1U;
+        while (end < world_commands_num &&
+               (full_redraw ||
+                gpu_map_world_command_scissor(&world_commands[end],
+                                              &world_frame_damage,
+                                              &first_scissor)) &&
+               world_commands[end].asset->texture == world_commands[first].asset->texture &&
+               memcmp(&world_commands[end].clip,
+                      &world_commands[first].clip,
+                      sizeof(world_commands[first].clip)) == 0) {
+            end++;
+        }
+        SDL_GPUTextureSamplerBinding binding = {
+            .texture = world_commands[first].asset->texture,
+            .sampler = map_sampler,
+        };
+        SDL_Rect scissor = world_commands[first].clip;
+        if (!full_redraw &&
+            !gpu_map_world_damage_clip_scissor(&world_commands[first], &scissor)) {
+            first++;
+            continue;
+        }
+        SDL_SetGPUScissor(pass, &scissor);
+        SDL_BindGPUFragmentSamplers(pass, 0, &binding, 1);
+        for (size_t chunk = first; chunk < end;) {
+            size_t chunk_end = MIN(end, chunk + GPU_MAP_WORLD_SLOT_CHUNK);
+            uint32_t slots[GPU_MAP_WORLD_SLOT_CHUNK] = {0};
+            for (size_t index = chunk; index < chunk_end; index++) {
+                slots[index - chunk] = world_command_slots[index];
+            }
+            size_t slot_count = chunk_end - chunk;
+            size_t slot_bytes = (slot_count + 3U) / 4U * sizeof(uint32_t) * 4U;
+            vertex.order_base = (float)(chunk + 1U);
+            SDL_PushGPUVertexUniformData(map_command_buffer, 0, &vertex, sizeof(vertex));
+            SDL_PushGPUVertexUniformData(map_command_buffer, 1, slots, (uint32_t)slot_bytes);
+            gpu_renderer_statistics_slot_uniform_upload(slot_bytes);
+            SDL_DrawGPUPrimitives(pass, 6, (uint32_t)slot_count, 0, 0);
+            drawn_commands += slot_count;
+            batches++;
+            chunk = chunk_end;
+        }
+        first = end;
+    }
+    gpu_renderer_statistics_commands(drawn_commands, batches, batches);
+}
+
 static bool gpu_map_world_commands_submit(void) {
+    /* Binary32 has exact distinct integer ranks through 2^24. Leave an
+     * endpoint above the final command so every interpolated Z is in (0,1). */
+    if (world_commands_num >= (1U << 24U)) {
+        SDL_SetError("GPU map painter rank exceeds exact depth representation");
+        return false;
+    }
     gpu_map_target_set_t *target = &map_targets[active_target_index];
     if (!gpu_map_world_slots_prepare(target)) {
         return false;
@@ -2135,72 +2172,11 @@ static bool gpu_map_world_commands_submit(void) {
         return false;
     }
     world_pass_load_existing = target->published && !world_frame_full_redraw;
-    if (!world_frame_full_redraw && !gpu_map_world_damage_clear(target)) {
-        return false;
-    }
     if (!gpu_map_world_pass_begin()) {
         return false;
     }
-    gpu_map_vertex_uniforms_t vertex = {
-        .viewport = {(float)target_width, (float)target_height},
-    };
-    SDL_PushGPUVertexUniformData(map_command_buffer, 0, &vertex, sizeof(vertex));
-    SDL_BindGPUVertexStorageBuffers(world_pass, 0, &target->world_instance_buffer, 1);
     SDL_BindGPUFragmentStorageBuffers(world_pass, 0, &projected_light_row_buffer, 1);
-
-    uint64_t batches = 0;
-    size_t drawn_commands = 0;
-    for (size_t first = 0; first < world_commands_num;) {
-        SDL_Rect first_scissor;
-        if (!world_frame_full_redraw &&
-            !gpu_map_world_command_scissor(&world_commands[first],
-                                           &world_frame_damage,
-                                           &first_scissor)) {
-            first++;
-            continue;
-        }
-        size_t end = first + 1U;
-        while (end < world_commands_num &&
-               (world_frame_full_redraw ||
-                gpu_map_world_command_scissor(&world_commands[end],
-                                              &world_frame_damage,
-                                              &first_scissor)) &&
-               world_commands[end].asset->texture == world_commands[first].asset->texture &&
-               memcmp(&world_commands[end].clip,
-                      &world_commands[first].clip,
-                      sizeof(world_commands[first].clip)) == 0) {
-            end++;
-        }
-        SDL_GPUTextureSamplerBinding binding = {
-            .texture = world_commands[first].asset->texture,
-            .sampler = map_sampler,
-        };
-        SDL_Rect scissor = world_commands[first].clip;
-        if (!world_frame_full_redraw &&
-            !gpu_map_world_damage_clip_scissor(&world_commands[first], &scissor)) {
-            first++;
-            continue;
-        }
-        SDL_SetGPUScissor(world_pass, &scissor);
-        SDL_BindGPUFragmentSamplers(world_pass, 0, &binding, 1);
-        for (size_t chunk = first; chunk < end;) {
-            size_t chunk_end = MIN(end, chunk + GPU_MAP_WORLD_SLOT_CHUNK);
-            uint32_t slots[GPU_MAP_WORLD_SLOT_CHUNK] = {0};
-            for (size_t index = chunk; index < chunk_end; index++) {
-                slots[index - chunk] = world_command_slots[index];
-            }
-            size_t slot_count = chunk_end - chunk;
-            size_t slot_bytes = (slot_count + 3U) / 4U * sizeof(uint32_t) * 4U;
-            SDL_PushGPUVertexUniformData(map_command_buffer, 1, slots, (uint32_t)slot_bytes);
-            gpu_renderer_statistics_slot_uniform_upload(slot_bytes);
-            SDL_DrawGPUPrimitives(world_pass, 6, (uint32_t)slot_count, 0, 0);
-            drawn_commands += slot_count;
-            batches++;
-            chunk = chunk_end;
-        }
-        first = end;
-    }
-    gpu_renderer_statistics_commands(drawn_commands, batches, batches);
+    gpu_map_world_draw(world_pass, world_frame_full_redraw);
     world_frame_updated = true;
     return true;
 }
@@ -2571,6 +2547,8 @@ bool gpu_map_renderer_create(SDL_GPUDevice *device, SDL_Renderer *renderer) {
     gpu_renderer_statistics_resource_create(0);
     gpu_renderer_statistics_resource_create(0);
     gpu_renderer_statistics_resource_create(0);
+    gpu_renderer_statistics_resource_create(0);
+    gpu_renderer_statistics_resource_create(0);
     core_resources_accounted = true;
     return true;
 }
@@ -2678,6 +2656,8 @@ void gpu_map_renderer_destroy(void) {
     solid_surface = NULL;
     SDL_ReleaseGPUGraphicsPipeline(map_device, world_pipeline);
     SDL_ReleaseGPUGraphicsPipeline(map_device, final_pipeline);
+    SDL_ReleaseGPUGraphicsPipeline(map_device, world_clear_pipeline);
+    SDL_ReleaseGPUGraphicsPipeline(map_device, world_transparent_pipeline);
     SDL_ReleaseGPUBuffer(map_device, light_quad_buffer);
     SDL_ReleaseGPUTransferBuffer(map_device, light_quad_transfer);
     SDL_ReleaseGPUBuffer(map_device, light_row_buffer);
@@ -2724,10 +2704,14 @@ void gpu_map_renderer_destroy(void) {
         gpu_renderer_statistics_resource_destroy(0);
         gpu_renderer_statistics_resource_destroy(0);
         gpu_renderer_statistics_resource_destroy(0);
+        gpu_renderer_statistics_resource_destroy(0);
+        gpu_renderer_statistics_resource_destroy(0);
         core_resources_accounted = false;
     }
     world_pipeline = NULL;
     final_pipeline = NULL;
+    world_clear_pipeline = NULL;
+    world_transparent_pipeline = NULL;
     light_quad_buffer = NULL;
     light_quad_transfer = NULL;
     light_row_buffer = NULL;
@@ -3628,6 +3612,37 @@ bool gpu_map_renderer_end(void) {
     gpu_renderer_statistics_commands(1, 1, 1);
     SDL_EndGPURenderPass(final_pass);
 
+    SDL_GPUDepthStencilTargetInfo transparent_depth = {
+        .texture = target->opaque_rank,
+        .load_op = SDL_GPU_LOADOP_LOAD,
+        .store_op = SDL_GPU_STOREOP_STORE,
+        .stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
+        .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
+    };
+    final_info.load_op = SDL_GPU_LOADOP_LOAD;
+    final_info.cycle = false;
+    SDL_GPURenderPass *transparent_pass =
+        SDL_BeginGPURenderPass(map_command_buffer, &final_info, 1, &transparent_depth);
+    if (transparent_pass == NULL) {
+        gpu_renderer_timing_end(GPU_RENDERER_TIMING_LIGHT_TONE, light_timing_started);
+        gpu_map_command_cancel();
+        return false;
+    }
+    SDL_BindGPUGraphicsPipeline(transparent_pass, world_transparent_pipeline);
+    SDL_SetGPUViewport(transparent_pass, &final_viewport);
+    SDL_GPUBuffer *transparent_buffers[] = {
+        projected_light_row_buffer,
+        light_quad_buffer,
+        light_row_buffer,
+        light_span_buffer,
+        light_forward_lut_buffer,
+        light_inverse_lut_buffer,
+    };
+    SDL_BindGPUFragmentStorageBuffers(transparent_pass, 0,
+                                      transparent_buffers, SDL_arraysize(transparent_buffers));
+    gpu_map_world_draw(transparent_pass, final_full_redraw);
+    SDL_EndGPURenderPass(transparent_pass);
+
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_LIGHT_TONE, light_timing_started);
     uint64_t submission_started = gpu_renderer_timing_begin();
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
@@ -3720,10 +3735,10 @@ void gpu_map_renderer_invalidate_target(bool auxiliary) {
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
 size_t gpu_map_renderer_target_payload_bytes(int width, int height, uint8_t active_depths) {
     if (width <= 0 || height <= 0 || active_depths == 0 || active_depths > MAP2_LEVELS ||
-        (size_t)width > SIZE_MAX / (size_t)height / 12U) {
+        (size_t)width > SIZE_MAX / (size_t)height / 16U) {
         return SIZE_MAX;
     }
-    return (size_t)width * (size_t)height * 12U;
+    return (size_t)width * (size_t)height * 16U;
 }
 
 size_t gpu_map_renderer_target_retained_bytes(int width, int height, uint8_t active_depths) {
@@ -3731,7 +3746,7 @@ size_t gpu_map_renderer_target_retained_bytes(int width, int height, uint8_t act
         return SIZE_MAX;
     }
     size_t per_target = gpu_map_target_texture_budget(width, height);
-    return per_target > SIZE_MAX / 3U ? SIZE_MAX : per_target * 3U;
+    return per_target > SIZE_MAX / 4U ? SIZE_MAX : per_target * 4U;
 }
 
 size_t gpu_map_renderer_atlas_page_count(void) {

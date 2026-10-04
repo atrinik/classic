@@ -47,7 +47,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 set(ATRINIK_GPU_SHADER_NAMES
     final_fragment final_vertex
     light_fragment light_vertex
-    world_fragment world_vertex)
+    world_clear_fragment world_fragment world_transparent_fragment world_vertex)
 set(ATRINIK_GPU_SHADER_ARTIFACTS)
 foreach (name IN LISTS ATRINIK_GPU_SHADER_NAMES)
     foreach (extension IN ITEMS dxil msl spv)
