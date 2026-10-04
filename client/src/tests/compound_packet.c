@@ -1,3 +1,7 @@
+#include <commands.h>
+#include <map.h>
+#include <player.h>
+#include <region_map.h>
 #include <interface_packet.h>
 #include <item_packet.h>
 #include <toolkit/socket.h>
@@ -13,6 +17,82 @@
             abort();                                                                        \
         }                                                                                   \
     } while (0)
+
+/* Resolve an introduced item while keeping the production command decoder and
+ * update mutation path. Rendering and secondary UI effects are irrelevant here. */
+static object introduced_item;
+static bool item_is_known;
+static unsigned item_redraws;
+size_t animations_num;
+_mapdata MapData;
+int minimap_redraw_flag;
+
+object *object_find(tag_t tag) {
+    return item_is_known && tag == introduced_item.tag ? &introduced_item : NULL;
+}
+void object_redraw(object *op) {
+    TEST_CHECK(op == &introduced_item);
+    item_redraws++;
+}
+int object_animate(object *op) {
+    (void)op;
+    return 0;
+}
+bool image_face_valid(int face) {
+    (void)face;
+    return true;
+}
+void image_request_face(int face) {
+    (void)face;
+}
+void spells_update(object *op, uint16_t cost, uint32_t path, uint32_t flags, const char *msg) {
+    (void)op;
+    (void)cost;
+    (void)path;
+    (void)flags;
+    (void)msg;
+}
+void skills_update(object *op, uint8_t level, int64_t xp, const char *msg) {
+    (void)op;
+    (void)level;
+    (void)xp;
+    (void)msg;
+}
+void region_map_fow_update(region_map_t *map) {
+    (void)map;
+}
+
+static packet_error_t decode_item_update(packet_struct *packet, size_t length) {
+    packet_reader_scope_t scope;
+    packet_reader_scope_begin(&scope);
+    socket_command_item_update(packet->data, length, 0);
+    return packet_reader_scope_finish(&scope);
+}
+
+static void test_update_requires_introduced_tag(void) {
+    introduced_item = (object){.tag = 42, .nrof = 1};
+    item_is_known = false;
+    item_redraws = 0;
+    packet_struct *packet = packet_new(0, 32, 32);
+    packet_writer_write_uint16(packet, UPD_NROF);
+    packet_writer_write_uint32(packet, introduced_item.tag);
+    packet_writer_write_uint32(packet, 7);
+    TEST_CHECK(decode_item_update(packet, packet->len) == PACKET_ERROR_UNSUPPORTED);
+    TEST_CHECK(introduced_item.nrof == 1 && item_redraws == 0);
+    item_is_known = true;
+    TEST_CHECK(decode_item_update(packet, packet->len) == PACKET_ERROR_NONE);
+    TEST_CHECK(introduced_item.nrof == 7 && item_redraws == 1);
+    TEST_CHECK(decode_item_update(packet, packet->len - 1) == PACKET_ERROR_TRUNCATED);
+    TEST_CHECK(introduced_item.nrof == 7 && item_redraws == 1);
+    packet_free(packet);
+
+    packet = packet_new(0, 32, 32);
+    packet_writer_write_uint16(packet, 0x8000);
+    packet_writer_write_uint32(packet, introduced_item.tag);
+    TEST_CHECK(decode_item_update(packet, packet->len) == PACKET_ERROR_UNSUPPORTED);
+    TEST_CHECK(introduced_item.nrof == 7 && item_redraws == 1);
+    packet_free(packet);
+}
 
 static void write_item_record(packet_struct *packet, const char *glow) {
     packet_writer_write_uint32(packet, 42);
@@ -353,6 +433,7 @@ static void test_bounded_fuzz_regression(void) {
 int main(void) {
     toolkit_import(packet);
     test_item_command();
+    test_update_requires_introduced_tag();
     test_name_count_update();
     test_extra_message_limit();
     test_glow_limit_and_error_scope();

@@ -3559,6 +3559,8 @@ bool player_load_stream(player *pl, FILE *fp) {
     HARD_ASSERT(pl != NULL);
     HARD_ASSERT(fp != NULL);
 
+    pl->initial_inventory_sent = false;
+
     char buf[HUGE_BUF];
     bool stuck_cooldown_seen = false;
     size_t line_length;
@@ -3833,6 +3835,8 @@ object *player_get_dummy(const char *name, const char *host) {
     pl->cs->sound = 1;
 
     object_enter_map(pl->ob, NULL, NULL, 0, 0, false);
+    /* Offline dummy players represent an already initialized client. */
+    pl->initial_inventory_sent = true;
 
     return pl->ob;
 }

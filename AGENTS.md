@@ -61,6 +61,15 @@
   on `classic`. Every runtime handoff includes the exact `topology show`, `up`,
   `ps`, `logs`, and `down` lifecycle, an isolated state, prerequisites, expected
   results, and cleanup.
+- Do not guess wrapper-generated paths or edit state used by a live process.
+  If broken local metadata prevents an authorized launch and public
+  inspect/retry/recovery cannot run, follow the wrapper's canonical
+  [local recovery](https://github.com/atrinik/atrinik/blob/main/docs/LOCAL_RECOVERY.md)
+  contract. Repair only the smallest owned coordinate after fresh path, object,
+  user, generation, ownership and current-use checks under exclusive
+  coordination; preserve the original evidence. Never rewrite a live
+  generation, adopt another task's state, fabricate ownership, or bypass
+  wrapper validation.
 - Commits and pull-request titles use Conventional Commits. Preferred scopes are
   `client`, `server`, `editor`, `libatrinik`, `protocol`, `build`, `ci`, `docs`,
   and `release`.

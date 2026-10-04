@@ -171,6 +171,20 @@ class UpdateSoundLockTests(unittest.TestCase):
             evidence = UPDATER.execute(
                 root, apply=False, api=api, downloader=self.downloader(downloads)
             )
+        original = (root / UPDATER.LOCK_PATH).read_bytes()
+        helper = mock.Mock()
+        with (
+            mock.patch.object(UPDATER, "validate_lock_with_loader"),
+            mock.patch.object(UPDATER.importlib.util, "spec_from_file_location", return_value=mock.Mock()),
+            mock.patch.object(UPDATER.importlib.util, "module_from_spec", return_value=helper),
+        ):
+            UPDATER.execute(root, apply=True, api=api, downloader=self.downloader(downloads))
+            documents = helper.apply_documents.call_args.args[1]
+            self.assertEqual(documents[UPDATER.LOCK_PATH]["dependencies"][0]["tag"], candidate_tag)
+            helper.apply_documents.side_effect = RuntimeError("bundle unavailable")
+            with self.assertRaisesRegex(UPDATER.UpdateError, "bundle unavailable"):
+                UPDATER.execute(root, apply=True, api=api, downloader=self.downloader(downloads))
+        self.assertEqual((root / UPDATER.LOCK_PATH).read_bytes(), original)
         self.assertTrue(evidence["changed"])
         self.assertEqual(evidence["new"]["tag"], candidate_tag)
         self.assertEqual(evidence["new"]["sha256"], hashlib.sha256(candidate_archive).hexdigest())

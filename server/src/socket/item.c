@@ -632,8 +632,15 @@ void esrv_send_inventory(object *pl, object *op) {
                              0);
     }
 
-    socket_send_packet(CONTR(pl)->cs, packet);
+    socket_struct *cs = CONTR(pl)->cs;
+    size_t queued_before = cs->packet_queue_count;
+    socket_send_packet(cs, packet);
     if (pl == op) {
+        /* Login enters ST_PLAYING before PLAYER and ITEM are sent. Only the
+         * successfully queued self snapshot enables subsequent item deltas. */
+        if (cs->state == ST_PLAYING && cs->packet_queue_count > queued_before) {
+            CONTR(pl)->initial_inventory_sent = true;
+        }
         player_status_send_snapshot(pl);
     }
 }
@@ -650,7 +657,7 @@ void esrv_send_inventory(object *pl, object *op) {
 static void esrv_update_item_send(int flags, object *pl, object *op) {
     packet_struct *packet;
 
-    if (!CONTR(pl)) {
+    if (!CONTR(pl) || CONTR(pl)->cs->state != ST_PLAYING || !CONTR(pl)->initial_inventory_sent) {
         return;
     }
 
@@ -705,7 +712,7 @@ void esrv_update_item(int flags, object *op) {
 static void esrv_send_item_send(object *pl, object *op) {
     packet_struct *packet;
 
-    if (!CONTR(pl) || CONTR(pl)->cs->state != ST_PLAYING) {
+    if (!CONTR(pl) || CONTR(pl)->cs->state != ST_PLAYING || !CONTR(pl)->initial_inventory_sent) {
         return;
     }
 

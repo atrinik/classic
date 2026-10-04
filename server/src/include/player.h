@@ -145,6 +145,9 @@ struct pl_player {
     /** Name of the map the player is on. */
     char maplevel[MAX_BUF];
 
+    /** This session has queued its initial inventory snapshot; never persisted. */
+    bool initial_inventory_sent;
+
     /** Rank + name +" the xxxx" */
     char quick_name[MAX_BUF];
 

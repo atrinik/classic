@@ -3,6 +3,11 @@
 import Atrinik
 
 
+# Exercise the real module exports used by content packet helpers.
+assert Atrinik.CLIENT_CMD_NOTIFICATION == 26
+assert Atrinik.CLIENT_CMD_MAPSTATS == 12
+
+
 origin = Atrinik.WhoIsActivator().map
 test_map = Atrinik.CreateMap(5, 5, "plugin-insert-monster", origin, "sealed", 0)
 
