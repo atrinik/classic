@@ -452,4 +452,5 @@ void client_access_admin_reset(void) {
         free(pending_command);
         pending_command = NULL;
     }
+    book_sensitive_clear();
 }

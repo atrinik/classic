@@ -14,6 +14,7 @@
 
 #include <mouse.h>
 
+#include <access_admin.h>
 #include <animations.h>
 #include <client.h>
 #include <commands.h>
@@ -2198,6 +2199,45 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         return false;
     }
     popup_destroy_all();
+
+    if (!book_load(book, (int)strlen(book))) {
+        SDL_SetError("ordinary book could not be opened for targeted privacy clear");
+        return false;
+    }
+    client_access_admin_reset();
+    if (!book_test_content_retained() || book_sensitive_visible()) {
+        SDL_SetError("targeted private-result clear altered an ordinary book");
+        return false;
+    }
+    popup_destroy_all();
+
+    const char *private_result =
+        "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";
+    if (!book_load_sensitive(private_result, (int)strlen(private_result), "Access management")) {
+        SDL_SetError("private access result could not be opened for lifecycle clear");
+        return false;
+    }
+    server_add_open();
+    popup_struct *private_overlay = popup_get_head();
+    client_access_admin_reset();
+    if (book_test_content_retained() || book_sensitive_visible() ||
+        popup_get_head() != private_overlay) {
+        SDL_SetError("admin reset retained private output or destroyed an unrelated popup");
+        return false;
+    }
+    popup_destroy_all();
+
+    if (!book_load_sensitive(private_result, (int)strlen(private_result), "Access management")) {
+        SDL_SetError("private access result could not be opened for character transition clear");
+        return false;
+    }
+    uint8_t empty_characters = 0;
+    socket_command_characters(&empty_characters, 0, 0);
+    if (book_test_content_retained() || book_sensitive_visible() || cpl.state != ST_LOGIN) {
+        SDL_SetError("account/character transition retained private access output");
+        return false;
+    }
+    cpl.state = ST_PLAY;
 
     settings_client_open();
     if (!gpu_player_view_ui_capture("popup_settings_controls", false)) {

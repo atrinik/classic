@@ -427,6 +427,8 @@ void socket_command_stats(uint8_t *data, size_t len, size_t pos) {
 
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_player(uint8_t *data, size_t len, size_t pos) {
+    client_access_admin_reset();
+
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     int tag, weight;

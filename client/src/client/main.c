@@ -30,6 +30,7 @@
 #include <mouse.h>
 #include <access_admin.h>
 #include <animations.h>
+#include <book.h>
 #include <client.h>
 #include <commands.h>
 #include <config.h>
@@ -825,6 +826,41 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *conte
     return false;
 }
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool client_access_lifecycle_test(void) {
+    static const char ordinary[] = "ordinary retained book";
+    static const char private_result[] =
+        "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";
+
+    if (!book_test_state_seed(ordinary, false)) {
+        return false;
+    }
+    client_access_admin_reset();
+    bool ordinary_preserved =
+        book_test_content_retained() && !book_test_clear_was_observed();
+    book_test_state_discard();
+
+    if (!book_test_state_seed(private_result, true)) {
+        return false;
+    }
+    client_access_admin_reset();
+    bool reset_cleared =
+        !book_test_content_retained() && book_test_clear_was_observed();
+
+    if (!book_test_state_seed(private_result, true)) {
+        return false;
+    }
+    uint8_t empty_characters = 0;
+    cpl.state = ST_PLAY;
+    socket_command_characters(&empty_characters, 0, 0);
+    bool characters_cleared = !book_test_content_retained() &&
+                              book_test_clear_was_observed() && cpl.state == ST_LOGIN;
+    book_test_state_discard();
+
+    return ordinary_preserved && reset_cleared && characters_cleared;
+}
+#endif
+
 /**
  * The main function.
  * @param argc
@@ -870,6 +906,10 @@ int main(int argc, char *argv[]) {
     }
     if (argc == 3 && strcmp(argv[1], "--gpu-player-view-lifecycle") == 0) {
         return gpu_player_view_main(argc - 1, &argv[1]);
+    }
+
+    if (argc == 2 && strcmp(argv[1], "--access-lifecycle-test") == 0) {
+        return client_access_lifecycle_test() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {

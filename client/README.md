@@ -209,6 +209,20 @@ environment variables never synthesize a selected-adapter identity.
  Account passwords remain a separate account-login credential and retain their
  existing protected-file automation path.
 
+ In-game `/access` management uses the dedicated encrypted administration
+ packets only while a character is playing. The server authorizes every request
+ against that current character's `access` command permission; characters in
+ the `[OP]` permission group qualify through its wildcard grant. Account names
+ and account-level allowlists do not grant this access. Permission is checked
+ again before a queued private result is delivered, so revocation prevents an
+ undelivered code from reaching the client even if the accepted mutation later
+ commits.
+
+ Administration results use a private book that is cleansed when it closes and
+ across logout, account selection, and character entry. This targeted cleanup
+ leaves ordinary books open. A code that was already displayed, copied, or
+ captured cannot be recalled by later permission or token revocation.
+
  Directory entries may intentionally omit a public hostname and port. Those
  servers remain joinable through authenticated rendezvous candidates, so
  launching a private friend server does not require publishing its raw IP.

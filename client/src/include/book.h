@@ -89,12 +89,24 @@ extern bool book_load(const char *data, int len);
 /** Load private access-management output and cleanse it when the popup closes. */
 bool book_load_sensitive(const char *data, int len, const char *title);
 
+/** Close and cleanse private access-management output without affecting an ordinary book. */
+void book_sensitive_clear(void);
+
 /** Whether private access-management output is currently visible. */
 bool book_sensitive_visible(void);
 
 #ifdef ATRINIK_WIDGET_TESTS
 /** Whether book content remains owned after an allocation-failure path. */
 extern bool book_test_content_retained(void);
+
+/** Seed retained book state without creating a renderer-owned popup. */
+extern bool book_test_state_seed(const char *content, bool sensitive);
+
+/** Whether the last sensitive-state teardown observed a fully cleansed buffer. */
+extern bool book_test_clear_was_observed(void);
+
+/** Release state seeded by a non-rendering lifecycle test. */
+extern void book_test_state_discard(void);
 #endif
 
 extern void book_redraw(void);

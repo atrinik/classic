@@ -46,6 +46,9 @@
 /** The book's content. */
 static char *book_content = NULL;
 static bool book_sensitive;
+#ifdef ATRINIK_WIDGET_TESTS
+static bool book_test_clear_observed;
+#endif
 /** Name of the book. */
 static char book_name[HUGE_BUF];
 /** Number of lines in the book. */
@@ -80,7 +83,17 @@ static void book_state_clear(void) {
     }
     book_help_history_enabled = 0;
     if (book_sensitive && book_content != NULL) {
-        access_code_clear(book_content, strlen(book_content));
+        size_t content_length = strlen(book_content);
+        access_code_clear(book_content, content_length);
+#ifdef ATRINIK_WIDGET_TESTS
+        book_test_clear_observed = true;
+        for (size_t i = 0; i < content_length; i++) {
+            if (book_content[i] != '\0') {
+                book_test_clear_observed = false;
+                break;
+            }
+        }
+#endif
     }
     free(book_content);
     book_content = NULL;
@@ -363,6 +376,19 @@ bool book_load_sensitive(const char *data, int len, const char *title) {
     return data != NULL && title != NULL && book_load_internal(data, len, true, title);
 }
 
+void book_sensitive_clear(void) {
+    if (!book_sensitive) {
+        return;
+    }
+
+    popup_struct *popup = book_popup_get();
+    if (popup != NULL) {
+        popup_destroy(popup);
+    } else {
+        book_state_clear();
+    }
+}
+
 bool book_sensitive_visible(void) {
     return book_sensitive && book_popup_get() != NULL;
 }
@@ -370,6 +396,25 @@ bool book_sensitive_visible(void) {
 #ifdef ATRINIK_WIDGET_TESTS
 bool book_test_content_retained(void) {
     return book_content != NULL;
+}
+
+bool book_test_state_seed(const char *content, bool sensitive) {
+    if (content == NULL || *content == '\0') {
+        return false;
+    }
+    book_state_clear();
+    book_content = xstrdup(content);
+    book_sensitive = sensitive;
+    book_test_clear_observed = false;
+    return true;
+}
+
+bool book_test_clear_was_observed(void) {
+    return book_test_clear_observed;
+}
+
+void book_test_state_discard(void) {
+    book_state_clear();
 }
 #endif
 

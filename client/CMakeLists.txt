@@ -578,6 +578,8 @@ if (BUILD_TESTING)
 
     add_test(NAME client-help-parser COMMAND ${EXECUTABLE} --help-parser-test)
 
+    add_test(NAME client-access-lifecycle COMMAND ${EXECUTABLE} --access-lifecycle-test)
+
     add_test(NAME client-cli-options
         COMMAND ${EXECUTABLE}
             --connect=example:account:password:character
