@@ -11,7 +11,7 @@
              layout="src/tests/fixtures/player_view/gpu-interface.cfg"
              layout-sha256="8f2fc77fead14655d039c9cd7e52c6767e942603eb06646f427f87d25cb8a3d2"
              snapshot="src/tests/fixtures/player_view/gpu-qualification-town-25x25-seven-depth.map2.hex"
-             snapshot-sha256="c344f13e2cd0f936c8561f9e88a74ae5ff75164d9d4c22d6012c2b28d0b3cc7e"
+             snapshot-sha256="2519cf2067a0952de4f918dbd9ffa31db5314ee00db60ce800cddf418a88f566"
              viewport-width="2560"
              viewport-height="1440"
              look-width="25"

@@ -41,6 +41,7 @@
 #include <keybind.h>
 #include <lighting.h>
 #include <main.h>
+#include <live_movement_input.h>
 #include <map.h>
 #include <player.h>
 #include <server_files.h>
@@ -77,6 +78,7 @@
 #include <toolkit/datetime.h>
 #include <toolkit/metaserver_url.h>
 #include <keepalive.h>
+#include <live_movement.h>
 #include <network_graph.h>
 #include <cmake.h>
 #include <openssl/crypto.h>
@@ -456,8 +458,7 @@ static void sound_background_hook(void) {
 /** Whether the window is available for normal-rate rendering. */
 static bool window_is_active(void) {
     SDL_WindowFlags flags = SDL_GetWindowFlags(ScreenWindow);
-    return (flags & (SDL_WINDOW_HIDDEN | SDL_WINDOW_MINIMIZED)) == 0 &&
-           (flags & SDL_WINDOW_INPUT_FOCUS) != 0;
+    return live_movement_window_is_active(flags, live_movement_enabled());
 }
 
 typedef struct presentation_clock {
@@ -471,9 +472,7 @@ static presentation_clock_t presentation_clock_start(uint32_t wall_tick, bool ac
 }
 
 /** Advance only the interval that began while presentation was active. */
-static void presentation_clock_step(presentation_clock_t *clock,
-                                    uint32_t wall_tick,
-                                    bool active) {
+static void presentation_clock_step(presentation_clock_t *clock, uint32_t wall_tick, bool active) {
     if (clock->active) {
         clock->tick += wall_tick - clock->wall_tick;
     }
@@ -489,7 +488,17 @@ static bool presentation_clock_suspend_test(void) {
     presentation_clock_step(&clock, 5000, true);
     success = success && clock.tick == 600;
     presentation_clock_step(&clock, 5050, true);
-    return success && clock.tick == 650;
+    success = success && clock.tick == 650;
+    clock =
+        presentation_clock_start(500, live_movement_window_is_active(SDL_WINDOW_INPUT_FOCUS, true));
+    presentation_clock_step(&clock, 600, live_movement_window_is_active(0, true));
+    presentation_clock_step(&clock, 900, live_movement_window_is_active(0, true));
+    success = success && clock.tick == 900;
+    presentation_clock_step(&clock,
+                            1000,
+                            live_movement_window_is_active(SDL_WINDOW_MINIMIZED, true));
+    presentation_clock_step(&clock, 5000, live_movement_window_is_active(0, true));
+    return success && clock.tick == 1000;
 }
 #endif
 
@@ -628,9 +637,7 @@ static bool clioptions_option_connect_password_file(const char *arg, char **errm
         return false;
     }
     if (permissive_mode) {
-        *errmsg = xstrdup(
-            "Connect password file must be readable only by the owner (mode 0600)"
-        );
+        *errmsg = xstrdup("Connect password file must be readable only by the owner (mode 0600)");
         OPENSSL_cleanse(password, sizeof(password));
         return false;
     }
@@ -748,8 +755,7 @@ static const char *clioptions_option_game_news_url_desc =
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_game_news_url(const char *arg, char **errmsg) {
     free(clioption_settings.game_news_url);
-    clioption_settings.game_news_url =
-        strcasecmp(arg, "off") == 0 ? NULL : xstrdup(arg);
+    clioption_settings.game_news_url = strcasecmp(arg, "off") == 0 ? NULL : xstrdup(arg);
     return true;
 }
 
@@ -762,6 +768,58 @@ static const char *clioptions_option_reconnect_desc =
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_reconnect(const char *arg, char **errmsg) {
     clioption_settings.reconnect = 1;
+    return true;
+}
+
+static char *live_route_path;
+static char *live_report_path;
+static char *live_initial_capture_path;
+static char *live_final_capture_path;
+static char *live_lighting_phase;
+
+static bool clioptions_option_live_route(const char *arg, char **errmsg) {
+    if (live_route_path != NULL || arg[0] != '/') {
+        *errmsg = xstrdup("Live route requires one absolute path");
+        return false;
+    }
+    live_route_path = xstrdup(arg);
+    return true;
+}
+
+static bool clioptions_option_live_report(const char *arg, char **errmsg) {
+    if (live_report_path != NULL || arg[0] != '/') {
+        *errmsg = xstrdup("Live report requires one absolute path");
+        return false;
+    }
+    live_report_path = xstrdup(arg);
+    return true;
+}
+
+static bool clioptions_option_live_initial_capture(const char *arg, char **errmsg) {
+    if (live_initial_capture_path != NULL || arg[0] != '/') {
+        *errmsg = xstrdup("Initial capture requires one absolute path");
+        return false;
+    }
+    live_initial_capture_path = xstrdup(arg);
+    return true;
+}
+
+static bool clioptions_option_live_final_capture(const char *arg, char **errmsg) {
+    if (live_final_capture_path != NULL || arg[0] != '/') {
+        *errmsg = xstrdup("Final capture requires one absolute path");
+        return false;
+    }
+    live_final_capture_path = xstrdup(arg);
+    return true;
+}
+
+static bool clioptions_option_live_lighting_phase(const char *arg, char **errmsg) {
+    if (live_lighting_phase != NULL || (strcmp(arg, "day") != 0 && strcmp(arg, "new-moon") != 0 &&
+                                        strcmp(arg, "full-moon") != 0)) {
+        *errmsg = xstrdup("Lighting phase must be day, new-moon, or full-moon");
+        return false;
+    }
+    live_lighting_phase = xstrdup(arg);
     return true;
 }
 
@@ -839,13 +897,29 @@ bool gpu_renderer_recovery_republish_test(void) {
 }
 #endif
 
-static bool gpu_renderer_recover_frame(unsigned int *attempts, const char *context) {
+static bool gpu_renderer_recover_frame(unsigned int *attempts,
+                                       const char *context,
+                                       const gpu_renderer_recreation_diagnostic_t *consumed) {
     HARD_ASSERT(attempts != NULL);
     HARD_ASSERT(context != NULL);
-
-    /* A resource failure can be raised after the loop's initial request poll.
-     * Consume that exact incident before the recovery transaction republishes. */
-    (void)gpu_renderer_recreation_take_request();
+    char error_snapshot[256];
+    snprintf(error_snapshot, sizeof(error_snapshot), "%s", SDL_GetError());
+    gpu_renderer_recreation_diagnostic_t diagnostic = {0};
+    if (consumed != NULL) {
+        diagnostic = *consumed;
+    } else {
+        (void)gpu_renderer_recreation_take_diagnostic(&diagnostic);
+    }
+    int width = 0, height = 0;
+    SDL_GetWindowSizeInPixels(ScreenWindow, &width, &height);
+    if (!live_movement_renderer_recovery(context,
+                                         &diagnostic,
+                                         error_snapshot,
+                                         SDL_GetWindowFlags(ScreenWindow),
+                                         width,
+                                         height)) {
+        return false;
+    }
 
     char backend_name[32];
     char gpu_name[256];
@@ -1029,6 +1103,33 @@ int main(int argc, char *argv[]) {
     CLIOPTIONS_CREATE(cli, text_debug, "Enable text API debugging");
     CLIOPTIONS_CREATE(cli, widget_render_debug, "Enable widget debugging");
     CLIOPTIONS_CREATE(cli, reconnect, "Reconnect automatically");
+    cli = clioptions_create("live-movement-route", clioptions_option_live_route);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(cli,
+                               "Run a bounded live movement route",
+                               "Execute an isolated route through normal movement commands.");
+    cli = clioptions_create("live-movement-report", clioptions_option_live_report);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(cli,
+                               "Exclusive JSONL report for the live route",
+                               "Create a new report of observed arrivals and frame timings.");
+    cli =
+        clioptions_create("live-movement-initial-capture", clioptions_option_live_initial_capture);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(cli,
+                               "Initial live route diagnostic PNG",
+                               "Pair with a final capture in the exclusive report directory.");
+    cli = clioptions_create("live-movement-final-capture", clioptions_option_live_final_capture);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(cli,
+                               "Final live route diagnostic PNG",
+                               "Pair with an initial capture in the exclusive report directory.");
+    cli = clioptions_create("live-movement-lighting-phase", clioptions_option_live_lighting_phase);
+    clioptions_enable_argument(cli);
+    clioptions_set_description(
+        cli,
+        "Fixed day, new-moon, or full-moon diagnostic",
+        "Requires captures and normal server permission for clock commands.");
 
     memset(&clioption_settings, 0, sizeof(clioption_settings));
     client_stun_config_init(&clioption_settings.stun);
@@ -1041,6 +1142,26 @@ int main(int argc, char *argv[]) {
     free(path);
 
     clioptions_parse(argc, argv);
+    bool live_initialized = live_movement_initialize(live_route_path, live_report_path);
+    if (live_initialized) {
+        live_initialized = live_movement_configure_review(live_report_path,
+                                                          live_initial_capture_path,
+                                                          live_final_capture_path,
+                                                          live_lighting_phase);
+    }
+    free(live_route_path);
+    free(live_report_path);
+    free(live_initial_capture_path);
+    free(live_final_capture_path);
+    free(live_lighting_phase);
+    if (!live_initialized) {
+        live_movement_abort("invalid or unavailable live review outputs");
+        live_movement_close();
+        return 8;
+    }
+    if (live_movement_enabled()) {
+        atexit(live_movement_close);
+    }
 
     client_window_title_init(getenv(CLIENT_LAUNCH_LABEL_ENV));
 
@@ -1059,6 +1180,7 @@ int main(int argc, char *argv[]) {
 
     if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO)) {
         LOG(ERROR, "Couldn't initialize SDL: %s", SDL_GetError());
+        live_movement_abort("SDL initialization failed");
         exit(1);
     }
 
@@ -1086,6 +1208,7 @@ int main(int argc, char *argv[]) {
     draw_info(COLOR_HGOLD, buf);
 
     settings_apply();
+    live_movement_ready();
     scrollbar_init();
     button_init();
 
@@ -1106,6 +1229,10 @@ int main(int argc, char *argv[]) {
         uint64_t profile_events_started = render_profiler_begin();
         done = Event_PollInputDevice();
         render_profiler_end(RENDER_PROFILE_EVENTS, profile_events_started);
+        if (done && live_movement_enabled()) {
+            live_movement_abort("window close requested");
+            break;
+        }
 
         presentation_clock_step(&presentation_clock, SDL_GetTicks(), window_is_active());
         LastTick = presentation_clock.tick;
@@ -1117,6 +1244,10 @@ int main(int argc, char *argv[]) {
 
         /* Have we been shutdown? */
         if (handle_socket_shutdown()) {
+            if (live_movement_enabled()) {
+                live_movement_abort("transport disconnected");
+                break;
+            }
             image_face_requests_clear();
             client_attempt_secrets_clear(
                 selected_server != NULL ? &selected_server->join_password : NULL,
@@ -1136,8 +1267,11 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        if (gpu_renderer_recreation_take_request() &&
-            !gpu_renderer_recover_frame(&gpu_recovery_attempts, "a window or display change")) {
+        gpu_renderer_recreation_diagnostic_t recreation_diagnostic;
+        if (gpu_renderer_recreation_take_diagnostic(&recreation_diagnostic) &&
+            !gpu_renderer_recover_frame(&gpu_recovery_attempts,
+                                        "a renderer recreation request",
+                                        &recreation_diagnostic)) {
             break;
         }
 
@@ -1176,6 +1310,10 @@ int main(int argc, char *argv[]) {
             play_action_sounds();
         }
         rich_presence_tick();
+        live_movement_tick();
+        if (live_movement_finished()) {
+            break;
+        }
         render_profiler_end(RENDER_PROFILE_GAME, profile_game_started);
 
         update = 0;
@@ -1206,7 +1344,7 @@ int main(int argc, char *argv[]) {
 
         if (update && !gpu_renderer_begin_frame()) {
             LOG(ERROR, "Could not begin GPU frame: %s", SDL_GetError());
-            if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "beginning a frame")) {
+            if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "beginning a frame", NULL)) {
                 break;
             }
             continue;
@@ -1271,12 +1409,16 @@ int main(int argc, char *argv[]) {
         render_profiler_end(RENDER_PROFILE_MAINTENANCE, profile_maintenance_started);
 
         uint64_t profile_present_started = render_profiler_begin();
+        bool frame_presented = false;
         if (update) {
             bool presented = gpu_renderer_present();
+            frame_presented = presented;
             map_benchmark_statistics_present(presented);
             if (!presented) {
                 LOG(ERROR, "Could not present the GPU frame: %s", SDL_GetError());
-                if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "presenting a frame")) {
+                if (!gpu_renderer_recover_frame(&gpu_recovery_attempts,
+                                                "presenting a frame",
+                                                NULL)) {
                     done = 1;
                 }
             } else {
@@ -1317,7 +1459,13 @@ int main(int argc, char *argv[]) {
         render_profiler_end(RENDER_PROFILE_WAIT, profile_wait_started);
         render_profiler_end(RENDER_PROFILE_FRAME, profile_frame_started);
         render_profiler_frame_finished(update != 0);
+        if (live_movement_enabled()) {
+            client_keepalive_statistics_t keepalive_statistics;
+            client_keepalive_statistics(&keepalive_state, &keepalive_statistics);
+            live_movement_frame_finished(frame_presented, &keepalive_statistics);
+        }
     }
 
-    return 0;
+    live_movement_close();
+    return live_movement_exit_status();
 }

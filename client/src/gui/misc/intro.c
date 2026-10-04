@@ -35,6 +35,7 @@
 #include <event.h>
 #include <button.h>
 #include <client.h>
+#include <live_movement.h>
 #include <join_credentials.h>
 #include <list.h>
 #include <main.h>
@@ -395,10 +396,9 @@ void intro_show(void) {
         {
             if (clioption_settings.game_news_url != NULL &&
                 *clioption_settings.game_news_url != '\0') {
-                news_request =
-                    curl_request_create_with_origin(clioption_settings.game_news_url,
-                                                    CURL_PKEY_TRUST_ULTIMATE,
-                                                    "client.game-news");
+                news_request = curl_request_create_with_origin(clioption_settings.game_news_url,
+                                                               CURL_PKEY_TRUST_ULTIMATE,
+                                                               "client.game-news");
                 curl_request_start_get(news_request);
             }
         }
@@ -480,7 +480,11 @@ void intro_show(void) {
                     clioption_settings.connect[0] = NULL;
                 }
 
-                event_push_key_once(SDLK_RETURN, 0);
+                if (live_movement_enabled()) {
+                    list_handle_enter(list_servers, NULL);
+                } else {
+                    event_push_key_once(SDLK_RETURN, 0);
+                }
                 break;
             }
         }

@@ -11,7 +11,7 @@ import tempfile
 
 
 STAGES = ("final_fragment", "final_vertex", "light_fragment", "light_vertex",
-          "world_fragment", "world_vertex")
+          "world_clear_fragment", "world_fragment", "world_transparent_fragment", "world_vertex")
 FORMATS = ("dxil", "msl", "spv")
 EXPECTED_NAMES = tuple(f"{stage}.{shader_format}" for shader_format in FORMATS
                        for stage in STAGES)

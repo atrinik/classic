@@ -18,6 +18,11 @@ client/textures/** -filter binary
 client/fonts/** -filter binary
 client/src/tests/fixtures/audio/*.mid -filter binary
 
+# Tiny generated GPU test geometry must work in offline, non-LFS CI checkouts.
+client/src/tests/fixtures/player_view/presentation-floor.png -filter binary
+client/src/tests/fixtures/player_view/presentation-player.png -filter binary
+client/src/tests/fixtures/player_view/presentation-tall.png -filter binary
+
 # GPU manifest inputs are hash-pinned as raw bytes and must stay LF-stable.
 client/data/archdef.dat text eol=lf
 client/data/interface.cfg text eol=lf

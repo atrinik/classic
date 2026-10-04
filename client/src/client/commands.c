@@ -39,6 +39,7 @@
 #include <item.h>
 #include <keybind.h>
 #include <lighting.h>
+#include <live_movement.h>
 #include <main.h>
 #include <map.h>
 #include <menu.h>
@@ -772,6 +773,10 @@ static bool map_continuation_visible_change;
 static bool map_continuation_region_fow_update;
 static uint64_t map_publication_generation;
 
+uint64_t socket_command_map_publication_generation(void) {
+    return map_publication_generation;
+}
+
 typedef struct map_pending_packet {
     uint8_t *data;
     size_t len;
@@ -878,11 +883,7 @@ static void socket_command_map_abort_timed_light(void) {
     socket_command_map_abort_pending();
 }
 
-static bool socket_command_map_movement_delta(int mapstat,
-                                              int xpos,
-                                              int ypos,
-                                              int *dx,
-                                              int *dy) {
+static bool socket_command_map_movement_delta(int mapstat, int xpos, int ypos, int *dx, int *dy) {
     *dx = xpos - MapData.posx;
     *dy = ypos - MapData.posy;
     return mapstat == MAP_UPDATE_CMD_SAME && (*dx != 0 || *dy != 0);
@@ -1031,7 +1032,6 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
             map_pending_effects.footstep = true;
             map_visible_change = true;
         }
-
     }
 
     uint8_t player_sub_layer = packet_reader_read_uint8(&reader);
@@ -1550,6 +1550,7 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
     int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
     map_protocol_packet_info_t info;
     if (!map_protocol_inspect(data, len, pos, wire_width, wire_height, &info)) {
+        live_movement_rejected_map(data, len, pos);
         LOG(PACKET, "Rejected malformed map packet.");
         socket_command_map_abort_pending();
         return;
@@ -1622,6 +1623,122 @@ void socket_command_map(uint8_t *data, size_t len, size_t pos) {
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
+/** Build a small real MAP envelope; both seam maps deliberately share a name. */
+static packet_struct *map_seam_test_packet(uint8_t mapstat, uint16_t continuation) {
+    packet_struct *packet = packet_new(0, 128, 128);
+    packet_writer_write_uint8(packet, mapstat);
+    if (mapstat != MAP_UPDATE_CMD_PARTIAL) {
+        packet_writer_write_cstring(packet, "Brynknot");
+        packet_writer_write_cstring(packet, "");
+        packet_writer_write_cstring(packet, "none");
+        packet_writer_write_uint8(packet, 0);
+        packet_writer_write_uint8(packet, 0);
+        packet_writer_write_cstring(packet, "");
+        packet_writer_write_cstring(packet, "");
+        packet_writer_write_cstring(packet,
+                                    mapstat == MAP_UPDATE_CMD_NEW
+                                        ? "/shattered_islands/world_0_68"
+                                        : "/shattered_islands/world_1_68");
+        if (mapstat == MAP_UPDATE_CMD_NEW) {
+            packet_writer_write_uint8(packet, 24);
+            packet_writer_write_uint8(packet, 24);
+        } else {
+            /* Wire tile identifiers are one-based: east is 2. */
+            packet_writer_write_uint8(packet, 2);
+            packet_writer_write_int8(packet, 1);
+            packet_writer_write_int8(packet, 0);
+            packet_writer_write_int8(packet, 0);
+        }
+    }
+    packet_writer_write_uint8(packet, mapstat == MAP_UPDATE_CMD_NEW ? 23 : 0);
+    packet_writer_write_uint8(packet, 18);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint16(
+        packet,
+        continuation | (mapstat == MAP_UPDATE_CMD_PARTIAL ? 0 : MAP2_CONTINUATION_TIMED_LIGHT));
+    if (mapstat != MAP_UPDATE_CMD_PARTIAL) {
+        packet_writer_write_uint64(packet, mapstat == MAP_UPDATE_CMD_NEW ? 700 : 701);
+        packet_writer_write_uint64(packet, 3600);
+        packet_writer_write_uint64(packet, 7200);
+        packet_writer_write_uint8(packet, MAP2_LIGHT_KEYFRAME_CONTINUOUS);
+    }
+    packet_writer_write_uint8(packet, 1);
+    packet_writer_write_int8(packet, 0);
+    packet_struct *level = packet_new(0, 32, 32);
+    packet_writer_write_uint16(level, MAP2_MASK_LIGHT_LEVEL);
+    packet_writer_write_uint16(level, 200);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_KEYFRAME);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint16(level, 300);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint32(packet, (uint32_t)level->len);
+    packet_writer_write_packet(packet, level);
+    packet_free(level);
+    return packet;
+}
+
+static bool map_seam_test_state(bool destination, uint64_t generation, bool buffered) {
+    return map_publication_generation == generation &&
+           strcmp(MapData.map_path,
+                  destination ? "/shattered_islands/world_1_68"
+                              : "/shattered_islands/world_0_68") == 0 &&
+           strcmp(MapData.name_new, "Brynknot") == 0 && MapData.posx == (destination ? 0 : 23) &&
+           MapData.posy == 18 && MapData.light_keyframe_valid &&
+           MapData.light_keyframe_generation == (destination ? 701 : 700) &&
+           MapData.light_keyframe_start_seconds == 3600 &&
+           MapData.light_keyframe_end_seconds == 7200 && !map_state_transaction_active() &&
+           !MapData.continuation.pending &&
+           socket_command_map_buffered_generation_test_pending() == buffered;
+}
+
+/** Requires the normal initialized widget fixture; caller reloads its MAP afterward. */
+bool socket_command_map_connected_seam_test(void) {
+    if (map_state_transaction_active() || MapData.continuation.pending ||
+        socket_command_map_buffered_generation_test_pending()) {
+        return false;
+    }
+    packet_struct *source = map_seam_test_packet(MAP_UPDATE_CMD_NEW, 0);
+    packet_struct *complete = map_seam_test_packet(MAP_UPDATE_CMD_CONNECTED, 0);
+    packet_struct *first = map_seam_test_packet(MAP_UPDATE_CMD_CONNECTED, 1);
+    packet_struct *last = map_seam_test_packet(MAP_UPDATE_CMD_PARTIAL, 1);
+    bool success = packet_writer_finish(source) && packet_writer_finish(complete) &&
+                   packet_writer_finish(first) && packet_writer_finish(last);
+    if (!success) {
+        goto cleanup;
+    }
+    uint64_t generation = map_publication_generation;
+    socket_command_map(source->data, source->len, 0);
+    success = map_seam_test_state(false, ++generation, false);
+    socket_command_map(complete->data, complete->len, 0);
+    success = map_seam_test_state(true, ++generation, false) && success;
+
+    socket_command_map(source->data, source->len, 0);
+    success = map_seam_test_state(false, ++generation, false) && success;
+    socket_command_map(first->data, first->len, 0);
+    success = map_seam_test_state(false, generation, true) && success;
+    socket_command_map(last->data, last->len, 0);
+    success = map_seam_test_state(true, ++generation, false) && success;
+
+    socket_command_map(source->data, source->len, 0);
+    success = map_seam_test_state(false, ++generation, false) && success;
+    socket_command_map(first->data, first->len, 0);
+    success = map_seam_test_state(false, generation, true) && success;
+    /* Truncate the declared level payload: neither metadata nor position may publish. */
+    socket_command_map(last->data, last->len - 1, 0);
+    success = map_seam_test_state(false, generation, false) && success;
+    /* The rejected generation must not poison the next valid seam publication. */
+    socket_command_map(complete->data, complete->len, 0);
+    success = map_seam_test_state(true, ++generation, false) && success;
+cleanup:
+    socket_command_map_abort_pending();
+    packet_free(source);
+    packet_free(complete);
+    packet_free(first);
+    packet_free(last);
+    return success;
+}
+
 bool socket_command_map_buffered_generation_test_begin(void) {
     if (map_pending_batch.continuation.pending || map_pending_batch.head != NULL) {
         return false;
@@ -1655,8 +1772,7 @@ bool socket_command_map_continuation_transaction_test(void) {
                    cpl.target_object_index == saved_target && !map_pending_effects.active;
     socket_command_map_abort_pending();
     success = success && !socket_command_map_buffered_generation_test_pending() &&
-              MapData.posx == 17 && MapData.posy == 23 &&
-              cpl.target_object_index == saved_target;
+              MapData.posx == 17 && MapData.posy == 23 && cpl.target_object_index == saved_target;
 
     map_state_transaction_begin(false);
     MapData.posx = 18;
@@ -1681,12 +1797,11 @@ bool socket_command_map_continuation_transaction_test(void) {
     success = success && map_state_transaction_active() && MapData.continuation.pending;
     socket_command_map_abort_pending();
     int retry_dx, retry_dy;
-    success = success && !map_state_transaction_active() && !MapData.continuation.pending &&
-              !map_pending_effects.active &&
-              MapData.posx == 18 && MapData.posy == 24 &&
-              socket_command_map_movement_delta(
-                  MAP_UPDATE_CMD_SAME, 19, 25, &retry_dx, &retry_dy) &&
-              retry_dx == 1 && retry_dy == 1;
+    success =
+        success && !map_state_transaction_active() && !MapData.continuation.pending &&
+        !map_pending_effects.active && MapData.posx == 18 && MapData.posy == 24 &&
+        socket_command_map_movement_delta(MAP_UPDATE_CMD_SAME, 19, 25, &retry_dx, &retry_dy) &&
+        retry_dx == 1 && retry_dy == 1;
     MapData.posx = saved_posx;
     MapData.posy = saved_posy;
     cpl.target_object_index = saved_target;

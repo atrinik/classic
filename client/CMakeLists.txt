@@ -47,7 +47,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 set(ATRINIK_GPU_SHADER_NAMES
     final_fragment final_vertex
     light_fragment light_vertex
-    world_fragment world_vertex)
+    world_clear_fragment world_fragment world_transparent_fragment world_vertex)
 set(ATRINIK_GPU_SHADER_ARTIFACTS)
 foreach (name IN LISTS ATRINIK_GPU_SHADER_NAMES)
     foreach (extension IN ITEMS dxil msl spv)
@@ -506,6 +506,12 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
     add_test(NAME client-lighting-transfer COMMAND client-lighting-transfer-tests)
 
+    add_executable(client-gpu-light-row-tests src/tests/gpu_light_row.c)
+    atrinik_configure_target(client-gpu-light-row-tests)
+    target_include_directories(client-gpu-light-row-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    add_test(NAME client-gpu-light-row COMMAND client-gpu-light-row-tests)
+
     add_executable(client-gpu-sprite-effect-abi-tests
         src/tests/gpu_sprite_effect_abi.c)
     atrinik_configure_target(client-gpu-sprite-effect-abi-tests)
@@ -533,6 +539,7 @@ if (BUILD_TESTING)
 
     add_executable(client-gpu-renderer-integration-tests
         src/tests/gpu_renderer_integration.c
+        src/tests/gpu_light_row_profiler_stub.c
         src/client/gpu_renderer.c
         src/client/gpu_map_renderer.c
         src/client/lighting_transfer.c)
@@ -540,6 +547,7 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-gpu-renderer-integration-tests)
     target_compile_definitions(client-gpu-renderer-integration-tests PRIVATE
         ATRINIK_GPU_CONFORMANCE_TESTS
+        ATRINIK_GPU_LIGHT_ROW_ORACLE
         "ATRINIK_GPU_SHADER_COHORT=\"${ATRINIK_GPU_SHADER_COHORT}\""
         SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-gpu-renderer-integration-tests BEFORE PRIVATE
@@ -757,6 +765,60 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-move-stream-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-move-stream COMMAND client-move-stream-tests)
+
+    add_executable(client-live-movement-route-tests
+        src/tests/live_movement_route.c src/client/live_movement_route.c)
+    atrinik_configure_target(client-live-movement-route-tests)
+    target_include_directories(client-live-movement-route-tests PRIVATE src/include)
+    target_link_libraries(client-live-movement-route-tests PRIVATE Atrinik::Core OpenSSL::Crypto)
+    if (TARGET LibXml2::LibXml2)
+        target_link_libraries(client-live-movement-route-tests PRIVATE LibXml2::LibXml2)
+    else ()
+        target_include_directories(client-live-movement-route-tests PRIVATE ${LIBXML2_INCLUDE_DIR})
+        target_link_libraries(client-live-movement-route-tests PRIVATE ${LIBXML2_LIBRARIES})
+    endif ()
+    add_test(NAME client-live-movement-route COMMAND client-live-movement-route-tests)
+    add_test(NAME client-live-movement-report
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_verify_live_movement.py")
+
+    add_executable(client-live-movement-input-tests src/tests/live_movement_input.c)
+    atrinik_configure_target(client-live-movement-input-tests)
+    target_include_directories(client-live-movement-input-tests PRIVATE src/include)
+    target_link_libraries(client-live-movement-input-tests PRIVATE SDL3::SDL3)
+    add_test(NAME client-live-movement-input COMMAND client-live-movement-input-tests)
+
+    add_executable(client-live-movement-tests
+        src/tests/live_movement.c src/client/live_movement_route.c)
+    atrinik_configure_target(client-live-movement-tests)
+    target_include_directories(client-live-movement-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-live-movement-tests PRIVATE
+        Atrinik::Core SDL3::SDL3 OpenSSL::Crypto)
+    if (TARGET LibXml2::LibXml2)
+        target_link_libraries(client-live-movement-tests PRIVATE LibXml2::LibXml2)
+    else ()
+        target_include_directories(client-live-movement-tests PRIVATE ${LIBXML2_INCLUDE_DIR})
+        target_link_libraries(client-live-movement-tests PRIVATE ${LIBXML2_LIBRARIES})
+    endif ()
+    add_test(NAME client-live-movement COMMAND client-live-movement-tests)
+
+    add_executable(client-live-movement-capture-tests
+        src/tests/live_movement_capture.c src/client/live_movement_capture.c)
+    atrinik_configure_target(client-live-movement-capture-tests)
+    target_compile_definitions(client-live-movement-capture-tests PRIVATE
+        ATRINIK_LIVE_MOVEMENT_CAPTURE_TESTING)
+    target_include_directories(client-live-movement-capture-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-live-movement-capture-tests PRIVATE
+        Atrinik::Core SDL3::SDL3 OpenSSL::Crypto)
+    add_test(NAME client-live-movement-capture COMMAND client-live-movement-capture-tests)
 
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
@@ -1024,6 +1086,7 @@ if (BUILD_TESTING)
 
     add_executable(client-map-visibility-tests
         src/tests/map_visibility.c
+        src/client/lighting_transfer.c
         src/client/map_visibility.c)
     atrinik_configure_target(client-map-visibility-tests)
     target_compile_definitions(client-map-visibility-tests PRIVATE SDL_DISABLE_OLD_NAMES)
@@ -1080,6 +1143,14 @@ if (BUILD_TESTING)
         map-overlay-widget-state
         map-overlay-elevated
         visibility-fade-centered
+        presentation-day
+        presentation-dusk
+        presentation-night
+        presentation-saturated
+        edge-lighting
+        ground-coverage
+        floor-composition
+        soft-clear-fade
         brynknot-movement
         gpu-qualification-town-25x25
         gpu-ui-closure)

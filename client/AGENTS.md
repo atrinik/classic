@@ -27,6 +27,10 @@
   is the shared normative contract. Keep remembered static geometry separate
   from current/live MAP2 records, treat server clears and Q5.11 radiance as
   authoritative, and keep player light presentation-only.
+  Opaque fragments retain an exact owner and painter rank; translucent
+  contributors use their own light before ordered source-over blending. Damage
+  and lighting-only updates must replay transparency over the resolved opaque
+  target, with opaque-rank occlusion and the existing encoded-RGBA convention.
 - Keep offline player-view proofs on the normal MAP decoder and
   `map_draw_map()` path. Their closed manifests must pin every immutable input
   and renderer choice, remain bounded and network-free, and never read or
@@ -34,6 +38,11 @@
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.
+- Live movement diagnostics use normal authenticated connections and movement
+  commands in an isolated wrapper scenario. Their closed route owns gameplay
+  input, accepts only complete server map publications, and fails on divergence
+  or deadlines. Arrival and presentation are separate evidence; offline snapshot
+  replays do not prove live travel or movement performance.
 - Client user data lives below `.atrinik/<major>.x/`. When that stable directory
   is first created, the client may migrate the highest valid same-major legacy
   directory; the migration is collision-safe and marker-backed, leaves other
