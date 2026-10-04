@@ -1764,8 +1764,7 @@ START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates
     ck_assert_ptr_nonnull(cell);
     int sub = pl->sub_layer;
     ck_assert_uint_gt(cell->light_rgb_radiance[sub][0], cell->light_rgb_radiance[sub][2]);
-    ck_assert_uint_gt(cell->light_next_rgb_radiance[sub][2],
-                      cell->light_next_rgb_radiance[sub][0]);
+    ck_assert_uint_gt(cell->light_next_rgb_radiance[sub][2], cell->light_next_rgb_radiance[sub][0]);
     uint64_t generation = cell->light_next_generation;
     uint16_t scalar = cell->light_next_radiance[sub];
     uint8_t bitmap = cell->light_next_rgb_explicit;
