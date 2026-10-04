@@ -101,9 +101,21 @@ jobs:
               "+refs/heads/${UPDATE_BRANCH}:refs/remotes/origin/${UPDATE_BRANCH}"
             test "$(git rev-parse "refs/remotes/origin/${UPDATE_BRANCH}")" = \
               "${branch_sha}"
-            test "$(git diff --name-only --no-renames \
-              "refs/remotes/origin/main...refs/remotes/origin/${UPDATE_BRANCH}")" = \
-              server/dependencies.lock.json
+            git diff --name-only --no-renames \
+              "refs/remotes/origin/main...refs/remotes/origin/${UPDATE_BRANCH}" \
+              > build/content-update/changed-paths.txt
+            python3 - <<'PY_PATHS'
+          from pathlib import Path
+
+          allowed = {
+              'dependencies.bundle.json',
+              'server/dependencies.lock.json',
+              'client/src/tests/fixtures/player_view/content-provenance.json',
+          }
+          changed = set(Path("build/content-update/changed-paths.txt").read_text().splitlines())
+          if not changed or not changed <= allowed:
+              raise SystemExit("unexpected automation changed paths")
+          PY_PATHS
             app_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
             expected_email="${app_id}+${APP_SLUG}[bot]@users.noreply.github.com"
             test -z "$(git log --format=%ae \
@@ -157,7 +169,10 @@ jobs:
           app_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
           git config user.email \
             "${app_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git add server/dependencies.lock.json
+          git add \
+            dependencies.bundle.json \
+            server/dependencies.lock.json \
+            client/src/tests/fixtures/player_view/content-provenance.json
           git diff --cached --quiet && exit 0
           git commit -m "chore(deps): update content lock to ${NEW_TAG}"
           gh auth setup-git

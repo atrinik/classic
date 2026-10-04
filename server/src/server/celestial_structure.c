@@ -2322,6 +2322,12 @@ bool celestial_structure_startup_preflight(char *error, size_t error_size) {
     return true;
 }
 
+#ifdef ATRINIK_TESTING
+void celestial_structure_set_runtime_active_for_test(bool active) {
+    celestial_v1_runtime_active = active;
+}
+#endif
+
 bool celestial_structure_v1_runtime_active(void) {
     return celestial_v1_runtime_active;
 }

@@ -20,6 +20,9 @@
   metric names, subjects, and event semantics are durable save contracts.
 - Preserve object ownership, map activation/swap, lighting, plugin boundaries,
   and save transactionality. Test cleanup/rollback for lifecycle changes.
+- While celestial-v1 runtime activation is inactive, preserve physical private-map
+  and savebed paths through normal character saves, including saves on v1 maps.
+  A map's schema alone does not select the process-wide persistence policy.
 - With the active celestial-v1 runtime, player persistence uses owner-bound
   `unique-v1:` map/savebed tokens for private maps; physical datapath identities
   must fail closed and use the existing savebed/emergency fallback.
