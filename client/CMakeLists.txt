@@ -1150,6 +1150,7 @@ if (BUILD_TESTING)
         edge-lighting
         ground-coverage
         floor-composition
+        soft-clear-fade
         brynknot-movement
         gpu-qualification-town-25x25
         gpu-ui-closure)

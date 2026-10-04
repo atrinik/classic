@@ -10002,6 +10002,322 @@ done:
     return success;
 }
 
+/** Closed fixture markers use separate pixels over unobstructed neighboring ground. */
+static const struct {
+    int x, y, layer, face;
+} map_soft_clear_markers[] = {
+    {5, 10, LAYER_ITEM, 3},
+    {12, 7, LAYER_ITEM2, 3},
+    {10, 10, LAYER_LIVING, 2},
+};
+
+static const map_render_command_t *map_soft_clear_command(size_t marker, int scroll) {
+    for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
+        const map_render_command_t *command = &map_retained_primary_context.commands[index];
+        if (command->depth == 0 && command->sub_layer == 0 &&
+            command->object_layer == map_soft_clear_markers[marker].layer &&
+            command->tile_x - MAP_STARTX == map_soft_clear_markers[marker].x - scroll &&
+            command->tile_y - MAP_STARTY == map_soft_clear_markers[marker].y) {
+            return command;
+        }
+    }
+    return NULL;
+}
+
+/** Reissue precisely the fixture's named actor, optionally with a new identity. */
+static void map_soft_clear_actor(packet_struct *level, uint32_t identity) {
+    packet_writer_write_uint16(level, (uint16_t)(10 << 11 | 10 << 6));
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, GET_MAP_LAYER(LAYER_LIVING, 0));
+    packet_writer_write_uint16(level, 2);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_NAME | MAP2_FLAG_MORE);
+    packet_writer_write_cstring(level, "Soft clear actor");
+    packet_writer_write_cstring(level, "ffffff");
+    packet_writer_write_uint32(level, MAP2_FLAG2_TARGET | MAP2_FLAG2_PROBE);
+    packet_writer_write_uint32(level, identity);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, 80);
+    packet_writer_write_uint8(level, 0);
+}
+
+/** Change only hidden scalar/RGB samples, never a face or visibility flag. */
+static void map_soft_clear_recolor(packet_struct *level) {
+    for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+        int x = map_soft_clear_markers[marker].x;
+        int y = map_soft_clear_markers[marker].y;
+        packet_writer_write_uint16(level, (uint16_t)(x << 11 | y << 6 | MAP2_MASK_LIGHT_LEVEL));
+        packet_writer_write_uint16(level, 4096);
+        packet_writer_write_uint8(level, 0);
+        packet_writer_write_uint8(level, MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16);
+        packet_writer_write_uint8(level, 1);
+        packet_writer_write_uint16(level, 32);
+        packet_writer_write_uint16(level, 256);
+        packet_writer_write_uint16(level, 4096);
+    }
+}
+
+static bool map_soft_clear_pixels(SDL_Surface *capture, int pixels[3][2], uint8_t rgba[3][4]) {
+    if (capture == NULL) {
+        return false;
+    }
+    for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+        if (!SDL_ReadSurfacePixel(capture, pixels[marker][0], pixels[marker][1],
+                                  &rgba[marker][0], &rgba[marker][1],
+                                  &rgba[marker][2], &rgba[marker][3])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Prove ordinary soft-clear continuity using pre-clear contributors, not FOW colors. */
+bool widget_map_soft_clear_fade_test(const uint8_t *snapshot, size_t snapshot_size) {
+#define SOFT_CLEAR_CHECK(expression)                                                           \
+    do {                                                                                        \
+        if (!(expression)) {                                                                    \
+            fprintf(stderr, "soft-clear fade variant %d checkpoint %s: %s\n",                    \
+                    variant, #expression, SDL_GetError());                                      \
+            success = false;                                                                    \
+            goto done;                                                                          \
+        }                                                                                       \
+    } while (0)
+    static const uint32_t elapsed[] = {0, 125, 249, 250};
+    static const uint8_t opacity[] = {255, 127, 1, 0};
+    static const uint8_t partial_opacity[] = {128, 64, 1, 0};
+    const uint32_t saved_tick = LastTick;
+    bool success = true;
+    int variant = -1;
+    SDL_Surface *capture = NULL, *full = NULL;
+    SDL_Surface *surface = cur_widget[MAP_ID] != NULL ? cur_widget[MAP_ID]->surface : NULL;
+    SOFT_CLEAR_CHECK(surface != NULL && snapshot != NULL && map_width == 17 && map_height == 17);
+
+    /* Each replay starts from the same closed, fully authorized publication:
+     * 0 baseline; 1 hidden recolor after clear; 2 clear+recolor in one packet;
+     * 3 scroll; 4 partial entry; 5 authored alpha; 6 identical positive update. */
+    for (variant = 0; variant < 7; variant++) {
+        LastTick = saved_tick;
+        socket_command_map(snapshot, snapshot_size, 0);
+        SOFT_CLEAR_CHECK(map_select_level(0, false));
+        uint8_t posx = MapData.posx, posy = MapData.posy;
+        int pixels[3][2];
+        uint8_t authorized[3][4], before_clear[3][4], samples[4][3][4];
+        capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+        SOFT_CLEAR_CHECK(capture != NULL);
+        for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+            const map_render_command_t *command = map_soft_clear_command(marker, 0);
+            SOFT_CLEAR_CHECK(command != NULL && !command->fogged);
+            pixels[marker][0] = command->bounds_x + command->bounds_w / 2;
+            /* The short actor's upper interior pixel projects onto ground whose
+             * light quad excludes its own cleared cell. This keeps partial-alpha
+             * continuity independent of a legitimate background-light change. */
+            pixels[marker][1] = command->bounds_y + (marker == 2 ? 2 : command->bounds_h / 3);
+            gpu_map_renderer_probe_t probe;
+            SOFT_CLEAR_CHECK(gpu_map_renderer_probe(pixels[marker][0], pixels[marker][1],
+                                                    MAP2_DEPTH_INDEX(0), &probe) &&
+                             probe.albedo[0] == 255 && probe.albedo[3] == 255 &&
+                             probe.ground_coverage == 255 && probe.final_color[3] == 255);
+            uint16_t linear[3];
+            lighting_tone_map_linear(probe.light[0], &probe.light[1], linear);
+            for (size_t channel = 0; channel < 3; channel++) {
+                SOFT_CLEAR_CHECK(probe.final_color[channel] ==
+                                 lighting_multiply_channel(probe.albedo[channel], linear[channel]));
+            }
+            SOFT_CLEAR_CHECK(probe.final_color[0] > 20 &&
+                             probe.final_color[0] > probe.final_color[2] + 8);
+        }
+        SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, authorized));
+        memcpy(before_clear, authorized, sizeof(before_clear));
+        const map_cell_actor_record_t *actor = map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(10, 10), 0);
+        SOFT_CLEAR_CHECK(actor->target_object_count == UINT32_C(0x11223344) &&
+                         actor->probe == 80 && strcmp(actor->name, "Soft clear actor") == 0);
+        SDL_DestroySurface(capture);
+        capture = NULL;
+
+        if (variant >= 4) {
+            packet_struct *level = packet_new(0, 64, 64);
+            if (variant == 5) {
+                packet_writer_write_uint16(level, (uint16_t)(5 << 11 | 10 << 6));
+                packet_writer_write_uint8(level, 1);
+                packet_writer_write_uint8(level, GET_MAP_LAYER(LAYER_ITEM, 0));
+                packet_writer_write_uint16(level, 3);
+                packet_writer_write_uint8(level, 0);
+                packet_writer_write_uint8(level, MAP2_FLAG_MORE);
+                packet_writer_write_uint32(level, MAP2_FLAG2_ALPHA);
+                packet_writer_write_uint8(level, 80);
+                packet_writer_write_uint8(level, 0);
+            } else {
+                map_soft_clear_actor(level, variant == 4 ? UINT32_C(0x55667788) : UINT32_C(0x11223344));
+            }
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, level, NULL));
+            if (variant == 4) {
+                LastTick += 125;
+                map_animate();
+                const map_cell_layer_record_t *record = map_cell_layer_record_read(
+                    MAP_CELL_GET_MIDDLE(10, 10), GET_MAP_LAYER(LAYER_LIVING, 0));
+                SOFT_CLEAR_CHECK(record->visibility.alpha == 128 && record->visibility.authorized);
+            }
+            capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
+            SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, before_clear));
+            full = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+            SOFT_CLEAR_CHECK(map_ground_coverage_equal(capture, full));
+            if (variant == 6) {
+                SOFT_CLEAR_CHECK(memcmp(before_clear, authorized, sizeof(authorized)) == 0);
+            }
+            SDL_DestroySurface(capture);
+            SDL_DestroySurface(full);
+            capture = full = NULL;
+        }
+
+        if (variant == 6) {
+            /* A truncated publication containing a clear must not alter the
+             * published record or its last successful presentation. */
+            packet_struct *invalid = packet_new(0, 16, 16);
+            packet_writer_write_uint16(invalid, (uint16_t)(10 << 11 | 10 << 6 | MAP2_MASK_CLEAR));
+            packet_writer_write_uint8(invalid, 0);
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, invalid, NULL));
+            actor = map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(10, 10), 0);
+            SOFT_CLEAR_CHECK(!MAP_CELL_GET_MIDDLE(10, 10)->fow &&
+                             actor->target_object_count == UINT32_C(0x11223344));
+            capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_STABLE);
+            uint8_t after_invalid[3][4];
+            SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, after_invalid) &&
+                             memcmp(after_invalid, before_clear, sizeof(before_clear)) == 0);
+            SDL_DestroySurface(capture);
+            capture = NULL;
+        }
+
+        uint32_t revoked_at = LastTick;
+        packet_struct *clear = packet_new(0, 128, 128);
+        for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+            packet_writer_write_uint16(clear, (uint16_t)(map_soft_clear_markers[marker].x << 11 |
+                                                         map_soft_clear_markers[marker].y << 6 |
+                                                         MAP2_MASK_CLEAR));
+        }
+        if (variant == 2) {
+            map_soft_clear_recolor(clear);
+        }
+        SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, clear, NULL));
+        capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
+        SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, samples[0]) &&
+                         memcmp(before_clear, samples[0], sizeof(before_clear)) == 0);
+        full = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+        SOFT_CLEAR_CHECK(map_ground_coverage_equal(capture, full));
+        SDL_DestroySurface(capture);
+        SDL_DestroySurface(full);
+        capture = full = NULL;
+
+        int scroll = variant == 3 ? 1 : 0;
+        if (variant == 1) {
+            packet_struct *level = packet_new(0, 128, 128);
+            map_soft_clear_recolor(level);
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, level, NULL));
+        } else if (scroll != 0) {
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, (uint8_t)(posx + 1), posy, 0, NULL, NULL));
+            for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+                pixels[marker][0] -= MAP_TILE_YOFF;
+                pixels[marker][1] -= MAP_TILE_XOFF;
+            }
+        }
+        for (size_t phase = 0; phase < arraysize(elapsed); phase++) {
+            LastTick = revoked_at + elapsed[phase];
+            map_animate();
+            /* A changed projection requires one full compilation; other changes
+             * exercise retained invalidation before any full publication. */
+            bool projection_changed = scroll != 0 && phase == 0;
+            capture = map_ground_coverage_capture(surface, projection_changed ? MAP_GROUND_COVERAGE_FULL
+                                                                             : MAP_GROUND_COVERAGE_RETAINED_CHANGED);
+            SOFT_CLEAR_CHECK(map_soft_clear_pixels(capture, pixels, samples[phase]));
+            full = map_ground_coverage_capture(surface, projection_changed ? MAP_GROUND_COVERAGE_RETAINED_STABLE
+                                                                          : MAP_GROUND_COVERAGE_FULL);
+            SOFT_CLEAR_CHECK(map_ground_coverage_equal(capture, full));
+            for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+                map_cell_t *cell = MAP_CELL_GET_MIDDLE(map_soft_clear_markers[marker].x - scroll,
+                                                      map_soft_clear_markers[marker].y);
+                const map_cell_layer_record_t *record = map_cell_layer_record_read(
+                    cell, GET_MAP_LAYER(map_soft_clear_markers[marker].layer, 0));
+                uint8_t expected = variant == 4 && marker == 2 ? partial_opacity[phase] : opacity[phase];
+                SOFT_CLEAR_CHECK(cell->fow && !record->visibility.authorized &&
+                                 (expected == 0 ? record->face == 0 :
+                                  record->face == map_soft_clear_markers[marker].face &&
+                                  record->visibility.alpha == expected));
+                if (marker == 2) {
+                    actor = map_cell_actor_record_read(cell, 0);
+                    SOFT_CLEAR_CHECK(actor->target_object_count == 0 && actor->probe == 0 && actor->name[0] == '\0');
+                    map_lighting_diagnostic_t diagnostic;
+                    SOFT_CLEAR_CHECK(map_lighting_diagnostic_get(0, 10 - scroll, 10, 0, true, &diagnostic) &&
+                                     diagnostic.fogged && !diagnostic.received && !diagnostic.working_available &&
+                                     !diagnostic.presentation_available);
+                }
+                SOFT_CLEAR_CHECK(samples[phase][marker][3] == 255);
+            }
+            if (phase == 0) {
+                SOFT_CLEAR_CHECK(memcmp(before_clear, samples[0], sizeof(before_clear)) == 0);
+            }
+            SDL_DestroySurface(capture);
+            SDL_DestroySurface(full);
+            capture = full = NULL;
+        }
+        for (size_t marker = 0; marker < arraysize(map_soft_clear_markers); marker++) {
+            bool contrast = false;
+            for (size_t channel = 0; channel < 3; channel++) {
+                contrast |= abs((int)authorized[marker][channel] - (int)samples[3][marker][channel]) >= 8;
+            }
+            SOFT_CLEAR_CHECK(contrast);
+            for (size_t phase = 0; phase < 3; phase++) {
+                unsigned alpha = variant == 4 && marker == 2 ? partial_opacity[phase] : opacity[phase];
+                if (variant == 5 && marker == 0) {
+                    alpha = MIN(alpha, 80U);
+                }
+                for (size_t channel = 0; channel < 3; channel++) {
+                    unsigned expected = ((unsigned)authorized[marker][channel] * alpha +
+                                         (unsigned)samples[3][marker][channel] * (255U - alpha) + 127U) / 255U;
+                    SOFT_CLEAR_CHECK(abs((int)samples[phase][marker][channel] - (int)expected) <= 2);
+                }
+            }
+        }
+        if (variant == 1) {
+            /* Re-entry under the new blue sample must discard the expired
+             * warm receipt even when the stable image asset is unchanged. */
+            packet_struct *level = packet_new(0, 128, 128);
+            packet_writer_write_uint16(level, (uint16_t)(10 << 11 | 10 << 6 | MAP2_MASK_FOW));
+            packet_writer_write_uint8(level, 0);
+            packet_writer_write_uint8(level, 0);
+            packet_writer_write_uint8(level, 0);
+            map_soft_clear_actor(level, UINT32_C(0x55667788));
+            SOFT_CLEAR_CHECK(map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, posx, posy, 0, level, NULL));
+            LastTick += MAP_VISIBILITY_FADE_DURATION_MS;
+            map_animate();
+            capture = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_RETAINED_CHANGED);
+            SOFT_CLEAR_CHECK(capture != NULL);
+            gpu_map_renderer_probe_t probe;
+            SOFT_CLEAR_CHECK(gpu_map_renderer_probe(pixels[2][0], pixels[2][1], MAP2_DEPTH_INDEX(0), &probe) &&
+                             probe.albedo[0] == 255 && probe.albedo[1] == 255 && probe.albedo[2] == 255 &&
+                             probe.final_color[2] > probe.final_color[0] + 16);
+            uint16_t linear[3];
+            lighting_tone_map_linear(probe.light[0], &probe.light[1], linear);
+            for (size_t channel = 0; channel < 3; channel++) {
+                SOFT_CLEAR_CHECK(probe.final_color[channel] == lighting_multiply_channel(255, linear[channel]));
+            }
+            full = map_ground_coverage_capture(surface, MAP_GROUND_COVERAGE_FULL);
+            SOFT_CLEAR_CHECK(map_ground_coverage_equal(capture, full));
+            SDL_DestroySurface(capture);
+            SDL_DestroySurface(full);
+            capture = full = NULL;
+        }
+        printf("{\"type\":\"soft-clear-fade\",\"variant\":%d,\"markers\":3,\"preclear_continuity\":true,\"blend_oracle\":true,\"frame_parity\":true}\n", variant);
+    }
+
+done:
+    SDL_DestroySurface(capture);
+    SDL_DestroySurface(full);
+    LastTick = saved_tick;
+    map_select_level(0, true);
+    map_redraw_consume();
+#undef SOFT_CLEAR_CHECK
+    return success;
+}
+
 /** Report only values allowed by the existing visibility-redacted diagnostic. */
 static void map_edge_lighting_vertex(const char *phase, int marker, int x, int y) {
     map_lighting_diagnostic_t value;

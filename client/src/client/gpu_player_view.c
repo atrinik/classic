@@ -209,6 +209,7 @@ typedef struct player_view_manifest {
     bool visibility_fade_test;
     bool edge_lighting_test;
     bool ground_coverage_test;
+    bool soft_clear_fade_test;
     bool floor_composition_test;
     bool map_interaction_test;
     bool animation_elevated;
@@ -596,6 +597,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "visibility-fade-test",
                                            "edge-lighting-test",
                                            "ground-coverage-test",
+                                           "soft-clear-fade-test",
                                            "floor-composition-test",
                                            "map-interaction-test",
                                            "animation-depth",
@@ -663,6 +665,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
         success ? player_view_xml_property(root, "visibility-fade-test") : NULL;
     char *floor_composition_test =
         success ? player_view_xml_property(root, "floor-composition-test") : NULL;
+    char *soft_clear_fade_test =
+        success ? player_view_xml_property(root, "soft-clear-fade-test") : NULL;
     char *ground_coverage_test =
         success ? player_view_xml_property(root, "ground-coverage-test") : NULL;
     char *edge_lighting_test =
@@ -756,6 +760,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
          player_view_parse_bool(visibility_fade_test, &manifest->visibility_fade_test)) &&
         (floor_composition_test == NULL ||
          player_view_parse_bool(floor_composition_test, &manifest->floor_composition_test)) &&
+        (soft_clear_fade_test == NULL ||
+         player_view_parse_bool(soft_clear_fade_test, &manifest->soft_clear_fade_test)) &&
         (ground_coverage_test == NULL ||
          player_view_parse_bool(ground_coverage_test, &manifest->ground_coverage_test)) &&
         (edge_lighting_test == NULL ||
@@ -1060,6 +1066,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(visibility_fade_test);
     free(edge_lighting_test);
     free(ground_coverage_test);
+    free(soft_clear_fade_test);
     free(floor_composition_test);
     free(map_interaction_test);
     free(animation_depth);
@@ -4276,6 +4283,14 @@ int gpu_player_view_main(int argc, char *argv[]) {
         goto cleanup;
     }
 #if defined(ATRINIK_WIDGET_TESTS) && defined(ATRINIK_GPU_CONFORMANCE_TESTS)
+    if (manifest.soft_clear_fade_test) {
+        bool fade = widget_map_soft_clear_fade_test(snapshot, snapshot_size);
+        socket_command_map(snapshot, snapshot_size, 0);
+        if (!fade || !gpu_player_view_render(map_widget, manifest.widget_render)) {
+            fprintf(stderr, "gpu-player-view: soft-clear fade regression failed: %s\n", SDL_GetError());
+            goto cleanup;
+        }
+    }
     if (manifest.ground_coverage_test) {
         bool coverage = widget_map_ground_coverage_test();
         socket_command_map(snapshot, snapshot_size, 0);
