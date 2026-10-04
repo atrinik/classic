@@ -338,6 +338,40 @@ static void collisions(void)
     access_result_cleanse(&a); cleanup(directory, s);
 }
 
+
+static void removal_capacity_receipts(void)
+{
+    for (unsigned mode = 0; mode < 2; mode++) {
+        char directory[64]; access_store_t *s = fresh(directory);
+        access_result_t issued = access_store_issue(s, request1, revision(s), "Shared removal", false, 0, 100, accepted, NULL);
+        snapshot_t *n = candidate(s, 100); assert(n);
+        n->tombstone_count = ACCESS_TOMBSTONE_LIMIT;
+        for (unsigned i = 0; i < ACCESS_TOMBSTONE_LIMIT; i++) {
+            snprintf(n->tombstones[i].id, 33, "a%031x", i + 1);
+            n->tombstones[i].removed = 100; n->tombstones[i].revision = n->revision;
+        }
+        assert(commit(s, n, false) == ACCESS_COMMITTED); discard(n);
+        uint64_t expected_a = revision(s);
+        access_result_t a = access_store_remove(s, request2, expected_a, issued.token.token_id, 101);
+        assert(a.outcome == ACCESS_PENDING);
+        access_result_t b = access_store_remove(s, request3, revision(s), issued.token.token_id, 101);
+        assert(b.outcome == ACCESS_PENDING);
+        access_route_t page[ACCESS_OUTBOX_LIMIT]; size_t count;
+        assert(access_store_outbox(s, page, ACCESS_OUTBOX_LIMIT, &count) == ACCESS_COMMITTED && count == 1);
+        assert(access_store_route_ack(s, page, 102) == ACCESS_COMMITTED);
+        assert(access_store_result(s, request2).outcome == ACCESS_PENDING);
+        assert(access_store_result(s, request3).outcome == ACCESS_PENDING);
+        int64_t later = TOMBSTONE_DAYS + 101;
+        if (mode) a = access_store_remove(s, request4, revision(s), issued.token.token_id, later);
+        else a = access_store_remove(s, request2, expected_a, issued.token.token_id, later);
+        assert(a.outcome == ACCESS_COMMITTED);
+        assert(access_store_result(s, request2).outcome == ACCESS_COMMITTED);
+        assert(access_store_result(s, request3).outcome == ACCESS_COMMITTED);
+        assert(s->state->token_count == 0 && s->state->tombstone_count == 1);
+        access_result_cleanse(&issued); cleanup(directory, s);
+    }
+}
+
 static void full_capacity(void)
 {
     char directory[64]; access_store_t *s = fresh(directory);
@@ -372,6 +406,6 @@ int main(int argc, char **argv)
 {
     if (argc == 2 && !strcmp(argv[1], "--capacity")) { full_capacity(); puts("1024-token outage capacity passed"); return 0; }
     basic(); crash_recovery(); fault_case(&fail_write, false); fault_case(&fail_file_sync, false);
-    fault_case(&fail_directory_sync, true); fault_case(&fail_rename, false); privacy(); races(); bounds(); activation_failures(); paths(); expiry_faults_and_remove(); collisions();
+    fault_case(&fail_directory_sync, true); fault_case(&fail_rename, false); privacy(); races(); bounds(); activation_failures(); paths(); expiry_faults_and_remove(); collisions(); removal_capacity_receipts();
     puts("access token store fixtures passed"); return 0;
 }

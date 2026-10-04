@@ -685,6 +685,14 @@ static access_result_t mutate(access_store_t *s, const char *id, uint64_t expect
             if (resume_remove) {
                 receipt_t *r = find_receipt(n, id); r->outcome = ACCESS_COMMITTED; r->revision = n->revision;
             } else new_receipt(n, id, hash, t, op, ACCESS_COMMITTED, now);
+            /* Multiple independently idempotent removals can await the same
+             * remote acknowledgement/capacity. Erasure completes all of them. */
+            for (size_t i = 0; i < n->receipt_count; i++) {
+                receipt_t *r = &n->receipts[i];
+                if (!strcmp(r->token, token_id) && r->operation == ACCESS_OP_REMOVE && r->outcome == ACCESS_PENDING) {
+                    r->outcome = ACCESS_COMMITTED; r->revision = n->revision;
+                }
+            }
             *t = n->tokens[--n->token_count]; memset(&n->tokens[n->token_count], 0, sizeof(*t));
         }
     } else {
