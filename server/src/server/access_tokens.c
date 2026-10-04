@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SNAPSHOT "access-tokens.snapshot"
@@ -474,8 +475,12 @@ access_outcome_t access_store_open(access_store_t **out, const char *directory,
         if (n == NULL) { outcome = ACCESS_UNAVAILABLE; goto fail; }
         token_t *t = &n->tokens[i]; t->info.state = ACCESS_TOKEN_REVOKED;
         t->info.ref.revision++;
-        receipt_t *r = find_receipt(n, t->route_request);
-        if (r) { r->outcome = ACCESS_LOCALLY_REVOKED; r->revision = n->revision; r->token_revision = t->info.ref.revision; }
+        for (size_t j = 0; j < n->receipt_count; j++) {
+            receipt_t *r = &n->receipts[j];
+            if (!strcmp(r->token, t->info.ref.token_id) && r->operation == ACCESS_OP_ISSUE && r->outcome == ACCESS_PENDING) {
+                r->outcome = ACCESS_LOCALLY_REVOKED; r->revision = n->revision; r->token_revision = t->info.ref.revision;
+            }
+        }
     }
     if (n) { outcome = commit(s, n, false); discard(n); if (outcome != ACCESS_COMMITTED) goto fail; }
     s->observed_clock = s->state->clock;
@@ -531,6 +536,31 @@ access_result_t access_store_result(access_store_t *s, const char *id)
     pthread_mutex_unlock(&s->mutex); return out;
 }
 
+static int64_t monotonic_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0 || ts.tv_sec > (INT64_MAX - 30000) / 1000) return 0;
+    return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+static bool issue_material(snapshot_t *n, token_t *t, char code[17], unsigned *generated)
+{
+    uint8_t raw_route[32]; bool unique = false;
+    while (*generated < 3 && !unique) {
+        (*generated)++; OPENSSL_cleanse(code, 17);
+        if (!random_id(t->info.ref.token_id) || !access_code_generate(code) ||
+                !access_code_derive(code, n->identity, raw_route, t->index, t->verifier)) break;
+        OPENSSL_cleanse(raw_route, sizeof(raw_route)); unique = true;
+        for (size_t i = 0; i < n->token_count; i++) {
+            if (&n->tokens[i] == t) continue;
+            if (!strcmp(t->info.ref.token_id, n->tokens[i].info.ref.token_id) ||
+                    !CRYPTO_memcmp(t->index, n->tokens[i].index, 32)) unique = false;
+        }
+        for (size_t i = 0; i < n->tombstone_count; i++)
+            if (!strcmp(t->info.ref.token_id, n->tombstones[i].id)) unique = false;
+    }
+    OPENSSL_cleanse(raw_route, sizeof(raw_route)); return unique;
+}
+
 access_result_t access_store_issue(access_store_t *s, const char *id, uint64_t expected,
     const char *label, bool has_expiry, int64_t expires, int64_t now,
     access_route_callback_t route, void *context)
@@ -538,6 +568,9 @@ access_result_t access_store_issue(access_store_t *s, const char *id, uint64_t e
     access_result_t out = { .outcome = ACCESS_INVALID }; uint8_t hash[32];
     if (!s || !hex_id(id) || !label_valid(label) || now <= 0 ||
             (has_expiry && (expires <= 0 || expires > INT64_C(253402300799))) || !fingerprint(ACCESS_OP_ISSUE, expected, label, has_expiry, expires, hash)) return out;
+    int64_t started = monotonic_ms();
+    if (started <= 0) return out;
+    int64_t deadline = started + 30000;
     pthread_mutex_lock(&s->mutex);
     receipt_t *old = find_receipt(s->state, id);
     if (s->poisoned || s->fenced) { out = result(s, ACCESS_UNAVAILABLE); goto done; }
@@ -551,19 +584,10 @@ access_result_t access_store_issue(access_store_t *s, const char *id, uint64_t e
         out = result(s, ACCESS_LIMIT); discard(n); goto done;
     }
     token_t *t = &n->tokens[n->token_count]; memset(t, 0, sizeof(*t));
-    char code[17] = {0}; uint8_t raw_route[32]; bool unique = false;
-    for (unsigned attempt = 0; attempt < 3 && !unique; attempt++) {
-        if (!random_id(t->info.ref.token_id) || !access_code_generate(code) ||
-                !access_code_derive(code, n->identity, raw_route, t->index, t->verifier)) break;
-        OPENSSL_cleanse(raw_route, sizeof(raw_route)); unique = true;
-        for (size_t i = 0; i < n->token_count; i++)
-            if (!strcmp(t->info.ref.token_id, n->tokens[i].info.ref.token_id) ||
-                !CRYPTO_memcmp(t->index, n->tokens[i].index, 32)) unique = false;
-        for (size_t i = 0; i < n->tombstone_count; i++)
-            if (!strcmp(t->info.ref.token_id, n->tombstones[i].id)) unique = false;
+    char code[17] = {0}; unsigned generated = 0;
+    if (!issue_material(n, t, code, &generated)) {
+        OPENSSL_cleanse(code, sizeof(code)); discard(n); out = result(s, ACCESS_UNAVAILABLE); goto done;
     }
-    OPENSSL_cleanse(raw_route, sizeof(raw_route));
-    if (!unique) { OPENSSL_cleanse(code, sizeof(code)); discard(n); out = result(s, ACCESS_UNAVAILABLE); goto done; }
     t->info.ref.revision = 1; memcpy(t->info.label, label, strlen(label) + 1);
     t->info.created_at = now; t->info.has_expiry = has_expiry; t->info.expires_at = has_expiry ? expires : 0;
     t->info.state = ACCESS_TOKEN_PENDING; t->info.route_pending = true; memcpy(t->route_request, id, 33);
@@ -572,11 +596,31 @@ access_result_t access_store_issue(access_store_t *s, const char *id, uint64_t e
     if (o != ACCESS_COMMITTED) { out = result(s, o); OPENSSL_cleanse(code, sizeof(code)); goto done; }
     out = receipt_result(s, find_receipt(s->state, id));
     access_outcome_t remote = ACCESS_PENDING;
-    if (route) {
-        pthread_mutex_unlock(&s->mutex);
-        remote = route(context, &request);
-        pthread_mutex_lock(&s->mutex);
+    for (;;) {
+        request.deadline_monotonic_ms = deadline;
+        int64_t current = monotonic_ms();
+        if (route && current > 0 && current < deadline) {
+            pthread_mutex_unlock(&s->mutex);
+            remote = route(context, &request);
+            pthread_mutex_lock(&s->mutex);
+        }
+        if (remote != ACCESS_ROUTE_COLLISION || generated >= 3 || s->poisoned || s->fenced) break;
+        t = find_token(s->state, request.token.token_id);
+        if (!t || t->info.state != ACCESS_TOKEN_PENDING || t->info.ref.revision != request.token.revision) break;
+        n = candidate(s, now);
+        if (!n) { remote = ACCESS_UNAVAILABLE; break; }
+        t = find_token(n, request.token.token_id);
+        if (!issue_material(n, t, code, &generated) || !random_id(t->route_request)) {
+            discard(n); remote = ACCESS_UNAVAILABLE; break;
+        }
+        receipt_t *retry = find_receipt(n, id); memcpy(retry->token, t->info.ref.token_id, 33);
+        retry->token_revision = t->info.ref.revision; retry->revision = n->revision;
+        access_route_t next_request = route_for(t);
+        o = commit(s, n, false); discard(n);
+        if (o != ACCESS_COMMITTED) { remote = o; break; }
+        request = next_request; remote = ACCESS_PENDING;
     }
+    if (monotonic_ms() >= deadline) remote = ACCESS_UNAVAILABLE;
     if (remote != ACCESS_COMMITTED || s->poisoned || s->fenced) {
         out = result(s, s->poisoned ? ACCESS_INDETERMINATE : ACCESS_PENDING);
         out.token = request.token; out.route_pending = true;
@@ -679,8 +723,12 @@ access_outcome_t access_store_outbox(access_store_t *s, access_route_t *rows, si
     if (!s || !rows || !count || capacity > ACCESS_OUTBOX_LIMIT) return ACCESS_INVALID;
     *count = 0; pthread_mutex_lock(&s->mutex);
     access_outcome_t o = s->poisoned ? ACCESS_INDETERMINATE : ACCESS_COMMITTED;
-    if (o == ACCESS_COMMITTED) for (size_t i = 0; i < s->state->token_count && *count < capacity; i++) {
-        token_t *t = &s->state->tokens[i]; if (t->info.route_pending) rows[(*count)++] = route_for(t);
+    if (o == ACCESS_COMMITTED) for (unsigned pass = 0; pass < 2; pass++) {
+        for (size_t i = 0; i < s->state->token_count && *count < capacity; i++) {
+            token_t *t = &s->state->tokens[i];
+            bool terminal = t->info.state != ACCESS_TOKEN_PENDING;
+            if (t->info.route_pending && terminal == (pass == 0)) rows[(*count)++] = route_for(t);
+        }
     }
     pthread_mutex_unlock(&s->mutex); return o;
 }

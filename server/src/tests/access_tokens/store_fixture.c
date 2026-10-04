@@ -9,6 +9,19 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <toolkit/access_code.h>
+
+static bool force_code, fail_generation;
+static char forced_code[17];
+static unsigned generation_calls;
+static bool fixture_generate(char out[17])
+{
+    generation_calls++;
+    if (fail_generation) { memset(out, 0, 17); return false; }
+    if (force_code) { memcpy(out, forced_code, 17); return true; }
+    return access_code_generate(out);
+}
+
 
 /* Deterministic syscall faults operate on fixture-owned files only. */
 static int fail_write, fail_file_sync, fail_directory_sync, fail_rename;
@@ -30,10 +43,12 @@ static int fixture_renameat(int a, const char *b, int c, const char *d)
     if (fail_rename) { errno = EIO; return -1; }
     return renameat(a, b, c, d);
 }
+#define access_code_generate fixture_generate
 #define write fixture_write
 #define fsync fixture_fsync
 #define renameat fixture_renameat
 #include "../../server/access_tokens.c"
+#undef access_code_generate
 #undef write
 #undef fsync
 #undef renameat
@@ -199,6 +214,9 @@ static void bounds(void)
     assert(a.outcome == ACCESS_LIMIT);
     a = access_store_revoke(s, request3, revision(s), active.token.token_id, 101);
     assert(a.outcome == ACCESS_LOCALLY_REVOKED && access_store_status(s).pending_route_sync == 33);
+    access_route_t page[ACCESS_OUTBOX_LIMIT]; size_t count;
+    assert(access_store_outbox(s, page, ACCESS_OUTBOX_LIMIT, &count) == ACCESS_COMMITTED && count == ACCESS_OUTBOX_LIMIT);
+    assert(page[0].revoke && !strcmp(page[0].token.token_id, active.token.token_id));
     access_token_ref_t ref;
     assert(access_store_authorize(s, active.code, identity, 102, &ref) == ACCESS_DENIED);
     access_result_cleanse(&active); cleanup(directory, s);
@@ -278,6 +296,48 @@ static void expiry_faults_and_remove(void)
     access_result_cleanse(&a); cleanup(directory, s);
 }
 
+
+typedef struct { unsigned calls, collisions; access_route_t previous; bool unavailable; } collision_context_t;
+static access_outcome_t remote_collision(void *opaque, const access_route_t *request)
+{
+    collision_context_t *context = opaque;
+    assert(request->deadline_monotonic_ms > monotonic_ms());
+    if (context->calls) {
+        assert(strcmp(request->request_id, context->previous.request_id));
+        assert(strcmp(request->token.token_id, context->previous.token.token_id));
+        assert(CRYPTO_memcmp(request->index, context->previous.index, 32));
+        assert(request->deadline_monotonic_ms == context->previous.deadline_monotonic_ms);
+    }
+    context->previous = *request; context->calls++;
+    return context->calls <= context->collisions ? ACCESS_ROUTE_COLLISION :
+        context->unavailable ? ACCESS_UNAVAILABLE : ACCESS_COMMITTED;
+}
+static void collisions(void)
+{
+    char directory[64]; access_store_t *s = fresh(directory);
+    collision_context_t context = { .collisions = 2 };
+    access_result_t a = access_store_issue(s, request1, revision(s), "Collision retry", false, 0, 100, remote_collision, &context);
+    assert(a.outcome == ACCESS_COMMITTED && context.calls == 3);
+    assert(!strcmp(a.token.token_id, context.previous.token.token_id));
+    access_token_ref_t ref; assert(access_store_authorize(s, a.code, identity, 101, &ref) == ACCESS_COMMITTED);
+    assert(access_store_result(s, request1).outcome == ACCESS_SECRET_UNAVAILABLE);
+    memcpy(forced_code, a.code, 17); force_code = true; generation_calls = 0;
+    access_result_t b = access_store_issue(s, request2, revision(s), "Forced local collision", false, 0, 102, accepted, NULL);
+    assert(b.outcome == ACCESS_UNAVAILABLE && b.code[0] == '\0' && generation_calls == 3);
+    force_code = false; fail_generation = true;
+    b = access_store_issue(s, request2, revision(s), "Entropy failure", false, 0, 102, accepted, NULL);
+    assert(b.outcome == ACCESS_UNAVAILABLE && b.code[0] == '\0'); fail_generation = false;
+    context = (collision_context_t) { .collisions = 1, .unavailable = true };
+    b = access_store_issue(s, request2, revision(s), "Retried then interrupted", false, 0, 102, remote_collision, &context);
+    assert(b.outcome == ACCESS_PENDING && context.calls == 2 && b.code[0] == '\0');
+    access_store_close(s); assert(access_store_open(&s, directory, identity, true, false) == ACCESS_COMMITTED);
+    b = access_store_result(s, request2); assert(b.outcome == ACCESS_LOCALLY_REVOKED && b.route_pending);
+    context = (collision_context_t) { .collisions = 3 };
+    b = access_store_issue(s, request3, revision(s), "Bounded remote collisions", false, 0, 103, remote_collision, &context);
+    assert(b.outcome == ACCESS_PENDING && context.calls == 3 && b.code[0] == '\0');
+    access_result_cleanse(&a); cleanup(directory, s);
+}
+
 static void full_capacity(void)
 {
     char directory[64]; access_store_t *s = fresh(directory);
@@ -312,6 +372,6 @@ int main(int argc, char **argv)
 {
     if (argc == 2 && !strcmp(argv[1], "--capacity")) { full_capacity(); puts("1024-token outage capacity passed"); return 0; }
     basic(); crash_recovery(); fault_case(&fail_write, false); fault_case(&fail_file_sync, false);
-    fault_case(&fail_directory_sync, true); fault_case(&fail_rename, false); privacy(); races(); bounds(); activation_failures(); paths(); expiry_faults_and_remove();
+    fault_case(&fail_directory_sync, true); fault_case(&fail_rename, false); privacy(); races(); bounds(); activation_failures(); paths(); expiry_faults_and_remove(); collisions();
     puts("access token store fixtures passed"); return 0;
 }

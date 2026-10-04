@@ -94,9 +94,15 @@ OpenSSL crypto and pthread. Run the resulting executable normally and with
 sanitizers are supported. These fixture builds are not integrated application or
 live-game acceptance.
 
-Remaining integration boundaries: remote ownership-collision regeneration needs
-a callback result distinguishing reserve collision from an ambiguous activation
-failure; current failure retains pending state and never releases a code. Native
+Reserve-only ownership collisions use the private callback outcome
+`ACCESS_ROUTE_COLLISION`. At most three total credential generations are attempted;
+each remote retry durably stages a fresh token/index and independent remote request
+ID while retaining the original management receipt. Activation conflicts remain
+ambiguous and never trigger collision retry. Every attempt shares one monotonic
+30-second deadline; the authenticated route adapter must honor the supplied
+remaining budget. Terminal revocations have priority in the bounded outbox page.
+
+Remaining integration boundaries: native
 Windows private state/IPC has no supported implementation in this POSIX module;
 parent platform selection must explicitly reject protected operation, while
 preserving the existing open-server build. Root-owned allowlist positive fixtures

@@ -21,7 +21,7 @@ typedef enum {
     ACCESS_COMMITTED, ACCESS_PENDING, ACCESS_LOCALLY_REVOKED,
     ACCESS_CONFLICT, ACCESS_DENIED, ACCESS_UNAVAILABLE, ACCESS_SAVE_FAILED,
     ACCESS_INDETERMINATE, ACCESS_SECRET_UNAVAILABLE, ACCESS_LIMIT,
-    ACCESS_INVALID, ACCESS_NOT_FOUND
+    ACCESS_INVALID, ACCESS_NOT_FOUND, ACCESS_ROUTE_COLLISION
 } access_outcome_t;
 typedef enum { ACCESS_TOKEN_PENDING = 1, ACCESS_TOKEN_ACTIVE,
     ACCESS_TOKEN_REVOKED, ACCESS_TOKEN_EXPIRED } access_token_state_t;
@@ -71,12 +71,16 @@ typedef struct {
     bool has_expiry;
     int64_t expires_at;
     bool revoke;
+    int64_t deadline_monotonic_ms; /* transient; zero for caller-owned outbox deadline */
 } access_route_t;
 
 /* The route callback must reserve then activate the exact supplied registration,
  * or confirm revocation. It may return COMMITTED only after authenticated remote
  * durable acknowledgement. No callback means pending, never success. Callbacks
- * must not re-enter the store and must enforce an operation deadline <= 30s.
+ * may permit concurrent mutations; only a still-pending matching token activates.
+ * ACCESS_ROUTE_COLLISION is legal ONLY for reserve ownership collision proving
+ * this tuple never registered. Other reserve/activate conflicts are ambiguous.
+ * Enforce the supplied monotonic deadline across all retry phases (<=30s).
  * Store APIs can perform disk I/O: invoke on the serialized bounded admin/auth
  * worker, never on the simulation thread. Public methods serialize internally.
  */
