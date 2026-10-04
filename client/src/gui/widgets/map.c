@@ -4072,14 +4072,31 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     uint8_t map_layer = GET_MAP_LAYER(data->layer, data->sub_layer);
     bool remembered = map_layer_is_remembered(data->layer);
-    uint16_t face = map_object_get_face(data->cell, map_layer);
-    if (face == 0 || face >= MAX_FACE_TILES) {
-        return;
-    }
-
-    sprite_struct *face_sprite = image_get_sprite(face);
-    if (face_sprite == NULL || face_sprite->bitmap == NULL) {
-        return;
+    bool transient = map_visibility_transient_layer(data->layer);
+    const map_cell_layer_record_t *record = map_cell_layer_record_read(data->cell, map_layer);
+    const map_visibility_fade_t *fade = &record->visibility;
+    bool stale = transient && !fade->authorized && data->world_surface;
+    sprite_struct *face_sprite = NULL;
+    SDL_Surface *source;
+    if (stale) {
+        /* Revocation clears actor animation flags. Do not resolve a new hidden
+         * face (or require it to be loaded) before replaying the shown source. */
+        source = gpu_renderer_map_presentation_source(data->cell->painter_identity,
+                                                       (uint32_t)map_layer << 2U,
+                                                       record->presentation_token);
+        if (source == NULL) {
+            return;
+        }
+    } else {
+        uint16_t face = map_object_get_face(data->cell, map_layer);
+        if (face == 0 || face >= MAX_FACE_TILES) {
+            return;
+        }
+        face_sprite = image_get_sprite(face);
+        if (face_sprite == NULL || face_sprite->bitmap == NULL) {
+            return;
+        }
+        source = face_sprite->bitmap;
     }
 
     /* When rendering on the map surface, avoid rendering the object
@@ -4091,8 +4108,8 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         return;
     }
 
-    int bitmap_h = face_sprite->bitmap->h;
-    int bitmap_w = face_sprite->bitmap->w;
+    int bitmap_h = source->h;
+    int bitmap_w = source->w;
 
     sprite_effects_t effects = {0};
     effects.rotate = map_cell_layer_record_read(data->cell, map_layer)->rotate;
@@ -4203,9 +4220,6 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     effects.alpha = map_cell_layer_record_read(data->cell, map_layer)->alpha;
     uint8_t authored_alpha = effects.alpha != 0 ? effects.alpha : UINT8_MAX;
-    bool transient = map_visibility_transient_layer(data->layer);
-    const map_visibility_fade_t *fade =
-        &map_cell_layer_record_read(data->cell, map_layer)->visibility;
     if (transient) {
         if (!fade->initialized || fade->alpha == 0) {
             return;
@@ -4264,7 +4278,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
                                               context->commands_capacity,
                                               sizeof(*context->commands));
         }
-        bool transformed = effects.rotate != 0 || (effects.zoom_x != 0 && effects.zoom_x != 100) ||
+        bool transformed = stale || effects.rotate != 0 || (effects.zoom_x != 0 && effects.zoom_x != 100) ||
                            (effects.zoom_y != 0 && effects.zoom_y != 100);
         int bounds_x = xl;
         int bounds_y = yl;
@@ -4281,7 +4295,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
             bounds_h += 22;
         }
         context->commands[context->commands_num] = (map_render_command_t){
-            .source = face_sprite->bitmap,
+            .source = source,
             .effects = effects,
             .x = xl,
             .y = yl,

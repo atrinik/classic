@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <SDL3/SDL.h>
@@ -411,6 +412,21 @@ static int gpu_map_presentation_compare(const void *left, const void *right) {
         return a->record_identity < b->record_identity ? -1 : 1;
     }
     return (a->draw_variant > b->draw_variant) - (a->draw_variant < b->draw_variant);
+}
+
+/** The borrowed original bitmap stays valid until its synchronous SDL cleanup
+ * invalidates the token. Calls and source destruction are on the main thread. */
+SDL_Surface *gpu_map_renderer_presentation_source(uint64_t identity, uint32_t variant,
+                                                  uint64_t token) {
+    if (presented_scene == NULL || presented_scene->commands_num == 0 || token == 0) {
+        return NULL;
+    }
+    gpu_map_world_command_t key = {.record_identity = identity, .draw_variant = variant};
+    const gpu_map_world_command_t *command = bsearch(&key, presented_scene->commands,
+                                                     presented_scene->commands_num,
+                                                     sizeof(*presented_scene->commands),
+                                                     gpu_map_presentation_compare);
+    return command != NULL && command->presentation_token == token ? command->presentation_source : NULL;
 }
 
 void gpu_map_renderer_presentation_begin(void) {

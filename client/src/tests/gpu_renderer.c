@@ -46,6 +46,12 @@ void gpu_map_renderer_set_presentation(uint64_t token, SDL_Surface *source, int 
     (void)x;
     (void)y;
 }
+SDL_Surface *gpu_map_renderer_presentation_source(uint64_t identity, uint32_t variant, uint64_t token) {
+    (void)identity;
+    (void)variant;
+    (void)token;
+    return NULL;
+}
 bool gpu_map_renderer_replay_presentation(uint64_t identity, uint32_t variant, uint64_t token,
                                            int x, int y, uint8_t alpha, uint8_t start_alpha) {
     (void)identity;

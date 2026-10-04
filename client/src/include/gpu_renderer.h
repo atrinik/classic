@@ -243,6 +243,9 @@ void gpu_renderer_map_set_instance_identity(uint64_t record_identity, uint32_t d
 /** Tag the next authorized primary draw with its semantic payload and world anchor.
  * source is an invalidation identity only; the renderer retains its GPU asset. */
 void gpu_renderer_map_set_presentation(uint64_t token, SDL_Surface *source, int x, int y);
+/** Borrow the last presented original bitmap for immediate main-thread admission.
+ * Do not retain/mutate it; source destruction/invalidation synchronously fences it. */
+SDL_Surface *gpu_renderer_map_presentation_source(uint64_t identity, uint32_t variant, uint64_t token);
 /** Replay the last successfully presented matching contributor, or draw nothing.
  * Alpha arguments are effective authored/forced/visibility minima. All calls are
  * main-thread only; failure invalidates this frame, and never publishes a receipt. */
