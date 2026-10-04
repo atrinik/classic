@@ -624,9 +624,14 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    TCase *tc_real_maps = tcase_create("Real maps");
+    tcase_add_unchecked_fixture(tc_real_maps, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_real_maps, check_test_setup, check_test_teardown);
+    tcase_set_timeout(tc_real_maps, 30);
+    suite_add_tcase(s, tc_real_maps);
     tcase_add_test(tc_core, test_celestial_open_field_matches_daylight_anchor);
     tcase_add_test(tc_core, test_discontinuous_horizontal_neighbor_is_not_a_local_light_dependency);
-    tcase_add_test(tc_core, test_brynknot_and_outside_fields_follow_settime);
+    tcase_add_test(tc_real_maps, test_brynknot_and_outside_fields_follow_settime);
     tcase_add_test(tc_core, test_unloaded_lower_map_does_not_gate_upper_light);
     tcase_add_test(tc_core, test_real_wilderness_midnight_full_and_new_moon_samples);
     tcase_add_test(tc_core, test_derived_horizontal_neighbors_preserve_day_and_lunar_light);
