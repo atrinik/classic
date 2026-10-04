@@ -9489,6 +9489,197 @@ done:
 }
 
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+/** Find one closed-fixture command after the working painter list was consumed. */
+static const map_render_command_t *map_floor_composition_command(int x, int layer) {
+    const map_render_command_t *result = NULL;
+    for (size_t index = 0; index < map_retained_primary_context.commands_num; index++) {
+        const map_render_command_t *command = &map_retained_primary_context.commands[index];
+        if (command->depth == 0 && command->sub_layer == 0 &&
+            command->tile_x - MAP_STARTX == x && command->tile_y - MAP_STARTY == 10 &&
+            command->object_layer == layer) {
+            if (result != NULL) {
+                return NULL;
+            }
+            result = command;
+        }
+    }
+    return result;
+}
+
+/** Capture final composed pixels, without attributing a mixed pixel to one owner. */
+static bool map_floor_composition_capture(SDL_Surface *surface,
+                                          bool retained,
+                                          int marker_x,
+                                          bool marker_present,
+                                          int *pixel_x,
+                                          int *pixel_y,
+                                          uint8_t rgba[4]) {
+    map_redraw_consume();
+    map_redraw_request(retained ? MAP_REDRAW_REASON_ANIMATION : MAP_REDRAW_REASON_MAP_PACKET);
+    map_benchmark_statistics_reset();
+    if (!gpu_renderer_begin_frame()) {
+        return false;
+    }
+    map_draw_map(surface);
+    map_benchmark_statistics_t statistics;
+    map_benchmark_statistics_get(&statistics);
+    if (statistics.primary_map_draws != 1 || statistics.auxiliary_map_draws != 0 ||
+        statistics.render_failures != 0 ||
+        (retained && (statistics.animation_draws != 1 || statistics.reused_render_commands == 0 ||
+                      statistics.compiled_render_commands != 0))) {
+        return SDL_SetError("floor composition did not exercise its primary draw path");
+    }
+    const map_render_command_t *command = map_floor_composition_command(marker_x, LAYER_ITEM);
+    if ((command != NULL) != marker_present) {
+        return SDL_SetError("floor composition item command lifetime mismatch");
+    }
+    if (command != NULL) {
+        *pixel_x = command->bounds_x + command->bounds_w / 2;
+        *pixel_y = command->bounds_y + command->bounds_h / 3;
+    }
+    if (!gpu_renderer_draw_map(0.0f, 0.0f, (float)surface->w, (float)surface->h) ||
+        !gpu_renderer_present()) {
+        return false;
+    }
+    SDL_Surface *capture = gpu_renderer_readback(NULL);
+    bool success = capture != NULL &&
+                   SDL_ReadSurfacePixel(capture, *pixel_x, *pixel_y,
+                                        &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
+    SDL_DestroySurface(capture);
+    return success;
+}
+
+/** Exercise night decorations through sparse scroll, soft FOW, and retained draws. */
+bool widget_map_floor_composition_test(void) {
+    if (map_width != 17 || map_height != 17 || cur_widget[MAP_ID] == NULL ||
+        cur_widget[MAP_ID]->surface == NULL || !map_select_level(0, false)) {
+        return SDL_SetError("floor composition requires its closed primary fixture");
+    }
+    SDL_Surface *surface = cur_widget[MAP_ID]->surface;
+    uint32_t initial_tick = LastTick;
+    int initial_x = MapData.posx;
+    int initial_y = MapData.posy;
+    uint64_t item_identity = MAP_CELL_GET_MIDDLE(6, 10)->painter_identity;
+    uint64_t mask_identity = MAP_CELL_GET_MIDDLE(10, 10)->painter_identity;
+    const map_cell_actor_record_t *initial_actor =
+        map_cell_actor_record_read(MAP_CELL_GET_MIDDLE(6, 10), 0);
+    if (initial_actor->target_object_count != UINT32_C(0x11223344) || initial_actor->probe != 80) {
+        return SDL_SetError("floor composition requires live interaction metadata before FOW");
+    }
+    uint8_t samples[4][4];
+    bool success = true;
+    int pixel_x = 0;
+    int pixel_y = 0;
+
+    /* Empty SAME payloads scroll cached records without resending their faces. */
+    for (int step = 0; success && step < 3; step++) {
+        int offset = step == 1 ? 1 : 0;
+        int marker_x = 6 - offset;
+        if (step != 0) {
+            success = map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME,
+                                                       (uint8_t)(initial_x + offset),
+                                                       (uint8_t)initial_y, 0, NULL, NULL);
+        }
+        map_cell_t *item_cell = MAP_CELL_GET_MIDDLE(marker_x, 10);
+        map_cell_t *mask_cell = MAP_CELL_GET_MIDDLE(10 - offset, 10);
+        const map_cell_layer_record_t *item =
+            map_cell_layer_record_read(item_cell, GET_MAP_LAYER(LAYER_ITEM, 0));
+        success = success && item_cell->painter_identity == item_identity &&
+                  mask_cell->painter_identity == mask_identity && item->face == 3 &&
+                  item->visibility.authorized && item->visibility.alpha == UINT8_MAX &&
+                  map_cell_layer_record_read(mask_cell, GET_MAP_LAYER(LAYER_FMASK, 0))->face == 2;
+        uint8_t full[4];
+        uint8_t retained[4];
+        if (!success ||
+            !map_floor_composition_capture(surface, false, marker_x, true, &pixel_x, &pixel_y, full)) {
+            success = false;
+            break;
+        }
+        const map_render_command_t *item_command = map_floor_composition_command(marker_x, LAYER_ITEM);
+        const map_render_command_t *mask_command = map_floor_composition_command(10 - offset, LAYER_FMASK);
+        success = item_command != NULL && mask_command != NULL && !item_command->fogged &&
+                  BIT_QUERY(item_command->effects.flags, SPRITE_FLAG_SMOOTH_DARK) &&
+                  BIT_QUERY(mask_command->effects.flags, SPRITE_FLAG_SMOOTH_DARK_SURFACE) &&
+                  map_floor_composition_capture(surface, true, marker_x, true,
+                                                &pixel_x, &pixel_y, retained) &&
+                  memcmp(full, retained, sizeof(full)) == 0;
+    }
+    if (!success) {
+        SDL_SetError("floor composition sparse-scroll decoration retention failed");
+        goto done;
+    }
+
+    packet_struct *base = packet_new(0, 16, 16);
+    map_actor_relocation_test_fow(base, 6, 10);
+    if (!map_actor_relocation_test_send(MAP_UPDATE_CMD_SAME, (uint8_t)initial_x,
+                                        (uint8_t)initial_y, 0, base, NULL)) {
+        success = false;
+        goto done;
+    }
+    static const uint32_t elapsed[] = {0, 125, 249, 250};
+    static const uint8_t alpha[] = {255, 127, 1, 0};
+    for (size_t phase = 0; phase < arraysize(elapsed); phase++) {
+        LastTick = initial_tick + elapsed[phase];
+        map_animate();
+        map_cell_t *cell = MAP_CELL_GET_MIDDLE(6, 10);
+        const map_cell_layer_record_t *item =
+            map_cell_layer_record_read(cell, GET_MAP_LAYER(LAYER_ITEM, 0));
+        const map_cell_actor_record_t *actor = map_cell_actor_record_read(cell, 0);
+        if (!cell->fow || item->visibility.authorized ||
+            actor->target_object_count != 0 || actor->probe != 0 || actor->name[0] != '\0' ||
+            (alpha[phase] != 0 && (item->face != 3 || item->visibility.alpha != alpha[phase])) ||
+            (alpha[phase] == 0 && item->face != 0)) {
+            success = SDL_SetError("floor composition FOW interaction/fade state failed at %u ms", elapsed[phase]);
+            goto done;
+        }
+        uint8_t retained[4];
+        if (!map_floor_composition_capture(surface, false, 6, alpha[phase] != 0,
+                                           &pixel_x, &pixel_y, samples[phase]) ||
+            !map_floor_composition_capture(surface, true, 6, alpha[phase] != 0,
+                                           &pixel_x, &pixel_y, retained) ||
+            memcmp(samples[phase], retained, sizeof(retained)) != 0) {
+            success = SDL_SetError("floor composition full/retained pixels differ at %u ms", elapsed[phase]);
+            goto done;
+        }
+        printf("{\"type\":\"floor-composition\",\"elapsed_ms\":%u,\"alpha\":%u,"
+               "\"pixel\":[%d,%d],\"final_rgba\":[%u,%u,%u,%u]}\n",
+               elapsed[phase], alpha[phase], pixel_x, pixel_y,
+               samples[phase][0], samples[phase][1], samples[phase][2], samples[phase][3]);
+    }
+    bool distinct_contribution = false;
+    for (size_t channel = 0; channel < 3; channel++) {
+        distinct_contribution |= abs((int)samples[0][channel] - (int)samples[3][channel]) >= 16;
+    }
+    if (!distinct_contribution || samples[0][3] != UINT8_MAX ||
+        samples[1][3] != UINT8_MAX || samples[2][3] != UINT8_MAX) {
+        success = SDL_SetError("floor composition probe did not capture a distinct opaque fog item");
+        goto done;
+    }
+    /* The tall item's upper pixel covers a still-visible neighboring floor.
+     * Full FOW opacity and expired item provide independent contributor colors;
+     * intermediate encoded-RGBA source-over must converge on that dark floor. */
+    for (size_t phase = 1; phase < 3; phase++) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            unsigned expected = ((unsigned)samples[0][channel] * alpha[phase] +
+                                 (unsigned)samples[3][channel] * (255U - alpha[phase]) + 127U) / 255U;
+            if (abs((int)samples[phase][channel] - (int)expected) > 2) {
+                success = SDL_SetError("floor composition brightness pop at %u ms channel %zu: got %u expected %u",
+                                       elapsed[phase], channel, samples[phase][channel], expected);
+                goto done;
+            }
+        }
+    }
+    if (samples[3][3] != UINT8_MAX ||
+        (samples[3][0] >= 150 && samples[3][1] >= 150 && samples[3][2] >= 150)) {
+        success = SDL_SetError("floor composition background probe was not opaque night ground");
+    }
+done:
+    LastTick = initial_tick;
+    map_select_level(0, true);
+    map_redraw_consume();
+    return success;
+}
+
 /** Report only values allowed by the existing visibility-redacted diagnostic. */
 static void map_edge_lighting_vertex(const char *phase, int marker, int x, int y) {
     map_lighting_diagnostic_t value;

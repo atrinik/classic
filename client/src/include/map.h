@@ -661,6 +661,8 @@ extern bool widget_map_actor_relocation_test(void);
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
 /** Probe static foot-row versus projected-ground lighting in the closed edge fixture. */
 extern bool widget_map_edge_lighting_test(void);
+/** Verify sparse scroll and fading FOW items through the production compositor. */
+extern bool widget_map_floor_composition_test(void);
 #endif
 /** Toggle the centered transient cohort for retained insertion/deletion evidence. */
 extern bool widget_map_retained_visibility_test_set(bool visible);

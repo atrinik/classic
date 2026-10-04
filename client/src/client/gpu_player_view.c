@@ -208,6 +208,7 @@ typedef struct player_view_manifest {
     bool kill_animation;
     bool visibility_fade_test;
     bool edge_lighting_test;
+    bool floor_composition_test;
     bool map_interaction_test;
     bool animation_elevated;
     bool animation_layer_content;
@@ -593,6 +594,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                                            "kill-animation",
                                            "visibility-fade-test",
                                            "edge-lighting-test",
+                                           "floor-composition-test",
                                            "map-interaction-test",
                                            "animation-depth",
                                            "animation-sub-layer",
@@ -657,6 +659,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
     char *kill_animation = success ? player_view_xml_property(root, "kill-animation") : NULL;
     char *visibility_fade_test =
         success ? player_view_xml_property(root, "visibility-fade-test") : NULL;
+    char *floor_composition_test =
+        success ? player_view_xml_property(root, "floor-composition-test") : NULL;
     char *edge_lighting_test =
         success ? player_view_xml_property(root, "edge-lighting-test") : NULL;
     char *map_interaction_test =
@@ -746,6 +750,8 @@ static bool player_view_manifest_parse(const char *manifest_path,
          player_view_parse_bool(kill_animation, &manifest->kill_animation)) &&
         (visibility_fade_test == NULL ||
          player_view_parse_bool(visibility_fade_test, &manifest->visibility_fade_test)) &&
+        (floor_composition_test == NULL ||
+         player_view_parse_bool(floor_composition_test, &manifest->floor_composition_test)) &&
         (edge_lighting_test == NULL ||
          player_view_parse_bool(edge_lighting_test, &manifest->edge_lighting_test)) &&
         (map_interaction_test == NULL ||
@@ -1047,6 +1053,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
     free(kill_animation);
     free(visibility_fade_test);
     free(edge_lighting_test);
+    free(floor_composition_test);
     free(map_interaction_test);
     free(animation_depth);
     free(animation_sub_layer);
@@ -4262,6 +4269,14 @@ int gpu_player_view_main(int argc, char *argv[]) {
         goto cleanup;
     }
 #if defined(ATRINIK_WIDGET_TESTS) && defined(ATRINIK_GPU_CONFORMANCE_TESTS)
+    if (manifest.floor_composition_test) {
+        bool composition = widget_map_floor_composition_test();
+        socket_command_map(snapshot, snapshot_size, 0);
+        if (!composition || !gpu_player_view_render(map_widget, manifest.widget_render)) {
+            fprintf(stderr, "gpu-player-view: floor composition regression failed: %s\n", SDL_GetError());
+            goto cleanup;
+        }
+    }
     if (manifest.edge_lighting_test && !widget_map_edge_lighting_test()) {
         fprintf(stderr, "gpu-player-view: edge lighting probe failed: %s\n", SDL_GetError());
         goto cleanup;

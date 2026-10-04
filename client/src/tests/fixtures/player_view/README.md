@@ -53,6 +53,21 @@ vertical marker consistency, no pending assets, and identical full/retained
 results. The zero expected-pixels hash requests measured diagnostic evidence
 and is not a calibrated cross-backend golden.
 
+The `floor-composition` fixture exercises night floor decorations through the
+normal MAP2 decoder and primary map painter. Empty movement packets scroll a
+persistent ITEM and FMASK out and back without resending their faces. Soft fog
+then revokes a remote actor's targeting metadata immediately and fades the ITEM
+at 0, 125, 249, and 250 ms. The tall analytic ITEM overlaps a still-visible dark
+floor pixel so its nearly transparent fog palette cannot conceal an accidental
+unlit background. Full and animation-retained draws must agree at every state.
+Intermediate final RGB must match encoded-RGBA source-over of the independently
+measured opaque fog sprite and expired-sprite background, within two code values.
+This is a composition regression, not a tone calibration change. Regenerate with
+`python3 tools/generate_floor_composition_fixture.py` and run
+`atrinik --gpu-player-view src/tests/fixtures/player_view/floor-composition.xml`.
+Its four `type="floor-composition"` JSONL rows contain final composed pixels;
+a single lighting-owner key cannot describe a mixed transparent pixel.
+
 These XML manifests preserve the pre-cutover renderer's viewport, logical map
 size, lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
 MAP command, and every image by SHA-256. They are immutable inputs for schema
