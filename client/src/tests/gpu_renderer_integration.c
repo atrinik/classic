@@ -1557,9 +1557,8 @@ static bool transparent_damage_checkpoint(void) {
     gpu_map_renderer_invalidate_target(false);
     SDL_Surface *baseline = success ? transparent_damage_frame(floor, NULL, 0.0f, 0, 32) : NULL;
     SDL_Surface *initial =
-        baseline != NULL
-            ? transparent_damage_frame(floor, overlay, 8.0f, SDL_ALPHA_OPAQUE, 32)
-            : NULL;
+        baseline != NULL ? transparent_damage_frame(floor, overlay, 8.0f, SDL_ALPHA_OPAQUE, 32)
+                         : NULL;
     Uint8 floor_red = 0, floor_green = 0, floor_blue = 0, floor_alpha = 0;
     success =
         initial != NULL &&
@@ -1624,8 +1623,7 @@ static bool transparent_damage_checkpoint(void) {
     SDL_Surface *relit_full =
         relit_damage != NULL ? transparent_damage_frame(floor, overlay, 8.0f, 128, 96) : NULL;
     success = success && relit_damage != NULL && relit_full != NULL &&
-              relit_statistics.map_full_redraws == 1 &&
-              relit_statistics.map_damage_frames == 0 &&
+              relit_statistics.map_full_redraws == 1 && relit_statistics.map_damage_frames == 0 &&
               relit_statistics.map_damage_clear_batches == 1 &&
               surfaces_match(relit_damage, relit_full);
     if (!success) {
@@ -1778,12 +1776,7 @@ static SDL_Surface *projected_alpha_frame(SDL_Surface *floor,
     lighting_vertex_t floor_light[4] = {
         {.x = 0, .y = 0, .scalar = 32, .red = 32, .green = 32, .blue = 32},
         {.x = map_size, .y = 0, .scalar = 32, .red = 32, .green = 32, .blue = 32},
-        {.x = map_size,
-         .y = map_size,
-         .scalar = 32,
-         .red = 32,
-         .green = 32,
-         .blue = 32},
+        {.x = map_size, .y = map_size, .scalar = 32, .red = 32, .green = 32, .blue = 32},
         {.x = 0, .y = map_size, .scalar = 32, .red = 32, .green = 32, .blue = 32},
     };
     lighting_vertex_t gradient[4] = {
@@ -1849,56 +1842,49 @@ static bool surface_read_rgba(SDL_Surface *surface, int x, int y, Uint8 pixel[4]
 static bool projected_alpha_checkpoint(void) {
     SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
     SDL_Surface *foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
-    bool success = floor != NULL && foreground != NULL &&
-                   SDL_FillSurfaceRect(
-                       floor, NULL, SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
-                   SDL_FillSurfaceRect(foreground,
-                                       NULL,
-                                       SDL_MapSurfaceRGBA(
-                                           foreground, 96, 208, 80, SDL_ALPHA_OPAQUE)) &&
-                   SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
-                   SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND);
+    bool success =
+        floor != NULL && foreground != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(foreground, 96, 208, 80, SDL_ALPHA_OPAQUE)) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND);
     gpu_map_renderer_invalidate_target(false);
-    SDL_Surface *baseline =
-        success ? projected_alpha_frame(floor, NULL, 0, 256, 2048) : NULL;
-    SDL_Surface *opaque_first = baseline != NULL
-                                    ? projected_alpha_frame(
-                                          floor, foreground, SDL_ALPHA_OPAQUE, 256, 2048)
-                                    : NULL;
-    SDL_Surface *half_first = opaque_first != NULL
-                                  ? projected_alpha_frame(floor, foreground, 128, 256, 2048)
-                                  : NULL;
-    SDL_Surface *half_changed = half_first != NULL
-                                    ? projected_alpha_frame(floor, foreground, 128, 1024, 512)
-                                    : NULL;
-    SDL_Surface *opaque_changed = half_changed != NULL
-                                      ? projected_alpha_frame(
-                                            floor, foreground, SDL_ALPHA_OPAQUE, 1024, 512)
-                                      : NULL;
+    SDL_Surface *baseline = success ? projected_alpha_frame(floor, NULL, 0, 256, 2048) : NULL;
+    SDL_Surface *opaque_first =
+        baseline != NULL ? projected_alpha_frame(floor, foreground, SDL_ALPHA_OPAQUE, 256, 2048)
+                         : NULL;
+    SDL_Surface *half_first =
+        opaque_first != NULL ? projected_alpha_frame(floor, foreground, 128, 256, 2048) : NULL;
+    SDL_Surface *half_changed =
+        half_first != NULL ? projected_alpha_frame(floor, foreground, 128, 1024, 512) : NULL;
+    SDL_Surface *opaque_changed =
+        half_changed != NULL ? projected_alpha_frame(floor, foreground, SDL_ALPHA_OPAQUE, 1024, 512)
+                             : NULL;
     Uint8 floor_upper[4], floor_lower[4];
     Uint8 opaque_first_upper[4], opaque_first_lower[4];
     Uint8 half_first_upper[4], half_first_lower[4];
     Uint8 opaque_changed_upper[4], opaque_changed_lower[4];
     Uint8 half_changed_upper[4], half_changed_lower[4];
-    success = surface_read_rgba(baseline, 16, 4, floor_upper) &&
-              surface_read_rgba(baseline, 16, 28, floor_lower) &&
-              surface_read_rgba(opaque_first, 16, 4, opaque_first_upper) &&
-              surface_read_rgba(opaque_first, 16, 28, opaque_first_lower) &&
-              surface_read_rgba(half_first, 16, 4, half_first_upper) &&
-              surface_read_rgba(half_first, 16, 28, half_first_lower) &&
-              surface_read_rgba(opaque_changed, 16, 4, opaque_changed_upper) &&
-              surface_read_rgba(opaque_changed, 16, 28, opaque_changed_lower) &&
-              surface_read_rgba(half_changed, 16, 4, half_changed_upper) &&
-              surface_read_rgba(half_changed, 16, 28, half_changed_lower) &&
-              compositor_alpha_matches(
-                  half_first_upper, floor_upper, opaque_first_upper, 128, 2) &&
-              compositor_alpha_matches(
-                  half_first_lower, floor_lower, opaque_first_lower, 128, 2) &&
-              compositor_alpha_matches(
-                  half_changed_upper, floor_upper, opaque_changed_upper, 128, 2) &&
-              compositor_alpha_matches(
-                  half_changed_lower, floor_lower, opaque_changed_lower, 128, 2) &&
-              !surfaces_match(half_first, half_changed);
+    success =
+        surface_read_rgba(baseline, 16, 4, floor_upper) &&
+        surface_read_rgba(baseline, 16, 28, floor_lower) &&
+        surface_read_rgba(opaque_first, 16, 4, opaque_first_upper) &&
+        surface_read_rgba(opaque_first, 16, 28, opaque_first_lower) &&
+        surface_read_rgba(half_first, 16, 4, half_first_upper) &&
+        surface_read_rgba(half_first, 16, 28, half_first_lower) &&
+        surface_read_rgba(opaque_changed, 16, 4, opaque_changed_upper) &&
+        surface_read_rgba(opaque_changed, 16, 28, opaque_changed_lower) &&
+        surface_read_rgba(half_changed, 16, 4, half_changed_upper) &&
+        surface_read_rgba(half_changed, 16, 28, half_changed_lower) &&
+        compositor_alpha_matches(half_first_upper, floor_upper, opaque_first_upper, 128, 2) &&
+        compositor_alpha_matches(half_first_lower, floor_lower, opaque_first_lower, 128, 2) &&
+        compositor_alpha_matches(half_changed_upper, floor_upper, opaque_changed_upper, 128, 2) &&
+        compositor_alpha_matches(half_changed_lower, floor_lower, opaque_changed_lower, 128, 2) &&
+        !surfaces_match(half_first, half_changed);
     if (!success) {
         SDL_SetError("projected mixed-alpha lighting did not preserve independently lit samples");
     }
@@ -1982,15 +1968,16 @@ static bool projected_alpha_recovery_republish(void *userdata) {
 static bool projected_alpha_recovery_checkpoint(SDL_Window *window, bool qualified) {
     SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
     SDL_Surface *foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
-    bool success = floor != NULL && foreground != NULL &&
-                   SDL_FillSurfaceRect(
-                       floor, NULL, SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
-                   SDL_FillSurfaceRect(foreground,
-                                       NULL,
-                                       SDL_MapSurfaceRGBA(
-                                           foreground, 96, 208, 80, SDL_ALPHA_OPAQUE)) &&
-                   SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
-                   SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND);
+    bool success =
+        floor != NULL && foreground != NULL &&
+        SDL_FillSurfaceRect(floor,
+                            NULL,
+                            SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+        SDL_FillSurfaceRect(foreground,
+                            NULL,
+                            SDL_MapSurfaceRGBA(foreground, 96, 208, 80, SDL_ALPHA_OPAQUE)) &&
+        SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+        SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND);
     gpu_map_renderer_invalidate_target(false);
     SDL_Surface *expected =
         success ? projected_alpha_frame(floor, foreground, 128, 1024, 512) : NULL;
@@ -2005,11 +1992,11 @@ static bool projected_alpha_recovery_checkpoint(SDL_Window *window, bool qualifi
     };
     success = expected != NULL && failed == NULL && !gpu_renderer_frame_valid() &&
               gpu_renderer_recover_and_republish(window,
-                                                  &attempts,
-                                                  !qualified,
-                                                  recovery_window_apply,
-                                                  projected_alpha_recovery_republish,
-                                                  &scene) &&
+                                                 &attempts,
+                                                 !qualified,
+                                                 recovery_window_apply,
+                                                 projected_alpha_recovery_republish,
+                                                 &scene) &&
               attempts == 1U && scene.checkpoint != NULL &&
               surfaces_match(expected, scene.checkpoint);
     if (!success) {
