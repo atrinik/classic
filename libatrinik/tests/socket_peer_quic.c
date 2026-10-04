@@ -1,6 +1,8 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
+#include "socket_peer_quic_fixture.h"
+
 #include "../socket_private.h"
 
 #include <toolkit/datetime.h>
@@ -86,14 +88,22 @@ static bool peer_matches(socket_t *sc, const struct sockaddr_in *expected) {
            actual->sin_addr.s_addr == expected->sin_addr.s_addr;
 }
 
-static void peer_assert_all(socket_t **accepted, const peer_client_t *clients) {
+static void peer_assert_all(socket_t **accepted,
+                            const peer_client_t *clients,
+                            socket_peer_quic_observer_t observe) {
     for (size_t i = 0; i < PEER_COUNT; i++) {
         REQUIRE(socket_refresh_peer_addr(accepted[i]));
         REQUIRE(peer_matches(accepted[i], &clients[i].source));
+        if (observe != NULL) {
+            observe(accepted[i], i);
+        }
     }
 }
 
-static void peer_service(socket_t **accepted, const peer_client_t *clients, bool reverse) {
+static void peer_service(socket_t **accepted,
+                         const peer_client_t *clients,
+                         bool reverse,
+                         socket_peer_quic_observer_t observe) {
     for (size_t n = 0; n < PEER_COUNT; n++) {
         size_t i = reverse ? PEER_COUNT - 1U - n : n;
         REQUIRE(SSL_handle_events(clients[i].socket->quic) == 1);
@@ -101,11 +111,14 @@ static void peer_service(socket_t **accepted, const peer_client_t *clients, bool
         socket_quic_service(accepted[i], ready, true);
         /* Refresh both children after each event: the most recent sender must
          * never replace the other child's peer, including its source port. */
-        peer_assert_all(accepted, clients);
+        peer_assert_all(accepted, clients, observe);
     }
 }
 
-static void peer_exchange(socket_t **accepted, const peer_client_t *clients, unsigned int round) {
+static void peer_exchange(socket_t **accepted,
+                          const peer_client_t *clients,
+                          unsigned int round,
+                          socket_peer_quic_observer_t observe) {
     size_t sent[PEER_COUNT] = {0};
     size_t received[PEER_COUNT] = {0};
     size_t echoed[PEER_COUNT] = {0};
@@ -138,9 +151,9 @@ static void peer_exchange(socket_t **accepted, const peer_client_t *clients, uns
                     REQUIRE(value == values[i]);
                 }
             }
-            peer_assert_all(accepted, clients);
+            peer_assert_all(accepted, clients, observe);
         }
-        peer_service(accepted, clients, round % 2U != 0);
+        peer_service(accepted, clients, round % 2U != 0, observe);
     }
     for (size_t i = 0; i < PEER_COUNT; i++) {
         REQUIRE(sent[i] == 1 && received[i] == 1 && echoed[i] == 1 && returned[i] == 1);
@@ -150,10 +163,13 @@ static void peer_exchange(socket_t **accepted, const peer_client_t *clients, uns
         memcpy(&accepted[i]->addr, &clients[1U - i].source, sizeof(clients[i].source));
         REQUIRE(socket_refresh_peer_addr(accepted[i]));
         REQUIRE(peer_matches(accepted[i], &clients[i].source));
+        if (observe != NULL) {
+            observe(accepted[i], i);
+        }
     }
 }
 
-int main(void) {
+int socket_peer_quic_fixture_run(socket_peer_quic_observer_t observe) {
     toolkit_import(path);
     toolkit_import(socket);
     char directory[HUGE_BUF];
@@ -228,12 +244,15 @@ int main(void) {
                 REQUIRE(SSL_handle_events(accepted[i]->quic) == 1);
                 REQUIRE(socket_refresh_peer_addr(accepted[i]));
                 REQUIRE(peer_matches(accepted[i], &clients[i].source));
+                if (observe != NULL) {
+                    observe(accepted[i], i);
+                }
             }
         }
     }
     REQUIRE(connected == PEER_COUNT && accepted_count == PEER_COUNT);
     for (unsigned int round = 0; round < ROUNDS; round++) {
-        peer_exchange(accepted, clients, round);
+        peer_exchange(accepted, clients, round, observe);
     }
     for (size_t i = 0; i < PEER_COUNT; i++) {
         socket_destroy(clients[i].socket);
