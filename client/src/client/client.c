@@ -74,6 +74,9 @@ static socket_command_struct commands[CLIENT_CMD_NROF] = {
 CASSERT_ARRAY(commands, CLIENT_CMD_NROF);
 
 static bool client_command_allowed(uint8_t type) {
+    if (cpl.state == ST_START_DATA) {
+        return false;
+    }
     if (type == CLIENT_CMD_KEEPALIVE) {
         return true;
     }
@@ -152,7 +155,7 @@ static bool client_command_dispatch(uint8_t *data, size_t len, void *user_data) 
 
     current_command_data = NULL;
     current_command_len = 0;
-    return deferred_command == NULL;
+    return deferred_command == NULL && !client_socket_shutdown_pending();
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
