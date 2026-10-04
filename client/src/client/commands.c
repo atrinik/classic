@@ -98,7 +98,8 @@ void socket_command_book(uint8_t *data, size_t len, size_t pos) {
 void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
-    if (cpl.state != ST_WAITSETUP) {
+    bool initial_setup = cpl.state == ST_WAITSETUP;
+    if (!initial_setup && cpl.state != ST_PLAY) {
         access_protocol_reject(&reader);
         return;
     }
@@ -144,7 +145,9 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
         asset_requests_set_capabilities(asset_capabilities);
     }
 
-    cpl.state = ST_REQUEST_FILES_LISTING;
+    if (initial_setup) {
+        cpl.state = ST_REQUEST_FILES_LISTING;
+    }
 }
 
 /** @copydoc socket_command_struct::handle_func */
