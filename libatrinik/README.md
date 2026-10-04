@@ -53,6 +53,25 @@ GPL-2.0-or-later license. The archive version matches the complete monorepo and
 includes matching protocol source under `dependencies/protocol`; a standalone
 CMake build selects that source automatically.
 
+## Access-code cryptography
+
+`access_code.h` owns the canonical sixteen-character Crockford code and the
+purpose-separated SHA-256 route capability, routing index, and identity-bound
+admission verifier. Generation uses exactly ten bytes from OpenSSL's private
+CSPRNG and fails without a code if entropy acquisition fails. Only the UI
+normalization function trims outer ASCII whitespace and uppercases ASCII;
+wire and store callers must validate the canonical bytes directly.
+
+All buffers remain caller-owned; calls retain no pointers and independent
+calls are thread-safe. Inputs and outputs must not overlap. Failed operations
+clear supplied output buffers. `access_code_clear` cleanses secret buffers;
+callers must cleanse every copy after use and never log codes or route
+capabilities. Store consumers persist only the index and verifier. The focused
+`libatrinik-access-code` test includes independently computed hash vectors,
+invalid alphabets/lengths, identity binding, and deterministic entropy failure
+on supported Linux linkers. The helper alone does not provide admission or
+route registration.
+
 ## Direct connection and rendezvous API
 
 `socket_quic_client_create` owns the complete client connection attempt. It
