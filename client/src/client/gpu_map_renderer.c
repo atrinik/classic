@@ -3090,6 +3090,8 @@ bool gpu_map_renderer_active(void) {
 
 void gpu_map_renderer_set_owner(uint8_t owner, int sample_y, bool projected) {
     HARD_ASSERT(owner < MAP2_LEVELS || owner == GPU_RENDERER_OWNER_UNLIT);
+    current_presentation_token = 0;
+    current_presentation_source = NULL;
     current_light_owner = owner;
     current_light_sample_y = sample_y;
     current_light_projected = projected && owner != GPU_RENDERER_OWNER_UNLIT;
