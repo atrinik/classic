@@ -1175,6 +1175,288 @@ static bool retained_primary_auxiliary_checkpoint(SDL_Surface *primary,
     return valid;
 }
 
+static bool unlit_owner_alpha_frame(SDL_Surface *floor,
+                                    SDL_Surface *foreground,
+                                    uint16_t radiance,
+                                    Uint8 foreground_alpha,
+                                    bool draw_foreground,
+                                    Uint8 pixel[4]) {
+    const int map_size = 8;
+    SDL_FRect destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
+    lighting_vertex_t light_quad[4] = {
+        {.x = 0,
+         .y = 0,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = map_size,
+         .y = 0,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = map_size,
+         .y = map_size,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+        {.x = 0,
+         .y = map_size,
+         .scalar = radiance,
+         .red = radiance,
+         .green = radiance,
+         .blue = radiance},
+    };
+    bool success = gpu_renderer_begin_frame() && gpu_renderer_map_begin(map_size, map_size);
+    gpu_renderer_map_light_quad(0, light_quad);
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
+    success = success && gpu_renderer_draw_surface(floor, NULL, &destination);
+    if (draw_foreground) {
+        success = success && SDL_SetSurfaceAlphaMod(foreground, foreground_alpha);
+        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0, false);
+        success = success && gpu_renderer_draw_surface(foreground, NULL, &destination);
+    }
+    success = success && gpu_renderer_map_end() &&
+              gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
+              gpu_renderer_present();
+    SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
+    success = checkpoint != NULL &&
+              SDL_ReadSurfacePixel(
+                  checkpoint, map_size / 2, map_size / 2, &pixel[0], &pixel[1], &pixel[2], &pixel[3]);
+    SDL_DestroySurface(checkpoint);
+    return success;
+}
+
+static bool unlit_owner_alpha_retained_frame(Uint8 pixel[4]) {
+    const int map_size = 8;
+    bool success = gpu_renderer_begin_frame() && gpu_renderer_map_retain(map_size, map_size) &&
+                   gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
+                   gpu_renderer_present();
+    SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
+    success = checkpoint != NULL &&
+              SDL_ReadSurfacePixel(
+                  checkpoint, map_size / 2, map_size / 2, &pixel[0], &pixel[1], &pixel[2], &pixel[3]);
+    SDL_DestroySurface(checkpoint);
+    return success;
+}
+
+static bool transparent_owner_order_frame(SDL_Surface *floor,
+                                          SDL_Surface *lit_foreground,
+                                          SDL_Surface *unlit_foreground,
+                                          SDL_Surface *occluder,
+                                          Uint8 lit_alpha,
+                                          Uint8 unlit_alpha,
+                                          Uint8 pixel[4]) {
+    const int map_size = 8;
+    SDL_FRect destination = {0.0f, 0.0f, (float)map_size, (float)map_size};
+    const uint16_t radiance[3] = {32, 512, 1024};
+    bool success = gpu_renderer_begin_frame() && gpu_renderer_map_begin(map_size, map_size);
+    for (uint8_t owner = 0; owner < SDL_arraysize(radiance); owner++) {
+        lighting_vertex_t quad[4] = {
+            {.x = 0,
+             .y = 0,
+             .scalar = radiance[owner],
+             .red = radiance[owner],
+             .green = radiance[owner],
+             .blue = radiance[owner]},
+            {.x = map_size,
+             .y = 0,
+             .scalar = radiance[owner],
+             .red = radiance[owner],
+             .green = radiance[owner],
+             .blue = radiance[owner]},
+            {.x = map_size,
+             .y = map_size,
+             .scalar = radiance[owner],
+             .red = radiance[owner],
+             .green = radiance[owner],
+             .blue = radiance[owner]},
+            {.x = 0,
+             .y = map_size,
+             .scalar = radiance[owner],
+             .red = radiance[owner],
+             .green = radiance[owner],
+             .blue = radiance[owner]},
+        };
+        gpu_renderer_map_light_quad(owner, quad);
+    }
+    gpu_renderer_map_set_owner(0, map_size / 2, false);
+    success = success && gpu_renderer_draw_surface(floor, NULL, &destination);
+    if (lit_foreground != NULL) {
+        success = success && SDL_SetSurfaceAlphaMod(lit_foreground, lit_alpha);
+        gpu_renderer_map_set_owner(1, map_size / 2, false);
+        success = success && gpu_renderer_draw_surface(lit_foreground, NULL, &destination);
+    }
+    if (unlit_foreground != NULL) {
+        success = success && SDL_SetSurfaceAlphaMod(unlit_foreground, unlit_alpha);
+        gpu_renderer_map_set_owner(GPU_RENDERER_OWNER_UNLIT, 0, false);
+        success = success && gpu_renderer_draw_surface(unlit_foreground, NULL, &destination);
+    }
+    if (occluder != NULL) {
+        gpu_renderer_map_set_owner(2, map_size / 2, false);
+        success = success && gpu_renderer_draw_surface(occluder, NULL, &destination);
+    }
+    success = success && gpu_renderer_map_end() &&
+              gpu_renderer_draw_map(0.0f, 0.0f, (float)map_size, (float)map_size) &&
+              gpu_renderer_present();
+    SDL_Surface *checkpoint = success ? gpu_renderer_readback(NULL) : NULL;
+    success = checkpoint != NULL &&
+              SDL_ReadSurfacePixel(
+                  checkpoint, map_size / 2, map_size / 2, &pixel[0], &pixel[1], &pixel[2], &pixel[3]);
+    SDL_DestroySurface(checkpoint);
+    return success;
+}
+
+static bool compositor_alpha_matches(const Uint8 actual[4],
+                                     const Uint8 floor[4],
+                                     const Uint8 foreground[4],
+                                     Uint8 alpha,
+                                     Uint8 tolerance) {
+    Uint8 expected[4] = {
+        alpha_blend_channel(foreground[0], floor[0], alpha),
+        alpha_blend_channel(foreground[1], floor[1], alpha),
+        alpha_blend_channel(foreground[2], floor[2], alpha),
+        SDL_ALPHA_OPAQUE,
+    };
+    for (size_t channel = 0; channel < SDL_arraysize(expected); channel++) {
+        if (!surface_channel_is_near(actual[channel], expected[channel], tolerance)) {
+            SDL_SetError("alpha %u composited %u,%u,%u,%u; expected %u,%u,%u,%u",
+                         alpha,
+                         actual[0],
+                         actual[1],
+                         actual[2],
+                         actual[3],
+                         expected[0],
+                         expected[1],
+                         expected[2],
+                         expected[3]);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool compositor_pixel_matches(const Uint8 actual[4],
+                                     const Uint8 expected[4],
+                                     const char *label) {
+    if (memcmp(actual, expected, 4) == 0) {
+        return true;
+    }
+    SDL_SetError("%s composited %u,%u,%u,%u; expected %u,%u,%u,%u",
+                 label,
+                 actual[0],
+                 actual[1],
+                 actual[2],
+                 actual[3],
+                 expected[0],
+                 expected[1],
+                 expected[2],
+                 expected[3]);
+    return false;
+}
+
+/** Preserve a lit backdrop when an unlit remembered-world fade overlaps it. */
+static bool unlit_owner_alpha_checkpoint(void) {
+    const uint16_t low_radiance = 32;
+    const uint16_t changed_radiance = 96;
+    SDL_ClearError();
+    SDL_Surface *floor = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *lit_foreground = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    SDL_Surface *occluder = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    bool success = floor != NULL && foreground != NULL && lit_foreground != NULL &&
+                   occluder != NULL &&
+                   SDL_FillSurfaceRect(
+                       floor, NULL, SDL_MapSurfaceRGBA(floor, 192, 176, 144, SDL_ALPHA_OPAQUE)) &&
+                   SDL_FillSurfaceRect(foreground,
+                                       NULL,
+                                       SDL_MapSurfaceRGBA(
+                                           foreground, 60, 60, 76, SDL_ALPHA_OPAQUE)) &&
+                   SDL_FillSurfaceRect(lit_foreground,
+                                       NULL,
+                                       SDL_MapSurfaceRGBA(
+                                           lit_foreground, 176, 48, 96, SDL_ALPHA_OPAQUE)) &&
+                   SDL_FillSurfaceRect(occluder,
+                                       NULL,
+                                       SDL_MapSurfaceRGBA(
+                                           occluder, 40, 192, 80, SDL_ALPHA_OPAQUE)) &&
+                   SDL_SetSurfaceBlendMode(floor, SDL_BLENDMODE_NONE) &&
+                   SDL_SetSurfaceBlendMode(foreground, SDL_BLENDMODE_BLEND) &&
+                   SDL_SetSurfaceBlendMode(lit_foreground, SDL_BLENDMODE_BLEND) &&
+                   SDL_SetSurfaceBlendMode(occluder, SDL_BLENDMODE_NONE);
+    Uint8 low_floor[4] = {0};
+    Uint8 opaque_foreground[4] = {0};
+    Uint8 half[4] = {0};
+    Uint8 retained[4] = {0};
+    Uint8 nearly_transparent[4] = {0};
+    Uint8 transparent[4] = {0};
+    Uint8 changed_half[4] = {0};
+    Uint8 changed_floor[4] = {0};
+    Uint8 restored_half[4] = {0};
+    Uint8 lit_opaque[4] = {0};
+    Uint8 mixed_owners[4] = {0};
+    Uint8 mixed_after_lit[4] = {0};
+    Uint8 occluder_opaque[4] = {0};
+    Uint8 occluded[4] = {0};
+
+    success = success &&
+              unlit_owner_alpha_frame(
+                  floor, foreground, low_radiance, 0, false, low_floor) &&
+              unlit_owner_alpha_frame(floor,
+                                      foreground,
+                                      low_radiance,
+                                      SDL_ALPHA_OPAQUE,
+                                      true,
+                                      opaque_foreground) &&
+              unlit_owner_alpha_frame(floor, foreground, low_radiance, 128, true, half) &&
+              compositor_alpha_matches(half, low_floor, opaque_foreground, 128, 2) &&
+              unlit_owner_alpha_retained_frame(retained) &&
+              compositor_pixel_matches(retained, half, "retained UNLIT alpha") &&
+              unlit_owner_alpha_frame(
+                  floor, foreground, low_radiance, 1, true, nearly_transparent) &&
+              compositor_alpha_matches(
+                  nearly_transparent, low_floor, opaque_foreground, 1, 2) &&
+              unlit_owner_alpha_frame(floor, foreground, low_radiance, 0, true, transparent) &&
+              compositor_pixel_matches(transparent, low_floor, "transparent UNLIT alpha") &&
+              unlit_owner_alpha_frame(
+                  floor, foreground, low_radiance, 128, true, restored_half) &&
+              compositor_pixel_matches(restored_half, half, "restored UNLIT alpha") &&
+              unlit_owner_alpha_frame(
+                  floor, foreground, changed_radiance, 128, true, changed_half) &&
+              unlit_owner_alpha_frame(
+                  floor, foreground, changed_radiance, 0, false, changed_floor) &&
+              compositor_alpha_matches(
+                  changed_half, changed_floor, opaque_foreground, 128, 2) &&
+              transparent_owner_order_frame(
+                  floor, lit_foreground, NULL, NULL, SDL_ALPHA_OPAQUE, 0, lit_opaque);
+    if (success) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            mixed_after_lit[channel] =
+                alpha_blend_channel(lit_opaque[channel], low_floor[channel], 128);
+        }
+        mixed_after_lit[3] = SDL_ALPHA_OPAQUE;
+    }
+    success = success && transparent_owner_order_frame(
+                  floor, lit_foreground, foreground, NULL, 128, 128, mixed_owners) &&
+              compositor_alpha_matches(
+                  mixed_owners, mixed_after_lit, opaque_foreground, 128, 2) &&
+              transparent_owner_order_frame(
+                  floor, NULL, NULL, occluder, 0, 0, occluder_opaque) &&
+              transparent_owner_order_frame(
+                  floor, lit_foreground, foreground, occluder, 128, 128, occluded) &&
+              compositor_pixel_matches(occluded, occluder_opaque, "opaque occluder");
+    if (!success && SDL_GetError()[0] == '\0') {
+        SDL_SetError("UNLIT owner alpha compositor checkpoint failed");
+    }
+    SDL_DestroySurface(occluder);
+    SDL_DestroySurface(lit_foreground);
+    SDL_DestroySurface(foreground);
+    SDL_DestroySurface(floor);
+    return success;
+}
+
 static bool lighting_lookup_checkpoint(SDL_Surface *source) {
     SDL_FRect full = {0.0f, 0.0f, 32.0f, 32.0f};
     SDL_FRect inset = {8.0f, 8.0f, 16.0f, 16.0f};
@@ -1668,6 +1950,7 @@ int main(void) {
     GPU_REQUIRE(ui_atlas_fault_checkpoint());
     GPU_REQUIRE(ui_atlas_churn_plateau_checkpoint());
     GPU_REQUIRE(draw_checkpoint(source, 0, 255, 0, 2048));
+    GPU_REQUIRE(unlit_owner_alpha_checkpoint());
     GPU_REQUIRE(lighting_lookup_checkpoint(source));
     GPU_REQUIRE(projected_lighting_checkpoint(source, 32.0f));
     gpu_renderer_statistics_reset();
