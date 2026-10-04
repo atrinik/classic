@@ -1704,15 +1704,16 @@ void socket_command_version(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     if (cpl.state != ST_WAITVERSION) {
-        LOG(BUG,
-            "Received version command when not in proper "
-            "state: %d, should be: %d.",
-            cpl.state,
-            ST_WAITVERSION);
+        access_protocol_reject(&reader);
         return;
     }
 
-    cpl.server_socket_version = packet_reader_read_uint32(&reader);
+    uint32_t server_socket_version = packet_reader_read_uint32(&reader);
+    if (!packet_reader_finish(&reader)) {
+        access_protocol_reject(&reader);
+        return;
+    }
+    cpl.server_socket_version = server_socket_version;
     if (cpl.server_socket_version != SOCKET_VERSION) {
         draw_info(COLOR_RED, "The client and server use incompatible gameplay protocol versions.");
         if (selected_server != NULL) {
@@ -1791,8 +1792,9 @@ void socket_command_access_admin_result(uint8_t *data, size_t len, size_t pos) {
     uint8_t version = packet_reader_read_uint8(&reader);
     packet_view_t payload =
         packet_reader_read_view(&reader, packet_reader_remaining(&reader));
-    if (!packet_reader_finish(&reader) || version != 1 || payload.len == 0 ||
-        payload.len > 32768U || !client_access_admin_response(payload.data, payload.len)) {
+    if (!packet_reader_finish(&reader) || cpl.state != ST_PLAY || version != 1 ||
+        payload.len == 0 || payload.len > 32768U ||
+        !client_access_admin_response(payload.data, payload.len)) {
         packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         client_socket_request_shutdown();
     }
