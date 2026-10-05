@@ -44,6 +44,65 @@ static bool all_zero(const void *data, size_t size) {
     return true;
 }
 
+/* Keep the real certificate, server identity, nonce and routing grant while
+ * changing only the canonical descriptor name. Rejection must erase all of the
+ * caller's prior result, including fields populated before name validation. */
+static int test_descriptor_names(const char nonce[65]) {
+    static const struct {
+        const char *encoded;
+        const char *expected;
+    } cases[] = {
+        {"Caf\xc3\xa9", "Caf\xc3\xa9"},
+        {"Cost \xe2\x82\xac", "Cost \xe2\x82\xac"},
+        {"Face \xf0\x9f\x98\x80", "Face \xf0\x9f\x98\x80"},
+        {"Quote\\\" and slash\\\\", "Quote\" and slash\\"},
+        {"", NULL},
+        {"\x80", NULL},
+        {"\xc2", NULL},
+        {"\xc2" "A", NULL},
+        {"\xc0\xaf", NULL},
+        {"\xe0\x80\xaf", NULL},
+        {"\xed\xa0\x80", NULL},
+        {"\xf4\x90\x80\x80", NULL},
+        {"\xef\xb7\x90", NULL},
+        {"\xef\xbf\xbe", NULL},
+        {"\xf4\x8f\xbf\xbe", NULL},
+        {"\xc2\x85", NULL},
+        {"Control\x1f", NULL},
+        {"Control\x7f", NULL},
+        {"Bad\\n", NULL},
+        {"\\u0061", NULL},
+    };
+    const char *name = strstr(body, "\"name\":\"Fixture\"");
+    REQUIRE(name != NULL);
+    name += strlen("\"name\":\"");
+    size_t prefix = (size_t)(name - body);
+    const char *suffix = name + strlen("Fixture");
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char changed[sizeof(body) + 128];
+        int size = snprintf(changed,
+                            sizeof(changed),
+                            "%.*s%s%s",
+                            (int)prefix,
+                            body,
+                            cases[i].encoded,
+                            suffix);
+        REQUIRE(size > 0 && (size_t)size < sizeof(changed));
+        access_resolved_t out;
+        memset(&out, 0xa5, sizeof(out));
+        bool resolved = access_resolve_parse(changed, (size_t)size, nonce, 1800000000, &out);
+        if (cases[i].expected != NULL) {
+            REQUIRE(resolved && strcmp(out.name, cases[i].expected) == 0);
+            REQUIRE(strcmp(out.grant.client_nonce, nonce) == 0 && out.port == 13327);
+            access_resolved_clear(&out);
+            REQUIRE(all_zero(&out, sizeof(out)));
+        } else {
+            REQUIRE(!resolved && all_zero(&out, sizeof(out)));
+        }
+    }
+    return 0;
+}
+
 static int test_precancelled_resolve(void) {
     atomic_bool cancelled = true;
     curl_cancel_t cancel = {.cancelled = cancellation_requested, .context = &cancelled};
@@ -89,6 +148,7 @@ int main(void) {
     nonce[64] = 0;
     REQUIRE(access_resolve_parse(body, sizeof(body) - 1, nonce, 1800000000, &out));
     REQUIRE(strcmp(out.name, "Fixture") == 0 && out.port == 13327);
+    REQUIRE(test_descriptor_names(nonce) == 0);
     for (size_t n = 0; n < sizeof(body) - 1; n++) {
         memset(&out, 0xa5, sizeof(out));
         REQUIRE(!access_resolve_parse(body, n, nonce, 1800000000, &out));
