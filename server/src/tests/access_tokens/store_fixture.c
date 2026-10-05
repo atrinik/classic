@@ -237,9 +237,11 @@ static void privacy(void) {
     access_store_close(s);
     char path[256], link[256];
     snprintf(path, sizeof(path), "%s/%s", directory, SNAPSHOT);
-    assert(chmod(path, 0644) == 0);
+    int fd = open(path, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+    assert(fd >= 0);
+    assert(fchmod(fd, 0644) == 0);
     assert(access_store_open(&s, directory, identity, true, false) == ACCESS_UNAVAILABLE);
-    assert(chmod(path, 0600) == 0);
+    assert(fchmod(fd, 0600) == 0);
     uint8_t wrong[32] = {0};
     assert(access_store_open(&s, directory, wrong, true, false) == ACCESS_UNAVAILABLE);
     snprintf(link, sizeof(link), "%s.sym", directory);
@@ -254,8 +256,7 @@ static void privacy(void) {
     assert(rename(link, path) == 0);
     assert(access_store_open(&s, directory, identity, true, false) == ACCESS_COMMITTED);
     access_store_close(s);
-    int fd = open(path, O_RDWR);
-    assert(fd >= 0);
+    /* Corrupt the pinned original snapshot, never a pathname checked earlier. */
     char byte = 1;
     assert(pwrite(fd, &byte, 1, 32) == 1);
     assert(close(fd) == 0);

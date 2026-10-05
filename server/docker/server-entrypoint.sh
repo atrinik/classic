@@ -10,6 +10,17 @@ if [ -n "${ATRINIK_JOIN_PASSWORD:-}" ] ||
     exit 1
 fi
 
+# Bind mounts replace the image's private data directory. Diagnose provisioning
+# before copying defaults or starting listeners; never adopt/chown mounted state.
+if [ -L data ] || [ ! -d data ]; then
+    echo "Data provisioning error: data must be an existing non-symlink directory, mode 0700, owned by the server UID ($(id -u)). See server/README.md." >&2
+    exit 1
+fi
+if [ "$(stat -c %a data)" != 700 ] || [ "$(stat -c %u data)" != "$(id -u)" ]; then
+    echo "Data provisioning error: data must have mode 0700 and owner UID $(id -u) (found mode $(stat -c %a data), UID $(stat -c %u data)). Stop the server and explicitly provision the host bind mount; see server/README.md." >&2
+    exit 1
+fi
+
 # Initialize a new host data folder from the image defaults.
 if [ ! -e data/.atrinik-initialized ]; then
     cp -R install_data/. data/

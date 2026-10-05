@@ -2,8 +2,8 @@ services:
   server:
     image: ${ATRINIK_SERVER_IMAGE:-atrinik-server}
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: server/Dockerfile
     environment:
       ATRINIK_HTTP_URL: ${ATRINIK_HTTP_URL:-off}
       ATRINIK_SERVER_PUBLIC: ${ATRINIK_SERVER_PUBLIC:-false}
@@ -13,7 +13,7 @@ services:
       ATRINIK_QUIC_PORT: ${ATRINIK_QUIC_PORT:-1730}
       HOME: /tmp
     network_mode: host
-    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    user: "${LOCAL_UID:-10001}:${LOCAL_GID:-10001}"
     volumes:
       - ./server-data:/opt/atrinik/server/data
       - ./server-custom.cfg:/opt/atrinik/server/server-custom.cfg:ro

@@ -207,18 +207,16 @@
 =================================================
 
  Release images are published to `ghcr.io/atrinik/classic-server`. Pin a
- version for a persistent deployment, then start it from the repository root:
+ version for a persistent deployment, then start it from the server/ directory:
   $ cp server-custom.cfg.example server-custom.cfg
-  $ mkdir -p server-data
-  $ ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/classic-server:5.6.0 \
-      LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) \
+  $ mkdir -m 0700 server-data && sudo chown 10001:10001 server-data && \
+      ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/classic-server:5.6.0 \
       docker compose -f compose.server.yaml up --no-build -d
 
  The `latest` tag follows the newest release, but a versioned tag avoids an
- unexpected server upgrade. To build the current source locally instead:
+ unexpected server upgrade. To build the current source locally instead (also from server/):
   $ cp server-custom.cfg.example server-custom.cfg
-  $ mkdir -p server-data
-  $ LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) \
+  $ mkdir -m 0700 server-data && sudo chown 10001:10001 server-data && \
       docker compose -f compose.server.yaml up --build -d
 
  On a native Linux Docker Engine, the Compose service uses host networking so
@@ -232,8 +230,27 @@
  deployment. Player data, the persistent QUIC identity, and other mutable state
  are kept directly in the host's server-data/ folder. Region maps are generated
  while building the image and refreshed into that folder when the container
- starts. On Linux, LOCAL_UID and LOCAL_GID keep those files owned by the user
- running Docker.
+ starts. Compose defaults to the image's dedicated UID/GID 10001:10001.
+ The fresh-directory commands intentionally refuse an existing server-data path;
+ they give only that newly created directory to the dedicated service identity.
+ Keep the image's containing server directory and executables root-owned.
+
+ Existing state requires an explicit stopped maintenance operation: stop the
+ service, take and verify a complete private-state backup, and inspect the exact
+ host bind-mount path with `ls -ldn server-data` (reject symlinks). If it already
+ belongs to UID 10001, correct only its leaf mode with `chmod 0700 server-data`.
+ If migrating a different service UID, review the backup and all state ownership
+ before an operator-managed ownership migration; do not recursively chown an
+ unverified path. The entrypoint rejects a wrong mode/owner before initialization
+ or listeners and never changes existing ownership or adopts a directory.
+
+ LOCAL_UID/LOCAL_GID overrides require a separately provisioned runtime image
+ and writable generated assets/data directory for the selected service identity,
+ as well as the 0700 host data directory. The packaged assets/data belongs to UID
+ 10001 and is mode 0700; changing only the Compose user cannot use that image.
+ Offline initialization/inspection must use the same UID as the online service.
+ Keep executable/configuration ancestry root-owned and do not use the Docker
+ caller's UID implicitly.
 
  To follow logs or stop the service:
   $ docker compose -f compose.server.yaml logs -f
