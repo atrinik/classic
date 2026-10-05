@@ -23,20 +23,7 @@
 #include <tod.h>
 #include <commands.h>
 #include <exit.h>
-
-START_TEST(test_access_attempt_budget_has_no_connection_identity) {
-    server_monotonic_t start = {.microseconds = 1000000};
-    ck_assert(socket_access_attempt_reserve_for_test(start, true));
-    for (unsigned int i = 1; i < 256; i++)
-        ck_assert(socket_access_attempt_reserve_for_test(start, false));
-    ck_assert(!socket_access_attempt_reserve_for_test(start, false));
-    ck_assert(
-        !socket_access_attempt_reserve_for_test((server_monotonic_t){.microseconds = 60999999},
-                                                false));
-    ck_assert(socket_access_attempt_reserve_for_test((server_monotonic_t){.microseconds = 61000000},
-                                                     false));
-}
-END_TEST
+#include <toolkit/datetime.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
     size_t count = 0;
@@ -70,6 +57,123 @@ static packet_struct *queued_command_payload_find(socket_struct *cs, uint8_t typ
 
     return NULL;
 }
+
+#ifdef __linux__
+static access_outcome_t request_access_route(void *context, const access_route_t *route) {
+    (void)context;
+    (void)route;
+    return ACCESS_COMMITTED;
+}
+
+/* Exercise dispatch, canonical validation, the real worker and socket completion
+ * on a fresh connection each time. No budget reset or simulated clock advance. */
+static void request_access_attempt(const char code[16], size_t payload_size, bool accepted) {
+    socket_struct cs = {
+        .state = ST_LOGIN,
+        .socket_version = SOCKET_VERSION,
+        .access_policy_sent = true,
+        .access_transport_authenticated = true,
+    };
+    uint8_t frame[18] = {SERVER_CMD_ACCESS_AUTH, 1};
+    memcpy(frame + 2, code, 16);
+    ck_assert_int_eq(socket_server_handle_command(&cs, NULL, frame, payload_size + 1),
+                     SOCKET_COMMAND_HANDLED);
+    ck_assert(cs.access_attempted);
+    if (payload_size == 17 && code[0] != '!') {
+        ck_assert_uint_ne(cs.access_auth_job, 0);
+    } else {
+        ck_assert_uint_eq(cs.access_auth_job, 0);
+    }
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (cs.access_auth_job != 0 && datetime_monotonic_ms() < deadline) {
+        socket_access_poll_for_test(&cs, NULL);
+        if (cs.access_auth_job != 0) {
+            struct timespec delay = {.tv_nsec = 1000000};
+            nanosleep(&delay, NULL);
+        }
+    }
+    ck_assert_uint_eq(cs.access_auth_job, 0);
+    ck_assert_int_eq(cs.access_authenticated, accepted);
+    ck_assert_int_eq(cs.state, accepted ? ST_LOGIN : ST_ZOMBIE);
+    if (accepted) {
+        packet_struct *result = queued_command_payload_find(&cs, CLIENT_CMD_ACCESS_RESULT);
+        ck_assert_ptr_nonnull(result);
+        ck_assert_uint_eq(result->len, 2);
+        ck_assert_uint_eq(result->data[0], 1);
+        ck_assert_uint_eq(result->data[1], 0);
+        /* A second AUTH is forbidden even with the same valid code. */
+        uint8_t again[18] = {SERVER_CMD_ACCESS_AUTH, 1};
+        memcpy(again + 2, code, 16);
+        socket_command_result_t handled;
+        deadline = datetime_monotonic_ms() + 3000;
+        do {
+            handled = socket_server_handle_command(&cs, NULL, again, sizeof(again));
+            if (handled == SOCKET_COMMAND_DEFER) {
+                struct timespec delay = {.tv_nsec = 1000000};
+                nanosleep(&delay, NULL);
+            }
+        } while (handled == SOCKET_COMMAND_DEFER && datetime_monotonic_ms() < deadline);
+        ck_assert_int_eq(handled, SOCKET_COMMAND_HANDLED);
+        ck_assert_int_eq(cs.state, ST_ZOMBIE);
+        ck_assert_uint_eq(cs.access_auth_job, 0);
+    }
+    socket_buffer_clear(&cs);
+}
+
+START_TEST(test_invalid_access_attempts_do_not_lock_out_valid_codes) {
+    char directory[] = "/tmp/atrinik-access-admission-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    uint8_t identity[32];
+    memset(identity, 0x11, sizeof(identity));
+    char identity_hex[65];
+    memset(identity_hex, '1', 64);
+    identity_hex[64] = 0;
+    access_store_t *store = NULL;
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    access_result_t issue = access_store_issue(store,
+                                              "11111111111111111111111111111111",
+                                              1,
+                                              "Admission regression",
+                                              false,
+                                              0,
+                                              time(NULL),
+                                              request_access_route,
+                                              NULL);
+    ck_assert_int_eq(issue.outcome, ACCESS_COMMITTED);
+    /* Canonical but unissued code must reach the worker and be denied there. */
+    const char missing[] = "0000000000000000";
+    ck_assert(memcmp(issue.code, missing, 16) != 0);
+    access_store_close(store);
+    char previous_store[sizeof(settings.access_store)];
+    memcpy(previous_store, settings.access_store, sizeof(previous_store));
+    bool previous_required = settings.access_required;
+    bool previous_initialize = settings.access_initialize;
+    snprintf(VS(settings.access_store), "%s", directory);
+    settings.access_required = true;
+    settings.access_initialize = false;
+    access_server_route_for_test(request_access_route);
+    ck_assert(access_server_init(identity_hex));
+    for (unsigned int phase = 0; phase < 3; phase++) {
+        for (unsigned int i = 0; i < 300; i++) {
+            request_access_attempt(phase == 1 ? "!!!!!!!!!!!!!!!!" : missing,
+                                   phase == 0 ? 16 : 17, false);
+        }
+        request_access_attempt(issue.code, 17, true);
+    }
+    access_result_cleanse(&issue);
+    ck_assert(access_server_shutdown());
+    access_server_deinit();
+    access_server_route_for_test(NULL);
+    memcpy(settings.access_store, previous_store, sizeof(previous_store));
+    settings.access_required = previous_required;
+    settings.access_initialize = previous_initialize;
+    char snapshot[256];
+    snprintf(VS(snapshot), "%s/%s", directory, ACCESS_STORE_FILENAME);
+    ck_assert_int_eq(unlink(snapshot), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+#endif
 
 static void command_frame_append(packet_struct *queue,
                                  uint8_t command,
@@ -2338,7 +2442,9 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
     tcase_add_test(tc_core, test_access_busy_retains_received_and_queued_frames);
-    tcase_add_test(tc_core, test_access_attempt_budget_has_no_connection_identity);
+#ifdef __linux__
+    tcase_add_test(tc_core, test_invalid_access_attempts_do_not_lock_out_valid_codes);
+#endif
     tcase_add_test(tc_core, test_access_permissions_follow_the_active_character);
     tcase_add_test(tc_core, test_access_revocation_denies_queued_private_result);
     tcase_add_test(tc_core, test_keepalive_echoes_identifier);

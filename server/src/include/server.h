@@ -389,7 +389,6 @@ typedef enum {
 } socket_command_result_t;
 #ifdef ATRINIK_TESTING
 void socket_server_process_received_for_test(socket_struct *cs);
-bool socket_access_attempt_reserve_for_test(server_monotonic_t now, bool reset);
 #endif
 extern socket_command_result_t
 socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);

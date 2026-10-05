@@ -68,35 +68,6 @@
 #include <openssl/crypto.h>
 #define GET_CLIENT_FLAGS(_O_) ((_O_)->flags[0] & 0x7f)
 #define NO_FACE_SEND (-1)
-/* Shared process budget; no network identity is collected or retained. */
-#define ACCESS_ATTEMPTS_PER_MINUTE 256U
-static server_monotonic_t access_attempt_window;
-static unsigned int access_attempt_count;
-
-static bool access_attempt_reserve(server_monotonic_t now) {
-    if (server_monotonic_elapsed_at_least(now,
-                                          access_attempt_window,
-                                          server_duration_from_seconds(60))) {
-        access_attempt_window = now;
-        access_attempt_count = 0;
-    }
-    if (access_attempt_count >= ACCESS_ATTEMPTS_PER_MINUTE) {
-        return false;
-    }
-    access_attempt_count++;
-    return true;
-}
-
-#ifdef ATRINIK_TESTING
-bool socket_access_attempt_reserve_for_test(server_monotonic_t now, bool reset) {
-    if (reset) {
-        access_attempt_window = now;
-        access_attempt_count = 0;
-    }
-    return access_attempt_reserve(now);
-}
-#endif
-
 void socket_command_access_auth(socket_struct *ns,
                                 player *pl,
                                 uint8_t *data,
@@ -106,8 +77,7 @@ void socket_command_access_auth(socket_struct *ns,
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     ns->access_attempted = true;
-    if (len - pos != 17 || packet_reader_read_uint8(&reader) != 1 ||
-        !access_attempt_reserve(server_monotonic_now())) {
+    if (len - pos != 17 || packet_reader_read_uint8(&reader) != 1) {
         ns->state = ST_ZOMBIE;
         return;
     }

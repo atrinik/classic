@@ -1,6 +1,6 @@
 # Access token store
 
-Admission and token history never collect network addresses or address-derived identifiers. The game process applies a shared limit of 256 authentication attempts per minute and allows one authentication attempt per connection; those bounds require no player-IP table. Retained admission history contains timestamps, not source addresses. Transport libraries may handle addresses transiently to route live traffic, but accepted application sockets do not retain them.
+Admission and token history never collect network addresses or address-derived identifiers. The game process allows one authentication attempt per connection and admits canonical codes to a fixed 32-job worker queue; these bounds require no player-IP table. Malformed codes consume no worker jobs, and completed or cancelled jobs release their slots. A full queue can temporarily reject legitimate attempts during overload, but failed attempts do not consume a process-wide minute quota. Retained admission history contains timestamps, not source addresses. Transport libraries may handle addresses transiently to route live traffic, but accepted application sockets do not retain them.
 
 The server owns one `access-tokens.snapshot` in its configured private access
 state directory. The directory must exist, belong to the service effective UID,
@@ -123,6 +123,9 @@ ID while retaining the original management receipt. Activation conflicts remain
 ambiguous and never trigger collision retry. Every attempt shares one monotonic
 30-second deadline; the authenticated route adapter must honor the supplied
 remaining budget. Terminal revocations have priority in the bounded outbox page.
+The worker retries one pending revocation per maintenance pass, rotating stable
+token IDs across all retained pending revocations. Pending maintenance interleaves
+with queued requests; this does not guarantee admission during sustained overload.
 
 Remaining integration boundaries: native
 Windows private state/IPC has no supported implementation in this POSIX module;
