@@ -407,6 +407,7 @@ START_TEST(test_refill_failed_commit_and_stacks) {
     bottle->type = LIGHT_REFILL;
     bottle->stats.food = 1000;
     bottle->nrof = 2;
+    SET_FLAG(bottle, FLAG_CAN_STACK);
     FREE_AND_COPY_HASH(bottle->race, "writing_ink");
     object_insert_into(bottle, writer, INS_NO_MERGE);
     mark(writer, pen);
