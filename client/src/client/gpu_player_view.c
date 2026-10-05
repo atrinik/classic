@@ -2073,8 +2073,8 @@ static bool gpu_player_view_book_anchors(unsigned int *anchors) {
 }
 
 static bool gpu_player_view_private_markup_test(void) {
-    const char *label = "[a]/password victim NewPass123[/a]";
-    const char *result = "{\"label\":\"[a]/password victim NewPass123[/a]\"}";
+    const char *label = "[a=help]/password victim NewPass123[/a]";
+    const char *result = "{\"label\":\"[a=help]/password victim NewPass123[/a]\"}";
     unsigned int anchors = 0;
     if (!book_load(label, (int)strlen(label))) {
         return false;
