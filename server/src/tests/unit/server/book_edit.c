@@ -124,7 +124,7 @@ START_TEST(test_edit_copy_sign_and_persistence) {
     object_set_value(copy, "quest_marker", "keep", true);
     object_insert_into(copy, writer, INS_NO_MERGE);
     /* Authored hooks and quest properties stay on the same object. */
-    object *event = object_new();
+    object *event = object_get();
     event->type = EVENT_OBJECT;
     event->sub_type = EVENT_APPLY;
     FREE_AND_COPY_HASH(event->race, "python");
@@ -325,11 +325,11 @@ START_TEST(test_all_book_producers_are_terminated) {
     ck_assert_str_eq(text, "[title]No quests to speak of.[/title]");
     ck_assert(packet_reader_finish(&reader));
     pl->quest_container = object_insert_into(arch_get("sack"), writer, INS_NO_MERGE);
-    object *quest = object_new();
+    object *quest = object_get();
     quest->type = QUEST_CONTAINER;
     FREE_AND_COPY_HASH(quest->race, "Keeper's request");
     object_insert_into(quest, pl->quest_container, INS_NO_MERGE);
-    object *part = object_new();
+    object *part = object_get();
     FREE_AND_COPY_HASH(part->race, "Find the book");
     FREE_AND_COPY_HASH(part->msg, "Return to the keeper.");
     object_insert_into(part, quest, INS_NO_MERGE);
