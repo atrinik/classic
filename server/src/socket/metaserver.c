@@ -87,16 +87,6 @@ static bool metaserver_initialized;
 static bool current_request_handled;
 static metaserver_publish_cadence_t publish_cadence;
 
-typedef struct metaserver_public_snapshot {
-    char name[MAX_BUF];
-    char description[MAX_BUF];
-    char hostname[MAX_BUF];
-    uint32_t players_count;
-    uint16_t port;
-    bool is_public;
-    bool access_required;
-} metaserver_public_snapshot_t;
-
 static metaserver_public_snapshot_t published_snapshot;
 static metaserver_public_snapshot_t attempted_snapshot;
 static metaserver_public_snapshot_t blocked_snapshot;
@@ -792,21 +782,58 @@ static uint32_t metaserver_publish_random(void) {
     return value;
 }
 
-static void metaserver_public_snapshot(metaserver_public_snapshot_t *snapshot) {
+void metaserver_public_snapshot(metaserver_public_snapshot_t *snapshot) {
     HARD_ASSERT(snapshot != NULL);
 
     memset(snapshot, 0, sizeof(*snapshot));
     snprintf(VS(snapshot->name), "%s", settings.server_name);
     snprintf(VS(snapshot->description), "%s", settings.server_desc);
-    if (*settings.metaserver_hostname != '\0') {
+    if (settings.server_public && *settings.metaserver_hostname != '\0') {
         snprintf(VS(snapshot->hostname), "%s", settings.metaserver_hostname);
         snapshot->port = settings.port_quic;
     }
     snapshot->is_public = settings.server_public;
     snapshot->access_required = settings.access_required;
-    for (player *pl = first_player; pl != NULL; pl = pl->next) {
-        snapshot->players_count++;
+    /* Private maintenance must not reveal player activity or route addresses. */
+    if (snapshot->is_public) {
+        for (player *pl = first_player; pl != NULL; pl = pl->next) {
+            snapshot->players_count++;
+        }
     }
+}
+
+bool metaserver_public_snapshot_body(const metaserver_public_snapshot_t *snapshot,
+                                      const char *server_id,
+                                      const char *certificate,
+                                      char body[METASERVER_PUBLISH_BODY_MAX + 1U],
+                                      size_t *body_size) {
+    HARD_ASSERT(snapshot != NULL);
+    metaserver_publisher_classic_payload_t payload = {
+        .server_id = server_id,
+        .certificate = certificate,
+        .name = snapshot->name,
+        .players_count = snapshot->players_count,
+        .version = PACKAGE_VERSION,
+        .text_comment = snapshot->description,
+        .is_public = snapshot->is_public,
+        .access_required = snapshot->access_required,
+        .hostname = *snapshot->hostname != '\0' ? snapshot->hostname : NULL,
+        .port = snapshot->port,
+    };
+    return metaserver_publisher_classic_body(&payload, body, body_size);
+}
+
+void metaserver_public_snapshot_succeeded(metaserver_publish_cadence_t *cadence,
+                                           const metaserver_public_snapshot_t *snapshot,
+                                           server_monotonic_t now,
+                                           uint32_t heartbeat_seconds,
+                                           uint32_t random_value) {
+    HARD_ASSERT(snapshot != NULL);
+    /* Private code-only discovery needs signed presence maintenance; open
+     * private servers need only their initial directory withdrawal. */
+    metaserver_publish_cadence_succeeded(cadence, now,
+                                          snapshot->is_public || snapshot->access_required,
+                                          heartbeat_seconds, random_value);
 }
 
 static bool metaserver_public_snapshot_equal(const metaserver_public_snapshot_t *lhs,
@@ -1010,11 +1037,13 @@ static void metaserver_update_request_locked(curl_request_t *request) {
         published_snapshot = attempted_snapshot;
         published_snapshot_valid = true;
         blocked_snapshot_valid = false;
-        metaserver_publish_cadence_succeeded(&publish_cadence,
-                                             server_monotonic_now(),
-                                             attempted_snapshot.is_public,
-                                             settings.metaserver_heartbeat,
-                                             metaserver_publish_random());
+        /* Code-only resolution needs fresh signed presence even while private.
+         * Renew on the timer; player changes never trigger private publication. */
+        metaserver_public_snapshot_succeeded(&publish_cadence,
+                                              &attempted_snapshot,
+                                              server_monotonic_now(),
+                                              settings.metaserver_heartbeat,
+                                              metaserver_publish_random());
         pthread_mutex_lock(&stats_lock);
         stats.last = time(NULL);
         stats.num++;
@@ -1067,7 +1096,8 @@ static void metaserver_update_request(curl_request_t *request, void *user_data) 
     pthread_mutex_unlock(&request_lock);
 }
 
-static curl_request_t *metaserver_publish_request_create(uint32_t players_count) {
+static curl_request_t *metaserver_publish_request_create(
+    const metaserver_public_snapshot_t *snapshot) {
     char server_id[65] = {0};
     char body[METASERVER_PUBLISH_BODY_MAX + 1U] = {0};
     char sequence_header[21] = {0};
@@ -1090,19 +1120,9 @@ static curl_request_t *metaserver_publish_request_create(uint32_t players_count)
         LOG(ERROR, "The active QUIC listener is not a valid P-256 publisher identity");
         goto out;
     }
-    metaserver_publisher_classic_payload_t payload = {
-        .server_id = server_id,
-        .certificate = metaserver_publisher_identity_certificate(identity),
-        .name = settings.server_name,
-        .players_count = players_count,
-        .version = PACKAGE_VERSION,
-        .text_comment = settings.server_desc,
-        .is_public = settings.server_public,
-        .access_required = settings.access_required,
-        .hostname = *settings.metaserver_hostname != '\0' ? settings.metaserver_hostname : NULL,
-        .port = *settings.metaserver_hostname != '\0' ? settings.port_quic : 0,
-    };
-    if (!metaserver_publisher_classic_body(&payload, body, &body_size)) {
+    if (!metaserver_public_snapshot_body(snapshot, server_id,
+                                          metaserver_publisher_identity_certificate(identity),
+                                          body, &body_size)) {
         LOG(ERROR, "Server metadata cannot be represented by the signed publisher contract");
         goto out;
     }
@@ -1254,7 +1274,7 @@ void metaserver_service(void) {
     pthread_mutex_lock(&stats_lock);
     stats.publish_attempts++;
     pthread_mutex_unlock(&stats_lock);
-    current_request = metaserver_publish_request_create(snapshot.players_count);
+    current_request = metaserver_publish_request_create(&snapshot);
     if (current_request == NULL) {
         metaserver_publish_failed_stat();
         metaserver_publish_retry_locked(0);

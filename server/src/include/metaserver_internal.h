@@ -14,6 +14,7 @@
 
 #include <toolkit/curl.h>
 #include <toolkit/rendezvous.h>
+#include <toolkit/metaserver_publisher.h>
 #include <server_clock.h>
 #include <access_tokens.h>
 #include <curl/curl.h>
@@ -41,6 +42,24 @@
 #define METASERVER_PUBLISH_HEARTBEAT_MIN_SECONDS 60U
 #define METASERVER_PUBLISH_HEARTBEAT_MAX_SECONDS 10800U
 
+/* Sanitized signed-presence state; private maintenance carries no activity/address. */
+typedef struct metaserver_public_snapshot {
+    char name[MAX_BUF];
+    char description[MAX_BUF];
+    char hostname[MAX_BUF];
+    uint32_t players_count;
+    uint16_t port;
+    bool is_public;
+    bool access_required;
+} metaserver_public_snapshot_t;
+
+void metaserver_public_snapshot(metaserver_public_snapshot_t *snapshot);
+bool metaserver_public_snapshot_body(const metaserver_public_snapshot_t *snapshot,
+                                      const char *server_id,
+                                      const char *certificate,
+                                      char body[METASERVER_PUBLISH_BODY_MAX + 1U],
+                                      size_t *body_size);
+
 typedef struct metaserver_attempt_budget {
     server_monotonic_t refill_deadline;
     uint32_t tokens;
@@ -57,6 +76,12 @@ typedef struct metaserver_publish_cadence {
     bool suspended;
     bool replay_recovered;
 } metaserver_publish_cadence_t;
+
+void metaserver_public_snapshot_succeeded(metaserver_publish_cadence_t *cadence,
+                                           const metaserver_public_snapshot_t *snapshot,
+                                           server_monotonic_t now,
+                                           uint32_t heartbeat_seconds,
+                                           uint32_t random_value);
 
 typedef struct metaserver_rendezvous_headers {
     rendezvous_websocket_protocol_t protocol;

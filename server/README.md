@@ -619,8 +619,15 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
  across process restarts and duplicate processes. Listing visibility, name,
  description, and access policy are startup settings; changing them
  requires a server restart, whose startup publication sends the new state.
- Private servers publish one removal/tombstone at startup and retry it until
- accepted, then send no heartbeats or player-count changes.
+ Private servers with `access_required false` publish one removal/tombstone at
+ startup and retry it until accepted, then send no heartbeats. Private servers
+ with `access_required true` continue signed presence maintenance on the same
+ bounded, jittered heartbeat timer so code-only discovery remains available
+ beyond the four-hour presence expiry. These publications carry `public:false`,
+ `accessRequired:true`, a zero player count, and no hostname or port; they never
+ make the server directory-visible. Player joins and departures neither trigger
+ private publications nor alter their payload. The rendezvous WebSocket alone
+ does not refresh this signed-presence expiry.
 
  The server reserves a fresh unsigned 64-bit publish sequence before every
  network attempt. Its crash-safe high-water mark is kept in two owner-only

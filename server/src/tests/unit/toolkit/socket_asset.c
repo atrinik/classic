@@ -15,6 +15,7 @@
 #include <metaserver_internal.h>
 #include <initialization.h>
 #include <access_server.h>
+#include <player.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -1727,6 +1728,110 @@ START_TEST(test_metaserver_access_route_cancellation_is_pending) {
 }
 END_TEST
 
+START_TEST(test_metaserver_private_presence_renews_without_activity) {
+    bool previous_public = settings.server_public;
+    bool previous_required = settings.access_required;
+    char previous_hostname[sizeof(settings.metaserver_hostname)];
+    memcpy(previous_hostname, settings.metaserver_hostname, sizeof(previous_hostname));
+    uint16_t previous_port = settings.port_quic;
+    player *previous_players = first_player;
+    player joined = {0};
+    char previous_name[sizeof(settings.server_name)];
+    memcpy(previous_name, settings.server_name, sizeof(previous_name));
+    snprintf(VS(settings.server_name), "%s", "Private presence test");
+    settings.server_public = false;
+    settings.access_required = true;
+    snprintf(VS(settings.metaserver_hostname), "%s", "private.example.invalid");
+    settings.port_quic = 13327;
+    first_player = NULL;
+
+    metaserver_public_snapshot_t empty;
+    metaserver_public_snapshot(&empty);
+    ck_assert(!empty.is_public);
+    ck_assert(empty.access_required);
+    ck_assert_uint_eq(empty.players_count, 0);
+    ck_assert_str_eq(empty.hostname, "");
+    ck_assert_uint_eq(empty.port, 0);
+
+    char body[METASERVER_PUBLISH_BODY_MAX + 1U];
+    size_t body_size;
+    const char *test_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    ck_assert(metaserver_public_snapshot_body(&empty, test_id, "YQ==", body, &body_size));
+    ck_assert_uint_eq(body_size, strlen(body));
+    ck_assert_ptr_nonnull(strstr(body, "\"playersCount\":0,"));
+    ck_assert_ptr_nonnull(strstr(body, "\"public\":false,\"accessRequired\":true"));
+    ck_assert_ptr_null(strstr(body, "\"hostname\":"));
+    ck_assert_ptr_null(strstr(body, "\"port\":"));
+
+    metaserver_publish_cadence_t cadence;
+    server_monotonic_t now = {UINT64_C(1000000)};
+    metaserver_publish_cadence_init(&cadence, now);
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    /* Exercise more than the deployed four-hour freshness window. The timer
+     * remains enabled for private code-only access even without player changes. */
+    for (unsigned i = 0; i < 8; i++) {
+        metaserver_public_snapshot_succeeded(&cadence, &empty, now, 9000, UINT32_MAX);
+        server_monotonic_t deadline = cadence.heartbeat_deadline;
+        ck_assert_uint_gt(deadline.microseconds, now.microseconds);
+        ck_assert_uint_lt(deadline.microseconds - now.microseconds,
+                          UINT64_C(14400000000));
+        first_player = &joined;
+        metaserver_public_snapshot_t populated;
+        metaserver_public_snapshot(&populated);
+        ck_assert_int_eq(memcmp(&empty, &populated, sizeof(empty)), 0);
+        char active_body[METASERVER_PUBLISH_BODY_MAX + 1U];
+        size_t active_size;
+        ck_assert(metaserver_public_snapshot_body(&populated, test_id, "YQ==",
+                                                  active_body, &active_size));
+        ck_assert_uint_eq(active_size, body_size);
+        ck_assert_str_eq(active_body, body);
+        now.microseconds += UINT64_C(11000000);
+        metaserver_publish_cadence_activity(&cadence, now, false, false);
+        ck_assert(!cadence.dirty);
+        ck_assert_uint_eq(cadence.heartbeat_deadline.microseconds, deadline.microseconds);
+        ck_assert(!metaserver_publish_cadence_needs_snapshot(&cadence, now));
+        ck_assert(!metaserver_publish_cadence_due(&cadence, now, false));
+        first_player = NULL;
+        metaserver_publish_cadence_activity(&cadence, now, false, false);
+        now.microseconds = deadline.microseconds - 1;
+        ck_assert(!metaserver_publish_cadence_due(&cadence, now, false));
+        now = deadline;
+        ck_assert(metaserver_publish_cadence_needs_snapshot(&cadence, now));
+        ck_assert(metaserver_publish_cadence_due(&cadence, now, false));
+        ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    }
+    /* The same snapshot still reports public player counts and endpoints. */
+    settings.server_public = true;
+    first_player = &joined;
+    metaserver_public_snapshot_t public_snapshot;
+    metaserver_public_snapshot(&public_snapshot);
+    ck_assert_uint_eq(public_snapshot.players_count, 1);
+    ck_assert_str_eq(public_snapshot.hostname, "private.example.invalid");
+    ck_assert_uint_eq(public_snapshot.port, 13327);
+    metaserver_public_snapshot_succeeded(&cadence, &public_snapshot, now, 9000, 0);
+    ck_assert(server_monotonic_is_set(cadence.heartbeat_deadline));
+    settings.access_required = false;
+    metaserver_public_snapshot(&public_snapshot);
+    metaserver_public_snapshot_succeeded(&cadence, &public_snapshot, now, 9000, 0);
+    ck_assert(server_monotonic_is_set(cadence.heartbeat_deadline));
+    settings.server_public = false;
+    metaserver_public_snapshot_t open_private;
+    metaserver_public_snapshot(&open_private);
+    metaserver_public_snapshot_succeeded(&cadence, &open_private, now, 9000, 0);
+    ck_assert(!server_monotonic_is_set(cadence.heartbeat_deadline));
+    now.microseconds += UINT64_C(172800000000);
+    metaserver_publish_cadence_activity(&cadence, now, false, false);
+    ck_assert(!metaserver_publish_cadence_needs_snapshot(&cadence, now));
+    ck_assert(!metaserver_publish_cadence_due(&cadence, now, false));
+    settings.server_public = previous_public;
+    settings.access_required = previous_required;
+    memcpy(settings.metaserver_hostname, previous_hostname, sizeof(previous_hostname));
+    settings.port_quic = previous_port;
+    first_player = previous_players;
+    memcpy(settings.server_name, previous_name, sizeof(previous_name));
+}
+END_TEST
+
 START_TEST(test_metaserver_private_activity_does_not_publish) {
     metaserver_publish_cadence_t cadence;
     server_monotonic_t now = {UINT64_C(1000000)};
@@ -2402,6 +2507,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_metaserver_publish_cadence_attempt_is_fail_closed);
     tcase_add_test(tc_core, test_metaserver_publish_error_code_is_bounded);
     tcase_add_test(tc_core, test_metaserver_publish_retry_and_daily_budget);
+    tcase_add_test(tc_core, test_metaserver_private_presence_renews_without_activity);
     tcase_add_test(tc_core, test_metaserver_private_activity_does_not_publish);
     tcase_add_test(tc_core, test_metaserver_rendezvous_ticket_isolation);
     tcase_add_test(tc_core, test_metaserver_generation_cancellation);
