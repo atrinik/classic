@@ -86,7 +86,7 @@ void book_edit_model_close(book_edit_model_t *model) {
     memset(&model->incoming, 0, sizeof(model->incoming));
 }
 
-void book_edit_model_cancel(book_edit_model_t *model) {
+void book_edit_model_reset(book_edit_model_t *model) {
     memset(model, 0, sizeof(*model));
 }
 

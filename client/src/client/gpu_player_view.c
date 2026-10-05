@@ -2216,21 +2216,54 @@ static bool gpu_player_view_book_editor_run(void) {
     BOOK_UI_CHECK(!book_edit_test_model()->current.session &&
                   strcmp(book_edit_test_model()->contents, retained_body) == 0);
     gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 19, 41, 500, false, saved_title, saved_body);
-    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
-                                                "book_editor_reopened_draft", false));
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
     model = book_edit_test_model();
     BOOK_UI_CHECK(model->current.session == 19 && model->current.ink == 500 &&
                   strcmp(model->title, retained_title) == 0 &&
                   strcmp(model->contents, retained_body) == 0);
-    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 20, 43, 500, false,
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(365, 411)); /* Cancel retains the same draft. */
+    model = book_edit_test_model();
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(popup_get_head() == NULL && !model->current.session &&
+                  model->destination == 41 && model->current.ink == 500 &&
+                  strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_title, saved_title) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0);
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_CANCEL &&
+                  request->session == 19 && request->destination == 41 && !request->source &&
+                  !request->title[0] && !request->contents[0]);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 20, 41, 500, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(strcmp(book_edit_test_model()->title, retained_title) == 0 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE)); /* Escape also retains, never saves. */
+    model = book_edit_test_model();
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(popup_get_head() == NULL && !model->current.session &&
+                  model->destination == 41 && model->current.ink == 500 &&
+                  strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0);
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_CANCEL &&
+                  request->session == 20 && !request->title[0] && !request->contents[0]);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 21, 41, 500, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_reopened_draft", false));
+    BOOK_UI_CHECK(book_edit_test_model()->current.session == 21 &&
+                  strcmp(book_edit_test_model()->title, retained_title) == 0 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 22, 43, 500, false,
                                   "Other destination", "Other persisted text.");
     BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
                                                 "book_editor_discard_confirmation", false));
     BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_OPEN_DISCARD);
     BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE));
     BOOK_UI_CHECK(strcmp(book_edit_test_model()->contents, retained_body) == 0);
-    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 21, 41, 500, false, saved_title, saved_body);
-    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 22, 41, 500, false,
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 23, 41, 500, false, saved_title, saved_body);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 24, 41, 500, false,
                                   "External rename", "External changed text.");
     BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
                                                 "book_editor_rebase_confirmation", false));
@@ -2238,11 +2271,29 @@ static bool gpu_player_view_book_editor_run(void) {
     requests = book_edit_test_request()->count;
     BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
     BOOK_UI_CHECK(book_edit_test_request()->count == requests &&
-                  book_edit_test_model()->current.session == 22 &&
+                  book_edit_test_model()->current.session == 24 &&
                   strcmp(book_edit_test_model()->contents, retained_body) == 0 &&
                   strcmp(book_edit_test_model()->base_contents, "External changed text.") == 0);
     BOOK_UI_CHECK(gpu_player_view_render_complete());
-    BOOK_UI_CHECK(gpu_player_view_book_click(365, 411)); /* Deliberate Cancel discards. */
+    BOOK_UI_CHECK(gpu_player_view_book_click(365, 411));
+    BOOK_UI_CHECK(popup_get_head() == NULL && !book_edit_test_model()->current.session &&
+                  book_edit_test_model()->destination == 41 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0 &&
+                  strcmp(book_edit_test_model()->base_contents, "External changed text.") == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 25, 41, 500, false,
+                                  "External rename", "External changed text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_NONE &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    /* Replacing a retained draft remains an explicit, separate confirmation. */
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 26, 43, 500, false,
+                                  "Other destination", "Other persisted text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_OPEN_DISCARD);
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(book_edit_test_model()->destination == 43 &&
+                  strcmp(book_edit_test_model()->contents, "Other persisted text.") == 0);
+    book_edit_disconnect();
     BOOK_UI_CHECK(popup_get_head() == NULL && !book_edit_test_model()->destination &&
                   !book_edit_test_model()->contents[0]);
     book_edit_deinit();

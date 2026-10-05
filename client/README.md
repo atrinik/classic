@@ -497,7 +497,9 @@ Book writing
  and apply an ink bottle to refill; then mark the same book and apply the pen to reopen
  with the retained draft. A different book requires confirmation to discard it;
  changed saved title/text requires confirmation to rebase it before saving.
- Cancel deliberately discards the draft.
+ Cancel, Escape and X-close retain the draft and end the server session without
+ saving or spending ink. Reopen the same book to resume it. Disconnect clears the
+ local draft; replacing it through Copy or another destination requires confirmation.
  Copy confirms source and destination before replacing the destination; copies
  remain unsigned. Save edits before Sign, then confirm permanent signing. A signed
  book is read only. Ink charges cover inserted UTF-8 bytes after the server's byte

@@ -184,9 +184,9 @@ static void test_draft_lifecycle(void) {
     CHECK(strcmp(model.base_contents, "New external text") == 0);
     CHECK(strcmp(model.contents, "My unsaved replacement") == 0);
     CHECK(book_edit_model_can_submit(&model, BOOK_EDIT_SAVE, 42));
-    /* Cancellation explicitly discards, and reused tags on a new connection
-     * cannot resurrect a draft under a different character's inventory. */
-    book_edit_model_cancel(&model);
+    /* Disconnect resets local identity, so reused tags cannot resurrect this
+     * draft under a different character's inventory. */
+    book_edit_model_reset(&model);
     CHECK(!model.destination && !model.current.session && !model.contents[0]);
     CHECK(book_edit_model_receive(&model, &next));
     CHECK(strcmp(model.contents, "New external text") == 0);

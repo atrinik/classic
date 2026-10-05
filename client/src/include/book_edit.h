@@ -44,7 +44,8 @@ bool book_edit_model_dirty(const book_edit_model_t *model);
 bool book_edit_model_receive(book_edit_model_t *model, const book_edit_snapshot_t *next);
 void book_edit_model_resolve_open(book_edit_model_t *model, bool accept);
 void book_edit_model_close(book_edit_model_t *model);
-void book_edit_model_cancel(book_edit_model_t *model);
+/** Clear connection-local destination and draft on disconnect. */
+void book_edit_model_reset(book_edit_model_t *model);
 bool book_edit_model_confirm(book_edit_model_t *model, enum book_edit_action action,
                              uint32_t destination);
 bool book_edit_model_can_submit(const book_edit_model_t *model, enum book_edit_action action,

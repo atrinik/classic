@@ -40,7 +40,8 @@
   focused widget.
 - Book writing uses a separate `BOOK_EDIT` popup and bounded protocol snapshots.
   Preserve drafts on server errors and keep destination/source identity explicit.
-  X-close suspends the draft for refill; same-book reopen uses a fresh session.
+  Cancel, Escape and X-close suspend the draft without saving or spending ink;
+  same-book reopen uses a fresh session and retains draft title, text and base.
   Confirm discard for a new destination and rebase for changed persisted fields.
   Disconnect clears connection-local destination identity and drafts.
   Copy replacement and irreversible signing each require their own confirmation;

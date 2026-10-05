@@ -134,7 +134,8 @@ sign confirmations, an insufficient-ink draft, X-close/refill/fresh-session
 reopen, destination discard and changed-base rebase confirmations, and signed
 then unsigned reader footers. Serialized requests, multiline UTF-8 input,
 Tab/mouse focus, key release and gameplay-key consumption, confirmation Back,
-and deliberate Cancel are asserted in that sweep. The signed footer deliberately
+Cancel/Escape close and same-book reopen retention, and explicit destination
+discard are asserted in that sweep. The signed footer deliberately
 uses markup-looking signer/date text to show its literal, separate presentation.
 These are offline UI conformance checks; software GPU results do not establish
 hardware qualification or live authenticated gameplay.

@@ -3,6 +3,7 @@
  */
 #include <book_edit.h>
 #include <book.h>
+#include <inttypes.h>
 #include <button.h>
 #include <client.h>
 #include <commands.h>
@@ -167,8 +168,8 @@ static int draw(popup_struct *popup) {
     text_input_set_parent(&contents, popup->x, popup->y);
     text_input_show(&title, popup->surface, 85, 120);
     text_input_show(&contents, popup->surface, 28, 176);
-    snprintf(buffer, sizeof(buffer), "Ink: %u/%u. Contents: %zu/%u bytes. Insertions cost 1 ink/byte; deletions/title/signing are free.",
-             model.current.ink, model.current.capacity, contents.num, BOOK_EDIT_CONTENT_MAX);
+    snprintf(buffer, sizeof(buffer), "Ink: %u/%u. Contents: %" PRIu64 "/%u bytes. Insertions cost 1 ink/byte; deletions/title/signing are free.",
+             model.current.ink, model.current.capacity, (uint64_t)contents.num, BOOK_EDIT_CONTENT_MAX);
     label(popup, buffer, 28, 329, 30);
     label(popup, message, 28, 362, 45);
     static const char *names[] = {"Next", "Next", "Save", "Copy", "Sign", "Cancel", "Confirm", "Back"};
@@ -243,12 +244,9 @@ static void back(void) {
     }
 }
 
-static void cancel(void) {
-    close_server_session();
-    /* Cancel is deliberate discard; error packets never take this path. */
-    book_edit_model_cancel(&model);
-    text_input_reset(&title);
-    text_input_reset(&contents);
+static void close_editor(void) {
+    /* Cancel and Escape take the same retaining close path as the popup X.
+     * The destroy callback sends CANCEL and suspends its server session. */
     if (editor) {
         popup_destroy(editor);
     }
@@ -303,7 +301,7 @@ static int handle_event(popup_struct *popup, SDL_Event *event) {
                     snprintf(message, sizeof(message), "Permanently sign book #%u as your character?\nThis locks its title and contents; signing cannot be undone.", model.destination);
                 }
                 break;
-            case 5: cancel(); return 1;
+            case 5: close_editor(); return 1;
             case 6:
                 if (model.confirmation == BOOK_CONFIRM_OPEN_DISCARD ||
                     model.confirmation == BOOK_CONFIRM_OPEN_REBASE) {
@@ -326,7 +324,7 @@ static int handle_event(popup_struct *popup, SDL_Event *event) {
         if (confirm) {
             back();
         } else {
-            cancel();
+            close_editor();
         }
         return 1;
     }
@@ -427,7 +425,7 @@ void book_edit_disconnect(void) {
     /* Inventory tags are connection-local; a later character must never inherit
      * this draft under a coincidentally reused destination tag. Clear before
      * destroying the popup so its callback cannot send on a closed connection. */
-    book_edit_model_cancel(&model);
+    book_edit_model_reset(&model);
     if (initialized) {
         text_input_reset(&title);
         text_input_reset(&contents);
