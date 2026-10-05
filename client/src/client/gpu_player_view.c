@@ -2110,10 +2110,17 @@ static bool gpu_player_view_book_editor_run(void) {
     book_edit_disconnect();
     const char *saved_title = "Unsigned destination";
     const char *saved_body = "Existing first line.\nExisting second line.";
-    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 17, 41, 100, false, saved_title, saved_body);
+    /* Wide, maximum-byte UTF-8 inventory names exercise the label ellipsis
+     * before Next. Restore a short base afterward to test actual title edits. */
+    char long_title[BOOK_EDIT_TITLE_MAX + 1];
+    memset(long_title, 'W', sizeof(long_title) - 3);
+    memcpy(long_title + sizeof(long_title) - 3, "\xc3\xa9", 3);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 16, 41, 100, false, long_title, saved_body);
     BOOK_UI_CHECK(popup_get_head() != NULL && book_edit_test_title_focused());
     BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
                                                 "book_editor_fields", false));
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 17, 41, 100, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
     BOOK_UI_CHECK(gpu_player_view_book_text(" edited"));
     BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_TAB) && !book_edit_test_title_focused());
     BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_RETURN));

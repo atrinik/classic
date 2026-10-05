@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include <book_edit.h>
+#include <book.h>
 #include <button.h>
 #include <client.h>
 #include <commands.h>
@@ -107,24 +108,59 @@ static void submit(enum book_edit_action action, uint32_t destination) {
     snprintf(message, sizeof(message), "Waiting for the server...");
 }
 
-static void label(popup_struct *popup, const char *text, int x, int y, int height) {
-    SDL_Rect box = {.w = popup->surface->w - x - 26, .h = height};
+static void label_region(popup_struct *popup, const char *text, int x, int y,
+                         int width, int height) {
+    SDL_Rect box = {.w = width, .h = height};
     text_show(popup->surface, FONT_ARIAL11, text, x, y, COLOR_BLACK,
               TEXT_WORD_WRAP, &box);
 }
 
+static void label(popup_struct *popup, const char *text, int x, int y, int height) {
+    /* Match the contents field's parchment boundary at x = 28 + 612. */
+    label_region(popup, text, x, y, 640 - x, height);
+}
+
+static void inventory_label(popup_struct *popup, const char *role, uint32_t tag,
+                            const book_edit_entry_t *entry, int y, bool destination) {
+    char title_text[BOOK_EDIT_TITLE_MAX + 1], buffer[256];
+    SDL_utf8strlcpy(title_text, entry ? entry->title : "Choose a book", sizeof(title_text));
+    /* Inventory titles cannot introduce another row of label text. */
+    for (char *p = title_text; *p; p++) {
+        if ((unsigned char)*p < 32) {
+            *p = ' ';
+        }
+    }
+    const char *status = entry && entry->finalized ?
+                         destination ? " [signed, read only]" : " [signed]" : "";
+    size_t len = strlen(title_text);
+    bool shortened = false;
+    for (;;) {
+        snprintf(buffer, sizeof(buffer), "%s (#%u): %s%s%s", role, tag,
+                 title_text, shortened ? "..." : "", status);
+        if (text_get_width(FONT_ARIAL11, buffer, 0) <= 540 || len == 0) {
+            break;
+        }
+        /* Remove one complete UTF-8 code point before adding the ellipsis. */
+        do {
+            len--;
+        } while (len > 0 && ((unsigned char)title_text[len] & 0xc0) == 0x80);
+        title_text[len] = '\0';
+        shortened = true;
+    }
+    /* The Next button begins at x=580; leave a 12px gap after this row. */
+    label_region(popup, buffer, 28, y, 540, 23);
+}
+
 static int draw(popup_struct *popup) {
     surface_show(popup->surface, 0, 0, NULL, texture_surface(popup->texture));
-    label(popup, "Write a book", 63, 27, 22);
+    SDL_Rect heading = {.w = BOOK_TITLE_WIDTH, .h = BOOK_TITLE_HEIGHT};
+    text_show(popup->surface, FONT_SERIF16, "Write a book", BOOK_TITLE_STARTX,
+              BOOK_TITLE_STARTY, COLOR_HGOLD, TEXT_ALIGN_CENTER, &heading);
     const book_edit_entry_t *destination = find_book(model.destination);
     const book_edit_entry_t *src = find_book(model.source);
     char buffer[512];
-    snprintf(buffer, sizeof(buffer), "Destination (#%u): %s%s", model.destination,
-             destination ? destination->title : "Choose a book", destination && destination->finalized ? " [signed, read only]" : "");
-    label(popup, buffer, 28, 58, 23);
-    snprintf(buffer, sizeof(buffer), "Copy source (#%u): %s%s", model.source,
-             src ? src->title : "Choose a different book", src && src->finalized ? " [signed]" : "");
-    label(popup, buffer, 28, 90, 23);
+    inventory_label(popup, "Destination", model.destination, destination, 58, true);
+    inventory_label(popup, "Copy source", model.source, src, 90, false);
     label(popup, "Title", 28, 123, 18);
     label(popup, "Contents (Enter: newline; Tab: change field)", 28, 155, 18);
     text_input_set_parent(&title, popup->x, popup->y);
@@ -254,11 +290,9 @@ static int handle_event(popup_struct *popup, SDL_Event *event) {
                 submit(BOOK_EDIT_SAVE, model.destination);
                 break;
             case 3: {
-                const book_edit_entry_t *src = find_book(model.source);
-                const book_edit_entry_t *dst = find_book(model.destination);
                 if (!book_edit_model_confirm(&model, BOOK_EDIT_COPY, model.destination)) { break; }
-                snprintf(message, sizeof(message), "Replace destination '%s' (#%u) with source '%s' (#%u)? Unsaved edits will be discarded. The copy remains unsigned.",
-                         dst ? dst->title : "", model.destination, src ? src->title : "", model.source);
+                snprintf(message, sizeof(message), "Replace title and text of destination #%u with source #%u?\nUnsaved edits will be discarded. The copy remains unsigned.",
+                         model.destination, model.source);
                 break;
             }
             case 4:
@@ -266,7 +300,7 @@ static int handle_event(popup_struct *popup, SDL_Event *event) {
                     snprintf(message, sizeof(message), "Save your edits first, then sign the saved book.");
                 } else {
                     if (!book_edit_model_confirm(&model, BOOK_EDIT_SIGN, model.destination)) { break; }
-                    snprintf(message, sizeof(message), "Permanently sign book #%u as your character? It will become read only and signing cannot be undone.", model.destination);
+                    snprintf(message, sizeof(message), "Permanently sign book #%u as your character?\nThis locks its title and contents; signing cannot be undone.", model.destination);
                 }
                 break;
             case 5: cancel(); return 1;
@@ -375,10 +409,10 @@ void socket_command_book_edit(uint8_t *data, size_t len, size_t pos) {
     title.focus = 1;
     contents.focus = 0;
     if (model.confirmation == BOOK_CONFIRM_OPEN_DISCARD) {
-        snprintf(message, sizeof(message), "Discard unsaved draft for book #%u and open book #%u? Back keeps the draft.",
+        snprintf(message, sizeof(message), "Discard unsaved draft for book #%u and open book #%u?\nBack keeps the draft.",
                  model.destination, model.incoming.selected);
     } else if (model.confirmation == BOOK_CONFIRM_OPEN_REBASE) {
-        snprintf(message, sizeof(message), "Book #%u changed while closed. Keep your draft over its newer saved title/text? Review before saving; Back keeps it suspended.", model.destination);
+        snprintf(message, sizeof(message), "Book #%u changed while closed.\nKeep your draft over its newer saved title and text? Review before saving; Back keeps it.", model.destination);
     } else if (next.result == BOOK_EDIT_ERROR) {
         snprintf(message, sizeof(message), "%.900s Close with X to refill; reapply the pen on the same book to resume.", model.current.notice);
     } else {
