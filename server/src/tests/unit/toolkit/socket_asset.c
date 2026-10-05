@@ -1646,6 +1646,7 @@ START_TEST(test_access_worker_shutdown_preserves_pending_route) {
     identity_hex[64] = 0;
     access_store_t *store = NULL;
     ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    ck_assert_uint_eq(access_store_status(store).revision, 1);
     access_store_close(store);
     char previous_store[sizeof(settings.access_store)];
     memcpy(previous_store, settings.access_store, sizeof(previous_store));
@@ -1661,7 +1662,7 @@ START_TEST(test_access_worker_shutdown_preserves_pending_route) {
     static const char issue[] =
         "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"issue\","
         "\"requestId\":\"11111111111111111111111111111111\","
-        "\"expectedRevision\":\"0\",\"label\":\"Shutdown fixture\"}";
+        "\"expectedRevision\":\"1\",\"label\":\"Shutdown fixture\"}";
     ck_assert_uint_ne(access_server_root_submit(issue, sizeof(issue) - 1), 0);
     uint64_t deadline = datetime_monotonic_ms() + 3000;
     while (!atomic_load(&access_shutdown_route_entered) && datetime_monotonic_ms() < deadline) {
