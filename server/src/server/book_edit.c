@@ -469,7 +469,8 @@ void socket_command_book_edit(socket_struct *cs, player *pl, uint8_t *data,
         snprintf(notice, sizeof(notice),
                  "Signed and dated. Title and text are now permanently locked.");
     } else {
-        snprintf(notice, sizeof(notice), "Saved. Used %zu ink; %d remains.", cost, pen->stats.food);
+        snprintf(notice, sizeof(notice), "Saved. Used %" PRIu64 " ink; %d remains.",
+                 (uint64_t)cost, pen->stats.food);
     }
     reply(pl, BOOK_EDIT_UPDATED, notice);
 }
