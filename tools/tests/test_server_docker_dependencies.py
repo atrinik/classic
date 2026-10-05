@@ -7,7 +7,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
@@ -144,6 +144,27 @@ class ServerDockerDependenciesTests(unittest.TestCase):
                 else:
                     self.assertIn("mismatched shared source", failure)
                     self.assertNotIn("fixture network forbidden", failure)
+
+    def test_worldmaker_data_contains_configuration_relative_public_keys(self):
+        docker = (ROOT / "server/Dockerfile").read_text()
+        start = docker.index("RUN mkdir -p /tmp/worldmaker")
+        stage = docker[start:docker.index("\n\n", start)]
+        cwd = PurePosixPath(re.search(r"&& cd (\S+)", stage).group(1))
+        data = PurePosixPath(re.search(r"--datapath=(\S+)", stage).group(1))
+        copied_data = PurePosixPath(re.search(r"cp -R install_data/\. (\S+)", stage).group(1))
+        self.assertEqual(copied_data, data)
+        self.assertIn(str(data / "tmp"), stage.splitlines()[0])
+        # Configuration value-file references resolve from cwd before CLI paths
+        # are applied. Use the real config and shipped public-key files.
+        references = re.findall(r"^[ \t]*[^#\s=]+\s*=\s*<([^\s#]+)",
+                                (ROOT / "server/server.cfg").read_text(), re.MULTILINE)
+        self.assertTrue(references)
+        for reference in references:
+            with self.subTest(reference=reference):
+                resolved = cwd / reference
+                self.assertTrue(resolved.is_relative_to(data),
+                                "configuration file is outside staged worldmaker DATA")
+                self.assertTrue((ROOT / "server/install_data" / resolved.relative_to(data)).is_file())
 
     def test_reachable_configure_sources_are_local_or_staged_and_compile_stays_offline(self):
         docker = (ROOT / "server/Dockerfile").read_text()

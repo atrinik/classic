@@ -42,18 +42,18 @@ RUN --network=none python3 tools/dependencies.py sync \
     && cmake --build build/release \
         --target atrinik-server atrinik-access-status plugin_arena plugin_python --parallel
 
-RUN mkdir -p /tmp/worldmaker /tmp/atrinik-assets /tmp/atrinik-data/tmp \
+RUN mkdir -p /tmp/worldmaker /tmp/atrinik-assets /tmp/worldmaker/data/tmp \
     && cp build/release/atrinik-server \
         build/release/libplugin_arena.so \
         build/release/libplugin_python.so \
         server.cfg permissions.cfg /tmp/worldmaker/ \
-    && cp -R install_data/. /tmp/atrinik-data/ \
+    && cp -R install_data/. /tmp/worldmaker/data/ \
     && cd /tmp/worldmaker \
     && ./atrinik-server \
         --worldmaker \
         --libpath=/src/server/runtime/content/lib \
         --mapspath=/src/server/runtime/content/maps \
-        --datapath=/tmp/atrinik-data \
+        --datapath=/tmp/worldmaker/data \
         --assetspath=/tmp/atrinik-assets \
         --resourcespath=/src/server/resources \
     && test -d /tmp/atrinik-assets/client-maps
