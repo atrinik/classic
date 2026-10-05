@@ -5,6 +5,9 @@
   layouts; trace those through their client/server producers and consumers.
 - Edit `schema/game-commands.json`, then run `python3 tools/generate.py`.
   Never hand-edit committed generated files or duplicate identifiers elsewhere.
+- Authored payload contracts shared by endpoints live under `include/`; the
+  book-editor contract is `include/atrinik/protocol/book_edit.h`. Keep these
+  installed headers and their endpoint validation synchronized.
 - Preserve stable names and IDs unless a coordinated breaking transition is
   explicit. Define framing, field order, widths, signedness, byte order,
   lengths, limits, state transitions, and malformed-input behavior before

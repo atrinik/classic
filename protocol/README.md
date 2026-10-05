@@ -9,7 +9,15 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
-Protocol v1080 adds timed celestial aggregate-light keyframes to MAP2. Its
+Protocol v1081 adds the paired `BOOK_EDIT` commands for bounded book editing,
+copying and permanent signing. The authored
+[`book_edit.h`](include/atrinik/protocol/book_edit.h) specifies field order,
+limits, actions and draft-preserving responses. Both endpoints validate a full
+packet before publishing state. Editor sessions belong to the current playing
+connection; reconnect requires applying a pen again. The existing protocol
+version handshake rejects earlier peers before gameplay.
+
+Protocol v1080 added timed celestial aggregate-light keyframes to MAP2. Its
 payload carries a bounded absolute game-time interval and next-endpoint samples;
 the client interpolates locally without periodic MAP traffic.
 
