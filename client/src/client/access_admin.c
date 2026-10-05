@@ -94,6 +94,9 @@ static bool request_id_generate(char id[33]) {
     access_code_clear(random, sizeof(random));
     if (!ok) {
         memset(id, 0, 33);
+    } else {
+        /* string_tohex emits uppercase; request IDs use canonical lowercase hex. */
+        string_tolower(id);
     }
     return ok;
 }

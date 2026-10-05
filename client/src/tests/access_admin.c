@@ -8,7 +8,9 @@
 #include <main.h>
 #include <textwin.h>
 #include <toolkit/datetime.h>
+#include <toolkit/string.h>
 
+#include <openssl/rand.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,11 +33,27 @@ static char displayed[2048];
 static const char token[] = "abcdef0123456789abcdef0123456789";
 static const char other_token[] = "11111111111111111111111111111111";
 
+/* Exercise alphabetic hex digits deterministically while keeping request IDs distinct. */
+int RAND_bytes(unsigned char *buffer, int size) {
+    static unsigned int sequence;
+    /* Importing the string toolkit also seeds its gameplay RNG dependency. */
+    REQUIRE(size == 16 || size == (int)sizeof(uint64_t));
+    REQUIRE(sequence < 256U);
+    memset(buffer, 0xab, (size_t)size);
+    buffer[size - 1] = (unsigned char)sequence++;
+    return 1;
+}
+
 uint64_t datetime_monotonic_us(void) {
     return now_us;
 }
 
 bool client_socket_send_access_admin(const char *json, size_t size) {
+    /* The real server rejects uppercase IDs, before it can return a valid response. */
+    const char *id = strstr(json, "\"requestId\":\"");
+    REQUIRE(id != NULL);
+    id += strlen("\"requestId\":\"");
+    REQUIRE(strspn(id, "0123456789abcdef") == 32U && id[32] == '\"');
     REQUIRE(size < sizeof(sent));
     memcpy(sent, json, size);
     sent[size] = '\0';
@@ -112,6 +130,7 @@ static void status_reply(void) {
 }
 
 int main(void) {
+    toolkit_import(string);
     command("/access status", true);
     status_reply();
     command("/access issue --label pending", true);
@@ -204,5 +223,6 @@ int main(void) {
     mutation_reply("issue", "conflict", "");
     client_access_admin_reset();
     REQUIRE(displayed[0] == '\0');
+    toolkit_deinit();
     return 0;
 }
