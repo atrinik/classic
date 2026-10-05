@@ -339,6 +339,26 @@ START_TEST(test_account_provision_writing_books_roundtrip_and_save_failure) {
     ck_assert_int_eq(path_secret_create_atomic(password_path, password, sizeof(password) - 1),
                      PATH_SECRET_CREATE_OK);
     unsigned long previous_hour = todtick;
+    /* The release content lock may precede the companion ink archetype. This
+     * bounded fixture tests provisioning, not release content acceptance. */
+    archetype_t *ink_arch = arch_find("ink_bottle");
+    bool previous_arch_in_init = arch_in_init;
+    if (ink_arch == NULL) {
+        archetype_t *oil = arch_find("oil_lamp");
+        ck_assert_ptr_nonnull(oil);
+        arch_in_init = true;
+        ink_arch = arch_clone(oil);
+        ink_arch->name = add_string("ink_bottle");
+        FREE_AND_COPY_HASH(ink_arch->clone.name, "ink bottle");
+        FREE_AND_COPY_HASH(ink_arch->clone.race, "writing_ink");
+        ink_arch->clone.stats.food = 1000;
+        ink_arch->clone.nrof = 1;
+        arch_add(ink_arch);
+        arch_in_init = previous_arch_in_init;
+    }
+    if (_i == 2) {
+        HASH_DEL(arch_table, ink_arch);
+    }
     player_save_fail_for_test(_i == 1);
     bool provisioned = account_provision_from_file(account_name,
                                                    password_path,
@@ -347,10 +367,15 @@ START_TEST(test_account_provision_writing_books_roundtrip_and_save_failure) {
                                                    "writing-books",
                                                    VS(error));
     player_save_fail_for_test(false);
+    if (_i == 2) {
+        arch_in_init = true;
+        arch_add(ink_arch);
+        arch_in_init = previous_arch_in_init;
+    }
     ck_assert_uint_eq(todtick, previous_hour);
-    if (_i == 1) {
+    if (_i != 0) {
         ck_assert(!provisioned);
-        ck_assert_ptr_nonnull(strstr(error, "save scenario player"));
+        ck_assert_ptr_nonnull(strstr(error, _i == 1 ? "save scenario player" : "scenario item: ink_bottle"));
         struct stat info;
         ck_assert_int_eq(stat(account_path, &info), -1);
         ck_assert_int_eq(stat(player_path, &info), -1);
@@ -507,7 +532,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_account_provision_lighting_preset);
     tcase_add_test(tc_core, test_account_provision_brynknot_idle_preserves_clock_and_existing_player);
     tcase_add_test(tc_core, test_account_provision_lighting_preset_rolls_back);
-    tcase_add_loop_test(tc_core, test_account_provision_writing_books_roundtrip_and_save_failure, 0, 2);
+    tcase_add_loop_test(tc_core, test_account_provision_writing_books_roundtrip_and_save_failure, 0, 3);
     return s;
 }
 

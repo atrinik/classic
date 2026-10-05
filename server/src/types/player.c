@@ -3734,7 +3734,9 @@ static void player_create(player *pl, archetype_t *at, const char *name) {
  * @param x Destination X coordinate.
  * @param y Destination Y coordinate.
  * @param item_archname Optional inventory item archetype name, or the
- * server-owned "writing-books" inventory bundle selector.
+ * server-owned "writing-books" inventory bundle selector. That bundle requires
+ * companion Classic-target content with the ink_bottle archetype; missing
+ * content fails provisioning rather than creating a singularity placeholder.
  * @param error Output buffer for a failure description.
  * @param error_size Size of error.
  * @return True on success, false on failure.
@@ -3801,12 +3803,13 @@ bool player_provision_scenario(const char *name,
             "Writing Draft Two", "Writing Draft Three", "Writing Source"
         };
         for (size_t i = 0; i < sizeof(arches) / sizeof(arches[0]); i++) {
-            object *writing_item = arch_get(arches[i]);
-            if (writing_item == NULL) {
+            archetype_t *writing_arch = arch_find(arches[i]);
+            if (writing_arch == NULL) {
                 snprintf(error, error_size, "could not load writing scenario item: %s", arches[i]);
                 free_player_internal(pl, false);
                 return false;
             }
+            object *writing_item = arch_to_object(writing_arch);
             FREE_AND_COPY_HASH(writing_item->name, titles[i]);
             writing_item->nrof = 1;
             if (i < 2) {
