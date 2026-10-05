@@ -190,7 +190,20 @@ static password_verify_result_t account_check_password(account_struct *account,
     return password_record_verify(password, account->password_record);
 }
 
+#ifdef ATRINIK_TESTING
+static bool test_account_save_failure;
+
+void account_fail_saves_for_test(bool fail) {
+    test_account_save_failure = fail;
+}
+#endif
+
 static int account_save(account_struct *account, const char *path) {
+#ifdef ATRINIK_TESTING
+    if (test_account_save_failure) {
+        return 0;
+    }
+#endif
     StringBuffer *buffer;
     char *contents;
     size_t i;
@@ -591,7 +604,7 @@ out:
 }
 
 static int account_provision_preset_hour(const char *preset) {
-    if (strcmp(preset, "basic-player") == 0) {
+    if (strcmp(preset, "basic-player") == 0 || strcmp(preset, "brynknot-idle") == 0) {
         return -1;
     }
     if (strcmp(preset, "lighting-radiance-day") == 0) {
@@ -609,11 +622,21 @@ static int account_provision_preset_hour(const char *preset) {
     return -2;
 }
 
-static bool account_provision_lighting_player(const char *character,
+static bool account_provision_preset_player(const char *character,
                                               const char *archname,
                                               const char *preset,
                                               char *error,
                                               size_t error_size) {
+    if (strcmp(preset, "brynknot-idle") == 0) {
+        return player_provision_scenario(character,
+                                         archname,
+                                         "/shattered_islands/world_0_70",
+                                         20,
+                                         8,
+                                         NULL,
+                                         error,
+                                         error_size);
+    }
     bool inside = strcmp(preset, "lighting-radiance-inside") == 0;
     return player_provision_scenario(character,
                                      archname,
@@ -680,9 +703,9 @@ bool account_provision_from_file(const char *name,
         goto out;
     }
     ok = account_provision(name, password, character, archname, error, error_size);
-    if (ok && preset_hour >= 0 &&
-        (!account_provision_lighting_player(character_name, archname, preset, error, error_size) ||
-         !todclock_set((unsigned long)preset_hour))) {
+    if (ok && (preset_hour >= 0 || strcmp(preset, "brynknot-idle") == 0) &&
+        (!account_provision_preset_player(character_name, archname, preset, error, error_size) ||
+         (preset_hour >= 0 && !todclock_set((unsigned long)preset_hour)))) {
         if (error[0] == '\0') {
             snprintf(error, error_size, "could not persist scenario world clock");
         }
@@ -1097,8 +1120,8 @@ void account_login_char(socket_struct *ns, char *name) {
     account_free(&account);
 }
 
-void account_logout_char(socket_struct *ns, player *pl) {
-    exploration_end(ns);
+bool account_logout_char_checked(socket_struct *ns, player *pl) {
+    bool exploration_saved = exploration_end_checked(ns);
     char *path;
     account_struct account;
     size_t i;
@@ -1107,7 +1130,7 @@ void account_logout_char(socket_struct *ns, player *pl) {
 
     if (!account_load(&account, path)) {
         free(path);
-        return;
+        return false;
     }
 
     for (i = 0; i < account.characters_num; i++) {
@@ -1136,9 +1159,14 @@ void account_logout_char(socket_struct *ns, player *pl) {
                 metrics_get(&pl->metrics, METRIC_CHARACTER_LAST_LOGOUT_AT));
     account_metrics_merge_character(&account.metrics, &pl->metrics);
 
-    account_save(&account, path);
+    bool saved = account_save(&account, path) != 0;
     account_free(&account);
     free(path);
+    return saved && exploration_saved;
+}
+
+void account_logout_char(socket_struct *ns, player *pl) {
+    (void)account_logout_char_checked(ns, pl);
 }
 
 void account_character_session_start(socket_struct *ns, player *pl) {

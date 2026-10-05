@@ -28,6 +28,8 @@
  */
 
 #include <global.h>
+#include <admin_shutdown.h>
+#include <exploration.h>
 #include <weather.h>
 #include <swap.h>
 #include <initialization.h>
@@ -75,10 +77,29 @@ int process_delay;
 
 static long shutdown_time;
 static uint8_t shutdown_active = 0;
+static bool shutdown_warning_sent;
+static long shutdown_warning_tick;
 static volatile sig_atomic_t shutdown_requested;
 
 static void dequeue_path_requests(void);
 static void do_specials(void);
+
+/** Report completed work that can starve the single-threaded QUIC pump.
+ * Keep routine ticks quiet and return the next stage's start time so waiting
+ * in one stage is never charged to the following stage.
+ */
+static uint64_t server_stage_finished(const char *stage, uint64_t started_us) {
+    uint64_t finished_us = datetime_monotonic_us();
+    if (finished_us >= started_us && finished_us - started_us >= UINT64_C(500000)) {
+        LOG(ERROR,
+            "Slow server stage: stage=%s duration_us=%" PRIu64 " tick=%" PRIu64,
+            stage,
+            finished_us - started_us,
+            (uint64_t)pticks);
+        return datetime_monotonic_us();
+    }
+    return finished_us;
+}
 
 static void shutdown_signal_handler(int signum) {
     (void)signum;
@@ -312,7 +333,8 @@ void process_events(void) {
 /**
  * Clean temporary map files.
  */
-void clean_tmp_files(void) {
+static bool clean_tmp_files_checked(void) {
+    bool ok = true;
     mapstruct *m, *tmp;
 
     /* We save the maps - it may not be intuitive why, but if there are
@@ -320,11 +342,14 @@ void clean_tmp_files(void) {
     DL_FOREACH_SAFE(first_map, m, tmp) {
         if (m->in_memory == MAP_IN_MEMORY) {
             if (settings.recycle_tmp_maps) {
-                swap_map(m, 0);
+                if (!swap_map_checked(m, 0)) {
+                    ok = false;
+                }
             } else {
                 if (new_save_map(m, 0) == 0) {
                     clean_tmp_map(m);
                 } else {
+                    ok = false;
                     LOG(BUG,
                         "Keeping unsaved map %s resident during temporary-file cleanup.",
                         m->path != NULL ? m->path : "<runtime>");
@@ -334,21 +359,43 @@ void clean_tmp_files(void) {
     }
 
     /* Write the clock */
-    write_todclock();
-
-    if (settings.recycle_tmp_maps) {
-        write_map_log();
+    if (!write_todclock_checked()) {
+        ok = false;
     }
+
+    if (settings.recycle_tmp_maps && !write_map_log_checked()) {
+        ok = false;
+    }
+    return ok;
+}
+
+void clean_tmp_files(void) {
+    (void)clean_tmp_files_checked();
 }
 
 /**
  * Shut down the server, saving and freeing all data.
  */
 void server_shutdown(void) {
-    player_disconnect_all();
-    clean_tmp_files();
-    LOG(INFO, "Server shutdown complete.");
-    exit(0);
+    bool ok = player_disconnect_all_checked();
+    if (!exploration_shutdown_checked()) {
+        ok = false;
+    }
+    if (!clean_tmp_files_checked()) {
+        ok = false;
+    }
+    if (!gameplay_journal_deinit_checked()) {
+        ok = false;
+    }
+    if (!admin_shutdown_finish(ok)) {
+        ok = false;
+    }
+    if (ok) {
+        LOG(INFO, "Server saves complete; releasing resources.");
+    } else {
+        LOG(ERROR, "Server shutdown persistence failed; refusing successful completion.");
+    }
+    exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
 }
 
 /**
@@ -514,9 +561,11 @@ int swap_apartments(const char *mapold, const char *mapnew, int x, int y, object
  * Collection of functions to call from time to time.
  */
 static void do_specials(void) {
+    uint64_t stage_started_us = datetime_monotonic_us();
     if (!(pticks % 2)) {
         dequeue_path_requests();
     }
+    stage_started_us = server_stage_finished("pathfinding", stage_started_us);
 
     if (!(pticks % PTICKS_PER_CLOCK)) {
         tick_the_clock();
@@ -525,22 +574,41 @@ static void do_specials(void) {
     if (!(pticks % (PTICKS_PER_CLOCK / 6))) {
         send_game_time(NULL);
     }
+    stage_started_us = server_stage_finished("clock", stage_started_us);
 
     /* Clears the tmp-files of maps which have reset */
     if (!(pticks % 509)) {
         flush_old_maps();
     }
+    stage_started_us = server_stage_finished("flush-old-maps", stage_started_us);
 
     metaserver_service();
+    server_stage_finished("metaserver", stage_started_us);
 }
 
 void shutdown_timer_start(long secs) {
+    (void)admin_shutdown_cancel();
     shutdown_time = pticks + secs * MAX_TICKS;
     shutdown_active = 1;
+    shutdown_warning_sent = false;
 }
 
 void shutdown_timer_stop(void) {
+    (void)admin_shutdown_cancel();
     shutdown_active = 0;
+    shutdown_warning_sent = false;
+}
+
+static bool admin_shutdown_schedule(unsigned seconds, const char *reason) {
+    if (shutdown_active || shutdown_requested) {
+        return false;
+    }
+    shutdown_timer_start((long)seconds);
+    draw_info_type_format(CHAT_TYPE_CHAT, NULL, COLOR_GREEN, NULL,
+                          "[Server]: Server shut down started; will shut down in %02u:%02u minutes.",
+                          seconds / 60, seconds % 60);
+    draw_info_type_format(CHAT_TYPE_CHAT, NULL, COLOR_GREEN, NULL, "[Server]: %s", reason);
+    return true;
 }
 
 static int shutdown_timer_check(void) {
@@ -549,11 +617,19 @@ static int shutdown_timer_check(void) {
     }
 
     if (pticks >= shutdown_time) {
+        admin_shutdown_expired();
         return 1;
+    }
+
+    /* Transport readiness can poll this many times before the game tick advances. */
+    if (shutdown_warning_sent && shutdown_warning_tick == pticks) {
+        return 0;
     }
 
     if (((shutdown_time - pticks) % (long)(60 * MAX_TICKS)) == 0 ||
         pticks == shutdown_time - (long)(5 * MAX_TICKS)) {
+        shutdown_warning_tick = pticks;
+        shutdown_warning_sent = true;
         draw_info_type_format(CHAT_TYPE_CHAT,
                               NULL,
                               COLOR_GREEN,
@@ -567,10 +643,17 @@ static int shutdown_timer_check(void) {
     return 0;
 }
 
+#ifdef ATRINIK_TESTING
+int shutdown_timer_check_for_test(void) {
+    return shutdown_timer_check();
+}
+#endif
+
 /**
  * Main processing function, called from main().
  */
 void main_process(void) {
+    uint64_t stage_started_us = datetime_monotonic_us();
     /* Global round ticker. */
     global_round_tag++;
     pticks++;
@@ -578,14 +661,18 @@ void main_process(void) {
 
     /* "do" something with objects with speed */
     process_events();
+    stage_started_us = server_stage_finished("process-events", stage_started_us);
 
     /* Removes unused maps after a certain timeout */
     check_active_maps();
+    stage_started_us = server_stage_finished("active-maps", stage_started_us);
 
     /* Routines called from time to time. */
     do_specials();
+    stage_started_us = datetime_monotonic_us();
 
     trigger_global_event(GEVENT_TICK, NULL, NULL);
+    server_stage_finished("tick-plugins", stage_started_us);
 }
 
 /**
@@ -693,6 +780,11 @@ int server_run(int argc, char **argv) {
 #endif
     }
 
+    if (!admin_shutdown_init(settings.admin_shutdown_socket, admin_shutdown_schedule)) {
+        LOG(ERROR, "Cannot initialize protected local administrative shutdown socket.");
+        return EXIT_FAILURE;
+    }
+
     if (!settings.no_console) {
         console_start_thread();
     }
@@ -713,8 +805,12 @@ int server_run(int argc, char **argv) {
             break;
         }
 
+        admin_shutdown_poll();
         console_command_handle();
-        if (!socket_server_process()) {
+        uint64_t stage_started_us = server_stage_finished("console", loop_started_us);
+        bool simulation_due = socket_server_process();
+        server_stage_finished("transport", stage_started_us);
+        if (!simulation_due) {
             /* Transport wakeups are intentionally independent from the game
              * loop. Keep servicing QUIC readiness and timers until the next
              * scheduled non-transport pass is due. */
@@ -726,8 +822,11 @@ int server_run(int argc, char **argv) {
             main_process();
         }
 
+        stage_started_us = datetime_monotonic_us();
         socket_server_post_process();
+        stage_started_us = server_stage_finished("socket-post-process", stage_started_us);
         socket_assets_service();
+        server_stage_finished("assets", stage_started_us);
         server_metrics_game_loop(datetime_monotonic_us() - loop_started_us);
 
         /* The transport poller waits for this deadline while still waking

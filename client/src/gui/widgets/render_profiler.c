@@ -72,6 +72,7 @@ static const render_profile_stage_metadata_t stage_metadata[RENDER_PROFILE_STAGE
     [RENDER_PROFILE_MAP_SPRITE_EFFECTS] = {"sprite_effects", RENDER_PROFILE_SCOPE_MAP_DRAW},
     [RENDER_PROFILE_MAP_HINT_REPLAY] = {"hint_replay", RENDER_PROFILE_SCOPE_MAP_DRAW},
     [RENDER_PROFILE_MAP_UI] = {"ui", RENDER_PROFILE_SCOPE_MAP_DRAW},
+    [RENDER_PROFILE_MAP_LIGHT_ROWS] = {"light_rows", RENDER_PROFILE_SCOPE_MAP_DRAW},
 };
 
 _Static_assert(arraysize(stage_metadata) == RENDER_PROFILE_STAGE_NUM,

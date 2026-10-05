@@ -464,7 +464,7 @@ def native_record(
                 "workload": "pvm1-map2-lifecycle-v4",
                 "lighting_statistics_version": 8,
                 "map_statistics_version": 6,
-                "render_profiler_statistics_version": 5,
+                "render_profiler_statistics_version": 6,
                 "sprite_cache_statistics_version": 3,
             },
             "implementation": {
@@ -774,6 +774,31 @@ class NativeV12RecordTests(unittest.TestCase):
         malformed["phases"][0]["render_stages"]["ground"]["scope"] = "per_map_draw"
         with self.assertRaisesRegex(ValueError, "render metadata"):
             benchmark.validate_record(malformed)
+
+    def test_requires_light_row_profiler_contract(self) -> None:
+        record = native_record()
+        for calls, phase in enumerate(record["phases"]):
+            phase["render_stages"]["light_rows"]["calls"] = calls
+        benchmark.validate_record(record)
+        self.assertEqual(
+            record["phases"][1]["render_stages"]["light_rows"]["scope"],
+            "per_map_draw",
+        )
+
+        stale = native_record()
+        stale["identity"]["instrumentation"]["render_profiler_statistics_version"] = 5
+        with self.assertRaisesRegex(ValueError, "instrumentation identity"):
+            benchmark.validate_record(stale)
+
+        missing = native_record()
+        del missing["phases"][1]["render_stages"]["light_rows"]
+        with self.assertRaisesRegex(ValueError, "render stages.*incompatible schema"):
+            benchmark.validate_record(missing)
+
+        wrong_scope = native_record()
+        wrong_scope["phases"][1]["render_stages"]["light_rows"]["scope"] = "per_level"
+        with self.assertRaisesRegex(ValueError, "render metadata"):
+            benchmark.validate_record(wrong_scope)
 
     def test_rejects_fabricated_queue_service_and_accepts_zero_drain_time(self) -> None:
         malformed = native_record()

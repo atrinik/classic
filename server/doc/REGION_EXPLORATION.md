@@ -61,7 +61,10 @@ account session. The original file remains available for operator recovery.
 Dirty accounts use the existing mode-0600 atomic replacement API, including
 flush/fsync/rename, at most once per five seconds. Logout, socket teardown and
 orderly shutdown force a save. Clean accounts do not write. Failed saves retain
-dirty state for retry across reconnect and log an error. A crash may lose the
+dirty state for retry across reconnect and log an error. Checked logout reports
+sidecar save failures alongside character and account failures. Before publishing
+a shutdown receipt, the server also checks detached dirty exploration accounts;
+a failed sidecar save prevents a successful receipt and clean exit. A crash may lose the
 most recent unsaved batch. This intentionally remains one account snapshot,
 not a per-map file tree or journal: a save is linear in that account's data,
 while discovery, idle flush and region synchronization do not scan it.

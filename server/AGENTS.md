@@ -24,6 +24,9 @@
   never import untrusted client `.tiles` files.
 - Preserve object ownership, map activation/swap, lighting, plugin boundaries,
   and save transactionality. Test cleanup/rollback for lifecycle changes.
+- While celestial-v1 runtime activation is inactive, preserve physical private-map
+  and savebed paths through normal character saves, including saves on v1 maps.
+  A map's schema alone does not select the process-wide persistence policy.
 - With the active celestial-v1 runtime, player persistence uses owner-bound
   `unique-v1:` map/savebed tokens for private maps; physical datapath identities
   must fail closed and use the existing savebed/emergency fallback.
@@ -35,10 +38,17 @@
 - `install_data/` defines new-runtime defaults. Never handcraft, replace, or
   delete initialized account/player/key/identity state unless the task owns
   that mutable data.
-- Keep `--content_benchmark` and `--provision_scenario` offline: no listeners,
+- Local root-only update shutdown is opt-in; preserve the bounded protocol,
+  idempotent countdown, and checked persistence/receipt contract in
+  [`doc/LOCAL_ADMIN_SHUTDOWN.md`](doc/LOCAL_ADMIN_SHUTDOWN.md).
+- Keep `--content_benchmark`, `--content_benchmark_route`, and
+  `--provision_scenario` offline: no listeners,
   plugins, metaserver, or console. Benchmark canonical logical map IDs; scenario
   provisioning persists through normal account/password APIs. Use wrapper
-  profiles/states/scenarios.
+  profiles/states/scenarios. Fixed `brynknot-v1` walking routes use initialized
+  maps and normal collision checks; static export is planning evidence, while
+  traversal requires the live client to acknowledge each normal movement step.
+  See [walking-route export](doc/WALKING_ROUTE.md).
 
 ## Dependencies, protocols, and generated files
 
@@ -71,6 +81,9 @@
   without network access. Independently pinned third-party FetchContent sources
   retain their checksum-verified fallback unless a release contract explicitly
   bundles them.
+- Development server images use the root publisher, honest source version
+  `0.0.0`, full source revision and digest-pinned provenance. They do not advance
+  stable releases or the public `latest` alias; see `../docs/RELEASING.md`.
 - Commits/PR titles use Conventional Commits. Preserve unrelated work, keep
   generated output under `build/`, and finish with `git diff --check`.
 - Update this guide when ownership, layout, commands, persistence/runtime, or

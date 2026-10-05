@@ -1529,7 +1529,7 @@ static bool map_atomic_open(map_atomic_file_t *file, const char *target) {
 }
 
 static bool map_atomic_publish(map_atomic_file_t *file) {
-    bool ok = fflush(file->fp) == 0;
+    bool ok = !ferror(file->fp) && fflush(file->fp) == 0;
 #ifdef WIN32
     if (ok) {
         ok = _commit(_fileno(file->fp)) == 0;
@@ -1759,6 +1759,8 @@ int new_save_map(mapstruct *m, int flag) {
                 "Celestial map transaction for %s committed but could not be retired: %s",
                 m->path != NULL ? m->path : "<runtime>",
                 transaction_error);
+            m->in_memory = previous_in_memory;
+            return -1;
         }
     }
 
@@ -1806,6 +1808,14 @@ void free_map(mapstruct *m, int flag) {
     }
 
     remove_light_source_list(m);
+
+    /* Teardown is not a sequence of gameplay geometry edits. new_save_map()
+     * restores MAP_IN_MEMORY for its non-destructive callers, so swapping must
+     * enter the teardown state here before removing floors and walls. Withdraw
+     * outgoing light while the original resident topology still exists, then
+     * invalidate surviving celestial dependencies once before unlinking it. */
+    celestial_light_invalidate(m);
+    m->in_memory = MAP_SAVING;
 
     if (m->buttons) {
         free_objectlinkpt(m->buttons);
@@ -1867,9 +1877,6 @@ void delete_map(mapstruct *m) {
     HARD_ASSERT(m != NULL);
 
     if (m->in_memory == MAP_IN_MEMORY) {
-        /* Change to MAP_SAVING, even though we are not,
-         * so that object_remove doesn't do as much work. */
-        m->in_memory = MAP_SAVING;
         free_map(m, 1);
     } else {
         remove_light_source_list(m);

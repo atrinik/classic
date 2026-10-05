@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -15,6 +16,77 @@ ROOT = Path(__file__).resolve().parents[2]
 class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+    def test_check_routes_immutable_inputs_to_the_consumers_revision(self) -> None:
+        workflow = self.text("check.yml")
+        # Job boundaries keep an unrelated checkout or artifact declaration from
+        # satisfying the producer/consumer identity contract.
+        jobs = dict(
+            re.findall(
+                r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)",
+                workflow[workflow.index("jobs:\n") :],
+                re.MULTILINE | re.DOTALL,
+            )
+        )
+        for producer, artifact in (
+            ("dependency-inputs", "classic-dependency-inputs"),
+            ("gpu-shaders", "classic-gpu-shaders"),
+        ):
+            with self.subTest(producer=producer):
+                job = jobs[producer]
+                self.assertIn("fail-fast: false", job)
+                self.assertIn(
+                    "cohort: ${{ fromJSON(github.event_name == 'pull_request' && "
+                    "'[\"validation\", \"windows-head\"]' || '[\"validation\"]') }}",
+                    job,
+                )
+                self.assertIn(
+                    "INPUT_REVISION: ${{ matrix.cohort == 'windows-head' && "
+                    "github.event.pull_request.head.sha || github.sha }}",
+                    job,
+                )
+                self.assertIn("ref: ${{ env.INPUT_REVISION }}", job)
+                self.assertIn(
+                    'test "$(git rev-parse HEAD)" = "${INPUT_REVISION}"', job
+                )
+                self.assertIn('test -z "$(git status --short)"', job)
+                self.assertIn("name: " + artifact + "-${{ env.INPUT_REVISION }}", job)
+                self.assertLess(
+                    job.index('test "$(git rev-parse HEAD)"'),
+                    job.index("actions/cache"),
+                )
+        self.assertIn(
+            "${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.cohort }}",
+            jobs["dependency-inputs"],
+        )
+        consumers = {
+            "server": ("classic-dependency-inputs",),
+            "client": ("classic-dependency-inputs", "classic-gpu-shaders"),
+            "gpu-coverage": ("classic-dependency-inputs", "classic-gpu-shaders"),
+            "integrated": ("classic-dependency-inputs", "classic-gpu-shaders"),
+            "windows-test-build": ("classic-dependency-inputs", "classic-gpu-shaders"),
+        }
+        for consumer, artifacts in consumers.items():
+            with self.subTest(consumer=consumer):
+                job = jobs[consumer]
+                if consumer == "windows-test-build":
+                    revision = "env.COVERAGE_SHA"
+                    self.assertIn("ref: ${{ env.COVERAGE_SHA }}", job)
+                else:
+                    revision = "github.sha"
+                    # These jobs retain the event checkout, including PR merges.
+                    self.assertNotIn("ref:", job)
+                for artifact in artifacts:
+                    self.assertIn("name: " + artifact + "-${{ " + revision + " }}", job)
+                self.assertNotIn("name: classic-dependency-inputs\n", job)
+                self.assertNotIn("name: classic-gpu-shaders\n", job)
+
+    def test_external_actions_use_immutable_commits(self) -> None:
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            for action in re.findall(r"(?m)^\s*(?:- )?uses:\s*(\S+)", path.read_text()):
+                if not action.startswith("./"):
+                    with self.subTest(workflow=path.name, action=action):
+                        self.assertRegex(action, r"^[A-Za-z0-9_./-]+@[0-9a-f]{40}$")
 
     def test_client_linux_presets_consume_the_validated_shader_cohort(self) -> None:
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
@@ -149,10 +221,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(verification, ownership)
         self.assertLess(ownership, token)
         self.assertLess(token, mutation)
-        self.assertIn(
-            "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0",
-            workflow,
-        )
+        self.assertRegex(workflow, r"actions/create-github-app-token@[0-9a-f]{40}\b")
         self.assertIn("permission-contents: write", workflow)
         self.assertIn("permission-pull-requests: write", workflow)
         self.assertIn("--force-with-lease=", workflow)
@@ -215,7 +284,8 @@ class WorkflowContractTests(unittest.TestCase):
         workflow = self.text("release.yml")
         self.assertIn("  workflow_dispatch:\n", workflow)
         self.assertIn("  push:\n", workflow)
-        self.assertIn("      - main\n", workflow)
+        self.assertNotIn("      - main\n", workflow)
+        self.assertIn("github.ref_name != 'main'", workflow)
         self.assertIn("      - '[0-9]+.[0-9]+.x'\n", workflow)
         self.assertIn("ATRINIK_RELEASE_BRANCH", workflow)
         self.assertIn("RELEASE_TRIGGER_SHA", workflow)
@@ -304,11 +374,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("refs/remotes/origin/main", workflow)
         self.assertIn("packages: write", workflow)
         self.assertIn("oras cp --from-oci-layout", workflow)
-        self.assertIn("9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59", workflow)
+        self.assertRegex(workflow, r"[0-9a-f]{64}  build/oras/oras\.tar\.gz")
+        self.assertIn("sha256sum --check", workflow)
         self.assertIn("dependency_bundle.py build", workflow)
-        self.assertIn("recover_attested_dependency_bundle.sh", workflow)
-        self.assertIn("docker login ghcr.io", workflow)
-        self.assertIn("--trusted-bundle", workflow)
+        self.assertNotIn("recover_attested_dependency_bundle.sh", workflow)
+        self.assertNotIn("--trusted-bundle", workflow)
         self.assertIn("immutable dependency material tag exists", workflow)
         self.assertIn("tools/release/check_registry_version.py", workflow)
         self.assertIn("steps.material-tag.outputs.package_exists", workflow)
@@ -317,8 +387,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('case "${PACKAGE_EXISTS}:${TAG_EXISTS}" in', workflow)
         self.assertIn("bootstrap_missing_package:", workflow)
         self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
-        self.assertIn("materials-428265fcc11e9e3f7fc534659b55008cd26e9da6c74da054074279b7bc4af2e9", workflow)
-        self.assertIn("sha256:ffe1fa8d28a323d502d01400e2260b7b5eec37842e762c439b88bd9ee823923e", workflow)
+        self.assertRegex(workflow, r"materials-[0-9a-f]{64}\b")
+        self.assertRegex(workflow, r"sha256:[0-9a-f]{64}\b")
         self.assertIn("use the documented recovery path", workflow)
         self.assertNotIn("oras repo tags", workflow)
         self.assertNotIn("pull_request:", workflow)
@@ -922,10 +992,10 @@ class WorkflowContractTests(unittest.TestCase):
                 "  server:\n    name: Server validation"
             )
         ]
-        self.assertIn(
-            "--release-history-ref \"${{ github.event_name == 'workflow_dispatch' && 'refs/remotes/origin/main' || 'HEAD' }}\"",
-            core,
-        )
+        self.assertIn("CHECK_EVENT_NAME: ${{ github.event_name }}", core)
+        self.assertIn("tools/ci/release_history_ref.py", core)
+        self.assertIn('--event "${CHECK_EVENT_NAME}"', core)
+        self.assertIn('--release-history-ref "${release_history_ref}"', core)
 
         workflow = self.text("pr-benchmarks.yml")
         triggers = workflow[: workflow.index("jobs:")]
@@ -948,9 +1018,8 @@ class WorkflowContractTests(unittest.TestCase):
         for material in benchmark_materials:
             self.assertEqual(client_benchmark.count(f"--material {material}"), 1)
         self.assertIn("tools/ci/run_linux_check.sh server-benchmark", workflow)
-        self.assertIn("recover_attested_dependency_bundle.sh", workflow)
-        self.assertIn("docker login ghcr.io", workflow)
-        self.assertIn("--trusted-bundle", workflow)
+        self.assertNotIn("recover_attested_dependency_bundle.sh", workflow)
+        self.assertNotIn("--trusted-bundle", workflow)
         self.assertIn("github.event.pull_request.base.sha", workflow)
         self.assertIn("github.event.pull_request.head.sha", workflow)
         self.assertIn("--network none", workflow)
@@ -979,9 +1048,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_windows_packages_persist_toolchain_bound_compiler_caches(self) -> None:
         candidate = self.text("build-release-candidate.yml")
-        cache_action = (
-            "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
-        )
+        cache_action = "actions/cache@"
         self.assertEqual(candidate.count(cache_action), 3)
         self.assertIn("name: Build release GPU shader cohort", candidate)
         self.assertIn("candidate-gpu-shaders-${{ needs.metadata.outputs.tag }}", candidate)
@@ -1201,7 +1268,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("client/build/windows-tests/client-rich-presence-tests.exe", build)
         self.assertNotIn("client/build/windows-release/client-rich-presence-tests.exe", build)
         self.assertIn("python3 tools/ci/stage_windows_runtime.py", build)
-        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", build)
+        self.assertRegex(build, r"actions/upload-artifact@[0-9a-f]{40}\b")
         self.assertIn("Build portable Windows server package", build)
         self.assertIn("bash tools/build-windows-package.sh build/windows-pr-package", build)
         self.assertIn(
@@ -1221,7 +1288,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("windows-one-click-${COVERAGE_SHA:0:7}.zip", build)
 
         self.assertIn("runs-on: windows-2025", run)
-        self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", run)
+        self.assertRegex(run, r"actions/checkout@[0-9a-f]{40}\b")
         self.assertIn("ref: ${{ env.COVERAGE_SHA }}", run)
         self.assertIn("Verify the exact Windows checkout and GPU fixture bytes", run)
         self.assertIn(
@@ -1240,7 +1307,7 @@ class WorkflowContractTests(unittest.TestCase):
             run.index('"smoke_windows_review_bundle.ps1"'),
         )
         self.assertNotIn('"atrinik-classic-issue-477-windows-one-click-*.zip"', run)
-        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", run)
+        self.assertRegex(run, r"actions/download-artifact@[0-9a-f]{40}\b")
         self.assertIn('"libatrinik-path.exe"', run)
         self.assertIn("New-Item -ItemType Junction", run)
         self.assertIn('"libatrinik-path.exe") $junction', run)
@@ -1461,9 +1528,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("name: Verified dependency inputs", staging)
         self.assertIn("bundle-key", staging)
         self.assertIn("bundle-stage", staging)
-        self.assertIn("recover_attested_dependency_bundle.sh", staging)
-        self.assertIn("docker login ghcr.io", staging)
-        self.assertIn("--trusted-bundle", staging)
+        self.assertNotIn("recover_attested_dependency_bundle.sh", staging)
+        self.assertNotIn("docker login ghcr.io", staging)
+        self.assertNotIn("--trusted-bundle", staging)
         for material in (
             "client/dependencies.lock.json",
             "server/dependencies.lock.json",
@@ -1548,9 +1615,9 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("bundle-key", benchmark)
         self.assertIn("bundle-stage", benchmark)
-        self.assertIn("recover_attested_dependency_bundle.sh", benchmark)
-        self.assertIn("docker login ghcr.io", benchmark)
-        self.assertIn("--trusted-bundle", benchmark)
+        self.assertNotIn("recover_attested_dependency_bundle.sh", benchmark)
+        self.assertNotIn("docker login ghcr.io", benchmark)
+        self.assertNotIn("--trusted-bundle", benchmark)
         self.assertIn("--output build/dependency-inputs", benchmark)
         self.assertIn("actions/cache/restore@", benchmark)
         self.assertIn("actions/cache/save@", benchmark)
@@ -1609,7 +1676,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--legacy-final-ref", project)
         self.assertIn("daily_performance_site.py build", project)
         self.assertIn("daily_performance_site.py validate", project)
-        self.assertIn("actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b", project)
+        self.assertRegex(project, r"actions/upload-pages-artifact@[0-9a-f]{40}\b")
         self.assertNotIn("benchmark-data:refs", workflow)
         self.assertNotIn("HEAD:benchmark-data", workflow)
         self.assertNotIn("contents: write", workflow)
@@ -1621,7 +1688,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("id-token: write", deploy)
         self.assertNotIn("issues: write", deploy)
         self.assertIn("environment:\n      name: github-pages", deploy)
-        self.assertIn("actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e", deploy)
+        self.assertRegex(deploy, r"actions/deploy-pages@[0-9a-f]{40}\b")
 
         alerts = workflow[workflow.index("  alerts:") :]
         self.assertIn("needs: [project, deploy]", alerts)
@@ -1633,15 +1700,20 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_linux_checks_pin_image_and_isolate_compiler_caches(self) -> None:
         workflow = self.text("check.yml")
-        digest = "d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f"
-        image = f"ghcr.io/atrinik/classic-build:1.2.3@sha256:{digest}"
-        cache_action = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+        match = re.search(
+            r"CLASSIC_LINUX_IMAGE: (ghcr\.io/atrinik/classic-build:[^\s@]+@sha256:([0-9a-f]{64}))",
+            workflow,
+        )
+        self.assertIsNotNone(match)
+        image, digest = match.groups()
+        self.assertIn(f"CLASSIC_LINUX_IMAGE_DIGEST: sha256:{digest}", workflow)
+        cache_action = "actions/cache@"
 
         self.assertEqual(workflow.count(image), 1)
         self.assertEqual(workflow.count(f"sha256:{digest}"), 2)
         self.assertEqual(workflow.count(cache_action), 5)
-        self.assertEqual(workflow.count(f"actions/cache/restore@{cache_action.split('@')[1]}"), 1)
-        self.assertEqual(workflow.count(f"actions/cache/save@{cache_action.split('@')[1]}"), 1)
+        self.assertEqual(workflow.count("actions/cache/restore@"), 1)
+        self.assertEqual(workflow.count("actions/cache/save@"), 1)
         self.assertEqual(workflow.count("tools/ci/linux_cache_key.py"), 4)
         self.assertEqual(workflow.count("tools/ci/run_linux_check.sh"), 8)
         self.assertEqual(workflow.count("--env CCACHE_DIR=/cache/ccache"), 4)
@@ -1651,8 +1723,8 @@ class WorkflowContractTests(unittest.TestCase):
         dependency_inputs = workflow[
             workflow.index("  dependency-inputs:") : workflow.index("  core:")
         ]
-        self.assertEqual(workflow.count("packages: read"), 2)
-        self.assertIn("packages: read", dependency_inputs)
+        self.assertEqual(workflow.count("packages: read"), 1)
+        self.assertNotIn("packages: read", dependency_inputs)
         self.assertNotIn("docker/login-action", workflow)
         self.assertNotIn("packages: read", self.text("codeql.yml"))
 

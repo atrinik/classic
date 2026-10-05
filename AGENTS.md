@@ -13,11 +13,15 @@
 - Root `.github/` and `.releaserc.cjs` are the only active GitHub/release
   configuration. Retired nested component copies remain recoverable from Git
   history; do not reintroduce an independent module release train.
-- Use `.agents/skills/classic-native-change` for C17/CMake work,
-  `.agents/skills/classic-protocol-change` for wire contracts, and
-  `.agents/skills/classic-runtime` for integrated execution. Cross-repository
-  composition still follows the wrapper's `atrinik-multi-repo-workspace` skill;
-  repository policy follows `atrinik-github-governance`.
+- Use the `atrinik-development` plugin from the `atrinik` marketplace:
+  `classic-native-change` for C17/CMake work, `classic-protocol-change` for
+  wire contracts, and `classic-runtime` for integrated execution. The exact
+  provider revision and required skills are recorded in
+  [.agents/skill-provider.json](.agents/skill-provider.json). Cross-repository
+  composition uses `atrinik-multi-repo-workspace`; repository policy uses
+  `atrinik-github-governance` from the same plugin. Repository ownership,
+  licensing and subtree instructions remain authoritative. Ordinary offline
+  checks require neither an installed plugin nor network access.
 - Keep coordinated protocol, library, client, and server changes in one
   monorepo worktree and pull request. Never copy protocol identifiers or shared
   code between subtrees.
@@ -57,6 +61,15 @@
   on `classic`. Every runtime handoff includes the exact `topology show`, `up`,
   `ps`, `logs`, and `down` lifecycle, an isolated state, prerequisites, expected
   results, and cleanup.
+- Do not guess wrapper-generated paths or edit state used by a live process.
+  If broken local metadata prevents an authorized launch and public
+  inspect/retry/recovery cannot run, follow the wrapper's canonical
+  [local recovery](https://github.com/atrinik/atrinik/blob/main/docs/LOCAL_RECOVERY.md)
+  contract. Repair only the smallest owned coordinate after fresh path, object,
+  user, generation, ownership and current-use checks under exclusive
+  coordination; preserve the original evidence. Never rewrite a live
+  generation, adopt another task's state, fabricate ownership, or bypass
+  wrapper validation.
 - Commits and pull-request titles use Conventional Commits. Preferred scopes are
   `client`, `server`, `editor`, `libatrinik`, `protocol`, `build`, `ci`, `docs`,
   and `release`.
@@ -65,6 +78,12 @@
   minor line; a numeric `X.Y.x` branch is cut from `vX.Y.0` and publishes only
   later patches. Never hand-edit tags, images, drafts, or release assets; use
   the checked publication/recovery procedures in `docs/RELEASING.md`.
+- Main stable publication is currently held in `release.yml`; a reviewed public
+  client/server upgrade must explicitly re-enable it. Checked main source builds
+  publish only `classic-server:source-COMMIT` and the `development` discovery
+  alias through `publish-development-server.yml`, with version `0.0.0`, exact
+  source identity, locked inputs, SBOM and signed provenance. See
+  `docs/RELEASING.md`; never substitute a source build for a semantic release.
 - `tools/ci/classify_changes.py` is the single path-selection contract for
   native Check and CodeQL work. Pull requests are path-aware; protocol,
   libatrinik, and validation-contract changes select both client and server.

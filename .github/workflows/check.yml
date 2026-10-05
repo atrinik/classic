@@ -36,13 +36,25 @@ jobs:
   gpu-shaders:
     name: Build GPU shader cohort
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows packages prove the PR head; Linux validates the merge revision.
+        cohort: ${{ fromJSON(github.event_name == 'pull_request' && '["validation", "windows-head"]' || '["validation"]') }}
+    env:
+      INPUT_REVISION: ${{ matrix.cohort == 'windows-head' && github.event.pull_request.head.sha || github.sha }}
     timeout-minutes: 20
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.INPUT_REVISION }}
           persist-credentials: false
+      - name: Bind inputs to the exact selected revision
+        run: |
+          test "$(git rev-parse HEAD)" = "${INPUT_REVISION}"
+          test -z "$(git status --short)"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ runner.temp }}/gpu-shader-downloads
@@ -57,7 +69,7 @@ jobs:
           "${GITHUB_WORKSPACE}/build/gpu-shaders"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: classic-gpu-shaders
+          name: classic-gpu-shaders-${{ env.INPUT_REVISION }}
           path: build/gpu-shaders
           if-no-files-found: error
           retention-days: 1
@@ -99,15 +111,25 @@ jobs:
   dependency-inputs:
     name: Verified dependency inputs
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows packages prove the PR head; Linux validates the merge revision.
+        cohort: ${{ fromJSON(github.event_name == 'pull_request' && '["validation", "windows-head"]' || '["validation"]') }}
+    env:
+      INPUT_REVISION: ${{ matrix.cohort == 'windows-head' && github.event.pull_request.head.sha || github.sha }}
     timeout-minutes: 15
     permissions:
-      attestations: read
       contents: read
-      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.INPUT_REVISION }}
           persist-credentials: false
+      - name: Bind inputs to the exact selected revision
+        run: |
+          test "$(git rev-parse HEAD)" = "${INPUT_REVISION}"
+          test -z "$(git status --short)"
       - name: Verify the published Sound lock coordinate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -126,16 +148,6 @@ jobs:
           key: classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}
           restore-keys: >-
             classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-
-      - name: Recover attested unchanged dependency archives
-        env:
-          DOCKER_CONFIG: ${{ runner.temp }}/classic-docker-config
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p "${DOCKER_CONFIG}"
-          printf '%s' "${GH_TOKEN}" | docker login ghcr.io \
-            --username "${GITHUB_ACTOR}" --password-stdin
-          bash tools/release/recover_attested_dependency_bundle.sh \
-            "${RUNNER_TEMP}/classic-trusted-dependency-bundle"
       - id: dependency-stage
         name: Acquire and verify complete immutable input bundle
         run: |
@@ -144,7 +156,6 @@ jobs:
             --server-lock server/dependencies.lock.json \
             --source-lock server/cmake/immutable_sources.lock.json \
             --cache "${RUNNER_TEMP}/classic-dependency-archives" \
-            --trusted-bundle "${RUNNER_TEMP}/classic-trusted-dependency-bundle" \
             --output build/dependency-inputs \
             --github-output "${GITHUB_OUTPUT}"
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -152,10 +163,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/classic-dependency-archives
           key: >-
-            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}
+            classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.cohort }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: classic-dependency-inputs
+          name: classic-dependency-inputs-${{ env.INPUT_REVISION }}
           path: build/dependency-inputs
           if-no-files-found: error
           retention-days: 1
@@ -182,10 +193,14 @@ jobs:
       - name: Install Python test coverage tooling
         run: python3 -m pip install coverage==7.15.3
       - name: Validate imported history and release helpers
+        env:
+          CHECK_EVENT_NAME: ${{ github.event_name }}
         run: |
+          release_history_ref=$(python3 tools/ci/release_history_ref.py \
+            --event "${CHECK_EVENT_NAME}")
           python3 -m coverage run --branch --source=tools \
             tools/verify_import_history.py \
-            --release-history-ref "${{ github.event_name == 'workflow_dispatch' && 'refs/remotes/origin/main' || 'HEAD' }}"
+            --release-history-ref "${release_history_ref}"
           python3 -m coverage run --append --branch --source=tools \
             -m unittest discover -s tools/tests -p 'test_*.py'
           python3 -m coverage xml --omit='tools/tests/*' \
@@ -271,7 +286,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Upload release-tool coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           disable_search: true
           fail_ci_if_error: false
@@ -279,7 +294,7 @@ jobs:
           flags: release-tools
           use_oidc: true
       - name: Upload libatrinik coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           disable_search: true
           fail_ci_if_error: false
@@ -310,11 +325,11 @@ jobs:
           test -z "$(git status --short)"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-dependency-inputs
+          name: classic-dependency-inputs-${{ env.COVERAGE_SHA }}
           path: build/dependency-inputs
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-gpu-shaders
+          name: classic-gpu-shaders-${{ env.COVERAGE_SHA }}
           path: build/gpu-shaders
       - name: Verify and stage deterministic package inputs offline
         run: |
@@ -736,7 +751,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-dependency-inputs
+          name: classic-dependency-inputs-${{ github.sha }}
           path: build/dependency-inputs
       - id: linux-cache
         name: Resolve isolated server compiler cache key
@@ -781,6 +796,27 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh server /workspace
+      - name: Cover local admin socket with root and unauthorized peers
+        run: |
+          test "$(id -u)" -ne 0
+          for fixture_uid in 0 "$(id -u)"; do
+            fixture_name=root
+            if [[ ${fixture_uid} -ne 0 ]]; then fixture_name=nonroot; fi
+            docker run --rm \
+              --user "${fixture_uid}:${fixture_uid}" \
+              --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges \
+              --cpus 1 --memory 512m --memory-swap 512m \
+              --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777,size=128m \
+              --tmpfs "/run/atrinik-admin-tests:rw,nosuid,nodev,mode=0700,uid=${fixture_uid},gid=${fixture_uid},size=1m" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/server/admin_shutdown.c,target=/workspace/server/src/server/admin_shutdown.c,readonly" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/include/admin_shutdown.h,target=/workspace/server/src/include/admin_shutdown.h,readonly" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/tests/admin_shutdown_socket.py,target=/workspace/server/src/tests/admin_shutdown_socket.py,readonly" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/server/tools/admin_shutdown_coverage.sh,target=/workspace/server/tools/admin_shutdown_coverage.sh,readonly" \
+              "${CLASSIC_LINUX_IMAGE}" \
+              bash /workspace/server/tools/admin_shutdown_coverage.sh \
+              > "server/coverage-admin-${fixture_name}.xml"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: linux-server-ccache-${{ github.run_attempt }}
@@ -788,12 +824,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Upload coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
-          files: server/coverage.xml
+          files: server/coverage.xml,server/coverage-admin-root.xml,server/coverage-admin-nonroot.xml
           flags: server
           use_oidc: true
 
@@ -813,11 +849,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-dependency-inputs
+          name: classic-dependency-inputs-${{ github.sha }}
           path: build/dependency-inputs
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-gpu-shaders
+          name: classic-gpu-shaders-${{ github.sha }}
           path: build/gpu-shaders
       - id: linux-cache
         name: Resolve isolated client compiler cache key
@@ -888,7 +924,7 @@ jobs:
             "${CLASSIC_LINUX_IMAGE}" \
             "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Upload coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
@@ -923,11 +959,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-dependency-inputs
+          name: classic-dependency-inputs-${{ github.sha }}
           path: build/dependency-inputs
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-gpu-shaders
+          name: classic-gpu-shaders-${{ github.sha }}
           path: build/gpu-shaders
       - name: Pull pinned build and GPU coverage environments
         env:
@@ -946,7 +982,7 @@ jobs:
             "${CLASSIC_LINUX_IMAGE}" \
             "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Upload GPU-complete client coverage
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
@@ -999,11 +1035,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-dependency-inputs
+          name: classic-dependency-inputs-${{ github.sha }}
           path: build/dependency-inputs
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: classic-gpu-shaders
+          name: classic-gpu-shaders-${{ github.sha }}
           path: build/gpu-shaders
       - id: linux-cache
         name: Resolve isolated integrated compiler cache key

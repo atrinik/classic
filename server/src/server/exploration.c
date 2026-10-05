@@ -478,28 +478,41 @@ static void free_session(exploration_session *session) {
     free(session);
 }
 
-void exploration_end(socket_struct *ns) {
+bool exploration_end_checked(socket_struct *ns) {
     exploration_session *session = ns != NULL ? ns->exploration : NULL;
     if (session == NULL) {
-        return;
+        return true;
     }
     exploration_account *account = session->account;
     free_session(session);
-    save_account(account);
+    bool saved = save_account(account);
     if (account->sessions == NULL && !account->dirty) {
         free_account(account);
     }
+    return saved;
 }
 
-void exploration_shutdown(void) {
+void exploration_end(socket_struct *ns) {
+    (void)exploration_end_checked(ns);
+}
+
+bool exploration_shutdown_checked(void) {
+    bool saved = true;
     while (accounts != NULL) {
         exploration_account *account = accounts;
-        save_account(account);
+        if (!save_account(account)) {
+            saved = false;
+        }
         while (account->sessions != NULL) {
             free_session(account->sessions);
         }
         free_account(account);
     }
+    return saved;
+}
+
+void exploration_shutdown(void) {
+    (void)exploration_shutdown_checked();
 }
 
 #ifdef ATRINIK_TESTING

@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
-FROM ubuntu@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b AS build
+FROM ubuntu@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78 AS build
 
 ARG ATRINIK_PACKAGE_VERSION
+ARG ATRINIK_SOURCE_REVISION=unknown
+ARG ATRINIK_SOURCE_DIRTY=unknown
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
@@ -27,6 +29,8 @@ RUN --network=none python3 tools/dependencies.py sync \
         -DBUILD_TESTING=OFF \
         -DPACKAGE_TYPE=none \
         -DATRINIK_PACKAGE_VERSION="${ATRINIK_PACKAGE_VERSION}" \
+        -DATRINIK_SOURCE_REVISION="${ATRINIK_SOURCE_REVISION}" \
+        -DATRINIK_SOURCE_DIRTY="${ATRINIK_SOURCE_DIRTY}" \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/src/protocol \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/src/libatrinik \
     && cmake --build build/release \
@@ -48,7 +52,7 @@ RUN mkdir -p /tmp/worldmaker /tmp/atrinik-assets /tmp/atrinik-data/tmp \
         --resourcespath=/src/server/resources \
     && test -d /tmp/atrinik-assets/client-maps
 
-FROM ubuntu@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b
+FROM ubuntu@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
 
 ENV DEBIAN_FRONTEND=noninteractive ATRINIK_HTTP_URL=off
 RUN apt-get update \

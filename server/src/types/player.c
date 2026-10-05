@@ -259,11 +259,22 @@ void player_deinit(void) {
 /**
  * Disconnect all currently connected players.
  */
-void player_disconnect_all(void) {
-    while (first_player) {
-        first_player->cs->state = ST_DEAD;
-        player_logout(first_player);
+bool player_disconnect_all_checked(void) {
+    bool saved = true;
+    player *pl = first_player;
+    while (pl != NULL) {
+        player *next = pl->next;
+        pl->cs->state = ST_DEAD;
+        if (!player_logout_checked(pl)) {
+            saved = false;
+        }
+        pl = next;
     }
+    return saved;
+}
+
+void player_disconnect_all(void) {
+    (void)player_disconnect_all_checked();
 }
 
 /**
@@ -3311,12 +3322,15 @@ bool player_save_checked(object *op) {
     player *pl = CONTR(op);
     char map_value[MAX_BUF], bed_value[MAX_BUF];
     const char *saved_map = op->map != NULL ? op->map->path : EMERGENCY_MAPPATH;
-    if (op->map != NULL && MAP_UNIQUE(op->map) &&
-        !player_unique_token_from_path(pl, saved_map, map_value)) {
-        LOG(ERROR, "Refusing to persist an unbound celestial unique map for %s.", STRING_SAFE(op->name));
-        goto out;
-    }
-    if (op->map != NULL && MAP_UNIQUE(op->map)) {
+    /* Physical private-map identities remain the save contract until the
+     * celestial runtime is active. Its token encoder deliberately rejects
+     * inactive runtimes, so requiring it here would prevent every legacy
+     * private-map character save. */
+    if (celestial_structure_v1_runtime_active() && op->map != NULL && MAP_UNIQUE(op->map)) {
+        if (!player_unique_token_from_path(pl, saved_map, map_value)) {
+            LOG(ERROR, "Refusing to persist an unbound celestial unique map for %s.", STRING_SAFE(op->name));
+            goto out;
+        }
         saved_map = map_value;
     }
     const char *saved_bed = pl->savebed_map;
@@ -3407,9 +3421,9 @@ bool player_save_checked(object *op) {
 
     /* Make sure the file contents are durable before publishing the rename. */
 #ifndef WIN32
-    if (unlikely(fflush(fp) != 0 || fsync(fileno(fp)) != 0)) {
+    if (unlikely(ferror(fp) || fflush(fp) != 0 || fsync(fileno(fp)) != 0)) {
 #else
-    if (unlikely(fflush(fp) != 0 || _commit(_fileno(fp)) != 0)) {
+    if (unlikely(ferror(fp) || fflush(fp) != 0 || _commit(_fileno(fp)) != 0)) {
 #endif
         LOG(ERROR, "Failure syncing file %s: %s", path_tmp, strerror(errno));
         goto error;
@@ -3460,12 +3474,12 @@ bool player_save_checked(object *op) {
                 "Celestial character transaction for %s committed but could not be retired: %s",
                 STRING_SAFE(op->name),
                 transaction_error);
+            goto error;
         }
     }
 
-    saved = true;
-
-    if (!metrics_character_save(pl)) {
+    saved = metrics_character_save(pl);
+    if (!saved) {
         draw_info(COLOR_RED, op, "Your character metrics couldn't be saved.");
     }
 
@@ -4148,12 +4162,12 @@ out:
  * @param pl
  * The player to remove.
  */
-void player_logout(player *pl) {
+bool player_logout_checked(player *pl) {
     HARD_ASSERT(pl != NULL);
-    SOFT_ASSERT(pl->cs->state == ST_DEAD, "Player socket state is: %d", pl->cs->state);
+    SOFT_ASSERT_RC(pl->cs->state == ST_DEAD, false, "Player socket state is: %d", pl->cs->state);
 
     if (pl->ob->type == DEAD_OBJECT) {
-        return;
+        return false;
     }
 
     player_stuck_cancel(pl->ob);
@@ -4162,7 +4176,7 @@ void player_logout(player *pl) {
         LOG(INFO,
             "Deferring logout of %s while a gameplay journal transaction is pending.",
             pl->ob->name != NULL ? pl->ob->name : "<unnamed>");
-        return;
+        return false;
     }
 
     /* Trigger the global LOGOUT event */
@@ -4179,8 +4193,10 @@ void player_logout(player *pl) {
     /* Be sure we have closed container when we leave */
     container_close(pl->ob, NULL);
 
-    player_save(pl->ob);
-    account_logout_char(pl->cs, pl);
+    bool saved = player_save_checked(pl->ob);
+    if (!account_logout_char_checked(pl->cs, pl)) {
+        saved = false;
+    }
     leave_map(pl->ob);
 
     LOG(SYSTEM,
@@ -4191,6 +4207,11 @@ void player_logout(player *pl) {
     /* To avoid problems with inventory window */
     pl->ob->type = DEAD_OBJECT;
     free_player(pl);
+    return saved;
+}
+
+void player_logout(player *pl) {
+    (void)player_logout_checked(pl);
 }
 
 /**

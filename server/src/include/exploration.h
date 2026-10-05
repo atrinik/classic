@@ -18,7 +18,9 @@
  * only draw_client_map2 may grant discoveries. Client cache reconciliation never
  * mutates the authoritative account bitfields. */
 void exploration_begin(socket_struct *ns);
+bool exploration_end_checked(socket_struct *ns);
 void exploration_end(socket_struct *ns);
+bool exploration_shutdown_checked(void);
 void exploration_shutdown(void);
 bool exploration_mark(socket_struct *ns,
                       const char *path,

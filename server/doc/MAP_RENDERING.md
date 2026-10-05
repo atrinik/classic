@@ -10,7 +10,8 @@ SDL GPU device and uses its GPU-backed 2D renderer for the complete window,
 with raw SDL_GPU passes for the ordered map albedo/owner and integer
 light/tone stages. Supported production backends are Vulkan, Direct3D 12, and
 Metal on hardware devices that provide RGBA8 and R32_UINT render targets plus
-fragment storage buffers. There is no window-surface presentation,
+fragment storage buffers and a D32_FLOAT painter-rank depth attachment. There
+is no window-surface presentation,
 CPU-completed frame, renderer selection, or software fallback.
 
 Decoded faces, immutable effects, glyphs, region maps, minimap output, and
@@ -25,9 +26,12 @@ encoding. It does not establish a retained CPU framebuffer.
 
 The primary map keeps semantic state in sparse pointer slots and allocates a
 cell only when a validated generation publishes content for that coordinate.
-The GPU albedo pass preserves painter order and writes an exact integer owner
-and compact-light index; the final pass consumes compact Q5.11 quad vertices
-directly with the checked tone/LUT rules. It does not allocate viewport-pixel
+The GPU opaque albedo pass preserves painter order and writes an exact integer
+owner, compact-light index, and per-pixel painter rank; the final opaque pass
+consumes compact Q5.11 quad vertices
+directly with the checked tone/LUT rules. Partially transparent fragments then
+use their own authorized light sample and the same tone/LUT rules before
+ordered source-over composition. It does not allocate viewport-pixel
 light fields per physical depth. The production logical setting remains 17.
 The 25-by-25 and 28-by-28 views are qualification-only fixtures until their
 hardware, correctness, and performance release gates pass; empty state for 28
@@ -388,9 +392,11 @@ coordinate lookup to every missing `tile_path_N`; explicit paths remain
 authoritative.  With `MAP_NO_DYNAMIC`, a derived slot is populated only when
 the candidate map exists, so an omitted direction remains a valid terminal
 edge and creates no path, retry, or invisible map.  Without that flag, the
-legacy dynamic-map rules are preserved as well.  Derived links carry no
-authored boundary policy, while explicit celestial links continue to require
-their reciprocal boundary declarations and vertical-stack validation.  The
+legacy dynamic-map rules are preserved as well.  Derived horizontal links carry no
+authored boundary policy and do not require resident neighbors for local celestial
+lighting; they transport no celestial field across the seam. Explicit celestial
+links continue to require their reciprocal boundary declarations and vertical-stack
+validation. The
 static authored-exit validator mirrors the existing-map coordinate lookup.
 Fixtures cover explicit and derived links, an omitted terminal edge, vertical
 coordinates, an authored missing target, asymmetry, different profiles, and
@@ -612,8 +618,19 @@ which either `(0,0)` or `(width-1,height-1)` does not map identically is invalid
 fixtures cover 64x64/64x64 success, 64x64/63x64 failure, and attempted `(1,0)`
 offset failure.  Adding a vertical transform requires a new schema version.
 
-Every referenced map must be resident for construction; v1 treats an unloaded
-upper target as unresolved rather than guessing from its path or last cache.
+Local field construction visits the requested map and its upward sky chain,
+then evaluates that chain top-down. Maps below the requested map cannot affect
+its sky exposure or radiance, need not be resident, and are neither rebuilt nor
+published by that solve. Each lower map resolves its own upper dependencies when
+needed. Full inventory validation still checks the complete vertical component.
+Every upward dependency must be resident for field construction; v1 treats an
+unloaded upper target as unresolved rather than guessing from its path or last
+cache. Continuous horizontal seams also retain their residency and reciprocal
+validation requirements. Discontinuous horizontal neighbors are independent
+local fields: their residency does not gate this map's sky or radiance. The
+full topology inventory still requires resident, reciprocal declarations on
+both sides of every authored seam. Local-field validation does not load a
+neighbor, transmit across a discontinuous seam, or waive vertical coverage.
 
 For each aligned column, scan from the highest resolved depth downward.  The
 first set `DOWN` face is the highest relevant horizontal boundary.  Its exposed face
@@ -1989,6 +2006,19 @@ cache generation; coordinate reuse cannot resurrect a prior map.
 | Stale expiry | Unchanged. | Remove the revoked visual/interaction payload while retaining a zero-alpha, generation-bound presentation tombstone for later fade-in. | The delta protocol never treats elapsed time without a packet as authoritative absence; expiry is deterministic and cannot schedule continuous redraw after alpha reaches zero. |
 | Teleport, reconnect, logout, renderer shutdown, or reset | Hard clear the affected map/session generation. | Hard clear all live records and annotations. | Reconnect invalidates both retained world and minimap targets before a split first update can render; no client cache is trusted across identity change. |
 
+Living actor fades follow identity across a complete MAP2 publication. A visible
+move of the same server object count transfers its current alpha to the new
+pose and removes the previous pose immediately, including multipart changes
+and linked-depth moves. Names and face IDs are not identities. If an actor is
+absent from the resulting authorized view (including fog, darkness, or an exit),
+its last pose may fade for the bounded interval. Later re-entry removes any old
+stale pose and follows the ordinary visibility-enter fade. The local player is
+identified at primary depth and retains that ownership through cache scrolling;
+its previous pose is removed immediately on movement or any clear and never
+leaves a disappearance ghost. Interaction metadata is revoked immediately even
+while another actor's noninteractive visual pose fades. Identity matching never
+crosses NEW/reset map generations or grants authorization to a stale pose.
+
 The local render clock is an injected monotonic integer-millisecond clock. It
 advances only while the presentation window is active, so minimizing or hiding
 the client suspends rather than completes in-progress fades. It does not use
@@ -1997,6 +2027,23 @@ windows suspend the presentation clock; they do not advance fades or expire a
 record. Resume consumes the next authoritative update and then advances from
 the saved clock value. A new map, renderer reset, or reconnect starts a new
 clock generation.
+
+The server sends the ordinary `CMD_MAPSTATS_TIME` clock sample and rate after
+both NEW map publications (login and teleport) and CONNECTED tile transitions.
+The existing periodic clock updates continue unchanged. A timed-light MAP2
+endpoint describes celestial samples; it does not establish the client's world
+clock or replace that synchronization message.
+Every timed-light record's RGB endpoint bitmap is a subset of its scalar
+endpoint bitmap. The producer includes the corresponding scalar even for an
+unchanged colored endpoint carried with another refreshed sub-layer; a
+CONNECTED publication may reuse the generation and translated endpoint cache.
+The decoder rejects records that violate this ownership contract before
+applying map metadata or geometry.
+Endpoint aggregation compares both celestial scalar and RGB values; equal
+scalar intensity does not imply equal color. A refreshed descriptor compares
+cached endpoint RGB channels as well as scalar, generation, knowledge, and
+bitmap state. A hue-only change is published once, while an unchanged repeat
+retains the cached endpoint without another tile update.
 
 ### Fixed visibility and light transfer
 
@@ -2007,8 +2054,8 @@ frozen constants are:
 | Quantity | Value |
 | --- | ---: |
 | Normal daylight raw radiance | 1280 |
-| Remembered-geometry neutral floor (`M`) | 512 raw (40% of daylight) |
-| Player-field neutral center (`P`) | 640 raw (50% of daylight) |
+| Remembered-geometry neutral floor (`M`) | 40 raw (3.125% of daylight) |
+| Player-field neutral center (`P`) | 80 raw (6.25% of daylight) |
 | Inner radius squared | 16 (radius 4) |
 | Outer radius squared | 64 (radius 8) |
 | Field weight unit | 256 |
@@ -2039,23 +2086,70 @@ positions where the player is rendered.
 
 Remembered static geometry outside current authorization receives a neutral
 memory lift, not a current-visibility grant. Let `S` be the decoded server
-scalar and `C` its decoded linear RGB vector. The display-only values are:
+scalar and `C` its decoded linear RGB vector. The display-only values before
+window attenuation are:
 
 ```text
-memory_lift = max(0, 512 - S)
+memory_lift = max(0, 40 - S)
 S_display   = S + memory_lift
 C_display   = max((0, 0, 0), C + (memory_lift, memory_lift, memory_lift))
 ```
 
-Thus zero-radiance remembered geometry is `(512,512,512)`, a low colored local
+Thus zero-radiance remembered geometry is `(40,40,40)`, a low colored local
 sample keeps its color while receiving only the missing neutral floor, and a
 negative or zero endpoint cannot produce a negative display value. The RGB
 component clamp is display-only and does not alter the cached sample. At or
-above raw 512 the server sample is unchanged. Current visible geometry does not get
+above raw 40 the interior server sample is unchanged. Current visible geometry does not get
 the memory lift; it receives the authoritative sample plus the player-field
 contribution. Q5.11 encoding remains the existing checked round-half-up
 `raw * 8 / 5` operation at the wire boundary; this contract adds no protocol
 field and no second visibility authority.
+
+With smooth lighting, feather the completed presentation sample at the negotiated
+wire-window boundary. Let `distance` be the minimum integer distance from the
+sample to any of the four window sides. Its Q0.8 weight is `0` at distance zero,
+`16` at distance one, and `256` at distance two or greater; samples outside the
+window also have weight zero. Multiply scalar and each RGB channel by this weight
+with checked round-half-up division by 256, after the player contribution or
+memory lift and before spatial interpolation and tone mapping. Within the outer
+three vertex rings (`distance <= 2`), first bound scalar values above Q5.11 2048
+(the display-white endpoint) to 2048 and scale every RGB channel by the same
+factor, with round-half-up division by the original scalar. This preserves channel
+ratios and prevents saturated light from defeating the feather. Full-weight
+vertices at distance two also use this normalization; samples at distance three
+or greater remain unchanged. The low midpoint
+compensates for the steep low-radiance tone curve. This presentation-only taper
+also bounds nearest-known light borrowing and leaves authoritative cache samples
+unchanged. Discrete lighting retains its per-tile transfer without this spatial
+taper. The interior values above and below describe full-weight samples.
+
+Known ground also has an independent geometric coverage channel in smooth mode.
+It applies only to FLOOR/FMASK commands on the selected projected lighting plane,
+excluding authored roofs. Walls, roofs, actors, and ITEM decorations retain their
+existing lighting. A cell is known for this channel when it stores a non-roof
+FLOOR or FMASK on that plane; light availability, fog state, and image upload
+readiness do not grant or revoke geometry coverage. Remembered ground therefore
+continues to participate.
+
+The light-grid vertices are cell centers. Each quad stores a 3x3 coverage lattice:
+its four corner samples are the corresponding known-cell bits, an edge midpoint
+is known only when both incident cells are known, and the center is known only
+when all four are known. True samples encode 255 and false samples encode zero.
+Piecewise bilinear interpolation over the four half-cell subquads tapers inward
+to black at a known/unknown boundary while preserving a known cell center,
+isolated islands, and narrow corridors. Fully known ground has coverage 255
+everywhere. Missing cells never submit a face.
+
+After the existing per-contributor tone mapping, multiply each eligible RGB
+channel by coverage with round-half-up division by 255; preserve alpha. Coverage
+thus cannot expose a lower linked level through opaque ground or attenuate
+structural owners. It uses the same multiplier for every RGB channel. It does
+not change radiance,
+nearest-known light borrowing, the player field, remembered-light lift, or the
+wire-window taper above. Coverage bytes are part of the retained light-quad
+identity, so geometry-only exploration invalidates final lighting even when
+radiance is unchanged. Full, retained, scrolled, and light-only draws use the same
+coverage channel.
 
 Fade alpha is integer and monotonic for one authoritative transition:
 
@@ -2063,6 +2157,44 @@ Fade alpha is integer and monotonic for one authoritative transition:
 fade_in(elapsed)  = min(255, floor((elapsed * 255 + 125) / 250))
 fade_out(elapsed) = max(0, 255 - floor((elapsed * 255 + 125) / 250))
 ```
+
+A revoked transient fades its last successfully presented contributor. The
+receipt binds the map/cache record identity, draw variant, semantic appearance
+token, original source-image identity, immutable GPU asset/effect instance, and
+selected compact light cohort. Identical positive payload refreshes keep the
+token; reauthorization, a changed visual payload, or a new actor identity mints
+a new token. A payload that has never reached a successful primary window
+presentation has no receipt and must not fabricate a disappearing ghost.
+
+A primary map draw stages its receipt bank; only a successful window present
+promotes it. Failed or omitted presents, auxiliary draws, and UI-only frames do
+not replace the last presented bank. Decoder rollback does not mutate receipts.
+The renderer retains at most a presented and a staged compact CPU cohort plus
+the existing submitted map data. These are proportional to compact records,
+not viewport pixels times levels; no new render target or CPU pixel-light field
+is allocated. Referenced frozen rows/spans/quads enter the existing light buffers
+with the same packed-key and allocation limits. They are excluded from current
+owner spatial lookup and cannot light another contributor.
+
+Replay preserves the already presented source/effects and sampled scalar/RGB,
+including the historical player contribution and window attenuation that were
+part of that visible sample. It never recalculates a current player boost,
+current hidden-cell light, or fresh animation/effect state. The frozen world
+anchor translates with an authorized SAME/CONNECTED scroll; signed row offsets
+retain the original sampled coordinates and captured extent across repeated
+scroll-out/back. NEW map identity, primary resize/device rebuild, source-image
+invalidation, expiry, and reentry discard the relevant receipt. No target/name,
+interaction state, or live lighting authority is restored by a receipt.
+
+Let `effective_start` and `effective_current` be the authored/forced/visibility
+alpha minima at revocation and at replay. A replay's modulation alpha is its
+immutable last-presented modulation alpha multiplied by
+`min(effective_current, effective_start) / effective_start`. Zero start or current
+alpha emits nothing. This retains the actual shown opacity even if logical
+fade-in advanced without a presentation, preserves intrinsic texture alpha and
+authored-alpha plateaus, and avoids cumulative rounding through repeated draws.
+Opaque and translucent replay use the ordinary tone and ordered composition
+passes. Structural FOW keeps its independent geometry/light semantics.
 
 An authoritative reappearance cancels fade-out and starts from the current
 alpha without overshoot. A newer authoritative absence replaces the prior
@@ -2123,21 +2255,35 @@ path. The compositor performs these phases in order:
 1. Validate and publish MAP2 state, including current fog/clear, depth, owner,
    alpha, transform, and server Q5.11 samples.
 2. Resolve the bounded remembered/live scene without synthesizing absent cells.
-3. Paint albedo, alpha, color-key, transformed, double-face, stretch, and
-   multipart geometry in the established global isometric order.
-4. For every final visible pixel/span, retain the physical depth/elevation
-   owner (or an equivalent surface-light coordinate) and select its authorized
-   interpolated sample.
-5. Apply the player contribution or remembered memory lift, then perform one
-   scene-linear tone-map/multiply traversal for the complete primary map.
+3. Evaluate source alpha and all sprite effects per fragment. Paint fully opaque
+   fragments in the established global isometric order into albedo and exact
+   owner/light-key targets, retaining the last opaque painter rank in D32_FLOAT.
+   Color-key and zero-alpha fragments write no color, owner, or rank.
+4. Select each opaque pixel's authorized interpolated sample and apply the
+   player contribution or remembered memory lift through the checked integer
+   tone/LUT multiplication rules.
+5. Replay partially transparent fragments in that same painter order. Each
+   contributor selects its own physical-depth/elevation owner and fixed or
+   projected light row, applies the identical tone/LUT rules, then blends with
+   encoded-RGBA source-over. A contributor behind the final opaque rank is
+   rejected; transparent fragments never change the rank. This preserves the
+   established display blending convention without assigning a blended pixel
+   to a single lighting owner.
 6. Draw names, probes, target bars, pointer cues, exits, and other annotations
    in one documented post-light phase only when their current cutoff permits.
 
-Color-key pixels remain transparent and write no owner. True alpha and surface
-alpha modulate the final albedo contribution; they do not discard the owner
-metadata of a partially transparent surface unless the existing painter marks
-the span transparent. Outlines and glows use the same owner/light result as
-their source sprite. UI annotations are unlit. A texture, allocation, shader,
+The effective post-effect alpha determines the opaque/transparent split per
+fragment, including textures that contain both kinds of pixels. Outlines and
+glows use the same owner/light selection as their source sprite. UI annotations
+are unlit. Stable GPU instance slots do not determine painter rank: the sorted
+command index does, with an explicit exact-rank limit below 2^24 commands.
+Order changes invalidate the full retained world. A bounded damage update clears
+and repaints opaque albedo, owner, and rank in its rectangle, resolves its light,
+and replays all intersecting transparent contributors in order. A lighting-only
+update preserves opaque geometry/ranks but resolves and replays transparency
+across the full target. An unchanged target retains the complete result.
+
+A texture, allocation, shader,
 target, submission, swapchain, device, or output failure discards the partial
 frame, stops presentation, and performs at most one complete GPU
 device/resource reconstruction followed by a complete scene republish. It
@@ -2153,18 +2299,23 @@ must satisfy these hard formulas, including pitch and allocator overhead:
 | Albedo target | one RGBA8 `N`-pixel GPU texture |
 | Owner/sample target | one R32_UINT `N`-pixel GPU texture |
 | Final map target | one RGBA8 `N`-pixel GPU texture |
+| Opaque painter rank | one D32_FLOAT `N`-pixel GPU depth texture |
 | Compact scalar/RGB light data | one record per projected populated light cell; record-count proportional and never `N * D` |
 | Compact spatial lookup | one coarse viewport bucket table plus bounded quad/bucket overlaps |
 | Static transformed/effect cache | existing explicit byte/entry cap; no uncapped fallback cache |
 | Live records | at most the bounded MAP2 command/object count for the active generation |
 | Painter submission | retained primary/auxiliary command arrays plus one persistent, cycled GPU instance stream; only adjacent equal texture/scissor state is batched |
 | Retained physical depths | `D <= MAP2_LEVELS == 2 * MAP2_MAX_DEPTH + 1` |
-| Compositions | one ordered albedo/owner pass and one final integer light/tone pass per complete primary draw |
+| Compositions | one ordered opaque albedo/owner/rank pass, one integer opaque light/tone resolve, and one ordered independently lit transparent pass per complete primary draw |
 
 The implementation exposes GPU counters for command construction,
 batches/draws, source and compact-light uploads, resource creation/destruction,
 albedo/owner work, final light/tone work, UI, submission, fenced completion,
-present wait, retained bytes, recovery, and fallbacks. After warmup an unchanged
+present wait, retained bytes, recovery, and fallbacks. Damage/dirty byte counts
+describe the logical albedo/owner/rank footprint (12 bytes per pixel), separately
+from actual upload traffic. The damage-clear batch counter records each actual
+opaque clear, including a frame whose simultaneous light change requires a
+full final resolve. After warmup an unchanged
 scene has no source/effect upload or resource churn. Idle after fades and timed
 buckets settle has no visibility, shadow, or map-state reconstruction work.
 Player screenshots enqueue a completed-frame GPU copy and return immediately;
@@ -2208,15 +2359,16 @@ coordinated update to all consumers before implementation proceeds.
 
 ### Conformance vectors and review gates
 
-The following vectors are mandatory in unit/fixture coverage:
+The following vectors are mandatory in unit/fixture coverage; light values
+describe interior samples before window attenuation:
 
 | Case | Remembered display scalar/RGB | Player contribution | Alpha |
 | --- | --- | --- | ---: |
 | never-seen cell | empty; no output | none | 0 |
-| remembered, zero server radiance | `(512,512,512)` | none | 255 for static geometry |
-| remembered, raw server `(80,0,0)` | `(512,432,432)` after neutral lift | none | 255 |
-| current visible, neutral raw 1280, center | `(1280,1280,1280)` | `640` each channel before tone mapping | 255 |
-| current visible, neutral raw 1280, `d2=25` | `(1280,1280,1280)` | `520` each channel | 255 |
+| remembered, zero server radiance | `(40,40,40)` | none | 255 for static geometry |
+| remembered, raw server `(20,0,0)` | `(40,20,20)` after neutral lift | none | 255 |
+| current visible, neutral raw 1280, center | `(1280,1280,1280)` | `80` each channel before tone mapping | 255 |
+| current visible, neutral raw 1280, `d2=25` | `(1280,1280,1280)` | `65` each channel | 255 |
 | fade-in at 125 ms | unchanged light | unchanged | 128 |
 | fade-out at 125 ms | unchanged static geometry | none | 127 |
 | revoked at 500 ms | unchanged remembered geometry only | none | 0 for live record |

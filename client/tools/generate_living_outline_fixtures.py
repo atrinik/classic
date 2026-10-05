@@ -95,7 +95,7 @@ def base(*records: bytes) -> bytes:
     return packet(((0, local + b"".join(records)),))
 
 
-def centered_visibility_fade() -> bytes:
+def centered_visibility_fade(*, retained_background: bool = False) -> bytes:
     """Create center-authorized item, actor, and effect records for fade tests."""
     center = tile(
         ORIGIN,
@@ -105,7 +105,15 @@ def centered_visibility_fade() -> bytes:
         layer(5, FACE_ACTOR),
         layer(6, FACE_EFFECT),
     )
-    return packet(((0, center),))
+    background = b""
+    if retained_background:
+        background = b"".join(
+            tile(x, y, layer(0, 1))
+            for x in range(MAP_SIZE)
+            for y in range(MAP_SIZE)
+            if (x, y) != (ORIGIN, ORIGIN)
+        )
+    return packet(((0, center + background),))
 
 
 def scenes() -> dict[str, bytes]:
@@ -171,6 +179,7 @@ def scenes() -> dict[str, bytes]:
         "remembered-floor": remembered_floor_initial,
         "remembered-floor-next": same_packet(fow_tile(ORIGIN + 1, ORIGIN)),
         "visibility-fade-centered": centered_visibility_fade(),
+        "visibility-fade-retained": centered_visibility_fade(retained_background=True),
     }
 
 

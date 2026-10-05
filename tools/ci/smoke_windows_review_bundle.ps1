@@ -18,6 +18,7 @@ $launcherErrorTask = $null
 $launcherServer = $null
 $launcherClient = $null
 $bodySucceeded = $false
+$clientCloseStarted = $false
 $portProbe = [System.Net.Sockets.UdpClient]::new(0)
 try {
     $serverPort = ([System.Net.IPEndPoint]$portProbe.Client.LocalEndPoint).Port
@@ -46,14 +47,99 @@ function Get-LauncherLogTail([string]$Path) {
         }
         return (@(
             $Lines | ForEach-Object {
-                $_ -replace "(?i)(password|secret|token)([=:])\S+", '$1$2[redacted]' |
-                    ForEach-Object {
-                        $_ -replace "(?i)https?://\S+", "[redacted-url]"
-                    }
+                # Drop the rest of a credential-bearing line, including quoted
+                # or whitespace-separated values. Never print terminal controls.
+                $safeLine = $_ -replace "[\x00-\x1f\x7f-\x9f]", "?"
+                $safeLine = $safeLine -replace "(?i)(password|passwd|secret|token|authorization|auth|bearer).*", "[redacted]"
+                $safeLine = $safeLine -replace "(?i)https?://\S+", "[redacted-url]"
+                $safeLine.Substring(0, [System.Math]::Min($safeLine.Length, 2048))
             }
         ) -join [System.Environment]::NewLine)
     } catch {
         return "<log unavailable>"
+    }
+}
+
+# Read-only HWND evidence: never read titles or send messages from this probe.
+# CloseMainWindow below remains the single normal close request.
+function Get-ClientWindowSnapshot($Client) {
+    try {
+        if (-not ("AtrinikReviewWindowProbe" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+public static class AtrinikReviewWindowProbe {
+    private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int GetClassNameW(IntPtr window, StringBuilder name, int capacity);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowEnabled(IntPtr window);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr window, uint command);
+
+    public static string Snapshot(int processId, IntPtr mainWindow) {
+        var rows = new List<string>();
+        int visited = 0;
+        bool complete = EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+            if (++visited > 4096 || rows.Count >= 32) return false;
+            uint owner;
+            uint thread = GetWindowThreadProcessId(window, out owner);
+            if (owner != (uint)processId) return true;
+            var name = new StringBuilder(256);
+            GetClassNameW(window, name, name.Capacity);
+            rows.Add(String.Format(
+                "hwnd={0} main={1} thread={2} class={3} visible={4} enabled={5} owner_hwnd={6}",
+                window.ToInt64(), window == mainWindow, thread,
+                Regex.Replace(name.ToString(), "[^A-Za-z0-9_.#-]", "?"),
+                IsWindowVisible(window), IsWindowEnabled(window),
+                GetWindow(window, 4).ToInt64())); // GW_OWNER
+            return true;
+        }, IntPtr.Zero);
+        return String.Format("pid={0} main_hwnd={1} enumeration_complete={2}; {3}",
+            processId, mainWindow.ToInt64(), complete, String.Join("; ", rows));
+    }
+}
+'@ -ErrorAction Stop
+        }
+        if ($Client.HasExited) {
+            return "client_exited=True"
+        }
+        return [AtrinikReviewWindowProbe]::Snapshot($Client.Id, $Client.MainWindowHandle)
+    } catch {
+        # A diagnostic must not change close semantics or replace its failure.
+        return "<client window snapshot unavailable>"
+    }
+}
+
+function Write-CloseFailureDiagnostics {
+    try {
+        try {
+            $launcherClient.Refresh()
+            Write-Host ("Client windows after close failure: " +
+                (Get-ClientWindowSnapshot $launcherClient))
+        } catch {
+            Write-Host "<client process refresh unavailable>"
+        }
+        foreach ($entry in @(
+            @{ Label = "Client log tail"; Path = $launcherClientLog },
+            @{ Label = "Server log tail"; Path = $launcherServerLog },
+            @{ Label = "Launcher failure log tail"; Path = $launcherFailureLog },
+            @{ Label = "Launcher progress log tail"; Path = $launcherProgressLog }
+        )) {
+            Write-Host ($entry.Label + ":" + [System.Environment]::NewLine +
+                (Get-LauncherLogTail $entry.Path))
+        }
+    } catch {
+        Write-Host "<close failure diagnostics unavailable>"
     }
 }
 
@@ -237,7 +323,7 @@ try {
     if ($process.ExitCode -ne 0) {
         throw "Flat review-bundle server exited with code $($process.ExitCode):`n$output"
     }
-    if ($output -notmatch "Server shutdown complete\.") {
+    if ($output -notmatch "Server saves complete; releasing resources\.") {
         throw "Flat review-bundle server did not report a clean shutdown"
     }
 
@@ -382,9 +468,13 @@ try {
     if ($launcherClient.HasExited) {
         throw "One-click client exited before the graceful close request"
     }
+    $clientCloseStarted = $true
+    Write-Host ("Client windows before normal close: " +
+        (Get-ClientWindowSnapshot $launcherClient))
     if (-not $launcherClient.CloseMainWindow()) {
         throw "Could not request a normal close of the one-click client window"
     }
+    Write-Host "Client normal close request accepted; waiting up to 30 seconds."
     if (-not $launcherClient.WaitForExit(30000)) {
         throw "One-click client did not exit after the normal close request"
     }
@@ -411,7 +501,7 @@ try {
         throw "One-click server exited with code $launcherServerExitCode"
     }
     $launcherServerLogText = Get-Content -Raw -LiteralPath $launcherServerLog
-    if ($launcherServerLogText -notmatch "Server shutdown complete\.") {
+    if ($launcherServerLogText -notmatch "Server saves complete; releasing resources\.") {
         throw "One-click server did not report a clean shutdown"
     }
     if (-not $launcherProcess.WaitForExit(60000)) {
@@ -421,6 +511,13 @@ try {
         throw "run-review.bat exited with code $($launcherProcess.ExitCode)"
     }
     $bodySucceeded = $true
+} catch {
+    if ($clientCloseStarted) {
+        # Collect while the exact owned processes and logs still exist, before
+        # failure containment and temporary-state removal in finally.
+        Write-CloseFailureDiagnostics
+    }
+    throw
 } finally {
     $cleanupFailures = [System.Collections.Generic.List[string]]::new()
     if ($null -ne $process) {

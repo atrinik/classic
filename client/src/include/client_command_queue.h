@@ -113,7 +113,12 @@ void client_command_queue_drain(uint64_t budget_us,
 /** Reset cumulative telemetry only when the queue is empty. */
 bool client_command_queue_statistics_reset(void);
 
-/** Snapshot cumulative and current telemetry at the supplied monotonic time. */
+/**
+ * Snapshot cumulative and current telemetry at the supplied monotonic time.
+ * Before initialization and after teardown, return an all-zero snapshot.
+ * Those lifecycle reads belong to the owner and must not race initialization
+ * or deinitialization; initialized snapshots retain normal queue locking.
+ */
 void client_command_queue_statistics_get(uint64_t now_us,
                                          client_command_queue_statistics_t *statistics);
 

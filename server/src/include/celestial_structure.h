@@ -37,7 +37,15 @@ typedef enum celestial_transmission {
 
 bool celestial_structure_finalize_map(mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_validate_header(mapstruct *map, char *error, size_t error_size);
+/** Validate all authored seam declarations and the complete resident stack. */
 bool celestial_structure_validate_topology(mapstruct *map, char *error, size_t error_size);
+/** Validate local lighting dependencies without loading maps. Discontinuous
+ * horizontal neighbors and maps below the requested map are independent;
+ * upward coverage, reciprocal links within that chain and continuous
+ * horizontal seams retain full validation. Server-thread only, retains no pointers. */
+bool celestial_structure_validate_light_dependencies(mapstruct *map,
+                                                     char *error,
+                                                     size_t error_size);
 bool celestial_structure_cell_exposed(const mapstruct *map, int x, int y);
 uint8_t celestial_structure_faces(const object *op);
 celestial_transmission_t celestial_structure_transmission(const char *value);
@@ -67,6 +75,10 @@ bool celestial_structure_acquire_writer_lease(char *error, size_t error_size);
 void celestial_structure_release_writer_lease(void);
 /** Whether startup has selected the fail-closed celestial-v1 runtime. */
 bool celestial_structure_v1_runtime_active(void);
+#ifdef ATRINIK_TESTING
+/** Select persistence policy for isolated tests; never activates runtime state. */
+void celestial_structure_set_runtime_active_for_test(bool active);
+#endif
 /** Publish the digest-addressed mutable-map provenance sidecar. */
 bool celestial_structure_write_provenance(const mapstruct *map, char *error, size_t error_size);
 bool celestial_structure_begin_map_transaction(const mapstruct *map,

@@ -22,6 +22,10 @@ if [ -n "${ATRINIK_SERVER_HOST:-}" ]; then
     set -- --server_host="${ATRINIK_SERVER_HOST}" "$@"
 fi
 
+if [ -n "${ATRINIK_ADMIN_SHUTDOWN_SOCKET:-}" ]; then
+    set -- --admin_shutdown_socket="${ATRINIK_ADMIN_SHUTDOWN_SOCKET}" "$@"
+fi
+
 exec ./atrinik-server \
     --network_stack="${ATRINIK_NETWORK_STACK:-dual}" \
     --no_console \

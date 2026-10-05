@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define TEST_CHECK(condition)                                                               \
     do {                                                                                    \
@@ -262,8 +263,35 @@ static void test_deinitialize_resets_reconnect_state(void) {
     TEST_CHECK(!statistics.due);
 }
 
+static void test_uninitialized_statistics(void) {
+    client_command_queue_statistics_t statistics;
+    memset(&statistics, 0xff, sizeof(statistics));
+    client_command_queue_statistics_get(UINT64_MAX, &statistics);
+#define CHECK_ZERO(field) TEST_CHECK(statistics.field == 0)
+    CHECK_ZERO(enqueued);
+    CHECK_ZERO(dequeued);
+    CHECK_ZERO(budget_yields);
+    CHECK_ZERO(recoveries);
+    CHECK_ZERO(depth);
+    CHECK_ZERO(bytes);
+    CHECK_ZERO(peak_depth);
+    CHECK_ZERO(peak_bytes);
+    CHECK_ZERO(oldest_age_us);
+    CHECK_ZERO(current_oldest_age_us);
+    CHECK_ZERO(processing_us);
+    CHECK_ZERO(enqueued_order_digest);
+    CHECK_ZERO(dequeued_order_digest);
+    CHECK_ZERO(order_digests_comparable);
+    CHECK_ZERO(due);
+    CHECK_ZERO(budget_due);
+#undef CHECK_ZERO
+    const uint8_t packet[] = {CLIENT_CMD_MAP, 1};
+    TEST_CHECK(!client_command_queue_enqueue_envelope_at(packet, sizeof(packet), 1));
+}
+
 int main(void) {
     toolkit_import(datetime);
+    test_uninitialized_statistics();
     TEST_CHECK(client_command_queue_initialize());
     test_empty_tick_and_validation();
     test_ordered_budget_yield_and_recovery();
@@ -272,6 +300,7 @@ int main(void) {
     test_dispatch_pause_preserves_remaining_commands();
     test_deinitialize_resets_reconnect_state();
     client_command_queue_deinitialize();
+    test_uninitialized_statistics();
     toolkit_deinit();
     return 0;
 }

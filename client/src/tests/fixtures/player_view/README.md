@@ -1,5 +1,73 @@
 # Frozen renderer migration fixtures
 
+The `presentation-day`, `presentation-dusk`, and `presentation-night` fixtures
+exercise the normal MAP2 decoder and `map_draw_map()` compositor with the same
+17-by-17 floor, opaque center player, viewport, and assets. Only authoritative
+neutral radiance changes: Q5.11 2048, 128, and 0. The analytic gray floor and
+white player are generated test geometry, not game artwork. Regenerate all
+three closed manifests and their pinned inputs with
+`python3 tools/generate_night_presentation_fixtures.py`.
+
+Run `atrinik --gpu-player-view src/tests/fixtures/player_view/presentation-night.xml`
+from the client directory (and the corresponding day/dusk manifests). Set
+`ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY` to a task-owned directory to export
+the actual completed GPU frames. The large viewport exposes all four map
+boundaries for inspection of the two-tile lighting feather. The zero golden
+hashes request measured evidence; they do not claim cross-backend approval.
+Check exported initial captures with
+`python3 tools/verify_night_presentation.py --day DAY.png --dusk DUSK.png --night NIGHT.png`.
+This rejects color contamination, missing or incorrectly lit player pixels,
+and day/night changes that fail to darken the fixed world-only rectangle
+`[350,240)..[701,401)`. The production captures include the HUD, so the checker
+uses coordinates from the pinned layout, never a color-based exclusion mask.
+It requires the
+actual completed GPU captures; manifest validation alone cannot pass it.
+Add `--saturated SATURATED.png` to compare three exposed boundary profiles
+against daylight (the inventory covers the fourth). A difference above two
+sRGB codes fails; this catches a steep saturated edge despite successful
+rendering and capture.
+
+The `presentation-saturated` companion uses Q5.11 65535 on every tile and
+120-pixel-tall colored structural sprites one tile inside each of the four
+edges. It exposes saturation in the tone curve and verifies that structural
+sprites use their owning floor sample instead of changing brightness with
+screen height. It is deliberately a stress diagnostic; a zero golden hash
+does not establish that the brightness taper has passed visual review.
+
+The `edge-lighting` fixture isolates the smooth-lighting wire-window feather at
+south-edge distances zero, one, and two. It fills the 17-by-17 MAP2 window with
+neutral Q5.11 2048 floor samples, keeps the local player at the center, and uses
+widely separated 120-pixel structural markers for the three boundary rings.
+Regenerate its closed manifest and snapshot from the client directory with
+`python3 tools/generate_edge_lighting_fixture.py`. Run
+`atrinik --gpu-player-view src/tests/fixtures/player_view/edge-lighting.xml` on
+a qualified GPU lane. Its `type="edge-lighting"` JSONL rows report the full and
+retained phases, each marker's submitted foot and decoded sample row, structural
+and adjacent-ground probes, and asset counters. Separate
+`type="edge-lighting-vertex"` rows describe the four contributing light vertices
+through the visibility-redacted tile diagnostic. `lighting_key`, `albedo`, and
+`final_rgba` come from GPU readback; `sample_y` decodes the uploaded row selected
+by that key, and `cpu_reconstructed_light` reconstructs its light from the
+uploaded CPU row/span mirror. A passing diagnostic establishes correct owning-cell sampling,
+vertical marker consistency, no pending assets, and identical full/retained
+results. The zero expected-pixels hash requests measured diagnostic evidence
+and is not a calibrated cross-backend golden.
+
+The `floor-composition` fixture exercises night floor decorations through the
+normal MAP2 decoder and primary map painter. Empty movement packets scroll a
+persistent ITEM and FMASK out and back without resending their faces. Soft fog
+then revokes a remote actor's targeting metadata immediately and fades the ITEM
+at 0, 125, 249, and 250 ms. The tall analytic ITEM overlaps a still-visible dark
+floor pixel so its nearly transparent fog palette cannot conceal an accidental
+unlit background. Full and animation-retained draws must agree at every state.
+Intermediate final RGB must match encoded-RGBA source-over of the independently
+measured opaque fog sprite and expired-sprite background, within two code values.
+This is a composition regression, not a tone calibration change. Regenerate with
+`python3 tools/generate_floor_composition_fixture.py` and run
+`atrinik --gpu-player-view src/tests/fixtures/player_view/floor-composition.xml`.
+Its four `type="floor-composition"` JSONL rows contain final composed pixels;
+a single lighting-owner key cannot describe a mixed transparent pixel.
+
 These XML manifests preserve the pre-cutover renderer's viewport, logical map
 size, lighting mode, zoom behavior, clock, settings defaults, multipart geometry,
 MAP command, and every image by SHA-256. They are immutable inputs for schema
@@ -14,11 +82,11 @@ zero, +1, and +2.
 `content-provenance.json` is the machine-readable coordinate for this fixture
 family. It binds the static Classic `data/archdef.dat` input, the selected
 `atrinik/content@main` runtime release and manifest, the generated archetype
-artifact, and the worldmaker output boundary. The selected content coordinate
-is `v1.7.0` at
-`08e8bc869d5d727d3862997176a137275f349869`; the 2026-09-01 issue observation
-(`v1.5.0` at `b9580ce4b920644494a9912f6ea4f37b4a4e7aa6`) remains recorded as
-historical evidence.
+artifact, and the worldmaker output boundary. Read its `content.selected`
+record for the current release, commit, and artifact digests; the verified
+content updater derives that record from the selected runtime. The 2026-09-01
+issue observation (`v1.5.0` at `b9580ce4b920644494a9912f6ea4f37b4a4e7aa6`)
+remains recorded as historical evidence.
 
 `archdef.dat` is a static Classic client input. Worldmaker does not generate
 or replace it; its generated `client-maps` and `data/*.zz` outputs are
@@ -41,7 +109,10 @@ python3 tools/verify_gpu_fixture_provenance.py \
 The generated `gpu-qualification-town-25x25` snapshot supplies seven active
 depths, nearly three thousand ordered sprite layers, mixed owner depths,
 roof/door/exit/FOW and transform semantics, plus exactly 64 animated live
-actors through the normal MAP2 decoder. Its zero expected hash is an explicit
+actors through the normal MAP2 decoder. Exactly one actor (`0x47700000`) carries the MAP2 HP
+probe value 64, so the requested target overlay has a selected target as well
+as targetable actor identities. Actor identities alone do not select the HP
+overlay. The pixel hash remains an explicit
 pending-hardware marker: qualified runs record `golden_verified:false` until
 reviewers approve and pin the cross-backend rendering contract.
 
@@ -276,11 +347,24 @@ rejection avoids mask allocation when no actor is occluded.
 `tools/generate_living_outline_fixtures.py` recreates every snapshot.
 
 The centered visibility-fade scene places authoritative item, living, and
-effect records on the MAP2 player cell. Its normal 320-by-240 player-view run
+effect records on the MAP2 player cell. Its normal 1024-by-640 player-view run
 advances the presentation clock and asserts that current records remain at
 full alpha, while the local player cannot enter a presentation fade. It then
 expires one revoked item to its zero-alpha generation tombstone and verifies
 that authoritative re-entry interpolates from zero instead of snapping opaque.
+Its GPU manifest uses `visibility-fade-retained.map2.hex`, which preserves the
+center records and adds 168 static floor neighbors within the same 13-by-13
+wire window. The subsequent retained-cohort insertion/deletion check must reuse
+actual unchanged commands; the original single-cell scene had none and could
+never satisfy that assertion. The original `visibility-fade-centered.map2.hex`
+remains unchanged as historical input. Its archived software pixel hash remains
+in the manifest's Git history and is not asserted for the expanded scene.
+The viewport leaves the center world cell exposed within the real HUD layout;
+the former 320-by-240 viewport allowed HUD panels to obscure every changed
+sprite. The logical look size remains 9-by-9, which negotiates the fixture's
+13-by-13 wire window including two overscan tiles on each side. Deletion must
+still change the actual completed-frame hash, and restoring the settled
+opaque records must reproduce the initial hash.
 
 The remembered-floor smooth and discrete scenes first authorize a zero-radiance
 floor beside a zero-radiance local actor, then soft-clear only that floor cell.
@@ -327,3 +411,58 @@ the explicit non-primary regression scene, these are pixel-exact references for
 the completed map output. `/screenshot map` asynchronously enqueues an explicit
 GPU readback of that map-widget rectangle and polls its fence on later client
 iterations; PNG encoder metadata is deliberately excluded.
+
+The `ground-coverage` fixture uses the closed `ground-coverage-test` switch to
+exercise an L-shaped hole, an isolated known floor, a one-cell corridor, and
+missing diagonal cells through the production MAP2 decoder and map painter.
+Its three boundary probes must have decreasing, nonzero coverage matching an
+independent pixel-center topology calculation. Actual GPU RGB must equal the
+CPU tone/LUT result multiplied by coverage with round-half-up division by 255;
+alpha stays opaque. An interior floor stays at full coverage, island/corridor
+centers remain visibly lit, and an unknown tile has neither remembered geometry
+nor a nonblack framebuffer pixel. FMASK receives coverage; actor, wall, and roof
+commands and pixels retain full coverage.
+
+Complete framebuffer comparisons require exact full/retained parity, an
+unchanged full rebuild, and SAME scroll-out/back parity. Normal light-only
+scalar/RGB and hue-only packets must change illumination without changing
+coverage or creating a floor. A layer-only exploration packet must increase
+coverage without changing the sampled light. Soft FOW must retain the explored
+floor and its coverage. Light, exploration, and FOW updates draw retained first,
+then compare every framebuffer pixel with a full rebuild, so full publication
+cannot mask missed retained invalidation. Changed retained draws must reuse
+commands; exploration must also compile newly exposed floor commands. Stable
+retained draws must compile zero commands. Scrolling changes the projection
+origin, which requires a full draw before checking stable retained parity.
+The immutable original snapshot is restored before the harness's
+remaining comparisons. The pending backend golden does not waive these
+semantic and pixel assertions. The floor-composition fixture additionally
+checks the expired-item background against CPU tone multiplied by coverage.
+
+The `soft-clear-fade` fixture exercises ordinary `MAP2_MASK_CLEAR` independently
+of the structural-FOW fixture. Its dim colored field contains distinct ITEM,
+ITEM2, and named nonlocal LIVING markers. It first captures each fully opaque,
+authorized contributor and verifies its actual GPU pixel against CPU tone/LUT
+lighting. The first soft-clear frame must preserve the previously displayed
+pixel exactly. At 125, 249, and 250 ms the marker fades through opacity 127, 1,
+and 0. Intermediate pixels must match encoded-RGBA blending of the pre-clear
+contributor with an independently captured expired background; a recolored FOW
+pixel is never accepted as the contributor reference.
+
+Seven immutable-snapshot replays cover an ordinary clear, hidden scalar/RGB
+updates after clearing, clear and hidden light in one publication, SAME scroll,
+revocation during half-complete actor entry, authored ITEM alpha 80, and an
+identical positive actor publication followed by a rejected truncated packet.
+The alpha-80 case pins the existing minimum-of-authored-and-visibility rule;
+its effective opacity remains 80 at visibility 127. The partial-entry actor
+starts its disappearance at 128 and proceeds through 64, 1, and 0 without
+multiplying entry opacity twice. Hidden samples and player-field movement may
+change the background but cannot relight the saved contributor. Actor identity,
+name, and probe are revoked immediately, and fogged lighting diagnostics stay
+redacted. Re-entry under a new blue sample must discard the old warm result.
+
+Every changed scene is drawn retained first and compared pixel-for-pixel with
+a full rebuild; a changed scroll origin requires a full draw before its stable
+retained comparison. The helper restores its clock and the harness republishes
+the original snapshot before subsequent fixture checks. Its pending backend
+golden does not bypass these independent semantic and framebuffer assertions.

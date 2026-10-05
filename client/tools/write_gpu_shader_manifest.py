@@ -14,7 +14,9 @@ STAGES = (
     "final_vertex",
     "light_fragment",
     "light_vertex",
+    "world_clear_fragment",
     "world_fragment",
+    "world_transparent_fragment",
     "world_vertex",
 )
 FORMATS = ("dxil", "msl", "spv")

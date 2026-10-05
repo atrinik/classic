@@ -24,11 +24,10 @@ class GpuFixtureProvenanceTests(unittest.TestCase):
     def test_bound_fixture_and_content_coordinate_pass(self) -> None:
         result = verify(ROOT.parent)
 
-        self.assertEqual("v1.7.0", result["content_coordinate"]["tag"])
-        self.assertEqual(
-            "08e8bc869d5d727d3862997176a137275f349869",
-            result["content_coordinate"]["commit"],
-        )
+        selected = next(entry for entry in load_json(LOCK)["dependencies"]
+                        if entry["name"] == "content")
+        self.assertEqual(selected["tag"], result["content_coordinate"]["tag"])
+        self.assertEqual(selected["commit"], result["content_coordinate"]["commit"])
         self.assertEqual(
             "977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e",
             result["archdef"]["sha256"],

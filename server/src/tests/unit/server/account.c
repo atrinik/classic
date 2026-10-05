@@ -20,6 +20,7 @@
 #include <toolkit/packet.h>
 #include <initialization.h>
 #include <player.h>
+#include <object.h>
 #include <toolkit/path.h>
 #include <toolkit/datetime.h>
 
@@ -245,6 +246,68 @@ START_TEST(test_account_provision_lighting_preset) {
 }
 END_TEST
 
+START_TEST(test_account_provision_brynknot_idle_preserves_clock_and_existing_player) {
+    const char *account_name = "scenariobrynknot";
+    const char *character_name = "Scenario Brynknot";
+    char error[HUGE_BUF];
+    char password_path[HUGE_BUF];
+    snprintf(VS(password_path), "%s/scenario-brynknot-password", settings.datapath);
+    char *account_path = account_make_path(account_name);
+    char *player_path = player_make_path(character_name, "player.dat");
+    char *metrics_path = player_make_path(character_name, "metrics.dat");
+    unlink(account_path);
+    unlink(player_path);
+    unlink(metrics_path);
+    unlink(password_path);
+    const char password[] = "local-brynknot-9!\n";
+    ck_assert_int_eq(path_secret_create_atomic(password_path, password, sizeof(password) - 1),
+                     PATH_SECRET_CREATE_OK);
+    unsigned long previous_hour = todtick;
+    ck_assert_msg(account_provision_from_file(account_name,
+                                               password_path,
+                                               character_name,
+                                               "human_male",
+                                               "brynknot-idle",
+                                               VS(error)),
+                  "%s", error);
+    ck_assert_uint_eq(todtick, previous_hour);
+    FILE *fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    char contents[HUGE_BUF * 4];
+    size_t length = fread(contents, 1, sizeof(contents) - 1, fp);
+    ck_assert(!ferror(fp));
+    contents[length] = '\0';
+    fclose(fp);
+    ck_assert_ptr_nonnull(strstr(contents, "map /shattered_islands/world_0_70\n"));
+    ck_assert_ptr_nonnull(strstr(contents, "bed_x 20\nbed_y 8\n"));
+    ck_assert_ptr_nonnull(strstr(contents, "x 20\ny 8\n"));
+    ck_assert_ptr_null(strstr(contents, "arch mithril_lamp"));
+    ck_assert(!account_provision_from_file(account_name,
+                                           password_path,
+                                           character_name,
+                                           "human_male",
+                                           "brynknot-idle",
+                                           VS(error)));
+    ck_assert_ptr_nonnull(strstr(error, "cannot reserve"));
+    fp = fopen(player_path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    char retained[sizeof(contents)];
+    size_t retained_length = fread(retained, 1, sizeof(retained), fp);
+    ck_assert(!ferror(fp));
+    fclose(fp);
+    ck_assert_uint_eq(retained_length, length);
+    ck_assert_int_eq(memcmp(contents, retained, length), 0);
+    ck_assert_uint_eq(todtick, previous_hour);
+    ck_assert_int_eq(unlink(account_path), 0);
+    ck_assert_int_eq(unlink(player_path), 0);
+    unlink(metrics_path);
+    ck_assert_int_eq(unlink(password_path), 0);
+    free(account_path);
+    free(player_path);
+    free(metrics_path);
+}
+END_TEST
+
 START_TEST(test_account_provision_lighting_preset_rolls_back) {
     const char *account_name = "ScenarioRollback";
     const char *account_name_canonical = "scenariorollback";
@@ -425,7 +488,7 @@ START_TEST(test_exploration_failed_save_retried) {
     ck_assert(exploration_mark(&ns, "/world", 1, 1, 0, 0));
     /* Block the atomic rename with a directory, after successful empty load. */
     ck_assert_int_eq(mkdir(path, 0700), 0);
-    exploration_end(&ns);
+    ck_assert(!exploration_end_checked(&ns));
     socket_buffer_clear(&ns);
     ck_assert_int_eq(rmdir(path), 0);
     exploration_begin(&ns);
@@ -438,6 +501,23 @@ START_TEST(test_exploration_failed_save_retried) {
     exploration_end(&ns);
     socket_buffer_clear(&ns);
     unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_shutdown_propagates_detached_save_failure) {
+    char *path = exploration_test_path("exploreshutdown");
+    unlink(path);
+    socket_struct ns = {.state = ST_PLAYING, .account = "exploreshutdown"};
+    exploration_begin(&ns);
+    ck_assert(exploration_mark(&ns, "/world", 1, 1, 0, 0));
+    ck_assert_int_eq(mkdir(path, 0700), 0);
+    ck_assert(!exploration_end_checked(&ns));
+    ck_assert_ptr_null(ns.exploration);
+    socket_buffer_clear(&ns);
+    ck_assert(!exploration_shutdown_checked());
+    ck_assert(exploration_shutdown_checked()); /* Empty cleanup remains idempotent. */
+    ck_assert_int_eq(rmdir(path), 0);
     free(path);
 }
 END_TEST
@@ -680,6 +760,56 @@ START_TEST(test_exploration_ten_thousand_maps) {
 }
 END_TEST
 
+START_TEST(test_checked_logout_propagates_save_failures) {
+    const char *account_name = "shutdownproof";
+    const char *character_name = "Shutdown Proof";
+    char error[HUGE_BUF];
+    char *account_path = account_make_path(account_name);
+    char *player_path = player_make_path(character_name, "player.dat");
+    unlink(account_path);
+    unlink(player_path);
+    ck_assert(account_provision(account_name,
+                                "local-test-7!",
+                                character_name,
+                                "human_male",
+                                VS(error)));
+    object *ob = player_get_dummy(character_name, NULL);
+    player *pl = CONTR(ob);
+    free(pl->cs->account);
+    pl->cs->account = xstrdup(account_name);
+    char *exploration_path = exploration_test_path(account_name);
+    unlink(exploration_path);
+    if (_i == 4) {
+        exploration_begin(pl->cs);
+        ck_assert(exploration_mark(pl->cs, "/world", 1, 1, 0, 0));
+        ck_assert_int_eq(mkdir(exploration_path, 0700), 0);
+    }
+
+    /* These independent failures must survive the logout cleanup. */
+    player_save_fail_for_test(_i == 1);
+    account_fail_saves_for_test(_i == 2);
+    if (_i == 3) {
+        pl->metrics_load_failed = true;
+    }
+    ck_assert_int_eq(player_disconnect_all_checked(), _i == 0);
+    ck_assert_ptr_null(first_player);
+    player_save_fail_for_test(false);
+    account_fail_saves_for_test(false);
+    ck_assert(player_disconnect_all_checked());
+    if (_i == 4) {
+        ck_assert_int_eq(rmdir(exploration_path), 0);
+    }
+    ck_assert(exploration_shutdown_checked());
+    unlink(exploration_path);
+    free(exploration_path);
+
+    ck_assert_int_eq(unlink(account_path), 0);
+    ck_assert_int_eq(unlink(player_path), 0);
+    free(account_path);
+    free(player_path);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("account");
     TCase *tc_core = tcase_create("Core");
@@ -687,11 +817,13 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_set_timeout(tc_core, 30);
+    tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 5);
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_exploration_account_round_trip);
     tcase_add_test(tc_core, test_exploration_bounds_and_stable_layout);
     tcase_add_test(tc_core, test_exploration_corrupt_file_preserved);
     tcase_add_test(tc_core, test_exploration_failed_save_retried);
+    tcase_add_test(tc_core, test_exploration_shutdown_propagates_detached_save_failure);
     tcase_add_test(tc_core, test_exploration_snapshot_batches);
     tcase_add_test(tc_core, test_exploration_reconciliation_is_sparse_and_never_grants_bits);
     tcase_add_test(tc_core, test_exploration_reconciliation_rejects_malformed_requests);
@@ -700,6 +832,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);
     tcase_add_test(tc_core, test_account_provision_lighting_preset);
+    tcase_add_test(tc_core, test_account_provision_brynknot_idle_preserves_clock_and_existing_player);
     tcase_add_test(tc_core, test_account_provision_lighting_preset_rolls_back);
     return s;
 }

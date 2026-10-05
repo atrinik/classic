@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,6 +30,7 @@
 #include <global.h>
 
 #include <content_benchmark.h>
+#include <walking_route.h>
 #include <initialization.h>
 #include <map.h>
 #include <swap.h>
@@ -200,6 +201,9 @@ static bool benchmark_map(const char *path) {
 }
 
 int content_benchmark_run(void) {
+    if (strcmp(settings.content_benchmark_maps, "brynknot-v1") == 0) {
+        return walking_route_export();
+    }
     char maps[CONTENT_BENCHMARK_MAX_MAPS][MAX_BUF];
     size_t map_count = parse_map_ids(settings.content_benchmark_maps, maps);
     if (map_count == 0) {

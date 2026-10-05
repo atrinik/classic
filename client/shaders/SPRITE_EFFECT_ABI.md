@@ -15,7 +15,7 @@ words in the metadata/timing lane. `abi_version` is `1` for this contract.
 | `modulation` | Straight-alpha RGBA modulation, normalized to `[0, 1]`; alpha is multiplicative. |
 | `effect_flags` | Versioned feature bits. Color modes are mutually exclusive; overlay and transform bits may combine. |
 | `texture_flags` | Exactly one atlas/standalone bit, exactly one straight/premultiplied alpha bit, plus source color-key provenance, nearest filtering, and clamp-to-edge policy. |
-| `lighting_key` | Existing compact light-row key, including projected-light encoding; the default is the explicit unlit value. It is presentation-only and does not grant visibility. |
+| `lighting_key` | Compact light-row key, including projected-light and ground-coverage flags; the default is the explicit unlit value. It is presentation-only and does not grant visibility. |
 | `owner_depth` | Opaque semantic owner/depth bytes for later lighting/mask consumers; unset bytes are `0xff`. High bits are zero. |
 | `texture_metadata` | Texture texel size followed by the UV inset used to keep samples inside the visible source rectangle. Current nearest uploads use a half-texel inset. |
 | `transform` | Rotation in radians, nonuniform x/y scale, and a reserved scalar. A zero/default instance has no transform. |
@@ -34,6 +34,38 @@ the resource rules below. Texture bits are `ATLAS` (0), `STANDALONE` (1),
 `NEAREST` (5), and `CLAMP_EDGE` (6). Exactly one storage bit and one alpha
 representation bit must be set. `owner_depth` packs owner in bits 0-7 and
 depth in bits 8-15; bits 16-31 are zero.
+
+The compact lighting key uses value bits 0-18, projected-owner flag bit 19,
+ground-coverage flag bit 20, and frozen-projected flag bit 21. Only explicitly eligible projected ground
+instances set coverage; setting the draw owner resets that eligibility. When
+resolving a projected owner to its row, the shader preserves the coverage flag.
+Walls, actors, roofs, and other structural owners retain their ordinary light.
+
+The 112-byte light quad stores nine coverage bytes in its existing trailing
+three words (`owner_padding.yzw`), least-significant byte first, with unused
+bytes zero. Samples form a 3-by-3 grid in U=x, V=y order at 0, 1/2, and 1 of
+the center-to-center quad. Coverage follows the selected light quads through
+row/span interpolation and multiplies the tone-mapped RGB with round-half-up
+division by 255. It preserves contributor alpha and opaque painter rank.
+Full coverage is exactly the previous result; legacy quad callers submit nine
+255 samples. Coverage changes invalidate retained lighting through the whole
+quad record without adding textures or per-depth pixel buffers.
+
+A frozen projected contributor uses a contiguous compact row run instead of a
+current physical-owner lookup. Its key value is the first encoded row;
+`effect_parameters.z` is the signed destination row origin and `.w` is the row
+count. These slots retain their ordinary effect meaning for other instances.
+Projected-owner and frozen-projected flags are mutually exclusive. The shader
+checks the signed row offset before selecting an encoded row and preserves the
+ground-coverage flag. The instance remains 144 bytes.
+
+Frozen light rows use the first spare row word as a signed X sample offset.
+Their source row Y, span endpoints, radiance, and quad coordinates stay frozen;
+scrolling changes the offset and projected run origin. Receipt-only quads use
+owner `UINT32_MAX` and are excluded from both current-owner spatial bucket
+passes. Referenced quads/span ranges are copied once per source index per map
+build. Rows with no spans preserve a special unlit/dark/transparent key in the
+second spare word. Row, span, and quad strides remain unchanged.
 
 ## Effect ownership matrix
 

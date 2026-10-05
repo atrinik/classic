@@ -43,7 +43,8 @@ struct WorldVertexOutput {
 
 cbuffer WorldVertexUniforms : register(b0, space1) {
     float2 world_viewport;
-    float2 world_vertex_padding;
+    float world_order_base;
+    float world_order_scale;
 };
 
 #define GPU_SPRITE_ABI_FLOAT4(_name) float4 _name;
@@ -89,7 +90,7 @@ WorldVertexOutput world_vertex(uint vertex_id : SV_VertexID, uint instance_id : 
     WorldVertexOutput output;
     output.position = float4(pixel.x * 2.0 / world_viewport.x - 1.0,
                              1.0 - pixel.y * 2.0 / world_viewport.y,
-                             0.0,
+                             (world_order_base + float(instance_id)) * world_order_scale,
                              1.0);
     float2 uv_min = instance.uv.xy + instance.texture_metadata.zw;
     float2 uv_max = instance.uv.xy + instance.uv.zw - instance.texture_metadata.zw;
@@ -112,6 +113,8 @@ SamplerState world_sampler : register(s0, space2);
 StructuredBuffer<uint> world_projected_light_rows : register(t1, space2);
 
 static const uint WORLD_PROJECTED_LIGHT_FLAG = 524288u;
+static const uint WORLD_GROUND_COVERAGE_FLAG = 1048576u;
+static const uint WORLD_FROZEN_PROJECTED_FLAG = 2097152u;
 static const uint WORLD_PROJECTED_LIGHT_OWNER_MASK = 15u;
 static const uint WORLD_LIGHT_OWNER_COUNT = 13u;
 
@@ -120,7 +123,7 @@ struct WorldFragmentOutput {
     uint lighting_key : SV_Target1;
 };
 
-WorldFragmentOutput world_fragment(WorldVertexOutput input) {
+float4 world_color(WorldVertexOutput input) {
     float4 color = world_texture.Sample(world_sampler, input.uv);
     if ((input.texture_flags & SPRITE_TEXTURE_PREMULTIPLIED_ALPHA) != 0u) {
         color.rgb = color.a > 0.0 ? color.rgb / color.a : float3(0.0, 0.0, 0.0);
@@ -150,15 +153,43 @@ WorldFragmentOutput world_fragment(WorldVertexOutput input) {
     if (color.a <= 0.0) {
         discard;
     }
-    WorldFragmentOutput output;
-    output.albedo = color;
+    return color;
+}
+
+uint world_lighting_key(WorldVertexOutput input) {
+    if ((input.lighting_key & WORLD_FROZEN_PROJECTED_FLAG) != 0u) {
+        int row = int(input.position.y) - int(input.effect_parameters.z);
+        if (row < 0 || row >= int(input.effect_parameters.w)) {
+            return 0u;
+        }
+        return ((input.lighting_key & 524287u) + uint(row)) |
+               (input.lighting_key & WORLD_GROUND_COVERAGE_FLAG);
+    }
     if ((input.lighting_key & WORLD_PROJECTED_LIGHT_FLAG) != 0u) {
         uint owner = input.lighting_key & WORLD_PROJECTED_LIGHT_OWNER_MASK;
         uint row = uint(input.position.y);
-        output.lighting_key = world_projected_light_rows[row * WORLD_LIGHT_OWNER_COUNT + owner];
-    } else {
-        output.lighting_key = input.lighting_key;
+        return world_projected_light_rows[row * WORLD_LIGHT_OWNER_COUNT + owner] |
+               (input.lighting_key & WORLD_GROUND_COVERAGE_FLAG);
     }
+    return input.lighting_key;
+}
+
+WorldFragmentOutput world_fragment(WorldVertexOutput input) {
+    float4 color = world_color(input);
+    if (color.a < 1.0) {
+        discard;
+    }
+    WorldFragmentOutput output;
+    output.albedo = color;
+    output.lighting_key = world_lighting_key(input);
+    return output;
+}
+
+/* Used with a zero-depth fullscreen triangle pair and a damage scissor. */
+WorldFragmentOutput world_clear_fragment() {
+    WorldFragmentOutput output;
+    output.albedo = float4(0.0, 0.0, 0.0, 0.0);
+    output.lighting_key = 0u;
     return output;
 }
 
@@ -338,7 +369,26 @@ bool final_light_triangle(LightQuad quad,
     return true;
 }
 
-uint4 final_light_load(uint quad_id, int2 position) {
+uint final_ground_coverage_sample(LightQuad quad, uint index) {
+    return (quad.owner_padding[1u + index / 4u] >> ((index % 4u) * 8u)) & 255u;
+}
+
+uint final_ground_coverage(LightQuad quad, uint u, uint v, uint area) {
+    /* Split the center-to-center quad into four half-cell patches. The
+     * middle samples can be zero even when diagonally opposite cells are
+     * known; an ordinary four-corner bilinear would bridge that boundary. */
+    uint column = u * 2u >= area ? 1u : 0u;
+    uint row = v * 2u >= area ? 1u : 0u;
+    uint first = row * 3u + column;
+    uint4 values = uint4(final_ground_coverage_sample(quad, first),
+                          final_ground_coverage_sample(quad, first + 1u),
+                          final_ground_coverage_sample(quad, first + 4u),
+                          final_ground_coverage_sample(quad, first + 3u));
+    return light_bilinear(values, u * 2u - column * area, v * 2u - row * area, area);
+}
+
+uint4 final_light_load(uint quad_id, int2 position, bool use_coverage, out uint coverage) {
+    coverage = 255u;
     LightQuad quad = final_light_quads[quad_id];
     int2 point_twice = position * 2 + 1;
     uint u;
@@ -365,11 +415,19 @@ uint4 final_light_load(uint quad_id, int2 position) {
                     distance = candidate;
                 }
             }
+            if (use_coverage) {
+                uint corner_sample = closest == 0u ? 0u : closest == 1u ? 2u :
+                                     closest == 2u ? 8u : 6u;
+                coverage = final_ground_coverage_sample(quad, corner_sample);
+            }
             return uint4(quad.scalar[closest],
                          quad.red[closest],
                          quad.green[closest],
                          quad.blue[closest]);
         }
+    }
+    if (use_coverage) {
+        coverage = final_ground_coverage(quad, u, v, area);
     }
     return uint4(light_bilinear(quad.scalar, u, v, area),
                  light_bilinear(quad.red, u, v, area),
@@ -377,7 +435,8 @@ uint4 final_light_load(uint quad_id, int2 position) {
                  light_bilinear(quad.blue, u, v, area));
 }
 
-uint4 final_light_horizontal(uint offset, uint count, int row_y, int x) {
+uint4 final_light_horizontal(uint offset, uint count, int row_y, int x,
+                             bool use_coverage, out uint coverage) {
     /* Find the first span whose left edge is strictly right of x. Rows are
      * emitted in increasing, non-overlapping x order, so this is also the
      * split between the nearest left and right samples. */
@@ -395,47 +454,55 @@ uint4 final_light_horizontal(uint offset, uint count, int row_y, int x) {
     uint right = low;
     if (right == 0u) {
         LightSpan span = final_light_spans[offset];
-        return final_light_load(span.quad, int2(span.first_x, row_y));
+        return final_light_load(span.quad, int2(span.first_x, row_y), use_coverage, coverage);
     }
     uint left = right - 1u;
     LightSpan left_span = final_light_spans[offset + left];
     if (x <= left_span.last_x) {
-        return final_light_load(left_span.quad, int2(x, row_y));
+        return final_light_load(left_span.quad, int2(x, row_y), use_coverage, coverage);
     }
     if (right == count) {
         LightSpan span = left_span;
-        return final_light_load(span.quad, int2(span.last_x, row_y));
+        return final_light_load(span.quad, int2(span.last_x, row_y), use_coverage, coverage);
     }
     LightSpan right_span = final_light_spans[offset + right];
-    uint4 left_light = final_light_load(left_span.quad, int2(left_span.last_x, row_y));
-    uint4 right_light = final_light_load(right_span.quad, int2(right_span.first_x, row_y));
+    uint left_coverage;
+    uint right_coverage;
+    uint4 left_light = final_light_load(left_span.quad, int2(left_span.last_x, row_y),
+                                        use_coverage, left_coverage);
+    uint4 right_light = final_light_load(right_span.quad, int2(right_span.first_x, row_y),
+                                         use_coverage, right_coverage);
     uint divisor = uint(right_span.first_x - left_span.last_x);
     uint progress = uint(x - left_span.last_x);
+    coverage = light_extrapolate(left_coverage, right_coverage, progress, divisor);
     return uint4(light_extrapolate(left_light.x, right_light.x, progress, divisor),
                  light_extrapolate(left_light.y, right_light.y, progress, divisor),
                  light_extrapolate(left_light.z, right_light.z, progress, divisor),
                  light_extrapolate(left_light.w, right_light.w, progress, divisor));
 }
 
-uint4 final_light_row(uint row_id, int x) {
+uint4 final_light_row(uint row_id, int x, bool use_coverage, out uint coverage) {
     LightRow row = final_light_rows[row_id];
-    uint4 upper = final_light_horizontal(row.upper_offset, row.upper_count, row.upper_y, x);
+    x += asint(row.padding.x);
+    uint4 upper = final_light_horizontal(row.upper_offset, row.upper_count, row.upper_y, x,
+                                         use_coverage, coverage);
     if (row.upper_y == row.lower_y) {
         return upper;
     }
-    uint4 lower = final_light_horizontal(row.lower_offset, row.lower_count, row.lower_y, x);
+    uint lower_coverage;
+    uint4 lower = final_light_horizontal(row.lower_offset, row.lower_count, row.lower_y, x,
+                                         use_coverage, lower_coverage);
     uint divisor = uint(row.lower_y - row.upper_y);
     uint progress = uint(clamp(row.sample_y, row.upper_y, row.lower_y) - row.upper_y);
+    coverage = light_extrapolate(coverage, lower_coverage, progress, divisor);
     return uint4(light_extrapolate(upper.x, lower.x, progress, divisor),
                  light_extrapolate(upper.y, lower.y, progress, divisor),
                  light_extrapolate(upper.z, lower.z, progress, divisor),
                  light_extrapolate(upper.w, lower.w, progress, divisor));
 }
 
-float4 final_fragment(FinalVertexOutput input) : SV_Target0 {
-    uint key = final_lighting_key_load(int2(input.position.xy));
+float4 light_contributor(float4 albedo, uint key, int x) {
     uint encoded_quad = key & 524287u;
-    float4 albedo = final_albedo.Sample(final_sampler, input.uv);
     if (encoded_quad == 0u) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
@@ -445,12 +512,40 @@ float4 final_fragment(FinalVertexOutput input) : SV_Target0 {
     if (encoded_quad == 524286u) {
         return float4(0.0, 0.0, 0.0, albedo.a);
     }
-    uint4 light = final_light_row(encoded_quad - 1u, int(input.position.x));
+    LightRow row = final_light_rows[encoded_quad - 1u];
+    if (row.upper_count == 0u && row.lower_count == 0u) {
+        if (row.padding.y == 0u) {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        return row.padding.y == 524287u ? albedo : float4(0.0, 0.0, 0.0, albedo.a);
+    }
+    bool use_coverage = (key & WORLD_GROUND_COVERAGE_FLAG) != 0u;
+    uint coverage;
+    uint4 light = final_light_row(encoded_quad - 1u, x, use_coverage, coverage);
     uint4 source = uint4(floor(saturate(albedo) * 255.0 + 0.5));
     uint3 lit = uint3(final_channel(source.r, light.x, light.y),
                       final_channel(source.g, light.x, light.z),
                       final_channel(source.b, light.x, light.w));
+    /* Coverage darkens the completed display sample without making ground
+     * transparent or exposing a lower physical plane. */
+    if (use_coverage) {
+        lit = (lit * coverage + 127u) / 255u;
+    }
     return float4(float3(lit) / 255.0, albedo.a);
+}
+
+float4 final_fragment(FinalVertexOutput input) : SV_Target0 {
+    return light_contributor(final_albedo.Sample(final_sampler, input.uv),
+                             final_lighting_key_load(int2(input.position.xy)),
+                             int(input.position.x));
+}
+
+float4 world_transparent_fragment(WorldVertexOutput input) : SV_Target0 {
+    float4 color = world_color(input);
+    if (color.a >= 1.0) {
+        discard;
+    }
+    return light_contributor(color, world_lighting_key(input), int(input.position.x));
 }
 
 StructuredBuffer<LightQuad> vertex_light_quads : register(t0, space0);

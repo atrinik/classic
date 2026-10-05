@@ -18,7 +18,7 @@
 
 typedef struct widgetdata widgetdata;
 
-#define RENDER_PROFILER_STATISTICS_VERSION UINT8_C(5)
+#define RENDER_PROFILER_STATISTICS_VERSION UINT8_C(6)
 
 /** Timed portions of the client frame and map renderer. */
 typedef enum render_profile_stage {
@@ -43,6 +43,7 @@ typedef enum render_profile_stage {
     RENDER_PROFILE_MAP_SPRITE_EFFECTS,
     RENDER_PROFILE_MAP_HINT_REPLAY,
     RENDER_PROFILE_MAP_UI,
+    RENDER_PROFILE_MAP_LIGHT_ROWS,
 
     RENDER_PROFILE_STAGE_NUM
 } render_profile_stage_t;

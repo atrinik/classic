@@ -21,6 +21,9 @@ set(SOURCES
 	src/client/item_packet.c
 	src/client/join_credentials.c
 	src/client/keepalive.c
+	src/client/live_movement.c
+	src/client/live_movement_capture.c
+	src/client/live_movement_route.c
 	src/client/keybind.c
 	src/client/keybind_event.c
 	src/client/keybind_input.c
@@ -61,6 +64,9 @@ set(SOURCES
 	src/client/updates.c
 	src/client/user_data.c
 	src/client/video.c
+	src/client/video_recording.c
+	src/client/video_encoder.c
+	src/client/video_avi.c
 	src/client/window_title.c
 	src/client/wrapper.c
 	src/events/event.c

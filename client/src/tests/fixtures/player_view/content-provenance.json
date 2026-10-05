@@ -17,19 +17,19 @@
     "selected": {
       "repository": "atrinik/content",
       "branch": "main",
-      "tag": "v1.7.0",
-      "commit": "08e8bc869d5d727d3862997176a137275f349869",
-      "release_version": "1.7.0",
+      "tag": "v1.9.0",
+      "commit": "d5fc39f1dcb8b031b3302d499c59975a548849b9",
+      "release_version": "1.9.0",
       "artifact": {
         "content_format": "classic-ads-v1",
         "format": "atrinik-classic-runtime-content-v1",
-        "url": "https://github.com/atrinik/content/releases/download/v1.7.0/atrinik-content-1.7.0-classic-runtime.tar.gz",
-        "sha256": "3425a0884fad98b96c72611292e30e7cca637acede3c296c4f06cc3f9e842ca4",
+        "url": "https://github.com/atrinik/content/releases/download/v1.9.0/atrinik-content-1.9.0-classic-runtime.tar.gz",
+        "sha256": "b65d1ce2efacbc7c77a1ec5df71e7287abecc263d92a844c621d2d9229aaf1ae",
         "manifest": {
           "path": "manifest.json",
-          "sha256": "1d4dc971b30256f9ec86b65f783bf30578fe781408fef5a58965c8b91e42b5d4",
-          "size": 750018,
-          "files_sha256": "77d2a157470d984f516f89dc5af2d3577d9be48c864b0bfdc56f77bff8742837"
+          "sha256": "956e753ab2af30d0ddd967c8e2f5fbc5ab243e2e55373e309e675ad4d17d0646",
+          "size": 750011,
+          "files_sha256": "29d6f97bddfe04fd132f37a75b3d32df02ca07f4279258d1f40976504185da90"
         },
         "archetypes": {
           "path": "lib/archetypes",
@@ -39,10 +39,10 @@
       },
       "runtime_manifests": [
         {
-          "release_version": "1.7.0",
-          "sha256": "1d4dc971b30256f9ec86b65f783bf30578fe781408fef5a58965c8b91e42b5d4",
-          "size": 750018,
-          "files_sha256": "77d2a157470d984f516f89dc5af2d3577d9be48c864b0bfdc56f77bff8742837"
+          "release_version": "1.9.0",
+          "sha256": "956e753ab2af30d0ddd967c8e2f5fbc5ab243e2e55373e309e675ad4d17d0646",
+          "size": 750011,
+          "files_sha256": "29d6f97bddfe04fd132f37a75b3d32df02ca07f4279258d1f40976504185da90"
         }
       ]
     },
