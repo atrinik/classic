@@ -87,6 +87,7 @@ docker run --rm \
   --network none \
   --env ATRINIK_GPU_CONFORMANCE_DRIVER=vulkan \
   --env ATRINIK_GPU_CONFORMANCE_REQUIRED=1 \
+  --env ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY=build/linux-coverage/review \
   --env SDL_VIDEODRIVER=x11 \
   --env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
   --env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
@@ -94,11 +95,13 @@ docker run --rm \
   --workdir "${compiled_home}" \
   "${gpu_image}" \
   sh -c "xvfb-run -a sh -c 'set -eu; \
+    mkdir -p build/linux-coverage/review; \
     ./build/linux-coverage/client-gpu-renderer-integration-tests; \
     ./build/linux-coverage/atrinik --gpu-player-view \
       src/tests/fixtures/player_view/gpu-ui-closure.xml \
       > build/linux-coverage/gpu-ui-closure.jsonl; \
-    if ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH=intro_server_browser \
+    if ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY= \
+      ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH=intro_server_browser \
       ./build/linux-coverage/atrinik --gpu-player-view \
         src/tests/fixtures/player_view/gpu-ui-closure.xml >/dev/null 2>&1; then \
       echo GPU UI closure accepted a suppressed root glyph >&2; \
