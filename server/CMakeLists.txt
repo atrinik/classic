@@ -100,42 +100,6 @@ function(atrinik_configure_target target)
     endif ()
 endfunction()
 
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.lock.json"
-    ATRINIK_SOURCE_LOCK)
-string(JSON ATRINIK_SOURCE_LOCK_SCHEMA ERROR_VARIABLE lock_error
-    GET "${ATRINIK_SOURCE_LOCK}" schema_version)
-if (lock_error OR NOT ATRINIK_SOURCE_LOCK_SCHEMA EQUAL 1)
-    message(FATAL_ERROR "cmake/dependencies.lock.json has an unsupported schema")
-endif ()
-
-function(atrinik_fetch_source name expected_repository expected_archive)
-    foreach (field IN ITEMS repository tag commit url sha256)
-        string(JSON dependency_${field} ERROR_VARIABLE lock_error
-            GET "${ATRINIK_SOURCE_LOCK}" dependencies ${name} ${field})
-        if (lock_error OR dependency_${field} STREQUAL "")
-            message(FATAL_ERROR "Source dependency ${name}.${field} is missing")
-        endif ()
-    endforeach ()
-    string(REGEX REPLACE "^v" "" dependency_version "${dependency_tag}")
-    set(expected_url
-        "https://github.com/${expected_repository}/releases/download/${dependency_tag}/${expected_archive}-${dependency_version}.tar.gz")
-    string(LENGTH "${dependency_commit}" commit_length)
-    string(LENGTH "${dependency_sha256}" digest_length)
-    if (NOT dependency_repository STREQUAL expected_repository OR
-            NOT dependency_tag MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+$" OR
-            NOT dependency_commit MATCHES "^[0-9a-f]+$" OR
-            NOT commit_length EQUAL 40 OR
-            NOT dependency_url STREQUAL expected_url OR
-            NOT dependency_sha256 MATCHES "^[0-9a-f]+$" OR
-            NOT digest_length EQUAL 64)
-        message(FATAL_ERROR "Source dependency ${name} has invalid lock metadata")
-    endif ()
-    FetchContent_Declare(${name}
-        URL "${dependency_url}"
-        URL_HASH "SHA256=${dependency_sha256}"
-        DOWNLOAD_EXTRACT_TIMESTAMP false)
-endfunction()
-
 if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
     foreach (candidate
             "${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
@@ -180,7 +144,16 @@ if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1081U$")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
-    atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
+    if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK OR
+            NOT EXISTS "${FETCHCONTENT_SOURCE_DIR_LIBATRINIK}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Matching Classic libatrinik source is required: use the sibling "
+            "libatrinik/ tree, the packaged dependencies/libatrinik tree, or "
+            "FETCHCONTENT_SOURCE_DIR_LIBATRINIK. The archived libatrinik v1.0.3 "
+            "fallback lacks the current Classic access APIs.")
+    endif ()
+    FetchContent_Declare(libatrinik
+        SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_LIBATRINIK}")
     FetchContent_MakeAvailable(libatrinik)
 endif ()
 include(cmake/pcpnatpmp.cmake)

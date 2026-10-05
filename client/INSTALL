@@ -37,10 +37,16 @@ compiler/platform benchmark provenance are embedded in the executable.
 The Classic protocol must be available from the sibling `protocol/` tree, the
 packaged `dependencies/protocol` tree, or CMake's
 `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` override. This keeps the client and
-its evolving wire contract on the same repository revision. The first
-configure downloads the exact libatrinik source release recorded in
-`cmake/dependencies.lock.json` and verifies its SHA-256 digest; use
-`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` for coordinated local work.
+its evolving wire contract on the same repository revision.
+
+The matching Classic libatrinik source must also come from the sibling
+`libatrinik/` tree, packaged `dependencies/libatrinik` tree, or
+`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` override. Use protocol and library sources
+from the same reviewed Classic revision. Bare component builds fail at configure
+when these sources are missing; they do not download a historical standalone
+library release. Scoped source archives already include both matching trees.
+A parent SDK project may provide the compatible `Atrinik::Core` target instead;
+its package version must retain the actual unified Classic version.
 
 The client uses direct module headers and has no client precompiled-header
 mode. Every source and test therefore exercises the same conventional include
