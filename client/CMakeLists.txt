@@ -884,7 +884,7 @@ if (BUILD_TESTING)
     add_test(NAME client-compound-packet COMMAND client-compound-packet-tests)
 
     add_executable(client-book-edit-tests
-        src/tests/book_edit.c src/client/book_edit_packet.c src/gui/toolkit/text_input.c)
+        src/tests/book_edit.c src/client/book_edit_packet.c src/client/book_edit_model.c src/gui/toolkit/text_input.c)
     atrinik_configure_target(client-book-edit-tests)
     target_compile_options(client-book-edit-tests PRIVATE
         $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>

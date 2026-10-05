@@ -1,5 +1,6 @@
 set(SOURCES
 	src/client/book_edit_packet.c
+	src/client/book_edit_model.c
 	src/gui/popups/book_edit.c
 	src/client/asset.c
 	src/client/asset_source.c

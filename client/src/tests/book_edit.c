@@ -114,4 +114,126 @@ static void test_multiline(void) {
     input.multiline = 0; text_input_set(&input, "title");
     key(&input, SDLK_RETURN); CHECK(strcmp(input.str, "title") == 0);
 }
-int main(void) { test_packet(); test_multiline(); return 0; }
+static book_edit_snapshot_t opened(uint32_t session, uint32_t selected, const char *body) {
+    book_edit_snapshot_t next = {.result = BOOK_EDIT_OPEN, .session = session,
+        .selected = selected, .ink = 100, .capacity = 500, .count = 2};
+    next.books[0] = (book_edit_entry_t){.tag = 41};
+    next.books[1] = (book_edit_entry_t){.tag = 42, .finalized = true};
+    strcpy(next.title, "Saved title");
+    strcpy(next.contents, body);
+    return next;
+}
+
+/* Exercise the same state and request gates used by the production popup. */
+static void test_draft_lifecycle(void) {
+    book_edit_model_t model = {0};
+    book_edit_snapshot_t next = opened(17, 41, "Saved text");
+    CHECK(book_edit_model_receive(&model, &next));
+    strcpy(model.title, "My draft title");
+    strcpy(model.contents, "Saved text plus unsaved text");
+    CHECK(book_edit_model_dirty(&model));
+    CHECK(book_edit_model_can_submit(&model, BOOK_EDIT_SAVE, 41));
+    model.pending = true;
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SAVE, 41));
+    next.result = BOOK_EDIT_ERROR; next.ink = 0;
+    CHECK(book_edit_model_receive(&model, &next));
+    CHECK(!model.pending && model.current.ink == 0);
+    CHECK(strcmp(model.title, "My draft title") == 0);
+    CHECK(strcmp(model.contents, "Saved text plus unsaved text") == 0);
+    /* X closes the modal for inventory/refill while invalidating old replies. */
+    book_edit_model_close(&model);
+    CHECK(model.current.session == 0 && book_edit_model_dirty(&model));
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SAVE, 41));
+    next.result = BOOK_EDIT_UPDATED;
+    CHECK(!book_edit_model_receive(&model, &next));
+    /* Apply the pen after refill: fresh session/ink, same retained draft. */
+    next = opened(18, 41, "Saved text"); next.ink = 500;
+    CHECK(book_edit_model_receive(&model, &next));
+    CHECK(model.current.session == 18 && model.current.ink == 500);
+    CHECK(model.confirmation == BOOK_CONFIRM_NONE && book_edit_model_dirty(&model));
+    CHECK(strcmp(model.title, "My draft title") == 0);
+    CHECK(book_edit_model_can_submit(&model, BOOK_EDIT_SAVE, 41));
+    /* A new destination cannot replace a retained draft without approval. */
+    book_edit_model_close(&model);
+    next = opened(19, 42, "Other book"); next.books[1].finalized = false;
+    CHECK(book_edit_model_receive(&model, &next));
+    CHECK(model.confirmation == BOOK_CONFIRM_OPEN_DISCARD && model.destination == 41);
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SAVE, 42));
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SAVE, 41));
+    book_edit_model_resolve_open(&model, false);
+    CHECK(model.destination == 41 && book_edit_model_dirty(&model));
+    CHECK(model.current.session == 0);
+    CHECK(book_edit_model_receive(&model, &next));
+    book_edit_model_resolve_open(&model, true);
+    CHECK(model.destination == 42 && model.current.session == 19);
+    CHECK(strcmp(model.contents, "Other book") == 0 && !book_edit_model_dirty(&model));
+    /* Same book changed externally: no silent lost-update rebase. */
+    strcpy(model.contents, "My unsaved replacement");
+    book_edit_model_close(&model);
+    next = opened(20, 42, "New external text"); next.books[1].finalized = false;
+    CHECK(book_edit_model_receive(&model, &next));
+    CHECK(model.confirmation == BOOK_CONFIRM_OPEN_REBASE);
+    CHECK(strcmp(model.base_contents, "Other book") == 0);
+    book_edit_model_resolve_open(&model, false);
+    CHECK(strcmp(model.contents, "My unsaved replacement") == 0);
+    CHECK(strcmp(model.base_contents, "Other book") == 0);
+    CHECK(book_edit_model_receive(&model, &next));
+    book_edit_model_resolve_open(&model, true);
+    CHECK(model.current.session == 20 && book_edit_model_dirty(&model));
+    CHECK(strcmp(model.base_contents, "New external text") == 0);
+    CHECK(strcmp(model.contents, "My unsaved replacement") == 0);
+    CHECK(book_edit_model_can_submit(&model, BOOK_EDIT_SAVE, 42));
+    /* Cancellation explicitly discards, and reused tags on a new connection
+     * cannot resurrect a draft under a different character's inventory. */
+    book_edit_model_cancel(&model);
+    CHECK(!model.destination && !model.current.session && !model.contents[0]);
+    CHECK(book_edit_model_receive(&model, &next));
+    CHECK(strcmp(model.contents, "New external text") == 0);
+}
+
+static void test_confirmation_gates(void) {
+    book_edit_model_t model = {0};
+    book_edit_snapshot_t next = opened(17, 41, "Saved text");
+    CHECK(book_edit_model_receive(&model, &next));
+    model.source = 42; /* A signed source is legal; its destination is not. */
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_COPY, 41));
+    strcpy(model.contents, "Retain my draft until copy confirmation");
+    CHECK(book_edit_model_confirm(&model, BOOK_EDIT_COPY, 41));
+    CHECK(model.confirmation == BOOK_CONFIRM_COPY);
+    CHECK(book_edit_model_can_submit(&model, BOOK_EDIT_COPY, 41));
+    model.current.books[2] = (book_edit_entry_t){.tag = 43};
+    model.current.count = 3;
+    model.source = 43; /* Queued source Next must not change the approved copy. */
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_COPY, 41));
+    model.source = 42;
+    CHECK(book_edit_model_can_submit(&model, BOOK_EDIT_COPY, 41));
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SIGN, 41));
+    model.confirmation = BOOK_CONFIRM_NONE; /* Back/Escape preserve draft. */
+    CHECK(book_edit_model_dirty(&model));
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_COPY, 41));
+    CHECK(!book_edit_model_confirm(&model, BOOK_EDIT_SIGN, 41));
+    next.result = BOOK_EDIT_UPDATED;
+    strcpy(next.contents, model.contents);
+    CHECK(book_edit_model_receive(&model, &next));
+    CHECK(!book_edit_model_dirty(&model));
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SIGN, 41));
+    CHECK(book_edit_model_confirm(&model, BOOK_EDIT_SIGN, 41));
+    CHECK(book_edit_model_can_submit(&model, BOOK_EDIT_SIGN, 41));
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_COPY, 41));
+    model.confirmation = BOOK_CONFIRM_NONE;
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SIGN, 41));
+    CHECK(!book_edit_model_confirm(&model, BOOK_EDIT_COPY, 42));
+    model.current.books[1].finalized = false;
+    strcpy(model.title, "Unsaved title");
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SELECT, 42));
+    CHECK(book_edit_model_confirm(&model, BOOK_EDIT_SELECT, 42));
+    CHECK(book_edit_model_can_submit(&model, BOOK_EDIT_SELECT, 42));
+    CHECK(!book_edit_model_can_submit(&model, BOOK_EDIT_SELECT, 41));
+    next.result = BOOK_EDIT_ERROR;
+    CHECK(book_edit_model_receive(&model, &next));
+    CHECK(book_edit_model_dirty(&model) && strcmp(model.title, "Unsaved title") == 0);
+}
+int main(void) {
+    test_packet(); test_multiline(); test_draft_lifecycle(); test_confirmation_gates();
+    return 0;
+}

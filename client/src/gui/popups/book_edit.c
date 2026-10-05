@@ -8,6 +8,8 @@
 #include <event.h>
 #include <main.h>
 #include <popup.h>
+#include <player.h>
+#include <client_socket.h>
 #include <sprite.h>
 #include <text.h>
 #include <text_input.h>
@@ -17,46 +19,55 @@
 #include <toolkit/toolkit.h>
 
 /* This editor owns a separate draft; ordinary BOOK/help popups cannot replace it. */
-static book_edit_snapshot_t current;
+static book_edit_model_t model;
 static popup_struct *editor;
 static text_input_struct title, contents;
 static button_struct buttons[8];
-static bool initialized, pending;
-static uint32_t source;
-static uint32_t draft_destination;
-static uint32_t selection_target;
-static enum { CONFIRM_NONE, CONFIRM_COPY, CONFIRM_SIGN, CONFIRM_SELECT } confirmation;
+static bool initialized;
 static char message[BOOK_EDIT_NOTICE_MAX + 1];
 
 static const book_edit_entry_t *find_book(uint32_t tag) {
-    for (size_t i = 0; i < current.count; i++) {
-        if (current.books[i].tag == tag) {
-            return &current.books[i];
+    for (size_t i = 0; i < model.current.count; i++) {
+        if (model.current.books[i].tag == tag) {
+            return &model.current.books[i];
         }
     }
     return NULL;
 }
 
+static void capture_draft(void) {
+    if (initialized) {
+        snprintf(model.title, sizeof(model.title), "%s", title.str);
+        snprintf(model.contents, sizeof(model.contents), "%s", contents.str);
+    }
+}
+
+static void display_draft(void) {
+    text_input_set(&title, model.title);
+    text_input_set(&contents, model.contents);
+}
+
 static bool dirty(void) {
-    return strcmp(title.str, current.title) != 0 || strcmp(contents.str, current.contents) != 0;
+    capture_draft();
+    return book_edit_model_dirty(&model);
 }
 
 static void submit(enum book_edit_action action, uint32_t destination) {
-    if (pending || current.session == 0 || cpl.state != ST_PLAY) {
+    if (!book_edit_model_can_submit(&model, action, destination) || cpl.state != ST_PLAY) {
         return;
     }
     packet_struct *packet = packet_new(SERVER_CMD_BOOK_EDIT, 256, 256);
     packet_writer_write_uint8(packet, action);
-    packet_writer_write_uint32(packet, current.session);
+    packet_writer_write_uint32(packet, model.current.session);
     packet_writer_write_uint32(packet, destination);
-    packet_writer_write_uint32(packet, action == BOOK_EDIT_COPY ? source : 0);
+    packet_writer_write_uint32(packet, action == BOOK_EDIT_COPY ? model.source : 0);
     packet_writer_write_cstring(packet, action == BOOK_EDIT_SAVE ? title.str :
-                                          action == BOOK_EDIT_SIGN ? current.title : "");
+                                          action == BOOK_EDIT_SIGN ? model.base_title : "");
     packet_writer_write_cstring(packet, action == BOOK_EDIT_SAVE ? contents.str :
-                                          action == BOOK_EDIT_SIGN ? current.contents : "");
+                                          action == BOOK_EDIT_SIGN ? model.base_contents : "");
     socket_send_packet(packet);
-    pending = action != BOOK_EDIT_CANCEL;
-    confirmation = CONFIRM_NONE;
+    model.pending = action != BOOK_EDIT_CANCEL;
+    model.confirmation = BOOK_CONFIRM_NONE;
     snprintf(message, sizeof(message), "Waiting for the server...");
 }
 
@@ -69,13 +80,13 @@ static void label(popup_struct *popup, const char *text, int x, int y, int heigh
 static int draw(popup_struct *popup) {
     surface_show(popup->surface, 0, 0, NULL, texture_surface(popup->texture));
     label(popup, "Write a book", 63, 27, 22);
-    const book_edit_entry_t *destination = find_book(draft_destination);
-    const book_edit_entry_t *src = find_book(source);
+    const book_edit_entry_t *destination = find_book(model.destination);
+    const book_edit_entry_t *src = find_book(model.source);
     char buffer[512];
-    snprintf(buffer, sizeof(buffer), "Destination (#%u): %s%s", draft_destination,
+    snprintf(buffer, sizeof(buffer), "Destination (#%u): %s%s", model.destination,
              destination ? destination->title : "Choose a book", destination && destination->finalized ? " [signed, read only]" : "");
     label(popup, buffer, 28, 58, 23);
-    snprintf(buffer, sizeof(buffer), "Copy source (#%u): %s%s", source,
+    snprintf(buffer, sizeof(buffer), "Copy source (#%u): %s%s", model.source,
              src ? src->title : "Choose a different book", src && src->finalized ? " [signed]" : "");
     label(popup, buffer, 28, 90, 23);
     label(popup, "Title", 28, 123, 18);
@@ -85,7 +96,7 @@ static int draw(popup_struct *popup) {
     text_input_show(&title, popup->surface, 85, 120);
     text_input_show(&contents, popup->surface, 28, 176);
     snprintf(buffer, sizeof(buffer), "Ink: %u/%u. Contents: %zu/%u bytes. Insertions cost 1 ink/byte; deletions/title/signing are free.",
-             current.ink, current.capacity, contents.num, BOOK_EDIT_CONTENT_MAX);
+             model.current.ink, model.current.capacity, contents.num, BOOK_EDIT_CONTENT_MAX);
     label(popup, buffer, 28, 329, 30);
     label(popup, message, 28, 362, 45);
     static const char *names[] = {"Next", "Next", "Save", "Copy", "Sign", "Cancel", "Confirm", "Back"};
@@ -95,17 +106,17 @@ static int draw(popup_struct *popup) {
         buttons[i].y = i < 2 ? 54 + (int)i * 32 : 406;
         buttons[i].surface = popup->surface;
         button_set_parent(&buttons[i], popup->x, popup->y);
-        bool confirm = confirmation != CONFIRM_NONE;
+        bool confirm = model.confirmation != BOOK_CONFIRM_NONE;
         if ((i >= 6) != confirm && i >= 2) {
             continue;
         }
-        buttons[i].disabled = pending || (i < 2 && (confirm || current.count < 2));
+        buttons[i].disabled = model.pending || (i < 2 && (confirm || !model.current.session || model.current.count < 2));
         if (i >= 2 && i <= 4) {
-            buttons[i].disabled |= destination == NULL || destination->finalized ||
-                                   draft_destination != current.selected;
+            buttons[i].disabled |= model.current.session == 0 || destination == NULL || destination->finalized ||
+                                   model.destination != model.current.selected;
         }
         if (i == 3) {
-            buttons[i].disabled |= src == NULL || source == draft_destination;
+            buttons[i].disabled |= src == NULL || model.source == model.destination;
         }
         button_show(&buttons[i], names[i]);
     }
@@ -114,14 +125,14 @@ static int draw(popup_struct *popup) {
 
 static uint32_t next_book(uint32_t tag, bool writable) {
     size_t start = 0;
-    for (size_t i = 0; i < current.count; i++) {
-        if (current.books[i].tag == tag) {
+    for (size_t i = 0; i < model.current.count; i++) {
+        if (model.current.books[i].tag == tag) {
             start = i + 1;
             break;
         }
     }
-    for (size_t i = 0; i < current.count; i++) {
-        const book_edit_entry_t *entry = &current.books[(start + i) % current.count];
+    for (size_t i = 0; i < model.current.count; i++) {
+        const book_edit_entry_t *entry = &model.current.books[(start + i) % model.current.count];
         if (!writable || !entry->finalized) {
             return entry->tag;
         }
@@ -129,12 +140,38 @@ static uint32_t next_book(uint32_t tag, bool writable) {
     return tag;
 }
 
+static void close_server_session(void) {
+    uint32_t session = model.incoming.session ? model.incoming.session : model.current.session;
+    uint32_t destination = model.incoming.session ? model.incoming.selected : model.destination;
+    if (!session || cpl.state != ST_PLAY) {
+        return;
+    }
+    packet_struct *packet = packet_new(SERVER_CMD_BOOK_EDIT, 32, 32);
+    packet_writer_write_uint8(packet, BOOK_EDIT_CANCEL);
+    packet_writer_write_uint32(packet, session);
+    packet_writer_write_uint32(packet, destination);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_cstring(packet, "");
+    packet_writer_write_cstring(packet, "");
+    socket_send_packet(packet);
+}
+
+static void back(void) {
+    if (model.confirmation == BOOK_CONFIRM_OPEN_DISCARD ||
+        model.confirmation == BOOK_CONFIRM_OPEN_REBASE) {
+        close_server_session();
+        book_edit_model_resolve_open(&model, false);
+        snprintf(message, sizeof(message), "Draft retained. Close, mark its original book, and apply the pen to resume.");
+    } else {
+        model.confirmation = BOOK_CONFIRM_NONE;
+        snprintf(message, sizeof(message), "Draft retained.");
+    }
+}
+
 static void cancel(void) {
-    submit(BOOK_EDIT_CANCEL, draft_destination);
+    close_server_session();
     /* Cancel is deliberate discard; error packets never take this path. */
-    current.session = 0;
-    draft_destination = 0;
-    pending = false;
+    book_edit_model_cancel(&model);
     text_input_reset(&title);
     text_input_reset(&contents);
     if (editor) {
@@ -144,8 +181,14 @@ static void cancel(void) {
 
 static int handle_event(popup_struct *popup, SDL_Event *event) {
     (void)popup;
-    bool confirm = confirmation != CONFIRM_NONE;
+    capture_draft();
+    bool confirm = model.confirmation != BOOK_CONFIRM_NONE;
     for (size_t i = 0; i < arraysize(buttons); i++) {
+        /* Input can drain several queued events before draw refreshes disabled
+         * buttons; gate the live state at the point of each action. */
+        if (model.pending || (i < 2 && (confirm || !model.current.session || model.current.count < 2))) {
+            continue;
+        }
         if (i >= 2 && ((i >= 6) != confirm)) {
             continue;
         }
@@ -154,63 +197,68 @@ static int handle_event(popup_struct *popup, SDL_Event *event) {
         }
         switch (i) {
             case 0:
-                selection_target = next_book(draft_destination, true);
-                if (selection_target == draft_destination) {
+                model.selection_target = next_book(model.destination, true);
+                if (model.selection_target == model.destination) {
                     break;
                 }
                 if (dirty()) {
-                    confirmation = CONFIRM_SELECT;
-                    snprintf(message, sizeof(message), "Discard this unsaved draft and select book #%u?", selection_target);
+                    book_edit_model_confirm(&model, BOOK_EDIT_SELECT, model.selection_target);
+                    snprintf(message, sizeof(message), "Discard this unsaved draft and select book #%u?", model.selection_target);
                 } else {
-                    submit(BOOK_EDIT_SELECT, selection_target);
+                    submit(BOOK_EDIT_SELECT, model.selection_target);
                 }
                 break;
             case 1:
-                source = next_book(source, false);
+                model.source = next_book(model.source, false);
                 break;
             case 2:
-                submit(BOOK_EDIT_SAVE, draft_destination);
+                submit(BOOK_EDIT_SAVE, model.destination);
                 break;
             case 3: {
-                const book_edit_entry_t *src = find_book(source);
-                const book_edit_entry_t *dst = find_book(draft_destination);
-                confirmation = CONFIRM_COPY;
+                const book_edit_entry_t *src = find_book(model.source);
+                const book_edit_entry_t *dst = find_book(model.destination);
+                if (!book_edit_model_confirm(&model, BOOK_EDIT_COPY, model.destination)) { break; }
                 snprintf(message, sizeof(message), "Replace destination '%s' (#%u) with source '%s' (#%u)? Unsaved edits will be discarded. The copy remains unsigned.",
-                         dst ? dst->title : "", draft_destination, src ? src->title : "", source);
+                         dst ? dst->title : "", model.destination, src ? src->title : "", model.source);
                 break;
             }
             case 4:
                 if (dirty()) {
                     snprintf(message, sizeof(message), "Save your edits first, then sign the saved book.");
                 } else {
-                    confirmation = CONFIRM_SIGN;
-                    snprintf(message, sizeof(message), "Permanently sign book #%u as your character? It will become read only and signing cannot be undone.", draft_destination);
+                    if (!book_edit_model_confirm(&model, BOOK_EDIT_SIGN, model.destination)) { break; }
+                    snprintf(message, sizeof(message), "Permanently sign book #%u as your character? It will become read only and signing cannot be undone.", model.destination);
                 }
                 break;
             case 5: cancel(); return 1;
             case 6:
-                submit(confirmation == CONFIRM_COPY ? BOOK_EDIT_COPY :
-                       confirmation == CONFIRM_SIGN ? BOOK_EDIT_SIGN : BOOK_EDIT_SELECT,
-                       confirmation == CONFIRM_SELECT ? selection_target : draft_destination);
+                if (model.confirmation == BOOK_CONFIRM_OPEN_DISCARD ||
+                    model.confirmation == BOOK_CONFIRM_OPEN_REBASE) {
+                    book_edit_model_resolve_open(&model, true);
+                    display_draft();
+                    snprintf(message, sizeof(message), "Draft ready. Review it before saving.");
+                    break;
+                }
+                submit(model.confirmation == BOOK_CONFIRM_COPY ? BOOK_EDIT_COPY :
+                       model.confirmation == BOOK_CONFIRM_SIGN ? BOOK_EDIT_SIGN : BOOK_EDIT_SELECT,
+                       model.confirmation == BOOK_CONFIRM_SELECT ? model.selection_target : model.destination);
                 break;
             case 7:
-                confirmation = CONFIRM_NONE;
-                snprintf(message, sizeof(message), "Draft retained.");
+                back();
                 break;
         }
         return 1;
     }
     if (event->type == SDL_EVENT_KEY_DOWN && event->key.key == SDLK_ESCAPE) {
         if (confirm) {
-            confirmation = CONFIRM_NONE;
-            snprintf(message, sizeof(message), "Draft retained.");
+            back();
         } else {
             cancel();
         }
         return 1;
     }
-    const book_edit_entry_t *destination = find_book(draft_destination);
-    if (!pending && !confirm && destination && !destination->finalized) {
+    const book_edit_entry_t *destination = find_book(model.destination);
+    if (!model.pending && !confirm && destination && !destination->finalized) {
         if (event->type == SDL_EVENT_KEY_DOWN && event->key.key == SDLK_TAB) {
             title.focus = !title.focus;
             contents.focus = !title.focus;
@@ -235,8 +283,12 @@ static int handle_event(popup_struct *popup, SDL_Event *event) {
 
 static int destroyed(popup_struct *popup) {
     (void)popup;
+    capture_draft();
     editor = NULL;
-    /* Closing the canvas keeps the draft/session; deliberate Cancel discards. */
+    /* The modal must close for inventory/refill. End the server session while
+     * retaining draft and base; applying the pen supplies a fresh OPEN. */
+    close_server_session();
+    book_edit_model_close(&model);
     return 1;
 }
 
@@ -261,9 +313,7 @@ void socket_command_book_edit(uint8_t *data, size_t len, size_t pos) {
         LOG(ERROR, "Rejected malformed BOOK_EDIT snapshot");
         return;
     }
-    if (next.result != BOOK_EDIT_OPEN && next.session != current.session) {
-        return;
-    }
+
     if (!initialized) {
         text_input_create(&title);
         title.max = BOOK_EDIT_TITLE_MAX;
@@ -278,34 +328,40 @@ void socket_command_book_edit(uint8_t *data, size_t len, size_t pos) {
         }
         initialized = true;
     }
-    bool retain = next.result == BOOK_EDIT_ERROR && current.session == next.session;
-    current = next;
-    pending = false;
-    confirmation = CONFIRM_NONE;
-    if (!retain) {
-        text_input_set(&title, current.title);
-        text_input_set(&contents, current.contents);
-        draft_destination = current.selected;
-        title.focus = 1;
-        contents.focus = 0;
+    capture_draft();
+    if (!book_edit_model_receive(&model, &next)) {
+        return;
     }
-    if (!find_book(source)) {
-        source = current.count ? current.books[0].tag : 0;
+    display_draft();
+    title.focus = 1;
+    contents.focus = 0;
+    if (model.confirmation == BOOK_CONFIRM_OPEN_DISCARD) {
+        snprintf(message, sizeof(message), "Discard unsaved draft for book #%u and open book #%u? Back keeps the draft.",
+                 model.destination, model.incoming.selected);
+    } else if (model.confirmation == BOOK_CONFIRM_OPEN_REBASE) {
+        snprintf(message, sizeof(message), "Book #%u changed while closed. Keep your draft over its newer saved title/text? Review before saving; Back keeps it suspended.", model.destination);
+    } else if (next.result == BOOK_EDIT_ERROR) {
+        snprintf(message, sizeof(message), "%.900s Close with X to refill; reapply the pen on the same book to resume.", model.current.notice);
+    } else {
+        snprintf(message, sizeof(message), "%s", model.current.notice);
     }
-    snprintf(message, sizeof(message), "%s", current.notice);
     if (!open_editor() && !client_command_retry_current()) {
         LOG(ERROR, "Could not retain book editor popup for GPU recovery");
     }
 }
 
 void book_edit_disconnect(void) {
+    /* Inventory tags are connection-local; a later character must never inherit
+     * this draft under a coincidentally reused destination tag. Clear before
+     * destroying the popup so its callback cannot send on a closed connection. */
+    book_edit_model_cancel(&model);
+    if (initialized) {
+        text_input_reset(&title);
+        text_input_reset(&contents);
+    }
     if (editor) {
         popup_destroy(editor);
     }
-    current.session = 0;
-    pending = false;
-    confirmation = CONFIRM_NONE;
-    /* The disconnected draft remains local, but cannot be submitted. */
 }
 
 void book_edit_deinit(void) {

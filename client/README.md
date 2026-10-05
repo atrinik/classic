@@ -493,7 +493,11 @@ Book writing
  book is the initial destination. Use the destination and copy-source Next buttons
  to choose books by title and object identity. Enter inserts a newline in Contents;
  Tab changes the focused field. Save commits title and contents. Server rejection
- (including insufficient ink) retains the draft. Cancel deliberately discards it.
+ (including insufficient ink) retains the draft. Close with X to mark an ink bottle
+ and apply the pen to refill; then mark the same book and apply the pen to reopen
+ with the retained draft. A different book requires confirmation to discard it;
+ changed saved title/text requires confirmation to rebase it before saving.
+ Cancel deliberately discards the draft.
  Copy confirms source and destination before replacing the destination; copies
  remain unsigned. Save edits before Sign, then confirm permanent signing. A signed
  book is read only. Ink charges cover inserted UTF-8 bytes after the server's byte
