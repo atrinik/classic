@@ -3,6 +3,7 @@
 #ifndef TOOLKIT_ACCESS_RESOLVE_H
 #define TOOLKIT_ACCESS_RESOLVE_H
 #include "access_code.h"
+#include "curl.h"
 #include "rendezvous.h"
 typedef struct access_resolved {
     char server_id[65];
@@ -20,6 +21,12 @@ typedef struct access_resolved {
 bool access_resolve(const char *origin,
                     const char code[ACCESS_CODE_LENGTH],
                     access_resolved_t *out);
+/* Same ownership as access_resolve; cancellation is borrowed until return.
+ * Aborted transfers clear output and do not attempt another endpoint. */
+bool access_resolve_cancellable(const char *origin,
+                                const char code[ACCESS_CODE_LENGTH],
+                                access_resolved_t *out,
+                                const curl_cancel_t *cancel);
 bool access_resolve_parse(const char *body,
                           size_t size,
                           const char nonce[65],

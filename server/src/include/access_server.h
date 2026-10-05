@@ -23,6 +23,8 @@ bool access_server_auth_poll(uint64_t, access_outcome_t *, access_token_ref_t *)
 access_session_state_t access_server_session_check(const access_token_ref_t *);
 void access_server_tick(void);
 #ifdef ATRINIK_TESTING
+/* Configure only while the worker is stopped; NULL restores real route IO. */
+void access_server_route_for_test(access_route_callback_t);
 uint64_t access_server_admin_result_for_test(bool, const char *, const char *);
 void access_server_session_sequence_for_test(const access_session_state_t *, size_t);
 #endif

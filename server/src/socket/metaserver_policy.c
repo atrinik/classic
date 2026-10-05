@@ -561,6 +561,16 @@ void metaserver_publish_cadence_init(metaserver_publish_cadence_t *cadence,
     metaserver_attempt_budget_init(&cadence->rate_budget, now);
 }
 
+void metaserver_publish_cadence_activity(metaserver_publish_cadence_t *cadence,
+                                         server_monotonic_t now,
+                                         bool is_public,
+                                         bool previously_public) {
+    /* Private activity never causes traffic; a public-to-private transition
+     * still schedules the removal, including a previously attempted publish. */
+    if (is_public || previously_public)
+        metaserver_publish_cadence_changed(cadence, now, false);
+}
+
 void metaserver_publish_cadence_changed(metaserver_publish_cadence_t *cadence,
                                         server_monotonic_t now,
                                         bool actual_change) {

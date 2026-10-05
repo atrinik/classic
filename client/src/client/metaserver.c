@@ -24,6 +24,7 @@
 #include <wrapper.h>
 #include <toolkit/logger.h>
 #include <toolkit/access_resolve.h>
+#include <access_resolver.h>
 #include <toolkit/memory.h>
 #include <toolkit/toolkit.h>
 #include <openssl/evp.h>
@@ -192,14 +193,21 @@ bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t ur
 }
 
 server_struct *metaserver_access_resolve(const char *code) {
-    if (!access_code_valid(code, ACCESS_CODE_LENGTH)) {
+    return metaserver_access_resolve_cancellable(code, NULL);
+}
+
+server_struct *metaserver_access_resolve_cancellable(const char *code,
+                                                    const curl_cancel_t *cancel) {
+    if (!access_code_valid(code, ACCESS_CODE_LENGTH) || curl_cancelled(cancel)) {
         return NULL;
     }
     for (size_t i = clioption_settings.metaservers.count; i > 0; i--) {
         const client_metaserver_endpoint_t *endpoint =
             &clioption_settings.metaservers.endpoints[i - 1];
         access_resolved_t resolved;
-        if (!access_resolve(endpoint->access_origin, code, &resolved)) {
+        if (curl_cancelled(cancel))
+            break;
+        if (!access_resolve_cancellable(endpoint->access_origin, code, &resolved, cancel)) {
             continue;
         }
 
@@ -274,6 +282,7 @@ void metaserver_clear_data(void) {
 }
 
 void metaserver_deinit(void) {
+    access_resolver_deinit();
     if (metaserver_worker != NULL) {
         SDL_WaitThread(metaserver_worker, NULL);
         metaserver_worker = NULL;

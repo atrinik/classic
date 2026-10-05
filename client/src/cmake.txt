@@ -86,6 +86,7 @@ set(SOURCES
 	src/gui/popups/help.c
 	src/gui/popups/interface.c
 	src/gui/popups/interface_packet.c
+	src/client/access_resolver.c
 	src/gui/popups/access_code.c
 	src/gui/popups/login.c
 	src/gui/popups/painting.c

@@ -43,6 +43,10 @@
   input, accepts only complete server map publications, and fails on divergence
   or deadlines. Arrival and presentation are separate evidence; offline snapshot
   replays do not prove live travel or movement performance.
+- Access-code popup resolution uses `access_resolver` jobs with copied secret
+  storage. Closing a popup cancels without joining; the main loop reaps finished
+  jobs and metaserver teardown joins all workers before endpoint/toolkit cleanup.
+  Retained workers share a bounded job budget, including cancelled requests.
 - Capture privacy is owned by `capture_privacy`: private UI retention and frame
   composition deny new screenshots, video frames, and diagnostic captures until
   a successfully presented clean frame. UI close/reset and renderer recovery

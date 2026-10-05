@@ -2081,3 +2081,54 @@ bool curl_verify(curl_pkey_trust_t trust,
 
     return false;
 }
+
+
+bool curl_cancelled(const curl_cancel_t *cancel) {
+    return cancel != NULL && cancel->cancelled != NULL && cancel->cancelled(cancel->context);
+}
+
+CURLcode curl_perform_cancellable(CURL *easy, const curl_cancel_t *cancel) {
+    if (curl_cancelled(cancel))
+        return CURLE_ABORTED_BY_CALLBACK;
+    if (cancel == NULL || cancel->cancelled == NULL)
+        return curl_easy_perform(easy);
+    /* The qualified access builds use c-ares for hostname resolution. Merely
+     * having ASYNCHDNS is insufficient: threaded DNS can join a stalled system
+     * resolver during handle cleanup. Never admit that unbounded cleanup here. */
+    const curl_version_info_data *version = curl_version_info(CURLVERSION_NOW);
+    if (version == NULL || !(version->features & CURL_VERSION_ASYNCHDNS) ||
+        version->ares == NULL) {
+        LOG(ERROR, "Cancellable access requests require a qualified c-ares libcurl build");
+        return CURLE_NOT_BUILT_IN;
+    }
+    CURLM *multi = curl_multi_init();
+    if (multi == NULL)
+        return CURLE_OUT_OF_MEMORY;
+    CURLcode result = CURLE_FAILED_INIT;
+    bool added = curl_multi_add_handle(multi, easy) == CURLM_OK;
+    if (added) {
+        int running = 0;
+        for (;;) {
+            if (curl_cancelled(cancel)) {
+                result = CURLE_ABORTED_BY_CALLBACK;
+                break;
+            }
+            if (curl_multi_perform(multi, &running) != CURLM_OK)
+                break;
+            if (running == 0) {
+                int remaining;
+                CURLMsg *message;
+                while ((message = curl_multi_info_read(multi, &remaining)) != NULL) {
+                    if (message->msg == CURLMSG_DONE && message->easy_handle == easy)
+                        result = message->data.result;
+                }
+                break;
+            }
+            if (curl_multi_poll(multi, NULL, 0, 50, NULL) != CURLM_OK)
+                break;
+        }
+        curl_multi_remove_handle(multi, easy);
+    }
+    curl_multi_cleanup(multi);
+    return curl_cancelled(cancel) ? CURLE_ABORTED_BY_CALLBACK : result;
+}

@@ -54,6 +54,8 @@
   `access_admin.c` owns strict bounded management JSON; `access_server.c` owns
   copied worker jobs and main-loop session checks. Keep socket/player pointers
   out of worker ownership, and propagate failed saves into shutdown receipts.
+  Shutdown cancels in-flight access route IO before joining workers; ambiguous
+  cancellation retains pending receipts/outbox entries for durable recovery.
 - In-game access administration uses the current character’s existing
   `/cmd_permission` grant for `access`; `[OP]` grants it automatically. Local
   root administration remains available for bootstrap. Access policy/store

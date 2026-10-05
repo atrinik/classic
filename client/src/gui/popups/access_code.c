@@ -12,6 +12,7 @@
 /** @file One-attempt server access-code prompt. */
 
 #include <access_attempt.h>
+#include <access_resolver.h>
 #include <button.h>
 #include <client.h>
 #include <main.h>
@@ -36,14 +37,7 @@ static text_input_struct code_input;
 static bool identity_confirmation;
 static bool connecting;
 static bool access_code_server_added;
-typedef struct access_resolve_job {
-    client_access_attempt_t attempt;
-    server_struct *server;
-    bool done;
-} access_resolve_job_t;
-static access_resolve_job_t *resolve_job;
-static SDL_Thread *resolve_thread;
-static SDL_Mutex *resolve_mutex;
+static access_resolver_job_t *resolve_job;
 
 static void access_code_input_clear(void) {
     access_code_clear(code_input.str, sizeof(code_input.str));
@@ -53,39 +47,11 @@ static void access_code_input_clear(void) {
     code_input.num = 0;
 }
 
-static int resolve_worker(void *data) {
-    access_resolve_job_t *job = data;
-    server_struct *server = metaserver_access_resolve(job->attempt.code);
-    if (server != NULL) {
-        server->access_attempt = job->attempt;
-        access_code_clear(&job->attempt, sizeof(job->attempt));
-    } else {
-        client_access_attempt_clear(&job->attempt);
-    }
-    SDL_LockMutex(resolve_mutex);
-    job->server = server;
-    job->done = true;
-    SDL_UnlockMutex(resolve_mutex);
-    return 0;
-}
-
 static bool resolve_finished(void) {
-    if (resolve_job == NULL || resolve_mutex == NULL) {
+    server_struct *server = NULL;
+    if (!access_resolver_take(resolve_job, &server)) {
         return false;
     }
-    SDL_LockMutex(resolve_mutex);
-    bool done = resolve_job->done;
-    SDL_UnlockMutex(resolve_mutex);
-    if (!done) {
-        return false;
-    }
-    SDL_WaitThread(resolve_thread, NULL);
-    resolve_thread = NULL;
-    SDL_DestroyMutex(resolve_mutex);
-    resolve_mutex = NULL;
-    server_struct *server = resolve_job->server;
-    access_code_clear(resolve_job, sizeof(*resolve_job));
-    free(resolve_job);
     resolve_job = NULL;
     if (server == NULL) {
         draw_info(COLOR_RED, "Access unavailable. Check the code and try again.");
@@ -222,21 +188,8 @@ static int popup_event(popup_struct *popup, SDL_Event *event) {
         }
 
         if (access_code_server == NULL) {
-            resolve_mutex = SDL_CreateMutex();
-            resolve_job = xcalloc(1, sizeof(*resolve_job));
-            resolve_job->attempt = attempt;
-            access_code_clear(&attempt, sizeof(attempt));
-            resolve_thread = resolve_mutex != NULL
-                                 ? SDL_CreateThread(resolve_worker, "access-resolve", resolve_job)
-                                 : NULL;
-            if (resolve_thread == NULL) {
-                client_access_attempt_clear(&resolve_job->attempt);
-                free(resolve_job);
-                resolve_job = NULL;
-                if (resolve_mutex != NULL) {
-                    SDL_DestroyMutex(resolve_mutex);
-                    resolve_mutex = NULL;
-                }
+            resolve_job = access_resolver_start(&attempt);
+            if (resolve_job == NULL) {
                 draw_info(COLOR_RED, "Could not start private server resolution.");
                 return 1;
             }
@@ -268,22 +221,8 @@ static int popup_event(popup_struct *popup, SDL_Event *event) {
 
 static int popup_destroy_callback(popup_struct *popup) {
     (void)popup;
-    if (resolve_thread != NULL) {
-        SDL_WaitThread(resolve_thread, NULL);
-        resolve_thread = NULL;
-    }
-    if (resolve_mutex != NULL) {
-        SDL_DestroyMutex(resolve_mutex);
-        resolve_mutex = NULL;
-    }
-    if (resolve_job != NULL) {
-        if (resolve_job->server != NULL) {
-            metaserver_server_free(resolve_job->server);
-        }
-        client_access_attempt_clear(&resolve_job->attempt);
-        free(resolve_job);
-        resolve_job = NULL;
-    }
+    access_resolver_cancel(resolve_job);
+    resolve_job = NULL;
     text_input_destroy(&code_input);
     access_code_clear(&code_input, sizeof(code_input));
     button_destroy(&button_connect);

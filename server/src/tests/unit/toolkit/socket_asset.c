@@ -14,6 +14,7 @@
 #include <server.h>
 #include <metaserver_internal.h>
 #include <initialization.h>
+#include <access_server.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -1621,6 +1622,146 @@ START_TEST(test_metaserver_publish_error_code_is_bounded) {
 }
 END_TEST
 
+#ifdef __linux__
+static atomic_bool access_shutdown_route_entered, access_shutdown_route_cancelled;
+static access_outcome_t access_shutdown_route(void *context, const access_route_t *route) {
+    (void)route;
+    const curl_cancel_t *cancel = context;
+    atomic_store(&access_shutdown_route_entered, true);
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (!curl_cancelled(cancel) && datetime_monotonic_ms() < deadline) {
+        struct timespec delay = {.tv_nsec = 1000000};
+        nanosleep(&delay, NULL);
+    }
+    atomic_store(&access_shutdown_route_cancelled, curl_cancelled(cancel));
+    return ACCESS_PENDING;
+}
+START_TEST(test_access_worker_shutdown_preserves_pending_route) {
+    char directory[] = "/tmp/atrinik-access-shutdown-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    uint8_t identity[32];
+    memset(identity, 0x11, sizeof(identity));
+    char identity_hex[65];
+    memset(identity_hex, '1', 64);
+    identity_hex[64] = 0;
+    access_store_t *store = NULL;
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    access_store_close(store);
+    char previous_store[sizeof(settings.access_store)];
+    memcpy(previous_store, settings.access_store, sizeof(previous_store));
+    bool previous_required = settings.access_required;
+    bool previous_initialize = settings.access_initialize;
+    snprintf(VS(settings.access_store), "%s", directory);
+    settings.access_required = true;
+    settings.access_initialize = false;
+    access_server_route_for_test(access_shutdown_route);
+    atomic_store(&access_shutdown_route_entered, false);
+    atomic_store(&access_shutdown_route_cancelled, false);
+    ck_assert(access_server_init(identity_hex));
+    static const char issue[] =
+        "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"issue\","
+        "\"requestId\":\"11111111111111111111111111111111\","
+        "\"expectedRevision\":\"0\",\"label\":\"Shutdown fixture\"}";
+    ck_assert_uint_ne(access_server_root_submit(issue, sizeof(issue) - 1), 0);
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (!atomic_load(&access_shutdown_route_entered) && datetime_monotonic_ms() < deadline) {
+        struct timespec delay = {.tv_nsec = 1000000};
+        nanosleep(&delay, NULL);
+    }
+    ck_assert(atomic_load(&access_shutdown_route_entered));
+    /* Queued work has no store ownership and can be cleared only after join. */
+    uint64_t auth = access_server_auth_submit("0123456789ABCDEF");
+    ck_assert_uint_ne(auth, 0);
+    static const char status_request[] =
+        "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"status\","
+        "\"requestId\":\"22222222222222222222222222222222\"}";
+    uint64_t admin = access_server_root_submit(status_request, sizeof(status_request) - 1);
+    ck_assert_uint_ne(admin, 0);
+    uint64_t before = datetime_monotonic_ms();
+    ck_assert(access_server_shutdown());
+    ck_assert_uint_lt(datetime_monotonic_ms() - before, 1000);
+    ck_assert(atomic_load(&access_shutdown_route_cancelled));
+    access_outcome_t outcome;
+    access_token_ref_t reference;
+    ck_assert(!access_server_auth_poll(auth, &outcome, &reference));
+    char response[1024];
+    size_t length;
+    ck_assert(!access_server_admin_poll(admin, response, sizeof(response), &length));
+    access_server_deinit();
+    access_server_route_for_test(NULL);
+    memcpy(settings.access_store, previous_store, sizeof(previous_store));
+    settings.access_required = previous_required;
+    settings.access_initialize = previous_initialize;
+    access_status_t status;
+    ck_assert_int_eq(access_store_inspect(directory, identity, true, &status), ACCESS_COMMITTED);
+    ck_assert_uint_eq(status.pending_route_sync, 1);
+    ck_assert_uint_eq(status.revision, 2);
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, false), ACCESS_COMMITTED);
+    access_result_t receipt = access_store_result(store, "11111111111111111111111111111111");
+    ck_assert_int_eq(receipt.outcome, ACCESS_LOCALLY_REVOKED);
+    ck_assert(receipt.route_pending && receipt.code[0] == 0);
+    access_result_cleanse(&receipt);
+    access_store_close(store);
+    char snapshot[256];
+    snprintf(VS(snapshot), "%s/access-tokens.snapshot", directory);
+    ck_assert_int_eq(unlink(snapshot), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+#endif
+
+static bool access_route_cancelled_for_test(void *context) {
+    return *(bool *)context;
+}
+
+START_TEST(test_metaserver_access_route_cancellation_is_pending) {
+    bool stopping = true;
+    curl_cancel_t cancel = {.cancelled = access_route_cancelled_for_test, .context = &stopping};
+    access_route_t route = {0};
+    /* Cancellation never reports rejection/non-ownership: durable issuance and
+     * revoke recovery must retain the outbox even before any network work. */
+    ck_assert_int_eq(metaserver_access_route(&cancel, &route), ACCESS_PENDING);
+    route.revoke = true;
+    ck_assert_int_eq(metaserver_access_route(&cancel, &route), ACCESS_PENDING);
+}
+END_TEST
+
+START_TEST(test_metaserver_private_activity_does_not_publish) {
+    metaserver_publish_cadence_t cadence;
+    server_monotonic_t now = {UINT64_C(1000000)};
+    metaserver_publish_cadence_init(&cadence, now);
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    /* Initial removal can retry, independent of player activity. */
+    metaserver_publish_cadence_failed(&cadence, now, 120, 0);
+    now.microseconds += UINT64_C(120000000);
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    metaserver_publish_cadence_succeeded(&cadence, now, false, 60, 0);
+    for (unsigned i = 0; i < 48; i++) {
+        now.microseconds += UINT64_C(3600000000);
+        metaserver_publish_cadence_activity(&cadence, now, false, false);
+        ck_assert(!metaserver_publish_cadence_needs_snapshot(&cadence, now));
+        ck_assert(!metaserver_publish_cadence_due(&cadence, now, true));
+    }
+    /* Public publication and subsequent removal remain possible. */
+    metaserver_publish_cadence_activity(&cadence, now, true, false);
+    now.microseconds += UINT64_C(11000000);
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    metaserver_publish_cadence_succeeded(&cadence, now, true, 60, 0);
+    ck_assert(server_monotonic_is_set(cadence.heartbeat_deadline));
+    metaserver_publish_cadence_activity(&cadence, now, false, true);
+    now.microseconds += UINT64_C(4000000000);
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    metaserver_publish_cadence_succeeded(&cadence, now, false, 60, 0);
+    now.microseconds += UINT64_C(4000000000);
+    metaserver_publish_cadence_activity(&cadence, now, false, false);
+    ck_assert(!metaserver_publish_cadence_due(&cadence, now, true));
+}
+END_TEST
+
 START_TEST(test_metaserver_publish_retry_and_daily_budget) {
     ck_assert_uint_eq(metaserver_publish_retry_delay_ms(0, 0, 0), 45000);
     ck_assert_uint_eq(metaserver_publish_retry_delay_ms(1, 0, 0), 90000);
@@ -2252,10 +2393,15 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_metaserver_rendezvous_token_bounds);
     tcase_add_test(tc_core, test_metaserver_rendezvous_retry_policy);
     tcase_add_test(tc_core, test_metaserver_access_route_acknowledgments);
+    tcase_add_test(tc_core, test_metaserver_access_route_cancellation_is_pending);
+#ifdef __linux__
+    tcase_add_test(tc_core, test_access_worker_shutdown_preserves_pending_route);
+#endif
     tcase_add_test(tc_core, test_metaserver_publish_cadence);
     tcase_add_test(tc_core, test_metaserver_publish_cadence_attempt_is_fail_closed);
     tcase_add_test(tc_core, test_metaserver_publish_error_code_is_bounded);
     tcase_add_test(tc_core, test_metaserver_publish_retry_and_daily_budget);
+    tcase_add_test(tc_core, test_metaserver_private_activity_does_not_publish);
     tcase_add_test(tc_core, test_metaserver_rendezvous_ticket_isolation);
     tcase_add_test(tc_core, test_metaserver_generation_cancellation);
     tcase_add_test(tc_core, test_metaserver_raw_endpoint_not_published);

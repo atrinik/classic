@@ -33,7 +33,8 @@ static struct {
     pthread_mutex_t mutex;
     pthread_cond_t ready;
     pthread_t thread, expiry_thread;
-    bool started, stopping, maintenance;
+    bool started, maintenance;
+    _Atomic bool stopping;
     uint64_t next_id;
     access_job jobs[ACCESS_OUTBOX_LIMIT];
     access_store_t *store;
@@ -41,6 +42,26 @@ static struct {
     _Atomic bool failed;
     int64_t tick;
 } worker = {.mutex = PTHREAD_MUTEX_INITIALIZER, .ready = PTHREAD_COND_INITIALIZER};
+
+static bool access_worker_cancelled(void *context) {
+    (void)context;
+    return atomic_load(&worker.stopping);
+}
+static const curl_cancel_t route_cancel = {.cancelled = access_worker_cancelled};
+#ifdef ATRINIK_TESTING
+static access_route_callback_t test_route;
+void access_server_route_for_test(access_route_callback_t callback) {
+    HARD_ASSERT(!worker.started);
+    test_route = callback;
+}
+#endif
+static access_outcome_t access_worker_route(void *context, const access_route_t *route) {
+#ifdef ATRINIK_TESTING
+    if (test_route != NULL)
+        return test_route(context, route);
+#endif
+    return metaserver_access_route(context, route);
+}
 
 /* Once a connection or maintenance pass observes a deadline, a backwards
  * wall-clock step cannot reopen it before its durable expiry transaction. */
@@ -77,7 +98,7 @@ static void maintain_store(void) {
     for (size_t i = 0; i < count; i++) {
         if (!rows[i].revoke)
             continue;
-        if (metaserver_access_route(NULL, &rows[i]) == ACCESS_COMMITTED) {
+        if (access_worker_route((void *)&route_cancel, &rows[i]) == ACCESS_COMMITTED) {
             result = access_store_route_ack(worker.store, &rows[i], access_clock_now());
             if (result == ACCESS_SAVE_FAILED || result == ACCESS_INDETERMINATE)
                 atomic_store(&worker.failed, true);
@@ -124,8 +145,8 @@ static void *run_worker(void *unused) {
             if (!access_admin_execute(worker.store,
                                       job->input,
                                       job->input_len,
-                                      metaserver_access_route,
-                                      NULL,
+                                      access_worker_route,
+                                      (void *)&route_cancel,
                                       job->output,
                                       sizeof(job->output),
                                       &job->output_len))

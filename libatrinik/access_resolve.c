@@ -221,8 +221,15 @@ static size_t response_header(char *data, size_t size, size_t count, void *conte
 bool access_resolve(const char *origin,
                     const char code[ACCESS_CODE_LENGTH],
                     access_resolved_t *out) {
+    return access_resolve_cancellable(origin, code, out, NULL);
+}
+
+bool access_resolve_cancellable(const char *origin,
+                                const char code[ACCESS_CODE_LENGTH],
+                                access_resolved_t *out,
+                                const curl_cancel_t *cancel) {
     access_resolved_clear(out);
-    if (out == NULL)
+    if (out == NULL || curl_cancelled(cancel))
         return false;
     unsigned char route[32] = {0}, nonce_bytes[32] = {0};
     char route_hex[65], nonce[65], request[256], url[MAX_BUF];
@@ -267,7 +274,7 @@ bool access_resolve(const char *origin,
 #ifdef WIN32
             curl_easy_setopt(curl, CURLOPT_CAINFO, "ca-bundle.crt");
 #endif
-            CURLcode result = curl_easy_perform(curl);
+            CURLcode result = curl_perform_cancellable(curl, cancel);
             long status = 0;
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
             time_t now = time(NULL);

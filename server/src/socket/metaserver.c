@@ -1012,7 +1012,7 @@ static void metaserver_update_request_locked(curl_request_t *request) {
         blocked_snapshot_valid = false;
         metaserver_publish_cadence_succeeded(&publish_cadence,
                                              server_monotonic_now(),
-                                             true,
+                                             attempted_snapshot.is_public,
                                              settings.metaserver_heartbeat,
                                              metaserver_publish_random());
         pthread_mutex_lock(&stats_lock);
@@ -1187,7 +1187,10 @@ void metaserver_info_update(void) {
     }
 
     pthread_mutex_lock(&request_lock);
-    metaserver_publish_cadence_changed(&publish_cadence, server_monotonic_now(), false);
+    metaserver_publish_cadence_activity(&publish_cadence,
+                                        server_monotonic_now(),
+                                        settings.server_public,
+                                        published_snapshot.is_public || attempted_snapshot.is_public);
     pthread_mutex_unlock(&request_lock);
 }
 
@@ -1336,7 +1339,8 @@ static bool metaserver_access_request_id(const char *request, const char *operat
 static access_outcome_t metaserver_access_operation(const access_route_t *route,
                                                     const char *operation,
                                                     char reservation[33],
-                                                    uint64_t deadline_ms) {
+                                                    uint64_t deadline_ms,
+                                                    const curl_cancel_t *cancel) {
     access_outcome_t outcome = ACCESS_PENDING;
     char server_id[65], request_id[33], index[65], expiry[24] = "null", handle[36] = "null";
     char body[4097], signature[METASERVER_PUBLISH_SIGNATURE_HEADER_MAX], url[MAX_BUF],
@@ -1350,7 +1354,8 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
     uint64_t sequence = 0;
     uint64_t now_ms = datetime_monotonic_ms();
     time_t now = time(NULL);
-    if (now < 0 || now_ms >= deadline_ms || !metaserver_identity(VS(server_id)) ||
+    if (curl_cancelled(cancel) || now < 0 || now_ms >= deadline_ms ||
+        !metaserver_identity(VS(server_id)) ||
         !string_is_hex_fixed(route->request_id, 32, true) ||
         !string_is_hex_fixed(route->token.token_id, 32, true) || route->token.revision == 0 ||
         !metaserver_access_request_id(route->request_id, operation, request_id) ||
@@ -1454,7 +1459,7 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
 #ifdef WIN32
     curl_easy_setopt(curl, CURLOPT_CAINFO, "ca-bundle.crt");
 #endif
-    CURLcode result = curl_easy_perform(curl);
+    CURLcode result = curl_perform_cancellable(curl, cancel);
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     if (result != CURLE_OK || status != 200 || memchr(response.body, 0, response.size) != NULL)
@@ -1478,7 +1483,9 @@ out:
 }
 
 access_outcome_t metaserver_access_route(void *context, const access_route_t *route) {
-    (void)context;
+    const curl_cancel_t *cancel = context;
+    if (curl_cancelled(cancel))
+        return ACCESS_PENDING;
     if (route == NULL || !metaserver_initialized || !metaserver_enabled())
         return ACCESS_UNAVAILABLE;
     char reservation[33] = {0};
@@ -1495,13 +1502,14 @@ access_outcome_t metaserver_access_route(void *context, const access_route_t *ro
     access_outcome_t outcome = metaserver_access_operation(route,
                                                            route->revoke ? "revoke" : "reserve",
                                                            reservation,
-                                                           deadline);
+                                                           deadline,
+                                                           cancel);
     /* Only a rejected reservation proves this tuple never acquired ownership.
      * Activation conflicts remain ambiguous and must retain pending state. */
     if (!route->revoke && outcome == ACCESS_CONFLICT)
         outcome = ACCESS_ROUTE_COLLISION;
     else if (outcome == ACCESS_COMMITTED && !route->revoke)
-        outcome = metaserver_access_operation(route, "activate", reservation, deadline);
+        outcome = metaserver_access_operation(route, "activate", reservation, deadline, cancel);
     OPENSSL_cleanse(reservation, sizeof(reservation));
     return outcome;
 }

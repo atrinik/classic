@@ -119,6 +119,10 @@ bool metaserver_publish_response_retryable(curl_state_t state, int http_code);
 metaserver_publish_failure_action_t metaserver_publish_failure_action(curl_state_t state,
                                                                       int http_code);
 void metaserver_publish_cadence_init(metaserver_publish_cadence_t *cadence, server_monotonic_t now);
+void metaserver_publish_cadence_activity(metaserver_publish_cadence_t *cadence,
+                                         server_monotonic_t now,
+                                         bool is_public,
+                                         bool previously_public);
 void metaserver_publish_cadence_changed(metaserver_publish_cadence_t *cadence,
                                         server_monotonic_t now,
                                         bool actual_change);
@@ -173,7 +177,9 @@ access_outcome_t metaserver_access_response_parse(const char *body,
                                                   const char *operation,
                                                   char reservation[33],
                                                   uint64_t now);
-/* Serialized access worker only; bounded remote route mutation. */
+/* Serialized access worker only; bounded remote route mutation. Context borrows
+ * an optional curl_cancel_t through return. Cancellation keeps remote outcome
+ * ambiguous (ACCESS_PENDING), retaining durable receipt/outbox recovery. */
 access_outcome_t metaserver_access_route(void *context, const access_route_t *route);
 
 #endif
