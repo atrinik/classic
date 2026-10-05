@@ -991,6 +991,7 @@ jobs:
           flags: client-gpu
           use_oidc: true
       - name: Wait for complete client coverage processing
+        continue-on-error: true
         env:
           CODECOV_REPORT_API: >-
             https://api.codecov.io/api/v2/github/${{ github.repository_owner }}/repos/${{ github.event.repository.name }}/totals/
