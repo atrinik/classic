@@ -58,23 +58,11 @@ static bool resolve_finished(void) {
         return true;
     }
     if (access_code_existing_server != NULL) {
-        if (strcmp(server->server_id, access_code_existing_server->server_id) != 0) {
+        if (!access_resolver_adopt(access_code_existing_server, server)) {
             metaserver_server_free(server);
             draw_info(COLOR_RED, "The resolved server identity changed; access was not sent.");
             return true;
         }
-        free(access_code_existing_server->hostname);
-        access_code_existing_server->hostname = server->hostname;
-        server->hostname = NULL;
-        access_code_existing_server->port = server->port;
-        free(access_code_existing_server->rendezvous_origin);
-        access_code_existing_server->rendezvous_origin = server->rendezvous_origin;
-        server->rendezvous_origin = NULL;
-        rendezvous_access_grant_clear(&access_code_existing_server->access_grant);
-        access_code_existing_server->access_grant = server->access_grant;
-        memset(&server->access_grant, 0, sizeof(server->access_grant));
-        access_code_existing_server->access_attempt = server->access_attempt;
-        client_access_attempt_clear(&server->access_attempt);
         metaserver_server_free(server);
         access_code_server = access_code_existing_server;
         access_code_server_added = true;
@@ -246,7 +234,7 @@ static int popup_destroy_callback(popup_struct *popup) {
 }
 
 void access_code_open(server_struct *server) {
-    access_code_existing_server = server != NULL && server->private_access ? server : NULL;
+    access_code_existing_server = access_resolver_required(server) ? server : NULL;
     access_code_server = access_code_existing_server == NULL ? server : NULL;
     access_code_server_added = server != NULL;
     identity_confirmation = false;

@@ -689,6 +689,8 @@ if (BUILD_TESTING)
 
     add_executable(client-access-resolver-tests
         src/tests/access_resolver.c
+        src/client/metaserver_direct.c
+        src/client/metaserver_directory.c
         src/client/access_resolver.c
         src/client/access_attempt.c)
     atrinik_configure_target(client-access-resolver-tests)
@@ -696,6 +698,12 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
     target_link_libraries(client-access-resolver-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    if (TARGET LibXml2::LibXml2)
+        target_link_libraries(client-access-resolver-tests PRIVATE LibXml2::LibXml2)
+    else ()
+        target_include_directories(client-access-resolver-tests PRIVATE ${LIBXML2_INCLUDE_DIR})
+        target_link_libraries(client-access-resolver-tests PRIVATE ${LIBXML2_LIBRARIES})
+    endif ()
     add_test(NAME client-access-resolver COMMAND client-access-resolver-tests)
 
     add_executable(client-window-title-tests

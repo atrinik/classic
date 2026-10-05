@@ -6,6 +6,44 @@
 #include <SDL3/SDL.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
+#include <toolkit/string.h>
+
+bool access_resolver_required(const server_struct *server) {
+    return server != NULL &&
+           (server->private_access ||
+            (server->access_required && (server->hostname == NULL || server->hostname[0] == '\0')));
+}
+
+bool access_resolver_adopt(server_struct *selected, server_struct *resolved) {
+    /* The access service parser binds the returned DER certificate to server_id.
+     * Check both pins before moving any endpoint or one-attempt secret. */
+    if (selected == NULL || resolved == NULL || !resolved->private_access ||
+        !string_is_hex_fixed(selected->server_id, 64, true) ||
+        !string_is_hex_fixed(selected->quic_certificate_sha256, 64, true) ||
+        !string_is_hex_fixed(resolved->server_id, 64, true) ||
+        !string_is_hex_fixed(resolved->quic_certificate_sha256, 64, true) ||
+        strcmp(selected->server_id, resolved->server_id) != 0 ||
+        strcmp(selected->quic_certificate_sha256, resolved->quic_certificate_sha256) != 0 ||
+        strcmp(resolved->server_id, resolved->quic_certificate_sha256) != 0) {
+        return false;
+    }
+    free(selected->hostname);
+    selected->hostname = resolved->hostname;
+    resolved->hostname = NULL;
+    selected->port = resolved->port;
+    free(selected->rendezvous_origin);
+    selected->rendezvous_origin = resolved->rendezvous_origin;
+    resolved->rendezvous_origin = NULL;
+    rendezvous_access_grant_clear(&selected->access_grant);
+    selected->access_grant = resolved->access_grant;
+    memset(&resolved->access_grant, 0, sizeof(resolved->access_grant));
+    client_access_attempt_clear(&selected->access_attempt);
+    selected->access_attempt = resolved->access_attempt;
+    client_access_attempt_clear(&resolved->access_attempt);
+    selected->private_access = true;
+    return true;
+}
 
 struct access_resolver_job {
     client_access_attempt_t attempt;

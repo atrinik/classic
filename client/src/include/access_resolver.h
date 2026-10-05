@@ -8,6 +8,13 @@ typedef struct server_struct server_struct;
 typedef struct access_resolver_job access_resolver_job_t;
 /* Includes cancelled workers whose transport cleanup has not finished. */
 #define ACCESS_RESOLVER_JOBS_MAX 8U
+/* Private sessions and addressless protected directory entries need a fresh grant. */
+bool access_resolver_required(const server_struct *server);
+/* Main-thread only. Adopt a trusted resolver result only if its identity and
+ * certificate pin match the selected entry. Failure leaves both untouched;
+ * success moves endpoint, grant and attempt ownership, preserving directory pins.
+ * The caller still owns and must free the detached result. */
+bool access_resolver_adopt(server_struct *selected, server_struct *resolved);
 /* All lifecycle calls are main-thread only. Start consumes and clears attempt
  * even on failure. Jobs copy all retained secret data and never retain UI state. */
 access_resolver_job_t *access_resolver_start(client_access_attempt_t *attempt);
