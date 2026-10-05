@@ -1624,6 +1624,120 @@ START_TEST(test_metaserver_publish_error_code_is_bounded) {
 END_TEST
 
 #ifdef __linux__
+static atomic_uint maintenance_calls;
+static atomic_bool maintenance_release, maintenance_saw_auth;
+static char maintenance_bad_token[33];
+static uint64_t maintenance_auth, maintenance_later_auth;
+
+static access_outcome_t maintenance_accept(void *context, const access_route_t *route) {
+    (void)context;
+    (void)route;
+    return ACCESS_COMMITTED;
+}
+
+static access_outcome_t maintenance_route(void *context, const access_route_t *route) {
+    (void)context;
+    unsigned call = atomic_fetch_add(&maintenance_calls, 1) + 1;
+    if (call == 1) {
+        uint64_t deadline = datetime_monotonic_ms() + 3000;
+        while (!atomic_load(&maintenance_release) && datetime_monotonic_ms() < deadline) {
+            struct timespec pause = {.tv_nsec = 1000000};
+            nanosleep(&pause, NULL);
+        }
+    } else if (call == 2) {
+        access_outcome_t outcome;
+        access_token_ref_t reference;
+        bool first_done = access_server_auth_poll(maintenance_auth, &outcome, &reference) &&
+                          outcome == ACCESS_DENIED;
+        bool later_done = access_server_auth_poll(maintenance_later_auth, &outcome, &reference);
+        atomic_store(&maintenance_saw_auth, first_done && !later_done);
+    }
+    return strcmp(route->token.token_id, maintenance_bad_token) == 0
+               ? ACCESS_CONFLICT : ACCESS_COMMITTED;
+}
+
+START_TEST(test_access_maintenance_rotates_and_services_queued_jobs) {
+    char directory[] = "/tmp/atrinik-access-fairness-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    uint8_t identity[32];
+    memset(identity, 0x11, sizeof(identity));
+    const char identity_hex[] =
+        "1111111111111111111111111111111111111111111111111111111111111111";
+    access_store_t *store = NULL;
+    int64_t now = (int64_t)time(NULL);
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    access_result_t tokens[2];
+    const char *requests[] = {"11111111111111111111111111111111",
+                              "22222222222222222222222222222222"};
+    for (size_t i = 0; i < 2; i++) {
+        tokens[i] = access_store_issue(store, requests[i], access_store_status(store).revision,
+                                       "Maintenance", false, 0, now, maintenance_accept, NULL);
+        ck_assert_int_eq(tokens[i].outcome, ACCESS_COMMITTED);
+    }
+    size_t bad = strcmp(tokens[0].token.token_id, tokens[1].token.token_id) < 0 ? 0 : 1;
+    snprintf(maintenance_bad_token, sizeof(maintenance_bad_token), "%s", tokens[bad].token.token_id);
+    ck_assert_int_eq(access_store_revoke(store, "33333333333333333333333333333333",
+                                         access_store_status(store).revision,
+                                         tokens[bad].token.token_id, now).outcome, ACCESS_LOCALLY_REVOKED);
+    ck_assert_int_eq(access_store_remove(store, "44444444444444444444444444444444",
+                                         access_store_status(store).revision,
+                                         tokens[1 - bad].token.token_id, now).outcome, ACCESS_PENDING);
+    for (size_t i = 0; i < 2; i++)
+        access_result_cleanse(&tokens[i]);
+    access_store_close(store);
+    char previous_store[sizeof(settings.access_store)];
+    memcpy(previous_store, settings.access_store, sizeof(previous_store));
+    bool previous_required = settings.access_required, previous_initialize = settings.access_initialize;
+    snprintf(VS(settings.access_store), "%s", directory);
+    settings.access_required = true;
+    settings.access_initialize = false;
+    atomic_store(&maintenance_calls, 0);
+    atomic_store(&maintenance_release, false);
+    atomic_store(&maintenance_saw_auth, false);
+    access_server_route_for_test(maintenance_route);
+    ck_assert(access_server_init(identity_hex));
+    access_server_maintenance_for_test();
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (atomic_load(&maintenance_calls) == 0 && datetime_monotonic_ms() < deadline) {
+        struct timespec pause = {.tv_nsec = 1000000};
+        nanosleep(&pause, NULL);
+    }
+    ck_assert_uint_eq(atomic_load(&maintenance_calls), 1);
+    uint64_t jobs[ACCESS_OUTBOX_LIMIT];
+    for (size_t i = 0; i < ACCESS_OUTBOX_LIMIT; i++) {
+        jobs[i] = access_server_auth_submit("0123456789ABCDEF");
+        ck_assert_uint_ne(jobs[i], 0);
+    }
+    maintenance_auth = jobs[0];
+    maintenance_later_auth = jobs[1];
+    access_server_maintenance_for_test();
+    atomic_store(&maintenance_release, true);
+    deadline = datetime_monotonic_ms() + 3000;
+    while (atomic_load(&maintenance_calls) < 2 && datetime_monotonic_ms() < deadline) {
+        struct timespec pause = {.tv_nsec = 1000000};
+        nanosleep(&pause, NULL);
+    }
+    /* Shutdown joins after the second callback and durable acknowledgement. */
+    ck_assert_uint_eq(atomic_load(&maintenance_calls), 2);
+    ck_assert(access_server_shutdown());
+    ck_assert(atomic_load(&maintenance_saw_auth));
+    access_server_deinit();
+    access_server_route_for_test(NULL);
+    memcpy(settings.access_store, previous_store, sizeof(previous_store));
+    settings.access_required = previous_required;
+    settings.access_initialize = previous_initialize;
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, false), ACCESS_COMMITTED);
+    ck_assert_uint_eq(access_store_status(store).pending_route_sync, 1);
+    ck_assert_int_eq(access_store_result(store, "44444444444444444444444444444444").outcome,
+                     ACCESS_COMMITTED);
+    access_store_close(store);
+    char snapshot[256];
+    snprintf(VS(snapshot), "%s/access-tokens.snapshot", directory);
+    ck_assert_int_eq(unlink(snapshot), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+
 static atomic_bool access_shutdown_route_entered, access_shutdown_route_cancelled;
 static access_outcome_t access_shutdown_route(void *context, const access_route_t *route) {
     (void)route;
@@ -2502,6 +2616,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_metaserver_access_route_cancellation_is_pending);
 #ifdef __linux__
     tcase_add_test(tc_core, test_access_worker_shutdown_preserves_pending_route);
+    tcase_add_test(tc_core, test_access_maintenance_rotates_and_services_queued_jobs);
 #endif
     tcase_add_test(tc_core, test_metaserver_publish_cadence);
     tcase_add_test(tc_core, test_metaserver_publish_cadence_attempt_is_fail_closed);

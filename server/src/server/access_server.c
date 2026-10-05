@@ -41,6 +41,7 @@ static struct {
     access_status_t absent;
     _Atomic bool failed;
     int64_t tick;
+    char retry_after[33];
 } worker = {.mutex = PTHREAD_MUTEX_INITIALIZER, .ready = PTHREAD_COND_INITIALIZER};
 
 static bool access_worker_cancelled(void *context) {
@@ -89,26 +90,22 @@ static void maintain_store(void) {
     access_outcome_t result = access_store_expire(worker.store, access_clock_now());
     if (result == ACCESS_SAVE_FAILED || result == ACCESS_INDETERMINATE)
         atomic_store(&worker.failed, true);
-    access_route_t rows[ACCESS_OUTBOX_LIMIT];
-    size_t count = 0;
-    if (access_store_outbox(worker.store, rows, ACCESS_OUTBOX_LIMIT, &count) != ACCESS_COMMITTED)
+    access_route_t row;
+    if (access_store_revoke_next(worker.store, worker.retry_after, &row) != ACCESS_COMMITTED)
         return;
-    /* One bounded retry per maintenance pass prevents route outage monopolizing
-     * the admin/auth worker. Issuance handles its own initial route transaction. */
-    for (size_t i = 0; i < count; i++) {
-        if (!rows[i].revoke)
-            continue;
-        if (access_worker_route((void *)&route_cancel, &rows[i]) == ACCESS_COMMITTED) {
-            result = access_store_route_ack(worker.store, &rows[i], access_clock_now());
-            if (result == ACCESS_SAVE_FAILED || result == ACCESS_INDETERMINATE)
-                atomic_store(&worker.failed, true);
-        }
-        break;
+    /* Advance even on failure; stable IDs survive acknowledgement/removal and
+     * reach every retained row, including those beyond the first dispatch page. */
+    memcpy(worker.retry_after, row.token.token_id, sizeof(worker.retry_after));
+    if (access_worker_route((void *)&route_cancel, &row) == ACCESS_COMMITTED) {
+        result = access_store_route_ack(worker.store, &row, access_clock_now());
+        if (result == ACCESS_SAVE_FAILED || result == ACCESS_INDETERMINATE)
+            atomic_store(&worker.failed, true);
     }
 }
 static void *run_worker(void *unused) {
     (void)unused;
     pthread_mutex_lock(&worker.mutex);
+    bool maintenance_served = false;
     for (;;) {
         access_job *job = NULL;
         for (size_t i = 0; i < ACCESS_OUTBOX_LIMIT; i++)
@@ -116,16 +113,21 @@ static void *run_worker(void *unused) {
                 job = &worker.jobs[i];
         if (worker.stopping)
             break;
-        if (job == NULL) {
-            if (worker.maintenance) {
-                worker.maintenance = false;
-                pthread_mutex_unlock(&worker.mutex);
-                maintain_store();
-                pthread_mutex_lock(&worker.mutex);
-            } else
-                pthread_cond_wait(&worker.ready, &worker.mutex);
+        /* Alternate pending maintenance and queued work. Neither continuous
+         * admissions nor repeated ticks can starve the other class of work. */
+        if (worker.maintenance && (job == NULL || !maintenance_served)) {
+            worker.maintenance = false;
+            maintenance_served = true;
+            pthread_mutex_unlock(&worker.mutex);
+            maintain_store();
+            pthread_mutex_lock(&worker.mutex);
             continue;
         }
+        if (job == NULL) {
+            pthread_cond_wait(&worker.ready, &worker.mutex);
+            continue;
+        }
+        maintenance_served = false;
         job->state = JOB_RUNNING;
         pthread_mutex_unlock(&worker.mutex);
         if (job->auth) {
@@ -237,6 +239,9 @@ bool access_server_init(const char identity_hex[65]) {
             return false;
     }
     worker.stopping = false;
+    worker.maintenance = false;
+    worker.tick = 0;
+    memset(worker.retry_after, 0, sizeof(worker.retry_after));
     atomic_store(&worker.failed, false);
     if (pthread_create(&worker.thread, NULL, run_worker, NULL) != 0) {
         access_store_close(worker.store);
@@ -256,6 +261,18 @@ bool access_server_init(const char identity_hex[65]) {
     worker.started = true;
     return true;
 }
+static void schedule_maintenance(void) {
+    pthread_mutex_lock(&worker.mutex);
+    worker.maintenance = true;
+    pthread_cond_signal(&worker.ready);
+    pthread_mutex_unlock(&worker.mutex);
+}
+#ifdef ATRINIK_TESTING
+void access_server_maintenance_for_test(void) {
+    HARD_ASSERT(worker.started);
+    schedule_maintenance();
+}
+#endif
 void access_server_tick(void) {
     if (!worker.started)
         return;
@@ -263,10 +280,7 @@ void access_server_tick(void) {
     if (now == worker.tick)
         return;
     worker.tick = now;
-    pthread_mutex_lock(&worker.mutex);
-    worker.maintenance = true;
-    pthread_cond_signal(&worker.ready);
-    pthread_mutex_unlock(&worker.mutex);
+    schedule_maintenance();
 }
 bool access_server_healthy(void) {
     return !atomic_load(&worker.failed);

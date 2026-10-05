@@ -1302,6 +1302,37 @@ access_store_outbox(access_store_t *s, access_route_t *rows, size_t capacity, si
     pthread_mutex_unlock(&s->mutex);
     return o;
 }
+access_outcome_t access_store_revoke_next(access_store_t *s,
+                                          const char *after_token_id,
+                                          access_route_t *row) {
+    if (!s || !after_token_id || !row || (*after_token_id && !hex_id(after_token_id)))
+        return ACCESS_INVALID;
+    memset(row, 0, sizeof(*row));
+    pthread_mutex_lock(&s->mutex);
+    access_outcome_t outcome = s->poisoned ? ACCESS_INDETERMINATE : ACCESS_NOT_FOUND;
+    token_t *first = NULL, *next = NULL;
+    if (!s->poisoned) {
+        for (size_t i = 0; i < s->state->token_count; i++) {
+            token_t *t = &s->state->tokens[i];
+            if (!t->info.route_pending || t->info.state == ACCESS_TOKEN_PENDING)
+                continue;
+            const char *id = t->info.ref.token_id;
+            if (first == NULL || strcmp(id, first->info.ref.token_id) < 0)
+                first = t;
+            if (strcmp(id, after_token_id) > 0 &&
+                (next == NULL || strcmp(id, next->info.ref.token_id) < 0))
+                next = t;
+        }
+        if (next == NULL)
+            next = first;
+        if (next != NULL) {
+            *row = route_for(next);
+            outcome = ACCESS_COMMITTED;
+        }
+    }
+    pthread_mutex_unlock(&s->mutex);
+    return outcome;
+}
 access_outcome_t access_store_route_ack(access_store_t *s, const access_route_t *ack, int64_t now) {
     if (!s || !ack || !hex_id(ack->request_id) || !hex_id(ack->token.token_id) || !ack->revoke ||
         now <= 0)

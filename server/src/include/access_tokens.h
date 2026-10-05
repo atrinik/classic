@@ -186,6 +186,12 @@ access_result_t access_store_remove(access_store_t *store,
  * Items include private I, never C/R/V; do not expose in operator UI. */
 access_outcome_t
 access_store_outbox(access_store_t *store, access_route_t *rows, size_t capacity, size_t *count);
+/* Select one pending revoke after a stable token-id cursor, wrapping at the end.
+ * Scans at most ACCESS_TOKEN_LIMIT records; does not mutate or perform route IO.
+ * Empty cursor starts at the minimum ID. NOT_FOUND clears row. */
+access_outcome_t access_store_revoke_next(access_store_t *store,
+                                          const char *after_token_id,
+                                          access_route_t *row);
 access_outcome_t
 access_store_route_ack(access_store_t *store, const access_route_t *ack, int64_t now);
 access_outcome_t access_store_authorize(access_store_t *store,

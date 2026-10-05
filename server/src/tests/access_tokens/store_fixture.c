@@ -612,6 +612,52 @@ static void removal_capacity_receipts(void) {
     }
 }
 
+static void fair_revoke_cursor(void) {
+    enum { COUNT = ACCESS_OUTBOX_LIMIT + 3 };
+    char directory[64], ids[COUNT][33], request[33], cursor[33] = "";
+    access_store_t *s = fresh(directory);
+    for (unsigned i = 0; i < COUNT; i++) {
+        snprintf(request, sizeof(request), "%032x", i + 100);
+        access_result_t a = access_store_issue(s, request, revision(s), "Cursor",
+                                               false, 0, 100, accepted, NULL);
+        assert(a.outcome == ACCESS_COMMITTED);
+        memcpy(ids[i], a.token.token_id, sizeof(ids[i]));
+        access_result_cleanse(&a);
+    }
+    for (unsigned i = 0; i < COUNT; i++) {
+        snprintf(request, sizeof(request), "%032x", i + 200);
+        assert(access_store_remove(s, request, revision(s), ids[i], 101).outcome == ACCESS_PENDING);
+    }
+    bool seen[COUNT] = {false};
+    for (unsigned i = 0; i < COUNT; i++) {
+        access_route_t row;
+        assert(access_store_revoke_next(s, cursor, &row) == ACCESS_COMMITTED);
+        assert(row.revoke && strcmp(row.token.token_id, cursor) > 0);
+        memcpy(cursor, row.token.token_id, sizeof(cursor));
+        unsigned index = 0;
+        while (index < COUNT && strcmp(ids[index], cursor))
+            index++;
+        assert(index < COUNT && !seen[index]);
+        seen[index] = true;
+        /* Keep the entire first page permanently failing. Later rows still get
+         * selected and can be removed, compacting the underlying token array. */
+        if (i >= ACCESS_OUTBOX_LIMIT)
+            assert(access_store_route_ack(s, &row, 102) == ACCESS_COMMITTED);
+    }
+    assert(access_store_status(s).pending_route_sync == ACCESS_OUTBOX_LIMIT);
+    access_route_t row;
+    assert(access_store_revoke_next(s, cursor, &row) == ACCESS_COMMITTED);
+    assert(strcmp(row.token.token_id, cursor) < 0); /* Wrap past the removed cursor. */
+    for (unsigned i = 0; i < ACCESS_OUTBOX_LIMIT; i++) {
+        assert(access_store_revoke_next(s, cursor, &row) == ACCESS_COMMITTED);
+        memcpy(cursor, row.token.token_id, sizeof(cursor));
+        assert(access_store_route_ack(s, &row, 103) == ACCESS_COMMITTED);
+    }
+    assert(access_store_revoke_next(s, cursor, &row) == ACCESS_NOT_FOUND);
+    assert(row.token.token_id[0] == 0 && !row.revoke);
+    cleanup(directory, s);
+}
+
 static void full_capacity(void) {
     char directory[64];
     access_store_t *s = fresh(directory);
@@ -832,6 +878,7 @@ int main(int argc, char **argv) {
     collisions();
     collision_receipt_fault();
     removal_capacity_receipts();
+    fair_revoke_cursor();
     puts("access token store fixtures passed");
     return 0;
 }
