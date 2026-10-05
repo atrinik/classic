@@ -6,6 +6,7 @@
 #include <keybind.h>
 #include <settings.h>
 #include <toolkit/packet.h>
+#include <toolkit/toolkit.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -234,6 +235,8 @@ static void test_confirmation_gates(void) {
     CHECK(book_edit_model_dirty(&model) && strcmp(model.title, "Unsaved title") == 0);
 }
 int main(void) {
+    toolkit_import(packet);
     test_packet(); test_multiline(); test_draft_lifecycle(); test_confirmation_gates();
+    toolkit_deinit();
     return 0;
 }
