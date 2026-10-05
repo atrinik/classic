@@ -4,6 +4,7 @@
 #include <global.h>
 #include <server_main.h>
 #include <server.h>
+#include <server_item.h>
 #include <book_edit.h>
 #include <commands.h>
 #include <check.h>
@@ -121,9 +122,14 @@ START_TEST(test_edit_copy_sign_and_persistence) {
     uint32_t id = reply_id(writer, BOOK_EDIT_OPEN);
     ck_assert(!QUERY_FLAG(pen, FLAG_APPLIED));
     ck_assert_int_eq(pen->stats.food, 1000);
+    char *description = object_get_description_s(pen, writer);
+    ck_assert_ptr_nonnull(strstr(description, "ink 1000/1000"));
+    free(description);
+    FREE_AND_COPY_HASH(book->custom_name, "Old alias");
     submit(writer, BOOK_EDIT_SAVE, id, book, NULL, "New title", "axc");
     reply_id(writer, BOOK_EDIT_UPDATED);
     ck_assert_str_eq(book->name, "New title");
+    ck_assert_ptr_null(book->custom_name);
     ck_assert_str_eq(book->msg, "axc");
     ck_assert_int_eq(pen->stats.food, 999);
     submit(writer, BOOK_EDIT_SAVE, id, book, NULL, "Renamed", "axc");

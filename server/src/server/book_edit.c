@@ -94,6 +94,9 @@ size_t book_edit_ink_cost(const char *before, const char *after) {
     if (old_len > BOOK_EDIT_CONTENT_MAX || new_len > BOOK_EDIT_CONTENT_MAX) {
         return SIZE_MAX;
     }
+    if (new_len == 0 || strcmp(before, after) == 0) {
+        return 0;
+    }
     /* One DP row: O(maximum text size) storage, bounded quadratic work. */
     uint16_t row[BOOK_EDIT_CONTENT_MAX + 1] = {0};
     for (size_t i = 0; i < old_len; i++) {
@@ -399,7 +402,9 @@ void socket_command_book_edit(socket_struct *cs, player *pl, uint8_t *data,
     }
     bool changed = strcmp(title, book->name) != 0 || strcmp(body, contents(book)) != 0;
     /* All validation has completed. These mutations run on the simulation thread. */
-    if (strcmp(title, book->name) != 0 || action == BOOK_EDIT_COPY) {
+    bool alias_changed = book->custom_name != NULL &&
+                         (strcmp(title, book->name) != 0 || action == BOOK_EDIT_COPY);
+    if (alias_changed) {
         /* A pre-existing /rename alias must not hide the chosen book title. */
         FREE_AND_CLEAR_HASH(book->custom_name);
     }
@@ -420,7 +425,7 @@ void socket_command_book_edit(socket_struct *cs, player *pl, uint8_t *data,
         object_set_value(book, BOOK_EDIT_UTC, utc, true);
         object_set_value(book, BOOK_EDIT_FINALIZED, "1", true);
     }
-    if (changed || action == BOOK_EDIT_SIGN) {
+    if (changed || alias_changed || action == BOOK_EDIT_SIGN) {
         book->inventory_generation++;
     }
     snapshot_book(snapshot, book, pl->ob);
