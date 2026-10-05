@@ -107,6 +107,7 @@ int main(void) {
         "\"tokenRevision\":\"1\",\"routePending\":false,\"code\":\"0123456789ABCDEF\"}}";
     REQUIRE(parse_admin(issue, &response));
     REQUIRE(response.operation == CLIENT_ACCESS_ADMIN_ISSUE);
+    REQUIRE(strcmp(response.token_id, "abcdef0123456789abcdef0123456789") == 0);
 
     static const char absent[] =
         "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"status\","

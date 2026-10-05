@@ -79,6 +79,15 @@ environment variables never synthesize a selected-adapter identity.
  a later run. Directories for unrelated or older major releases are left
  untouched and are never imported.
 
+ Access-management responses appear as literal text in the private book window.
+ After an uncertain mutation, use `/access result REQUEST_ID` to recover its
+ receipt. If it remains pending and identifies a token, explicitly revoke or
+ remove that exact token with `/access revoke TOKEN_ID` or `/access remove
+ TOKEN_ID`. New issuance stays blocked until `/access result REQUEST_ID`
+ confirms a terminal receipt. If cleanup itself is uncertain, keep recovering
+ the original mutation: a missing cleanup receipt cannot establish its outcome.
+ Mutations are never automatically retried.
+
  If you used a different BUILD_DIR or CMake preset, adjust the executable path
  accordingly. Extracted portable Windows packages contain atrinik.exe and all
  required runtime assets and DLLs; run atrinik.exe from inside that package.

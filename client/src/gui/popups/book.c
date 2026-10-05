@@ -137,10 +137,10 @@ static int popup_draw_func(popup_struct *popup) {
                   BOOK_TITLE_STARTX,
                   BOOK_TITLE_STARTY,
                   COLOR_HGOLD,
-                  TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_ALIGN_CENTER,
+                  TEXT_WORD_WRAP | (book_sensitive ? 0 : TEXT_MARKUP) | TEXT_ALIGN_CENTER,
                   &box);
 
-        /* Draw the content. */
+        /* Sensitive results contain server-controlled labels: render literal text. */
         box.w = BOOK_TEXT_WIDTH;
         box.h = BOOK_TEXT_HEIGHT;
         box.y = book_scroll;
@@ -154,7 +154,7 @@ static int popup_draw_func(popup_struct *popup) {
                   BOOK_TEXT_STARTX,
                   BOOK_TEXT_STARTY,
                   COLOR_BLACK,
-                  TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_LINES_SKIP,
+                  TEXT_WORD_WRAP | (book_sensitive ? 0 : TEXT_MARKUP) | TEXT_LINES_SKIP,
                   &box);
         text_set_selection(NULL, NULL, NULL);
 
@@ -328,7 +328,7 @@ static bool book_load_internal(const char *data, int len, bool sensitive, const 
               BOOK_TEXT_STARTX,
               BOOK_TEXT_STARTY,
               COLOR_WHITE,
-              TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_LINES_CALC,
+              TEXT_WORD_WRAP | (book_sensitive ? 0 : TEXT_MARKUP) | TEXT_LINES_CALC,
               &box);
     book_lines = box.h;
     book_scroll_lines = box.y;

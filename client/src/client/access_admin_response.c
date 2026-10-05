@@ -358,12 +358,13 @@ static bool json_list_result(json_parser_t *parser) {
 
 static bool json_mutation_result(json_parser_t *parser,
                                  client_access_admin_operation_t operation,
-                                 bool committed) {
+                                 bool committed,
+                                 char token_id[33]) {
     char value[65];
     char key[32];
     if (!json_character(parser, '{') ||
-        !json_named_string(parser, "tokenId", value, sizeof(value)) ||
-        (*value != '\0' && !fixed_hex(value, 32)) || !json_character(parser, ',') ||
+        !json_named_string(parser, "tokenId", token_id, 33) ||
+        (*token_id != '\0' && !fixed_hex(token_id, 32)) || !json_character(parser, ',') ||
         !json_named_string(parser, "tokenRevision", value, sizeof(value)) ||
         !decimal_value(value, UINT64_MAX, false) || !json_character(parser, ',') ||
         !json_string(parser, key, sizeof(key)) || strcmp(key, "routePending") != 0 ||
@@ -444,7 +445,8 @@ static bool json_result(json_parser_t *parser,
                         client_access_admin_operation_t operation,
                         bool committed,
                         bool revision_present,
-                        const char *revision) {
+                        const char *revision,
+                        char token_id[33]) {
     if (!revision_present) {
         if (operation == CLIENT_ACCESS_ADMIN_STATUS && committed) {
             return json_status_result(parser, false, revision);
@@ -462,7 +464,7 @@ static bool json_result(json_parser_t *parser,
         case CLIENT_ACCESS_ADMIN_REVOKE:
         case CLIENT_ACCESS_ADMIN_REMOVE:
         case CLIENT_ACCESS_ADMIN_RESULT:
-            return json_mutation_result(parser, operation, committed);
+            return json_mutation_result(parser, operation, committed, token_id);
         default:
             return false;
     }
@@ -532,6 +534,7 @@ bool client_access_admin_response_parse(const uint8_t *data,
                        response->operation,
                        response->committed,
                        response->revision_present,
-                       response->revision) &&
+                       response->revision,
+                       response->token_id) &&
            json_character(&parser, '}') && parser.position == parser.end;
 }

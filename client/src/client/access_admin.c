@@ -34,6 +34,7 @@ static bool request_outstanding;
 static uint64_t request_started_us;
 static char recovery_request_id[33];
 static char recovery_server_id[65];
+static char recovery_token_id[33];
 static char last_result_target[33];
 
 static bool mutation_operation(client_access_admin_operation_t operation) {
@@ -50,6 +51,12 @@ static bool recovery_for_selected_server(void) {
 static void remember_recovery(void) {
     if (!request_outstanding || !mutation_operation(last_operation) || selected_server == NULL ||
         selected_server->server_id == NULL) {
+        return;
+    }
+    access_code_clear(recovery_token_id, sizeof(recovery_token_id));
+    /* Cleanup can fail before reaching the server. Its absent receipt must not
+     * replace the original unresolved mutation or release the issuance fence. */
+    if (recovery_for_selected_server()) {
         return;
     }
     snprintf(recovery_request_id, sizeof(recovery_request_id), "%s", last_request_id);
@@ -313,9 +320,14 @@ bool client_access_admin_command(const char *command) {
         draw_info(COLOR_RED, "Wait for the current access-management request to finish.");
         return true;
     }
+    /* A recovered nonterminal receipt permits explicit cleanup of its exact token.
+     * Keep issuance fenced until a subsequent result confirms a terminal receipt. */
+    bool cleanup = strncmp(operation, "revoke ", 7) == 0 ||
+                   strncmp(operation, "remove ", 7) == 0;
+    bool recovered_cleanup = cleanup && recovery_token_id[0] != '\0' &&
+                             strcmp(operation + 7, recovery_token_id) == 0;
     if (recovery_for_selected_server() &&
-        (strncmp(operation, "issue ", 6) == 0 || strncmp(operation, "revoke ", 7) == 0 ||
-         strncmp(operation, "remove ", 7) == 0)) {
+        (strncmp(operation, "issue ", 6) == 0 || cleanup) && !recovered_cleanup) {
         draw_info_format(COLOR_RED,
                          "Recover request %s with /access result before another mutation.",
                          recovery_request_id);
@@ -397,10 +409,15 @@ bool client_access_admin_response(const uint8_t *data, size_t size) {
         free(pending_command);
         pending_command = NULL;
     }
-    if (response.operation == CLIENT_ACCESS_ADMIN_RESULT && response.terminal &&
+    if (response.operation == CLIENT_ACCESS_ADMIN_RESULT && recovery_for_selected_server() &&
         strcmp(last_result_target, recovery_request_id) == 0) {
-        access_code_clear(recovery_request_id, sizeof(recovery_request_id));
-        access_code_clear(recovery_server_id, sizeof(recovery_server_id));
+        if (response.terminal) {
+            access_code_clear(recovery_request_id, sizeof(recovery_request_id));
+            access_code_clear(recovery_server_id, sizeof(recovery_server_id));
+            access_code_clear(recovery_token_id, sizeof(recovery_token_id));
+        } else {
+            snprintf(recovery_token_id, sizeof(recovery_token_id), "%s", response.token_id);
+        }
     }
     access_code_clear(last_result_target, sizeof(last_result_target));
     char *json = xmalloc(size + 1U);

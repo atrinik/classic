@@ -673,6 +673,31 @@ if (BUILD_TESTING)
     target_link_libraries(client-access-tests PRIVATE Atrinik::Core)
     add_test(NAME client-access COMMAND client-access-tests)
 
+    add_executable(client-access-admin-tests
+        src/tests/access_admin.c
+        src/client/access_admin.c
+        src/client/access_admin_response.c)
+    atrinik_configure_target(client-access-admin-tests)
+    target_include_directories(client-access-admin-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-access-admin-tests PRIVATE
+        Atrinik::Core SDL3::SDL3 OpenSSL::Crypto)
+    add_test(NAME client-access-admin COMMAND client-access-admin-tests)
+
+    add_executable(client-access-resolver-tests
+        src/tests/access_resolver.c
+        src/client/access_resolver.c
+        src/client/access_attempt.c)
+    atrinik_configure_target(client-access-resolver-tests)
+    target_include_directories(client-access-resolver-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-access-resolver-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-access-resolver COMMAND client-access-resolver-tests)
+
     add_executable(client-window-title-tests
         src/tests/window_title.c
         src/client/window_title.c)

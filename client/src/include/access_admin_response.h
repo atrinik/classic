@@ -26,6 +26,8 @@ typedef struct client_access_admin_response {
     client_access_admin_operation_t operation;
     char request_id[33];
     char revision[21];
+    /** Validated mutation/recovery token, empty when no token is known. */
+    char token_id[33];
     bool revision_present;
     bool committed;
     bool terminal;
