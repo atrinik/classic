@@ -53,10 +53,9 @@ static void remember_recovery(void) {
         selected_server->server_id == NULL) {
         return;
     }
-    access_code_clear(recovery_token_id, sizeof(recovery_token_id));
-    /* Cleanup can fail before reaching the server. Its absent receipt must not
-     * replace the original unresolved mutation or release the issuance fence. */
-    if (recovery_for_selected_server()) {
+    /* Cleanup can fail before reaching the server. Keep the original request,
+     * server and validated token together until recovery actually completes. */
+    if (recovery_request_id[0] != '\0') {
         return;
     }
     snprintf(recovery_request_id, sizeof(recovery_request_id), "%s", last_request_id);
@@ -327,12 +326,14 @@ bool client_access_admin_command(const char *command) {
      * Keep issuance fenced until a subsequent result confirms a terminal receipt. */
     bool cleanup = strncmp(operation, "revoke ", 7) == 0 ||
                    strncmp(operation, "remove ", 7) == 0;
-    bool recovered_cleanup = cleanup && recovery_token_id[0] != '\0' &&
+    bool recovered_cleanup = cleanup && recovery_for_selected_server() &&
+                             recovery_token_id[0] != '\0' &&
                              strcmp(operation + 7, recovery_token_id) == 0;
-    if (recovery_for_selected_server() &&
+    if (recovery_request_id[0] != '\0' &&
         (strncmp(operation, "issue ", 6) == 0 || cleanup) && !recovered_cleanup) {
         draw_info_format(COLOR_RED,
-                         "Recover request %s with /access result before another mutation.",
+                         "Return to the original server and recover request %s with /access result "
+                         "before another mutation.",
                          recovery_request_id);
         return true;
     }
@@ -388,7 +389,10 @@ bool client_access_admin_response(const uint8_t *data, size_t size) {
         return false;
     }
 
-    if (mutation_operation(response.operation) && !response.terminal) {
+    /* A committed issuance is not delivered until its private book opens. Keep
+     * only recovery identities, never the one-time code, if presentation fails. */
+    bool issued = response.operation == CLIENT_ACCESS_ADMIN_ISSUE && response.committed;
+    if ((mutation_operation(response.operation) && !response.terminal) || issued) {
         remember_recovery();
     }
     request_outstanding = false;
@@ -412,23 +416,24 @@ bool client_access_admin_response(const uint8_t *data, size_t size) {
         free(pending_command);
         pending_command = NULL;
     }
-    if (response.operation == CLIENT_ACCESS_ADMIN_RESULT && recovery_for_selected_server() &&
-        strcmp(last_result_target, recovery_request_id) == 0) {
-        if (response.terminal) {
-            access_code_clear(recovery_request_id, sizeof(recovery_request_id));
-            access_code_clear(recovery_server_id, sizeof(recovery_server_id));
-            access_code_clear(recovery_token_id, sizeof(recovery_token_id));
-        } else {
-            snprintf(recovery_token_id, sizeof(recovery_token_id), "%s", response.token_id);
-        }
-    }
-    access_code_clear(last_result_target, sizeof(last_result_target));
     char *json = xmalloc(size + 1U);
     memcpy(json, data, size);
     json[size] = '\0';
     bool displayed = book_load_sensitive(json, (int)size, "Access management");
     access_code_clear(json, size);
     free(json);
+    bool recovered_result = response.operation == CLIENT_ACCESS_ADMIN_RESULT &&
+                            strcmp(last_result_target, recovery_request_id) == 0;
+    if (recovery_for_selected_server() && (issued || recovered_result)) {
+        if (displayed && response.terminal) {
+            access_code_clear(recovery_request_id, sizeof(recovery_request_id));
+            access_code_clear(recovery_server_id, sizeof(recovery_server_id));
+            access_code_clear(recovery_token_id, sizeof(recovery_token_id));
+        } else if (response.token_id[0] != '\0' || displayed) {
+            snprintf(recovery_token_id, sizeof(recovery_token_id), "%s", response.token_id);
+        }
+    }
+    access_code_clear(last_result_target, sizeof(last_result_target));
     return displayed;
 }
 

@@ -26,6 +26,9 @@
 static server_struct server = {.server_id =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"};
 server_struct *selected_server = &server;
+static server_struct other_server = {.server_id =
+    "1111111111111111111111111111111111111111111111111111111111111111"};
+static bool fail_book;
 static uint64_t now_us = 1;
 static unsigned int sends;
 static char sent[2048];
@@ -74,6 +77,9 @@ void draw_info_format(const char *color, const char *format, ...) {
 bool book_load_sensitive(const char *data, int len, const char *title) {
     REQUIRE(strcmp(title, "Access management") == 0);
     REQUIRE(len > 0 && (size_t)len < sizeof(displayed));
+    if (fail_book) {
+        return false;
+    }
     memcpy(displayed, data, (size_t)len);
     displayed[len] = '\0';
     return true;
@@ -111,7 +117,7 @@ static void reply(const char *operation, const char *outcome, const char *result
                         "\"requestId\":\"%s\",\"outcome\":\"%s\",\"revision\":\"7\","
                         "\"result\":%s}", operation, id, outcome, result);
     REQUIRE(size > 0 && (size_t)size < sizeof(json));
-    REQUIRE(client_access_admin_response((const uint8_t *)json, (size_t)size));
+    REQUIRE(client_access_admin_response((const uint8_t *)json, (size_t)size) == !fail_book);
 }
 
 static void mutation_reply(const char *operation, const char *outcome, const char *id) {
@@ -182,7 +188,8 @@ int main(void) {
      * replace the original uncertain issuance and release its fence. */
     now_us += UINT64_C(35000000);
     client_access_admin_update();
-    token_command("remove", token, false);
+    token_command("remove", token, true);
+    mutation_reply("remove", "conflict", "");
     token_command("result", removal, false);
     char missing_cleanup[512];
     int missing_size = snprintf(missing_cleanup, sizeof(missing_cleanup),
@@ -198,8 +205,9 @@ int main(void) {
     mutation_reply("result", "pending", token);
     token_command("remove", token, true);
     mutation_reply("remove", "pending", token);
-    /* A pending cleanup still requires recovery of the original mutation. */
-    token_command("remove", token, false);
+    /* A pending cleanup preserves its validated token and the original request. */
+    token_command("remove", token, true);
+    mutation_reply("remove", "conflict", "");
     token_command("result", issuance, true);
     mutation_reply("result", "indeterminate", "");
     token_command("remove", token, false);
@@ -208,6 +216,70 @@ int main(void) {
     token_command("remove", token, true);
     mutation_reply("remove", "committed", token);
     command("/access issue --label duplicate", false);
+    token_command("result", issuance, true);
+    mutation_reply("result", "locally_revoked_route_pending", token);
+
+    /* A single unresolved recovery fences mutations on every server. Read-only
+     * operations remain available, but server B cannot consume server A's token. */
+    command("/access issue --label server-a", true);
+    request_id(issuance);
+    now_us += UINT64_C(35000000);
+    client_access_admin_update();
+    token_command("result", issuance, true);
+    mutation_reply("result", "pending", token);
+    client_access_admin_reset();
+    selected_server = &other_server;
+    command("/access issue --label server-b", false);
+    token_command("revoke", token, false);
+    token_command("remove", token, false);
+    token_command("result", issuance, false);
+    command("/access status", true);
+    status_reply();
+    now_us += UINT64_C(35000000);
+    client_access_admin_update();
+    client_access_admin_reset();
+    selected_server = &server;
+    token_command("result", issuance, true);
+    mutation_reply("result", "pending", token);
+    token_command("revoke", token, true);
+    now_us += UINT64_C(35000000);
+    client_access_admin_update();
+    client_access_admin_reset();
+    token_command("result", issuance, true);
+    mutation_reply("result", "pending", token);
+    token_command("revoke", token, true);
+    mutation_reply("revoke", "committed", token);
+    token_command("result", issuance, true);
+    mutation_reply("result", "locally_revoked_route_pending", token);
+
+    /* Renderer failure never loses the issuance receipt or validated token.
+     * Simulate the command handler's disconnect, reconnect and explicit cleanup. */
+    command("/access issue --label failed-book", true);
+    request_id(issuance);
+    book_sensitive_clear();
+    fail_book = true;
+    reply("issue", "committed",
+          "{\"tokenId\":\"abcdef0123456789abcdef0123456789\","
+          "\"tokenRevision\":\"1\",\"routePending\":false,\"code\":\"0123456789ABCDEF\"}");
+    REQUIRE(displayed[0] == '\0');
+    client_access_admin_reset();
+    command("/access issue --label duplicate", false);
+    fail_book = false;
+    command("/access status", true);
+    status_reply();
+    token_command("revoke", other_token, false);
+    token_command("revoke", token, true);
+    mutation_reply("revoke", "conflict", "");
+    token_command("result", issuance, true);
+    fail_book = true;
+    mutation_reply("result", "committed", token);
+    client_access_admin_reset();
+    command("/access issue --label duplicate", false);
+    fail_book = false;
+    token_command("result", issuance, true);
+    mutation_reply("result", "pending", token);
+    token_command("remove", token, true);
+    mutation_reply("remove", "committed", token);
     token_command("result", issuance, true);
     mutation_reply("result", "locally_revoked_route_pending", token);
 
