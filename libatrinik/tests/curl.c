@@ -10,9 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifdef ATRINIK_TEST_CURL_CLEANUP
 #include <curl/curl.h>
-#endif
 
 typedef struct http_fixture {
     int listener;
@@ -117,6 +115,123 @@ static bool wait_for_flag(atomic_bool *flag, unsigned timeout_ms) {
         usleep(1000);
     }
     return true;
+}
+
+typedef struct cancellable_fixture {
+    CURL *easy;
+    curl_cancel_t cancel;
+    atomic_bool cancelled;
+    CURLcode result;
+    long status;
+    size_t received;
+} cancellable_fixture_t;
+
+static bool cancellation_requested(void *context) {
+    return atomic_load((atomic_bool *)context);
+}
+
+static size_t count_response(char *data, size_t size, size_t count, void *context) {
+    (void)data;
+    size_t bytes = size * count;
+    *(size_t *)context += bytes;
+    return bytes;
+}
+
+static void *perform_cancellable(void *context) {
+    cancellable_fixture_t *transfer = context;
+    transfer->result = curl_perform_cancellable(transfer->easy, &transfer->cancel);
+    curl_easy_getinfo(transfer->easy, CURLINFO_RESPONSE_CODE, &transfer->status);
+    curl_easy_cleanup(transfer->easy);
+    return NULL;
+}
+
+static int test_cancellable_perform(bool cancel) {
+    static const char response[] = "HTTP/1.1 200 OK\r\n"
+                                   "Content-Length: 7\r\n"
+                                   "Connection: close\r\n\r\n"
+                                   "success";
+    http_fixture_t fixture = {.listener = -1, .response = response, .stall_until_close = cancel};
+    char url[128];
+    if (http_fixture_start(&fixture, url, sizeof(url)) != 0) {
+        return 1;
+    }
+    cancellable_fixture_t transfer = {.easy = curl_easy_init()};
+    if (transfer.easy == NULL) {
+        close(fixture.listener);
+        return 1;
+    }
+    transfer.cancel.cancelled = cancellation_requested;
+    transfer.cancel.context = &transfer.cancelled;
+    curl_easy_setopt(transfer.easy, CURLOPT_URL, url);
+    curl_easy_setopt(transfer.easy, CURLOPT_NOPROXY, "*");
+    curl_easy_setopt(transfer.easy, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(transfer.easy, CURLOPT_TIMEOUT_MS, 8000L);
+    curl_easy_setopt(transfer.easy, CURLOPT_WRITEFUNCTION, count_response);
+    curl_easy_setopt(transfer.easy, CURLOPT_WRITEDATA, &transfer.received);
+    pthread_t server_thread;
+    if (pthread_create(&server_thread, NULL, http_fixture_run, &fixture) != 0) {
+        curl_easy_cleanup(transfer.easy);
+        close(fixture.listener);
+        return 1;
+    }
+    pthread_t worker;
+    if (pthread_create(&worker, NULL, perform_cancellable, &transfer) != 0) {
+        curl_easy_cleanup(transfer.easy);
+        pthread_join(server_thread, NULL);
+        close(fixture.listener);
+        return 1;
+    }
+    bool received = wait_for_flag(&fixture.received, 3000);
+    uint64_t started = monotonic_ms();
+    if (cancel) {
+        atomic_store(&transfer.cancelled, true);
+    }
+    pthread_join(worker, NULL);
+    uint64_t elapsed = monotonic_ms() - started;
+    pthread_join(server_thread, NULL);
+    close(fixture.listener);
+    bool valid = received && fixture.accepted;
+    if (cancel) {
+        valid = valid && transfer.result == CURLE_ABORTED_BY_CALLBACK && elapsed < 2000 &&
+                fixture.peer_closed && transfer.received == 0;
+    } else {
+        valid = valid && transfer.result == CURLE_OK && transfer.status == 200 &&
+                transfer.received == 7;
+    }
+    if (!valid) {
+        fprintf(stderr,
+                "cancellable HTTP fixture failed: cancel=%d result=%d elapsed=%llu\n",
+                cancel,
+                transfer.result,
+                (unsigned long long)elapsed);
+    }
+    return !valid;
+}
+
+static int test_precancelled_perform(void) {
+    http_fixture_t fixture = {.listener = -1};
+    char url[128];
+    if (http_fixture_start(&fixture, url, sizeof(url)) != 0) {
+        return 1;
+    }
+    CURL *easy = curl_easy_init();
+    if (easy == NULL) {
+        close(fixture.listener);
+        return 1;
+    }
+    atomic_bool cancelled = true;
+    curl_cancel_t cancel = {.cancelled = cancellation_requested, .context = &cancelled};
+    curl_easy_setopt(easy, CURLOPT_URL, url);
+    curl_easy_setopt(easy, CURLOPT_NOPROXY, "*");
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, 100L);
+    CURLcode result = curl_perform_cancellable(easy, &cancel);
+    curl_easy_cleanup(easy);
+    struct pollfd listener = {.fd = fixture.listener, .events = POLLIN};
+    bool no_connection = poll(&listener, 1, 100) == 0;
+    close(fixture.listener);
+    curl_cancel_t empty = {0};
+    return result != CURLE_ABORTED_BY_CALLBACK || !no_connection || !curl_cancelled(&cancel) ||
+           curl_cancelled(NULL) || curl_cancelled(&empty);
 }
 
 #ifdef ATRINIK_TEST_CURL_CLEANUP
@@ -610,6 +725,11 @@ int main(void) {
                  test_response_code_survives_partial_body() || test_total_timeout() ||
                  test_validated_cache_commit() || test_bounded_request_diagnostic() ||
                  test_endpoint_alias_diagnostics();
+    failed |= test_precancelled_perform();
+    failed |= test_cancellable_perform(false);
+    for (unsigned iteration = 0; iteration < 3; iteration++) {
+        failed |= test_cancellable_perform(true);
+    }
     for (unsigned post = 0; post < 2; post++) {
         failed |= test_async_request(post != 0, false, false);
         failed |= test_async_request(post != 0, true, false);

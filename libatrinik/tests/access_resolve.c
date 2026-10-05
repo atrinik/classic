@@ -1,7 +1,15 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include <toolkit/access_resolve.h>
+#include <toolkit/curl.h>
 #include <toolkit/metaserver_url.h>
+#include <stdatomic.h>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 #define REQUIRE(x)                                  \
     do {                                            \
         if (!(x)) {                                 \
@@ -22,6 +30,58 @@ static const char body[] =
     "\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"grant\":"
     "\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"expiresAt\":"
     "\"1800000015\",\"endpoint\":{\"hostname\":\"game.example.net\",\"port\":13327}}";
+static bool cancellation_requested(void *context) {
+    return atomic_load((atomic_bool *)context);
+}
+
+static bool all_zero(const void *data, size_t size) {
+    const unsigned char *bytes = data;
+    for (size_t i = 0; i < size; i++) {
+        if (bytes[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int test_precancelled_resolve(void) {
+    atomic_bool cancelled = true;
+    curl_cancel_t cancel = {.cancelled = cancellation_requested, .context = &cancelled};
+    access_resolved_t out;
+    const char *origin = "https://127.0.0.1:9";
+#ifndef _WIN32
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    REQUIRE(listener >= 0);
+    struct sockaddr_in address = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+        .sin_port = 0,
+    };
+    bool listening = bind(listener, (struct sockaddr *)&address, sizeof(address)) == 0 &&
+                     listen(listener, 1) == 0;
+    socklen_t length = sizeof(address);
+    listening = listening && getsockname(listener, (struct sockaddr *)&address, &length) == 0;
+    if (!listening) {
+        close(listener);
+        return 1;
+    }
+    char loopback[128];
+    snprintf(loopback, sizeof(loopback), "http://127.0.0.1:%u", ntohs(address.sin_port));
+    origin = loopback;
+#endif
+    memset(&out, 0xa5, sizeof(out));
+    bool resolved = access_resolve_cancellable(origin, "000G40R40M30E209", &out, &cancel);
+    bool cleared = all_zero(&out, sizeof(out));
+#ifndef _WIN32
+    struct pollfd connection = {.fd = listener, .events = POLLIN};
+    bool no_connection = poll(&connection, 1, 100) == 0;
+    close(listener);
+    REQUIRE(no_connection);
+#endif
+    REQUIRE(!resolved && cleared);
+    return 0;
+}
+
 int main(void) {
     access_resolved_t out;
     char nonce[65];
@@ -59,5 +119,6 @@ int main(void) {
     REQUIRE(!metaserver_url_access("https://example.net/?secret=x", NULL, false, url, sizeof(url)));
     REQUIRE(!metaserver_url_access("https://example.net/base", NULL, false, url, sizeof(url)));
     REQUIRE(metaserver_url_access("http://127.0.0.1:8787", NULL, false, url, sizeof(url)));
+    REQUIRE(test_precancelled_resolve() == 0);
     return 0;
 }
