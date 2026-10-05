@@ -62,3 +62,11 @@ into `atrinik`. Local source runs may instead set the public, non-secret
 `ATRINIK_DISCORD_APPLICATION_ID` environment variable or create the ignored
 `data/discord-application-id` file. Never supply a Discord Client Secret,
 OAuth token, bot token, authorization code, or user credential.
+
+Windows portable packages install the checked-in Mozilla-derived `ca-bundle.crt`.
+The client release helper explicitly selects that source bundle; standalone CMake
+builds may still set `ATRINIK_CA_BUNDLE` deliberately. When the selected Windows
+runtime DLLs include c-ares, packaging also requires its complete license at
+`ATRINIK_WINDOWS_RUNTIME_DIR/../share/licenses/c-ares/LICENSE.md`, or the explicit
+`ATRINIK_WINDOWS_CARES_LICENSE` override, and installs it as `c-ares-LICENSE.md`
+beside the DLLs. Toolchains without a c-ares DLL do not require that notice.

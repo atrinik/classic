@@ -39,3 +39,10 @@ The server core object library precompiles `src/include/global.h` by default.
 Pass `-DENABLE_PRECOMPILED_HEADERS=OFF` for a conventional build. See
 `../docs/BUILD_ACCELERATION.md` for the benchmark procedure, measurements, and
 invalidation tradeoffs.
+
+Windows portable server packages directly install the checked-in Mozilla-derived
+`ca-bundle.crt`. When the selected Windows runtime DLLs include c-ares, packaging
+also requires its complete license at
+`ATRINIK_WINDOWS_RUNTIME_DIR/../share/licenses/c-ares/LICENSE.md`, or the explicit
+`ATRINIK_WINDOWS_CARES_LICENSE` override, and installs it as `c-ares-LICENSE.md`
+beside the DLLs. Toolchains without a c-ares DLL do not require that notice.

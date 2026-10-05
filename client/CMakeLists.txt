@@ -1251,6 +1251,26 @@ if (WIN32 AND NOT UNIX)
         if (ATRINIK_WINDOWS_RUNTIME_DLLS)
             install(FILES ${ATRINIK_WINDOWS_RUNTIME_DLLS}
                 DESTINATION ${INSTALL_SUBDIR_BIN})
+
+            # A c-ares runtime must carry the complete notice from its toolchain.
+            set(ATRINIK_WINDOWS_CARES_LICENSE
+                "${ATRINIK_WINDOWS_RUNTIME_DIR}/../share/licenses/c-ares/LICENSE.md"
+                CACHE FILEPATH "c-ares license accompanying the Windows runtime DLL")
+            foreach (runtime_dll IN LISTS ATRINIK_WINDOWS_RUNTIME_DLLS)
+                get_filename_component(runtime_name "${runtime_dll}" NAME)
+                string(TOLOWER "${runtime_name}" runtime_name)
+                if (runtime_name MATCHES "^(lib)?cares[^/]*\\.dll$")
+                    if (NOT EXISTS "${ATRINIK_WINDOWS_CARES_LICENSE}" OR
+                            IS_DIRECTORY "${ATRINIK_WINDOWS_CARES_LICENSE}")
+                        message(FATAL_ERROR
+                            "c-ares runtime requires ATRINIK_WINDOWS_CARES_LICENSE: "
+                            "${ATRINIK_WINDOWS_CARES_LICENSE}")
+                    endif ()
+                    install(FILES "${ATRINIK_WINDOWS_CARES_LICENSE}"
+                        DESTINATION ${INSTALL_SUBDIR_BIN} RENAME c-ares-LICENSE.md)
+                    break()
+                endif ()
+            endforeach ()
         else ()
             message(FATAL_ERROR
                 "No DLLs found in ATRINIK_WINDOWS_RUNTIME_DIR: ${ATRINIK_WINDOWS_RUNTIME_DIR}")
