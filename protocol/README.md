@@ -16,6 +16,11 @@ limits, actions and draft-preserving responses. Both endpoints validate a full
 packet before publishing state. Editor sessions belong to the current playing
 connection; reconnect requires applying a pen again. The existing protocol
 version handshake rejects earlier peers before gameplay.
+Signed `BOOK` responses also append two bounded NUL-terminated UTF-8 fields,
+signer and in-game date (127 bytes each), after the existing book-message
+terminator. Unsigned responses have no suffix. The client accepts either the
+complete pair or no suffix and renders authenticated metadata outside editable
+book markup.
 
 Protocol v1080 added timed celestial aggregate-light keyframes to MAP2. Its
 payload carries a bounded absolute game-time interval and next-endpoint samples;
