@@ -149,8 +149,8 @@ if (NOT TARGET Atrinik::Core)
         message(FATAL_ERROR
             "Matching Classic libatrinik source is required: use the sibling "
             "libatrinik/ tree, the packaged dependencies/libatrinik tree, or "
-            "FETCHCONTENT_SOURCE_DIR_LIBATRINIK. The archived libatrinik v1.0.3 "
-            "fallback lacks the current Classic access APIs.")
+            "FETCHCONTENT_SOURCE_DIR_LIBATRINIK. Historical standalone libatrinik "
+            "releases lack the current Classic access APIs.")
     endif ()
     FetchContent_Declare(libatrinik
         SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_LIBATRINIK}")
