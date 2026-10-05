@@ -16,8 +16,11 @@
  * S2C: result:u8, session:u32, selected:u32, ink:u32, capacity:u32, count:u16,
  *      count * (tag:u32, finalized:u8, title:string), selected_title:string,
  *      selected_contents:string, notice:string. Every packet is complete.
- * ERROR retains the current draft. OPEN/UPDATED replace it only after complete
- * validation; SELECT discards a draft only after explicit client confirmation.
+ * ERROR retains the current draft. OPEN binds a fresh session and preserves a
+ * suspended dirty draft for the same unchanged destination. A different book
+ * or changed persisted base requires explicit discard/rebase confirmation.
+ * UPDATED replaces the draft after complete validation; SELECT discards a
+ * draft only after explicit client confirmation.
  *
  * One session per connection. Applying another pen invalidates the old session;
  * reconnect never restores one. Server-held snapshots fence inventory custody,
