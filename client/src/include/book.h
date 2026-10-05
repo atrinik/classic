@@ -92,6 +92,8 @@ extern bool book_load_signed(const char *data, int len, const char *signer, cons
 #ifdef ATRINIK_WIDGET_TESTS
 /** Whether book content remains owned after an allocation-failure path. */
 extern bool book_test_content_retained(void);
+/** Whether the signed reader executed its separate footer rendering path. */
+extern bool book_test_signature_rendered(void);
 #endif
 
 extern void book_redraw(void);

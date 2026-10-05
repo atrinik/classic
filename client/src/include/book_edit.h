@@ -53,4 +53,17 @@ void socket_command_book_edit(uint8_t *data, size_t len, size_t pos);
 /** Forget session identity on disconnect; never submit an old draft to a new connection. */
 void book_edit_disconnect(void);
 void book_edit_deinit(void);
+#ifdef ATRINIK_WIDGET_TESTS
+typedef struct book_edit_test_request {
+    unsigned count;
+    enum book_edit_action action;
+    uint32_t session, destination, source;
+    char title[BOOK_EDIT_TITLE_MAX + 1], contents[BOOK_EDIT_CONTENT_MAX + 1];
+} book_edit_test_request_t;
+/* Read-only production-popup and serialized-request observations. */
+const book_edit_model_t *book_edit_test_model(void);
+const book_edit_test_request_t *book_edit_test_request(void);
+bool book_edit_test_title_focused(void);
+#endif
+
 #endif

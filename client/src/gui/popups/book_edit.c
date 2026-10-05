@@ -37,8 +37,8 @@ static const book_edit_entry_t *find_book(uint32_t tag) {
 
 static void capture_draft(void) {
     if (initialized) {
-        snprintf(model.title, sizeof(model.title), "%s", title.str);
-        snprintf(model.contents, sizeof(model.contents), "%s", contents.str);
+        snprintf(model.title, sizeof(model.title), "%.*s", (int)BOOK_EDIT_TITLE_MAX, title.str);
+        snprintf(model.contents, sizeof(model.contents), "%.*s", (int)BOOK_EDIT_CONTENT_MAX, contents.str);
     }
 }
 
@@ -51,6 +51,39 @@ static bool dirty(void) {
     capture_draft();
     return book_edit_model_dirty(&model);
 }
+
+#ifdef ATRINIK_WIDGET_TESTS
+static book_edit_test_request_t last_request;
+
+/* Observe serialized production requests without creating a transport. */
+static void record_request(packet_struct *packet) {
+    book_edit_test_request_t next = {.count = last_request.count + 1};
+    packet_reader_t reader;
+    packet_reader_init(&reader, packet->data, packet->len);
+    next.action = packet_reader_read_uint8(&reader);
+    next.session = packet_reader_read_uint32(&reader);
+    next.destination = packet_reader_read_uint32(&reader);
+    next.source = packet_reader_read_uint32(&reader);
+    if (packet_reader_read_string(&reader, next.title, sizeof(next.title)) &&
+        packet_reader_read_string(&reader, next.contents, sizeof(next.contents)) &&
+        packet_reader_finish(&reader)) {
+        last_request = next;
+    }
+}
+
+const book_edit_model_t *book_edit_test_model(void) {
+    capture_draft();
+    return &model;
+}
+
+const book_edit_test_request_t *book_edit_test_request(void) {
+    return &last_request;
+}
+
+bool book_edit_test_title_focused(void) {
+    return title.focus && !contents.focus;
+}
+#endif
 
 static void submit(enum book_edit_action action, uint32_t destination) {
     if (!book_edit_model_can_submit(&model, action, destination) || cpl.state != ST_PLAY) {
@@ -65,6 +98,9 @@ static void submit(enum book_edit_action action, uint32_t destination) {
                                           action == BOOK_EDIT_SIGN ? model.base_title : "");
     packet_writer_write_cstring(packet, action == BOOK_EDIT_SAVE ? contents.str :
                                           action == BOOK_EDIT_SIGN ? model.base_contents : "");
+#ifdef ATRINIK_WIDGET_TESTS
+    record_request(packet);
+#endif
     socket_send_packet(packet);
     model.pending = action != BOOK_EDIT_CANCEL;
     model.confirmation = BOOK_CONFIRM_NONE;
@@ -153,6 +189,9 @@ static void close_server_session(void) {
     packet_writer_write_uint32(packet, 0);
     packet_writer_write_cstring(packet, "");
     packet_writer_write_cstring(packet, "");
+#ifdef ATRINIK_WIDGET_TESTS
+    record_request(packet);
+#endif
     socket_send_packet(packet);
 }
 

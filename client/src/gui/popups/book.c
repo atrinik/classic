@@ -46,6 +46,9 @@
 static char *book_content = NULL;
 static char book_signer[128];
 static char book_signed_date[128];
+#ifdef ATRINIK_WIDGET_TESTS
+static bool book_signature_rendered;
+#endif
 /** Name of the book. */
 static char book_name[HUGE_BUF];
 /** Number of lines in the book. */
@@ -85,6 +88,9 @@ static void book_state_clear(void) {
     book_scroll_lines = 0;
     book_scroll = 0;
     book_signer[0] = book_signed_date[0] = '\0';
+#ifdef ATRINIK_WIDGET_TESTS
+    book_signature_rendered = false;
+#endif
 }
 
 /**
@@ -138,6 +144,9 @@ static int popup_draw_func(popup_struct *popup) {
         text_set_selection(NULL, NULL, NULL);
 
         if (book_signer[0]) {
+#ifdef ATRINIK_WIDGET_TESTS
+            book_signature_rendered = true;
+#endif
             char signature[300];
             snprintf(signature, sizeof(signature), "Signed by %s on %s", book_signer, book_signed_date);
             box.w = BOOK_TEXT_WIDTH;
@@ -351,10 +360,16 @@ static bool book_load_internal(const char *data, int len) {
 
 bool book_load(const char *data, int len) {
     book_signer[0] = book_signed_date[0] = '\0';
+#ifdef ATRINIK_WIDGET_TESTS
+    book_signature_rendered = false;
+#endif
     return book_load_internal(data, len);
 }
 
 bool book_load_signed(const char *data, int len, const char *signer, const char *date) {
+#ifdef ATRINIK_WIDGET_TESTS
+    book_signature_rendered = false;
+#endif
     SDL_utf8strlcpy(book_signer, signer, sizeof(book_signer));
     SDL_utf8strlcpy(book_signed_date, date, sizeof(book_signed_date));
     return book_load_internal(data, len);
@@ -363,6 +378,9 @@ bool book_load_signed(const char *data, int len, const char *signer, const char 
 #ifdef ATRINIK_WIDGET_TESTS
 bool book_test_content_retained(void) {
     return book_content != NULL;
+}
+bool book_test_signature_rendered(void) {
+    return book_signature_rendered;
 }
 #endif
 
