@@ -27,6 +27,7 @@ add_library(Atrinik::Protocol ALIAS atrinik-protocol)
 set_target_properties(atrinik-protocol PROPERTIES EXPORT_NAME Protocol)
 target_include_directories(atrinik-protocol INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/generated/c/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -80,3 +81,5 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/AtrinikProtocolConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/AtrinikProtocolConfigVersion.cmake"
     DESTINATION lib/cmake/AtrinikProtocol)
+
+install(DIRECTORY include/ DESTINATION include)

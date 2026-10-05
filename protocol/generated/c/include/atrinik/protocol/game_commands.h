@@ -3,7 +3,7 @@
 #ifndef ATRINIK_PROTOCOL_GAME_COMMANDS_H
 #define ATRINIK_PROTOCOL_GAME_COMMANDS_H
 
-#define ATRINIK_PROTOCOL_VERSION 1080U
+#define ATRINIK_PROTOCOL_VERSION 1081U
 #define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION
 #define ATRINIK_PROTOCOL_ITEM_NAME_SIZE 128U
 
@@ -45,7 +45,8 @@ typedef enum atrinik_client_to_server_command {
     SERVER_CMD_TALK = 20,
     SERVER_CMD_MOVE = 21,
     SERVER_CMD_TARGET = 22,
-    SERVER_CMD_NROF = 23
+    SERVER_CMD_BOOK_EDIT = 23,
+    SERVER_CMD_NROF = 24
 } atrinik_client_to_server_command_t;
 
 /* Stable diagnostic names for client-to-server commands. */
@@ -72,6 +73,7 @@ typedef enum atrinik_client_to_server_command {
 #define SERVER_CMD_NAME_TALK "talk"
 #define SERVER_CMD_NAME_MOVE "move"
 #define SERVER_CMD_NAME_TARGET "target"
+#define SERVER_CMD_NAME_BOOK_EDIT "book_edit"
 
 typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_MAP = 0,
@@ -103,7 +105,8 @@ typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_NOTIFICATION = 26,
     CLIENT_CMD_KEEPALIVE = 27,
     CLIENT_CMD_PLAYER_STATUS = 28,
-    CLIENT_CMD_NROF = 29
+    CLIENT_CMD_BOOK_EDIT = 29,
+    CLIENT_CMD_NROF = 30
 } atrinik_server_to_client_command_t;
 
 /* Stable diagnostic names for server-to-client commands. */
@@ -136,5 +139,6 @@ typedef enum atrinik_server_to_client_command {
 #define CLIENT_CMD_NAME_NOTIFICATION "notification"
 #define CLIENT_CMD_NAME_KEEPALIVE "keepalive"
 #define CLIENT_CMD_NAME_PLAYER_STATUS "player_status"
+#define CLIENT_CMD_NAME_BOOK_EDIT "book_edit"
 
 #endif
