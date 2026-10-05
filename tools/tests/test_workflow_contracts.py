@@ -17,6 +17,27 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_final_published_provider_pins_and_installed_library_lane(self) -> None:
+        classic = "ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2"
+        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml", "build-release-candidate.yml"):
+            with self.subTest(workflow=name):
+                workflow = self.text(name)
+                self.assertIn(f"CLASSIC_LINUX_IMAGE: {classic}", workflow)
+                if name != "build-release-candidate.yml":
+                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2", workflow)
+        candidate = self.text("build-release-candidate.yml")
+        sources = candidate[candidate.index("  sources:"):candidate.index("  client-windows:")]
+        lane = sources[sources.index("      - name: Pull the immutable installed-library"):]
+        self.assertIn('docker pull "${CLASSIC_LINUX_IMAGE}"', lane)
+        self.assertIn("bash tools/ci/check_installed_library.sh", lane)
+        self.assertIn('"${RELEASE_VERSION}" "${RELEASE_REVISION}"', lane)
+        self.assertIn("RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}", lane)
+        self.assertIn("persist-credentials: false", sources)
+        self.assertIn("permissions:\n      contents: read", sources)
+        for forbidden in ("apt-get", "pip install", "docker/login-action", "GH_TOKEN"):
+            self.assertNotIn(forbidden, lane)
+        self.assertNotIn("apt-get", sources)
+
     def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
         workflow = self.text("check.yml")
         jobs = dict(
@@ -1094,10 +1115,10 @@ class WorkflowContractTests(unittest.TestCase):
         server_job = candidate[
             candidate.index("  server-windows:") : candidate.index("  server-image:")
         ]
-        digest = "d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb"
-        image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
+        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
+        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
         self.assertEqual(
-            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.2.1-{digest}"), 1
+            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.16.0-{digest}"), 1
         )
         self.assertEqual(candidate.count(image), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", candidate)
@@ -1227,8 +1248,8 @@ class WorkflowContractTests(unittest.TestCase):
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
-        digest = "d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb"
-        image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
+        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
+        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
         self.assertEqual(build.count(image), 4)
@@ -1943,8 +1964,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("tools/ci/run_gpu_coverage.sh", client)
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage_job)
         self.assertIn(
-            "ghcr.io/atrinik/linux-build:1.3.0@sha256:"
-            "260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a",
+            "ghcr.io/atrinik/linux-build:1.16.0@sha256:"
+            "89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e",
             workflow,
         )
 
