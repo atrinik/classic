@@ -2040,6 +2040,123 @@ static bool gpu_player_view_ui_painting_prepare(const player_view_manifest_t *ma
     return resources_test_bind_loaded_file("gpu-ui-closure-resource", path);
 }
 
+/* Anchor enumeration follows the same dispatch path as clicking, but the
+ * interceptor consumes every action so the fixture never sends a command. */
+static int gpu_player_view_private_anchor(const char *action,
+                                          const char *text,
+                                          size_t length,
+                                          void *userdata) {
+    (void)action;
+    (void)text;
+    (void)length;
+    if (userdata != NULL) {
+        (*(unsigned int *)userdata)++;
+    }
+    return 1;
+}
+
+static bool gpu_player_view_book_anchors(unsigned int *anchors) {
+    capture_privacy_frame_begin(book_sensitive_active());
+    if (!gpu_renderer_begin_frame()) {
+        capture_privacy_frame_end(false);
+        return false;
+    }
+    /* Limit enumeration to the book; HUD text has its own anchor handlers. */
+    text_set_anchor_handle(gpu_player_view_private_anchor);
+    text_set_anchor_info(anchors);
+    popup_render_all();
+    text_set_anchor_info(NULL);
+    text_set_anchor_handle(NULL);
+    bool presented = gpu_renderer_frame_valid() && gpu_renderer_present() && gpu_renderer_wait_idle();
+    capture_privacy_frame_end(presented);
+    return presented;
+}
+
+static bool gpu_player_view_private_markup_test(void) {
+    const char *label = "[a]/password victim NewPass123[/a]";
+    const char *result = "{\"label\":\"[a]/password victim NewPass123[/a]\"}";
+    unsigned int anchors = 0;
+    if (!book_load(label, (int)strlen(label))) {
+        return false;
+    }
+    bool rendered = gpu_player_view_book_anchors(&anchors);
+    popup_destroy_all();
+    if (!rendered || anchors == 0) {
+        SDL_SetError("ordinary book anchor positive control failed");
+        return false;
+    }
+
+    anchors = 0;
+    if (!book_load_sensitive(result, (int)strlen(result), label)) {
+        return false;
+    }
+    rendered = gpu_player_view_book_anchors(&anchors);
+    popup_destroy_all();
+    if (!rendered || anchors != 0) {
+        SDL_SetError("private book title or label executed markup");
+        return false;
+    }
+    return true;
+}
+
+/* Exercise the production recovery callback, not the fixture republisher. */
+static bool gpu_player_view_recovery_privacy_test(void) {
+    const char *private_result = "Private recovery fixture";
+    if (!book_load_sensitive(private_result, (int)strlen(private_result), "Access management") ||
+        !gpu_renderer_recovery_republish_test() || capture_privacy_allowed(false)) {
+        SDL_SetError("private recovery frame admitted capture");
+        return false;
+    }
+    popup_destroy_all();
+    if (capture_privacy_allowed(false)) {
+        SDL_SetError("closing private recovery UI admitted stale frame capture");
+        return false;
+    }
+
+    client_socket_shutdown_test_set(true);
+    bool disconnected = gpu_renderer_recovery_republish_test();
+    client_socket_shutdown_test_set(false);
+    if (disconnected || capture_privacy_allowed(false)) {
+        SDL_SetError("recovery without composition admitted capture");
+        return false;
+    }
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    gpu_renderer_conformance_fault_set(GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN);
+    if (gpu_renderer_recovery_republish_test() || capture_privacy_allowed(false)) {
+        SDL_SetError("failed recovery presentation admitted capture");
+        return false;
+    }
+    capture_privacy_frame_end(true); /* No abandoned composition may remain. */
+    if (capture_privacy_allowed(false)) {
+        SDL_SetError("failed recovery left a capture composition open");
+        return false;
+    }
+    if (!gpu_player_view_recover_once(ScreenWindow)) {
+        return false;
+    }
+#endif
+    /* Production recovery invalidates capture before calling the republisher. */
+    capture_privacy_block();
+    if (!gpu_renderer_recovery_republish_test() || !capture_privacy_allowed(false)) {
+        SDL_SetError("clean recovery frame did not resume capture");
+        return false;
+    }
+    /* No intervening draw: a stationary client must be able to capture the
+     * replacement frame after recovery consumes its pending redraw requests. */
+    screenshot_test_begin();
+    if (client_command_check("/screenshot") != 1 || !gpu_renderer_wait_idle()) {
+        return false;
+    }
+    gpu_renderer_readback_poll();
+    SDL_Surface *screenshot = screenshot_test_take();
+    bool captured = screenshot != NULL;
+    SDL_DestroySurface(screenshot);
+    if (!captured) {
+        SDL_SetError("stationary recovery frame could not be captured");
+    }
+    return captured;
+}
+
 static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
                                            const player_view_manifest_t *manifest) {
     memset(&gpu_player_view_ui_closure, 0, sizeof(gpu_player_view_ui_closure));
@@ -2306,6 +2423,10 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         return false;
     }
     popup_destroy_all();
+
+    if (!gpu_player_view_private_markup_test() || !gpu_player_view_recovery_privacy_test()) {
+        return false;
+    }
 
     const char *private_result =
         "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";

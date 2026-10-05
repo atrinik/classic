@@ -32,6 +32,7 @@
 #include <animations.h>
 #include <book.h>
 #include <capture_privacy.h>
+#include <access_resolver.h>
 #include <client.h>
 #include <commands.h>
 #include <config.h>
@@ -792,7 +793,11 @@ static bool gpu_renderer_recovery_republish(void *userdata) {
     widget_redraw_everything();
     popup_redraw_all();
 
+    /* Recovery composes a new frame and may consume the last pending redraw.
+     * Track privacy throughout composition, including private UI loaded by it. */
+    capture_privacy_frame_begin(book_sensitive_active());
     if (!gpu_renderer_begin_frame()) {
+        capture_privacy_frame_end(false);
         return false;
     }
     uint64_t gpu_ui_started = gpu_renderer_timing_begin();
@@ -827,13 +832,16 @@ static bool gpu_renderer_recovery_republish(void *userdata) {
     }
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_UI, gpu_ui_started);
     if (!gpu_renderer_frame_valid()) {
+        capture_privacy_frame_end(false);
         return false;
     }
     if (client_socket_shutdown_pending()) {
         SDL_SetError("connection closed during GPU recovery republish");
+        capture_privacy_frame_end(false);
         return false;
     }
     bool presented = gpu_renderer_present();
+    capture_privacy_frame_end(presented);
     map_benchmark_statistics_present(presented);
     return presented;
 }
@@ -1253,6 +1261,7 @@ int main(int argc, char *argv[]) {
 
         uint64_t profile_game_started = render_profiler_begin();
 
+        access_resolver_service();
         client_access_admin_update();
 
         /* Have we been shutdown? */
