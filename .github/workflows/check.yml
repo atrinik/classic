@@ -986,7 +986,7 @@ jobs:
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           files: client/coverage.xml
           flags: client-gpu
           use_oidc: true
@@ -999,12 +999,25 @@ jobs:
           for attempt in {1..90}; do
             reports_ready=true
             for flag in client-unit client-gpu; do
-              if ! sessions=$(
-                curl --fail --silent --show-error --retry 2 --get \
+              if response=$(
+                curl --fail --silent --show-error --get \
                   --data-urlencode "sha=${COVERAGE_SHA}" \
                   --data-urlencode "flag=${flag}" \
-                  "${CODECOV_REPORT_API}" | jq -er '.totals.sessions // 0'
-              ) || [ "${sessions}" -lt 1 ]; then
+                  "${CODECOV_REPORT_API}"
+              ); then
+                if ! sessions=$(printf '%s' "${response}" | jq -er '.totals.sessions // 0') ||
+                   [ "${sessions}" -lt 1 ]; then
+                  reports_ready=false
+                  break
+                fi
+              else
+                curl_status=$?
+                case "${curl_status}" in
+                  35|51|58|60|77)
+                    echo "Codecov TLS transfer failed (curl exit ${curl_status}); this is not a coverage processing delay." >&2
+                    exit "${curl_status}"
+                    ;;
+                esac
                 reports_ready=false
                 break
               fi
