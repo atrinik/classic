@@ -1,4 +1,6 @@
 set(SOURCES
+	src/client/book_edit_packet.c
+	src/gui/popups/book_edit.c
 	src/client/asset.c
 	src/client/asset_source.c
 	src/client/audio_log.c

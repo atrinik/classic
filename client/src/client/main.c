@@ -27,6 +27,7 @@
  * Client main related functions.
  */
 
+#include <book_edit.h>
 #include <mouse.h>
 #include <animations.h>
 #include <client.h>
@@ -306,6 +307,7 @@ static int game_status_chain(void) {
         metaserver_get_servers();
         cpl.state = ST_START;
     } else if (cpl.state == ST_START) {
+        book_edit_disconnect();
         image_face_requests_clear();
         if (client_socket_active()) {
             client_socket_close(&csocket);

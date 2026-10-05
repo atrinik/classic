@@ -27,6 +27,7 @@
  * General convenience functions for the client.
  */
 
+#include <book_edit.h>
 #include <image_codec.h>
 #include <client.h>
 #include <effects.h>
@@ -87,6 +88,7 @@ void system_end(void) {
     object_deinit();
     notification_destroy();
     connection_preference_popup_deinit();
+    book_edit_deinit();
     popup_destroy_all();
     resources_deinit();
     toolkit_widget_deinit();

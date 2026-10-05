@@ -485,3 +485,27 @@ environment variables never synthesize a selected-adapter identity.
  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+Book writing
+------------
+ Apply a pen while carrying writable books to open the book editor. The marked
+ book is the initial destination. Use the destination and copy-source Next buttons
+ to choose books by title and object identity. Enter inserts a newline in Contents;
+ Tab changes the focused field. Save commits title and contents. Server rejection
+ (including insufficient ink) retains the draft. Cancel deliberately discards it.
+ Copy confirms source and destination before replacing the destination; copies
+ remain unsigned. Save edits before Sign, then confirm permanent signing. A signed
+ book is read only. Ink charges cover inserted UTF-8 bytes after the server's byte
+ LCS diff; title changes, deletions and signing are free.
+
+ The editor uses BOOK_EDIT at classic wire revision 1081. BOOK retains its original
+ NUL-terminated text, optionally followed by exactly two NUL-terminated UTF-8
+ strings: authenticated signer and in-game date, each at most 127 bytes. Both must
+ be nonempty and no trailing bytes are accepted. Unsigned books omit the suffix.
+ The reader renders signature metadata in a separate unformatted footer.
+
+ Focused regression validation is `ctest --test-dir BUILD -R client-book-edit
+ --output-on-failure`; the normal client suite also exercises command dispatch and
+ retained popup/GPU behavior. Use the documented linux-coverage preset for native
+ coverage, and the workspace wrapper for integrated client/server execution.

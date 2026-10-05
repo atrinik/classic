@@ -38,6 +38,13 @@
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.
+- Book writing uses a separate `BOOK_EDIT` popup and bounded protocol snapshots.
+  Preserve drafts on server errors and keep destination/source identity explicit.
+  Copy replacement and irreversible signing each require their own confirmation;
+  signing submits persisted fields only. Never inherit signature metadata on copy.
+  Multiline text editing is opt-in; default single-line inputs retain their behavior.
+  Reset editor session identity on disconnect. Read-only books render optional
+  authenticated signer/date metadata separately without interpreting its markup.
 - Live movement diagnostics use normal authenticated connections and movement
   commands in an isolated wrapper scenario. Their closed route owns gameplay
   input, accepts only complete server map publications, and fails on divergence

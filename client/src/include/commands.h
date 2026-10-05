@@ -55,6 +55,8 @@ extern int cmd_aliases_handle(const char *cmd);
 
 /** Public API implemented in src/client/commands.c. */
 
+extern void socket_command_book_edit(uint8_t *data, size_t len, size_t pos);
+
 extern void socket_command_book(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_setup(uint8_t *data, size_t len, size_t pos);

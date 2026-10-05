@@ -44,6 +44,8 @@
 
 /** The book's content. */
 static char *book_content = NULL;
+static char book_signer[128];
+static char book_signed_date[128];
 /** Name of the book. */
 static char book_name[HUGE_BUF];
 /** Number of lines in the book. */
@@ -82,6 +84,7 @@ static void book_state_clear(void) {
     book_lines = 0;
     book_scroll_lines = 0;
     book_scroll = 0;
+    book_signer[0] = book_signed_date[0] = '\0';
 }
 
 /**
@@ -118,7 +121,7 @@ static int popup_draw_func(popup_struct *popup) {
 
         /* Draw the content. */
         box.w = BOOK_TEXT_WIDTH;
-        box.h = BOOK_TEXT_HEIGHT;
+        box.h = BOOK_TEXT_HEIGHT - (book_signer[0] ? 36 : 0);
         box.y = book_scroll;
         text_color_set(0, 0, 255);
         text_set_selection(&popup->selection_start,
@@ -133,6 +136,16 @@ static int popup_draw_func(popup_struct *popup) {
                   TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_LINES_SKIP,
                   &box);
         text_set_selection(NULL, NULL, NULL);
+
+        if (book_signer[0]) {
+            char signature[300];
+            snprintf(signature, sizeof(signature), "Signed by %s on %s", book_signer, book_signed_date);
+            box.w = BOOK_TEXT_WIDTH;
+            box.h = 32;
+            text_show(popup->surface, FONT_ARIAL11, signature, BOOK_TEXT_STARTX,
+                      BOOK_TEXT_STARTY + BOOK_TEXT_HEIGHT - 32, COLOR_BLACK,
+                      TEXT_WORD_WRAP, &box);
+        }
 
         popup->redraw = 0;
     }
@@ -241,7 +254,7 @@ static const char *popup_clipboard_copy_func(popup_struct *popup) {
  * @param len
  * Length of 'data'.
  */
-bool book_load(const char *data, int len) {
+static bool book_load_internal(const char *data, int len) {
     SDL_Rect box;
     int pos;
     popup_struct *popup;
@@ -285,7 +298,7 @@ bool book_load(const char *data, int len) {
 
     /* Calculate the line numbers. */
     box.w = BOOK_TEXT_WIDTH;
-    box.h = BOOK_TEXT_HEIGHT;
+    box.h = BOOK_TEXT_HEIGHT - (book_signer[0] ? 36 : 0);
     text_show(NULL,
               FONT_ARIAL11,
               book_content,
@@ -334,6 +347,17 @@ bool book_load(const char *data, int len) {
 
     popup->redraw = 1;
     return true;
+}
+
+bool book_load(const char *data, int len) {
+    book_signer[0] = book_signed_date[0] = '\0';
+    return book_load_internal(data, len);
+}
+
+bool book_load_signed(const char *data, int len, const char *signer, const char *date) {
+    SDL_utf8strlcpy(book_signer, signer, sizeof(book_signer));
+    SDL_utf8strlcpy(book_signed_date, date, sizeof(book_signed_date));
+    return book_load_internal(data, len);
 }
 
 #ifdef ATRINIK_WIDGET_TESTS

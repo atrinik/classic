@@ -31,6 +31,7 @@
 #include <animations.h>
 #include <asset.h>
 #include <book.h>
+#include <book_edit.h>
 #include <client.h>
 #include <commands.h>
 #include <effects.h>
@@ -76,7 +77,22 @@ static_assert(MAP2_PROTOCOL_METADATA_SHORT_MAX == MAX_BUF - 1,
 
 /** @copydoc socket_command_struct::handle_func */
 void socket_command_book(uint8_t *data, size_t len, size_t pos) {
-    if (!book_load((char *)data + pos, len)) {
+    packet_reader_t reader;
+    packet_reader_init_at(&reader, data, len, pos);
+    packet_view_t content = packet_reader_read_string_view(&reader, PACKET_PAYLOAD_MAX);
+    char signer[128] = "", date[128] = "";
+    if (reader.pos < reader.len) {
+        if (!packet_reader_read_string(&reader, signer, sizeof(signer)) ||
+            !packet_reader_read_string(&reader, date, sizeof(date)) ||
+            signer[0] == '\0' || date[0] == '\0' ||
+            !book_edit_utf8_valid(signer) || !book_edit_utf8_valid(date)) {
+            return;
+        }
+    }
+    if (!packet_reader_finish(&reader)) {
+        return;
+    }
+    if (!book_load_signed((const char *)content.data, (int)content.len, signer, date)) {
         if (!client_command_retry_current()) {
             LOG(ERROR, "Could not retain BOOK command for GPU recovery");
         }

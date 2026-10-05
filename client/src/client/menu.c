@@ -256,6 +256,12 @@ int client_command_check(const char *cmd) {
         type = string_startswith(cmd, "/cast ") ? TYPE_SPELL : TYPE_SKILL;
         cmd = strchr(cmd, ' ') + 1;
 
+        if (type == TYPE_SKILL && strncasecmp(cmd, "inscription", 11) == 0 &&
+            (cmd[11] == '\0' || isspace((unsigned char)cmd[11]))) {
+            draw_info(COLOR_WHITE, "Apply a pen to open the book editor. Enter title and contents there; use Copy or Sign for those actions.");
+            return 1;
+        }
+
         if (string_isempty(cmd)) {
             return 1;
         }
