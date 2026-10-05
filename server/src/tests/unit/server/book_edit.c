@@ -49,8 +49,12 @@ static void setup_writer(object **writer, object **pen, object **book) {
     mapstruct *map;
     check_setup_env_pl(&map, writer);
     CONTR(*writer)->cs->state = ST_PLAYING;
-    object_insert_into(arch_get("skill_literacy"), *writer, INS_NO_MERGE);
-    object_insert_into(arch_get("skill_inscription"), *writer, INS_NO_MERGE);
+    if (find_skill(*writer, SK_LITERACY) == NULL) {
+        object_insert_into(arch_get("skill_literacy"), *writer, INS_NO_MERGE);
+    }
+    if (find_skill(*writer, SK_INSCRIPTION) == NULL) {
+        object_insert_into(arch_get("skill_inscription"), *writer, INS_NO_MERGE);
+    }
     *pen = arch_get("writing_pen");
     (*pen)->nrof = 1;
     FREE_AND_COPY_HASH((*pen)->race, "writing_ink");
@@ -315,8 +319,13 @@ START_TEST(test_all_book_producers_are_terminated) {
     object *writer, *pen, *book;
     setup_writer(&writer, &pen, &book);
     player *pl = CONTR(writer);
+    object *quest_container = pl->quest_container;
+    ck_assert_ptr_nonnull(quest_container);
+    /* Cover the no-container response without changing the player's inventory.
+     * Restore the normal root before insertion can recalculate player state. */
     pl->quest_container = NULL;
     socket_command_quest_list(pl->cs, pl, NULL, 0, 0);
+    pl->quest_container = quest_container;
     packet_reader_t reader;
     packet_struct *packet = last_packet(writer, CLIENT_CMD_BOOK);
     char text[4096];
@@ -324,12 +333,18 @@ START_TEST(test_all_book_producers_are_terminated) {
     ck_assert(packet_reader_read_string(&reader, text, sizeof(text)));
     ck_assert_str_eq(text, "[title]No quests to speak of.[/title]");
     ck_assert(packet_reader_finish(&reader));
-    pl->quest_container = object_insert_into(arch_get("sack"), writer, INS_NO_MERGE);
-    object *quest = object_get();
-    quest->type = QUEST_CONTAINER;
+    /* Use the same nested quest archetype/status tree as authored quests. */
+    object *quest = arch_get(QUEST_CONTAINER_ARCHETYPE);
+    quest->magic = QUEST_STATUS_STARTED;
+    FREE_AND_COPY_HASH(quest->name, "book-producer-quest");
     FREE_AND_COPY_HASH(quest->race, "Keeper's request");
-    object_insert_into(quest, pl->quest_container, INS_NO_MERGE);
-    object *part = object_get();
+    object_insert_into(quest, quest_container, INS_NO_MERGE);
+    object *part = arch_get(QUEST_CONTAINER_ARCHETYPE);
+    part->magic = QUEST_STATUS_STARTED;
+    part->sub_type = QUEST_TYPE_KILL;
+    part->last_sp = 1;
+    part->last_grace = 3;
+    FREE_AND_COPY_HASH(part->name, "book-producer-objective");
     FREE_AND_COPY_HASH(part->race, "Find the book");
     FREE_AND_COPY_HASH(part->msg, "Return to the keeper.");
     object_insert_into(part, quest, INS_NO_MERGE);
@@ -340,6 +355,7 @@ START_TEST(test_all_book_producers_are_terminated) {
     ck_assert_ptr_nonnull(strstr(text, "Keeper's request"));
     ck_assert_ptr_nonnull(strstr(text, "Find the book"));
     ck_assert_ptr_nonnull(strstr(text, "Return to the keeper."));
+    ck_assert_ptr_nonnull(strstr(text, "Status: 1/3"));
     ck_assert(packet_reader_finish(&reader));
     player_apply(writer, book, 0, 0);
     packet = last_packet(writer, CLIENT_CMD_BOOK);
