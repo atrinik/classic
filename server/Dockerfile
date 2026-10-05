@@ -21,6 +21,12 @@ WORKDIR /src/server
 RUN --network=none python3 docker/runtime-provider.py stage \
         --output /opt/runtime-provider \
     && python3 docker/runtime-provider.py packages > /opt/runtime-provider-packages.lock
+# Acquire the only non-local native source before the offline configure step.
+# The existing fetcher verifies both the locked archive and extracted tree;
+# CMake revalidates this same build/dependency-cache before using its contents.
+RUN python3 tools/dependencies.py source \
+        --source-lock cmake/immutable_sources.lock.json \
+        --source-name libpcpnatpmp --cache build/dependency-cache
 RUN --network=none python3 tools/dependencies.py sync \
         --cache build/dependencies/downloads --refresh --offline \
     && python3 tools/dependencies.py verify \
