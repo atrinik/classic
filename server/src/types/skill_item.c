@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -32,10 +32,20 @@
 #include <global.h>
 #include <server_main.h>
 #include <object_methods.h>
+#include <object.h>
+#include <book_edit.h>
+
+static int apply_func(object *op, object *applier, int aflags) {
+    if (applier->type == PLAYER && book_edit_is_pen(op)) {
+        book_edit_open(op, applier);
+        return OBJECT_METHOD_OK;
+    }
+    return object_apply_item(op, applier, aflags);
+}
 
 /**
  * Initialize the skill item type object methods.
  */
 OBJECT_TYPE_INIT_DEFINE(skill_item) {
-    OBJECT_METHODS(SKILL_ITEM)->apply_func = object_apply_item;
+    OBJECT_METHODS(SKILL_ITEM)->apply_func = apply_func;
 }

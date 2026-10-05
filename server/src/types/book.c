@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -32,6 +32,7 @@
 #include <server_item.h>
 #include <server.h>
 #include <book.h>
+#include <book_edit.h>
 #include <toolkit/packet.h>
 #include <player.h>
 #include <object.h>
@@ -89,7 +90,7 @@ static int apply_func(object *op, object *applier, int aflags) {
         return OBJECT_METHOD_OK;
     }
 
-    if (op->msg == NULL) {
+    if (op->msg == NULL && !book_edit_finalized(op)) {
         draw_info_format(COLOR_WHITE, applier, "You open the %s and find it empty.", op->name);
         return OBJECT_METHOD_OK;
     }
@@ -131,7 +132,13 @@ static int apply_func(object *op, object *applier, int aflags) {
     stringbuffer_free(sb);
     packet_writer_write_string(packet, "[/book]");
     packet_debug_data(packet, 0, "Book message");
-    packet_writer_write_cstring(packet, op->msg);
+    packet_writer_write_cstring(packet, op->msg != NULL ? op->msg : "");
+    if (book_edit_finalized(op)) {
+        const char *signer = object_get_value(op, BOOK_EDIT_SIGNER);
+        const char *date = object_get_value(op, BOOK_EDIT_DATE);
+        packet_writer_write_cstring(packet, signer != NULL ? signer : "Unknown");
+        packet_writer_write_cstring(packet, date != NULL ? date : "Unknown date");
+    }
     socket_send_packet(CONTR(applier)->cs, packet);
 
     /* Gain xp from reading but only if not read before. */

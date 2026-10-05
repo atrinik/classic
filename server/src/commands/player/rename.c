@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,6 +30,7 @@
  */
 
 #include <global.h>
+#include <book_edit.h>
 #include <server_main.h>
 #include <server_item.h>
 #include <server.h>
@@ -44,6 +45,13 @@ void command_rename(object *op, const char *command, char *params) {
 
     if (!tmp) {
         draw_info(COLOR_WHITE, op, "No marked item to rename.");
+        return;
+    }
+
+    if (tmp->type == BOOK) {
+        draw_info(COLOR_WHITE, op, book_edit_finalized(tmp) ?
+                  "This signed book is permanently finalized and cannot be renamed." :
+                  "To rename a book, mark it and apply a writing pen to open its editor.");
         return;
     }
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <book_edit.h>
 #include <server_main.h>
 #include <server_item.h>
 #include <server.h>
@@ -558,6 +559,14 @@ object_get_description_terrain(const object *op, const object *caller, StringBuf
 
     stringbuffer_append_string(sb, "(");
     size_t old_len = stringbuffer_length(sb);
+    if (book_edit_is_pen(op)) {
+        stringbuffer_append_printf(sb, "(ink %d/%d; 1 per new/replaced UTF-8 byte) ",
+                                   op->stats.food, op->stats.maxhp);
+    }
+    if (op->type == BOOK && book_edit_finalized(op)) {
+        stringbuffer_append_string(sb, "(signed; permanently finalized) ");
+    }
+
 
     if (op->terrain_flag & TERRAIN_AIRBREATH) {
         stringbuffer_append_string(sb, "air breathing, ");

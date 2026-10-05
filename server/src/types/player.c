@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <book_edit.h>
 #include <celestial_structure.h>
 #include <gameplay_journal.h>
 #include <movement.h>
@@ -408,6 +409,7 @@ static player *get_player(player *p) {
  * The player structure to free.
  */
 static void free_player_internal(player *pl, bool free_socket) {
+    book_edit_clear(pl);
     /* If this player is in a party, leave the party */
     if (pl->party) {
         command_party(pl->ob, "party", "leave");

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -36,6 +36,7 @@
 #include <object.h>
 #include <player.h>
 #include <object_methods.h>
+#include <book_edit.h>
 
 /** @copydoc object_methods_t::apply_func */
 static int apply_func(object *op, object *applier, int aflags) {
@@ -44,6 +45,48 @@ static int apply_func(object *op, object *applier, int aflags) {
 
     if (applier->type != PLAYER) {
         return OBJECT_METHOD_UNHANDLED;
+    }
+
+    /* Ink uses the familiar mark-tool/apply-refill interaction. */
+    if (op->race != NULL && strcmp(op->race, "writing_ink") == 0) {
+        object *pen = find_marked_object(applier);
+        if (!book_edit_is_pen(pen) || pen->env != applier ||
+            pen->race == NULL || strcmp(pen->race, "writing_ink") != 0 ||
+            object_get_env(op) != applier) {
+            draw_info(COLOR_WHITE, applier,
+                      "Mark a writing pen in your main inventory, then apply a carried ink bottle.");
+            return OBJECT_METHOD_OK;
+        }
+        if (pen->nrof > 1) {
+            draw_info(COLOR_WHITE, applier, "Split off one writing pen before refilling it.");
+            return OBJECT_METHOD_OK;
+        }
+        if (pen->stats.maxhp <= 0 || pen->stats.food < 0 ||
+            pen->stats.food >= pen->stats.maxhp || op->stats.food <= 0) {
+            draw_info(COLOR_WHITE, applier, "The pen is full or this bottle has no usable ink.");
+            return OBJECT_METHOD_OK;
+        }
+        int amount = MIN(pen->stats.maxhp - pen->stats.food, op->stats.food);
+        if (amount < op->stats.food && op->nrof > 1) {
+            op = object_stack_get_reinsert(op, 1);
+            if (op->nrof > 1) {
+                draw_info(COLOR_WHITE, applier, "Split off one ink bottle before refilling.");
+                return OBJECT_METHOD_OK;
+            }
+        }
+        pen->stats.food += amount;
+        if (amount == op->stats.food) {
+            decrease_ob(op);
+        } else {
+            op->stats.food -= amount;
+            esrv_update_item(UPD_NAME, op);
+        }
+        esrv_update_item(UPD_NAME, pen);
+        draw_info_format(COLOR_WHITE, applier,
+                         "Your pen now has %d/%d ink. Writing costs 1 ink per new or replaced "
+                         "UTF-8 byte; deletions, renaming and signing are free.",
+                         pen->stats.food, pen->stats.maxhp);
+        return OBJECT_METHOD_OK;
     }
 
     object *light = find_marked_object(applier);

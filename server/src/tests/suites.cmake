@@ -8,6 +8,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.assets|check_server_assets|src/tests/unit/server/assets.c"
     "server.attack|check_server_attack|src/tests/unit/server/attack.c"
     "server.ban|check_server_ban|src/tests/unit/server/ban.c"
+    "server.book_edit|check_server_book_edit|src/tests/unit/server/book_edit.c"
     "server.bank|check_server_bank|src/tests/unit/server/bank.c"
     "server.cache|check_server_cache|src/tests/unit/server/cache.c"
     "server.celestial_lunar|check_server_celestial_lunar|src/tests/unit/server/celestial_lunar.c"

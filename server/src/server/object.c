@@ -2315,6 +2315,7 @@ void object_remove(object *op, int flags) {
         object_remove(op->more, flags);
     }
 
+    op->inventory_generation++;
     SET_FLAG(op, FLAG_REMOVED);
     SET_FLAG(op, FLAG_OBJECT_WAS_MOVED);
     op->quickslot = 0;
@@ -2829,6 +2830,7 @@ object *object_insert_into(object *op, object *where, int flag) {
 
     where = HEAD(where);
     op = HEAD(op);
+    op->inventory_generation++;
 
     /* If the object has tail parts, it means the object is a multi-part
      * object that was on a map prior to this insert call. Thus, we will
