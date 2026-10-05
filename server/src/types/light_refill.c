@@ -49,12 +49,16 @@ static int apply_func(object *op, object *applier, int aflags) {
 
     /* Ink uses the familiar mark-tool/apply-refill interaction. */
     if (op->race != NULL && strcmp(op->race, "writing_ink") == 0) {
-        object *pen = find_marked_object(applier);
+        object *pen = book_edit_marked_inventory(applier);
         if (!book_edit_is_pen(pen) || pen->env != applier ||
             pen->race == NULL || strcmp(pen->race, "writing_ink") != 0 ||
-            object_get_env(op) != applier) {
+            !book_edit_inventory_contains(applier, op)) {
             draw_info(COLOR_WHITE, applier,
                       "Mark a writing pen in your main inventory, then apply a carried ink bottle.");
+            return OBJECT_METHOD_OK;
+        }
+        if (QUERY_FLAG(pen, FLAG_UNPAID) || QUERY_FLAG(op, FLAG_UNPAID)) {
+            draw_info(COLOR_WHITE, applier, "You should pay for the pen and ink first.");
             return OBJECT_METHOD_OK;
         }
         if (pen->nrof > 1) {

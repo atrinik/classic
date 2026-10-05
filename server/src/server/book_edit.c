@@ -131,7 +131,8 @@ static bool snapshot_location(book_snapshot *snapshot, const object *op, const o
 }
 
 static bool snapshot_book(book_snapshot *snapshot, const object *op, const object *owner) {
-    if (op->type != BOOK || !book_edit_text_valid(op->name, true) ||
+    if (op->type != BOOK || QUERY_FLAG(op, FLAG_UNPAID) ||
+        !book_edit_text_valid(op->name, true) ||
         !book_edit_text_valid(contents(op), false) || !snapshot_location(snapshot, op, owner)) {
         return false;
     }
@@ -141,7 +142,8 @@ static bool snapshot_book(book_snapshot *snapshot, const object *op, const objec
     return true;
 }
 
-static object *inventory_find(object *list, tag_t tag, size_t depth, size_t *budget) {
+static object *inventory_find(object *owner, object *list, tag_t tag, size_t depth,
+                              size_t *budget) {
     if (depth == BOOK_EDIT_DEPTH_MAX) {
         return NULL;
     }
@@ -150,10 +152,13 @@ static object *inventory_find(object *list, tag_t tag, size_t depth, size_t *bud
             return NULL;
         }
         (*budget)--;
+        if (IS_INVISIBLE(op, owner) || QUERY_FLAG(op, FLAG_REMOVED)) {
+            continue;
+        }
         if (op->count == tag) {
             return op;
         }
-        object *found = inventory_find(op->inv, tag, depth + 1, budget);
+        object *found = inventory_find(owner, op->inv, tag, depth + 1, budget);
         if (found != NULL) {
             return found;
         }
@@ -163,7 +168,19 @@ static object *inventory_find(object *list, tag_t tag, size_t depth, size_t *bud
 
 static object *resolve(object *owner, tag_t tag) {
     size_t budget = BOOK_EDIT_SCAN_MAX;
-    return inventory_find(owner->inv, tag, 0, &budget);
+    return inventory_find(owner, owner->inv, tag, 0, &budget);
+}
+
+object *book_edit_marked_inventory(object *writer) {
+    player *pl = CONTR(writer);
+    /* Compare the stored pointer only after resolving its tag. A recycled or
+     * dropped marked pointer is never dereferenced. */
+    object *item = pl->mark != NULL ? resolve(writer, pl->mark_count) : NULL;
+    return item == pl->mark ? item : NULL;
+}
+
+bool book_edit_inventory_contains(object *writer, const object *item) {
+    return item != NULL && resolve(writer, item->count) == item;
 }
 
 static bool location_matches(const book_snapshot *snapshot, const object *op, const object *owner) {
@@ -181,7 +198,8 @@ static bool location_matches(const book_snapshot *snapshot, const object *op, co
 }
 
 static bool book_matches(const book_snapshot *snapshot, const object *op, const object *owner) {
-    return op != NULL && op->type == BOOK && op->name != NULL && location_matches(snapshot, op, owner) &&
+    return op != NULL && op->type == BOOK && !QUERY_FLAG(op, FLAG_UNPAID) &&
+           op->name != NULL && location_matches(snapshot, op, owner) &&
            snapshot->finalized == book_edit_finalized(op) &&
            strcmp(snapshot->title, op->name) == 0 && strcmp(snapshot->contents, contents(op)) == 0;
 }
@@ -225,8 +243,12 @@ static void reply(player *pl, enum book_edit_result result, const char *notice) 
 }
 
 static const char *prerequisite(object *writer, object *pen) {
-    if (!book_edit_is_pen(pen) || pen->env != writer) {
+    if (!book_edit_is_pen(pen) || pen->env != writer || IS_INVISIBLE(pen, writer) ||
+        QUERY_FLAG(pen, FLAG_REMOVED)) {
         return "Carry the writing pen in your main inventory, then apply it again.";
+    }
+    if (QUERY_FLAG(pen, FLAG_UNPAID)) {
+        return "You should pay for the writing pen first.";
     }
     if (pen->nrof > 1) {
         return "Split off one writing pen from the stack before writing or refilling.";
@@ -257,6 +279,10 @@ static bool collect(struct book_edit_session *session, object *owner, object *li
             return false;
         }
         (*budget)--;
+        /* Hidden containers must not reveal their books through the editor. */
+        if (IS_INVISIBLE(op, owner) || QUERY_FLAG(op, FLAG_REMOVED)) {
+            continue;
+        }
         if (op->type == BOOK) {
             book_snapshot snapshot;
             if (snapshot_book(&snapshot, op, owner)) {
@@ -281,10 +307,16 @@ bool book_edit_open(object *pen, object *writer) {
         draw_info(COLOR_WHITE, writer, error);
         return false;
     }
-    object *book = find_marked_object(writer);
-    if (book == NULL || book->type != BOOK || resolve(writer, book->count) != book) {
+    /* Resolve the stored identity within the same bounded visible-inventory
+     * walk used at commit time; never dereference a possibly stale mark. */
+    object *book = book_edit_marked_inventory(writer);
+    if (book == NULL || book->type != BOOK) {
         draw_info(COLOR_WHITE, writer,
                   "Mark a book or letter in your inventory, then apply the writing pen.");
+        return false;
+    }
+    if (QUERY_FLAG(book, FLAG_UNPAID)) {
+        draw_info(COLOR_WHITE, writer, "You should pay for the book first.");
         return false;
     }
     if (book->nrof > 1 || book_edit_finalized(book)) {

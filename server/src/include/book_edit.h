@@ -15,6 +15,9 @@ bool book_edit_is_pen(const object *op);
 bool book_edit_finalized(const object *op);
 bool book_edit_text_valid(const char *text, bool title);
 size_t book_edit_ink_cost(const char *before, const char *after);
+/* Player-only bounded lookups; marked pointers are compared, never dereferenced. */
+object *book_edit_marked_inventory(object *writer);
+bool book_edit_inventory_contains(object *writer, const object *item);
 bool book_edit_open(object *pen, object *writer);
 void book_edit_clear(player *pl);
 void socket_command_book_edit(socket_struct *cs, player *pl, uint8_t *data,
