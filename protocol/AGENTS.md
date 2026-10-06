@@ -31,3 +31,11 @@
   with `git diff --check`.
 - Update this `AGENTS.md` in the same change when major rework alters ownership,
   schemas, generation, compatibility policy, consumers, or validation.
+
+- Revision 1081 reserves retired SETUP subtype 3 and adds ACCESS_AUTH/ADMIN,
+  RESULT/ADMIN_RESULT/POLICY. Policy follows authenticated VERSION before
+  setup/resources/accounts on every connection; update all native and Python
+  consumers together. Raw access payloads require sensitive packet handling.
+
+- Revision 1082 appends BOOK_EDIT at C2S 25 and S2C 32 while preserving
+  published v1081 access IDs. The version handshake rejects earlier peers.

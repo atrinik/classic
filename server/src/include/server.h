@@ -346,8 +346,8 @@ socket_command_account(socket_struct *ns, player *pl, uint8_t *data, size_t len,
  * @param cs
  * Client connection.
  * @return
- * True after the version and initial setup exchanges completed and any
- * configured join password was accepted, false otherwise.
+ * True after version, authenticated policy and initial setup exchanges complete,
+ * including a valid access-code admission when required; false otherwise.
  */
 extern bool socket_connection_admitted(const socket_struct *cs);
 
@@ -355,8 +355,8 @@ extern bool socket_connection_admitted(const socket_struct *cs);
  * Check whether a gameplay command is valid in the connection's current
  * protocol phase.
  *
- * The separate control command still requires its IP allowlist check at the
- * central dispatch boundary.
+ * Remote control commands are always denied; local administration uses the
+ * independently authenticated Unix socket.
  *
  * @param cs
  * Client connection.
@@ -379,10 +379,19 @@ extern bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t
  * @param len
  * Length of data.
  * @return
- * True if the command was handled or rejected. False only when an admitted
- * playing-only command must be queued for the associated player.
+ * HANDLED for consumed/rejected commands, QUEUE for a playing-only command,
+ * or DEFER when authority is busy and the original frame must be retained.
  */
-extern bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);
+typedef enum {
+    SOCKET_COMMAND_QUEUE = 0,
+    SOCKET_COMMAND_HANDLED = 1,
+    SOCKET_COMMAND_DEFER = 2
+} socket_command_result_t;
+#ifdef ATRINIK_TESTING
+void socket_server_process_received_for_test(socket_struct *cs);
+#endif
+extern socket_command_result_t
+socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);
 
 extern bool socket_server_command_queue_append(socket_struct *cs, const uint8_t *data, size_t len);
 
@@ -430,5 +439,14 @@ extern void updates_init(void);
 
 extern void
 socket_command_request_update(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos);
+
+/* Access operations are dispatched only on authenticated QUIC connections. */
+void socket_command_access_auth(socket_struct *, player *, uint8_t *, size_t, size_t);
+void socket_command_access_admin(socket_struct *, player *, uint8_t *, size_t, size_t);
+bool socket_access_admin_permitted(socket_struct *, player *);
+#ifdef ATRINIK_TESTING
+void socket_access_poll_for_test(socket_struct *, player *);
+#endif
+void socket_server_access_poll(void);
 
 #endif

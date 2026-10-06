@@ -5,6 +5,7 @@
 #include <global.h>
 #include <server_main.h>
 #include <server.h>
+#include <access_server.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -22,6 +23,7 @@
 #include <tod.h>
 #include <commands.h>
 #include <exit.h>
+#include <toolkit/datetime.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
     size_t count = 0;
@@ -55,6 +57,123 @@ static packet_struct *queued_command_payload_find(socket_struct *cs, uint8_t typ
 
     return NULL;
 }
+
+#ifdef __linux__
+static access_outcome_t request_access_route(void *context, const access_route_t *route) {
+    (void)context;
+    (void)route;
+    return ACCESS_COMMITTED;
+}
+
+/* Exercise dispatch, canonical validation, the real worker and socket completion
+ * on a fresh connection each time. No budget reset or simulated clock advance. */
+static void request_access_attempt(const char code[16], size_t payload_size, bool accepted) {
+    socket_struct cs = {
+        .state = ST_LOGIN,
+        .socket_version = SOCKET_VERSION,
+        .access_policy_sent = true,
+        .access_transport_authenticated = true,
+    };
+    uint8_t frame[18] = {SERVER_CMD_ACCESS_AUTH, 1};
+    memcpy(frame + 2, code, 16);
+    ck_assert_int_eq(socket_server_handle_command(&cs, NULL, frame, payload_size + 1),
+                     SOCKET_COMMAND_HANDLED);
+    ck_assert(cs.access_attempted);
+    if (payload_size == 17 && code[0] != '!') {
+        ck_assert_uint_ne(cs.access_auth_job, 0);
+    } else {
+        ck_assert_uint_eq(cs.access_auth_job, 0);
+    }
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (cs.access_auth_job != 0 && datetime_monotonic_ms() < deadline) {
+        socket_access_poll_for_test(&cs, NULL);
+        if (cs.access_auth_job != 0) {
+            struct timespec delay = {.tv_nsec = 1000000};
+            nanosleep(&delay, NULL);
+        }
+    }
+    ck_assert_uint_eq(cs.access_auth_job, 0);
+    ck_assert_int_eq(cs.access_authenticated, accepted);
+    ck_assert_int_eq(cs.state, accepted ? ST_LOGIN : ST_ZOMBIE);
+    if (accepted) {
+        packet_struct *result = queued_command_payload_find(&cs, CLIENT_CMD_ACCESS_RESULT);
+        ck_assert_ptr_nonnull(result);
+        ck_assert_uint_eq(result->len, 2);
+        ck_assert_uint_eq(result->data[0], 1);
+        ck_assert_uint_eq(result->data[1], 0);
+        /* A second AUTH is forbidden even with the same valid code. */
+        uint8_t again[18] = {SERVER_CMD_ACCESS_AUTH, 1};
+        memcpy(again + 2, code, 16);
+        socket_command_result_t handled;
+        deadline = datetime_monotonic_ms() + 3000;
+        do {
+            handled = socket_server_handle_command(&cs, NULL, again, sizeof(again));
+            if (handled == SOCKET_COMMAND_DEFER) {
+                struct timespec delay = {.tv_nsec = 1000000};
+                nanosleep(&delay, NULL);
+            }
+        } while (handled == SOCKET_COMMAND_DEFER && datetime_monotonic_ms() < deadline);
+        ck_assert_int_eq(handled, SOCKET_COMMAND_HANDLED);
+        ck_assert_int_eq(cs.state, ST_ZOMBIE);
+        ck_assert_uint_eq(cs.access_auth_job, 0);
+    }
+    socket_buffer_clear(&cs);
+}
+
+START_TEST(test_invalid_access_attempts_do_not_lock_out_valid_codes) {
+    char directory[] = "/tmp/atrinik-access-admission-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    uint8_t identity[32];
+    memset(identity, 0x11, sizeof(identity));
+    char identity_hex[65];
+    memset(identity_hex, '1', 64);
+    identity_hex[64] = 0;
+    access_store_t *store = NULL;
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    access_result_t issue = access_store_issue(store,
+                                              "11111111111111111111111111111111",
+                                              1,
+                                              "Admission regression",
+                                              false,
+                                              0,
+                                              time(NULL),
+                                              request_access_route,
+                                              NULL);
+    ck_assert_int_eq(issue.outcome, ACCESS_COMMITTED);
+    /* Canonical but unissued code must reach the worker and be denied there. */
+    const char missing[] = "0000000000000000";
+    ck_assert(memcmp(issue.code, missing, 16) != 0);
+    access_store_close(store);
+    char previous_store[sizeof(settings.access_store)];
+    memcpy(previous_store, settings.access_store, sizeof(previous_store));
+    bool previous_required = settings.access_required;
+    bool previous_initialize = settings.access_initialize;
+    snprintf(VS(settings.access_store), "%s", directory);
+    settings.access_required = true;
+    settings.access_initialize = false;
+    access_server_route_for_test(request_access_route);
+    ck_assert(access_server_init(identity_hex));
+    for (unsigned int phase = 0; phase < 3; phase++) {
+        for (unsigned int i = 0; i < 300; i++) {
+            request_access_attempt(phase == 1 ? "!!!!!!!!!!!!!!!!" : missing,
+                                   phase == 0 ? 16 : 17, false);
+        }
+        request_access_attempt(issue.code, 17, true);
+    }
+    access_result_cleanse(&issue);
+    ck_assert(access_server_shutdown());
+    access_server_deinit();
+    access_server_route_for_test(NULL);
+    memcpy(settings.access_store, previous_store, sizeof(previous_store));
+    settings.access_required = previous_required;
+    settings.access_initialize = previous_initialize;
+    char snapshot[256];
+    snprintf(VS(snapshot), "%s/%s", directory, ACCESS_STORE_FILENAME);
+    ck_assert_int_eq(unlink(snapshot), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+#endif
 
 static void command_frame_append(packet_struct *queue,
                                  uint8_t command,
@@ -507,7 +626,7 @@ typedef struct command_phase {
     int state;
     uint32_t socket_version;
     bool setup_completed;
-    bool join_authenticated;
+    bool access_authenticated;
 } command_phase_t;
 
 static const command_phase_t command_phases[] = {
@@ -531,22 +650,22 @@ static const command_phase_t command_phases[] = {
 
 typedef struct command_policy_expectation {
     const char *name;
-    unsigned int without_join_password;
-    unsigned int with_join_password;
+    unsigned int without_access_code;
+    unsigned int with_access_code;
 } command_policy_expectation_t;
 
 #define COMMAND_POLICY(_symbol, _without, _with) \
     [SERVER_CMD_##_symbol] = {SERVER_CMD_NAME_##_symbol, (_without), (_with)}
 
 static const command_policy_expectation_t command_policy_expectations[] = {
-    COMMAND_POLICY(CONTROL, COMMAND_PHASE_LOGIN_MASK, COMMAND_PHASE_LOGIN_MASK),
+    COMMAND_POLICY(CONTROL, 0, 0),
     COMMAND_POLICY(ASK_FACE,
                    COMMAND_PHASE_SETUP_UNAUTHENTICATED | COMMAND_PHASE_ADMITTED_LOGIN |
                        COMMAND_PHASE_PLAYING_MASK,
                    COMMAND_PHASE_ADMITTED_LOGIN | COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(SETUP,
                    COMMAND_PHASE_VERSIONED | COMMAND_PHASE_PLAYING_MASK,
-                   COMMAND_PHASE_VERSIONED | COMMAND_PHASE_PLAYING),
+                   COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(VERSION, COMMAND_PHASE_CONNECTED, COMMAND_PHASE_CONNECTED),
     COMMAND_POLICY(CLEAR, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(REQUEST_UPDATE,
@@ -571,6 +690,8 @@ static const command_policy_expectation_t command_policy_expectations[] = {
     COMMAND_POLICY(TALK, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(MOVE, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(TARGET, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(ACCESS_AUTH, 0, COMMAND_PHASE_VERSIONED),
+    COMMAND_POLICY(ACCESS_ADMIN, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(BOOK_EDIT, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
 };
 
@@ -635,7 +756,7 @@ START_TEST(test_setup_round_trip_uses_current_option_ids) {
     ck_assert_uint_eq(CMD_SETUP_SOUND, 0);
     ck_assert_uint_eq(CMD_SETUP_MAPSIZE, 1);
     ck_assert_uint_eq(CMD_SETUP_DATA_URL, 2);
-    ck_assert_uint_eq(CMD_SETUP_JOIN_PASSWORD, 3);
+    /* Setup subtype 3 is permanently reserved after access-code migration. */
     ck_assert_uint_eq(CMD_SETUP_ASSET_TRANSPORT, 4);
     ck_assert_uint_eq(CMD_SETUP_CONNECTION_MODE, 5);
     ck_assert_uint_ge(SOCKET_VERSION, ASSET_TRANSPORT_FACE_BATCH_VERSION);
@@ -694,7 +815,7 @@ START_TEST(test_initial_setup_completion_is_transactional) {
     cs->state = ST_LOGIN;
     cs->socket_version = SOCKET_VERSION;
     cs->setup_completed = false;
-    settings.join_password[0] = '\0';
+    settings.access_required = false;
     socket_buffer_clear(cs);
 
     uint8_t truncated[] = {CMD_SETUP_MAPSIZE, 13};
@@ -709,49 +830,24 @@ START_TEST(test_initial_setup_completion_is_transactional) {
 }
 END_TEST
 
-START_TEST(test_initial_setup_requires_valid_join_password) {
+START_TEST(test_retired_join_password_setup_is_rejected) {
     mapstruct *map;
     object *pl;
-
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
     cs->state = ST_LOGIN;
     cs->socket_version = SOCKET_VERSION;
-    cs->join_authenticated = false;
     cs->setup_completed = false;
-    memset(settings.join_password, 0, sizeof(settings.join_password));
-    snprintf(VS(settings.join_password), "%s", "secret");
+    cs->access_authenticated = false;
+    settings.access_required = true;
     socket_buffer_clear(cs);
-
-    packet_struct *request = packet_new(0, 32, 0);
-    packet_writer_write_uint8(request, CMD_SETUP_JOIN_PASSWORD);
-    packet_writer_write_cstring(request, "secret");
-    socket_command_setup(cs, CONTR(pl), request->data, request->len, 0);
-    packet_free(request);
-    ck_assert(cs->join_authenticated);
-    ck_assert(cs->setup_completed);
-    ck_assert_int_eq(cs->state, ST_LOGIN);
-
-    packet_struct *response = queued_command_find(cs, CLIENT_CMD_SETUP);
-    ck_assert_ptr_nonnull(response);
-    packet_reader_t reader;
-    packet_reader_init(&reader, response->data, response->len);
-    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_SETUP_JOIN_PASSWORD);
-    ck_assert_uint_eq(packet_reader_read_uint8(&reader), 1);
-    ck_assert(packet_reader_finish(&reader));
-
-    socket_buffer_clear(cs);
-    cs->state = ST_LOGIN;
-    cs->join_authenticated = false;
-    cs->setup_completed = false;
-    request = packet_new(0, 32, 0);
-    packet_writer_write_uint8(request, CMD_SETUP_JOIN_PASSWORD);
-    packet_writer_write_cstring(request, "wrong");
-    socket_command_setup(cs, CONTR(pl), request->data, request->len, 0);
-    packet_free(request);
-    ck_assert(!cs->join_authenticated);
-    ck_assert(!cs->setup_completed);
+    uint8_t retired[] = {3, 'o', 'l', 'd', 0};
+    socket_command_setup(cs, CONTR(pl), retired, sizeof(retired), 0);
     ck_assert_int_eq(cs->state, ST_ZOMBIE);
+    ck_assert(!cs->setup_completed);
+    ck_assert(!cs->access_authenticated);
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_SETUP));
+    settings.access_required = false;
 }
 END_TEST
 
@@ -763,25 +859,24 @@ START_TEST(test_command_policy_covers_every_connection_phase) {
     socket_struct *cs = CONTR(pl)->cs;
 
     for (size_t join_required = 0; join_required < 2; join_required++) {
-        memset(settings.join_password, 0, sizeof(settings.join_password));
-        snprintf(VS(settings.join_password), "%s", join_required ? "secret" : "");
+        settings.access_required = join_required != 0;
 
         for (size_t phase_index = 0; phase_index < arraysize(command_phases); phase_index++) {
             const command_phase_t *phase = &command_phases[phase_index];
             cs->state = phase->state;
             cs->socket_version = phase->socket_version;
             cs->setup_completed = phase->setup_completed;
-            cs->join_authenticated = phase->join_authenticated;
+            cs->access_authenticated = phase->access_authenticated;
 
             for (size_t command = 0; command < arraysize(command_policy_expectations); command++) {
                 const command_policy_expectation_t *expectation =
                     &command_policy_expectations[command];
-                unsigned int allowed = join_required ? expectation->with_join_password
-                                                     : expectation->without_join_password;
+                unsigned int allowed = join_required ? expectation->with_access_code
+                                                     : expectation->without_access_code;
                 bool expected = (allowed & phase->mask) != 0;
                 bool actual = socket_server_command_phase_allowed(cs, (uint8_t)command);
                 ck_assert_msg(actual == expected,
-                              "%s was unexpectedly %s in phase %s with join password %s",
+                              "%s was unexpectedly %s in phase %s with access code %s",
                               expectation->name,
                               actual ? "allowed" : "rejected",
                               phase->name,
@@ -798,7 +893,7 @@ START_TEST(test_out_of_order_player_command_is_not_queued) {
 
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
-    settings.join_password[0] = '\0';
+    settings.access_required = false;
     uint8_t request[] = {SERVER_CMD_MOVE};
 
     cs->state = ST_LOGIN;
@@ -1200,7 +1295,7 @@ START_TEST(test_only_valid_post_setup_activity_refreshes_login_deadline) {
 
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
-    settings.join_password[0] = '\0';
+    settings.access_required = false;
     uint8_t keepalive[] = {SERVER_CMD_KEEPALIVE};
 
     cs->state = ST_LOGIN;
@@ -1221,13 +1316,158 @@ START_TEST(test_only_valid_post_setup_activity_refreshes_login_deadline) {
 }
 END_TEST
 
+START_TEST(test_access_busy_retains_received_and_queued_frames) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    bool saved_required = settings.access_required;
+    settings.access_required = true;
+    cs->access_authenticated = true;
+    cs->access_policy_sent = true;
+    cs->access_transport_authenticated = true;
+    cs->socket_version = SOCKET_VERSION;
+    cs->setup_completed = true;
+    cs->state = ST_PLAYING;
+    op->speed_left = 1;
+    const uint8_t frame[] = {0, 5, SERVER_CMD_KEEPALIVE, 0, 0, 0, 7};
+    ck_assert_uint_ge(cs->packet_recv->size, sizeof(frame));
+    memcpy(cs->packet_recv->data, frame, sizeof(frame));
+    cs->packet_recv->len = sizeof(frame);
+    socket_buffer_clear(cs);
+    access_session_state_t received[] = {ACCESS_SESSION_BUSY, ACCESS_SESSION_VALID};
+    access_server_session_sequence_for_test(received, arraysize(received));
+    socket_server_process_received_for_test(cs);
+    ck_assert_uint_eq(cs->packet_recv->len, sizeof(frame));
+    ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_KEEPALIVE), 0);
+    socket_server_process_received_for_test(cs);
+    ck_assert_uint_eq(cs->packet_recv->len, 0);
+    ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_KEEPALIVE), 1);
+
+    socket_buffer_clear(cs);
+    ck_assert(socket_server_command_queue_append(cs, frame + 2, sizeof(frame) - 2));
+    /* Authority becomes busy after the loop's preliminary valid check. */
+    access_session_state_t queued[] = {ACCESS_SESSION_VALID,
+                                       ACCESS_SESSION_BUSY,
+                                       ACCESS_SESSION_VALID,
+                                       ACCESS_SESSION_VALID};
+    access_server_session_sequence_for_test(queued, arraysize(queued));
+    socket_server_handle_client(pl);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, sizeof(frame));
+    ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_KEEPALIVE), 0);
+    socket_server_handle_client(pl);
+    ck_assert_uint_eq(cs->packet_recv_cmd->len, 0);
+    ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_KEEPALIVE), 1);
+    access_server_session_sequence_for_test(NULL, 0);
+    settings.access_required = saved_required;
+}
+END_TEST
+
+START_TEST(test_access_permissions_follow_the_active_character) {
+    char saved[sizeof(settings.default_permission_groups)];
+    memcpy(saved, settings.default_permission_groups, sizeof(saved));
+    settings.default_permission_groups[0] = '\0';
+    socket_struct first = {0}, second = {0};
+    player allowed = {0}, denied = {0};
+    object allowed_object = {0}, denied_object = {0};
+    allowed.ob = &allowed_object;
+    denied.ob = &denied_object;
+    char *permissions[] = {"access"};
+    allowed.cs = &first;
+    denied.cs = &second;
+    first.state = second.state = ST_PLAYING;
+    first.account = second.account = "same-account";
+    allowed.cmd_permissions = permissions;
+    allowed.num_cmd_permissions = 1;
+    ck_assert(socket_access_admin_permitted(&first, &allowed));
+    ck_assert(!socket_access_admin_permitted(&second, &denied));
+    permissions[0] = "/access";
+    ck_assert(socket_access_admin_permitted(&first, &allowed));
+    permissions[0] = "[OP]";
+    ck_assert(socket_access_admin_permitted(&first, &allowed));
+    allowed.num_cmd_permissions = 0;
+    ck_assert(!socket_access_admin_permitted(&first, &allowed));
+    allowed.num_cmd_permissions = 1;
+    ck_assert(socket_access_admin_permitted(&first, &allowed));
+    ck_assert(!socket_access_admin_permitted(&first, &denied));
+    ck_assert(!socket_access_admin_permitted(&first, NULL));
+    first.state = ST_LOGIN;
+    ck_assert(!socket_access_admin_permitted(&first, &allowed));
+    memcpy(settings.default_permission_groups, saved, sizeof(saved));
+}
+END_TEST
+
+START_TEST(test_access_revocation_denies_queued_private_result) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    cs->state = ST_PLAYING;
+    bool saved_required = settings.access_required;
+    settings.access_required = false;
+    char saved[sizeof(settings.default_permission_groups)];
+    memcpy(saved, settings.default_permission_groups, sizeof(saved));
+    settings.default_permission_groups[0] = '\0';
+    const char *request = "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"issue\","
+                          "\"requestId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+                          "\"expectedRevision\":\"1\",\"label\":\"fixture\"}";
+    const char *secret = "fixture-private-result";
+    uint64_t job = access_server_admin_result_for_test(true, request, secret);
+    cs->access_admin_job = job;
+    cs->access_admin_actor_tag = pl->ob->count;
+    socket_buffer_clear(cs);
+    socket_access_poll_for_test(cs, pl);
+    ck_assert_uint_eq(cs->access_admin_job, 0);
+    packet_struct *packet = queued_command_find(cs, CLIENT_CMD_ACCESS_ADMIN_RESULT);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_ptr_null(memmem(packet->data, packet->len, secret, strlen(secret)));
+    ck_assert_ptr_nonnull(memmem(packet->data, packet->len, "unavailable", 11));
+    ck_assert_ptr_nonnull(memmem(packet->data, packet->len,
+                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 32));
+    char response[512];
+    size_t length = 0;
+    ck_assert(!access_server_admin_poll(job, response, sizeof(response), &length));
+    /* A root-local callback has its independent peer-credential authority. */
+    job = access_server_admin_result_for_test(true, request, secret);
+    ck_assert(access_server_admin_poll(job, response, sizeof(response), &length));
+    ck_assert_str_eq(response, secret);
+    /* A denial at admission cannot become authority merely because a grant was
+     * added while that denied operation was queued. */
+    job = access_server_admin_result_for_test(false, request, secret);
+    ck_assert(access_server_admin_poll_permitted(job, true, response, sizeof(response), &length));
+    ck_assert_ptr_null(strstr(response, secret));
+    ck_assert_ptr_nonnull(strstr(response, "unavailable"));
+    /* Losing the character cancels delivery rather than migrating the response
+     * onto the account-selection connection or a different character. */
+    object replacement = {0};
+    replacement.count = op->count + 1;
+    for (unsigned int i = 0; i < 3; i++) {
+        cs->access_admin_job = access_server_admin_result_for_test(true, request, secret);
+        job = cs->access_admin_job;
+        cs->access_admin_actor_tag = op->count;
+        pl->ob = i == 2 ? &replacement : op;
+        socket_buffer_clear(cs);
+        cs->state = i == 0 ? ST_LOGIN : ST_PLAYING;
+        socket_access_poll_for_test(cs, i == 1 ? NULL : pl);
+        pl->ob = op;
+        ck_assert_uint_eq(cs->access_admin_job, 0);
+        ck_assert_uint_eq(queued_command_count(cs, CLIENT_CMD_ACCESS_ADMIN_RESULT), 0);
+        ck_assert(!access_server_admin_poll(job, response, sizeof(response), &length));
+    }
+    memcpy(settings.default_permission_groups, saved, sizeof(saved));
+    settings.access_required = saved_required;
+}
+END_TEST
+
 START_TEST(test_keepalive_echoes_identifier) {
     mapstruct *map;
     object *pl;
 
     check_setup_env_pl(&map, &pl);
     socket_struct *cs = CONTR(pl)->cs;
-    settings.join_password[0] = '\0';
+    settings.access_required = false;
     const uint32_t expected_id = UINT32_C(0x12345678);
     uint8_t keepalive[] = {
         SERVER_CMD_KEEPALIVE,
@@ -1280,15 +1520,10 @@ START_TEST(test_version_requires_exact_match) {
     cs->state = ST_LOGIN;
     cs->socket_version = 0;
     request_version(cs, CONTR(pl), SOCKET_VERSION);
-    ck_assert_int_eq(cs->state, ST_LOGIN);
-    ck_assert_uint_eq(cs->socket_version, SOCKET_VERSION);
-
-    packet_struct *response = queued_command_find(cs, CLIENT_CMD_VERSION);
-    ck_assert_ptr_nonnull(response);
-    packet_reader_t reader;
-    packet_reader_init(&reader, response->data, response->len);
-    ck_assert_uint_eq(packet_reader_read_uint32(&reader), SOCKET_VERSION);
-    ck_assert(packet_reader_finish(&reader));
+    ck_assert_int_eq(cs->state, ST_ZOMBIE);
+    ck_assert_uint_eq(cs->socket_version, 0);
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_VERSION));
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_ACCESS_POLICY));
 }
 END_TEST
 
@@ -2191,7 +2426,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_setup_round_trip_uses_current_option_ids);
     tcase_add_test(tc_core, test_setup_rejects_unknown_option);
     tcase_add_test(tc_core, test_initial_setup_completion_is_transactional);
-    tcase_add_test(tc_core, test_initial_setup_requires_valid_join_password);
+    tcase_add_test(tc_core, test_retired_join_password_setup_is_rejected);
     tcase_add_test(tc_core, test_command_policy_covers_every_connection_phase);
     tcase_add_test(tc_core, test_out_of_order_player_command_is_not_queued);
     tcase_add_test(tc_core, test_clear_immediately_discards_queued_commands_and_stops_run);
@@ -2207,6 +2442,12 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_move_and_fire_require_exact_v1078_payloads);
     tcase_add_test(tc_core, test_malformed_tombstone_queue_is_discarded_safely);
     tcase_add_test(tc_core, test_only_valid_post_setup_activity_refreshes_login_deadline);
+    tcase_add_test(tc_core, test_access_busy_retains_received_and_queued_frames);
+#ifdef __linux__
+    tcase_add_test(tc_core, test_invalid_access_attempts_do_not_lock_out_valid_codes);
+#endif
+    tcase_add_test(tc_core, test_access_permissions_follow_the_active_character);
+    tcase_add_test(tc_core, test_access_revocation_denies_queued_private_result);
     tcase_add_test(tc_core, test_keepalive_echoes_identifier);
     tcase_add_test(tc_core, test_version_requires_exact_match);
     tcase_add_test(tc_core, test_move_path_walkable_target_reaches_exact_coordinate);

@@ -2,7 +2,7 @@
 # Do not edit by hand.
 from enum import IntEnum
 
-PROTOCOL_VERSION = 1081
+PROTOCOL_VERSION = 1082
 
 
 ITEM_NAME_SIZE = 128
@@ -47,7 +47,9 @@ class ClientToServerCommand(IntEnum):
     TALK = 20
     MOVE = 21
     TARGET = 22
-    BOOK_EDIT = 23
+    ACCESS_AUTH = 23
+    ACCESS_ADMIN = 24
+    BOOK_EDIT = 25
 
 
 class ServerToClientCommand(IntEnum):
@@ -80,4 +82,7 @@ class ServerToClientCommand(IntEnum):
     NOTIFICATION = 26
     KEEPALIVE = 27
     PLAYER_STATUS = 28
-    BOOK_EDIT = 29
+    ACCESS_RESULT = 29
+    ACCESS_ADMIN_RESULT = 30
+    ACCESS_POLICY = 31
+    BOOK_EDIT = 32

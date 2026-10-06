@@ -4,7 +4,7 @@
 #ifndef ATRINIK_PROTOCOL_BOOK_EDIT_H
 #define ATRINIK_PROTOCOL_BOOK_EDIT_H
 
-/* BOOK_EDIT is available only in PLAYING state at protocol revision 1081.
+/* BOOK_EDIT is available only in PLAYING state at protocol revision 1082.
  * Integers use the existing packet writer's network byte order. Strings are
  * NUL-terminated UTF-8, bounded in bytes excluding their terminator.
  *

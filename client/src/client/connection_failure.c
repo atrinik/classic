@@ -23,15 +23,13 @@ bool client_connection_failure_format(const socket_connect_failure_t *failure,
     int written;
     switch (failure->code) {
         case SOCKET_CONNECT_FAILURE_AUTHORIZATION:
-            written = snprintf(message,
-                               message_size,
-                               "Connection failed: the server invite was rejected.");
+            written =
+                snprintf(message, message_size, "Connection failed: server access was rejected.");
             break;
 
-        case SOCKET_CONNECT_FAILURE_INVITE_EXPIRED:
-            written = snprintf(message,
-                               message_size,
-                               "Connection failed: the server invite has expired.");
+        case SOCKET_CONNECT_FAILURE_ACCESS_UNAVAILABLE:
+            written =
+                snprintf(message, message_size, "Connection failed: server access is unavailable.");
             break;
 
         case SOCKET_CONNECT_FAILURE_RATE_LIMITED:

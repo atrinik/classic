@@ -334,6 +334,8 @@ typedef struct settings_struct {
      * Player data, unique maps, etc.
      */
     char datapath[MAX_BUF];
+    /** Explicit inherited private-data capability; literal argv only, -1 if absent. */
+    int datapath_fd;
 
     /**
      * Where the map files are.
@@ -370,13 +372,10 @@ typedef struct settings_struct {
     /** Automatic router port mapping policy (auto or off). */
     char port_mapping[16];
 
-    /**
-     * Optional password required before a client may join this server.
-     */
-    char join_password[MAX_BUF];
-
-    /** Protected file containing the current rendezvous invite capability. */
-    char rendezvous_invite_file[HUGE_BUF];
+    /** Startup-only server admission policy and protected store coordinates. */
+    bool access_required;
+    bool access_initialize;
+    char access_store[HUGE_BUF];
     char admin_shutdown_socket[108];
 
     /**
@@ -490,11 +489,6 @@ typedef struct settings_struct {
      * Limits on the allowed characters.
      */
     size_t limits[ALLOWED_CHARS_NUM][2];
-
-    /**
-     * IPs allowed to remotely control the client.
-     */
-    char control_allowed_ips[HUGE_BUF];
 
     /**
      * Which player the remote command goes through, if applicable.

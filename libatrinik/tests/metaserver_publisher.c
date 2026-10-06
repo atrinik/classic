@@ -233,7 +233,7 @@ static void fixture_vector_verify(const char *json,
     require(string_parse_uint64(sequence_text, 10, 1, UINT64_MAX, &sequence));
     require(string_decode_hex_fixed(nonce_hex, sizeof(nonce) * 2U, true, VS(nonce)));
     metaserver_publisher_components_t components;
-    require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                        fixture->authority,
                                        fixture->server_id,
                                        sequence,
@@ -468,7 +468,7 @@ int main(int argc, char **argv) {
         .version = "5.7.0",
         .text_comment = "Fixture",
         .is_public = true,
-        .password_required = true,
+        .access_required = true,
     };
     require(metaserver_publisher_classic_body(&payload, body, &body_size));
     require(body_size == strlen(fixture.body));
@@ -487,9 +487,9 @@ int main(int argc, char **argv) {
     payload.hostname = "play.example.net";
     payload.port = 1730;
     require(metaserver_publisher_classic_body(&payload, body, &body_size));
-    require(strstr(body,
-                   "\"passwordRequired\":true,\"hostname\":\"play.example.net\",\"port\":1730}") !=
-            NULL);
+    require(
+        strstr(body, "\"accessRequired\":true,\"hostname\":\"play.example.net\",\"port\":1730}") !=
+        NULL);
     payload.hostname = "192.0.2.1";
     require(!metaserver_publisher_classic_body(&payload, body, &body_size));
     payload.hostname = "play.example.net";
@@ -501,7 +501,7 @@ int main(int argc, char **argv) {
     payload.port = 0;
 
     metaserver_publisher_components_t classic;
-    require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                        fixture.authority,
                                        fixture.server_id,
                                        sequence,
@@ -535,7 +535,7 @@ int main(int argc, char **argv) {
     }
 
     metaserver_publisher_components_t game;
-    require(metaserver_publisher_build(METASERVER_PUBLISHER_GAME_V1,
+    require(metaserver_publisher_build(METASERVER_PUBLISHER_GAME_V2,
                                        fixture.authority,
                                        fixture.server_id,
                                        sequence,
@@ -567,7 +567,7 @@ int main(int argc, char **argv) {
                                          fixture.server_id,
                                          classic.signature_base,
                                          signature));
-    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                         "Publish.meta.atrinik.org",
                                         fixture.server_id,
                                         sequence,
@@ -576,7 +576,7 @@ int main(int argc, char **argv) {
                                         fixture.body,
                                         strlen(fixture.body),
                                         &classic));
-    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                         fixture.authority,
                                         fixture.server_id,
                                         0,
@@ -586,7 +586,7 @@ int main(int argc, char **argv) {
                                         strlen(fixture.body),
                                         &classic));
     memset(nonce, 0, sizeof(nonce));
-    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V1,
+    require(!metaserver_publisher_build(METASERVER_PUBLISHER_CLASSIC_V3,
                                         fixture.authority,
                                         fixture.server_id,
                                         sequence,
@@ -595,6 +595,48 @@ int main(int argc, char **argv) {
                                         fixture.body,
                                         strlen(fixture.body),
                                         &classic));
+
+    /* Independent shared access-routes-v1 reserve signature vector. */
+    static const char route_body[] =
+        "{\"schema\":\"atrinik-access-route-v1\",\"profile\":\"classic\",\"serverId\":"
+        "\"0d61dae94226a68c2452598898d33ef8eb97a73a040294825c2eedb01d6aee40\",\"certificate\":"
+        "\"MIIBOjCB4KADAgECAgID6TAKBggqhkjOPQQDAjAmMSQwIgYDVQQDDBtBdHJpbmlrIGFjY2VzcyBmaXh0dXJlIG9u"
+        "bHkwHhcNMjYwMTAxMDAwMDAwWhcNMzYwMTAxMDAwMDAwWjAmMSQwIgYDVQQDDBtBdHJpbmlrIGFjY2VzcyBmaXh0dX"
+        "JlIG9ubHkwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARrF9Hy4SxCR/i85uVjpEDydwN9gS3rM6D0oTlF2JjClk/"
+        "jQuL+Gn+bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1MAoGCCqGSM49BAMCA0kAMEYCIQDuJYjSE1s0zA8WTnf+"
+        "zwhLUj7HiAN3I4u9Se0dmU2jvAIhALgq0zfa5cvIFi8xBKYqCN8gNsxnhvb2qPHKe/"
+        "pUq8DT\",\"operation\":\"reserve\",\"requestId\":\"00000000000000000000000000000065\","
+        "\"tokenId\":\"10101010101010101010101010101010\",\"tokenRevision\":\"1\",\"index\":"
+        "\"6128199c2e3ad6b5022a86fa42ed5d43709c80023bd21a485a049dcdd898596f\",\"reservationId\":"
+        "null,\"expiresAt\":null}";
+    static const char route_expected_base[] =
+        "\"@method\": POST\n\"@authority\": publish.meta.atrinik.org\n\"@path\": "
+        "/v1/access/servers/classic/"
+        "0d61dae94226a68c2452598898d33ef8eb97a73a040294825c2eedb01d6aee40/"
+        "routes\n\"content-digest\": "
+        "sha-256=:AC5ZJagA3Dx8EwqTolfh78gzc7Gdcf39VXTN/F2p974=:\n\"content-type\": "
+        "application/json\n\"atrinik-server-id\": "
+        "0d61dae94226a68c2452598898d33ef8eb97a73a040294825c2eedb01d6aee40\n\"atrinik-publish-"
+        "sequence\": 101\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" "
+        "\"content-digest\" \"content-type\" \"atrinik-server-id\" "
+        "\"atrinik-publish-sequence\");created=1800000000;expires=1800000300;nonce="
+        "\"00000000000000000000000000000065\";alg=\"ecdsa-p256-sha256\";keyid="
+        "\"0d61dae94226a68c2452598898d33ef8eb97a73a040294825c2eedb01d6aee40\";tag=\"atrinik-access-"
+        "routes-v1\"";
+    unsigned char route_nonce[16] = {0};
+    route_nonce[15] = 101;
+    metaserver_publisher_components_t route_components;
+    require(metaserver_publisher_build(
+        METASERVER_PUBLISHER_ACCESS_CLASSIC_V1,
+        "publish.meta.atrinik.org",
+        "0d61dae94226a68c2452598898d33ef8eb97a73a040294825c2eedb01d6aee40",
+        101,
+        route_nonce,
+        UINT64_C(1800000000),
+        route_body,
+        sizeof(route_body) - 1,
+        &route_components));
+    require(strcmp(route_components.signature_base, route_expected_base) == 0);
 
     sequence_persistence_test(fixture.server_id);
     identity_signing_test();

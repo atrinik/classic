@@ -29,6 +29,10 @@
 
 #include <global.h>
 #include <admin_shutdown.h>
+#include <access_server.h>
+#ifndef WIN32
+#include <access_bootstrap.h>
+#endif
 #include <weather.h>
 #include <swap.h>
 #include <server_main.h>
@@ -66,6 +70,7 @@
 #include <toolkit/datetime.h>
 #include <cmake.h>
 #include <openssl/crypto.h>
+#include <limits.h>
 
 /**
  * The server's settings.
@@ -96,6 +101,18 @@ int first_map_y;
 static void init_beforeplay(void);
 static void init_dynamic(void);
 static void init_clocks(void);
+#ifndef WIN32
+static int access_state_descriptor = -1;
+static int access_generation_descriptor = -1;
+#endif
+int initialization_data_descriptor(void) {
+#ifdef WIN32
+    return -1;
+#else
+    return access_state_descriptor;
+#endif
+}
+
 static bool removed_httppath_seen;
 /* Handler failures do not stop CLI parsing; reject startup even after a valid option. */
 static bool oversized_assetspath_seen;
@@ -197,6 +214,7 @@ void cleanup(void) {
         function();                                       \
     } while (0)
     CLEANUP_STAGE(admin_shutdown_deinit);
+    CLEANUP_STAGE(access_server_deinit);
     CLEANUP_STAGE(cache_remove_all);
     CLEANUP_STAGE(remove_plugins);
     CLEANUP_STAGE(gameplay_journal_deinit);
@@ -220,7 +238,6 @@ void cleanup(void) {
     CLEANUP_STAGE(object_deinit);
     CLEANUP_STAGE(metaserver_deinit);
     CLEANUP_STAGE(party_deinit);
-    OPENSSL_cleanse(settings.join_password, sizeof(settings.join_password));
     LOG(INFO, "Server resources released; deinitializing toolkit.");
 #undef CLEANUP_STAGE
     toolkit_deinit();
@@ -228,6 +245,14 @@ void cleanup(void) {
     free_random_map_loader();
     free_map_header_loader();
     celestial_structure_release_writer_lease();
+#ifndef WIN32
+    access_state_unlock(access_state_descriptor);
+    access_state_descriptor = -1;
+    if (access_generation_descriptor >= 0) {
+        close(access_generation_descriptor);
+        access_generation_descriptor = -1;
+    }
+#endif
 }
 
 /**
@@ -477,6 +502,32 @@ static bool clioptions_option_datapath(const char *arg, char **errmsg) {
     return true;
 }
 
+static const char *clioptions_option_datapath_fd_desc =
+    "Borrow an inherited private data-directory descriptor. Requires an exact "
+    "--datapath=./data whose generation symlink targets /proc/self/fd/N, and a literal "
+    "numeric command-line argument. "
+    "Unsupported for offline tools and Windows.";
+static bool clioptions_option_datapath_fd(const char *arg, char **errmsg) {
+    unsigned value = 0;
+    if (!arg || arg[0] < '1' || arg[0] > '9' || settings.datapath_fd >= 0) {
+        *errmsg = xstrdup("Expected one literal inherited directory descriptor greater than 2");
+        return false;
+    }
+    for (const char *p = arg; *p; p++) {
+        if (*p < '0' || *p > '9' || value > ((unsigned)INT_MAX - (unsigned)(*p - '0')) / 10U) {
+            *errmsg = xstrdup("Invalid inherited directory descriptor");
+            return false;
+        }
+        value = value * 10U + (unsigned)(*p - '0');
+    }
+    if (value <= 2U) {
+        *errmsg = xstrdup("Inherited directory descriptor must be greater than 2");
+        return false;
+    }
+    settings.datapath_fd = (int)value;
+    return true;
+}
+
 /**
  * Description of the --mapspath command.
  */
@@ -624,59 +675,78 @@ static bool clioptions_option_port_mapping(const char *arg, char **errmsg) {
     return true;
 }
 
-/**
- * Description of the --join_password command.
- */
-static const char *clioptions_option_join_password_desc =
-    "Optional password required before clients may join this server.";
-/** @copydoc clioptions_handler_func */
+/* Admission policy and store configuration are immutable after startup,
+ * including through /config invoked by an OP character. */
+static bool access_configuration_locked;
+static bool invalid_access_configuration;
+static bool removed_access_configuration;
+static bool access_setting_mutable(char **errmsg) {
+    if (access_configuration_locked) {
+        *errmsg = xstrdup("Access configuration is startup-only");
+        return false;
+    }
+    return true;
+}
+static const char *clioptions_option_access_required_desc =
+    "Require an operator-issued access code before account authentication.";
+static bool clioptions_option_access_required(const char *arg, char **errmsg) {
+    if (!access_setting_mutable(errmsg))
+        return false;
+    if (KEYWORD_IS_TRUE(arg))
+        settings.access_required = true;
+    else if (KEYWORD_IS_FALSE(arg))
+        settings.access_required = false;
+    else {
+        invalid_access_configuration = true;
+        *errmsg = xstrdup("Expected a boolean");
+        return false;
+    }
+    return true;
+}
+static const char *clioptions_option_access_initialize_desc =
+    "Explicitly initialize a new empty access store; refuses existing state.";
+static bool clioptions_option_access_initialize(const char *arg, char **errmsg) {
+    if (!access_setting_mutable(errmsg))
+        return false;
+    if (KEYWORD_IS_TRUE(arg))
+        settings.access_initialize = true;
+    else if (KEYWORD_IS_FALSE(arg))
+        settings.access_initialize = false;
+    else {
+        invalid_access_configuration = true;
+        *errmsg = xstrdup("Expected a boolean");
+        return false;
+    }
+    return true;
+}
+static const char *clioptions_option_access_store_desc =
+    "Private existing directory containing durable admission state.";
+static bool clioptions_option_access_store(const char *arg, char **errmsg) {
+    if (!access_setting_mutable(errmsg))
+        return false;
+    if (arg[0] != '/' || strlen(arg) >= sizeof(settings.access_store)) {
+        invalid_access_configuration = true;
+        *errmsg = xstrdup("Expected a bounded absolute directory");
+        return false;
+    }
+    snprintf(VS(settings.access_store), "%s", arg);
+    return true;
+}
+/* Recognize removed settings solely to fail startup, never fall back to open. */
+static const char *clioptions_option_join_password_desc = "Removed admission option.";
+static const char *clioptions_option_join_password_file_desc = "Removed admission option.";
+static const char *clioptions_option_rendezvous_invite_file_desc = "Removed admission option.";
 static bool clioptions_option_join_password(const char *arg, char **errmsg) {
-    if (strlen(arg) >= sizeof(settings.join_password)) {
-        *errmsg = xstrdup("Join password is too long");
-        return false;
-    }
-
-    OPENSSL_cleanse(settings.join_password, sizeof(settings.join_password));
-    snprintf(VS(settings.join_password), "%s", arg);
-    return true;
+    (void)arg;
+    removed_access_configuration = true;
+    *errmsg = xstrdup("Legacy admission configuration requires offline migration");
+    return false;
 }
-
-static const char *clioptions_option_join_password_file_desc =
-    "Read the private server password from a file.";
-
 static bool clioptions_option_join_password_file(const char *arg, char **errmsg) {
-    char password[MAX_BUF];
-    bool permissive_mode;
-    path_secret_error_t error = path_read_secret(arg, VS(password), &permissive_mode);
-    if (error != PATH_SECRET_OK) {
-        string_fmt(*errmsg,
-                   "Cannot use join password file %s: %s",
-                   arg,
-                   path_secret_error_string(error));
-        return false;
-    }
-    if (permissive_mode) {
-        LOG(SYSTEM,
-            "Join password file %s is readable or writable by group/other; "
-            "use mode 0600",
-            arg);
-    }
-
-    bool ok = clioptions_option_join_password(password, errmsg);
-    OPENSSL_cleanse(password, sizeof(password));
-    return ok;
+    return clioptions_option_join_password(arg, errmsg);
 }
-
-static const char *clioptions_option_rendezvous_invite_file_desc =
-    "Protected path for the generated rendezvous invite capability.";
-
 static bool clioptions_option_rendezvous_invite_file(const char *arg, char **errmsg) {
-    if (arg[0] == '\0' || strlen(arg) >= sizeof(settings.rendezvous_invite_file)) {
-        *errmsg = xstrdup("Rendezvous invite file path is empty or too long");
-        return false;
-    }
-    snprintf(VS(settings.rendezvous_invite_file), "%s", arg);
-    return true;
+    return clioptions_option_join_password(arg, errmsg);
 }
 
 /**
@@ -943,12 +1013,14 @@ static bool clioptions_option_allowed_chars(const char *arg, char **errmsg) {
  * Description of the --control_allowed_ips command.
  */
 static const char *clioptions_option_control_allowed_ips_desc =
-    "Comma-separated list of IPs that are allowed to send special control-related "
-    "commands to the server.";
+    "Removed: use the root-authenticated local admin socket.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_control_allowed_ips(const char *arg, char **errmsg) {
-    snprintf(VS(settings.control_allowed_ips), "%s", arg);
-    return true;
+    (void)arg;
+    invalid_access_configuration = true;
+    *errmsg = xstrdup(
+        "Remote CONTROL is unavailable; remove control_allowed_ips and use the local admin socket");
+    return false;
 }
 
 /**
@@ -1123,6 +1195,8 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, port_quic, "Sets the QUIC UDP port");
     CLIOPTIONS_CREATE_ARGUMENT(cli, libpath, "Read-only data files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, datapath, "Read/write data files location");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, datapath_fd, "Inherited private data directory descriptor");
+    clioptions_enable_command_line_only(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, mapspath, "Map files location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, assetspath, "Game asset staging location");
     CLIOPTIONS_CREATE_ARGUMENT(cli, httppath, "Removed asset staging option");
@@ -1136,12 +1210,15 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, http_url, "Operator-managed HTTP asset origin");
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "STUN discovery endpoint");
     CLIOPTIONS_CREATE_ARGUMENT(cli, port_mapping, "Router port mapping policy");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, access_required, "Access code admission policy");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, access_initialize, "Initialize empty access store");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, access_store, "Private access store directory");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Removed admission option");
     clioptions_enable_sensitive(cli);
-    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Private server password file");
-    CLIOPTIONS_CREATE_ARGUMENT(cli,
-                               rendezvous_invite_file,
-                               "Protected rendezvous invite capability path");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Removed admission option");
+    clioptions_enable_sensitive(cli);
+    CLIOPTIONS_CREATE_ARGUMENT(cli, rendezvous_invite_file, "Removed admission option");
+    clioptions_enable_sensitive(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_public, "Public server listing");
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_host, "Legacy public IP address (not published)");
     CLIOPTIONS_CREATE_ARGUMENT(cli, server_name, "Name of the server");
@@ -1173,7 +1250,7 @@ static void init_library(int argc, char *argv[]) {
                                default_permission_groups,
                                "Permission groups applied to all players");
     clioptions_enable_changeable(cli);
-    CLIOPTIONS_CREATE_ARGUMENT(cli, control_allowed_ips, "IP allowed to control the server");
+    CLIOPTIONS_CREATE_ARGUMENT(cli, control_allowed_ips, "Removed remote control option");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, control_player, "Default player for control commands");
     clioptions_enable_changeable(cli);
@@ -1190,14 +1267,34 @@ static void init_library(int argc, char *argv[]) {
     toolkit_import(pathfinder);
 
     memset(&settings, 0, sizeof(settings));
+    settings.datapath_fd = -1;
     settings.content_benchmark_iterations = 9;
     settings.celestial_inventory_limit = 8192;
 
-    clioptions_load("server.cfg", NULL);
-    clioptions_load("server-custom.cfg", NULL);
+    access_configuration_locked = false;
+    invalid_access_configuration = false;
+    removed_access_configuration = false;
+    if (!clioptions_load("server.cfg", NULL)) {
+        LOG(ERROR, "Cannot read required server configuration; refusing game startup");
+        exit(EXIT_FAILURE);
+    }
+    errno = 0;
+    if (!clioptions_load("server-custom.cfg", NULL) && errno != ENOENT) {
+        LOG(ERROR, "Cannot read custom server configuration; refusing game startup");
+        exit(EXIT_FAILURE);
+    }
 
     if (argv != NULL) {
         clioptions_parse(argc, argv);
+    }
+    access_configuration_locked = true;
+    if (invalid_access_configuration || clioptions_had_startup_errors()) {
+        LOG(ERROR, "Invalid access configuration; refusing game startup");
+        exit(EXIT_FAILURE);
+    }
+    if (removed_access_configuration) {
+        LOG(ERROR, "Legacy admission configuration requires offline migration");
+        exit(EXIT_FAILURE);
     }
     if (strcmp(settings.content_benchmark_maps, "brynknot-v1") == 0 &&
         (settings.provision_scenario || settings.unit_tests || settings.plugin_unit_tests ||
@@ -1214,6 +1311,81 @@ static void init_library(int argc, char *argv[]) {
         LOG(ERROR, "Asset staging path is too long; --assetspath must be at most 255 bytes");
         exit(EXIT_FAILURE);
     }
+
+#ifdef WIN32
+    if (settings.datapath_fd >= 0 || settings.access_required || settings.access_initialize ||
+        *settings.access_store != '\0') {
+        LOG(ERROR, "Access token administration is unsupported on Windows servers");
+        exit(EXIT_FAILURE);
+    }
+#else
+    bool offline_state_mode = settings.world_maker || settings.unit_tests ||
+                              settings.plugin_unit_tests || settings.provision_scenario ||
+                              settings.content_benchmark || settings.celestial_inventory;
+    if (settings.datapath_fd >= 0) {
+        /* Validate the original before opening anything that could reuse a
+         * closed descriptor number supplied on the command line. */
+        int flags = fcntl(settings.datapath_fd, F_GETFD);
+        if (flags < 0 || fcntl(settings.datapath_fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
+            LOG(ERROR, "Cannot retain inherited private server state");
+            exit(EXIT_FAILURE);
+        }
+        char expected[MAX_BUF];
+        snprintf(VS(expected), "/proc/self/fd/%d", settings.datapath_fd);
+        struct stat generation;
+        access_generation_descriptor = open(".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (access_generation_descriptor < 0 ||
+            fstat(access_generation_descriptor, &generation) != 0 || !S_ISDIR(generation.st_mode) ||
+            (generation.st_uid != geteuid() && generation.st_uid != 0) ||
+            (generation.st_mode & 0022) != 0) {
+            LOG(ERROR, "Invalid inherited data descriptor generation directory");
+            exit(EXIT_FAILURE);
+        }
+        struct stat link_before, link_after, target, inherited;
+        char actual[MAX_BUF];
+        ssize_t length;
+        if (offline_state_mode || settings.access_initialize ||
+            strcmp(settings.datapath, "./data") != 0 ||
+            fstatat(access_generation_descriptor, "data", &link_before, AT_SYMLINK_NOFOLLOW) != 0 ||
+            !S_ISLNK(link_before.st_mode) ||
+            (length = readlinkat(access_generation_descriptor, "data", actual, sizeof(actual))) !=
+                (ssize_t)strlen(expected) ||
+            memcmp(actual, expected, (size_t)length) != 0 ||
+            fstatat(access_generation_descriptor, "data", &target, 0) != 0 ||
+            fstat(settings.datapath_fd, &inherited) != 0 || !S_ISDIR(target.st_mode) ||
+            target.st_uid != geteuid() || (target.st_mode & 07777) != 0700 ||
+            target.st_dev != inherited.st_dev || target.st_ino != inherited.st_ino ||
+            target.st_mode != inherited.st_mode || target.st_uid != inherited.st_uid ||
+            fstatat(access_generation_descriptor, "data", &link_after, AT_SYMLINK_NOFOLLOW) != 0 ||
+            link_before.st_dev != link_after.st_dev || link_before.st_ino != link_after.st_ino) {
+            LOG(ERROR, "Invalid inherited data descriptor mode or datapath binding");
+            exit(EXIT_FAILURE);
+        }
+        if ((access_state_descriptor = access_state_lock_fd(settings.datapath_fd)) < 0) {
+            LOG(ERROR, "Cannot retain inherited private server state");
+            exit(EXIT_FAILURE);
+        }
+        /* The wrapper pins the generation's ./data symlink. Preserve this
+         * logical spelling for existing private-map/savebed identities while
+         * token-store operations use the descriptor directly. Never close/reuse
+         * N; its CLOEXEC flag prevents child capability leaks.
+         * Cleanup closes only our lock duplicate, never explicitly unlocks it. */
+    }
+    if (settings.access_initialize) {
+        bool initialized = access_bootstrap_initialize(settings.datapath,
+                                                       settings.access_store,
+                                                       settings.access_required);
+        if (!initialized)
+            LOG(ERROR, "Offline access store initialization failed");
+        exit(initialized ? EXIT_SUCCESS : EXIT_FAILURE);
+    }
+    if (!offline_state_mode && settings.datapath_fd < 0 &&
+        (access_state_descriptor = access_state_lock(settings.datapath)) < 0) {
+        LOG(ERROR, "Cannot exclusively lock private server state");
+        exit(EXIT_FAILURE);
+    }
+
+#endif
 
     /* Verify the data directory is valid. */
     DIR *dir = opendir(settings.datapath);

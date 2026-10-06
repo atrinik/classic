@@ -27,7 +27,7 @@
   mutation. The offline `writing-books` scenario uses normal skill linking;
   provision and run it only through an isolated wrapper state. See
   [`doc/BOOK_WRITING.md`](doc/BOOK_WRITING.md) for persistence, protocol revision
-  1081, refill rules and acceptance observations.
+  1082, refill rules and acceptance observations.
 - While celestial-v1 runtime activation is inactive, preserve physical private-map
   and savebed paths through normal character saves, including saves on v1 maps.
   A map's schema alone does not select the process-wide persistence policy.
@@ -54,12 +54,32 @@
   traversal requires the live client to acknowledge each normal movement step.
   See [walking-route export](doc/WALKING_ROUTE.md).
 
+## Access admission and administration
+
+- Protocol 1081 uses mandatory authenticated access policy before setup/account
+  traffic. Retired SETUP subtype 3 stays reserved; no join-password fallback.
+- `access_tokens.c` owns checked snapshot/audit/receipt/outbox transactions;
+  `access_admin.c` owns strict bounded management JSON; `access_server.c` owns
+  copied worker jobs and main-loop session checks. Keep socket/player pointers
+  out of worker ownership, and propagate failed saves into shutdown receipts.
+  Shutdown cancels in-flight access route IO before joining workers; ambiguous
+  cancellation retains pending receipts/outbox entries for durable recovery.
+- In-game access administration uses the current character’s existing
+  `/cmd_permission` grant for `access`; `[OP]` grants it automatically. Local
+  root administration remains available for bootstrap. Access policy/store
+  settings are startup-only and cannot be changed through `/config`.
+- See `doc/ACCESS_TOKEN_STORE.md` and `doc/LOCAL_ADMIN_SHUTDOWN.md` for durability,
+  root bootstrap, private responses, exact online/offline status and backups.
+  Never expose raw codes to command logs or ordinary packet dumps.
+
 ## Dependencies, protocols, and generated files
 
 - Integrated builds use sibling `protocol/` and `libatrinik/`. Classic protocol
   must come from that sibling, the release's embedded `dependencies/protocol`
   tree, or an explicit source override so its wire revision cannot drift;
-  libatrinik remains an immutable checksum-pinned release fallback.
+  libatrinik likewise requires matching sibling, embedded, or explicit source;
+  a parent SDK may provide a compatible `Atrinik::Core` target. Historical
+  standalone library releases are not a current API fallback.
   Content/resources also come from pinned releases; add no submodules.
 - Packet-layout changes are coordinated protocol work. Generated IDs originate
   at `protocol/schema/game-commands.json`; never copy or renumber them locally.

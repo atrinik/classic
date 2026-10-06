@@ -14,6 +14,7 @@
 #include <gpu_renderer.h>
 #include <image_codec.h>
 #include <live_movement_capture.h>
+#include <capture_privacy.h>
 
 #include <SDL3/SDL.h>
 
@@ -153,9 +154,9 @@ static int test_success(void) {
     char path[TEST_PATH_MAX];
     live_movement_capture_t *capture = create_capture(path);
     REQUIRE(capture != NULL);
-    REQUIRE(live_movement_capture_request(capture));
+    REQUIRE(live_movement_capture_request(capture, true));
     REQUIRE(live_movement_capture_result(capture)->status == LIVE_MOVEMENT_CAPTURE_PENDING);
-    REQUIRE(!live_movement_capture_request(capture));
+    REQUIRE(!live_movement_capture_request(capture, true));
     SDL_Surface *surface = SDL_CreateSurface(2, 2, SDL_PIXELFORMAT_RGBA32);
     REQUIRE(surface != NULL);
     mock_complete(surface);
@@ -177,20 +178,48 @@ static int test_success(void) {
     return 0;
 }
 
+static int test_privacy_admission(void) {
+    mock_reset();
+    char path[TEST_PATH_MAX];
+    capture_privacy_block();
+    live_movement_capture_t *capture = create_capture(path);
+    REQUIRE(capture != NULL);
+    REQUIRE(!live_movement_capture_request(capture, capture_privacy_allowed(false)));
+    REQUIRE(queued_complete == NULL);
+    REQUIRE(live_movement_capture_result(capture)->status == LIVE_MOVEMENT_CAPTURE_FAILED);
+    REQUIRE(strcmp(live_movement_capture_result(capture)->error, "diagnostic capture unavailable") == 0);
+    live_movement_capture_destroy(capture);
+    REQUIRE(unlink(path) == 0);
+
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
+    capture = create_capture(path);
+    REQUIRE(capture != NULL);
+    REQUIRE(live_movement_capture_request(capture, capture_privacy_allowed(false)));
+    capture_privacy_block();
+    SDL_Surface *surface = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
+    REQUIRE(surface != NULL);
+    mock_complete(surface); /* Safe submitted copy survives later private UI. */
+    REQUIRE(live_movement_capture_result(capture)->status == LIVE_MOVEMENT_CAPTURE_COMPLETE);
+    live_movement_capture_destroy(capture);
+    REQUIRE(unlink(path) == 0);
+    return 0;
+}
+
 static int test_queue_and_callback_failures(void) {
     mock_reset();
     char path[TEST_PATH_MAX];
     live_movement_capture_t *capture = create_capture(path);
     REQUIRE(capture != NULL);
     queue_success = false;
-    REQUIRE(!live_movement_capture_request(capture));
+    REQUIRE(!live_movement_capture_request(capture, true));
     REQUIRE(live_movement_capture_result(capture)->status == LIVE_MOVEMENT_CAPTURE_FAILED);
     live_movement_capture_destroy(capture);
     REQUIRE(unlink(path) == 0);
 
     mock_reset();
     capture = create_capture(path);
-    REQUIRE(capture != NULL && live_movement_capture_request(capture));
+    REQUIRE(capture != NULL && live_movement_capture_request(capture, true));
     mock_cancel();
     REQUIRE(live_movement_capture_result(capture)->status == LIVE_MOVEMENT_CAPTURE_FAILED);
     REQUIRE(strstr(live_movement_capture_result(capture)->error, "canceled") != NULL);
@@ -199,7 +228,7 @@ static int test_queue_and_callback_failures(void) {
 
     mock_reset();
     capture = create_capture(path);
-    REQUIRE(capture != NULL && live_movement_capture_request(capture));
+    REQUIRE(capture != NULL && live_movement_capture_request(capture, true));
     mock_complete(NULL);
     REQUIRE(live_movement_capture_result(capture)->status == LIVE_MOVEMENT_CAPTURE_FAILED);
     live_movement_capture_destroy(capture);
@@ -207,7 +236,7 @@ static int test_queue_and_callback_failures(void) {
 
     mock_reset();
     capture = create_capture(path);
-    REQUIRE(capture != NULL && live_movement_capture_request(capture));
+    REQUIRE(capture != NULL && live_movement_capture_request(capture, true));
     encoder_success = false;
     SDL_Surface *surface = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
     REQUIRE(surface != NULL);
@@ -222,7 +251,7 @@ static int test_bounds_and_write_failure(void) {
     mock_reset();
     char path[TEST_PATH_MAX];
     live_movement_capture_t *capture = create_capture(path);
-    REQUIRE(capture != NULL && live_movement_capture_request(capture));
+    REQUIRE(capture != NULL && live_movement_capture_request(capture, true));
     SDL_Surface *surface = SDL_CreateSurface(4097, 1, SDL_PIXELFORMAT_RGBA32);
     REQUIRE(surface != NULL);
     mock_complete(surface);
@@ -232,7 +261,7 @@ static int test_bounds_and_write_failure(void) {
 
     mock_reset();
     capture = create_capture(path);
-    REQUIRE(capture != NULL && live_movement_capture_request(capture));
+    REQUIRE(capture != NULL && live_movement_capture_request(capture, true));
     surface = SDL_CreateSurface(4096, 2048, SDL_PIXELFORMAT_RGBA32);
     REQUIRE(surface != NULL);
     mock_complete(surface);
@@ -242,7 +271,7 @@ static int test_bounds_and_write_failure(void) {
 
     mock_reset();
     capture = create_capture(path);
-    REQUIRE(capture != NULL && live_movement_capture_request(capture));
+    REQUIRE(capture != NULL && live_movement_capture_request(capture, true));
     REQUIRE(live_movement_capture_test_close_descriptor(capture));
     surface = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
     REQUIRE(surface != NULL);
@@ -258,7 +287,7 @@ static int test_pending_destroy(void) {
     mock_reset();
     char path[TEST_PATH_MAX];
     live_movement_capture_t *capture = create_capture(path);
-    REQUIRE(capture != NULL && live_movement_capture_request(capture));
+    REQUIRE(capture != NULL && live_movement_capture_request(capture, true));
     live_movement_capture_destroy(capture);
     SDL_Surface *surface = SDL_CreateSurface(1, 1, SDL_PIXELFORMAT_RGBA32);
     REQUIRE(surface != NULL);
@@ -267,7 +296,7 @@ static int test_pending_destroy(void) {
 
     mock_reset();
     capture = create_capture(path);
-    REQUIRE(capture != NULL && live_movement_capture_request(capture));
+    REQUIRE(capture != NULL && live_movement_capture_request(capture, true));
     live_movement_capture_destroy(capture);
     mock_cancel();
     REQUIRE(unlink(path) == 0);
@@ -278,6 +307,7 @@ int main(void) {
     REQUIRE(SDL_Init(0));
     REQUIRE(test_create_exclusive() == 0);
     REQUIRE(test_success() == 0);
+    REQUIRE(test_privacy_admission() == 0);
     REQUIRE(test_queue_and_callback_failures() == 0);
     REQUIRE(test_bounds_and_write_failure() == 0);
     REQUIRE(test_pending_destroy() == 0);

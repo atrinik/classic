@@ -18,8 +18,8 @@
 #include <openssl/sha.h>
 #include <openssl/x509.h>
 
-#define METASERVER_PUBLISH_CLASSIC_TAG "atrinik-classic-publish-v1"
-#define METASERVER_PUBLISH_GAME_TAG "atrinik-game-publish-v1"
+#define METASERVER_PUBLISH_CLASSIC_TAG "atrinik-classic-publish-v3"
+#define METASERVER_PUBLISH_GAME_TAG "atrinik-game-publish-v2"
 #define METASERVER_PUBLISH_COMPONENTS                                            \
     "(\"@method\" \"@authority\" \"@path\" \"content-digest\" \"content-type\" " \
     "\"atrinik-server-id\" \"atrinik-publish-sequence\")"
@@ -217,11 +217,11 @@ bool metaserver_publisher_classic_body(const metaserver_publisher_classic_payloa
     }
     int length = snprintf(body,
                           METASERVER_PUBLISH_BODY_MAX + 1U,
-                          "{\"schema\":\"atrinik-classic-publish-v1\","
+                          "{\"schema\":\"atrinik-classic-publish-v3\","
                           "\"serverId\":\"%s\",\"certificate\":\"%s\","
                           "\"name\":\"%s\",\"playersCount\":%" PRIu32 ","
                           "\"version\":\"%s\",\"textComment\":\"%s\","
-                          "\"public\":%s,\"passwordRequired\":%s%s}",
+                          "\"public\":%s,\"accessRequired\":%s%s}",
                           payload->server_id,
                           payload->certificate,
                           name,
@@ -229,7 +229,7 @@ bool metaserver_publisher_classic_body(const metaserver_publisher_classic_payloa
                           version,
                           comment,
                           payload->is_public ? "true" : "false",
-                          payload->password_required ? "true" : "false",
+                          payload->access_required ? "true" : "false",
                           endpoint);
     if (length <= 0 || (size_t)length > METASERVER_PUBLISH_BODY_MAX) {
         *body = '\0';
@@ -314,12 +314,15 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
 
     const char *prefix = NULL;
     const char *tag = NULL;
-    if (profile == METASERVER_PUBLISHER_CLASSIC_V1) {
-        prefix = "/v1/classic/servers";
+    if (profile == METASERVER_PUBLISHER_CLASSIC_V3) {
+        prefix = "/v3/classic/servers";
         tag = METASERVER_PUBLISH_CLASSIC_TAG;
-    } else if (profile == METASERVER_PUBLISHER_GAME_V1) {
-        prefix = "/v1/servers";
+    } else if (profile == METASERVER_PUBLISHER_GAME_V2) {
+        prefix = "/v2/servers";
         tag = METASERVER_PUBLISH_GAME_TAG;
+    } else if (profile == METASERVER_PUBLISHER_ACCESS_CLASSIC_V1) {
+        prefix = "/v1/access/servers/classic";
+        tag = "atrinik-access-routes-v1";
     } else {
         return false;
     }
@@ -354,7 +357,12 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
     }
     metaserver_publisher_hex_lower(nonce_hex);
 
-    int path_length = snprintf(VS(components->path), "%s/%s/publish", prefix, server_id);
+    int path_length =
+        snprintf(VS(components->path),
+                 "%s/%s/%s",
+                 prefix,
+                 server_id,
+                 profile == METASERVER_PUBLISHER_ACCESS_CLASSIC_V1 ? "routes" : "publish");
     int digest_length = snprintf(VS(components->content_digest), "sha-256=:%s:", digest_base64);
     int input_length =
         snprintf(VS(components->signature_input),

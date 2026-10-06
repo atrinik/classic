@@ -17,6 +17,63 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_final_published_provider_pins_and_installed_library_lane(self) -> None:
+        classic = "ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2"
+        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml", "build-release-candidate.yml"):
+            with self.subTest(workflow=name):
+                workflow = self.text(name)
+                self.assertIn(f"CLASSIC_LINUX_IMAGE: {classic}", workflow)
+                if name != "build-release-candidate.yml":
+                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2", workflow)
+        candidate = self.text("build-release-candidate.yml")
+        sources = candidate[candidate.index("  sources:"):candidate.index("  client-windows:")]
+        lane = sources[sources.index("      - name: Pull the immutable installed-library"):]
+        self.assertIn('docker pull "${CLASSIC_LINUX_IMAGE}"', lane)
+        self.assertIn("bash tools/ci/check_installed_library.sh", lane)
+        self.assertIn('"${RELEASE_VERSION}" "${RELEASE_REVISION}"', lane)
+        self.assertIn("RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}", lane)
+        self.assertIn("persist-credentials: false", sources)
+        self.assertIn("permissions:\n      contents: read", sources)
+        for forbidden in ("apt-get", "pip install", "docker/login-action", "GH_TOKEN"):
+            self.assertNotIn(forbidden, lane)
+        self.assertNotIn("apt-get", sources)
+
+    def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
+        workflow = self.text("check.yml")
+        jobs = dict(
+            re.findall(
+                r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)",
+                workflow[workflow.index("jobs:\n") :],
+                re.MULTILINE | re.DOTALL,
+            )
+        )
+        producer = jobs["windows-test-build"]
+        consumer = jobs["windows-test"]
+        self.assertIn(
+            'cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"',
+            producer,
+        )
+        self.assertIn(
+            '& (Join-Path $bundle "libatrinik-metaserver-publisher.exe") $publisher',
+            consumer,
+        )
+        fixture_paths = re.findall(
+            r'\$publisher = Join-Path \$bundle "fixtures/([^"/]+)"', consumer
+        )
+        self.assertEqual(len(fixture_paths), 1)
+        fixture_path = ROOT / "libatrinik/tests/fixtures" / fixture_paths[0]
+        self.assertTrue(fixture_path.is_file(), f"unstaged publisher fixture: {fixture_path}")
+        cmake = (ROOT / "libatrinik/CMakeLists.txt").read_text(encoding="utf-8")
+        ctest_fixtures = re.findall(
+            r'add_test\(NAME libatrinik-metaserver-publisher\s+'
+            r'COMMAND libatrinik-metaserver-publisher\s+'
+            r'"\$\{CMAKE_CURRENT_SOURCE_DIR\}/tests/fixtures/([^"/]+)"\)',
+            cmake,
+        )
+        self.assertEqual(fixture_paths, ctest_fixtures)
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(fixture["body"])["schema"], "atrinik-classic-publish-v3")
+
     def test_check_routes_immutable_inputs_to_the_consumers_revision(self) -> None:
         workflow = self.text("check.yml")
         # Job boundaries keep an unrelated checkout or artifact declaration from
@@ -1058,10 +1115,10 @@ class WorkflowContractTests(unittest.TestCase):
         server_job = candidate[
             candidate.index("  server-windows:") : candidate.index("  server-image:")
         ]
-        digest = "d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb"
-        image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
+        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
+        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
         self.assertEqual(
-            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.2.1-{digest}"), 1
+            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.16.0-{digest}"), 1
         )
         self.assertEqual(candidate.count(image), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", candidate)
@@ -1191,8 +1248,8 @@ class WorkflowContractTests(unittest.TestCase):
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
-        digest = "d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb"
-        image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
+        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
+        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
         self.assertEqual(build.count(image), 4)
@@ -1514,7 +1571,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("$process.Kill($true)", smoke)
         self.assertIn("$process.Dispose()", smoke)
         self.assertIn('"Server ready\\. Waiting for connections"', smoke)
-        self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
+        self.assertIn('"fixtures/metaserver-classic-publisher-v3.json"', run)
 
         self.assertIn("- windows-test", aggregate)
         self.assertIn("--windows-required", aggregate)
@@ -1794,6 +1851,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("api.codecov.io/api/v2/github/", gpu_coverage_job)
         self.assertIn("flags: client-unit", client)
         self.assertIn("flags: client-gpu", gpu_coverage_job)
+        self.assertIn("fail_ci_if_error: true", gpu_coverage_job)
+        self.assertLess(gpu_coverage_job.index("name: Build and exercise complete GPU coverage"),
+                        gpu_coverage_job.index("name: Upload GPU-complete client coverage"))
         self.assertIn(
             "COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
             workflow,
@@ -1904,8 +1964,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("tools/ci/run_gpu_coverage.sh", client)
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage_job)
         self.assertIn(
-            "ghcr.io/atrinik/linux-build:1.3.0@sha256:"
-            "260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a",
+            "ghcr.io/atrinik/linux-build:1.16.0@sha256:"
+            "89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e",
             workflow,
         )
 
@@ -1927,6 +1987,78 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             with self.subTest(measurement_field=field):
                 self.assertIn(f"printf '{field}\\t", measurement)
+
+
+    def run_gpu_codecov_poll(self, mode: str, tls_code: int = 60):
+        workflow = self.text("check.yml")
+        step = workflow.split("      - name: Wait for complete client coverage processing\n", 1)[1]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n  integrated:", 1)[0])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            curl = root / "curl"
+            curl.write_text(textwrap.dedent('''\
+                #!/usr/bin/env python3
+                import json, os, pathlib, sys
+                calls = pathlib.Path(os.environ['MOCK_CALLS'])
+                previous = calls.read_text().splitlines() if calls.exists() else []
+                with calls.open('a') as stream: stream.write(json.dumps(sys.argv[1:]) + '\\n')
+                mode = os.environ['MOCK_MODE']
+                if mode == 'tls': sys.exit(int(os.environ['MOCK_TLS_CODE']))
+                if mode == 'http' and not previous: sys.exit(22)
+                sessions = 0 if mode == 'zero' or (mode == 'pending' and not previous) else 1
+                print(json.dumps({'totals': {'sessions': sessions}}))
+                '''))
+            jq = root / "jq"
+            jq.write_text(textwrap.dedent('''\
+                #!/usr/bin/env python3
+                import json, sys
+                print(json.load(sys.stdin)['totals']['sessions'])
+                '''))
+            sleep = root / "sleep"
+            sleep.write_text('#!/bin/sh\nprintf "sleep\\n" >> "$MOCK_SLEEPS"\n')
+            for executable in (curl, jq, sleep): executable.chmod(0o700)
+            environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                               MOCK_CALLS=str(root / 'calls'), MOCK_SLEEPS=str(root / 'sleeps'),
+                               MOCK_MODE=mode, MOCK_TLS_CODE=str(tls_code),
+                               COVERAGE_SHA='a' * 40,
+                               CODECOV_REPORT_API='https://api.codecov.io/api/v2/github/atrinik/repos/classic/totals/')
+            result = subprocess.run(['bash', '-c', script], env=environment,
+                                    capture_output=True, text=True, timeout=30)
+            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+            sleeps = (root / 'sleeps').read_text().splitlines() if (root / 'sleeps').exists() else []
+            return result, calls, sleeps
+
+    def test_gpu_codecov_permanent_tls_errors_fail_without_repolling(self) -> None:
+        for code in (35, 51, 58, 60, 77):
+            with self.subTest(code=code):
+                result, calls, sleeps = self.run_gpu_codecov_poll('tls', code)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertIn(f'Codecov TLS transfer failed (curl exit {code})', result.stderr)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(sleeps, [])
+                self.assertNotIn('--retry', calls[0])
+                self.assertNotIn('--insecure', calls[0])
+
+    def test_gpu_codecov_processing_and_http_delays_still_wait_for_both_reports(self) -> None:
+        for mode in ('pending', 'http'):
+            with self.subTest(mode=mode):
+                result, calls, sleeps = self.run_gpu_codecov_poll(mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(calls), 3)
+                self.assertEqual(sleeps, ['sleep'])
+                self.assertIn('flag=client-unit', calls[1])
+                self.assertIn('flag=client-gpu', calls[2])
+                for call in calls:
+                    self.assertIn('sha=' + 'a' * 40, call)
+                    self.assertEqual(call[-1], 'https://api.codecov.io/api/v2/github/atrinik/repos/classic/totals/')
+
+    def test_gpu_codecov_zero_sessions_remains_a_required_timeout_failure(self) -> None:
+        result, calls, sleeps = self.run_gpu_codecov_poll('zero')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len(calls), 90)
+        self.assertEqual(len(sleeps), 90)
+        self.assertIn('within 15 minutes', result.stderr)
+
 
 
 if __name__ == "__main__":

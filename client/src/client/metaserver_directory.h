@@ -1,6 +1,6 @@
 /**
  * @file
- * Transactional classic static-directory protocol 4 parser.
+ * Transactional classic static-directory protocol 6 parser.
  */
 
 #ifndef CLIENT_METASERVER_DIRECTORY_H
@@ -23,7 +23,7 @@ typedef struct metaserver_directory_entry {
     char hostname[254];
     uint16_t port;
     bool has_endpoint;
-    bool password_required;
+    bool access_required;
 } metaserver_directory_entry_t;
 
 typedef struct metaserver_directory_snapshot {

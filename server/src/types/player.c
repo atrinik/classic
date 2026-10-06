@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <access_server.h>
 #include <book_edit.h>
 #include <celestial_structure.h>
 #include <gameplay_journal.h>
@@ -540,6 +541,13 @@ void give_initial_items(object *pl, treasure_list_t *items) {
  * @retval 1 There are more actions we can do.
  */
 int handle_newcs_player(player *pl) {
+    /* Session authority fences automatic movement as well as packet dispatch.
+     * BUSY means the durable expiry/revoke transaction has not completed yet. */
+    if (settings.access_required && pl->cs->access_authenticated &&
+        access_server_session_check(&pl->cs->access_token) != ACCESS_SESSION_VALID) {
+        pl->run_on = 0;
+        return 0;
+    }
     if (!pl->ob || !OBJECT_ACTIVE(pl->ob)) {
         return -1;
     }
@@ -3894,7 +3902,9 @@ object *player_get_dummy(const char *name, const char *host) {
 
     pl->cs->state = ST_PLAYING;
     pl->cs->socket_version = SOCKET_VERSION;
-    pl->cs->join_authenticated = true;
+    pl->cs->access_authenticated = true;
+    pl->cs->access_transport_authenticated = true;
+    pl->cs->access_policy_sent = true;
     pl->cs->setup_completed = true;
     pl->cs->account = xstrdup(ACCOUNT_TESTING_NAME);
     pl->cs->sound = 1;
