@@ -68,11 +68,15 @@ static uint8_t book_help_history_enabled = 0;
 /** Scrollbar in the book GUI. */
 static scrollbar_struct scrollbar;
 
+static int popup_destroy_callback(popup_struct *popup);
+
 static popup_struct *book_popup_get(void) {
     popup_struct *popup;
 
     for (popup = popup_get_head(); popup != NULL; popup = popup->next) {
-        if (popup->texture == texture_get(TEXTURE_TYPE_CLIENT, "book")) {
+        /* The editor shares the parchment texture, but owns its own draft and
+         * teardown. Identify the reader by its state-owning callback. */
+        if (popup->destroy_callback_func == popup_destroy_callback) {
             return popup;
         }
     }

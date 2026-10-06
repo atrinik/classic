@@ -2219,6 +2219,60 @@ static bool gpu_player_view_book_editor_run(void) {
     const book_edit_model_t *model = book_edit_test_model();
     memcpy(retained_title, model->title, sizeof(retained_title));
     memcpy(retained_body, model->contents, sizeof(retained_body));
+
+    /* Reader and editor share parchment artwork, never model or popup identity.
+     * Exercise production BOOK decoding and private-result teardown while a
+     * dirty editor remains underneath, with its session and draft untouched. */
+    popup_struct *draft_editor = popup_get_head();
+    unsigned draft_requests = book_edit_test_request()->count;
+    reader = packet_new(0, 128, 128);
+    packet_writer_write_cstring(reader, "Ordinary reader beside an unsaved draft.");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    popup_struct *coexisting_reader = popup_get_head();
+    BOOK_UI_CHECK(coexisting_reader != NULL && coexisting_reader != draft_editor &&
+                  coexisting_reader->next == draft_editor &&
+                  coexisting_reader->destroy_callback_func != draft_editor->destroy_callback_func &&
+                  coexisting_reader->draw_func != draft_editor->draw_func &&
+                  book_test_content_retained() && !book_sensitive_active());
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && !book_test_signature_rendered());
+    reader = packet_new(0, 256, 128);
+    packet_writer_write_cstring(reader, "Signed reader beside an unsaved draft.");
+    packet_writer_write_cstring(reader, "Authenticated [b]fixture[/b] character");
+    packet_writer_write_cstring(reader, "Year 42, [red]day 7");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    BOOK_UI_CHECK(popup_get_head() == coexisting_reader &&
+                  coexisting_reader->next == draft_editor);
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && book_test_signature_rendered());
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE));
+    BOOK_UI_CHECK(popup_get_head() == draft_editor && !book_test_content_retained() &&
+                  !book_test_signature_rendered());
+
+    const char *private_draft_result = "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";
+    BOOK_UI_CHECK(book_load_sensitive(private_draft_result, (int)strlen(private_draft_result),
+                                      "Access management"));
+    coexisting_reader = popup_get_head();
+    BOOK_UI_CHECK(coexisting_reader != NULL && coexisting_reader != draft_editor &&
+                  coexisting_reader->next == draft_editor && book_sensitive_visible() &&
+                  !capture_privacy_allowed(book_sensitive_active()));
+    BOOK_UI_CHECK(gpu_player_view_render_complete() &&
+                  !capture_privacy_allowed(book_sensitive_active()));
+    client_access_admin_reset();
+    BOOK_UI_CHECK(popup_get_head() == draft_editor && draft_editor->next == NULL &&
+                  !book_sensitive_active() && !book_sensitive_visible() &&
+                  !book_test_content_retained() && book_test_clear_was_observed() &&
+                  !capture_privacy_allowed(false));
+    model = book_edit_test_model();
+    BOOK_UI_CHECK(model->current.session == 18 && model->destination == 41 &&
+                  model->current.ink == 0 && strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_title, saved_title) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0 &&
+                  book_edit_test_request()->count == draft_requests);
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && capture_privacy_allowed(false));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_W)); /* Editor still owns focused input. */
+
     BOOK_UI_CHECK(gpu_player_view_book_click(35, 411));
     request = book_edit_test_request();
     BOOK_UI_CHECK(request->action == BOOK_EDIT_SAVE &&
