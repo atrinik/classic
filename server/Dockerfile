@@ -61,7 +61,9 @@ RUN mkdir -p /tmp/worldmaker /tmp/atrinik-assets /tmp/worldmaker/data/tmp \
 FROM ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
 
 ENV DEBIAN_FRONTEND=noninteractive ATRINIK_HTTP_URL=off
-# Public distro trust bootstraps HTTPS without weakening peer/signature checks.
+# The minimal base lacks the default OpenSSL trust links. Select this public
+# distro bundle explicitly for both APT acquisition phases until its normal
+# ca-certificates package is installed; peer/signature checks remain enabled.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /opt/runtime-provider-packages.lock /tmp/runtime-provider-packages.lock
 COPY --from=build /opt/runtime-provider/ /usr/local/
@@ -74,8 +76,10 @@ RUN test "$(dpkg --print-architecture)" = amd64 \
         -e 's|http://security.ubuntu.com/ubuntu/|https://snapshot.ubuntu.com/ubuntu/20260810T000000Z/|' \
         /etc/apt/sources.list.d/ubuntu.sources \
     && sed -i '/^Signed-By:/a Check-Valid-Until: no' /etc/apt/sources.list.d/ubuntu.sources \
-    && apt-get update \
-    && xargs -r apt-get install -y --no-install-recommends < /tmp/runtime-provider-packages.lock \
+    && apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt \
+        -o APT::Update::Error-Mode=any update \
+    && xargs -r apt-get -o Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt \
+        install -y --no-install-recommends < /tmp/runtime-provider-packages.lock \
     && rm -rf /var/lib/apt/lists/* /tmp/runtime-provider-packages.lock \
     && ldconfig \
     && python3 /usr/local/share/atrinik/runtime-provider.py verify-packages \
