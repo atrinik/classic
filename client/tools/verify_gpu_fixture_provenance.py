@@ -446,12 +446,21 @@ def _validate_runtime_manifest(
              f"content runtime manifest size mismatch: expected {variant['size']}, "
              f"got {len(manifest_data)}")
 
+    return _validate_runtime_payload(runtime_root, manifest_relative, manifest_data,
+                                     manifest, provenance, selected["commit"])
+
+
+def _validate_runtime_payload(
+    runtime_root: Path, manifest_relative: str, manifest_data: bytes,
+    manifest: dict[str, Any], provenance: dict[str, Any], expected_commit: str,
+) -> dict[str, Any]:
+    """Validate identical runtime bytes/compatibility for either explicit contract."""
     _require(manifest["schema_version"] == 2, "content runtime manifest schema is incorrect")
     _require(manifest["target"] == "classic", "content runtime manifest target is incorrect")
     _require(manifest["source"] == {
-        "repository": selected["repository"],
-        "branch": selected["branch"],
-        "commit": selected["commit"],
+        "repository": CONTENT_REPOSITORY,
+        "branch": CONTENT_BRANCH,
+        "commit": expected_commit,
     }, "content runtime source coordinate disagrees with fixture provenance")
     for key, expected in (
         ("content_format", CONTENT_FORMAT),
@@ -503,7 +512,7 @@ def _validate_runtime_manifest(
     _require(manifest["celestial_migration_index_sha256"] == migration_entry["sha256"],
              "content runtime migration index digest is incorrect")
 
-    expected_archetypes = artifact["archetypes"]
+    expected_archetypes = provenance["content"]["selected"]["artifact"]["archetypes"]
     archetype_entry = next(
         (entry for entry in entries if entry["path"] == expected_archetypes["path"]),
         None,
@@ -528,8 +537,8 @@ def _validate_runtime_manifest(
                  f"expected {entry['size']}, got {actual_size}")
 
     return {
-        "release_version": release_version,
-        "manifest_sha256": actual_manifest_sha,
+        "release_version": manifest["release_version"],
+        "manifest_sha256": hashlib.sha256(manifest_data).hexdigest(),
         "manifest_size": len(manifest_data),
         "files": len(entries),
         "manifest_files_sha256": manifest["celestial_manifest_files_sha256"],
@@ -537,11 +546,66 @@ def _validate_runtime_manifest(
     }
 
 
+def _validate_source_profile(
+    qualification_path: Path, qualification_sha256: str, package_version: str,
+    runtime_root: Path, resources_root: Path, provenance: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    _require(package_version == "0.0.0",
+             "source-profile qualification requires package version 0.0.0")
+    path = Path(qualification_path)
+    _require(path.is_absolute() and path.is_file() and not path.is_symlink(),
+             "source-profile qualification must be an absolute regular file")
+    data = path.read_bytes()
+    _require(len(data) <= 4096, "source-profile qualification is too large")
+    expected_sha = _sha256(qualification_sha256, "qualification digest")
+    _require(hashlib.sha256(data).hexdigest() == expected_sha,
+             "source-profile qualification digest mismatch")
+    value = _object(_load_json_bytes(data, str(path)), "source-profile qualification")
+    _keys(value, {"schema_version", "kind", "package_version", "source",
+                  "content_manifest_sha256"}, "source-profile qualification")
+    _require(type(value["schema_version"]) is int and value["schema_version"] == 1,
+             "source-profile qualification schema is incorrect")
+    _require(value["kind"] == "classic-source-profile-qualification" and
+             value["package_version"] == package_version,
+             "source-profile qualification kind/version is incorrect")
+    sources = _object(value["source"], "qualification source")
+    _keys(sources, {"classic", "content", "resources"}, "qualification source")
+    for name, raw in sources.items():
+        entry = _object(raw, f"qualification source {name}")
+        _keys(entry, {"commit", "dirty"}, f"qualification source {name}")
+        _commit(entry["commit"], f"qualification source {name} commit")
+        _require(type(entry["dirty"]) is bool,
+                 f"qualification source {name} dirty must be boolean")
+    for name, root in (("content", runtime_root), ("resources", resources_root)):
+        _require(root.is_dir() and not root.is_symlink(),
+                 f"source-profile {name} root is not a regular directory")
+    _require(bool(_runtime_file_paths(resources_root, "")),
+             "source-profile resources tree is empty")
+    runtime_root = runtime_root.resolve()
+    manifest_path = _resolve_inside(runtime_root, "manifest.json", "content runtime manifest")
+    manifest_data = manifest_path.read_bytes()
+    manifest_sha = _sha256(value["content_manifest_sha256"], "content manifest digest")
+    _require(hashlib.sha256(manifest_data).hexdigest() == manifest_sha,
+             "source-profile content manifest digest mismatch")
+    manifest = _object(_load_json_bytes(manifest_data, str(manifest_path)),
+                       "content runtime manifest")
+    _keys(manifest, MANIFEST_KEYS, "content runtime manifest")
+    _require(manifest["release_version"] == "unreleased",
+             "source-profile content must be explicitly unreleased")
+    runtime = _validate_runtime_payload(runtime_root, "manifest.json", manifest_data,
+                                        manifest, provenance, sources["content"]["commit"])
+    return runtime, value
+
+
 def verify(
     classic_root: Path,
     provenance_path: Path | None = None,
     lock_path: Path | None = None,
     content_runtime: Path | None = None,
+    source_profile_qualification: Path | None = None,
+    source_profile_qualification_sha256: str | None = None,
+    package_version: str | None = None,
+    profile_resources: Path | None = None,
 ) -> dict[str, Any]:
     classic_path = Path(classic_root)
     _require(classic_path.is_dir() and not classic_path.is_symlink(),
@@ -555,7 +619,18 @@ def verify(
     _verify_lock(Path(lock_path), provenance)
     fixture_count = _verify_static_inputs(classic_root, provenance)
     runtime = None
-    if content_runtime is not None:
+    qualification = None
+    source_options = (source_profile_qualification, source_profile_qualification_sha256,
+                      package_version, profile_resources)
+    if any(option is not None for option in source_options):
+        _require(all(option is not None for option in source_options) and
+                 content_runtime is not None,
+                 "source-profile qualification requires all options and paired trees")
+        runtime, qualification = _validate_source_profile(
+            Path(source_profile_qualification), source_profile_qualification_sha256,
+            package_version, Path(content_runtime), Path(profile_resources), provenance,
+        )
+    elif content_runtime is not None:
         runtime = _validate_runtime_manifest(Path(content_runtime), provenance)
     return {
         "schema_version": 1,
@@ -573,6 +648,7 @@ def verify(
             "sha256": provenance["archdef"]["sha256"],
             "size": provenance["archdef"]["size"],
         },
+        "source_profile_qualification": qualification,
         "runtime_verified": runtime is not None,
         "runtime": runtime,
     }
@@ -587,6 +663,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provenance", type=Path)
     parser.add_argument("--lock", type=Path)
     parser.add_argument("--content-runtime", type=Path)
+    parser.add_argument("--source-profile-qualification", type=Path)
+    parser.add_argument("--source-profile-qualification-sha256")
+    parser.add_argument("--package-version")
+    parser.add_argument("--profile-resources", type=Path)
     args = parser.parse_args()
     try:
         result = verify(
@@ -594,6 +674,10 @@ def main(argv: list[str] | None = None) -> int:
             args.provenance,
             args.lock,
             args.content_runtime,
+            args.source_profile_qualification,
+            args.source_profile_qualification_sha256,
+            args.package_version,
+            args.profile_resources,
         )
     except (OSError, ProvenanceError) as error:
         print(f"content provenance error: {error}", file=sys.stderr)

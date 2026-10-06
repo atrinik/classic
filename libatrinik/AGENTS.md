@@ -21,6 +21,15 @@
 - Keep pathfinding free of global state and external dependencies. Add tests for
   unreachable goals, budgets, partial paths, overflow, allocation failure, and
   independent contexts when changing the core.
+- Access codes, private discovery and one-use routing grants are reusable APIs.
+  `access_code.h` owns canonical generation/normalization and purpose hashes;
+  `access_resolve.h` owns bounded HTTPS discovery without public-cache effects.
+  Cancellable access HTTP uses a qualified c-ares libcurl hostname resolver;
+  threaded DNS cleanup is not a bounded cancellation primitive. Keep normal
+  transfer and stalled DNS/HTTP cancellation tests with the qualified build.
+  Caller-owned secret buffers must be cleansed. Grant routing never substitutes
+  for the game server's encrypted access gate. Mark secret packets sensitive
+  before writing; receive-buffer owners separately cleanse consumed bytes.
 - Follow the root `.clang-format` and CMake target/export conventions. Validate the
   top-level CMake/CTest suite, the standalone `pathfinding/` build and tests,
   install/package consumption, and downstream client/server builds through the

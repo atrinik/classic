@@ -31,6 +31,7 @@
 
 #include <SDL3/SDL.h>
 #include <book.h>
+#include <capture_privacy.h>
 #include <event.h>
 #include <main.h>
 #include <popup.h>
@@ -39,11 +40,16 @@
 #include <texture.h>
 #include <sprite.h>
 #include <toolkit/toolkit.h>
+#include <toolkit/access_code.h>
 #include <widget.h>
 #include <toolkit/string.h>
 
 /** The book's content. */
 static char *book_content = NULL;
+static bool book_sensitive;
+#ifdef ATRINIK_WIDGET_TESTS
+static bool book_test_clear_observed;
+#endif
 /** Name of the book. */
 static char book_name[HUGE_BUF];
 /** Number of lines in the book. */
@@ -77,8 +83,22 @@ static void book_state_clear(void) {
         book_help_history = NULL;
     }
     book_help_history_enabled = 0;
+    if (book_sensitive && book_content != NULL) {
+        size_t content_length = strlen(book_content);
+        access_code_clear(book_content, content_length);
+#ifdef ATRINIK_WIDGET_TESTS
+        book_test_clear_observed = true;
+        for (size_t i = 0; i < content_length; i++) {
+            if (book_content[i] != '\0') {
+                book_test_clear_observed = false;
+                break;
+            }
+        }
+#endif
+    }
     free(book_content);
     book_content = NULL;
+    book_sensitive = false;
     book_lines = 0;
     book_scroll_lines = 0;
     book_scroll = 0;
@@ -93,8 +113,12 @@ static void book_state_clear(void) {
  */
 void book_name_change(const char *name, size_t len) {
     len = MIN(sizeof(book_name) - 1, len);
-    strncpy(book_name, name, len);
-    book_name[len] = '\0';
+    size_t copied = 0;
+    while (copied < len && name[copied] != '\0') {
+        book_name[copied] = name[copied];
+        copied++;
+    }
+    book_name[copied] = '\0';
 }
 
 /** @copydoc popup_struct::draw_func */
@@ -113,10 +137,10 @@ static int popup_draw_func(popup_struct *popup) {
                   BOOK_TITLE_STARTX,
                   BOOK_TITLE_STARTY,
                   COLOR_HGOLD,
-                  TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_ALIGN_CENTER,
+                  TEXT_WORD_WRAP | (book_sensitive ? 0 : TEXT_MARKUP) | TEXT_ALIGN_CENTER,
                   &box);
 
-        /* Draw the content. */
+        /* Sensitive results contain server-controlled labels: render literal text. */
         box.w = BOOK_TEXT_WIDTH;
         box.h = BOOK_TEXT_HEIGHT;
         box.y = book_scroll;
@@ -130,7 +154,7 @@ static int popup_draw_func(popup_struct *popup) {
                   BOOK_TEXT_STARTX,
                   BOOK_TEXT_STARTY,
                   COLOR_BLACK,
-                  TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_LINES_SKIP,
+                  TEXT_WORD_WRAP | (book_sensitive ? 0 : TEXT_MARKUP) | TEXT_LINES_SKIP,
                   &box);
         text_set_selection(NULL, NULL, NULL);
 
@@ -241,17 +265,25 @@ static const char *popup_clipboard_copy_func(popup_struct *popup) {
  * @param len
  * Length of 'data'.
  */
-bool book_load(const char *data, int len) {
+static bool book_load_internal(const char *data, int len, bool sensitive, const char *title) {
     SDL_Rect box;
     int pos;
     popup_struct *popup;
 
-    /* Nothing to do. */
-    if (!data || !len) {
+    if (data == NULL || len <= 0) {
+        popup = book_popup_get();
+        if (popup != NULL) {
+            popup_destroy(popup);
+        } else {
+            book_state_clear();
+        }
         return true;
     }
 
     /* Free old book data and reset the values. */
+    if (book_sensitive && book_content != NULL) {
+        access_code_clear(book_content, strlen(book_content));
+    }
     free(book_content);
 
     book_lines = 0;
@@ -260,7 +292,11 @@ bool book_load(const char *data, int len) {
 
     /* Store the data. */
     book_content = xstrdup(data);
-    book_name_change("Book", 4);
+    book_sensitive = sensitive;
+    if (sensitive) {
+        capture_privacy_block();
+    }
+    book_name_change(title, strlen(title));
 
     /* Strip trailing newlines. */
     for (pos = len - 1; pos >= 0; pos--) {
@@ -292,7 +328,7 @@ bool book_load(const char *data, int len) {
               BOOK_TEXT_STARTX,
               BOOK_TEXT_STARTY,
               COLOR_WHITE,
-              TEXT_WORD_WRAP | TEXT_MARKUP | TEXT_LINES_CALC,
+              TEXT_WORD_WRAP | (book_sensitive ? 0 : TEXT_MARKUP) | TEXT_LINES_CALC,
               &box);
     book_lines = box.h;
     book_scroll_lines = box.y;
@@ -336,9 +372,60 @@ bool book_load(const char *data, int len) {
     return true;
 }
 
+bool book_load(const char *data, int len) {
+    return book_load_internal(data, len, false, "Book");
+}
+
+bool book_load_sensitive(const char *data, int len, const char *title) {
+    return data != NULL && title != NULL && book_load_internal(data, len, true, title);
+}
+
+void book_sensitive_clear(void) {
+    if (!book_sensitive) {
+        return;
+    }
+
+    popup_struct *popup = book_popup_get();
+    if (popup != NULL) {
+        popup_destroy(popup);
+    } else {
+        book_state_clear();
+    }
+}
+
+bool book_sensitive_active(void) {
+    return book_sensitive;
+}
+
+bool book_sensitive_visible(void) {
+    return book_sensitive && book_popup_get() != NULL;
+}
+
 #ifdef ATRINIK_WIDGET_TESTS
 bool book_test_content_retained(void) {
     return book_content != NULL;
+}
+
+bool book_test_state_seed(const char *content, bool sensitive) {
+    if (content == NULL || *content == '\0') {
+        return false;
+    }
+    book_state_clear();
+    book_content = xstrdup(content);
+    book_sensitive = sensitive;
+    if (sensitive) {
+        capture_privacy_block();
+    }
+    book_test_clear_observed = false;
+    return true;
+}
+
+bool book_test_clear_was_observed(void) {
+    return book_test_clear_observed;
+}
+
+void book_test_state_discard(void) {
+    book_state_clear();
 }
 #endif
 

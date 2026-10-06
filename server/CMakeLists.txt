@@ -100,42 +100,6 @@ function(atrinik_configure_target target)
     endif ()
 endfunction()
 
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.lock.json"
-    ATRINIK_SOURCE_LOCK)
-string(JSON ATRINIK_SOURCE_LOCK_SCHEMA ERROR_VARIABLE lock_error
-    GET "${ATRINIK_SOURCE_LOCK}" schema_version)
-if (lock_error OR NOT ATRINIK_SOURCE_LOCK_SCHEMA EQUAL 1)
-    message(FATAL_ERROR "cmake/dependencies.lock.json has an unsupported schema")
-endif ()
-
-function(atrinik_fetch_source name expected_repository expected_archive)
-    foreach (field IN ITEMS repository tag commit url sha256)
-        string(JSON dependency_${field} ERROR_VARIABLE lock_error
-            GET "${ATRINIK_SOURCE_LOCK}" dependencies ${name} ${field})
-        if (lock_error OR dependency_${field} STREQUAL "")
-            message(FATAL_ERROR "Source dependency ${name}.${field} is missing")
-        endif ()
-    endforeach ()
-    string(REGEX REPLACE "^v" "" dependency_version "${dependency_tag}")
-    set(expected_url
-        "https://github.com/${expected_repository}/releases/download/${dependency_tag}/${expected_archive}-${dependency_version}.tar.gz")
-    string(LENGTH "${dependency_commit}" commit_length)
-    string(LENGTH "${dependency_sha256}" digest_length)
-    if (NOT dependency_repository STREQUAL expected_repository OR
-            NOT dependency_tag MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+$" OR
-            NOT dependency_commit MATCHES "^[0-9a-f]+$" OR
-            NOT commit_length EQUAL 40 OR
-            NOT dependency_url STREQUAL expected_url OR
-            NOT dependency_sha256 MATCHES "^[0-9a-f]+$" OR
-            NOT digest_length EQUAL 64)
-        message(FATAL_ERROR "Source dependency ${name} has invalid lock metadata")
-    endif ()
-    FetchContent_Declare(${name}
-        URL "${dependency_url}"
-        URL_HASH "SHA256=${dependency_sha256}"
-        DOWNLOAD_EXTRACT_TIMESTAMP false)
-endfunction()
-
 if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
     foreach (candidate
             "${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
@@ -175,12 +139,21 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1080U$")
-    message(FATAL_ERROR "Server requires classic game protocol v1080")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1081U$")
+    message(FATAL_ERROR "Server requires classic game protocol v1081")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
-    atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
+    if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK OR
+            NOT EXISTS "${FETCHCONTENT_SOURCE_DIR_LIBATRINIK}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Matching Classic libatrinik source is required: use the sibling "
+            "libatrinik/ tree, the packaged dependencies/libatrinik tree, or "
+            "FETCHCONTENT_SOURCE_DIR_LIBATRINIK. Historical standalone libatrinik "
+            "releases lack the current Classic access APIs.")
+    endif ()
+    FetchContent_Declare(libatrinik
+        SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_LIBATRINIK}")
     FetchContent_MakeAvailable(libatrinik)
 endif ()
 include(cmake/pcpnatpmp.cmake)
@@ -210,6 +183,9 @@ endforeach ()
 
 include(src/cmake.txt)
 find_package(PkgConfig REQUIRED)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+endif ()
 
 if (NOT MINGW)
     pkg_check_modules(MINIUPNPC REQUIRED IMPORTED_TARGET miniupnpc)
@@ -280,6 +256,31 @@ target_include_directories(${EXECUTABLE} BEFORE PRIVATE
     ${ATRINIK_SERVER_INCLUDE_DIRS})
 target_link_libraries(${EXECUTABLE} PRIVATE atrinik-server-core Atrinik::Core)
 
+# The wrapper reads this without executing an unknown historical binary. Bind
+# advertised descriptor support to the exact linked executable.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(access_capabilities_script
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/write_server_capabilities.cmake")
+    set_property(TARGET ${EXECUTABLE} APPEND PROPERTY LINK_DEPENDS
+        "${access_capabilities_script}")
+    add_custom_command(TARGET ${EXECUTABLE} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            "-DSERVER_EXECUTABLE=$<TARGET_FILE:${EXECUTABLE}>"
+            -P "${access_capabilities_script}"
+        VERBATIM)
+endif ()
+
+# Read-only stopped-state acceptance for the updater. This program does not
+# link the simulation core or initialize listeners, plugins, or a publisher.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(atrinik-access-status
+        tools/access_status.c src/server/access_admin.c src/server/access_tokens.c
+        src/server/access_bootstrap.c)
+    atrinik_configure_target(atrinik-access-status)
+    target_include_directories(atrinik-access-status PRIVATE src/include)
+    target_link_libraries(atrinik-access-status PRIVATE Atrinik::Core Threads::Threads)
+endif ()
+
 add_library(plugin_arena MODULE
     src/plugins/plugin_arena/plugin_arena.c)
 atrinik_configure_target(plugin_arena)
@@ -340,6 +341,34 @@ endif ()
 
 if (BUILD_TESTING AND NOT MINGW)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME server-access-configuration
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/access_configuration.py
+            $<TARGET_FILE:${EXECUTABLE}>)
+    set_tests_properties(server-access-configuration PROPERTIES TIMEOUT 90)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(atrinik-access-bootstrap-tests
+            src/tests/access_tokens/bootstrap_fixture.c)
+        atrinik_configure_target(atrinik-access-bootstrap-tests)
+        target_include_directories(atrinik-access-bootstrap-tests PRIVATE src/include)
+        target_link_libraries(atrinik-access-bootstrap-tests PRIVATE Atrinik::Core Threads::Threads)
+        target_compile_options(atrinik-access-bootstrap-tests PRIVATE -UNDEBUG)
+        target_link_options(atrinik-access-bootstrap-tests PRIVATE
+            -Wl,--wrap=socket,--wrap=connect,--wrap=bind,--wrap=listen)
+        add_test(NAME server-access-bootstrap COMMAND atrinik-access-bootstrap-tests
+            ${CMAKE_CURRENT_BINARY_DIR})
+        set_tests_properties(server-access-bootstrap PROPERTIES TIMEOUT 90)
+        add_executable(atrinik-access-store-tests src/tests/access_tokens/store_fixture.c)
+        atrinik_configure_target(atrinik-access-store-tests)
+        target_include_directories(atrinik-access-store-tests PRIVATE src/include)
+        target_link_libraries(atrinik-access-store-tests PRIVATE Atrinik::Core Threads::Threads)
+        # Fixture assertions remain active in the release-style validation build.
+        target_compile_options(atrinik-access-store-tests PRIVATE -UNDEBUG)
+        add_test(NAME server-access-store COMMAND atrinik-access-store-tests)
+        add_test(NAME server-access-store-capacity COMMAND atrinik-access-store-tests --capacity)
+        set_tests_properties(server-access-store server-access-store-capacity
+            PROPERTIES TIMEOUT 180)
+    endif ()
     pkg_check_modules(CHECK_PKG QUIET IMPORTED_TARGET check)
 
     if (CHECK_PKG_FOUND)
@@ -696,6 +725,26 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
             "No DLLs found in ATRINIK_WINDOWS_RUNTIME_DIR: ${ATRINIK_WINDOWS_RUNTIME_DIR}")
     endif ()
     install(FILES ${ATRINIK_WINDOWS_RUNTIME_DLLS} DESTINATION server)
+
+    # A c-ares runtime must carry the complete notice from its toolchain.
+    set(ATRINIK_WINDOWS_CARES_LICENSE
+        "${ATRINIK_WINDOWS_RUNTIME_DIR}/../share/licenses/c-ares/LICENSE.md"
+        CACHE FILEPATH "c-ares license accompanying the Windows runtime DLL")
+    foreach (runtime_dll IN LISTS ATRINIK_WINDOWS_RUNTIME_DLLS)
+        get_filename_component(runtime_name "${runtime_dll}" NAME)
+        string(TOLOWER "${runtime_name}" runtime_name)
+        if (runtime_name MATCHES "^(lib)?cares[^/]*\\.dll$")
+            if (NOT EXISTS "${ATRINIK_WINDOWS_CARES_LICENSE}" OR
+                    IS_DIRECTORY "${ATRINIK_WINDOWS_CARES_LICENSE}")
+                message(FATAL_ERROR
+                    "c-ares runtime requires ATRINIK_WINDOWS_CARES_LICENSE: "
+                    "${ATRINIK_WINDOWS_CARES_LICENSE}")
+            endif ()
+            install(FILES "${ATRINIK_WINDOWS_CARES_LICENSE}"
+                DESTINATION server RENAME c-ares-LICENSE.md)
+            break()
+        endif ()
+    endforeach ()
 
     install(DIRECTORY "${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}/"
         DESTINATION server)

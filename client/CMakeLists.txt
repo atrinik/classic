@@ -245,42 +245,6 @@ function(atrinik_configure_target target)
     endif ()
 endfunction()
 
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.lock.json"
-    ATRINIK_SOURCE_LOCK)
-string(JSON ATRINIK_SOURCE_LOCK_SCHEMA ERROR_VARIABLE lock_error
-    GET "${ATRINIK_SOURCE_LOCK}" schema_version)
-if (lock_error OR NOT ATRINIK_SOURCE_LOCK_SCHEMA EQUAL 1)
-    message(FATAL_ERROR "cmake/dependencies.lock.json has an unsupported schema")
-endif ()
-
-function(atrinik_fetch_source name expected_repository expected_archive)
-    foreach (field IN ITEMS repository tag commit url sha256)
-        string(JSON dependency_${field} ERROR_VARIABLE lock_error
-            GET "${ATRINIK_SOURCE_LOCK}" dependencies ${name} ${field})
-        if (lock_error OR dependency_${field} STREQUAL "")
-            message(FATAL_ERROR "Source dependency ${name}.${field} is missing")
-        endif ()
-    endforeach ()
-    string(REGEX REPLACE "^v" "" dependency_version "${dependency_tag}")
-    set(expected_url
-        "https://github.com/${expected_repository}/releases/download/${dependency_tag}/${expected_archive}-${dependency_version}.tar.gz")
-    string(LENGTH "${dependency_commit}" commit_length)
-    string(LENGTH "${dependency_sha256}" digest_length)
-    if (NOT dependency_repository STREQUAL expected_repository OR
-            NOT dependency_tag MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+$" OR
-            NOT dependency_commit MATCHES "^[0-9a-f]+$" OR
-            NOT commit_length EQUAL 40 OR
-            NOT dependency_url STREQUAL expected_url OR
-            NOT dependency_sha256 MATCHES "^[0-9a-f]+$" OR
-            NOT digest_length EQUAL 64)
-        message(FATAL_ERROR "Source dependency ${name} has invalid lock metadata")
-    endif ()
-    FetchContent_Declare(${name}
-        URL "${dependency_url}"
-        URL_HASH "SHA256=${dependency_sha256}"
-        DOWNLOAD_EXTRACT_TIMESTAMP false)
-endfunction()
-
 if (NOT FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL)
     foreach (candidate
             "${CMAKE_CURRENT_SOURCE_DIR}/../protocol"
@@ -320,12 +284,21 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1080U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1080")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1081U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1081")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
-    atrinik_fetch_source(libatrinik "atrinik/libatrinik" "libatrinik")
+    if (NOT FETCHCONTENT_SOURCE_DIR_LIBATRINIK OR
+            NOT EXISTS "${FETCHCONTENT_SOURCE_DIR_LIBATRINIK}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Matching Classic libatrinik source is required: use the sibling "
+            "libatrinik/ tree, the packaged dependencies/libatrinik tree, or "
+            "FETCHCONTENT_SOURCE_DIR_LIBATRINIK. Historical standalone libatrinik "
+            "releases lack the current Classic access APIs.")
+    endif ()
+    FetchContent_Declare(libatrinik
+        SOURCE_DIR "${FETCHCONTENT_SOURCE_DIR_LIBATRINIK}")
     FetchContent_MakeAvailable(libatrinik)
 endif ()
 
@@ -586,6 +559,14 @@ if (BUILD_TESTING)
 
     add_test(NAME client-help-parser COMMAND ${EXECUTABLE} --help-parser-test)
 
+    add_test(NAME client-access-lifecycle COMMAND ${EXECUTABLE} --access-lifecycle-test)
+
+    add_executable(client-capture-privacy-tests
+        src/tests/capture_privacy.c src/client/capture_privacy.c)
+    atrinik_configure_target(client-capture-privacy-tests)
+    target_include_directories(client-capture-privacy-tests PRIVATE src/include)
+    add_test(NAME client-capture-privacy COMMAND client-capture-privacy-tests)
+
     add_test(NAME client-cli-options
         COMMAND ${EXECUTABLE}
             --connect=example:account:password:character
@@ -654,6 +635,50 @@ if (BUILD_TESTING)
     target_link_libraries(client-metaserver-options-tests PRIVATE Atrinik::Core)
     add_test(NAME client-metaserver-options COMMAND client-metaserver-options-tests)
 
+    add_executable(client-access-tests
+        src/tests/access.c
+        src/client/access_admin_response.c
+        src/client/access_attempt.c
+        src/client/access_protocol.c)
+    atrinik_configure_target(client-access-tests)
+    target_include_directories(client-access-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-access-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-access COMMAND client-access-tests)
+
+    add_executable(client-access-admin-tests
+        src/tests/access_admin.c
+        src/client/access_admin.c
+        src/client/access_admin_response.c)
+    atrinik_configure_target(client-access-admin-tests)
+    target_include_directories(client-access-admin-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-access-admin-tests PRIVATE
+        Atrinik::Core SDL3::SDL3 OpenSSL::Crypto)
+    add_test(NAME client-access-admin COMMAND client-access-admin-tests)
+
+    add_executable(client-access-resolver-tests
+        src/tests/access_resolver.c
+        src/client/metaserver_direct.c
+        src/client/metaserver_directory.c
+        src/client/access_resolver.c
+        src/client/access_attempt.c)
+    atrinik_configure_target(client-access-resolver-tests)
+    target_include_directories(client-access-resolver-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-access-resolver-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    if (TARGET LibXml2::LibXml2)
+        target_link_libraries(client-access-resolver-tests PRIVATE LibXml2::LibXml2)
+    else ()
+        target_include_directories(client-access-resolver-tests PRIVATE ${LIBXML2_INCLUDE_DIR})
+        target_link_libraries(client-access-resolver-tests PRIVATE ${LIBXML2_LIBRARIES})
+    endif ()
+    add_test(NAME client-access-resolver COMMAND client-access-resolver-tests)
+
     add_executable(client-window-title-tests
         src/tests/window_title.c
         src/client/window_title.c)
@@ -680,12 +705,11 @@ if (BUILD_TESTING)
     endif ()
     add_test(NAME client-metaserver-directory
         COMMAND client-metaserver-directory-tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/classic-directory-v4.xml")
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/tests/fixtures/classic-directory-v6.xml")
 
     add_executable(client-connection-failure-tests
         src/tests/connection_failure.c
         src/client/connection_failure.c
-        src/client/join_credentials.c
         src/client/metaserver_identity.c)
     atrinik_configure_target(client-connection-failure-tests)
     target_include_directories(client-connection-failure-tests PRIVATE
@@ -807,7 +831,8 @@ if (BUILD_TESTING)
     add_test(NAME client-live-movement COMMAND client-live-movement-tests)
 
     add_executable(client-live-movement-capture-tests
-        src/tests/live_movement_capture.c src/client/live_movement_capture.c)
+        src/tests/live_movement_capture.c src/client/live_movement_capture.c
+        src/client/capture_privacy.c)
     atrinik_configure_target(client-live-movement-capture-tests)
     target_compile_definitions(client-live-movement-capture-tests PRIVATE
         ATRINIK_LIVE_MOVEMENT_CAPTURE_TESTING)
@@ -832,7 +857,7 @@ if (BUILD_TESTING)
 
     if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(client-video-recording-tests
-            src/tests/video_recording.c src/client/video_recording.c)
+            src/tests/video_recording.c src/client/video_recording.c src/client/capture_privacy.c)
         atrinik_configure_target(client-video-recording-tests)
         target_include_directories(client-video-recording-tests BEFORE PRIVATE
             ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -1226,6 +1251,26 @@ if (WIN32 AND NOT UNIX)
         if (ATRINIK_WINDOWS_RUNTIME_DLLS)
             install(FILES ${ATRINIK_WINDOWS_RUNTIME_DLLS}
                 DESTINATION ${INSTALL_SUBDIR_BIN})
+
+            # A c-ares runtime must carry the complete notice from its toolchain.
+            set(ATRINIK_WINDOWS_CARES_LICENSE
+                "${ATRINIK_WINDOWS_RUNTIME_DIR}/../share/licenses/c-ares/LICENSE.md"
+                CACHE FILEPATH "c-ares license accompanying the Windows runtime DLL")
+            foreach (runtime_dll IN LISTS ATRINIK_WINDOWS_RUNTIME_DLLS)
+                get_filename_component(runtime_name "${runtime_dll}" NAME)
+                string(TOLOWER "${runtime_name}" runtime_name)
+                if (runtime_name MATCHES "^(lib)?cares[^/]*\\.dll$")
+                    if (NOT EXISTS "${ATRINIK_WINDOWS_CARES_LICENSE}" OR
+                            IS_DIRECTORY "${ATRINIK_WINDOWS_CARES_LICENSE}")
+                        message(FATAL_ERROR
+                            "c-ares runtime requires ATRINIK_WINDOWS_CARES_LICENSE: "
+                            "${ATRINIK_WINDOWS_CARES_LICENSE}")
+                    endif ()
+                    install(FILES "${ATRINIK_WINDOWS_CARES_LICENSE}"
+                        DESTINATION ${INSTALL_SUBDIR_BIN} RENAME c-ares-LICENSE.md)
+                    break()
+                endif ()
+            endforeach ()
         else ()
             message(FATAL_ERROR
                 "No DLLs found in ATRINIK_WINDOWS_RUNTIME_DIR: ${ATRINIK_WINDOWS_RUNTIME_DIR}")

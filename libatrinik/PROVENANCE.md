@@ -13,5 +13,14 @@ change establishes otherwise.
 
 The Atrinik maintainers own API review, dependency updates, security fixes,
 and releases. Releases use immutable semantic-version tags and include a
-SHA-256 manifest. The canonical game wire contract is owned and released by
-`atrinik/protocol`; `dependencies.lock.json` pins the exact accepted artifact.
+SHA-256 manifest. Classic game command identities and generated C/Python
+bindings are owned by the sibling `protocol/` module in this monorepo.
+Integrated builds select that source, and scoped library releases embed the
+matching unified-version protocol tree under `dependencies/`.
+
+`dependencies.lock.json` retains the separate historical v1.0.0 protocol
+artifact fallback. The shared access-authority specification now published by
+`atrinik/protocol` has a different source layout and does not supply the Classic
+CMake command-binding package. Its v2.9.0 provenance is recorded in
+[`protocol/README.md`](../protocol/README.md); it does not replace that archival
+lock or the sibling Classic bindings.

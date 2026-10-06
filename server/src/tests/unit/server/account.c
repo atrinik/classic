@@ -394,6 +394,52 @@ START_TEST(test_checked_logout_propagates_save_failures) {
 }
 END_TEST
 
+START_TEST(test_access_preserves_normal_command_permissions) {
+    char saved_groups[sizeof(settings.default_permission_groups)];
+    memcpy(saved_groups, settings.default_permission_groups, sizeof(saved_groups));
+    bool saved_required = settings.access_required;
+    player pl = {0};
+    settings.access_required = true;
+    snprintf(VS(settings.default_permission_groups), "[OP]");
+    const char *commands[] = {"console", "create", "patch", "config", "password", "/console",
+                              "kick", "ban", "freeze"};
+    for (size_t i = 0; i < arraysize(commands); i++)
+        ck_assert_int_eq(commands_check_permission(&pl, commands[i]), 1);
+
+    settings.default_permission_groups[0] = '\0';
+    ck_assert_int_eq(commands_check_permission(&pl, "console"), 0);
+    char *permissions[] = {"console", "create", "patch", "config", "password", "kick"};
+    pl.cmd_permissions = permissions;
+    pl.num_cmd_permissions = arraysize(permissions);
+    for (size_t i = 0; i < arraysize(permissions); i++)
+        ck_assert_int_eq(commands_check_permission(&pl, permissions[i]), 1);
+    ck_assert_int_eq(commands_check_permission(&pl, "ban"), 0);
+    settings.access_required = saved_required;
+    memcpy(settings.default_permission_groups, saved_groups, sizeof(saved_groups));
+}
+END_TEST
+
+START_TEST(test_access_preserves_ordinary_registration) {
+    bool saved_required = settings.access_required;
+    settings.access_required = true;
+    object *ob = player_get_dummy("Registration Proof", NULL);
+    socket_struct *cs = CONTR(ob)->cs;
+    free(cs->account);
+    cs->account = NULL;
+    char name[] = "reservationproof";
+    char password[] = "local-test-7!";
+    char *path = account_make_path(name);
+    unlink(path);
+    account_register(cs, name, password, password);
+    ck_assert_ptr_nonnull(cs->account);
+    ck_assert_str_eq(cs->account, name);
+    ck_assert(path_exists(path));
+    ck_assert_int_eq(unlink(path), 0);
+    free(path);
+    settings.access_required = saved_required;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("account");
     TCase *tc_core = tcase_create("Core");
@@ -402,6 +448,8 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_set_timeout(tc_core, 30);
     tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 4);
+    tcase_add_test(tc_core, test_access_preserves_normal_command_permissions);
+    tcase_add_test(tc_core, test_access_preserves_ordinary_registration);
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);

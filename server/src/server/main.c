@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <admin_shutdown.h>
+#include <access_server.h>
 #include <weather.h>
 #include <swap.h>
 #include <initialization.h>
@@ -376,7 +377,9 @@ void clean_tmp_files(void) {
  * Shut down the server, saving and freeing all data.
  */
 void server_shutdown(void) {
-    bool ok = player_disconnect_all_checked();
+    bool ok = access_server_shutdown();
+    if (!player_disconnect_all_checked())
+        ok = false;
     if (!clean_tmp_files_checked()) {
         ok = false;
     }
@@ -781,6 +784,10 @@ int server_run(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    admin_shutdown_set_access(access_server_root_submit,
+                              access_server_admin_poll,
+                              access_server_cancel);
+
     if (!settings.no_console) {
         console_start_thread();
     }
@@ -792,7 +799,7 @@ int server_run(int argc, char **argv) {
     for (;;) {
         uint64_t loop_started_us = datetime_monotonic_us();
         if (unlikely(shutdown_requested || shutdown_timer_check() ||
-                     !gameplay_journal_available())) {
+                     !gameplay_journal_available() || !access_server_healthy())) {
             if (!gameplay_journal_available()) {
                 LOG(ERROR,
                     "Gameplay journal is unavailable; shutting down to preserve the audit "

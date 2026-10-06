@@ -106,6 +106,13 @@ static struct {
     char input[ADMIN_SHUTDOWN_REQUEST_MAX + 1];
     size_t used;
     uint64_t accepted;
+    uint64_t executing;
+    uint64_t job;
+    char output[32768 + 65];
+    size_t output_size, output_sent;
+    admin_access_start_fn access_start;
+    admin_access_poll_fn access_poll;
+    admin_access_cancel_fn access_cancel;
     admin_shutdown_schedule_fn schedule;
     admin_shutdown_request pending;
     bool expired;
@@ -127,7 +134,28 @@ static uint64_t monotonic_ms(void) {
     return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
 }
 
+static void cleanse(void *data, size_t size) {
+    volatile unsigned char *p = data;
+    while (size--)
+        *p++ = 0;
+}
+
+void admin_shutdown_set_access(admin_access_start_fn start,
+                               admin_access_poll_fn poll,
+                               admin_access_cancel_fn cancel) {
+    state.access_start = start;
+    state.access_poll = poll;
+    state.access_cancel = cancel;
+}
+
 static void close_client(void) {
+    if (state.job && state.access_cancel)
+        state.access_cancel(state.job);
+    state.job = 0;
+    state.executing = 0;
+    state.output_size = state.output_sent = 0;
+    cleanse(state.input, sizeof(state.input));
+    cleanse(state.output, sizeof(state.output));
     if (state.client >= 0) {
         close(state.client);
         state.client = -1;
@@ -293,15 +321,54 @@ bool admin_shutdown_finish(bool saved) {
 }
 
 static void respond(const char *message) {
-    (void)send(state.client, message, strlen(message), MSG_NOSIGNAL | MSG_DONTWAIT);
-    close_client();
+    size_t length = strlen(message);
+    if (length >= sizeof(state.output)) {
+        close_client();
+        return;
+    }
+    memcpy(state.output, message, length);
+    state.output_size = length;
+    state.output_sent = 0;
+    state.executing = monotonic_ms();
+    ssize_t sent = send(state.client, state.output, state.output_size, MSG_NOSIGNAL | MSG_DONTWAIT);
+    if (sent > 0) {
+        state.output_sent = (size_t)sent;
+        if (state.output_sent == state.output_size)
+            close_client();
+    } else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+        close_client();
 }
 
 static void handle_request(void) {
     const char capabilities[] = "ATRINIK-ADMIN/1 CAPABILITIES\n";
     if (state.used == sizeof(capabilities) - 1 &&
         memcmp(state.input, capabilities, sizeof(capabilities) - 1) == 0) {
-        respond("ATRINIK-ADMIN/1 CAPABILITIES shutdown-v1 durable-result-v1\n");
+        respond(
+            state.access_start && state.access_poll && state.access_cancel
+                ? "ATRINIK-ADMIN/1 CAPABILITIES shutdown-v1 durable-result-v1 access-tokens-v1\n"
+                : "ATRINIK-ADMIN/1 CAPABILITIES shutdown-v1 durable-result-v1\n");
+        return;
+    }
+    const char access[] = "ATRINIK-ADMIN/1 ACCESS ";
+    if (state.used > sizeof(access) && memcmp(state.input, access, sizeof(access) - 1) == 0) {
+        size_t length = state.used - sizeof(access);
+        const char *json = state.input + sizeof(access) - 1;
+        if (state.input[state.used - 1] != '\n' || memchr(json, '\n', length) ||
+            memchr(json, '\r', length) || memchr(json, 0, length)) {
+            respond("ATRINIK-ADMIN/1 ERROR malformed\n");
+            return;
+        }
+        if (!state.access_start || !state.access_poll || !state.access_cancel) {
+            respond("ATRINIK-ADMIN/1 ERROR unavailable\n");
+            return;
+        }
+        state.job = state.access_start(json, length);
+        if (!state.job) {
+            respond("ATRINIK-ADMIN/1 ERROR unavailable\n");
+            return;
+        }
+        state.executing = monotonic_ms();
+        cleanse(state.input, sizeof(state.input));
         return;
     }
     admin_shutdown_request request;
@@ -346,8 +413,43 @@ void admin_shutdown_poll(void) {
         return;
     }
     uint64_t now = monotonic_ms();
-    if (state.client >= 0 && (now == UINT64_MAX || now - state.accepted >= 2000)) {
+    if (state.client >= 0 &&
+        (now == UINT64_MAX ||
+         (state.executing ? now - state.executing >= 35000 : now - state.accepted >= 2000))) {
         close_client();
+    }
+    if (state.client >= 0 && state.job) {
+        size_t length = 0;
+        if (state.access_poll(state.job, state.output + 64, 32768 + 1, &length)) {
+            state.job = 0;
+            if (!length || length > 32768 || memchr(state.output + 64, 0, length)) {
+                close_client();
+                return;
+            }
+            char header[64];
+            int n = snprintf(header, sizeof(header), "ATRINIK-ADMIN/1 ACCESS %zu\n", length);
+            memmove(state.output + n, state.output + 64, length);
+            memcpy(state.output, header, (size_t)n);
+            state.output_size = (size_t)n + length;
+            state.output_sent = 0;
+        } else if (now - state.executing >= 30000) {
+            close_client();
+            return;
+        } else
+            return;
+    }
+    if (state.client >= 0 && state.output_size) {
+        ssize_t sent = send(state.client,
+                            state.output + state.output_sent,
+                            state.output_size - state.output_sent,
+                            MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (sent > 0) {
+            state.output_sent += (size_t)sent;
+            if (state.output_sent == state.output_size)
+                close_client();
+        } else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+            close_client();
+        return;
     }
     if (state.client < 0) {
         state.client = accept4(state.listener, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -377,6 +479,13 @@ void admin_shutdown_poll(void) {
     }
 }
 #else
+void admin_shutdown_set_access(admin_access_start_fn start,
+                               admin_access_poll_fn poll,
+                               admin_access_cancel_fn cancel) {
+    (void)start;
+    (void)poll;
+    (void)cancel;
+}
 bool admin_shutdown_init(const char *path, admin_shutdown_schedule_fn schedule) {
     (void)schedule;
     return path[0] == '\0';

@@ -50,7 +50,8 @@ permissions:
   packages: read
 
 env:
-  WINDOWS_BUILD_CACHE_EPOCH: 1.2.1-d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
+  WINDOWS_BUILD_CACHE_EPOCH: 1.16.0-4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
 
 concurrency:
   group: >-
@@ -163,6 +164,8 @@ jobs:
 
   sources:
     name: Build source packages and protocol wheel
+    permissions:
+      contents: read
     needs: metadata
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -170,6 +173,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -193,28 +197,18 @@ jobs:
             build/release/atrinik_classic_protocol-*-py3-none-any.whl
           build/wheel-smoke/bin/python -c \
             'import atrinik_protocol; assert atrinik_protocol.PROTOCOL_VERSION > 0'
+      - name: Pull the immutable installed-library toolchain anonymously
+        run: docker pull "${CLASSIC_LINUX_IMAGE}"
       - name: Build the extracted unified library and exact-version consumer
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libidn2-dev libssl-dev zlib1g-dev
-          mkdir -p build/extracted
-          tar -xzf \
+          bash tools/ci/check_installed_library.sh \
+            "${CLASSIC_LINUX_IMAGE}" \
             "build/release/atrinik-classic-libatrinik-${RELEASE_VERSION}.tar.gz" \
-            -C build/extracted
-          library_source="build/extracted/atrinik-classic-libatrinik-${RELEASE_VERSION}"
-          cmake -S "${library_source}" -B build/extracted-library \
-            -DBUILD_TESTING=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="${PWD}/build/extracted-install"
-          cmake --build build/extracted-library --parallel
-          cmake --install build/extracted-library
-          cmake -S "${library_source}/tests/consumer" -B build/extracted-consumer \
-            -DATRINIK_CONSUMER_VERSION="${RELEASE_VERSION}" \
-            -DCMAKE_PREFIX_PATH="${PWD}/build/extracted-install"
-          cmake --build build/extracted-consumer --parallel
-          build/extracted-consumer/libatrinik-consumer
+            "${RELEASE_VERSION}" "${RELEASE_REVISION}" \
+            "build/installed-library-check"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-source-protocol-${{ needs.metadata.outputs.tag }}
@@ -266,7 +260,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: docker pull ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
+      - run: docker pull ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
       - name: Build portable package from monorepo siblings
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -285,7 +279,7 @@ jobs:
             --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/client \
-            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
             bash -c \
               'set -euo pipefail
                ccache --zero-stats
@@ -331,7 +325,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: docker pull ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
+      - run: docker pull ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
       - name: Build portable package from monorepo siblings
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -348,7 +342,7 @@ jobs:
             --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/server \
-            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
             bash -c \
               'set -euo pipefail
                ccache --zero-stats

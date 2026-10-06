@@ -252,3 +252,17 @@ set(SERVER_CORE_SOURCES
 	src/types/wealth.c
 	src/types/weapon.c
 	src/types/word_of_recall.c)
+
+# The checked access-token store and its worker are Linux-only. Windows keeps
+# ordinary open gameplay, but must never substitute weaker storage/locking.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND SERVER_CORE_SOURCES
+        src/server/access_bootstrap.c
+        src/server/access_tokens.c
+        src/server/access_admin.c
+        src/server/access_server.c)
+elseif (WIN32)
+    list(APPEND SERVER_CORE_SOURCES src/server/access_unsupported.c)
+else ()
+    message(FATAL_ERROR "Classic access backend supports Linux and Windows only")
+endif ()
