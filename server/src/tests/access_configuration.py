@@ -76,6 +76,7 @@ with tempfile.TemporaryDirectory(prefix="atrinik-access-config-") as temporary:
             target.write_text("")
         else:
             target.mkdir(mode=mode)
+        target.chmod(mode)  # Keep the rejection fixture independent of the caller's umask.
         descriptor = os.open(target, os.O_RDONLY)
         try:
             (root / "data").symlink_to(f"/proc/self/fd/{descriptor}")
