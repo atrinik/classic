@@ -76,7 +76,7 @@ region. Save/load timings are diagnostics, not hardware-dependent assertions.
 
 ## Protocol 1082
 
-Server-to-client `REGION_EXPLORATION` remains command 29. Its payload starts
+Server-to-client `REGION_EXPLORATION` uses command 32. Its payload starts
 with one unsigned 8-bit operation:
 
 | Operation | Remaining payload |
@@ -92,7 +92,7 @@ nonzero masks, valid byte indices and no unused tail bits. BITMAP and PATCH
 merge into the account cache by OR. The server chooses PATCH only when its
 count-and-pair bytes are smaller than a full bitmap; otherwise it sends BITMAP.
 
-Client-to-server `REGION_EXPLORATION` command 23 is playing-only. Its payload is
+Client-to-server `REGION_EXPLORATION` command 25 is playing-only. Its payload is
 operation `0`, path cstring, cached-byte-count u16, and that many cache bytes.
 Zero count means a cache miss. For a known map a nonzero count must exactly
 match its stored bitmap size, with canonical zero padding. For an unknown path,

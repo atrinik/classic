@@ -33,6 +33,7 @@
 
 #include "map.h"
 #include "server_clock.h"
+#include "access_tokens.h"
 
 /** Maximum time a connection may remain in the handshake/setup phase. */
 #define SOCKET_SETUP_TIMEOUT 30
@@ -228,8 +229,15 @@ typedef struct socket_struct {
     /** Does the client want sound? */
     uint32_t sound : 1;
 
-    /** Whether the configured server join password was accepted. */
-    bool join_authenticated;
+    /** Per-connection admission state; never inherited across reconnects. */
+    bool access_transport_authenticated;
+    bool access_policy_sent;
+    bool access_attempted;
+    bool access_authenticated;
+    access_token_ref_t access_token;
+    uint64_t access_auth_job;
+    uint64_t access_admin_job;
+    uint64_t access_admin_actor_tag;
 
     /** Whether the initial client setup exchange completed successfully. */
     bool setup_completed;

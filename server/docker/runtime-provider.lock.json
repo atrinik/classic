@@ -1,0 +1,1644 @@
+{
+  "schema_version": 1,
+  "build_image": "ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2",
+  "platform_digest": "sha256:66a637c76f07d32ff933886a96bc5bd720fc695cf20a4acb9c1710983fdb7478",
+  "producer_source": "4be36a1f1eebb667aad77c227f7855a4a656d150",
+  "runtime_base": "ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03",
+  "snapshot": "20260810T000000Z",
+  "openssl_version": "3.5.5",
+  "evidence_sha256": {
+    "payload": "c5e71a9bf7e8f80fa80887d36057ad59942c40a85b8b122d18b450964e61e89b",
+    "packages": "e8e8121787389444029abc0e2f9225e7456ce11e74f3908f615f900da3677fd2",
+    "runtime_closure": "6739957d17e0fe6e780c4daaccb1d2d82422833c603d219aace58ed62f59c10f",
+    "source_9136_server_python_closure": "b70a977a3ffaf4c2d3d3fefd9a6e4a1cff4ee63692024a68418c5d6c22dfcd3b"
+  },
+  "files": [
+    {
+      "path": "/usr/local/lib/libcares.so",
+      "mode": "0o777",
+      "symlink": "libcares.so.2"
+    },
+    {
+      "path": "/usr/local/lib/libcares.so.2",
+      "mode": "0o777",
+      "symlink": "libcares.so.2.19.5"
+    },
+    {
+      "path": "/usr/local/lib/libcares.so.2.19.5",
+      "mode": "0o644",
+      "bytes": 332496,
+      "sha256": "94663719ed375379fb7a92d3d94d6e46e5775c866c3ee8231cef0cbef625925a"
+    },
+    {
+      "path": "/usr/local/lib/libcurl.so",
+      "mode": "0o777",
+      "symlink": "libcurl.so.4.8.0"
+    },
+    {
+      "path": "/usr/local/lib/libcurl.so.4",
+      "mode": "0o777",
+      "symlink": "libcurl.so.4.8.0"
+    },
+    {
+      "path": "/usr/local/lib/libcurl.so.4.8.0",
+      "mode": "0o755",
+      "bytes": 1011192,
+      "sha256": "e57453fa28bcd39a4fd6b40d98bccecacc27393ff96057d7cdbb75941733247a"
+    },
+    {
+      "path": "/usr/local/share/atrinik/classic-curl-toolchain.json",
+      "mode": "0o644",
+      "bytes": 1750,
+      "sha256": "64cdcc72137713828229dd5cc1d2a89cdf96c2a9beeb7738abd2a644216ee3b5"
+    },
+    {
+      "path": "/usr/local/share/atrinik/curl/config.log",
+      "mode": "0o644",
+      "bytes": 280986,
+      "sha256": "2db9c573eb0af9925327d2ce5f6efc53c0a33ac71721ab2bc3640979b3d9bde0"
+    },
+    {
+      "path": "/usr/local/share/atrinik/curl/curl_config.h",
+      "mode": "0o644",
+      "bytes": 25247,
+      "sha256": "6da18b724bbeb355d8f43a01329999a458b429dd301db421abc6a9dfdc852018"
+    },
+    {
+      "path": "/usr/local/share/licenses/c-ares/LICENSE.md",
+      "mode": "0o644",
+      "bytes": 1211,
+      "sha256": "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807"
+    },
+    {
+      "path": "/usr/local/share/licenses/curl/COPYING",
+      "mode": "0o644",
+      "bytes": 1088,
+      "sha256": "e18f1989333b70044b2adfb7dc2f905d0119dbdcac3bc9f4bc9d540e3a29de5b"
+    }
+  ],
+  "packages": [
+    {
+      "Package": "ca-certificates",
+      "Version": "20260601~26.04.1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "debconf",
+      "Version": "1.5.92",
+      "Architecture": "all"
+    },
+    {
+      "Package": "fontconfig-config",
+      "Version": "2.17.1-3ubuntu1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "fonts-dejavu-core",
+      "Version": "2.37-8build1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "fonts-dejavu-mono",
+      "Version": "2.37-8build1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "gcc-16-base",
+      "Version": "16-20260322-1ubuntu1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libaom3",
+      "Version": "3.13.1-2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libbrotli1",
+      "Version": "1.2.0-3build1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libbz2-1.0",
+      "Version": "1.0.8-6build2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libc-bin",
+      "Version": "2.43-2ubuntu2.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libc-gconv-modules-extra",
+      "Version": "2.43-2ubuntu2.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libc6",
+      "Version": "2.43-2ubuntu2.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libcrypt1",
+      "Version": "1:4.5.1-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libdb5.3t64",
+      "Version": "5.3.28+dfsg2-10ubuntu1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libdeflate0",
+      "Version": "1.23-2ubuntu1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libexpat1",
+      "Version": "2.7.4-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libffi8",
+      "Version": "3.5.2-4",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libfontconfig1",
+      "Version": "2.17.1-3ubuntu1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libfreetype6",
+      "Version": "2.14.2+dfsg-1ubuntu0.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libgcc-s1",
+      "Version": "16-20260322-1ubuntu1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libgd3",
+      "Version": "2.3.3-13ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libheif-plugin-aomdec",
+      "Version": "1.21.2-3ubuntu0.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libheif1",
+      "Version": "1.21.2-3ubuntu0.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libidn2-0",
+      "Version": "2.3.8-4build1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libimagequant0",
+      "Version": "4.4.1-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libjbig0",
+      "Version": "2.1-6.1ubuntu3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libjpeg-turbo8",
+      "Version": "2.1.5-4ubuntu4",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libjpeg8",
+      "Version": "8c-2ubuntu12",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "liblerc4",
+      "Version": "4.0.0+ds-5ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "liblzma5",
+      "Version": "5.8.3-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libminiupnpc21",
+      "Version": "2.3.3-2build1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libncursesw6",
+      "Version": "6.6+20251231-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libnghttp2-14",
+      "Version": "1.68.0-2ubuntu0.2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpng16-16t64",
+      "Version": "1.6.57-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpsl5t64",
+      "Version": "0.21.2-1.1build2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpython3-stdlib",
+      "Version": "3.14.3-0ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpython3.14",
+      "Version": "3.14.4-1ubuntu0.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpython3.14-minimal",
+      "Version": "3.14.4-1ubuntu0.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpython3.14-stdlib",
+      "Version": "3.14.4-1ubuntu0.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libreadline8t64",
+      "Version": "8.3-4",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libsharpyuv0",
+      "Version": "1.5.0-0.1build1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libsqlite3-0",
+      "Version": "3.46.1-9ubuntu0.2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libssl3t64",
+      "Version": "3.5.5-1ubuntu3.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libstdc++6",
+      "Version": "16-20260322-1ubuntu1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libtiff6",
+      "Version": "4.7.0-3ubuntu4",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libtinfo6",
+      "Version": "6.6+20251231-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libunistring5",
+      "Version": "1.3-2build1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libuuid1",
+      "Version": "2.41.3-3ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libwebp7",
+      "Version": "1.5.0-0.1build1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libx11-6",
+      "Version": "2:1.8.13-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libx11-data",
+      "Version": "2:1.8.13-1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "libxau6",
+      "Version": "1:1.0.11-1build2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libxcb1",
+      "Version": "1.17.0-2ubuntu1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libxdmcp6",
+      "Version": "1:1.1.5-2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libxpm4",
+      "Version": "1:3.5.17-1ubuntu0.26.04.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libzstd1",
+      "Version": "1.5.7+dfsg-3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "media-types",
+      "Version": "14.0.0build1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "netbase",
+      "Version": "6.5build1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "openssl",
+      "Version": "3.5.5-1ubuntu3.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "openssl-provider-legacy",
+      "Version": "3.5.5-1ubuntu3.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "python3",
+      "Version": "3.14.3-0ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "python3-minimal",
+      "Version": "3.14.3-0ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "python3.14",
+      "Version": "3.14.4-1ubuntu0.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "python3.14-minimal",
+      "Version": "3.14.4-1ubuntu0.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "readline-common",
+      "Version": "8.3-4",
+      "Architecture": "all"
+    },
+    {
+      "Package": "tzdata",
+      "Version": "2026c-0ubuntu0.26.04.1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "zlib1g",
+      "Version": "1:1.3.dfsg+really1.3.1-1ubuntu3",
+      "Architecture": "amd64"
+    }
+  ],
+  "curl_distro_sonames": {
+    "libz.so.1": "/usr/lib/x86_64-linux-gnu/libz.so.1",
+    "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+    "libnghttp2.so.14": "/usr/lib/x86_64-linux-gnu/libnghttp2.so.14",
+    "libidn2.so.0": "/usr/lib/x86_64-linux-gnu/libidn2.so.0",
+    "libpsl.so.5": "/usr/lib/x86_64-linux-gnu/libpsl.so.5",
+    "libssl.so.3": "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+    "libcrypto.so.3": "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+    "libzstd.so.1": "/usr/lib/x86_64-linux-gnu/libzstd.so.1",
+    "libbrotlidec.so.1": "/usr/lib/x86_64-linux-gnu/libbrotlidec.so.1",
+    "libunistring.so.5": "/usr/lib/x86_64-linux-gnu/libunistring.so.5",
+    "libbrotlicommon.so.1": "/usr/lib/x86_64-linux-gnu/libbrotlicommon.so.1",
+    "loader": "/lib64/ld-linux-x86-64.so.2"
+  },
+  "package_roots": [
+    "ca-certificates",
+    "libbrotli1",
+    "libc-bin",
+    "libc6",
+    "libcrypt1",
+    "libgd3",
+    "libidn2-0",
+    "libminiupnpc21",
+    "libnghttp2-14",
+    "libpsl5t64",
+    "libpython3-stdlib",
+    "libpython3.14",
+    "libpython3.14-minimal",
+    "libpython3.14-stdlib",
+    "libreadline8t64",
+    "libssl3t64",
+    "libunistring5",
+    "libzstd1",
+    "openssl",
+    "python3",
+    "python3-minimal",
+    "python3.14",
+    "python3.14-minimal",
+    "zlib1g"
+  ],
+  "package_dependencies": {
+    "ca-certificates": [
+      "debconf",
+      "openssl"
+    ],
+    "debconf": [],
+    "fontconfig-config": [
+      "fonts-dejavu-core"
+    ],
+    "fonts-dejavu-core": [
+      "fonts-dejavu-mono"
+    ],
+    "fonts-dejavu-mono": [],
+    "gcc-16-base": [],
+    "libaom3": [
+      "libc6"
+    ],
+    "libbrotli1": [
+      "libc6"
+    ],
+    "libbz2-1.0": [
+      "libc6"
+    ],
+    "libc-bin": [
+      "libc6"
+    ],
+    "libc-gconv-modules-extra": [],
+    "libc6": [
+      "libc-gconv-modules-extra",
+      "libgcc-s1"
+    ],
+    "libcrypt1": [
+      "libc6"
+    ],
+    "libdb5.3t64": [
+      "libc6"
+    ],
+    "libdeflate0": [
+      "libc6"
+    ],
+    "libexpat1": [
+      "libc6"
+    ],
+    "libffi8": [
+      "libc6"
+    ],
+    "libfontconfig1": [
+      "fontconfig-config",
+      "libc6",
+      "libexpat1",
+      "libfreetype6"
+    ],
+    "libfreetype6": [
+      "libbrotli1",
+      "libbz2-1.0",
+      "libc6",
+      "libpng16-16t64",
+      "zlib1g"
+    ],
+    "libgcc-s1": [
+      "gcc-16-base",
+      "libc6"
+    ],
+    "libgd3": [
+      "libc6",
+      "libfontconfig1",
+      "libfreetype6",
+      "libheif1",
+      "libimagequant0",
+      "libjpeg8",
+      "libpng16-16t64",
+      "libtiff6",
+      "libwebp7",
+      "libxpm4"
+    ],
+    "libheif-plugin-aomdec": [
+      "libaom3",
+      "libc6",
+      "libgcc-s1",
+      "libheif1",
+      "libstdc++6"
+    ],
+    "libheif1": [
+      "libbrotli1",
+      "libc6",
+      "libgcc-s1",
+      "libheif-plugin-aomdec",
+      "libsharpyuv0",
+      "libstdc++6",
+      "zlib1g"
+    ],
+    "libidn2-0": [
+      "libc6",
+      "libunistring5"
+    ],
+    "libimagequant0": [
+      "libc6",
+      "libgcc-s1"
+    ],
+    "libjbig0": [
+      "libc6"
+    ],
+    "libjpeg-turbo8": [
+      "libc6"
+    ],
+    "libjpeg8": [
+      "libjpeg-turbo8"
+    ],
+    "liblerc4": [
+      "libc6",
+      "libgcc-s1",
+      "libstdc++6"
+    ],
+    "liblzma5": [
+      "libc6"
+    ],
+    "libminiupnpc21": [
+      "libc6"
+    ],
+    "libncursesw6": [
+      "libc6",
+      "libtinfo6"
+    ],
+    "libnghttp2-14": [
+      "libc6"
+    ],
+    "libpng16-16t64": [
+      "libc6",
+      "zlib1g"
+    ],
+    "libpsl5t64": [
+      "libc6",
+      "libidn2-0",
+      "libunistring5"
+    ],
+    "libpython3-stdlib": [
+      "libpython3.14-stdlib"
+    ],
+    "libpython3.14": [
+      "libc6",
+      "libexpat1",
+      "libpython3.14-stdlib",
+      "zlib1g"
+    ],
+    "libpython3.14-minimal": [
+      "libc6",
+      "libssl3t64"
+    ],
+    "libpython3.14-stdlib": [
+      "libbz2-1.0",
+      "libc6",
+      "libdb5.3t64",
+      "libffi8",
+      "liblzma5",
+      "libncursesw6",
+      "libpython3.14-minimal",
+      "libreadline8t64",
+      "libsqlite3-0",
+      "libtinfo6",
+      "libuuid1",
+      "libzstd1",
+      "media-types",
+      "netbase",
+      "tzdata"
+    ],
+    "libreadline8t64": [
+      "libc6",
+      "libtinfo6",
+      "readline-common"
+    ],
+    "libsharpyuv0": [
+      "libc6"
+    ],
+    "libsqlite3-0": [
+      "libc6"
+    ],
+    "libssl3t64": [
+      "libc6",
+      "libzstd1",
+      "openssl-provider-legacy",
+      "zlib1g"
+    ],
+    "libstdc++6": [
+      "gcc-16-base",
+      "libc6",
+      "libgcc-s1"
+    ],
+    "libtiff6": [
+      "libc6",
+      "libdeflate0",
+      "libjbig0",
+      "libjpeg8",
+      "liblerc4",
+      "liblzma5",
+      "libwebp7",
+      "libzstd1",
+      "zlib1g"
+    ],
+    "libtinfo6": [
+      "libc6"
+    ],
+    "libunistring5": [
+      "libc6"
+    ],
+    "libuuid1": [
+      "libc6"
+    ],
+    "libwebp7": [
+      "libc6",
+      "libsharpyuv0"
+    ],
+    "libx11-6": [
+      "libc6",
+      "libx11-data",
+      "libxcb1"
+    ],
+    "libx11-data": [],
+    "libxau6": [
+      "libc6"
+    ],
+    "libxcb1": [
+      "libc6",
+      "libxau6",
+      "libxdmcp6"
+    ],
+    "libxdmcp6": [
+      "libc6"
+    ],
+    "libxpm4": [
+      "libc6",
+      "libx11-6"
+    ],
+    "libzstd1": [
+      "libc6"
+    ],
+    "media-types": [],
+    "netbase": [],
+    "openssl": [
+      "libc6",
+      "libssl3t64"
+    ],
+    "openssl-provider-legacy": [
+      "libc6",
+      "libssl3t64"
+    ],
+    "python3": [
+      "libpython3-stdlib",
+      "python3-minimal",
+      "python3.14"
+    ],
+    "python3-minimal": [
+      "python3.14-minimal"
+    ],
+    "python3.14": [
+      "libpython3.14-stdlib",
+      "media-types",
+      "python3.14-minimal",
+      "tzdata"
+    ],
+    "python3.14-minimal": [
+      "libc6",
+      "libexpat1",
+      "libpython3.14-minimal",
+      "zlib1g"
+    ],
+    "readline-common": [],
+    "tzdata": [
+      "debconf"
+    ],
+    "zlib1g": [
+      "libc6"
+    ]
+  },
+  "package_dependency_selections": {
+    "ca-certificates": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "openssl (>= 1.1.1)",
+          "selected": "openssl"
+        },
+        {
+          "requirement": "debconf (>= 0.5) | debconf-2.0",
+          "selected": "debconf"
+        }
+      ]
+    },
+    "debconf": {
+      "Pre-Depends": [],
+      "Depends": []
+    },
+    "fontconfig-config": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "fonts-dejavu-core | fonts-liberation | fonts-croscore | fonts-freefont-otf | fonts-freefont-ttf | fonts-urw-base35 | fonts-texgyre | fonts-noto-core",
+          "selected": "fonts-dejavu-core"
+        }
+      ]
+    },
+    "fonts-dejavu-core": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "fonts-dejavu-mono",
+          "selected": "fonts-dejavu-mono"
+        }
+      ]
+    },
+    "fonts-dejavu-mono": {
+      "Pre-Depends": [],
+      "Depends": []
+    },
+    "gcc-16-base": {
+      "Pre-Depends": [],
+      "Depends": []
+    },
+    "libaom3": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.34)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libbrotli1": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.29)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libbz2-1.0": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.4)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libc-bin": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>> 2.43)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libc6 (<< 2.44)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libc-gconv-modules-extra": {
+      "Pre-Depends": [],
+      "Depends": []
+    },
+    "libc6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libgcc-s1",
+          "selected": "libgcc-s1"
+        },
+        {
+          "requirement": "libc-gconv-modules-extra (= 2.43-2ubuntu2.3)",
+          "selected": "libc-gconv-modules-extra"
+        }
+      ]
+    },
+    "libcrypt1": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libdb5.3t64": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libdeflate0": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.14)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libexpat1": {
+      "Pre-Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ],
+      "Depends": []
+    },
+    "libffi8": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libfontconfig1": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libexpat1 (>= 2.0.1)",
+          "selected": "libexpat1"
+        },
+        {
+          "requirement": "libfreetype6 (>= 2.9.1)",
+          "selected": "libfreetype6"
+        },
+        {
+          "requirement": "fontconfig-config (>= 2.17.1-3ubuntu1)",
+          "selected": "fontconfig-config"
+        }
+      ]
+    },
+    "libfreetype6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libbrotli1 (>= 0.6.0)",
+          "selected": "libbrotli1"
+        },
+        {
+          "requirement": "libbz2-1.0",
+          "selected": "libbz2-1.0"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libpng16-16t64 (>= 1.6.46)",
+          "selected": "libpng16-16t64"
+        },
+        {
+          "requirement": "zlib1g (>= 1:1.1.4)",
+          "selected": "zlib1g"
+        }
+      ]
+    },
+    "libgcc-s1": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "gcc-16-base (= 16-20260322-1ubuntu1)",
+          "selected": "gcc-16-base"
+        },
+        {
+          "requirement": "libc6 (>= 2.35)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libgd3": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libfontconfig1 (>= 2.12.6)",
+          "selected": "libfontconfig1"
+        },
+        {
+          "requirement": "libfreetype6 (>= 2.2.1)",
+          "selected": "libfreetype6"
+        },
+        {
+          "requirement": "libheif1 (>= 1.3.2)",
+          "selected": "libheif1"
+        },
+        {
+          "requirement": "libimagequant0 (>= 2.11.10)",
+          "selected": "libimagequant0"
+        },
+        {
+          "requirement": "libjpeg8 (>= 8c)",
+          "selected": "libjpeg8"
+        },
+        {
+          "requirement": "libpng16-16t64 (>= 1.6.46)",
+          "selected": "libpng16-16t64"
+        },
+        {
+          "requirement": "libtiff6 (>= 4.0.3)",
+          "selected": "libtiff6"
+        },
+        {
+          "requirement": "libwebp7 (>= 1.5.0)",
+          "selected": "libwebp7"
+        },
+        {
+          "requirement": "libxpm4",
+          "selected": "libxpm4"
+        }
+      ]
+    },
+    "libheif-plugin-aomdec": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libheif1 (= 1.21.2-3ubuntu0.3)",
+          "selected": "libheif1"
+        },
+        {
+          "requirement": "libaom3 (>= 3.2.0)",
+          "selected": "libaom3"
+        },
+        {
+          "requirement": "libc6 (>= 2.14)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libgcc-s1 (>= 3.0)",
+          "selected": "libgcc-s1"
+        },
+        {
+          "requirement": "libstdc++6 (>= 13)",
+          "selected": "libstdc++6"
+        }
+      ]
+    },
+    "libheif1": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libbrotli1 (>= 0.6.0)",
+          "selected": "libbrotli1"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libgcc-s1 (>= 3.3.1)",
+          "selected": "libgcc-s1"
+        },
+        {
+          "requirement": "libsharpyuv0 (>= 1.5.0)",
+          "selected": "libsharpyuv0"
+        },
+        {
+          "requirement": "libstdc++6 (>= 13.1)",
+          "selected": "libstdc++6"
+        },
+        {
+          "requirement": "zlib1g (>= 1:1.1.4)",
+          "selected": "zlib1g"
+        },
+        {
+          "requirement": "libheif-plugin-aomdec (= 1.21.2-3ubuntu0.3) | libheif-plugin-dav1d (= 1.21.2-3ubuntu0.3)",
+          "selected": "libheif-plugin-aomdec"
+        }
+      ]
+    },
+    "libidn2-0": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.14)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libunistring5 (>= 1.1)",
+          "selected": "libunistring5"
+        }
+      ]
+    },
+    "libimagequant0": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.34)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libgcc-s1 (>= 4.2)",
+          "selected": "libgcc-s1"
+        }
+      ]
+    },
+    "libjbig0": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.4)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libjpeg-turbo8": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libjpeg8": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libjpeg-turbo8 (>= 1.1.90+svn722-1ubuntu6)",
+          "selected": "libjpeg-turbo8"
+        }
+      ]
+    },
+    "liblerc4": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.29)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libgcc-s1 (>= 3.3.1)",
+          "selected": "libgcc-s1"
+        },
+        {
+          "requirement": "libstdc++6 (>= 5.2)",
+          "selected": "libstdc++6"
+        }
+      ]
+    },
+    "liblzma5": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.34)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libminiupnpc21": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libncursesw6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libtinfo6 (= 6.6+20251231-1)",
+          "selected": "libtinfo6"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libnghttp2-14": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.17)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libpng16-16t64": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.29)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "zlib1g (>= 1:1.2.3.4)",
+          "selected": "zlib1g"
+        }
+      ]
+    },
+    "libpsl5t64": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libidn2-0 (>= 0.16)",
+          "selected": "libidn2-0"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libunistring5 (>= 1.1)",
+          "selected": "libunistring5"
+        }
+      ]
+    },
+    "libpython3-stdlib": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libpython3.14-stdlib (>= 3.14.3)",
+          "selected": "libpython3.14-stdlib"
+        }
+      ]
+    },
+    "libpython3.14": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libpython3.14-stdlib (= 3.14.4-1ubuntu0.1)",
+          "selected": "libpython3.14-stdlib"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libexpat1 (>= 2.7.2)",
+          "selected": "libexpat1"
+        },
+        {
+          "requirement": "zlib1g (>= 1:1.2.0)",
+          "selected": "zlib1g"
+        }
+      ]
+    },
+    "libpython3.14-minimal": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.14)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libssl3t64 (>= 3.4.0)",
+          "selected": "libssl3t64"
+        }
+      ]
+    },
+    "libpython3.14-stdlib": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libpython3.14-minimal (= 3.14.4-1ubuntu0.1)",
+          "selected": "libpython3.14-minimal"
+        },
+        {
+          "requirement": "media-types | mime-support",
+          "selected": "media-types"
+        },
+        {
+          "requirement": "netbase",
+          "selected": "netbase"
+        },
+        {
+          "requirement": "tzdata",
+          "selected": "tzdata"
+        },
+        {
+          "requirement": "libbz2-1.0",
+          "selected": "libbz2-1.0"
+        },
+        {
+          "requirement": "libc6 (>= 2.42)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libdb5.3t64",
+          "selected": "libdb5.3t64"
+        },
+        {
+          "requirement": "libffi8 (>= 3.4)",
+          "selected": "libffi8"
+        },
+        {
+          "requirement": "liblzma5 (>= 5.1.1alpha+20120614)",
+          "selected": "liblzma5"
+        },
+        {
+          "requirement": "libncursesw6 (>= 6.1)",
+          "selected": "libncursesw6"
+        },
+        {
+          "requirement": "libreadline8t64 (>= 7.0~beta)",
+          "selected": "libreadline8t64"
+        },
+        {
+          "requirement": "libsqlite3-0 (>= 3.36.0)",
+          "selected": "libsqlite3-0"
+        },
+        {
+          "requirement": "libtinfo6 (>= 6)",
+          "selected": "libtinfo6"
+        },
+        {
+          "requirement": "libuuid1 (>= 2.20.1)",
+          "selected": "libuuid1"
+        },
+        {
+          "requirement": "libzstd1 (>= 1.5.5)",
+          "selected": "libzstd1"
+        }
+      ]
+    },
+    "libreadline8t64": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "readline-common",
+          "selected": "readline-common"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libtinfo6 (>= 6)",
+          "selected": "libtinfo6"
+        }
+      ]
+    },
+    "libsharpyuv0": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.29)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libsqlite3-0": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libssl3t64": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libzstd1 (>= 1.5.5)",
+          "selected": "libzstd1"
+        },
+        {
+          "requirement": "zlib1g (>= 1:1.1.4)",
+          "selected": "zlib1g"
+        },
+        {
+          "requirement": "openssl-provider-legacy",
+          "selected": "openssl-provider-legacy"
+        }
+      ]
+    },
+    "libstdc++6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "gcc-16-base (= 16-20260322-1ubuntu1)",
+          "selected": "gcc-16-base"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libgcc-s1 (>= 4.3)",
+          "selected": "libgcc-s1"
+        }
+      ]
+    },
+    "libtiff6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libdeflate0 (>= 1.0)",
+          "selected": "libdeflate0"
+        },
+        {
+          "requirement": "libjbig0 (>= 2.0)",
+          "selected": "libjbig0"
+        },
+        {
+          "requirement": "libjpeg8 (>= 8c)",
+          "selected": "libjpeg8"
+        },
+        {
+          "requirement": "liblerc4 (>= 3.0)",
+          "selected": "liblerc4"
+        },
+        {
+          "requirement": "liblzma5 (>= 5.1.1alpha+20120614)",
+          "selected": "liblzma5"
+        },
+        {
+          "requirement": "libwebp7 (>= 1.5.0)",
+          "selected": "libwebp7"
+        },
+        {
+          "requirement": "libzstd1 (>= 1.5.5)",
+          "selected": "libzstd1"
+        },
+        {
+          "requirement": "zlib1g (>= 1:1.1.4)",
+          "selected": "zlib1g"
+        }
+      ]
+    },
+    "libtinfo6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.42)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libunistring5": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.34)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libuuid1": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libwebp7": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.34)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libsharpyuv0 (>= 1.5.0)",
+          "selected": "libsharpyuv0"
+        }
+      ]
+    },
+    "libx11-6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libxcb1 (>= 1.11.1)",
+          "selected": "libxcb1"
+        },
+        {
+          "requirement": "libx11-data",
+          "selected": "libx11-data"
+        }
+      ]
+    },
+    "libx11-data": {
+      "Pre-Depends": [],
+      "Depends": []
+    },
+    "libxau6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.33)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libxcb1": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libxau6 (>= 1:1.0.11)",
+          "selected": "libxau6"
+        },
+        {
+          "requirement": "libxdmcp6 (>= 1:1.1.5)",
+          "selected": "libxdmcp6"
+        }
+      ]
+    },
+    "libxdmcp6": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.36)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "libxpm4": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libx11-6",
+          "selected": "libx11-6"
+        }
+      ]
+    },
+    "libzstd1": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.34)",
+          "selected": "libc6"
+        }
+      ]
+    },
+    "media-types": {
+      "Pre-Depends": [],
+      "Depends": []
+    },
+    "netbase": {
+      "Pre-Depends": [],
+      "Depends": []
+    },
+    "openssl": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libssl3t64 (>= 3.5.0)",
+          "selected": "libssl3t64"
+        }
+      ]
+    },
+    "openssl-provider-legacy": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.14)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libssl3t64 (>= 3.0.3)",
+          "selected": "libssl3t64"
+        }
+      ]
+    },
+    "python3": {
+      "Pre-Depends": [
+        {
+          "requirement": "python3-minimal (= 3.14.3-0ubuntu2)",
+          "selected": "python3-minimal"
+        }
+      ],
+      "Depends": [
+        {
+          "requirement": "python3.14 (>= 3.14.3)",
+          "selected": "python3.14"
+        },
+        {
+          "requirement": "libpython3-stdlib (= 3.14.3-0ubuntu2)",
+          "selected": "libpython3-stdlib"
+        }
+      ]
+    },
+    "python3-minimal": {
+      "Pre-Depends": [
+        {
+          "requirement": "python3.14-minimal (>= 3.14.3)",
+          "selected": "python3.14-minimal"
+        }
+      ],
+      "Depends": []
+    },
+    "python3.14": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "python3.14-minimal (= 3.14.4-1ubuntu0.1)",
+          "selected": "python3.14-minimal"
+        },
+        {
+          "requirement": "libpython3.14-stdlib (= 3.14.4-1ubuntu0.1)",
+          "selected": "libpython3.14-stdlib"
+        },
+        {
+          "requirement": "media-types | mime-support",
+          "selected": "media-types"
+        },
+        {
+          "requirement": "tzdata",
+          "selected": "tzdata"
+        }
+      ]
+    },
+    "python3.14-minimal": {
+      "Pre-Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ],
+      "Depends": [
+        {
+          "requirement": "libpython3.14-minimal (= 3.14.4-1ubuntu0.1)",
+          "selected": "libpython3.14-minimal"
+        },
+        {
+          "requirement": "libexpat1 (>= 2.7.2)",
+          "selected": "libexpat1"
+        },
+        {
+          "requirement": "zlib1g (>= 1:1.2.0)",
+          "selected": "zlib1g"
+        }
+      ]
+    },
+    "readline-common": {
+      "Pre-Depends": [],
+      "Depends": []
+    },
+    "tzdata": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "debconf (>= 0.5) | debconf-2.0",
+          "selected": "debconf"
+        }
+      ]
+    },
+    "zlib1g": {
+      "Pre-Depends": [],
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.14)",
+          "selected": "libc6"
+        }
+      ]
+    }
+  }
+}

@@ -223,9 +223,9 @@ extern void help_show(const char *name);
 
 extern void help_handle_tabulator(text_input_struct *text_input);
 
-/** Public API implemented in src/gui/popups/join_password.c. */
+/** Public API implemented in src/gui/popups/access_code.c. */
 
-extern void join_password_open(server_struct *server);
+extern void access_code_open(server_struct *server);
 
 /** Public API implemented in src/gui/popups/login.c. */
 

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -40,6 +40,16 @@
 void command_config(object *op, const char *command, char *params) {
     if (params == NULL) {
         draw_info(COLOR_WHITE, op, "Usage: /config <name>, /config <name> = <value>");
+        return;
+    }
+
+    /* These root-managed policy coordinates are not an OP-readable config
+     * surface. Handler guards independently reject runtime writes. */
+    const char *key = params;
+    while (*key == ' ' || *key == '\t')
+        key++;
+    if (strncmp(key, "access_", 7) == 0) {
+        draw_info(COLOR_WHITE, op, "Access configuration is root-managed at startup.");
         return;
     }
 

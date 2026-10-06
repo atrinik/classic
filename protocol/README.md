@@ -10,12 +10,33 @@ currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
 Protocol v1082 synchronizes account region-map exploration using map-path
-bitfields. Server-to-client `REGION_EXPLORATION` (ID 29) carries account binding,
-bitmaps and sparse bit deltas. Client-to-server `REGION_EXPLORATION` (ID 23)
+bitfields. Server-to-client `REGION_EXPLORATION` (ID 32) carries account binding,
+bitmaps and sparse bit deltas. Client-to-server `REGION_EXPLORATION` (ID 25)
 requests only discoveries missing from a cached bitmap, without granting any
 discovery on the server. See the [exploration contract](../server/doc/REGION_EXPLORATION.md)
 for framing, bounds, persistence and lifecycle rules. Both peers require the
-exact protocol version; the earlier snapshot-only v1081 format is superseded.
+exact protocol version; the earlier unpublished snapshot-only exploration
+format is superseded. Access command IDs from published v1081 remain unchanged.
+
+Protocol v1081 replaced invitations and shared join passwords with independent
+access codes. Authenticated `ACCESS_POLICY` precedes setup/account traffic;
+protected connections require `ACCESS_AUTH` before proceeding. `ACCESS_ADMIN`
+uses the active character's existing `/cmd_permission` grants, including
+`[OP]`, and rechecks authorization before private result delivery. Retired
+SETUP subtype 3 remains reserved. Admission and use history do not retain
+network addresses or address-derived identifiers.
+
+The shared access-authority contract is
+[`atrinik/protocol` v2.9.0](https://github.com/atrinik/protocol/blob/6a725ca46d4ccea3f7c50d2d225abd4545265945/spec/access-tokens.md),
+at commit `6a725ca46d4ccea3f7c50d2d225abd4545265945`. Its specification SHA-256 is
+`bee74f5c4c7875c3d4ce81f97107a8e695472d28a58b36ce049889fb1b1e20ce`.
+The released `atrinik-protocol-2.9.0.tar.gz` source archive has SHA-256
+`e1388e317df69ec02639831553bb696e5104da1dde2ff4c7e244f163fff103af`;
+`atrinik-protocol-contracts-2.9.0.tar.gz` has SHA-256
+`dc2c94541e8e7b899125dd00bd7344f26cdd1612a4a4599fde51385c6c9ddc0a`.
+These are contract provenance references, not Classic CMake dependencies.
+Classic command IDs and C/Python bindings continue to come from this directory
+and are included in the unified Classic source packages.
 
 Protocol v1080 adds timed celestial aggregate-light keyframes to MAP2. Its
 payload carries a bounded absolute game-time interval and next-endpoint samples;

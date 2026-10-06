@@ -20,7 +20,9 @@ bool live_movement_configure_review(const char *report_path,
 void live_movement_ready(void);
 bool live_movement_enabled(void);
 void live_movement_tick(void);
-void live_movement_frame_finished(bool presented, const client_keepalive_statistics_t *keepalive);
+void live_movement_frame_finished(bool presented,
+                                  bool capture_allowed,
+                                  const client_keepalive_statistics_t *keepalive);
 void live_movement_abort(const char *reason);
 /** Privately retain one malformed MAP envelope when live diagnostics are active. */
 void live_movement_rejected_map(const uint8_t *data, size_t len, size_t cursor_offset);

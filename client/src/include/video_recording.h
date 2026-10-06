@@ -12,7 +12,8 @@
 bool video_recording_initialize(const char *executable_name);
 bool video_recording_start(const char *absolute_path);
 void video_recording_stop(void);
-void video_recording_frame(bool playing, bool presented, uint64_t now_ms);
+/* Admission applies only to new GPU copies; denial still services lifecycle. */
+void video_recording_frame(bool playing, bool presented, bool capture_allowed, uint64_t now_ms);
 bool video_recording_message(char *message, size_t capacity, bool *failed);
 bool video_recording_failed(void);
 /* Call before SDL teardown; owns only its encoder child, thread and frames. */

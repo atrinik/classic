@@ -43,6 +43,9 @@
 #include <ban.h>
 #include <metaserver_internal.h>
 #include <network_metrics.h>
+#include <access_server.h>
+#include <access_admin.h>
+#include <openssl/crypto.h>
 
 TOOLKIT_API(DEPENDS(socket), IMPORTS(logger));
 
@@ -61,6 +64,7 @@ typedef enum socket_command_policy {
     SOCKET_COMMAND_POLICY_CONTROL,
     SOCKET_COMMAND_POLICY_ADMITTED,
     SOCKET_COMMAND_POLICY_SETUP,
+    SOCKET_COMMAND_POLICY_ACCESS,
     SOCKET_COMMAND_POLICY_VERSION,
     SOCKET_COMMAND_POLICY_PLAYING,
     SOCKET_COMMAND_POLICY_LOGIN,
@@ -185,8 +189,9 @@ CASSERT_ARRAY(socket_commands, SERVER_CMD_NROF);
 bool socket_connection_admitted(const socket_struct *cs) {
     HARD_ASSERT(cs != NULL);
 
-    return cs->socket_version == SOCKET_VERSION && cs->setup_completed &&
-           (*settings.join_password == '\0' || cs->join_authenticated);
+    return cs->socket_version == SOCKET_VERSION && cs->setup_completed && cs->access_policy_sent &&
+           cs->access_transport_authenticated &&
+           (!settings.access_required || cs->access_authenticated);
 }
 
 bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t type) {
@@ -198,9 +203,9 @@ bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t type) 
 
     switch (socket_commands[type].policy) {
         case SOCKET_COMMAND_POLICY_CONTROL:
-            /* The central dispatcher separately applies the control
-             * protocol's source-IP authentication before invoking it. */
-            return cs->state == ST_LOGIN;
+            /* Privileged local control is available only through the root-authenticated
+             * Unix admin socket. The legacy network command remains reserved. */
+            return false;
 
         case SOCKET_COMMAND_POLICY_LIVENESS:
             return cs->state == ST_LOGIN || cs->state == ST_PLAYING;
@@ -208,9 +213,16 @@ bool socket_server_command_phase_allowed(const socket_struct *cs, uint8_t type) 
         case SOCKET_COMMAND_POLICY_VERSION:
             return cs->state == ST_LOGIN && cs->socket_version == 0 && !cs->setup_completed;
 
+        case SOCKET_COMMAND_POLICY_ACCESS:
+            return cs->state == ST_LOGIN && cs->socket_version == SOCKET_VERSION &&
+                   cs->access_policy_sent && settings.access_required && !cs->access_attempted &&
+                   !cs->setup_completed && cs->access_transport_authenticated;
+
         case SOCKET_COMMAND_POLICY_SETUP:
             if (cs->state == ST_LOGIN) {
-                return cs->socket_version == SOCKET_VERSION && !cs->setup_completed;
+                return cs->socket_version == SOCKET_VERSION && !cs->setup_completed &&
+                       cs->access_policy_sent && cs->access_transport_authenticated &&
+                       (!settings.access_required || cs->access_authenticated);
             }
             return cs->state == ST_PLAYING && socket_connection_admitted(cs);
 
@@ -382,6 +394,10 @@ TOOLKIT_INIT_FUNC(socket_server) {
             !socket_certificate_sha256(identity_socket, quic_certificate_sha256)) {
             LOG(ERROR, "Failed to initialize the QUIC listener");
             exit(1);
+        }
+        if (!access_server_init(quic_certificate_sha256)) {
+            LOG(ERROR, "Cannot initialize checked access state; refusing game startup");
+            exit(EXIT_FAILURE);
         }
         LOG(SYSTEM, "QUIC certificate SHA-256: %s", quic_certificate_sha256);
 
@@ -597,53 +613,15 @@ static bool socket_server_quic_punch_receive(socket_t *server_socket) {
     return true;
 }
 
-/** Check whether the control protocol accepts the connection's source IP. */
-static bool socket_server_control_authorized(socket_struct *cs) {
-    if (strcasecmp(settings.control_allowed_ips, "none") == 0) {
-        LOG(PACKET, "Control command received but no IPs are allowed.");
-        return false;
-    }
-
-    char word[MAX_BUF];
-    size_t pos = 0;
-    while (string_get_word(settings.control_allowed_ips, &pos, ',', VS(word), 0)) {
-        char *split[2];
-        if (string_split(word, split, arraysize(split), '/') < 1) {
-            continue;
-        }
-
-        struct sockaddr_storage addr;
-        if (!socket_host2addr(split[0], &addr)) {
-            continue;
-        }
-
-        unsigned short plen = socket_addr_plen(&addr);
-        if (split[1] != NULL) {
-            uint64_t value;
-            if (!string_parse_uint64(split[1], 10, 0, plen, &value)) {
-                LOG(ERROR, "Ignoring invalid control CIDR prefix: %s", word);
-                continue;
-            }
-            plen = (unsigned short)value;
-        }
-
-        if (socket_cmp_addr(cs->sc, &addr, plen) == 0) {
-            return true;
-        }
-    }
-
-    LOG(PACKET, "Received control command from unauthorized IP: %s", socket_get_id(cs->sc));
-    return false;
-}
-
 /**
  * Attempt to handle a command from the client.
  *
  * @return
- * True if the command was handled or rejected. False only when a valid
- * playing-only command must be queued for its player.
+ * HANDLED for consumed/rejected commands, QUEUE for a playing-only command,
+ * or DEFER when authority is busy and the original frame must be retained.
  */
-bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len) {
+socket_command_result_t
+socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len) {
     size_t pos = 0;
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
@@ -651,41 +629,50 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
 
 #ifndef DEBUG
     char *cp;
-
-    LOG(DUMPRX, "Received packet with command type %d (%" PRIu64 " bytes):", type, (uint64_t)len);
-    cp = xmalloc(sizeof(*cp) * (len * 3 + 1));
-    string_tohex(data, len, cp, len * 3 + 1, true);
-    LOG(DUMPRX, "  Hexadecimal: %s", cp);
-    free(cp);
+    if (type != SERVER_CMD_ACCESS_AUTH && type != SERVER_CMD_ACCESS_ADMIN) {
+        LOG(DUMPRX,
+            "Received packet with command type %d (%" PRIu64 " bytes):",
+            type,
+            (uint64_t)len);
+        cp = xmalloc(sizeof(*cp) * (len * 3 + 1));
+        string_tohex(data, len, cp, len * 3 + 1, true);
+        LOG(DUMPRX, "  Hexadecimal: %s", cp);
+        free(cp);
+    }
 #endif
 
     if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
         LOG(DEVEL, "Malformed command envelope: %s", packet_error_string(reader.error));
-        return true;
+        return SOCKET_COMMAND_HANDLED;
     }
 
     if (type >= SERVER_CMD_NROF || socket_commands[type].handle_func == NULL) {
         LOG(DEVEL, "Unknown command type: %" PRIu8, type);
-        return true;
+        return SOCKET_COMMAND_HANDLED;
     }
 
+    if (settings.access_required && cs->access_authenticated) {
+        access_session_state_t admission = access_server_session_check(&cs->access_token);
+        if (admission != ACCESS_SESSION_VALID) {
+            if (admission == ACCESS_SESSION_BUSY)
+                return SOCKET_COMMAND_DEFER;
+            cs->state = ST_DEAD;
+            return SOCKET_COMMAND_HANDLED;
+        }
+    }
     if (!socket_server_command_phase_allowed(cs, type)) {
         LOG(DEVEL,
             "Rejected out-of-order %s command in connection state %d",
             socket_commands[type].name,
             cs->state);
-        return true;
-    }
-
-    if (socket_commands[type].policy == SOCKET_COMMAND_POLICY_CONTROL &&
-        !socket_server_control_authorized(cs)) {
-        return true;
+        cs->state = ST_ZOMBIE;
+        return SOCKET_COMMAND_HANDLED;
     }
 
     /* Playing-only commands read directly from the transport are queued for
      * the associated player. The phase check above drops them before login. */
     if (socket_commands[type].flags & SOCKET_COMMAND_PLAYER_ONLY && pl == NULL) {
-        return false;
+        return SOCKET_COMMAND_QUEUE;
     }
 
     if (pl == NULL && socket_commands[type].policy == SOCKET_COMMAND_POLICY_PLAYING) {
@@ -706,7 +693,7 @@ bool socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, 
         socket_login_deadline_refresh(cs);
     }
 
-    return true;
+    return SOCKET_COMMAND_HANDLED;
 }
 
 static void socket_server_csocket_create(socket_t *server_socket) {
@@ -1078,6 +1065,9 @@ void socket_server_handle_client(player *pl) {
     }
 
     for (int num_cmds = 0; num_cmds < SOCKET_SERVER_PLAYER_MAX_COMMANDS; num_cmds++) {
+        if (settings.access_required && pl->cs->access_authenticated &&
+            access_server_session_check(&pl->cs->access_token) != ACCESS_SESSION_VALID)
+            break;
         if (pl->cs->packet_recv_cmd->len == 0) {
             break;
         }
@@ -1097,7 +1087,9 @@ void socket_server_handle_client(player *pl) {
             pl->cs->keepalive = 0;
         }
 
-        socket_server_handle_command(pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2);
+        if (socket_server_handle_command(pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2) ==
+            SOCKET_COMMAND_DEFER)
+            break;
         packet_delete(pl->cs->packet_recv_cmd, 0, len);
         pl->cs->packet_recv_cmd_base += len;
         socket_server_command_queue_prune(pl->cs);
@@ -1146,28 +1138,12 @@ static inline bool server_socket_csocket_is_zombie(socket_struct *cs) {
  * @param cs
  * Client socket.
  */
-static inline void socket_server_csocket_read(socket_struct *cs) {
-    HARD_ASSERT(cs != NULL);
+static bool socket_server_has_received_command(const socket_struct *cs) {
+    return cs->packet_recv->len >= 2 && (size_t)(2 + (cs->packet_recv->data[0] << 8) +
+                                                 cs->packet_recv->data[1]) <= cs->packet_recv->len;
+}
 
-    if (cs->state == ST_DEAD) {
-        return;
-    }
-
-    size_t previous_len = cs->packet_recv->len;
-    size_t amt;
-    if (!socket_read(cs->sc,
-                     (void *)(cs->packet_recv->data + cs->packet_recv->len),
-                     cs->packet_recv->size - cs->packet_recv->len,
-                     &amt)) {
-        cs->state = ST_DEAD;
-        return;
-    }
-
-    cs->packet_recv->len += amt;
-    if (amt != 0 && previous_len == 0) {
-        cs->packet_receive_started_us = datetime_monotonic_us();
-    }
-
+static void socket_server_process_received(socket_struct *cs) {
     while (cs->packet_recv->len >= 2) {
         size_t size = 2 + (cs->packet_recv->data[0] << 8) + cs->packet_recv->data[1];
         if (size > cs->packet_recv->len) {
@@ -1181,7 +1157,11 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
         size_t decrypted_len = len - 2;
 
         /* Try to handle the command. */
-        if (!socket_server_handle_command(cs, NULL, decrypted_data, decrypted_len)) {
+        socket_command_result_t dispatch =
+            socket_server_handle_command(cs, NULL, decrypted_data, decrypted_len);
+        if (dispatch == SOCKET_COMMAND_DEFER)
+            break;
+        if (dispatch == SOCKET_COMMAND_QUEUE) {
             /* Couldn't handle it immediately, add it to the commands
              * packet. */
             if (!socket_server_command_queue_append(cs, decrypted_data, decrypted_len)) {
@@ -1200,6 +1180,42 @@ static inline void socket_server_csocket_read(socket_struct *cs) {
     if (cs->packet_recv->len == 0) {
         cs->packet_receive_started_us = 0;
     }
+}
+#ifdef ATRINIK_TESTING
+void socket_server_process_received_for_test(socket_struct *cs) {
+    socket_server_process_received(cs);
+}
+#endif
+
+static inline void socket_server_csocket_read(socket_struct *cs) {
+    HARD_ASSERT(cs != NULL);
+
+    if (cs->state == ST_DEAD) {
+        return;
+    }
+
+    /* Retry retained complete frames before reading into a potentially full
+     * buffer. A deferred frame keeps its original bytes and ordering. */
+    socket_server_process_received(cs);
+    if (cs->state == ST_DEAD || socket_server_has_received_command(cs))
+        return;
+
+    size_t previous_len = cs->packet_recv->len;
+    size_t amt;
+    if (!socket_read(cs->sc,
+                     (void *)(cs->packet_recv->data + cs->packet_recv->len),
+                     cs->packet_recv->size - cs->packet_recv->len,
+                     &amt)) {
+        cs->state = ST_DEAD;
+        return;
+    }
+
+    cs->packet_recv->len += amt;
+    if (amt != 0 && previous_len == 0) {
+        cs->packet_receive_started_us = datetime_monotonic_us();
+    }
+
+    socket_server_process_received(cs);
 }
 
 typedef struct socket_server_transport_stats {
@@ -1221,7 +1237,8 @@ static bool socket_server_pending_application(void) {
     csocket_entry_t *entry;
     DL_FOREACH(client_sockets, entry) {
         if (!server_socket_csocket_is_zombie(entry->cs) &&
-            (entry->cs->packets != NULL || socket_assets_pending(entry->cs))) {
+            (entry->cs->packets != NULL || socket_assets_pending(entry->cs) ||
+             socket_server_has_received_command(entry->cs))) {
             return true;
         }
     }
@@ -1229,7 +1246,8 @@ static bool socket_server_pending_application(void) {
     player *pl;
     DL_FOREACH(first_player, pl) {
         if (!server_socket_csocket_is_zombie(pl->cs) &&
-            (pl->cs->packets != NULL || socket_assets_pending(pl->cs))) {
+            (pl->cs->packets != NULL || socket_assets_pending(pl->cs) ||
+             socket_server_has_received_command(pl->cs))) {
             return true;
         }
     }
@@ -1293,7 +1311,8 @@ static bool socket_server_service_connection(socket_struct *cs,
                                              socket_server_transport_stats_t *stats) {
     bool transport_ready = socket_quic_timeout(cs->sc, 1U) == 0;
     bool timer_due = socket_quic_timer_due(cs->sc);
-    bool application_pending = cs->packets != NULL || socket_assets_pending(cs);
+    bool application_pending =
+        cs->packets != NULL || socket_assets_pending(cs) || socket_server_has_received_command(cs);
     bool application_ready = application_wakeup_armed && application_pending;
     if (!network_ready && !transport_ready && !application_ready) {
         return false;
@@ -1310,7 +1329,11 @@ static bool socket_server_service_connection(socket_struct *cs,
         return false;
     }
 
-    socket_server_csocket_read(cs);
+    /* Keep servicing encrypted transport while a durable mutation owns the
+     * admission authority, but preserve application bytes for later dispatch. */
+    if (!settings.access_required || !cs->access_authenticated ||
+        access_server_session_check(&cs->access_token) == ACCESS_SESSION_VALID)
+        socket_server_csocket_read(cs);
     return true;
 }
 
@@ -1384,7 +1407,8 @@ static void socket_server_service_player_connections(socket_server_transport_sta
                 continue;
             }
             if (cs->state == ST_DEAD) {
-                player_logout(live);
+                if (!player_logout_checked(live))
+                    access_server_save_failed();
             } else {
                 socket_buffer_write(cs);
             }
@@ -1402,7 +1426,86 @@ static void socket_server_service_player_connections(socket_server_transport_sta
  * scheduled independently by sleep_delta_timeout_us(), so QUIC readiness and
  * timer events do not inherit the simulation tick cadence.
  */
+bool socket_access_admin_permitted(socket_struct *cs, player *pl) {
+    return cs != NULL && pl != NULL && pl->ob != NULL && cs->state == ST_PLAYING && pl->cs == cs &&
+           commands_check_permission(pl, "access");
+}
+
+static void socket_access_poll_one(socket_struct *cs, player *pl) {
+    if (cs->access_auth_job != 0) {
+        access_outcome_t outcome;
+        access_token_ref_t ref;
+        if (access_server_auth_poll(cs->access_auth_job, &outcome, &ref)) {
+            cs->access_auth_job = 0;
+            bool accepted = outcome == ACCESS_COMMITTED &&
+                            access_server_session_check(&ref) == ACCESS_SESSION_VALID;
+            if (accepted) {
+                cs->access_token = ref;
+                cs->access_authenticated = true;
+                socket_login_deadline_refresh(cs);
+            }
+            packet_struct *packet = packet_new(CLIENT_CMD_ACCESS_RESULT, 2, 0);
+            packet_writer_write_uint8(packet, 1);
+            packet_writer_write_uint8(packet, accepted ? 0 : 1);
+            socket_send_packet(cs, packet);
+            if (!accepted) {
+                cs->state = ST_ZOMBIE;
+            }
+        }
+    }
+    if (cs->access_admin_job != 0 &&
+        (pl == NULL || pl->ob == NULL || pl->cs != cs || cs->state != ST_PLAYING ||
+         pl->ob->count != cs->access_admin_actor_tag)) {
+        access_server_cancel(cs->access_admin_job);
+        cs->access_admin_job = 0;
+        cs->access_admin_actor_tag = 0;
+    }
+    if (cs->access_admin_job != 0) {
+        char response[ACCESS_ADMIN_RESPONSE_MAX + 1];
+        size_t length = 0;
+        if (access_server_admin_poll_permitted(cs->access_admin_job,
+                                              socket_access_admin_permitted(cs, pl),
+                                              VS(response), &length)) {
+            cs->access_admin_job = 0;
+            cs->access_admin_actor_tag = 0;
+            if (length > 0 && socket_connection_admitted(cs)) {
+                packet_struct *packet = packet_new(CLIENT_CMD_ACCESS_ADMIN_RESULT, length + 1, 0);
+                packet_mark_sensitive(packet);
+                packet_writer_write_uint8(packet, 1);
+                packet_writer_write_bytes(packet, (const uint8_t *)response, length);
+                socket_send_packet(cs, packet);
+            }
+            OPENSSL_cleanse(response, sizeof(response));
+        }
+    }
+    if (settings.access_required && cs->access_authenticated &&
+        access_server_session_check(&cs->access_token) == ACCESS_SESSION_DENIED)
+        cs->state = ST_DEAD;
+}
+
+#ifdef ATRINIK_TESTING
+void socket_access_poll_for_test(socket_struct *cs, player *pl) {
+    socket_access_poll_one(cs, pl);
+}
+#endif
+
+void socket_server_access_poll(void) {
+    access_server_tick();
+    csocket_entry_t *entry;
+    DL_FOREACH(client_sockets, entry)
+        socket_access_poll_one(entry->cs, NULL);
+    player *pl, *next;
+    DL_FOREACH_SAFE(first_player, pl, next) {
+        socket_access_poll_one(pl->cs, pl);
+        if (pl->cs->state == ST_DEAD && settings.access_required && pl->cs->access_authenticated) {
+            if (!player_logout_checked(pl))
+                access_server_save_failed();
+        }
+    }
+}
+
 bool socket_server_process(void) {
+    socket_server_access_poll();
     static time_t heartbeat_last;
     time_t now = time(NULL);
     if (heartbeat_last == 0 || now - heartbeat_last >= 5) {
@@ -1460,7 +1563,8 @@ bool socket_server_process(void) {
     player *pl, *pl_tmp;
     DL_FOREACH_SAFE(first_player, pl, pl_tmp) {
         if (pl->cs->state == ST_DEAD) {
-            player_logout(pl);
+            if (!player_logout_checked(pl))
+                access_server_save_failed();
             continue;
         }
 
@@ -1470,7 +1574,8 @@ bool socket_server_process(void) {
         }
 
         if (pl->cs->state == ST_DEAD) {
-            player_logout(pl);
+            if (!player_logout_checked(pl))
+                access_server_save_failed();
             continue;
         }
 
@@ -1581,7 +1686,8 @@ void socket_server_post_process(void) {
             pl->cs->state = ST_DEAD;
         }
         if (pl->cs->state == ST_DEAD) {
-            player_logout(pl);
+            if (!player_logout_checked(pl))
+                access_server_save_failed();
             continue;
         }
 
@@ -1592,7 +1698,8 @@ void socket_server_post_process(void) {
                 socket_get_id(pl->cs->sc),
                 socket_fd(pl->cs->sc));
             pl->cs->state = ST_DEAD;
-            player_logout(pl);
+            if (!player_logout_checked(pl))
+                access_server_save_failed();
             continue;
         }
 

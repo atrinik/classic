@@ -38,7 +38,9 @@
     {"id": 20, "symbol": "TALK", "wire_name": "talk"},
     {"id": 21, "symbol": "MOVE", "wire_name": "move"},
     {"id": 22, "symbol": "TARGET", "wire_name": "target"},
-    {"id": 23, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
+    {"id": 23, "symbol": "ACCESS_AUTH", "wire_name": "access_auth"},
+    {"id": 24, "symbol": "ACCESS_ADMIN", "wire_name": "access_admin"},
+    {"id": 25, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
   ],
   "server_to_client": [
     {"id": 0, "symbol": "MAP", "wire_name": "map"},
@@ -70,6 +72,9 @@
     {"id": 26, "symbol": "NOTIFICATION", "wire_name": "notification"},
     {"id": 27, "symbol": "KEEPALIVE", "wire_name": "keepalive"},
     {"id": 28, "symbol": "PLAYER_STATUS", "wire_name": "player_status"},
-    {"id": 29, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
+    {"id": 29, "symbol": "ACCESS_RESULT", "wire_name": "access_result"},
+    {"id": 30, "symbol": "ACCESS_ADMIN_RESULT", "wire_name": "access_admin_result"},
+    {"id": 31, "symbol": "ACCESS_POLICY", "wire_name": "access_policy"},
+    {"id": 32, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
   ]
 }

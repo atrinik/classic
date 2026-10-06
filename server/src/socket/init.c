@@ -30,6 +30,7 @@
 #include "zlib.h"
 
 #include <global.h>
+#include <access_server.h>
 #include <server_main.h>
 #include <server.h>
 #include <exploration.h>
@@ -77,13 +78,23 @@ bool init_connection(socket_struct *ns) {
     ns->connection_mode = socket_connection_mode_get(ns->sc);
     ns->account = NULL;
     ns->socket_version = 0;
-    ns->join_authenticated = false;
+    access_server_cancel(ns->access_auth_job);
+    access_server_cancel(ns->access_admin_job);
+    ns->access_auth_job = ns->access_admin_job = 0;
+    ns->access_admin_actor_tag = 0;
+    ns->access_authenticated = false;
+    ns->access_attempted = false;
+    ns->access_policy_sent = false;
+    ns->access_transport_authenticated = false;
+    memset(&ns->access_token, 0, sizeof(ns->access_token));
     ns->setup_completed = false;
     socket_login_deadline_refresh(ns);
     socket_assets_connection_register(ns);
 
     ns->packet_recv = packet_new(0, 1024 * 3, 0);
+    packet_mark_sensitive(ns->packet_recv);
     ns->packet_recv_cmd = packet_new(0, 1024 * 64, 0);
+    packet_mark_sensitive(ns->packet_recv_cmd);
     packet_writer_set_limit(ns->packet_recv_cmd, SOCKET_COMMAND_QUEUE_STORAGE_MAX);
 
     memset(&ns->lastmap, 0, sizeof(struct Map));
@@ -132,6 +143,8 @@ void free_all_newserver(void) {
  */
 static void free_newsocket_internal(socket_struct *ns, bool connected) {
     exploration_end(ns);
+    access_server_cancel(ns->access_auth_job);
+    access_server_cancel(ns->access_admin_job);
     socket_assets_connection_clear(ns);
     if (connected) {
         socket_destroy(ns->sc);

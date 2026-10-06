@@ -47,7 +47,9 @@ class ClientToServerCommand(IntEnum):
     TALK = 20
     MOVE = 21
     TARGET = 22
-    REGION_EXPLORATION = 23
+    ACCESS_AUTH = 23
+    ACCESS_ADMIN = 24
+    REGION_EXPLORATION = 25
 
 
 class ServerToClientCommand(IntEnum):
@@ -80,4 +82,7 @@ class ServerToClientCommand(IntEnum):
     NOTIFICATION = 26
     KEEPALIVE = 27
     PLAYER_STATUS = 28
-    REGION_EXPLORATION = 29
+    ACCESS_RESULT = 29
+    ACCESS_ADMIN_RESULT = 30
+    ACCESS_POLICY = 31
+    REGION_EXPLORATION = 32

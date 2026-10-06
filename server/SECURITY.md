@@ -10,5 +10,6 @@ duplicate destinations, and unexpected archive roots. Treat changes to lock
 validation, archive extraction, authentication, networking, asset serving,
 plugin loading, and mutable `data/` handling as security-sensitive.
 
-Never commit `server-custom.cfg`, `data/`, join-password files, QUIC identities,
-metaserver keys, credentials, or generated runtime trees.
+Never commit `server-custom.cfg`, `data/`, access codes or token-store snapshots,
+QUIC identities, metaserver keys, credentials, or generated runtime trees. Keep
+access-code issuance in its private interface and out of ordinary logs and chat.

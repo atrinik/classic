@@ -36,6 +36,9 @@
 
 extern struct settings_struct settings;
 
+/** Borrow the pinned data-directory lock for this runtime, or -1 when absent. */
+int initialization_data_descriptor(void);
+
 extern shstr_constants shstr_cons;
 
 extern int world_darkness;
