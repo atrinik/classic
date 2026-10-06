@@ -7,6 +7,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -206,6 +208,55 @@ class ServerRuntimeProviderTests(unittest.TestCase):
                                 capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.splitlines(), [f"{r['Package']}={r['Version']}" for r in LOCK["packages"]])
         self.assertFalse(any(line.startswith("libcurl4t64=") for line in result.stdout.splitlines()))
+
+    def run_docker_apt_acquisition(self, failed_phase=None):
+        # Execute the Dockerfile's real update/install chain with only apt-get
+        # replaced. This checks option propagation through xargs and shell
+        # failure handling without network or package changes on the test host.
+        docker = (ROOT / "server/Dockerfile").read_text().replace("\\\n", " ")
+        start = docker.index("    && apt-get ") + len("    && ")
+        end = docker.index("    && rm -rf /var/lib/apt/lists/*", start)
+        acquisition = docker[start:end].strip()
+        with tempfile.TemporaryDirectory(dir=os.environ.get("ATRINIK_TEST_TMPDIR")) as temporary:
+            root = Path(temporary)
+            log = root / "apt.jsonl"
+            lock = root / "packages.lock"
+            lock.write_text("fixture-package=1.2.3\n")
+            stub = root / "apt-get"
+            stub.write_text(
+                "#!" + sys.executable + "\n"
+                "import json, os, sys\n"
+                "with open(os.environ['APT_TEST_LOG'], 'a') as stream:\n"
+                "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "sys.exit(100 if os.environ.get('APT_TEST_FAIL') in sys.argv[1:] else 0)\n")
+            stub.chmod(0o755)
+            acquisition = acquisition.replace("/tmp/runtime-provider-packages.lock", shlex.quote(str(lock)))
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                       APT_TEST_LOG=str(log), APT_TEST_FAIL=failed_phase or "")
+            result = subprocess.run(["/bin/sh", "-c", acquisition], env=env,
+                                    capture_output=True, text=True, timeout=10)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+        return result, calls
+
+    def test_docker_apt_uses_explicit_public_trust_for_both_acquisitions(self):
+        result, calls = self.run_docker_apt_acquisition()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 2)
+        for args in calls:
+            self.assertEqual(args[:2], ["-o", "Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt"])
+        self.assertEqual(calls[0][2:], ["-o", "APT::Update::Error-Mode=any", "update"])
+        self.assertEqual(calls[1][2:], ["install", "-y", "--no-install-recommends", "fixture-package=1.2.3"])
+
+    def test_docker_apt_failed_refresh_never_installs_from_stale_indexes(self):
+        result, calls = self.run_docker_apt_acquisition("update")
+        self.assertEqual(result.returncode, 100)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][-1], "update")
+
+    def test_docker_apt_install_failure_propagates(self):
+        result, calls = self.run_docker_apt_acquisition("install")
+        self.assertEqual(result.returncode, 123)  # xargs propagates child failure.
+        self.assertEqual(len(calls), 2)
 
     def test_docker_uses_locked_images_and_checks_without_tls_bypass(self):
         docker = (ROOT / "server/Dockerfile").read_text()
