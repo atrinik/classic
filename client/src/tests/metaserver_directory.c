@@ -77,7 +77,7 @@ static char *build_directory(size_t servers, size_t *body_size) {
         body,
         capacity,
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<Servers protocol=\"4\" schema=\"atrinik-classic-directory-v4\" generation=\"1\" "
+        "<Servers protocol=\"6\" schema=\"atrinik-classic-directory-v6\" generation=\"1\" "
         "generated-at=\"1000\" expires-at=\"2000\">\n");
     for (size_t i = 0; i < servers && used < capacity; i++) {
         int written =
@@ -86,7 +86,7 @@ static char *build_directory(size_t servers, size_t *body_size) {
                      "<Server><Id>%064zx</Id><Name>Server</Name><PlayersCount>0</PlayersCount>"
                      "<Version>1</Version><TextComment></TextComment>"
                      "<CertificateSha256>%064zx</CertificateSha256>"
-                     "<PasswordRequired>false</PasswordRequired></Server>\n",
+                     "<AccessRequired>false</AccessRequired></Server>\n",
                      i,
                      i);
         if (written < 0 || (size_t)written >= capacity - used) {
@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
     REQUIRE(snapshot->servers[1].has_endpoint);
     REQUIRE(strcmp(snapshot->servers[1].hostname, "play.example.net") == 0);
     REQUIRE(snapshot->servers[1].port == 13327);
-    REQUIRE(snapshot->servers[1].password_required);
+    REQUIRE(snapshot->servers[1].access_required);
     REQUIRE(metaserver_directory_current(snapshot, 1786222799));
     REQUIRE(!metaserver_directory_current(snapshot, 1786222800));
     REQUIRE(!metaserver_directory_current(snapshot, 1786218899));
@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
     free(different);
     metaserver_directory_free(snapshot);
 
-    REQUIRE(reject_replacement(body, "protocol=\"4\"", "protocol=\"3\"") == 0);
+    REQUIRE(reject_replacement(body, "protocol=\"6\"", "protocol=\"5\"") == 0);
     REQUIRE(reject_replacement(body,
                                "<Servers ",
                                "<!DOCTYPE Servers [<!ENTITY x \"secret\">]><Servers ") == 0);

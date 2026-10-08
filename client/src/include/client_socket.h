@@ -26,6 +26,8 @@
 #define CLIENT_SOCKET_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <toolkit/access_code.h>
 #include <toolkit/socket.h>
 
 typedef struct client_socket client_socket_t;
@@ -39,10 +41,21 @@ struct packet_struct;
 /** Public API implemented in src/client/socket.c. */
 
 extern void socket_send_packet(struct packet_struct *packet);
+/** Always consumes packet; false leaves a bounded producer responsible for retry. */
+bool socket_send_packet_bounded(struct packet_struct *packet, size_t queue_limit);
+
+/** Queue the one access-auth payload without generic packet debug serialization. */
+bool client_socket_send_access_auth(const char code[ACCESS_CODE_LENGTH]);
+
+/** Queue one bounded in-game access-management request without packet diagnostics. */
+bool client_socket_send_access_admin(const char *json, size_t size);
 
 extern void socket_thread_start(void);
 
 extern void socket_thread_stop(void);
+
+/** Ask the transport thread to close after a protocol or authentication failure. */
+void client_socket_request_shutdown(void);
 
 extern int handle_socket_shutdown(void);
 

@@ -123,7 +123,7 @@ over the same renderer. It separately warms and checkpoints the intro server
 browser, ready account/password login form, character selection, populated
 gameplay widgets and text windows, a context menu, tooltip, opaque and fading
 notification, generic input controls, book, settings, color picker, connection
-preference, join-password, credits, painting and region-map popups, the
+preference, credits, painting and region-map popups, the
 minimap, an observable zoomed region-map FOW update followed by an unchanged
 retained frame, and the real `/screenshot` and `/screenshot map` commands.
 Every non-readback state requires zero source upload, fallback, and

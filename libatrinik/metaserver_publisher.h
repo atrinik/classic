@@ -24,8 +24,9 @@
 #define METASERVER_PUBLISH_VALIDITY_SECONDS 300U
 
 typedef enum metaserver_publisher_profile {
-    METASERVER_PUBLISHER_CLASSIC_V1,
-    METASERVER_PUBLISHER_GAME_V1
+    METASERVER_PUBLISHER_CLASSIC_V3,
+    METASERVER_PUBLISHER_GAME_V2,
+    METASERVER_PUBLISHER_ACCESS_CLASSIC_V1
 } metaserver_publisher_profile_t;
 
 typedef enum metaserver_publish_sequence_result {
@@ -49,7 +50,7 @@ typedef struct metaserver_publisher_classic_payload {
     const char *version;
     const char *text_comment;
     bool is_public;
-    bool password_required;
+    bool access_required;
     /** Optional canonical DNS fallback for direct friend joining. */
     const char *hostname;
     /** QUIC port paired with hostname; zero means addressless publication. */

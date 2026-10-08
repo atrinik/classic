@@ -207,18 +207,16 @@
 =================================================
 
  Release images are published to `ghcr.io/atrinik/classic-server`. Pin a
- version for a persistent deployment, then start it from the repository root:
+ version for a persistent deployment, then start it from the server/ directory:
   $ cp server-custom.cfg.example server-custom.cfg
-  $ mkdir -p server-data
-  $ ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/classic-server:5.6.0 \
-      LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) \
+  $ mkdir -m 0700 server-data && sudo chown 10001:10001 server-data && \
+      ATRINIK_SERVER_IMAGE=ghcr.io/atrinik/classic-server:5.6.0 \
       docker compose -f compose.server.yaml up --no-build -d
 
  The `latest` tag follows the newest release, but a versioned tag avoids an
- unexpected server upgrade. To build the current source locally instead:
+ unexpected server upgrade. To build the current source locally instead (also from server/):
   $ cp server-custom.cfg.example server-custom.cfg
-  $ mkdir -p server-data
-  $ LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) \
+  $ mkdir -m 0700 server-data && sudo chown 10001:10001 server-data && \
       docker compose -f compose.server.yaml up --build -d
 
  On a native Linux Docker Engine, the Compose service uses host networking so
@@ -232,8 +230,27 @@
  deployment. Player data, the persistent QUIC identity, and other mutable state
  are kept directly in the host's server-data/ folder. Region maps are generated
  while building the image and refreshed into that folder when the container
- starts. On Linux, LOCAL_UID and LOCAL_GID keep those files owned by the user
- running Docker.
+ starts. Compose defaults to the image's dedicated UID/GID 10001:10001.
+ The fresh-directory commands intentionally refuse an existing server-data path;
+ they give only that newly created directory to the dedicated service identity.
+ Keep the image's containing server directory and executables root-owned.
+
+ Existing state requires an explicit stopped maintenance operation: stop the
+ service, take and verify a complete private-state backup, and inspect the exact
+ host bind-mount path with `ls -ldn server-data` (reject symlinks). If it already
+ belongs to UID 10001, correct only its leaf mode with `chmod 0700 server-data`.
+ If migrating a different service UID, review the backup and all state ownership
+ before an operator-managed ownership migration; do not recursively chown an
+ unverified path. The entrypoint rejects a wrong mode/owner before initialization
+ or listeners and never changes existing ownership or adopts a directory.
+
+ LOCAL_UID/LOCAL_GID overrides require a separately provisioned runtime image
+ and writable generated assets/data directory for the selected service identity,
+ as well as the 0700 host data directory. The packaged assets/data belongs to UID
+ 10001 and is mode 0700; changing only the Compose user cannot use that image.
+ Offline initialization/inspection must use the same UID as the online service.
+ Keep executable/configuration ancestry root-owned and do not use the Docker
+ caller's UID implicitly.
 
  To follow logs or stop the service:
   $ docker compose -f compose.server.yaml logs -f
@@ -245,13 +262,13 @@
  seconds old; a wedged process therefore becomes unhealthy even if PID 1 still
  exists.
 
- For a private server, mount a Docker secret or another mode-0600 file and set
- `ATRINIK_JOIN_PASSWORD_FILE` to its container path. The entrypoint prefers that
- file over `ATRINIK_JOIN_PASSWORD`, avoiding disclosure through the container
- environment. Native deployments can use `--join_password_file=PATH`.
+ Configure admission with `access_required` in the read-only server-custom.cfg.
+ Private access uses labelled 16-character codes, issued through the private
+ in-game access panel or root local administration. See LOCAL_ADMIN_SHUTDOWN.md
+ for initialization, administration and stopped-state inspection.
 
- For a public direct server, set ATRINIK_SERVER_PUBLIC=true and optionally
- ATRINIK_JOIN_PASSWORD. No hostname or HTTP URL is required. Large dedicated
+ For a public direct server, set ATRINIK_SERVER_PUBLIC=true and choose
+ `access_required = false` for open admission. Large dedicated
  servers can deploy an HTTPS origin/CDN separately and set ATRINIK_HTTP_URL to
  its base URL; clients will prefer it and fall back to QUIC if it is
  unavailable:
@@ -411,38 +428,35 @@ for registry, persistence, event, privacy, and analytics semantics.
   port_quic = 1730
   stun_server = off
   port_mapping = auto
-  join_password = choose-a-long-password
+  access_required = true
 
- 'server_public' is opt-in. If false, the server is not returned by the public
- directory. The join password is verified by the game server over encrypted
- QUIC; the metaserver receives only the boolean fact that a password is
- required. Failed attempts are compared in constant time and limited per peer
- to five per minute, with a 256-per-minute server-wide ceiling. Use a long
- randomly generated password and prefer
- `join_password_file`/`--join_password_file` over command-line or environment
- values. The file must be a regular, non-symlink file containing exactly one
- nonempty line shorter than 1024 bytes. Mode 0600 is recommended; group/other
- permissions produce a startup warning.
+ 'server_public' is opt-in and controls directory visibility independently of
+ `access_required`. Protected servers require a canonical 16-character access
+ code after certificate-pinned QUIC and an authenticated policy announcement.
+ The same code authorizes private discovery; the metaserver stores a separate
+ route hash while the game server retains only domain-separated token hashes.
+ Account names, account passwords, characters and maps remain separate.
 
- A listed password-protected server also requires a high-entropy rendezvous
- invite before the metaserver reveals any transient QUIC candidate. On first
- protected start, the server creates `data/rendezvous-invite` as an exclusive
- owner-only regular file (mode 0600 on POSIX, protected owner DACL on Windows)
- containing one capability bound to this server's QUIC identity and valid for
- at most seven days. Share the file itself with invited players through a
- protected channel; never paste its contents into server configuration, a
- command line, chat, or logs. The path alone can be changed with
- `rendezvous_invite_file` or `--rendezvous_invite_file=PATH`.
+ Each code has a person/group label and optional expiry (default: never).
+ Initialize an absent store once with `access_initialize = true`; this offline
+ invocation requires the existing QUIC identity and exits before listeners,
+ plugins or publication. Remove that setting before normal startup. Root local
+ administration can issue the first code while
+ the protected server remains locked. In-game administration uses the current
+ character’s existing `/cmd_permission` grant for `access`; `[OP]` grants it
+ automatically. Access policy/store settings remain startup-only and cannot
+ be changed through `/config`. Codes appear only in the private issuance result and
+ can be deliberately copied by their issuer. Never put them in ordinary chat,
+ configuration, command lines or logs.
 
- The server reuses a valid capability across restarts. To revoke or rotate it,
- stop the server, delete that file, and restart; a replacement is generated.
- An expired, permissively readable, malformed, replaced, or wrong-server file
- fails closed instead of being silently overwritten. The separate human join
- password is still authenticated by the game server only after certificate-
- pinned QUIC has connected.
+ Revocation commits local denial before remote synchronization, and expires
+ or disconnects affected sessions through checked player saves. Back up the
+ complete data/config/QUIC-identity cohort, including the private access token
+ snapshot, audit history and pending route state. Do not restore the token
+ snapshot independently or reuse the retired join-password/invite settings.
 
  Addressless listings expose no direct endpoint, so their only connection path
- is the invite-authorized rendezvous exchange. The legacy numeric `server_host`
+ is the code-authorized rendezvous exchange. The legacy numeric `server_host`
  setting is no longer published. To opt into an explicit direct fallback,
  configure the canonical lowercase DNS `metaserver_hostname`; the current
  `port_quic` is published as its paired port. Invalid or numeric hostnames are
@@ -603,10 +617,17 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
 
  The local buckets are defense in depth: the metaserver remains authoritative
  across process restarts and duplicate processes. Listing visibility, name,
- description, and join-password mode are startup settings; changing them
+ description, and access policy are startup settings; changing them
  requires a server restart, whose startup publication sends the new state.
- Private servers publish one removal/tombstone at startup and retry it until
- accepted, then send no heartbeats or player-count changes.
+ Private servers with `access_required false` publish one removal/tombstone at
+ startup and retry it until accepted, then send no heartbeats. Private servers
+ with `access_required true` continue signed presence maintenance on the same
+ bounded, jittered heartbeat timer so code-only discovery remains available
+ beyond the four-hour presence expiry. These publications carry `public:false`,
+ `accessRequired:true`, a zero player count, and no hostname or port; they never
+ make the server directory-visible. Player joins and departures neither trigger
+ private publications nor alter their payload. The rendezvous WebSocket alone
+ does not refresh this signed-presence expiry.
 
  The server reserves a fresh unsigned 64-bit publish sequence before every
  network attempt. Its crash-safe high-water mark is kept in two owner-only
@@ -636,7 +657,7 @@ mode and connection ID in `/who`, formatted as `(route: QUIC/mapped; connection:
   - A fresh random nonce and monotonic publish sequence used only for replay
     defense
   - Number of players online
-  - Whether a join password is required (never the password itself)
+  - Whether an access code is required (never the code itself)
 
  The above information is sent over HTTPS to
  `https://publish.meta.atrinik.org/v1/classic/servers/<server-id>/publish`,

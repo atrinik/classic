@@ -178,7 +178,8 @@ static void *quic_test_server_main(void *data) {
             socket_wait(server->listener, true, false, 10);
             server->accepted[i] = socket_accept(server->listener);
         }
-        if (server->accepted[i] == NULL) {
+        if (server->accepted[i] == NULL || server->accepted[i]->addr.ss_family != 0 ||
+            strcmp(socket_get_addr(server->accepted[i]), "<no address>") != 0) {
             server->failed = true;
             return NULL;
         }

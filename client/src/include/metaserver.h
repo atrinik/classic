@@ -26,6 +26,7 @@
 #define METASERVER_H
 
 #include <stdbool.h>
+#include <toolkit/curl.h>
 #include <stddef.h>
 
 typedef struct server_struct server_struct;
@@ -42,6 +43,15 @@ extern void metaserver_init(void);
 extern server_struct *server_get_id(size_t num);
 
 bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t url_size);
+
+/** Resolve one detached session-only private server by access code. */
+server_struct *metaserver_access_resolve(const char *code);
+server_struct *metaserver_access_resolve_cancellable(const char *code,
+                                                    const curl_cancel_t *cancel);
+
+/** Add or release a resolved server after the user accepts or cancels its identity. */
+void metaserver_server_add(server_struct *server);
+void metaserver_server_free(server_struct *server);
 
 extern size_t server_get_count(void);
 

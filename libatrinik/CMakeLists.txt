@@ -312,6 +312,8 @@ if (NOT DEFINED HAVE_IPV6)
 endif ()
 
 set(LIBATRINIK_PUBLIC_HEADER_NAMES
+    access_code.h
+    access_resolve.h
     binreloc.h
     bresenham.h
     clioptions.h
@@ -377,6 +379,8 @@ else ()
 endif ()
 
 set(TOOLKIT_SOURCES
+    access_code.c
+    access_resolve.c
     binreloc.c
     clioptions.c
     colorspace.c
@@ -434,7 +438,7 @@ else ()
 endif ()
 
 if (CURL_INCLUDE_DIRS)
-    target_include_directories(${ATRINIK_TOOLKIT} PRIVATE ${CURL_INCLUDE_DIRS})
+    target_include_directories(${ATRINIK_TOOLKIT} PUBLIC ${CURL_INCLUDE_DIRS})
 endif ()
 if (ZLIB_INCLUDE_DIRS)
     target_include_directories(${ATRINIK_TOOLKIT} PRIVATE ${ZLIB_INCLUDE_DIRS})
@@ -444,9 +448,9 @@ if (OPENSSL_INCLUDE_DIR)
 endif ()
 
 if (TARGET CURL::libcurl)
-    target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE CURL::libcurl)
+    target_link_libraries(${ATRINIK_TOOLKIT} PUBLIC CURL::libcurl)
 else ()
-    target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE ${CURL_LIBRARIES})
+    target_link_libraries(${ATRINIK_TOOLKIT} PUBLIC ${CURL_LIBRARIES})
 endif ()
 target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE PkgConfig::IDN2)
 target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE Threads::Threads)
@@ -511,6 +515,29 @@ endif ()
 
 if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         ATRINIK_INTEGRATED_BUILD) AND BUILD_TESTING)
+    add_executable(libatrinik-access-code tests/access_code.c)
+    atrinik_configure_target(libatrinik-access-code)
+    target_link_libraries(libatrinik-access-code PRIVATE Atrinik::Core)
+    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_definitions(libatrinik-access-code PRIVATE ACCESS_CODE_TEST_ENTROPY)
+        target_link_options(libatrinik-access-code PRIVATE "-Wl,--wrap=RAND_priv_bytes")
+    endif ()
+    add_test(NAME libatrinik-access-code COMMAND libatrinik-access-code)
+
+    add_executable(libatrinik-access-resolve tests/access_resolve.c)
+    atrinik_configure_target(libatrinik-access-resolve)
+    target_link_libraries(libatrinik-access-resolve PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-access-resolve COMMAND libatrinik-access-resolve)
+
+    add_executable(libatrinik-sensitive-packet tests/sensitive_packet.c)
+    atrinik_configure_target(libatrinik-sensitive-packet)
+    target_link_libraries(libatrinik-sensitive-packet PRIVATE Atrinik::Core)
+    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_definitions(libatrinik-sensitive-packet PRIVATE PACKET_TEST_FREE)
+        target_link_options(libatrinik-sensitive-packet PRIVATE "-Wl,--wrap=free")
+    endif ()
+    add_test(NAME libatrinik-sensitive-packet COMMAND libatrinik-sensitive-packet)
+
     add_executable(libatrinik-smoke tests/smoke.c)
     atrinik_configure_target(libatrinik-smoke)
     target_link_libraries(libatrinik-smoke PRIVATE Atrinik::Core)
@@ -558,9 +585,7 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     add_executable(libatrinik-rendezvous tests/rendezvous.c)
     atrinik_configure_target(libatrinik-rendezvous)
     target_link_libraries(libatrinik-rendezvous PRIVATE Atrinik::Core)
-    add_test(NAME libatrinik-rendezvous COMMAND libatrinik-rendezvous
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1.json"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendezvous-invite-v1-negative.json")
+    add_test(NAME libatrinik-rendezvous COMMAND libatrinik-rendezvous)
 
     add_executable(libatrinik-metaserver-publisher
         tests/metaserver_publisher.c)
@@ -568,7 +593,7 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-metaserver-publisher PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-metaserver-publisher
         COMMAND libatrinik-metaserver-publisher
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-publisher-v1.json")
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/metaserver-classic-publisher-v3.json")
 
     add_executable(libatrinik-metaserver-url tests/metaserver_url.c)
     atrinik_configure_target(libatrinik-metaserver-url)

@@ -222,9 +222,13 @@ live_movement_capture_create(const char *absolute_path, char *error, size_t erro
     return capture;
 }
 
-bool live_movement_capture_request(live_movement_capture_t *capture) {
+bool live_movement_capture_request(live_movement_capture_t *capture, bool capture_allowed) {
     if (capture == NULL || capture->result.status != LIVE_MOVEMENT_CAPTURE_READY ||
         capture->stream == NULL) {
+        return false;
+    }
+    if (!capture_allowed) {
+        capture_fail(capture, "diagnostic capture unavailable");
         return false;
     }
     capture->result.status = LIVE_MOVEMENT_CAPTURE_PENDING;

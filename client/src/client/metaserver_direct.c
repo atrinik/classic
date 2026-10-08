@@ -36,7 +36,7 @@ bool metaserver_direct_parse(const char *body,
         server->name = xstrdup(entry->name);
         server->version = xstrdup(entry->version);
         server->desc = xstrdup(entry->text_comment);
-        server->password_required = entry->password_required;
+        server->access_required = entry->access_required;
         if (entry->has_endpoint) {
             server->hostname = xstrdup(entry->hostname);
             server->port = entry->port;

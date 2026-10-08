@@ -292,6 +292,7 @@ static bool capture_checkpoints_poll(uint64_t now) {
 }
 
 static bool capture_checkpoint_request(size_t index,
+                                       bool capture_allowed,
                                        uint64_t now,
                                        uint64_t gpu_publication,
                                        bool game_time_valid,
@@ -316,7 +317,7 @@ static bool capture_checkpoint_request(size_t index,
             index == 0 ? "initial" : "final",
             frames,
             elapsed_us());
-    if (!live_movement_capture_request(checkpoint->job)) {
+    if (!live_movement_capture_request(checkpoint->job, capture_allowed)) {
         terminal(false, "could not queue diagnostic capture");
         return false;
     }
@@ -661,7 +662,9 @@ void live_movement_tick(void) {
     }
 }
 
-void live_movement_frame_finished(bool presented, const client_keepalive_statistics_t *keepalive) {
+void live_movement_frame_finished(bool presented,
+                                  bool capture_allowed,
+                                  const client_keepalive_statistics_t *keepalive) {
     if (!enabled || !ready || finished)
         return;
     uint64_t now = datetime_monotonic_us();
@@ -809,6 +812,7 @@ void live_movement_frame_finished(bool presented, const client_keepalive_statist
                 live_movement_capture_result(capture_checkpoints[0].job);
             if (initial->status == LIVE_MOVEMENT_CAPTURE_READY) {
                 capture_checkpoint_request(0,
+                                           capture_allowed,
                                            now,
                                            primary_gpu_generation,
                                            time_valid,
@@ -834,7 +838,12 @@ void live_movement_frame_finished(bool presented, const client_keepalive_statist
                 primary_gpu_generation,
                 elapsed_us());
         if (final_checkpoint && capture_checkpoints[1].job != NULL)
-            capture_checkpoint_request(1, now, primary_gpu_generation, time_valid, game_seconds);
+            capture_checkpoint_request(1,
+                                       capture_allowed,
+                                       now,
+                                       primary_gpu_generation,
+                                       time_valid,
+                                       game_seconds);
     }
 }
 

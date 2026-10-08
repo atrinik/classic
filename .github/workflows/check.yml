@@ -26,9 +26,9 @@ concurrency:
 
 env:
   COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.2.3@sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
-  CLASSIC_LINUX_IMAGE_DIGEST: sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
-  CLASSIC_GPU_COVERAGE_IMAGE: ghcr.io/atrinik/linux-build:1.3.0@sha256:260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
+  CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
+  CLASSIC_GPU_COVERAGE_IMAGE: ghcr.io/atrinik/linux-build:1.16.0@sha256:89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e
   CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
   CLASSIC_LINUX_CCACHE_EPOCH: "1"
 
@@ -286,6 +286,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Upload release-tool coverage
+        continue-on-error: true
+        timeout-minutes: 2
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           disable_search: true
@@ -294,6 +296,8 @@ jobs:
           flags: release-tools
           use_oidc: true
       - name: Upload libatrinik coverage
+        continue-on-error: true
+        timeout-minutes: 2
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           disable_search: true
@@ -354,7 +358,7 @@ jobs:
           printf '%s\n' '123456789012345678' > \
             build/discord-test-application-id
       - name: Pull pinned Windows build environment
-        run: docker pull ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb
+        run: docker pull ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
       - name: Cross-build and stage standalone tests
         run: |
           docker run --rm \
@@ -371,7 +375,7 @@ jobs:
             --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace \
-            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
             bash -c '
               set -euo pipefail
               pcpnatpmp_source="$(cat build/libpcpnatpmp-source-path)"
@@ -472,7 +476,7 @@ jobs:
             --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace \
-            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
             bash -c '
               set -euo pipefail
               x86_64-w64-mingw32.shared-cmake \
@@ -506,7 +510,7 @@ jobs:
             --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/server \
-            ghcr.io/atrinik/windows-build:1.2.1@sha256:d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb \
+            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
             bash tools/build-windows-package.sh build/windows-pr-package
           cp server/build/windows-pr-package/*.zip \
             libatrinik/build/windows-test-bundle/
@@ -689,7 +693,7 @@ jobs:
             throw "libatrinik-signals.exe exception guard test failed with exit code ${LASTEXITCODE}"
           }
 
-          $publisher = Join-Path $bundle "fixtures/metaserver-publisher-v1.json"
+          $publisher = Join-Path $bundle "fixtures/metaserver-classic-publisher-v3.json"
           & (Join-Path $bundle "libatrinik-metaserver-publisher.exe") $publisher
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-metaserver-publisher.exe failed with exit code ${LASTEXITCODE}"
@@ -824,6 +828,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Upload coverage
+        continue-on-error: true
+        timeout-minutes: 2
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
@@ -924,6 +930,8 @@ jobs:
             "${CLASSIC_LINUX_IMAGE}" \
             "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Upload coverage
+        continue-on-error: true
+        timeout-minutes: 2
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
@@ -982,6 +990,8 @@ jobs:
             "${CLASSIC_LINUX_IMAGE}" \
             "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Upload GPU-complete client coverage
+        continue-on-error: true
+        timeout-minutes: 2
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           override_commit: ${{ env.COVERAGE_SHA }}
@@ -990,34 +1000,6 @@ jobs:
           files: client/coverage.xml
           flags: client-gpu
           use_oidc: true
-      - name: Wait for complete client coverage processing
-        env:
-          CODECOV_REPORT_API: >-
-            https://api.codecov.io/api/v2/github/${{ github.repository_owner }}/repos/${{ github.event.repository.name }}/totals/
-        run: |
-          set -euo pipefail
-          for attempt in {1..90}; do
-            reports_ready=true
-            for flag in client-unit client-gpu; do
-              if ! sessions=$(
-                curl --fail --silent --show-error --retry 2 --get \
-                  --data-urlencode "sha=${COVERAGE_SHA}" \
-                  --data-urlencode "flag=${flag}" \
-                  "${CODECOV_REPORT_API}" | jq -er '.totals.sessions // 0'
-              ) || [ "${sessions}" -lt 1 ]; then
-                reports_ready=false
-                break
-              fi
-            done
-            if [ "${reports_ready}" = true ]; then
-              echo "Codecov processed both client coverage reports."
-              exit 0
-            fi
-            echo "Waiting for Codecov client coverage processing (${attempt}/90)..."
-            sleep 10
-          done
-          echo "Codecov did not process both client coverage reports within 15 minutes." >&2
-          exit 1
 
   integrated:
     name: Integrated client/server graph

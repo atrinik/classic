@@ -9,8 +9,10 @@
 - Integrated builds use sibling `protocol/` and `libatrinik/` sources. Classic
   protocol must come from that sibling, the release's embedded
   `dependencies/protocol` tree, or an explicit source override so its wire
-  revision cannot drift; libatrinik retains an immutable checksum-pinned
-  release fallback. Update lock files and dependency tests together. Do not add
+  revision cannot drift. libatrinik likewise requires matching sibling, embedded,
+  or explicit source; a parent SDK may provide a compatible `Atrinik::Core` target.
+  Historical standalone library releases are not a current API fallback.
+  Update dependency selection and its configure tests together. Do not add
   Git submodules or copied protocol constants.
 - The scoped client source release embeds matching protocol and libatrinik
   trees under `dependencies/`; standalone CMake configuration must select them
@@ -38,11 +40,30 @@
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.
+- Region-map exploration uses a hashed cache of at most 10,000 server-received
+  map bitfields, scoped to the pinned connection certificate and authenticated
+  account. Retain initial dimensions and OR incoming snapshots/patches. Request
+  only region-definition paths, deduplicated and paced with socket backpressure.
+  Bitmap allocations total at most 1 MiB; reject excess new records without
+  changing the cache. Replay uses one shared 65,536-unit map/byte/set-bit budget
+  per frame, resumes across frames, and coalesces packets by cache revision.
+  RESET selects the account once per connection; duplicate active RESETs are
+  idempotent and account switches require disconnect. Disconnect hides cached
+  bits and flushes optional private disk storage. Never import character `.tiles` files or
+  persist client-renderer visibility in the account cache.
 - Live movement diagnostics use normal authenticated connections and movement
   commands in an isolated wrapper scenario. Their closed route owns gameplay
   input, accepts only complete server map publications, and fails on divergence
   or deadlines. Arrival and presentation are separate evidence; offline snapshot
   replays do not prove live travel or movement performance.
+- Access-code popup resolution uses `access_resolver` jobs with copied secret
+  storage. Closing a popup cancels without joining; the main loop reaps finished
+  jobs and metaserver teardown joins all workers before endpoint/toolkit cleanup.
+  Retained workers share a bounded job budget, including cancelled requests.
+- Capture privacy is owned by `capture_privacy`: private UI retention and frame
+  composition deny new screenshots, video frames, and diagnostic captures until
+  a successfully presented clean frame. UI close/reset and renderer recovery
+  must not clear this latch; already submitted safe copies may complete.
 - Linux video recording owns `video_recording`, `video_encoder`, and `video_avi`.
   Capture only completed gameplay frames with bounded asynchronous readbacks;
   transport and process-isolated JPEG encoding must not block the render loop.

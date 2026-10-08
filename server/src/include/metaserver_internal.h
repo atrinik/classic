@@ -14,7 +14,9 @@
 
 #include <toolkit/curl.h>
 #include <toolkit/rendezvous.h>
+#include <toolkit/metaserver_publisher.h>
 #include <server_clock.h>
+#include <access_tokens.h>
 #include <curl/curl.h>
 
 #define METASERVER_RENDEZVOUS_AUTH_JOBS_MAX 64U
@@ -40,6 +42,24 @@
 #define METASERVER_PUBLISH_HEARTBEAT_MIN_SECONDS 60U
 #define METASERVER_PUBLISH_HEARTBEAT_MAX_SECONDS 10800U
 
+/* Sanitized signed-presence state; private maintenance carries no activity/address. */
+typedef struct metaserver_public_snapshot {
+    char name[MAX_BUF];
+    char description[MAX_BUF];
+    char hostname[MAX_BUF];
+    uint32_t players_count;
+    uint16_t port;
+    bool is_public;
+    bool access_required;
+} metaserver_public_snapshot_t;
+
+void metaserver_public_snapshot(metaserver_public_snapshot_t *snapshot);
+bool metaserver_public_snapshot_body(const metaserver_public_snapshot_t *snapshot,
+                                      const char *server_id,
+                                      const char *certificate,
+                                      char body[METASERVER_PUBLISH_BODY_MAX + 1U],
+                                      size_t *body_size);
+
 typedef struct metaserver_attempt_budget {
     server_monotonic_t refill_deadline;
     uint32_t tokens;
@@ -57,6 +77,12 @@ typedef struct metaserver_publish_cadence {
     bool replay_recovered;
 } metaserver_publish_cadence_t;
 
+void metaserver_public_snapshot_succeeded(metaserver_publish_cadence_t *cadence,
+                                           const metaserver_public_snapshot_t *snapshot,
+                                           server_monotonic_t now,
+                                           uint32_t heartbeat_seconds,
+                                           uint32_t random_value);
+
 typedef struct metaserver_rendezvous_headers {
     rendezvous_websocket_protocol_t protocol;
     uint32_t retry_after_seconds;
@@ -64,13 +90,10 @@ typedef struct metaserver_rendezvous_headers {
 } metaserver_rendezvous_headers_t;
 
 typedef struct metaserver_rendezvous_auth_job {
-    rendezvous_invite_t invite;
-    unsigned char challenge[RENDEZVOUS_CHALLENGE_SIZE];
     char ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
     uint64_t deadline_ms;
     rendezvous_server_auth_state_t state;
     bool active;
-    bool known_invite;
 } metaserver_rendezvous_auth_job_t;
 
 typedef enum metaserver_rendezvous_auth_claim {
@@ -121,6 +144,10 @@ bool metaserver_publish_response_retryable(curl_state_t state, int http_code);
 metaserver_publish_failure_action_t metaserver_publish_failure_action(curl_state_t state,
                                                                       int http_code);
 void metaserver_publish_cadence_init(metaserver_publish_cadence_t *cadence, server_monotonic_t now);
+void metaserver_publish_cadence_activity(metaserver_publish_cadence_t *cadence,
+                                         server_monotonic_t now,
+                                         bool is_public,
+                                         bool previously_public);
 void metaserver_publish_cadence_changed(metaserver_publish_cadence_t *cadence,
                                         server_monotonic_t now,
                                         bool actual_change);
@@ -166,5 +193,18 @@ bool metaserver_public_endpoint_from_config(const char *configured_host,
                                             char *published_host,
                                             size_t published_host_size,
                                             uint16_t *published_port);
+
+/* Strict bounded acknowledgment parser; reservation changes only on success. */
+access_outcome_t metaserver_access_response_parse(const char *body,
+                                                  size_t body_size,
+                                                  const char *request_id,
+                                                  uint64_t token_revision,
+                                                  const char *operation,
+                                                  char reservation[33],
+                                                  uint64_t now);
+/* Serialized access worker only; bounded remote route mutation. Context borrows
+ * an optional curl_cancel_t through return. Cancellation keeps remote outcome
+ * ambiguous (ACCESS_PENDING), retaining durable receipt/outbox recovery. */
+access_outcome_t metaserver_access_route(void *context, const access_route_t *route);
 
 #endif
