@@ -187,6 +187,10 @@ extern void game_news_open(const char *title);
 extern void intro_deinit(void);
 #ifdef ATRINIK_WIDGET_TESTS
 extern void intro_test_begin(void);
+/** Inspect the visible provider button without bypassing normal event handling. */
+extern bool intro_test_metaserver_button(SDL_Rect *rect, const char **label);
+/** Whether the next intro frame must rebuild the server list. */
+extern bool intro_test_servers_invalidated(void);
 #endif
 
 extern void intro_show(void);
