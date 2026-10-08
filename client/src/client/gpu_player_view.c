@@ -2362,9 +2362,57 @@ static bool gpu_player_view_book_editor_run(void) {
     BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
     BOOK_UI_CHECK(book_edit_test_model()->destination == 43 &&
                   strcmp(book_edit_test_model()->contents, "Other persisted text.") == 0);
-    book_edit_disconnect();
+    BOOK_UI_CHECK(gpu_player_view_book_text(" Account A unsaved title"));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_TAB));
+    BOOK_UI_CHECK(gpu_player_view_book_text(" Account A unsaved text"));
+    BOOK_UI_CHECK(gpu_player_view_book_close());
+    BOOK_UI_CHECK(book_edit_model_dirty(book_edit_test_model()));
+
+    /* Drive the actual Settings -> Logout action. It reconnects straight
+     * through ST_STARTCONNECT, bypassing game_status_chain's ST_START reset. */
+    char *saved_account = clioption_settings.connect[1];
+    char *saved_password = clioption_settings.connect[2];
+    clioption_settings.connect[1] = clioption_settings.connect[2] = NULL;
+    settings_open();
+    BOOK_UI_CHECK(popup_get_head() != NULL);
+    SDL_Event logout = {.type = SDL_EVENT_KEY_DOWN};
+    logout.key.key = SDLK_UP; /* Default Disconnect -> Logout. */
+    BOOK_UI_CHECK(popup_handle_event(&logout) == 1);
+    capture_privacy_block();
+    requests = book_edit_test_request()->count;
+    logout.key.key = SDLK_RETURN;
+    BOOK_UI_CHECK(popup_handle_event(&logout) == 1);
+    free(clioption_settings.connect[1]);
+    free(clioption_settings.connect[2]);
+    clioption_settings.connect[1] = saved_account;
+    clioption_settings.connect[2] = saved_password;
+    BOOK_UI_CHECK(cpl.state == ST_STARTCONNECT && popup_get_head() != NULL &&
+                  !book_edit_test_model()->destination && !book_edit_test_model()->contents[0] &&
+                  !book_edit_test_model()->title[0] && !book_edit_test_model()->base_contents[0] &&
+                  !book_edit_test_model()->current.session &&
+                  book_edit_test_request()->count == requests && !capture_privacy_allowed(false));
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(false);
+    BOOK_UI_CHECK(!capture_privacy_allowed(false));
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && capture_privacy_allowed(false));
+
+    cpl.state = ST_PLAY;
+    popup_destroy_all();
+    /* A second account reuses the same inventory tag and server session. Its
+     * snapshot must open fresh without any discard/rebase or Account A text. */
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 26, 43, 500, false,
+                                  "Account B title", "Account B persisted text.");
+    model = book_edit_test_model();
+    BOOK_UI_CHECK(model->confirmation == BOOK_CONFIRM_NONE && model->destination == 43 &&
+                  strcmp(model->title, "Account B title") == 0 &&
+                  strcmp(model->contents, "Account B persisted text.") == 0 &&
+                  strcmp(model->base_contents, "Account B persisted text.") == 0 &&
+                  !book_edit_model_dirty(model));
+    requests = book_edit_test_request()->count;
+    client_socket_close(&csocket); /* An open canvas clears without a cancel request. */
     BOOK_UI_CHECK(popup_get_head() == NULL && !book_edit_test_model()->destination &&
-                  !book_edit_test_model()->contents[0]);
+                  !book_edit_test_model()->contents[0] &&
+                  book_edit_test_request()->count == requests);
     book_edit_deinit();
     return gpu_player_view_book_editor_ui.states_num == 9;
 }

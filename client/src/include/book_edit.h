@@ -65,6 +65,8 @@ typedef struct book_edit_test_request {
 const book_edit_model_t *book_edit_test_model(void);
 const book_edit_test_request_t *book_edit_test_request(void);
 bool book_edit_test_title_focused(void);
+/* Seed a suspended draft for headless production-socket lifecycle checks. */
+bool book_edit_test_seed_draft(void);
 #endif
 
 #endif

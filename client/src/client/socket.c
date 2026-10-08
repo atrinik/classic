@@ -38,6 +38,7 @@
 #include <client_socket.h>
 #include <event.h>
 #include <access_attempt.h>
+#include <book_edit.h>
 #include <main.h>
 #include <player.h>
 #include <SDL3/SDL.h>
@@ -398,6 +399,9 @@ void socket_thread_stop(void) {
 }
 
 void client_socket_request_shutdown(void) {
+    /* Shutdown requests run on the UI/command-dispatch thread. Forget the
+     * account's draft immediately, even before the transport worker exits. */
+    book_edit_disconnect();
     if (socket_mutex == NULL) {
         abort_thread = 1;
         return;
@@ -489,6 +493,11 @@ bool client_socket_connection_mode(socket_connection_mode_t *mode) {
 void client_socket_close(client_socket_t *csock) {
     HARD_ASSERT(csock != NULL);
 
+    /* Logout reconnects directly through ST_STARTCONNECT, so ST_START cannot
+     * own this reset. Clear UI state on the main thread, never in the I/O
+     * worker; polled remote failures also reach this boundary via stop. */
+    book_edit_disconnect();
+
     if (selected_server != NULL) {
         client_access_attempt_clear(&selected_server->access_attempt);
     }
@@ -515,6 +524,8 @@ void client_socket_close(client_socket_t *csock) {
  * Deinitialize the client sockets.
  */
 void client_socket_deinitialize(void) {
+    /* Also forget a suspended draft when there is no live transport left. */
+    book_edit_disconnect();
     if (io_thread != NULL) {
         socket_thread_stop();
     } else if (csocket.sc != NULL) {
@@ -556,6 +567,9 @@ bool client_socket_open(client_socket_t *csock,
                         const char *quic_certificate_sha256,
                         socket_connection_preference_t preference) {
     HARD_ASSERT(csock != NULL);
+    /* A new or failed connection attempt cannot inherit an older account's
+     * inventory identity. This does not release capture_privacy's frame latch. */
+    book_edit_disconnect();
     csock->failure.code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
     csock->failure.retry_after_seconds = 0;
     if (quic_certificate_sha256 == NULL) {

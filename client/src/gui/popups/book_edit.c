@@ -85,6 +85,24 @@ const book_edit_test_request_t *book_edit_test_request(void) {
 bool book_edit_test_title_focused(void) {
     return title.focus && !contents.focus;
 }
+
+bool book_edit_test_seed_draft(void) {
+    if (initialized || editor != NULL || model.destination != 0) {
+        return false;
+    }
+    book_edit_snapshot_t next = {.result = BOOK_EDIT_OPEN, .session = 17,
+        .selected = 41, .ink = 100, .capacity = 500, .count = 1};
+    next.books[0].tag = 41;
+    snprintf(next.title, sizeof(next.title), "Saved title");
+    snprintf(next.contents, sizeof(next.contents), "Saved text");
+    if (!book_edit_model_receive(&model, &next)) {
+        return false;
+    }
+    snprintf(model.title, sizeof(model.title), "Account A draft title");
+    snprintf(model.contents, sizeof(model.contents), "Account A private draft");
+    book_edit_model_close(&model);
+    return book_edit_model_dirty(&model) && model.destination == 41;
+}
 #endif
 
 static void submit(enum book_edit_action action, uint32_t destination) {
