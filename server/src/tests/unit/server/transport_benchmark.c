@@ -37,6 +37,7 @@
 #include <walking_route.h>
 #include <gameplay_journal.h>
 #include <auth_worker.h>
+#include <access_server.h>
 #include <toolkit/packet.h>
 #include <check.h>
 #include <checkstd.h>
@@ -566,6 +567,8 @@ typedef struct transport_auth_received {
     size_t length;
     bool setup;
     bool version;
+    bool access_policy;
+    bool admitted;
     bool authenticated;
     bool keepalive;
     uint32_t keepalive_id;
@@ -645,6 +648,18 @@ static bool transport_auth_receive_packet(transport_auth_received_t *received,
         received->version = length == 5U &&
             (((uint32_t)data[1] << 24) | ((uint32_t)data[2] << 16) |
              ((uint32_t)data[3] << 8) | data[4]) == SOCKET_VERSION;
+        break;
+    case CLIENT_CMD_ACCESS_POLICY:
+        if (length != 3U || data[1] != 1 || data[2] != 1) {
+            return false;
+        }
+        received->access_policy = true;
+        break;
+    case CLIENT_CMD_ACCESS_RESULT:
+        if (length != 3U || data[1] != 1 || data[2] != 0) {
+            return false;
+        }
+        received->admitted = true;
         break;
     case CLIENT_CMD_CHARACTERS:
         if (length > sizeof(transport_auth_account) &&
@@ -742,9 +757,70 @@ static void transport_auth_pass(transport_benchmark_client_t *clients,
     }
 }
 
+static char transport_access_directory[128];
+static char transport_access_saved_store[sizeof(settings.access_store)];
+static char transport_access_identity[65];
+static bool transport_access_saved_required;
+static bool transport_access_saved_initialize;
+static bool transport_access_owned;
+
+static access_outcome_t transport_access_route(void *context, const access_route_t *route) {
+    (void)context;
+    (void)route;
+    return ACCESS_COMMITTED;
+}
+
+/* Replace only this forked runner's optional access service with an isolated
+ * protected store, bound to the real QUIC listener certificate. */
+static access_result_t transport_access_setup(const char fingerprint[65]) {
+    snprintf(VS(transport_access_directory), "/tmp/atrinik-transport-access-XXXXXX");
+    ck_assert_ptr_nonnull(mkdtemp(transport_access_directory));
+    uint8_t identity[32];
+    for (size_t i = 0; i < sizeof(identity); i++) {
+        unsigned int value;
+        ck_assert_int_eq(sscanf(fingerprint + 2U * i, "%2x", &value), 1);
+        identity[i] = (uint8_t)value;
+    }
+    access_store_t *store = NULL;
+    ck_assert_int_eq(access_store_open(&store, transport_access_directory, identity, true, true),
+                     ACCESS_COMMITTED);
+    access_result_t issue = access_store_issue(store, "11111111111111111111111111111111", 1,
+                                              "Transport admission", false, 0, time(NULL),
+                                              transport_access_route, NULL);
+    ck_assert_int_eq(issue.outcome, ACCESS_COMMITTED);
+    access_store_close(store);
+    memcpy(transport_access_saved_store, settings.access_store, sizeof(settings.access_store));
+    transport_access_saved_required = settings.access_required;
+    transport_access_saved_initialize = settings.access_initialize;
+    snprintf(VS(transport_access_identity), "%s", fingerprint);
+    ck_assert(access_server_shutdown());
+    access_server_deinit();
+    transport_access_owned = true;
+    settings.access_required = true;
+    settings.access_initialize = false;
+    snprintf(VS(settings.access_store), "%s", transport_access_directory);
+    access_server_route_for_test(transport_access_route);
+    ck_assert(access_server_init(fingerprint));
+    return issue;
+}
+
 static void transport_auth_teardown(void) {
     auth_worker_pause_for_test(false);
     account_deinit();
+    if (transport_access_owned) {
+        ck_assert(access_server_shutdown());
+        access_server_deinit();
+        access_server_route_for_test(NULL);
+        memcpy(settings.access_store, transport_access_saved_store, sizeof(settings.access_store));
+        settings.access_required = transport_access_saved_required;
+        settings.access_initialize = transport_access_saved_initialize;
+        char snapshot[256];
+        snprintf(VS(snapshot), "%s/%s", transport_access_directory, ACCESS_STORE_FILENAME);
+        ck_assert_int_eq(unlink(snapshot), 0);
+        ck_assert_int_eq(rmdir(transport_access_directory), 0);
+        transport_access_owned = false;
+        ck_assert(access_server_init(transport_access_identity));
+    }
     check_test_teardown();
 }
 
@@ -767,6 +843,7 @@ START_TEST(test_quic_login_and_movement_continue_while_authentication_pending) {
     uint16_t port = 0;
     toolkit_import(socket_server);
     ck_assert(socket_server_quic_info(VS(host), &port, fingerprint));
+    access_result_t admission = transport_access_setup(fingerprint);
     for (size_t i = 0; i < arraysize(clients); i++) {
         snprintf(VS(clients[i].host), "%s", *host != '\0' ? host : "127.0.0.1");
         clients[i].port = port;
@@ -779,7 +856,6 @@ START_TEST(test_quic_login_and_movement_continue_while_authentication_pending) {
     const uint8_t setup[] = {SERVER_CMD_SETUP, CMD_SETUP_MAPSIZE, 13, 13};
     for (size_t i = 0; i < arraysize(clients); i++) {
         ck_assert(transport_auth_write(&clients[i], version, sizeof(version)));
-        ck_assert(transport_auth_write(&clients[i], setup, sizeof(setup)));
     }
     uint64_t deadline = datetime_monotonic_ms() + 5000U;
     bool negotiated = false;
@@ -787,10 +863,41 @@ START_TEST(test_quic_login_and_movement_continue_while_authentication_pending) {
         transport_auth_pass(clients, received, &simulation_passes);
         negotiated = true;
         for (size_t i = 0; i < arraysize(clients); i++) {
-            negotiated = negotiated && received[i].setup && received[i].version;
+            negotiated = negotiated && received[i].access_policy && received[i].version;
         }
     }
-    ck_assert_msg(negotiated, "QUIC setup/version did not complete");
+    ck_assert_msg(negotiated, "QUIC version/access policy did not complete");
+    uint8_t access[] = {SERVER_CMD_ACCESS_AUTH, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+                       0, 0, 0, 0, 0, 0, 0, 0};
+    memcpy(access + 2U, admission.code, 16);
+    for (size_t i = 0; i < arraysize(clients); i++) {
+        ck_assert(transport_auth_write(&clients[i], access, sizeof(access)));
+    }
+    OPENSSL_cleanse(access, sizeof(access));
+    access_result_cleanse(&admission);
+    deadline = datetime_monotonic_ms() + 5000U;
+    negotiated = false;
+    while (!negotiated && datetime_monotonic_ms() < deadline) {
+        transport_auth_pass(clients, received, &simulation_passes);
+        negotiated = true;
+        for (size_t i = 0; i < arraysize(clients); i++) {
+            negotiated = negotiated && received[i].admitted;
+        }
+    }
+    ck_assert_msg(negotiated, "QUIC access admission did not complete");
+    for (size_t i = 0; i < arraysize(clients); i++) {
+        ck_assert(transport_auth_write(&clients[i], setup, sizeof(setup)));
+    }
+    deadline = datetime_monotonic_ms() + 5000U;
+    negotiated = false;
+    while (!negotiated && datetime_monotonic_ms() < deadline) {
+        transport_auth_pass(clients, received, &simulation_passes);
+        negotiated = true;
+        for (size_t i = 0; i < arraysize(clients); i++) {
+            negotiated = negotiated && received[i].setup;
+        }
+    }
+    ck_assert_msg(negotiated, "QUIC admitted setup did not complete");
 
     auth_worker_pause_for_test(true);
     ck_assert(transport_auth_login(&clients[1], false));
