@@ -168,6 +168,46 @@ class ServerRuntimeProviderTests(unittest.TestCase):
                 with self.assertRaisesRegex(provider.ProviderError, "Incomplete"):
                     provider.verify_elf(LOCK, [target])
 
+    def test_dependency_free_python_modules_retain_all_loader_checks(self):
+        expected = dict(LOCK["curl_distro_sonames"], **{
+            "libcurl.so.4": "/usr/local/lib/libcurl.so.4",
+            "libcares.so.2": "/usr/local/lib/libcares.so.2"})
+        linked = "\n".join(f"{name} => {path} (0x1234)" for name, path in expected.items() if name != "loader")
+        linked += f"\n {expected['loader']} (0x1234)\n"
+        with tempfile.TemporaryDirectory(dir=os.environ.get("ATRINIK_TEST_TMPDIR")) as temporary:
+            root = Path(temporary)
+            modules = root / "lib-dynload"
+            modules.mkdir()
+            module = modules / "_asyncio.cpython-314-x86_64-linux-gnu.so"
+            module.touch()
+            core = root / "atrinik-server"
+            core.touch()
+            with patch.object(provider, "PYTHON_DYNLOAD", modules), \
+                    patch.object(Path, "resolve", lambda path, strict=False: path):
+                with patch.object(provider.subprocess, "check_output", side_effect=[linked, "\tstatically linked\n"]):
+                    provider.verify_elf(LOCK, [core, module])
+                for output in ("", "unknown output", "statically linked\nlibc.so.6 => not found",
+                               "statically linked\nunexpected extra line"):
+                    with self.subTest(output=output), \
+                            patch.object(provider.subprocess, "check_output", return_value=output):
+                        with self.assertRaisesRegex(provider.ProviderError, "Runtime ELF target .*_asyncio"):
+                            provider.verify_elf(LOCK, [module])
+                with patch.object(provider.subprocess, "check_output", return_value="statically linked"):
+                    with self.assertRaisesRegex(provider.ProviderError, "Incomplete curl/c-ares"):
+                        provider.verify_elf(LOCK, [module])
+                    for name in ("atrinik-server", "atrinik-access-status", "libcurl.so.4", "libplugin_arena.so"):
+                        target = root / name
+                        target.touch()
+                        with self.subTest(target=name), self.assertRaisesRegex(provider.ProviderError, "No dynamic ELF"):
+                            provider.verify_elf(LOCK, [target])
+                with patch.object(provider.subprocess, "check_output", side_effect=subprocess.CalledProcessError(
+                        1, ["ldd", str(module)], output="statically linked")):
+                    with self.assertRaisesRegex(provider.ProviderError, "Runtime ELF target .*_asyncio.*exit 1"):
+                        provider.verify_elf(LOCK, [module])
+                module.unlink()
+                with self.assertRaisesRegex(provider.ProviderError, "Missing runtime ELF target"):
+                    provider.verify_elf(LOCK, [module])
+
     def test_complete_package_graph_rejects_indirect_omissions(self):
         roots = ["fixture-server", "fixture-python"]
         dependencies = {"fixture-server": ["fixture-gd", "fixture-libc"],

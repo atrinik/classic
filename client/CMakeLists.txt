@@ -284,8 +284,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1082U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1082")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1083U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1083")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -758,6 +758,24 @@ if (BUILD_TESTING)
     target_link_libraries(client-command-queue-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-command-queue COMMAND client-command-queue-tests)
 
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(client-socket-output-tests
+            src/tests/socket_output.c
+            src/client/client_command_queue.c)
+        atrinik_configure_target(client-socket-output-tests)
+        target_compile_definitions(client-socket-output-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+        target_include_directories(client-socket-output-tests BEFORE PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR}/src/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_compile_options(client-socket-output-tests PRIVATE
+            -ffunction-sections -fdata-sections)
+        target_link_options(client-socket-output-tests PRIVATE -Wl,--gc-sections)
+        target_link_libraries(client-socket-output-tests PRIVATE Atrinik::Core SDL3::SDL3)
+        add_test(NAME client-socket-output COMMAND client-socket-output-tests)
+    endif ()
+
     add_executable(client-keybind-input-tests
         src/tests/keybind_input.c
         src/client/keybind_event.c
@@ -789,6 +807,14 @@ if (BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-move-stream-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-move-stream COMMAND client-move-stream-tests)
+
+    add_executable(client-region-exploration-tests
+        src/tests/region_exploration.c src/client/region_exploration.c)
+    atrinik_configure_target(client-region-exploration-tests)
+    target_include_directories(client-region-exploration-tests PRIVATE src/include)
+    target_link_libraries(client-region-exploration-tests PRIVATE Atrinik::Core OpenSSL::Crypto)
+    add_test(NAME client-region-exploration COMMAND client-region-exploration-tests
+        "${CMAKE_CURRENT_BINARY_DIR}/region-exploration-cache-test")
 
     add_executable(client-live-movement-route-tests
         src/tests/live_movement_route.c src/client/live_movement_route.c)
@@ -1206,6 +1232,7 @@ if (BUILD_TESTING)
     set_tests_properties(client-widget-priority-integration PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
+    add_test(NAME client-region-exploration-integration COMMAND atrinik --region-exploration-test)
     add_test(NAME client-map-state-integration COMMAND atrinik --map-state-test)
 
     endif ()

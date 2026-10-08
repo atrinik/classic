@@ -17,12 +17,12 @@ SPEC.loader.exec_module(GENERATE)
 class GenerateTests(unittest.TestCase):
     def test_repository_schema_is_valid(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
-        self.assertEqual(schema["protocol_version"], 1082)
+        self.assertEqual(schema["protocol_version"], 1083)
         self.assertEqual(schema["item_name_size"], 128)
         self.assertEqual(schema["item_extra_message_size"], 256)
         self.assertEqual(schema["player_status"]["max_statuses"], 48)
-        self.assertEqual(len(schema["client_to_server"]), 26)
-        self.assertEqual(len(schema["server_to_client"]), 33)
+        self.assertEqual(len(schema["client_to_server"]), 27)
+        self.assertEqual(len(schema["server_to_client"]), 34)
 
     def test_book_edit_preserves_published_access_command_ids(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
@@ -31,7 +31,27 @@ class GenerateTests(unittest.TestCase):
         self.assertEqual((c2s["ACCESS_AUTH"], c2s["ACCESS_ADMIN"]), (23, 24))
         self.assertEqual((s2c["ACCESS_RESULT"], s2c["ACCESS_ADMIN_RESULT"],
                           s2c["ACCESS_POLICY"]), (29, 30, 31))
-        self.assertEqual((c2s["BOOK_EDIT"], s2c["BOOK_EDIT"]), (25, 32))
+        self.assertEqual((c2s["BOOK_EDIT"], s2c["BOOK_EDIT"]), (26, 33))
+    def test_combined_access_and_exploration_command_ids(self) -> None:
+        schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
+        expected = {
+            "client_to_server": {
+                "ACCESS_AUTH": 23,
+                "ACCESS_ADMIN": 24,
+                "REGION_EXPLORATION": 25,
+            },
+            "server_to_client": {
+                "ACCESS_RESULT": 29,
+                "ACCESS_ADMIN_RESULT": 30,
+                "ACCESS_POLICY": 31,
+                "REGION_EXPLORATION": 32,
+            },
+        }
+        for direction, commands in expected.items():
+            actual = {command["symbol"]: command["id"] for command in schema[direction]}
+            for symbol, command_id in commands.items():
+                with self.subTest(direction=direction, symbol=symbol):
+                    self.assertEqual(actual[symbol], command_id)
 
     def test_repository_outputs_are_current(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")

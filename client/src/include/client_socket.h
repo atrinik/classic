@@ -41,6 +41,8 @@ struct packet_struct;
 /** Public API implemented in src/client/socket.c. */
 
 extern void socket_send_packet(struct packet_struct *packet);
+/** Always consumes packet; false leaves a bounded producer responsible for retry. */
+bool socket_send_packet_bounded(struct packet_struct *packet, size_t queue_limit);
 
 /** Queue the one access-auth payload without generic packet debug serialization. */
 bool client_socket_send_access_auth(const char code[ACCESS_CODE_LENGTH]);

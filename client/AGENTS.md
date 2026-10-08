@@ -51,6 +51,17 @@
   Multiline text editing is opt-in; default single-line inputs retain their behavior.
   Reset editor session identity on disconnect. Read-only books render optional
   authenticated signer/date metadata separately without interpreting its markup.
+- Region-map exploration uses a hashed cache of at most 10,000 server-received
+  map bitfields, scoped to the pinned connection certificate and authenticated
+  account. Retain initial dimensions and OR incoming snapshots/patches. Request
+  only region-definition paths, deduplicated and paced with socket backpressure.
+  Bitmap allocations total at most 1 MiB; reject excess new records without
+  changing the cache. Replay uses one shared 65,536-unit map/byte/set-bit budget
+  per frame, resumes across frames, and coalesces packets by cache revision.
+  RESET selects the account once per connection; duplicate active RESETs are
+  idempotent and account switches require disconnect. Disconnect hides cached
+  bits and flushes optional private disk storage. Never import character `.tiles` files or
+  persist client-renderer visibility in the account cache.
 - Live movement diagnostics use normal authenticated connections and movement
   commands in an isolated wrapper scenario. Their closed route owns gameplay
   input, accepts only complete server map publications, and fails on divergence

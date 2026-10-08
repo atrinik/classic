@@ -5,9 +5,6 @@
   layouts; trace those through their client/server producers and consumers.
 - Edit `schema/game-commands.json`, then run `python3 tools/generate.py`.
   Never hand-edit committed generated files or duplicate identifiers elsewhere.
-- Authored payload contracts shared by endpoints live under `include/`; the
-  book-editor contract is `include/atrinik/protocol/book_edit.h`. Keep these
-  installed headers and their endpoint validation synchronized.
 - Preserve stable names and IDs unless a coordinated breaking transition is
   explicit. Define framing, field order, widths, signedness, byte order,
   lengths, limits, state transitions, and malformed-input behavior before
@@ -32,10 +29,11 @@
 - Update this `AGENTS.md` in the same change when major rework alters ownership,
   schemas, generation, compatibility policy, consumers, or validation.
 
-- Revision 1081 reserves retired SETUP subtype 3 and adds ACCESS_AUTH/ADMIN,
-  RESULT/ADMIN_RESULT/POLICY. Policy follows authenticated VERSION before
-  setup/resources/accounts on every connection; update all native and Python
-  consumers together. Raw access payloads require sensitive packet handling.
+- Revision 1082 retains the published v1081 ACCESS_AUTH/ADMIN IDs 23/24 and
+  RESULT/ADMIN_RESULT/POLICY IDs 29/30/31; REGION_EXPLORATION uses client-to-server
+  ID 25 and server-to-client ID 32. Retired SETUP subtype 3 remains reserved.
+  Policy follows authenticated VERSION before setup/resources/accounts on every
+  connection; update all native and Python consumers together. Raw access payloads require sensitive packet handling.
 
-- Revision 1082 appends BOOK_EDIT at C2S 25 and S2C 32 while preserving
-  published v1081 access IDs. The version handshake rejects earlier peers.
+- Revision 1083 appends BOOK_EDIT at C2S 26 and S2C 33 while preserving
+  published access and exploration IDs. The version handshake rejects earlier peers.

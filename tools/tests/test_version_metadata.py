@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -264,6 +266,20 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
         client, _ = self.build_and_outputs()
         self.assertTrue(client.startswith("5.68.0|"), client)
         self.assertTrue(client.endswith("|" + revision + "|false"), client)
+
+    def test_gameplay_consumers_require_current_schema_revision(self) -> None:
+        schema = json.loads((ROOT / "protocol/schema/game-commands.json").read_text())
+        version = schema["protocol_version"]
+        for component in ("client", "server"):
+            with self.subTest(component=component):
+                source = (ROOT / component / "CMakeLists.txt").read_text()
+                match = re.search(
+                    r'if \(NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " ([0-9]+)U\$"\)',
+                    source,
+                )
+                self.assertIsNotNone(match, "Missing exact protocol compatibility gate")
+                self.assertEqual(int(match.group(1)), version)
+                self.assertIn(f"requires classic game protocol v{version}", source)
 
     def test_real_protocol_unified_and_embedded_archive_versions(self) -> None:
         self.initialize_git(self.root)

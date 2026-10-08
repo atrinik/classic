@@ -21,6 +21,7 @@ NATIVE_SHARED_PATHS = {
     "ATTRIBUTIONS.md",
     "CMakeLists.txt",
     "CMakePresets.json",
+    "codecov.yml",
     "LICENSE.md",
     "docs/history/component-release-map.json",
     "docs/history/release-tags.json",

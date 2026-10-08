@@ -323,6 +323,12 @@ socket_command_quest_list(socket_struct *ns, player *pl, uint8_t *data, size_t l
 extern void
 socket_command_clear(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos);
 
+extern void socket_command_region_exploration(socket_struct *ns,
+                                              player *pl,
+                                              uint8_t *data,
+                                              size_t len,
+                                              size_t pos);
+
 extern void
 socket_command_move_path(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos);
 

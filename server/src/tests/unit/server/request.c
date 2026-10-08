@@ -23,6 +23,9 @@
 #include <tod.h>
 #include <commands.h>
 #include <exit.h>
+#include <exploration.h>
+#include <account.h>
+#include <toolkit/path.h>
 #include <toolkit/datetime.h>
 
 static size_t queued_command_count(socket_struct *cs, uint8_t type) {
@@ -690,6 +693,7 @@ static const command_policy_expectation_t command_policy_expectations[] = {
     COMMAND_POLICY(TALK, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(MOVE, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(TARGET, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
+    COMMAND_POLICY(REGION_EXPLORATION, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(ACCESS_AUTH, 0, COMMAND_PHASE_VERSIONED),
     COMMAND_POLICY(ACCESS_ADMIN, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
     COMMAND_POLICY(BOOK_EDIT, COMMAND_PHASE_PLAYING_MASK, COMMAND_PHASE_PLAYING),
@@ -2413,6 +2417,80 @@ START_TEST(test_odd_view_los_matches_emitted_map_coordinates) {
 }
 END_TEST
 
+START_TEST(test_region_exploration_grants_only_visible_public_base_cells) {
+    mapstruct *base;
+    object *pl;
+    check_setup_env_pl(&base, &pl);
+    request_move_player(&pl, base, 12, 12);
+    socket_struct *cs = CONTR(pl)->cs;
+    free(cs->account);
+    cs->account = xstrdup("exploregrant");
+    char *account_path = account_make_path(cs->account);
+    char path[HUGE_BUF];
+    snprintf(VS(path), "%s.exploration", account_path);
+    free(account_path);
+    unlink(path);
+    exploration_begin(cs);
+
+    region_struct region = {.name = "test", .map_first = "/world/test"};
+    region_struct *original_region = base->region;
+    base->region = &region;
+    FREE_AND_COPY_HASH(base->path, "/world/grant");
+    mapstruct *upper = get_empty_map(24, 24);
+    base->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = base;
+    base->coords[2] = 0;
+    upper->coords[2] = 1;
+    base->level_min = upper->level_min = 0;
+    base->level_max = upper->level_max = 1;
+    upper->region = &region;
+    FREE_AND_COPY_HASH(upper->path, "/world/upper");
+    object *exit = arch_get("stairs_down");
+    exit->x = 13;
+    exit->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(exit, base, NULL, 0));
+    object *roof = arch_get("roof_thatch");
+    roof->x = 13;
+    roof->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+
+    update_los(pl);
+    int ax = cs->mapx_2 + 1, ay = cs->mapy_2;
+    CONTR(pl)->blocked_los[ax][ay] |= BLOCKED_LOS_BLOCKED;
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    ck_assert(!exploration_visited(cs, "/world/grant", 13, 12));
+    ck_assert(!exploration_visited(cs, "/world/upper", 13, 12));
+    ck_assert(!exploration_visited(cs, "/world/grant", 0, 0));
+
+    CONTR(pl)->blocked_los[ax][ay] &= ~BLOCKED_LOS_BLOCKED;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert(exploration_visited(cs, "/world/grant", 13, 12));
+    ck_assert(!exploration_visited(cs, "/world/upper", 13, 12));
+
+    FREE_AND_COPY_HASH(base->path, "/world/private");
+    base->map_flags |= MAP_FLAG_UNIQUE;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert(!exploration_visited(cs, "/world/private", 13, 12));
+    base->map_flags &= ~MAP_FLAG_UNIQUE;
+    FREE_AND_COPY_HASH(base->path, "/world/unmapped");
+    base->region = NULL;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert(!exploration_visited(cs, "/world/unmapped", 13, 12));
+
+    exploration_end(cs);
+    socket_buffer_clear(cs);
+    base->region = original_region;
+    upper->region = NULL;
+    unlink(path);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -2469,6 +2547,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
+    tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
     tcase_add_test(tc_core, test_timed_endpoint_refresh_keeps_colored_scalar_present);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);

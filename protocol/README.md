@@ -9,9 +9,9 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
-Protocol v1082 adds the paired `BOOK_EDIT` commands for bounded book editing,
-copying and permanent signing. Existing v1081 access command IDs are preserved;
-BOOK_EDIT is appended at client-to-server ID 25 and server-to-client ID 32. The authored
+Protocol v1083 adds the paired `BOOK_EDIT` commands for bounded book editing,
+copying and permanent signing. Published access and exploration command IDs are preserved;
+BOOK_EDIT is appended at client-to-server ID 26 and server-to-client ID 33. The authored
 [`book_edit.h`](include/atrinik/protocol/book_edit.h) specifies field order,
 limits, actions and draft-preserving responses. Both endpoints validate a full
 packet before publishing state. Editor sessions belong to the current playing
@@ -23,7 +23,16 @@ terminator. Unsigned responses have no suffix. The client accepts either the
 complete pair or no suffix and renders authenticated metadata outside editable
 book markup.
 
-Protocol v1081 replaces invitations and shared join passwords with independent
+Protocol v1082 synchronizes account region-map exploration using map-path
+bitfields. Server-to-client `REGION_EXPLORATION` (ID 32) carries account binding,
+bitmaps and sparse bit deltas. Client-to-server `REGION_EXPLORATION` (ID 25)
+requests only discoveries missing from a cached bitmap, without granting any
+discovery on the server. See the [exploration contract](../server/doc/REGION_EXPLORATION.md)
+for framing, bounds, persistence and lifecycle rules. Both peers require the
+exact protocol version; the earlier unpublished snapshot-only exploration
+format is superseded. Access command IDs from published v1081 remain unchanged.
+
+Protocol v1081 replaced invitations and shared join passwords with independent
 access codes. Authenticated `ACCESS_POLICY` precedes setup/account traffic;
 protected connections require `ACCESS_AUTH` before proceeding. `ACCESS_ADMIN`
 uses the active character's existing `/cmd_permission` grants, including

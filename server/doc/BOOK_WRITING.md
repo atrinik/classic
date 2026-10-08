@@ -70,7 +70,7 @@ The ordinary `/rename` alias path also rejects finalized books.
 
 ## Wire and validation
 
-The coordinated Classic protocol revision is 1082. `BOOK_EDIT` action/result
+The coordinated Classic protocol revision is 1083. `BOOK_EDIT` action/result
 layouts and bounds live in `protocol/include/atrinik/protocol/book_edit.h`.
 Parsers reject truncated fields, unknown actions, illegal source fields and
 trailing bytes before any mutation. Existing `BOOK` readers receive one

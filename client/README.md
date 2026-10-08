@@ -528,7 +528,7 @@ Book writing
  book is read only. Ink charges cover inserted UTF-8 bytes after the server's byte
  LCS diff; title changes, deletions and signing are free.
 
- The editor uses BOOK_EDIT at classic wire revision 1082. BOOK retains its original
+ The editor uses BOOK_EDIT at classic wire revision 1083. BOOK retains its original
  NUL-terminated text, optionally followed by exactly two NUL-terminated UTF-8
  strings: authenticated signer and in-game date, each at most 127 bytes. Both must
  be nonempty and no trailing bytes are accepted. Unsigned books omit the suffix.
