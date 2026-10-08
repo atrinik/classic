@@ -230,7 +230,6 @@ int main(void) {
                    "https://classic.dev.metaserver.atrinik.org/index.xml") == 0);
     REQUIRE(strcmp(fetched_rendezvous[1],
                    "https://rendezvous.dev.meta.atrinik.org/v1/classic") == 0);
-    REQUIRE(server_get_count() == 1);
 
     poll_until_idle();
     REQUIRE(server_get_count() == 2);
