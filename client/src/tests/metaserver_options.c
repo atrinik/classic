@@ -24,6 +24,38 @@ int main(void) {
     TEST_CHECK(options.endpoints == NULL);
     TEST_CHECK(options.count == 0);
 
+    client_metaserver_options_replace_provider(&options, METASERVER_PROVIDER_DEFAULT);
+    TEST_CHECK(client_metaserver_options_enabled(&options));
+    TEST_CHECK(options.count == 1);
+    TEST_CHECK(strcmp(options.endpoints[0].directory_url,
+                      "https://classic.metaserver.atrinik.org/index.xml") == 0);
+    TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin,
+                      "https://rendezvous.meta.atrinik.org/v1/classic") == 0);
+    TEST_CHECK(client_metaserver_options_provider(&options) == METASERVER_PROVIDER_DEFAULT);
+
+    client_metaserver_options_replace_provider(&options, METASERVER_PROVIDER_DEV);
+    TEST_CHECK(options.count == 1);
+    TEST_CHECK(strcmp(options.endpoints[0].directory_url,
+                      "https://classic.dev.metaserver.atrinik.org/index.xml") == 0);
+    TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin,
+                      "https://rendezvous.dev.meta.atrinik.org/v1/classic") == 0);
+    TEST_CHECK(client_metaserver_options_provider(&options) == METASERVER_PROVIDER_DEV);
+
+    client_metaserver_options_t copied = {0};
+    client_metaserver_options_copy(&copied, &options);
+    TEST_CHECK(copied.count == 1);
+    TEST_CHECK(copied.endpoints != options.endpoints);
+    TEST_CHECK(copied.endpoints[0].directory_url != options.endpoints[0].directory_url);
+    TEST_CHECK(copied.endpoints[0].rendezvous_origin != options.endpoints[0].rendezvous_origin);
+    options.endpoints[0].directory_url[8] = 'X';
+    options.endpoints[0].rendezvous_origin[8] = 'X';
+    TEST_CHECK(strcmp(copied.endpoints[0].directory_url,
+                      "https://classic.dev.metaserver.atrinik.org/index.xml") == 0);
+    TEST_CHECK(strcmp(copied.endpoints[0].rendezvous_origin,
+                      "https://rendezvous.dev.meta.atrinik.org/v1/classic") == 0);
+    client_metaserver_options_deinit(&copied);
+    client_metaserver_options_replace_provider(&options, METASERVER_PROVIDER_DEFAULT);
+
     char directory[] = "https://classic.meta.atrinik.org/index.xml";
     char rendezvous[] = "https://rendezvous.meta.atrinik.org/v1/classic";
     client_metaserver_options_add(&options, directory, rendezvous);
@@ -63,6 +95,7 @@ int main(void) {
     TEST_CHECK(!client_metaserver_options_enabled(&options));
     TEST_CHECK(options.endpoints == NULL);
     TEST_CHECK(options.count == 0);
+    TEST_CHECK(client_metaserver_options_provider(&options) == METASERVER_PROVIDER_DEFAULT);
 
     TEST_CHECK(
         client_metaserver_options_parse(&options,
