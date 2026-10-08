@@ -46,6 +46,7 @@
 #include <loader.h>
 #include <player.h>
 #include <object.h>
+#include <book_edit.h>
 
 /**
  * All the possible fields of an object.
@@ -792,6 +793,35 @@ static const char doc_Atrinik_Object_TeleportTo[] =
 static bool python_object_is_hidden_bank(const object *op) {
     return op->arch != NULL && strcmp(op->arch->name, "player_info") == 0 && op->name != NULL &&
            strcmp(op->name, "BANK_GENERAL") == 0;
+}
+
+static bool python_object_is_finalized_book(const object *op) {
+    /* Presence locks the signed record, regardless of marker value or type. */
+    return hooks->object_get_value(op, BOOK_EDIT_FINALIZED) != NULL;
+}
+
+static bool python_object_reject_finalized_book(const object *op) {
+    if (!python_object_is_finalized_book(op)) {
+        return false;
+    }
+    PyErr_SetString(PyExc_RuntimeError,
+                    "Finalized book title, contents and signature cannot be changed.");
+    return true;
+}
+
+static bool python_book_key_is_protected(const char *key, const char *value) {
+    /* Key/value pairs are serialized verbatim ahead of native fields. Prevent
+     * field aliases and loader-line injection from rewriting a signed reload. */
+    return strcmp(key, BOOK_EDIT_FINALIZED) == 0 || strcmp(key, BOOK_EDIT_SIGNER) == 0 ||
+           strcmp(key, BOOK_EDIT_DATE) == 0 || strcmp(key, BOOK_EDIT_UTC) == 0 ||
+           strcmp(key, "name") == 0 || strcmp(key, "name_pl") == 0 ||
+           strcmp(key, "custom_name") == 0 || strcmp(key, "title") == 0 ||
+           strcmp(key, "msg") == 0 || strcmp(key, "type") == 0 ||
+           strcmp(key, "arch") == 0 || strcmp(key, "artifact") == 0 ||
+           strcmp(key, "object") == 0 || strcmp(key, "more") == 0 ||
+           strcmp(key, "end") == 0 || strcmp(key, "endmsg") == 0 ||
+           *key == '\0' || strpbrk(key, " \t\r\n\v\f") != NULL ||
+           (value != NULL && strpbrk(value, "\r\n") != NULL);
 }
 
 static bool python_object_is_player_rooted(object *op) {
@@ -2017,6 +2047,11 @@ static PyObject *Atrinik_Object_WriteKey(Atrinik_Object *self, PyObject *args) {
 
     OBJEXISTCHECK(self);
 
+    if (python_book_key_is_protected(key, value) &&
+        python_object_reject_finalized_book(self->obj)) {
+        return NULL;
+    }
+
     return Py_BuildBoolean(hooks->object_set_value(self->obj, key, value, add_key));
 }
 
@@ -2718,6 +2753,10 @@ static PyObject *Atrinik_Object_Artificate(Atrinik_Object *self, PyObject *args)
 
     OBJEXISTCHECK(self);
 
+    if (python_object_reject_finalized_book(self->obj)) {
+        return NULL;
+    }
+
     if (python_object_is_persistent(self->obj)) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Persistent objects cannot be artified; prepare the object before "
@@ -2775,6 +2814,9 @@ static PyObject *Atrinik_Object_Load(Atrinik_Object *self, PyObject *args) {
     }
 
     OBJEXISTCHECK(self);
+    if (python_object_reject_finalized_book(self->obj)) {
+        return NULL;
+    }
     if (python_object_is_persistent(self->obj) || self->obj->env != NULL ||
         self->obj->inv != NULL || python_load_contains_field(lines, "arch")) {
         PyErr_SetString(PyExc_RuntimeError,
@@ -3022,6 +3064,13 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
     uint32_t old_nrof;
 
     OBJEXISTCHECK_INT(obj);
+
+    if ((field->offset == offsetof(object, name) || field->offset == offsetof(object, msg) ||
+         field->offset == offsetof(object, custom_name) || field->offset == offsetof(object, title) ||
+         field->offset == offsetof(object, type)) &&
+        python_object_reject_finalized_book(obj->obj)) {
+        return -1;
+    }
 
     old_glow_radius = obj->obj->glow_radius;
     old_light_color = obj->obj->light_color;
