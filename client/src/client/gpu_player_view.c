@@ -2373,6 +2373,8 @@ static bool gpu_player_view_book_editor_run(void) {
     char *saved_account = clioption_settings.connect[1];
     char *saved_password = clioption_settings.connect[2];
     clioption_settings.connect[1] = clioption_settings.connect[2] = NULL;
+    BOOK_UI_CHECK(client_command_queue_initialize());
+    client_socket_shutdown_test_set(false);
     settings_open();
     BOOK_UI_CHECK(popup_get_head() != NULL);
     SDL_Event logout = {.type = SDL_EVENT_KEY_DOWN};
@@ -2391,6 +2393,7 @@ static bool gpu_player_view_book_editor_run(void) {
                   !book_edit_test_model()->title[0] && !book_edit_test_model()->base_contents[0] &&
                   !book_edit_test_model()->current.session &&
                   book_edit_test_request()->count == requests && !capture_privacy_allowed(false));
+    BOOK_UI_CHECK(handle_socket_shutdown() == 1 && cpl.state == ST_STARTCONNECT);
     capture_privacy_frame_begin(false);
     capture_privacy_frame_end(false);
     BOOK_UI_CHECK(!capture_privacy_allowed(false));
@@ -2413,6 +2416,7 @@ static bool gpu_player_view_book_editor_run(void) {
     BOOK_UI_CHECK(popup_get_head() == NULL && !book_edit_test_model()->destination &&
                   !book_edit_test_model()->contents[0] &&
                   book_edit_test_request()->count == requests);
+    BOOK_UI_CHECK(handle_socket_shutdown() == 1);
     book_edit_deinit();
     return gpu_player_view_book_editor_ui.states_num == 9;
 }
