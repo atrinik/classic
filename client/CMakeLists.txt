@@ -666,9 +666,11 @@ if (BUILD_TESTING)
     target_include_directories(client-metaserver-lifecycle-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(client-metaserver-lifecycle-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-metaserver-lifecycle COMMAND client-metaserver-lifecycle-tests)
+    set_tests_properties(client-metaserver-lifecycle PROPERTIES TIMEOUT 10)
 
     add_executable(client-window-title-tests
         src/tests/window_title.c

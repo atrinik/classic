@@ -54,7 +54,7 @@ int main(void) {
     TEST_CHECK(strcmp(copied.endpoints[0].rendezvous_origin,
                       "https://rendezvous.dev.meta.atrinik.org/v1/classic") == 0);
     client_metaserver_options_deinit(&copied);
-    client_metaserver_options_replace_provider(&options, METASERVER_PROVIDER_DEFAULT);
+    client_metaserver_options_deinit(&options);
 
     char directory[] = "https://classic.meta.atrinik.org/index.xml";
     char rendezvous[] = "https://rendezvous.meta.atrinik.org/v1/classic";
