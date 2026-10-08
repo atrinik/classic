@@ -118,6 +118,14 @@ bool intro_test_metaserver_button(SDL_Rect *rect, const char **label) {
 bool intro_test_servers_invalidated(void) {
     return servers_invalidated;
 }
+
+const char *intro_test_server_name(size_t row) {
+    if (list_servers == NULL || row >= list_servers->rows || list_servers->text == NULL ||
+        list_servers->text[row] == NULL) {
+        return NULL;
+    }
+    return list_servers->text[row][0];
+}
 #endif
 
 /**

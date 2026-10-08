@@ -31,6 +31,7 @@
 #define POPUP_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <SDL3/SDL.h>
@@ -191,6 +192,8 @@ extern void intro_test_begin(void);
 extern bool intro_test_metaserver_button(SDL_Rect *rect, const char **label);
 /** Whether the next intro frame must rebuild the server list. */
 extern bool intro_test_servers_invalidated(void);
+/** Borrow a displayed server name until the list is rebuilt or destroyed. */
+extern const char *intro_test_server_name(size_t row);
 #endif
 
 extern void intro_show(void);
