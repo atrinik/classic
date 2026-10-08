@@ -817,7 +817,7 @@ static bool python_book_key_is_protected(const char *key, const char *value) {
            strcmp(key, "name") == 0 || strcmp(key, "name_pl") == 0 ||
            strcmp(key, "custom_name") == 0 || strcmp(key, "title") == 0 ||
            strcmp(key, "msg") == 0 || strcmp(key, "type") == 0 ||
-           strcmp(key, "arch") == 0 || strcmp(key, "artifact") == 0 ||
+           strcmp(key, "arch") == 0 || strcmp(key, "artifact") == 0 || strcmp(key, "amask") == 0 ||
            strcmp(key, "object") == 0 || strcmp(key, "more") == 0 ||
            strcmp(key, "end") == 0 || strcmp(key, "endmsg") == 0 ||
            *key == '\0' || strpbrk(key, " \t\r\n\v\f") != NULL ||
@@ -3070,6 +3070,20 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
          field->offset == offsetof(object, type)) &&
         python_object_reject_finalized_book(obj->obj)) {
         return -1;
+    }
+
+    if (field->type == FIELDTYPE_SHSTR && PyString_Check(value) &&
+        python_object_is_finalized_book(obj->obj)) {
+        const char *text = PyString_AsString(value);
+        if (text == NULL) {
+            return -1;
+        }
+        /* Native single-line string fields are serialized verbatim. A script
+         * must not inject loader records after the signed title or metadata. */
+        if (strpbrk(text, "\r\n") != NULL) {
+            python_object_reject_finalized_book(obj->obj);
+            return -1;
+        }
     }
 
     old_glow_radius = obj->obj->glow_radius;

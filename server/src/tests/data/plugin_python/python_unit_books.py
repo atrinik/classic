@@ -18,6 +18,10 @@ def snapshot(book):
         book.custom_name,
         book.title,
         book.type,
+        book.race,
+        book.slaying,
+        book.glow,
+        book.artifact,
         {key: book.ReadKey(key) for key in signature},
     )
 
@@ -62,6 +66,10 @@ def check_finalized(book):
         ("type", Atrinik.Type.MISC_OBJECT),
     ):
         reject(book, lambda: setattr(book, field, value))
+    for field in ("glow", "race", "slaying", "artifact"):
+        for separator in ("\n", "\r", "\r\n"):
+            value = "quest" + separator + "name Tampered title" + separator + "book_signer Forged"
+            reject(book, lambda: setattr(book, field, value))
     # Both overwriting and deleting any signature component must fail atomically.
     for key in signature:
         reject(book, lambda: book.WriteKey(key, "tampered"))
@@ -69,7 +77,7 @@ def check_finalized(book):
         reject(book, lambda: book.WriteKey(key, "", False))
     for key in (
         "name", "name_pl", "msg", "custom_name", "title", "type", "arch",
-        "artifact", "object", "more", "end", "endmsg", "name injected",
+        "artifact", "amask", "object", "more", "end", "endmsg", "name injected",
         "quest\nbook_finalized",
     ):
         reject(book, lambda: book.WriteKey(key, "tampered"))
@@ -80,6 +88,13 @@ def check_finalized(book):
     reject(book, lambda: book.Artificate("nonexistent-book-artifact"))
     # Authored hooks can still advance quest state and modify unrelated fields.
     book.WriteKey("quest_state", "read")
+    for field, value in (
+        ("race", "quest"), ("slaying", "quest-marker"), ("glow", "ff0000"),
+        ("artifact", "quest-artifact"),
+    ):
+        setattr(book, field, value)
+        if getattr(book, field) != value:
+            raise RuntimeError("Finalization blocked safe quest string metadata")
     book.value += 1
     if book.ReadKey("quest_state") != "read":
         raise RuntimeError("Finalization blocked normal quest metadata")
