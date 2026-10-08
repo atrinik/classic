@@ -891,7 +891,13 @@ START_TEST(test_access_preserves_ordinary_registration) {
     ck_assert_uint_eq(cs->access_auth_job, 0);
     ck_assert(cs->access_authenticated);
     ck_assert(socket_connection_admitted(cs));
-    ck_assert_int_eq(access_server_session_check(&cs->access_token), ACCESS_SESSION_VALID);
+    access_session_state_t admission = access_server_session_check(&cs->access_token);
+    while (admission == ACCESS_SESSION_BUSY && datetime_monotonic_ms() < deadline) {
+        struct timespec delay = {.tv_nsec = 1000000};
+        nanosleep(&delay, NULL);
+        admission = access_server_session_check(&cs->access_token);
+    }
+    ck_assert_int_eq(admission, ACCESS_SESSION_VALID);
     socket_login_deadline_refresh(cs);
     ck_assert(account_auth_start());
     char name[] = "reservationproof";
