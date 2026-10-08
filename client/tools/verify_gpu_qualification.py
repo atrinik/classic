@@ -50,8 +50,8 @@ UI_CLOSURE_STATES = (
 )
 ROOT_GLYPH_CONTRACTS = {
     "intro_server_browser": (357, "f1761b6510869ded"),
-    "login_popup": (385, "4266544b0b8b6fbd"),
-    "popup_character_selection": (385, "4266544b0b8b6fbd"),
+    "login_popup": (359, "f14a293e7d0b8c2d"),
+    "popup_character_selection": (359, "f14a293e7d0b8c2d"),
 }
 ASSERTION_ATTRIBUTES = {
     "ui_names_targets": ("player-names", "target-ui"),

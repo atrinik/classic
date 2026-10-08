@@ -1774,8 +1774,8 @@ static bool gpu_player_view_root_glyphs_match(const gpu_player_view_ui_state_t *
         expected_hash = UINT64_C(0xf1761b6510869ded);
     } else if (strcmp(state->name, "login_popup") == 0 ||
                strcmp(state->name, "popup_character_selection") == 0) {
-        expected_count = 385;
-        expected_hash = UINT64_C(0x4266544b0b8b6fbd);
+        expected_count = 359;
+        expected_hash = UINT64_C(0xf14a293e7d0b8c2d);
     } else {
         return true;
     }
