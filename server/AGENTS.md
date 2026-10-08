@@ -18,6 +18,10 @@
 - Persist spell/skill identities as stable strings, never table positions.
   Review `doc/METRICS.md` and the metric registry/hooks for gameplay changes;
   metric names, subjects, and event semantics are durable save contracts.
+- Region-map exploration is account-owned server state. Follow
+  [`doc/REGION_EXPLORATION.md`](doc/REGION_EXPLORATION.md): only visible public
+  base-level MAP2 cells grant discovery; retain account sidecars in backups and
+  never import untrusted client `.tiles` files.
 - Preserve object ownership, map activation/swap, lighting, plugin boundaries,
   and save transactionality. Test cleanup/rollback for lifecycle changes.
 - While celestial-v1 runtime activation is inactive, preserve physical private-map
@@ -48,7 +52,7 @@
 
 ## Access admission and administration
 
-- Protocol 1081 uses mandatory authenticated access policy before setup/account
+- Protocol 1082 retains mandatory authenticated access policy before setup/account
   traffic. Retired SETUP subtype 3 stays reserved; no join-password fallback.
 - `access_tokens.c` owns checked snapshot/audit/receipt/outbox transactions;
   `access_admin.c` owns strict bounded management JSON; `access_server.c` owns

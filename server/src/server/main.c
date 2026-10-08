@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <admin_shutdown.h>
+#include <exploration.h>
 #include <access_server.h>
 #include <weather.h>
 #include <swap.h>
@@ -378,8 +379,12 @@ void clean_tmp_files(void) {
  */
 void server_shutdown(void) {
     bool ok = access_server_shutdown();
-    if (!player_disconnect_all_checked())
+    if (!player_disconnect_all_checked()) {
         ok = false;
+    }
+    if (!exploration_shutdown_checked()) {
+        ok = false;
+    }
     if (!clean_tmp_files_checked()) {
         ok = false;
     }

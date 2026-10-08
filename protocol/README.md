@@ -9,7 +9,16 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
-Protocol v1081 replaces invitations and shared join passwords with independent
+Protocol v1082 synchronizes account region-map exploration using map-path
+bitfields. Server-to-client `REGION_EXPLORATION` (ID 32) carries account binding,
+bitmaps and sparse bit deltas. Client-to-server `REGION_EXPLORATION` (ID 25)
+requests only discoveries missing from a cached bitmap, without granting any
+discovery on the server. See the [exploration contract](../server/doc/REGION_EXPLORATION.md)
+for framing, bounds, persistence and lifecycle rules. Both peers require the
+exact protocol version; the earlier unpublished snapshot-only exploration
+format is superseded. Access command IDs from published v1081 remain unchanged.
+
+Protocol v1081 replaced invitations and shared join passwords with independent
 access codes. Authenticated `ACCESS_POLICY` precedes setup/account traffic;
 protected connections require `ACCESS_AUTH` before proceeding. `ACCESS_ADMIN`
 uses the active character's existing `/cmd_permission` grants, including

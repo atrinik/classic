@@ -33,6 +33,7 @@
 #include <access_server.h>
 #include <server_main.h>
 #include <server.h>
+#include <exploration.h>
 #include <initialization.h>
 #include <animation.h>
 #include <toolkit/packet.h>
@@ -141,6 +142,7 @@ void free_all_newserver(void) {
  * The socket.
  */
 static void free_newsocket_internal(socket_struct *ns, bool connected) {
+    exploration_end(ns);
     access_server_cancel(ns->access_auth_job);
     access_server_cancel(ns->access_admin_job);
     socket_assets_connection_clear(ns);

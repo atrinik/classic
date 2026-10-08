@@ -61,6 +61,8 @@ ATRINIK-ADMIN/1 RESULT ID saved
 
 Other terminal states are `failed` and `cancelled`. `saved` requires timer expiry
 and successful checked account/player/map/world-clock/map-log/journal shutdown.
+Account exploration sidecars, including dirty accounts retained after socket
+teardown, participate in the checked persistence result.
 Failure to save or publish completion causes a nonzero server exit. The updater
 must require **both** the matching, owner/mode-verified `saved` receipt and clean
 exit of the exact process/container it authenticated. A scheduled acknowledgement,

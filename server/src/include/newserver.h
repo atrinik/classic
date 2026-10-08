@@ -320,6 +320,9 @@ typedef struct socket_struct {
 
     char *account;
 
+    /** Owned account exploration session; accessed only by exploration.c. */
+    struct exploration_session *exploration;
+
     struct packet_struct *packet_recv;
     struct packet_struct *packet_recv_cmd;
     uint64_t packet_recv_cmd_base;

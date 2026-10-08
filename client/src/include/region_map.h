@@ -169,11 +169,12 @@ typedef struct region_map_fow {
     /** Reference count. */
     int refcount;
 
-    char *path;
-
     SDL_Surface *surface;
 
     uint32_t *bitmap;
+    uint64_t exploration_revision; ///< Last completely applied cache revision.
+    uint64_t exploration_target; ///< Revision at the beginning of this pass.
+    size_t exploration_map, exploration_byte; ///< Bounded replay continuation.
 
     UT_array *tiles;
 } region_map_fow_t;
@@ -182,6 +183,7 @@ typedef struct region_map_fow {
  * Region map structure.
  */
 typedef struct region_map {
+    struct region_map *next; ///< Main-thread live-view registry.
     /**
      * Region map image.
      *
@@ -265,9 +267,12 @@ region_map_t *region_map_clone(region_map_t *region_map);
 void region_map_free(region_map_t *region_map);
 void region_map_update(region_map_t *region_map, const char *region_name);
 void region_map_fow_update(region_map_t *region_map);
+void region_map_exploration_refresh(bool reset);
+void region_map_exploration_refresh_map(const char *path, bool reset);
+void region_map_exploration_clear(void);
+void region_map_exploration_service(void);
 #ifdef ATRINIK_WIDGET_TESTS
-/** Disable or restore fixture FOW persistence. */
-void region_map_test_fow_persistence_set(bool enabled);
+bool region_map_exploration_test(void);
 #endif
 bool region_map_fow_set_visited(region_map_t *region_map,
                                 region_map_def_map_t *map,

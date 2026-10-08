@@ -1024,6 +1024,9 @@ int main(int argc, char *argv[]) {
         return gpu_player_view_main(argc - 1, &argv[1]);
     }
 
+    if (argc == 2 && strcmp(argv[1], "--region-exploration-test") == 0) {
+        return region_map_exploration_test() ? 0 : 1;
+    }
     if (argc == 2 && strcmp(argv[1], "--access-lifecycle-test") == 0) {
         return client_access_lifecycle_test() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
@@ -1309,6 +1312,7 @@ int main(int argc, char *argv[]) {
 
             DoClient();
             image_face_requests_service();
+            region_map_exploration_service();
         }
 
         /* If not connected, walk through connection chain and/or wait for

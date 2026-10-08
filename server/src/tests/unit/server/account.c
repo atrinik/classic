@@ -15,10 +15,14 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <account.h>
+#include <exploration.h>
+#include <server.h>
+#include <toolkit/packet.h>
 #include <initialization.h>
 #include <player.h>
 #include <object.h>
 #include <toolkit/path.h>
+#include <toolkit/datetime.h>
 
 START_TEST(test_account_provision) {
     const char *account_name = "scenarioaccount";
@@ -110,9 +114,7 @@ START_TEST(test_account_provision_password_file_permissions) {
 
 #ifdef WIN32
     unlink(password_path);
-    ck_assert_int_eq(path_secret_create_atomic(password_path,
-                                               password,
-                                               sizeof(password) - 1),
+    ck_assert_int_eq(path_secret_create_atomic(password_path, password, sizeof(password) - 1),
                      PATH_SECRET_CREATE_OK);
 #endif
 
@@ -147,10 +149,9 @@ START_TEST(test_account_provision_password_file_permissions) {
 
     static const char empty_password[] = "";
     unlink(password_path);
-    ck_assert_int_eq(path_secret_create_atomic(password_path,
-                                               empty_password,
-                                               sizeof(empty_password) - 1),
-                     PATH_SECRET_CREATE_OK);
+    ck_assert_int_eq(
+        path_secret_create_atomic(password_path, empty_password, sizeof(empty_password) - 1),
+        PATH_SECRET_CREATE_OK);
     ck_assert(!account_provision_from_file(account_name,
                                            password_path,
                                            character_name,
@@ -162,10 +163,9 @@ START_TEST(test_account_provision_password_file_permissions) {
     const char valid_password[] = "local-file-8!\r\n";
 #ifdef WIN32
     unlink(password_path);
-    ck_assert_int_eq(path_secret_create_atomic(password_path,
-                                               valid_password,
-                                               sizeof(valid_password) - 1),
-                     PATH_SECRET_CREATE_OK);
+    ck_assert_int_eq(
+        path_secret_create_atomic(password_path, valid_password, sizeof(valid_password) - 1),
+        PATH_SECRET_CREATE_OK);
 #else
     fd = open(password_path, O_WRONLY | O_TRUNC);
     ck_assert_int_ge(fd, 0);
@@ -357,6 +357,409 @@ START_TEST(test_account_provision_lighting_preset_rolls_back) {
 }
 END_TEST
 
+static char *exploration_test_path(const char *name) {
+    char *base = account_make_path(name);
+    char *path = xmalloc(strlen(base) + sizeof(".exploration"));
+    sprintf(path, "%s.exploration", base);
+    free(base);
+    path_ensure_directories(path);
+    return path;
+}
+
+static packet_error_t
+exploration_test_request(socket_struct *ns, const char *path, const uint8_t *bits, size_t bytes) {
+    packet_struct *packet = packet_new(SERVER_CMD_REGION_EXPLORATION, 0, 256);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_cstring(packet, path);
+    packet_writer_write_uint16(packet, bytes);
+    if (bytes != 0) {
+        packet_writer_write_bytes(packet, bits, bytes);
+    }
+    packet_reader_scope_t scope;
+    packet_reader_scope_begin(&scope);
+    socket_command_region_exploration(ns, NULL, packet->data, packet->len, 0);
+    packet_error_t error = packet_reader_scope_finish(&scope);
+    packet_free(packet);
+    return error;
+}
+
+static packet_struct *exploration_test_response(socket_struct *ns) {
+    for (packet_struct *packet = ns->packets; packet != NULL; packet = packet->next) {
+        if (packet->type == CLIENT_CMD_REGION_EXPLORATION) {
+            return packet;
+        }
+    }
+    return NULL;
+}
+
+START_TEST(test_exploration_account_round_trip) {
+    char *path = exploration_test_path("exploretest");
+    unlink(path);
+    socket_struct first = {.state = ST_PLAYING, .account = "exploretest"};
+    socket_struct second = {.state = ST_PLAYING, .account = "exploretest"};
+    socket_struct other = {.state = ST_PLAYING, .account = "exploreother"};
+    exploration_begin(&first);
+    ck_assert(exploration_mark(&first, "/world/start", 17, 19, 16, 18));
+    ck_assert(!exploration_mark(&first, "/world/start", 17, 19, 16, 18));
+    exploration_begin(&second);
+    ck_assert(exploration_visited(&second, "/world/start", 16, 18));
+    ck_assert(exploration_mark(&second, "/world/start", 17, 19, 0, 0));
+    ck_assert(exploration_visited(&first, "/world/start", 0, 0));
+    exploration_begin(&other);
+    ck_assert(!exploration_visited(&other, "/world/start", 16, 18));
+    exploration_end(&other);
+    exploration_end(&first);
+    exploration_end(&second);
+    socket_buffer_clear(&first);
+    socket_buffer_clear(&second);
+    socket_buffer_clear(&other);
+    exploration_shutdown();
+
+    /* Fresh process state and socket replay the account's union of characters. */
+    exploration_begin(&first);
+    ck_assert(exploration_visited(&first, "/world/start", 16, 18));
+    ck_assert(exploration_visited(&first, "/world/start", 0, 0));
+    ck_assert(!exploration_visited(&first, "/world/start", 1, 0));
+    ck_assert_uint_eq(first.packet_queue_count, 2); /* Identity RESET only; no login replay. */
+    ck_assert_int_eq(exploration_test_request(&first, "/world/start", NULL, 0), PACKET_ERROR_NONE);
+    socket_buffer_clear(&first);
+    exploration_flush(&first, false);
+    ck_assert_ptr_nonnull(exploration_test_response(&first));
+    struct stat st;
+    ck_assert_int_eq(stat(path, &st), 0);
+#ifndef WIN32
+    ck_assert_uint_eq(st.st_mode & 0777, 0600);
+#endif
+    exploration_end(&first);
+    socket_buffer_clear(&first);
+    unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_bounds_and_stable_layout) {
+    char *path = exploration_test_path("explorebounds");
+    unlink(path);
+    socket_struct ns = {.state = ST_PLAYING, .account = "explorebounds"};
+    exploration_begin(&ns);
+    ck_assert(!exploration_mark(&ns, "/world/../secret", 1, 1, 0, 0));
+    ck_assert(!exploration_mark(&ns, "relative", 1, 1, 0, 0));
+    ck_assert(!exploration_mark(&ns, "/world", 0, 1, 0, 0));
+    ck_assert(!exploration_mark(&ns, "/world", 257, 1, 0, 0));
+    ck_assert(!exploration_mark(&ns, "/world", 1, 1, 1, 0));
+    ck_assert(exploration_mark(&ns, "/world", 256, 256, 255, 255));
+    ck_assert(exploration_visited(&ns, "/world", 255, 255));
+    ck_assert(exploration_mark(&ns, "/world", 2, 2, 1, 1));
+    ck_assert(exploration_visited(&ns, "/world", 255, 255));
+    exploration_end(&ns);
+    socket_buffer_clear(&ns);
+    unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_corrupt_file_preserved) {
+    char *path = exploration_test_path("explorecorrupt");
+    /* Valid magic followed by a truncated record. */
+    static const uint8_t bad[] = {'A', 'E', 'X', 'P', '0', '0', '0', '1', 0, 6, '/', 'x'};
+    ck_assert(path_write_atomic(path, bad, sizeof(bad), 0600));
+    socket_struct ns = {.state = ST_PLAYING, .account = "explorecorrupt"};
+    exploration_begin(&ns);
+    ck_assert(!exploration_mark(&ns, "/world", 1, 1, 0, 0));
+    exploration_end(&ns);
+    socket_buffer_clear(&ns);
+    FILE *fp = fopen(path, "rb");
+    ck_assert_ptr_nonnull(fp);
+    uint8_t actual[sizeof(bad)];
+    ck_assert_uint_eq(fread(actual, 1, sizeof(actual), fp), sizeof(actual));
+    ck_assert_int_eq(memcmp(actual, bad, sizeof(bad)), 0);
+    ck_assert_int_eq(fgetc(fp), EOF);
+    fclose(fp);
+    unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_failed_save_retried) {
+    char *path = exploration_test_path("exploreretry");
+    unlink(path);
+    socket_struct ns = {.state = ST_PLAYING, .account = "exploreretry"};
+    exploration_begin(&ns);
+    ck_assert(exploration_mark(&ns, "/world", 1, 1, 0, 0));
+    /* Block the atomic rename with a directory, after successful empty load. */
+    ck_assert_int_eq(mkdir(path, 0700), 0);
+    ck_assert(!exploration_end_checked(&ns));
+    socket_buffer_clear(&ns);
+    ck_assert_int_eq(rmdir(path), 0);
+    exploration_begin(&ns);
+    ck_assert(exploration_visited(&ns, "/world", 0, 0));
+    exploration_end(&ns);
+    socket_buffer_clear(&ns);
+    exploration_shutdown();
+    exploration_begin(&ns);
+    ck_assert(exploration_visited(&ns, "/world", 0, 0));
+    exploration_end(&ns);
+    socket_buffer_clear(&ns);
+    unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_shutdown_propagates_detached_save_failure) {
+    char *path = exploration_test_path("exploreshutdown");
+    unlink(path);
+    socket_struct ns = {.state = ST_PLAYING, .account = "exploreshutdown"};
+    exploration_begin(&ns);
+    ck_assert(exploration_mark(&ns, "/world", 1, 1, 0, 0));
+    ck_assert_int_eq(mkdir(path, 0700), 0);
+    ck_assert(!exploration_end_checked(&ns));
+    ck_assert_ptr_null(ns.exploration);
+    socket_buffer_clear(&ns);
+    ck_assert(!exploration_shutdown_checked());
+    ck_assert(exploration_shutdown_checked()); /* Empty cleanup remains idempotent. */
+    ck_assert_int_eq(rmdir(path), 0);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_snapshot_batches) {
+    char *path = exploration_test_path("explorebatch");
+    unlink(path);
+    socket_struct ns = {.state = ST_PLAYING, .account = "explorebatch"};
+    exploration_begin(&ns);
+    for (unsigned i = 0; i < 40; i++) {
+        char name[32];
+        snprintf(VS(name), "/world/map%u", i);
+        ck_assert(exploration_mark(&ns, name, 1, 1, 0, 0));
+    }
+    socket_buffer_clear(&ns);
+    exploration_flush(&ns, true);
+    ck_assert_uint_eq(ns.packet_queue_count, 64);
+    ck_assert_uint_eq(exploration_test_response(&ns)->data[0], 1);
+    socket_buffer_clear(&ns);
+    exploration_flush(&ns, false);
+    ck_assert_uint_eq(ns.packet_queue_count, 16);
+    socket_buffer_clear(&ns);
+    exploration_flush(&ns, false);
+    ck_assert_uint_eq(ns.packet_queue_count, 0);
+    exploration_end(&ns);
+    unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_reconciliation_is_sparse_and_never_grants_bits) {
+    char *path = exploration_test_path("exploredelta");
+    unlink(path);
+    socket_struct ns = {.state = ST_PLAYING, .account = "exploredelta"};
+    exploration_begin(&ns);
+    packet_struct *reset = exploration_test_response(&ns);
+    ck_assert_ptr_nonnull(reset);
+    ck_assert_uint_eq(reset->data[0], 0);
+    ck_assert_str_eq((char *)reset->data + 1, ns.account);
+    ck_assert(exploration_mark(&ns, "/world/delta", 16, 16, 0, 0));
+    ck_assert(exploration_mark(&ns, "/world/delta", 16, 16, 8, 0));
+    exploration_flush(&ns, true);
+    socket_buffer_clear(&ns);
+
+    uint8_t cached[32] = {1};
+    ck_assert_int_eq(exploration_test_request(&ns, "/world/delta", cached, sizeof(cached)),
+                     PACKET_ERROR_NONE);
+    exploration_flush(&ns, false);
+    packet_struct *response = exploration_test_response(&ns);
+    ck_assert_ptr_nonnull(response);
+    packet_reader_t reader;
+    packet_reader_init(&reader, response->data, response->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), 2);
+    char map_path[256];
+    ck_assert(packet_reader_read_string(&reader, VS(map_path)));
+    ck_assert_str_eq(map_path, "/world/delta");
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), 16);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), 16);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), 1);
+    ck_assert_uint_eq(packet_reader_read_uint16(&reader), 1);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), 1);
+    ck_assert(packet_reader_finish(&reader));
+    socket_buffer_clear(&ns);
+
+    cached[1] = 1;
+    ck_assert_int_eq(exploration_test_request(&ns, "/world/delta", cached, sizeof(cached)),
+                     PACKET_ERROR_NONE);
+    exploration_flush(&ns, false);
+    ck_assert_uint_eq(ns.packet_queue_count, 0);
+    memset(cached, 255, sizeof(cached));
+    ck_assert_int_eq(exploration_test_request(&ns, "/world/delta", cached, sizeof(cached)),
+                     PACKET_ERROR_NONE);
+    exploration_flush(&ns, false);
+    ck_assert_uint_eq(ns.packet_queue_count, 0);
+    ck_assert(!exploration_visited(&ns, "/world/delta", 1, 0));
+
+    ck_assert_int_eq(exploration_test_request(&ns, "/world/unknown", cached, 1), PACKET_ERROR_NONE);
+    exploration_flush(&ns, false);
+    response = exploration_test_response(&ns);
+    ck_assert_ptr_nonnull(response);
+    ck_assert_uint_eq(response->data[0], 3);
+    ck_assert_str_eq((char *)response->data + 1, "/world/unknown");
+    ck_assert(!exploration_visited(&ns, "/world/unknown", 0, 0));
+    socket_buffer_clear(&ns);
+    exploration_end(&ns);
+    unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_reconciliation_rejects_malformed_requests) {
+    char *path = exploration_test_path("exploreinvalid");
+    unlink(path);
+    socket_struct ns = {.state = ST_PLAYING, .account = "exploreinvalid"};
+    exploration_begin(&ns);
+    ck_assert(exploration_mark(&ns, "/world", 1, 1, 0, 0));
+    exploration_flush(&ns, true);
+    socket_buffer_clear(&ns);
+    uint8_t cached[2] = {1, 0};
+    ck_assert_int_ne(exploration_test_request(&ns, "/world", cached, 2), PACKET_ERROR_NONE);
+    cached[0] = 255;
+    ck_assert_int_ne(exploration_test_request(&ns, "/world", cached, 1), PACKET_ERROR_NONE);
+    ck_assert_int_ne(exploration_test_request(&ns, "/../world", NULL, 0), PACKET_ERROR_NONE);
+    ck_assert_int_ne(exploration_test_request(&ns, "relative", NULL, 0), PACKET_ERROR_NONE);
+    /* Truncated, unknown-op and trailing data fail without enqueuing a response. */
+    uint8_t bad[][7] = {{0}, {1, '/', 'x', 0, 0, 0}, {0, '/', 'x', 0, 0, 0, 42}};
+    const size_t bad_lengths[] = {1, 6, 7};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        packet_reader_scope_t scope;
+        packet_reader_scope_begin(&scope);
+        socket_command_region_exploration(&ns, NULL, bad[i], bad_lengths[i], 0);
+        ck_assert_int_ne(packet_reader_scope_finish(&scope), PACKET_ERROR_NONE);
+    }
+    ns.state = ST_LOGIN;
+    ck_assert_int_ne(exploration_test_request(&ns, "/world", NULL, 0), PACKET_ERROR_NONE);
+    ns.state = ST_PLAYING;
+    exploration_flush(&ns, false);
+    ck_assert_uint_eq(ns.packet_queue_count, 0);
+    ck_assert(exploration_visited(&ns, "/world", 0, 0));
+    exploration_end(&ns);
+    unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_session_flush_is_local_and_backpressure_retains_bits) {
+    char *path = exploration_test_path("explorequeue");
+    unlink(path);
+    socket_struct first = {.state = ST_PLAYING, .account = "explorequeue"};
+    socket_struct second = {.state = ST_PLAYING, .account = "explorequeue"};
+    socket_struct unrelated[64] = {0};
+    char unrelated_names[64][32];
+    exploration_begin(&first);
+    exploration_begin(&second);
+    for (unsigned i = 0; i < 64; i++) {
+        snprintf(VS(unrelated_names[i]), "exploreunrelated%02u", i);
+        unrelated[i].state = ST_PLAYING;
+        unrelated[i].account = unrelated_names[i];
+        exploration_begin(&unrelated[i]);
+        socket_buffer_clear(&unrelated[i]);
+    }
+    socket_buffer_clear(&first);
+    socket_buffer_clear(&second);
+    exploration_stats_reset();
+    ck_assert(exploration_mark(&first, "/world", 24, 24, 1, 1));
+    ck_assert_uint_eq(exploration_stats_get().broadcast_sessions, 2);
+    first.packet_queue_bytes = 1024U * 1024U + 1;
+    exploration_flush(&first, true);
+    ck_assert_uint_eq(exploration_stats_get().pending_visits, 0);
+    first.packet_queue_bytes = 0;
+    exploration_flush(&first, false);
+    ck_assert_uint_eq(exploration_stats_get().pending_visits, 1);
+    ck_assert_ptr_nonnull(exploration_test_response(&first));
+    ck_assert_uint_eq(second.packet_queue_count, 0);
+    for (unsigned i = 0; i < 64; i++) {
+        ck_assert_uint_eq(unrelated[i].packet_queue_count, 0);
+    }
+    exploration_flush(&second, false);
+    ck_assert_ptr_nonnull(exploration_test_response(&second));
+    ck_assert_uint_eq(exploration_stats_get().pending_visits, 2);
+    socket_buffer_clear(&first);
+    socket_buffer_clear(&second);
+    exploration_stats_reset();
+    for (unsigned i = 0; i < 1000; i++) {
+        ck_assert(!exploration_mark(&first, "/world", 24, 24, 1, 1));
+        exploration_flush(&first, false);
+        exploration_flush(&second, false);
+        exploration_flush(&unrelated[i % 64], false);
+    }
+    exploration_test_stats stats = exploration_stats_get();
+    ck_assert_uint_eq(stats.account_lookups, 0);
+    ck_assert_uint_eq(stats.map_lookups, 0);
+    ck_assert_uint_eq(stats.pending_visits, 0);
+    ck_assert_uint_eq(stats.broadcast_sessions, 0);
+    ck_assert_uint_eq(stats.save_records, 0);
+    exploration_end(&first);
+    exploration_end(&second);
+    for (unsigned i = 0; i < 64; i++) {
+        exploration_end(&unrelated[i]);
+    }
+    unlink(path);
+    free(path);
+}
+END_TEST
+
+START_TEST(test_exploration_ten_thousand_maps) {
+    unsigned dimension = _i == 0 ? 24 : 256;
+    char *path = exploration_test_path("explorescale");
+    unlink(path);
+    socket_struct ns = {.state = ST_PLAYING, .account = "explorescale"};
+    exploration_begin(&ns);
+    socket_buffer_clear(&ns);
+    exploration_stats_reset();
+    uint64_t started = datetime_monotonic_us();
+    for (unsigned i = 0; i < 10000; i++) {
+        char name[64];
+        snprintf(VS(name), "/world/map%05u", i);
+        ck_assert(exploration_mark(&ns, name, dimension, dimension, dimension - 1, dimension - 1));
+    }
+    uint64_t mark_us = datetime_monotonic_us() - started;
+    ck_assert_uint_eq(exploration_stats_get().account_lookups, 0);
+    ck_assert_uint_eq(exploration_stats_get().map_lookups, 10000);
+    ck_assert(!exploration_mark(&ns, "/world/overflow", 1, 1, 0, 0));
+    started = datetime_monotonic_us();
+    exploration_end(&ns);
+    uint64_t save_us = datetime_monotonic_us() - started;
+    exploration_test_stats saved = exploration_stats_get();
+    ck_assert_uint_eq(saved.save_records, 10000);
+    struct stat st;
+    ck_assert_int_eq(stat(path, &st), 0);
+    ck_assert_uint_eq(saved.save_bytes, (uint64_t)st.st_size);
+    exploration_stats_reset();
+    started = datetime_monotonic_us();
+    exploration_begin(&ns);
+    uint64_t load_us = datetime_monotonic_us() - started;
+    ck_assert_uint_eq(exploration_stats_get().load_records, 10000);
+    ck_assert_uint_eq(exploration_stats_get().map_lookups, 10000);
+    ck_assert_uint_eq(ns.packet_queue_count,
+                      2); /* Only account identity, regardless of map count. */
+    socket_buffer_clear(&ns);
+    ck_assert(exploration_visited(&ns, "/world/map09999", dimension - 1, dimension - 1));
+    exploration_stats_reset();
+    for (unsigned i = 0; i < 1000; i++) {
+        exploration_flush(&ns, false);
+    }
+    ck_assert_uint_eq(exploration_stats_get().pending_visits, 0);
+    ck_assert_uint_eq(exploration_stats_get().map_lookups, 0);
+    ck_assert_uint_eq(exploration_stats_get().sent_records, 0);
+    printf("exploration_scale maps=10000 dimension=%u disk_bytes=%" PRIu64 " mark_us=%" PRIu64
+           " save_us=%" PRIu64 " load_us=%" PRIu64 "\n",
+           dimension,
+           (uint64_t)st.st_size,
+           mark_us,
+           save_us,
+           load_us);
+    fflush(stdout);
+    exploration_end(&ns);
+    unlink(path);
+    free(path);
+}
+END_TEST
+
 START_TEST(test_checked_logout_propagates_save_failures) {
     const char *account_name = "shutdownproof";
     const char *character_name = "Shutdown Proof";
@@ -374,6 +777,13 @@ START_TEST(test_checked_logout_propagates_save_failures) {
     player *pl = CONTR(ob);
     free(pl->cs->account);
     pl->cs->account = xstrdup(account_name);
+    char *exploration_path = exploration_test_path(account_name);
+    unlink(exploration_path);
+    if (_i == 4) {
+        exploration_begin(pl->cs);
+        ck_assert(exploration_mark(pl->cs, "/world", 1, 1, 0, 0));
+        ck_assert_int_eq(mkdir(exploration_path, 0700), 0);
+    }
 
     /* These independent failures must survive the logout cleanup. */
     player_save_fail_for_test(_i == 1);
@@ -386,6 +796,12 @@ START_TEST(test_checked_logout_propagates_save_failures) {
     player_save_fail_for_test(false);
     account_fail_saves_for_test(false);
     ck_assert(player_disconnect_all_checked());
+    if (_i == 4) {
+        ck_assert_int_eq(rmdir(exploration_path), 0);
+    }
+    ck_assert(exploration_shutdown_checked());
+    unlink(exploration_path);
+    free(exploration_path);
 
     ck_assert_int_eq(unlink(account_path), 0);
     ck_assert_int_eq(unlink(player_path), 0);
@@ -447,10 +863,20 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_set_timeout(tc_core, 30);
-    tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 4);
+    tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 5);
     tcase_add_test(tc_core, test_access_preserves_normal_command_permissions);
     tcase_add_test(tc_core, test_access_preserves_ordinary_registration);
     tcase_add_test(tc_core, test_account_provision);
+    tcase_add_test(tc_core, test_exploration_account_round_trip);
+    tcase_add_test(tc_core, test_exploration_bounds_and_stable_layout);
+    tcase_add_test(tc_core, test_exploration_corrupt_file_preserved);
+    tcase_add_test(tc_core, test_exploration_failed_save_retried);
+    tcase_add_test(tc_core, test_exploration_shutdown_propagates_detached_save_failure);
+    tcase_add_test(tc_core, test_exploration_snapshot_batches);
+    tcase_add_test(tc_core, test_exploration_reconciliation_is_sparse_and_never_grants_bits);
+    tcase_add_test(tc_core, test_exploration_reconciliation_rejects_malformed_requests);
+    tcase_add_test(tc_core, test_exploration_session_flush_is_local_and_backpressure_retains_bits);
+    tcase_add_loop_test(tc_core, test_exploration_ten_thousand_maps, 0, 2);
     tcase_add_test(tc_core, test_account_provision_rejects_invalid_inputs);
     tcase_add_test(tc_core, test_account_provision_password_file_permissions);
     tcase_add_test(tc_core, test_account_provision_lighting_preset);

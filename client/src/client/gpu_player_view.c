@@ -1942,7 +1942,6 @@ static bool gpu_player_view_ui_region_map_prepare(void) {
     region->def->num_maps = 1;
     region->def->maps = xcalloc(1, sizeof(*region->def->maps));
     region->def->maps[0].path = xstrdup("/gpu-ui-closure");
-    region->fow->path = xstrdup("gpu-ui-closure-in-memory.fow");
     region->fow->bitmap = xcalloc(1, RM_MAP_FOW_BITMAP_SIZE(region));
     snprintf(VS(MapData.map_path), "%s", region->def->maps[0].path);
     snprintf(VS(MapData.region_name), "%s", "gpu-ui-closure");
@@ -2163,7 +2162,6 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     popup_destroy_all();
     tooltip_dismiss();
     notification_destroy();
-    region_map_test_fow_persistence_set(false);
     metaserver_clear_data();
     selected_server = metaserver_add("fixture.invalid",
                                      13327,
@@ -4178,7 +4176,6 @@ int gpu_player_view_main(int argc, char *argv[]) {
     wrapper_test_user_data_isolated_set(true);
     widget_mplayer_test_isolated_set(true);
     widget_render_profiler_test_isolated_set(true);
-    region_map_test_fow_persistence_set(false);
     snprintf(VS(cpl.account), "%s", "renderer-fixture");
     snprintf(VS(cpl.name), "%s", "Renderer Maintainer");
 #endif
@@ -4884,7 +4881,6 @@ cleanup:
 #ifdef ATRINIK_WIDGET_TESTS
     widget_mplayer_test_isolated_set(false);
     widget_render_profiler_test_isolated_set(false);
-    region_map_test_fow_persistence_set(true);
 #endif
     if (objects_ready) {
         object_deinit();

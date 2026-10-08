@@ -51,6 +51,7 @@
 #include <player_status.h>
 #include <popup.h>
 #include <region_map.h>
+#include <region_exploration.h>
 #include <rich_presence.h>
 #include <server_files.h>
 #include <settings.h>
@@ -1966,4 +1967,19 @@ void socket_command_control(uint8_t *data, size_t len, size_t pos) {
     if (type == CMD_CONTROL_PLAYER && sub_type == CMD_CONTROL_PLAYER_TELEPORT) {
         SDL_RaiseWindow(ScreenWindow);
     }
+}
+
+void socket_command_region_exploration(uint8_t *data, size_t len, size_t pos) {
+    packet_reader_t reader;
+    packet_reader_init_at(&reader, data, len, pos);
+    bool changed;
+    if (pos > len || !region_exploration_receive(data + pos, len - pos, &changed)) {
+        packet_reader_set_error(&reader, PACKET_ERROR_INVALID_ENCODING);
+        return;
+    }
+    if (changed) {
+        region_map_exploration_refresh_map(data[pos] == 0 ? NULL : (const char *)data + pos + 1,
+                                           data[pos] == 0);
+    }
+    packet_reader_skip(&reader, len - pos);
 }

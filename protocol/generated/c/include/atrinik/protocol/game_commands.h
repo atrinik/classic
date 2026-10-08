@@ -3,7 +3,7 @@
 #ifndef ATRINIK_PROTOCOL_GAME_COMMANDS_H
 #define ATRINIK_PROTOCOL_GAME_COMMANDS_H
 
-#define ATRINIK_PROTOCOL_VERSION 1081U
+#define ATRINIK_PROTOCOL_VERSION 1082U
 #define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION
 #define ATRINIK_PROTOCOL_ITEM_NAME_SIZE 128U
 
@@ -47,7 +47,8 @@ typedef enum atrinik_client_to_server_command {
     SERVER_CMD_TARGET = 22,
     SERVER_CMD_ACCESS_AUTH = 23,
     SERVER_CMD_ACCESS_ADMIN = 24,
-    SERVER_CMD_NROF = 25
+    SERVER_CMD_REGION_EXPLORATION = 25,
+    SERVER_CMD_NROF = 26
 } atrinik_client_to_server_command_t;
 
 /* Stable diagnostic names for client-to-server commands. */
@@ -76,6 +77,7 @@ typedef enum atrinik_client_to_server_command {
 #define SERVER_CMD_NAME_TARGET "target"
 #define SERVER_CMD_NAME_ACCESS_AUTH "access_auth"
 #define SERVER_CMD_NAME_ACCESS_ADMIN "access_admin"
+#define SERVER_CMD_NAME_REGION_EXPLORATION "region_exploration"
 
 typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_MAP = 0,
@@ -110,7 +112,8 @@ typedef enum atrinik_server_to_client_command {
     CLIENT_CMD_ACCESS_RESULT = 29,
     CLIENT_CMD_ACCESS_ADMIN_RESULT = 30,
     CLIENT_CMD_ACCESS_POLICY = 31,
-    CLIENT_CMD_NROF = 32
+    CLIENT_CMD_REGION_EXPLORATION = 32,
+    CLIENT_CMD_NROF = 33
 } atrinik_server_to_client_command_t;
 
 /* Stable diagnostic names for server-to-client commands. */
@@ -146,5 +149,6 @@ typedef enum atrinik_server_to_client_command {
 #define CLIENT_CMD_NAME_ACCESS_RESULT "access_result"
 #define CLIENT_CMD_NAME_ACCESS_ADMIN_RESULT "access_admin_result"
 #define CLIENT_CMD_NAME_ACCESS_POLICY "access_policy"
+#define CLIENT_CMD_NAME_REGION_EXPLORATION "region_exploration"
 
 #endif

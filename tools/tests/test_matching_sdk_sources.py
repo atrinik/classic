@@ -17,7 +17,7 @@ class MatchingSDKSourceTests(unittest.TestCase):
             protocol.mkdir(parents=True)
             header = protocol / "generated/c/include/atrinik/protocol/game_commands.h"
             header.parent.mkdir(parents=True)
-            header.write_text("#define ATRINIK_PROTOCOL_VERSION 1081U\n")
+            header.write_text("#define ATRINIK_PROTOCOL_VERSION 1082U\n")
             (protocol / "CMakeLists.txt").write_text(
                 "add_library(protocol INTERFACE)\n"
                 "add_library(Atrinik::Protocol ALIAS protocol)\n")

@@ -30,6 +30,11 @@
 #include <metaserver.h>
 #include <asset.h>
 #include <client.h>
+#include <region_map.h>
+#include <region_exploration.h>
+#include <wrapper.h>
+#include <config.h>
+#include <toolkit/path.h>
 #include <client_socket.h>
 #include <event.h>
 #include <access_attempt.h>
@@ -58,6 +63,7 @@ static int abort_thread = 0;
 
 /* start is the first waiting item in queue, end is the most recent enqueued */
 static command_buffer *output_queue_start = NULL, *output_queue_end = NULL;
+static size_t output_queue_bytes;
 
 /**
  * Enqueue a command buffer last in a queue.
@@ -77,6 +83,7 @@ static void command_buffer_enqueue(command_buffer *buf,
     }
 
     *queue_end = buf;
+    output_queue_bytes += buf->len;
 }
 
 /**
@@ -87,6 +94,7 @@ static command_buffer *command_buffer_dequeue(command_buffer **queue_start,
     command_buffer *buf = *queue_start;
 
     if (buf) {
+        output_queue_bytes -= buf->len;
         *queue_start = buf->next;
 
         if (buf->next) {
@@ -99,27 +107,35 @@ static command_buffer *command_buffer_dequeue(command_buffer **queue_start,
     return buf;
 }
 
-void socket_send_packet(struct packet_struct *packet) {
+bool socket_send_packet_bounded(struct packet_struct *packet, size_t queue_limit) {
     HARD_ASSERT(packet != NULL);
 
     if (!packet_writer_finish(packet)) {
         LOG(ERROR, "Refusing malformed outbound packet: %s", packet_error_string(packet->error));
         packet_free(packet);
-        return;
+        return false;
     }
 
     if (socket_mutex == NULL) {
         packet_free(packet);
-        return;
+        return false;
     }
 
     SDL_LockMutex(socket_mutex);
     if (csocket.sc == NULL || abort_thread) {
         SDL_UnlockMutex(socket_mutex);
         packet_free(packet);
-        return;
+        return false;
     }
 
+    SDL_LockMutex(output_buffer_mutex);
+    size_t bytes = packet->len + 3;
+    if (bytes > queue_limit || output_queue_bytes > queue_limit - bytes) {
+        SDL_UnlockMutex(output_buffer_mutex);
+        SDL_UnlockMutex(socket_mutex);
+        packet_free(packet);
+        return false;
+    }
     packet_struct *packet_meta = packet_new(0, 4, 0);
     packet_writer_write_uint16(packet_meta, packet->len + 1);
     packet_writer_write_uint8(packet_meta, packet->type);
@@ -128,12 +144,15 @@ void socket_send_packet(struct packet_struct *packet) {
     packet_free(packet_meta);
     command_buffer *buf2 = command_buffer_new(packet->len, packet->data);
     packet_free(packet);
-    SDL_UnlockMutex(socket_mutex);
-
-    SDL_LockMutex(output_buffer_mutex);
     command_buffer_enqueue(buf1, &output_queue_start, &output_queue_end);
     command_buffer_enqueue(buf2, &output_queue_start, &output_queue_end);
     SDL_UnlockMutex(output_buffer_mutex);
+    SDL_UnlockMutex(socket_mutex);
+    return true;
+}
+
+void socket_send_packet(struct packet_struct *packet) {
+    (void)socket_send_packet_bounded(packet, SIZE_MAX);
 }
 
 bool client_socket_send_access_auth(const char code[ACCESS_CODE_LENGTH]) {
@@ -403,6 +422,7 @@ int handle_socket_shutdown(void) {
         SDL_UnlockMutex(socket_mutex);
 
         /* Empty all queues */
+        region_map_exploration_clear();
         client_command_retry_clear();
         client_command_queue_clear();
         bool input_statistics_reset = client_command_queue_statistics_reset();
@@ -500,6 +520,7 @@ void client_socket_deinitialize(void) {
     } else if (csocket.sc != NULL) {
         client_socket_close(&csocket);
     }
+    region_map_exploration_clear();
     client_command_retry_clear();
     client_command_queue_deinitialize();
     if (output_buffer_mutex != NULL) {
@@ -572,6 +593,11 @@ bool client_socket_open(client_socket_t *csock,
         goto error;
     }
 
+    char *marker = file_path(DIRECTORY_CACHE "/exploration/.root", "wb");
+    char *directory = marker != NULL ? path_dirname(marker) : NULL;
+    region_exploration_connect(quic_certificate_sha256, directory);
+    free(directory);
+    free(marker);
     return true;
 
 error:
