@@ -105,3 +105,51 @@ void client_metaserver_options_deinit(client_metaserver_options_t *options) {
     client_metaserver_options_clear(options);
     options->disabled = false;
 }
+
+static const char *const provider_directory[] = {
+    "https://classic.metaserver.atrinik.org/index.xml",
+    "https://classic.dev.metaserver.atrinik.org/index.xml",
+};
+
+static const char *const provider_rendezvous[] = {
+    "https://rendezvous.meta.atrinik.org/v1/classic",
+    "https://rendezvous.dev.meta.atrinik.org/v1/classic",
+};
+
+void client_metaserver_options_copy(client_metaserver_options_t *destination,
+                                    const client_metaserver_options_t *source) {
+    HARD_ASSERT(destination != NULL);
+    HARD_ASSERT(source != NULL);
+    if (destination == source) {
+        return;
+    }
+    client_metaserver_options_clear(destination);
+    for (size_t i = 0; i < source->count; i++) {
+        client_metaserver_options_add(destination,
+                                      source->endpoints[i].directory_url,
+                                      source->endpoints[i].rendezvous_origin);
+    }
+    destination->disabled = source->disabled;
+}
+
+void client_metaserver_options_replace_provider(client_metaserver_options_t *options,
+                                                metaserver_provider_t provider) {
+    HARD_ASSERT(options != NULL);
+    HARD_ASSERT(provider == METASERVER_PROVIDER_DEFAULT || provider == METASERVER_PROVIDER_DEV);
+    client_metaserver_options_clear(options);
+    client_metaserver_options_add(options,
+                                  provider_directory[provider],
+                                  provider_rendezvous[provider]);
+}
+
+metaserver_provider_t client_metaserver_options_provider(
+    const client_metaserver_options_t *options) {
+    HARD_ASSERT(options != NULL);
+    return !options->disabled && options->count == 1 &&
+                   strcmp(options->endpoints[0].directory_url,
+                          provider_directory[METASERVER_PROVIDER_DEV]) == 0 &&
+                   strcmp(options->endpoints[0].rendezvous_origin,
+                          provider_rendezvous[METASERVER_PROVIDER_DEV]) == 0
+               ? METASERVER_PROVIDER_DEV
+               : METASERVER_PROVIDER_DEFAULT;
+}

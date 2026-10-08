@@ -169,7 +169,14 @@ environment variables never synthesize a selected-adapter identity.
 
  The packaged directory configuration is an explicit trusted pair:
 
-     metaserver = https://classic.meta.atrinik.org/index.xml https://rendezvous.meta.atrinik.org/v1/classic
+     metaserver = https://classic.metaserver.atrinik.org/index.xml https://rendezvous.meta.atrinik.org/v1/classic
+
+ The intro screen always includes a provider button. `Dev` switches to
+ `https://classic.dev.metaserver.atrinik.org/index.xml` with
+ `https://rendezvous.dev.meta.atrinik.org/v1/classic`; `Default` switches back
+ to the packaged pair above. Its label names the destination. Clicking refreshes
+ the listing and replaces custom endpoints or `--nometa` for the current session.
+ The choice is not saved; startup configuration applies again on the next launch.
 
  The first value is the complete static protocol-4 XML URL. The second is the
  dynamic signaling origin and classic path prefix. Additional metaserver lines

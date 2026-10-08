@@ -1779,8 +1779,16 @@ static bool gpu_player_view_root_glyphs_match(const gpu_player_view_ui_state_t *
     } else {
         return true;
     }
-    return state->root_glyphs.count == expected_count &&
-           state->root_glyphs.semantic_hash == expected_hash;
+    bool matches = state->root_glyphs.count == expected_count &&
+                   state->root_glyphs.semantic_hash == expected_hash;
+    if (!matches) {
+        fprintf(stderr,
+                "UI root glyphs %s: count=%" PRIu64 ", semantic_hash=%016" PRIx64 "\n",
+                state->name,
+                state->root_glyphs.count,
+                state->root_glyphs.semantic_hash);
+    }
+    return matches;
 }
 
 static bool gpu_player_view_ui_capture(const char *name, bool notification_fade) {
@@ -2024,6 +2032,75 @@ static bool gpu_player_view_ui_painting_prepare(const player_view_manifest_t *ma
     return resources_test_bind_loaded_file("gpu-ui-closure-resource", path);
 }
 
+/** Exercise the production intro controls without starting directory requests. */
+static bool gpu_player_view_intro_provider_controls(void) {
+    SDL_Rect rect;
+    const char *label;
+    int connecting = ms_connecting(-1);
+    client_metaserver_options_disable(&clioption_settings.metaservers);
+    ms_connecting(0);
+    if (!gpu_player_view_render_complete() ||
+        !intro_test_metaserver_button(&rect, &label) || strcmp(label, "Dev") != 0 ||
+        rect.x < 0 || rect.y < 0 || rect.x + rect.w > video_get_width() ||
+        rect.y + rect.h > video_get_height() ||
+        text_get_width(FONT_ARIAL10, "Default", 0) > rect.w) {
+        SDL_SetError("metaserver toggle was not available with discovery disabled and no servers");
+        return false;
+    }
+
+    selected_server = metaserver_add("old.invalid", 13327, "Old provider", "5.1.0", "Old");
+    if (!gpu_player_view_render_complete() || intro_test_server_name(0) == NULL ||
+        strcmp(intro_test_server_name(0), "Old provider") != 0) {
+        SDL_SetError("intro fixture did not display its initial provider row");
+        return false;
+    }
+    ms_connecting(1);
+    for (size_t i = 0; i < 2; i++) {
+        if (!gpu_player_view_render_complete() ||
+            !intro_test_metaserver_button(&rect, &label) ||
+            strcmp(label, i == 0 ? "Dev" : "Default") != 0) {
+            SDL_SetError("metaserver toggle was not available during a fetch");
+            return false;
+        }
+        SDL_Event event = {0};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = rect.x + rect.w / 2;
+        event.button.y = rect.y + rect.h / 2;
+        if (intro_event(&event) != 1 || cpl.state != ST_META || selected_server != NULL ||
+            server_get_count() != 0 || !intro_test_servers_invalidated() ||
+            metaserver_get_provider() !=
+                (i == 0 ? METASERVER_PROVIDER_DEV : METASERVER_PROVIDER_DEFAULT) ||
+            !client_metaserver_options_enabled(&clioption_settings.metaservers)) {
+            SDL_SetError("metaserver toggle did not switch and invalidate the selected server");
+            return false;
+        }
+        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        intro_event(&event);
+        const char *name = i == 0 ? "Dev provider" : "Default provider";
+        selected_server = metaserver_add("new.invalid", 13327, name, "5.1.0", "New");
+        cpl.state = ST_START;
+        if (!gpu_player_view_render_complete() || intro_test_servers_invalidated() ||
+            intro_test_server_name(0) == NULL ||
+            strcmp(intro_test_server_name(0), name) != 0 ||
+            !intro_test_metaserver_button(NULL, &label) ||
+            strcmp(label, i == 0 ? "Default" : "Dev") != 0) {
+            SDL_SetError("metaserver toggle retained a stale row or destination label");
+            return false;
+        }
+    }
+    metaserver_clear_data();
+    intro_deinit();
+    if (intro_test_metaserver_button(NULL, NULL)) {
+        SDL_SetError("metaserver toggle survived intro teardown");
+        return false;
+    }
+    intro_test_begin();
+    client_metaserver_options_deinit(&clioption_settings.metaservers);
+    ms_connecting(connecting);
+    return gpu_player_view_render_complete() && intro_test_metaserver_button(NULL, NULL);
+}
+
 static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
                                            const player_view_manifest_t *manifest) {
     memset(&gpu_player_view_ui_closure, 0, sizeof(gpu_player_view_ui_closure));
@@ -2032,14 +2109,17 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     notification_destroy();
     region_map_test_fow_persistence_set(false);
     metaserver_clear_data();
+    intro_test_begin();
+    cpl.state = ST_START;
+    if (!gpu_player_view_intro_provider_controls()) {
+        return false;
+    }
     selected_server = metaserver_add("fixture.invalid",
                                      13327,
                                      "Frozen GPU Qualification",
                                      PACKAGE_VERSION,
                                      "Immutable offline UI fixture server");
 
-    intro_test_begin();
-    cpl.state = ST_START;
     if (!gpu_player_view_ui_capture("intro_server_browser", false)) {
         return false;
     }

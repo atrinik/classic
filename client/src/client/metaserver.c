@@ -49,6 +49,43 @@ static SDL_Thread *metaserver_worker;
 /** Is metaserver enabled? */
 static bool enabled;
 
+/** Main-thread ownership except done/cancelled, protected by the connecting mutex.
+ * The worker exclusively owns options/results until done is observed and joined. */
+typedef struct metaserver_request {
+    client_metaserver_options_t options;
+    server_struct *servers;
+    uint64_t generation;
+    bool done;
+    bool cancelled;
+} metaserver_request_t;
+
+static metaserver_request_t *active_request;
+static uint64_t request_generation;
+static bool refresh_pending;
+static metaserver_provider_t provider;
+
+static void metaserver_request_free(metaserver_request_t *request) {
+    server_struct *node, *tmp;
+    DL_FOREACH_SAFE(request->servers, node, tmp) {
+        DL_DELETE(request->servers, node);
+        metaserver_server_free(node);
+    }
+    client_metaserver_options_deinit(&request->options);
+    free(request);
+}
+
+static void metaserver_invalidate(void) {
+    request_generation++;
+    refresh_pending = false;
+    SDL_LockMutex(metaserver_connecting_mutex);
+    if (active_request != NULL) {
+        active_request->cancelled = true;
+    }
+    metaserver_connecting = 0;
+    SDL_UnlockMutex(metaserver_connecting_mutex);
+}
+
+#ifndef CLIENT_METASERVER_TESTING
 static bool metaserver_etag_valid(const char *value) {
     size_t size = strlen(value);
     if (size < 2 || size > 255 || value[0] != '"' || value[size - 1] != '"') {
@@ -133,6 +170,8 @@ static bool metaserver_cached_snapshot(const char *body,
     return true;
 }
 
+#endif
+
 void metaserver_init(void) {
     server_head = NULL;
     server_count = 0;
@@ -141,6 +180,10 @@ void metaserver_init(void) {
     metaserver_connecting_mutex = SDL_CreateMutex();
     server_head_mutex = SDL_CreateMutex();
     metaserver_worker = NULL;
+    active_request = NULL;
+    request_generation = 0;
+    refresh_pending = false;
+    provider = client_metaserver_options_provider(&clioption_settings.metaservers);
     if (metaserver_connecting_mutex == NULL || server_head_mutex == NULL) {
         LOG(ERROR, "Could not create metaserver mutexes: %s", SDL_GetError());
         exit(EXIT_FAILURE);
@@ -213,6 +256,7 @@ int ms_connecting(int val) {
 }
 
 void metaserver_clear_data(void) {
+    metaserver_invalidate();
     if (selected_server != NULL) {
         client_attempt_secrets_clear(&selected_server->join_password,
                                      &clioption_settings.join_password,
@@ -230,9 +274,12 @@ void metaserver_clear_data(void) {
 }
 
 void metaserver_deinit(void) {
+    metaserver_invalidate();
     if (metaserver_worker != NULL) {
         SDL_WaitThread(metaserver_worker, NULL);
         metaserver_worker = NULL;
+        metaserver_request_free(active_request);
+        active_request = NULL;
     }
 
     metaserver_clear_data();
@@ -258,12 +305,25 @@ server_struct *metaserver_add(const char *hostname,
     return node;
 }
 
-int metaserver_thread(void *dummy) {
-    (void)dummy;
+#ifdef CLIENT_METASERVER_TESTING
+/* The offline lifecycle test owns its transport and completion barriers. */
+void metaserver_test_fetch(const client_metaserver_options_t *options, server_struct **servers);
+#endif
 
-    for (size_t i = clioption_settings.metaservers.count; i > 0; i--) {
-        const client_metaserver_endpoint_t *endpoint =
-            &clioption_settings.metaservers.endpoints[i - 1];
+static int metaserver_thread(void *data) {
+    metaserver_request_t *job = data;
+
+#ifdef CLIENT_METASERVER_TESTING
+    metaserver_test_fetch(&job->options, &job->servers);
+#else
+    for (size_t i = job->options.count; i > 0; i--) {
+        SDL_LockMutex(metaserver_connecting_mutex);
+        bool cancelled = job->cancelled;
+        SDL_UnlockMutex(metaserver_connecting_mutex);
+        if (cancelled) {
+            break;
+        }
+        const client_metaserver_endpoint_t *endpoint = &job->options.endpoints[i - 1];
         time_t current_time = time(NULL);
         if (current_time < 0) {
             continue;
@@ -325,7 +385,8 @@ int metaserver_thread(void *dummy) {
                                                  endpoint->rendezvous_origin,
                                                  now,
                                                  cache_valid ? cached_snapshot->generation : 0,
-                                                 &accepted_generation);
+                                                 &accepted_generation,
+                                                 &job->servers);
                 if (parsed && http_code == 200 && !curl_request_cache_commit(request)) {
                     LOG(ERROR, "Could not persist the validated metaserver directory cache");
                 }
@@ -340,7 +401,8 @@ int metaserver_thread(void *dummy) {
                                              endpoint->rendezvous_origin,
                                              now,
                                              cached_snapshot->generation,
-                                             &accepted_generation);
+                                             &accepted_generation,
+                                             &job->servers);
         }
         metaserver_directory_free(cached_snapshot);
         free(cached_body);
@@ -350,29 +412,76 @@ int metaserver_thread(void *dummy) {
         }
     }
 
+#endif
     SDL_LockMutex(metaserver_connecting_mutex);
-    metaserver_connecting = 0;
+    job->done = true;
     SDL_UnlockMutex(metaserver_connecting_mutex);
     return 0;
+}
+
+void metaserver_poll(void) {
+    if (active_request != NULL) {
+        SDL_LockMutex(metaserver_connecting_mutex);
+        bool done = active_request->done;
+        SDL_UnlockMutex(metaserver_connecting_mutex);
+        if (!done) {
+            return;
+        }
+        SDL_WaitThread(metaserver_worker, NULL);
+        metaserver_worker = NULL;
+        if (active_request->generation == request_generation) {
+            /* Prepend directory entries, preserving both directory order and
+             * manually configured --server entries already in the list. */
+            server_struct *node;
+            while (active_request->servers != NULL) {
+                node = active_request->servers->prev;
+                DL_DELETE(active_request->servers, node);
+                metaserver_server_add(node);
+            }
+            ms_connecting(0);
+        }
+        metaserver_request_free(active_request);
+        active_request = NULL;
+    }
+    if (!refresh_pending) {
+        return;
+    }
+    refresh_pending = false;
+    active_request = xcalloc(1, sizeof(*active_request));
+    active_request->generation = request_generation;
+    client_metaserver_options_copy(&active_request->options, &clioption_settings.metaservers);
+    metaserver_worker = SDL_CreateThread(metaserver_thread, "metaserver", active_request);
+    if (metaserver_worker == NULL) {
+        LOG(ERROR, "Metaserver thread creation failed: %s", SDL_GetError());
+        metaserver_request_free(active_request);
+        active_request = NULL;
+        ms_connecting(0);
+    }
 }
 
 void metaserver_get_servers(void) {
     if (!enabled) {
         return;
     }
+    metaserver_invalidate();
+    refresh_pending = true;
+    ms_connecting(1);
+    metaserver_poll();
+}
 
-    if (metaserver_worker != NULL) {
-        SDL_WaitThread(metaserver_worker, NULL);
-        metaserver_worker = NULL;
-    }
+metaserver_provider_t metaserver_get_provider(void) {
+    return provider;
+}
 
-    SDL_LockMutex(metaserver_connecting_mutex);
-    metaserver_connecting = 1;
-    SDL_UnlockMutex(metaserver_connecting_mutex);
-
-    metaserver_worker = SDL_CreateThread(metaserver_thread, "metaserver", NULL);
-    if (metaserver_worker == NULL) {
-        LOG(ERROR, "Metaserver thread creation failed: %s", SDL_GetError());
-        exit(1);
-    }
+void metaserver_toggle_provider(void) {
+    provider = provider == METASERVER_PROVIDER_DEFAULT ? METASERVER_PROVIDER_DEV
+                                                      : METASERVER_PROVIDER_DEFAULT;
+    metaserver_clear_data();
+    /* A pending CLI join secret must not cross into the other provider even
+     * when no server has been selected yet. */
+    client_attempt_secrets_clear(NULL, &clioption_settings.join_password, NULL);
+    client_metaserver_options_replace_provider(&clioption_settings.metaservers, provider);
+    enabled = true;
+    /* The intro requests ST_META to rebuild CLI entries and queue discovery. */
+    ms_connecting(1);
 }

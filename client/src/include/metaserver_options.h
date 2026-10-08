@@ -7,6 +7,8 @@
 #ifndef METASERVER_OPTIONS_H
 #define METASERVER_OPTIONS_H
 
+#include <metaserver.h>
+
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -48,6 +50,18 @@ void client_metaserver_options_disable(client_metaserver_options_t *options);
 
 /** Return whether metaserver access is enabled. */
 bool client_metaserver_options_enabled(const client_metaserver_options_t *options);
+
+/** Deep-copy into a zero-initialized or previously initialized destination. */
+void client_metaserver_options_copy(client_metaserver_options_t *destination,
+                                    const client_metaserver_options_t *source);
+
+/** Replace all endpoints with one built-in pair and enable discovery. */
+void client_metaserver_options_replace_provider(client_metaserver_options_t *options,
+                                                metaserver_provider_t provider);
+
+/** Exact enabled development pair, otherwise the default toggle position. */
+metaserver_provider_t client_metaserver_options_provider(
+    const client_metaserver_options_t *options);
 
 /** Free all copied endpoint pairs and restore the zero-initialized state. */
 void client_metaserver_options_deinit(client_metaserver_options_t *options);

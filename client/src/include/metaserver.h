@@ -57,7 +57,18 @@ extern server_struct *metaserver_add(const char *hostname,
                                      const char *version,
                                      const char *desc);
 
-extern int metaserver_thread(void *dummy);
+typedef enum metaserver_provider {
+    METASERVER_PROVIDER_DEFAULT,
+    METASERVER_PROVIDER_DEV
+} metaserver_provider_t;
+
+/** Main-thread APIs. Provider changes affect only this client session. */
+metaserver_provider_t metaserver_get_provider(void);
+/** Clear selection/list and replace endpoints. Caller requests ST_META to refresh. */
+void metaserver_toggle_provider(void);
+
+/** Publish completed current requests and start the latest pending refresh. */
+void metaserver_poll(void);
 
 extern void metaserver_get_servers(void);
 
