@@ -7,6 +7,7 @@
 #include <server.h>
 #include <account.h>
 #include <auth_worker.h>
+#include <access_server.h>
 #include <player.h>
 #include <object.h>
 #include <commands.h>
@@ -32,6 +33,7 @@ static player *fixture_actor;
 static char saved_default_groups[MAX_BUF];
 static bool fixture_groups_saved;
 static bool fixture_paths_owned;
+static bool saved_access_required;
 
 static char *read_account(void) {
     FILE *fp = fopen(account_path, "rb");
@@ -75,7 +77,9 @@ static socket_struct *connection(size_t index) {
         ck_assert_ptr_nonnull(ns->sc);
         ns->state = ST_LOGIN;
         ns->socket_version = SOCKET_VERSION;
-        ns->join_authenticated = true;
+        ns->access_policy_sent = true;
+        ns->access_transport_authenticated = true;
+        ns->access_authenticated = true;
         ns->setup_completed = true;
         socket_login_deadline_refresh(ns);
     }
@@ -130,6 +134,8 @@ static void fixture_cleanup(void) {
     account_fail_saves_for_test(false);
     auth_worker_pause_for_test(false);
     account_deinit();
+    access_server_session_sequence_for_test(NULL, 0);
+    settings.access_required = saved_access_required;
     if (fixture_groups_saved) {
         memcpy(settings.default_permission_groups, saved_default_groups,
                sizeof(saved_default_groups));
@@ -172,6 +178,8 @@ static void fixture_setup(void) {
         fixture_cleanup();
     }
     check_test_setup();
+    saved_access_required = settings.access_required;
+    settings.access_required = false;
     memset(connections, 0, sizeof(connections));
     socket_struct *seed = connection(0);
     const char *id = socket_get_id(seed->sc);
@@ -528,19 +536,30 @@ START_TEST(test_concurrent_password_changes_recheck_current_credential) {
 }
 END_TEST
 
-START_TEST(test_password_reset_rechecks_actor_permission) {
-    char *before = read_account();
+static player *reset_actor(void) {
     memcpy(saved_default_groups, settings.default_permission_groups,
            sizeof(saved_default_groups));
     fixture_groups_saved = true;
     settings.default_permission_groups[0] = '\0';
-    object *actor = player_get_dummy(NULL, NULL);
-    player *pl = CONTR(actor);
+    player *pl = CONTR(player_get_dummy(NULL, NULL));
     fixture_actor = pl;
     pl->cmd_permissions = xcalloc(1, sizeof(*pl->cmd_permissions));
     pl->cmd_permissions[0] = xstrdup("password");
     pl->num_cmd_permissions = 1;
     ck_assert(commands_check_permission(pl, "password"));
+    pl->cs->socket_version = SOCKET_VERSION;
+    pl->cs->setup_completed = true;
+    pl->cs->access_policy_sent = true;
+    pl->cs->access_transport_authenticated = true;
+    pl->cs->access_authenticated = true;
+    pl->cs->state = ST_PLAYING;
+    return pl;
+}
+
+START_TEST(test_password_reset_rechecks_actor_permission) {
+    char *before = read_account();
+    player *pl = reset_actor();
+    object *actor = pl->ob;
     auth_worker_pause_for_test(true);
     char name[MAX_BUF];
     snprintf(VS(name), "%s", fixture_name);
@@ -605,6 +624,194 @@ START_TEST(test_shutdown_clears_pending_work_and_can_restart) {
 }
 END_TEST
 
+/* Exercise every async mutation through the same completion admission fence. */
+static socket_struct *submit_admission_operation(int operation) {
+    socket_struct *ns = connection(0);
+    if (operation == 0) {
+        login(ns, fixture_password);
+    } else if (operation == 1) {
+        register_account(ns, fixture_password);
+    } else if (operation == 2) {
+        ns->account = xstrdup(fixture_name);
+        char old_password[MAX_BUF], password[] = "changed-async-9!";
+        char confirmation[] = "changed-async-9!";
+        snprintf(VS(old_password), "%s", fixture_password);
+        account_password_change(ns, old_password, password, confirmation);
+    } else {
+        player *pl = reset_actor();
+        char name[MAX_BUF];
+        snprintf(VS(name), "%s", fixture_name);
+        account_password_force(pl->ob, name, "changed-async-9!");
+        ns = pl->cs;
+    }
+    ck_assert_uint_ne(ns->auth_request, 0);
+    ck_assert(auth_worker_wait_idle_for_test());
+    return ns;
+}
+
+static void assert_admission_unchanged(socket_struct *ns, const char *before, int operation) {
+    char *after = read_account();
+    ck_assert_str_eq(after, before);
+    free(after);
+    struct stat statbuf;
+    ck_assert_int_eq(stat(registration_path, &statbuf), -1);
+    ck_assert_int_eq(errno, ENOENT);
+    if (operation != 2) {
+        ck_assert_ptr_null(ns->account);
+    }
+    ck_assert_uint_eq(ns->password_fails, 0);
+    ck_assert(!has_message(ns, "Password changed successfully"));
+}
+
+START_TEST(test_completed_operation_requires_current_access) {
+    char *before = read_account();
+    socket_struct *ns = submit_admission_operation(_i);
+    settings.access_required = true;
+    /* Revoked and expired tokens both return DENIED, before the later socket
+     * poll has had a chance to mark this still-live connection dead. */
+    const access_session_state_t sequence[] = {ACCESS_SESSION_DENIED};
+    access_server_session_sequence_for_test(sequence, arraysize(sequence));
+    account_auth_poll();
+    ck_assert_uint_eq(ns->auth_request, 0);
+    ck_assert_int_ne(ns->state, ST_DEAD);
+    assert_admission_unchanged(ns, before, _i);
+    free(before);
+}
+END_TEST
+
+START_TEST(test_busy_completion_retries_current_access) {
+    char *before = read_account();
+    socket_struct *ns = submit_admission_operation(_i);
+    uint64_t request = ns->auth_request;
+    settings.access_required = true;
+    const access_session_state_t sequence[] = {ACCESS_SESSION_BUSY, ACCESS_SESSION_BUSY,
+                                                ACCESS_SESSION_VALID};
+    access_server_session_sequence_for_test(sequence, arraysize(sequence));
+    for (size_t i = 0; i < 2; i++) {
+        account_auth_poll();
+        ck_assert_uint_eq(ns->auth_request, request);
+        ck_assert_uint_eq(auth_worker_pending_for_test(), 0);
+        assert_admission_unchanged(ns, before, _i);
+    }
+    account_auth_poll();
+    ck_assert_uint_eq(ns->auth_request, 0);
+    if (_i < 2) {
+        ck_assert_str_eq(ns->account, _i == 0 ? fixture_name : registration_name);
+    } else {
+        ck_assert(has_message(ns, "Password changed successfully"));
+    }
+    char *after = read_account();
+    if (_i != 1) {
+        ck_assert_str_ne(after, before);
+    }
+    free(after);
+    free(before);
+}
+END_TEST
+
+START_TEST(test_busy_result_cannot_outlive_session_or_deadline) {
+    server_clock_fake_install(UINT64_C(125000), server_tick_now(),
+                              server_monotonic_now(), server_wall_utc_now());
+    char *before = read_account();
+    socket_struct *ns = submit_admission_operation(0);
+    settings.access_required = true;
+    const access_session_state_t sequence[] = {ACCESS_SESSION_BUSY, ACCESS_SESSION_VALID};
+    access_server_session_sequence_for_test(sequence, arraysize(sequence));
+    account_auth_poll();
+    ck_assert_uint_ne(ns->auth_request, 0);
+    if (_i == 0) {
+        server_clock_fake_advance_monotonic(server_duration_from_seconds(30));
+    } else if (_i == 1) {
+        account_auth_connection_clear(ns);
+    } else if (_i == 2) {
+        ns->access_authenticated = false;
+    } else {
+        account_deinit();
+    }
+    account_auth_poll();
+    ck_assert_uint_eq(ns->auth_request, 0);
+    assert_admission_unchanged(ns, before, 0);
+    free(before);
+}
+END_TEST
+
+START_TEST(test_busy_result_rechecks_revocation_and_reset_permission) {
+    char *before = read_account();
+    socket_struct *ns = submit_admission_operation(_i == 0 ? 0 : 3);
+    settings.access_required = true;
+    const access_session_state_t sequence[] = {ACCESS_SESSION_BUSY, ACCESS_SESSION_DENIED};
+    access_server_session_sequence_for_test(sequence, arraysize(sequence));
+    account_auth_poll();
+    ck_assert_uint_ne(ns->auth_request, 0);
+    if (_i == 1) {
+        free(fixture_actor->cmd_permissions[0]);
+        fixture_actor->cmd_permissions[0] = NULL;
+        /* Permission loss must reject even if the token is still valid. */
+        const access_session_state_t valid[] = {ACCESS_SESSION_VALID};
+        access_server_session_sequence_for_test(valid, arraysize(valid));
+    }
+    account_auth_poll();
+    ck_assert_uint_eq(ns->auth_request, 0);
+    assert_admission_unchanged(ns, before, _i == 0 ? 0 : 3);
+    free(before);
+}
+END_TEST
+
+START_TEST(test_busy_results_retain_capacity_reservations) {
+    settings.access_required = true;
+    access_session_state_t busy[AUTH_WORKER_QUEUE];
+    for (size_t i = 0; i < arraysize(busy); i++) {
+        login(connection(i), fixture_password);
+        ck_assert_uint_ne(connection(i)->auth_request, 0);
+        /* Avoid making this a race against the independent worker queue cap. */
+        ck_assert(auth_worker_wait_idle_for_test());
+        busy[i] = ACCESS_SESSION_BUSY;
+    }
+    access_server_session_sequence_for_test(busy, arraysize(busy));
+    account_auth_poll();
+    ck_assert_uint_eq(auth_worker_pending_for_test(), 0);
+    for (size_t i = 0; i < arraysize(busy); i++) {
+        ck_assert_uint_ne(connection(i)->auth_request, 0);
+        ck_assert_ptr_null(connection(i)->account);
+    }
+    /* Reset only the rate budget so capacity is the limit under test. */
+    account_init();
+    auth_worker_pause_for_test(true);
+    for (size_t i = arraysize(busy); i < AUTH_WORKER_CAPACITY; i++) {
+        login(connection(i), fixture_password);
+        ck_assert_uint_ne(connection(i)->auth_request, 0);
+    }
+    socket_struct *overflow = connection(AUTH_WORKER_CAPACITY);
+    login(overflow, fixture_password);
+    ck_assert_uint_eq(overflow->auth_request, 0);
+    ck_assert(has_message(overflow, "temporarily busy"));
+    ck_assert_uint_eq(overflow->password_fails, 0);
+    for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
+        account_auth_connection_clear(connection(i));
+    }
+    auth_worker_pause_for_test(false);
+    ck_assert(auth_worker_wait_idle_for_test());
+    const access_session_state_t valid[] = {ACCESS_SESSION_VALID};
+    access_server_session_sequence_for_test(valid, arraysize(valid));
+    login(overflow, fixture_password);
+    drain();
+    ck_assert_str_eq(overflow->account, fixture_name);
+    ck_assert_uint_eq(successful_logins(), 1);
+}
+END_TEST
+
+START_TEST(test_public_completion_requires_transport_admission) {
+    char *before = read_account();
+    socket_struct *ns = submit_admission_operation(0);
+    ck_assert(!settings.access_required);
+    ns->access_transport_authenticated = false;
+    account_auth_poll();
+    ck_assert_uint_eq(ns->auth_request, 0);
+    assert_admission_unchanged(ns, before, 0);
+    free(before);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("account_async");
     TCase *tc = tcase_create("integration");
@@ -625,6 +832,12 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_password_reset_rechecks_actor_permission);
     tcase_add_test(tc, test_pending_request_timeout_discards_running_result);
     tcase_add_test(tc, test_shutdown_clears_pending_work_and_can_restart);
+    tcase_add_loop_test(tc, test_completed_operation_requires_current_access, 0, 4);
+    tcase_add_loop_test(tc, test_busy_completion_retries_current_access, 0, 4);
+    tcase_add_loop_test(tc, test_busy_result_cannot_outlive_session_or_deadline, 0, 4);
+    tcase_add_test(tc, test_public_completion_requires_transport_admission);
+    tcase_add_loop_test(tc, test_busy_result_rechecks_revocation_and_reset_permission, 0, 2);
+    tcase_add_test(tc, test_busy_results_retain_capacity_reservations);
     suite_add_tcase(s, tc);
     return s;
 }

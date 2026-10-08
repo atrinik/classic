@@ -36,6 +36,7 @@
 #include <initialization.h>
 #include <account.h>
 #include <auth_worker.h>
+#include <access_server.h>
 #include <commands.h>
 #include <exploration.h>
 #include <toolkit/packet.h>
@@ -733,6 +734,12 @@ typedef struct {
     tag_t actor_count;
     server_monotonic_t deadline;
     auth_credential_t credential;
+    /* Completed results keep their existing bounded reservation while access
+     * admission is busy. Never retain the worker's plaintext input buffers. */
+    bool result_ready;
+    bool create;
+    password_verify_result_t result;
+    char record[PASSWORD_RECORD_SIZE];
 } account_auth_pending_t;
 
 static account_auth_pending_t auth_pending[AUTH_WORKER_CAPACITY];
@@ -884,12 +891,13 @@ static bool account_auth_session_valid(const account_auth_pending_t *pending) {
     }
     return ns->auth_generation == pending->generation && ns->auth_request == pending->request &&
            ns->state != ST_DEAD && ns->state != ST_ZOMBIE && ns->state != ST_AVAILABLE &&
+           socket_connection_admitted(ns) &&
            ((pending->session_account == NULL && ns->account == NULL) ||
             (pending->session_account != NULL && ns->account != NULL &&
              strcmp(pending->session_account, ns->account) == 0));
 }
 
-static void account_auth_complete(account_auth_pending_t *pending, const auth_work_t *work) {
+static void account_auth_complete(account_auth_pending_t *pending) {
     socket_struct *ns = pending->connection;
     account_auth_kind_t kind = pending->kind;
     account_struct account = {0};
@@ -925,11 +933,11 @@ static void account_auth_complete(account_auth_pending_t *pending, const auth_wo
             goto out;
         }
     }
-    if (work->result != PASSWORD_VERIFY_MATCH) {
-        account_auth_error(ns, kind, work->result == PASSWORD_VERIFY_MISMATCH
+    if (pending->result != PASSWORD_VERIFY_MATCH) {
+        account_auth_error(ns, kind, pending->result == PASSWORD_VERIFY_MISMATCH
                                         ? "Invalid password."
                                         : "Password processing failed; please retry.");
-        if (kind == AUTH_LOGIN && work->result == PASSWORD_VERIFY_MISMATCH) {
+        if (kind == AUTH_LOGIN && pending->result == PASSWORD_VERIFY_MISMATCH) {
             ns->password_fails++;
             LOG(SYSTEM, "%s: Failed to provide correct password for account %s.",
                 socket_get_id(ns->sc), pending->name);
@@ -943,8 +951,8 @@ static void account_auth_complete(account_auth_pending_t *pending, const auth_wo
         }
         goto out;
     }
-    if (work->create) {
-        memcpy(account.password_record, work->record, sizeof(account.password_record));
+    if (pending->create) {
+        memcpy(account.password_record, pending->record, sizeof(account.password_record));
         OPENSSL_cleanse(account.pbkdf2_password, sizeof(account.pbkdf2_password));
         OPENSSL_cleanse(account.pbkdf2_salt, sizeof(account.pbkdf2_salt));
         account.has_pbkdf2_password = account.has_pbkdf2_salt = false;
@@ -999,6 +1007,21 @@ out:
 }
 
 void account_auth_poll(void) {
+    auth_work_t work;
+    while (auth_worker_take(&work)) {
+        for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
+            account_auth_pending_t *pending = &auth_pending[i];
+            if (pending->connection != NULL && pending->generation == work.generation &&
+                pending->request == work.request) {
+                pending->result_ready = true;
+                pending->create = work.create;
+                pending->result = work.result;
+                memcpy(pending->record, work.record, sizeof(pending->record));
+                break;
+            }
+        }
+        OPENSSL_cleanse(&work, sizeof(work));
+    }
     for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
         account_auth_pending_t *pending = &auth_pending[i];
         if (pending->connection == NULL) {
@@ -1015,26 +1038,30 @@ void account_auth_poll(void) {
                                    "Authentication timed out; please retry.");
             }
             account_auth_release(pending);
+            continue;
         }
-    }
-    auth_work_t work;
-    while (auth_worker_take(&work)) {
-        for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
-            account_auth_pending_t *pending = &auth_pending[i];
-            if (pending->connection != NULL && pending->generation == work.generation &&
-                pending->request == work.request) {
-                /* Recheck each result: a prior completion can change credentials. */
-                if (account_auth_session_valid(pending) &&
-                    !server_monotonic_expired(pending->deadline) &&
-                    !(pending->connection->state == ST_LOGIN &&
-                      socket_login_expired(pending->connection))) {
-                    account_auth_complete(pending, &work);
-                }
+        if (!pending->result_ready) {
+            continue;
+        }
+        /* The access socket poll runs later in the loop. Check current token
+         * validity here before any account, credential or failure side effect.
+         * BUSY is neither authorization nor denial: retry this bounded result
+         * on a later tick, under the original deadline and session checks. */
+        if (settings.access_required) {
+            access_session_state_t admission =
+                access_server_session_check(&pending->connection->access_token);
+            if (admission == ACCESS_SESSION_BUSY) {
+                continue;
+            }
+            if (admission != ACCESS_SESSION_VALID) {
                 account_auth_release(pending);
-                break;
+                continue;
             }
         }
-        OPENSSL_cleanse(&work, sizeof(work));
+        /* Every completion reloads credentials; an earlier result may have
+         * changed the account since this worker's input snapshot was taken. */
+        account_auth_complete(pending);
+        account_auth_release(pending);
     }
 }
 
