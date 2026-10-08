@@ -560,6 +560,7 @@ if (BUILD_TESTING)
     add_test(NAME client-help-parser COMMAND ${EXECUTABLE} --help-parser-test)
 
     add_test(NAME client-access-lifecycle COMMAND ${EXECUTABLE} --access-lifecycle-test)
+    add_test(NAME client-book-edit-lifecycle COMMAND ${EXECUTABLE} --book-edit-lifecycle-test)
 
     add_executable(client-capture-privacy-tests
         src/tests/capture_privacy.c src/client/capture_privacy.c)
