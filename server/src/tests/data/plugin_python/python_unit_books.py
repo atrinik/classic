@@ -39,7 +39,21 @@ def reject(book, action):
         raise RuntimeError("Rejected book mutation changed its signed record")
 
 
+def reject_deletion(book):
+    before = snapshot(book)
+    try:
+        delattr(book, "race")
+    except TypeError as error:
+        if "Object attributes cannot be deleted" not in str(error):
+            raise
+    else:
+        raise RuntimeError("Object attribute deletion was accepted")
+    if snapshot(book) != before:
+        raise RuntimeError("Rejected deletion changed the object")
+
+
 book = Atrinik.CreateObject("book")
+reject_deletion(book)
 book.name = "Plugin signed title"
 book.msg = "Plugin signed contents"
 book.custom_name = "Quest alias"
@@ -56,6 +70,7 @@ for key, value in signature.items():
 
 
 def check_finalized(book):
+    reject_deletion(book)
     for field, value in (
         ("name", "Tampered title"),
         ("msg", "Tampered contents"),

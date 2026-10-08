@@ -3065,6 +3065,12 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
 
     OBJEXISTCHECK_INT(obj);
 
+    if (value == NULL) {
+        PyErr_SetString(PyExc_TypeError,
+                        "Object attributes cannot be deleted; assign None where supported.");
+        return -1;
+    }
+
     if ((field->offset == offsetof(object, name) || field->offset == offsetof(object, msg) ||
          field->offset == offsetof(object, custom_name) || field->offset == offsetof(object, title) ||
          field->offset == offsetof(object, type)) &&
