@@ -62,7 +62,7 @@ void metaserver_test_fetch(const client_metaserver_options_t *options, server_st
         fetch_peak = fetch_inflight;
     }
     REQUIRE(index < 2);
-    SDL_ConditionBroadcast(fetch_condition);
+    SDL_BroadcastCondition(fetch_condition);
     while (fetch_block && !fetch_release) {
         SDL_WaitCondition(fetch_condition, fetch_mutex);
     }
@@ -75,12 +75,12 @@ void metaserver_test_fetch(const client_metaserver_options_t *options, server_st
                      "%s",
                      options->endpoints[0].rendezvous_origin) < (int)sizeof(fetched_rendezvous[index]));
     fetch_captured++;
-    SDL_ConditionBroadcast(fetch_condition);
+    SDL_BroadcastCondition(fetch_condition);
     if (fetch_server[index]) {
         test_server_append(servers, index == 0 ? "obsolete" : "development");
     }
     fetch_inflight--;
-    SDL_ConditionBroadcast(fetch_condition);
+    SDL_BroadcastCondition(fetch_condition);
     SDL_UnlockMutex(fetch_mutex);
 }
 
@@ -101,7 +101,7 @@ static void wait_for_fetch(size_t count) {
 static void release_fetch(void) {
     SDL_LockMutex(fetch_mutex);
     fetch_release = true;
-    SDL_ConditionBroadcast(fetch_condition);
+    SDL_BroadcastCondition(fetch_condition);
     SDL_UnlockMutex(fetch_mutex);
 }
 
@@ -162,12 +162,12 @@ static int shutdown_thread(void *unused) {
     (void)unused;
     SDL_LockMutex(fetch_mutex);
     shutdown_started = true;
-    SDL_ConditionBroadcast(fetch_condition);
+    SDL_BroadcastCondition(fetch_condition);
     SDL_UnlockMutex(fetch_mutex);
     metaserver_deinit();
     SDL_LockMutex(fetch_mutex);
     shutdown_complete = true;
-    SDL_ConditionBroadcast(fetch_condition);
+    SDL_BroadcastCondition(fetch_condition);
     SDL_UnlockMutex(fetch_mutex);
     return 0;
 }
