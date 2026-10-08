@@ -19,6 +19,7 @@ import subprocess
 
 PREFIX = PurePosixPath("/usr/local")
 LOCK = Path(__file__).with_name("runtime-provider.lock.json")
+PYTHON_DYNLOAD = Path("/usr/lib/python3.14/lib-dynload")
 REQUIRED = {
     "lib/libcurl.so.4", "lib/libcurl.so.4.8.0",
     "lib/libcares.so.2", "lib/libcares.so.2.19.5",
@@ -171,7 +172,12 @@ def verify_packages(lock, observed):
         raise ProviderError("Unexpected distro libcurl4t64 installed")
 
 
-def parse_ldd(output):
+def parse_ldd(output, *, allow_dependency_free=False):
+    # Pinned distro Python modules may resolve their symbols from the hosting
+    # interpreter and have no DT_NEEDED entries. glibc ldd reports this exact
+    # successful result, despite these files being dynamic shared objects.
+    if allow_dependency_free and output.strip() == "statically linked":
+        return {}
     if "not found" in output:
         raise ProviderError("Unresolved ELF dependency: " + output.strip())
     resolved = dict(re.findall(r"^\s*(\S+) => (/\S+) \(", output, re.MULTILINE))
@@ -192,8 +198,14 @@ def verify_elf(lock, targets):
     for target in targets:
         if not target.is_file():
             raise ProviderError(f"Missing runtime ELF target: {target}")
-        output = subprocess.check_output(["ldd", str(target)], text=True)
-        resolved = parse_ldd(output)
+        try:
+            output = subprocess.check_output(["ldd", str(target)], text=True)
+            resolved = parse_ldd(output, allow_dependency_free=(
+                target.parent == PYTHON_DYNLOAD and target.suffix == ".so"))
+        except subprocess.CalledProcessError as error:
+            raise ProviderError(f"Runtime ELF target {target}: ldd failed with exit {error.returncode}") from error
+        except ProviderError as error:
+            raise ProviderError(f"Runtime ELF target {target}: {error}") from error
         for soname, path in resolved.items():
             if soname in expected and Path(path).resolve(strict=True) != Path(expected[soname]).resolve(strict=True):
                 raise ProviderError(f"Unexpected ELF provider for {soname}: {path}")
@@ -208,7 +220,7 @@ def runtime_targets(server):
                                           "libplugin_arena.so", "libplugin_python.so")]
     targets += [Path("/usr/local/lib/libcurl.so.4"), Path("/usr/local/lib/libcares.so.2"),
                 Path("/usr/lib/x86_64-linux-gnu/libpython3.14.so.1.0")]
-    extensions = sorted(Path("/usr/lib/python3.14/lib-dynload").glob("*.so"))
+    extensions = sorted(PYTHON_DYNLOAD.glob("*.so"))
     if not extensions:
         raise ProviderError("Missing Python runtime extension modules")
     return targets + extensions

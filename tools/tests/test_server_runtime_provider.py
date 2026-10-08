@@ -7,6 +7,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -166,6 +168,46 @@ class ServerRuntimeProviderTests(unittest.TestCase):
                 with self.assertRaisesRegex(provider.ProviderError, "Incomplete"):
                     provider.verify_elf(LOCK, [target])
 
+    def test_dependency_free_python_modules_retain_all_loader_checks(self):
+        expected = dict(LOCK["curl_distro_sonames"], **{
+            "libcurl.so.4": "/usr/local/lib/libcurl.so.4",
+            "libcares.so.2": "/usr/local/lib/libcares.so.2"})
+        linked = "\n".join(f"{name} => {path} (0x1234)" for name, path in expected.items() if name != "loader")
+        linked += f"\n {expected['loader']} (0x1234)\n"
+        with tempfile.TemporaryDirectory(dir=os.environ.get("ATRINIK_TEST_TMPDIR")) as temporary:
+            root = Path(temporary)
+            modules = root / "lib-dynload"
+            modules.mkdir()
+            module = modules / "_asyncio.cpython-314-x86_64-linux-gnu.so"
+            module.touch()
+            core = root / "atrinik-server"
+            core.touch()
+            with patch.object(provider, "PYTHON_DYNLOAD", modules), \
+                    patch.object(Path, "resolve", lambda path, strict=False: path):
+                with patch.object(provider.subprocess, "check_output", side_effect=[linked, "\tstatically linked\n"]):
+                    provider.verify_elf(LOCK, [core, module])
+                for output in ("", "unknown output", "statically linked\nlibc.so.6 => not found",
+                               "statically linked\nunexpected extra line"):
+                    with self.subTest(output=output), \
+                            patch.object(provider.subprocess, "check_output", return_value=output):
+                        with self.assertRaisesRegex(provider.ProviderError, "Runtime ELF target .*_asyncio"):
+                            provider.verify_elf(LOCK, [module])
+                with patch.object(provider.subprocess, "check_output", return_value="statically linked"):
+                    with self.assertRaisesRegex(provider.ProviderError, "Incomplete curl/c-ares"):
+                        provider.verify_elf(LOCK, [module])
+                    for name in ("atrinik-server", "atrinik-access-status", "libcurl.so.4", "libplugin_arena.so"):
+                        target = root / name
+                        target.touch()
+                        with self.subTest(target=name), self.assertRaisesRegex(provider.ProviderError, "No dynamic ELF"):
+                            provider.verify_elf(LOCK, [target])
+                with patch.object(provider.subprocess, "check_output", side_effect=subprocess.CalledProcessError(
+                        1, ["ldd", str(module)], output="statically linked")):
+                    with self.assertRaisesRegex(provider.ProviderError, "Runtime ELF target .*_asyncio.*exit 1"):
+                        provider.verify_elf(LOCK, [module])
+                module.unlink()
+                with self.assertRaisesRegex(provider.ProviderError, "Missing runtime ELF target"):
+                    provider.verify_elf(LOCK, [module])
+
     def test_complete_package_graph_rejects_indirect_omissions(self):
         roots = ["fixture-server", "fixture-python"]
         dependencies = {"fixture-server": ["fixture-gd", "fixture-libc"],
@@ -206,6 +248,55 @@ class ServerRuntimeProviderTests(unittest.TestCase):
                                 capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.splitlines(), [f"{r['Package']}={r['Version']}" for r in LOCK["packages"]])
         self.assertFalse(any(line.startswith("libcurl4t64=") for line in result.stdout.splitlines()))
+
+    def run_docker_apt_acquisition(self, failed_phase=None):
+        # Execute the Dockerfile's real update/install chain with only apt-get
+        # replaced. This checks option propagation through xargs and shell
+        # failure handling without network or package changes on the test host.
+        docker = (ROOT / "server/Dockerfile").read_text().replace("\\\n", " ")
+        start = docker.index("    && apt-get ") + len("    && ")
+        end = docker.index("    && rm -rf /var/lib/apt/lists/*", start)
+        acquisition = docker[start:end].strip()
+        with tempfile.TemporaryDirectory(dir=os.environ.get("ATRINIK_TEST_TMPDIR")) as temporary:
+            root = Path(temporary)
+            log = root / "apt.jsonl"
+            lock = root / "packages.lock"
+            lock.write_text("fixture-package=1.2.3\n")
+            stub = root / "apt-get"
+            stub.write_text(
+                "#!" + sys.executable + "\n"
+                "import json, os, sys\n"
+                "with open(os.environ['APT_TEST_LOG'], 'a') as stream:\n"
+                "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "sys.exit(100 if os.environ.get('APT_TEST_FAIL') in sys.argv[1:] else 0)\n")
+            stub.chmod(0o755)
+            acquisition = acquisition.replace("/tmp/runtime-provider-packages.lock", shlex.quote(str(lock)))
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                       APT_TEST_LOG=str(log), APT_TEST_FAIL=failed_phase or "")
+            result = subprocess.run(["/bin/sh", "-c", acquisition], env=env,
+                                    capture_output=True, text=True, timeout=10)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+        return result, calls
+
+    def test_docker_apt_uses_explicit_public_trust_for_both_acquisitions(self):
+        result, calls = self.run_docker_apt_acquisition()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(calls), 2)
+        for args in calls:
+            self.assertEqual(args[:2], ["-o", "Acquire::https::CAInfo=/etc/ssl/certs/ca-certificates.crt"])
+        self.assertEqual(calls[0][2:], ["-o", "APT::Update::Error-Mode=any", "update"])
+        self.assertEqual(calls[1][2:], ["install", "-y", "--no-install-recommends", "fixture-package=1.2.3"])
+
+    def test_docker_apt_failed_refresh_never_installs_from_stale_indexes(self):
+        result, calls = self.run_docker_apt_acquisition("update")
+        self.assertEqual(result.returncode, 100)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][-1], "update")
+
+    def test_docker_apt_install_failure_propagates(self):
+        result, calls = self.run_docker_apt_acquisition("install")
+        self.assertEqual(result.returncode, 123)  # xargs propagates child failure.
+        self.assertEqual(len(calls), 2)
 
     def test_docker_uses_locked_images_and_checks_without_tls_bypass(self):
         docker = (ROOT / "server/Dockerfile").read_text()
