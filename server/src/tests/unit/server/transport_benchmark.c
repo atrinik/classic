@@ -560,6 +560,8 @@ static void issue566_durability_benchmark(object *pl, strakewood_timing_t *timin
         strakewood_timing_add(&timings[2], started_us);
     }
 }
+/* Protected access stores and their worker are supported on Linux only. */
+#ifdef __linux__
 /* Unlike the timing benchmark, this fixture receives arbitrary gameplay
  * packets. A complete maximum-sized wire frame fits, including its header. */
 typedef struct transport_auth_received {
@@ -998,6 +1000,8 @@ START_TEST(test_quic_login_and_movement_continue_while_authentication_pending) {
 }
 END_TEST
 
+#endif /* __linux__ */
+
 /** Phase markers survive a stuck callback; the isolated runner bounds the child. */
 static void strakewood_progress(unsigned int tick, const char *phase) {
     fprintf(stderr, "STRAKEWOOD tick=%u phase=%s\n", tick, phase);
@@ -1322,12 +1326,14 @@ static Suite *suite(void) {
         tcase_add_test(tc_core, test_strakewood_idle_simulation);
     } else {
         tcase_add_test(tc_core, test_deadline_driven_quic_service_benchmark);
+#ifdef __linux__
         TCase *tc_auth = tcase_create("Pending authentication");
         tcase_set_timeout(tc_auth, 45);
         tcase_add_unchecked_fixture(tc_auth, check_setup, check_teardown);
         tcase_add_checked_fixture(tc_auth, check_test_setup, transport_auth_teardown);
         tcase_add_test(tc_auth, test_quic_login_and_movement_continue_while_authentication_pending);
         suite_add_tcase(s, tc_auth);
+#endif
     }
     return s;
 }
