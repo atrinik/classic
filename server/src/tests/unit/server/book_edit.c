@@ -119,6 +119,128 @@ START_TEST(test_cost_and_text_bounds) {
 }
 END_TEST
 
+/* Deliberately use the ordinary full DP table as an independent small oracle.
+ * Include more than two machine words to exercise cross-word subtraction. */
+#define INK_ORACLE_MAX 192
+static size_t ink_cost_oracle(const char *before, const char *after) {
+    size_t old_len = strlen(before), new_len = strlen(after);
+    ck_assert_uint_le(old_len, INK_ORACLE_MAX);
+    ck_assert_uint_le(new_len, INK_ORACLE_MAX);
+    uint16_t table[INK_ORACLE_MAX + 1][INK_ORACLE_MAX + 1] = {{0}};
+    for (size_t i = 1; i <= old_len; i++) {
+        for (size_t j = 1; j <= new_len; j++) {
+            if (before[i - 1] == after[j - 1]) {
+                table[i][j] = table[i - 1][j - 1] + 1;
+            } else {
+                table[i][j] = MAX(table[i - 1][j], table[i][j - 1]);
+            }
+        }
+    }
+    return new_len - table[old_len][new_len];
+}
+
+static void ink_small_string(char *text, unsigned int value) {
+    size_t len = 0;
+    while (value != 0) {
+        text[len++] = (char)('a' + (value - 1) % 3);
+        value = (value - 1) / 3;
+    }
+    text[len] = '\0';
+}
+
+START_TEST(test_ink_cost_matches_independent_oracle) {
+    char before[INK_ORACLE_MAX + 1], after[INK_ORACLE_MAX + 1];
+    /* All strings of length zero through three over a three-byte alphabet. */
+    for (unsigned int i = 0; i < 40; i++) {
+        ink_small_string(before, i);
+        for (unsigned int j = 0; j < 40; j++) {
+            ink_small_string(after, j);
+            ck_assert_uint_eq(book_edit_ink_cost(before, after), ink_cost_oracle(before, after));
+        }
+    }
+    uint32_t seed = UINT32_C(0x619cb542);
+    for (size_t sample = 0; sample < 512; sample++) {
+        size_t old_len = sample % (INK_ORACLE_MAX + 1);
+        size_t new_len = (sample * 67) % (INK_ORACLE_MAX + 1);
+        for (size_t i = 0; i < MAX(old_len, new_len); i++) {
+            seed = seed * UINT32_C(1664525) + UINT32_C(1013904223);
+            /* Alternate repeated symbols and all non-NUL byte values,
+             * including bytes with the sign bit set. */
+            before[i] = (char)(1 + (seed >> 16) % (sample % 2 ? 255 : 3));
+            seed = seed * UINT32_C(1664525) + UINT32_C(1013904223);
+            after[i] = (char)(1 + (seed >> 16) % (sample % 2 ? 255 : 3));
+        }
+        before[old_len] = '\0';
+        after[new_len] = '\0';
+        ck_assert_uint_eq(book_edit_ink_cost(before, after), ink_cost_oracle(before, after));
+    }
+    const size_t boundaries[] = {63, 64, 65, 127, 128, 129, INK_ORACLE_MAX};
+    for (size_t i = 0; i < sizeof(boundaries) / sizeof(boundaries[0]); i++) {
+        size_t len = boundaries[i];
+        memset(before, 'a', len);
+        memset(after, 'a', len);
+        before[len] = after[len] = '\0';
+        before[0] = 'b';
+        after[len - 1] = 'b';
+        ck_assert_uint_eq(book_edit_ink_cost(before, after), ink_cost_oracle(before, after));
+    }
+    /* Matching and charging are byte-based, even inside UTF-8 sequences. */
+    ck_assert_uint_eq(book_edit_ink_cost("\xc3\xa9", "\xc3\xaa"), 1);
+}
+END_TEST
+
+START_TEST(test_ink_cost_adversarial_maximum) {
+    char before[BOOK_EDIT_CONTENT_MAX + 2], after[BOOK_EDIT_CONTENT_MAX + 2];
+    memset(before, 'a', BOOK_EDIT_CONTENT_MAX);
+    memset(after, 'b', BOOK_EDIT_CONTENT_MAX);
+    before[BOOK_EDIT_CONTENT_MAX] = after[BOOK_EDIT_CONTENT_MAX] = '\0';
+    ck_assert_uint_eq(book_edit_ink_cost(before, after), BOOK_EDIT_CONTENT_MAX);
+    ck_assert_uint_eq(book_edit_ink_cost(before, ""), 0);
+    ck_assert_uint_eq(book_edit_ink_cost("", after), BOOK_EDIT_CONTENT_MAX);
+    ck_assert_uint_eq(book_edit_ink_cost(before, before), 0);
+    memset(before + BOOK_EDIT_CONTENT_MAX / 2, 'b', BOOK_EDIT_CONTENT_MAX / 2);
+    memset(after + BOOK_EDIT_CONTENT_MAX / 2, 'a', BOOK_EDIT_CONTENT_MAX / 2);
+    ck_assert_uint_eq(book_edit_ink_cost(before, after), BOOK_EDIT_CONTENT_MAX / 2);
+    for (size_t i = 0; i < BOOK_EDIT_CONTENT_MAX; i++) {
+        before[i] = i % 2 ? 'a' : 'b';
+        after[i] = i % 2 ? 'b' : 'a';
+    }
+    ck_assert_uint_eq(book_edit_ink_cost(before, after), 1);
+    before[BOOK_EDIT_CONTENT_MAX] = 'a';
+    before[BOOK_EDIT_CONTENT_MAX + 1] = '\0';
+    ck_assert(book_edit_ink_cost(before, after) == SIZE_MAX);
+    ck_assert(book_edit_ink_cost(after, before) == SIZE_MAX);
+}
+END_TEST
+
+START_TEST(test_dry_pen_repeated_maximum_edits) {
+    object *writer, *pen, *book;
+    setup_writer(&writer, &pen, &book);
+    char before[BOOK_EDIT_CONTENT_MAX + 1], after[BOOK_EDIT_CONTENT_MAX + 1];
+    memset(before, 'a', BOOK_EDIT_CONTENT_MAX);
+    memset(after, 'b', BOOK_EDIT_CONTENT_MAX);
+    before[BOOK_EDIT_CONTENT_MAX] = after[BOOK_EDIT_CONTENT_MAX] = '\0';
+    FREE_AND_COPY_HASH(book->msg, before);
+    pen->stats.food = 0;
+    ck_assert(book_edit_open(pen, writer));
+    uint32_t id = reply_id(writer, BOOK_EDIT_OPEN);
+    for (size_t i = 0; i < 15; i++) {
+        submit(writer, BOOK_EDIT_SAVE, id, book, NULL, "Uncommitted", after);
+        reply_id(writer, BOOK_EDIT_ERROR);
+        ck_assert_str_eq(book->name, "Draft");
+        ck_assert_str_eq(book->msg, before);
+        ck_assert_int_eq(pen->stats.food, 0);
+    }
+    /* A dry pen still permits deletion; rejection must preserve the session. */
+    before[BOOK_EDIT_CONTENT_MAX / 2] = '\0';
+    submit(writer, BOOK_EDIT_SAVE, id, book, NULL, "Shortened", before);
+    reply_id(writer, BOOK_EDIT_UPDATED);
+    ck_assert_str_eq(book->msg, before);
+    ck_assert_int_eq(pen->stats.food, 0);
+    book_edit_clear(CONTR(writer));
+}
+END_TEST
+
 START_TEST(test_edit_copy_sign_and_persistence) {
     object *writer, *pen, *book;
     setup_writer(&writer, &pen, &book);
@@ -529,6 +651,9 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc, check_setup, check_teardown);
     tcase_add_checked_fixture(tc, check_test_setup, check_test_teardown);
     tcase_add_test(tc, test_cost_and_text_bounds);
+    tcase_add_test(tc, test_ink_cost_matches_independent_oracle);
+    tcase_add_test(tc, test_ink_cost_adversarial_maximum);
+    tcase_add_test(tc, test_dry_pen_repeated_maximum_edits);
     tcase_add_test(tc, test_edit_copy_sign_and_persistence);
     tcase_add_test(tc, test_visibility_payment_and_bounded_mark);
     tcase_add_test(tc, test_copy_source_and_destination_revalidation);

@@ -90,24 +90,51 @@ bool book_edit_text_valid(const char *text, bool title) {
 }
 
 size_t book_edit_ink_cost(const char *before, const char *after) {
-    size_t old_len = strlen(before), new_len = strlen(after);
+    size_t old_len = strnlen(before, BOOK_EDIT_CONTENT_MAX + 1);
+    size_t new_len = strnlen(after, BOOK_EDIT_CONTENT_MAX + 1);
     if (old_len > BOOK_EDIT_CONTENT_MAX || new_len > BOOK_EDIT_CONTENT_MAX) {
         return SIZE_MAX;
     }
     if (new_len == 0 || strcmp(before, after) == 0) {
         return 0;
     }
-    /* One DP row: O(maximum text size) storage, bounded quadratic work. */
-    uint16_t row[BOOK_EDIT_CONTENT_MAX + 1] = {0};
+    if (old_len == 0) {
+        return new_len;
+    }
+    /* Charge new_len - LCS(before, after), in bytes. Each set bit in row
+     * denotes an increase between adjacent columns of the LCS DP row.
+     * Updating all columns is then x & ~(x - ((row << 1) | 1)), where x
+     * combines row with the positions matching the next input byte.
+     * Carry/borrow propagation treats the words as one unsigned bit vector.
+     * At the 2048-byte limit this performs at most 2048 * 32 word updates,
+     * rather than 2048 * 2048 byte comparisons on the socket thread. */
+    enum { WORD_BITS = 64, WORD_COUNT = (BOOK_EDIT_CONTENT_MAX + WORD_BITS - 1) / WORD_BITS };
+    uint64_t matches[256][WORD_COUNT] = {{0}};
+    uint64_t row[WORD_COUNT] = {0};
+    size_t words = (new_len + WORD_BITS - 1) / WORD_BITS;
+    for (size_t j = 0; j < new_len; j++) {
+        matches[(unsigned char)after[j]][j / WORD_BITS] |= UINT64_C(1) << (j % WORD_BITS);
+    }
     for (size_t i = 0; i < old_len; i++) {
-        uint16_t diagonal = 0;
-        for (size_t j = 1; j <= new_len; j++) {
-            uint16_t above = row[j];
-            row[j] = before[i] == after[j - 1] ? diagonal + 1 : MAX(row[j], row[j - 1]);
-            diagonal = above;
+        uint64_t carry = 1, borrow = 0;
+        for (size_t j = 0; j < words; j++) {
+            uint64_t x = matches[(unsigned char)before[i]][j] | row[j];
+            uint64_t y = (row[j] << 1) | carry;
+            carry = row[j] >> (WORD_BITS - 1);
+            uint64_t difference = x - y;
+            uint64_t next_borrow = x < y || difference < borrow;
+            row[j] = x & ~(difference - borrow);
+            borrow = next_borrow;
         }
     }
-    return new_len - row[new_len];
+    size_t common = 0;
+    for (size_t j = 0; j < words; j++) {
+        /* No padding bits can be set: every update is masked by x. */
+        for (uint64_t bits = row[j]; bits != 0; bits &= bits - 1) {
+            common++;
+        }
+    }
+    return new_len - common;
 }
 
 static const char *contents(const object *op) {
