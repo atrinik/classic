@@ -35,6 +35,8 @@
 #include <region.h>
 #include <initialization.h>
 #include <account.h>
+#include <auth_worker.h>
+#include <commands.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <arch.h>
@@ -97,7 +99,7 @@ void account_init(void) {
     account_auth_work_tokens = ACCOUNT_AUTH_WORK_BURST;
 }
 
-void account_deinit(void) {}
+
 
 static bool account_auth_work_allowed(unsigned int cost) {
     time_t now = datetime_getutc();
@@ -113,6 +115,9 @@ static bool account_auth_work_allowed(unsigned int cost) {
             account_auth_work_refill_time = now;
         } else if (refill > 0) {
             account_auth_work_tokens += (unsigned int)refill;
+            if (account_auth_work_tokens > ACCOUNT_AUTH_WORK_BURST) {
+                account_auth_work_tokens = ACCOUNT_AUTH_WORK_BURST;
+            }
             account_auth_work_refill_time += refill * ACCOUNT_AUTH_WORK_REFILL_SECONDS;
         }
     }
@@ -130,7 +135,10 @@ static void account_free(account_struct *account) {
 
     free(account->last_connection_id);
 
-    free(account->password_old);
+    if (account->password_old != NULL) {
+        OPENSSL_cleanse(account->password_old, strlen(account->password_old));
+        free(account->password_old);
+    }
 
     for (i = 0; i < account->characters_num; i++) {
         free(account->characters[i].name);
@@ -144,14 +152,6 @@ static void account_free(account_struct *account) {
     OPENSSL_cleanse(account->pbkdf2_salt, sizeof(account->pbkdf2_salt));
 }
 
-static char *account_old_crypt(char *str, const char *salt) {
-#if defined(HAVE_CRYPT) && defined(HAVE_CRYPT_H)
-    return crypt(str, salt);
-#else
-    return NULL;
-#endif
-}
-
 static bool account_set_password(account_struct *account, const char *password) {
     if (!password_record_create(password, account->password_record)) {
         LOG(ERROR, "Failed to create Argon2id account password record");
@@ -162,29 +162,12 @@ static bool account_set_password(account_struct *account, const char *password) 
     OPENSSL_cleanse(account->pbkdf2_salt, sizeof(account->pbkdf2_salt));
     account->has_pbkdf2_password = false;
     account->has_pbkdf2_salt = false;
-    free(account->password_old);
+    if (account->password_old != NULL) {
+        OPENSSL_cleanse(account->password_old, strlen(account->password_old));
+        free(account->password_old);
+    }
     account->password_old = NULL;
     return true;
-}
-
-static password_verify_result_t account_check_password(account_struct *account,
-                                                       const char *password) {
-    if (account->password_old) {
-        const char *calculated = account_old_crypt((char *)password, account->password_old);
-        size_t expected_length = strlen(account->password_old);
-        return calculated != NULL && strlen(calculated) == expected_length &&
-                       CRYPTO_memcmp(calculated, account->password_old, expected_length) == 0
-                   ? PASSWORD_VERIFY_MATCH
-                   : PASSWORD_VERIFY_MISMATCH;
-    }
-
-    if (account->has_pbkdf2_password && account->has_pbkdf2_salt) {
-        return password_pbkdf2_sha256_verify(password,
-                                             account->pbkdf2_salt,
-                                             account->pbkdf2_password);
-    }
-
-    return password_record_verify(password, account->password_record);
 }
 
 #ifdef ATRINIK_TESTING
@@ -737,6 +720,323 @@ out:
     return ok;
 }
 
+typedef enum { AUTH_LOGIN, AUTH_REGISTER, AUTH_CHANGE, AUTH_FORCE } account_auth_kind_t;
+
+typedef struct {
+    /* Main-thread-only pointer; workers receive only the two numeric IDs. */
+    socket_struct *connection;
+    uint64_t generation;
+    uint64_t request;
+    char *name;
+    char *session_account;
+    account_auth_kind_t kind;
+    tag_t actor_count;
+    server_monotonic_t deadline;
+    auth_credential_t credential;
+} account_auth_pending_t;
+
+static account_auth_pending_t auth_pending[AUTH_WORKER_CAPACITY];
+static uint64_t auth_generation;
+static uint64_t auth_request;
+
+static auth_credential_t account_credential(const account_struct *account) {
+    auth_credential_t credential = {0};
+    memcpy(credential.record, account->password_record, sizeof(credential.record));
+    if (account->password_old != NULL) {
+        snprintf(credential.legacy, sizeof(credential.legacy), "%s", account->password_old);
+    }
+    credential.pbkdf2 = account->has_pbkdf2_password && account->has_pbkdf2_salt;
+    memcpy(credential.hash, account->pbkdf2_password, sizeof(credential.hash));
+    memcpy(credential.salt, account->pbkdf2_salt, sizeof(credential.salt));
+    return credential;
+}
+
+static void account_auth_release(account_auth_pending_t *pending) {
+    if (pending->connection != NULL &&
+        pending->connection->auth_generation == pending->generation &&
+        pending->connection->auth_request == pending->request) {
+        pending->connection->auth_request = 0;
+    }
+    free(pending->name);
+    free(pending->session_account);
+    OPENSSL_cleanse(pending, sizeof(*pending));
+}
+
+void account_auth_connection_clear(socket_struct *ns) {
+    for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
+        if (auth_pending[i].connection == ns) {
+            auth_worker_cancel(auth_pending[i].generation, auth_pending[i].request);
+            account_auth_release(&auth_pending[i]);
+        }
+    }
+    ns->auth_generation = 0;
+    ns->auth_request = 0;
+}
+
+bool account_auth_start(void) {
+    return auth_worker_start();
+}
+
+void account_deinit(void) {
+    auth_worker_stop();
+    for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
+        account_auth_release(&auth_pending[i]);
+    }
+}
+
+static void account_auth_error(socket_struct *ns, account_auth_kind_t kind, const char *message) {
+    draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_RED, ns, message);
+    if (kind == AUTH_LOGIN || kind == AUTH_REGISTER) {
+        account_send_characters(ns, NULL);
+    }
+}
+
+static bool account_auth_submit(socket_struct *ns,
+                                const char *name,
+                                const account_struct *account,
+                                const char *password,
+                                const char *replacement,
+                                account_auth_kind_t kind) {
+    account_auth_pending_t *pending = NULL;
+    auth_work_t work = {0};
+    for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
+        if (auth_pending[i].connection == NULL) {
+            pending = &auth_pending[i];
+            break;
+        }
+    }
+    if (ns->auth_request != 0 || pending == NULL ||
+        (password != NULL && strlen(password) >= sizeof(work.password)) ||
+        (replacement != NULL && strlen(replacement) >= sizeof(work.replacement)) ||
+        auth_request == UINT64_MAX || (ns->auth_generation == 0 && auth_generation == UINT64_MAX)) {
+        goto busy;
+    }
+    tag_t actor_count = 0;
+    if (kind == AUTH_FORCE) {
+        for (player *pl = first_player; pl != NULL; pl = pl->next) {
+            if (pl->cs == ns && commands_check_permission(pl, "password")) {
+                actor_count = pl->ob->count;
+                break;
+            }
+        }
+        if (actor_count == 0) {
+            goto busy;
+        }
+    }
+    work.verify = kind == AUTH_LOGIN || kind == AUTH_CHANGE;
+    if (account != NULL) {
+        work.credential = account_credential(account);
+    }
+    work.create = kind != AUTH_LOGIN || work.credential.legacy[0] != '\0' ||
+                  work.credential.pbkdf2 || password_record_needs_rehash(work.credential.record);
+    if (!account_auth_work_allowed((unsigned int)work.verify + (unsigned int)work.create)) {
+        goto busy;
+    }
+    if (password != NULL) {
+        memcpy(work.password, password, strlen(password) + 1);
+    }
+    const char *new_password = replacement != NULL ? replacement : password;
+    if (work.create && new_password != NULL) {
+        memcpy(work.replacement, new_password, strlen(new_password) + 1);
+    }
+    if (ns->auth_generation == 0) {
+        ns->auth_generation = ++auth_generation;
+    }
+    work.generation = ns->auth_generation;
+    work.request = ++auth_request;
+    if (!auth_worker_submit(&work)) {
+        goto busy;
+    }
+    ns->auth_request = work.request;
+    pending->connection = ns;
+    pending->generation = work.generation;
+    pending->request = work.request;
+    pending->name = xstrdup(name);
+    pending->session_account = ns->account != NULL ? xstrdup(ns->account) : NULL;
+    pending->kind = kind;
+    pending->actor_count = actor_count;
+    pending->credential = work.credential;
+    pending->deadline = server_monotonic_deadline_after(server_duration_from_seconds(30));
+    OPENSSL_cleanse(&work, sizeof(work));
+    return true;
+
+busy:
+    OPENSSL_cleanse(&work, sizeof(work));
+    account_auth_error(ns, kind, "Authentication is temporarily busy; please retry shortly.");
+    return false;
+}
+
+static bool account_auth_session_valid(const account_auth_pending_t *pending) {
+    const socket_struct *ns = pending->connection;
+    if (pending->kind == AUTH_FORCE) {
+        bool authorized = false;
+        for (player *pl = first_player; pl != NULL; pl = pl->next) {
+            if (pl->cs == ns && pl->ob->count == pending->actor_count &&
+                commands_check_permission(pl, "password")) {
+                authorized = true;
+                break;
+            }
+        }
+        if (!authorized) {
+            return false;
+        }
+    }
+    return ns->auth_generation == pending->generation && ns->auth_request == pending->request &&
+           ns->state != ST_DEAD && ns->state != ST_ZOMBIE && ns->state != ST_AVAILABLE &&
+           ((pending->session_account == NULL && ns->account == NULL) ||
+            (pending->session_account != NULL && ns->account != NULL &&
+             strcmp(pending->session_account, ns->account) == 0));
+}
+
+static void account_auth_complete(account_auth_pending_t *pending, const auth_work_t *work) {
+    socket_struct *ns = pending->connection;
+    account_auth_kind_t kind = pending->kind;
+    account_struct account = {0};
+    char *path = account_make_path(pending->name);
+    bool reserved = false;
+    if (kind == AUTH_REGISTER) {
+        metrics_store_init(&account.metrics, METRIC_SCOPE_ACCOUNT, 0);
+        account.metrics_valid = true;
+        account.last_connection_id = xstrdup("");
+        if (path_exists(path)) {
+            account_auth_error(ns, kind, "That account name is already registered.");
+            goto out;
+        }
+    } else {
+        if (!account_load(&account, path)) {
+            account_auth_error(ns, kind, "Read error occurred, please contact server administrator.");
+            free(path);
+            return;
+        }
+        auth_credential_t current = account_credential(&account);
+        bool same = current.pbkdf2 == pending->credential.pbkdf2 &&
+                    CRYPTO_memcmp(current.record, pending->credential.record,
+                                  sizeof(current.record)) == 0 &&
+                    CRYPTO_memcmp(current.legacy, pending->credential.legacy,
+                                  sizeof(current.legacy)) == 0 &&
+                    CRYPTO_memcmp(current.hash, pending->credential.hash,
+                                  sizeof(current.hash)) == 0 &&
+                    CRYPTO_memcmp(current.salt, pending->credential.salt,
+                                  sizeof(current.salt)) == 0;
+        OPENSSL_cleanse(&current, sizeof(current));
+        if (!same) {
+            account_auth_error(ns, kind, "Account credentials changed; please retry.");
+            goto out;
+        }
+    }
+    if (work->result != PASSWORD_VERIFY_MATCH) {
+        account_auth_error(ns, kind, work->result == PASSWORD_VERIFY_MISMATCH
+                                        ? "Invalid password."
+                                        : "Password processing failed; please retry.");
+        if (kind == AUTH_LOGIN && work->result == PASSWORD_VERIFY_MISMATCH) {
+            ns->password_fails++;
+            LOG(SYSTEM, "%s: Failed to provide correct password for account %s.",
+                socket_get_id(ns->sc), pending->name);
+            if (ns->password_fails >= MAX_PASSWORD_FAILURES) {
+                LOG(SYSTEM, "%s: Too many incorrect passwords for account %s.",
+                    socket_get_id(ns->sc), pending->name);
+                draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_RED, ns,
+                               "You have failed to provide a correct password too many times.");
+                ns->state = ST_ZOMBIE;
+            }
+        }
+        goto out;
+    }
+    if (work->create) {
+        memcpy(account.password_record, work->record, sizeof(account.password_record));
+        OPENSSL_cleanse(account.pbkdf2_password, sizeof(account.pbkdf2_password));
+        OPENSSL_cleanse(account.pbkdf2_salt, sizeof(account.pbkdf2_salt));
+        account.has_pbkdf2_password = account.has_pbkdf2_salt = false;
+        if (account.password_old != NULL) {
+            OPENSSL_cleanse(account.password_old, strlen(account.password_old));
+            free(account.password_old);
+            account.password_old = NULL;
+        }
+    }
+    if (kind == AUTH_LOGIN || kind == AUTH_REGISTER) {
+        free(account.last_connection_id);
+        account.last_connection_id = xstrdup(socket_get_id(ns->sc));
+        account.last_time = datetime_getutc();
+        if (account.metrics.epoch == 0) {
+            account.metrics.epoch = (uint64_t)account.last_time;
+            account.metrics.dirty = true;
+        }
+        if (kind == AUTH_REGISTER) {
+            metrics_set(&account.metrics, METRIC_ACCOUNT_CREATED_AT, (uint64_t)account.last_time);
+            path_ensure_directories(path);
+            char error[MAX_BUF];
+            if (!account_reserve_file(path, error, sizeof(error))) {
+                account_auth_error(ns, kind, "Account creation failed; please retry.");
+                goto out;
+            }
+            reserved = true;
+        } else {
+            if (metrics_get(&account.metrics, METRIC_ACCOUNT_FIRST_LOGIN_AT) == 0) {
+                metrics_set(&account.metrics, METRIC_ACCOUNT_FIRST_LOGIN_AT, (uint64_t)account.last_time);
+            }
+            metrics_set(&account.metrics, METRIC_ACCOUNT_LAST_LOGIN_AT, (uint64_t)account.last_time);
+            metrics_add(&account.metrics, METRIC_ACCOUNT_SUCCESSFUL_AUTHENTICATIONS, 1);
+        }
+    }
+    if (!account_save(&account, path)) {
+        account_auth_error(ns, kind, "Save error occurred; authentication was not completed.");
+        goto out;
+    }
+    reserved = false;
+    if (kind == AUTH_LOGIN || kind == AUTH_REGISTER) {
+        ns->account = xstrdup(pending->name);
+        account_send_characters(ns, &account);
+    } else {
+        draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_GREEN, ns, "Password changed successfully.");
+    }
+out:
+    if (reserved) {
+        unlink(path);
+    }
+    account_free(&account);
+    free(path);
+}
+
+void account_auth_poll(void) {
+    for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
+        account_auth_pending_t *pending = &auth_pending[i];
+        if (pending->connection == NULL) {
+            continue;
+        }
+        bool valid = account_auth_session_valid(pending);
+        bool expired = server_monotonic_expired(pending->deadline) ||
+                       (pending->connection->state == ST_LOGIN &&
+                        socket_login_expired(pending->connection));
+        if (!valid || expired) {
+            auth_worker_cancel(pending->generation, pending->request);
+            if (valid && expired) {
+                account_auth_error(pending->connection, pending->kind,
+                                   "Authentication timed out; please retry.");
+            }
+            account_auth_release(pending);
+        }
+    }
+    auth_work_t work;
+    while (auth_worker_take(&work)) {
+        for (size_t i = 0; i < AUTH_WORKER_CAPACITY; i++) {
+            account_auth_pending_t *pending = &auth_pending[i];
+            if (pending->connection != NULL && pending->generation == work.generation &&
+                pending->request == work.request) {
+                /* Recheck each result: a prior completion can change credentials. */
+                if (account_auth_session_valid(pending) &&
+                    !server_monotonic_expired(pending->deadline) &&
+                    !(pending->connection->state == ST_LOGIN &&
+                      socket_login_expired(pending->connection))) {
+                    account_auth_complete(pending, &work);
+                }
+                account_auth_release(pending);
+                break;
+            }
+        }
+        OPENSSL_cleanse(&work, sizeof(work));
+    }
+}
+
 void account_login(socket_struct *ns, char *name, char *password) {
     account_struct account;
     char *path;
@@ -775,90 +1075,7 @@ void account_login(socket_struct *ns, char *name, char *password) {
         return;
     }
 
-    unsigned int auth_cost = account.password_old || account.has_pbkdf2_password ||
-                                     password_record_needs_rehash(account.password_record)
-                                 ? 2
-                                 : 1;
-    if (!account_auth_work_allowed(auth_cost)) {
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Authentication is temporarily busy; please retry shortly.");
-        account_send_characters(ns, NULL);
-        account_free(&account);
-        free(path);
-        return;
-    }
-
-    password_verify_result_t password_result = account_check_password(&account, password);
-    if (password_result != PASSWORD_VERIFY_MATCH) {
-        draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_RED, ns, "Invalid password.");
-        account_send_characters(ns, NULL);
-        account_free(&account);
-        free(path);
-
-        ns->password_fails++;
-        LOG(SYSTEM,
-            "%s: Failed to provide correct password for account %s.",
-            socket_get_id(ns->sc),
-            name);
-
-        if (ns->password_fails >= MAX_PASSWORD_FAILURES) {
-            LOG(SYSTEM,
-                "%s: Failed to provide a correct password for account %s too many times!",
-                socket_get_id(ns->sc),
-                name);
-            draw_info_send(CHAT_TYPE_GAME,
-                           NULL,
-                           COLOR_RED,
-                           ns,
-                           "You have failed to provide a correct password too many times.");
-            ns->state = ST_ZOMBIE;
-        }
-
-        return;
-    }
-
-    if ((account.password_old || account.has_pbkdf2_password ||
-         password_record_needs_rehash(account.password_record)) &&
-        !account_set_password(&account, password)) {
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Password upgrade failed, please contact server administrator.");
-        account_free(&account);
-        free(path);
-        return;
-    }
-
-    free(account.last_connection_id);
-    account.last_connection_id = xstrdup(socket_get_id(ns->sc));
-    account.last_time = datetime_getutc();
-    if (account.metrics.epoch == 0) {
-        account.metrics.epoch = (uint64_t)account.last_time;
-        account.metrics.dirty = true;
-    }
-    if (metrics_get(&account.metrics, METRIC_ACCOUNT_FIRST_LOGIN_AT) == 0) {
-        metrics_set(&account.metrics, METRIC_ACCOUNT_FIRST_LOGIN_AT, (uint64_t)account.last_time);
-    }
-    metrics_set(&account.metrics, METRIC_ACCOUNT_LAST_LOGIN_AT, (uint64_t)account.last_time);
-    metrics_add(&account.metrics, METRIC_ACCOUNT_SUCCESSFUL_AUTHENTICATIONS, 1);
-    if (!account_save(&account, path)) {
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Account metrics could not be saved; authentication was not completed.");
-        account_send_characters(ns, NULL);
-        account_free(&account);
-        free(path);
-        return;
-    }
-
-    ns->account = xstrdup(name);
-    account_send_characters(ns, &account);
+    account_auth_submit(ns, name, &account, password, NULL, AUTH_LOGIN);
     account_free(&account);
     free(path);
 }
@@ -930,37 +1147,7 @@ void account_register(socket_struct *ns, char *name, char *password, char *passw
         return;
     }
 
-    if (!account_auth_work_allowed(1) || !account_set_password(&account, password)) {
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Account creation failed, please contact server administrator.");
-        account_free(&account);
-        free(path);
-        return;
-    }
-    path_ensure_directories(path);
-    account.last_connection_id = xstrdup(socket_get_id(ns->sc));
-    account.last_time = datetime_getutc();
-    account.metrics.epoch = (uint64_t)account.last_time;
-    metrics_set(&account.metrics, METRIC_ACCOUNT_CREATED_AT, (uint64_t)account.last_time);
-    account.characters = NULL;
-    account.characters_num = 0;
-
-    if (!account_save(&account, path)) {
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Save error occurred, please contact server administrator.");
-        account_free(&account);
-        free(path);
-        return;
-    }
-
-    ns->account = xstrdup(name);
-    account_send_characters(ns, &account);
+    account_auth_submit(ns, name, NULL, NULL, password, AUTH_REGISTER);
     account_free(&account);
     free(path);
 }
@@ -1248,45 +1435,7 @@ void account_password_change(socket_struct *ns,
         return;
     }
 
-    if (!account_auth_work_allowed(2)) {
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Authentication is temporarily busy; please retry shortly.");
-        account_free(&account);
-        free(path);
-        return;
-    }
-
-    if (account_check_password(&account, password) != PASSWORD_VERIFY_MATCH) {
-        draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_RED, ns, "Invalid password.");
-        account_free(&account);
-        free(path);
-        return;
-    }
-
-    if (!account_set_password(&account, password_new)) {
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Password change failed, please contact server administrator.");
-        account_free(&account);
-        free(path);
-        return;
-    }
-
-    if (account_save(&account, path)) {
-        draw_info_send(CHAT_TYPE_GAME, NULL, COLOR_GREEN, ns, "Password changed successfully.");
-    } else {
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Save error occurred, please contact server administrator.");
-    }
-
+    account_auth_submit(ns, ns->account, &account, password, password_new, AUTH_CHANGE);
     account_free(&account);
     free(path);
 }
@@ -1332,25 +1481,9 @@ void account_password_force(object *op, char *name, const char *password) {
         return;
     }
 
-    if (!account_set_password(&account, password)) {
-        draw_info(COLOR_RED,
-                  op,
-                  "Password change failed, please contact server "
-                  "administrator.");
-        account_free(&account);
-        free(path);
-        return;
+    if (op->type == PLAYER && CONTR(op)->cs != NULL) {
+        account_auth_submit(CONTR(op)->cs, name, &account, NULL, password, AUTH_FORCE);
     }
-
-    if (account_save(&account, path)) {
-        draw_info(COLOR_GREEN, op, "Password changed successfully.");
-    } else {
-        draw_info(COLOR_RED,
-                  op,
-                  "Save error occurred, please contact server "
-                  "administrator.");
-    }
-
     account_free(&account);
     free(path);
 }

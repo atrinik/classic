@@ -115,6 +115,644 @@ static void assert_local_light_matches(const mapstruct *map, const test_light_sn
     }
 }
 
+static void link_horizontal_maps(mapstruct *west, mapstruct *east) {
+    west->tile_path[TILED_EAST] = add_string("/tests/light-east");
+    east->tile_path[TILED_WEST] = add_string("/tests/light-west");
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+}
+
+START_TEST(test_rebuild_preserves_incoming_light_from_third_horizontal_map) {
+    enum { WIDTH = 7, HEIGHT = 7 };
+    mapstruct *maps[3];
+    test_light_snapshot expected[3][WIDTH * HEIGHT];
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i] = get_empty_map(WIDTH, HEIGHT);
+        if (i != 0) {
+            link_horizontal_maps(maps[i - 1], maps[i]);
+        }
+    }
+    /* Incremental insertion is the independent replay oracle: none of these
+     * source additions uses the rebuild's target/source enumeration. */
+    add_colored_light(maps[2], 0, 3, 13, UINT32_C(0xff8040));
+    add_colored_light(maps[2], 1, 3, -5, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(maps[1], 6, 3)->light_source_positive_value, 0);
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        snapshot_local_light(maps[i], expected[i]);
+    }
+    recalculate_light_sources(maps[0]);
+    recalculate_light_sources(maps[0]);
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        assert_local_light_matches(maps[i], expected[i]);
+    }
+}
+END_TEST
+
+START_TEST(test_rebuild_matches_incremental_oracle_for_all_resident_sources) {
+    enum { COLUMNS = 3, LEVELS = MAP2_MAX_DEPTH + 2, WIDTH = 9, HEIGHT = 9 };
+    mapstruct *maps[COLUMNS][LEVELS];
+    test_light_snapshot expected[COLUMNS][LEVELS][WIDTH * HEIGHT];
+    for (int column = 0; column < COLUMNS; column++) {
+        for (int depth = 0; depth < LEVELS; depth++) {
+            maps[column][depth] = get_empty_map(WIDTH, HEIGHT);
+            if (depth != 0) {
+                link_stacked_maps(maps[column][depth - 1], maps[column][depth]);
+            }
+            if (column != 0) {
+                link_horizontal_maps(maps[column - 1][depth], maps[column][depth]);
+            }
+        }
+    }
+    for (int column = 0; column < COLUMNS; column++) {
+        for (int depth = 0; depth < LEVELS; depth++) {
+            add_colored_light(maps[column][depth], column == 2 ? 0 : WIDTH - 1, 3,
+                              13, UINT32_C(0x40a0ff));
+            /* Same-origin cancellation keeps the scalar mask zero while the
+             * positive/RGB origins must remain discoverable. */
+            add_colored_light(maps[column][depth], column == 2 ? 0 : WIDTH - 1, 3,
+                              -13, LIGHT_COLOR_WHITE);
+            add_colored_light(maps[column][depth], 3, 2, -5, LIGHT_COLOR_WHITE);
+        }
+    }
+    for (int column = 0; column < COLUMNS; column++) {
+        for (int depth = 0; depth < LEVELS; depth++) {
+            snapshot_local_light(maps[column][depth], expected[column][depth]);
+        }
+    }
+    /* Each rebuild includes incoming sources beyond its horizontal and
+     * vertical cleared boundaries; untouched maps must remain exact too. */
+    for (int column = 0; column < COLUMNS; column++) {
+        recalculate_light_sources(maps[column][0]);
+        for (int check_column = 0; check_column < COLUMNS; check_column++) {
+            for (int depth = 0; depth < LEVELS; depth++) {
+                assert_local_light_matches(maps[check_column][depth],
+                                           expected[check_column][depth]);
+            }
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_unchanged_geometry_updates_do_not_rebuild_or_invalidate) {
+    mapstruct *map = get_empty_map(9, 9);
+    object *floor = arch_get("water_still");
+    floor->x = 4;
+    floor->y = 4;
+    object_insert_map(floor, map, NULL, 0);
+    add_colored_light(map, 3, 4, 13, UINT32_C(0xff4000));
+    test_light_snapshot expected[9 * 9];
+    snapshot_local_light(map, expected);
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    uint64_t revision = map->celestial_structure_revision;
+    for (int i = 0; i < 1000; i++) {
+        /* A pre-existing lazy flag must still refresh, but must not turn an
+         * equivalent effective geometry into a lighting invalidation. */
+        GET_MAP_SPACE_PTR(map, 4, 4)->flags |= P_NEED_UPDATE;
+        object_update(floor, UP_OBJ_FLAGS);
+        ck_assert(!(GET_MAP_FLAGS(map, 4, 4) & P_NEED_UPDATE));
+    }
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    ck_assert_uint_eq(map->celestial_structure_revision, revision);
+    assert_local_light_matches(map, expected);
+}
+END_TEST
+
+static object *add_light_blocker(mapstruct *map, int x, int y) {
+    object *blocker = arch_get("letter");
+    SET_FLAG(blocker, FLAG_BLOCKSVIEW);
+    blocker->x = x;
+    blocker->y = y;
+    return object_insert_map(blocker, map, NULL, INS_NO_MERGE);
+}
+
+START_TEST(test_geometry_tracks_last_blocker_and_cleared_flag) {
+    mapstruct *map = get_empty_map(9, 9);
+    add_colored_light(map, 3, 4, 13, UINT32_C(0x00ff00));
+    object *first = add_light_blocker(map, 4, 4);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value, 0);
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    object *second = add_light_blocker(map, 4, 4);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    object_remove(first, 0);
+    object_destroy(first);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    CLEAR_FLAG(second, FLAG_BLOCKSVIEW);
+    object_update(second, UP_OBJ_FLAGS);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value, 0);
+    SET_FLAG(second, FLAG_BLOCKSVIEW);
+    object_update(second, UP_OBJ_FLAGS);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value, 0);
+    rebuilds = light_rebuild_count_for_test();
+    object_remove(second, 0);
+    object_destroy(second);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value, 0);
+}
+END_TEST
+
+START_TEST(test_geometry_batches_flush_before_read_and_at_scope_end) {
+    mapstruct *map = get_empty_map(9, 9);
+    add_colored_light(map, 2, 4, 13, UINT32_C(0x8040ff));
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    uint64_t revision = map->celestial_structure_revision;
+    light_batch_begin();
+    light_batch_begin();
+    object *first = add_light_blocker(map, 3, 4);
+    object *second = add_light_blocker(map, 4, 4);
+    light_batch_end();
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    (void)map_get_darkness(map, 5, 4, NULL);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    ck_assert_uint_eq(map->celestial_structure_revision, revision);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value, 0);
+    light_batch_end();
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    light_batch_begin();
+    object_remove(first, 0);
+    object_remove(second, 0);
+    light_batch_end();
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 2);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 5, 4)->light_source_value, 0);
+    object_destroy(first);
+    object_destroy(second);
+}
+END_TEST
+
+START_TEST(test_floor_and_roof_geometry_detects_removal_and_flag_changes) {
+    mapstruct *lower = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    mapstruct *top = get_empty_map(9, 9);
+    link_stacked_maps(lower, upper);
+    link_stacked_maps(upper, top);
+    add_colored_light(lower, 4, 4, 13, UINT32_C(0xff8000));
+    object *floor = arch_get("water_still");
+    floor->x = 4;
+    floor->y = 4;
+    object_insert_map(floor, upper, NULL, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 4, 4)->light_source_value, 0);
+    object *duplicate = arch_get("water_still");
+    duplicate->x = 4;
+    duplicate->y = 4;
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    object_insert_map(duplicate, upper, NULL, INS_NO_MERGE);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    object_remove(floor, 0);
+    object_destroy(floor);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    CLEAR_FLAG(duplicate, FLAG_IS_FLOOR);
+    object_update(duplicate, UP_OBJ_FLAGS);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(upper, 4, 4)->light_source_value, 0);
+    object_remove(duplicate, 0);
+    object_destroy(duplicate);
+    object *roof = arch_get("roof_thatch");
+    roof->x = 4;
+    roof->y = 4;
+    object_insert_map(roof, upper, NULL, 0);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(upper, 4, 4)->light_source_value, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(top, 4, 4)->light_source_value, 0);
+    object_remove(roof, 0);
+    object_destroy(roof);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(top, 4, 4)->light_source_value, 0);
+}
+END_TEST
+
+START_TEST(test_multipart_flag_update_rebuilds_once_and_removal_withdraws_tail_once) {
+    mapstruct *map = get_empty_map(9, 9);
+    object *head = add_light_blocker(map, 4, 4);
+    object *tail = add_light_blocker(map, 4, 5);
+    head->more = tail;
+    tail->head = head;
+    CLEAR_FLAG(head, FLAG_BLOCKSVIEW);
+    CLEAR_FLAG(tail, FLAG_BLOCKSVIEW);
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    object_update(head, UP_OBJ_FLAGS);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    tail->glow_radius = 13;
+    tail->light_color = UINT32_C(0xff0080);
+    adjust_light_source_color(map, tail->x, tail->y, tail->glow_radius, tail->light_color, 1);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(map, 4, 5)->light_source_value, 0);
+    object_remove(head, 0);
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {
+            MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+            ck_assert_int_eq(space->light_source_value, 0);
+            ck_assert_int_eq(space->light_source_positive_value, 0);
+            ck_assert_int_eq(space->light_source_color_weight, 0);
+        }
+    }
+    object_destroy(head);
+}
+END_TEST
+
+START_TEST(test_batch_geometry_and_source_deltas_preserve_all_accumulators) {
+    mapstruct *map = get_empty_map(9, 9);
+    object *source = add_colored_light(map, 3, 4, 13, UINT32_C(0xff0080));
+    object *blocker = add_light_blocker(map, 4, 4);
+    light_batch_begin();
+    object_remove(blocker, 0);
+    object_remove(source, 0);
+    light_batch_end();
+    object_destroy(blocker);
+    object_destroy(source);
+    test_light_snapshot empty[9 * 9] = {0};
+    assert_local_light_matches(map, empty);
+
+    add_colored_light(map, 3, 4, 1, UINT32_C(0x00ff00));
+    blocker = add_light_blocker(map, 4, 4);
+    light_batch_begin();
+    object_remove(blocker, 0);
+    add_colored_light(map, 3, 4, 13, UINT32_C(0xff0080));
+    light_batch_end();
+    object_destroy(blocker);
+    test_light_snapshot result[9 * 9];
+    snapshot_local_light(map, result);
+    mapstruct *oracle = get_empty_map(9, 9);
+    add_colored_light(oracle, 3, 4, 1, UINT32_C(0x00ff00));
+    add_colored_light(oracle, 3, 4, 13, UINT32_C(0xff0080));
+    assert_local_light_matches(oracle, result);
+    recalculate_light_sources(map);
+    assert_local_light_matches(map, result);
+}
+END_TEST
+
+START_TEST(test_geometry_footprint_crosses_several_narrow_map_seams) {
+    enum { MAPS = 7, WIDTH = 1, HEIGHT = 7 };
+    mapstruct *maps[MAPS];
+    for (int i = 0; i < MAPS; i++) {
+        maps[i] = get_empty_map(WIDTH, HEIGHT);
+        if (i != 0) {
+            link_horizontal_maps(maps[i - 1], maps[i]);
+        }
+    }
+    add_colored_light(maps[3], 0, 3, 13, UINT32_C(0x40a0ff));
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(maps[0], 0, 3)->light_source_value, 0);
+    object *blocker = add_light_blocker(maps[2], 0, 3);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(maps[0], 0, 3)->light_source_value, 0);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(maps[6], 0, 3)->light_source_value, 0);
+    object_remove(blocker, 0);
+    object_destroy(blocker);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(maps[0], 0, 3)->light_source_value, 0);
+    test_light_snapshot expected[MAPS][WIDTH * HEIGHT];
+    for (int i = 0; i < MAPS; i++) {
+        snapshot_local_light(maps[i], expected[i]);
+    }
+    recalculate_light_sources(maps[2]);
+    for (int i = 0; i < MAPS; i++) {
+        assert_local_light_matches(maps[i], expected[i]);
+    }
+}
+END_TEST
+
+START_TEST(test_scalar_origin_without_object_rebuilds_and_withdraws_symmetrically) {
+    mapstruct *lower = get_empty_map(7, 7);
+    mapstruct *upper = get_empty_map(7, 7);
+    link_stacked_maps(lower, upper);
+    adjust_light_source(lower, 3, 3, 13);
+    test_light_snapshot expected[7 * 7];
+    snapshot_local_light(upper, expected);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(upper, 3, 3)->light_source_value, 0);
+    recalculate_light_sources(lower);
+    assert_local_light_matches(upper, expected);
+    remove_light_source_list(lower);
+    test_light_snapshot empty[7 * 7] = {0};
+    assert_local_light_matches(upper, empty);
+}
+END_TEST
+
+START_TEST(test_rebuild_preserves_asymmetric_incoming_source) {
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *middle = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    link_horizontal_maps(west, middle);
+    link_horizontal_maps(middle, east);
+    middle->tile_map[TILED_EAST] = NULL;
+    add_colored_light(east, 0, 4, 13, UINT32_C(0xff8040));
+    test_light_snapshot expected[9 * 9];
+    snapshot_local_light(middle, expected);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(middle, 8, 4)->light_source_positive_value, 0);
+    recalculate_light_sources(west);
+    assert_local_light_matches(middle, expected);
+    object *blocker = add_light_blocker(middle, 7, 4);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(middle, 6, 4)->light_source_value, 0);
+    object_remove(blocker, 0);
+    object_destroy(blocker);
+    assert_local_light_matches(middle, expected);
+    /* Restore the fixture's ordinary teardown backlinks. */
+    middle->tile_map[TILED_EAST] = east;
+}
+END_TEST
+
+START_TEST(test_disconnected_irregular_component_does_not_expand_regular_rebuild) {
+    mapstruct *regular[6];
+    for (size_t i = 0; i < arraysize(regular); i++) {
+        regular[i] = get_empty_map(9, 9);
+        if (i != 0) {
+            link_horizontal_maps(regular[i - 1], regular[i]);
+        }
+    }
+    mapstruct *irregular_west = get_empty_map(7, 9);
+    mapstruct *irregular_east = get_empty_map(9, 9);
+    link_horizontal_maps(irregular_west, irregular_east);
+    add_colored_light(regular[0], 4, 4, 3, UINT32_C(0xff8040));
+    add_colored_light(irregular_east, 4, 4, 3, UINT32_C(0x4080ff));
+
+    /* Deliberately mark unrelated accumulators: a whole-resident fallback or
+     * whole-regular-component clear would erase them. No ray from the changed
+     * map reaches either cell. This tests the spatial bound, not just output
+     * equivalence after a redundant clear/replay. */
+    GET_MAP_SPACE_PTR(regular[5], 4, 4)->light_source_value += 123;
+    GET_MAP_SPACE_PTR(irregular_east, 4, 4)->light_source_value += 456;
+    test_light_snapshot far_expected[9 * 9];
+    test_light_snapshot irregular_expected[9 * 9];
+    test_light_snapshot local_expected[9 * 9];
+    snapshot_local_light(regular[5], far_expected);
+    snapshot_local_light(irregular_east, irregular_expected);
+    snapshot_local_light(regular[0], local_expected);
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    recalculate_light_sources(regular[0]);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    assert_local_light_matches(regular[0], local_expected);
+    assert_local_light_matches(regular[5], far_expected);
+    assert_local_light_matches(irregular_east, irregular_expected);
+}
+END_TEST
+
+START_TEST(test_partial_grid_rebuild_bounds_targets_and_incoming_sources) {
+    mapstruct *maps[10];
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i] = get_empty_map(9, 9);
+        if (i != 0) {
+            link_horizontal_maps(maps[i - 1], maps[i]);
+        }
+    }
+    mapstruct *north = get_empty_map(9, 9);
+    maps[0]->tile_map[TILED_NORTH] = north;
+    north->tile_map[TILED_SOUTH] = maps[0];
+    maps[0]->tile_path[TILED_NORTH] = add_string("/tests/light-north");
+    north->tile_path[TILED_SOUTH] = add_string("/tests/light-south");
+    /* This partial grid has no northeast commuting square. A source on the
+     * third seam still contributes to the second-seam map being cleared. */
+    add_colored_light(maps[3], 0, 4, 13, UINT32_C(0xff8040));
+    add_colored_light(maps[3], 1, 4, -5, LIGHT_COLOR_WHITE);
+    test_light_snapshot expected[3][9 * 9];
+    for (size_t i = 0; i < arraysize(expected); i++) {
+        snapshot_local_light(maps[i], expected[i]);
+    }
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(maps[2], 8, 4)->light_source_positive_value, 0);
+    /* A sentinel proves bounded writes independently of the incremental-light
+     * oracle. Discovery counts also prove that remote sources are not replayed. */
+    GET_MAP_SPACE_PTR(maps[4], 4, 4)->light_source_value = 123;
+    recalculate_light_sources(maps[0]);
+    ck_assert_uint_eq(light_rebuild_target_maps_for_test(), 4);
+    ck_assert_uint_eq(light_rebuild_source_maps_for_test(), 5);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(maps[4], 4, 4)->light_source_value, 123);
+    for (size_t i = 0; i < arraysize(expected); i++) {
+        assert_local_light_matches(maps[i], expected[i]);
+    }
+}
+END_TEST
+
+START_TEST(test_loaded_reverse_link_replacement_clears_former_target) {
+    mapstruct *old_lower = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    mapstruct *new_lower = get_empty_map(9, 9);
+    link_stacked_maps(old_lower, upper);
+    add_colored_light(upper, 4, 4, 13, UINT32_C(0xff8040));
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(old_lower, 4, 4)->light_source_positive_value, 0);
+    /* map_set_tile() can overwrite an implicit reverse pointer during load.
+     * The old lower map still points up, but post-load directed reach from the
+     * upper source no longer contains it. Its old contribution must be cleared. */
+    link_stacked_maps(new_lower, upper);
+    check_light_source_list(new_lower);
+    test_light_snapshot empty[9 * 9] = {0};
+    assert_local_light_matches(old_lower, empty);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(new_lower, 4, 4)->light_source_positive_value, 0);
+    old_lower->tile_map[TILED_UP] = NULL;
+}
+END_TEST
+
+START_TEST(test_component_includes_incoming_only_source_and_excludes_disconnected_maps) {
+    mapstruct *receiver = get_empty_map(9, 9);
+    mapstruct *source = get_empty_map(9, 9);
+    link_horizontal_maps(receiver, source);
+    receiver->tile_map[TILED_EAST] = NULL;
+    mapstruct *disconnected = get_empty_map(9, 9);
+    add_colored_light(source, 0, 4, 13, UINT32_C(0x4080ff));
+    add_colored_light(disconnected, 4, 4, 3, UINT32_C(0xff8040));
+    GET_MAP_SPACE_PTR(disconnected, 4, 4)->light_source_value += 123;
+    test_light_snapshot receiver_expected[9 * 9];
+    test_light_snapshot source_expected[9 * 9];
+    test_light_snapshot disconnected_expected[9 * 9];
+    snapshot_local_light(receiver, receiver_expected);
+    snapshot_local_light(source, source_expected);
+    snapshot_local_light(disconnected, disconnected_expected);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(receiver, 8, 4)->light_source_positive_value, 0);
+    recalculate_light_sources(receiver);
+    assert_local_light_matches(receiver, receiver_expected);
+    assert_local_light_matches(source, source_expected);
+    assert_local_light_matches(disconnected, disconnected_expected);
+    /* Restore backlinks for the ordinary fixture teardown. */
+    receiver->tile_map[TILED_EAST] = source;
+}
+END_TEST
+
+START_TEST(test_rebuild_preserves_incoming_source_with_different_map_dimensions) {
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *middle = get_empty_map(12, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    link_horizontal_maps(west, middle);
+    link_horizontal_maps(middle, east);
+    add_colored_light(east, 0, 4, 13, UINT32_C(0x40a0ff));
+    test_light_snapshot expected[12 * 9];
+    snapshot_local_light(middle, expected);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(middle, 11, 4)->light_source_positive_value, 0);
+    recalculate_light_sources(west);
+    assert_local_light_matches(middle, expected);
+}
+END_TEST
+
+START_TEST(test_target_footprint_resolves_vertical_link_only_on_horizontal_neighbor) {
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    link_horizontal_maps(west, east);
+    link_stacked_maps(east, upper);
+    add_colored_light(east, 0, 4, 13, UINT32_C(0xff0080));
+    test_light_snapshot expected[9 * 9];
+    snapshot_local_light(upper, expected);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(upper, 0, 4)->light_source_positive_value, 0);
+    recalculate_light_sources(west);
+    assert_local_light_matches(upper, expected);
+}
+END_TEST
+
+START_TEST(test_target_footprint_retains_differing_vertical_dimension_fallback) {
+    mapstruct *lower = get_empty_map(12, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    mapstruct *upper_east = get_empty_map(9, 9);
+    link_stacked_maps(lower, upper);
+    link_horizontal_maps(upper, upper_east);
+    /* The upper map ends inside the lower map's rectangle. Its remaining
+     * coordinates must still be resolved instead of skipped as duplicates. */
+    GET_MAP_SPACE_PTR(upper_east, 0, 4)->light_source_value = 1;
+    recalculate_light_sources(lower);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper_east, 0, 4)->light_source_value, 0);
+}
+END_TEST
+
+START_TEST(test_noncommuting_linked_depth_paths_rebuild_every_affected_target) {
+    mapstruct *source_map = get_empty_map(9, 9);
+    mapstruct *level_one = get_empty_map(9, 9);
+    mapstruct *level_two = get_empty_map(9, 9);
+    mapstruct *roof_map = get_empty_map(9, 9);
+    mapstruct *target_map = get_empty_map(9, 9);
+    link_stacked_maps(source_map, level_one);
+    link_stacked_maps(level_one, level_two);
+    link_horizontal_maps(level_one, roof_map);
+    link_horizontal_maps(level_two, target_map);
+    add_colored_light(source_map, 8, 4, 13, UINT32_C(0xff8040));
+    test_light_snapshot expected[9 * 9];
+    snapshot_local_light(target_map, expected);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_value, 0);
+    /* The ray resolves its intermediate point through level_one's east link,
+     * and its endpoint through level_two's east link. roof_map itself has no
+     * vertical link to that endpoint, despite every existing edge being equal
+     * size and reciprocal. A geometry-origin footprint alone misses it. */
+    object *roof = arch_get("roof_thatch");
+    roof->x = 0;
+    roof->y = 4;
+    object_insert_map(roof, roof_map, NULL, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_value, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_positive_value, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_color_weight, 0);
+    object_remove(roof, 0);
+    object_destroy(roof);
+    assert_local_light_matches(target_map, expected);
+}
+END_TEST
+
+START_TEST(test_different_vertical_dimensions_never_publish_out_of_bounds_spaces) {
+    mapstruct *lower = get_empty_map(12, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    link_stacked_maps(lower, upper);
+    /* No east neighbor exists on the smaller upper map. Both traversal orders
+     * must reject x >= 9, including the bottom row where an unchecked offset
+     * would run past its allocation instead of merely aliasing another row. */
+    add_colored_light(lower, 10, 8, 13, UINT32_C(0x40a0ff));
+    recalculate_light_sources(lower);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 8, 8)->light_source_value, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 1, 1)->light_source_color_weight, 0);
+    add_colored_light(lower, 10, 0, 13, UINT32_C(0xff8040));
+    recalculate_light_sources(lower);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(upper, 1, 1)->light_source_color_weight, 0);
+}
+END_TEST
+
+START_TEST(test_unloading_light_relay_rebuilds_surviving_targets_once) {
+    mapstruct *source_map = get_empty_map(9, 9);
+    mapstruct *relay = get_empty_map(9, 9);
+    mapstruct *target = get_empty_map(9, 9);
+    link_stacked_maps(source_map, relay);
+    link_stacked_maps(relay, target);
+    add_colored_light(source_map, 4, 4, 13, UINT32_C(0xff8040));
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(target, 4, 4)->light_source_value, 0);
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    free_map(relay, 1);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    test_light_snapshot empty[9 * 9] = {0};
+    assert_local_light_matches(target, empty);
+    ck_assert(!target->local_light_unlink_pending);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(source_map, 4, 4)->light_source_value, 0);
+}
+END_TEST
+
+START_TEST(test_deferred_unlink_flushes_before_read_and_new_source_delta) {
+    mapstruct *source_map = get_empty_map(9, 9);
+    mapstruct *relay = get_empty_map(9, 9);
+    mapstruct *target = get_empty_map(9, 9);
+    link_stacked_maps(source_map, relay);
+    link_stacked_maps(relay, target);
+    add_colored_light(source_map, 4, 4, 13, UINT32_C(0xff8040));
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    light_map_unlink_begin(false);
+    free_map(relay, 1);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+    ck_assert(target->local_light_unlink_pending);
+    (void)map_get_darkness(target, 4, 4, NULL);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+    test_light_snapshot empty[9 * 9] = {0};
+    assert_local_light_matches(target, empty);
+    light_map_unlink_end();
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds + 1);
+
+    /* Re-establish the fixture, then exercise the pre-stack source barrier
+     * with pending unlink marks instead of an explicit lighting read. */
+    mapstruct *second_relay = get_empty_map(9, 9);
+    link_stacked_maps(source_map, second_relay);
+    link_stacked_maps(second_relay, target);
+    recalculate_light_sources(source_map);
+    light_map_unlink_begin(false);
+    free_map(second_relay, 1);
+    add_colored_light(target, 4, 4, 1, UINT32_C(0x00ff00));
+    light_map_unlink_end();
+    test_light_snapshot result[9 * 9];
+    snapshot_local_light(target, result);
+    mapstruct *oracle = get_empty_map(9, 9);
+    add_colored_light(oracle, 4, 4, 1, UINT32_C(0x00ff00));
+    assert_local_light_matches(oracle, result);
+}
+END_TEST
+
+START_TEST(test_full_map_retirement_does_not_rebuild_per_deleted_map) {
+    enum { MAPS = 4 };
+    mapstruct *maps[MAPS];
+    for (int i = 0; i < MAPS; i++) {
+        maps[i] = get_empty_map(9, 9);
+        if (i != 0) {
+            link_stacked_maps(maps[i - 1], maps[i]);
+        }
+        add_colored_light(maps[i], 4, 4, 13, UINT32_C(0x40a0ff));
+    }
+    uint64_t rebuilds = light_rebuild_count_for_test();
+    free_all_maps();
+    ck_assert_ptr_null(first_map);
+    ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
+}
+END_TEST
+
+START_TEST(test_deferred_unlink_precedes_in_place_emitter_color_change) {
+    mapstruct *source_map = get_empty_map(9, 9);
+    mapstruct *relay = get_empty_map(9, 9);
+    mapstruct *target = get_empty_map(9, 9);
+    link_stacked_maps(source_map, relay);
+    link_stacked_maps(relay, target);
+    add_colored_light(source_map, 4, 4, 13, LIGHT_COLOR_WHITE);
+    object *emitter = add_colored_light(target, 4, 4, 2, UINT32_C(0xff0000));
+    light_map_unlink_begin(false);
+    free_map(relay, 1);
+    ck_assert(target->local_light_unlink_pending);
+    light_source_prepare_change();
+    emitter->light_color = UINT32_C(0x0000ff);
+    adjust_light_source_color(target, 4, 4, 2, UINT32_C(0xff0000), -1);
+    adjust_light_source_color(target, 4, 4, 2, emitter->light_color, 1);
+    light_map_unlink_end();
+    MapSpace *center = GET_MAP_SPACE_PTR(target, 4, 4);
+    ck_assert_int_eq(center->light_source_value, 80);
+    ck_assert_int_eq(center->light_source_positive_value, 80);
+    ck_assert_int_eq(center->light_source_color[0], 0);
+    ck_assert_int_eq(center->light_source_color[1], 0);
+    ck_assert_int_eq(center->light_source_color[2], INT64_C(80) * UINT16_MAX);
+    ck_assert_int_eq(center->light_source_color_weight, INT64_C(80) * UINT16_MAX);
+    test_light_snapshot expected[9 * 9];
+    snapshot_local_light(target, expected);
+    mapstruct *oracle = get_empty_map(9, 9);
+    add_colored_light(oracle, 4, 4, 2, UINT32_C(0x0000ff));
+    assert_local_light_matches(oracle, expected);
+}
+END_TEST
+
 START_TEST(test_radial_light_profile_is_symmetric_monotonic_and_exact) {
     mapstruct *map = get_empty_map(11, 11);
     adjust_light_source(map, 5, 5, 3);
@@ -644,7 +1282,14 @@ START_TEST(test_saved_dense_map_teardown_does_not_rebuild_light_per_object) {
     }
 
     uint64_t rebuilds = light_rebuild_count_for_test();
-    check_active_maps();
+    for (int tick = 0; tick < MAPS; tick++) {
+        check_active_maps();
+        int swapped = 0;
+        for (int map_index = 0; map_index < MAPS; map_index++) {
+            swapped += maps[map_index]->in_memory == MAP_SWAPPED;
+        }
+        ck_assert_int_eq(swapped, tick + 1);
+    }
     ck_assert_uint_eq(light_rebuild_count_for_test(), rebuilds);
 
     for (int map_index = 0; map_index < MAPS; map_index++) {
@@ -811,6 +1456,31 @@ static Suite *suite(void) {
 
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_light_level_anchors);
+    tcase_add_test(tc_core, test_rebuild_preserves_incoming_light_from_third_horizontal_map);
+    tcase_add_test(tc_core, test_rebuild_matches_incremental_oracle_for_all_resident_sources);
+    tcase_add_test(tc_core, test_unchanged_geometry_updates_do_not_rebuild_or_invalidate);
+    tcase_add_test(tc_core, test_geometry_tracks_last_blocker_and_cleared_flag);
+    tcase_add_test(tc_core, test_geometry_batches_flush_before_read_and_at_scope_end);
+    tcase_add_test(tc_core, test_floor_and_roof_geometry_detects_removal_and_flag_changes);
+    tcase_add_test(tc_core, test_multipart_flag_update_rebuilds_once_and_removal_withdraws_tail_once);
+    tcase_add_test(tc_core, test_batch_geometry_and_source_deltas_preserve_all_accumulators);
+    tcase_add_test(tc_core, test_geometry_footprint_crosses_several_narrow_map_seams);
+    tcase_add_test(tc_core, test_scalar_origin_without_object_rebuilds_and_withdraws_symmetrically);
+    tcase_add_test(tc_core, test_rebuild_preserves_asymmetric_incoming_source);
+    tcase_add_test(tc_core, test_disconnected_irregular_component_does_not_expand_regular_rebuild);
+    tcase_add_test(tc_core, test_partial_grid_rebuild_bounds_targets_and_incoming_sources);
+    tcase_add_test(tc_core, test_loaded_reverse_link_replacement_clears_former_target);
+    tcase_add_test(tc_core,
+                   test_component_includes_incoming_only_source_and_excludes_disconnected_maps);
+    tcase_add_test(tc_core, test_rebuild_preserves_incoming_source_with_different_map_dimensions);
+    tcase_add_test(tc_core, test_target_footprint_resolves_vertical_link_only_on_horizontal_neighbor);
+    tcase_add_test(tc_core, test_target_footprint_retains_differing_vertical_dimension_fallback);
+    tcase_add_test(tc_core, test_noncommuting_linked_depth_paths_rebuild_every_affected_target);
+    tcase_add_test(tc_core, test_different_vertical_dimensions_never_publish_out_of_bounds_spaces);
+    tcase_add_test(tc_core, test_unloading_light_relay_rebuilds_surviving_targets_once);
+    tcase_add_test(tc_core, test_deferred_unlink_flushes_before_read_and_new_source_delta);
+    tcase_add_test(tc_core, test_full_map_retirement_does_not_rebuild_per_deleted_map);
+    tcase_add_test(tc_core, test_deferred_unlink_precedes_in_place_emitter_color_change);
     tcase_add_test(tc_core, test_light_level_interpolation);
     tcase_add_test(tc_core, test_radial_light_profile_is_symmetric_monotonic_and_exact);
     tcase_add_test(tc_core, test_colored_radial_light_removal_restores_whole_field);

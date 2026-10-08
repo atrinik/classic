@@ -30,6 +30,7 @@
 #include "zlib.h"
 
 #include <global.h>
+#include <account.h>
 #include <server_main.h>
 #include <server.h>
 #include <initialization.h>
@@ -61,6 +62,7 @@ bool init_connection(socket_struct *ns) {
         return false;
     }
 
+    account_auth_connection_clear(ns);
     ns->login_count = 0;
     ns->keepalive = 0;
     ns->addme = 0;
@@ -130,6 +132,7 @@ void free_all_newserver(void) {
  * The socket.
  */
 static void free_newsocket_internal(socket_struct *ns, bool connected) {
+    account_auth_connection_clear(ns);
     socket_assets_connection_clear(ns);
     if (connected) {
         socket_destroy(ns->sc);

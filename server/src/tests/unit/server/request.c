@@ -1730,6 +1730,75 @@ START_TEST(test_map_exit_semantic_not_disclosed_by_boundary_geometry) {
 }
 END_TEST
 
+START_TEST(test_pending_neighbor_endpoint_resends_without_player_generation_change) {
+    mapstruct *west;
+    object *pl;
+    check_setup_env_pl(&west, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    mapstruct *maps[] = {west, east};
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i]->celestial_schema = 1;
+        maps[i]->celestial_schema_seen = true;
+        maps[i]->celestial_sky_above = CELESTIAL_SKY_OPEN;
+        maps[i]->celestial_sky_seen = true;
+        maps[i]->celestial_v1_header_seen = true;
+        maps[i]->celestial_width_seen = true;
+        maps[i]->celestial_height_seen = true;
+    }
+    FREE_AND_COPY_HASH(west->path, "/pending/west");
+    FREE_AND_COPY_HASH(east->path, "/pending/east");
+    FREE_AND_COPY_HASH(west->tile_path[TILED_EAST], east->path);
+    FREE_AND_COPY_HASH(east->tile_path[TILED_WEST], west->path);
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+    west->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    east->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    object *floor = arch_get("water_still");
+    ck_assert_ptr_nonnull(floor);
+    floor->x = 0;
+    floor->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(floor, east, NULL, 0));
+    request_move_player(&pl, west, 23, 12);
+    unsigned long saved_hour = todtick;
+    long saved_ticks = pticks;
+    todtick = 5 * HOURS_PER_MONTH + 7;
+    pticks = 0;
+    ck_assert(celestial_light_keyframe_ensure(west, (uint64_t)todtick));
+    ck_assert(!celestial_light_keyframe_request(east, (uint64_t)todtick));
+    /* Incomplete storage must never become a camera endpoint. */
+    east->spaces[0 + east->width * 12].celestial_light_next_value = INT32_MAX;
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2 + 1, cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert(cell->light_next_known[floor->sub_layer]);
+    ck_assert_uint_eq(cell->light_next_radiance[floor->sub_layer],
+                      cell->light_radiance[floor->sub_layer]);
+    packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[30], MAP2_LIGHT_KEYFRAME_SNAP);
+    uint64_t generation = celestial_light_generation(west);
+    celestial_light_process_steps_for_test(100000);
+    ck_assert(east->celestial_light_keyframe_valid);
+    ck_assert_uint_eq(celestial_light_generation(west), generation);
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    ck_assert_uint_eq(celestial_light_generation(west), generation);
+    ck_assert_uint_gt(cell->light_next_radiance[floor->sub_layer],
+                      cell->light_radiance[floor->sub_layer]);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[30], MAP2_LIGHT_KEYFRAME_CONTINUOUS);
+    todtick = saved_hour;
+    pticks = saved_ticks;
+}
+END_TEST
+
 START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates) {
     mapstruct *map;
     object *pl;
@@ -2228,6 +2297,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
+    tcase_add_test(tc_core, test_pending_neighbor_endpoint_resends_without_player_generation_change);
     tcase_add_test(tc_core, test_timed_endpoint_refresh_keeps_colored_scalar_present);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);

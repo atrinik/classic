@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <light.h>
 #include <admin_shutdown.h>
 #include <weather.h>
 #include <swap.h>
@@ -150,6 +151,7 @@ void leave_map(object *op) {
  * The map to set the timeout for.
  */
 void set_map_timeout(mapstruct *map) {
+    swap_cancel_pending(map);
 #if MAP_DEFAULTTIMEOUT
     uint32_t swap_time = MAP_SWAP_TIME(map);
 
@@ -649,6 +651,7 @@ int shutdown_timer_check_for_test(void) {
  * Main processing function, called from main().
  */
 void main_process(void) {
+    account_auth_poll();
     uint64_t stage_started_us = datetime_monotonic_us();
     /* Global round ticker. */
     global_round_tag++;
@@ -662,6 +665,9 @@ void main_process(void) {
     /* Removes unused maps after a certain timeout */
     check_active_maps();
     stage_started_us = server_stage_finished("active-maps", stage_started_us);
+
+    celestial_light_process_pending(2000);
+    stage_started_us = server_stage_finished("celestial-precompute", stage_started_us);
 
     /* Routines called from time to time. */
     do_specials();
@@ -776,6 +782,11 @@ int server_run(int argc, char **argv) {
 #endif
     }
 
+    if (!account_auth_start()) {
+        LOG(ERROR, "Cannot initialize bounded authentication workers.");
+        return EXIT_FAILURE;
+    }
+
     if (!admin_shutdown_init(settings.admin_shutdown_socket, admin_shutdown_schedule)) {
         LOG(ERROR, "Cannot initialize protected local administrative shutdown socket.");
         return EXIT_FAILURE;
@@ -801,6 +812,7 @@ int server_run(int argc, char **argv) {
             break;
         }
 
+        account_auth_poll();
         admin_shutdown_poll();
         console_command_handle();
         uint64_t stage_started_us = server_stage_finished("console", loop_started_us);
