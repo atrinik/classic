@@ -656,8 +656,10 @@ static void assert_admission_unchanged(socket_struct *ns, const char *before, in
     struct stat statbuf;
     ck_assert_int_eq(stat(registration_path, &statbuf), -1);
     ck_assert_int_eq(errno, ENOENT);
-    if (operation != 2) {
+    if (operation < 2) {
         ck_assert_ptr_null(ns->account);
+    } else {
+        ck_assert_str_eq(ns->account, operation == 2 ? fixture_name : ACCOUNT_TESTING_NAME);
     }
     ck_assert_uint_eq(ns->password_fails, 0);
     ck_assert(!has_message(ns, "Password changed successfully"));
@@ -699,6 +701,7 @@ START_TEST(test_busy_completion_retries_current_access) {
         ck_assert_str_eq(ns->account, _i == 0 ? fixture_name : registration_name);
     } else {
         ck_assert(has_message(ns, "Password changed successfully"));
+        ck_assert_str_eq(ns->account, _i == 2 ? fixture_name : ACCOUNT_TESTING_NAME);
     }
     char *after = read_account();
     if (_i != 1) {
