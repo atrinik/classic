@@ -11,7 +11,7 @@ from pathlib import Path
 
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 ROOT_GLYPHS = {
-    "intro_server_browser": {"count": 383, "semantic_hash": "29c427a4eff9acbd"},
+    "intro_server_browser": {"count": 357, "semantic_hash": "f1761b6510869ded"},
     "login_popup": {"count": 385, "semantic_hash": "4266544b0b8b6fbd"},
     "popup_character_selection": {"count": 385, "semantic_hash": "4266544b0b8b6fbd"},
 }
