@@ -19,6 +19,10 @@ bool access_server_admin_poll(uint64_t, char *, size_t, size_t *);
 bool access_server_admin_poll_permitted(uint64_t, bool, char *, size_t, size_t *);
 void access_server_cancel(uint64_t);
 uint64_t access_server_auth_submit(const char code[16]);
+/* Consume a completed auth job only after current session authority is known.
+ * COMMITTED includes a VALID session check; revoked/expired authority is DENIED.
+ * BUSY retains the job and leaves outputs untouched, returning false for retry.
+ * The caller must cancel a pending job on disconnect or login timeout. */
 bool access_server_auth_poll(uint64_t, access_outcome_t *, access_token_ref_t *);
 access_session_state_t access_server_session_check(const access_token_ref_t *);
 void access_server_tick(void);
@@ -26,6 +30,8 @@ void access_server_tick(void);
 /* Configure only while the worker is stopped; NULL restores real route IO. */
 void access_server_route_for_test(access_route_callback_t);
 void access_server_maintenance_for_test(void);
+/* Seed completed jobs only while the worker is stopped. */
+uint64_t access_server_auth_result_for_test(access_outcome_t, const access_token_ref_t *);
 uint64_t access_server_admin_result_for_test(bool, const char *, const char *);
 void access_server_session_sequence_for_test(const access_session_state_t *, size_t);
 #endif
