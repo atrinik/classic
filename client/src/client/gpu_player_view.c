@@ -20,6 +20,7 @@
 #include <commands.h>
 #include <client_socket.h>
 #include <book.h>
+#include <book_edit.h>
 #include <capture_privacy.h>
 #include <config.h>
 #include <color_picker.h>
@@ -1772,6 +1773,7 @@ typedef struct gpu_player_view_ui_closure {
 } gpu_player_view_ui_closure_t;
 
 static gpu_player_view_ui_closure_t gpu_player_view_ui_closure;
+static gpu_player_view_ui_closure_t gpu_player_view_book_editor_ui;
 
 static const gpu_player_view_ui_state_t *gpu_player_view_ui_state_find(const char *name) {
     for (size_t i = 0; i < gpu_player_view_ui_closure.states_num; i++) {
@@ -1799,8 +1801,9 @@ static bool gpu_player_view_root_glyphs_match(const gpu_player_view_ui_state_t *
            state->root_glyphs.semantic_hash == expected_hash;
 }
 
-static bool gpu_player_view_ui_capture(const char *name, bool notification_fade) {
-    if (gpu_player_view_ui_closure.states_num >= PLAYER_VIEW_UI_STATES) {
+static bool gpu_player_view_ui_capture_into(gpu_player_view_ui_closure_t *closure,
+                                            const char *name, bool notification_fade) {
+    if (closure->states_num >= PLAYER_VIEW_UI_STATES) {
         SDL_SetError("UI closure state capacity exceeded before %s", name);
         return false;
     }
@@ -1829,7 +1832,7 @@ static bool gpu_player_view_ui_capture(const char *name, bool notification_fade)
         return false;
     }
     gpu_player_view_ui_state_t *state =
-        &gpu_player_view_ui_closure.states[gpu_player_view_ui_closure.states_num++];
+        &closure->states[closure->states_num++];
     state->name = name;
     gpu_renderer_statistics_get(&state->steady);
     text_root_glyph_statistics_get(&state->root_glyphs);
@@ -1848,6 +1851,10 @@ static bool gpu_player_view_ui_capture(const char *name, bool notification_fade)
         return false;
     }
     return true;
+}
+
+static bool gpu_player_view_ui_capture(const char *name, bool notification_fade) {
+    return gpu_player_view_ui_capture_into(&gpu_player_view_ui_closure, name, notification_fade);
 }
 
 static bool gpu_player_view_ui_screenshot(const char *name,
@@ -2039,6 +2046,382 @@ static bool gpu_player_view_ui_painting_prepare(const player_view_manifest_t *ma
     return resources_test_bind_loaded_file("gpu-ui-closure-resource", path);
 }
 
+/* Scripted production SDL popup acceptance. There is no server connection:
+ * bounded protocol snapshots drive the real decoder, and requests are observed
+ * after production serialization. Existing UI goldens remain a separate sweep. */
+static void gpu_player_view_book_snapshot(uint8_t result, uint32_t session,
+                                          uint32_t destination, uint32_t ink,
+                                          bool finalized, const char *title,
+                                          const char *contents) {
+    packet_struct *packet = packet_new(0, 256, 256);
+    packet_writer_write_uint8(packet, result);
+    packet_writer_write_uint32(packet, session);
+    packet_writer_write_uint32(packet, destination);
+    packet_writer_write_uint32(packet, ink);
+    packet_writer_write_uint32(packet, 500);
+    packet_writer_write_uint16(packet, 3);
+    for (uint32_t tag = 41; tag <= 43; tag++) {
+        packet_writer_write_uint32(packet, tag);
+        packet_writer_write_uint8(packet, tag == 42 || (tag == destination && finalized));
+        packet_writer_write_cstring(packet, tag == destination ? title :
+                                   tag == 42 ? "Signed copy source" : "Other inventory book");
+    }
+    packet_writer_write_cstring(packet, title);
+    packet_writer_write_cstring(packet, contents);
+    packet_writer_write_cstring(packet, result == BOOK_EDIT_ERROR ?
+                               "Not enough ink. Your draft is kept; refill the pen and retry." :
+                               "Insertions cost one ink per UTF-8 byte; renaming and signing are free.");
+    socket_command_book_edit(packet->data, packet->len, 0);
+    packet_free(packet);
+}
+
+static bool gpu_player_view_book_click(int x, int y) {
+    popup_struct *popup = popup_get_head();
+    if (popup == NULL) {
+        return false;
+    }
+    SDL_Event event = {.type = SDL_EVENT_MOUSE_BUTTON_DOWN};
+    event.button.button = SDL_BUTTON_LEFT;
+    event.button.x = (float)(popup->x + x);
+    event.button.y = (float)(popup->y + y);
+    bool consumed = popup_handle_event(&event) == 1;
+    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    (void)popup_handle_event(&event);
+    return consumed;
+}
+
+static bool gpu_player_view_book_key(SDL_Keycode key) {
+    SDL_Event event = {.type = SDL_EVENT_KEY_DOWN};
+    event.key.key = key;
+    if (popup_handle_event(&event) != 1) {
+        return false;
+    }
+    event.type = SDL_EVENT_KEY_UP;
+    return popup_get_head() == NULL || popup_handle_event(&event) == 1;
+}
+
+static bool gpu_player_view_book_text(const char *text) {
+    SDL_Event event = {.type = SDL_EVENT_TEXT_INPUT};
+    event.text.text = text;
+    return popup_handle_event(&event) == 1;
+}
+
+static bool gpu_player_view_book_close(void) {
+    popup_struct *popup = popup_get_head();
+    return popup != NULL &&
+           gpu_player_view_book_click(popup->button_right.x + 5, popup->button_right.y + 5) &&
+           popup_get_head() == NULL;
+}
+
+#define BOOK_UI_CHECK(condition) do { \
+    if (!(condition)) { \
+        SDL_SetError("book popup UI acceptance failed at line %d: %s", __LINE__, #condition); \
+        return false; \
+    } \
+} while (0)
+
+static bool gpu_player_view_book_editor_run(void) {
+    memset(&gpu_player_view_book_editor_ui, 0, sizeof(gpu_player_view_book_editor_ui));
+    book_edit_disconnect();
+    const char *saved_title = "Unsigned destination";
+    const char *saved_body = "Existing first line.\nExisting second line.";
+    /* Wide, maximum-byte UTF-8 inventory names exercise the label ellipsis
+     * before Next. Restore a short base afterward to test actual title edits. */
+    char long_title[BOOK_EDIT_TITLE_MAX + 1];
+    memset(long_title, 'W', sizeof(long_title) - 3);
+    memcpy(long_title + sizeof(long_title) - 3, "\xc3\xa9", 3);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 16, 41, 100, false, long_title, saved_body);
+    BOOK_UI_CHECK(popup_get_head() != NULL && book_edit_test_title_focused());
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_fields", false));
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 17, 41, 100, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_text(" edited"));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_TAB) && !book_edit_test_title_focused());
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_RETURN));
+    BOOK_UI_CHECK(gpu_player_view_book_text("Unsaved UTF-8 draft: \xc3\xa9"));
+    BOOK_UI_CHECK(strstr(book_edit_test_model()->contents, "\nUnsaved UTF-8 draft: \xc3\xa9") != NULL);
+    SDL_Event composition = {.type = SDL_EVENT_TEXT_EDITING};
+    composition.edit.text = "composition";
+    BOOK_UI_CHECK(popup_handle_event(&composition) == 1);
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_W)); /* A gameplay binding stays consumed. */
+    BOOK_UI_CHECK(gpu_player_view_book_click(90, 125) && book_edit_test_title_focused());
+    BOOK_UI_CHECK(gpu_player_view_book_click(40, 185) && !book_edit_test_title_focused());
+    BOOK_UI_CHECK(gpu_player_view_book_click(590, 95)); /* Select signed copy source #42. */
+    BOOK_UI_CHECK(gpu_player_view_render_complete()); /* Refresh Copy's enabled state. */
+    unsigned requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(145, 411));
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_COPY &&
+                  book_edit_test_request()->count == requests);
+    /* Next still has its old draw-time enabled flag: this same-drain event
+     * must be fenced by the production event handler's live confirmation. */
+    BOOK_UI_CHECK(gpu_player_view_book_click(590, 95));
+    BOOK_UI_CHECK(book_edit_test_model()->source == 42);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_copy_confirmation", false));
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    const book_edit_test_request_t *request = book_edit_test_request();
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_COPY &&
+                  request->destination == 41 && request->source == 42 &&
+                  request->title[0] == '\0' && request->contents[0] == '\0');
+    gpu_player_view_book_snapshot(BOOK_EDIT_UPDATED, 17, 41, 80, false,
+                                  "Signed copy source", "Copied source text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_SIGN);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_sign_confirmation", false));
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE));
+    BOOK_UI_CHECK(book_edit_test_request()->count == requests &&
+                  book_edit_test_model()->confirmation == BOOK_CONFIRM_NONE);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_SIGN &&
+                  strcmp(request->title, "Signed copy source") == 0 &&
+                  strcmp(request->contents, "Copied source text.") == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_UPDATED, 17, 41, 80, true,
+                                  "Signed copy source", "Copied source text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    requests = request->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(35, 411));
+    BOOK_UI_CHECK(book_edit_test_request()->count == requests);
+    BOOK_UI_CHECK(gpu_player_view_book_close());
+    packet_struct *reader = packet_new(0, 256, 128);
+    packet_writer_write_cstring(reader, "[b]Signed title[/b]\nCopied source text.");
+    packet_writer_write_cstring(reader, "Authenticated [b]fixture[/b] character");
+    packet_writer_write_cstring(reader, "Year 42, [red]day 7");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_reader_signed_footer", false));
+    BOOK_UI_CHECK(book_test_signature_rendered());
+    reader = packet_new(0, 128, 128);
+    packet_writer_write_cstring(reader, "Unsigned replacement book.\nNo authenticated footer remains.");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_reader_unsigned_footer_clear", false));
+    BOOK_UI_CHECK(!book_test_signature_rendered());
+    BOOK_UI_CHECK(gpu_player_view_book_close());
+    BOOK_UI_CHECK(!book_test_signature_rendered());
+
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 18, 41, 0, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_text(" retained"));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_TAB));
+    BOOK_UI_CHECK(gpu_player_view_book_text("\nDraft after insufficient ink: \xc3\xa9"));
+    char retained_title[BOOK_EDIT_TITLE_MAX + 1], retained_body[BOOK_EDIT_CONTENT_MAX + 1];
+    const book_edit_model_t *model = book_edit_test_model();
+    memcpy(retained_title, model->title, sizeof(retained_title));
+    memcpy(retained_body, model->contents, sizeof(retained_body));
+
+    /* Reader and editor share parchment artwork, never model or popup identity.
+     * Exercise production BOOK decoding and private-result teardown while a
+     * dirty editor remains underneath, with its session and draft untouched. */
+    popup_struct *draft_editor = popup_get_head();
+    unsigned draft_requests = book_edit_test_request()->count;
+    reader = packet_new(0, 128, 128);
+    packet_writer_write_cstring(reader, "Ordinary reader beside an unsaved draft.");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    popup_struct *coexisting_reader = popup_get_head();
+    BOOK_UI_CHECK(coexisting_reader != NULL && coexisting_reader != draft_editor &&
+                  coexisting_reader->next == draft_editor &&
+                  coexisting_reader->destroy_callback_func != draft_editor->destroy_callback_func &&
+                  coexisting_reader->draw_func != draft_editor->draw_func &&
+                  book_test_content_retained() && !book_sensitive_active());
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && !book_test_signature_rendered());
+    reader = packet_new(0, 256, 128);
+    packet_writer_write_cstring(reader, "Signed reader beside an unsaved draft.");
+    packet_writer_write_cstring(reader, "Authenticated [b]fixture[/b] character");
+    packet_writer_write_cstring(reader, "Year 42, [red]day 7");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    BOOK_UI_CHECK(popup_get_head() == coexisting_reader &&
+                  coexisting_reader->next == draft_editor);
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && book_test_signature_rendered());
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE));
+    BOOK_UI_CHECK(popup_get_head() == draft_editor && !book_test_content_retained() &&
+                  !book_test_signature_rendered());
+
+    const char *private_draft_result = "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";
+    BOOK_UI_CHECK(book_load_sensitive(private_draft_result, (int)strlen(private_draft_result),
+                                      "Access management"));
+    coexisting_reader = popup_get_head();
+    BOOK_UI_CHECK(coexisting_reader != NULL && coexisting_reader != draft_editor &&
+                  coexisting_reader->next == draft_editor && book_sensitive_visible() &&
+                  !capture_privacy_allowed(book_sensitive_active()));
+    BOOK_UI_CHECK(gpu_player_view_render_complete() &&
+                  !capture_privacy_allowed(book_sensitive_active()));
+    client_access_admin_reset();
+    BOOK_UI_CHECK(popup_get_head() == draft_editor && draft_editor->next == NULL &&
+                  !book_sensitive_active() && !book_sensitive_visible() &&
+                  !book_test_content_retained() && book_test_clear_was_observed() &&
+                  !capture_privacy_allowed(false));
+    model = book_edit_test_model();
+    BOOK_UI_CHECK(model->current.session == 18 && model->destination == 41 &&
+                  model->current.ink == 0 && strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_title, saved_title) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0 &&
+                  book_edit_test_request()->count == draft_requests);
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && capture_privacy_allowed(false));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_W)); /* Editor still owns focused input. */
+
+    BOOK_UI_CHECK(gpu_player_view_book_click(35, 411));
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(request->action == BOOK_EDIT_SAVE &&
+                  strcmp(request->title, retained_title) == 0 &&
+                  strcmp(request->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_ERROR, 18, 41, 0, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_insufficient_ink", false));
+    BOOK_UI_CHECK(strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    BOOK_UI_CHECK(gpu_player_view_book_close()); /* Real popup X event, not model_close. */
+    BOOK_UI_CHECK(!book_edit_test_model()->current.session &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 19, 41, 500, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    model = book_edit_test_model();
+    BOOK_UI_CHECK(model->current.session == 19 && model->current.ink == 500 &&
+                  strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0);
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(365, 411)); /* Cancel retains the same draft. */
+    model = book_edit_test_model();
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(popup_get_head() == NULL && !model->current.session &&
+                  model->destination == 41 && model->current.ink == 500 &&
+                  strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_title, saved_title) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0);
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_CANCEL &&
+                  request->session == 19 && request->destination == 41 && !request->source &&
+                  !request->title[0] && !request->contents[0]);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 20, 41, 500, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(strcmp(book_edit_test_model()->title, retained_title) == 0 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE)); /* Escape also retains, never saves. */
+    model = book_edit_test_model();
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(popup_get_head() == NULL && !model->current.session &&
+                  model->destination == 41 && model->current.ink == 500 &&
+                  strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0);
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_CANCEL &&
+                  request->session == 20 && !request->title[0] && !request->contents[0]);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 21, 41, 500, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_reopened_draft", false));
+    BOOK_UI_CHECK(book_edit_test_model()->current.session == 21 &&
+                  strcmp(book_edit_test_model()->title, retained_title) == 0 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 22, 43, 500, false,
+                                  "Other destination", "Other persisted text.");
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_discard_confirmation", false));
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_OPEN_DISCARD);
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE));
+    BOOK_UI_CHECK(strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 23, 41, 500, false, saved_title, saved_body);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 24, 41, 500, false,
+                                  "External rename", "External changed text.");
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_rebase_confirmation", false));
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_OPEN_REBASE);
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(book_edit_test_request()->count == requests &&
+                  book_edit_test_model()->current.session == 24 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0 &&
+                  strcmp(book_edit_test_model()->base_contents, "External changed text.") == 0);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_click(365, 411));
+    BOOK_UI_CHECK(popup_get_head() == NULL && !book_edit_test_model()->current.session &&
+                  book_edit_test_model()->destination == 41 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0 &&
+                  strcmp(book_edit_test_model()->base_contents, "External changed text.") == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 25, 41, 500, false,
+                                  "External rename", "External changed text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_NONE &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    /* Replacing a retained draft remains an explicit, separate confirmation. */
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 26, 43, 500, false,
+                                  "Other destination", "Other persisted text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_OPEN_DISCARD);
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(book_edit_test_model()->destination == 43 &&
+                  strcmp(book_edit_test_model()->contents, "Other persisted text.") == 0);
+    BOOK_UI_CHECK(gpu_player_view_book_text(" Account A unsaved title"));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_TAB));
+    BOOK_UI_CHECK(gpu_player_view_book_text(" Account A unsaved text"));
+    BOOK_UI_CHECK(gpu_player_view_book_close());
+    BOOK_UI_CHECK(book_edit_model_dirty(book_edit_test_model()));
+
+    /* Drive the actual Settings -> Logout action. It reconnects straight
+     * through ST_STARTCONNECT, bypassing game_status_chain's ST_START reset. */
+    char *saved_account = clioption_settings.connect[1];
+    char *saved_password = clioption_settings.connect[2];
+    clioption_settings.connect[1] = clioption_settings.connect[2] = NULL;
+    BOOK_UI_CHECK(client_command_queue_initialize());
+    client_socket_shutdown_test_set(false);
+    settings_open();
+    BOOK_UI_CHECK(popup_get_head() != NULL);
+    SDL_Event logout = {.type = SDL_EVENT_KEY_DOWN};
+    logout.key.key = SDLK_UP; /* Default Disconnect -> Logout. */
+    BOOK_UI_CHECK(popup_handle_event(&logout) == 1);
+    capture_privacy_block();
+    requests = book_edit_test_request()->count;
+    logout.key.key = SDLK_RETURN;
+    BOOK_UI_CHECK(popup_handle_event(&logout) == 1);
+    free(clioption_settings.connect[1]);
+    free(clioption_settings.connect[2]);
+    clioption_settings.connect[1] = saved_account;
+    clioption_settings.connect[2] = saved_password;
+    BOOK_UI_CHECK(cpl.state == ST_STARTCONNECT && popup_get_head() != NULL &&
+                  !book_edit_test_model()->destination && !book_edit_test_model()->contents[0] &&
+                  !book_edit_test_model()->title[0] && !book_edit_test_model()->base_contents[0] &&
+                  !book_edit_test_model()->current.session &&
+                  book_edit_test_request()->count == requests && !capture_privacy_allowed(false));
+    BOOK_UI_CHECK(handle_socket_shutdown() == 1 && cpl.state == ST_STARTCONNECT);
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(false);
+    BOOK_UI_CHECK(!capture_privacy_allowed(false));
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && capture_privacy_allowed(false));
+
+    cpl.state = ST_PLAY;
+    popup_destroy_all();
+    /* A second account reuses the same inventory tag and server session. Its
+     * snapshot must open fresh without any discard/rebase or Account A text. */
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 26, 43, 500, false,
+                                  "Account B title", "Account B persisted text.");
+    model = book_edit_test_model();
+    BOOK_UI_CHECK(model->confirmation == BOOK_CONFIRM_NONE && model->destination == 43 &&
+                  strcmp(model->title, "Account B title") == 0 &&
+                  strcmp(model->contents, "Account B persisted text.") == 0 &&
+                  strcmp(model->base_contents, "Account B persisted text.") == 0 &&
+                  !book_edit_model_dirty(model));
+    requests = book_edit_test_request()->count;
+    client_socket_close(&csocket); /* An open canvas clears without a cancel request. */
+    BOOK_UI_CHECK(popup_get_head() == NULL && !book_edit_test_model()->destination &&
+                  !book_edit_test_model()->contents[0] &&
+                  book_edit_test_request()->count == requests);
+    BOOK_UI_CHECK(handle_socket_shutdown() == 1);
+    book_edit_deinit();
+    return gpu_player_view_book_editor_ui.states_num == 9;
+}
+#undef BOOK_UI_CHECK
+
 /* Anchor enumeration follows the same dispatch path as clicking, but the
  * interceptor consumes every action so the fixture never sends a command. */
 static int gpu_player_view_private_anchor(const char *action,
@@ -2085,14 +2468,31 @@ static bool gpu_player_view_private_markup_test(void) {
         return false;
     }
 
+    /* Replace a signed reader in-place: private results must clear its footer
+     * while blocking capture before the next presented frame. */
     anchors = 0;
-    if (!book_load_sensitive(result, (int)strlen(result), label)) {
+    if (!book_load_signed(label, (int)strlen(label), "Authenticated signer", "Year 42")) {
         return false;
     }
     rendered = gpu_player_view_book_anchors(&anchors);
+    if (!rendered || !book_test_signature_rendered()) {
+        SDL_SetError("signed reader did not render before private replacement");
+        return false;
+    }
+    anchors = 0;
+    if (!book_load_sensitive(result, (int)strlen(result), label) ||
+        capture_privacy_allowed(book_sensitive_active())) {
+        SDL_SetError("private replacement admitted capture before composition");
+        return false;
+    }
+    rendered = gpu_player_view_book_anchors(&anchors);
+    bool private_retained = book_sensitive_active();
+    bool signature_rendered = book_test_signature_rendered();
+    bool capture_allowed = capture_privacy_allowed(private_retained);
     popup_destroy_all();
-    if (!rendered || anchors != 0) {
-        SDL_SetError("private book title or label executed markup");
+    if (!rendered || anchors != 0 || signature_rendered || !private_retained || capture_allowed ||
+        !book_test_clear_was_observed()) {
+        SDL_SetError("private replacement retained signature, markup, or capture permission");
         return false;
     }
     return true;
@@ -2411,6 +2811,10 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     }
     popup_destroy_all();
 
+    if (!gpu_player_view_book_editor_run()) {
+        return false;
+    }
+
     if (!book_load(book, (int)strlen(book))) {
         SDL_SetError("ordinary book could not be opened for targeted privacy clear");
         return false;
@@ -2601,14 +3005,14 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
            gpu_player_view_ui_closure.states_num == PLAYER_VIEW_UI_STATES;
 }
 
-static void gpu_player_view_ui_closure_write(void) {
-    if (gpu_player_view_ui_closure.states_num == 0) {
+static void gpu_player_view_ui_states_write(const gpu_player_view_ui_closure_t *closure) {
+    if (closure->states_num == 0) {
         fputs("null", stdout);
         return;
     }
     fputc('[', stdout);
-    for (size_t index = 0; index < gpu_player_view_ui_closure.states_num; index++) {
-        const gpu_player_view_ui_state_t *state = &gpu_player_view_ui_closure.states[index];
+    for (size_t index = 0; index < closure->states_num; index++) {
+        const gpu_player_view_ui_state_t *state = &closure->states[index];
         printf("%s{\"name\":", index == 0 ? "" : ",");
         gpu_player_view_json_string(state->name);
         printf(",\"pixels_sha256\":\"%s\",\"output_size\":[%d,%d],"
@@ -2641,6 +3045,13 @@ static void gpu_player_view_ui_closure_write(void) {
     }
     fputc(']', stdout);
 }
+static void gpu_player_view_ui_closure_write(void) {
+    gpu_player_view_ui_states_write(&gpu_player_view_ui_closure);
+}
+static void gpu_player_view_book_editor_ui_write(void) {
+    gpu_player_view_ui_states_write(&gpu_player_view_book_editor_ui);
+}
+
 #else
 static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
                                            const player_view_manifest_t *manifest) {
@@ -2650,6 +3061,9 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
 }
 
 static void gpu_player_view_ui_closure_write(void) {
+    fputs("null", stdout);
+}
+static void gpu_player_view_book_editor_ui_write(void) {
     fputs("null", stdout);
 }
 #endif
@@ -2748,6 +3162,8 @@ static void gpu_player_view_record(const player_view_manifest_t *manifest,
     printf("},\"qualified_hardware\":%s,\"ui_closure\":",
            gpu_renderer_hardware_verified() ? "true" : "false");
     gpu_player_view_ui_closure_write();
+    fputs(",\"book_editor_ui\":", stdout);
+    gpu_player_view_book_editor_ui_write();
     fputs("}\n", stdout);
 }
 

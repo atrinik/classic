@@ -9,6 +9,20 @@ The game and metaserver protocols are separate contract families. This package
 currently publishes only the classic game command registry. Add another family
 only with its own namespace, specification, version, fixtures, and validation.
 
+Protocol v1083 adds the paired `BOOK_EDIT` commands for bounded book editing,
+copying and permanent signing. Published access and exploration command IDs are preserved;
+BOOK_EDIT is appended at client-to-server ID 26 and server-to-client ID 33. The authored
+[`book_edit.h`](include/atrinik/protocol/book_edit.h) specifies field order,
+limits, actions and draft-preserving responses. Both endpoints validate a full
+packet before publishing state. Editor sessions belong to the current playing
+connection; reconnect requires applying a pen again. The existing protocol
+version handshake rejects earlier peers before gameplay.
+Signed `BOOK` responses also append two bounded NUL-terminated UTF-8 fields,
+signer and in-game date (127 bytes each), after the existing book-message
+terminator. Unsigned responses have no suffix. The client accepts either the
+complete pair or no suffix and renders authenticated metadata outside editable
+book markup.
+
 Protocol v1082 synchronizes account region-map exploration using map-path
 bitfields. Server-to-client `REGION_EXPLORATION` (ID 32) carries account binding,
 bitmaps and sparse bit deltas. Client-to-server `REGION_EXPLORATION` (ID 25)

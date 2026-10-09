@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <access_server.h>
+#include <book_edit.h>
 #include <celestial_structure.h>
 #include <gameplay_journal.h>
 #include <movement.h>
@@ -409,6 +410,7 @@ static player *get_player(player *p) {
  * The player structure to free.
  */
 static void free_player_internal(player *pl, bool free_socket) {
+    book_edit_clear(pl);
     /* If this player is in a party, leave the party */
     if (pl->party) {
         command_party(pl->ob, "party", "leave");
@@ -3739,7 +3741,10 @@ static void player_create(player *pl, archetype_t *at, const char *name) {
  * @param map_path Canonical map path.
  * @param x Destination X coordinate.
  * @param y Destination Y coordinate.
- * @param item_archname Optional inventory item archetype name.
+ * @param item_archname Optional inventory item archetype name, or the
+ * server-owned "writing-books" inventory bundle selector. That bundle requires
+ * companion Classic-target content with the ink_bottle archetype; missing
+ * content fails provisioning rather than creating a singularity placeholder.
  * @param error Output buffer for a failure description.
  * @param error_size Size of error.
  * @return True on success, false on failure.
@@ -3768,8 +3773,9 @@ bool player_provision_scenario(const char *name,
         snprintf(error, error_size, "could not load scenario map");
         return false;
     }
+    bool writing_books = item_archname != NULL && strcmp(item_archname, "writing-books") == 0;
     object *item = NULL;
-    if (item_archname != NULL) {
+    if (item_archname != NULL && !writing_books) {
         item = arch_get(item_archname);
         if (item == NULL) {
             snprintf(error, error_size, "could not load scenario item");
@@ -3796,8 +3802,53 @@ bool player_provision_scenario(const char *name,
     if (item != NULL) {
         object_insert_into(item, pl->ob, 0);
     }
-    player_save(pl->ob);
+    if (writing_books) {
+        const char *arches[] = {
+            "writing_pen", "writing_pen", "ink_bottle", "book", "book", "book", "book"
+        };
+        const char *titles[] = {
+            "writing pen", "dry writing pen", "ink bottle", "Writing Draft One",
+            "Writing Draft Two", "Writing Draft Three", "Writing Source"
+        };
+        for (size_t i = 0; i < sizeof(arches) / sizeof(arches[0]); i++) {
+            archetype_t *writing_arch = arch_find(arches[i]);
+            if (writing_arch == NULL) {
+                snprintf(error, error_size, "could not load writing scenario item: %s", arches[i]);
+                free_player_internal(pl, false);
+                return false;
+            }
+            object *writing_item = arch_to_object(writing_arch);
+            FREE_AND_COPY_HASH(writing_item->name, titles[i]);
+            writing_item->nrof = 1;
+            if (i < 2) {
+                writing_item->stats.maxhp = 1000;
+                writing_item->stats.food = i == 0 ? 1000 : 1;
+            } else if (i >= 3) {
+                FREE_AND_CLEAR_HASH(writing_item->msg);
+                if (i == 6) {
+                    writing_item->msg = add_string("Existing source text for copying and editing.\n");
+                }
+            }
+            if (object_insert_into(writing_item, pl->ob, INS_NO_MERGE) == NULL) {
+                snprintf(error, error_size, "could not insert writing scenario item");
+                free_player_internal(pl, false);
+                return false;
+            }
+        }
+        /* The normal skill linker creates the character's skill archetypes. */
+        link_player_skills(pl->ob);
+        if (find_skill(pl->ob, SK_LITERACY) == NULL || find_skill(pl->ob, SK_INSCRIPTION) == NULL) {
+            snprintf(error, error_size, "writing scenario requires Literacy and Inscription");
+            free_player_internal(pl, false);
+            return false;
+        }
+    }
+    bool save_ok = player_save_checked(pl->ob);
     free_player_internal(pl, false);
+    if (!save_ok) {
+        snprintf(error, error_size, "could not save scenario player");
+        return false;
+    }
 
     char *path = player_make_path(name, "player.dat");
     struct stat statbuf;

@@ -284,8 +284,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1082U$")
-    message(FATAL_ERROR "Client requires classic game protocol v1082")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1083U$")
+    message(FATAL_ERROR "Client requires classic game protocol v1083")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -560,6 +560,7 @@ if (BUILD_TESTING)
     add_test(NAME client-help-parser COMMAND ${EXECUTABLE} --help-parser-test)
 
     add_test(NAME client-access-lifecycle COMMAND ${EXECUTABLE} --access-lifecycle-test)
+    add_test(NAME client-book-edit-lifecycle COMMAND ${EXECUTABLE} --book-edit-lifecycle-test)
 
     add_executable(client-capture-privacy-tests
         src/tests/capture_privacy.c src/client/capture_privacy.c)
@@ -910,6 +911,7 @@ if (BUILD_TESTING)
 
     add_executable(client-compound-packet-tests
         src/tests/compound_packet.c
+        src/client/book_edit_packet.c
         src/client/commands.c
         src/client/item_packet.c
         src/gui/popups/interface_packet.c)
@@ -932,6 +934,23 @@ if (BUILD_TESTING)
         SDL3_image::SDL3_image
         SDL3_ttf::SDL3_ttf)
     add_test(NAME client-compound-packet COMMAND client-compound-packet-tests)
+
+    add_executable(client-book-edit-tests
+        src/tests/book_edit.c src/client/book_edit_packet.c src/client/book_edit_model.c src/gui/toolkit/text_input.c)
+    atrinik_configure_target(client-book-edit-tests)
+    target_compile_options(client-book-edit-tests PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-fdata-sections>)
+    target_link_options(client-book-edit-tests PRIVATE
+        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+    target_compile_definitions(client-book-edit-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-book-edit-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-book-edit-tests PRIVATE Atrinik::Core SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+    add_test(NAME client-book-edit COMMAND client-book-edit-tests)
 
     add_executable(client-player-status-tests
         src/tests/player_status.c

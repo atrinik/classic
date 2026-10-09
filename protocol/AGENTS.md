@@ -34,3 +34,9 @@
   ID 25 and server-to-client ID 32. Retired SETUP subtype 3 remains reserved.
   Policy follows authenticated VERSION before setup/resources/accounts on every
   connection; update all native and Python consumers together. Raw access payloads require sensitive packet handling.
+
+- Authored payload headers live in `include/atrinik/protocol/`; `book_edit.h`
+  owns the BOOK_EDIT action/result identities, bounds and field layouts.
+
+- Revision 1083 appends BOOK_EDIT at C2S 26 and S2C 33 while preserving
+  published access and exploration IDs. The version handshake rejects earlier peers.

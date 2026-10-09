@@ -2,7 +2,7 @@
 # Do not edit by hand.
 from enum import IntEnum
 
-PROTOCOL_VERSION = 1082
+PROTOCOL_VERSION = 1083
 
 
 ITEM_NAME_SIZE = 128
@@ -50,6 +50,7 @@ class ClientToServerCommand(IntEnum):
     ACCESS_AUTH = 23
     ACCESS_ADMIN = 24
     REGION_EXPLORATION = 25
+    BOOK_EDIT = 26
 
 
 class ServerToClientCommand(IntEnum):
@@ -86,3 +87,4 @@ class ServerToClientCommand(IntEnum):
     ACCESS_ADMIN_RESULT = 30
     ACCESS_POLICY = 31
     REGION_EXPLORATION = 32
+    BOOK_EDIT = 33

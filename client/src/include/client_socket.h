@@ -40,6 +40,9 @@ struct packet_struct;
 
 /** Public API implemented in src/client/socket.c. */
 
+/* Open, close, shutdown requests, shutdown polling and deinitialization run on
+ * the main thread: they also clear account-local UI and editor draft state. */
+
 extern void socket_send_packet(struct packet_struct *packet);
 /** Always consumes packet; false leaves a bounded producer responsible for retry. */
 bool socket_send_packet_bounded(struct packet_struct *packet, size_t queue_limit);

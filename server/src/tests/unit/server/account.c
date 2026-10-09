@@ -17,6 +17,7 @@
 #include <account.h>
 #include <auth_worker.h>
 #include <access_server.h>
+#include <arch.h>
 #include <exploration.h>
 #include <server.h>
 #include <toolkit/packet.h>
@@ -303,6 +304,129 @@ START_TEST(test_account_provision_brynknot_idle_preserves_clock_and_existing_pla
     ck_assert_int_eq(unlink(account_path), 0);
     ck_assert_int_eq(unlink(player_path), 0);
     unlink(metrics_path);
+    ck_assert_int_eq(unlink(password_path), 0);
+    free(account_path);
+    free(player_path);
+    free(metrics_path);
+}
+END_TEST
+
+static object *writing_scenario_item(object *pl, const char *name) {
+    object *found = NULL;
+    for (object *item = pl->inv; item != NULL; item = item->below) {
+        if (strcmp(item->name, name) == 0) {
+            ck_assert_ptr_null(found);
+            found = item;
+        }
+    }
+    ck_assert_ptr_nonnull(found);
+    ck_assert_uint_eq(found->nrof, 1);
+    return found;
+}
+
+START_TEST(test_account_provision_writing_books_roundtrip_and_save_failure) {
+    const char *account_name = "scenariowriting";
+    const char *character_name = "Scenario Writing";
+    char error[HUGE_BUF];
+    char password_path[HUGE_BUF];
+    snprintf(VS(password_path), "%s/scenario-writing-password", settings.datapath);
+    char *account_path = account_make_path(account_name);
+    char *player_path = player_make_path(character_name, "player.dat");
+    char *metrics_path = player_make_path(character_name, "metrics.dat");
+    unlink(account_path);
+    unlink(player_path);
+    unlink(metrics_path);
+    unlink(password_path);
+    const char password[] = "local-writing-9!\n";
+    ck_assert_int_eq(path_secret_create_atomic(password_path, password, sizeof(password) - 1),
+                     PATH_SECRET_CREATE_OK);
+    unsigned long previous_hour = todtick;
+    /* The release content lock may precede the companion ink archetype. This
+     * bounded fixture tests provisioning, not release content acceptance. */
+    archetype_t *ink_arch = arch_find("ink_bottle");
+    bool previous_arch_in_init = arch_in_init;
+    if (ink_arch == NULL) {
+        archetype_t *oil = arch_find("oil_lamp");
+        ck_assert_ptr_nonnull(oil);
+        arch_in_init = true;
+        ink_arch = arch_clone(oil);
+        ink_arch->name = add_string("ink_bottle");
+        FREE_AND_COPY_HASH(ink_arch->clone.name, "ink bottle");
+        FREE_AND_COPY_HASH(ink_arch->clone.race, "writing_ink");
+        ink_arch->clone.stats.food = 1000;
+        ink_arch->clone.nrof = 1;
+        arch_add(ink_arch);
+        arch_in_init = previous_arch_in_init;
+    }
+    if (_i == 2) {
+        HASH_DEL(arch_table, ink_arch);
+    }
+    player_save_fail_for_test(_i == 1);
+    bool provisioned = account_provision_from_file(account_name,
+                                                   password_path,
+                                                   character_name,
+                                                   "human_male",
+                                                   "writing-books",
+                                                   VS(error));
+    player_save_fail_for_test(false);
+    if (_i == 2) {
+        arch_in_init = true;
+        arch_add(ink_arch);
+        arch_in_init = previous_arch_in_init;
+    }
+    ck_assert_uint_eq(todtick, previous_hour);
+    if (_i != 0) {
+        ck_assert(!provisioned);
+        ck_assert_ptr_nonnull(strstr(error, _i == 1 ? "save scenario player" : "scenario item: ink_bottle"));
+        struct stat info;
+        ck_assert_int_eq(stat(account_path, &info), -1);
+        ck_assert_int_eq(stat(player_path, &info), -1);
+        ck_assert_int_eq(stat(metrics_path, &info), -1);
+    } else {
+        ck_assert_msg(provisioned, "%s", error);
+        FILE *fp = fopen(player_path, "rb");
+        ck_assert_ptr_nonnull(fp);
+        object *placeholder = player_get_dummy(character_name, NULL);
+        player *loaded = CONTR(placeholder);
+        object_remove(placeholder, 0);
+        placeholder->custom_attrset = NULL;
+        object_destroy(placeholder);
+        loaded->ob = object_get();
+        ck_assert(player_load_stream(loaded, fp));
+        fclose(fp);
+        loaded->ob->custom_attrset = loaded;
+        ck_assert_str_eq(loaded->maplevel, "/shattered_islands/world_0_70");
+        ck_assert_int_eq(loaded->ob->x, 20);
+        ck_assert_int_eq(loaded->ob->y, 8);
+        ck_assert_int_eq(loaded->bed_x, 20);
+        ck_assert_int_eq(loaded->bed_y, 8);
+        object *pen = writing_scenario_item(loaded->ob, "writing pen");
+        ck_assert_int_eq(pen->type, SKILL_ITEM);
+        ck_assert_int_eq(pen->stats.sp, SK_INSCRIPTION);
+        ck_assert_int_eq(pen->stats.food, 1000);
+        ck_assert_int_eq(pen->stats.maxhp, 1000);
+        pen = writing_scenario_item(loaded->ob, "dry writing pen");
+        ck_assert_int_eq(pen->stats.food, 1);
+        ck_assert_int_eq(pen->stats.maxhp, 1000);
+        object *ink = writing_scenario_item(loaded->ob, "ink bottle");
+        ck_assert_str_eq(ink->arch->name, "ink_bottle");
+        ck_assert_int_eq(ink->stats.food, 1000);
+        const char *drafts[] = {"Writing Draft One", "Writing Draft Two", "Writing Draft Three"};
+        for (size_t i = 0; i < sizeof(drafts) / sizeof(drafts[0]); i++) {
+            object *book = writing_scenario_item(loaded->ob, drafts[i]);
+            ck_assert_int_eq(book->type, BOOK);
+            ck_assert_ptr_null(book->msg);
+        }
+        object *source = writing_scenario_item(loaded->ob, "Writing Source");
+        ck_assert_int_eq(source->type, BOOK);
+        ck_assert_str_eq(source->msg, "Existing source text for copying and editing.\n");
+        ck_assert_ptr_nonnull(find_skill(loaded->ob, SK_LITERACY));
+        ck_assert_ptr_nonnull(find_skill(loaded->ob, SK_INSCRIPTION));
+        free_player(loaded);
+        ck_assert_int_eq(unlink(account_path), 0);
+        ck_assert_int_eq(unlink(player_path), 0);
+        unlink(metrics_path);
+    }
     ck_assert_int_eq(unlink(password_path), 0);
     free(account_path);
     free(player_path);
@@ -961,6 +1085,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_account_provision_lighting_preset);
     tcase_add_test(tc_core, test_account_provision_brynknot_idle_preserves_clock_and_existing_player);
     tcase_add_test(tc_core, test_account_provision_lighting_preset_rolls_back);
+    tcase_add_loop_test(tc_core, test_account_provision_writing_books_roundtrip_and_save_failure, 0, 3);
     return s;
 }
 

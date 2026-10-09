@@ -27,6 +27,7 @@
  * Client main related functions.
  */
 
+#include <book_edit.h>
 #include <mouse.h>
 #include <access_admin.h>
 #include <animations.h>
@@ -310,6 +311,7 @@ static int game_status_chain(void) {
         metaserver_get_servers();
         cpl.state = ST_START;
     } else if (cpl.state == ST_START) {
+        book_edit_disconnect();
         image_face_requests_clear();
         if (client_socket_active()) {
             client_socket_close(&csocket);
@@ -924,6 +926,77 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts,
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
+static bool client_book_edit_lifecycle_test(void) {
+    /* These cases call the actual production transport lifecycle, including
+     * the no-socket and mutex-backed paths that Logout can encounter. */
+    for (unsigned int route = 0; route < 7; route++) {
+        if (!book_edit_test_seed_draft()) {
+            return false;
+        }
+        cpl.state = ST_STARTCONNECT; /* Logout bypasses the ST_START fallback. */
+        capture_privacy_block();
+        switch (route) {
+            case 0:
+                client_socket_close(&csocket);
+                break;
+            case 1:
+                client_socket_shutdown_test_set(false);
+                client_socket_close(&csocket);
+                break;
+            case 2:
+                client_socket_request_shutdown();
+                break;
+            case 3:
+                client_socket_shutdown_test_set(false);
+                client_socket_request_shutdown();
+                break;
+            case 4:
+                if (!client_command_queue_initialize()) {
+                    return false;
+                }
+                client_socket_shutdown_test_set(true);
+                if (!handle_socket_shutdown()) {
+                    return false;
+                }
+                break;
+            case 5:
+                client_socket_deinitialize();
+                break;
+            case 6: {
+                server_struct server = {0};
+                server_struct *saved_server = selected_server;
+                selected_server = &server;
+                /* Non-NULL malformed fingerprint is rejected by the transport
+                 * before discovery, DNS or socket creation in every build. */
+                bool opened = client_socket_open(&csocket, "unused.invalid", 1, "invalid",
+                                                 SOCKET_CONNECTION_PREFERENCE_AUTO);
+                selected_server = saved_server;
+                if (opened) {
+                    return false;
+                }
+                break;
+            }
+        }
+        const book_edit_model_t empty = {0};
+        if (memcmp(book_edit_test_model(), &empty, sizeof(empty)) != 0 ||
+            cpl.state != ST_STARTCONNECT || capture_privacy_allowed(false)) {
+            return false;
+        }
+        capture_privacy_frame_begin(false);
+        capture_privacy_frame_end(false);
+        if (capture_privacy_allowed(false)) {
+            return false;
+        }
+        capture_privacy_frame_begin(false);
+        capture_privacy_frame_end(true);
+        if (!capture_privacy_allowed(false)) {
+            return false;
+        }
+        client_socket_deinitialize();
+    }
+    return true;
+}
+
 static bool client_access_lifecycle_test(void) {
     static const char ordinary[] = "ordinary retained book";
     static const char private_result[] =
@@ -1029,6 +1102,10 @@ int main(int argc, char *argv[]) {
     }
     if (argc == 2 && strcmp(argv[1], "--access-lifecycle-test") == 0) {
         return client_access_lifecycle_test() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "--book-edit-lifecycle-test") == 0) {
+        return client_book_edit_lifecycle_test() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {

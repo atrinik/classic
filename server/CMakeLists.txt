@@ -139,8 +139,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1082U$")
-    message(FATAL_ERROR "Server requires classic game protocol v1082")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1083U$")
+    message(FATAL_ERROR "Server requires classic game protocol v1083")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -451,6 +451,7 @@ if (BUILD_TESTING AND NOT MINGW)
             ${CMAKE_CURRENT_SOURCE_DIR}/server.cfg
             ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/content_benchmark
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_books.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_calendar.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_fail.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_pass.py)
@@ -608,6 +609,22 @@ if (BUILD_TESTING AND NOT MINGW)
                     -DATRINIK_CLOCKDATA=671
                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
             set_tests_properties(server-plugin-python-calendar PROPERTIES
+                LABELS "server;plugin;runtime"
+                TIMEOUT 300
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
+            add_test(NAME server-plugin-python-books
+                COMMAND ${ATRINIK_SERVER_TEST_RUNNER}
+                    --name server-plugin-python-books
+                    --copy-python-maps
+                    --
+                    ${CMAKE_COMMAND}
+                    -DATRINIK_SERVER=$<TARGET_FILE:${EXECUTABLE}>
+                    -DATRINIK_RUNTIME_DIR=.
+                    -DATRINIK_UNIT_SCRIPT=python_unit_books.py
+                    -DATRINIK_EXPECT_FAILURE=false
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_plugin_unit_test.cmake)
+            set_tests_properties(server-plugin-python-books PROPERTIES
                 LABELS "server;plugin;runtime"
                 TIMEOUT 300
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

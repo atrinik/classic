@@ -24,6 +24,14 @@
   never import untrusted client `.tiles` files.
 - Preserve object ownership, map activation/swap, lighting, plugin boundaries,
   and save transactionality. Test cleanup/rollback for lifecycle changes.
+- Book writing uses server-held inventory/title/text snapshots and separate
+  persistent `book_finalized`, signer, in-game date and UTC metadata. Preserve
+  hidden/unpaid inventory checks, script/quest attributes, destination stack
+  rejection, byte-based changed-text ink charging and atomic rejection before
+  mutation. The offline `writing-books` scenario uses normal skill linking;
+  provision and run it only through an isolated wrapper state. See
+  [`doc/BOOK_WRITING.md`](doc/BOOK_WRITING.md) for persistence, protocol revision
+  1083, refill rules and acceptance observations.
 - While celestial-v1 runtime activation is inactive, preserve physical private-map
   and savebed paths through normal character saves, including saves on v1 maps.
   A map's schema alone does not select the process-wide persistence policy.
@@ -52,7 +60,7 @@
 
 ## Access admission and administration
 
-- Protocol 1082 retains mandatory authenticated access policy before setup/account
+- Protocol 1083 retains mandatory authenticated access policy before setup/account
   traffic. Retired SETUP subtype 3 stays reserved; no join-password fallback.
 - `access_tokens.c` owns checked snapshot/audit/receipt/outbox transactions;
   `access_admin.c` owns strict bounded management JSON; `access_server.c` owns

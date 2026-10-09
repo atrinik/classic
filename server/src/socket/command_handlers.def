@@ -26,3 +26,5 @@ ATRINIK_SERVER_COMMAND_HANDLER(TARGET, socket_command_target, PLAYING, true)
 ATRINIK_SERVER_COMMAND_HANDLER(REGION_EXPLORATION, socket_command_region_exploration, PLAYING, true)
 ATRINIK_SERVER_COMMAND_HANDLER(ACCESS_AUTH, socket_command_access_auth, ACCESS, false)
 ATRINIK_SERVER_COMMAND_HANDLER(ACCESS_ADMIN, socket_command_access_admin, PLAYING, false)
+
+ATRINIK_SERVER_COMMAND_HANDLER(BOOK_EDIT, socket_command_book_edit, PLAYING, true)

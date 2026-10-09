@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 1082,
+  "protocol_version": 1083,
   "item_name_size": 128,
   "item_extra_message_size": 256,
   "player_status": {
@@ -40,7 +40,8 @@
     {"id": 22, "symbol": "TARGET", "wire_name": "target"},
     {"id": 23, "symbol": "ACCESS_AUTH", "wire_name": "access_auth"},
     {"id": 24, "symbol": "ACCESS_ADMIN", "wire_name": "access_admin"},
-    {"id": 25, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
+    {"id": 25, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"},
+    {"id": 26, "symbol": "BOOK_EDIT", "wire_name": "book_edit"}
   ],
   "server_to_client": [
     {"id": 0, "symbol": "MAP", "wire_name": "map"},
@@ -75,6 +76,7 @@
     {"id": 29, "symbol": "ACCESS_RESULT", "wire_name": "access_result"},
     {"id": 30, "symbol": "ACCESS_ADMIN_RESULT", "wire_name": "access_admin_result"},
     {"id": 31, "symbol": "ACCESS_POLICY", "wire_name": "access_policy"},
-    {"id": 32, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"}
+    {"id": 32, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"},
+    {"id": 33, "symbol": "BOOK_EDIT", "wire_name": "book_edit"}
   ]
 }

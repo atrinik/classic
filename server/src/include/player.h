@@ -494,6 +494,8 @@ struct pl_player {
     /** Auto-reply message when AFK */
     char afk_auto_reply[MAX_BUF];
 
+    struct book_edit_session *book_editor; ///< Connection-local writing snapshots.
+
     object *talking_to; ///< Object the player is talking to.
     tag_t talking_to_count; ///< ID of ::talking_to.
 
