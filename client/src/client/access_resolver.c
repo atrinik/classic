@@ -1,6 +1,7 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include <access_resolver.h>
+#include <client.h>
 #include <main.h>
 #include <metaserver.h>
 #include <metaserver_options.h>
