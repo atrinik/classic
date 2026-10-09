@@ -435,26 +435,28 @@ START_TEST(test_deadline_driven_quic_service_benchmark) {
     char stats[HUGE_BUF * 4] = {0};
     server_metrics_stats(VS(stats));
     printf("QUIC benchmark: clients=%u keepalive_interval_ms=%" PRIu64
-           " samples=%zu sent=%zu responses=%zu late=%zu missed=%zu\n",
+           " samples=%" PRIuMAX " sent=%" PRIuMAX " responses=%" PRIuMAX
+           " late=%" PRIuMAX " missed=%" PRIuMAX "\n",
            TRANSPORT_BENCHMARK_CLIENTS,
            TRANSPORT_BENCHMARK_IDLE_MS,
-           value_count,
-           sent,
-           responses,
-           late,
-           missed);
+           (uintmax_t)value_count,
+           (uintmax_t)sent,
+           (uintmax_t)responses,
+           (uintmax_t)late,
+           (uintmax_t)missed);
     printf("Client send-to-dispatch RTT us: p50=%" PRIu64 " p95=%" PRIu64
            " p99=%" PRIu64 " max=%" PRIu64 "\n",
            transport_benchmark_percentile(values, value_count, 50),
            transport_benchmark_percentile(values, value_count, 95),
            transport_benchmark_percentile(values, value_count, 99),
            transport_benchmark_max(values, value_count));
-    printf("Idle: wall_ms=%" PRIu64 " passes=%zu simulation_passes=%zu cpu_percent=%.2f\n",
+    printf("Idle: wall_ms=%" PRIu64 " passes=%" PRIuMAX
+           " simulation_passes=%" PRIuMAX " cpu_percent=%.2f\n",
            wall_us / UINT64_C(1000),
-           idle_passes,
-           idle_simulation_passes,
+           (uintmax_t)idle_passes,
+           (uintmax_t)idle_simulation_passes,
            cpu_percent);
-    printf("Server simulation passes=%zu\n%s", simulation_passes, stats);
+    printf("Server simulation passes=%" PRIuMAX "\n%s", (uintmax_t)simulation_passes, stats);
 
     for (size_t i = 0; i < arraysize(clients); i++) {
         socket_destroy(clients[i].socket);
@@ -490,8 +492,8 @@ static void strakewood_timing_add(strakewood_timing_t *timing, uint64_t started_
     if (elapsed_us >= UINT64_C(50000)) {
         /* Stop timing before output; retain bounded chronological evidence. */
         if (timing->slow_events++ < ISSUE566_SLOW_EVENT_LIMIT) {
-            printf("ISSUE566 slow_event stage=%s sample_index=%zu duration_us=%" PRIu64 "\n",
-                   timing->stage, sample_index, elapsed_us);
+            printf("ISSUE566 slow_event stage=%s sample_index=%" PRIuMAX " duration_us=%" PRIu64 "\n",
+                   timing->stage, (uintmax_t)sample_index, elapsed_us);
         }
     }
 }
@@ -502,12 +504,12 @@ static void strakewood_timing_report(strakewood_timing_t *timing) {
     }
     qsort(timing->samples, timing->count, sizeof(*timing->samples),
           transport_benchmark_compare_u64);
-    printf("ISSUE566 timing_us stage=%s count=%zu p50=%" PRIu64
-           " p95=%" PRIu64 " max=%" PRIu64 " slow_events=%zu\n",
-           timing->stage, timing->count,
+    printf("ISSUE566 timing_us stage=%s count=%" PRIuMAX " p50=%" PRIu64
+           " p95=%" PRIu64 " max=%" PRIu64 " slow_events=%" PRIuMAX "\n",
+           timing->stage, (uintmax_t)timing->count,
            timing->samples[(timing->count - 1U) * 50U / 100U],
            timing->samples[(timing->count * 95U + 99U) / 100U - 1U],
-           timing->samples[timing->count - 1U], timing->slow_events);
+           timing->samples[timing->count - 1U], (uintmax_t)timing->slow_events);
 }
 
 /** Read-only map counts, collected outside the measured stages. */
@@ -530,10 +532,11 @@ static void issue566_map_changes(const char *stage, unsigned int tick,
     issue566_map_counts after = issue566_maps();
     if (before.total != after.total || before.resident != after.resident ||
         before.swapped != after.swapped) {
-        printf("ISSUE566 map_states stage=%s sample_index=%u total=%zu->%zu "
-               "resident=%zu->%zu swapped=%zu->%zu\n", stage, tick,
-               before.total, after.total, before.resident, after.resident,
-               before.swapped, after.swapped);
+        printf("ISSUE566 map_states stage=%s sample_index=%u total=%" PRIuMAX "->%" PRIuMAX " "
+               "resident=%" PRIuMAX "->%" PRIuMAX " swapped=%" PRIuMAX "->%" PRIuMAX "\n", stage, tick,
+               (uintmax_t)before.total, (uintmax_t)after.total,
+               (uintmax_t)before.resident, (uintmax_t)after.resident,
+               (uintmax_t)before.swapped, (uintmax_t)after.swapped);
     }
 }
 
@@ -755,7 +758,7 @@ static void transport_auth_pass(transport_benchmark_client_t *clients,
     transport_benchmark_server_pass(simulation_passes);
     for (size_t i = 0; i < TRANSPORT_BENCHMARK_CLIENTS; i++) {
         ck_assert_msg(transport_auth_receive(&clients[i], &received[i]),
-                      "QUIC gameplay receive failed for peer %zu", i);
+                      "QUIC gameplay receive failed for peer %" PRIuMAX, (uintmax_t)i);
     }
 }
 
@@ -977,8 +980,8 @@ START_TEST(test_quic_login_and_movement_continue_while_authentication_pending) {
     }
     ck_assert_uint_gt(simulation_passes, before_simulation);
     printf("QUIC pending-auth acceptance: keepalive_us=%" PRIu64
-           " movement_steps=3 movement_us=%" PRIu64 " simulation_passes=%zu\n",
-           keepalive_us, datetime_monotonic_us() - movement_started, simulation_passes);
+           " movement_steps=3 movement_us=%" PRIu64 " simulation_passes=%" PRIuMAX "\n",
+           keepalive_us, datetime_monotonic_us() - movement_started, (uintmax_t)simulation_passes);
     auth_worker_pause_for_test(false);
     deadline = datetime_monotonic_ms() + 5000U;
     while (!received[3].authenticated && datetime_monotonic_ms() < deadline) {
@@ -1288,16 +1291,16 @@ START_TEST(test_strakewood_idle_simulation) {
     for (size_t i = 0; i < arraysize(timing_stages); i++) {
         strakewood_timing_report(&timings[i]);
     }
-    printf("ISSUE566 movement attempts=%zu successes=%u glow_radius=%d autosaves=%u\n",
-           timings[4].count, movement_successes, pl->glow_radius, autosaves);
+    printf("ISSUE566 movement attempts=%" PRIuMAX " successes=%u glow_radius=%d autosaves=%u\n",
+           (uintmax_t)timings[4].count, movement_successes, pl->glow_radius, autosaves);
     if (route_mode) {
         size_t maps_visited = 0;
         for (size_t m = 0; m < arraysize(route_visited); m++) {
             maps_visited += route_visited[m];
         }
         ck_assert_uint_eq(movement_successes, route_count - 1U);
-        printf("ISSUE566 offline planned traversal steps=%u maps_visited=%zu complete=1\n",
-               movement_successes, maps_visited);
+        printf("ISSUE566 offline planned traversal steps=%u maps_visited=%" PRIuMAX " complete=1\n",
+               movement_successes, (uintmax_t)maps_visited);
     }
     free(route_points);
     fflush(stdout);

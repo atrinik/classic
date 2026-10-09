@@ -235,8 +235,8 @@ static bool issue566_opaque_burst(mapstruct *map,
             mismatches += !issue566_snapshot_matches(&before[i]);
         }
         printf(ISSUE566_PREFIX "\topaque-burst\t%s\t%d\t%d\t%d\t%" PRIu64
-                              "\t%zu\tsynthetic-repeated-no-op-opaque-updates\n",
-               map->path, selected->x, selected->y, counts[sample], elapsed_us, mismatches);
+                              "\t%" PRIuMAX "\tsynthetic-repeated-no-op-opaque-updates\n",
+               map->path, selected->x, selected->y, counts[sample], elapsed_us, (uintmax_t)mismatches);
         if (mismatches != 0) {
             LOG(ERROR, "Issue 566 synthetic opaque updates changed local illumination for %s.",
                 map->path);
@@ -274,9 +274,10 @@ static bool issue566_rebuild(mapstruct *map, uint16_t sample) {
             }
         }
     }
-    printf(ISSUE566_PREFIX "\tinventory\t%s\t%u\t%d\t%d\t%zu\t%zu\t%zu\t%zu\n",
-           map->path, sample, MAP_WIDTH(map), MAP_HEIGHT(map), local_objects, local_origins,
-           local_positive, local_negative);
+    printf(ISSUE566_PREFIX "\tinventory\t%s\t%u\t%d\t%d\t%" PRIuMAX
+                          "\t%" PRIuMAX "\t%" PRIuMAX "\t%" PRIuMAX "\n",
+           map->path, sample, MAP_WIDTH(map), MAP_HEIGHT(map), (uintmax_t)local_objects,
+           (uintmax_t)local_origins, (uintmax_t)local_positive, (uintmax_t)local_negative);
     issue566_light_snapshot *before = xcalloc(cells, sizeof(*before));
     size_t position = 0;
     for (mapstruct *loaded = first_map; loaded != NULL; loaded = loaded->next) {
@@ -320,10 +321,13 @@ static bool issue566_rebuild(mapstruct *map, uint16_t sample) {
         }
     }
     bool identical = mismatches == 0;
-    printf(ISSUE566_PREFIX "\tmismatch-count\t%s\t%u\t%zu\n",
-           map->path, sample, mismatches);
-    printf(ISSUE566_PREFIX "\trebuild\t%s\t%u\t%" PRIu64 "\t%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%s\n",
-           map->path, sample, elapsed_us, resident_maps, cells, objects, origins, positive, negative,
+    printf(ISSUE566_PREFIX "\tmismatch-count\t%s\t%u\t%" PRIuMAX "\n",
+           map->path, sample, (uintmax_t)mismatches);
+    printf(ISSUE566_PREFIX "\trebuild\t%s\t%u\t%" PRIu64
+                          "\t%" PRIuMAX "\t%" PRIuMAX "\t%" PRIuMAX
+                          "\t%" PRIuMAX "\t%" PRIuMAX "\t%" PRIuMAX "\t%s\n",
+           map->path, sample, elapsed_us, (uintmax_t)resident_maps, (uintmax_t)cells,
+           (uintmax_t)objects, (uintmax_t)origins, (uintmax_t)positive, (uintmax_t)negative,
            identical ? "exact" : "changed");
     if (!identical) {
         LOG(ERROR, "Issue 566 benchmark rebuild changed initialized illumination for %s.", map->path);
@@ -340,8 +344,8 @@ static bool issue566_rebuild(mapstruct *map, uint16_t sample) {
                 repeat_mismatches += !issue566_snapshot_matches(&before[i]);
             }
             printf(ISSUE566_PREFIX "\tfailed-rebuild-repeat\t%s\t%u\t%" PRIu64
-                                  "\t%zu\t%s\n",
-                   map->path, sample, repeat_us, repeat_mismatches,
+                                  "\t%" PRIuMAX "\t%s\n",
+                   map->path, sample, repeat_us, (uintmax_t)repeat_mismatches,
                    repeat_mismatches == 0 ? "stable" : "changed");
         }
     }
@@ -391,8 +395,8 @@ static bool issue566_lookup(void) {
         if (first_map != original_head) {
             valid = false;
         }
-        printf(ISSUE566_PREFIX "\tlookup-miss\t%zu\t%zu\t%d\t%" PRIu64 "\n",
-               actual, count, PROBES, elapsed_us);
+        printf(ISSUE566_PREFIX "\tlookup-miss\t%" PRIuMAX "\t%" PRIuMAX "\t%d\t%" PRIu64 "\n",
+               (uintmax_t)actual, (uintmax_t)count, PROBES, elapsed_us);
     }
     free_string_shared(dummy_path);
     free_string_shared(missing);
