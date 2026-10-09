@@ -121,6 +121,11 @@ typedef struct text_input_struct {
      */
     uint8_t focus;
 
+    /** Opt-in multiline editing; default inputs retain single-line behavior. */
+    uint8_t multiline;
+    /** First visible visual line in a multiline input. */
+    size_t scroll_line;
+
     int (*character_check_func)(struct text_input_struct *text_input, char c);
 
     void (*show_edit_func)(struct text_input_struct *text_input);

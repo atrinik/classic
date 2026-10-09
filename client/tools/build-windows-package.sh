@@ -87,7 +87,7 @@ fi
   -DPACKAGE_TYPE=zip \
   -DATRINIK_PACKAGE_VERSION="${version}" \
   -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \
-  -DATRINIK_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+  "-DATRINIK_CA_BUNDLE=${PWD}/ca-bundle.crt" \
   "-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}" \
   "${dependency_arguments[@]}"
 cmake --build build/windows-release --parallel "$(nproc)"

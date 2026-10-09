@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -99,6 +99,10 @@ typedef struct clioption clioption_t;
 
 TOOLKIT_FUNCS_DECLARE(clioptions);
 
+/** Sticky initialization parse failures, including value-file preprocessing.
+ * Runtime edits do not set this flag; toolkit initialization clears it. */
+bool clioptions_had_startup_errors(void);
+
 /**
  * Creates a new CLI option.
  *
@@ -160,6 +164,13 @@ extern void clioptions_enable_argument(clioption_t *cli);
  * CLI.
  */
 extern void clioptions_enable_changeable(clioption_t *cli);
+
+/**
+ * Require the value directly in argv. Configuration files, runtime strings and
+ * <value-file> argument expansion are rejected before invoking the handler.
+ * This is intended for explicit inherited process capabilities.
+ */
+extern void clioptions_enable_command_line_only(clioption_t *cli);
 
 /**
  * Marks the CLI value as sensitive.

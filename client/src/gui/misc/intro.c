@@ -35,8 +35,8 @@
 #include <event.h>
 #include <button.h>
 #include <client.h>
+#include <access_attempt.h>
 #include <live_movement.h>
-#include <join_credentials.h>
 #include <list.h>
 #include <main.h>
 #include <misc.h>
@@ -143,9 +143,7 @@ static void list_handle_enter(list_struct *list, SDL_Event *event) {
         /* Get selected server. */
         server_struct *next_server = server_get_id(list->row_selected - 1);
         if (selected_server != NULL && selected_server != next_server) {
-            client_attempt_secrets_clear(&selected_server->join_password,
-                                         &clioption_settings.join_password,
-                                         &selected_server->rendezvous_invite);
+            client_access_attempt_clear(&selected_server->access_attempt);
         }
         selected_server = next_server;
 
@@ -166,12 +164,8 @@ static void list_handle_enter(list_struct *list, SDL_Event *event) {
             return;
         }
 
-        bool invite_required = selected_server->hostname == NULL || selected_server->port == 0;
-        if (selected_server->password_required &&
-            ((invite_required && selected_server->rendezvous_invite == NULL) ||
-             (selected_server->join_password == NULL &&
-              clioption_settings.join_password == NULL))) {
-            join_password_open(selected_server);
+        if (selected_server->access_required && !selected_server->access_attempt.present) {
+            access_code_open(selected_server);
         } else {
             login_start();
         }
@@ -556,6 +550,7 @@ int intro_event(SDL_Event *event) {
     }
 
     if (button_event(&button_metaserver, event)) {
+        access_code_cancel();
         metaserver_toggle_provider();
         servers_invalidated = true;
         cpl.state = ST_META;

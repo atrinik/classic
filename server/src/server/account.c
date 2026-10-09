@@ -35,6 +35,7 @@
 #include <region.h>
 #include <initialization.h>
 #include <account.h>
+#include <exploration.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
 #include <arch.h>
@@ -97,7 +98,9 @@ void account_init(void) {
     account_auth_work_tokens = ACCOUNT_AUTH_WORK_BURST;
 }
 
-void account_deinit(void) {}
+void account_deinit(void) {
+    exploration_shutdown();
+}
 
 static bool account_auth_work_allowed(unsigned int cost) {
     time_t now = datetime_getutc();
@@ -601,7 +604,8 @@ out:
 }
 
 static int account_provision_preset_hour(const char *preset) {
-    if (strcmp(preset, "basic-player") == 0 || strcmp(preset, "brynknot-idle") == 0) {
+    if (strcmp(preset, "basic-player") == 0 || strcmp(preset, "brynknot-idle") == 0 ||
+        strcmp(preset, "writing-books") == 0) {
         return -1;
     }
     if (strcmp(preset, "lighting-radiance-day") == 0) {
@@ -624,13 +628,13 @@ static bool account_provision_preset_player(const char *character,
                                               const char *preset,
                                               char *error,
                                               size_t error_size) {
-    if (strcmp(preset, "brynknot-idle") == 0) {
+    if (strcmp(preset, "brynknot-idle") == 0 || strcmp(preset, "writing-books") == 0) {
         return player_provision_scenario(character,
                                          archname,
                                          "/shattered_islands/world_0_70",
                                          20,
                                          8,
-                                         NULL,
+                                         strcmp(preset, "writing-books") == 0 ? "writing-books" : NULL,
                                          error,
                                          error_size);
     }
@@ -700,7 +704,8 @@ bool account_provision_from_file(const char *name,
         goto out;
     }
     ok = account_provision(name, password, character, archname, error, error_size);
-    if (ok && (preset_hour >= 0 || strcmp(preset, "brynknot-idle") == 0) &&
+    if (ok && (preset_hour >= 0 || strcmp(preset, "brynknot-idle") == 0 ||
+               strcmp(preset, "writing-books") == 0) &&
         (!account_provision_preset_player(character_name, archname, preset, error, error_size) ||
          (preset_hour >= 0 && !todclock_set((unsigned long)preset_hour)))) {
         if (error[0] == '\0') {
@@ -1118,6 +1123,7 @@ void account_login_char(socket_struct *ns, char *name) {
 }
 
 bool account_logout_char_checked(socket_struct *ns, player *pl) {
+    bool exploration_saved = exploration_end_checked(ns);
     char *path;
     account_struct account;
     size_t i;
@@ -1158,7 +1164,7 @@ bool account_logout_char_checked(socket_struct *ns, player *pl) {
     bool saved = account_save(&account, path) != 0;
     account_free(&account);
     free(path);
-    return saved;
+    return saved && exploration_saved;
 }
 
 void account_logout_char(socket_struct *ns, player *pl) {
@@ -1170,6 +1176,7 @@ void account_character_session_start(socket_struct *ns, player *pl) {
     HARD_ASSERT(pl != NULL);
     HARD_ASSERT(ns->account != NULL);
 
+    exploration_begin(ns);
     char *path = account_make_path(ns->account);
     account_struct account;
     if (!account_load(&account, path)) {

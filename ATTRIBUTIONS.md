@@ -131,3 +131,12 @@ Riccardo Iaconelli - GPLv3:
 
 Brian "Gramlath" Angeletti - GPLv2:
     player_doll_f.png (based on: player_doll.png, by: David Gervais - http://pousse.rapiere.free.fr/tome/tome-tiles.htm - CC BY 3.0)
+
+## Mozilla CA certificate bundle
+
+The shipped `ca-bundle.crt` contains Mozilla CA certificate data converted by
+curl's `mk-ca-bundle.pl`, distributed under the Mozilla Public License 2.0
+([MPL-2.0](https://www.mozilla.org/MPL/2.0/)). The unmodified source bundle is
+[curl's 2026-09-25 Mozilla CA extraction](https://curl.se/ca/cacert-2026-09-25.pem).
+See [curl's CA extraction documentation](https://curl.se/docs/caextract.html)
+for the conversion source and license.

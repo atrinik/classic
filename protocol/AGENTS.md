@@ -28,3 +28,15 @@
   with `git diff --check`.
 - Update this `AGENTS.md` in the same change when major rework alters ownership,
   schemas, generation, compatibility policy, consumers, or validation.
+
+- Revision 1082 retains the published v1081 ACCESS_AUTH/ADMIN IDs 23/24 and
+  RESULT/ADMIN_RESULT/POLICY IDs 29/30/31; REGION_EXPLORATION uses client-to-server
+  ID 25 and server-to-client ID 32. Retired SETUP subtype 3 remains reserved.
+  Policy follows authenticated VERSION before setup/resources/accounts on every
+  connection; update all native and Python consumers together. Raw access payloads require sensitive packet handling.
+
+- Authored payload headers live in `include/atrinik/protocol/`; `book_edit.h`
+  owns the BOOK_EDIT action/result identities, bounds and field layouts.
+
+- Revision 1083 appends BOOK_EDIT at C2S 26 and S2C 33 while preserving
+  published access and exploration IDs. The version handshake rejects earlier peers.

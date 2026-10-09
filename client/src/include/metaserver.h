@@ -26,9 +26,11 @@
 #define METASERVER_H
 
 #include <stdbool.h>
+#include <toolkit/curl.h>
 #include <stddef.h>
 
 typedef struct server_struct server_struct;
+typedef struct client_metaserver_options client_metaserver_options_t;
 
 /**
  * @file
@@ -42,6 +44,16 @@ extern void metaserver_init(void);
 extern server_struct *server_get_id(size_t num);
 
 bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t url_size);
+
+/** Main-thread resolution using the current session endpoints. */
+server_struct *metaserver_access_resolve(const char *code);
+/** Worker resolution using caller-owned immutable endpoint settings. */
+server_struct *metaserver_access_resolve_cancellable(
+    const client_metaserver_options_t *options, const char *code, const curl_cancel_t *cancel);
+
+/** Add or release a resolved server after the user accepts or cancels its identity. */
+void metaserver_server_add(server_struct *server);
+void metaserver_server_free(server_struct *server);
 
 extern size_t server_get_count(void);
 

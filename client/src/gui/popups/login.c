@@ -34,7 +34,6 @@
 #include <client.h>
 #include <live_movement.h>
 #include <event.h>
-#include <join_credentials.h>
 #include <list.h>
 #include <main.h>
 #include <player.h>
@@ -46,6 +45,7 @@
 #include <text.h>
 #include <text_input.h>
 #include <toolkit/toolkit.h>
+#include <toolkit/access_code.h>
 #include <widget.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -228,7 +228,10 @@ static int popup_draw(popup_struct *popup) {
             text_input_set(&text_inputs[LOGIN_TEXT_INPUT_PASSWORD], clioption_settings.connect[2]);
 
             if (!clioption_settings.reconnect) {
-                client_join_credentials_clear(NULL, &clioption_settings.connect[2]);
+                access_code_clear(clioption_settings.connect[2],
+                                  strlen(clioption_settings.connect[2]));
+                free(clioption_settings.connect[2]);
+                clioption_settings.connect[2] = NULL;
             }
 
             if (!live_movement_enabled()) {

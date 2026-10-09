@@ -29,7 +29,9 @@
 
 #include <ctype.h>
 #include <wrapper.h>
+#include <access_admin.h>
 #include <client.h>
+#include <book.h>
 #include <effects.h>
 #include <event.h>
 #include <gpu_renderer.h>
@@ -65,7 +67,9 @@
  * 0 to send command to server, 1 to not send it
  */
 int client_command_check(const char *cmd) {
-    if (cmd_aliases_handle(cmd)) {
+    if (client_access_admin_command(cmd)) {
+        return 1;
+    } else if (cmd_aliases_handle(cmd)) {
         return 1;
     } else if (strncasecmp(cmd, "/ready_spell", 12) == 0) {
         cmd = strchr(cmd, ' ');
@@ -179,6 +183,10 @@ int client_command_check(const char *cmd) {
         }
         return 1;
     } else if (!strncasecmp(cmd, "/screenshot", 11)) {
+        if (book_sensitive_visible()) {
+            draw_info(COLOR_RED, "Close the private access result before taking a screenshot.");
+            return 1;
+        }
         SDL_Rect map_rect;
         const SDL_Rect *screenshot_rect = NULL;
 
@@ -255,6 +263,12 @@ int client_command_check(const char *cmd) {
 
         type = string_startswith(cmd, "/cast ") ? TYPE_SPELL : TYPE_SKILL;
         cmd = strchr(cmd, ' ') + 1;
+
+        if (type == TYPE_SKILL && strncasecmp(cmd, "inscription", 11) == 0 &&
+            (cmd[11] == '\0' || isspace((unsigned char)cmd[11]))) {
+            draw_info(COLOR_WHITE, "Apply a pen to open the book editor. Enter title and contents there; use Copy or Sign for those actions.");
+            return 1;
+        }
 
         if (string_isempty(cmd)) {
             return 1;

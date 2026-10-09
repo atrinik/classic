@@ -37,10 +37,16 @@ compiler/platform benchmark provenance are embedded in the executable.
 The Classic protocol must be available from the sibling `protocol/` tree, the
 packaged `dependencies/protocol` tree, or CMake's
 `FETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL` override. This keeps the client and
-its evolving wire contract on the same repository revision. The first
-configure downloads the exact libatrinik source release recorded in
-`cmake/dependencies.lock.json` and verifies its SHA-256 digest; use
-`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` for coordinated local work.
+its evolving wire contract on the same repository revision.
+
+The matching Classic libatrinik source must also come from the sibling
+`libatrinik/` tree, packaged `dependencies/libatrinik` tree, or
+`FETCHCONTENT_SOURCE_DIR_LIBATRINIK` override. Use protocol and library sources
+from the same reviewed Classic revision. Bare component builds fail at configure
+when these sources are missing; they do not download a historical standalone
+library release. Scoped source archives already include both matching trees.
+A parent SDK project may provide the compatible `Atrinik::Core` target instead;
+its package version must retain the actual unified Classic version.
 
 The client uses direct module headers and has no client precompiled-header
 mode. Every source and test therefore exercises the same conventional include
@@ -56,3 +62,11 @@ into `atrinik`. Local source runs may instead set the public, non-secret
 `ATRINIK_DISCORD_APPLICATION_ID` environment variable or create the ignored
 `data/discord-application-id` file. Never supply a Discord Client Secret,
 OAuth token, bot token, authorization code, or user credential.
+
+Windows portable packages install the checked-in Mozilla-derived `ca-bundle.crt`.
+The client release helper explicitly selects that source bundle; standalone CMake
+builds may still set `ATRINIK_CA_BUNDLE` deliberately. When the selected Windows
+runtime DLLs include c-ares, packaging also requires its complete license at
+`ATRINIK_WINDOWS_RUNTIME_DIR/../share/licenses/c-ares/LICENSE.md`, or the explicit
+`ATRINIK_WINDOWS_CARES_LICENSE` override, and installs it as `c-ares-LICENSE.md`
+beside the DLLs. Toolchains without a c-ares DLL do not require that notice.

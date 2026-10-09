@@ -12,6 +12,7 @@
 /** @file Ordered inbound server-command queue and bounded dispatcher. */
 
 #include <client_command_queue.h>
+#include <toolkit/access_code.h>
 #include <client.h>
 #include <string.h>
 #include <SDL3/SDL.h>
@@ -34,9 +35,14 @@ static uint64_t queue_order_digest_update(uint64_t digest, const command_buffer 
         digest *= UINT64_C(1099511628211);
         length >>= 8;
     }
-    for (size_t i = 0; i < buf->len; i++) {
-        digest ^= buf->data[i];
+    if (buf->sensitive) {
+        digest ^= UINT8_C(0xa5);
         digest *= UINT64_C(1099511628211);
+    } else {
+        for (size_t i = 0; i < buf->len; i++) {
+            digest ^= buf->data[i];
+            digest *= UINT64_C(1099511628211);
+        }
     }
     return digest;
 }
@@ -61,6 +67,7 @@ command_buffer *command_buffer_new(size_t len, uint8_t *data) {
     buf->next = buf->prev = NULL;
     buf->enqueued_us = 0;
     buf->len = len;
+    buf->sensitive = false;
 
     if (data != NULL) {
         memcpy(buf->data, data, len);
@@ -70,7 +77,15 @@ command_buffer *command_buffer_new(size_t len, uint8_t *data) {
     return buf;
 }
 
+void command_buffer_mark_sensitive(command_buffer *buf) {
+    HARD_ASSERT(buf != NULL);
+    buf->sensitive = true;
+}
+
 void command_buffer_free(command_buffer *buf) {
+    if (buf != NULL && buf->sensitive) {
+        access_code_clear(buf->data, buf->len);
+    }
     free(buf);
 }
 

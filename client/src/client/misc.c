@@ -28,6 +28,8 @@
  */
 
 #include <image_codec.h>
+#include <book.h>
+#include <capture_privacy.h>
 #include <gpu_renderer.h>
 #include <main.h>
 #include <misc.h>
@@ -179,6 +181,10 @@ static void screenshot_cancel(void *userdata) {
  * Optional completed-frame rectangle. NULL captures the complete window.
  */
 void screenshot_create(const SDL_Rect *rect) {
+    if (!capture_privacy_allowed(book_sensitive_active())) {
+        draw_info(COLOR_RED, "Screenshot unavailable until a clean frame is displayed.");
+        return;
+    }
     char timebuf[64];
     struct timeval tv;
     struct tm *tm;

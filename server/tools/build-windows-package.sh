@@ -8,6 +8,15 @@ if [[ ! ${version} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "ATRINIK_PACKAGE_VERSION must be MAJOR.MINOR.PATCH" >&2
   exit 1
 fi
+qualification=${ATRINIK_SOURCE_PROFILE_QUALIFICATION:-}
+qualification_sha=${ATRINIK_SOURCE_PROFILE_QUALIFICATION_SHA256:-}
+if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
+  if [[ ${version} != 0.0.0 || -z ${ATRINIK_PROFILE_CONTENT_DIR:-} ||
+        -z ${ATRINIK_PROFILE_RESOURCES_DIR:-} || -z ${qualification} || -z ${qualification_sha} ]]; then
+    echo "source-profile qualification requires version 0.0.0 and paired staged trees" >&2
+    exit 1
+  fi
+fi
 for variable in MXE_TOOLCHAIN_FILE MXE_RUNTIME_DIR \
     ATRINIK_WINDOWS_PYTHON_INCLUDE_DIR ATRINIK_WINDOWS_PYTHON_LIBRARY \
     ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR; do
@@ -63,7 +72,16 @@ else
   python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
   python3 tools/dependencies.py verify
 fi
-python3 ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runtime/content
+provenance_arguments=()
+if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
+  provenance_arguments+=(
+    --source-profile-qualification "${qualification}"
+    --source-profile-qualification-sha256 "${qualification_sha}"
+    --package-version "${version}"
+    --profile-resources "${profile_resources}"
+  )
+fi
+python3 ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runtime/content "${provenance_arguments[@]}"
 
 dependency_arguments=()
 native_compiler_arguments=()
@@ -93,13 +111,24 @@ fi
 package_root=build/windows-package-root
 region_build=build/windows-region-generator
 region_runtime=${package_root}/region-runtime
-region_data=${package_root}/region-data
+# server.cfg resolves its checked public key files relative to the runtime cwd.
+region_data=${region_runtime}/data
 cmake -E remove_directory "${package_root}"
 cmake -E remove_directory build/windows-release
 cmake -E make_directory "${package_root}"
 cmake -E copy_directory runtime/content/maps "${package_root}/maps"
 cmake -E copy_directory runtime/content/lib "${package_root}/lib"
 cmake -E copy_directory runtime/content/attribution "${package_root}/attribution"
+if [[ -n ${qualification} ]]; then
+  # Retain the exact public source coordinates in the distributed archive.
+  cmake -E copy "${qualification}" \
+    "${package_root}/attribution/source-profile-qualification.json"
+  copied_sha=$(sha256sum "${package_root}/attribution/source-profile-qualification.json")
+  if [[ ${copied_sha%% *} != "${qualification_sha}" ]]; then
+    echo "copied source-profile qualification digest changed" >&2
+    exit 1
+  fi
+fi
 cmake -E copy runtime/content/compatibility.json \
   "${package_root}/compatibility.json"
 cmake -E copy runtime/content/manifest.json "${package_root}/manifest.json"
@@ -137,7 +166,6 @@ test -d "${region_assets}/client-maps"
 cmake -E copy_directory "${region_assets}/client-maps" \
   "${package_root}/client-maps"
 cmake -E remove_directory "${region_runtime}"
-cmake -E remove_directory "${region_data}"
 cmake -E remove_directory "${region_assets}"
 
 "${mxe_cmake}" -S . -B build/windows-release -G Ninja \

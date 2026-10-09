@@ -44,7 +44,7 @@ UI_CLOSURE_STATES = (
     "gameplay_widgets_text_windows", "context_menu_tooltip_notification",
     "notification_fading", "popup_generic_input_controls", "popup_book",
     "popup_settings_controls", "popup_color_picker", "popup_connection_preference",
-    "popup_join_password", "popup_credits", "popup_painting", "popup_region_map_minimap",
+    "popup_credits", "popup_painting", "popup_region_map_minimap",
     "region_map_fow_transition",
     "region_map_fow_retained", "screenshot_window", "screenshot_map",
 )

@@ -5,6 +5,7 @@
  ************************************************************************/
 
 #include <client.h>
+#include <access_resolver.h>
 #include <main.h>
 #include <metaserver.h>
 #include <metaserver_options.h>
@@ -186,6 +187,15 @@ static void wait_for_shutdown_start(void) {
     REQUIRE(false);
 }
 
+server_struct *metaserver_access_resolve_cancellable(
+    const client_metaserver_options_t *options, const char *code, const curl_cancel_t *cancel) {
+    (void)options;
+    (void)code;
+    (void)cancel;
+    REQUIRE(false);
+    return NULL;
+}
+
 int main(void) {
     fetch_mutex = SDL_CreateMutex();
     fetch_condition = SDL_CreateCondition();
@@ -202,11 +212,11 @@ int main(void) {
     set_fetch_server(0, true);
     metaserver_get_servers();
     wait_for_fetch(1);
-    clioption_settings.join_password = strdup("fixture-secret");
-    REQUIRE(clioption_settings.join_password != NULL);
+    selected_server = manual;
+    REQUIRE(client_access_attempt_set(&manual->access_attempt, "0123456789ABCDEF", 16));
     /* Replacing configuration while the request is blocked must discard its result. */
     metaserver_toggle_provider();
-    REQUIRE(clioption_settings.join_password == NULL);
+    REQUIRE(selected_server == NULL);
     metaserver_get_servers();
     metaserver_toggle_provider();
     metaserver_get_servers();

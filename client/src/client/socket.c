@@ -30,9 +30,15 @@
 #include <metaserver.h>
 #include <asset.h>
 #include <client.h>
+#include <region_map.h>
+#include <region_exploration.h>
+#include <wrapper.h>
+#include <config.h>
+#include <toolkit/path.h>
 #include <client_socket.h>
 #include <event.h>
-#include <join_credentials.h>
+#include <access_attempt.h>
+#include <book_edit.h>
 #include <main.h>
 #include <player.h>
 #include <SDL3/SDL.h>
@@ -58,6 +64,7 @@ static int abort_thread = 0;
 
 /* start is the first waiting item in queue, end is the most recent enqueued */
 static command_buffer *output_queue_start = NULL, *output_queue_end = NULL;
+static size_t output_queue_bytes;
 
 /**
  * Enqueue a command buffer last in a queue.
@@ -77,6 +84,7 @@ static void command_buffer_enqueue(command_buffer *buf,
     }
 
     *queue_end = buf;
+    output_queue_bytes += buf->len;
 }
 
 /**
@@ -87,6 +95,7 @@ static command_buffer *command_buffer_dequeue(command_buffer **queue_start,
     command_buffer *buf = *queue_start;
 
     if (buf) {
+        output_queue_bytes -= buf->len;
         *queue_start = buf->next;
 
         if (buf->next) {
@@ -99,27 +108,35 @@ static command_buffer *command_buffer_dequeue(command_buffer **queue_start,
     return buf;
 }
 
-void socket_send_packet(struct packet_struct *packet) {
+bool socket_send_packet_bounded(struct packet_struct *packet, size_t queue_limit) {
     HARD_ASSERT(packet != NULL);
 
     if (!packet_writer_finish(packet)) {
         LOG(ERROR, "Refusing malformed outbound packet: %s", packet_error_string(packet->error));
         packet_free(packet);
-        return;
+        return false;
     }
 
     if (socket_mutex == NULL) {
         packet_free(packet);
-        return;
+        return false;
     }
 
     SDL_LockMutex(socket_mutex);
     if (csocket.sc == NULL || abort_thread) {
         SDL_UnlockMutex(socket_mutex);
         packet_free(packet);
-        return;
+        return false;
     }
 
+    SDL_LockMutex(output_buffer_mutex);
+    size_t bytes = packet->len + 3;
+    if (bytes > queue_limit || output_queue_bytes > queue_limit - bytes) {
+        SDL_UnlockMutex(output_buffer_mutex);
+        SDL_UnlockMutex(socket_mutex);
+        packet_free(packet);
+        return false;
+    }
     packet_struct *packet_meta = packet_new(0, 4, 0);
     packet_writer_write_uint16(packet_meta, packet->len + 1);
     packet_writer_write_uint8(packet_meta, packet->type);
@@ -128,12 +145,81 @@ void socket_send_packet(struct packet_struct *packet) {
     packet_free(packet_meta);
     command_buffer *buf2 = command_buffer_new(packet->len, packet->data);
     packet_free(packet);
-    SDL_UnlockMutex(socket_mutex);
-
-    SDL_LockMutex(output_buffer_mutex);
     command_buffer_enqueue(buf1, &output_queue_start, &output_queue_end);
     command_buffer_enqueue(buf2, &output_queue_start, &output_queue_end);
     SDL_UnlockMutex(output_buffer_mutex);
+    SDL_UnlockMutex(socket_mutex);
+    return true;
+}
+
+void socket_send_packet(struct packet_struct *packet) {
+    (void)socket_send_packet_bounded(packet, SIZE_MAX);
+}
+
+bool client_socket_send_access_auth(const char code[ACCESS_CODE_LENGTH]) {
+    if (!access_code_valid(code, ACCESS_CODE_LENGTH) || socket_mutex == NULL) {
+        return false;
+    }
+
+    uint8_t frame[3] = {
+        0,
+        ACCESS_CODE_LENGTH + 2U,
+        SERVER_CMD_ACCESS_AUTH,
+    };
+    uint8_t payload[ACCESS_CODE_LENGTH + 1U] = {1};
+    memcpy(payload + 1, code, ACCESS_CODE_LENGTH);
+
+    SDL_LockMutex(socket_mutex);
+    if (csocket.sc == NULL || abort_thread || !socket_is_quic(csocket.sc)) {
+        SDL_UnlockMutex(socket_mutex);
+        access_code_clear(payload, sizeof(payload));
+        return false;
+    }
+    command_buffer *frame_buffer = command_buffer_new(sizeof(frame), frame);
+    command_buffer *payload_buffer = command_buffer_new(sizeof(payload), payload);
+    command_buffer_mark_sensitive(payload_buffer);
+    SDL_UnlockMutex(socket_mutex);
+    access_code_clear(payload, sizeof(payload));
+
+    SDL_LockMutex(output_buffer_mutex);
+    command_buffer_enqueue(frame_buffer, &output_queue_start, &output_queue_end);
+    command_buffer_enqueue(payload_buffer, &output_queue_start, &output_queue_end);
+    SDL_UnlockMutex(output_buffer_mutex);
+    return true;
+}
+
+bool client_socket_send_access_admin(const char *json, size_t size) {
+    if (json == NULL || size == 0 || size > 1024U || memchr(json, '\0', size) != NULL ||
+        socket_mutex == NULL) {
+        return false;
+    }
+    size_t payload_size = size + 1U;
+    uint16_t frame_size = (uint16_t)(payload_size + 1U);
+    uint8_t frame[3] = {
+        (uint8_t)(frame_size >> 8U),
+        (uint8_t)frame_size,
+        SERVER_CMD_ACCESS_ADMIN,
+    };
+    uint8_t payload[1025] = {1};
+    memcpy(payload + 1, json, size);
+
+    SDL_LockMutex(socket_mutex);
+    if (csocket.sc == NULL || abort_thread || !socket_is_quic(csocket.sc)) {
+        SDL_UnlockMutex(socket_mutex);
+        access_code_clear(payload, sizeof(payload));
+        return false;
+    }
+    command_buffer *frame_buffer = command_buffer_new(sizeof(frame), frame);
+    command_buffer *payload_buffer = command_buffer_new(payload_size, payload);
+    command_buffer_mark_sensitive(payload_buffer);
+    SDL_UnlockMutex(socket_mutex);
+    access_code_clear(payload, sizeof(payload));
+
+    SDL_LockMutex(output_buffer_mutex);
+    command_buffer_enqueue(frame_buffer, &output_queue_start, &output_queue_end);
+    command_buffer_enqueue(payload_buffer, &output_queue_start, &output_queue_end);
+    SDL_UnlockMutex(output_buffer_mutex);
+    return true;
 }
 
 static bool socket_thread_aborted(void) {
@@ -214,6 +300,7 @@ static int socket_io_thread_loop(void *dummy) {
                 readbuf_size = readbuf_len + toread;
                 readbuf = xmalloc(readbuf_size);
                 memcpy(readbuf, tmp, readbuf_len);
+                access_code_clear(tmp, (size_t)readbuf_len);
                 free(tmp);
             }
         }
@@ -230,6 +317,10 @@ static int socket_io_thread_loop(void *dummy) {
             if (readbuf_len == cmd_len + header_len && !socket_thread_aborted()) {
                 command_buffer *input =
                     command_buffer_new(readbuf_len - header_len, readbuf + header_len);
+                if (input->len > 0 && input->data[0] == CLIENT_CMD_ACCESS_ADMIN_RESULT) {
+                    command_buffer_mark_sensitive(input);
+                    access_code_clear(readbuf + header_len, (size_t)cmd_len);
+                }
                 if (!client_command_queue_enqueue_buffer_at(input, datetime_monotonic_us())) {
                     command_buffer_free(input);
                     break;
@@ -259,6 +350,7 @@ static int socket_io_thread_loop(void *dummy) {
     if (output != NULL) {
         command_buffer_free(output);
     }
+    access_code_clear(readbuf, readbuf_size);
     free(readbuf);
 
     SDL_LockMutex(socket_mutex);
@@ -306,6 +398,19 @@ void socket_thread_stop(void) {
     }
 }
 
+void client_socket_request_shutdown(void) {
+    /* Shutdown requests run on the UI/command-dispatch thread. Forget the
+     * account's draft immediately, even before the transport worker exits. */
+    book_edit_disconnect();
+    if (socket_mutex == NULL) {
+        abort_thread = 1;
+        return;
+    }
+    SDL_LockMutex(socket_mutex);
+    abort_thread = 1;
+    SDL_UnlockMutex(socket_mutex);
+}
+
 /**
  * Detect and handle socket system shutdowns. Also reset the socket system
  * for a restart.
@@ -321,6 +426,7 @@ int handle_socket_shutdown(void) {
         SDL_UnlockMutex(socket_mutex);
 
         /* Empty all queues */
+        region_map_exploration_clear();
         client_command_retry_clear();
         client_command_queue_clear();
         bool input_statistics_reset = client_command_queue_statistics_reset();
@@ -387,10 +493,14 @@ bool client_socket_connection_mode(socket_connection_mode_t *mode) {
 void client_socket_close(client_socket_t *csock) {
     HARD_ASSERT(csock != NULL);
 
-    client_attempt_secrets_clear(selected_server != NULL ? &selected_server->join_password : NULL,
-                                 &clioption_settings.join_password,
-                                 selected_server != NULL ? &selected_server->rendezvous_invite
-                                                         : NULL);
+    /* Logout reconnects directly through ST_STARTCONNECT, so ST_START cannot
+     * own this reset. Clear UI state on the main thread, never in the I/O
+     * worker; polled remote failures also reach this boundary via stop. */
+    book_edit_disconnect();
+
+    if (selected_server != NULL) {
+        client_access_attempt_clear(&selected_server->access_attempt);
+    }
 
     if (socket_mutex == NULL) {
         if (csock->sc != NULL) {
@@ -414,11 +524,14 @@ void client_socket_close(client_socket_t *csock) {
  * Deinitialize the client sockets.
  */
 void client_socket_deinitialize(void) {
+    /* Also forget a suspended draft when there is no live transport left. */
+    book_edit_disconnect();
     if (io_thread != NULL) {
         socket_thread_stop();
     } else if (csocket.sc != NULL) {
         client_socket_close(&csocket);
     }
+    region_map_exploration_clear();
     client_command_retry_clear();
     client_command_queue_deinitialize();
     if (output_buffer_mutex != NULL) {
@@ -454,53 +567,39 @@ bool client_socket_open(client_socket_t *csock,
                         const char *quic_certificate_sha256,
                         socket_connection_preference_t preference) {
     HARD_ASSERT(csock != NULL);
+    /* A new or failed connection attempt cannot inherit an older account's
+     * inventory identity. This does not release capture_privacy's frame latch. */
+    book_edit_disconnect();
     csock->failure.code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
     csock->failure.retry_after_seconds = 0;
     if (quic_certificate_sha256 == NULL) {
         csock->failure.code = SOCKET_CONNECT_FAILURE_PROTOCOL_REVISION;
-        client_attempt_secrets_clear(
-            selected_server != NULL ? &selected_server->join_password : NULL,
-            &clioption_settings.join_password,
-            selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
+        if (selected_server != NULL) {
+            client_access_attempt_clear(&selected_server->access_attempt);
+        }
         SOFT_ASSERT_RC(false, false, "Missing QUIC certificate fingerprint");
     }
     if (selected_server == NULL) {
-        client_attempt_secrets_clear(NULL, &clioption_settings.join_password, NULL);
         SOFT_ASSERT_RC(false, false, "Missing selected server");
-    }
-    bool has_directory_address = host != NULL && *host != '\0' && port > 0 && port <= UINT16_MAX;
-    if (selected_server->password_required && !has_directory_address &&
-        selected_server->rendezvous_invite == NULL) {
-        csock->failure.code = SOCKET_CONNECT_FAILURE_AUTHORIZATION;
-        client_attempt_secrets_clear(&selected_server->join_password,
-                                     &clioption_settings.join_password,
-                                     &selected_server->rendezvous_invite);
-        SOFT_ASSERT_RC(false, false, "Missing protected rendezvous invite");
     }
 
     char rendezvous_url[HUGE_BUF];
     const char *rendezvous = NULL;
-    if ((!selected_server->password_required || selected_server->rendezvous_invite != NULL) &&
-        metaserver_rendezvous_url(selected_server, VS(rendezvous_url))) {
+    if (metaserver_rendezvous_url(selected_server, VS(rendezvous_url))) {
         rendezvous = rendezvous_url;
     }
-    csock->sc = socket_quic_client_create(host,
-                                          port,
-                                          quic_certificate_sha256,
-                                          rendezvous,
-                                          clioption_settings.stun.endpoint,
-                                          selected_server->rendezvous_invite,
-                                          preference,
-                                          &csock->failure);
-    if (selected_server->rendezvous_invite != NULL) {
-        rendezvous_invite_cleanse(selected_server->rendezvous_invite);
-        free(selected_server->rendezvous_invite);
-        selected_server->rendezvous_invite = NULL;
-    }
+    csock->sc = socket_quic_client_create(
+        host,
+        port,
+        quic_certificate_sha256,
+        rendezvous,
+        clioption_settings.stun.endpoint,
+        selected_server->private_access ? &selected_server->access_grant : NULL,
+        preference,
+        &csock->failure);
+    rendezvous_access_grant_clear(&selected_server->access_grant);
     if (csock->sc == NULL) {
-        client_attempt_secrets_clear(&selected_server->join_password,
-                                     &clioption_settings.join_password,
-                                     &selected_server->rendezvous_invite);
+        client_access_attempt_clear(&selected_server->access_attempt);
         return false;
     }
 
@@ -508,6 +607,11 @@ bool client_socket_open(client_socket_t *csock,
         goto error;
     }
 
+    char *marker = file_path(DIRECTORY_CACHE "/exploration/.root", "wb");
+    char *directory = marker != NULL ? path_dirname(marker) : NULL;
+    region_exploration_connect(quic_certificate_sha256, directory);
+    free(directory);
+    free(marker);
     return true;
 
 error:
@@ -515,8 +619,6 @@ error:
     csock->sc = NULL;
     csock->failure.code = SOCKET_CONNECT_FAILURE_UNAVAILABLE;
     csock->failure.retry_after_seconds = 0;
-    client_attempt_secrets_clear(&selected_server->join_password,
-                                 &clioption_settings.join_password,
-                                 &selected_server->rendezvous_invite);
+    client_access_attempt_clear(&selected_server->access_attempt);
     return false;
 }

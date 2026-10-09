@@ -17,6 +17,63 @@ class WorkflowContractTests(unittest.TestCase):
     def text(self, name: str) -> str:
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
+    def test_final_published_provider_pins_and_installed_library_lane(self) -> None:
+        classic = "ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2"
+        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml", "build-release-candidate.yml"):
+            with self.subTest(workflow=name):
+                workflow = self.text(name)
+                self.assertIn(f"CLASSIC_LINUX_IMAGE: {classic}", workflow)
+                if name != "build-release-candidate.yml":
+                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2", workflow)
+        candidate = self.text("build-release-candidate.yml")
+        sources = candidate[candidate.index("  sources:"):candidate.index("  client-windows:")]
+        lane = sources[sources.index("      - name: Pull the immutable installed-library"):]
+        self.assertIn('docker pull "${CLASSIC_LINUX_IMAGE}"', lane)
+        self.assertIn("bash tools/ci/check_installed_library.sh", lane)
+        self.assertIn('"${RELEASE_VERSION}" "${RELEASE_REVISION}"', lane)
+        self.assertIn("RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}", lane)
+        self.assertIn("persist-credentials: false", sources)
+        self.assertIn("permissions:\n      contents: read", sources)
+        for forbidden in ("apt-get", "pip install", "docker/login-action", "GH_TOKEN"):
+            self.assertNotIn(forbidden, lane)
+        self.assertNotIn("apt-get", sources)
+
+    def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
+        workflow = self.text("check.yml")
+        jobs = dict(
+            re.findall(
+                r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)",
+                workflow[workflow.index("jobs:\n") :],
+                re.MULTILINE | re.DOTALL,
+            )
+        )
+        producer = jobs["windows-test-build"]
+        consumer = jobs["windows-test"]
+        self.assertIn(
+            'cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"',
+            producer,
+        )
+        self.assertIn(
+            '& (Join-Path $bundle "libatrinik-metaserver-publisher.exe") $publisher',
+            consumer,
+        )
+        fixture_paths = re.findall(
+            r'\$publisher = Join-Path \$bundle "fixtures/([^"/]+)"', consumer
+        )
+        self.assertEqual(len(fixture_paths), 1)
+        fixture_path = ROOT / "libatrinik/tests/fixtures" / fixture_paths[0]
+        self.assertTrue(fixture_path.is_file(), f"unstaged publisher fixture: {fixture_path}")
+        cmake = (ROOT / "libatrinik/CMakeLists.txt").read_text(encoding="utf-8")
+        ctest_fixtures = re.findall(
+            r'add_test\(NAME libatrinik-metaserver-publisher\s+'
+            r'COMMAND libatrinik-metaserver-publisher\s+'
+            r'"\$\{CMAKE_CURRENT_SOURCE_DIR\}/tests/fixtures/([^"/]+)"\)',
+            cmake,
+        )
+        self.assertEqual(fixture_paths, ctest_fixtures)
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(fixture["body"])["schema"], "atrinik-classic-publish-v3")
+
     def test_check_routes_immutable_inputs_to_the_consumers_revision(self) -> None:
         workflow = self.text("check.yml")
         # Job boundaries keep an unrelated checkout or artifact declaration from
@@ -1058,10 +1115,10 @@ class WorkflowContractTests(unittest.TestCase):
         server_job = candidate[
             candidate.index("  server-windows:") : candidate.index("  server-image:")
         ]
-        digest = "d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb"
-        image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
+        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
+        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
         self.assertEqual(
-            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.2.1-{digest}"), 1
+            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.16.0-{digest}"), 1
         )
         self.assertEqual(candidate.count(image), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", candidate)
@@ -1191,8 +1248,8 @@ class WorkflowContractTests(unittest.TestCase):
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
-        digest = "d1f082eb28891600a9cf018a1d4310b9f3e1f985f82139fa48fbd4ac77b623bb"
-        image = f"ghcr.io/atrinik/windows-build:1.2.1@sha256:{digest}"
+        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
+        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
         self.assertEqual(build.count(image), 4)
@@ -1514,7 +1571,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("$process.Kill($true)", smoke)
         self.assertIn("$process.Dispose()", smoke)
         self.assertIn('"Server ready\\. Waiting for connections"', smoke)
-        self.assertIn('"fixtures/metaserver-publisher-v1.json"', run)
+        self.assertIn('"fixtures/metaserver-classic-publisher-v3.json"', run)
 
         self.assertIn("- windows-test", aggregate)
         self.assertIn("--windows-required", aggregate)
@@ -1787,13 +1844,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("name: classic-gpu-shaders", client)
         self.assertIn("name: classic-gpu-shaders", gpu_coverage_job)
         self.assertIn("name: classic-gpu-shaders", integrated)
-        self.assertIn(
-            "name: Wait for complete client coverage processing",
-            gpu_coverage_job,
+        self.assertNotIn(
+            "Wait for complete client coverage processing", gpu_coverage_job
         )
-        self.assertIn("api.codecov.io/api/v2/github/", gpu_coverage_job)
+        self.assertNotIn("api.codecov.io", gpu_coverage_job)
         self.assertIn("flags: client-unit", client)
         self.assertIn("flags: client-gpu", gpu_coverage_job)
+        self.assertIn("fail_ci_if_error: false", gpu_coverage_job)
+        self.assertLess(gpu_coverage_job.index("name: Build and exercise complete GPU coverage"),
+                        gpu_coverage_job.index("name: Upload GPU-complete client coverage"))
         self.assertIn(
             "COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
             workflow,
@@ -1802,24 +1861,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("override_commit: ${{ env.COVERAGE_SHA }}", client)
         self.assertIn("override_commit: ${{ env.COVERAGE_SHA }}", gpu_coverage_job)
         self.assertNotIn("\n          commit:", workflow)
-        self.assertIn('"sha=${COVERAGE_SHA}"', gpu_coverage_job)
-        self.assertNotIn('"sha=${GITHUB_SHA}"', gpu_coverage_job)
         client_readme = (ROOT / "client" / "README.md").read_text(encoding="utf-8")
         self.assertEqual(client_readme.count("flag=client-gpu"), 1)
         self.assertNotIn("flag=client)]", client_readme)
-        self.assertIn("for flag in client-unit client-gpu", gpu_coverage_job)
-        self.assertIn("for attempt in {1..90}", gpu_coverage_job)
-        self.assertIn("(${attempt}/90)", gpu_coverage_job)
-        self.assertIn("within 15 minutes", gpu_coverage_job)
-        self.assertNotIn("for attempt in {1..30}", gpu_coverage_job)
-        self.assertIn('"flag=${flag}"', gpu_coverage_job)
-        self.assertIn("'.totals.sessions // 0'", gpu_coverage_job)
-        self.assertIn('[ "${sessions}" -lt 1 ]', gpu_coverage_job)
-        self.assertIn('[ "${reports_ready}" = true ]', gpu_coverage_job)
         aggregate = workflow[workflow.index("  classic-validation:") :]
         self.assertIn("- gpu-coverage", aggregate)
         self.assertIn("--gpu-coverage-required", aggregate)
-        self.assertIn("--gpu-coverage-result '${{ needs.gpu-coverage.result }}'", aggregate)
+        self.assertIn(
+            "--gpu-coverage-result '${{ needs.gpu-coverage.result }}'", aggregate
+        )
         expected_materials = {
             "core": {
                 ".github/workflows/check.yml",
@@ -1904,8 +1954,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("tools/ci/run_gpu_coverage.sh", client)
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage_job)
         self.assertIn(
-            "ghcr.io/atrinik/linux-build:1.3.0@sha256:"
-            "260658d2709e993b41148a9d8f724c2d2f7f1fd93543a139b00d139b10e7f31a",
+            "ghcr.io/atrinik/linux-build:1.16.0@sha256:"
+            "89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e",
             workflow,
         )
 
@@ -1927,6 +1977,52 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             with self.subTest(measurement_field=field):
                 self.assertIn(f"printf '{field}\\t", measurement)
+
+
+    def test_codecov_reporting_is_informational_without_weakening_native_coverage(
+        self,
+    ) -> None:
+        config = (ROOT / "codecov.yml").read_text(encoding="utf-8")
+        self.assertIn("    project:\n      default:\n        informational: true", config)
+        self.assertIn("    patch:\n      default:\n        informational: true", config)
+
+        workflow = self.text("check.yml")
+        self.assertEqual(workflow.count("uses: codecov/codecov-action@"), 5)
+        self.assertEqual(workflow.count("fail_ci_if_error: false"), 5)
+        self.assertNotIn("fail_ci_if_error: true", workflow)
+        self.assertNotIn("api.codecov.io", workflow)
+        upload_steps = [
+            re.split(r"(?m)^  [a-zA-Z0-9_-]+:", step, maxsplit=1)[0]
+            for step in re.split(r"(?m)(?=^      - )", workflow)
+            if "uses: codecov/codecov-action@" in step
+        ]
+        self.assertEqual(len(upload_steps), 5)
+        for step in upload_steps:
+            with self.subTest(upload_step=step.splitlines()[0]):
+                self.assertIn("        continue-on-error: true", step)
+                self.assertIn("        timeout-minutes: 2", step)
+                self.assertIn("        fail_ci_if_error: false", step)
+
+        gpu_coverage = workflow[
+            workflow.index("  gpu-coverage:\n    name: Trusted GPU renderer coverage") :
+            workflow.index("  integrated:\n    name: Integrated client/server graph")
+        ]
+        self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage)
+        self.assertIn("files: client/coverage.xml", gpu_coverage)
+        self.assertIn("flags: client-gpu", gpu_coverage)
+        native_coverage = gpu_coverage.split(
+            "      - name: Upload GPU-complete client coverage", 1
+        )[0]
+        self.assertIn("name: Build and exercise complete GPU coverage", native_coverage)
+        self.assertNotIn("continue-on-error: true", native_coverage)
+
+        aggregate = workflow[workflow.index("  classic-validation:") :]
+        self.assertIn("- gpu-coverage", aggregate)
+        self.assertIn("--gpu-coverage-required", aggregate)
+        self.assertIn(
+            "--gpu-coverage-result '${{ needs.gpu-coverage.result }}'", aggregate
+        )
+
 
 
 if __name__ == "__main__":

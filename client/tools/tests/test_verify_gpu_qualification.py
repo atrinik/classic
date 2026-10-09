@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import re
 import struct
 import tempfile
 import unittest
@@ -177,6 +178,16 @@ def record(name="dense-17x17-five-depth-1080p"):
 
 
 class VerifyGpuQualificationTests(unittest.TestCase):
+    def test_ui_closure_emitter_matches_verifier_contract(self):
+        source = (Path(__file__).resolve().parents[2] /
+                  "src/client/gpu_player_view.c").read_text(encoding="utf-8")
+        capacity = re.search(r"^#define PLAYER_VIEW_UI_STATES (\d+)$", source, re.MULTILINE)
+        self.assertIsNotNone(capacity)
+        self.assertEqual(int(capacity.group(1)), len(UI_CLOSURE_STATES))
+        emitted = tuple(re.findall(
+            r'gpu_player_view_ui_(?:capture|screenshot)\("([^"\n]+)"', source))
+        self.assertEqual(emitted, UI_CLOSURE_STATES)
+
     def test_qualified_d3d12_requires_selected_adapter_identity(self):
         value = record()
         value["gpu"]["backend"] = "direct3d12"

@@ -27,15 +27,20 @@
  * Client main related functions.
  */
 
+#include <book_edit.h>
 #include <mouse.h>
+#include <access_admin.h>
 #include <animations.h>
+#include <book.h>
+#include <capture_privacy.h>
+#include <access_resolver.h>
 #include <client.h>
 #include <commands.h>
 #include <config.h>
 #include <effects.h>
 #include <event.h>
 #include <image.h>
-#include <join_credentials.h>
+#include <access_attempt.h>
 #include <inventory.h>
 #include <item.h>
 #include <keybind.h>
@@ -306,6 +311,7 @@ static int game_status_chain(void) {
         metaserver_get_servers();
         cpl.state = ST_START;
     } else if (cpl.state == ST_START) {
+        book_edit_disconnect();
         image_face_requests_clear();
         if (client_socket_active()) {
             client_socket_close(&csocket);
@@ -327,9 +333,7 @@ static int game_status_chain(void) {
                              "The server %s does not have a valid QUIC certificate "
                              "fingerprint, refusing to connect.",
                              selected_server->name);
-            client_attempt_secrets_clear(&selected_server->join_password,
-                                         &clioption_settings.join_password,
-                                         &selected_server->rendezvous_invite);
+            client_access_attempt_clear(&selected_server->access_attempt);
             cpl.state = ST_START;
             return 1;
         }
@@ -344,9 +348,7 @@ static int game_status_chain(void) {
                 snprintf(VS(failure_message), "Connection failed; please try again.");
             }
             draw_info(COLOR_RED, failure_message);
-            client_attempt_secrets_clear(&selected_server->join_password,
-                                         &clioption_settings.join_password,
-                                         &selected_server->rendezvous_invite);
+            client_access_attempt_clear(&selected_server->access_attempt);
             cpl.state = ST_START;
             return 1;
         }
@@ -377,11 +379,6 @@ static int game_status_chain(void) {
             MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT)));
         packet_writer_write_uint8(packet, CMD_SETUP_DATA_URL);
         packet_writer_write_cstring(packet, "");
-        packet_writer_write_uint8(packet, CMD_SETUP_JOIN_PASSWORD);
-        const char *join_password = selected_server->join_password != NULL
-                                        ? selected_server->join_password
-                                        : clioption_settings.join_password;
-        packet_writer_write_cstring(packet, join_password != NULL ? join_password : "");
         if (cpl.server_socket_version >= ASSET_TRANSPORT_SOCKET_VERSION) {
             packet_writer_write_uint8(packet, CMD_SETUP_ASSET_TRANSPORT);
         }
@@ -537,10 +534,6 @@ void clioption_settings_deinit(void) {
 
     free(clioption_settings.game_news_url);
 
-    client_join_credentials_clear(NULL, &clioption_settings.join_password);
-
-    free(clioption_settings.rendezvous_invite_file);
-
     client_stun_config_deinit(&clioption_settings.stun);
 }
 
@@ -566,10 +559,10 @@ static bool clioptions_option_server(const char *arg, char **errmsg) {
  * Description of the --metaserver command.
  */
 static const char *const clioptions_option_metaserver_desc =
-    "Adds a paired static directory and rendezvous service to the list tried.\n\n"
+    "Adds a static directory, rendezvous service, and access service to the list tried.\n\n"
     "Usage:\n"
     " --metaserver=\"https://classic.meta.example/index.xml "
-    "https://rendezvous.meta.example/v1/classic\"";
+    "https://rendezvous.meta.example/v1/classic https://access.meta.example\"";
 
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_metaserver(const char *arg, char **errmsg) {
@@ -648,62 +641,6 @@ static bool clioptions_option_connect_password_file(const char *arg, char **errm
     clioption_settings.connect[2] = xstrdup(password);
     clioption_connect_password_file_loaded = true;
     OPENSSL_cleanse(password, sizeof(password));
-    return true;
-}
-
-/**
- * Description of the --join_password command.
- */
-static const char *const clioptions_option_join_password_desc =
-    "Password used to join a private game server.";
-/** @copydoc clioptions_handler_func */
-static bool clioptions_option_join_password(const char *arg, char **errmsg) {
-    if (strlen(arg) >= MAX_BUF) {
-        *errmsg = xstrdup("Join password is too long");
-        return false;
-    }
-
-    client_join_credentials_clear(NULL, &clioption_settings.join_password);
-    clioption_settings.join_password = xstrdup(arg);
-    return true;
-}
-
-static const char *const clioptions_option_join_password_file_desc =
-    "Read the private server password from a file.";
-
-static bool clioptions_option_join_password_file(const char *arg, char **errmsg) {
-    char password[MAX_BUF];
-    bool permissive_mode;
-    path_secret_error_t error = path_read_secret(arg, VS(password), &permissive_mode);
-    if (error != PATH_SECRET_OK) {
-        string_fmt(*errmsg,
-                   "Cannot use join password file %s: %s",
-                   arg,
-                   path_secret_error_string(error));
-        return false;
-    }
-    if (permissive_mode) {
-        LOG(SYSTEM,
-            "Join password file %s is readable or writable by group/other; "
-            "use mode 0600",
-            arg);
-    }
-
-    bool ok = clioptions_option_join_password(password, errmsg);
-    OPENSSL_cleanse(password, sizeof(password));
-    return ok;
-}
-
-static const char *const clioptions_option_rendezvous_invite_file_desc =
-    "Read a protected rendezvous invite through this file path when connecting.";
-
-static bool clioptions_option_rendezvous_invite_file(const char *arg, char **errmsg) {
-    if (arg[0] == '\0' || strlen(arg) >= HUGE_BUF) {
-        *errmsg = xstrdup("Rendezvous invite file path is empty or too long");
-        return false;
-    }
-    free(clioption_settings.rendezvous_invite_file);
-    clioption_settings.rendezvous_invite_file = xstrdup(arg);
     return true;
 }
 
@@ -858,7 +795,11 @@ static bool gpu_renderer_recovery_republish(void *userdata) {
     widget_redraw_everything();
     popup_redraw_all();
 
+    /* Recovery composes a new frame and may consume the last pending redraw.
+     * Track privacy throughout composition, including private UI loaded by it. */
+    capture_privacy_frame_begin(book_sensitive_active());
     if (!gpu_renderer_begin_frame()) {
+        capture_privacy_frame_end(false);
         return false;
     }
     uint64_t gpu_ui_started = gpu_renderer_timing_begin();
@@ -893,13 +834,16 @@ static bool gpu_renderer_recovery_republish(void *userdata) {
     }
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_UI, gpu_ui_started);
     if (!gpu_renderer_frame_valid()) {
+        capture_privacy_frame_end(false);
         return false;
     }
     if (client_socket_shutdown_pending()) {
         SDL_SetError("connection closed during GPU recovery republish");
+        capture_privacy_frame_end(false);
         return false;
     }
     bool presented = gpu_renderer_present();
+    capture_privacy_frame_end(presented);
     map_benchmark_statistics_present(presented);
     return presented;
 }
@@ -913,6 +857,7 @@ bool gpu_renderer_recovery_republish_test(void) {
 static bool gpu_renderer_recover_frame(unsigned int *attempts,
                                        const char *context,
                                        const gpu_renderer_recreation_diagnostic_t *consumed) {
+    capture_privacy_block();
     HARD_ASSERT(attempts != NULL);
     HARD_ASSERT(context != NULL);
     char error_snapshot[256];
@@ -980,6 +925,127 @@ static bool gpu_renderer_recover_frame(unsigned int *attempts,
     return false;
 }
 
+#ifdef ATRINIK_WIDGET_TESTS
+static bool client_book_edit_lifecycle_test(void) {
+    /* These cases call the actual production transport lifecycle, including
+     * the no-socket and mutex-backed paths that Logout can encounter. */
+    for (unsigned int route = 0; route < 7; route++) {
+        if (!book_edit_test_seed_draft()) {
+            return false;
+        }
+        cpl.state = ST_STARTCONNECT; /* Logout bypasses the ST_START fallback. */
+        capture_privacy_block();
+        switch (route) {
+            case 0:
+                client_socket_close(&csocket);
+                break;
+            case 1:
+                client_socket_shutdown_test_set(false);
+                client_socket_close(&csocket);
+                break;
+            case 2:
+                client_socket_request_shutdown();
+                break;
+            case 3:
+                client_socket_shutdown_test_set(false);
+                client_socket_request_shutdown();
+                break;
+            case 4:
+                if (!client_command_queue_initialize()) {
+                    return false;
+                }
+                client_socket_shutdown_test_set(true);
+                if (!handle_socket_shutdown()) {
+                    return false;
+                }
+                break;
+            case 5:
+                client_socket_deinitialize();
+                break;
+            case 6: {
+                server_struct server = {0};
+                server_struct *saved_server = selected_server;
+                selected_server = &server;
+                /* Non-NULL malformed fingerprint is rejected by the transport
+                 * before discovery, DNS or socket creation in every build. */
+                bool opened = client_socket_open(&csocket, "unused.invalid", 1, "invalid",
+                                                 SOCKET_CONNECTION_PREFERENCE_AUTO);
+                selected_server = saved_server;
+                if (opened) {
+                    return false;
+                }
+                break;
+            }
+        }
+        const book_edit_model_t empty = {0};
+        if (memcmp(book_edit_test_model(), &empty, sizeof(empty)) != 0 ||
+            cpl.state != ST_STARTCONNECT || capture_privacy_allowed(false)) {
+            return false;
+        }
+        capture_privacy_frame_begin(false);
+        capture_privacy_frame_end(false);
+        if (capture_privacy_allowed(false)) {
+            return false;
+        }
+        capture_privacy_frame_begin(false);
+        capture_privacy_frame_end(true);
+        if (!capture_privacy_allowed(false)) {
+            return false;
+        }
+        client_socket_deinitialize();
+    }
+    return true;
+}
+
+static bool client_access_lifecycle_test(void) {
+    static const char ordinary[] = "ordinary retained book";
+    static const char private_result[] =
+        "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";
+
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
+    if (!book_test_state_seed(ordinary, false)) {
+        return false;
+    }
+    client_access_admin_reset();
+    bool ordinary_preserved =
+        book_test_content_retained() && !book_test_clear_was_observed() &&
+        capture_privacy_allowed(book_sensitive_active());
+    book_test_state_discard();
+
+    if (!book_test_state_seed(private_result, true)) {
+        return false;
+    }
+    bool retained_denied = book_sensitive_active() &&
+                           !capture_privacy_allowed(book_sensitive_active());
+    capture_privacy_frame_begin(book_sensitive_active());
+    client_access_admin_reset();
+    capture_privacy_frame_end(true);
+    bool reset_cleared =
+        !book_test_content_retained() && book_test_clear_was_observed() &&
+        !capture_privacy_allowed(book_sensitive_active());
+
+    if (!book_test_state_seed(private_result, true)) {
+        return false;
+    }
+    uint8_t empty_characters = 0;
+    cpl.state = ST_PLAY;
+    socket_command_characters(&empty_characters, 0, 0);
+    bool characters_cleared = !book_test_content_retained() &&
+                              book_test_clear_was_observed() && cpl.state == ST_LOGIN;
+    book_test_state_discard();
+
+    bool closed_denied = !capture_privacy_allowed(book_sensitive_active());
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(false);
+    bool failed_denied = !capture_privacy_allowed(book_sensitive_active());
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(true);
+    return ordinary_preserved && retained_denied && reset_cleared && characters_cleared &&
+           closed_denied && failed_denied && capture_privacy_allowed(book_sensitive_active());
+}
+#endif
+
 /**
  * The main function.
  * @param argc
@@ -1029,6 +1095,17 @@ int main(int argc, char *argv[]) {
     }
     if (argc == 3 && strcmp(argv[1], "--gpu-player-view-lifecycle") == 0) {
         return gpu_player_view_main(argc - 1, &argv[1]);
+    }
+
+    if (argc == 2 && strcmp(argv[1], "--region-exploration-test") == 0) {
+        return region_map_exploration_test() ? 0 : 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "--access-lifecycle-test") == 0) {
+        return client_access_lifecycle_test() ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "--book-edit-lifecycle-test") == 0) {
+        return client_book_edit_lifecycle_test() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     if (argc == 2 && strcmp(argv[1], "--map-state-test") == 0) {
@@ -1107,12 +1184,6 @@ int main(int argc, char *argv[]) {
     clioptions_enable_sensitive(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, connect_password_file, "Protected account password file");
     CLIOPTIONS_CREATE_ARGUMENT(cli, game_news_url, "Set game news URL");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password, "Private server password");
-    clioptions_enable_sensitive(cli);
-    CLIOPTIONS_CREATE_ARGUMENT(cli, join_password_file, "Private server password file");
-    CLIOPTIONS_CREATE_ARGUMENT(cli,
-                               rendezvous_invite_file,
-                               "Protected rendezvous invite file path");
     CLIOPTIONS_CREATE_ARGUMENT(cli, stun_server, "Direct rendezvous STUN endpoint");
 
     /* Argument options*/
@@ -1273,6 +1344,9 @@ int main(int argc, char *argv[]) {
 
         uint64_t profile_game_started = render_profiler_begin();
 
+        access_resolver_service();
+        client_access_admin_update();
+
         /* Have we been shutdown? */
         if (handle_socket_shutdown()) {
             if (live_movement_enabled()) {
@@ -1280,10 +1354,10 @@ int main(int argc, char *argv[]) {
                 break;
             }
             image_face_requests_clear();
-            client_attempt_secrets_clear(
-                selected_server != NULL ? &selected_server->join_password : NULL,
-                &clioption_settings.join_password,
-                selected_server != NULL ? &selected_server->rendezvous_invite : NULL);
+            if (selected_server != NULL) {
+                client_access_attempt_clear(&selected_server->access_attempt);
+            }
+            client_access_admin_reset();
             if (cpl.state != ST_STARTCONNECT) {
                 cpl.state = ST_START;
                 /* Make sure no popup is visible. */
@@ -1318,6 +1392,7 @@ int main(int argc, char *argv[]) {
 
             DoClient();
             image_face_requests_service();
+            region_map_exploration_service();
         }
 
         /* If not connected, walk through connection chain and/or wait for
@@ -1373,7 +1448,11 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        if (update) {
+            capture_privacy_frame_begin(book_sensitive_active());
+        }
         if (update && !gpu_renderer_begin_frame()) {
+            capture_privacy_frame_end(false);
             LOG(ERROR, "Could not begin GPU frame: %s", SDL_GetError());
             if (!gpu_renderer_recover_frame(&gpu_recovery_attempts, "beginning a frame", NULL)) {
                 break;
@@ -1444,6 +1523,7 @@ int main(int argc, char *argv[]) {
         if (update) {
             bool presented = gpu_renderer_present();
             frame_presented = presented;
+            capture_privacy_frame_end(presented);
             map_benchmark_statistics_present(presented);
             if (!presented) {
                 LOG(ERROR, "Could not present the GPU frame: %s", SDL_GetError());
@@ -1457,7 +1537,10 @@ int main(int argc, char *argv[]) {
             }
         }
         render_profiler_end(RENDER_PROFILE_PRESENT, profile_present_started);
-        video_recording_frame(cpl.state == ST_PLAY, frame_presented, SDL_GetTicks());
+        video_recording_frame(cpl.state == ST_PLAY,
+                              frame_presented,
+                              capture_privacy_allowed(book_sensitive_active()),
+                              SDL_GetTicks());
         char recording_notice[4352];
         bool recording_failed;
         if (video_recording_message(recording_notice,
@@ -1506,7 +1589,9 @@ int main(int argc, char *argv[]) {
         if (live_movement_enabled()) {
             client_keepalive_statistics_t keepalive_statistics;
             client_keepalive_statistics(&keepalive_state, &keepalive_statistics);
-            live_movement_frame_finished(frame_presented, &keepalive_statistics);
+            live_movement_frame_finished(frame_presented,
+                                         capture_privacy_allowed(book_sensitive_active()),
+                                         &keepalive_statistics);
         }
     }
 
