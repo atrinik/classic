@@ -2708,7 +2708,7 @@ void socket_command_quest_list(socket_struct *ns,
 
     packet = packet_new(CLIENT_CMD_BOOK, 0, 0);
     packet_debug_data(packet, 0, "Quest list message");
-    packet_writer_write_string_n(packet, cp, cp_len);
+    packet_writer_write_cstring_n(packet, cp, cp_len);
     socket_send_packet(pl->cs, packet);
     free(cp);
 }

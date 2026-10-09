@@ -31,6 +31,7 @@
  */
 
 #include <global.h>
+#include <book_edit.h>
 #include <server_main.h>
 #include <initialization.h>
 #include <toolkit/path.h>

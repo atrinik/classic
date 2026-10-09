@@ -46,8 +46,11 @@
 
 /** The book's content. */
 static char *book_content = NULL;
+static char book_signer[128];
+static char book_signed_date[128];
 static bool book_sensitive;
 #ifdef ATRINIK_WIDGET_TESTS
+static bool book_signature_rendered;
 static bool book_test_clear_observed;
 #endif
 /** Name of the book. */
@@ -65,11 +68,15 @@ static uint8_t book_help_history_enabled = 0;
 /** Scrollbar in the book GUI. */
 static scrollbar_struct scrollbar;
 
+static int popup_destroy_callback(popup_struct *popup);
+
 static popup_struct *book_popup_get(void) {
     popup_struct *popup;
 
     for (popup = popup_get_head(); popup != NULL; popup = popup->next) {
-        if (popup->texture == texture_get(TEXTURE_TYPE_CLIENT, "book")) {
+        /* The editor shares the parchment texture, but owns its own draft and
+         * teardown. Identify the reader by its state-owning callback. */
+        if (popup->destroy_callback_func == popup_destroy_callback) {
             return popup;
         }
     }
@@ -102,6 +109,10 @@ static void book_state_clear(void) {
     book_lines = 0;
     book_scroll_lines = 0;
     book_scroll = 0;
+    book_signer[0] = book_signed_date[0] = '\0';
+#ifdef ATRINIK_WIDGET_TESTS
+    book_signature_rendered = false;
+#endif
 }
 
 /**
@@ -142,7 +153,7 @@ static int popup_draw_func(popup_struct *popup) {
 
         /* Sensitive results contain server-controlled labels: render literal text. */
         box.w = BOOK_TEXT_WIDTH;
-        box.h = BOOK_TEXT_HEIGHT;
+        box.h = BOOK_TEXT_HEIGHT - (book_signer[0] ? 36 : 0);
         box.y = book_scroll;
         text_color_set(0, 0, 255);
         text_set_selection(&popup->selection_start,
@@ -157,6 +168,19 @@ static int popup_draw_func(popup_struct *popup) {
                   TEXT_WORD_WRAP | (book_sensitive ? 0 : TEXT_MARKUP) | TEXT_LINES_SKIP,
                   &box);
         text_set_selection(NULL, NULL, NULL);
+
+        if (book_signer[0]) {
+#ifdef ATRINIK_WIDGET_TESTS
+            book_signature_rendered = true;
+#endif
+            char signature[300];
+            snprintf(signature, sizeof(signature), "Signed by %s on %s", book_signer, book_signed_date);
+            box.w = BOOK_TEXT_WIDTH;
+            box.h = 32;
+            text_show(popup->surface, FONT_ARIAL11, signature, BOOK_TEXT_STARTX,
+                      BOOK_TEXT_STARTY + BOOK_TEXT_HEIGHT - 32, COLOR_BLACK,
+                      TEXT_WORD_WRAP, &box);
+        }
 
         popup->redraw = 0;
     }
@@ -321,7 +345,7 @@ static bool book_load_internal(const char *data, int len, bool sensitive, const 
 
     /* Calculate the line numbers. */
     box.w = BOOK_TEXT_WIDTH;
-    box.h = BOOK_TEXT_HEIGHT;
+    box.h = BOOK_TEXT_HEIGHT - (book_signer[0] ? 36 : 0);
     text_show(NULL,
               FONT_ARIAL11,
               book_content,
@@ -373,11 +397,31 @@ static bool book_load_internal(const char *data, int len, bool sensitive, const 
 }
 
 bool book_load(const char *data, int len) {
+    book_signer[0] = book_signed_date[0] = '\0';
+#ifdef ATRINIK_WIDGET_TESTS
+    book_signature_rendered = false;
+#endif
+    return book_load_internal(data, len, false, "Book");
+}
+
+bool book_load_signed(const char *data, int len, const char *signer, const char *date) {
+#ifdef ATRINIK_WIDGET_TESTS
+    book_signature_rendered = false;
+#endif
+    SDL_utf8strlcpy(book_signer, signer, sizeof(book_signer));
+    SDL_utf8strlcpy(book_signed_date, date, sizeof(book_signed_date));
     return book_load_internal(data, len, false, "Book");
 }
 
 bool book_load_sensitive(const char *data, int len, const char *title) {
-    return data != NULL && title != NULL && book_load_internal(data, len, true, title);
+    if (data == NULL || title == NULL) {
+        return false;
+    }
+    book_signer[0] = book_signed_date[0] = '\0';
+#ifdef ATRINIK_WIDGET_TESTS
+    book_signature_rendered = false;
+#endif
+    return book_load_internal(data, len, true, title);
 }
 
 void book_sensitive_clear(void) {
@@ -404,6 +448,9 @@ bool book_sensitive_visible(void) {
 #ifdef ATRINIK_WIDGET_TESTS
 bool book_test_content_retained(void) {
     return book_content != NULL;
+}
+bool book_test_signature_rendered(void) {
+    return book_signature_rendered;
 }
 
 bool book_test_state_seed(const char *content, bool sensitive) {

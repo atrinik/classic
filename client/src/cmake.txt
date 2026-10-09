@@ -1,4 +1,7 @@
 set(SOURCES
+	src/client/book_edit_packet.c
+	src/client/book_edit_model.c
+	src/gui/popups/book_edit.c
 	src/client/access_admin.c
 	src/client/access_admin_response.c
 	src/client/access_protocol.c

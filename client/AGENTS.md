@@ -40,6 +40,17 @@
 - Focused text inputs own their key-down, key-up, text-input, and text-editing
   events. Do not let gameplay bindings observe an event already consumed by a
   focused widget.
+- Book writing uses a separate `BOOK_EDIT` popup and bounded protocol snapshots.
+  Preserve drafts on server errors and keep destination/source identity explicit.
+  Cancel, Escape and X-close suspend the draft without saving or spending ink;
+  same-book reopen uses a fresh session and retains draft title, text and base.
+  Confirm discard for a new destination and rebase for changed persisted fields.
+  Disconnect clears connection-local destination identity and drafts.
+  Copy replacement and irreversible signing each require their own confirmation;
+  signing submits persisted fields only. Never inherit signature metadata on copy.
+  Multiline text editing is opt-in; default single-line inputs retain their behavior.
+  Reset editor session identity on disconnect. Read-only books render optional
+  authenticated signer/date metadata separately without interpreting its markup.
 - Region-map exploration uses a hashed cache of at most 10,000 server-received
   map bitfields, scoped to the pinned connection certificate and authenticated
   account. Retain initial dimensions and OR incoming snapshots/patches. Request

@@ -86,6 +86,9 @@ extern void book_name_change(const char *name, size_t len);
 /** Load book state and create its popup, returning false on canvas failure. */
 extern bool book_load(const char *data, int len);
 
+/** Display separately authenticated signature metadata without interpreting markup. */
+extern bool book_load_signed(const char *data, int len, const char *signer, const char *date);
+
 /** Load private access-management output and cleanse it when the popup closes. */
 bool book_load_sensitive(const char *data, int len, const char *title);
 
@@ -101,6 +104,8 @@ bool book_sensitive_visible(void);
 #ifdef ATRINIK_WIDGET_TESTS
 /** Whether book content remains owned after an allocation-failure path. */
 extern bool book_test_content_retained(void);
+/** Whether the signed reader executed its separate footer rendering path. */
+extern bool book_test_signature_rendered(void);
 
 /** Seed retained book state without creating a renderer-owned popup. */
 extern bool book_test_state_seed(const char *content, bool sensitive);

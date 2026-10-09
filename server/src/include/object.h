@@ -159,6 +159,9 @@ struct obj {
     /** Unique object number for this object */
     tag_t count;
 
+    /** Transient custody revision; never copied or persisted. */
+    uint64_t inventory_generation;
+
     /**
      * Needed for the damage info for client in map2. Also used for
      * unmodified carrying weight of magical containers to prevent rounding

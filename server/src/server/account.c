@@ -604,7 +604,8 @@ out:
 }
 
 static int account_provision_preset_hour(const char *preset) {
-    if (strcmp(preset, "basic-player") == 0 || strcmp(preset, "brynknot-idle") == 0) {
+    if (strcmp(preset, "basic-player") == 0 || strcmp(preset, "brynknot-idle") == 0 ||
+        strcmp(preset, "writing-books") == 0) {
         return -1;
     }
     if (strcmp(preset, "lighting-radiance-day") == 0) {
@@ -627,13 +628,13 @@ static bool account_provision_preset_player(const char *character,
                                               const char *preset,
                                               char *error,
                                               size_t error_size) {
-    if (strcmp(preset, "brynknot-idle") == 0) {
+    if (strcmp(preset, "brynknot-idle") == 0 || strcmp(preset, "writing-books") == 0) {
         return player_provision_scenario(character,
                                          archname,
                                          "/shattered_islands/world_0_70",
                                          20,
                                          8,
-                                         NULL,
+                                         strcmp(preset, "writing-books") == 0 ? "writing-books" : NULL,
                                          error,
                                          error_size);
     }
@@ -703,7 +704,8 @@ bool account_provision_from_file(const char *name,
         goto out;
     }
     ok = account_provision(name, password, character, archname, error, error_size);
-    if (ok && (preset_hour >= 0 || strcmp(preset, "brynknot-idle") == 0) &&
+    if (ok && (preset_hour >= 0 || strcmp(preset, "brynknot-idle") == 0 ||
+               strcmp(preset, "writing-books") == 0) &&
         (!account_provision_preset_player(character_name, archname, preset, error, error_size) ||
          (preset_hour >= 0 && !todclock_set((unsigned long)preset_hour)))) {
         if (error[0] == '\0') {

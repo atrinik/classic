@@ -126,6 +126,20 @@ notification, generic input controls, book, settings, color picker, connection
 preference, credits, painting and region-map popups, the
 minimap, an observable zoomed region-map FOW update followed by an unchanged
 retained frame, and the real `/screenshot` and `/screenshot map` commands.
+The same manifest also emits a separate nine-state `book_editor_ui` sweep,
+without changing the eighteen existing UI goldens. It sends bounded synthetic
+server snapshots through the production BOOK_EDIT/BOOK decoders and drives the
+real SDL popup draw and event paths. Checkpoints cover labeled fields, copy and
+sign confirmations, an insufficient-ink draft, X-close/refill/fresh-session
+reopen, destination discard and changed-base rebase confirmations, and signed
+then unsigned reader footers. Serialized requests, multiline UTF-8 input,
+Tab/mouse focus, key release and gameplay-key consumption, confirmation Back,
+Cancel/Escape close and same-book reopen retention, and explicit destination
+discard are asserted in that sweep. The signed footer deliberately
+uses markup-looking signer/date text to show its literal, separate presentation.
+These are offline UI conformance checks; software GPU results do not establish
+hardware qualification or live authenticated gameplay.
+
 Every non-readback state requires zero source upload, fallback, and
 resource creation/destruction after warmup. Blink and notification-fade clocks
 are frozen by the fixture, while inventory, party-list, text-window,
