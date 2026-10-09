@@ -199,6 +199,8 @@ extern const char *intro_test_server_name(size_t row);
 extern void intro_show(void);
 
 extern int intro_event(SDL_Event *event);
+/** Handle only the provider control, including when cancelling access input. */
+extern int intro_metaserver_event(SDL_Event *event);
 
 /** Public API implemented in src/gui/popups/characters.c. */
 
@@ -235,6 +237,11 @@ extern void help_handle_tabulator(text_input_struct *text_input);
 extern void access_code_open(server_struct *server);
 /** Dismiss pending access input/resolution before freeing its server list. */
 extern void access_code_cancel(void);
+/** True only when the access-code popup is the active modal. */
+extern bool access_code_active(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool access_code_test_cleared(void);
+#endif
 
 /** Public API implemented in src/gui/popups/login.c. */
 

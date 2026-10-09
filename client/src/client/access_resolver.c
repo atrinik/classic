@@ -54,11 +54,28 @@ struct access_resolver_job {
     SDL_Thread *thread;
     atomic_bool done, cancelled;
     struct access_resolver_job *next;
+#ifdef ATRINIK_WIDGET_TESTS
+    access_resolver_test_transport_t test_transport;
+    void *test_context;
+#endif
 };
 /* Only the main thread reads/writes the list and thread handles. The worker
  * owns attempt/options/server until publishing done with release semantics. */
 static access_resolver_job_t *jobs;
 static unsigned job_count;
+#ifdef ATRINIK_WIDGET_TESTS
+static access_resolver_test_transport_t test_transport;
+static void *test_context;
+
+bool access_resolver_test_transport(access_resolver_test_transport_t transport, void *context) {
+    if (jobs != NULL) {
+        return false;
+    }
+    test_transport = transport;
+    test_context = context;
+    return true;
+}
+#endif
 
 static bool cancelled(void *context) {
     access_resolver_job_t *job = context;
@@ -68,8 +85,18 @@ static bool cancelled(void *context) {
 static int resolve_worker(void *context) {
     access_resolver_job_t *job = context;
     curl_cancel_t cancel = {.cancelled = cancelled, .context = job};
-    server_struct *server =
-        metaserver_access_resolve_cancellable(&job->options, job->attempt.code, &cancel);
+    server_struct *server;
+#ifdef ATRINIK_WIDGET_TESTS
+    if (job->test_transport != NULL) {
+        server = job->test_transport(&job->options,
+                                     job->attempt.code,
+                                     &cancel,
+                                     job->test_context);
+    } else
+#endif
+    {
+        server = metaserver_access_resolve_cancellable(&job->options, job->attempt.code, &cancel);
+    }
     if (server != NULL) {
         if (cancelled(job)) {
             metaserver_server_free(server);
@@ -111,6 +138,10 @@ access_resolver_job_t *access_resolver_start(client_access_attempt_t *attempt) {
         atomic_init(&job->cancelled, false);
         job->attempt = *attempt;
         client_metaserver_options_copy(&job->options, &clioption_settings.metaservers);
+#ifdef ATRINIK_WIDGET_TESTS
+        job->test_transport = test_transport;
+        job->test_context = test_context;
+#endif
         job->thread = SDL_CreateThread(resolve_worker, "access-resolve", job);
         if (job->thread == NULL) {
             client_access_attempt_clear(&job->attempt);

@@ -263,6 +263,15 @@ int Event_PollInputDevice(void) {
                     cursor_texture = texture_get(TEXTURE_TYPE_CLIENT, "cursor_default");
                 }
 
+                /* A visible provider control can cancel access input/resolution.
+                 * Keep covered points, other popups and all other input modal. */
+                if (cpl.state <= ST_WAITFORPLAY && access_code_active() &&
+                    event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                    event.button.button == SDL_BUTTON_LEFT &&
+                    !popup_covers_point(x, y) && intro_metaserver_event(&event)) {
+                    break;
+                }
+
                 if (popup_handle_event(&event)) {
                     break;
                 }

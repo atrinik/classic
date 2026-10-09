@@ -527,6 +527,18 @@ void intro_show(void) {
     }
 }
 
+/** Handle only the provider control; shared by normal and access-modal dispatch. */
+int intro_metaserver_event(SDL_Event *event) {
+    if (list_servers == NULL || !button_event(&button_metaserver, event)) {
+        return 0;
+    }
+    access_code_cancel();
+    metaserver_toggle_provider();
+    servers_invalidated = true;
+    cpl.state = ST_META;
+    return 1;
+}
+
 /**
  * Handle event in the main screen.
  * @param event
@@ -549,11 +561,7 @@ int intro_event(SDL_Event *event) {
         }
     }
 
-    if (button_event(&button_metaserver, event)) {
-        access_code_cancel();
-        metaserver_toggle_provider();
-        servers_invalidated = true;
-        cpl.state = ST_META;
+    if (intro_metaserver_event(event)) {
         return 1;
     }
     if (BUTTON_CHECK_TOOLTIP(&button_metaserver)) {

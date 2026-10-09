@@ -31,4 +31,15 @@ void access_resolver_service(void);
 void access_resolver_cancel_all(void);
 /* Cancel and join all jobs before endpoint settings, SDL or curl are destroyed. */
 void access_resolver_deinit(void);
+#ifdef ATRINIK_WIDGET_TESTS
+#include <metaserver_options.h>
+#include <toolkit/curl.h>
+/* Offline transport seam; setter rejects changes while any job owns its context. */
+typedef server_struct *(*access_resolver_test_transport_t)(
+    const client_metaserver_options_t *options,
+    const char *code,
+    const curl_cancel_t *cancel,
+    void *context);
+bool access_resolver_test_transport(access_resolver_test_transport_t transport, void *context);
+#endif
 #endif

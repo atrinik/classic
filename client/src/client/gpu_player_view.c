@@ -15,6 +15,7 @@
 #include <mouse.h>
 
 #include <access_admin.h>
+#include <access_resolver.h>
 #include <animations.h>
 #include <client.h>
 #include <commands.h>
@@ -2054,6 +2055,113 @@ static bool gpu_player_view_ui_painting_prepare(const player_view_manifest_t *ma
     return resources_test_bind_loaded_file("gpu-ui-closure-resource", path);
 }
 
+/** Send the real queued mouse input through modal and intro dispatch. */
+static bool gpu_player_view_provider_click(const SDL_Rect *rect) {
+    SDL_Event event = {.type = SDL_EVENT_MOUSE_BUTTON_DOWN};
+    event.button.button = SDL_BUTTON_LEFT;
+    event.button.x = (float)(rect->x + rect->w / 2);
+    event.button.y = (float)(rect->y + rect->h / 2);
+    if (!SDL_PushEvent(&event)) {
+        return false;
+    }
+    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    return SDL_PushEvent(&event) && Event_PollInputDevice() == 0;
+}
+
+typedef struct gpu_provider_access_test {
+    SDL_Semaphore *started;
+    SDL_Semaphore *release;
+    bool snapshot_cancelled;
+} gpu_provider_access_test_t;
+
+/** Hold the real resolver worker after snapshotting, without network traffic. */
+static server_struct *gpu_player_view_provider_access_transport(
+    const client_metaserver_options_t *options,
+    const char *code,
+    const curl_cancel_t *cancel,
+    void *context) {
+    gpu_provider_access_test_t *test = context;
+    SDL_SignalSemaphore(test->started);
+    bool released = SDL_WaitSemaphoreTimeout(test->release, 5000);
+    test->snapshot_cancelled =
+        released && curl_cancelled(cancel) && options->count == 1 &&
+        strcmp(code, "0123456789ABCDEF") == 0 &&
+        strcmp(options->endpoints[0].directory_url,
+               "https://classic.metaserver.atrinik.org/index.xml") == 0 &&
+        strcmp(options->endpoints[0].rendezvous_origin,
+               "https://rendezvous.meta.atrinik.org/v1/classic") == 0 &&
+        strcmp(options->endpoints[0].access_origin,
+               "https://rendezvous.meta.atrinik.org") == 0;
+    return NULL;
+}
+
+static bool gpu_player_view_provider_access_cancel(const SDL_Rect *rect) {
+    gpu_provider_access_test_t test = {0};
+    test.started = SDL_CreateSemaphore(0);
+    test.release = SDL_CreateSemaphore(0);
+    bool registered = false;
+    bool ok = false;
+    if (test.started == NULL || test.release == NULL) {
+        goto cleanup;
+    }
+    registered =
+        access_resolver_test_transport(gpu_player_view_provider_access_transport, &test);
+    if (!registered) {
+        goto cleanup;
+    }
+
+    /* Other modals keep ownership even at the visible provider button. */
+    server_struct *selection = selected_server;
+    popup_struct *other = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (other == NULL || !gpu_player_view_render_complete() ||
+        popup_covers_point(rect->x + rect->w / 2, rect->y + rect->h / 2) ||
+        !gpu_player_view_provider_click(rect) || popup_get_head() != other ||
+        cpl.state != ST_START || selected_server != selection ||
+        metaserver_get_provider() != METASERVER_PROVIDER_DEFAULT) {
+        goto cleanup;
+    }
+    popup_destroy(other);
+
+    access_code_open(NULL);
+    if (!access_code_active() || !gpu_player_view_render_complete() ||
+        popup_covers_point(rect->x + rect->w / 2, rect->y + rect->h / 2)) {
+        goto cleanup;
+    }
+    SDL_Event input = {.type = SDL_EVENT_TEXT_INPUT};
+    input.text.text = "0123456789ABCDEF";
+    if (!SDL_PushEvent(&input)) {
+        goto cleanup;
+    }
+    event_push_key_once(SDLK_RETURN, 0);
+    if (Event_PollInputDevice() != 0 || !SDL_WaitSemaphoreTimeout(test.started, 2000)) {
+        goto cleanup;
+    }
+    uint64_t before = SDL_GetTicks();
+    ok = gpu_player_view_provider_click(rect) && SDL_GetTicks() - before < 100 &&
+         access_code_test_cleared() && popup_get_head() == NULL &&
+         cpl.state == ST_META && selected_server == NULL && server_get_count() == 0 &&
+         metaserver_get_provider() == METASERVER_PROVIDER_DEV;
+
+cleanup:
+    popup_destroy_all();
+    if (registered) {
+        SDL_SignalSemaphore(test.release);
+        access_resolver_deinit();
+        ok = ok && test.snapshot_cancelled;
+        (void)access_resolver_test_transport(NULL, NULL);
+    }
+    if (test.started != NULL) {
+        SDL_DestroySemaphore(test.started);
+    }
+    if (test.release != NULL) {
+        SDL_DestroySemaphore(test.release);
+    }
+    if (!ok) {
+        SDL_SetError("queued provider click did not preserve modal ownership and cancel access");
+    }
+    return ok;
+}
+
 /** Exercise the production intro controls without starting directory requests. */
 static bool gpu_player_view_intro_provider_controls(void) {
     SDL_Rect rect;
@@ -2070,6 +2178,8 @@ static bool gpu_player_view_intro_provider_controls(void) {
         return false;
     }
 
+    client_metaserver_options_replace_provider(&clioption_settings.metaservers,
+                                               METASERVER_PROVIDER_DEFAULT);
     selected_server = metaserver_add("old.invalid", 13327, "Old provider", "5.1.0", "Old");
     if (!gpu_player_view_render_complete() || intro_test_server_name(0) == NULL ||
         strcmp(intro_test_server_name(0), "Old provider") != 0) {
@@ -2084,12 +2194,9 @@ static bool gpu_player_view_intro_provider_controls(void) {
             SDL_SetError("metaserver toggle was not available during a fetch");
             return false;
         }
-        SDL_Event event = {0};
-        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-        event.button.button = SDL_BUTTON_LEFT;
-        event.button.x = rect.x + rect.w / 2;
-        event.button.y = rect.y + rect.h / 2;
-        if (intro_event(&event) != 1 || cpl.state != ST_META || selected_server != NULL ||
+        bool clicked = i == 0 ? gpu_player_view_provider_access_cancel(&rect)
+                              : gpu_player_view_provider_click(&rect);
+        if (!clicked || cpl.state != ST_META || selected_server != NULL ||
             server_get_count() != 0 || !intro_test_servers_invalidated() ||
             metaserver_get_provider() !=
                 (i == 0 ? METASERVER_PROVIDER_DEV : METASERVER_PROVIDER_DEFAULT) ||
@@ -2097,8 +2204,6 @@ static bool gpu_player_view_intro_provider_controls(void) {
             SDL_SetError("metaserver toggle did not switch and invalidate the selected server");
             return false;
         }
-        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
-        intro_event(&event);
         const char *name = i == 0 ? "Dev provider" : "Default provider";
         selected_server = metaserver_add("new.invalid", 13327, name, "5.1.0", "New");
         cpl.state = ST_START;
