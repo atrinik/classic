@@ -79,7 +79,10 @@ environment variables never synthesize a selected-adapter identity.
  a later run. Directories for unrelated or older major releases are left
  untouched and are never imported.
 
- Access-management responses appear as literal text in the private book window.
+ Access-management responses appear as readable summaries in the private book
+ window, with token labels and IDs, UTC dates, and a command for the next list
+ page when available. A newly issued access code appears once: copy it before
+ closing the window, because it cannot be retrieved again.
  After an uncertain mutation, use `/access result REQUEST_ID` to recover its
  receipt. If it remains pending and identifies a token, explicitly revoke or
  remove that exact token with `/access revoke TOKEN_ID` or `/access remove
