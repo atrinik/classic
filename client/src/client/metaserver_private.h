@@ -27,11 +27,13 @@ void metaserver_server_add(server_struct *server);
 
 void metaserver_server_free(server_struct *server);
 
+/** Append parsed entries to a caller-owned staging list; never publishes globals. */
 bool metaserver_direct_parse(const char *body,
                              size_t body_size,
                              const char *rendezvous_origin,
                              uint64_t now,
                              uint64_t minimum_generation,
-                             uint64_t *accepted_generation);
+                             uint64_t *accepted_generation,
+                             server_struct **result);
 
 #endif

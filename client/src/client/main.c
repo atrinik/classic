@@ -1336,6 +1336,9 @@ int main(int argc, char *argv[]) {
         presentation_clock_step(&presentation_clock, SDL_GetTicks(), window_is_active());
         LastTick = presentation_clock.tick;
 
+        /* Directory results are published only by the main thread. */
+        metaserver_poll();
+
         /* Screenshot copies complete independently of the render loop. */
         gpu_renderer_readback_poll();
 

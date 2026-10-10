@@ -1,9 +1,11 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include <access_resolver.h>
+#include <client.h>
 #include "../client/metaserver_private.h"
 #include <main.h>
 #include <metaserver.h>
+#include <metaserver_options.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,11 +15,7 @@
 static atomic_uint started, stopped, freed;
 static atomic_bool finish;
 static const char identity[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-static server_struct *directory_server;
-void metaserver_server_add(server_struct *server) {
-    REQUIRE(directory_server == NULL);
-    directory_server = server;
-}
+clioption_settings_struct clioption_settings;
 
 static server_struct *parse_protected_directory(void) {
     char xml[1024];
@@ -28,9 +26,9 @@ static server_struct *parse_protected_directory(void) {
         "<TextComment></TextComment><CertificateSha256>%s</CertificateSha256>"
         "<AccessRequired>true</AccessRequired></Server></Servers>", identity, identity);
     REQUIRE(size > 0 && (size_t)size < sizeof(xml));
-    REQUIRE(metaserver_direct_parse(xml, (size_t)size, "https://directory.example", 1500, 0, NULL));
-    server_struct *server = directory_server;
-    directory_server = NULL;
+    server_struct *server = NULL;
+    REQUIRE(metaserver_direct_parse(
+        xml, (size_t)size, "https://directory.example", 1500, 0, NULL, &server));
     REQUIRE(server != NULL && server->hostname == NULL && server->access_required);
     REQUIRE(!server->private_access && access_resolver_required(server));
     return server;
@@ -39,7 +37,16 @@ static server_struct *parse_protected_directory(void) {
 /* Deliberately hold cancelled work after the callback observes cancellation:
  * popup teardown must return without waiting for this worker or its storage. */
 static atomic_bool allow_cancel_return;
-server_struct *metaserver_access_resolve_cancellable(const char *code, const curl_cancel_t *cancel) {
+server_struct *metaserver_access_resolve_cancellable(
+    const client_metaserver_options_t *options, const char *code, const curl_cancel_t *cancel) {
+    REQUIRE(options != NULL && options->count == 1);
+    char directory[128], rendezvous[128], access[128];
+    REQUIRE(snprintf(directory, sizeof(directory), "%s", options->endpoints[0].directory_url) <
+            (int)sizeof(directory));
+    REQUIRE(snprintf(rendezvous, sizeof(rendezvous), "%s", options->endpoints[0].rendezvous_origin) <
+            (int)sizeof(rendezvous));
+    REQUIRE(snprintf(access, sizeof(access), "%s", options->endpoints[0].access_origin) <
+            (int)sizeof(access));
     REQUIRE(access_code_valid(code, ACCESS_CODE_LENGTH));
     atomic_fetch_add(&started, 1);
     uint64_t deadline = SDL_GetTicks() + 4000;
@@ -47,6 +54,11 @@ server_struct *metaserver_access_resolve_cancellable(const char *code, const cur
         REQUIRE(SDL_GetTicks() < deadline);
         SDL_Delay(1);
     }
+    /* The main thread may replace and free the original settings while this
+     * worker is blocked. Every retained endpoint must remain its own snapshot. */
+    REQUIRE(strcmp(directory, options->endpoints[0].directory_url) == 0);
+    REQUIRE(strcmp(rendezvous, options->endpoints[0].rendezvous_origin) == 0);
+    REQUIRE(strcmp(access, options->endpoints[0].access_origin) == 0);
     if (curl_cancelled(cancel)) {
         while (!atomic_load(&allow_cancel_return)) {
             REQUIRE(SDL_GetTicks() < deadline);
@@ -172,12 +184,18 @@ static void directory_resolution(void) {
 
 int main(void) {
     REQUIRE(SDL_Init(0));
+    client_metaserver_options_replace_provider(&clioption_settings.metaservers,
+                                               METASERVER_PROVIDER_DEFAULT);
     access_resolver_job_t *job = start();
     wait_count(&started, 1);
     server_struct *server = NULL;
     REQUIRE(!access_resolver_take(job, &server));
+    /* Replace all original settings while the worker retains them, then cancel
+     * through the provider-switch API without waiting for transport cleanup. */
+    client_metaserver_options_replace_provider(&clioption_settings.metaservers,
+                                               METASERVER_PROVIDER_DEV);
     uint64_t before = SDL_GetTicks();
-    access_resolver_cancel(job);
+    access_resolver_cancel_all();
     access_resolver_service();
     REQUIRE(SDL_GetTicks() - before < 100);
     REQUIRE(atomic_load(&stopped) == 0);
@@ -200,7 +218,9 @@ int main(void) {
     /* A completed result abandoned before take must be released by the reaper. */
     job = start();
     wait_count(&stopped, 3);
-    access_resolver_cancel(job);
+    before = SDL_GetTicks();
+    access_resolver_cancel_all();
+    REQUIRE(SDL_GetTicks() - before < 100);
     deadline = SDL_GetTicks() + 4000;
     while (atomic_load(&freed) != 2) {
         REQUIRE(SDL_GetTicks() < deadline);
@@ -235,6 +255,7 @@ int main(void) {
     access_resolver_deinit();
     REQUIRE(atomic_load(&stopped) == 4 + ACCESS_RESOLVER_JOBS_MAX);
     directory_resolution();
+    client_metaserver_options_deinit(&clioption_settings.metaservers);
     SDL_Quit();
     return 0;
 }

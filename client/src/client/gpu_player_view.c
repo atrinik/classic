@@ -15,6 +15,7 @@
 #include <mouse.h>
 
 #include <access_admin.h>
+#include <access_resolver.h>
 #include <animations.h>
 #include <client.h>
 #include <commands.h>
@@ -1788,17 +1789,25 @@ static bool gpu_player_view_root_glyphs_match(const gpu_player_view_ui_state_t *
     uint64_t expected_count;
     uint64_t expected_hash;
     if (strcmp(state->name, "intro_server_browser") == 0) {
-        expected_count = 383;
-        expected_hash = UINT64_C(0x29c427a4eff9acbd);
+        expected_count = 357;
+        expected_hash = UINT64_C(0xf1761b6510869ded);
     } else if (strcmp(state->name, "login_popup") == 0 ||
                strcmp(state->name, "popup_character_selection") == 0) {
-        expected_count = 385;
-        expected_hash = UINT64_C(0x4266544b0b8b6fbd);
+        expected_count = 359;
+        expected_hash = UINT64_C(0xf14a293e7d0b8c2d);
     } else {
         return true;
     }
-    return state->root_glyphs.count == expected_count &&
-           state->root_glyphs.semantic_hash == expected_hash;
+    bool matches = state->root_glyphs.count == expected_count &&
+                   state->root_glyphs.semantic_hash == expected_hash;
+    if (!matches) {
+        fprintf(stderr,
+                "UI root glyphs %s: count=%" PRIu64 ", semantic_hash=%016" PRIx64 "\n",
+                state->name,
+                state->root_glyphs.count,
+                state->root_glyphs.semantic_hash);
+    }
+    return matches;
 }
 
 static bool gpu_player_view_ui_capture_into(gpu_player_view_ui_closure_t *closure,
@@ -2044,6 +2053,257 @@ static bool gpu_player_view_ui_painting_prepare(const player_view_manifest_t *ma
     socket_command_resource(resource->data, resource->len, 0);
     packet_free(resource);
     return resources_test_bind_loaded_file("gpu-ui-closure-resource", path);
+}
+
+/** Reconcile startup window events before testing a frozen intro viewport. */
+static bool gpu_player_view_provider_input_prepare(void) {
+    for (unsigned int pass = 0; pass < 4; pass++) {
+        if (Event_PollInputDevice() != 0) {
+            SDL_SetError("provider input setup received a quit event");
+            return false;
+        }
+        if (!gpu_renderer_recreation_take_request()) {
+            return true;
+        }
+        /* The production loop services recreation after dispatch, before its
+         * next frame. Do the same for queued startup resize/display events. */
+        capture_privacy_block();
+        if (!gpu_player_view_recover_once(ScreenWindow)) {
+            return false;
+        }
+    }
+    SDL_SetError("provider input setup did not settle its startup window events");
+    return false;
+}
+
+/** Send the real queued mouse input through modal and intro dispatch. */
+static bool gpu_player_view_provider_click(const SDL_Rect *rect) {
+    SDL_Event event = {.type = SDL_EVENT_MOUSE_BUTTON_DOWN};
+    event.button.button = SDL_BUTTON_LEFT;
+    event.button.x = (float)(rect->x + rect->w / 2);
+    event.button.y = (float)(rect->y + rect->h / 2);
+    if (!SDL_PushEvent(&event)) {
+        return false;
+    }
+    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    return SDL_PushEvent(&event) && Event_PollInputDevice() == 0;
+}
+
+typedef struct gpu_provider_access_test {
+    SDL_Semaphore *started;
+    SDL_Semaphore *release;
+    bool snapshot_cancelled;
+} gpu_provider_access_test_t;
+
+/** Hold the real resolver worker after snapshotting, without network traffic. */
+static server_struct *gpu_player_view_provider_access_transport(
+    const client_metaserver_options_t *options,
+    const char *code,
+    const curl_cancel_t *cancel,
+    void *context) {
+    gpu_provider_access_test_t *test = context;
+    SDL_SignalSemaphore(test->started);
+    bool released = SDL_WaitSemaphoreTimeout(test->release, 5000);
+    test->snapshot_cancelled =
+        released && curl_cancelled(cancel) && options->count == 1 &&
+        strcmp(code, "0123456789ABCDEF") == 0 &&
+        strcmp(options->endpoints[0].directory_url,
+               "https://classic.metaserver.atrinik.org/index.xml") == 0 &&
+        strcmp(options->endpoints[0].rendezvous_origin,
+               "https://rendezvous.meta.atrinik.org/v1/classic") == 0 &&
+        strcmp(options->endpoints[0].access_origin,
+               "https://rendezvous.meta.atrinik.org") == 0;
+    return NULL;
+}
+
+static bool gpu_player_view_provider_access_cancel(const SDL_Rect *rect) {
+    gpu_provider_access_test_t test = {0};
+    test.started = SDL_CreateSemaphore(0);
+    test.release = SDL_CreateSemaphore(0);
+    bool registered = false;
+    bool ok = false;
+    char failure_error[256] = {0};
+    const char *stage = "semaphore initialization";
+    if (test.started == NULL || test.release == NULL) {
+        goto cleanup;
+    }
+    stage = "transport registration";
+    registered =
+        access_resolver_test_transport(gpu_player_view_provider_access_transport, &test);
+    if (!registered) {
+        goto cleanup;
+    }
+
+    stage = "other modal ownership";
+    /* Other modals keep ownership even at the visible provider button. */
+    server_struct *selection = selected_server;
+    popup_struct *other = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (other == NULL || !gpu_player_view_render_complete() ||
+        popup_covers_point(rect->x + rect->w / 2, rect->y + rect->h / 2) ||
+        !gpu_player_view_provider_click(rect) || popup_get_head() != other ||
+        cpl.state != ST_START || selected_server != selection ||
+        metaserver_get_provider() != METASERVER_PROVIDER_DEFAULT) {
+        goto cleanup;
+    }
+    stage = "other modal window reconciliation";
+    if (!gpu_player_view_provider_input_prepare()) {
+        goto cleanup;
+    }
+    popup_destroy(other);
+
+    stage = "access popup visibility";
+    access_code_open(NULL);
+    if (!access_code_active() || !gpu_player_view_render_complete() ||
+        popup_covers_point(rect->x + rect->w / 2, rect->y + rect->h / 2)) {
+        goto cleanup;
+    }
+    stage = "access input submission";
+    SDL_Event input = {.type = SDL_EVENT_TEXT_INPUT};
+    input.text.text = "0123456789ABCDEF";
+    if (!SDL_PushEvent(&input)) {
+        goto cleanup;
+    }
+    event_push_key_once(SDLK_RETURN, 0);
+    if (Event_PollInputDevice() != 0 || !SDL_WaitSemaphoreTimeout(test.started, 2000)) {
+        goto cleanup;
+    }
+    stage = "provider dispatch and cancellation";
+    uint64_t before = SDL_GetTicks();
+    ok = gpu_player_view_provider_click(rect) && SDL_GetTicks() - before < 100 &&
+         access_code_test_cleared() && popup_get_head() == NULL &&
+         cpl.state == ST_META && selected_server == NULL && server_get_count() == 0 &&
+         metaserver_get_provider() == METASERVER_PROVIDER_DEV;
+
+cleanup:
+    if (!ok) {
+        snprintf(failure_error, sizeof(failure_error), "%s", SDL_GetError());
+    }
+    popup_destroy_all();
+    if (registered) {
+        SDL_SignalSemaphore(test.release);
+        access_resolver_deinit();
+        if (ok && !test.snapshot_cancelled) {
+            stage = "cancelled endpoint snapshot";
+        }
+        ok = ok && test.snapshot_cancelled;
+        (void)access_resolver_test_transport(NULL, NULL);
+    }
+    if (test.started != NULL) {
+        SDL_DestroySemaphore(test.started);
+    }
+    if (test.release != NULL) {
+        SDL_DestroySemaphore(test.release);
+    }
+    if (!ok) {
+        SDL_SetError("queued provider test failed at %s: rect=%d,%d,%d,%d state=%d provider=%d "
+                     "servers=%zu selected=%d invalidated=%d SDL=%s",
+                     stage,
+                     rect->x,
+                     rect->y,
+                     rect->w,
+                     rect->h,
+                     cpl.state,
+                     metaserver_get_provider(),
+                     server_get_count(),
+                     selected_server != NULL,
+                     intro_test_servers_invalidated(),
+                     failure_error);
+    }
+    return ok;
+}
+
+/** Exercise the production intro controls without starting directory requests. */
+static bool gpu_player_view_intro_provider_controls_run(void) {
+    SDL_Rect rect;
+    const char *label;
+    int connecting = ms_connecting(-1);
+    if (!gpu_player_view_provider_input_prepare()) {
+        return false;
+    }
+    client_metaserver_options_disable(&clioption_settings.metaservers);
+    ms_connecting(0);
+    if (!gpu_player_view_render_complete() ||
+        !intro_test_metaserver_button(&rect, &label) || strcmp(label, "Dev") != 0 ||
+        rect.x < 0 || rect.y < 0 || rect.x + rect.w > video_get_width() ||
+        rect.y + rect.h > video_get_height() ||
+        text_get_width(FONT_ARIAL10, "Default", 0) > rect.w) {
+        SDL_SetError("metaserver toggle was not available with discovery disabled and no servers");
+        return false;
+    }
+
+    client_metaserver_options_replace_provider(&clioption_settings.metaservers,
+                                               METASERVER_PROVIDER_DEFAULT);
+    selected_server = metaserver_add("old.invalid", 13327, "Old provider", "5.1.0", "Old");
+    if (!gpu_player_view_render_complete() || intro_test_server_name(0) == NULL ||
+        strcmp(intro_test_server_name(0), "Old provider") != 0) {
+        SDL_SetError("intro fixture did not display its initial provider row");
+        return false;
+    }
+    ms_connecting(1);
+    for (size_t i = 0; i < 2; i++) {
+        if (!gpu_player_view_render_complete() ||
+            !intro_test_metaserver_button(&rect, &label) ||
+            strcmp(label, i == 0 ? "Dev" : "Default") != 0) {
+            SDL_SetError("metaserver toggle was not available during a fetch");
+            return false;
+        }
+        bool clicked = i == 0 ? gpu_player_view_provider_access_cancel(&rect)
+                              : gpu_player_view_provider_click(&rect);
+        if (!clicked) {
+            return false;
+        }
+        if (cpl.state != ST_META || selected_server != NULL ||
+            server_get_count() != 0 || !intro_test_servers_invalidated() ||
+            metaserver_get_provider() !=
+                (i == 0 ? METASERVER_PROVIDER_DEV : METASERVER_PROVIDER_DEFAULT) ||
+            !client_metaserver_options_enabled(&clioption_settings.metaservers)) {
+            SDL_SetError("metaserver toggle did not switch: iteration=%zu state=%d provider=%d "
+                         "servers=%zu selected=%d invalidated=%d enabled=%d",
+                         i,
+                         cpl.state,
+                         metaserver_get_provider(),
+                         server_get_count(),
+                         selected_server != NULL,
+                         intro_test_servers_invalidated(),
+                         client_metaserver_options_enabled(&clioption_settings.metaservers));
+            return false;
+        }
+        const char *name = i == 0 ? "Dev provider" : "Default provider";
+        selected_server = metaserver_add("new.invalid", 13327, name, "5.1.0", "New");
+        cpl.state = ST_START;
+        if (!gpu_player_view_provider_input_prepare() || !gpu_player_view_render_complete() ||
+            intro_test_servers_invalidated() ||
+            intro_test_server_name(0) == NULL ||
+            strcmp(intro_test_server_name(0), name) != 0 ||
+            !intro_test_metaserver_button(NULL, &label) ||
+            strcmp(label, i == 0 ? "Default" : "Dev") != 0) {
+            SDL_SetError("metaserver toggle retained a stale row or destination label");
+            return false;
+        }
+    }
+    metaserver_clear_data();
+    intro_deinit();
+    if (intro_test_metaserver_button(NULL, NULL)) {
+        SDL_SetError("metaserver toggle survived intro teardown");
+        return false;
+    }
+    intro_test_begin();
+    client_metaserver_options_deinit(&clioption_settings.metaservers);
+    ms_connecting(connecting);
+    return gpu_player_view_render_complete() && intro_test_metaserver_button(NULL, NULL);
+}
+
+/** Match the production window's text-input lifecycle for queued SDL input. */
+static bool gpu_player_view_intro_provider_controls(void) {
+    bool text_active = SDL_TextInputActive(ScreenWindow);
+    if (!text_active && !SDL_StartTextInput(ScreenWindow)) {
+        return false;
+    }
+    bool result = gpu_player_view_intro_provider_controls_run();
+    if (!text_active) {
+        SDL_StopTextInput(ScreenWindow);
+    }
+    return result;
 }
 
 /* Scripted production SDL popup acceptance. There is no server connection:
@@ -2563,14 +2823,17 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     tooltip_dismiss();
     notification_destroy();
     metaserver_clear_data();
+    intro_test_begin();
+    cpl.state = ST_START;
+    if (!gpu_player_view_intro_provider_controls()) {
+        return false;
+    }
     selected_server = metaserver_add("fixture.invalid",
                                      13327,
                                      "Frozen GPU Qualification",
                                      PACKAGE_VERSION,
                                      "Immutable offline UI fixture server");
 
-    intro_test_begin();
-    cpl.state = ST_START;
     if (!gpu_player_view_ui_capture("intro_server_browser", false)) {
         return false;
     }

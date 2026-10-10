@@ -1,8 +1,10 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include <access_resolver.h>
+#include <client.h>
 #include <main.h>
 #include <metaserver.h>
+#include <metaserver_options.h>
 #include <SDL3/SDL.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -47,15 +49,33 @@ bool access_resolver_adopt(server_struct *selected, server_struct *resolved) {
 
 struct access_resolver_job {
     client_access_attempt_t attempt;
+    client_metaserver_options_t options;
     server_struct *server;
     SDL_Thread *thread;
     atomic_bool done, cancelled;
     struct access_resolver_job *next;
+#ifdef ATRINIK_WIDGET_TESTS
+    access_resolver_test_transport_t test_transport;
+    void *test_context;
+#endif
 };
 /* Only the main thread reads/writes the list and thread handles. The worker
- * owns attempt/server until publishing done with release semantics. */
+ * owns attempt/options/server until publishing done with release semantics. */
 static access_resolver_job_t *jobs;
 static unsigned job_count;
+#ifdef ATRINIK_WIDGET_TESTS
+static access_resolver_test_transport_t test_transport;
+static void *test_context;
+
+bool access_resolver_test_transport(access_resolver_test_transport_t transport, void *context) {
+    if (jobs != NULL) {
+        return false;
+    }
+    test_transport = transport;
+    test_context = context;
+    return true;
+}
+#endif
 
 static bool cancelled(void *context) {
     access_resolver_job_t *job = context;
@@ -65,7 +85,18 @@ static bool cancelled(void *context) {
 static int resolve_worker(void *context) {
     access_resolver_job_t *job = context;
     curl_cancel_t cancel = {.cancelled = cancelled, .context = job};
-    server_struct *server = metaserver_access_resolve_cancellable(job->attempt.code, &cancel);
+    server_struct *server;
+#ifdef ATRINIK_WIDGET_TESTS
+    if (job->test_transport != NULL) {
+        server = job->test_transport(&job->options,
+                                     job->attempt.code,
+                                     &cancel,
+                                     job->test_context);
+    } else
+#endif
+    {
+        server = metaserver_access_resolve_cancellable(&job->options, job->attempt.code, &cancel);
+    }
     if (server != NULL) {
         if (cancelled(job)) {
             metaserver_server_free(server);
@@ -90,6 +121,7 @@ static void release_job(access_resolver_job_t *job) {
     if (job->server != NULL)
         metaserver_server_free(job->server);
     client_access_attempt_clear(&job->attempt);
+    client_metaserver_options_deinit(&job->options);
     access_code_clear(job, sizeof(*job));
     free(job);
 }
@@ -105,9 +137,15 @@ access_resolver_job_t *access_resolver_start(client_access_attempt_t *attempt) {
         atomic_init(&job->done, false);
         atomic_init(&job->cancelled, false);
         job->attempt = *attempt;
+        client_metaserver_options_copy(&job->options, &clioption_settings.metaservers);
+#ifdef ATRINIK_WIDGET_TESTS
+        job->test_transport = test_transport;
+        job->test_context = test_context;
+#endif
         job->thread = SDL_CreateThread(resolve_worker, "access-resolve", job);
         if (job->thread == NULL) {
             client_access_attempt_clear(&job->attempt);
+            client_metaserver_options_deinit(&job->options);
             free(job);
             job = NULL;
         } else {
@@ -145,9 +183,13 @@ void access_resolver_service(void) {
     }
 }
 
-void access_resolver_deinit(void) {
+void access_resolver_cancel_all(void) {
     for (access_resolver_job_t *job = jobs; job != NULL; job = job->next)
         access_resolver_cancel(job);
+}
+
+void access_resolver_deinit(void) {
+    access_resolver_cancel_all();
     while (jobs != NULL)
         release_job(jobs);
 }

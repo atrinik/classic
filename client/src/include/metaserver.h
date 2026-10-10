@@ -30,6 +30,7 @@
 #include <stddef.h>
 
 typedef struct server_struct server_struct;
+typedef struct client_metaserver_options client_metaserver_options_t;
 
 /**
  * @file
@@ -44,10 +45,11 @@ extern server_struct *server_get_id(size_t num);
 
 bool metaserver_rendezvous_url(const server_struct *server, char *url, size_t url_size);
 
-/** Resolve one detached session-only private server by access code. */
+/** Main-thread resolution using the current session endpoints. */
 server_struct *metaserver_access_resolve(const char *code);
-server_struct *metaserver_access_resolve_cancellable(const char *code,
-                                                    const curl_cancel_t *cancel);
+/** Worker resolution using caller-owned immutable endpoint settings. */
+server_struct *metaserver_access_resolve_cancellable(
+    const client_metaserver_options_t *options, const char *code, const curl_cancel_t *cancel);
 
 /** Add or release a resolved server after the user accepts or cancels its identity. */
 void metaserver_server_add(server_struct *server);
@@ -67,7 +69,18 @@ extern server_struct *metaserver_add(const char *hostname,
                                      const char *version,
                                      const char *desc);
 
-extern int metaserver_thread(void *dummy);
+typedef enum metaserver_provider {
+    METASERVER_PROVIDER_DEFAULT,
+    METASERVER_PROVIDER_DEV
+} metaserver_provider_t;
+
+/** Main-thread APIs. Provider changes affect only this client session. */
+metaserver_provider_t metaserver_get_provider(void);
+/** Clear selection/list and replace endpoints. Caller requests ST_META to refresh. */
+void metaserver_toggle_provider(void);
+
+/** Publish completed current requests and start the latest pending refresh. */
+void metaserver_poll(void);
 
 extern void metaserver_get_servers(void);
 

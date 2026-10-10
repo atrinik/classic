@@ -86,6 +86,13 @@
   is first created, the client may migrate the highest valid same-major legacy
   directory; the migration is collision-safe and marker-backed, leaves other
   major lines untouched, and resumes after interruption or a user-file conflict.
+- Intro provider switches are session-only: dismiss access-code input, cancel
+  pending access resolution without waiting, clear selection and directory rows,
+  and replace the complete trusted directory/rendezvous/access endpoint set.
+  Directory and access workers own endpoint snapshots until completion; publish
+  only current directory generations and never adopt cancelled access results.
+  Only an uncovered provider-button click may bypass the active access-code
+  modal; other popups and focused input retain their normal event ownership.
 - Follow the root `.clang-format`, existing allocation/error conventions, and CMake
   source lists. Add focused tests for renderer, input, parser, and lifecycle
   regressions.

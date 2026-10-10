@@ -31,6 +31,7 @@
 #define POPUP_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <SDL3/SDL.h>
@@ -187,11 +188,19 @@ extern void game_news_open(const char *title);
 extern void intro_deinit(void);
 #ifdef ATRINIK_WIDGET_TESTS
 extern void intro_test_begin(void);
+/** Inspect the visible provider button without bypassing normal event handling. */
+extern bool intro_test_metaserver_button(SDL_Rect *rect, const char **label);
+/** Whether the next intro frame must rebuild the server list. */
+extern bool intro_test_servers_invalidated(void);
+/** Borrow a displayed server name until the list is rebuilt or destroyed. */
+extern const char *intro_test_server_name(size_t row);
 #endif
 
 extern void intro_show(void);
 
 extern int intro_event(SDL_Event *event);
+/** Handle only the provider control, including when cancelling access input. */
+extern int intro_metaserver_event(SDL_Event *event);
 
 /** Public API implemented in src/gui/popups/characters.c. */
 
@@ -226,6 +235,13 @@ extern void help_handle_tabulator(text_input_struct *text_input);
 /** Public API implemented in src/gui/popups/access_code.c. */
 
 extern void access_code_open(server_struct *server);
+/** Dismiss pending access input/resolution before freeing its server list. */
+extern void access_code_cancel(void);
+/** True only when the access-code popup is the active modal. */
+extern bool access_code_active(void);
+#ifdef ATRINIK_WIDGET_TESTS
+extern bool access_code_test_cleared(void);
+#endif
 
 /** Public API implemented in src/gui/popups/login.c. */
 

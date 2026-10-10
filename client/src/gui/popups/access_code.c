@@ -233,6 +233,29 @@ static int popup_destroy_callback(popup_struct *popup) {
     return 1;
 }
 
+bool access_code_active(void) {
+    return access_code_popup != NULL && popup_get_head() == access_code_popup;
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool access_code_test_cleared(void) {
+    const unsigned char *bytes = (const unsigned char *)&code_input;
+    for (size_t i = 0; i < sizeof(code_input); i++) {
+        if (bytes[i] != 0) {
+            return false;
+        }
+    }
+    return access_code_popup == NULL && resolve_job == NULL && access_code_server == NULL &&
+           access_code_existing_server == NULL;
+}
+#endif
+
+void access_code_cancel(void) {
+    if (access_code_popup != NULL) {
+        popup_destroy(access_code_popup);
+    }
+}
+
 void access_code_open(server_struct *server) {
     access_code_existing_server = access_resolver_required(server) ? server : NULL;
     access_code_server = access_code_existing_server == NULL ? server : NULL;

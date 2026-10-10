@@ -13,7 +13,8 @@ bool metaserver_direct_parse(const char *body,
                              const char *rendezvous_origin,
                              uint64_t now,
                              uint64_t minimum_generation,
-                             uint64_t *accepted_generation) {
+                             uint64_t *accepted_generation,
+                             server_struct **result) {
     metaserver_directory_snapshot_t *snapshot = NULL;
     if (!metaserver_directory_parse(body, body_size, &snapshot) ||
         !metaserver_directory_current(snapshot, now) || snapshot->generation < minimum_generation) {
@@ -44,7 +45,7 @@ bool metaserver_direct_parse(const char *body,
     }
 
     for (size_t i = snapshot->servers_count; i > 0; i--) {
-        metaserver_server_add(servers[i - 1]);
+        DL_PREPEND(*result, servers[i - 1]);
     }
     if (accepted_generation != NULL) {
         *accepted_generation = snapshot->generation;
