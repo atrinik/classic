@@ -672,8 +672,9 @@ def validate_retirement_guard(
     """Revalidate the opted-in incident before returning any DELETE disposition.
 
     This is called again by guarded deletion under the existing publication lock.
-    The finite inventory is complete from the oldest listed run's creation time;
-    unlike recovery discovery, it must never silently truncate unknown runs.
+    Exact tag/source inventories are complete regardless of creation time;
+    later-lineage inventory starts at the oldest listed run. Unlike recovery
+    discovery, neither path may silently truncate unknown runs.
     """
     guard = disposition.get("retirement_guard")
     run_ids = disposition.get("failed_package_run_ids")
@@ -726,39 +727,48 @@ def validate_retirement_guard(
             if name.startswith("complete-release-candidate-"):
                 raise PendingReleaseError("failed package run retains a complete release candidate")
 
-    query = urlencode({"event": "workflow_dispatch",
-                       "created": ">=" + oldest.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                       "per_page": 100})
-    inventory = request(f"repos/{repository}/actions/workflows/package-release.yml/runs?{query}")
-    if (not isinstance(inventory, dict) or type(inventory.get("total_count")) is not int
-            or not isinstance(inventory.get("workflow_runs"), list)
-            or not 0 <= inventory["total_count"] <= 100
-            or inventory["total_count"] != len(inventory["workflow_runs"])):
-        raise PendingReleaseError("retirement requires a complete bounded Package Release inventory")
-    relevant_ids: set[int] = set()
-    seen_ids: set[int] = set()
-    for run in inventory["workflow_runs"]:
-        if (not isinstance(run, dict) or type(run.get("id")) is not int or run["id"] <= 0
-                or run["id"] in seen_ids or run.get("name") != PACKAGE_RUN_NAME
-                or run.get("path") != PACKAGE_WORKFLOW_PATH
-                or run.get("event") != "workflow_dispatch"
-                or run.get("repository", {}).get("full_name") != repository
-                or run.get("head_repository", {}).get("full_name") != repository
-                or not isinstance(run.get("head_sha"), str)
-                or SHA_RE.fullmatch(run["head_sha"]) is None):
-            raise PendingReleaseError("retirement received an untrusted Package Release inventory")
-        seen_ids.add(run["id"])
-        relevant = (run.get("head_branch") in {tag, "main"} or run["head_sha"] == commit
-                    or (is_ancestor(commit, run["head_sha"])
-                        and is_ancestor(run["head_sha"], current_head)))
-        if relevant:
-            relevant_ids.add(run["id"])
-            expected = expected_runs.get(run["id"])
-            if expected is None or any(run.get(key) != expected.get(key) for key in
-                    ("head_sha", "head_branch", "run_attempt", "status", "conclusion", "created_at")):
-                raise PendingReleaseError("Package Release inventory has an additional or changed relevant run")
-    if relevant_ids != set(run_ids):
-        raise PendingReleaseError("Package Release inventory no longer contains exactly the listed failed runs")
+    # Exact tag/source searches have no time filter: an earlier packaging run
+    # may already hold a candidate. The later-lineage search also includes every
+    # state, so a queued recovery cannot be hidden by a completed-only filter.
+    for filters in ({"branch": tag}, {"head_sha": commit},
+                    {"created": ">=" + oldest.strftime("%Y-%m-%dT%H:%M:%SZ")}):
+        query = urlencode({"event": "workflow_dispatch", **filters, "per_page": 100})
+        inventory = request(f"repos/{repository}/actions/workflows/package-release.yml/runs?{query}")
+        if (not isinstance(inventory, dict) or type(inventory.get("total_count")) is not int
+                or not isinstance(inventory.get("workflow_runs"), list)
+                or not 0 <= inventory["total_count"] <= 100
+                or inventory["total_count"] != len(inventory["workflow_runs"])):
+            raise PendingReleaseError("retirement requires a complete bounded Package Release inventory")
+        relevant_ids: set[int] = set()
+        seen_ids: set[int] = set()
+        for run in inventory["workflow_runs"]:
+            if (not isinstance(run, dict) or type(run.get("id")) is not int or run["id"] <= 0
+                    or run["id"] in seen_ids or run.get("name") != PACKAGE_RUN_NAME
+                    or run.get("path") != PACKAGE_WORKFLOW_PATH
+                    or run.get("event") != "workflow_dispatch"
+                    or run.get("repository", {}).get("full_name") != repository
+                    or run.get("head_repository", {}).get("full_name") != repository
+                    or not isinstance(run.get("head_sha"), str)
+                    or SHA_RE.fullmatch(run["head_sha"]) is None):
+                raise PendingReleaseError("retirement received an untrusted Package Release inventory")
+            seen_ids.add(run["id"])
+            if (("branch" in filters and run.get("head_branch") != filters["branch"]) or
+                    ("head_sha" in filters and run["head_sha"] != filters["head_sha"])):
+                raise PendingReleaseError("retirement received a misfiltered Package Release inventory")
+            relevant = (run.get("head_branch") in {tag, "main"} or run["head_sha"] == commit
+                        or (is_ancestor(commit, run["head_sha"])
+                            and is_ancestor(run["head_sha"], current_head)))
+            if relevant:
+                relevant_ids.add(run["id"])
+                expected = expected_runs.get(run["id"])
+                if expected is None or any(run.get(key) != expected.get(key) for key in
+                        ("head_sha", "head_branch", "run_attempt", "status", "conclusion", "created_at")):
+                    raise PendingReleaseError("Package Release inventory has an additional or changed relevant run")
+        expected_ids = {run_id for run_id, run in expected_runs.items()
+                        if ("branch" not in filters or run["head_branch"] == filters["branch"])
+                        and ("head_sha" not in filters or run["head_sha"] == filters["head_sha"])}
+        if relevant_ids != expected_ids:
+            raise PendingReleaseError("Package Release inventory no longer contains exactly the listed failed runs")
 
     # Transport, permissions, missing-package and malformed responses are errors,
     # never absence. The workflow has packages:read; no broader credential is used.

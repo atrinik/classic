@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 
 RELEASE_TOOLS = Path(__file__).resolve().parents[1] / "release"
@@ -943,9 +944,19 @@ class ExactRetirementGuardTests(unittest.TestCase):
         if "/artifacts?" in path:
             return {"total_count": len(self.artifacts), "artifacts": self.artifacts}
         if "/actions/workflows/" in path:
-            self.assertIn("created=%3E%3D2026-10-10T22%3A44%3A52Z", path)
             self.assertNotIn("status=", path)
-            return self.inventory_override or {"total_count": len(self.runs), "workflow_runs": self.runs}
+            filters = parse_qs(urlsplit(path).query)
+            selected = self.runs
+            if "branch" in filters:
+                self.assertNotIn("created", filters)
+                selected = [run for run in self.runs if run.get("head_branch") == filters["branch"][0]]
+            elif "head_sha" in filters:
+                self.assertNotIn("created", filters)
+                selected = [run for run in self.runs if run.get("head_sha") == filters["head_sha"][0]]
+            else:
+                self.assertEqual(filters.get("created"), [">=2026-10-10T22:44:52Z"])
+                selected = [run for run in self.runs if run.get("created_at", "") >= "2026-10-10T22:44:52Z"]
+            return self.inventory_override or {"total_count": len(selected), "workflow_runs": selected}
         if "/actions/runs/" in path:
             self.assertTrue(path.endswith(str(self.run_id)))
             return self.run
@@ -995,6 +1006,32 @@ class ExactRetirementGuardTests(unittest.TestCase):
             with self.subTest(branch=branch, status=status), self.assertRaisesRegex(
                     resolve_pending_release.PendingReleaseError, "additional or changed"):
                 self.guard()
+
+    def test_earlier_tag_or_source_runs_cannot_hide_outside_lineage_time_window(self):
+        for branch, source, status, conclusion in (
+                (self.tag, self.current, "completed", "success"),
+                (self.tag, self.commit, "in_progress", None),
+                ("main", self.commit, "completed", "failure")):
+            self.runs = [copy.deepcopy(self.run), self.run | {
+                "id": self.run_id - 1, "head_branch": branch, "head_sha": source,
+                "status": status, "conclusion": conclusion, "created_at": "2026-10-09T12:00:00Z"}]
+            with self.subTest(branch=branch, status=status), self.assertRaisesRegex(
+                    resolve_pending_release.PendingReleaseError, "additional or changed"):
+                self.guard()
+
+    def test_each_exact_query_requires_its_expected_runs_and_correct_filter(self):
+        original = self.request
+        for selector in ("branch=", "head_sha="):
+            for response in ({"total_count": 0, "workflow_runs": []},
+                    {"total_count": 1, "workflow_runs": [self.run | {
+                        "head_branch": "feature", "head_sha": self.current}]}):
+                def request(path):
+                    return response if selector in path else original(path)
+                with self.subTest(selector=selector, response=response), patch.object(
+                        resolve_pending_release, "is_ancestor", return_value=True), self.assertRaises(
+                        resolve_pending_release.PendingReleaseError):
+                    resolve_pending_release.validate_retirement_guard(
+                        "atrinik/classic", self.tag, self.current, self.disposition, request)
 
     def test_run_attempt_source_status_or_repository_drift_fails(self):
         original = copy.deepcopy(self.run)

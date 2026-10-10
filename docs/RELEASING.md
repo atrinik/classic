@@ -247,8 +247,9 @@ This incident opts into an additional retirement guard without changing the
 older recorded exceptions. On both disposition selection and the guarded
 DELETE path, it re-fetches the exact failed run and attempt, verifies its source
 and skipped candidate/publication jobs, rejects any complete candidate artifact,
-and requires the complete bounded Package Release inventory since that run's
-creation to contain exactly the listed relevant run IDs. Queued, rerun, or
+and requires complete bounded Package Release inventories for the exact tag and
+source without date filters, plus later main-lineage runs since that run's
+creation, to contain exactly the listed relevant run IDs. Queued, rerun, or
 additional tag/main-lineage runs stop retirement. The current registry inventory
 must prove the versioned server image absent; permission errors, missing pages,
 malformed metadata, or an exhausted bound fail closed. The helper rechecks current
