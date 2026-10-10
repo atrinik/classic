@@ -8,6 +8,11 @@ if [[ ! ${version} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "ATRINIK_PACKAGE_VERSION must be MAJOR.MINOR.PATCH" >&2
   exit 1
 fi
+build_parallelism=${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}
+if [[ ! ${build_parallelism} =~ ^[1-9][0-9]*$ ]]; then
+  echo "CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer" >&2
+  exit 1
+fi
 if [[ $(uname -s) != Linux || $(dpkg --print-architecture) != amd64 ]]; then
   echo "Classic Debian packages require Linux amd64" >&2
   exit 1
@@ -51,7 +56,7 @@ cmake -S . -B build/linux-release -G Ninja \
   "-DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=$(realpath ../libatrinik)" \
   "-DATRINIK_GPU_SHADER_DIRECTORY=$(realpath "${ATRINIK_GPU_SHADER_DIRECTORY}")" \
   "-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}"
-cmake --build build/linux-release --parallel "$(nproc)"
+cmake --build build/linux-release --parallel "${build_parallelism}"
 
 production_executable=build/linux-release/atrinik
 if [[ ! -f ${production_executable} ]]; then

@@ -20,6 +20,8 @@ class LinuxPackageContractTests(unittest.TestCase):
         self.assertNotIn("-DBUILD_TESTING=ON", script)
         self.assertIn("--refresh --offline", script)
         self.assertIn("-DFETCHCONTENT_FULLY_DISCONNECTED=ON", script)
+        self.assertIn('build_parallelism=${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}', script)
+        self.assertIn('--parallel "${build_parallelism}"', script)
         for component in ("ATRINIK_PROTOCOL", "LIBATRINIK"):
             self.assertIn(f"-DFETCHCONTENT_SOURCE_DIR_{component}=", script)
         for marker in ("'--gpu-player-view'", "'injected GPU conformance fault'"):
@@ -48,6 +50,14 @@ class LinuxPackageContractTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("must be MAJOR.MINOR.PATCH", result.stderr)
             environment["ATRINIK_PACKAGE_VERSION"] = "5.1.0"
+            for parallelism in ("0", "-1", "2.0", "2;bad", "two"):
+                environment["CMAKE_BUILD_PARALLEL_LEVEL"] = parallelism
+                result = subprocess.run(["bash", str(SCRIPT)], cwd=directory,
+                                        env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer",
+                              result.stderr)
+            environment["CMAKE_BUILD_PARALLEL_LEVEL"] = "2"
             result = subprocess.run(["bash", str(SCRIPT)], cwd=directory,
                                     env=environment, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
