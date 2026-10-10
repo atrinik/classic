@@ -67,7 +67,7 @@ jobs:
           "${GITHUB_WORKSPACE}"
           "${RUNNER_TEMP}/gpu-shader-downloads"
           "${GITHUB_WORKSPACE}/build/gpu-shaders"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: classic-gpu-shaders-${{ env.INPUT_REVISION }}
           path: build/gpu-shaders
@@ -164,7 +164,7 @@ jobs:
           path: ${{ runner.temp }}/classic-dependency-archives
           key: >-
             classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.cohort }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: classic-dependency-inputs-${{ env.INPUT_REVISION }}
           path: build/dependency-inputs
@@ -187,7 +187,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
       - name: Install Python test coverage tooling
@@ -278,7 +278,7 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh core /workspace
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: linux-core-evidence-${{ github.run_attempt }}
@@ -327,11 +327,11 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "${COVERAGE_SHA}"
           test -z "$(git status --short)"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-dependency-inputs-${{ env.COVERAGE_SHA }}
           path: build/dependency-inputs
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-gpu-shaders-${{ env.COVERAGE_SHA }}
           path: build/gpu-shaders
@@ -525,7 +525,7 @@ jobs:
             --server-package "${server_packages[0]}" \
             --output "libatrinik/build/windows-test-bundle/atrinik-classic-issue-521-windows-one-click-${COVERAGE_SHA:0:7}.zip" \
             --revision "${COVERAGE_SHA}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: native-windows-tests
           path: libatrinik/build/windows-test-bundle
@@ -562,7 +562,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "GPU fixture byte verification failed for the Windows checkout"
           }
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: native-windows-tests
           path: build/native-windows-tests
@@ -753,7 +753,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-dependency-inputs-${{ github.sha }}
           path: build/dependency-inputs
@@ -821,7 +821,7 @@ jobs:
               bash /workspace/server/tools/admin_shutdown_coverage.sh \
               > "server/coverage-admin-${fixture_name}.xml"
           done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-server-ccache-${{ github.run_attempt }}
           path: build/ci-evidence/ccache-server.tsv
@@ -853,11 +853,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-dependency-inputs-${{ github.sha }}
           path: build/dependency-inputs
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-gpu-shaders-${{ github.sha }}
           path: build/gpu-shaders
@@ -940,7 +940,7 @@ jobs:
           files: client/coverage.xml
           flags: client-unit
           use_oidc: true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-client-ccache-${{ github.run_attempt }}
           path: build/ci-evidence/ccache-client.tsv
@@ -965,11 +965,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-dependency-inputs-${{ github.sha }}
           path: build/dependency-inputs
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-gpu-shaders-${{ github.sha }}
           path: build/gpu-shaders
@@ -1015,11 +1015,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-dependency-inputs-${{ github.sha }}
           path: build/dependency-inputs
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: classic-gpu-shaders-${{ github.sha }}
           path: build/gpu-shaders
@@ -1070,7 +1070,7 @@ jobs:
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
             tools/ci/run_linux_check.sh integrated /workspace
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-integrated-ccache-${{ github.run_attempt }}
           path: build/ci-evidence/ccache-integrated.tsv
