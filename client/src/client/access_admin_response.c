@@ -114,7 +114,7 @@ static void text_timestamp(json_parser_t *parser, const char *label, const char 
 static void text_named_string(json_parser_t *parser, const char *name, const char *value) {
     static const struct { const char *key; const char *label; } fields[] = {
         {"requestId", "Request ID"}, {"tokenId", "Token ID"},
-        {"tokenRevision", "Token revision"}, {"revision", "Revision"},
+        {"tokenRevision", "Token revision"},
         {"label", "Label"}, {"serverIdentity", "Server identity"},
         {"policy", "Admission policy"}, {"integrity", "Store integrity"},
         {"durability", "Store durability"}, {"state", "State"}, {"code", "Access code"},
@@ -374,7 +374,11 @@ static bool json_token(json_parser_t *parser, bool history) {
     if (!json_character(parser, '{') || !json_named_string(parser, "tokenId", text, sizeof(text)) ||
         !fixed_hex(text, 32) || !json_character(parser, ',') ||
         !json_named_string(parser, "revision", text, sizeof(text)) ||
-        !decimal_value(text, UINT64_MAX, true) || !json_character(parser, ',') ||
+        !decimal_value(text, UINT64_MAX, true)) {
+        return false;
+    }
+    text_field(parser, "Token revision", text);
+    if (!json_character(parser, ',') ||
         !json_named_string(parser, "label", text, sizeof(text)) || *text == '\0' ||
         !json_character(parser, ',') ||
         !json_named_string(parser, "createdAt", text, sizeof(text)) ||

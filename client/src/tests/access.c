@@ -32,11 +32,29 @@ static bool parse_admin(const char *json, client_access_admin_response_t *respon
 
 static char readable[CLIENT_ACCESS_ADMIN_TEXT_MAX];
 
+static size_t count_readable_lines(const char *prefix) {
+    size_t count = 0;
+    size_t length = strlen(prefix);
+    const char *line = readable;
+    while (*line != '\0') {
+        if (strncmp(line, prefix, length) == 0) {
+            count++;
+        }
+        const char *end = strchr(line, '\n');
+        if (end == NULL) {
+            break;
+        }
+        line = end + 1;
+    }
+    return count;
+}
+
 static void format_admin(const char *json) {
     REQUIRE(client_access_admin_response_format((const uint8_t *)json, strlen(json),
                                                 readable, sizeof(readable)));
     REQUIRE(strstr(readable, "atrinik-access-admin-v1") == NULL);
     REQUIRE(strstr(readable, "Request ID: 0123456789abcdef0123456789abcdef") != NULL);
+    REQUIRE(count_readable_lines("Revision: ") == 0U);
 }
 
 static void format_fixture(const char *operation, const char *outcome, const char *result) {
@@ -48,6 +66,8 @@ static void format_fixture(const char *operation, const char *outcome, const cha
                           operation, outcome, result);
     REQUIRE(length > 0 && (size_t)length < sizeof(json));
     format_admin(json);
+    REQUIRE(count_readable_lines("Store revision: ") == 1U);
+    REQUIRE(count_readable_lines("Store revision: 7\n") == 1U);
 }
 
 static void test_readable_results(void) {
@@ -64,9 +84,22 @@ static void test_readable_results(void) {
     REQUIRE(strstr(readable, "Expires: 9999-12-31 23:59:59 UTC") != NULL);
     REQUIRE(strstr(readable, "Last admitted: Never") != NULL);
     REQUIRE(strstr(readable, "Next page: /access list --cursor 64") != NULL);
+    REQUIRE(count_readable_lines("Token revision: ") == 1U);
+    REQUIRE(count_readable_lines("Token revision: 1\n") == 1U);
+    static const char second_token[] =
+        "{\"tokenId\":\"11111111111111111111111111111111\",\"revision\":\"7\","
+        "\"label\":\"Second token\",\"createdAt\":\"1\",\"expiresAt\":null,"
+        "\"state\":\"active\",\"routePending\":false,\"lastAdmittedAt\":null}";
+    REQUIRE(snprintf(result, sizeof(result), "{\"tokens\":[%s,%s],\"cursor\":null}",
+                     token, second_token) > 0);
+    format_fixture("list", "committed", result);
+    REQUIRE(count_readable_lines("Token revision: ") == 2U);
+    REQUIRE(count_readable_lines("Token revision: 1\n") == 1U);
+    REQUIRE(count_readable_lines("Token revision: 7\n") == 1U);
     format_fixture("list", "committed", "{\"tokens\":[],\"cursor\":null}");
     REQUIRE(strstr(readable, "No access tokens on this page.") != NULL);
     REQUIRE(strstr(readable, "End of token list.") != NULL);
+    REQUIRE(count_readable_lines("Token revision: ") == 0U);
 
     /* Preserve even labels which happen to match a status value. */
     static const char history[] =
@@ -76,6 +109,8 @@ static void test_readable_results(void) {
         "\"history\":[\"1\",\"951782400\"]}";
     format_fixture("history", "committed", history);
     REQUIRE(strstr(readable, "Label: absent_open") != NULL);
+    REQUIRE(count_readable_lines("Token revision: ") == 1U);
+    REQUIRE(count_readable_lines("Token revision: 1\n") == 1U);
     REQUIRE(strstr(readable, "Expires: Never") != NULL);
     REQUIRE(strstr(readable, "Admission history (oldest first):") != NULL);
     REQUIRE(strstr(readable, "  Admitted: 1970-01-01 00:00:01 UTC") != NULL);
@@ -88,17 +123,35 @@ static void test_readable_results(void) {
                      (int)(admissions - history), history) > 0);
     format_fixture("history", "committed", empty_history);
     REQUIRE(strstr(readable, "No admissions recorded.") != NULL);
+    REQUIRE(count_readable_lines("Admission history (oldest first):\n") == 1U);
+    REQUIRE(count_readable_lines("  Admitted: ") == 0U);
+    REQUIRE(count_readable_lines("Token revision: ") == 1U);
     format_fixture("history", "not_found", "{}");
     REQUIRE(strstr(readable, "Outcome: Token or request not found.") != NULL);
+    REQUIRE(count_readable_lines("Token revision: ") == 0U);
 
     static const char mutation[] =
         "{\"tokenId\":\"abcdef0123456789abcdef0123456789\","
         "\"tokenRevision\":\"1\",\"routePending\":false}";
     const char *operations[] = {"revoke", "remove", "result"};
     for (size_t i = 0; i < sizeof(operations) / sizeof(operations[0]); i++) {
-        format_fixture(operations[i], "committed", mutation);
-        REQUIRE(strstr(readable, "Outcome: Completed successfully.") != NULL);
-        REQUIRE(strstr(readable, "Token ID: abcdef0123456789abcdef0123456789") != NULL);
+        /* A token revision may differ from or equal the store revision. */
+        const char *token_revisions[] = {"1", "7"};
+        for (size_t j = 0; j < sizeof(token_revisions) / sizeof(token_revisions[0]); j++) {
+            char mutation_result[256];
+            REQUIRE(snprintf(mutation_result, sizeof(mutation_result),
+                             "{\"tokenId\":\"abcdef0123456789abcdef0123456789\","
+                             "\"tokenRevision\":\"%s\",\"routePending\":false}",
+                             token_revisions[j]) > 0);
+            format_fixture(operations[i], "committed", mutation_result);
+            REQUIRE(strstr(readable, "Outcome: Completed successfully.") != NULL);
+            REQUIRE(strstr(readable, "Token ID: abcdef0123456789abcdef0123456789") != NULL);
+            REQUIRE(count_readable_lines("Token revision: ") == 1U);
+            char token_line[64];
+            REQUIRE(snprintf(token_line, sizeof(token_line), "Token revision: %s\n",
+                             token_revisions[j]) > 0);
+            REQUIRE(count_readable_lines(token_line) == 1U);
+        }
     }
     const char *outcomes[] = {"locally_revoked_route_pending", "pending", "conflict", "denied",
         "limit", "invalid", "not_found", "unavailable", "save_failed", "indeterminate",
@@ -123,6 +176,8 @@ static void test_readable_results(void) {
     REQUIRE(snprintf(result + used, sizeof(result) - used, "],\"cursor\":null}") > 0);
     format_fixture("list", "committed", result);
     REQUIRE(strlen(readable) < CLIENT_ACCESS_ADMIN_TEXT_MAX);
+    REQUIRE(count_readable_lines("Token revision: ") == 64U);
+    REQUIRE(count_readable_lines("Token revision: 1\n") == 64U);
     char maximum_history[2048];
     used = (size_t)snprintf(maximum_history, sizeof(maximum_history), "%.*s\"history\":[",
                             (int)(admissions - history), history);
@@ -183,6 +238,21 @@ int main(void) {
     REQUIRE(strstr(readable, "Operation: Access management status") != NULL);
     REQUIRE(strstr(readable, "Admission policy: Protected (access code required)") != NULL);
     REQUIRE(strstr(readable, "Routes awaiting synchronization: 0") != NULL);
+    REQUIRE(count_readable_lines("Store revision: ") == 1U);
+    REQUIRE(count_readable_lines("Store revision: 3\n") == 1U);
+    REQUIRE(count_readable_lines("Token revision: ") == 0U);
+    const char *durability = strstr(status, "\"durability\":\"ok\"");
+    REQUIRE(durability != NULL);
+    char uncertain_status[sizeof(status) + 16U];
+    REQUIRE(snprintf(uncertain_status, sizeof(uncertain_status),
+                     "%.*s\"durability\":\"indeterminate\"%s",
+                     (int)(durability - status), status,
+                     durability + strlen("\"durability\":\"ok\"")) > 0);
+    format_admin(uncertain_status);
+    REQUIRE(count_readable_lines(
+                "Store durability: Uncertain; recover outstanding requests before retrying\n") == 1U);
+    REQUIRE(count_readable_lines("Store revision: 3\n") == 1U);
+    REQUIRE(count_readable_lines("Token revision: ") == 0U);
     const char *pending = strstr(status, "\"pendingRouteSync\":0");
     REQUIRE(pending != NULL);
     char overflowing_status[sizeof(status) + 16U];
@@ -221,6 +291,10 @@ int main(void) {
     format_admin(issue);
     REQUIRE(strstr(readable, "Access code: 0123456789ABCDEF") != NULL);
     REQUIRE(strstr(readable, "One-time display: copy this code now.") != NULL);
+    REQUIRE(count_readable_lines("Store revision: 4\n") == 1U);
+    REQUIRE(count_readable_lines("Store revision: ") == 1U);
+    REQUIRE(count_readable_lines("Token revision: 1\n") == 1U);
+    REQUIRE(count_readable_lines("Token revision: ") == 1U);
     char small[64];
     memset(small, 'X', sizeof(small));
     REQUIRE(!client_access_admin_response_format((const uint8_t *)issue, strlen(issue),
@@ -247,6 +321,8 @@ int main(void) {
     REQUIRE(!response.revision_present);
     format_admin(absent);
     REQUIRE(strstr(readable, "State: Access store not initialized; admission is open") != NULL);
+    REQUIRE(count_readable_lines("Store revision: ") == 0U);
+    REQUIRE(count_readable_lines("Token revision: ") == 0U);
 
     static const char duplicate[] =
         "{\"schema\":\"atrinik-access-admin-v1\",\"schema\":\"atrinik-access-admin-v1\","
