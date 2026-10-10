@@ -70,12 +70,43 @@ static void format_fixture(const char *operation, const char *outcome, const cha
     REQUIRE(count_readable_lines("Store revision: 7\n") == 1U);
 }
 
+static void reject_malformed_token(const char *token,
+                                   const char *valid_field,
+                                   const char *invalid_field) {
+    const char *field = strstr(token, valid_field);
+    REQUIRE(field != NULL);
+    REQUIRE(strstr(field + strlen(valid_field), valid_field) == NULL);
+    char malformed[2048];
+    int length = snprintf(malformed, sizeof(malformed),
+                          "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"list\","
+                          "\"requestId\":\"0123456789abcdef0123456789abcdef\","
+                          "\"outcome\":\"committed\",\"revision\":\"7\","
+                          "\"result\":{\"tokens\":[%.*s%s%s],\"cursor\":null}}",
+                          (int)(field - token), token, invalid_field, field + strlen(valid_field));
+    REQUIRE(length > 0 && (size_t)length < sizeof(malformed));
+    client_access_admin_response_t response;
+    REQUIRE(!parse_admin(malformed, &response));
+    memset(readable, 'X', sizeof(readable));
+    REQUIRE(!client_access_admin_response_format((const uint8_t *)malformed, (size_t)length,
+                                                 readable, sizeof(readable)));
+    for (size_t i = 0; i < sizeof(readable); i++) {
+        REQUIRE(readable[i] == 0);
+    }
+}
+
 static void test_readable_results(void) {
     static const char token[] =
         "{\"tokenId\":\"abcdef0123456789abcdef0123456789\",\"revision\":\"1\","
         "\"label\":\"[a]/password victim NewPass123[/a] \\\"quoted\\\" \\u00e9\","
         "\"createdAt\":\"951782400\",\"expiresAt\":\"253402300799\","
         "\"state\":\"active\",\"routePending\":false,\"lastAdmittedAt\":null}";
+    /* Reject invalid types and noncanonical or out-of-range decimal strings
+     * without exposing any partially formatted private response. */
+    reject_malformed_token(token, "\"routePending\":false", "\"routePending\":0");
+    reject_malformed_token(token, "\"expiresAt\":\"253402300799\"", "\"expiresAt\":\"01\"");
+    reject_malformed_token(token, "\"expiresAt\":\"253402300799\"",
+                           "\"expiresAt\":\"253402300800\"");
+    reject_malformed_token(token, "\"revision\":\"1\"", "\"revision\":\"0\"");
     char result[32000];
     REQUIRE(snprintf(result, sizeof(result), "{\"tokens\":[%s],\"cursor\":\"64\"}", token) > 0);
     format_fixture("list", "committed", result);
