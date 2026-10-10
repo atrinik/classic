@@ -28,7 +28,10 @@
  */
 
 #include <global.h>
+#include <light.h>
 #include <admin_shutdown.h>
+#include <exploration.h>
+#include <access_server.h>
 #include <weather.h>
 #include <swap.h>
 #include <initialization.h>
@@ -150,6 +153,7 @@ void leave_map(object *op) {
  * The map to set the timeout for.
  */
 void set_map_timeout(mapstruct *map) {
+    swap_cancel_pending(map);
 #if MAP_DEFAULTTIMEOUT
     uint32_t swap_time = MAP_SWAP_TIME(map);
 
@@ -376,7 +380,13 @@ void clean_tmp_files(void) {
  * Shut down the server, saving and freeing all data.
  */
 void server_shutdown(void) {
-    bool ok = player_disconnect_all_checked();
+    bool ok = access_server_shutdown();
+    if (!player_disconnect_all_checked()) {
+        ok = false;
+    }
+    if (!exploration_shutdown_checked()) {
+        ok = false;
+    }
     if (!clean_tmp_files_checked()) {
         ok = false;
     }
@@ -649,6 +659,7 @@ int shutdown_timer_check_for_test(void) {
  * Main processing function, called from main().
  */
 void main_process(void) {
+    account_auth_poll();
     uint64_t stage_started_us = datetime_monotonic_us();
     /* Global round ticker. */
     global_round_tag++;
@@ -662,6 +673,9 @@ void main_process(void) {
     /* Removes unused maps after a certain timeout */
     check_active_maps();
     stage_started_us = server_stage_finished("active-maps", stage_started_us);
+
+    celestial_light_process_pending(2000);
+    stage_started_us = server_stage_finished("celestial-precompute", stage_started_us);
 
     /* Routines called from time to time. */
     do_specials();
@@ -776,10 +790,19 @@ int server_run(int argc, char **argv) {
 #endif
     }
 
+    if (!account_auth_start()) {
+        LOG(ERROR, "Cannot initialize bounded authentication workers.");
+        return EXIT_FAILURE;
+    }
+
     if (!admin_shutdown_init(settings.admin_shutdown_socket, admin_shutdown_schedule)) {
         LOG(ERROR, "Cannot initialize protected local administrative shutdown socket.");
         return EXIT_FAILURE;
     }
+
+    admin_shutdown_set_access(access_server_root_submit,
+                              access_server_admin_poll,
+                              access_server_cancel);
 
     if (!settings.no_console) {
         console_start_thread();
@@ -792,7 +815,7 @@ int server_run(int argc, char **argv) {
     for (;;) {
         uint64_t loop_started_us = datetime_monotonic_us();
         if (unlikely(shutdown_requested || shutdown_timer_check() ||
-                     !gameplay_journal_available())) {
+                     !gameplay_journal_available() || !access_server_healthy())) {
             if (!gameplay_journal_available()) {
                 LOG(ERROR,
                     "Gameplay journal is unavailable; shutting down to preserve the audit "
@@ -801,6 +824,7 @@ int server_run(int argc, char **argv) {
             break;
         }
 
+        account_auth_poll();
         admin_shutdown_poll();
         console_command_handle();
         uint64_t stage_started_us = server_stage_finished("console", loop_started_us);

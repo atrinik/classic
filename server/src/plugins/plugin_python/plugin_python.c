@@ -1723,7 +1723,13 @@ static PyObject *Atrinik_CreateMap(PyObject *self, PyObject *args) {
     int light;
     PyObject *origin_object;
 
-    if (!PyArg_ParseTuple(args, "iisOsi", &width, &height, &path, &origin_object, &sky_above,
+    if (!PyArg_ParseTuple(args,
+                          "iisOsi",
+                          &width,
+                          &height,
+                          &path,
+                          &origin_object,
+                          &sky_above,
                           &light)) {
         return NULL;
     }
@@ -1984,9 +1990,6 @@ static PyObject *Atrinik_GetSettings(PyObject *self, PyObject *ignored) {
                                      (unsigned PY_LONG_LONG)hooks->settings->limits[i][1]));
     }
 
-    PyDict_SetItemString(dict,
-                         "control_allowed_ips",
-                         Py_BuildValue("s", hooks->settings->control_allowed_ips));
     PyDict_SetItemString(dict,
                          "control_player",
                          Py_BuildValue("s", hooks->settings->control_player));
@@ -2585,8 +2588,10 @@ MODULEAPI void initPlugin(struct plugin_hooklist *hooklist) {
     PyModule_AddStringConstant(module_tmp, "__doc__", module_doc_gender);
     module_add_cstr_array(module_tmp, "gender_noun", hooks->gender_noun, GENDER_MAX);
     module_add_cstr_array(module_tmp, "gender_subjective", hooks->gender_subjective, GENDER_MAX);
-    module_add_cstr_array(
-        module_tmp, "gender_subjective_upper", hooks->gender_subjective_upper, GENDER_MAX);
+    module_add_cstr_array(module_tmp,
+                          "gender_subjective_upper",
+                          hooks->gender_subjective_upper,
+                          GENDER_MAX);
     module_add_cstr_array(module_tmp, "gender_objective", hooks->gender_objective, GENDER_MAX);
     module_add_cstr_array(module_tmp, "gender_possessive", hooks->gender_possessive, GENDER_MAX);
     module_add_cstr_array(module_tmp, "gender_reflexive", hooks->gender_reflexive, GENDER_MAX);

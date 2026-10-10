@@ -1,4 +1,7 @@
 #include <commands.h>
+#include <book.h>
+#include <client.h>
+#include <sound.h>
 #include <map.h>
 #include <player.h>
 #include <region_map.h>
@@ -60,6 +63,69 @@ void skills_update(object *op, uint8_t level, int64_t xp, const char *msg) {
 }
 void region_map_fow_update(region_map_t *map) {
     (void)map;
+}
+
+static unsigned book_publications, book_sounds;
+static char read_content[256], read_signer[128], read_date[128];
+bool book_load_signed(const char *data, int len, const char *signer, const char *date) {
+    TEST_CHECK(len >= 0 && (size_t)len < sizeof(read_content));
+    memcpy(read_content, data, (size_t)len);
+    read_content[len] = '\0';
+    snprintf(read_signer, sizeof(read_signer), "%s", signer);
+    snprintf(read_date, sizeof(read_date), "%s", date);
+    book_publications++;
+    return true;
+}
+bool client_command_retry_current(void) { return false; }
+void sound_play_effect(const char *filename, int volume) {
+    TEST_CHECK(strcmp(filename, "book.ogg") == 0 && volume == 100);
+    book_sounds++;
+}
+
+static void test_book_command(void) {
+    const char *bodies[] = {"<book>Ordinary unsigned book</book>",
+                           "<book>Quest text populated by its script</book>", ""};
+    for (size_t i = 0; i < arraysize(bodies); i++) {
+        packet_struct *packet = packet_new(0, 128, 128);
+        packet_writer_write_cstring(packet, bodies[i]);
+        unsigned before = book_publications;
+        socket_command_book(packet->data, packet->len, 0);
+        TEST_CHECK(book_publications == before + 1 && strcmp(read_content, bodies[i]) == 0);
+        TEST_CHECK(!read_signer[0] && !read_date[0]);
+        /* An unterminated populated quest BOOK must not reach the GUI. */
+        socket_command_book(packet->data, packet->len - 1, 0);
+        TEST_CHECK(book_publications == before + 1);
+        packet_free(packet);
+    }
+    packet_struct *packet = packet_new(0, 256, 128);
+    packet_writer_write_cstring(packet, "<book>Signed book</book>");
+    size_t suffix = packet->len;
+    packet_writer_write_cstring(packet, "Authenticated character");
+    packet_writer_write_cstring(packet, "Year 42, day 7");
+    unsigned before = book_publications;
+    socket_command_book(packet->data, packet->len, 0);
+    TEST_CHECK(book_publications == before + 1);
+    TEST_CHECK(strcmp(read_signer, "Authenticated character") == 0);
+    TEST_CHECK(strcmp(read_date, "Year 42, day 7") == 0);
+    for (size_t cut = suffix + 1; cut < packet->len; cut++) {
+        socket_command_book(packet->data, cut, 0);
+        TEST_CHECK(book_publications == before + 1);
+    }
+    packet_writer_write_uint8(packet, 0);
+    socket_command_book(packet->data, packet->len, 0);
+    TEST_CHECK(book_publications == before + 1);
+    packet_free(packet);
+    const char *bad[] = {"", "\xc0\xaf", "\xed\xa0\x80"};
+    for (size_t i = 0; i < arraysize(bad); i++) {
+        packet = packet_new(0, 128, 128);
+        packet_writer_write_cstring(packet, "book text");
+        packet_writer_write_cstring(packet, bad[i]);
+        packet_writer_write_cstring(packet, "date");
+        socket_command_book(packet->data, packet->len, 0);
+        TEST_CHECK(book_publications == before + 1);
+        packet_free(packet);
+    }
+    TEST_CHECK(book_sounds == book_publications);
 }
 
 static packet_error_t decode_item_update(packet_struct *packet, size_t length) {
@@ -432,6 +498,7 @@ static void test_bounded_fuzz_regression(void) {
 
 int main(void) {
     toolkit_import(packet);
+    test_book_command();
     test_item_command();
     test_update_requires_introduced_tag();
     test_name_count_update();

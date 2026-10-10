@@ -14,6 +14,8 @@
 #include <server.h>
 #include <metaserver_internal.h>
 #include <initialization.h>
+#include <access_server.h>
+#include <player.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -96,7 +98,9 @@ static void *asset_loopback_server_main(void *data) {
     socket_struct ns = {
         .sc = connection,
         .socket_version = SOCKET_VERSION,
-        .join_authenticated = true,
+        .access_authenticated = true,
+        .access_transport_authenticated = true,
+        .access_policy_sent = true,
         .setup_completed = true,
         .state = ST_LOGIN,
     };
@@ -1276,6 +1280,78 @@ START_TEST(test_metaserver_rendezvous_token_bounds) {
 }
 END_TEST
 
+START_TEST(test_metaserver_access_route_acknowledgments) {
+    const char *request = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const char *reply = "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":"
+                        "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"reserved\","
+                        "\"reservationId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\","
+                        "\"reservationExpiresAt\":\"160\",\"tokenRevision\":\"1\"}";
+    char reservation[33] = {0};
+    ck_assert_int_eq(metaserver_access_response_parse(reply,
+                                                      strlen(reply),
+                                                      request,
+                                                      1,
+                                                      "reserve",
+                                                      reservation,
+                                                      100),
+                     ACCESS_COMMITTED);
+    ck_assert_str_eq(reservation, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    for (size_t n = 0; n < strlen(reply); n++) {
+        reservation[0] = 0;
+        ck_assert_int_eq(
+            metaserver_access_response_parse(reply, n, request, 1, "reserve", reservation, 100),
+            ACCESS_PENDING);
+        ck_assert_str_eq(reservation, "");
+    }
+    ck_assert_int_eq(metaserver_access_response_parse(reply,
+                                                      strlen(reply),
+                                                      request,
+                                                      2,
+                                                      "reserve",
+                                                      reservation,
+                                                      100),
+                     ACCESS_PENDING);
+    ck_assert_int_eq(metaserver_access_response_parse(reply,
+                                                      strlen(reply),
+                                                      request,
+                                                      1,
+                                                      "reserve",
+                                                      reservation,
+                                                      160),
+                     ACCESS_PENDING);
+    ck_assert_int_eq(metaserver_access_response_parse(reply,
+                                                      strlen(reply),
+                                                      request,
+                                                      1,
+                                                      "activate",
+                                                      reservation,
+                                                      100),
+                     ACCESS_PENDING);
+    const char *collision =
+        "{\"schema\":\"atrinik-access-route-result-v1\",\"requestId\":"
+        "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"outcome\":\"conflict\",\"reservationId\":null,"
+        "\"reservationExpiresAt\":null,\"tokenRevision\":\"1\"}";
+    ck_assert_int_eq(metaserver_access_response_parse(collision,
+                                                      strlen(collision),
+                                                      request,
+                                                      1,
+                                                      "reserve",
+                                                      reservation,
+                                                      100),
+                     ACCESS_CONFLICT);
+    char changed[1025];
+    snprintf(VS(changed), "%s ", reply);
+    ck_assert_int_eq(metaserver_access_response_parse(changed,
+                                                      strlen(changed),
+                                                      request,
+                                                      1,
+                                                      "reserve",
+                                                      reservation,
+                                                      100),
+                     ACCESS_PENDING);
+}
+END_TEST
+
 START_TEST(test_metaserver_rendezvous_retry_policy) {
     ck_assert_int_gt(METASERVER_RENDEZVOUS_UPGRADE_TIMEOUT_MS,
                      METASERVER_RENDEZVOUS_CONNECT_TIMEOUT_MS);
@@ -1296,7 +1372,7 @@ START_TEST(test_metaserver_rendezvous_retry_policy) {
     metaserver_rendezvous_headers_t headers = {0};
     char status[] = "HTTP/1.1 429 Too Many Requests\r\n";
     char retry[] = "Retry-After: 120\r\n";
-    char protocol[] = "Sec-WebSocket-Protocol: " RENDEZVOUS_INVITE_SUBPROTOCOL "\r\n";
+    char protocol[] = "Sec-WebSocket-Protocol: " RENDEZVOUS_ACCESS_SUBPROTOCOL "\r\n";
     ck_assert(metaserver_rendezvous_protocol_allows(&headers, false));
     ck_assert(!metaserver_rendezvous_protocol_allows(&headers, true));
     ck_assert_uint_eq(metaserver_rendezvous_header(status, 1, strlen(status), &headers),
@@ -1547,6 +1623,365 @@ START_TEST(test_metaserver_publish_error_code_is_bounded) {
 }
 END_TEST
 
+#ifdef __linux__
+static atomic_uint maintenance_calls;
+static atomic_bool maintenance_release, maintenance_saw_auth;
+static char maintenance_bad_token[33];
+static uint64_t maintenance_auth, maintenance_later_auth;
+
+static access_outcome_t maintenance_accept(void *context, const access_route_t *route) {
+    (void)context;
+    (void)route;
+    return ACCESS_COMMITTED;
+}
+
+static access_outcome_t maintenance_route(void *context, const access_route_t *route) {
+    (void)context;
+    unsigned call = atomic_fetch_add(&maintenance_calls, 1) + 1;
+    if (call == 1) {
+        uint64_t deadline = datetime_monotonic_ms() + 3000;
+        while (!atomic_load(&maintenance_release) && datetime_monotonic_ms() < deadline) {
+            struct timespec pause = {.tv_nsec = 1000000};
+            nanosleep(&pause, NULL);
+        }
+    } else if (call == 2) {
+        access_outcome_t outcome;
+        access_token_ref_t reference;
+        bool first_done = access_server_auth_poll(maintenance_auth, &outcome, &reference) &&
+                          outcome == ACCESS_DENIED;
+        bool later_done = access_server_auth_poll(maintenance_later_auth, &outcome, &reference);
+        atomic_store(&maintenance_saw_auth, first_done && !later_done);
+    }
+    return strcmp(route->token.token_id, maintenance_bad_token) == 0
+               ? ACCESS_CONFLICT : ACCESS_COMMITTED;
+}
+
+START_TEST(test_access_maintenance_rotates_and_services_queued_jobs) {
+    char directory[] = "/tmp/atrinik-access-fairness-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    uint8_t identity[32];
+    memset(identity, 0x11, sizeof(identity));
+    const char identity_hex[] =
+        "1111111111111111111111111111111111111111111111111111111111111111";
+    access_store_t *store = NULL;
+    int64_t now = (int64_t)time(NULL);
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    access_result_t tokens[2];
+    const char *requests[] = {"11111111111111111111111111111111",
+                              "22222222222222222222222222222222"};
+    for (size_t i = 0; i < 2; i++) {
+        tokens[i] = access_store_issue(store, requests[i], access_store_status(store).revision,
+                                       "Maintenance", false, 0, now, maintenance_accept, NULL);
+        ck_assert_int_eq(tokens[i].outcome, ACCESS_COMMITTED);
+    }
+    size_t bad = strcmp(tokens[0].token.token_id, tokens[1].token.token_id) < 0 ? 0 : 1;
+    snprintf(maintenance_bad_token, sizeof(maintenance_bad_token), "%s", tokens[bad].token.token_id);
+    ck_assert_int_eq(access_store_revoke(store, "33333333333333333333333333333333",
+                                         access_store_status(store).revision,
+                                         tokens[bad].token.token_id, now).outcome, ACCESS_LOCALLY_REVOKED);
+    ck_assert_int_eq(access_store_remove(store, "44444444444444444444444444444444",
+                                         access_store_status(store).revision,
+                                         tokens[1 - bad].token.token_id, now).outcome, ACCESS_PENDING);
+    for (size_t i = 0; i < 2; i++)
+        access_result_cleanse(&tokens[i]);
+    access_store_close(store);
+    char previous_store[sizeof(settings.access_store)];
+    memcpy(previous_store, settings.access_store, sizeof(previous_store));
+    bool previous_required = settings.access_required, previous_initialize = settings.access_initialize;
+    snprintf(VS(settings.access_store), "%s", directory);
+    settings.access_required = true;
+    settings.access_initialize = false;
+    atomic_store(&maintenance_calls, 0);
+    atomic_store(&maintenance_release, false);
+    atomic_store(&maintenance_saw_auth, false);
+    access_server_route_for_test(maintenance_route);
+    ck_assert(access_server_init(identity_hex));
+    access_server_maintenance_for_test();
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (atomic_load(&maintenance_calls) == 0 && datetime_monotonic_ms() < deadline) {
+        struct timespec pause = {.tv_nsec = 1000000};
+        nanosleep(&pause, NULL);
+    }
+    ck_assert_uint_eq(atomic_load(&maintenance_calls), 1);
+    uint64_t jobs[ACCESS_OUTBOX_LIMIT];
+    for (size_t i = 0; i < ACCESS_OUTBOX_LIMIT; i++) {
+        jobs[i] = access_server_auth_submit("0123456789ABCDEF");
+        ck_assert_uint_ne(jobs[i], 0);
+    }
+    maintenance_auth = jobs[0];
+    maintenance_later_auth = jobs[1];
+    access_server_maintenance_for_test();
+    atomic_store(&maintenance_release, true);
+    deadline = datetime_monotonic_ms() + 3000;
+    while (atomic_load(&maintenance_calls) < 2 && datetime_monotonic_ms() < deadline) {
+        struct timespec pause = {.tv_nsec = 1000000};
+        nanosleep(&pause, NULL);
+    }
+    /* Shutdown joins after the second callback and durable acknowledgement. */
+    ck_assert_uint_eq(atomic_load(&maintenance_calls), 2);
+    ck_assert(access_server_shutdown());
+    ck_assert(atomic_load(&maintenance_saw_auth));
+    access_server_deinit();
+    access_server_route_for_test(NULL);
+    memcpy(settings.access_store, previous_store, sizeof(previous_store));
+    settings.access_required = previous_required;
+    settings.access_initialize = previous_initialize;
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, false), ACCESS_COMMITTED);
+    ck_assert_uint_eq(access_store_status(store).pending_route_sync, 1);
+    ck_assert_int_eq(access_store_result(store, "44444444444444444444444444444444").outcome,
+                     ACCESS_COMMITTED);
+    access_store_close(store);
+    char snapshot[256];
+    snprintf(VS(snapshot), "%s/access-tokens.snapshot", directory);
+    ck_assert_int_eq(unlink(snapshot), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+
+static atomic_bool access_shutdown_route_entered, access_shutdown_route_cancelled;
+static access_outcome_t access_shutdown_route(void *context, const access_route_t *route) {
+    (void)route;
+    const curl_cancel_t *cancel = context;
+    atomic_store(&access_shutdown_route_entered, true);
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (!curl_cancelled(cancel) && datetime_monotonic_ms() < deadline) {
+        struct timespec delay = {.tv_nsec = 1000000};
+        nanosleep(&delay, NULL);
+    }
+    atomic_store(&access_shutdown_route_cancelled, curl_cancelled(cancel));
+    return ACCESS_PENDING;
+}
+START_TEST(test_access_worker_shutdown_preserves_pending_route) {
+    char directory[] = "/tmp/atrinik-access-shutdown-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    uint8_t identity[32];
+    memset(identity, 0x11, sizeof(identity));
+    char identity_hex[65];
+    memset(identity_hex, '1', 64);
+    identity_hex[64] = 0;
+    access_store_t *store = NULL;
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    ck_assert_uint_eq(access_store_status(store).revision, 1);
+    access_store_close(store);
+    char previous_store[sizeof(settings.access_store)];
+    memcpy(previous_store, settings.access_store, sizeof(previous_store));
+    bool previous_required = settings.access_required;
+    bool previous_initialize = settings.access_initialize;
+    snprintf(VS(settings.access_store), "%s", directory);
+    settings.access_required = true;
+    settings.access_initialize = false;
+    access_server_route_for_test(access_shutdown_route);
+    atomic_store(&access_shutdown_route_entered, false);
+    atomic_store(&access_shutdown_route_cancelled, false);
+    ck_assert(access_server_init(identity_hex));
+    static const char issue[] =
+        "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"issue\","
+        "\"requestId\":\"11111111111111111111111111111111\","
+        "\"expectedRevision\":\"1\",\"label\":\"Shutdown fixture\"}";
+    ck_assert_uint_ne(access_server_root_submit(issue, sizeof(issue) - 1), 0);
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (!atomic_load(&access_shutdown_route_entered) && datetime_monotonic_ms() < deadline) {
+        struct timespec delay = {.tv_nsec = 1000000};
+        nanosleep(&delay, NULL);
+    }
+    ck_assert(atomic_load(&access_shutdown_route_entered));
+    /* Queued work has no store ownership and can be cleared only after join. */
+    uint64_t auth = access_server_auth_submit("0123456789ABCDEF");
+    ck_assert_uint_ne(auth, 0);
+    static const char status_request[] =
+        "{\"schema\":\"atrinik-access-admin-v1\",\"operation\":\"status\","
+        "\"requestId\":\"22222222222222222222222222222222\"}";
+    uint64_t admin = access_server_root_submit(status_request, sizeof(status_request) - 1);
+    ck_assert_uint_ne(admin, 0);
+    uint64_t before = datetime_monotonic_ms();
+    ck_assert(access_server_shutdown());
+    ck_assert_uint_lt(datetime_monotonic_ms() - before, 1000);
+    ck_assert(atomic_load(&access_shutdown_route_cancelled));
+    access_outcome_t outcome;
+    access_token_ref_t reference;
+    ck_assert(!access_server_auth_poll(auth, &outcome, &reference));
+    char response[1024];
+    size_t length;
+    ck_assert(!access_server_admin_poll(admin, response, sizeof(response), &length));
+    access_server_deinit();
+    access_server_route_for_test(NULL);
+    memcpy(settings.access_store, previous_store, sizeof(previous_store));
+    settings.access_required = previous_required;
+    settings.access_initialize = previous_initialize;
+    access_status_t status;
+    ck_assert_int_eq(access_store_inspect(directory, identity, true, &status), ACCESS_COMMITTED);
+    ck_assert_uint_eq(status.pending_route_sync, 1);
+    ck_assert_uint_eq(status.revision, 2);
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, false), ACCESS_COMMITTED);
+    access_result_t receipt = access_store_result(store, "11111111111111111111111111111111");
+    ck_assert_int_eq(receipt.outcome, ACCESS_LOCALLY_REVOKED);
+    ck_assert(receipt.route_pending && receipt.code[0] == 0);
+    access_result_cleanse(&receipt);
+    access_store_close(store);
+    char snapshot[256];
+    snprintf(VS(snapshot), "%s/access-tokens.snapshot", directory);
+    ck_assert_int_eq(unlink(snapshot), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+#endif
+
+static bool access_route_cancelled_for_test(void *context) {
+    return *(bool *)context;
+}
+
+START_TEST(test_metaserver_access_route_cancellation_is_pending) {
+    bool stopping = true;
+    curl_cancel_t cancel = {.cancelled = access_route_cancelled_for_test, .context = &stopping};
+    access_route_t route = {0};
+    /* Cancellation never reports rejection/non-ownership: durable issuance and
+     * revoke recovery must retain the outbox even before any network work. */
+    ck_assert_int_eq(metaserver_access_route(&cancel, &route), ACCESS_PENDING);
+    route.revoke = true;
+    ck_assert_int_eq(metaserver_access_route(&cancel, &route), ACCESS_PENDING);
+}
+END_TEST
+
+START_TEST(test_metaserver_private_presence_renews_without_activity) {
+    bool previous_public = settings.server_public;
+    bool previous_required = settings.access_required;
+    char previous_hostname[sizeof(settings.metaserver_hostname)];
+    memcpy(previous_hostname, settings.metaserver_hostname, sizeof(previous_hostname));
+    uint16_t previous_port = settings.port_quic;
+    player *previous_players = first_player;
+    player joined = {0};
+    char previous_name[sizeof(settings.server_name)];
+    memcpy(previous_name, settings.server_name, sizeof(previous_name));
+    snprintf(VS(settings.server_name), "%s", "Private presence test");
+    settings.server_public = false;
+    settings.access_required = true;
+    snprintf(VS(settings.metaserver_hostname), "%s", "private.example.invalid");
+    settings.port_quic = 13327;
+    first_player = NULL;
+
+    metaserver_public_snapshot_t empty;
+    metaserver_public_snapshot(&empty);
+    ck_assert(!empty.is_public);
+    ck_assert(empty.access_required);
+    ck_assert_uint_eq(empty.players_count, 0);
+    ck_assert_str_eq(empty.hostname, "");
+    ck_assert_uint_eq(empty.port, 0);
+
+    char body[METASERVER_PUBLISH_BODY_MAX + 1U];
+    size_t body_size;
+    const char *test_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    ck_assert(metaserver_public_snapshot_body(&empty, test_id, "YQ==", body, &body_size));
+    ck_assert_uint_eq(body_size, strlen(body));
+    ck_assert_ptr_nonnull(strstr(body, "\"playersCount\":0,"));
+    ck_assert_ptr_nonnull(strstr(body, "\"public\":false,\"accessRequired\":true"));
+    ck_assert_ptr_null(strstr(body, "\"hostname\":"));
+    ck_assert_ptr_null(strstr(body, "\"port\":"));
+
+    metaserver_publish_cadence_t cadence;
+    server_monotonic_t now = {UINT64_C(1000000)};
+    metaserver_publish_cadence_init(&cadence, now);
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    /* Exercise more than the deployed four-hour freshness window. The timer
+     * remains enabled for private code-only access even without player changes. */
+    for (unsigned i = 0; i < 8; i++) {
+        metaserver_public_snapshot_succeeded(&cadence, &empty, now, 9000, UINT32_MAX);
+        server_monotonic_t deadline = cadence.heartbeat_deadline;
+        ck_assert_uint_gt(deadline.microseconds, now.microseconds);
+        ck_assert_uint_lt(deadline.microseconds - now.microseconds,
+                          UINT64_C(14400000000));
+        first_player = &joined;
+        metaserver_public_snapshot_t populated;
+        metaserver_public_snapshot(&populated);
+        ck_assert_int_eq(memcmp(&empty, &populated, sizeof(empty)), 0);
+        char active_body[METASERVER_PUBLISH_BODY_MAX + 1U];
+        size_t active_size;
+        ck_assert(metaserver_public_snapshot_body(&populated, test_id, "YQ==",
+                                                  active_body, &active_size));
+        ck_assert_uint_eq(active_size, body_size);
+        ck_assert_str_eq(active_body, body);
+        now.microseconds += UINT64_C(11000000);
+        metaserver_publish_cadence_activity(&cadence, now, false, false);
+        ck_assert(!cadence.dirty);
+        ck_assert_uint_eq(cadence.heartbeat_deadline.microseconds, deadline.microseconds);
+        ck_assert(!metaserver_publish_cadence_needs_snapshot(&cadence, now));
+        ck_assert(!metaserver_publish_cadence_due(&cadence, now, false));
+        first_player = NULL;
+        metaserver_publish_cadence_activity(&cadence, now, false, false);
+        now.microseconds = deadline.microseconds - 1;
+        ck_assert(!metaserver_publish_cadence_due(&cadence, now, false));
+        now = deadline;
+        ck_assert(metaserver_publish_cadence_needs_snapshot(&cadence, now));
+        ck_assert(metaserver_publish_cadence_due(&cadence, now, false));
+        ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    }
+    /* The same snapshot still reports public player counts and endpoints. */
+    settings.server_public = true;
+    first_player = &joined;
+    metaserver_public_snapshot_t public_snapshot;
+    metaserver_public_snapshot(&public_snapshot);
+    ck_assert_uint_eq(public_snapshot.players_count, 1);
+    ck_assert_str_eq(public_snapshot.hostname, "private.example.invalid");
+    ck_assert_uint_eq(public_snapshot.port, 13327);
+    metaserver_public_snapshot_succeeded(&cadence, &public_snapshot, now, 9000, 0);
+    ck_assert(server_monotonic_is_set(cadence.heartbeat_deadline));
+    settings.access_required = false;
+    metaserver_public_snapshot(&public_snapshot);
+    metaserver_public_snapshot_succeeded(&cadence, &public_snapshot, now, 9000, 0);
+    ck_assert(server_monotonic_is_set(cadence.heartbeat_deadline));
+    settings.server_public = false;
+    metaserver_public_snapshot_t open_private;
+    metaserver_public_snapshot(&open_private);
+    metaserver_public_snapshot_succeeded(&cadence, &open_private, now, 9000, 0);
+    ck_assert(!server_monotonic_is_set(cadence.heartbeat_deadline));
+    now.microseconds += UINT64_C(172800000000);
+    metaserver_publish_cadence_activity(&cadence, now, false, false);
+    ck_assert(!metaserver_publish_cadence_needs_snapshot(&cadence, now));
+    ck_assert(!metaserver_publish_cadence_due(&cadence, now, false));
+    settings.server_public = previous_public;
+    settings.access_required = previous_required;
+    memcpy(settings.metaserver_hostname, previous_hostname, sizeof(previous_hostname));
+    settings.port_quic = previous_port;
+    first_player = previous_players;
+    memcpy(settings.server_name, previous_name, sizeof(previous_name));
+}
+END_TEST
+
+START_TEST(test_metaserver_private_activity_does_not_publish) {
+    metaserver_publish_cadence_t cadence;
+    server_monotonic_t now = {UINT64_C(1000000)};
+    metaserver_publish_cadence_init(&cadence, now);
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    /* Initial removal can retry, independent of player activity. */
+    metaserver_publish_cadence_failed(&cadence, now, 120, 0);
+    now.microseconds += UINT64_C(120000000);
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    metaserver_publish_cadence_succeeded(&cadence, now, false, 60, 0);
+    for (unsigned i = 0; i < 48; i++) {
+        now.microseconds += UINT64_C(3600000000);
+        metaserver_publish_cadence_activity(&cadence, now, false, false);
+        ck_assert(!metaserver_publish_cadence_needs_snapshot(&cadence, now));
+        ck_assert(!metaserver_publish_cadence_due(&cadence, now, true));
+    }
+    /* Public publication and subsequent removal remain possible. */
+    metaserver_publish_cadence_activity(&cadence, now, true, false);
+    now.microseconds += UINT64_C(11000000);
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    metaserver_publish_cadence_succeeded(&cadence, now, true, 60, 0);
+    ck_assert(server_monotonic_is_set(cadence.heartbeat_deadline));
+    metaserver_publish_cadence_activity(&cadence, now, false, true);
+    now.microseconds += UINT64_C(4000000000);
+    ck_assert(metaserver_publish_cadence_due(&cadence, now, true));
+    ck_assert(metaserver_publish_cadence_attempted(&cadence, now));
+    metaserver_publish_cadence_succeeded(&cadence, now, false, 60, 0);
+    now.microseconds += UINT64_C(4000000000);
+    metaserver_publish_cadence_activity(&cadence, now, false, false);
+    ck_assert(!metaserver_publish_cadence_due(&cadence, now, true));
+}
+END_TEST
+
 START_TEST(test_metaserver_publish_retry_and_daily_budget) {
     ck_assert_uint_eq(metaserver_publish_retry_delay_ms(0, 0, 0), 45000);
     ck_assert_uint_eq(metaserver_publish_retry_delay_ms(1, 0, 0), 90000);
@@ -1732,8 +2167,8 @@ START_TEST(test_metaserver_rendezvous_ticket_isolation) {
                      METASERVER_RENDEZVOUS_AUTH_CLAIM_OK);
     ck_assert_ptr_nonnull(job_a);
     ck_assert_ptr_nonnull(job_b);
-    job_a->state = RENDEZVOUS_SERVER_AUTH_WAIT_PROOF;
-    job_b->state = RENDEZVOUS_SERVER_AUTH_WAIT_PROOF;
+    job_a->state = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
+    job_b->state = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
 
     ck_assert_int_eq(
         metaserver_rendezvous_auth_claim(jobs, arraysize(jobs), ticket_a, 300, &claimed),
@@ -1742,12 +2177,12 @@ START_TEST(test_metaserver_rendezvous_ticket_isolation) {
     ck_assert_ptr_eq(metaserver_rendezvous_auth_find(jobs,
                                                      arraysize(jobs),
                                                      ticket_b,
-                                                     RENDEZVOUS_SERVER_AUTH_WAIT_PROOF),
+                                                     RENDEZVOUS_SERVER_AUTH_AUTHORIZED),
                      job_b);
     ck_assert_ptr_null(metaserver_rendezvous_auth_find(jobs,
                                                        arraysize(jobs),
                                                        "malformed",
-                                                       RENDEZVOUS_SERVER_AUTH_WAIT_PROOF));
+                                                       RENDEZVOUS_SERVER_AUTH_AUTHORIZED));
     ck_assert_int_eq(
         metaserver_rendezvous_auth_claim(jobs, arraysize(jobs), "malformed", 300, &claimed),
         METASERVER_RENDEZVOUS_AUTH_CLAIM_INVALID);
@@ -1799,7 +2234,7 @@ END_TEST
 START_TEST(test_metaserver_generation_cancellation) {
     const rendezvous_server_auth_state_t stages[] = {
         RENDEZVOUS_SERVER_AUTH_NEW,
-        RENDEZVOUS_SERVER_AUTH_WAIT_PROOF,
+        RENDEZVOUS_SERVER_AUTH_AUTHORIZED,
         RENDEZVOUS_SERVER_AUTH_AUTHORIZED,
     };
     for (size_t i = 0; i < arraysize(stages); i++) {
@@ -1964,35 +2399,22 @@ START_TEST(test_socket_rendezvous_messages) {
     static const char ticket[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     static const char other_ticket[] =
         "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    rendezvous_invite_t invite = {
+    rendezvous_access_grant_t grant = {
         .server_id = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-        .invite_id = "00112233445566778899aabbccddeeff",
-        .expiry = UINT64_MAX,
+        .generation = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        .client_nonce = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        .grant = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        .expiry = (uint64_t)time(NULL) + 15,
     };
-    memset(invite.secret, 0x42, sizeof(invite.secret));
     socket_rendezvous_attempt_t *attempt =
-        socket_rendezvous_attempt_create(server_id, ticket, &invite, UINT64_MAX);
+        socket_rendezvous_attempt_create(server_id, ticket, &grant, UINT64_MAX);
     ck_assert_ptr_nonnull(attempt);
-
     char message[RENDEZVOUS_FRAME_MAX + 1U], proof_frame[RENDEZVOUS_FRAME_MAX + 1U];
+    char parsed_ticket[65];
     ck_assert(socket_rendezvous_attempt_auth_init(attempt, VS(message)));
-    char parsed_ticket[65], invite_id[33];
-    ck_assert(rendezvous_auth_init_parse(message, parsed_ticket, invite_id));
-    ck_assert_str_eq(parsed_ticket, ticket);
-    ck_assert_str_eq(invite_id, invite.invite_id);
-
-    unsigned char challenge[RENDEZVOUS_CHALLENGE_SIZE];
-    memset(challenge, 0x24, sizeof(challenge));
-    ck_assert(rendezvous_auth_challenge_render(VS(message), ticket, challenge));
-    rendezvous_server_auth_state_t server_auth = RENDEZVOUS_SERVER_AUTH_NEW;
-    ck_assert(rendezvous_server_auth_challenge_sent(&server_auth));
-    ck_assert_int_eq(
-        socket_rendezvous_attempt_challenge(attempt, message, strlen(message), VS(proof_frame)),
-        SOCKET_RENDEZVOUS_FRAME_CHALLENGE);
-    unsigned char proof[RENDEZVOUS_PROOF_SIZE];
-    ck_assert(rendezvous_auth_proof_parse(proof_frame, ticket, proof));
-    ck_assert(rendezvous_auth_result_render(VS(message), ticket, true));
-    ck_assert(rendezvous_server_auth_result_sent(&server_auth, true));
+    ck_assert_ptr_nonnull(strstr(message, "access_init"));
+    snprintf(VS(message), "{\"type\":\"access_ready\",\"version\":1}");
+    rendezvous_server_auth_state_t server_auth = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
     ck_assert_int_eq(socket_rendezvous_attempt_auth_result(attempt, message, strlen(message)),
                      SOCKET_RENDEZVOUS_FRAME_AUTHORIZED);
     ck_assert(socket_rendezvous_attempt_client_candidate(attempt, "192.0.2.10", 1730, VS(message)));
@@ -2066,9 +2488,7 @@ START_TEST(test_socket_rendezvous_messages) {
         &port,
         parsed_ticket));
     socket_rendezvous_attempt_destroy(attempt);
-    rendezvous_invite_cleanse(&invite);
-    OPENSSL_cleanse(challenge, sizeof(challenge));
-    OPENSSL_cleanse(proof, sizeof(proof));
+    rendezvous_access_grant_clear(&grant);
     OPENSSL_cleanse(proof_frame, sizeof(proof_frame));
 }
 END_TEST
@@ -2192,10 +2612,18 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_socket_rendezvous_messages);
     tcase_add_test(tc_core, test_metaserver_rendezvous_token_bounds);
     tcase_add_test(tc_core, test_metaserver_rendezvous_retry_policy);
+    tcase_add_test(tc_core, test_metaserver_access_route_acknowledgments);
+    tcase_add_test(tc_core, test_metaserver_access_route_cancellation_is_pending);
+#ifdef __linux__
+    tcase_add_test(tc_core, test_access_worker_shutdown_preserves_pending_route);
+    tcase_add_test(tc_core, test_access_maintenance_rotates_and_services_queued_jobs);
+#endif
     tcase_add_test(tc_core, test_metaserver_publish_cadence);
     tcase_add_test(tc_core, test_metaserver_publish_cadence_attempt_is_fail_closed);
     tcase_add_test(tc_core, test_metaserver_publish_error_code_is_bounded);
     tcase_add_test(tc_core, test_metaserver_publish_retry_and_daily_budget);
+    tcase_add_test(tc_core, test_metaserver_private_presence_renews_without_activity);
+    tcase_add_test(tc_core, test_metaserver_private_activity_does_not_publish);
     tcase_add_test(tc_core, test_metaserver_rendezvous_ticket_isolation);
     tcase_add_test(tc_core, test_metaserver_generation_cancellation);
     tcase_add_test(tc_core, test_metaserver_raw_endpoint_not_published);

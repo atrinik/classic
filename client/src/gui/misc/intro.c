@@ -35,8 +35,8 @@
 #include <event.h>
 #include <button.h>
 #include <client.h>
+#include <access_attempt.h>
 #include <live_movement.h>
-#include <join_credentials.h>
 #include <list.h>
 #include <main.h>
 #include <misc.h>
@@ -65,6 +65,8 @@
  * we need to do it like this.
  */
 static size_t last_server_count = 0;
+/** Rebuild the list after changing providers, even if the count is unchanged. */
+static bool servers_invalidated;
 
 /** cURL request when downloading news from the site. */
 static curl_request_t *news_request = NULL;
@@ -75,7 +77,7 @@ static uint32_t eyes_blink_ticks = 0;
 static uint8_t eyes_draw = 1;
 /** Button buffer. */
 static button_struct button_play, button_refresh, button_server, button_settings, button_help,
-    button_credits, button_connection, button_quit;
+    button_credits, button_connection, button_metaserver, button_quit;
 
 /** The news list. */
 static list_struct *list_news = NULL;
@@ -93,6 +95,39 @@ void intro_test_begin(void) {
 /** The servers list. */
 static list_struct *list_servers = NULL;
 
+/** The button names the provider that clicking it will select. */
+static const char *metaserver_button_label(void) {
+    return metaserver_get_provider() == METASERVER_PROVIDER_DEV ? "Default" : "Dev";
+}
+
+#ifdef ATRINIK_WIDGET_TESTS
+bool intro_test_metaserver_button(SDL_Rect *rect, const char **label) {
+    if (list_servers == NULL) {
+        return false;
+    }
+    if (rect != NULL) {
+        SDL_Surface *surface = texture_surface(button_metaserver.texture);
+        *rect = (SDL_Rect){button_metaserver.x, button_metaserver.y, surface->w, surface->h};
+    }
+    if (label != NULL) {
+        *label = metaserver_button_label();
+    }
+    return true;
+}
+
+bool intro_test_servers_invalidated(void) {
+    return servers_invalidated;
+}
+
+const char *intro_test_server_name(size_t row) {
+    if (list_servers == NULL || row >= list_servers->rows || list_servers->text == NULL ||
+        list_servers->text[row] == NULL) {
+        return NULL;
+    }
+    return list_servers->text[row][0];
+}
+#endif
+
 /**
  * Handle enter key being pressed in the servers list.
  * @param list
@@ -108,9 +143,7 @@ static void list_handle_enter(list_struct *list, SDL_Event *event) {
         /* Get selected server. */
         server_struct *next_server = server_get_id(list->row_selected - 1);
         if (selected_server != NULL && selected_server != next_server) {
-            client_attempt_secrets_clear(&selected_server->join_password,
-                                         &clioption_settings.join_password,
-                                         &selected_server->rendezvous_invite);
+            client_access_attempt_clear(&selected_server->access_attempt);
         }
         selected_server = next_server;
 
@@ -131,12 +164,8 @@ static void list_handle_enter(list_struct *list, SDL_Event *event) {
             return;
         }
 
-        bool invite_required = selected_server->hostname == NULL || selected_server->port == 0;
-        if (selected_server->password_required &&
-            ((invite_required && selected_server->rendezvous_invite == NULL) ||
-             (selected_server->join_password == NULL &&
-              clioption_settings.join_password == NULL))) {
-            join_password_open(selected_server);
+        if (selected_server->access_required && !selected_server->access_attempt.present) {
+            access_code_open(selected_server);
         } else {
             login_start();
         }
@@ -181,10 +210,12 @@ void intro_deinit(void) {
     button_destroy(&button_help);
     button_destroy(&button_credits);
     button_destroy(&button_connection);
+    button_destroy(&button_metaserver);
     button_destroy(&button_quit);
 
     list_remove(list_servers);
     list_servers = NULL;
+    servers_invalidated = false;
 
     list_remove(list_news);
     list_news = NULL;
@@ -260,11 +291,12 @@ void intro_show(void) {
         button_create(&button_help);
         button_create(&button_credits);
         button_create(&button_connection);
+        button_create(&button_metaserver);
         button_create(&button_quit);
     }
 
-    /* List doesn't exist or the count changed? Create new list. */
-    if (!list_servers || last_server_count != server_count) {
+    /* Rebuild when the list, count, or provider changes. */
+    if (!list_servers || servers_invalidated || last_server_count != server_count) {
         size_t i;
 
         /* Remove it if it exists already. */
@@ -305,6 +337,7 @@ void intro_show(void) {
 
         /* Store the new count. */
         last_server_count = server_count;
+        servers_invalidated = false;
     }
 
     /* Actually draw the list. */
@@ -439,7 +472,7 @@ void intro_show(void) {
     list_show_root(list_news, x + 13, y + 10);
 
     button_play.x = button_refresh.x = button_server.x = button_settings.x = button_help.x =
-        button_credits.x = button_connection.x = button_quit.x = 489;
+        button_credits.x = button_connection.x = button_metaserver.x = button_quit.x = 489;
     y += 2;
 
     button_play.y = y + 10;
@@ -462,6 +495,9 @@ void intro_show(void) {
 
     button_connection.y = y + 160;
     button_show_root(&button_connection, "Route");
+
+    button_metaserver.y = y + 185;
+    button_show_root(&button_metaserver, metaserver_button_label());
 
     button_quit.y = y + 224;
     button_show_root(&button_quit, "Quit");
@@ -491,6 +527,18 @@ void intro_show(void) {
     }
 }
 
+/** Handle only the provider control; shared by normal and access-modal dispatch. */
+int intro_metaserver_event(SDL_Event *event) {
+    if (list_servers == NULL || !button_event(&button_metaserver, event)) {
+        return 0;
+    }
+    access_code_cancel();
+    metaserver_toggle_provider();
+    servers_invalidated = true;
+    cpl.state = ST_META;
+    return 1;
+}
+
 /**
  * Handle event in the main screen.
  * @param event
@@ -511,6 +559,17 @@ int intro_event(SDL_Event *event) {
             list_servers->focus = 1;
             list_news->focus = 0;
         }
+    }
+
+    if (intro_metaserver_event(event)) {
+        return 1;
+    }
+    if (BUTTON_CHECK_TOOLTIP(&button_metaserver)) {
+        const char *tooltip = metaserver_get_provider() == METASERVER_PROVIDER_DEV
+                                  ? "Switch to default metaserver: classic.metaserver.atrinik.org"
+                                  : "Switch to dev metaserver: classic.dev.metaserver.atrinik.org";
+        tooltip_create(event_mouse_x(event), event_mouse_y(event), FONT_ARIAL11, tooltip);
+        tooltip_enable_delay(300);
     }
 
     if (button_event(&button_play, event)) {

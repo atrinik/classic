@@ -37,14 +37,86 @@
 #define MAX_LIGHT_SOURCE 13
 #define MAX_LIGHT_RADIUS 4
 #define LIGHT_DISTANCE_SCALE 256
-/** Maximum unique maps visited by light_map_set_collect(). */
-#define LIGHT_COLUMN_MAPS_MAX (1 + 2 * MAP2_MAX_DEPTH * (1 + TILED_NUM_DIR))
-#define LIGHT_MAP_SET_MAX ((1 + TILED_NUM_DIR) * LIGHT_COLUMN_MAPS_MAX)
+/** Full queues publish early; this bounds scope bookkeeping, not reach. */
+#define LIGHT_PENDING_MAX ((1 + 2 * MAP2_MAX_DEPTH) * (1 + TILED_NUM_DIR))
 
 typedef struct light_map_set {
-    mapstruct *maps[LIGHT_MAP_SET_MAX];
+    mapstruct **maps;
     size_t count;
+    size_t capacity;
 } light_map_set;
+
+static unsigned int light_batch_depth;
+static struct {
+    mapstruct *map;
+    bool local;
+    bool celestial;
+} light_pending[LIGHT_PENDING_MAX];
+static size_t light_pending_count;
+static unsigned int light_unlink_depth;
+static unsigned int light_retirement_depth;
+static bool light_unlink_marks_pending;
+
+void light_source_prepare_change(void) {
+    light_map_unlink_flush();
+    light_batch_flush();
+}
+
+void light_batch_begin(void) {
+    HARD_ASSERT(light_batch_depth < UINT_MAX);
+    light_batch_depth++;
+}
+
+void light_batch_flush(void) {
+    if (light_unlink_depth == 0) {
+        light_map_unlink_flush();
+    }
+    /* Remove each entry before publishing so rebuild/read barriers cannot
+     * recursively flush that entry. Scopes never retain maps across lifecycle
+     * operations or callbacks that can release them. */
+    while (light_pending_count != 0) {
+        size_t index = --light_pending_count;
+        mapstruct *map = light_pending[index].map;
+        bool local = light_pending[index].local;
+        bool celestial = light_pending[index].celestial;
+        if (local) {
+            recalculate_light_sources(map);
+        }
+        if (celestial) {
+            celestial_light_invalidate(map);
+        }
+    }
+}
+
+void light_batch_end(void) {
+    HARD_ASSERT(light_batch_depth != 0);
+    if (--light_batch_depth == 0) {
+        light_batch_flush();
+    }
+}
+
+void light_geometry_changed(mapstruct *map, bool local, bool celestial) {
+    if (!local && !celestial) {
+        return;
+    }
+    for (size_t i = 0; i < light_pending_count; i++) {
+        if (light_pending[i].map == map) {
+            light_pending[i].local |= local;
+            light_pending[i].celestial |= celestial;
+            return;
+        }
+    }
+    if (light_pending_count == arraysize(light_pending)) {
+        light_batch_flush();
+    }
+    light_pending[light_pending_count].map = map;
+    light_pending[light_pending_count].local = local;
+    light_pending[light_pending_count].celestial = celestial;
+    light_pending_count++;
+    if (light_batch_depth == 0) {
+        light_batch_flush();
+    }
+}
 
 /**
  * Convert authoritative raw map illumination to a perceptual client light
@@ -319,15 +391,17 @@ static bool light_map_set_contains(const light_map_set *set, const mapstruct *ma
     return false;
 }
 
-static void light_map_set_add(light_map_set *set, mapstruct *map) {
-    if (map == NULL || map->in_memory != MAP_IN_MEMORY || light_map_set_contains(set, map)) {
-        return;
+static void light_map_set_append(light_map_set *set, mapstruct *map) {
+    if (set->count == set->capacity) {
+        set->capacity = set->capacity == 0 ? 16 : set->capacity * 2;
+        set->maps = xreallocarray(set->maps, set->capacity, sizeof(*set->maps));
     }
+    set->maps[set->count++] = map;
+}
 
-    SOFT_ASSERT(set->count < arraysize(set->maps), "Too many linked maps in lighting volume");
-
-    if (set->count < arraysize(set->maps)) {
-        set->maps[set->count++] = map;
+static void light_map_set_add(light_map_set *set, mapstruct *map) {
+    if (map != NULL && map->in_memory == MAP_IN_MEMORY && !light_map_set_contains(set, map)) {
+        light_map_set_append(set, map);
     }
 }
 
@@ -341,39 +415,114 @@ static mapstruct *light_loaded_tile(mapstruct *map, int tile) {
     return tiled;
 }
 
-static void light_map_set_add_column(light_map_set *set, mapstruct *map) {
-    light_map_set_add(set, map);
+typedef struct light_graph_node light_graph_node;
+typedef struct light_graph_edge {
+    light_graph_node *source;
+    int direction;
+    struct light_graph_edge *next;
+} light_graph_edge;
 
-    for (int direction = TILED_UP; direction <= TILED_DOWN; direction++) {
-        mapstruct *level = map;
+struct light_graph_node {
+    mapstruct *map;
+    light_graph_edge *incoming;
+    bool visited;
+    UT_hash_handle hh;
+};
 
-        for (int depth = 0; depth < MAP2_MAX_DEPTH; depth++) {
-            level = light_loaded_tile(level, direction);
+typedef struct light_graph {
+    light_graph_node *nodes;
+    light_graph_edge *edges;
+    light_graph_node *index;
+} light_graph;
 
-            if (level == NULL) {
-                break;
-            }
-
-            light_map_set_add(set, level);
-
-            for (int side = 0; side < TILED_NUM_DIR; side++) {
-                light_map_set_add(set, light_loaded_tile(level, side));
-            }
-        }
-    }
+static void light_graph_free(light_graph *graph) {
+    HASH_CLEAR(hh, graph->index);
+    free(graph->edges);
+    free(graph->nodes);
 }
 
-static void light_map_set_collect(light_map_set *set, mapstruct *map) {
-    memset(set, 0, sizeof(*set));
-    light_map_set_add_column(set, map);
-
-    for (int direction = 0; direction < TILED_NUM_DIR; direction++) {
-        mapstruct *side = light_loaded_tile(map, direction);
-
-        if (side != NULL) {
-            light_map_set_add_column(set, side);
+/** Collect the weak resident component of the seeds with a fresh reverse-edge
+ * index. Every resolved ray sample follows loaded tile pointers, so neither a
+ * source nor a target outside this component can interact with its geometry.
+ * Include incoming and path-less pointer edges: asymmetric links and stale
+ * reverse path metadata must overestimate reach, never hide incoming light.
+ * The temporary graph costs O(resident maps + tile edges); no cached topology
+ * or map pointer survives this operation. */
+static void light_component_collect(light_map_set *component, const light_map_set *seeds,
+                                    light_graph *graph) {
+    memset(component, 0, sizeof(*component));
+    memset(graph, 0, sizeof(*graph));
+    if (seeds->count == 0) {
+        return;
+    }
+    size_t count = 0;
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        if (map->in_memory == MAP_IN_MEMORY) {
+            count++;
         }
     }
+    if (count == 0) {
+        return;
+    }
+    light_graph_node *nodes = xcalloc(count, sizeof(*nodes));
+    light_graph_edge *edges = xmallocarray(count, TILED_NUM * sizeof(*edges));
+    light_graph_node **queue = xmallocarray(count, sizeof(*queue));
+    light_graph_node *index = NULL;
+    size_t node_count = 0;
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        if (map->in_memory == MAP_IN_MEMORY) {
+            light_graph_node *node = &nodes[node_count++];
+            node->map = map;
+            HASH_ADD_PTR(index, map, node);
+        }
+    }
+    size_t edge_count = 0;
+    for (size_t i = 0; i < count; i++) {
+        for (int direction = 0; direction < TILED_NUM; direction++) {
+            mapstruct *neighbor = light_loaded_tile(nodes[i].map, direction);
+            light_graph_node *target;
+            HASH_FIND_PTR(index, &neighbor, target);
+            if (target != NULL) {
+                light_graph_edge *edge = &edges[edge_count++];
+                edge->source = &nodes[i];
+                edge->direction = direction;
+                edge->next = target->incoming;
+                target->incoming = edge;
+            }
+        }
+    }
+    size_t queued = 0;
+    for (size_t i = 0; i < seeds->count; i++) {
+        light_graph_node *node;
+        HASH_FIND_PTR(index, &seeds->maps[i], node);
+        if (node != NULL && !node->visited) {
+            node->visited = true;
+            queue[queued++] = node;
+        }
+    }
+    for (size_t cursor = 0; cursor < queued; cursor++) {
+        light_graph_node *node = queue[cursor];
+        light_map_set_append(component, node->map);
+        for (int direction = 0; direction < TILED_NUM; direction++) {
+            mapstruct *neighbor = light_loaded_tile(node->map, direction);
+            light_graph_node *target;
+            HASH_FIND_PTR(index, &neighbor, target);
+            if (target != NULL && !target->visited) {
+                target->visited = true;
+                queue[queued++] = target;
+            }
+        }
+        for (light_graph_edge *edge = node->incoming; edge != NULL; edge = edge->next) {
+            if (!edge->source->visited) {
+                edge->source->visited = true;
+                queue[queued++] = edge->source;
+            }
+        }
+    }
+    free(queue);
+    graph->nodes = nodes;
+    graph->edges = edges;
+    graph->index = index;
 }
 
 static mapstruct *light_vertical_map(mapstruct *map, int z) {
@@ -414,7 +563,110 @@ static mapstruct *light_resolve_space(mapstruct *map, int x, int y, int z, int *
         return NULL;
     }
 
-    return light_vertical_map(side, z);
+    level = light_vertical_map(side, z);
+    /* Vertical neighbors can have different dimensions. The coordinates
+     * resolved on the horizontal base map must be resolved again there; never
+     * publish an out-of-range space after the alternate traversal order. */
+    return level == NULL ? NULL : get_map_from_coord2(level, rx, ry);
+}
+
+/** Equal dimensions and support shorter than a map side bound every resolved
+ * sample to V^k H or H V^k: at most one horizontal (possibly diagonal) edge
+ * and at most three same-direction vertical edges. Diagonal composition and
+ * commuting squares are not required. Retain full-component repair for
+ * asymmetric pointers: map loading can overwrite an implicit reverse link,
+ * whose old target is absent from the current directed reach. */
+static bool light_topology_is_uniform(const light_map_set *component) {
+    if (component->count == 0) {
+        return true;
+    }
+    int width = MAP_WIDTH(component->maps[0]);
+    int height = MAP_HEIGHT(component->maps[0]);
+    if (width < 2 * MAX_LIGHT_RADIUS + 1 || height < 2 * MAX_LIGHT_RADIUS + 1) {
+        return false;
+    }
+    for (size_t i = 0; i < component->count; i++) {
+        mapstruct *map = component->maps[i];
+        if (MAP_WIDTH(map) != width || MAP_HEIGHT(map) != height) {
+            return false;
+        }
+        for (int direction = 0; direction < TILED_NUM; direction++) {
+            mapstruct *neighbor = light_loaded_tile(map, direction);
+            if (neighbor != NULL && neighbor->tile_map[map_tiled_reverse[direction]] != map) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/** Append one directed step, or its actual inverse. Incoming pointers may
+ * branch and need not have reverse paths; never infer them from outgoing links. */
+static void light_reach_step(light_map_set *result, const light_map_set *seeds,
+                             const light_graph *graph, bool inverse, int first, int end) {
+    for (size_t i = 0; i < seeds->count; i++) {
+        mapstruct *map = seeds->maps[i];
+        if (inverse) {
+            light_graph_node *node;
+            HASH_FIND_PTR(graph->index, &map, node);
+            if (node == NULL) {
+                continue;
+            }
+            for (light_graph_edge *edge = node->incoming; edge != NULL; edge = edge->next) {
+                if (edge->direction >= first && edge->direction < end) {
+                    light_map_set_add(result, edge->source->map);
+                }
+            }
+        } else {
+            for (int direction = first; direction < end; direction++) {
+                light_map_set_add(result, light_loaded_tile(map, direction));
+            }
+        }
+    }
+}
+
+static void light_reach_merge(light_map_set *result, const light_map_set *seeds) {
+    for (size_t i = 0; i < seeds->count; i++) {
+        light_map_set_add(result, seeds->maps[i]);
+    }
+}
+
+static void light_reach_vertical(light_map_set *result, const light_map_set *seeds,
+                                 const light_graph *graph, bool inverse) {
+    light_reach_merge(result, seeds);
+    int radius = MIN(MAX_LIGHT_RADIUS - 1, MAP2_MAX_DEPTH);
+    for (int direction = TILED_UP; direction <= TILED_DOWN; direction++) {
+        light_map_set frontier = {0};
+        light_reach_merge(&frontier, seeds);
+        for (int depth = 0; depth < radius && frontier.count != 0; depth++) {
+            light_map_set next = {0};
+            light_reach_step(&next, &frontier, graph, inverse, direction, direction + 1);
+            light_reach_merge(result, &next);
+            free(frontier.maps);
+            frontier = next;
+        }
+        free(frontier.maps);
+    }
+}
+
+/** Geometry-independent R reach (or inverse R), including both resolver
+ * orders even when the first currently succeeds. Reversing both orders gives
+ * the same language with inverted edges, including asymmetric incoming links.
+ * Missing links and blocked rays must not prune discovery: loading/removing
+ * geometry can enable paths that currently contribute nothing. */
+static void light_reach_collect(light_map_set *result, const light_map_set *seeds,
+                                const light_graph *graph, bool inverse) {
+    memset(result, 0, sizeof(*result));
+    light_map_set vertical = {0};
+    light_reach_vertical(&vertical, seeds, graph, inverse);
+    light_reach_merge(result, &vertical);
+    light_reach_step(result, &vertical, graph, inverse, 0, TILED_NUM_DIR);
+    free(vertical.maps);
+    light_map_set horizontal = {0};
+    light_reach_merge(&horizontal, seeds);
+    light_reach_step(&horizontal, seeds, graph, inverse, 0, TILED_NUM_DIR);
+    light_reach_vertical(result, &horizontal, graph, inverse);
+    free(horizontal.maps);
 }
 
 static bool light_space_has_floor(mapstruct *map, int x, int y) {
@@ -688,6 +940,8 @@ static void adjust_grouped_light_source(mapstruct *map,
 
 /** Add or remove a legacy scalar light source at one map space. */
 void adjust_light_source(mapstruct *map, int x, int y, int light) {
+    light_map_unlink_flush();
+    light_batch_flush();
     MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
     adjust_grouped_light_source(map, x, y, &space->light_source, light, LIGHT_MASK_SCALAR);
 }
@@ -741,6 +995,7 @@ void adjust_light_source_color(mapstruct *map,
  * The map to check.
  */
 void check_light_source_list(mapstruct *map) {
+    light_batch_flush();
     /* Rebuild the complete bounded linked volume now that this map's floors
      * and blockers exist. Rebuilding also makes repeated lifecycle calls
      * idempotent instead of adding the same source masks twice. */
@@ -749,22 +1004,36 @@ void check_light_source_list(mapstruct *map) {
 
 #ifdef ATRINIK_TESTING
 static uint64_t light_rebuild_count;
+static size_t light_rebuild_target_maps;
+static size_t light_rebuild_source_maps;
+
+size_t light_rebuild_target_maps_for_test(void) {
+    return light_rebuild_target_maps;
+}
+
+size_t light_rebuild_source_maps_for_test(void) {
+    return light_rebuild_source_maps;
+}
 
 uint64_t light_rebuild_count_for_test(void) {
     return light_rebuild_count;
 }
 #endif
 
-/** Rebuild source illumination after opaque map geometry changes. */
-void recalculate_light_sources(mapstruct *map) {
+/** Rebuild exactly the supplied resident targets in one publication. */
+static void light_rebuild_targets(const light_map_set *maps, const light_map_set *component,
+                                 const light_graph *graph,
+                                 bool bounded_sources, bool complete_component) {
+    if (maps->count == 0) {
+        return;
+    }
+    HARD_ASSERT(!complete_component || (!bounded_sources && maps->count == component->count));
 #ifdef ATRINIK_TESTING
     light_rebuild_count++;
+    light_rebuild_target_maps = maps->count;
 #endif
-    light_map_set maps;
-    light_map_set_collect(&maps, map);
-
-    for (size_t i = 0; i < maps.count; i++) {
-        mapstruct *target = maps.maps[i];
+    for (size_t i = 0; i < maps->count; i++) {
+        mapstruct *target = maps->maps[i];
 
         for (int y = 0; y < MAP_HEIGHT(target); y++) {
             for (int x = 0; x < MAP_WIDTH(target); x++) {
@@ -778,65 +1047,213 @@ void recalculate_light_sources(mapstruct *map) {
         }
     }
 
-    for (size_t i = 0; i < maps.count; i++) {
-        mapstruct *source_map = maps.maps[i];
-
-        for (MapSpace *tmp = source_map->first_light; tmp != NULL; tmp = tmp->next_light) {
-            if (tmp->first != NULL) {
-                int scalar_mask = get_real_light_source_value(tmp->light_source);
-                if (scalar_mask != 0) {
-                    light_mask_adjust(source_map,
-                                      tmp->first->x,
-                                      tmp->first->y,
-                                      scalar_mask,
-                                      1,
-                                      NULL,
-                                      &maps,
-                                      false,
-                                      LIGHT_MASK_SCALAR,
-                                      0);
-                }
-                if (tmp->light_source_positive != 0) {
-                    light_mask_adjust(source_map,
-                                      tmp->first->x,
-                                      tmp->first->y,
-                                      get_real_light_source_value(tmp->light_source_positive),
-                                      1,
-                                      NULL,
-                                      &maps,
-                                      false,
-                                      LIGHT_MASK_POSITIVE,
-                                      0);
-                }
-            }
+    /* Cleared targets and incoming sources differ. Uniform map dimensions
+     * and reciprocal pointers permit bounded inverse reach without commuting
+     * links. Other shapes replay the complete weak component. */
+    light_map_set sources = {0};
+    if (bounded_sources) {
+        light_reach_collect(&sources, maps, graph, true);
+    }
+    const light_map_set *origins = bounded_sources ? &sources : component;
+#ifdef ATRINIK_TESTING
+    light_rebuild_source_maps = origins->count;
+#endif
+    /* A full-component clear covers every resident map a replay ray can
+     * resolve: all its horizontal and vertical edges stay within that weak
+     * component. Omit the per-sample linear target lookup only in this case.
+     * Bounded footprints and partial post-unlink repairs retain the fence. */
+    const light_map_set *write_targets = complete_component ? NULL : maps;
+    for (size_t i = 0; i < origins->count; i++) {
+        mapstruct *source_map = origins->maps[i];
+        if (source_map->first_light == NULL) {
+            continue;
         }
 
-        for (int y = 0; y < MAP_HEIGHT(source_map); y++) {
-            for (int x = 0; x < MAP_WIDTH(source_map); x++) {
-                for (object *source = GET_MAP_OB(source_map, x, y); source != NULL;
-                     source = source->above) {
-                    if (source->glow_radius == 0) {
-                        continue;
-                    }
-
-                    if (source->glow_radius < 0) {
-                        continue;
-                    }
-                    uint32_t color = source->light_color;
-                    light_mask_adjust(source_map,
-                                      x,
-                                      y,
-                                      get_real_light_source_value(source->glow_radius),
-                                      1,
-                                      NULL,
-                                      &maps,
-                                      false,
-                                      LIGHT_MASK_COLOR,
-                                      color);
+        for (MapSpace *tmp = source_map->first_light; tmp != NULL; tmp = tmp->next_light) {
+            ptrdiff_t origin = tmp - source_map->spaces;
+            int x = (int)(origin % MAP_WIDTH(source_map));
+            int y = (int)(origin / MAP_WIDTH(source_map));
+            int scalar_mask = get_real_light_source_value(tmp->light_source);
+            if (scalar_mask != 0) {
+                light_mask_adjust(source_map,
+                                  x,
+                                  y,
+                                  scalar_mask,
+                                  1,
+                                  NULL,
+                                  write_targets,
+                                  false,
+                                  LIGHT_MASK_SCALAR,
+                                  0);
+            }
+            if (tmp->light_source_positive != 0) {
+                light_mask_adjust(source_map,
+                                  x,
+                                  y,
+                                  get_real_light_source_value(tmp->light_source_positive),
+                                  1,
+                                  NULL,
+                                  write_targets,
+                                  false,
+                                  LIGHT_MASK_POSITIVE,
+                                  0);
+            }
+            for (object *source = tmp->first; source != NULL; source = source->above) {
+                if (source->glow_radius <= 0) {
+                    continue;
                 }
+                uint32_t color = source->light_color;
+                light_mask_adjust(source_map,
+                                  x,
+                                  y,
+                                  get_real_light_source_value(source->glow_radius),
+                                  1,
+                                  NULL,
+                                  write_targets,
+                                  false,
+                                  LIGHT_MASK_COLOR,
+                                  color);
             }
         }
     }
+    free(sources.maps);
+}
+
+/** Select a complete pre-change footprint or its whole resident component. */
+static void light_geometry_targets_collect(light_map_set *maps, mapstruct *map,
+                                           bool bounded_sources,
+                                           const light_map_set *component,
+                                           const light_graph *graph) {
+    memset(maps, 0, sizeof(*maps));
+    if (map == NULL || map->in_memory != MAP_IN_MEMORY) {
+        return;
+    }
+    if (bounded_sources) {
+        /* Every ray that samples changed geometry has its source in inverse R.
+         * Its endpoint can use a different resolver order/column, so expand R
+         * again from those sources. This bounds horizontal reach to two seams
+         * while retaining noncommuting linked-depth paths. */
+        light_map_set seeds = {.maps = &map, .count = 1};
+        light_map_set sources;
+        light_reach_collect(&sources, &seeds, graph, true);
+        light_reach_collect(maps, &sources, graph, false);
+        free(sources.maps);
+    } else {
+        /* Narrow/mixed dimensions can cross several horizontal seams. No
+         * coverage or graph-size cap may omit a connected resident target. */
+        if (component->count != 0) {
+            maps->maps = xmallocarray(component->count, sizeof(*maps->maps));
+            memcpy(maps->maps, component->maps, component->count * sizeof(*maps->maps));
+            maps->count = maps->capacity = component->count;
+        }
+    }
+}
+
+/** Rebuild source illumination after opaque map geometry changes. */
+void recalculate_light_sources(mapstruct *map) {
+    if (map == NULL || map->in_memory != MAP_IN_MEMORY) {
+        return;
+    }
+    light_map_set seeds = {.maps = &map, .count = 1};
+    light_map_set component;
+    light_graph graph;
+    light_component_collect(&component, &seeds, &graph);
+    bool bounded_sources = light_topology_is_uniform(&component);
+    light_map_set maps;
+    light_geometry_targets_collect(&maps, map, bounded_sources, &component, &graph);
+    light_rebuild_targets(&maps, &component, &graph, bounded_sources, !bounded_sources);
+    free(maps.maps);
+    light_graph_free(&graph);
+    free(component.maps);
+}
+
+void light_map_unlink_begin(bool retiring_all) {
+    HARD_ASSERT(light_unlink_depth < UINT_MAX);
+    light_unlink_depth++;
+    if (retiring_all) {
+        HARD_ASSERT(light_retirement_depth == 0);
+        light_retirement_depth = light_unlink_depth;
+    }
+}
+
+void light_map_unlink_flush(void) {
+    if (!light_unlink_marks_pending) {
+        return;
+    }
+    light_unlink_marks_pending = false;
+    light_map_set targets = {0};
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        if (!map->local_light_unlink_pending) {
+            continue;
+        }
+        /* Clear even a swapped map's mark. Deleted maps have already left
+         * first_map, so no retained pointer can outlive their ownership. */
+        map->local_light_unlink_pending = false;
+        light_map_set_add(&targets, map);
+    }
+    if (targets.count != 0) {
+        /* The old component can split at unlink. Seed every marked survivor
+         * so the current component union still includes all incoming origins. */
+        light_map_set component;
+        light_graph graph;
+        light_component_collect(&component, &targets, &graph);
+        light_rebuild_targets(&targets, &component, &graph,
+                              light_topology_is_uniform(&component), false);
+        light_graph_free(&graph);
+        free(component.maps);
+    }
+    free(targets.maps);
+}
+
+void light_map_unlink_end(void) {
+    HARD_ASSERT(light_unlink_depth != 0);
+    if (light_retirement_depth == light_unlink_depth) {
+        light_retirement_depth = 0;
+    }
+    if (--light_unlink_depth == 0) {
+        light_map_unlink_flush();
+    }
+}
+
+void light_map_prepare_unlink(mapstruct *map) {
+    light_map_unlink_begin(false);
+    /* Complete retirement has no surviving map and invokes no gameplay
+     * callbacks. Skip both survivor marking and per-map publications, avoiding
+     * quadratic scans while free_all_maps() destroys the entire map list. */
+    if (light_retirement_depth != 0) {
+        return;
+    }
+    /* The departing map's sources are withdrawn through their old topology.
+     * Only surviving sources can leave stale contributions routed through it. */
+    light_map_set seeds = {.maps = &map, .count = 1};
+    light_map_set component;
+    light_graph graph;
+    light_component_collect(&component, &seeds, &graph);
+    bool surviving_origin = false;
+    for (size_t i = 0; i < component.count; i++) {
+        mapstruct *source = component.maps[i];
+        if (source != map && source->first_light != NULL) {
+            surviving_origin = true;
+            break;
+        }
+    }
+    if (!surviving_origin) {
+        light_graph_free(&graph);
+        free(component.maps);
+        return;
+    }
+    light_map_set targets;
+    light_geometry_targets_collect(&targets, map, light_topology_is_uniform(&component),
+                                   &component, &graph);
+    for (size_t i = 0; i < targets.count; i++) {
+        if (targets.maps[i] != map) {
+            targets.maps[i]->local_light_unlink_pending = true;
+            light_unlink_marks_pending = true;
+        }
+    }
+    free(targets.maps);
+    light_graph_free(&graph);
+    free(component.maps);
 }
 
 /**
@@ -845,18 +1262,19 @@ void recalculate_light_sources(mapstruct *map) {
  * The map to remove from.
  */
 void remove_light_source_list(mapstruct *map) {
+    light_batch_flush();
     MapSpace *tmp;
 
     for (tmp = map->first_light; tmp; tmp = tmp->next_light) {
-        if (!tmp->first) {
-            continue;
-        }
+        ptrdiff_t origin = tmp - map->spaces;
+        int x = (int)(origin % MAP_WIDTH(map));
+        int y = (int)(origin / MAP_WIDTH(map));
 
         int scalar_mask = get_real_light_source_value(tmp->light_source);
         if (scalar_mask != 0) {
             light_mask_adjust(map,
-                              tmp->first->x,
-                              tmp->first->y,
+                              x,
+                              y,
                               scalar_mask,
                               -1,
                               NULL,
@@ -868,8 +1286,8 @@ void remove_light_source_list(mapstruct *map) {
         int positive_mask = get_real_light_source_value(tmp->light_source_positive);
         if (positive_mask != 0) {
             light_mask_adjust(map,
-                              tmp->first->x,
-                              tmp->first->y,
+                              x,
+                              y,
                               positive_mask,
                               -1,
                               NULL,

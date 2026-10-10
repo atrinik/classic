@@ -33,6 +33,7 @@
 #define TOOLKIT_CURL_H
 
 #include "toolkit.h"
+#include <curl/curl.h>
 
 /**
  * Connection timeout in seconds.
@@ -91,6 +92,22 @@ typedef void (*curl_request_process_cb)(curl_request_process_t type, size_t size
 typedef struct curl_request curl_request_t;
 
 typedef void (*curl_request_cb)(curl_request_t *request, void *user_data);
+
+/** Borrowed cancellation callback/context; callback runs only on the transfer
+ * thread and must safely observe cancellation from other threads. */
+typedef struct curl_cancel {
+    bool (*cancelled)(void *context);
+    void *context;
+} curl_cancel_t;
+
+/** Perform an exclusively caller-owned easy handle with cooperative cancellation.
+ * Does not retain the handle or cancellation context. Polls at most every 50ms;
+ * cancellable transfers require a qualified c-ares hostname resolver build
+ * (ASYNCHDNS alone is insufficient). Unsupported builds fail before network IO.
+ * Caller callbacks must also remain bounded. Cancellation returns
+ * CURLE_ABORTED_BY_CALLBACK; no response is implied to be uncommitted remotely. */
+CURLcode curl_perform_cancellable(CURL *easy, const curl_cancel_t *cancel);
+bool curl_cancelled(const curl_cancel_t *cancel);
 
 /* Prototypes */
 

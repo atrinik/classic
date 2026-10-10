@@ -14,11 +14,15 @@
 
 #include <mouse.h>
 
+#include <access_admin.h>
+#include <access_resolver.h>
 #include <animations.h>
 #include <client.h>
 #include <commands.h>
 #include <client_socket.h>
 #include <book.h>
+#include <book_edit.h>
+#include <capture_privacy.h>
 #include <config.h>
 #include <color_picker.h>
 #include <effects.h>
@@ -1485,7 +1489,9 @@ static bool gpu_player_view_render(widgetdata *widget, bool widget_render) {
 }
 
 static bool gpu_player_view_render_complete(void) {
+    capture_privacy_frame_begin(book_sensitive_active());
     if (!gpu_renderer_begin_frame()) {
+        capture_privacy_frame_end(false);
         return false;
     }
 #ifdef ATRINIK_WIDGET_TESTS
@@ -1513,9 +1519,12 @@ static bool gpu_player_view_render_complete(void) {
     }
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_UI, ui_started);
 #else
+    capture_privacy_frame_end(false);
     return false;
 #endif
-    return gpu_renderer_frame_valid() && gpu_renderer_present() && gpu_renderer_wait_idle();
+    bool presented = gpu_renderer_frame_valid() && gpu_renderer_present() && gpu_renderer_wait_idle();
+    capture_privacy_frame_end(presented);
+    return presented;
 }
 
 static char gpu_player_view_review_prefix[256];
@@ -1744,7 +1753,7 @@ static void gpu_player_view_json_map_pacing(FILE *output,
 }
 
 #ifdef ATRINIK_WIDGET_TESTS
-#define PLAYER_VIEW_UI_STATES 19
+#define PLAYER_VIEW_UI_STATES 18
 
 typedef struct gpu_player_view_ui_state {
     const char *name;
@@ -1765,26 +1774,45 @@ typedef struct gpu_player_view_ui_closure {
 } gpu_player_view_ui_closure_t;
 
 static gpu_player_view_ui_closure_t gpu_player_view_ui_closure;
+static gpu_player_view_ui_closure_t gpu_player_view_book_editor_ui;
+
+static const gpu_player_view_ui_state_t *gpu_player_view_ui_state_find(const char *name) {
+    for (size_t i = 0; i < gpu_player_view_ui_closure.states_num; i++) {
+        if (strcmp(gpu_player_view_ui_closure.states[i].name, name) == 0) {
+            return &gpu_player_view_ui_closure.states[i];
+        }
+    }
+    return NULL;
+}
 
 static bool gpu_player_view_root_glyphs_match(const gpu_player_view_ui_state_t *state) {
     uint64_t expected_count;
     uint64_t expected_hash;
     if (strcmp(state->name, "intro_server_browser") == 0) {
-        expected_count = 383;
-        expected_hash = UINT64_C(0x29c427a4eff9acbd);
+        expected_count = 357;
+        expected_hash = UINT64_C(0xf1761b6510869ded);
     } else if (strcmp(state->name, "login_popup") == 0 ||
                strcmp(state->name, "popup_character_selection") == 0) {
-        expected_count = 385;
-        expected_hash = UINT64_C(0x4266544b0b8b6fbd);
+        expected_count = 359;
+        expected_hash = UINT64_C(0xf14a293e7d0b8c2d);
     } else {
         return true;
     }
-    return state->root_glyphs.count == expected_count &&
-           state->root_glyphs.semantic_hash == expected_hash;
+    bool matches = state->root_glyphs.count == expected_count &&
+                   state->root_glyphs.semantic_hash == expected_hash;
+    if (!matches) {
+        fprintf(stderr,
+                "UI root glyphs %s: count=%" PRIu64 ", semantic_hash=%016" PRIx64 "\n",
+                state->name,
+                state->root_glyphs.count,
+                state->root_glyphs.semantic_hash);
+    }
+    return matches;
 }
 
-static bool gpu_player_view_ui_capture(const char *name, bool notification_fade) {
-    if (gpu_player_view_ui_closure.states_num >= PLAYER_VIEW_UI_STATES) {
+static bool gpu_player_view_ui_capture_into(gpu_player_view_ui_closure_t *closure,
+                                            const char *name, bool notification_fade) {
+    if (closure->states_num >= PLAYER_VIEW_UI_STATES) {
         SDL_SetError("UI closure state capacity exceeded before %s", name);
         return false;
     }
@@ -1813,7 +1841,7 @@ static bool gpu_player_view_ui_capture(const char *name, bool notification_fade)
         return false;
     }
     gpu_player_view_ui_state_t *state =
-        &gpu_player_view_ui_closure.states[gpu_player_view_ui_closure.states_num++];
+        &closure->states[closure->states_num++];
     state->name = name;
     gpu_renderer_statistics_get(&state->steady);
     text_root_glyph_statistics_get(&state->root_glyphs);
@@ -1832,6 +1860,10 @@ static bool gpu_player_view_ui_capture(const char *name, bool notification_fade)
         return false;
     }
     return true;
+}
+
+static bool gpu_player_view_ui_capture(const char *name, bool notification_fade) {
+    return gpu_player_view_ui_capture_into(&gpu_player_view_ui_closure, name, notification_fade);
 }
 
 static bool gpu_player_view_ui_screenshot(const char *name,
@@ -1926,7 +1958,6 @@ static bool gpu_player_view_ui_region_map_prepare(void) {
     region->def->num_maps = 1;
     region->def->maps = xcalloc(1, sizeof(*region->def->maps));
     region->def->maps[0].path = xstrdup("/gpu-ui-closure");
-    region->fow->path = xstrdup("gpu-ui-closure-in-memory.fow");
     region->fow->bitmap = xcalloc(1, RM_MAP_FOW_BITMAP_SIZE(region));
     snprintf(VS(MapData.map_path), "%s", region->def->maps[0].path);
     snprintf(VS(MapData.region_name), "%s", "gpu-ui-closure");
@@ -2024,22 +2055,785 @@ static bool gpu_player_view_ui_painting_prepare(const player_view_manifest_t *ma
     return resources_test_bind_loaded_file("gpu-ui-closure-resource", path);
 }
 
+/** Reconcile startup window events before testing a frozen intro viewport. */
+static bool gpu_player_view_provider_input_prepare(void) {
+    for (unsigned int pass = 0; pass < 4; pass++) {
+        if (Event_PollInputDevice() != 0) {
+            SDL_SetError("provider input setup received a quit event");
+            return false;
+        }
+        if (!gpu_renderer_recreation_take_request()) {
+            return true;
+        }
+        /* The production loop services recreation after dispatch, before its
+         * next frame. Do the same for queued startup resize/display events. */
+        capture_privacy_block();
+        if (!gpu_player_view_recover_once(ScreenWindow)) {
+            return false;
+        }
+    }
+    SDL_SetError("provider input setup did not settle its startup window events");
+    return false;
+}
+
+/** Send the real queued mouse input through modal and intro dispatch. */
+static bool gpu_player_view_provider_click(const SDL_Rect *rect) {
+    SDL_Event event = {.type = SDL_EVENT_MOUSE_BUTTON_DOWN};
+    event.button.button = SDL_BUTTON_LEFT;
+    event.button.x = (float)(rect->x + rect->w / 2);
+    event.button.y = (float)(rect->y + rect->h / 2);
+    if (!SDL_PushEvent(&event)) {
+        return false;
+    }
+    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    return SDL_PushEvent(&event) && Event_PollInputDevice() == 0;
+}
+
+typedef struct gpu_provider_access_test {
+    SDL_Semaphore *started;
+    SDL_Semaphore *release;
+    bool snapshot_cancelled;
+} gpu_provider_access_test_t;
+
+/** Hold the real resolver worker after snapshotting, without network traffic. */
+static server_struct *gpu_player_view_provider_access_transport(
+    const client_metaserver_options_t *options,
+    const char *code,
+    const curl_cancel_t *cancel,
+    void *context) {
+    gpu_provider_access_test_t *test = context;
+    SDL_SignalSemaphore(test->started);
+    bool released = SDL_WaitSemaphoreTimeout(test->release, 5000);
+    test->snapshot_cancelled =
+        released && curl_cancelled(cancel) && options->count == 1 &&
+        strcmp(code, "0123456789ABCDEF") == 0 &&
+        strcmp(options->endpoints[0].directory_url,
+               "https://classic.metaserver.atrinik.org/index.xml") == 0 &&
+        strcmp(options->endpoints[0].rendezvous_origin,
+               "https://rendezvous.meta.atrinik.org/v1/classic") == 0 &&
+        strcmp(options->endpoints[0].access_origin,
+               "https://rendezvous.meta.atrinik.org") == 0;
+    return NULL;
+}
+
+static bool gpu_player_view_provider_access_cancel(const SDL_Rect *rect) {
+    gpu_provider_access_test_t test = {0};
+    test.started = SDL_CreateSemaphore(0);
+    test.release = SDL_CreateSemaphore(0);
+    bool registered = false;
+    bool ok = false;
+    char failure_error[256] = {0};
+    const char *stage = "semaphore initialization";
+    if (test.started == NULL || test.release == NULL) {
+        goto cleanup;
+    }
+    stage = "transport registration";
+    registered =
+        access_resolver_test_transport(gpu_player_view_provider_access_transport, &test);
+    if (!registered) {
+        goto cleanup;
+    }
+
+    stage = "other modal ownership";
+    /* Other modals keep ownership even at the visible provider button. */
+    server_struct *selection = selected_server;
+    popup_struct *other = popup_create(texture_get(TEXTURE_TYPE_CLIENT, "popup"));
+    if (other == NULL || !gpu_player_view_render_complete() ||
+        popup_covers_point(rect->x + rect->w / 2, rect->y + rect->h / 2) ||
+        !gpu_player_view_provider_click(rect) || popup_get_head() != other ||
+        cpl.state != ST_START || selected_server != selection ||
+        metaserver_get_provider() != METASERVER_PROVIDER_DEFAULT) {
+        goto cleanup;
+    }
+    stage = "other modal window reconciliation";
+    if (!gpu_player_view_provider_input_prepare()) {
+        goto cleanup;
+    }
+    popup_destroy(other);
+
+    stage = "access popup visibility";
+    access_code_open(NULL);
+    if (!access_code_active() || !gpu_player_view_render_complete() ||
+        popup_covers_point(rect->x + rect->w / 2, rect->y + rect->h / 2)) {
+        goto cleanup;
+    }
+    stage = "access input submission";
+    SDL_Event input = {.type = SDL_EVENT_TEXT_INPUT};
+    input.text.text = "0123456789ABCDEF";
+    if (!SDL_PushEvent(&input)) {
+        goto cleanup;
+    }
+    event_push_key_once(SDLK_RETURN, 0);
+    if (Event_PollInputDevice() != 0 || !SDL_WaitSemaphoreTimeout(test.started, 2000)) {
+        goto cleanup;
+    }
+    stage = "provider dispatch and cancellation";
+    uint64_t before = SDL_GetTicks();
+    ok = gpu_player_view_provider_click(rect) && SDL_GetTicks() - before < 100 &&
+         access_code_test_cleared() && popup_get_head() == NULL &&
+         cpl.state == ST_META && selected_server == NULL && server_get_count() == 0 &&
+         metaserver_get_provider() == METASERVER_PROVIDER_DEV;
+
+cleanup:
+    if (!ok) {
+        snprintf(failure_error, sizeof(failure_error), "%s", SDL_GetError());
+    }
+    popup_destroy_all();
+    if (registered) {
+        SDL_SignalSemaphore(test.release);
+        access_resolver_deinit();
+        if (ok && !test.snapshot_cancelled) {
+            stage = "cancelled endpoint snapshot";
+        }
+        ok = ok && test.snapshot_cancelled;
+        (void)access_resolver_test_transport(NULL, NULL);
+    }
+    if (test.started != NULL) {
+        SDL_DestroySemaphore(test.started);
+    }
+    if (test.release != NULL) {
+        SDL_DestroySemaphore(test.release);
+    }
+    if (!ok) {
+        SDL_SetError("queued provider test failed at %s: rect=%d,%d,%d,%d state=%d provider=%d "
+                     "servers=%zu selected=%d invalidated=%d SDL=%s",
+                     stage,
+                     rect->x,
+                     rect->y,
+                     rect->w,
+                     rect->h,
+                     cpl.state,
+                     metaserver_get_provider(),
+                     server_get_count(),
+                     selected_server != NULL,
+                     intro_test_servers_invalidated(),
+                     failure_error);
+    }
+    return ok;
+}
+
+/** Exercise the production intro controls without starting directory requests. */
+static bool gpu_player_view_intro_provider_controls_run(void) {
+    SDL_Rect rect;
+    const char *label;
+    int connecting = ms_connecting(-1);
+    if (!gpu_player_view_provider_input_prepare()) {
+        return false;
+    }
+    client_metaserver_options_disable(&clioption_settings.metaservers);
+    ms_connecting(0);
+    if (!gpu_player_view_render_complete() ||
+        !intro_test_metaserver_button(&rect, &label) || strcmp(label, "Dev") != 0 ||
+        rect.x < 0 || rect.y < 0 || rect.x + rect.w > video_get_width() ||
+        rect.y + rect.h > video_get_height() ||
+        text_get_width(FONT_ARIAL10, "Default", 0) > rect.w) {
+        SDL_SetError("metaserver toggle was not available with discovery disabled and no servers");
+        return false;
+    }
+
+    client_metaserver_options_replace_provider(&clioption_settings.metaservers,
+                                               METASERVER_PROVIDER_DEFAULT);
+    selected_server = metaserver_add("old.invalid", 13327, "Old provider", "5.1.0", "Old");
+    if (!gpu_player_view_render_complete() || intro_test_server_name(0) == NULL ||
+        strcmp(intro_test_server_name(0), "Old provider") != 0) {
+        SDL_SetError("intro fixture did not display its initial provider row");
+        return false;
+    }
+    ms_connecting(1);
+    for (size_t i = 0; i < 2; i++) {
+        if (!gpu_player_view_render_complete() ||
+            !intro_test_metaserver_button(&rect, &label) ||
+            strcmp(label, i == 0 ? "Dev" : "Default") != 0) {
+            SDL_SetError("metaserver toggle was not available during a fetch");
+            return false;
+        }
+        bool clicked = i == 0 ? gpu_player_view_provider_access_cancel(&rect)
+                              : gpu_player_view_provider_click(&rect);
+        if (!clicked) {
+            return false;
+        }
+        if (cpl.state != ST_META || selected_server != NULL ||
+            server_get_count() != 0 || !intro_test_servers_invalidated() ||
+            metaserver_get_provider() !=
+                (i == 0 ? METASERVER_PROVIDER_DEV : METASERVER_PROVIDER_DEFAULT) ||
+            !client_metaserver_options_enabled(&clioption_settings.metaservers)) {
+            SDL_SetError("metaserver toggle did not switch: iteration=%zu state=%d provider=%d "
+                         "servers=%zu selected=%d invalidated=%d enabled=%d",
+                         i,
+                         cpl.state,
+                         metaserver_get_provider(),
+                         server_get_count(),
+                         selected_server != NULL,
+                         intro_test_servers_invalidated(),
+                         client_metaserver_options_enabled(&clioption_settings.metaservers));
+            return false;
+        }
+        const char *name = i == 0 ? "Dev provider" : "Default provider";
+        selected_server = metaserver_add("new.invalid", 13327, name, "5.1.0", "New");
+        cpl.state = ST_START;
+        if (!gpu_player_view_provider_input_prepare() || !gpu_player_view_render_complete() ||
+            intro_test_servers_invalidated() ||
+            intro_test_server_name(0) == NULL ||
+            strcmp(intro_test_server_name(0), name) != 0 ||
+            !intro_test_metaserver_button(NULL, &label) ||
+            strcmp(label, i == 0 ? "Default" : "Dev") != 0) {
+            SDL_SetError("metaserver toggle retained a stale row or destination label");
+            return false;
+        }
+    }
+    metaserver_clear_data();
+    intro_deinit();
+    if (intro_test_metaserver_button(NULL, NULL)) {
+        SDL_SetError("metaserver toggle survived intro teardown");
+        return false;
+    }
+    intro_test_begin();
+    client_metaserver_options_deinit(&clioption_settings.metaservers);
+    ms_connecting(connecting);
+    return gpu_player_view_render_complete() && intro_test_metaserver_button(NULL, NULL);
+}
+
+/** Match the production window's text-input lifecycle for queued SDL input. */
+static bool gpu_player_view_intro_provider_controls(void) {
+    bool text_active = SDL_TextInputActive(ScreenWindow);
+    if (!text_active && !SDL_StartTextInput(ScreenWindow)) {
+        return false;
+    }
+    bool result = gpu_player_view_intro_provider_controls_run();
+    if (!text_active) {
+        SDL_StopTextInput(ScreenWindow);
+    }
+    return result;
+}
+
+/* Scripted production SDL popup acceptance. There is no server connection:
+ * bounded protocol snapshots drive the real decoder, and requests are observed
+ * after production serialization. Existing UI goldens remain a separate sweep. */
+static void gpu_player_view_book_snapshot(uint8_t result, uint32_t session,
+                                          uint32_t destination, uint32_t ink,
+                                          bool finalized, const char *title,
+                                          const char *contents) {
+    packet_struct *packet = packet_new(0, 256, 256);
+    packet_writer_write_uint8(packet, result);
+    packet_writer_write_uint32(packet, session);
+    packet_writer_write_uint32(packet, destination);
+    packet_writer_write_uint32(packet, ink);
+    packet_writer_write_uint32(packet, 500);
+    packet_writer_write_uint16(packet, 3);
+    for (uint32_t tag = 41; tag <= 43; tag++) {
+        packet_writer_write_uint32(packet, tag);
+        packet_writer_write_uint8(packet, tag == 42 || (tag == destination && finalized));
+        packet_writer_write_cstring(packet, tag == destination ? title :
+                                   tag == 42 ? "Signed copy source" : "Other inventory book");
+    }
+    packet_writer_write_cstring(packet, title);
+    packet_writer_write_cstring(packet, contents);
+    packet_writer_write_cstring(packet, result == BOOK_EDIT_ERROR ?
+                               "Not enough ink. Your draft is kept; refill the pen and retry." :
+                               "Insertions cost one ink per UTF-8 byte; renaming and signing are free.");
+    socket_command_book_edit(packet->data, packet->len, 0);
+    packet_free(packet);
+}
+
+static bool gpu_player_view_book_click(int x, int y) {
+    popup_struct *popup = popup_get_head();
+    if (popup == NULL) {
+        return false;
+    }
+    SDL_Event event = {.type = SDL_EVENT_MOUSE_BUTTON_DOWN};
+    event.button.button = SDL_BUTTON_LEFT;
+    event.button.x = (float)(popup->x + x);
+    event.button.y = (float)(popup->y + y);
+    bool consumed = popup_handle_event(&event) == 1;
+    event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    (void)popup_handle_event(&event);
+    return consumed;
+}
+
+static bool gpu_player_view_book_key(SDL_Keycode key) {
+    SDL_Event event = {.type = SDL_EVENT_KEY_DOWN};
+    event.key.key = key;
+    if (popup_handle_event(&event) != 1) {
+        return false;
+    }
+    event.type = SDL_EVENT_KEY_UP;
+    return popup_get_head() == NULL || popup_handle_event(&event) == 1;
+}
+
+static bool gpu_player_view_book_text(const char *text) {
+    SDL_Event event = {.type = SDL_EVENT_TEXT_INPUT};
+    event.text.text = text;
+    return popup_handle_event(&event) == 1;
+}
+
+static bool gpu_player_view_book_close(void) {
+    popup_struct *popup = popup_get_head();
+    return popup != NULL &&
+           gpu_player_view_book_click(popup->button_right.x + 5, popup->button_right.y + 5) &&
+           popup_get_head() == NULL;
+}
+
+#define BOOK_UI_CHECK(condition) do { \
+    if (!(condition)) { \
+        SDL_SetError("book popup UI acceptance failed at line %d: %s", __LINE__, #condition); \
+        return false; \
+    } \
+} while (0)
+
+static bool gpu_player_view_book_editor_run(void) {
+    memset(&gpu_player_view_book_editor_ui, 0, sizeof(gpu_player_view_book_editor_ui));
+    book_edit_disconnect();
+    const char *saved_title = "Unsigned destination";
+    const char *saved_body = "Existing first line.\nExisting second line.";
+    /* Wide, maximum-byte UTF-8 inventory names exercise the label ellipsis
+     * before Next. Restore a short base afterward to test actual title edits. */
+    char long_title[BOOK_EDIT_TITLE_MAX + 1];
+    memset(long_title, 'W', sizeof(long_title) - 3);
+    memcpy(long_title + sizeof(long_title) - 3, "\xc3\xa9", 3);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 16, 41, 100, false, long_title, saved_body);
+    BOOK_UI_CHECK(popup_get_head() != NULL && book_edit_test_title_focused());
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_fields", false));
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 17, 41, 100, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_text(" edited"));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_TAB) && !book_edit_test_title_focused());
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_RETURN));
+    BOOK_UI_CHECK(gpu_player_view_book_text("Unsaved UTF-8 draft: \xc3\xa9"));
+    BOOK_UI_CHECK(strstr(book_edit_test_model()->contents, "\nUnsaved UTF-8 draft: \xc3\xa9") != NULL);
+    SDL_Event composition = {.type = SDL_EVENT_TEXT_EDITING};
+    composition.edit.text = "composition";
+    BOOK_UI_CHECK(popup_handle_event(&composition) == 1);
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_W)); /* A gameplay binding stays consumed. */
+    BOOK_UI_CHECK(gpu_player_view_book_click(90, 125) && book_edit_test_title_focused());
+    BOOK_UI_CHECK(gpu_player_view_book_click(40, 185) && !book_edit_test_title_focused());
+    BOOK_UI_CHECK(gpu_player_view_book_click(590, 95)); /* Select signed copy source #42. */
+    BOOK_UI_CHECK(gpu_player_view_render_complete()); /* Refresh Copy's enabled state. */
+    unsigned requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(145, 411));
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_COPY &&
+                  book_edit_test_request()->count == requests);
+    /* Next still has its old draw-time enabled flag: this same-drain event
+     * must be fenced by the production event handler's live confirmation. */
+    BOOK_UI_CHECK(gpu_player_view_book_click(590, 95));
+    BOOK_UI_CHECK(book_edit_test_model()->source == 42);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_copy_confirmation", false));
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    const book_edit_test_request_t *request = book_edit_test_request();
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_COPY &&
+                  request->destination == 41 && request->source == 42 &&
+                  request->title[0] == '\0' && request->contents[0] == '\0');
+    gpu_player_view_book_snapshot(BOOK_EDIT_UPDATED, 17, 41, 80, false,
+                                  "Signed copy source", "Copied source text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_SIGN);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_sign_confirmation", false));
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE));
+    BOOK_UI_CHECK(book_edit_test_request()->count == requests &&
+                  book_edit_test_model()->confirmation == BOOK_CONFIRM_NONE);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_SIGN &&
+                  strcmp(request->title, "Signed copy source") == 0 &&
+                  strcmp(request->contents, "Copied source text.") == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_UPDATED, 17, 41, 80, true,
+                                  "Signed copy source", "Copied source text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    requests = request->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(35, 411));
+    BOOK_UI_CHECK(book_edit_test_request()->count == requests);
+    BOOK_UI_CHECK(gpu_player_view_book_close());
+    packet_struct *reader = packet_new(0, 256, 128);
+    packet_writer_write_cstring(reader, "[b]Signed title[/b]\nCopied source text.");
+    packet_writer_write_cstring(reader, "Authenticated [b]fixture[/b] character");
+    packet_writer_write_cstring(reader, "Year 42, [red]day 7");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_reader_signed_footer", false));
+    BOOK_UI_CHECK(book_test_signature_rendered());
+    reader = packet_new(0, 128, 128);
+    packet_writer_write_cstring(reader, "Unsigned replacement book.\nNo authenticated footer remains.");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_reader_unsigned_footer_clear", false));
+    BOOK_UI_CHECK(!book_test_signature_rendered());
+    BOOK_UI_CHECK(gpu_player_view_book_close());
+    BOOK_UI_CHECK(!book_test_signature_rendered());
+
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 18, 41, 0, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_text(" retained"));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_TAB));
+    BOOK_UI_CHECK(gpu_player_view_book_text("\nDraft after insufficient ink: \xc3\xa9"));
+    char retained_title[BOOK_EDIT_TITLE_MAX + 1], retained_body[BOOK_EDIT_CONTENT_MAX + 1];
+    const book_edit_model_t *model = book_edit_test_model();
+    memcpy(retained_title, model->title, sizeof(retained_title));
+    memcpy(retained_body, model->contents, sizeof(retained_body));
+
+    /* Reader and editor share parchment artwork, never model or popup identity.
+     * Exercise production BOOK decoding and private-result teardown while a
+     * dirty editor remains underneath, with its session and draft untouched. */
+    popup_struct *draft_editor = popup_get_head();
+    unsigned draft_requests = book_edit_test_request()->count;
+    reader = packet_new(0, 128, 128);
+    packet_writer_write_cstring(reader, "Ordinary reader beside an unsaved draft.");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    popup_struct *coexisting_reader = popup_get_head();
+    BOOK_UI_CHECK(coexisting_reader != NULL && coexisting_reader != draft_editor &&
+                  coexisting_reader->next == draft_editor &&
+                  coexisting_reader->destroy_callback_func != draft_editor->destroy_callback_func &&
+                  coexisting_reader->draw_func != draft_editor->draw_func &&
+                  book_test_content_retained() && !book_sensitive_active());
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && !book_test_signature_rendered());
+    reader = packet_new(0, 256, 128);
+    packet_writer_write_cstring(reader, "Signed reader beside an unsaved draft.");
+    packet_writer_write_cstring(reader, "Authenticated [b]fixture[/b] character");
+    packet_writer_write_cstring(reader, "Year 42, [red]day 7");
+    socket_command_book(reader->data, reader->len, 0);
+    packet_free(reader);
+    BOOK_UI_CHECK(popup_get_head() == coexisting_reader &&
+                  coexisting_reader->next == draft_editor);
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && book_test_signature_rendered());
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE));
+    BOOK_UI_CHECK(popup_get_head() == draft_editor && !book_test_content_retained() &&
+                  !book_test_signature_rendered());
+
+    const char *private_draft_result = "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";
+    BOOK_UI_CHECK(book_load_sensitive(private_draft_result, (int)strlen(private_draft_result),
+                                      "Access management"));
+    coexisting_reader = popup_get_head();
+    BOOK_UI_CHECK(coexisting_reader != NULL && coexisting_reader != draft_editor &&
+                  coexisting_reader->next == draft_editor && book_sensitive_visible() &&
+                  !capture_privacy_allowed(book_sensitive_active()));
+    BOOK_UI_CHECK(gpu_player_view_render_complete() &&
+                  !capture_privacy_allowed(book_sensitive_active()));
+    client_access_admin_reset();
+    BOOK_UI_CHECK(popup_get_head() == draft_editor && draft_editor->next == NULL &&
+                  !book_sensitive_active() && !book_sensitive_visible() &&
+                  !book_test_content_retained() && book_test_clear_was_observed() &&
+                  !capture_privacy_allowed(false));
+    model = book_edit_test_model();
+    BOOK_UI_CHECK(model->current.session == 18 && model->destination == 41 &&
+                  model->current.ink == 0 && strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_title, saved_title) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0 &&
+                  book_edit_test_request()->count == draft_requests);
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && capture_privacy_allowed(false));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_W)); /* Editor still owns focused input. */
+
+    BOOK_UI_CHECK(gpu_player_view_book_click(35, 411));
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(request->action == BOOK_EDIT_SAVE &&
+                  strcmp(request->title, retained_title) == 0 &&
+                  strcmp(request->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_ERROR, 18, 41, 0, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_insufficient_ink", false));
+    BOOK_UI_CHECK(strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    BOOK_UI_CHECK(gpu_player_view_book_close()); /* Real popup X event, not model_close. */
+    BOOK_UI_CHECK(!book_edit_test_model()->current.session &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 19, 41, 500, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    model = book_edit_test_model();
+    BOOK_UI_CHECK(model->current.session == 19 && model->current.ink == 500 &&
+                  strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0);
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(365, 411)); /* Cancel retains the same draft. */
+    model = book_edit_test_model();
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(popup_get_head() == NULL && !model->current.session &&
+                  model->destination == 41 && model->current.ink == 500 &&
+                  strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_title, saved_title) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0);
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_CANCEL &&
+                  request->session == 19 && request->destination == 41 && !request->source &&
+                  !request->title[0] && !request->contents[0]);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 20, 41, 500, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(strcmp(book_edit_test_model()->title, retained_title) == 0 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE)); /* Escape also retains, never saves. */
+    model = book_edit_test_model();
+    request = book_edit_test_request();
+    BOOK_UI_CHECK(popup_get_head() == NULL && !model->current.session &&
+                  model->destination == 41 && model->current.ink == 500 &&
+                  strcmp(model->title, retained_title) == 0 &&
+                  strcmp(model->contents, retained_body) == 0 &&
+                  strcmp(model->base_contents, saved_body) == 0);
+    BOOK_UI_CHECK(request->count == requests + 1 && request->action == BOOK_EDIT_CANCEL &&
+                  request->session == 20 && !request->title[0] && !request->contents[0]);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 21, 41, 500, false, saved_title, saved_body);
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_reopened_draft", false));
+    BOOK_UI_CHECK(book_edit_test_model()->current.session == 21 &&
+                  strcmp(book_edit_test_model()->title, retained_title) == 0 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 22, 43, 500, false,
+                                  "Other destination", "Other persisted text.");
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_discard_confirmation", false));
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_OPEN_DISCARD);
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_ESCAPE));
+    BOOK_UI_CHECK(strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 23, 41, 500, false, saved_title, saved_body);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 24, 41, 500, false,
+                                  "External rename", "External changed text.");
+    BOOK_UI_CHECK(gpu_player_view_ui_capture_into(&gpu_player_view_book_editor_ui,
+                                                "book_editor_rebase_confirmation", false));
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_OPEN_REBASE);
+    requests = book_edit_test_request()->count;
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(book_edit_test_request()->count == requests &&
+                  book_edit_test_model()->current.session == 24 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0 &&
+                  strcmp(book_edit_test_model()->base_contents, "External changed text.") == 0);
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(gpu_player_view_book_click(365, 411));
+    BOOK_UI_CHECK(popup_get_head() == NULL && !book_edit_test_model()->current.session &&
+                  book_edit_test_model()->destination == 41 &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0 &&
+                  strcmp(book_edit_test_model()->base_contents, "External changed text.") == 0);
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 25, 41, 500, false,
+                                  "External rename", "External changed text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_NONE &&
+                  strcmp(book_edit_test_model()->contents, retained_body) == 0);
+    /* Replacing a retained draft remains an explicit, separate confirmation. */
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 26, 43, 500, false,
+                                  "Other destination", "Other persisted text.");
+    BOOK_UI_CHECK(gpu_player_view_render_complete());
+    BOOK_UI_CHECK(book_edit_test_model()->confirmation == BOOK_CONFIRM_OPEN_DISCARD);
+    BOOK_UI_CHECK(gpu_player_view_book_click(255, 411));
+    BOOK_UI_CHECK(book_edit_test_model()->destination == 43 &&
+                  strcmp(book_edit_test_model()->contents, "Other persisted text.") == 0);
+    BOOK_UI_CHECK(gpu_player_view_book_text(" Account A unsaved title"));
+    BOOK_UI_CHECK(gpu_player_view_book_key(SDLK_TAB));
+    BOOK_UI_CHECK(gpu_player_view_book_text(" Account A unsaved text"));
+    BOOK_UI_CHECK(gpu_player_view_book_close());
+    BOOK_UI_CHECK(book_edit_model_dirty(book_edit_test_model()));
+
+    /* Drive the actual Settings -> Logout action. It reconnects straight
+     * through ST_STARTCONNECT, bypassing game_status_chain's ST_START reset. */
+    char *saved_account = clioption_settings.connect[1];
+    char *saved_password = clioption_settings.connect[2];
+    clioption_settings.connect[1] = clioption_settings.connect[2] = NULL;
+    BOOK_UI_CHECK(client_command_queue_initialize());
+    client_socket_shutdown_test_set(false);
+    settings_open();
+    BOOK_UI_CHECK(popup_get_head() != NULL);
+    SDL_Event logout = {.type = SDL_EVENT_KEY_DOWN};
+    logout.key.key = SDLK_UP; /* Default Disconnect -> Logout. */
+    BOOK_UI_CHECK(popup_handle_event(&logout) == 1);
+    capture_privacy_block();
+    requests = book_edit_test_request()->count;
+    logout.key.key = SDLK_RETURN;
+    BOOK_UI_CHECK(popup_handle_event(&logout) == 1);
+    free(clioption_settings.connect[1]);
+    free(clioption_settings.connect[2]);
+    clioption_settings.connect[1] = saved_account;
+    clioption_settings.connect[2] = saved_password;
+    BOOK_UI_CHECK(cpl.state == ST_STARTCONNECT && popup_get_head() != NULL &&
+                  !book_edit_test_model()->destination && !book_edit_test_model()->contents[0] &&
+                  !book_edit_test_model()->title[0] && !book_edit_test_model()->base_contents[0] &&
+                  !book_edit_test_model()->current.session &&
+                  book_edit_test_request()->count == requests && !capture_privacy_allowed(false));
+    BOOK_UI_CHECK(handle_socket_shutdown() == 1 && cpl.state == ST_STARTCONNECT);
+    capture_privacy_frame_begin(false);
+    capture_privacy_frame_end(false);
+    BOOK_UI_CHECK(!capture_privacy_allowed(false));
+    BOOK_UI_CHECK(gpu_player_view_render_complete() && capture_privacy_allowed(false));
+
+    cpl.state = ST_PLAY;
+    popup_destroy_all();
+    /* A second account reuses the same inventory tag and server session. Its
+     * snapshot must open fresh without any discard/rebase or Account A text. */
+    gpu_player_view_book_snapshot(BOOK_EDIT_OPEN, 26, 43, 500, false,
+                                  "Account B title", "Account B persisted text.");
+    model = book_edit_test_model();
+    BOOK_UI_CHECK(model->confirmation == BOOK_CONFIRM_NONE && model->destination == 43 &&
+                  strcmp(model->title, "Account B title") == 0 &&
+                  strcmp(model->contents, "Account B persisted text.") == 0 &&
+                  strcmp(model->base_contents, "Account B persisted text.") == 0 &&
+                  !book_edit_model_dirty(model));
+    requests = book_edit_test_request()->count;
+    client_socket_close(&csocket); /* An open canvas clears without a cancel request. */
+    BOOK_UI_CHECK(popup_get_head() == NULL && !book_edit_test_model()->destination &&
+                  !book_edit_test_model()->contents[0] &&
+                  book_edit_test_request()->count == requests);
+    BOOK_UI_CHECK(handle_socket_shutdown() == 1);
+    book_edit_deinit();
+    return gpu_player_view_book_editor_ui.states_num == 9;
+}
+#undef BOOK_UI_CHECK
+
+/* Anchor enumeration follows the same dispatch path as clicking, but the
+ * interceptor consumes every action so the fixture never sends a command. */
+static int gpu_player_view_private_anchor(const char *action,
+                                          const char *text,
+                                          size_t length,
+                                          void *userdata) {
+    (void)action;
+    (void)text;
+    (void)length;
+    if (userdata != NULL) {
+        (*(unsigned int *)userdata)++;
+    }
+    return 1;
+}
+
+static bool gpu_player_view_book_anchors(unsigned int *anchors) {
+    capture_privacy_frame_begin(book_sensitive_active());
+    if (!gpu_renderer_begin_frame()) {
+        capture_privacy_frame_end(false);
+        return false;
+    }
+    /* Limit enumeration to the book; HUD text has its own anchor handlers. */
+    text_set_anchor_handle(gpu_player_view_private_anchor);
+    text_set_anchor_info(anchors);
+    popup_render_all();
+    text_set_anchor_info(NULL);
+    text_set_anchor_handle(NULL);
+    bool presented = gpu_renderer_frame_valid() && gpu_renderer_present() && gpu_renderer_wait_idle();
+    capture_privacy_frame_end(presented);
+    return presented;
+}
+
+static bool gpu_player_view_private_markup_test(void) {
+    const char *label = "[a=help]/password victim NewPass123[/a]";
+    const char *result = "{\"label\":\"[a=help]/password victim NewPass123[/a]\"}";
+    unsigned int anchors = 0;
+    if (!book_load(label, (int)strlen(label))) {
+        return false;
+    }
+    bool rendered = gpu_player_view_book_anchors(&anchors);
+    popup_destroy_all();
+    if (!rendered || anchors == 0) {
+        SDL_SetError("ordinary book anchor positive control failed");
+        return false;
+    }
+
+    /* Replace a signed reader in-place: private results must clear its footer
+     * while blocking capture before the next presented frame. */
+    anchors = 0;
+    if (!book_load_signed(label, (int)strlen(label), "Authenticated signer", "Year 42")) {
+        return false;
+    }
+    rendered = gpu_player_view_book_anchors(&anchors);
+    if (!rendered || !book_test_signature_rendered()) {
+        SDL_SetError("signed reader did not render before private replacement");
+        return false;
+    }
+    anchors = 0;
+    if (!book_load_sensitive(result, (int)strlen(result), label) ||
+        capture_privacy_allowed(book_sensitive_active())) {
+        SDL_SetError("private replacement admitted capture before composition");
+        return false;
+    }
+    rendered = gpu_player_view_book_anchors(&anchors);
+    bool private_retained = book_sensitive_active();
+    bool signature_rendered = book_test_signature_rendered();
+    bool capture_allowed = capture_privacy_allowed(private_retained);
+    popup_destroy_all();
+    if (!rendered || anchors != 0 || signature_rendered || !private_retained || capture_allowed ||
+        !book_test_clear_was_observed()) {
+        SDL_SetError("private replacement retained signature, markup, or capture permission");
+        return false;
+    }
+    return true;
+}
+
+/* Exercise the production recovery callback, not the fixture republisher. */
+static bool gpu_player_view_recovery_privacy_test(void) {
+    const char *private_result = "Private recovery fixture";
+    if (!book_load_sensitive(private_result, (int)strlen(private_result), "Access management") ||
+        !gpu_renderer_recovery_republish_test() || capture_privacy_allowed(false)) {
+        SDL_SetError("private recovery frame admitted capture");
+        return false;
+    }
+    popup_destroy_all();
+    if (capture_privacy_allowed(false)) {
+        SDL_SetError("closing private recovery UI admitted stale frame capture");
+        return false;
+    }
+
+    client_socket_shutdown_test_set(true);
+    bool disconnected = gpu_renderer_recovery_republish_test();
+    client_socket_shutdown_test_set(false);
+    if (disconnected || capture_privacy_allowed(false)) {
+        SDL_SetError("recovery without composition admitted capture");
+        return false;
+    }
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    gpu_renderer_conformance_fault_set(GPU_RENDERER_CONFORMANCE_FAULT_SWAPCHAIN);
+    if (gpu_renderer_recovery_republish_test() || capture_privacy_allowed(false)) {
+        SDL_SetError("failed recovery presentation admitted capture");
+        return false;
+    }
+    capture_privacy_frame_end(true); /* No abandoned composition may remain. */
+    if (capture_privacy_allowed(false)) {
+        SDL_SetError("failed recovery left a capture composition open");
+        return false;
+    }
+    if (!gpu_player_view_recover_once(ScreenWindow)) {
+        return false;
+    }
+#endif
+    /* Production recovery invalidates capture before calling the republisher. */
+    capture_privacy_block();
+    if (!gpu_renderer_recovery_republish_test() || !capture_privacy_allowed(false)) {
+        SDL_SetError("clean recovery frame did not resume capture");
+        return false;
+    }
+    /* No intervening draw: a stationary client must be able to capture the
+     * replacement frame after recovery consumes its pending redraw requests. */
+    screenshot_test_begin();
+    if (client_command_check("/screenshot") != 1 || !gpu_renderer_wait_idle()) {
+        return false;
+    }
+    gpu_renderer_readback_poll();
+    SDL_Surface *screenshot = screenshot_test_take();
+    bool captured = screenshot != NULL;
+    SDL_DestroySurface(screenshot);
+    if (!captured) {
+        SDL_SetError("stationary recovery frame could not be captured");
+    }
+    return captured;
+}
+
 static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
                                            const player_view_manifest_t *manifest) {
     memset(&gpu_player_view_ui_closure, 0, sizeof(gpu_player_view_ui_closure));
     popup_destroy_all();
     tooltip_dismiss();
     notification_destroy();
-    region_map_test_fow_persistence_set(false);
     metaserver_clear_data();
+    intro_test_begin();
+    cpl.state = ST_START;
+    if (!gpu_player_view_intro_provider_controls()) {
+        return false;
+    }
     selected_server = metaserver_add("fixture.invalid",
                                      13327,
                                      "Frozen GPU Qualification",
                                      PACKAGE_VERSION,
                                      "Immutable offline UI fixture server");
 
-    intro_test_begin();
-    cpl.state = ST_START;
     if (!gpu_player_view_ui_capture("intro_server_browser", false)) {
         return false;
     }
@@ -2280,6 +3074,53 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
     }
     popup_destroy_all();
 
+    if (!gpu_player_view_book_editor_run()) {
+        return false;
+    }
+
+    if (!book_load(book, (int)strlen(book))) {
+        SDL_SetError("ordinary book could not be opened for targeted privacy clear");
+        return false;
+    }
+    client_access_admin_reset();
+    if (!book_test_content_retained() || book_sensitive_visible()) {
+        SDL_SetError("targeted private-result clear altered an ordinary book");
+        return false;
+    }
+    popup_destroy_all();
+
+    if (!gpu_player_view_private_markup_test() || !gpu_player_view_recovery_privacy_test()) {
+        return false;
+    }
+
+    const char *private_result =
+        "{\"operation\":\"issue\",\"code\":\"0123456789ABCDEF\"}";
+    if (!book_load_sensitive(private_result, (int)strlen(private_result), "Access management")) {
+        SDL_SetError("private access result could not be opened for lifecycle clear");
+        return false;
+    }
+    server_add_open();
+    popup_struct *private_overlay = popup_get_head();
+    client_access_admin_reset();
+    if (book_test_content_retained() || book_sensitive_visible() ||
+        popup_get_head() != private_overlay) {
+        SDL_SetError("admin reset retained private output or destroyed an unrelated popup");
+        return false;
+    }
+    popup_destroy_all();
+
+    if (!book_load_sensitive(private_result, (int)strlen(private_result), "Access management")) {
+        SDL_SetError("private access result could not be opened for character transition clear");
+        return false;
+    }
+    uint8_t empty_characters = 0;
+    socket_command_characters(&empty_characters, 0, 0);
+    if (book_test_content_retained() || book_sensitive_visible() || cpl.state != ST_LOGIN) {
+        SDL_SetError("account/character transition retained private access output");
+        return false;
+    }
+    cpl.state = ST_PLAY;
+
     settings_client_open();
     if (!gpu_player_view_ui_capture("popup_settings_controls", false)) {
         return false;
@@ -2323,12 +3164,6 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
 
     connection_preference_open(selected_server);
     if (!gpu_player_view_ui_capture("popup_connection_preference", false)) {
-        return false;
-    }
-    popup_destroy_all();
-
-    join_password_open(selected_server);
-    if (!gpu_player_view_ui_capture("popup_join_password", false)) {
         return false;
     }
     popup_destroy_all();
@@ -2377,9 +3212,16 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
         !gpu_player_view_ui_capture("region_map_fow_retained", false)) {
         return false;
     }
-    gpu_player_view_ui_state_t *initial = &gpu_player_view_ui_closure.states[14];
-    gpu_player_view_ui_state_t *changed = &gpu_player_view_ui_closure.states[15];
-    gpu_player_view_ui_state_t *retained = &gpu_player_view_ui_closure.states[16];
+    const gpu_player_view_ui_state_t *initial =
+        gpu_player_view_ui_state_find("popup_region_map_minimap");
+    const gpu_player_view_ui_state_t *changed =
+        gpu_player_view_ui_state_find("region_map_fow_transition");
+    const gpu_player_view_ui_state_t *retained =
+        gpu_player_view_ui_state_find("region_map_fow_retained");
+    if (initial == NULL || changed == NULL || retained == NULL) {
+        SDL_SetError("region-map FOW closure states are missing");
+        return false;
+    }
     if (strcmp(initial->digest, changed->digest) == 0 ||
         strcmp(changed->digest, retained->digest) != 0) {
         SDL_SetError("region-map FOW hashes invalid: initial_changed=%d changed_retained=%d",
@@ -2426,14 +3268,14 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
            gpu_player_view_ui_closure.states_num == PLAYER_VIEW_UI_STATES;
 }
 
-static void gpu_player_view_ui_closure_write(void) {
-    if (gpu_player_view_ui_closure.states_num == 0) {
+static void gpu_player_view_ui_states_write(const gpu_player_view_ui_closure_t *closure) {
+    if (closure->states_num == 0) {
         fputs("null", stdout);
         return;
     }
     fputc('[', stdout);
-    for (size_t index = 0; index < gpu_player_view_ui_closure.states_num; index++) {
-        const gpu_player_view_ui_state_t *state = &gpu_player_view_ui_closure.states[index];
+    for (size_t index = 0; index < closure->states_num; index++) {
+        const gpu_player_view_ui_state_t *state = &closure->states[index];
         printf("%s{\"name\":", index == 0 ? "" : ",");
         gpu_player_view_json_string(state->name);
         printf(",\"pixels_sha256\":\"%s\",\"output_size\":[%d,%d],"
@@ -2466,6 +3308,13 @@ static void gpu_player_view_ui_closure_write(void) {
     }
     fputc(']', stdout);
 }
+static void gpu_player_view_ui_closure_write(void) {
+    gpu_player_view_ui_states_write(&gpu_player_view_ui_closure);
+}
+static void gpu_player_view_book_editor_ui_write(void) {
+    gpu_player_view_ui_states_write(&gpu_player_view_book_editor_ui);
+}
+
 #else
 static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
                                            const player_view_manifest_t *manifest) {
@@ -2475,6 +3324,9 @@ static bool gpu_player_view_ui_closure_run(widgetdata *map_widget,
 }
 
 static void gpu_player_view_ui_closure_write(void) {
+    fputs("null", stdout);
+}
+static void gpu_player_view_book_editor_ui_write(void) {
     fputs("null", stdout);
 }
 #endif
@@ -2573,6 +3425,8 @@ static void gpu_player_view_record(const player_view_manifest_t *manifest,
     printf("},\"qualified_hardware\":%s,\"ui_closure\":",
            gpu_renderer_hardware_verified() ? "true" : "false");
     gpu_player_view_ui_closure_write();
+    fputs(",\"book_editor_ui\":", stdout);
+    gpu_player_view_book_editor_ui_write();
     fputs("}\n", stdout);
 }
 
@@ -4001,7 +4855,6 @@ int gpu_player_view_main(int argc, char *argv[]) {
     wrapper_test_user_data_isolated_set(true);
     widget_mplayer_test_isolated_set(true);
     widget_render_profiler_test_isolated_set(true);
-    region_map_test_fow_persistence_set(false);
     snprintf(VS(cpl.account), "%s", "renderer-fixture");
     snprintf(VS(cpl.name), "%s", "Renderer Maintainer");
 #endif
@@ -4707,7 +5560,6 @@ cleanup:
 #ifdef ATRINIK_WIDGET_TESTS
     widget_mplayer_test_isolated_set(false);
     widget_render_profiler_test_isolated_set(false);
-    region_map_test_fow_persistence_set(true);
 #endif
     if (objects_ready) {
         object_deinit();

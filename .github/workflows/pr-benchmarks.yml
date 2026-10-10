@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.2.3@sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
-  CLASSIC_LINUX_IMAGE_DIGEST: sha256:d0ec0a31f97fa1d699f62b81bbe697d95b335f44f1c99fde8704dfc528e2102f
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
+  CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
   CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
   CLASSIC_LINUX_CCACHE_EPOCH: "1"
 
@@ -116,7 +116,7 @@ jobs:
           path: ${{ runner.temp }}/classic-dependency-archives
           key: >-
             classic-dependency-archives-v1-${{ steps.dependency-key.outputs.digest }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pr-benchmark-dependency-inputs
           path: build/dependency-inputs
@@ -136,7 +136,7 @@ jobs:
           "${GITHUB_WORKSPACE}"
           "${RUNNER_TEMP}/gpu-shader-downloads"
           "${GITHUB_WORKSPACE}/build/gpu-shaders"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: needs.changes.outputs.client == 'true'
         with:
           name: pr-benchmark-gpu-shaders
@@ -158,11 +158,11 @@ jobs:
           persist-credentials: false
       - name: Bind the benchmark to the latest pull-request head
         run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: pr-benchmark-dependency-inputs
           path: build/dependency-inputs
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: pr-benchmark-gpu-shaders
           path: build/gpu-shaders
@@ -230,7 +230,7 @@ jobs:
             --baseline-schema build/ci-evidence/movement-baseline-schema.py \
             --output build/ci-evidence/movement-comment.md
           cat build/ci-evidence/movement-comment.md >>"${GITHUB_STEP_SUMMARY}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: pr-client-benchmark-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
@@ -252,7 +252,7 @@ jobs:
           persist-credentials: false
       - name: Bind the benchmark to the latest pull-request head
         run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: pr-benchmark-dependency-inputs
           path: build/dependency-inputs
@@ -314,7 +314,7 @@ jobs:
               'The requested server benchmark did not produce complete evidence.' \
               >>"${GITHUB_STEP_SUMMARY}"
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: pr-server-benchmark-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
@@ -376,7 +376,7 @@ jobs:
       actions: read
       pull-requests: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           name: pr-client-benchmark-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}

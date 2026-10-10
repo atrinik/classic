@@ -39,6 +39,11 @@ extern void account_init(void);
 
 extern void account_deinit(void);
 
+/* Start after offline modes and daemon fork; poll from the main server loop. */
+bool account_auth_start(void);
+void account_auth_poll(void);
+void account_auth_connection_clear(socket_struct *ns);
+
 extern char *account_make_path(const char *name);
 
 /**

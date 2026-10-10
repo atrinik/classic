@@ -64,10 +64,30 @@ extern bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour);
 /** Ensure the field used by map_get_darkness() matches the current hour/profile. */
 extern void celestial_light_ensure(mapstruct *map);
 
-/** Ensure current and next authoritative hourly fields are available. */
+/** Synchronously ensure both hourly fields (offline callers and solver oracle). */
 extern bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour);
 
-/** Return the nonzero generation identifying the current authoritative field. */
+/** Ensure current lighting, queue next hour, and return only complete readiness. */
+extern bool celestial_light_keyframe_request(mapstruct *map, uint64_t absolute_hour);
+
+/** Advance queued cell work on the server thread within this monotonic budget. */
+extern void celestial_light_process_pending(uint64_t budget_us);
+
+/** Cancel every queued stack retaining this map before its storage is released. */
+extern void celestial_light_forget(mapstruct *map);
+
+/** Update exact cell transport geometry and report a semantic change. */
+extern bool celestial_light_geometry_update(mapstruct *map, int x, int y);
+
+#ifdef ATRINIK_TESTING
+extern void celestial_light_process_steps_for_test(size_t steps);
+extern size_t celestial_light_pending_steps_for_test(const mapstruct *map);
+extern uint64_t celestial_light_rebuilds_for_test(void);
+extern size_t celestial_light_pending_memory_for_test(void);
+extern void celestial_light_pending_memory_limit_for_test(size_t limit);
+#endif
+
+/** Return the nonzero generation of the authoritative field/endpoint pair. */
 extern uint64_t celestial_light_generation(const mapstruct *map);
 
 extern void adjust_light_source(mapstruct *map, int x, int y, int light);
@@ -81,9 +101,37 @@ extern void remove_light_source_list(mapstruct *map);
 
 extern void recalculate_light_sources(mapstruct *map);
 
+/** Short server-thread scopes only: balance every begin/end and finish before
+ * changing map residency or releasing maps. Reads and source deltas flush the
+ * pending work without ending the enclosing scope. */
+extern void light_batch_begin(void);
+extern void light_batch_end(void);
+extern void light_batch_flush(void);
+
+/** Publish changed effective geometry, coalescing each map within a scope. */
+extern void light_geometry_changed(mapstruct *map, bool local, bool celestial);
+
+/** Defer map-owned unlink marks across complete retirement; these scopes never
+ * retain released map pointers. Reads and new source mutations force a flush.
+ * retiring_all is reserved for free_all_maps(): it promises complete retirement
+ * with no surviving map, lighting read or gameplay callback within the scope. */
+extern void light_map_unlink_begin(bool retiring_all);
+extern void light_map_unlink_end(void);
+extern void light_map_unlink_flush(void);
+
+/** Begin an unlink scope and mark affected survivors before topology changes. */
+extern void light_map_prepare_unlink(mapstruct *map);
+
+/** Flush geometry and unlink work before changing a resident emitter's radius
+ * or color. Counter delta helpers cannot infer the object's previous fields. */
+extern void light_source_prepare_change(void);
+
 #ifdef ATRINIK_TESTING
 /** Single-server-thread rebuild counter for deterministic teardown work tests. */
 extern uint64_t light_rebuild_count_for_test(void);
+/** Most recent rebuild discovery sizes, including maps without emitters. */
+extern size_t light_rebuild_target_maps_for_test(void);
+extern size_t light_rebuild_source_maps_for_test(void);
 #endif
 
 #endif

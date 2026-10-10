@@ -99,6 +99,7 @@ void button_create(button_struct *button) {
 void button_destroy(button_struct *button) {
     if (button->font) {
         font_free(button->font);
+        button->font = NULL;
     }
 }
 

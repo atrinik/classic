@@ -133,6 +133,24 @@ static int swap_map_check(mapstruct *tiled, mapstruct *map) {
     return tiled->player_first != NULL;
 }
 
+static bool swap_map_has_players(mapstruct *map) {
+    MAP_TILES_WALK_START(map, swap_map_check) {
+        if (MAP_TILES_WALK_RETVAL != 0) {
+            return true;
+        }
+    }
+    MAP_TILES_WALK_END
+    return false;
+}
+
+/** Cancel retained expiry state before map re-entry, reuse, or teardown. */
+void swap_cancel_pending(mapstruct *map) {
+    map->swap_pending_order = 0;
+    map->swap_pending_count = 0;
+    map->swap_retry_ticks = 0;
+    map->swap_failures = 0;
+}
+
 /**
  * Swaps a map to disk.
  * @param map
@@ -146,13 +164,8 @@ bool swap_map_checked(mapstruct *map, int force_flag) {
         return false;
     }
 
-    if (!force_flag) {
-        MAP_TILES_WALK_START(map, swap_map_check) {
-            if (MAP_TILES_WALK_RETVAL != 0) {
-                return false;
-            }
-        }
-        MAP_TILES_WALK_END
+    if (!force_flag && swap_map_has_players(map)) {
+        return false;
     }
 
     /* Update the reset time. */
@@ -186,29 +199,74 @@ void swap_map(mapstruct *map, int force_flag) {
 }
 
 /**
- * Check active maps and swap them out.
+ * Age resident maps and attempt at most one eligible ordinary swap per call.
+ *
+ * Tickets live in the maps, so no queue retains a deleted map pointer. Failed
+ * saves keep the map resident, back off by 2..32 ticks and move behind waiting
+ * work. Explicit resets and shutdown still use the complete checked save path.
  */
 void check_active_maps(void) {
-    mapstruct *map, *tmp;
+    static uint64_t next_order;
+    mapstruct *map, *candidate = NULL;
 
-    DL_FOREACH_SAFE(first_map, map, tmp) {
+    DL_FOREACH(first_map, map) {
         if (map->in_memory != MAP_IN_MEMORY) {
+            swap_cancel_pending(map);
             continue;
         }
 
-        if (!map->timeout) {
-            if (!map->player_first) {
+        if (map->swap_pending_order != 0 &&
+            (map->swap_pending_count != map->count || map->timeout != 0)) {
+            swap_cancel_pending(map);
+        }
+
+        if (map->player_first != NULL) {
+            swap_cancel_pending(map);
+            map->timeout = 0;
+            continue;
+        }
+
+        if (map->swap_pending_order == 0) {
+            if (map->timeout == 0) {
                 set_map_timeout(map);
+                continue;
             }
 
+            if (map->timeout > 1) {
+                map->timeout--;
+                continue;
+            }
+
+            map->timeout = 0;
+            map->swap_pending_order = ++next_order;
+            map->swap_pending_count = map->count;
+        }
+
+        if (map->swap_retry_ticks != 0) {
+            map->swap_retry_ticks--;
             continue;
         }
 
-        if (--(map->timeout) > 0) {
+        /* Recheck the complete resident stack at the point of scheduling. A
+         * player on a linked map cancels expiry just as direct occupancy does. */
+        if (swap_map_has_players(map)) {
+            swap_cancel_pending(map);
             continue;
         }
 
-        swap_map(map, 0);
+        if (candidate == NULL || map->swap_pending_order < candidate->swap_pending_order) {
+            candidate = map;
+        }
+    }
+
+    if (candidate != NULL && !swap_map_checked(candidate, 0)) {
+        /* A successful reset may delete candidate; only a failed save retains
+         * a resident map that may be inspected here. */
+        if (candidate->swap_failures < 5) {
+            candidate->swap_failures++;
+        }
+        candidate->swap_retry_ticks = 1U << candidate->swap_failures;
+        candidate->swap_pending_order = ++next_order;
     }
 }
 
@@ -225,7 +283,8 @@ void flush_old_maps(void) {
     DL_FOREACH_SAFE(first_map, m, tmp) {
         /* There can be cases (ie death) where a player leaves a map and
          * the timeout is not set so it isn't swapped out. */
-        if ((m->in_memory == MAP_IN_MEMORY) && (m->timeout == 0) && !m->player_first) {
+        if (m->in_memory == MAP_IN_MEMORY && m->timeout == 0 &&
+            m->swap_pending_order == 0 && !m->player_first) {
             set_map_timeout(m);
         }
 

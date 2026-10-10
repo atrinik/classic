@@ -39,6 +39,8 @@
 #include <toolkit/rendezvous.h>
 #include <toolkit/toolkit.h>
 
+#include <access_attempt.h>
+
 typedef struct Animations Animations;
 typedef struct _anim_table _anim_table;
 typedef struct clioption_settings_struct clioption_settings_struct;
@@ -74,14 +76,16 @@ typedef struct server_struct {
     char *rendezvous_origin;
 
     bool direct : 1;
-    bool password_required : 1;
+    /** Directory hint; the encrypted ACCESS_POLICY packet is authoritative. */
+    bool access_required : 1;
     bool player_known : 1;
 
-    /** Session-only password for joining this server. */
-    char *join_password;
+    /** Raw access code retained only for the current connection attempt. */
+    client_access_attempt_t access_attempt;
 
-    /** Session-only protected-rendezvous invite capability. */
-    rendezvous_invite_t *rendezvous_invite;
+    /** One-attempt grant returned by private access resolution. */
+    rendezvous_access_grant_t access_grant;
+    bool private_access : 1;
 
     /** Server version. */
     char *version;
@@ -254,6 +258,16 @@ typedef enum player_state_t {
      * Wait for version information from the server.
      */
     ST_WAITVERSION,
+
+    /**
+     * Wait for the mandatory encrypted access-policy announcement.
+     */
+    ST_WAITACCESS_POLICY,
+
+    /**
+     * Wait for the result of the single access-code attempt.
+     */
+    ST_WAITACCESS_RESULT,
 
     /**
      * Server version received.

@@ -45,6 +45,9 @@
 #include <initialization.h>
 #include <animation.h>
 #include <account.h>
+#include <exploration.h>
+#include <access_server.h>
+#include <access_admin.h>
 #include <toolkit/map_protocol.h>
 #include <toolkit/packet.h>
 #include <toolkit/string.h>
@@ -66,83 +69,57 @@
 #include <openssl/crypto.h>
 #define GET_CLIENT_FLAGS(_O_) ((_O_)->flags[0] & 0x7f)
 #define NO_FACE_SEND (-1)
-#define JOIN_FAILURES_PER_MINUTE 5U
-#define JOIN_FAILURES_UNKNOWN_PER_MINUTE 64U
-#define JOIN_FAILURES_GLOBAL_PER_MINUTE 256U
-#define JOIN_FAILURE_ENTRY_MAX 1024U
-
-typedef struct join_failure_entry {
-    UT_hash_handle hh;
-    char address[MAX_BUF];
-    server_monotonic_t window_started;
-    unsigned int failures;
-} join_failure_entry_t;
-
-static join_failure_entry_t *join_failures;
-static server_monotonic_t join_failure_global_window;
-static unsigned int join_failure_global_count;
-
-static bool join_password_allowed(socket_struct *ns) {
-    server_monotonic_t now = server_monotonic_now();
-    server_duration_t minute = server_duration_from_seconds(60);
-    server_duration_t stale = server_duration_from_seconds(120);
-    if (server_monotonic_elapsed_at_least(now, join_failure_global_window, minute)) {
-        join_failure_global_window = now;
-        join_failure_global_count = 0;
+void socket_command_access_auth(socket_struct *ns,
+                                player *pl,
+                                uint8_t *data,
+                                size_t len,
+                                size_t pos) {
+    (void)pl;
+    packet_reader_t reader;
+    packet_reader_init_cursor(&reader, data, len, &pos);
+    ns->access_attempted = true;
+    if (len - pos != 17 || packet_reader_read_uint8(&reader) != 1) {
+        ns->state = ST_ZOMBIE;
+        return;
     }
-    if (join_failure_global_count >= JOIN_FAILURES_GLOBAL_PER_MINUTE) {
-        return false;
+    char code[16];
+    for (size_t i = 0; i < sizeof(code); i++)
+        code[i] = packet_reader_read_uint8(&reader);
+    ns->access_auth_job = access_server_auth_submit(code);
+    OPENSSL_cleanse(code, sizeof(code));
+    OPENSSL_cleanse(data, len);
+    if (ns->access_auth_job == 0) {
+        packet_struct *result = packet_new(CLIENT_CMD_ACCESS_RESULT, 2, 0);
+        packet_writer_write_uint8(result, 1);
+        packet_writer_write_uint8(result, 1);
+        socket_send_packet(ns, result);
+        ns->state = ST_ZOMBIE;
     }
-
-    const char *address = socket_get_addr(ns->sc);
-    join_failure_entry_t *entry;
-    HASH_FIND_STR(join_failures, address, entry);
-    if (entry == NULL) {
-        join_failure_entry_t *old, *next;
-        HASH_ITER(hh, join_failures, old, next) {
-            if (server_monotonic_elapsed_at_least(now, old->window_started, stale)) {
-                HASH_DEL(join_failures, old);
-                free(old);
-            }
-        }
-        if (HASH_COUNT(join_failures) >= JOIN_FAILURE_ENTRY_MAX) {
-            join_failure_entry_t *oldest = NULL;
-            HASH_ITER(hh, join_failures, old, next) {
-                if (oldest == NULL ||
-                    server_monotonic_before(old->window_started, oldest->window_started)) {
-                    oldest = old;
-                }
-            }
-            if (oldest != NULL) {
-                HASH_DEL(join_failures, oldest);
-                free(oldest);
-            }
-        }
-        entry = xcalloc(1, sizeof(*entry));
-        snprintf(VS(entry->address), "%s", address);
-        entry->window_started = now;
-        HASH_ADD_STR(join_failures, address, entry);
-    }
-
-    if (server_monotonic_elapsed_at_least(now, entry->window_started, minute)) {
-        entry->window_started = now;
-        entry->failures = 0;
-    }
-    unsigned int limit = strcmp(address, "<no address>") == 0 ? JOIN_FAILURES_UNKNOWN_PER_MINUTE
-                                                              : JOIN_FAILURES_PER_MINUTE;
-    return entry->failures < limit;
 }
 
-static void join_password_failed(socket_struct *ns) {
-    if (join_failure_global_count < UINT_MAX) {
-        join_failure_global_count++;
+void socket_command_access_admin(socket_struct *ns,
+                                 player *pl,
+                                 uint8_t *data,
+                                 size_t len,
+                                 size_t pos) {
+    packet_reader_t reader;
+    packet_reader_init_cursor(&reader, data, len, &pos);
+    if (len - pos < 2 || len - pos > ACCESS_ADMIN_REQUEST_MAX + 1 ||
+        packet_reader_read_uint8(&reader) != 1 || ns->access_admin_job != 0 ||
+        ns->account == NULL || ns->state != ST_PLAYING || pl == NULL || pl->ob == NULL || pl->cs != ns) {
+        ns->state = ST_ZOMBIE;
+        return;
     }
-    const char *address = socket_get_addr(ns->sc);
-    join_failure_entry_t *entry;
-    HASH_FIND_STR(join_failures, address, entry);
-    if (entry != NULL && entry->failures < UINT_MAX) {
-        entry->failures++;
-    }
+    /* Each operation uses this active character's ordinary command permissions,
+     * including explicit grants and [OP]. Never trust a client identity field. */
+    ns->access_admin_job =
+        access_server_admin_submit((const char *)data + pos, len - pos,
+                                   socket_access_admin_permitted(ns, pl));
+    ns->access_admin_actor_tag = ns->access_admin_job == 0 ? 0 : pl->ob->count;
+    while (pos < len)
+        (void)packet_reader_read_uint8(&reader);
+    if (ns->access_admin_job == 0)
+        ns->state = ST_ZOMBIE;
 }
 
 void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
@@ -203,18 +180,6 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
                 ns->connection_mode = mode;
             }
             packet_writer_write_uint8(packet, ns->connection_mode);
-        } else if (type == CMD_SETUP_JOIN_PASSWORD) {
-            char password[MAX_BUF] = {0};
-            packet_reader_read_string(&reader, VS(password));
-
-            bool allowed = join_password_allowed(ns);
-            ns->join_authenticated =
-                allowed && CRYPTO_memcmp(settings.join_password, password, sizeof(password)) == 0;
-            if (!ns->join_authenticated) {
-                join_password_failed(ns);
-            }
-            OPENSSL_cleanse(password, sizeof(password));
-            packet_writer_write_uint8(packet, ns->join_authenticated ? 1 : 0);
         } else {
             LOG(PACKET, "Unknown setup type: %u", type);
             packet_free(packet);
@@ -225,23 +190,6 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
 
     if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
         packet_free(packet);
-        return;
-    }
-
-    if (*settings.join_password != '\0' && !ns->join_authenticated) {
-        LOG(SYSTEM,
-            "Connection %s rejected: incorrect or missing join password",
-            socket_get_id(ns->sc));
-        draw_info_send(CHAT_TYPE_GAME,
-                       NULL,
-                       COLOR_RED,
-                       ns,
-                       "Incorrect or missing server join password.");
-        /* JOIN_PASSWORD promises an explicit acceptance result. Send the
-         * SETUP response before entering the short zombie grace period so the
-         * client can report the rejection instead of appearing to hang. */
-        socket_send_packet(ns, packet);
-        ns->state = ST_ZOMBIE;
         return;
     }
 
@@ -274,9 +222,14 @@ void socket_command_version(socket_struct *ns, player *pl, uint8_t *data, size_t
     uint32_t ver;
     packet_struct *packet;
 
-    /* Ignore multiple version commands. */
+    if (!socket_is_quic(ns->sc) || len - pos != 4) {
+        ns->state = ST_ZOMBIE;
+        return;
+    }
+
+    /* Reject multiple version commands. */
     if (ns->socket_version != 0) {
-        LOG(PACKET, "Received extraneous version command.");
+        ns->state = ST_ZOMBIE;
         return;
     }
 
@@ -293,11 +246,17 @@ void socket_command_version(socket_struct *ns, player *pl, uint8_t *data, size_t
     }
 
     ns->socket_version = ver;
+    ns->access_transport_authenticated = true;
 
     packet = packet_new(CLIENT_CMD_VERSION, 4, 4);
     packet_debug_data(packet, 0, "Socket version");
     packet_writer_write_uint32(packet, SOCKET_VERSION);
     socket_send_packet(ns, packet);
+    packet = packet_new(CLIENT_CMD_ACCESS_POLICY, 2, 0);
+    packet_writer_write_uint8(packet, 1);
+    packet_writer_write_uint8(packet, settings.access_required ? 1 : 0);
+    socket_send_packet(ns, packet);
+    ns->access_policy_sent = true;
 }
 
 void socket_command_item_move(socket_struct *ns,
@@ -1317,6 +1276,8 @@ static packet_struct *map2_frame_level_chunk(int8_t depth, packet_struct *payloa
 
 /** Draw the client map. */
 void draw_client_map2(object *pl) {
+    light_map_unlink_flush();
+    light_batch_flush();
     static uint32_t map2_count = 0;
     MapCell *mp;
     MapSpace *msp;
@@ -1331,6 +1292,7 @@ void draw_client_map2(object *pl) {
     uint16_t light_next_radiance[NUM_SUB_LAYERS];
     uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
     MapSpace *light_spaces[NUM_SUB_LAYERS];
+    bool light_next_ready[NUM_SUB_LAYERS];
     int ext_flags, anim_num;
     int num_layers;
     object *tmp, *tmp2;
@@ -1348,6 +1310,7 @@ void draw_client_map2(object *pl) {
     uint64_t timed_light_start_seconds = 0;
     uint64_t timed_light_end_seconds = 0;
     uint8_t timed_light_flags = MAP2_LIGHT_KEYFRAME_CONTINUOUS;
+    size_t timed_light_flags_pos = 0;
 
     /* Any kind of special vision? */
     special_vision =
@@ -1365,18 +1328,19 @@ void draw_client_map2(object *pl) {
         CONTR(pl)->cs->lastmap_player_level_known = true;
     }
 
-    if (pl->map->celestial_schema == 1 &&
-        celestial_light_keyframe_ensure(pl->map, (uint64_t)todtick)) {
+    if (pl->map->celestial_schema == 1) {
+        bool next_ready = celestial_light_keyframe_request(pl->map, (uint64_t)todtick);
         timed_light_generation = celestial_light_generation(pl->map);
-        timed_light_descriptor =
-            timed_light_generation != 0 &&
-            (CONTR(pl)->map_update_cmd != MAP_UPDATE_CMD_SAME ||
-             timed_light_generation != CONTR(pl)->cs->lastmap_light_generation);
+        /* Visible neighboring/upper sources can finish independently of the
+         * player's map. Carry the bounded descriptor while comparing endpoint
+         * bytes below, so their completion is sent without another traversal
+         * of camera geometry or redundant tile payloads. */
+        timed_light_descriptor = timed_light_generation != 0;
         timed_light_start_seconds = (uint64_t)todtick * UINT64_C(60) * UINT64_C(60);
         timed_light_end_seconds = timed_light_start_seconds > UINT64_MAX - UINT64_C(3600)
                                       ? UINT64_MAX
                                       : timed_light_start_seconds + UINT64_C(3600);
-        if ((uint64_t)pticks % PTICKS_PER_CLOCK != 0) {
+        if (!next_ready || (uint64_t)pticks % PTICKS_PER_CLOCK != 0) {
             timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
         }
     }
@@ -1493,6 +1457,7 @@ void draw_client_map2(object *pl) {
         packet_debug_data(packet, 0, "Timed-light end game seconds");
         packet_writer_write_uint64(packet, timed_light_end_seconds);
         packet_debug_data(packet, 0, "Timed-light flags");
+        timed_light_flags_pos = packet->len;
         packet_writer_write_uint8(packet, timed_light_flags);
     }
 
@@ -1694,6 +1659,7 @@ void draw_client_map2(object *pl) {
                            0,
                            sizeof(light_next_rgb_radiance[sub_layer]));
                     light_spaces[sub_layer] = NULL;
+                    light_next_ready[sub_layer] = false;
                 }
 
                 /* Initialize default values for some variables. */
@@ -1712,6 +1678,11 @@ void draw_client_map2(object *pl) {
                         mask |= MAP2_MASK_SUPPORT_HEIGHT;
                     }
                 }
+                if (depth == 0 && !tile_fow && !MAP_UNIQUE(m) && m->region != NULL &&
+                    region_find_with_map(m->region) != NULL) {
+                    exploration_mark(CONTR(pl)->cs, m->path, MAP_WIDTH(m), MAP_HEIGHT(m), nx, ny);
+                }
+
                 if (!mp->fow_known || (mp->fow != 0) != tile_fow) {
                     mask |= MAP2_MASK_FOW;
                 }
@@ -1789,7 +1760,11 @@ void draw_client_map2(object *pl) {
                             (!light_set[sub_layer] || (layer == LAYER_EFFECT && sub_layer > 0))) {
                             light_set[sub_layer] = 1;
                             if (tmp->map->celestial_schema == 1) {
-                                celestial_light_keyframe_ensure(tmp->map, (uint64_t)todtick);
+                                light_next_ready[sub_layer] =
+                                    celestial_light_keyframe_request(tmp->map, (uint64_t)todtick);
+                                if (!light_next_ready[sub_layer]) {
+                                    timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+                                }
                             }
                             light_spaces[sub_layer] = GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y);
                             raw_light[sub_layer] = map_get_darkness(tmp->map, tmp->x, tmp->y, NULL);
@@ -2254,6 +2229,7 @@ void draw_client_map2(object *pl) {
                            sizeof(light_next_rgb_radiance[sub_layer]));
 
                     if (light_set[sub_layer] && light_spaces[sub_layer] != NULL &&
+                        light_next_ready[sub_layer] &&
                         (light_spaces[sub_layer]->celestial_light_next_value !=
                              light_spaces[sub_layer]->celestial_light_value ||
                          memcmp(light_spaces[sub_layer]->celestial_light_next_rgb,
@@ -2628,9 +2604,13 @@ void draw_client_map2(object *pl) {
 
     uint16_t continuation_marker =
         continuation_packet_count | (timed_light_descriptor ? MAP2_CONTINUATION_TIMED_LIGHT : 0);
+    if (timed_light_descriptor) {
+        packet_header->data[timed_light_flags_pos] = timed_light_flags;
+    }
     packet_header->data[continuation_count_pos] = continuation_marker >> 8;
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
+    exploration_flush(CONTR(pl)->cs, false);
     bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
                             CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     socket_send_packet(CONTR(pl)->cs, packet_header);
@@ -2743,7 +2723,7 @@ void socket_command_quest_list(socket_struct *ns,
 
     packet = packet_new(CLIENT_CMD_BOOK, 0, 0);
     packet_debug_data(packet, 0, "Quest list message");
-    packet_writer_write_string_n(packet, cp, cp_len);
+    packet_writer_write_cstring_n(packet, cp, cp_len);
     socket_send_packet(pl->cs, packet);
     free(cp);
 }

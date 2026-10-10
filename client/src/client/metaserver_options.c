@@ -36,6 +36,7 @@ static void client_metaserver_options_clear(client_metaserver_options_t *options
     for (size_t i = 0; i < options->count; i++) {
         free(options->endpoints[i].directory_url);
         free(options->endpoints[i].rendezvous_origin);
+        free(options->endpoints[i].access_origin);
     }
     free(options->endpoints);
     options->endpoints = NULL;
@@ -44,16 +45,19 @@ static void client_metaserver_options_clear(client_metaserver_options_t *options
 
 void client_metaserver_options_add(client_metaserver_options_t *options,
                                    const char *directory_url,
-                                   const char *rendezvous_origin) {
+                                   const char *rendezvous_origin,
+                                   const char *access_origin) {
     HARD_ASSERT(options != NULL);
     HARD_ASSERT(directory_url != NULL);
     HARD_ASSERT(rendezvous_origin != NULL);
+    HARD_ASSERT(access_origin != NULL);
 
     options->endpoints =
         xreallocarray(options->endpoints, options->count + 1, sizeof(*options->endpoints));
     client_metaserver_endpoint_t *endpoint = &options->endpoints[options->count];
     endpoint->directory_url = xstrdup(directory_url);
     endpoint->rendezvous_origin = xstrdup(rendezvous_origin);
+    endpoint->access_origin = xstrdup(access_origin);
     options->count++;
     options->disabled = false;
 }
@@ -66,23 +70,27 @@ bool client_metaserver_options_parse(client_metaserver_options_t *options,
 
     char directory_url[MAX_BUF];
     char rendezvous_origin[MAX_BUF];
+    char access_origin[MAX_BUF];
     char rendered[MAX_BUF];
     const char *cursor = value;
     if (!client_metaserver_options_word(&cursor, VS(directory_url)) ||
-        !client_metaserver_options_word(&cursor, VS(rendezvous_origin)) || *cursor != '\0' ||
+        !client_metaserver_options_word(&cursor, VS(rendezvous_origin)) ||
+        !client_metaserver_options_word(&cursor, VS(access_origin)) || *cursor != '\0' ||
         !metaserver_url_directory_valid(directory_url) ||
         !metaserver_url_rendezvous(rendezvous_origin,
                                    client_metaserver_identity,
                                    "client",
-                                   VS(rendered))) {
+                                   VS(rendered)) ||
+        !metaserver_url_access(access_origin, NULL, false, VS(rendered))) {
         if (errmsg != NULL) {
-            *errmsg = xstrdup("metaserver requires one canonical directory URL and one canonical "
-                              "rendezvous origin");
+            *errmsg = xstrdup("metaserver requires canonical directory, rendezvous, and "
+                              "access-service endpoints; the former two-value format is no "
+                              "longer accepted");
         }
         return false;
     }
 
-    client_metaserver_options_add(options, directory_url, rendezvous_origin);
+    client_metaserver_options_add(options, directory_url, rendezvous_origin, access_origin);
     return true;
 }
 
@@ -104,4 +112,61 @@ void client_metaserver_options_deinit(client_metaserver_options_t *options) {
     }
     client_metaserver_options_clear(options);
     options->disabled = false;
+}
+
+static const char *const provider_directory[] = {
+    "https://classic.metaserver.atrinik.org/index.xml",
+    "https://classic.dev.metaserver.atrinik.org/index.xml",
+};
+
+static const char *const provider_rendezvous[] = {
+    "https://rendezvous.meta.atrinik.org/v1/classic",
+    "https://rendezvous.dev.meta.atrinik.org/v1/classic",
+};
+
+static const char *const provider_access[] = {
+    "https://rendezvous.meta.atrinik.org",
+    "https://rendezvous.dev.meta.atrinik.org",
+};
+
+void client_metaserver_options_copy(client_metaserver_options_t *destination,
+                                    const client_metaserver_options_t *source) {
+    HARD_ASSERT(destination != NULL);
+    HARD_ASSERT(source != NULL);
+    if (destination == source) {
+        return;
+    }
+    client_metaserver_options_clear(destination);
+    for (size_t i = 0; i < source->count; i++) {
+        client_metaserver_options_add(destination,
+                                      source->endpoints[i].directory_url,
+                                      source->endpoints[i].rendezvous_origin,
+                                      source->endpoints[i].access_origin);
+    }
+    destination->disabled = source->disabled;
+}
+
+void client_metaserver_options_replace_provider(client_metaserver_options_t *options,
+                                                metaserver_provider_t provider) {
+    HARD_ASSERT(options != NULL);
+    HARD_ASSERT(provider == METASERVER_PROVIDER_DEFAULT || provider == METASERVER_PROVIDER_DEV);
+    client_metaserver_options_clear(options);
+    client_metaserver_options_add(options,
+                                  provider_directory[provider],
+                                  provider_rendezvous[provider],
+                                  provider_access[provider]);
+}
+
+metaserver_provider_t client_metaserver_options_provider(
+    const client_metaserver_options_t *options) {
+    HARD_ASSERT(options != NULL);
+    return !options->disabled && options->count == 1 &&
+                   strcmp(options->endpoints[0].directory_url,
+                          provider_directory[METASERVER_PROVIDER_DEV]) == 0 &&
+                   strcmp(options->endpoints[0].rendezvous_origin,
+                          provider_rendezvous[METASERVER_PROVIDER_DEV]) == 0 &&
+                   strcmp(options->endpoints[0].access_origin,
+                          provider_access[METASERVER_PROVIDER_DEV]) == 0
+               ? METASERVER_PROVIDER_DEV
+               : METASERVER_PROVIDER_DEFAULT;
 }

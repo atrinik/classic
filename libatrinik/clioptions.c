@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -87,6 +87,9 @@ struct clioption {
     /** Whether the retained value must be redacted and securely cleared. */
     bool sensitive : 1;
 
+    /** Require a literal argv argument, excluding config and file indirection. */
+    bool command_line_only : 1;
+
     /**
      * Brief description.
      */
@@ -115,6 +118,7 @@ static size_t clioptions_num;
  * If true, process initialization has finished.
  */
 static bool clioptions_runtime;
+static bool clioptions_startup_errors;
 
 TOOLKIT_API(DEPENDS(logger), IMPORTS(string), IMPORTS(stringbuffer));
 
@@ -267,6 +271,7 @@ TOOLKIT_INIT_FUNC(clioptions) {
     clioptions = NULL;
     clioptions_num = 0;
     clioptions_runtime = false;
+    clioptions_startup_errors = false;
 
     clioption_t *cli;
     CLIOPTIONS_CREATE_ARGUMENT(cli, config, "Read configuration from file");
@@ -380,6 +385,13 @@ void clioptions_enable_changeable(clioption_t *cli) {
     cli->changeable = true;
 }
 
+void clioptions_enable_command_line_only(clioption_t *cli) {
+    TOOLKIT_PROTECT();
+    HARD_ASSERT(cli != NULL);
+    HARD_ASSERT(!cli->command_line_only);
+    cli->command_line_only = true;
+}
+
 void clioptions_enable_sensitive(clioption_t *cli) {
     TOOLKIT_PROTECT();
 
@@ -470,6 +482,10 @@ static bool clioptions_call_handler(clioption_t *cli, const char *cli_arg, char 
 
     char *contents = NULL;
     if (cli_arg != NULL && *cli_arg == '<') {
+        if (cli->command_line_only) {
+            *errmsg = xstrdup("Option requires a literal command-line argument");
+            return false;
+        }
         contents = path_file_contents(cli_arg + 1);
         if (contents == NULL) {
             string_fmt(*errmsg, "Cannot open %s", cli_arg + 1);
@@ -505,6 +521,11 @@ static bool clioptions_call_handler(clioption_t *cli, const char *cli_arg, char 
     return true;
 }
 
+bool clioptions_had_startup_errors(void) {
+    TOOLKIT_PROTECT();
+    return clioptions_startup_errors;
+}
+
 void clioptions_parse(int argc, char *argv[]) {
     TOOLKIT_PROTECT();
 
@@ -526,6 +547,7 @@ void clioptions_parse(int argc, char *argv[]) {
             char *errmsg = NULL;
 
             if (!clioptions_call_handler(cli, cli_arg, &errmsg)) {
+                clioptions_startup_errors = true;
                 if (cli->sensitive) {
                     LOG(ERROR, "Failed to parse sensitive option --%s", cli->name);
                     if (errmsg != NULL) {
@@ -592,9 +614,19 @@ bool clioptions_load(const char *path, const char *category) {
 
     OPENSSL_cleanse(buf, sizeof(buf));
 
-    fclose(fp);
-
-    return true;
+    bool complete = !ferror(fp);
+    int read_error = complete ? 0 : errno;
+    if (fclose(fp) != 0) {
+        complete = false;
+        if (read_error == 0)
+            read_error = errno;
+    }
+    if (!complete) {
+        if (!clioptions_runtime)
+            clioptions_startup_errors = true;
+        errno = read_error != 0 ? read_error : EIO;
+    }
+    return complete;
 }
 
 bool clioptions_load_str(const char *str, char **errmsg) {
@@ -632,6 +664,11 @@ bool clioptions_load_str(const char *str, char **errmsg) {
         goto out;
     }
 
+    if (cli->command_line_only) {
+        *errmsg = xstrdup("Option is command-line only");
+        goto out;
+    }
+
     if (cli->handler_func == NULL) {
         if (!clioptions_runtime) {
             ret = true;
@@ -650,6 +687,8 @@ bool clioptions_load_str(const char *str, char **errmsg) {
     ret = clioptions_call_handler(cli, cli_arg, errmsg);
 
 out:
+    if (!ret && !clioptions_runtime)
+        clioptions_startup_errors = true;
     if (!ret && cli != NULL && cli->sensitive) {
         if (*errmsg != NULL) {
             OPENSSL_cleanse(*errmsg, strlen(*errmsg) + 1U);

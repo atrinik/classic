@@ -41,7 +41,7 @@
 
 static void socket_packet_enqueue(socket_struct *ns, packet_struct *packet) {
 #ifndef DEBUG
-    {
+    if (packet->type != CLIENT_CMD_ACCESS_ADMIN_RESULT) {
         char *cp, *cp2;
 
         LOG(DUMPTX,
@@ -179,7 +179,8 @@ void socket_send_packet(socket_struct *ns, struct packet_struct *packet) {
 
     packet_struct *packet_meta = packet_new(0, 4, 0);
 
-    packet_compress(packet);
+    if (packet->type != CLIENT_CMD_ACCESS_ADMIN_RESULT)
+        packet_compress(packet);
     uint32_t payload_len = (uint32_t)packet->len + 1;
     if (payload_len < 0x8000) {
         packet_writer_write_uint16(packet_meta, (uint16_t)payload_len);

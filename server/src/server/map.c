@@ -1120,6 +1120,85 @@ void map_set_tile(mapstruct *m, int tile, const char *pathname) {
 }
 
 /**
+ * Restore coordinate-filename links after reading either a source or temporary
+ * map header. Celestial saves omit derived links, so both loaders must rebuild
+ * them before validating the sky anchor. Authored paths remain authoritative.
+ */
+static void derive_map_filename_tiles(mapstruct *m, const char *pathname, int flags) {
+    char split[MAX_BUF];
+    const char *basename;
+    size_t pos, coords_idx, coords_len;
+    int16_t old_style_z;
+
+    basename = strrchr(m->path, flags & MAP_PLAYER_UNIQUE ? '$' : '/');
+    if (basename == NULL) {
+        basename = m->path;
+    } else {
+        basename++;
+    }
+
+    pos = coords_idx = 0;
+    coords_len = 0;
+    old_style_z = 0;
+
+    while (string_get_word(basename, &pos, '_', split, sizeof(split), 0)) {
+        if (strlen(split) == 1) {
+            old_style_z = string_isdigit(split) ? atoi(split) : 'a' - *split - 1;
+        } else if (strlen(split) > 3) {
+            /* TODO: remove this hack (avoids parsing old-style naming
+             * convention like map_0101) */
+            continue;
+        }
+
+        if (string_isdigit(split)) {
+            coords_len += strlen(split) + 1;
+            m->coords[coords_idx] = atoi(split);
+            coords_idx++;
+        }
+
+        if (coords_idx >= arraysize(m->coords)) {
+            break;
+        }
+    }
+
+    if (coords_idx >= 2) {
+        size_t i;
+        char *cp, *cp2, path[HUGE_BUF];
+
+        cp = string_sub(pathname, 0, -coords_len);
+
+        for (i = 0; i < TILED_NUM; i++) {
+            if (m->tile_path[i] != NULL) {
+                continue;
+            }
+
+            snprintf(VS(path),
+                     "%s_%d_%d",
+                     cp,
+                     m->coords[0] + map_tiled_coords[i][0],
+                     m->coords[1] + map_tiled_coords[i][1]);
+
+            if (m->coords[2] + map_tiled_coords[i][2] != 0) {
+                snprintfcat(VS(path), "_%d", m->coords[2] + map_tiled_coords[i][2]);
+            }
+
+            if ((!(flags & MAP_NO_DYNAMIC) &&
+                 ((m->coords[2] >= 0 && i != TILED_UP && i != TILED_DOWN) ||
+                  (m->coords[2] > 0 && i != TILED_UP))) ||
+                path_exists(path)) {
+                cp2 = path_basename(path);
+                map_set_tile(m, i, cp2);
+                free(cp2);
+            }
+        }
+
+        free(cp);
+    } else {
+        m->coords[2] = old_style_z;
+    }
+}
+
+/**
  * Opens the file "filename" and reads information about the map
  * from the given file, and stores it in a newly allocated
  * mapstruct.
@@ -1138,10 +1217,7 @@ void map_set_tile(mapstruct *m, int tile, const char *pathname) {
 mapstruct *load_original_map(const char *filename, mapstruct *originator, int flags) {
     FILE *fp;
     mapstruct *m;
-    char pathname[HUGE_BUF], split[MAX_BUF];
-    const char *basename;
-    size_t pos, coords_idx, coords_len;
-    int16_t old_style_z;
+    char pathname[HUGE_BUF];
 
     /* No sense in doing this all for random maps, it will all fail anyways. */
     if (!strncmp(filename, "/random/", 8)) {
@@ -1189,81 +1265,13 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
 
     if (fp != NULL && !load_map_header(m, fp)) {
         log_error("Failure loading map header for %s, flags=%d", filename, flags);
+        free_map(m, 1);
         delete_map(m);
         fclose(fp);
         return NULL;
     }
 
-    basename = strrchr(filename, flags & MAP_PLAYER_UNIQUE ? '$' : '/');
-    if (basename == NULL) {
-        basename = filename;
-    } else {
-        basename++;
-    }
-
-    pos = coords_idx = 0;
-    coords_len = 0;
-    old_style_z = 0;
-
-    while (string_get_word(basename, &pos, '_', split, sizeof(split), 0)) {
-        if (strlen(split) == 1) {
-            old_style_z = string_isdigit(split) ? atoi(split) : 'a' - *split - 1;
-        } else if (strlen(split) > 3) {
-            /* TODO: remove this hack (avoids parsing old-style naming
-             * convention like map_0101) */
-            continue;
-        }
-
-        if (string_isdigit(split)) {
-            coords_len += strlen(split) + 1;
-            m->coords[coords_idx] = atoi(split);
-            coords_idx++;
-        }
-
-        if (coords_idx >= arraysize(m->coords)) {
-            break;
-        }
-    }
-
-    if (coords_idx >= 2) {
-        size_t i;
-        char *cp, *cp2, path[HUGE_BUF];
-
-        const char *path_cp = pathname;
-        if (real_path != NULL) {
-            path_cp = create_pathname(real_path);
-        }
-        cp = string_sub(path_cp, 0, -coords_len);
-
-        for (i = 0; i < TILED_NUM; i++) {
-            if (m->tile_path[i] != NULL) {
-                continue;
-            }
-
-            snprintf(VS(path),
-                     "%s_%d_%d",
-                     cp,
-                     m->coords[0] + map_tiled_coords[i][0],
-                     m->coords[1] + map_tiled_coords[i][1]);
-
-            if (m->coords[2] + map_tiled_coords[i][2] != 0) {
-                snprintfcat(VS(path), "_%d", m->coords[2] + map_tiled_coords[i][2]);
-            }
-
-            if ((!(flags & MAP_NO_DYNAMIC) &&
-                 ((m->coords[2] >= 0 && i != TILED_UP && i != TILED_DOWN) ||
-                  (m->coords[2] > 0 && i != TILED_UP))) ||
-                path_exists(path)) {
-                cp2 = path_basename(path);
-                map_set_tile(m, i, cp2);
-                free(cp2);
-            }
-        }
-
-        free(cp);
-    } else {
-        m->coords[2] = old_style_z;
-    }
+    derive_map_filename_tiles(m, real_path != NULL ? create_pathname(real_path) : pathname, flags);
 
     if (m->level_max == 0 && m->coords[2] >= 0) {
         m->level_max = INT8_MAX;
@@ -1280,6 +1288,7 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
         char error[HUGE_BUF];
         if (!celestial_structure_validate_header(m, VS(error))) {
             LOG(ERROR, "Celestial structural header validation failed: %s", error);
+            free_map(m, 1);
             delete_map(m);
             fclose(fp);
             return NULL;
@@ -1341,7 +1350,7 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
  * The map object we load into (this can change from the passed
  * option if we can't find the original map).
  */
-static mapstruct *load_temporary_map(mapstruct *m) {
+static mapstruct *load_temporary_map(mapstruct *m, int flags) {
     FILE *fp;
     char buf[HUGE_BUF];
 
@@ -1375,11 +1384,13 @@ static mapstruct *load_temporary_map(mapstruct *m) {
             m->path,
             m->tmpname);
         snprintf(buf, sizeof(buf), "%s", m->path);
+        free_map(m, 1);
         delete_map(m);
         m = load_original_map(buf, NULL, 0);
         fclose(fp);
         return m;
     }
+    derive_map_filename_tiles(m, create_pathname(m->path), flags & MAP_NO_DYNAMIC);
     if (m->celestial_v1_header_seen) {
         char error[HUGE_BUF];
         if (!celestial_structure_validate_header(m, VS(error))) {
@@ -1389,6 +1400,7 @@ static mapstruct *load_temporary_map(mapstruct *m) {
                 m->tmpname,
                 error);
             snprintf(VS(buf), "%s", m->path);
+            free_map(m, 1);
             delete_map(m);
             m = load_original_map(buf, NULL, 0);
             fclose(fp);
@@ -1801,12 +1813,17 @@ static void free_all_objects(mapstruct *m) {
  * If set, free all objects on the map.
  */
 void free_map(mapstruct *m, int flag) {
+    light_batch_flush();
     int i;
+
+    swap_cancel_pending(m);
+    celestial_light_forget(m);
 
     if (!m->in_memory) {
         return;
     }
 
+    light_map_prepare_unlink(m);
     remove_light_source_list(m);
 
     /* Teardown is not a sequence of gameplay geometry edits. new_save_map()
@@ -1845,7 +1862,9 @@ void free_map(mapstruct *m, int flag) {
                     STRING_SAFE(m->tile_map[i]->path));
             }
 
-            m->tile_map[i]->tile_map[map_tiled_reverse[i]] = NULL;
+            if (m->tile_map[i]->tile_map[map_tiled_reverse[i]] == m) {
+                m->tile_map[i]->tile_map[map_tiled_reverse[i]] = NULL;
+            }
             m->tile_map[i] = NULL;
         }
 
@@ -1865,6 +1884,7 @@ void free_map(mapstruct *m, int flag) {
 
     m->in_memory = MAP_SWAPPED;
     m->celestial_light_valid = false;
+    light_map_unlink_end();
 }
 
 /**
@@ -1874,7 +1894,11 @@ void free_map(mapstruct *m, int flag) {
  * The map to delete.
  */
 void delete_map(mapstruct *m) {
+    light_batch_flush();
     HARD_ASSERT(m != NULL);
+
+    swap_cancel_pending(m);
+    celestial_light_forget(m);
 
     if (m->in_memory == MAP_IN_MEMORY) {
         free_map(m, 1);
@@ -1959,7 +1983,7 @@ mapstruct *ready_map_name(const char *name, mapstruct *originator, int flags) {
         }
     } else {
         /* If in this loop, we found a temporary map, so load it up. */
-        m = load_temporary_map(m);
+        m = load_temporary_map(m, flags);
 
         if (m == NULL) {
             return NULL;
@@ -1997,6 +2021,7 @@ void clean_tmp_map(mapstruct *m) {
  * Free all allocated maps.
  */
 void free_all_maps(void) {
+    light_map_unlink_begin(true);
     mapstruct *map, *tmp;
 
     DL_FOREACH_SAFE(first_map, map, tmp) {
@@ -2008,6 +2033,7 @@ void free_all_maps(void) {
 
         delete_map(map);
     }
+    light_map_unlink_end();
 }
 
 /**
@@ -2823,6 +2849,8 @@ int wall_blocked(mapstruct *m, int x, int y) {
 }
 
 int map_get_darkness(mapstruct *m, int x, int y, object **mirror) {
+    light_map_unlink_flush();
+    light_batch_flush();
     MapSpace *msp;
     uint8_t outdoor;
     int darkness;

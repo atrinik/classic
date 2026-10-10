@@ -44,14 +44,14 @@ UI_CLOSURE_STATES = (
     "gameplay_widgets_text_windows", "context_menu_tooltip_notification",
     "notification_fading", "popup_generic_input_controls", "popup_book",
     "popup_settings_controls", "popup_color_picker", "popup_connection_preference",
-    "popup_join_password", "popup_credits", "popup_painting", "popup_region_map_minimap",
+    "popup_credits", "popup_painting", "popup_region_map_minimap",
     "region_map_fow_transition",
     "region_map_fow_retained", "screenshot_window", "screenshot_map",
 )
 ROOT_GLYPH_CONTRACTS = {
-    "intro_server_browser": (383, "29c427a4eff9acbd"),
-    "login_popup": (385, "4266544b0b8b6fbd"),
-    "popup_character_selection": (385, "4266544b0b8b6fbd"),
+    "intro_server_browser": (357, "f1761b6510869ded"),
+    "login_popup": (359, "f14a293e7d0b8c2d"),
+    "popup_character_selection": (359, "f14a293e7d0b8c2d"),
 }
 ASSERTION_ATTRIBUTES = {
     "ui_names_targets": ("player-names", "target-ui"),

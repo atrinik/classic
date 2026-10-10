@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <server_main.h>
+#include <swap.h>
 #include <server_item.h>
 #include <server.h>
 #include <quest.h>
@@ -1931,7 +1932,9 @@ void object_update(object *op, int action) {
         return;
     }
 
-    if (flags != newflags) {
+    light_batch_begin();
+
+    if ((newflags & P_NEED_UPDATE) || flags != newflags) {
         /* Rebuild flags */
         if (newflags & P_NEED_UPDATE) {
             msp->flags |= newflags;
@@ -1941,15 +1944,35 @@ void object_update(object *op, int action) {
         }
     }
 
-    if (op->map->in_memory == MAP_IN_MEMORY &&
-        (QUERY_FLAG(op, FLAG_BLOCKSVIEW) || QUERY_FLAG(op, FLAG_IS_FLOOR))) {
-        recalculate_light_sources(op->map);
-        celestial_light_invalidate(op->map);
+    /* Callers can already have changed op's flags, and inserts/removals have
+     * already changed the stack. Compare with the geometry last published for
+     * this space, rather than using the updated object as a change hint. */
+    uint8_t geometry = 0;
+    for (object *tmp = msp->first; tmp != NULL; tmp = tmp->above) {
+        if (QUERY_FLAG(tmp, FLAG_BLOCKSVIEW)) {
+            geometry |= 1U;
+        }
+        if (QUERY_FLAG(tmp, FLAG_IS_FLOOR)) {
+            geometry |= 2U;
+        }
+        if (object_is_roof_surface(tmp)) {
+            geometry |= 4U;
+        }
+    }
+    bool local_changed = msp->light_geometry != geometry;
+    msp->light_geometry = geometry;
+    bool celestial_changed = celestial_light_geometry_update(op->map, op->x, op->y);
+    if (op->map->in_memory == MAP_IN_MEMORY) {
+        light_geometry_changed(op->map, local_changed, celestial_changed);
     }
 
-    if (op->more != NULL && action != UP_OBJ_INSERT) {
+    /* Insertion and removal already visit every part through their own
+     * recursion. Repeating removal updates would subtract a tail's light a
+     * second time. Flag/face updates still propagate from the head. */
+    if (op->more != NULL && action != UP_OBJ_INSERT && action != UP_OBJ_REMOVE) {
         object_update(op->more, action);
     }
+    light_batch_end();
 }
 
 /**
@@ -2315,6 +2338,7 @@ void object_remove(object *op, int flags) {
         object_remove(op->more, flags);
     }
 
+    op->inventory_generation++;
     SET_FLAG(op, FLAG_REMOVED);
     SET_FLAG(op, FLAG_OBJECT_WAS_MOVED);
     op->quickslot = 0;
@@ -2355,6 +2379,15 @@ void object_remove(object *op, int flags) {
             living_update(env);
         }
     } else if (op->map != NULL) {
+        /* A pending rebuild must still see this emitter's pre-removal stack
+         * and counters. Publishing after unlinking would omit its RGB replay
+         * and then subtract its contribution a second time. */
+        if (op->glow_radius != 0) {
+            if (op->map->in_memory != MAP_SAVING) {
+                light_map_unlink_flush();
+            }
+            light_batch_flush();
+        }
         /* If this is the base layer object, we assign the next object
          * to be it if it is from same layer and sub-layer. */
         MapSpace *msp = GET_MAP_SPACE_PTR(op->map, op->x, op->y);
@@ -2563,6 +2596,12 @@ object *object_insert_map(object *op, mapstruct *m, object *originator, int flag
 
     MapSpace *msp = GET_MAP_SPACE_PTR(op->map, op->x, op->y);
 
+    /* Source counters are incremented by object_update() after linking; flush
+     * while both the resident source stack and counters still agree. */
+    if (op->glow_radius != 0) {
+        light_map_unlink_flush();
+        light_batch_flush();
+    }
     if (op->layer != 0) {
         object *top = GET_MAP_SPACE_LAYER(msp, op->layer, op->sub_layer);
         if (top == NULL) {
@@ -2829,6 +2868,7 @@ object *object_insert_into(object *op, object *where, int flag) {
 
     where = HEAD(where);
     op = HEAD(op);
+    op->inventory_generation++;
 
     /* If the object has tail parts, it means the object is a multi-part
      * object that was on a map prior to this insert call. Thus, we will
@@ -4587,6 +4627,7 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
     }
 
     trigger_map_event(MEVENT_ENTER, m, op, NULL, NULL, NULL, 0);
+    swap_cancel_pending(m);
     m->timeout = 0;
 
     /* Do some action special for players after we have inserted them. */
