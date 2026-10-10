@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from release_artifacts import expected_names as contract_names, git_value, source_schema
+
 
 TAG_RE = re.compile(r"v([0-9]+)\.([0-9]+)\.([0-9]+)")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
@@ -31,26 +33,11 @@ def version(tag: str) -> tuple[int, int, int]:
     return parsed  # type: ignore[return-value]
 
 
-def expected_names(release_version: str) -> set[str]:
-    names = {f"atrinik-classic-{release_version}.tar.gz"}
-    names.update(
-        f"atrinik-classic-{module}-{release_version}.tar.gz"
-        for module in MODULES
-    )
-    names.update(
-        {
-            f"atrinik-classic-client-{release_version}-windows-x86_64.zip",
-            f"atrinik-classic-server-{release_version}-windows-x86_64.zip",
-            f"atrinik_classic_protocol-{release_version}-py3-none-any.whl",
-            f"atrinik-classic-{release_version}.spdx.json",
-            "release-manifest.json",
-            "SHA256SUMS",
-        }
-    )
-    return names
+def expected_names(release_version: str, schema: int = 1) -> set[str]:
+    return contract_names(release_version, schema)
 
 
-def validate_latest(release: object) -> tuple[str, str]:
+def validate_latest(release: object, schema: int = 1) -> tuple[str, str]:
     if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
         raise LatestTagError("selected release has malformed metadata")
     tag = str(release["tag_name"])
@@ -83,7 +70,7 @@ def validate_latest(release: object) -> tuple[str, str]:
             or DIGEST_RE.fullmatch(str(asset["digest"])) is None
         ):
             raise LatestTagError(f"selected release has incomplete asset {name}")
-    expected = expected_names(release_version)
+    expected = expected_names(release_version, schema)
     if actual != expected:
         raise LatestTagError(
             "selected release asset set differs: "
@@ -92,7 +79,7 @@ def validate_latest(release: object) -> tuple[str, str]:
     return tag, release_version
 
 
-def select_latest(releases: object) -> dict[str, object]:
+def select_latest(releases: object, schema_resolver=None) -> dict[str, object]:
     if not isinstance(releases, list):
         raise LatestTagError("GitHub releases API returned malformed metadata")
     candidates: list[tuple[tuple[int, int, int], dict[str, object]]] = []
@@ -114,7 +101,8 @@ def select_latest(releases: object) -> dict[str, object]:
     if not candidates:
         raise LatestTagError("no published unified Classic release exists")
     selected = max(candidates, key=lambda candidate: candidate[0])[1]
-    validate_latest(selected)
+    schema = schema_resolver(str(selected["tag_name"])) if schema_resolver else 1
+    validate_latest(selected, schema)
     release_id = selected.get("id")
     if not isinstance(release_id, int) or release_id <= 0:
         raise LatestTagError("selected release has no valid numeric ID")
@@ -130,6 +118,7 @@ def write_output(path: Path, values: dict[str, str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--source-root", type=Path, default=Path.cwd())
     parser.add_argument("--github-output", type=Path, required=True)
     arguments = parser.parse_args()
     result = subprocess.run(
@@ -154,10 +143,14 @@ def main() -> int:
             + "\n",
         )
     try:
+        def schema_for_tag(tag: str) -> int:
+            revision = git_value(arguments.source_root, "rev-parse", "--verify", f"{tag}^{{commit}}")
+            return source_schema(arguments.source_root, revision)
+
         selected = select_latest(
-            [json.loads(line) for line in result.stdout.splitlines() if line]
+            [json.loads(line) for line in result.stdout.splitlines() if line], schema_for_tag
         )
-        tag, release_version = validate_latest(selected)
+        tag, release_version = validate_latest(selected, schema_for_tag(str(selected["tag_name"])))
         write_output(
             arguments.github_output,
             {
@@ -166,7 +159,7 @@ def main() -> int:
                 "version": release_version,
             },
         )
-    except (OSError, ValueError, LatestTagError) as error:
+    except (OSError, ValueError, RuntimeError) as error:
         parser.exit(1, f"latest-release audit failed: {error}\n")
     print(f"validated highest immutable Classic release {tag}")
     return 0

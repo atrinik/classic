@@ -560,6 +560,7 @@ class FinalizeArtifactsTests(unittest.TestCase):
         manifest = finalize_artifacts.build_release_manifest(
             [artifact], "5.6.0", "c" * 40, 123, descriptor, []
         )
+        self.assertEqual(manifest["schema_version"], 2)
         self.assertIs(manifest["dependency_bundle"], descriptor)
         self.assertEqual(manifest["artifacts"][0]["name"], artifact.name)
         self.assertEqual(manifest["artifacts"][0]["size"], len(b"artifact"))
@@ -568,6 +569,7 @@ class FinalizeArtifactsTests(unittest.TestCase):
         names = finalize_artifacts.expected_names("5.6.0")
         self.assertIn("atrinik-classic-5.6.0.tar.gz", names)
         self.assertIn("atrinik-classic-editor-5.6.0.tar.gz", names)
+        self.assertIn("atrinik-classic-client-5.6.0-linux-amd64.deb", names)
         self.assertIn(
             "atrinik-classic-server-5.6.0-windows-x86_64.zip", names
         )
