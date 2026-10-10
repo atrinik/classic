@@ -442,6 +442,7 @@ their generated `VERSION` file as the deterministic offline fallback.
 | `atrinik-classic-{client,server,editor,libatrinik,protocol}-VERSION.tar.gz` | Scoped source with root license, attributions, provenance, and `VERSION`; native consumers include matching sibling dependency source |
 | `atrinik_classic_protocol-VERSION-py3-none-any.whl` | Python bindings; distribution name `atrinik-classic-protocol` |
 | `atrinik-classic-{client,server}-VERSION-windows-x86_64.zip` | Portable Windows packages built against sibling protocol and libatrinik |
+| `atrinik-classic-client-VERSION-linux-amd64.deb` | Linux client using APT-managed runtime libraries; SDL 3.4 or newer |
 | `atrinik-classic-VERSION.spdx.json` | SPDX 2.3 manifest for downloadable artifacts |
 | `release-manifest.json` | Machine-readable commit, epoch, sizes, hashes, and locked sound/content/resource inputs with affected artifacts |
 | `SHA256SUMS` | SHA-256 for every preceding release file |
@@ -450,10 +451,19 @@ their generated `VERSION` file as the deterministic offline fallback.
 The editor archive contains the maintained Gridarta packaging utility. It does
 not claim to contain a Gridarta JAR: Gridarta remains an operator-supplied,
 separately reviewed GPL checkout. Automating that JAR requires an independently
-verified immutable upstream revision and dependency contract. Native Linux
-client and editor binary bundles likewise require a separately defined runtime
-and packaging contract; the complete/scoped source archives and Linux server
-container are the supported Linux release inputs in this pipeline.
+verified immutable upstream revision and dependency contract. The editor has no
+Linux binary bundle.
+
+The Linux client Debian package is built and installation-tested on Debian
+testing (`forky`), using the digest-pinned base and signed APT snapshot in
+`tools/ci/debian-client/Dockerfile`. The recorded build-package inventory is
+retained as workflow evidence. The trusted workflow caller supplies the Dockerfile and
+installation smoke script; the exact candidate checkout and staged inputs are
+read-only container inputs. Candidate code runs offline as an ordinary user
+from a private copy inside the build container, with only the package output
+directory writable on the runner. The job rejects symlink outputs and uploads
+only the expected regular `.deb` file. The real packaging fixture runs in this
+Debian image, which includes all required packaging tools.
 
 The client and server source archives include the matching protocol and
 libatrinik trees under `dependencies/`; the libatrinik archive includes the
@@ -461,7 +471,7 @@ matching protocol tree. Their CMake configuration selects those packaged
 sources automatically, so an exported scope never follows the replacement
 repositories or depends on a separately mutable classic release.
 
-The portable client consumes the checksum-pinned sound release. The portable
+The Windows and Debian clients consume the checksum-pinned sound release. The portable
 server and server image consume the checksum-pinned classic content and
 resources releases. Their lock path, repository, tag, commit, URL, SHA-256,
 destination, and affected artifacts are recorded in `release-manifest.json`
@@ -470,10 +480,42 @@ as machine-readable OCI labels. The release manifest also records the exact
 durable dependency-bundle image, manifest digest, material digest, inner
 manifest digest, and source-lock digests used to acquire those inputs.
 
+### Installing the Linux client
+
+Download `atrinik-classic-client-VERSION-linux-amd64.deb` from the release,
+verify it against `SHA256SUMS`, then install it through APT:
+
+```sh
+sudo apt install ./atrinik-classic-client-VERSION-linux-amd64.deb
+/usr/games/atrinik
+```
+
+The desktop entry also starts the installed client. Packages contain client
+files and verified sound, not private copies of system libraries. CPack uses
+`dpkg-shlibdeps` to generate the linked runtime dependencies and retains the
+capability minimums SDL >= 3.4, SDL3_image/SDL3_ttf >= 3.2, SDL3_mixer >= 3.2.4,
+and OpenSSL >= 3.5, plus certificate trust and the Vulkan loader. Newer library
+versions are allowed; exact build-package versions are not runtime pins.
+
+APT must find compatible dependencies in the configured repositories. When an
+older Debian or Ubuntu release cannot satisfy them, use Debian testing or a
+newer distribution; the package does not lower the SDL requirement or add a
+repository automatically. Other distributions are best effort. Running the
+game still requires a supported hardware GPU and installed drivers. Headless
+installation smoke verifies loader resolution, the CLI, repeat installation,
+and removal preserving user data; it does not claim graphical or audible proof.
+
+Release-manifest schema 2 includes the Debian package in its exact 13-file
+contract. Historical schema 1 retains its original 12 files. Publication and
+recovery select the schema from the original source revision, validate the
+manifest, locked inputs and every artifact hash, and never append a Debian
+package to an already published release. The existing main publication hold
+remains in effect.
+
 ## Rehearsal and verification
 
-Release Rehearsal invokes the same source, wheel, Windows, image, and closed-set
-validation jobs with version `0.0.0`, retains the candidate assets for 30 days,
+Release Rehearsal invokes the same source, wheel, Windows, Debian client
+build/install, image, and closed-set validation jobs with version `0.0.0`, retains the candidate assets for 30 days,
 pulls the exact durable dependency bundle before its build fan-out, and has no
 publishing job or write permissions. Run it before initial
 activation and after material release-pipeline changes. The versioned image

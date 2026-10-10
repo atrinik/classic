@@ -70,11 +70,19 @@ jobs:
       source_epoch: ${{ steps.metadata.outputs.source_epoch }}
       tag: ${{ steps.metadata.outputs.tag }}
       version: ${{ steps.metadata.outputs.version }}
+      artifact_schema: ${{ steps.metadata.outputs.artifact_schema }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.revision }}
+      - name: Check out the trusted artifact-contract reader
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: build/release-automation
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: tools/release
       - id: metadata
         name: Validate immutable candidate coordinates
         env:
@@ -97,7 +105,11 @@ jobs:
             test "${RELEASE_TAG}" = "v${RELEASE_VERSION}"
             test -n "${RELEASE_SOURCE_EPOCH}"
           fi
+          artifact_schema=$(python3 build/release-automation/tools/release/release_artifacts.py \
+            --print-source-schema --revision "${commit}" --source-root "${GITHUB_WORKSPACE}")
+          [[ ${artifact_schema} == 1 || ${artifact_schema} == 2 ]]
           {
+            echo "artifact_schema=${artifact_schema}"
             echo "tag=${RELEASE_TAG}"
             echo "version=${RELEASE_VERSION}"
             echo "commit=${commit}"
@@ -216,6 +228,113 @@ jobs:
             build/release/*.tar.gz
             build/release/*.whl
           if-no-files-found: error
+          retention-days: 30
+
+  client-linux:
+    name: Build and install Debian client package
+    needs: [metadata, dependencies, gpu-shaders]
+    if: needs.metadata.outputs.artifact_schema == '2'
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Image preparation and runtime smoke belong to the trusted caller.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: tools/ci
+      - name: Check out candidate source as container input only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          path: candidate-source
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: candidate-dependencies-${{ needs.metadata.outputs.tag }}
+          path: build/linux-inputs
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: candidate-gpu-shaders-${{ needs.metadata.outputs.tag }}
+          path: build/gpu-shaders
+      - name: Retrieve release-only Discord configuration
+        if: inputs.rehearsal != true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: discord-application-id-${{ inputs.tag }}
+          path: build/discord-config
+      - name: Prepare pinned Debian testing build and clean runtime
+        run: |
+          docker build --platform linux/amd64 --target build --tag classic-deb-build \
+            --file tools/ci/debian-client/Dockerfile tools/ci/debian-client
+          docker build --platform linux/amd64 --target runtime --tag classic-deb-runtime \
+            --file tools/ci/debian-client/Dockerfile tools/ci/debian-client
+          mkdir -p build/linux-package-evidence build/linux-packages build/discord-config
+          docker image inspect classic-deb-build classic-deb-runtime \
+            --format '{{.Id}}' > build/linux-package-evidence/images.txt
+          docker run --rm --network none classic-deb-build cat /build-packages.tsv \
+            > build/linux-package-evidence/build-packages.tsv
+      - name: Build client with distribution libraries and offline release inputs
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_epoch }}
+          DISCORD_CONFIG_FILE: ${{ inputs.rehearsal != true && '/input/discord-config/discord-application-id' || '' }}
+        run: |
+          docker run --rm --platform linux/amd64 --network none \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" --cpus 2 --memory 8g \
+            --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
+            --env SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --env CMAKE_BUILD_PARALLEL_LEVEL=2 \
+            --env ATRINIK_GPU_SHADER_DIRECTORY=/input/gpu-shaders \
+            --env ATRINIK_DEPENDENCY_DOWNLOADS=/input/dependencies/client/build/dependencies/downloads \
+            --env ATRINIK_DISCORD_APPLICATION_ID_FILE="${DISCORD_CONFIG_FILE}" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/candidate-source,target=/input/source,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/linux-inputs,target=/input/dependencies,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/gpu-shaders,target=/input/gpu-shaders,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/discord-config,target=/input/discord-config,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/linux-packages,target=/output" \
+            classic-deb-build bash -c \
+              'set -euo pipefail
+               mkdir /tmp/source
+               cp -a --no-preserve=ownership /input/source/. /tmp/source/
+               cd /tmp/source/client
+               test -f tools/tests/test_linux_package_contract.py
+               python3 -m unittest discover -s tools/tests -p test_linux_package_contract.py
+               bash tools/build-linux-package.sh /output' \
+            > build/linux-package-evidence/build.log 2>&1
+          # Candidate code cannot modify the runner checkout, automation, or
+          # evidence. Reject symlink outputs before any host consumer opens one.
+          package="build/linux-packages/atrinik-classic-client-${RELEASE_VERSION}-linux-amd64.deb"
+          test -f "${package}" && test ! -L "${package}"
+      - name: Install through APT without build tools or source checkouts
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          docker run --rm --platform linux/amd64 --security-opt no-new-privileges \
+            --cpus 2 --memory 4g --env ATRINIK_DEB_SMOKE_CONTAINER=1 \
+            --env DEBIAN_FRONTEND=noninteractive \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/linux-packages,target=/packages,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tools/ci/smoke_linux_client_package.sh,target=/smoke.sh,readonly" \
+            classic-deb-runtime bash /smoke.sh \
+            "/packages/atrinik-classic-client-${RELEASE_VERSION}-linux-amd64.deb" \
+            "${RELEASE_VERSION}" > build/linux-package-evidence/install.log 2>&1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-client-linux-${{ needs.metadata.outputs.tag }}
+          path: build/linux-packages/atrinik-classic-client-${{ needs.metadata.outputs.version }}-linux-amd64.deb
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain package build and installation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: client-linux-evidence-${{ needs.metadata.outputs.tag }}
+          path: build/linux-package-evidence
+          if-no-files-found: warn
           retention-days: 30
 
   client-windows:
@@ -399,10 +518,21 @@ jobs:
 
   candidate:
     name: Validate complete release candidate
+    if: >-
+      always() &&
+      needs.metadata.result == 'success' &&
+      needs.sources.result == 'success' &&
+      needs.gpu-shaders.result == 'success' &&
+      needs.client-windows.result == 'success' &&
+      needs.server-windows.result == 'success' &&
+      needs.server-image.result == 'success' &&
+      ((needs.metadata.outputs.artifact_schema == '2' && needs.client-linux.result == 'success') ||
+      (needs.metadata.outputs.artifact_schema == '1' && needs.client-linux.result == 'skipped'))
     needs:
       - metadata
       - sources
       - gpu-shaders
+      - client-linux
       - client-windows
       - server-windows
       - server-image

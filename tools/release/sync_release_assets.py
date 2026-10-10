@@ -8,6 +8,8 @@ import hashlib
 from pathlib import Path
 import subprocess
 
+from release_artifacts import ROOT, git_value, validate_candidate
+
 from github_release import GitHubReleaseError, lookup_release
 
 
@@ -98,6 +100,8 @@ def main() -> int:
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--tag", required=True)
+    parser.add_argument("--revision")
+    parser.add_argument("--source-root", type=Path, default=Path.cwd())
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--verify-published", action="store_true")
     mode.add_argument("--verify-only", action="store_true")
@@ -105,9 +109,8 @@ def main() -> int:
     arguments = parser.parse_args()
     directory = arguments.directory.resolve(strict=True)
     try:
-        expected = expected_assets(directory)
-        if len(expected) != 12:
-            raise AssetSyncError(f"candidate must contain exactly 12 assets, got {len(expected)}")
+        revision = arguments.revision or git_value(arguments.source_root, "rev-parse", "--verify", f"{arguments.tag}^{{commit}}")
+        expected = validate_candidate(directory, arguments.tag, revision, arguments.source_root)
         release_state = lookup_release(arguments.repository, arguments.tag)
         if arguments.verify_published:
             release = require_published_immutable(
@@ -153,7 +156,7 @@ def main() -> int:
         release_id = require_release_id(release, arguments.tag)
         if arguments.github_output is not None:
             write_output(arguments.github_output, state, release_id)
-    except (GitHubReleaseError, OSError, ValueError, AssetSyncError) as error:
+    except (GitHubReleaseError, OSError, ValueError, RuntimeError) as error:
         parser.exit(1, f"release asset sync failed: {error}\n")
     description = "published immutable" if state == "published" else "draft"
     print(f"verified {len(expected)} {description} assets")

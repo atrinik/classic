@@ -117,13 +117,15 @@ class SyncReleaseAssetsTests(unittest.TestCase):
                 "atrinik/classic",
                 "--tag",
                 "v5.37.0",
+                "--revision",
+                "c" * 40,
                 "--verify-only",
                 "--github-output",
                 str(output),
             ]
             with mock.patch.object(
                 sync_release_assets, "lookup_release", return_value=release
-            ):
+            ), mock.patch.object(sync_release_assets, "validate_candidate", return_value=expected):
                 with mock.patch.object(sys, "argv", arguments):
                     self.assertEqual(sync_release_assets.main(), 0)
             self.assertEqual(

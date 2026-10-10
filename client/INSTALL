@@ -1,7 +1,8 @@
 # Building Atrinik client
 
 Install Python 3.11 or newer, CMake 3.21 or newer, Ninja, a C17 compiler,
-SDL 3, SDL3_image, SDL3_ttf, SDL3_mixer, and LibXml2. Client builds also need
+SDL >= 3.4, SDL3_image/SDL3_ttf >= 3.2, SDL3_mixer >= 3.2.4,
+OpenSSL >= 3.5, and LibXml2. Client builds also need
 DXC and SPIRV-Cross to compile the authoritative HLSL source. Install those
 tools system-wide or prepare the pinned versions once, then build:
 
@@ -62,6 +63,13 @@ into `atrinik`. Local source runs may instead set the public, non-secret
 `ATRINIK_DISCORD_APPLICATION_ID` environment variable or create the ignored
 `data/discord-application-id` file. Never supply a Discord Client Secret,
 OAuth token, bot token, authorization code, or user credential.
+
+Linux amd64 releases include a Debian package. Install the downloaded file with
+`sudo apt install ./atrinik-classic-client-VERSION-linux-amd64.deb`, then use the
+desktop entry or `/usr/games/atrinik`. System libraries are APT dependencies,
+with minimum capability versions rather than exact pins. Debian testing is the
+build/install baseline; use a newer distribution if your repositories cannot
+satisfy the dependencies. See `../docs/RELEASING.md` for the artifact contract.
 
 Windows portable packages install the checked-in Mozilla-derived `ca-bundle.crt`.
 The client release helper explicitly selects that source bundle; standalone CMake

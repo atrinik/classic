@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "release" / "check_latest_release.py"
@@ -38,6 +40,17 @@ class CheckLatestReleaseTests(unittest.TestCase):
             check_latest_release.validate_latest(release()),
             ("v5.6.0", "5.6.0"),
         )
+
+    def test_schema_two_release_requires_deb_and_historical_does_not(self) -> None:
+        value = release()
+        deb = {"name": "atrinik-classic-client-5.6.0-linux-amd64.deb",
+               "state": "uploaded", "size": 1, "digest": "sha256:" + "a" * 64}
+        with self.assertRaises(check_latest_release.LatestTagError):
+            check_latest_release.validate_latest(value, 2)
+        value["assets"].append(deb)
+        self.assertEqual(check_latest_release.validate_latest(value, 2), ("v5.6.0", "5.6.0"))
+        with self.assertRaises(check_latest_release.LatestTagError):
+            check_latest_release.validate_latest(value, 1)
 
     def test_draft_mutable_or_incomplete_release_fails_closed(self) -> None:
         cases = [

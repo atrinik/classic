@@ -26,7 +26,10 @@ class LockedInputError(RuntimeError):
 
 def affected_artifacts(component: str, version: str) -> list[str]:
     if component == "client":
-        return [f"atrinik-classic-client-{version}-windows-x86_64.zip"]
+        return [
+            f"atrinik-classic-client-{version}-windows-x86_64.zip",
+            f"atrinik-classic-client-{version}-linux-amd64.deb",
+        ]
     if component == "server":
         return [
             f"atrinik-classic-server-{version}-windows-x86_64.zip",

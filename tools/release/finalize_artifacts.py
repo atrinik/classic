@@ -19,6 +19,7 @@ from locked_inputs import load_locked_inputs
 from dependency_bundle import load_descriptor, verify_descriptor
 
 
+RELEASE_ARTIFACT_SCHEMA = 2
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 MODULES = ("client", "server", "editor", "libatrinik", "protocol")
 EMBEDDED_PYTHON_STDLIB_RE = re.compile(
@@ -426,6 +427,7 @@ def expected_names(version: str) -> set[str]:
     names.update(
         {
             f"atrinik-classic-client-{version}-windows-x86_64.zip",
+            f"atrinik-classic-client-{version}-linux-amd64.deb",
             f"atrinik-classic-server-{version}-windows-x86_64.zip",
         }
     )
@@ -531,7 +533,7 @@ def build_release_manifest(
     locked_inputs: list[dict[str, object]],
 ) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": RELEASE_ARTIFACT_SCHEMA,
         "tag": f"v{version}",
         "version": version,
         "revision": revision,
@@ -628,6 +630,8 @@ def main() -> int:
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
     )
     validate_wheel(wheel_path, arguments.version)
+    from release_artifacts import validate_deb
+    validate_deb(directory / f"atrinik-classic-client-{arguments.version}-linux-amd64.deb", arguments.version)
 
     sbom_path = directory / f"atrinik-classic-{arguments.version}.spdx.json"
     sbom_path.write_text(

@@ -49,6 +49,7 @@ class LockedInputsTests(unittest.TestCase):
     def test_inputs_record_coordinates_and_affected_artifacts(self) -> None:
         inputs = locked_inputs.load_locked_inputs("5.6.0", self.root)
         self.assertEqual([record["name"] for record in inputs], ["content", "sound"])
+        self.assertIn("atrinik-classic-client-5.6.0-linux-amd64.deb", inputs[1]["affects"])
         content = inputs[0]
         self.assertIn(
             "atrinik-classic-server-5.6.0-windows-x86_64.zip",
