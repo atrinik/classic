@@ -26,6 +26,7 @@ permissions:
 
 concurrency:
   group: classic-release-publication
+  queue: max
   cancel-in-progress: false
 
 jobs:
