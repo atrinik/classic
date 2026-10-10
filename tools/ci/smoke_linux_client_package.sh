@@ -30,7 +30,7 @@ if command -v cc || command -v cmake || command -v python3; then
   exit 1
 fi
 smoke_home=$(mktemp -d)
-trap 'rm -rf -- "$smoke_home"' EXIT
+trap 'status=$?; if (( status != 0 )) && [[ -f "$smoke_home/help.log" ]]; then cat "$smoke_home/help.log"; fi; rm -rf -- "$smoke_home"' EXIT
 chown 65534:65534 "$smoke_home"
 cd "$smoke_home"
 setpriv --reuid 65534 --regid 65534 --clear-groups \
