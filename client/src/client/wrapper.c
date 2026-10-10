@@ -29,6 +29,7 @@
 
 #include <image_codec.h>
 #include <client.h>
+#include <cmake.h>
 #include <effects.h>
 #include <image.h>
 #include <interface.h>
