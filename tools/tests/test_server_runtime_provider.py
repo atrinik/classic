@@ -126,7 +126,8 @@ class ServerRuntimeProviderTests(unittest.TestCase):
     def test_package_checks_detect_indirect_omission_ssl_drift_and_shadow_curl(self):
         observed = {r["Package"]: (r["Version"], r["Architecture"]) for r in LOCK["packages"]}
         provider.verify_packages(LOCK, observed)
-        for name in ("libunistring5", "libbrotli1", "libssl3t64", "libpython3.14"):
+        for name in ("libunistring5", "libbrotli1", "libssl3t64", "libpython3.14",
+                     "bsdutils", "login", "mount", "util-linux", "libuuid1"):
             changed = dict(observed)
             changed[name] = ("wrong-version", "amd64")
             with self.assertRaisesRegex(provider.ProviderError, "Runtime package mismatch"):
@@ -249,6 +250,32 @@ class ServerRuntimeProviderTests(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines(), [f"{r['Package']}={r['Version']}" for r in LOCK["packages"]])
         self.assertFalse(any(line.startswith("libcurl4t64=") for line in result.stdout.splitlines()))
 
+    def test_runtime_base_utilities_require_complete_matching_package_versions(self):
+        for name in ("bsdutils", "login", "mount", "util-linux", "libblkid1",
+                     "libmount1", "libsmartcols1", "libuuid1"):
+            with self.subTest(missing=name):
+                lock = copy.deepcopy(LOCK)
+                lock["packages"] = [row for row in lock["packages"] if row["Package"] != name]
+                with self.assertRaises(provider.ProviderError):
+                    provider.validate_lock(lock)
+        for name in ("libuuid1", "libblkid1", "libmount1", "libsmartcols1", "libpam-modules-bin"):
+            with self.subTest(changed=name):
+                lock = copy.deepcopy(LOCK)
+                next(row for row in lock["packages"] if row["Package"] == name)["Version"] += ".2"
+                with self.assertRaisesRegex(provider.ProviderError, "Unsatisfied locked dpkg dependency"):
+                    provider.validate_lock(lock)
+
+    def test_dependency_selection_rejects_wrong_alternative_and_version(self):
+        versions = {"fixture-a": "1:2.3-1", "fixture-b": "3.0"}
+        provider.verify_dependency_selection("fixture", {
+            "requirement": "fixture-a (>= 1:2.0) | fixture-b", "selected": "fixture-a"}, versions)
+        for requirement, selected in (("fixture-a (>= 1:2.4)", "fixture-a"),
+                                      ("fixture-b", "fixture-a"),
+                                      ("fixture-a (invalid 2.3)", "fixture-a")):
+            with self.subTest(requirement=requirement), self.assertRaises(provider.ProviderError):
+                provider.verify_dependency_selection("fixture", {
+                    "requirement": requirement, "selected": selected}, versions)
+
     def run_docker_apt_acquisition(self, failed_phase=None):
         # Execute the Dockerfile's real update/install chain with only apt-get
         # replaced. This checks option propagation through xargs and shell
@@ -308,7 +335,8 @@ class ServerRuntimeProviderTests(unittest.TestCase):
         self.assertIn("RUN --network=none python3 tools/dependencies.py", docker)
         self.assertIn("COPY --from=build /opt/runtime-provider/ /usr/local/", docker)
         self.assertNotIn("COPY --from=build /usr/local/", docker)
-        for forbidden in ("Verify-Peer=false", "Verify-Host=false", "--allow-unauthenticated", "trusted=yes", "libcurl4t64"):
+        for forbidden in ("Verify-Peer=false", "Verify-Host=false", "--allow-unauthenticated",
+                          "--allow-downgrades", "trusted=yes", "libcurl4t64"):
             self.assertNotIn(forbidden, docker)
         self.assertIn("runtime-provider.py verify-runtime", docker)
         self.assertIn("chown -R atrinik:atrinik maps server/data server/assets/data", docker)
