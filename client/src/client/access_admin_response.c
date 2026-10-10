@@ -8,6 +8,8 @@
 
 #include <ctype.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define ACCESS_ADMIN_RESPONSE_MAX 32768U
@@ -19,6 +21,10 @@
 typedef struct json_parser {
     const uint8_t *position;
     const uint8_t *end;
+    char *output;
+    size_t capacity;
+    size_t used;
+    bool overflow;
 } json_parser_t;
 
 static const char *const operation_names[] = {
@@ -55,6 +61,86 @@ static void memory_clear(void *memory, size_t size) {
 
 const char *client_access_admin_operation_name(client_access_admin_operation_t operation) {
     return operation < CLIENT_ACCESS_ADMIN_OPERATION_COUNT ? operation_names[operation] : NULL;
+}
+
+/* Output is literal text for the private book, whose renderer disables markup.
+ * Never use this formatter's output with a markup-enabled rendering entry point. */
+static void text_append(json_parser_t *parser, const char *text) {
+    if (parser->output == NULL || parser->overflow) {
+        return;
+    }
+    size_t size = strlen(text);
+    if (size >= parser->capacity - parser->used) {
+        parser->overflow = true;
+        return;
+    }
+    memcpy(parser->output + parser->used, text, size + 1U);
+    parser->used += size;
+}
+
+static void text_field(json_parser_t *parser, const char *label, const char *value) {
+    text_append(parser, label);
+    text_append(parser, ": ");
+    text_append(parser, value);
+    text_append(parser, "\n");
+}
+
+static void text_timestamp(json_parser_t *parser, const char *label, const char *value) {
+    if (parser->output == NULL) {
+        return;
+    }
+    /* The strict parser bounds timestamps to 9999-12-31. Convert civil days
+     * directly instead of relying on platform time_t range or local timezone. */
+    uint64_t seconds = strtoull(value, NULL, 10);
+    uint64_t days = seconds / 86400U + 719468U;
+    uint64_t era = days / 146097U;
+    unsigned int day_of_era = (unsigned int)(days % 146097U);
+    unsigned int year_of_era =
+        (day_of_era - day_of_era / 1460U + day_of_era / 36524U - day_of_era / 146096U) / 365U;
+    unsigned int year = year_of_era + (unsigned int)era * 400U;
+    unsigned int day_of_year = day_of_era -
+        (365U * year_of_era + year_of_era / 4U - year_of_era / 100U);
+    unsigned int month_index = (5U * day_of_year + 2U) / 153U;
+    unsigned int day = day_of_year - (153U * month_index + 2U) / 5U + 1U;
+    unsigned int month = month_index < 10U ? month_index + 3U : month_index - 9U;
+    year += month <= 2U;
+    char date[32];
+    snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u:%02u UTC",
+             year, month, day, (unsigned int)(seconds % 86400U / 3600U),
+             (unsigned int)(seconds % 3600U / 60U), (unsigned int)(seconds % 60U));
+    text_field(parser, label, date);
+}
+
+static void text_named_string(json_parser_t *parser, const char *name, const char *value) {
+    static const struct { const char *key; const char *label; } fields[] = {
+        {"requestId", "Request ID"}, {"tokenId", "Token ID"},
+        {"tokenRevision", "Token revision"},
+        {"label", "Label"}, {"serverIdentity", "Server identity"},
+        {"policy", "Admission policy"}, {"integrity", "Store integrity"},
+        {"durability", "Store durability"}, {"state", "State"}, {"code", "Access code"},
+    };
+    if (strcmp(name, "createdAt") == 0) {
+        text_timestamp(parser, "Created", value);
+        return;
+    }
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        if (strcmp(name, fields[i].key) == 0) {
+            const char *description = value;
+            if (strcmp(name, "state") == 0 && strcmp(value, "absent_open") == 0) {
+                description = "Access store not initialized; admission is open";
+            } else if (strcmp(name, "policy") == 0) {
+                description = strcmp(value, "open") == 0 ? "Open (no access code required)"
+                                                        : "Protected (access code required)";
+            } else if (strcmp(name, "durability") == 0 && strcmp(value, "indeterminate") == 0) {
+                description = "Uncertain; recover outstanding requests before retrying";
+            }
+            text_field(parser, fields[i].label, *description != '\0' ? description : "None");
+            if (strcmp(name, "code") == 0) {
+                text_append(parser, "One-time display: copy this code now. It cannot be retrieved again.\n");
+            }
+            return;
+        }
+    }
 }
 
 static bool json_character(json_parser_t *parser, uint8_t character) {
@@ -210,8 +296,12 @@ static bool json_string(json_parser_t *parser, char *output, size_t capacity) {
 static bool
 json_named_string(json_parser_t *parser, const char *name, char *output, size_t capacity) {
     char key[32];
-    return json_string(parser, key, sizeof(key)) && strcmp(key, name) == 0 &&
-           json_character(parser, ':') && json_string(parser, output, capacity);
+    bool valid = json_string(parser, key, sizeof(key)) && strcmp(key, name) == 0 &&
+                 json_character(parser, ':') && json_string(parser, output, capacity);
+    if (valid) {
+        text_named_string(parser, name, output);
+    }
+    return valid;
 }
 
 static bool fixed_hex(const char *text, size_t size) {
@@ -253,27 +343,42 @@ static bool json_decimal_string(json_parser_t *parser,
 }
 
 static bool json_boolean(json_parser_t *parser) {
-    return json_literal(parser, "true") || json_literal(parser, "false");
+    bool pending = json_literal(parser, "true");
+    if (!pending && !json_literal(parser, "false")) {
+        return false;
+    }
+    text_field(parser, "Route synchronization", pending ? "Pending" : "Complete");
+    return true;
 }
 
 static bool json_empty_object(json_parser_t *parser) {
     return json_literal(parser, "{}");
 }
 
-static bool json_nullable_timestamp(json_parser_t *parser) {
+static bool json_nullable_timestamp(json_parser_t *parser, const char *label, const char *absent) {
     if (json_literal(parser, "null")) {
+        text_field(parser, label, absent);
         return true;
     }
     char value[13];
-    return json_decimal_string(parser, value, sizeof(value), ACCESS_ADMIN_EXPIRES_MAX, true);
+    if (!json_decimal_string(parser, value, sizeof(value), ACCESS_ADMIN_EXPIRES_MAX, true)) {
+        return false;
+    }
+    text_timestamp(parser, label, value);
+    return true;
 }
 
 static bool json_token(json_parser_t *parser, bool history) {
+    text_append(parser, "\n");
     char text[129];
     if (!json_character(parser, '{') || !json_named_string(parser, "tokenId", text, sizeof(text)) ||
         !fixed_hex(text, 32) || !json_character(parser, ',') ||
         !json_named_string(parser, "revision", text, sizeof(text)) ||
-        !decimal_value(text, UINT64_MAX, true) || !json_character(parser, ',') ||
+        !decimal_value(text, UINT64_MAX, true)) {
+        return false;
+    }
+    text_field(parser, "Token revision", text);
+    if (!json_character(parser, ',') ||
         !json_named_string(parser, "label", text, sizeof(text)) || *text == '\0' ||
         !json_character(parser, ',') ||
         !json_named_string(parser, "createdAt", text, sizeof(text)) ||
@@ -282,7 +387,7 @@ static bool json_token(json_parser_t *parser, bool history) {
     }
     char key[32];
     if (!json_string(parser, key, sizeof(key)) || strcmp(key, "expiresAt") != 0 ||
-        !json_character(parser, ':') || !json_nullable_timestamp(parser) ||
+        !json_character(parser, ':') || !json_nullable_timestamp(parser, "Expires", "Never") ||
         !json_character(parser, ',') || !json_named_string(parser, "state", text, sizeof(text)) ||
         (strcmp(text, "pending") != 0 && strcmp(text, "active") != 0 &&
          strcmp(text, "revoked") != 0 && strcmp(text, "expired") != 0) ||
@@ -290,7 +395,7 @@ static bool json_token(json_parser_t *parser, bool history) {
         strcmp(key, "routePending") != 0 || !json_character(parser, ':') || !json_boolean(parser) ||
         !json_character(parser, ',') || !json_string(parser, key, sizeof(key)) ||
         strcmp(key, "lastAdmittedAt") != 0 || !json_character(parser, ':') ||
-        !json_nullable_timestamp(parser)) {
+        !json_nullable_timestamp(parser, "Last admitted", "Never")) {
         return false;
     }
     if (history) {
@@ -299,6 +404,7 @@ static bool json_token(json_parser_t *parser, bool history) {
             !json_character(parser, '[')) {
             return false;
         }
+        text_append(parser, "Admission history (oldest first):\n");
         size_t count = 0;
         if (!json_character(parser, ']')) {
             do {
@@ -310,6 +416,7 @@ static bool json_token(json_parser_t *parser, bool history) {
                                          true)) {
                     return false;
                 }
+                text_timestamp(parser, "  Admitted", text);
                 if (json_character(parser, ']')) {
                     break;
                 }
@@ -317,6 +424,9 @@ static bool json_token(json_parser_t *parser, bool history) {
             if (parser->position[-1] != ']') {
                 return false;
             }
+        }
+        if (count == 0U) {
+            text_append(parser, "  No admissions recorded.\n");
         }
     }
     return json_character(parser, '}');
@@ -347,11 +457,19 @@ static bool json_list_result(json_parser_t *parser) {
         strcmp(key, "cursor") != 0 || !json_character(parser, ':')) {
         return false;
     }
+    if (count == 0U) {
+        text_append(parser, "No access tokens on this page.\n");
+    }
     if (!json_literal(parser, "null")) {
         char cursor[21];
         if (!json_decimal_string(parser, cursor, sizeof(cursor), ACCESS_ADMIN_TOKEN_LIMIT, true)) {
             return false;
         }
+        text_append(parser, "\nNext page: /access list --cursor ");
+        text_append(parser, cursor);
+        text_append(parser, "\n");
+    } else {
+        text_append(parser, "\nEnd of token list.\n");
     }
     return json_character(parser, '}');
 }
@@ -437,6 +555,9 @@ json_status_result(json_parser_t *parser, bool revision_present, const char *out
         parser->position++;
         digits++;
     }
+    char pending_text[32];
+    snprintf(pending_text, sizeof(pending_text), "%llu", (unsigned long long)pending);
+    text_field(parser, "Routes awaiting synchronization", pending_text);
     return digits != 0U && (digits == 1U || *digits_start != '0') && pending <= 1024U &&
            json_character(parser, '}');
 }
@@ -470,14 +591,17 @@ static bool json_result(json_parser_t *parser,
     }
 }
 
-bool client_access_admin_response_parse(const uint8_t *data,
-                                        size_t size,
-                                        client_access_admin_response_t *response) {
+static bool response_parse(const uint8_t *data,
+                           size_t size,
+                           client_access_admin_response_t *response,
+                           char *output,
+                           size_t capacity) {
     if (data == NULL || response == NULL || size == 0 || size > ACCESS_ADMIN_RESPONSE_MAX ||
         memchr(data, '\0', size) != NULL) {
         return false;
     }
-    json_parser_t parser = {.position = data, .end = data + size};
+    json_parser_t parser = {.position = data, .end = data + size,
+                            .output = output, .capacity = capacity};
     char value[96];
     memset(response, 0, sizeof(*response));
     if (!json_character(&parser, '{') ||
@@ -502,10 +626,27 @@ bool client_access_admin_response_parse(const uint8_t *data,
         !json_named_string(&parser, "outcome", value, sizeof(value))) {
         return false;
     }
+    static const char *const operation_titles[] = {
+        "Issue access code", "List access tokens", "Access token history", "Revoke access token",
+        "Remove access token", "Access management status", "Recover request result",
+    };
+    text_field(&parser, "Operation", operation_titles[response->operation]);
+    static const char *const outcome_descriptions[] = {
+        "Completed successfully.",
+        "Locally revoked; route synchronization is still pending.",
+        "Still pending. Recover this request before another mutation.",
+        "Revision conflict. Refresh with /access status or /access list before retrying.",
+        "Permission denied.", "Access token limit reached.", "Invalid request.",
+        "Token or request not found.", "Access management is unavailable.",
+        "Could not save the access store.",
+        "Result is uncertain. Recover this request before retrying.",
+        "Already completed; the one-time access code cannot be retrieved again.",
+    };
     bool known_outcome = false;
     for (size_t i = 0; i < sizeof(outcome_names) / sizeof(outcome_names[0]); i++) {
         if (strcmp(value, outcome_names[i]) == 0) {
             known_outcome = true;
+            text_field(&parser, "Outcome", outcome_descriptions[i]);
             break;
         }
     }
@@ -528,6 +669,14 @@ bool client_access_admin_response_parse(const uint8_t *data,
     } else {
         response->revision_present = true;
     }
+    if (response->revision_present) {
+        text_field(&parser, "Store revision", response->revision);
+    }
+    if (!response->terminal && response->operation != CLIENT_ACCESS_ADMIN_RESULT) {
+        text_append(&parser, "Recovery command: /access result ");
+        text_append(&parser, response->request_id);
+        text_append(&parser, "\n");
+    }
     return json_character(&parser, ',') && json_string(&parser, key, sizeof(key)) &&
            strcmp(key, "result") == 0 && json_character(&parser, ':') &&
            json_result(&parser,
@@ -536,5 +685,28 @@ bool client_access_admin_response_parse(const uint8_t *data,
                        response->revision_present,
                        response->revision,
                        response->token_id) &&
-           json_character(&parser, '}') && parser.position == parser.end;
+           json_character(&parser, '}') && parser.position == parser.end && !parser.overflow;
+}
+
+bool client_access_admin_response_parse(const uint8_t *data,
+                                        size_t size,
+                                        client_access_admin_response_t *response) {
+    return response_parse(data, size, response, NULL, 0);
+}
+
+bool client_access_admin_response_format(const uint8_t *data,
+                                         size_t size,
+                                         char *output,
+                                         size_t capacity) {
+    if (output == NULL || capacity == 0) {
+        return false;
+    }
+    output[0] = '\0';
+    client_access_admin_response_t response;
+    bool valid = response_parse(data, size, &response, output, capacity);
+    memory_clear(&response, sizeof(response));
+    if (!valid) {
+        memory_clear(output, capacity);
+    }
+    return valid;
 }

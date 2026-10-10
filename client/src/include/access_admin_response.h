@@ -38,6 +38,17 @@ bool client_access_admin_response_parse(const uint8_t *data,
                                         size_t size,
                                         client_access_admin_response_t *response);
 
+/** Maximum capacity needed for readable output, including caller recovery details. */
+#define CLIENT_ACCESS_ADMIN_TEXT_MAX 65536U
+
+/** Validate and format literal text for the markup-disabled private book only.
+ * The caller owns and must securely clear the output, which may contain a
+ * one-time secret. Failure clears the entire output buffer, never truncates. */
+bool client_access_admin_response_format(const uint8_t *data,
+                                         size_t size,
+                                         char *output,
+                                         size_t capacity);
+
 const char *client_access_admin_operation_name(client_access_admin_operation_t operation);
 
 #endif

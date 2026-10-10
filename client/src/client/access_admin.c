@@ -416,12 +416,22 @@ bool client_access_admin_response(const uint8_t *data, size_t size) {
         free(pending_command);
         pending_command = NULL;
     }
-    char *json = xmalloc(size + 1U);
-    memcpy(json, data, size);
-    json[size] = '\0';
-    bool displayed = book_load_sensitive(json, (int)size, "Access management");
-    access_code_clear(json, size);
-    free(json);
+    char *text = xmalloc(CLIENT_ACCESS_ADMIN_TEXT_MAX);
+    bool formatted = client_access_admin_response_format(data, size, text,
+                                                          CLIENT_ACCESS_ADMIN_TEXT_MAX);
+    if (formatted && response.operation == CLIENT_ACCESS_ADMIN_RESULT) {
+        size_t used = strlen(text);
+        int added = snprintf(text + used, CLIENT_ACCESS_ADMIN_TEXT_MAX - used,
+                             "Original request ID: %s\n%s%s%s",
+                             last_result_target,
+                             response.terminal ? "" : "Recovery command: /access result ",
+                             response.terminal ? "" : last_result_target,
+                             response.terminal ? "" : "\n");
+        formatted = added > 0 && (size_t)added < CLIENT_ACCESS_ADMIN_TEXT_MAX - used;
+    }
+    bool displayed = formatted && book_load_sensitive(text, (int)strlen(text), "Access management");
+    access_code_clear(text, CLIENT_ACCESS_ADMIN_TEXT_MAX);
+    free(text);
     bool recovered_result = response.operation == CLIENT_ACCESS_ADMIN_RESULT &&
                             strcmp(last_result_target, recovery_request_id) == 0;
     if (recovery_for_selected_server() && (issued || recovered_result)) {

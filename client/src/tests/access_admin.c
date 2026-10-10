@@ -118,6 +118,18 @@ static void reply(const char *operation, const char *outcome, const char *result
                         "\"result\":%s}", operation, id, outcome, result);
     REQUIRE(size > 0 && (size_t)size < sizeof(json));
     REQUIRE(client_access_admin_response((const uint8_t *)json, (size_t)size) == !fail_book);
+    if (!fail_book) {
+        REQUIRE(strstr(displayed, "atrinik-access-admin-v1") == NULL);
+        REQUIRE(strstr(displayed, "Outcome: ") != NULL);
+        if (strcmp(operation, "result") == 0) {
+            const char *target = strstr(sent, "\"targetRequestId\":\"");
+            REQUIRE(target != NULL);
+            char original[64];
+            snprintf(original, sizeof(original), "Original request ID: %.32s",
+                     target + strlen("\"targetRequestId\":\""));
+            REQUIRE(strstr(displayed, original) != NULL);
+        }
+    }
 }
 
 static void mutation_reply(const char *operation, const char *outcome, const char *id) {
