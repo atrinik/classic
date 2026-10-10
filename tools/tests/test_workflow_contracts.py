@@ -342,16 +342,17 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("  workflow_dispatch:\n", workflow)
         self.assertIn("  push:\n", workflow)
         self.assertNotIn("      - main\n", workflow)
-        self.assertIn("github.ref_name != 'main'", workflow)
+        self.assertIn("workflows: [Check, Package Release]", workflow)
+        self.assertIn("types: [completed]", workflow)
+        self.assertIn("github.event.workflow_run.event == 'push'", workflow)
+        self.assertIn("github.event.workflow_run.head_branch == 'main'", workflow)
+        self.assertIn("github.event.workflow_run.head_repository.full_name == github.repository", workflow)
+        self.assertIn("github.event.workflow_run.event == 'workflow_dispatch'", workflow)
         self.assertIn("      - '[0-9]+.[0-9]+.x'\n", workflow)
-        self.assertIn("ATRINIK_RELEASE_BRANCH", workflow)
-        self.assertIn("RELEASE_TRIGGER_SHA", workflow)
-        self.assertIn('test "${commit}" = "${RELEASE_TRIGGER_SHA}"', workflow)
-        self.assertIn('refs/remotes/origin/${RELEASE_BRANCH}', workflow)
-        self.assertIn('select(.name == "Classic validation"', workflow)
-        self.assertIn('test "${GITHUB_REF}" = "refs/heads/${RELEASE_BRANCH}"', workflow)
-        self.assertIn('check_state=$(gh api', workflow)
-        self.assertIn('Classic validation did not complete', workflow)
+        self.assertIn("tools/release/select_release_batch.py", workflow)
+        self.assertIn("ref: ${{ steps.batch.outputs.revision }}", workflow)
+        self.assertIn("if: steps.batch.outputs.proceed == 'true'", workflow)
+        self.assertIn("if: steps.current.outputs.proceed == 'true'", workflow)
         self.assertIn("node tools/tests/test_release_policy.cjs", workflow)
         self.assertIn('export GITHUB_REF="refs/heads/${ATRINIK_RELEASE_BRANCH}"', workflow)
         self.assertIn('export GITHUB_REF_NAME="${ATRINIK_RELEASE_BRANCH}"', workflow)
@@ -581,9 +582,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(bundle, rebind)
         self.assertLess(rebind, pending)
         rebind_step = workflow[rebind:pending]
-        self.assertIn('git fetch --no-tags origin "${RELEASE_BRANCH}"', rebind_step)
-        self.assertIn('refs/remotes/origin/${RELEASE_BRANCH}', rebind_step)
-        self.assertIn('test "${commit}" = "${RELEASE_TRIGGER_SHA}"', rebind_step)
+        self.assertIn('select_release_batch.py --recheck', rebind_step)
+        self.assertIn('--branch "${RELEASE_BRANCH}" --revision "${RELEASE_TRIGGER_SHA}"', rebind_step)
+        self.assertIn('RELEASE_TRIGGER_SHA: ${{ steps.batch.outputs.revision }}', rebind_step)
 
     def test_dependency_bundle_install_fails_before_pull_without_attestation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -771,6 +772,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("group: classic-release-publication", package)
         self.assertIn("group: classic-release-publication", recovery)
         self.assertIn("classic-release-candidate-", candidate)
+        for workflow in (release, package, recovery):
+            self.assertIn("queue: max", workflow)
+            self.assertIn("cancel-in-progress: false", workflow)
+
+    def test_semantic_mutation_sites_recheck_after_pending_resolution(self) -> None:
+        workflow = self.text("release.yml")
+        mutations = workflow.split("      - name: ")
+        for name in ("Delete the policy-listed empty failed draft",
+                     "Resume the incomplete package release", "Resume the retained complete candidate",
+                     "Analyze commits, tag, and publish release notes"):
+            step = next(step for step in mutations if step.startswith(name))
+            self.assertIn("select_release_batch.py --recheck --require-current", step)
+            fence = step.index("select_release_batch.py --recheck --require-current")
+            write = min(step.index(command) for command in
+                        ("--delete-policy-listed-empty-draft", "gh workflow run", "npx --yes")
+                        if command in step)
+            self.assertLess(fence, write)
 
     def test_latest_alias_has_one_globally_serialized_owner(self) -> None:
         package = self.text("package-release.yml")

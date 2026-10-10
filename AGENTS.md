@@ -74,16 +74,22 @@
   `client`, `server`, `editor`, `libatrinik`, `protocol`, `build`, `ci`, `docs`,
   and `release`.
 - Root semantic-release owns one unprefixed repository version and first-parent
-  release history. `main` advances every release-driving commit to the next
-  minor line; a numeric `X.Y.x` branch is cut from `vX.Y.0` and publishes only
+  release history. `main` advances each checked release-driving batch to the
+  next minor line; a numeric `X.Y.x` branch is cut from `vX.Y.0` and publishes only
   later patches. Never hand-edit tags, images, drafts, or release assets; use
   the checked publication/recovery procedures in `docs/RELEASING.md`.
-- Main stable publication is currently held in `release.yml`; a reviewed public
-  client/server upgrade must explicitly re-enable it. Checked main source builds
-  publish only `classic-server:source-COMMIT` and the `development` discovery
-  alias through `publish-development-server.yml`, with version `0.0.0`, exact
-  source identity, locked inputs, SBOM and signed provenance. See
-  `docs/RELEASING.md`; never substitute a source build for a semantic release.
+- Successful trusted main-push Check completions automatically wake Semantic
+  Release for the exact checked current head. Package Release completion
+  reconciles later checked main batches; semantic analysis, packaging, and
+  recovery share the non-cancelling publication queue. Latest promotion keeps
+  its separate alias lock. Each release includes the complete artifact
+  contract, including the Linux Debian client. Numeric maintenance pushes and
+  manual retries retain branch/check validation and guarded recovery. See
+  `docs/RELEASING.md`; source publication does not authorize runtime deployment.
+- Checked main source builds also publish `classic-server:source-COMMIT` and
+  the `development` discovery alias through `publish-development-server.yml`,
+  with version `0.0.0`, exact source identity, locked inputs, SBOM and signed
+  provenance. Never substitute a source build for a semantic release.
 - `tools/ci/classify_changes.py` is the single path-selection contract for
   native Check and CodeQL work. Pull requests are path-aware; protocol,
   libatrinik, and validation-contract changes select both client and server.
