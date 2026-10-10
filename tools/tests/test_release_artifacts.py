@@ -126,7 +126,7 @@ class ReleaseArtifactsTests(unittest.TestCase):
         control.write_text(valid)
         for name in ("usr/games/atrinik", "usr/share/applications/atrinik.desktop",
                      "usr/share/games/atrinik/sound/a", "usr/share/games/atrinik/fonts/a",
-                     "usr/share/games/atrinik/textures/a", "usr/share/doc/atrinik/LICENSE.md", "usr/share/doc/atrinik/ATTRIBUTIONS.md"):
+                     "usr/share/games/atrinik/textures/a", "usr/share/games/atrinik/client.cfg", "usr/share/doc/atrinik/LICENSE.md", "usr/share/doc/atrinik/ATTRIBUTIONS.md"):
             path = package / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"payload")
@@ -139,6 +139,12 @@ class ReleaseArtifactsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode())
         build()
         artifacts.validate_deb(deb, self.version)
+        runtime_config = package / "usr/share/games/atrinik/client.cfg"
+        runtime_config.unlink()
+        build()
+        with self.assertRaisesRegex(RuntimeError, "client.cfg"):
+            artifacts.validate_deb(deb, self.version)
+        runtime_config.write_text("payload")
         duplicate = valid.replace(
             "Depends: ",
             "Depends: libsdl3-0 (>= 3.4.0), libssl3t64 (>= 3.5.0), "

@@ -136,7 +136,8 @@ def validate_deb(path: Path, version: str) -> None:
             if member.isfile() and (".so" in PurePosixPath(name).name or name.endswith((".a", ".dll", ".exe"))):
                 raise RuntimeError(f"private library in Debian package: {name}")
         required = ("usr/games/atrinik", "usr/share/applications/atrinik.desktop",
-                    "usr/share/doc/atrinik/LICENSE.md", "usr/share/doc/atrinik/ATTRIBUTIONS.md")
+                    "usr/share/doc/atrinik/LICENSE.md", "usr/share/doc/atrinik/ATTRIBUTIONS.md",
+                    "usr/share/games/atrinik/client.cfg")
         for name in required:
             if name not in entries or not entries[name].isfile() or entries[name].size == 0:
                 raise RuntimeError(f"Debian package missing {name}")

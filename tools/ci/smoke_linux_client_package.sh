@@ -19,6 +19,7 @@ test -x /usr/games/atrinik
 test -s /usr/share/applications/atrinik.desktop
 test -s /usr/share/pixmaps/atrinik.png
 test -d /usr/share/games/atrinik/sound
+test -s /usr/share/games/atrinik/client.cfg
 test -s /usr/share/doc/atrinik/LICENSE.md
 if ldd /usr/games/atrinik | grep -F 'not found'; then
   echo "installed client has an unresolved runtime library" >&2
@@ -36,6 +37,7 @@ setpriv --reuid 65534 --regid 65534 --clear-groups \
   env HOME="$smoke_home" ATRINIK_CONFIG_DIR="$smoke_home/config" \
   timeout 30 /usr/games/atrinik --help > "$smoke_home/help.log" 2>&1
 grep -F 'List of available options' "$smoke_home/help.log"
+grep -F 'Loading configuration from /usr/share/games/atrinik/client.cfg' "$smoke_home/help.log"
 # Repeat installation, then remove: package management must not erase user data.
 apt-get install -y --no-install-recommends "$package"
 install -d "$smoke_home/config/.atrinik"
