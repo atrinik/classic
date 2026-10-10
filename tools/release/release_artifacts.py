@@ -131,6 +131,9 @@ def validate_deb(path: Path, version: str) -> None:
         entries = safe_deb_members(archive)
         allowed = ("usr/games", "usr/share/games/atrinik", "usr/share/doc/atrinik", "usr/share/applications", "usr/share/icons", "usr/share/pixmaps")
         for name, member in entries.items():
+            if (member.isdir() and member.mode & 0o005 != 0o005
+                    or member.isfile() and not member.mode & 0o004):
+                raise RuntimeError(f"Debian payload is inaccessible to ordinary users: {name}")
             if not any(name == root or name.startswith(root + "/") or member.isdir() and root.startswith(name + "/") for root in allowed):
                 raise RuntimeError(f"unexpected Debian payload path: {name}")
             if member.isfile() and (".so" in PurePosixPath(name).name or name.endswith((".a", ".dll", ".exe"))):
@@ -150,7 +153,7 @@ def validate_deb(path: Path, version: str) -> None:
         assert desktop is not None
         if "Exec=/usr/games/atrinik" not in desktop.read().decode("utf-8").splitlines():
             raise RuntimeError("Debian desktop entry must launch /usr/games/atrinik")
-        if not entries["usr/games/atrinik"].mode & 0o111:
+        if not entries["usr/games/atrinik"].mode & 0o001:
             raise RuntimeError("Debian client is not executable")
         for root in ("usr/share/games/atrinik/sound", "usr/share/games/atrinik/fonts", "usr/share/games/atrinik/textures", "usr/share/doc/atrinik"):
             if not any(name.startswith(root + "/") and member.isfile() and member.size > 0 for name, member in entries.items()):

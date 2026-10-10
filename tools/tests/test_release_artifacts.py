@@ -130,6 +130,11 @@ class ReleaseArtifactsTests(unittest.TestCase):
             path = package / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"payload")
+            path.chmod(0o644)
+            for parent in path.parents:
+                if parent == package:
+                    break
+                parent.chmod(0o755)
         (package / "usr/games/atrinik").write_bytes(b"\x7fELF\x02\x01" + b"\0" * 12 + b"\x3e\x00")
         (package / "usr/share/applications/atrinik.desktop").write_text("[Desktop Entry]\nExec=/usr/games/atrinik\n")
         (package / "usr/games/atrinik").chmod(0o755)
@@ -139,12 +144,22 @@ class ReleaseArtifactsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode())
         build()
         artifacts.validate_deb(deb, self.version)
+        for path, mode in ((package / "usr/games", 0o700),
+                           (package / "usr/share/games/atrinik/client.cfg", 0o600),
+                           (package / "usr/games/atrinik", 0o744)):
+            original_mode = path.stat().st_mode & 0o777
+            path.chmod(mode)
+            build()
+            with self.assertRaisesRegex(RuntimeError, "inaccessible|not executable"):
+                artifacts.validate_deb(deb, self.version)
+            path.chmod(original_mode)
         runtime_config = package / "usr/share/games/atrinik/client.cfg"
         runtime_config.unlink()
         build()
         with self.assertRaisesRegex(RuntimeError, "client.cfg"):
             artifacts.validate_deb(deb, self.version)
         runtime_config.write_text("payload")
+        runtime_config.chmod(0o644)
         duplicate = valid.replace(
             "Depends: ",
             "Depends: libsdl3-0 (>= 3.4.0), libssl3t64 (>= 3.5.0), "
@@ -168,6 +183,7 @@ class ReleaseArtifactsTests(unittest.TestCase):
         control.write_text(valid)
         bad = package / "usr/share/games/atrinik/private.so"
         bad.write_bytes(b"library")
+        bad.chmod(0o644)
         build()
         with self.assertRaisesRegex(RuntimeError, "private library"):
             artifacts.validate_deb(deb, self.version)
