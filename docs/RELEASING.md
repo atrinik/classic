@@ -451,10 +451,19 @@ their generated `VERSION` file as the deterministic offline fallback.
 The editor archive contains the maintained Gridarta packaging utility. It does
 not claim to contain a Gridarta JAR: Gridarta remains an operator-supplied,
 separately reviewed GPL checkout. Automating that JAR requires an independently
-verified immutable upstream revision and dependency contract. The Linux client Debian package is built and installation-tested on Debian
+verified immutable upstream revision and dependency contract. The editor has no
+Linux binary bundle.
+
+The Linux client Debian package is built and installation-tested on Debian
 testing (`forky`), using the digest-pinned base and signed APT snapshot in
 `tools/ci/debian-client/Dockerfile`. The recorded build-package inventory is
-retained as workflow evidence. The editor has no Linux binary bundle.
+retained as workflow evidence. The trusted workflow caller supplies the Dockerfile and
+installation smoke script; the exact candidate checkout and staged inputs are
+read-only container inputs. Candidate code runs offline as an ordinary user
+from a private copy inside the build container, with only the package output
+directory writable on the runner. The job rejects symlink outputs and uploads
+only the expected regular `.deb` file. The real packaging fixture runs in this
+Debian image, which includes all required packaging tools.
 
 The client and server source archives include the matching protocol and
 libatrinik trees under `dependencies/`; the libatrinik archive includes the
