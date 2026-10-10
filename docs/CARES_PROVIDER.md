@@ -18,8 +18,13 @@ symlinks and verifies the staged result. Headers, pkg-config metadata, compiler
 binaries and the rest of the build prefix are excluded. Both full curl and c-ares
 licenses remain in `/usr/local/share/licenses/`.
 
-The destination uses the producer's immutable Ubuntu 26.04 base and signed
-`20260810T000000Z` snapshot. A public distro CA bundle is copied from the compiler
+The destination uses the digest-pinned Ubuntu base in
+[`server/Dockerfile`](../server/Dockerfile) and the signed `20260810T000000Z`
+snapshot. Dockerfile is the sole owner of the runtime base image pin, so
+Dependabot can update it without synchronizing a duplicate lock field. The
+provider lock continues to verify the copied libraries and installed package
+closure; a new base must still pass the actual assembly checks below.
+A public distro CA bundle is copied from the compiler
 stage before HTTPS package acquisition, then the locked `ca-certificates` package
 owns runtime system trust. HTTPS peer verification and APT Release signature and
 package hash verification remain enabled. Historical Release expiry is disabled
