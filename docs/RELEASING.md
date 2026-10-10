@@ -1,30 +1,62 @@
 # Unified classic releases
 
 Classic uses one repository version, commit, tag, GitHub release, and artifact
-set. The first post-consolidation release is `v5.6.0`; later versions stay on
+set. The first post-consolidation release was `v5.6.0`; later versions stay on
 the `v5.x.x` line and follow a branch-aware Conventional Commits policy through
-semantic-release. When stable publication is enabled on `main`, every accepted release-driving commit starts the
-next minor line. A numeric `X.Y.x` branch is cut from its published `vX.Y.0`
-tag and accepts only patch releases (`vX.Y.1`, then later point fixes);
+semantic-release. On `main`, each checked batch containing release-driving
+commits starts the next minor line. A numeric `X.Y.x` branch is cut from its
+published `vX.Y.0` tag and accepts only patch releases (`vX.Y.1`, then later point fixes);
 feature/breaking transitions fail closed instead of leaving the range.
 
-## Current main publication mode: development only
+## Automatic main publication
 
-Stable publication from `main` is held while its protocol and access changes
-are qualified for development. `release.yml` excludes main pushes and rejects
-manual main runs at both the job and branch-validation boundaries. Re-enabling
-main stable publication requires a reviewed source change paired with the
-public client/server upgrade. Numeric maintenance branches retain their existing
-release policy. The stable pipeline below describes that retained contract;
-it does not authorize main publication while the hold is present.
+Successful trusted `Check` workflow runs for protected `main` pushes wake
+Semantic Release. Before changing release state, it verifies the exact current
+main commit, the Check workflow identity and check suite, and the successful
+`Classic validation` aggregate. Pull-request, merge-group, failed, stale,
+non-main, or foreign-repository Check runs cannot authorize publication.
 
-Merge this hold and the development publisher atomically before merging a
-protocol change that the public server cannot accept. A push evaluates the
-workflow definition at the pushed revision. Before merging, audit and drain
-already queued/running Semantic Release, Package Release, Recover Missing
-Release and Promote Latest Release runs: the new definition cannot stop an
-old run that already crossed its final current-main check. Do not dispatch
-stable packaging, recovery or promotion as part of development delivery.
+Semantic Release, Package Release, and Recover Missing Release share the
+non-cancelling `classic-release-publication` queue with
+`queue: max`. GitHub retains up to 100 pending runs; operators must investigate
+queue-capacity failures rather than treating a missing run as success. The queue
+serializes release writers while CI validates new merges. Stale or unvalidated
+heads are skipped, and the next checked current head includes all unreleased
+first-parent changes since the previous semantic release. This batches merges
+without a fixed quiet-period delay or a release for every intermediate commit.
+Only batches containing release-driving Conventional Commits create a version.
+Promote Latest Release retains its separate `classic-promote-latest` lock and
+recomputes the latest complete immutable release before reconciling aliases.
+The expanded pending queue applies to the new workflow definitions. Existing
+immutable tags retain their historical definitions, including the former
+single-pending-run behavior and original asset schema; recover them through
+the guarded procedures below rather than assuming the new queue contract.
+
+Successful Package Release completion also wakes Semantic Release to reconcile
+current main. This wake-up reselects the latest head and requires its own exact
+trusted successful Check binding before mutation; the package run is not source
+validation. It lets an older pending draft finish recovery before a later
+checked batch is analyzed, so merges made during packaging are not lost. If
+current main is still being checked, its later successful Check completion
+supplies the next wake-up. Failed packaging retains the guarded recovery rules
+below and does not authorize a new release over an incomplete draft.
+
+Numeric maintenance branches retain push and manual dispatch triggers and
+patch-only version policy. Manual dispatch on current `main` provides an
+explicit retry when automatic analysis failed before tagging; it still requires
+exact trusted source validation and the shared publication queue. Maintenance
+pushes and manual release runs wait for the exact push Check result for up to
+30 attempts at 30-second intervals; a timeout is a failure. Once a tag or
+candidate exists, follow the matching recovery procedure below instead of
+creating replacement release state.
+
+Merging the automation change arms future successful main Check completions.
+Preparing or reviewing its pull request publishes no release and dispatches no
+workflow. Stable source publication and the existing development-server channel
+do not deploy or upgrade a running public game; runtime acceptance, activation,
+compatibility, and rollback remain separate operations.
+
+### Development server channel
 
 `Publish Development Server` runs on main pushes and manual current-main
 dispatches. Its read-only preflight binds a successful `Classic validation`
@@ -147,7 +179,7 @@ rechecks those immutable coordinates and the failed job conclusions, then
 re-lists the complete draft inventory and every page of failed-run jobs, reads
 the exact release once more, deletes only that exact zero-asset draft, and
 continues version analysis. Semantic Release, Package Release, and manual
-recovery share one non-cancelling publication lock. Any
+recovery share one non-cancelling publication queue. Any
 changed draft ID or tag target, uploaded asset, successful
 candidate/publication job, unrecognized run, or additional draft fails closed.
 GitHub does not provide a conditional release DELETE, so operators must not
@@ -356,9 +388,11 @@ complete `classic` supply-chain profile before resuming publication.
 
 1. The root Check workflow validates import evidence and every module. Its
    aggregate result is `Classic validation`.
-2. A successful Check run for the current `main` commit triggers Semantic
-   Release. Pull-request, merge-group, failed, stale, and non-main Check runs
-   cannot publish.
+2. A successful trusted main-push Check run wakes Semantic Release. It skips
+   stale heads and requires exact current-head workflow/check-suite validation
+   before mutation. Successful Package Release completion supplies a second
+   reconciliation wake-up for a later checked main batch. Maintenance pushes
+   and supported manual dispatches retain exact branch validation.
 3. Semantic-release first pulls and verifies the exact checked dependency
    bundle. It then analyzes and formats only exact first-parent commits,
    creates the unprefixed tag and draft GitHub release notes, then dispatches
@@ -383,10 +417,12 @@ complete `classic` supply-chain profile before resuming publication.
    size, state, name, or extra-asset mismatch fails without overwrite. It then
    publishes or verifies the same-version server image, locked-input labels,
    SLSA provenance, SPDX SBOM, and GitHub/Sigstore attestation.
-7. With all twelve assets and the image complete, the workflow publishes the
+7. With all required assets and the image complete, the workflow publishes the
    draft as its last release mutation and verifies that GitHub reports an
    immutable, non-prerelease release with the exact asset digests. A retry also
    accepts that exact published state and skips every immutable release write.
+   Schema 2 requires thirteen assets including the Debian client; historical
+   schema-1 recovery retains its original twelve-asset contract.
 8. A separate job dispatches the globally serialized Promote Latest Release
    workflow after successful publication. It selects the highest published
    unified semantic version regardless of publication order, revalidates its
@@ -412,20 +448,30 @@ component workflow/release copies were retired after the root rehearsal and
 unified releases proved equivalence; Git history preserves their migration
 evidence.
 
-### Initial activation
+### Activation and operational retries
 
-The pipeline was activated in two phases so merging its implementation could
-not publish an untested first release. Semantic Release remained manual-only
-until a complete post-merge rehearsal succeeded and an administrator
-live-audited repository immutable releases as enabled through the governance
-rollout. The separate activation change then added only the successful current
-release-branch Check gate. Automatic publication now starts from protected
-pushes and waits for that exact commit's validation result before mutating
-release state.
+The original unified pipeline was activated after a complete post-merge
+rehearsal and an administrator's live audit of immutable releases. That initial
+manual-only rollout and the later main publication hold are historical; current
+main publication uses the automatic validation and reconciliation chain above.
+The first post-consolidation version was `v5.6.0`. Imported component features,
+breaking markers, and old issue numbers remain excluded from unified version
+analysis and notes.
 
-The first automatic analysis must produce `v5.6.0` from the already-merged
-unified release work. Imported component features, breaking markers, and old
-issue numbers must not affect its version or appear in its notes.
+Repository immutable releases remain an externally governed prerequisite.
+A live audit on 2026-10-10 for this automation change observed immutable-release
+settings `enabled` and `enforced` as `true`, with no in-progress stable release
+runs. Those observations describe that audit, not a permanent guarantee. Audit
+fresh live settings and queued/running release writers before operational policy
+changes; workflow credentials cannot substitute for the administration audit.
+No settings change, workflow dispatch, tag, release, or deployment is part of
+preparing the automation pull request.
+
+Use Release Rehearsal after material pipeline changes. A failed pre-tag Semantic
+Release run may be retried on current checked main. A failed Package Release run
+must follow its exact draft/candidate recovery boundary. The shared queue does
+not waive asset integrity, immutable release requirements, dependency-bundle
+verification, or maintenance-branch version policy.
 
 ## Artifact contract
 
@@ -509,8 +555,8 @@ Release-manifest schema 2 includes the Debian package in its exact 13-file
 contract. Historical schema 1 retains its original 12 files. Publication and
 recovery select the schema from the original source revision, validate the
 manifest, locked inputs and every artifact hash, and never append a Debian
-package to an already published release. The existing main publication hold
-remains in effect.
+package to an already published release. Automatic main releases use the
+complete schema-2 contract, including the Debian client.
 
 ## Rehearsal and verification
 

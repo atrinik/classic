@@ -15,13 +15,15 @@ and exact validation requirements.
    `feat(protocol)!: ...`.
 
 The squash-merge title is the unified release input. Classic stays on the
-`5.x.x` line: `main` advances every release-driving commit to the next minor
-version, while a numeric `X.Y.x` maintenance branch advances only its patch
+`5.x.x` line: `main` advances each checked release-driving batch to the next
+minor version, while a numeric `X.Y.x` maintenance branch advances only its patch
 version from the published `vX.Y.0` baseline. A breaking marker or `feat` on a
-maintenance branch is rejected as out of range. Main stable publication is
-currently held; its checked development server images use `0.0.0` plus the
-exact source revision. See `docs/RELEASING.md` for the publication and resumption
-contract.
+maintenance branch is rejected as out of range. Successful trusted main-push
+Check completions automatically release checked batches of unreleased changes,
+including the complete Linux Debian client package. Package Release completion
+reconciles later checked batches through the shared publication queue. The
+separate development server images use `0.0.0` plus the exact source revision.
+See `docs/RELEASING.md` for publication, manual retry, and guarded recovery.
 
 Do not vendor content, sound, resources, generated dependency trees, or copies
 of sibling source. Do not edit imported history maps or archive refs. Security
@@ -88,11 +90,13 @@ Do not normalize them as source headers; change one only through deliberate
 repository-owned legal review.
 
 The root workflows own the unified classic release line. Main stable
-publication is currently held; checked current-main pushes publish only the
-separate development image channel. Numeric maintenance branches retain their
-validated semantic-release and guarded packaging contract. Pull-request,
-merge-group, failed and stale checks cannot authorize publication. The retired
-nested component workflow and semantic-release files remain available in Git
+publication runs automatically after exact trusted main-push validation; the
+shared non-cancelling queue serializes semantic analysis, packaging, and
+recovery; Latest promotion retains its separate alias lock. Numeric maintenance branches retain their validated
+semantic-release and guarded packaging contract. Pull-request, merge-group,
+failed and stale checks cannot authorize publication. Publishing source and
+release artifacts does not authorize deploying or upgrading a running game.
+The retired nested component workflow and semantic-release files remain available in Git
 history; never restore them as independent release trains.
 
 Release builds consume `sound`, `content`, `resources`, and `libpcpnatpmp`
