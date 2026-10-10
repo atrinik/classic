@@ -111,15 +111,20 @@ def validate_deb(path: Path, version: str) -> None:
             if fields.get(key) != expected:
                 raise RuntimeError(f"Debian package has wrong {key}")
         dependencies = fields.get("Depends", "").split(",")
-        for package, minimum in (("libsdl3-0", "3.4"), ("libssl3t64", "3.5")):
+        for package, minimum in (("libsdl3-0", "3.4"), ("libssl3t64", "3.5"),
+                                 ("libsdl3-image0", "3.2"), ("libsdl3-ttf0", "3.2"),
+                                 ("libsdl3-mixer0", "3.2.4")):
             matches = [re.fullmatch(rf"\s*{package}(?::amd64)?\s*\(>=\s*([^\s)]+)\)\s*", d) for d in dependencies]
             versions = [m.group(1) for m in matches if m is not None]
-            if len(versions) != 1:
+            # CPack combines authored runtime floors with generated shlibdeps.
+            # Comma-separated duplicates are conjunctive: one sufficient lower
+            # bound preserves the floor even when another bound is weaker.
+            if not any(subprocess.run(
+                ["dpkg", "--compare-versions", bound, "ge", minimum],
+                capture_output=True,
+            ).returncode == 0 for bound in versions):
                 raise RuntimeError(f"Debian package requires {package} >= {minimum}")
-            result = subprocess.run(["dpkg", "--compare-versions", versions[0], "ge", minimum], capture_output=True)
-            if result.returncode:
-                raise RuntimeError(f"Debian package requires {package} >= {minimum}")
-        for package in ("libsdl3-image0", "libsdl3-mixer0", "libsdl3-ttf0", "ca-certificates", "libvulkan1"):
+        for package in ("ca-certificates", "libvulkan1"):
             if not any(re.fullmatch(rf"\s*{package}(?::amd64)?(?:\s*\([^)]*\))?\s*", d) for d in dependencies):
                 raise RuntimeError(f"Debian package requires {package}")
     with deb_tar(path, "--fsys-tarfile") as archive:

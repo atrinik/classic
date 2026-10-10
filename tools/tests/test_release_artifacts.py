@@ -112,7 +112,7 @@ class ReleaseArtifactsTests(unittest.TestCase):
         control.parent.mkdir(parents=True)
         control.parent.chmod(0o755)
         valid = ("Package: atrinik\nVersion: 5.99.0\nArchitecture: amd64\nMaintainer: Test <test@example.invalid>\nDescription: Test\n"
-                 "Depends: libsdl3-0 (>= 3.4), libsdl3-image0, libsdl3-mixer0, libsdl3-ttf0, libssl3t64 (>= 3.5), ca-certificates, libvulkan1\n")
+                 "Depends: libsdl3-0 (>= 3.4), libsdl3-image0 (>= 3.2), libsdl3-mixer0 (>= 3.2.4), libsdl3-ttf0 (>= 3.2), libssl3t64 (>= 3.5), ca-certificates, libvulkan1\n")
         control.write_text(valid)
         for name in ("usr/games/atrinik", "usr/share/applications/atrinik.desktop",
                      "usr/share/games/atrinik/sound/a", "usr/share/games/atrinik/fonts/a",
@@ -129,8 +129,22 @@ class ReleaseArtifactsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode())
         build()
         artifacts.validate_deb(deb, self.version)
+        duplicate = valid.replace(
+            "Depends: ",
+            "Depends: libsdl3-0 (>= 3.4.0), libssl3t64 (>= 3.5.0), "
+            "libsdl3-image0 (>= 3.0), libsdl3-ttf0 (>= 3.0), "
+            "libsdl3-mixer0 (>= 3.0), ",
+        )
+        control.write_text(duplicate)
+        build()
+        artifacts.validate_deb(deb, self.version)
         for text, error in ((valid.replace("Architecture: amd64", "Architecture: arm64"), "Architecture"),
-                            (valid.replace("(>= 3.4)", "(>= 3.2)"), "libsdl3-0")):
+                            (valid.replace("(>= 3.4)", "(>= 3.2)"), "libsdl3-0"),
+                            (duplicate.replace("(>= 3.4.0)", "(>= 3.3.0)").replace("(>= 3.4)", "(>= 3.2)"), "libsdl3-0"),
+                            (valid.replace("libssl3t64 (>= 3.5)", "libssl3t64 (>= 3.4)"), "libssl3t64"),
+                            (valid.replace("libsdl3-image0 (>= 3.2)", "libsdl3-image0 (>= 3.1)"), "libsdl3-image0"),
+                            (valid.replace("libsdl3-ttf0 (>= 3.2)", "libsdl3-ttf0 (>= 3.1)"), "libsdl3-ttf0"),
+                            (valid.replace("libsdl3-mixer0 (>= 3.2.4)", "libsdl3-mixer0 (>= 3.2.3)"), "libsdl3-mixer0")):
             control.write_text(text)
             build()
             with self.assertRaisesRegex(RuntimeError, error):
