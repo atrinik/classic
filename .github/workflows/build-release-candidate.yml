@@ -69,11 +69,19 @@ jobs:
       source_epoch: ${{ steps.metadata.outputs.source_epoch }}
       tag: ${{ steps.metadata.outputs.tag }}
       version: ${{ steps.metadata.outputs.version }}
+      artifact_schema: ${{ steps.metadata.outputs.artifact_schema }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.revision }}
+      - name: Check out the trusted artifact-contract reader
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: build/release-automation
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: tools/release
       - id: metadata
         name: Validate immutable candidate coordinates
         env:
@@ -96,7 +104,11 @@ jobs:
             test "${RELEASE_TAG}" = "v${RELEASE_VERSION}"
             test -n "${RELEASE_SOURCE_EPOCH}"
           fi
+          artifact_schema=$(python3 build/release-automation/tools/release/release_artifacts.py \
+            --print-source-schema --revision "${commit}" --source-root "${GITHUB_WORKSPACE}")
+          [[ ${artifact_schema} == 1 || ${artifact_schema} == 2 ]]
           {
+            echo "artifact_schema=${artifact_schema}"
             echo "tag=${RELEASE_TAG}"
             echo "version=${RELEASE_VERSION}"
             echo "commit=${commit}"
@@ -227,6 +239,7 @@ jobs:
   client-linux:
     name: Build and install Debian client package
     needs: [metadata, dependencies, gpu-shaders]
+    if: needs.metadata.outputs.artifact_schema == '2'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -486,6 +499,16 @@ jobs:
 
   candidate:
     name: Validate complete release candidate
+    if: >-
+      always() &&
+      needs.metadata.result == 'success' &&
+      needs.sources.result == 'success' &&
+      needs.gpu-shaders.result == 'success' &&
+      needs.client-windows.result == 'success' &&
+      needs.server-windows.result == 'success' &&
+      needs.server-image.result == 'success' &&
+      ((needs.metadata.outputs.artifact_schema == '2' && needs.client-linux.result == 'success') ||
+      (needs.metadata.outputs.artifact_schema == '1' && needs.client-linux.result == 'skipped'))
     needs:
       - metadata
       - sources

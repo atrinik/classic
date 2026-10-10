@@ -11,6 +11,7 @@ class LinuxDebWorkflowTests(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/build-release-candidate.yml').read_text()
         job = workflow.split('  client-linux:\n', 1)[1].split('  client-windows:\n', 1)[0]
         self.assertIn('needs: [metadata, dependencies, gpu-shaders]', job)
+        self.assertIn("if: needs.metadata.outputs.artifact_schema == '2'", job)
         self.assertIn('ref: ${{ needs.metadata.outputs.commit }}', job)
         self.assertIn('persist-credentials: false', job)
         self.assertIn('--network none', job)
@@ -20,6 +21,13 @@ class LinuxDebWorkflowTests(unittest.TestCase):
         self.assertIn('client/build/packages/*.deb', job)
         candidate = workflow.split('  candidate:\n', 1)[1]
         self.assertIn('      - client-linux\n', candidate)
+        self.assertIn("needs.metadata.outputs.artifact_schema == '2' && needs.client-linux.result == 'success'", candidate)
+        self.assertIn("needs.metadata.outputs.artifact_schema == '1' && needs.client-linux.result == 'skipped'", candidate)
+        metadata = workflow.split('  metadata:\n', 1)[1].split('  dependencies:\n', 1)[0]
+        self.assertIn('--print-source-schema --revision "${commit}"', metadata)
+        self.assertIn('--source-root "${GITHUB_WORKSPACE}"', metadata)
+        self.assertIn('ref: ${{ github.sha }}', metadata)
+
         self.assertLess(job.index('classic-deb-runtime bash /smoke.sh'),
                         job.index('name: release-client-linux-'))
 
