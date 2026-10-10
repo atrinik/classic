@@ -30,6 +30,7 @@
 #include <image_codec.h>
 #include <client.h>
 #include <cmake.h>
+#include <toolkit/binreloc.h>
 #include <effects.h>
 #include <image.h>
 #include <interface.h>
