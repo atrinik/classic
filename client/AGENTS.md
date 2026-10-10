@@ -65,6 +65,10 @@
   intentional.
 - Commits and pull-request titles use Conventional Commits. Classic uses one
   repository-wide release line; keep client release assets coherent with it.
+- Linux amd64 release packaging uses `tools/build-linux-package.sh`, staged
+  verified sound and shader inputs, and APT-managed system libraries with SDL
+  >= 3.4. Root Release Candidate builds and installation-tests the Debian package
+  on pinned Debian testing inputs; retain the unified version and release contract.
 - Keep generated output under `build/`, preserve unrelated work, and finish
   with `git diff --check`.
 - Update this `AGENTS.md` in the same change when major rework alters ownership,

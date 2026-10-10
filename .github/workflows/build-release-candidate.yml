@@ -224,6 +224,87 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  client-linux:
+    name: Build and install Debian client package
+    needs: [metadata, dependencies, gpu-shaders]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: candidate-dependencies-${{ needs.metadata.outputs.tag }}
+          path: .
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: candidate-gpu-shaders-${{ needs.metadata.outputs.tag }}
+          path: build/gpu-shaders
+      - name: Retrieve release-only Discord configuration
+        if: inputs.rehearsal != true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: discord-application-id-${{ inputs.tag }}
+          path: build/discord-config
+      - name: Prepare pinned Debian testing build and clean runtime
+        run: |
+          docker build --platform linux/amd64 --target build --tag classic-deb-build \
+            --file tools/ci/debian-client/Dockerfile tools/ci/debian-client
+          docker build --platform linux/amd64 --target runtime --tag classic-deb-runtime \
+            --file tools/ci/debian-client/Dockerfile tools/ci/debian-client
+          mkdir -p build/linux-package-evidence
+          docker image inspect classic-deb-build classic-deb-runtime \
+            --format '{{.Id}}' > build/linux-package-evidence/images.txt
+      - name: Build client with distribution libraries and offline release inputs
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_epoch }}
+          DISCORD_CONFIG_FILE: ${{ inputs.rehearsal != true && '/workspace/build/discord-config/discord-application-id' || '' }}
+        run: |
+          docker run --rm --platform linux/amd64 --network none \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" --cpus 2 --memory 8g \
+            --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
+            --env SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --env CMAKE_BUILD_PARALLEL_LEVEL=2 \
+            --env ATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders \
+            --env ATRINIK_DEPENDENCY_DOWNLOADS=/workspace/client/build/dependencies/downloads \
+            --env ATRINIK_DISCORD_APPLICATION_ID_FILE="${DISCORD_CONFIG_FILE}" \
+            --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace/client \
+            classic-deb-build bash -c \
+              'set -euo pipefail
+               cp /build-packages.tsv ../build/linux-package-evidence/build-packages.tsv
+               bash tools/build-linux-package.sh build/packages'
+      - name: Install through APT without build tools or source checkouts
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          docker run --rm --platform linux/amd64 --security-opt no-new-privileges \
+            --cpus 2 --memory 4g --env ATRINIK_DEB_SMOKE_CONTAINER=1 \
+            --env DEBIAN_FRONTEND=noninteractive \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/client/build/packages,target=/packages,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tools/ci/smoke_linux_client_package.sh,target=/smoke.sh,readonly" \
+            classic-deb-runtime bash /smoke.sh \
+            "/packages/atrinik-classic-client-${RELEASE_VERSION}-linux-amd64.deb" \
+            "${RELEASE_VERSION}" > build/linux-package-evidence/install.log 2>&1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-client-linux-${{ needs.metadata.outputs.tag }}
+          path: client/build/packages/*.deb
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain package build and installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: client-linux-evidence-${{ needs.metadata.outputs.tag }}
+          path: build/linux-package-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
   client-windows:
     name: Build Windows client package
     needs: [metadata, dependencies, gpu-shaders]
@@ -409,6 +490,7 @@ jobs:
       - metadata
       - sources
       - gpu-shaders
+      - client-linux
       - client-windows
       - server-windows
       - server-image

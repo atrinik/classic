@@ -257,11 +257,11 @@ jobs:
             --organization atrinik --package classic-server \
             --tag "${RELEASE_VERSION}" \
             --github-output "${GITHUB_OUTPUT}"
-      - name: Recheck candidate hashes before publication
-        working-directory: build/release
-        run: |
-          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 12
-          sha256sum --check SHA256SUMS
+      - name: Recheck the revision-specific candidate before publication
+        run: >-
+          python3 build/release-automation/tools/release/release_artifacts.py
+          --directory build/release --tag "${RELEASE_TAG}"
+          --revision "${RELEASE_COMMIT}" --source-root "${GITHUB_WORKSPACE}"
       - name: Attest downloadable artifact provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -273,6 +273,7 @@ jobs:
             build/release/*.tar.gz
             build/release/*.whl
             build/release/*.zip
+            build/release/*.deb
           sbom-path: build/release/atrinik-classic-${{ env.RELEASE_VERSION }}.spdx.json
       - id: assets
         name: Resume draft assets or verify the immutable release
@@ -283,6 +284,8 @@ jobs:
         run: |
           python3 build/release-automation/tools/release/sync_release_assets.py \
             --directory build/release \
+            --revision "${RELEASE_COMMIT}" \
+            --source-root "${GITHUB_WORKSPACE}" \
             --repository "${RELEASE_REPOSITORY}" \
             --tag "${RELEASE_TAG}" \
             --github-output "${GITHUB_OUTPUT}"
@@ -372,6 +375,8 @@ jobs:
         run: |
           python3 build/release-automation/tools/release/sync_release_assets.py \
             --directory build/release \
+            --revision "${RELEASE_COMMIT}" \
+            --source-root "${GITHUB_WORKSPACE}" \
             --repository "${RELEASE_REPOSITORY}" \
             --tag "${RELEASE_TAG}" \
             --verify-only \
@@ -405,6 +410,8 @@ jobs:
           for attempt in {1..6}; do
             if python3 build/release-automation/tools/release/sync_release_assets.py \
                 --directory build/release \
+                --revision "${RELEASE_COMMIT}" \
+                --source-root "${GITHUB_WORKSPACE}" \
                 --repository "${RELEASE_REPOSITORY}" \
                 --tag "${RELEASE_TAG}" \
                 --verify-published; then
