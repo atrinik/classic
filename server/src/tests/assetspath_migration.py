@@ -15,6 +15,43 @@ MAX_ASSETSPATH_BYTES = 255
 ASSETSPATH_LENGTH_DIAGNOSTIC = "--assetspath must be at most 255 bytes"
 
 
+def prepare_worldmaker_maps(maps: Path) -> None:
+    """Exercise real map generation without rendering the full content release."""
+    maps.mkdir()
+    (maps / "regions.reg").write_text(
+        "region world\n"
+        "celestial_schema 1\n"
+        "celestial_solar_mode global\n"
+        "celestial_solar_rate 1/1\n"
+        "celestial_solar_epoch 0\n"
+        "celestial_solar_phase 0\n"
+        "celestial_season_mode global\n"
+        "celestial_season_rate 1/1\n"
+        "celestial_season_epoch 0\n"
+        "celestial_season_phase 0\n"
+        "celestial_lunar_mode global\n"
+        "celestial_lunar_rate 1/1\n"
+        "celestial_lunar_epoch 0\n"
+        "celestial_lunar_phase 0\n"
+        "celestial_lunar_period 672\n"
+        "celestial_day_color ffffff\n"
+        "celestial_night_color 6080c0\n"
+        "celestial_day_brightness 256\n"
+        "celestial_night_brightness 256\n"
+        "celestial_moon_color c0d0ff\n"
+        "celestial_moon_max 20\n"
+        "celestial_starlight_color 6080c0\n"
+        "celestial_starlight_strength 2\n"
+        "map_first /staging\n"
+        "end\n",
+        encoding="utf-8",
+    )
+    (maps / "staging").write_text(
+        "arch map\nname Asset staging fixture\nwidth 2\nheight 2\nregion world\nend\n",
+        encoding="utf-8",
+    )
+
+
 def require_rejection(result: subprocess.CompletedProcess[str], surface: str) -> None:
     output = result.stdout + result.stderr
     if result.returncode == 0 or "use assetspath" not in output:
@@ -36,14 +73,18 @@ def run_server(
     arguments.append(f"--assetspath={assetspath}")
     if following_assetspath is not None:
         arguments.append(f"--assetspath={following_assetspath}")
-    return subprocess.run(
-        arguments,
-        capture_output=True,
-        text=True,
-        check=False,
-        pass_fds=pass_fds,
-        timeout=SERVER_TIMEOUT_SECONDS,
-    )
+    with tempfile.TemporaryDirectory(dir=".") as temporary:
+        maps = Path(os.path.relpath(temporary)) / "maps"
+        prepare_worldmaker_maps(maps)
+        arguments.append(f"--mapspath={maps}")
+        return subprocess.run(
+            arguments,
+            capture_output=True,
+            text=True,
+            check=False,
+            pass_fds=pass_fds,
+            timeout=SERVER_TIMEOUT_SECONDS,
+        )
 
 
 def path_with_encoded_length(root: Path, length: int, fill: str) -> str:
@@ -161,6 +202,12 @@ def main() -> int:
             raise RuntimeError("fresh asset staging lacks generated core data")
         if not (assets / "client-maps").is_dir():
             raise RuntimeError("fresh asset staging lacks client-maps directory")
+        client_maps = assets / "client-maps"
+        if not (client_maps / "world.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n"):
+            raise RuntimeError("fresh asset staging lacks a generated world map PNG")
+        definition = (client_maps / "world.def").read_text(encoding="utf-8")
+        if "map_size_x 2\nmap_size_y 2\n" not in definition or "/staging" not in definition:
+            raise RuntimeError("fresh asset staging lacks the fixture map definition")
         result = run_server(executable, assets)
         if result.returncode != 0:
             raise RuntimeError(
