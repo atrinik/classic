@@ -149,11 +149,14 @@ install(FILES LICENSE.md DESTINATION include/atrinik)
             required = ("usr/games/atrinik", "usr/share/applications/atrinik.desktop",
                         "usr/share/pixmaps/atrinik.png", "usr/share/doc/atrinik/LICENSE.md",
                         "usr/share/doc/atrinik/ATTRIBUTIONS.md",
+                        "usr/share/games/atrinik/client.cfg",
                         "usr/share/games/atrinik/sound/fixture.txt")
             for path in required:
                 self.assertTrue((payload / path).is_file(), path)
             self.assertIn("Exec=/usr/games/atrinik\n",
                           (payload / "usr/share/applications/atrinik.desktop").read_text())
+            self.assertEqual((payload / "usr/share/games/atrinik/client.cfg").read_bytes(),
+                             (source / "client.cfg").read_bytes())
             self.assertFalse((payload / "usr/include").exists())
             self.assertFalse((payload / "usr/lib").exists())
             self.assertFalse((payload / "usr/share/games/atrinik/data/discord-application-id").exists())
