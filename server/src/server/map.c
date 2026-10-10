@@ -1390,9 +1390,7 @@ static mapstruct *load_temporary_map(mapstruct *m, int flags) {
         fclose(fp);
         return m;
     }
-    if (m->celestial_schema == 1) {
-        derive_map_filename_tiles(m, create_pathname(m->path), flags & MAP_NO_DYNAMIC);
-    }
+    derive_map_filename_tiles(m, create_pathname(m->path), flags & MAP_NO_DYNAMIC);
     if (m->celestial_v1_header_seen) {
         char error[HUGE_BUF];
         if (!celestial_structure_validate_header(m, VS(error))) {
