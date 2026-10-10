@@ -137,6 +137,11 @@ def select(env: dict[str, str], payload: dict, wait: bool = False) -> dict[str, 
         revision = run["head_sha"] if run["path"] == CHECK else current(branch)
         if run["path"] == PACKAGE:
             comparison = api(f"compare/{run['head_sha']}...{revision}")
+            if (re.fullmatch(r"[0-9]+\.[0-9]+\.x", run["head_branch"]) and
+                    comparison.get("status") in ("behind", "diverged") and
+                    SHA.fullmatch(comparison.get("merge_base_commit", {}).get("sha", ""))):
+                return {"proceed": "false", "branch": branch, "revision": revision,
+                        "reason": "maintenance-package-outside-main"}
             need(comparison.get("status") in ("ahead", "identical") and
                  comparison.get("merge_base_commit", {}).get("sha") == run["head_sha"],
                  "package source is not an ancestor of current main")
@@ -158,6 +163,8 @@ def select(env: dict[str, str], payload: dict, wait: bool = False) -> dict[str, 
             return result | {"proceed": "true", "reason": "checked-current-head"}
         if wait and event != "workflow_run" and attempt < 29:
             time.sleep(30)
+    need(event == "workflow_run",
+         f"Classic validation did not complete successfully for {branch} at {revision}")
     return result | {"reason": "awaiting-successful-check"}
 
 
@@ -169,7 +176,7 @@ def recheck(branch: str, revision: str) -> bool:
     return current(branch) == revision and checked(branch, revision) is not None and current(branch) == revision
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--github-output", required=True, type=Path)
     parser.add_argument("--recheck", action="store_true")
@@ -177,11 +184,17 @@ def main() -> None:
     parser.add_argument("--branch")
     parser.add_argument("--revision")
     args = parser.parse_args()
+    need(not args.require_current or args.recheck, "--require-current requires --recheck")
+    exit_code = 0
     if args.recheck:
-        context(dict(os.environ))
+        branch = context(dict(os.environ))
+        need(args.branch == branch, "recheck branch differs from the workflow branch")
         need(args.branch and args.revision, "recheck requires a selected branch and revision")
         proceed = recheck(args.branch, args.revision)
-        need(proceed or not args.require_current, "release branch or validation changed before mutation")
+        # Reserved status 3 means a normal superseded batch, never an API,
+        # provenance, context, checkout, or argument error. The workflow latches
+        # this disposition before skipping the remaining mutation steps.
+        exit_code = 3 if args.require_current and not proceed else 0
         values = {"proceed": str(proceed).lower()}
     else:
         payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
@@ -191,7 +204,8 @@ def main() -> None:
             need("\n" not in value and "\r" not in value, "invalid release output")
             stream.write(f"{key}={value}\n")
     print(json.dumps(values, sort_keys=True))
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

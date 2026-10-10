@@ -123,16 +123,24 @@ jobs:
             --branch "${ATRINIK_RELEASE_BRANCH}" \
             --github-output "${GITHUB_OUTPUT}"
       - name: Delete the policy-listed empty failed draft
-        if: steps.pending-release.outputs.action == 'delete-empty-draft'
+        if: env.ATRINIK_RELEASE_SUPERSEDED != 'true' && steps.pending-release.outputs.action == 'delete-empty-draft'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.pending-release.outputs.release_id }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}
         run: |
+          if test "${ATRINIK_RELEASE_SUPERSEDED:-false}" = true; then exit 0; fi
           python3 tools/release/select_release_batch.py --recheck --require-current \
             --branch "${ATRINIK_RELEASE_BRANCH}" --revision "$(git rev-parse HEAD)" \
-            --github-output "${GITHUB_OUTPUT}"
+            --github-output "${GITHUB_OUTPUT}" || {
+              status=$?
+              if test "${status}" -eq 3; then
+                echo 'ATRINIK_RELEASE_SUPERSEDED=true' >> "${GITHUB_ENV}"
+                exit 0
+              fi
+              exit "${status}"
+            }
           set -euo pipefail
           python3 tools/release/resolve_pending_release.py \
             --repository "${RELEASE_REPOSITORY}" \
@@ -141,31 +149,47 @@ jobs:
             --expected-tag "${RELEASE_TAG}" \
             --expected-release-id "${RELEASE_ID}"
       - name: Resume the incomplete package release
-        if: steps.pending-release.outputs.action == 'resume'
+        if: env.ATRINIK_RELEASE_SUPERSEDED != 'true' && steps.pending-release.outputs.action == 'resume'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}
         run: |
+          if test "${ATRINIK_RELEASE_SUPERSEDED:-false}" = true; then exit 0; fi
           python3 tools/release/select_release_batch.py --recheck --require-current \
             --branch "${ATRINIK_RELEASE_BRANCH}" --revision "$(git rev-parse HEAD)" \
-            --github-output "${GITHUB_OUTPUT}"
+            --github-output "${GITHUB_OUTPUT}" || {
+              status=$?
+              if test "${status}" -eq 3; then
+                echo 'ATRINIK_RELEASE_SUPERSEDED=true' >> "${GITHUB_ENV}"
+                exit 0
+              fi
+              exit "${status}"
+            }
           gh workflow run package-release.yml \
             --repo "${RELEASE_REPOSITORY}" \
             --ref "${ATRINIK_RELEASE_BRANCH}" \
             --field "tag=${RELEASE_TAG}" \
             --field "source_branch=${ATRINIK_RELEASE_BRANCH}"
       - name: Resume the retained complete candidate
-        if: steps.pending-release.outputs.action == 'resume-retained-candidate'
+        if: env.ATRINIK_RELEASE_SUPERSEDED != 'true' && steps.pending-release.outputs.action == 'resume-retained-candidate'
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN_ID: ${{ steps.pending-release.outputs.candidate_run_id }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.pending-release.outputs.tag }}
         run: |
+          if test "${ATRINIK_RELEASE_SUPERSEDED:-false}" = true; then exit 0; fi
           python3 tools/release/select_release_batch.py --recheck --require-current \
             --branch "${ATRINIK_RELEASE_BRANCH}" --revision "$(git rev-parse HEAD)" \
-            --github-output "${GITHUB_OUTPUT}"
+            --github-output "${GITHUB_OUTPUT}" || {
+              status=$?
+              if test "${status}" -eq 3; then
+                echo 'ATRINIK_RELEASE_SUPERSEDED=true' >> "${GITHUB_ENV}"
+                exit 0
+              fi
+              exit "${status}"
+            }
           set -euo pipefail
           [[ ${CANDIDATE_RUN_ID} =~ ^[1-9][0-9]*$ ]]
           [[ ${RELEASE_TAG} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -189,14 +213,23 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
       - name: Analyze commits, tag, and publish release notes
         if: >-
-          steps.pending-release.outputs.action == 'none' ||
-          steps.pending-release.outputs.action == 'delete-empty-draft'
+          env.ATRINIK_RELEASE_SUPERSEDED != 'true' &&
+          (steps.pending-release.outputs.action == 'none' ||
+          steps.pending-release.outputs.action == 'delete-empty-draft')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if test "${ATRINIK_RELEASE_SUPERSEDED:-false}" = true; then exit 0; fi
           python3 tools/release/select_release_batch.py --recheck --require-current \
             --branch "${ATRINIK_RELEASE_BRANCH}" --revision "$(git rev-parse HEAD)" \
-            --github-output "${GITHUB_OUTPUT}"
+            --github-output "${GITHUB_OUTPUT}" || {
+              status=$?
+              if test "${status}" -eq 3; then
+                echo 'ATRINIK_RELEASE_SUPERSEDED=true' >> "${GITHUB_ENV}"
+                exit 0
+              fi
+              exit "${status}"
+            }
           export GITHUB_REF="refs/heads/${ATRINIK_RELEASE_BRANCH}"
           export GITHUB_REF_NAME="${ATRINIK_RELEASE_BRANCH}"
           release_commit=$(git rev-parse HEAD)

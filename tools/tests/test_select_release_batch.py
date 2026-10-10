@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -131,7 +133,8 @@ class BatchTests(unittest.TestCase):
         for changes in ({"event": "pull_request"}, {"head_repository": {"full_name": "fork/classic"}},
                         {"path": batch.PACKAGE}, {"head_branch": "feature"}):
             self.runs = [check_run(**changes)]
-            self.assertEqual(self.select(env=environment("workflow_dispatch"))["proceed"], "false")
+            with self.assertRaisesRegex(RuntimeError, "Classic validation did not complete"):
+                self.select(env=environment("workflow_dispatch"))
 
     def test_branch_changes_during_validation_cannot_authorize_old_head(self):
         with patch.object(batch, "current", side_effect=[HEAD, OLD]):
@@ -177,11 +180,66 @@ class BatchTests(unittest.TestCase):
 
     def test_manual_wait_is_bounded_and_never_changes_selected_revision(self):
         self.runs = []
-        with patch.object(batch.time, "sleep") as sleep:
-            result = batch.select(environment("workflow_dispatch"), {}, wait=True)
-        self.assertEqual(sleep.call_count, 29)
-        self.assertEqual(result["proceed"], "false")
-        self.assertEqual(result["revision"], HEAD)
+        for event, branch in (("workflow_dispatch", "main"), ("push", "5.80.x"),
+                              ("workflow_dispatch", "5.80.x")):
+            with self.subTest(event=event, branch=branch), patch.object(batch.time, "sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, f"did not complete successfully for {branch} at {HEAD}"):
+                    batch.select(environment(event, branch), {}, wait=True)
+                self.assertEqual(sleep.call_count, 29)
+                self.assertEqual(sleep.call_args.args, (30,))
+
+    def test_divergent_authenticated_maintenance_package_is_a_noop(self):
+        self.trigger = package_run(head_branch="5.80.x")
+        for status in ("behind", "diverged"):
+            with self.subTest(status=status), patch.object(batch, "api", side_effect=[self.trigger,
+                    {"ref": "refs/heads/main", "object": {"type": "commit", "sha": HEAD}},
+                    {"status": status, "merge_base_commit": {"sha": "c" * 40}}]):
+                result = self.select()
+                self.assertEqual(result["proceed"], "false")
+                self.assertEqual(result["reason"], "maintenance-package-outside-main")
+
+    def test_maintenance_package_does_not_hide_malformed_or_failed_api(self):
+        self.trigger = package_run(head_branch="5.80.x")
+        for response in ({"status": "diverged"}, RuntimeError("API unavailable")):
+            with self.subTest(response=response), patch.object(batch, "api", side_effect=[self.trigger,
+                    {"ref": "refs/heads/main", "object": {"type": "commit", "sha": HEAD}}, response]):
+                with self.assertRaises(RuntimeError):
+                    self.select()
+
+    def test_cli_reserves_status_three_for_authenticated_supersession(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            argv = ["select_release_batch.py", "--recheck", "--require-current", "--branch", "main",
+                    "--revision", HEAD, "--github-output", str(output)]
+            for proceed, expected_status in ((False, 3), (True, 0)):
+                with self.subTest(proceed=proceed), patch("sys.argv", argv), patch.dict(
+                        os.environ, environment(), clear=True), patch.object(batch, "recheck", return_value=proceed):
+                    output.write_text("")
+                    self.assertEqual(batch.main(), expected_status)
+                    self.assertEqual(output.read_text(), f"proceed={str(proceed).lower()}\n")
+            with patch("sys.argv", argv), patch.dict(os.environ, environment(), clear=True), patch.object(
+                    batch, "recheck", side_effect=RuntimeError("API unavailable")):
+                output.write_text("")
+                with self.assertRaisesRegex(RuntimeError, "API unavailable"):
+                    batch.main()
+                self.assertEqual(output.read_text(), "")
+            for changes in ({"GITHUB_REPOSITORY": "fork/classic"}, {"GITHUB_REF_NAME": "feature"}):
+                with self.subTest(changes=changes), patch("sys.argv", argv), patch.dict(
+                        os.environ, environment() | changes, clear=True), patch.object(batch, "recheck") as recheck:
+                    with self.assertRaises(RuntimeError):
+                        batch.main()
+                    recheck.assert_not_called()
+
+    def test_cli_cannot_recheck_another_branch_or_require_without_recheck(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            argv = ["select_release_batch.py", "--require-current", "--branch", "5.80.x",
+                    "--revision", HEAD, "--github-output", str(Path(temporary) / "output")]
+            for args in (argv, argv + ["--recheck"]):
+                with self.subTest(args=args), patch("sys.argv", args), patch.dict(
+                        os.environ, environment(), clear=True), patch.object(batch, "recheck") as recheck:
+                    with self.assertRaises(RuntimeError):
+                        batch.main()
+                    recheck.assert_not_called()
 
     def test_main_push_and_unprotected_contexts_are_rejected(self):
         for env in (environment("push"), environment("pull_request"), environment(branch="feature"),
