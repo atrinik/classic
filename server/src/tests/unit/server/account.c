@@ -15,6 +15,8 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <account.h>
+#include <auth_worker.h>
+#include <access_server.h>
 #include <arch.h>
 #include <exploration.h>
 #include <server.h>
@@ -959,26 +961,101 @@ START_TEST(test_access_preserves_normal_command_permissions) {
 }
 END_TEST
 
+#ifdef __linux__
+static access_outcome_t registration_access_route(void *context, const access_route_t *route) {
+    (void)context;
+    (void)route;
+    return ACCESS_COMMITTED;
+}
+
 START_TEST(test_access_preserves_ordinary_registration) {
+    char directory[] = "/tmp/atrinik-registration-access-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    uint8_t identity[32];
+    memset(identity, 0x11, sizeof(identity));
+    char identity_hex[65];
+    memset(identity_hex, '1', 64);
+    identity_hex[64] = 0;
+    access_store_t *store = NULL;
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    access_result_t issue = access_store_issue(store, "11111111111111111111111111111111", 1,
+                                              "Registration admission", false, 0, time(NULL),
+                                              registration_access_route, NULL);
+    ck_assert_int_eq(issue.outcome, ACCESS_COMMITTED);
+    access_store_close(store);
     bool saved_required = settings.access_required;
+    bool saved_initialize = settings.access_initialize;
+    char saved_store[sizeof(settings.access_store)];
+    memcpy(saved_store, settings.access_store, sizeof(saved_store));
     settings.access_required = true;
+    settings.access_initialize = false;
+    snprintf(VS(settings.access_store), "%s", directory);
+    access_server_route_for_test(registration_access_route);
+    ck_assert(access_server_init(identity_hex));
+
     object *ob = player_get_dummy("Registration Proof", NULL);
     socket_struct *cs = CONTR(ob)->cs;
     free(cs->account);
     cs->account = NULL;
+    cs->state = ST_LOGIN;
+    cs->socket_version = SOCKET_VERSION;
+    cs->access_transport_authenticated = true;
+    cs->access_policy_sent = true;
+    cs->setup_completed = true;
+    cs->access_authenticated = false;
+    cs->access_auth_job = access_server_auth_submit(issue.code);
+    access_result_cleanse(&issue);
+    ck_assert_uint_ne(cs->access_auth_job, 0);
+    uint64_t deadline = datetime_monotonic_ms() + 3000;
+    while (cs->access_auth_job != 0 && datetime_monotonic_ms() < deadline) {
+        socket_access_poll_for_test(cs, NULL);
+        struct timespec delay = {.tv_nsec = 1000000};
+        nanosleep(&delay, NULL);
+    }
+    ck_assert_uint_eq(cs->access_auth_job, 0);
+    ck_assert(cs->access_authenticated);
+    ck_assert(socket_connection_admitted(cs));
+    access_session_state_t admission = access_server_session_check(&cs->access_token);
+    while (admission == ACCESS_SESSION_BUSY && datetime_monotonic_ms() < deadline) {
+        struct timespec delay = {.tv_nsec = 1000000};
+        nanosleep(&delay, NULL);
+        admission = access_server_session_check(&cs->access_token);
+    }
+    ck_assert_int_eq(admission, ACCESS_SESSION_VALID);
+    socket_login_deadline_refresh(cs);
+    ck_assert(account_auth_start());
     char name[] = "reservationproof";
     char password[] = "local-test-7!";
     char *path = account_make_path(name);
     unlink(path);
     account_register(cs, name, password, password);
+    ck_assert_uint_ne(cs->auth_request, 0);
+    deadline = datetime_monotonic_ms() + 5000;
+    while (cs->auth_request != 0 && datetime_monotonic_ms() < deadline) {
+        account_auth_poll();
+        struct timespec delay = {.tv_nsec = 1000000};
+        nanosleep(&delay, NULL);
+    }
+    ck_assert_uint_eq(cs->auth_request, 0);
     ck_assert_ptr_nonnull(cs->account);
     ck_assert_str_eq(cs->account, name);
     ck_assert(path_exists(path));
+    account_deinit();
     ck_assert_int_eq(unlink(path), 0);
     free(path);
+    ck_assert(access_server_shutdown());
+    access_server_deinit();
+    access_server_route_for_test(NULL);
     settings.access_required = saved_required;
+    settings.access_initialize = saved_initialize;
+    memcpy(settings.access_store, saved_store, sizeof(saved_store));
+    char snapshot[256];
+    snprintf(VS(snapshot), "%s/%s", directory, ACCESS_STORE_FILENAME);
+    ck_assert_int_eq(unlink(snapshot), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
 }
 END_TEST
+#endif
 
 static Suite *suite(void) {
     Suite *s = suite_create("account");
@@ -989,7 +1066,9 @@ static Suite *suite(void) {
     tcase_set_timeout(tc_core, 30);
     tcase_add_loop_test(tc_core, test_checked_logout_propagates_save_failures, 0, 5);
     tcase_add_test(tc_core, test_access_preserves_normal_command_permissions);
+#ifdef __linux__
     tcase_add_test(tc_core, test_access_preserves_ordinary_registration);
+#endif
     tcase_add_test(tc_core, test_account_provision);
     tcase_add_test(tc_core, test_exploration_account_round_trip);
     tcase_add_test(tc_core, test_exploration_bounds_and_stable_layout);

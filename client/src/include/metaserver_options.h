@@ -7,6 +7,8 @@
 #ifndef METASERVER_OPTIONS_H
 #define METASERVER_OPTIONS_H
 
+#include <metaserver.h>
+
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -28,7 +30,7 @@ typedef struct client_metaserver_options {
  * Append one copied endpoint set, re-enabling a previously disabled list.
  *
  * A zero-initialized options structure is ready for use. The caller retains
- * ownership of both input strings.
+ * ownership of all input strings.
  */
 void client_metaserver_options_add(client_metaserver_options_t *options,
                                    const char *directory_url,
@@ -45,11 +47,23 @@ bool client_metaserver_options_parse(client_metaserver_options_t *options,
                                      const char *value,
                                      char **errmsg);
 
-/** Disable metaserver access and discard every previously configured pair. */
+/** Disable metaserver access and discard every previously configured endpoint set. */
 void client_metaserver_options_disable(client_metaserver_options_t *options);
 
 /** Return whether metaserver access is enabled. */
 bool client_metaserver_options_enabled(const client_metaserver_options_t *options);
+
+/** Deep-copy into a zero-initialized or previously initialized destination. */
+void client_metaserver_options_copy(client_metaserver_options_t *destination,
+                                    const client_metaserver_options_t *source);
+
+/** Replace all endpoints with one built-in endpoint set and enable discovery. */
+void client_metaserver_options_replace_provider(client_metaserver_options_t *options,
+                                                metaserver_provider_t provider);
+
+/** Exact enabled development endpoint set, otherwise the default toggle position. */
+metaserver_provider_t client_metaserver_options_provider(
+    const client_metaserver_options_t *options);
 
 /** Free all copied endpoint sets and restore the zero-initialized state. */
 void client_metaserver_options_deinit(client_metaserver_options_t *options);

@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "image": "ghcr.io/atrinik/classic-dependencies",
-  "tag": "materials-575e182b260e49c7cdb150b947212c9bd4883113888d67da9e22f3cca472ff01",
-  "digest": "sha256:6c941a367f0909c128e8bc6310ffc7e044e7c8810cca633106460492c9436f93",
-  "material_digest": "sha256:575e182b260e49c7cdb150b947212c9bd4883113888d67da9e22f3cca472ff01",
-  "bundle_manifest_sha256": "sha256:4fa72a6e58b2a86605c1f8ffe8938fb12328b5713260f03dc243f8b266a5aed3",
+  "tag": "materials-ff913bb2d3814772765830862d4554da0e30c57cc4a480d42f82ede494f4dd59",
+  "digest": "sha256:e9249f88214d8a72530b072dbf40169c5ec0988f9afbb8a63cb289415dd58ea0",
+  "material_digest": "sha256:ff913bb2d3814772765830862d4554da0e30c57cc4a480d42f82ede494f4dd59",
+  "bundle_manifest_sha256": "sha256:2bf90c13e9a9f79b3ae2390e64b54757488e0b1482b653e20b27dea4060365e4",
   "source_locks": {
     "client/dependencies.lock.json": "395d6783731ccaef4c8a219a2567ec9c29d3ef7f563b5ae696164283e3ca5f61",
-    "server/dependencies.lock.json": "3159aa08d69d49ea87b5e193841dc1a72ca66e01e92bf20bc6357b1f20c93428",
+    "server/dependencies.lock.json": "795cae2bbc67df309568d7cbf6a8d8ad0571fdbe4c319c69f6f2ca2d4065bb6a",
     "server/cmake/immutable_sources.lock.json": "48ecf2b5037d53ffe6a92613906eeeef67440636c71cb7c9190ad847b67bd254"
   },
   "acquisition_contracts": {
     "server/tools/dependencies.py": "1c0726874aefe0f6278be90575240f5c8a2c784a1a702a9611deb8e768652af9",
     "tools/release/dependency_bundle.py": "78970ef8338361ab60c3eca326609cd32c1154d8b928108e11e5c180b7cee0fa"
   },
-  "verified_input_bundle_digest": "sha256:2e167d4e5f7478a3ec9b5418938abaf425eb832a76519a6e2e4b97634c9f6f2a"
+  "verified_input_bundle_digest": "sha256:c621ca65803f915d034ea6ba74118e19ebd833981b4a8be145c54c0748a9302f"
 }

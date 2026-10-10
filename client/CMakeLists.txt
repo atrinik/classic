@@ -636,6 +636,25 @@ if (BUILD_TESTING)
     target_link_libraries(client-metaserver-options-tests PRIVATE Atrinik::Core)
     add_test(NAME client-metaserver-options COMMAND client-metaserver-options-tests)
 
+    add_executable(client-metaserver-lifecycle-tests
+        src/tests/metaserver_lifecycle.c
+        src/client/access_attempt.c
+        src/client/access_resolver.c
+        src/client/metaserver.c
+        src/client/metaserver_options.c)
+    atrinik_configure_target(client-metaserver-lifecycle-tests)
+    target_compile_definitions(client-metaserver-lifecycle-tests PRIVATE
+        CLIENT_METASERVER_TESTING
+        SDL_DISABLE_OLD_NAMES)
+    target_include_directories(client-metaserver-lifecycle-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-metaserver-lifecycle-tests PRIVATE Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-metaserver-lifecycle COMMAND client-metaserver-lifecycle-tests)
+    set_tests_properties(client-metaserver-lifecycle PROPERTIES TIMEOUT 10)
+
     add_executable(client-access-tests
         src/tests/access.c
         src/client/access_admin_response.c
@@ -666,7 +685,8 @@ if (BUILD_TESTING)
         src/client/metaserver_direct.c
         src/client/metaserver_directory.c
         src/client/access_resolver.c
-        src/client/access_attempt.c)
+        src/client/access_attempt.c
+        src/client/metaserver_options.c)
     atrinik_configure_target(client-access-resolver-tests)
     target_include_directories(client-access-resolver-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include

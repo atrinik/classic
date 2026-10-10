@@ -3304,6 +3304,11 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         hooks->object_remove(obj->obj, 0);
     }
 
+    if (obj->obj->map != NULL &&
+        (field->offset == offsetof(object, glow_radius) ||
+         field->offset == offsetof(object, light_color))) {
+        hooks->light_source_prepare_change();
+    }
     ret = generic_field_setter(field, obj->obj, value);
 
     if (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer)) {

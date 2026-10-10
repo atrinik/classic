@@ -379,15 +379,43 @@ bool access_server_auth_poll(uint64_t id, access_outcome_t *out, access_token_re
     pthread_mutex_lock(&worker.mutex);
     access_job *job = find_job(id);
     if (job != NULL && job->auth && job->state == JOB_DONE) {
-        *out = job->outcome;
-        *ref = job->ref;
-        clear_job(job);
-        done = true;
+        access_session_state_t state = job->outcome == ACCESS_COMMITTED
+                                           ? access_server_session_check(&job->ref)
+                                           : ACCESS_SESSION_DENIED;
+        /* A completed authorization still owns its bounded slot until current
+         * authority can be checked. Store contention must not consume it or
+         * turn a valid admission into a permanent denial. */
+        if (state != ACCESS_SESSION_BUSY) {
+            *out = job->outcome == ACCESS_COMMITTED && state != ACCESS_SESSION_VALID
+                       ? ACCESS_DENIED
+                       : job->outcome;
+            *ref = job->ref;
+            clear_job(job);
+            done = true;
+        }
     }
     pthread_mutex_unlock(&worker.mutex);
     return done;
 }
 #ifdef ATRINIK_TESTING
+uint64_t access_server_auth_result_for_test(access_outcome_t outcome,
+                                          const access_token_ref_t *ref) {
+    HARD_ASSERT(!worker.started);
+    if (worker.next_id == UINT64_MAX)
+        return 0;
+    for (size_t i = 0; i < ACCESS_OUTBOX_LIMIT; i++) {
+        access_job *job = &worker.jobs[i];
+        if (job->state != JOB_FREE)
+            continue;
+        job->id = ++worker.next_id;
+        job->auth = true;
+        job->outcome = outcome;
+        job->ref = *ref;
+        job->state = JOB_DONE;
+        return job->id;
+    }
+    return 0;
+}
 uint64_t access_server_admin_result_for_test(bool permitted,
                                             const char *request,
                                             const char *response) {

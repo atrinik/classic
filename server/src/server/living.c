@@ -1108,11 +1108,15 @@ void living_update_player(object *op) {
         light = 0;
     }
 
+    bool update_light = op->map != NULL && !QUERY_FLAG(op, FLAG_REMOVED) &&
+                        (old_glow != light || old_light_color != light_color);
+    if (update_light) {
+        light_source_prepare_change();
+    }
     op->glow_radius = light;
     op->light_color = light_color;
 
-    if (op->map != NULL && !QUERY_FLAG(op, FLAG_REMOVED) &&
-        (old_glow != light || old_light_color != light_color)) {
+    if (update_light) {
         if (old_glow != 0) {
             adjust_light_source_color(op->map, op->x, op->y, old_glow, old_light_color, -1);
         }
