@@ -137,11 +137,12 @@ def select(env: dict[str, str], payload: dict, wait: bool = False) -> dict[str, 
         revision = run["head_sha"] if run["path"] == CHECK else current(branch)
         if run["path"] == PACKAGE:
             comparison = api(f"compare/{run['head_sha']}...{revision}")
-            if (re.fullmatch(r"[0-9]+\.[0-9]+\.x", run["head_branch"]) and
-                    comparison.get("status") in ("behind", "diverged") and
+            # Maintenance publication normally runs from an immutable version
+            # tag. An authenticated unrelated package is only an irrelevant wake.
+            if (comparison.get("status") in ("behind", "diverged") and
                     SHA.fullmatch(comparison.get("merge_base_commit", {}).get("sha", ""))):
                 return {"proceed": "false", "branch": branch, "revision": revision,
-                        "reason": "maintenance-package-outside-main"}
+                        "reason": "unrelated-package"}
             need(comparison.get("status") in ("ahead", "identical") and
                  comparison.get("merge_base_commit", {}).get("sha") == run["head_sha"],
                  "package source is not an ancestor of current main")

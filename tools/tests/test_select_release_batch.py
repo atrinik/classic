@@ -164,12 +164,6 @@ class BatchTests(unittest.TestCase):
             self.trigger = package_run(**changes)
             with self.assertRaises(RuntimeError):
                 self.select()
-        self.trigger = package_run()
-        with patch.object(batch, "api", side_effect=[self.trigger,
-                          {"ref": "refs/heads/main", "object": {"type": "commit", "sha": HEAD}},
-                          {"status": "diverged", "merge_base_commit": {"sha": OLD}}]):
-            with self.assertRaisesRegex(RuntimeError, "not an ancestor"):
-                self.select()
 
     def test_manual_main_and_maintenance_are_checked_exactly(self):
         self.assertEqual(self.select(env=environment("workflow_dispatch"))["proceed"], "true")
@@ -188,23 +182,29 @@ class BatchTests(unittest.TestCase):
                 self.assertEqual(sleep.call_count, 29)
                 self.assertEqual(sleep.call_args.args, (30,))
 
-    def test_divergent_authenticated_maintenance_package_is_a_noop(self):
-        self.trigger = package_run(head_branch="5.80.x")
-        for status in ("behind", "diverged"):
-            with self.subTest(status=status), patch.object(batch, "api", side_effect=[self.trigger,
-                    {"ref": "refs/heads/main", "object": {"type": "commit", "sha": HEAD}},
-                    {"status": status, "merge_base_commit": {"sha": "c" * 40}}]):
-                result = self.select()
-                self.assertEqual(result["proceed"], "false")
-                self.assertEqual(result["reason"], "maintenance-package-outside-main")
+    def test_unrelated_authenticated_branch_and_tag_packages_are_noops(self):
+        for branch in ("5.80.x", "v5.80.1", "v5.80.0", "main"):
+            self.trigger = package_run(head_branch=branch)
+            for status in ("behind", "diverged"):
+                with self.subTest(branch=branch, status=status), patch.object(batch, "api", side_effect=[self.trigger,
+                        {"ref": "refs/heads/main", "object": {"type": "commit", "sha": HEAD}},
+                        {"status": status, "merge_base_commit": {"sha": "c" * 40}}]):
+                    result = self.select()
+                    self.assertEqual(result["proceed"], "false")
+                    self.assertEqual(result["reason"], "unrelated-package")
 
-    def test_maintenance_package_does_not_hide_malformed_or_failed_api(self):
-        self.trigger = package_run(head_branch="5.80.x")
-        for response in ({"status": "diverged"}, RuntimeError("API unavailable")):
-            with self.subTest(response=response), patch.object(batch, "api", side_effect=[self.trigger,
-                    {"ref": "refs/heads/main", "object": {"type": "commit", "sha": HEAD}}, response]):
-                with self.assertRaises(RuntimeError):
-                    self.select()
+    def test_unrelated_package_does_not_hide_malformed_or_failed_api(self):
+        for branch in ("5.80.x", "v5.80.1"):
+            self.trigger = package_run(head_branch=branch)
+            for response in ({"status": "diverged"},
+                             {"status": "unknown", "merge_base_commit": {"sha": OLD}},
+                             {"status": "behind", "merge_base_commit": {"sha": "invalid"}},
+                             {"status": "ahead", "merge_base_commit": {"sha": HEAD}},
+                             RuntimeError("API unavailable")):
+                with self.subTest(branch=branch, response=response), patch.object(batch, "api", side_effect=[self.trigger,
+                        {"ref": "refs/heads/main", "object": {"type": "commit", "sha": HEAD}}, response]):
+                    with self.assertRaises(RuntimeError):
+                        self.select()
 
     def test_cli_reserves_status_three_for_authenticated_supersession(self):
         with tempfile.TemporaryDirectory() as temporary:
