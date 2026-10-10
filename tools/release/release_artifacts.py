@@ -223,11 +223,22 @@ def validate_candidate(directory: Path, tag: str, revision: str, source_root: Pa
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--directory", type=Path, required=True)
-    parser.add_argument("--tag", required=True)
+    parser.add_argument("--directory", type=Path)
+    parser.add_argument("--tag")
     parser.add_argument("--revision", required=True)
     parser.add_argument("--source-root", type=Path, default=Path.cwd())
+    parser.add_argument("--print-source-schema", action="store_true")
     args = parser.parse_args()
+    if args.print_source_schema:
+        if args.directory is not None or args.tag is not None:
+            parser.error("--print-source-schema accepts only --revision and --source-root")
+        try:
+            print(source_schema(args.source_root, args.revision))
+        except (OSError, ValueError, RuntimeError) as error:
+            parser.exit(1, f"release source contract validation failed: {error}\n")
+        return 0
+    if args.directory is None or args.tag is None:
+        parser.error("candidate validation requires --directory and --tag")
     try:
         assets = validate_candidate(args.directory, args.tag, args.revision, args.source_root)
     except (OSError, ValueError, RuntimeError, tarfile.TarError) as error:

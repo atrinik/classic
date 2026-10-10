@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from contextlib import redirect_stdout
 import json
 from pathlib import Path
 import shutil
@@ -88,6 +89,15 @@ class ReleaseArtifactsTests(unittest.TestCase):
         with mock.patch.object(artifacts, "git_value", return_value="RELEASE_ARTIFACT_SCHEMA = 3\n"):
             with self.assertRaises(RuntimeError):
                 artifacts.source_schema(self.root, self.revision)
+
+    def test_source_schema_cli_requires_no_candidate_directory(self):
+        output = io.StringIO()
+        arguments = ["release_artifacts.py", "--print-source-schema", "--revision",
+                     self.revision, "--source-root", str(self.root)]
+        with mock.patch.object(sys, "argv", arguments), mock.patch.object(artifacts, "source_schema", return_value=2) as schema, redirect_stdout(output):
+            self.assertEqual(artifacts.main(), 0)
+        schema.assert_called_once_with(self.root, self.revision)
+        self.assertEqual(output.getvalue(), "2\n")
 
     def test_source_metadata_binds_epoch_bundle_and_historical_affects(self):
         inputs = locked_inputs.load_locked_inputs(self.version)
