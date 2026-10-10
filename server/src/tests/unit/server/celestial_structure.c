@@ -1586,6 +1586,210 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
 }
 END_TEST
 
+START_TEST(test_filename_tiling_survives_temporary_map_reload) {
+    char temporary_root[] = "/tmp/atrinik-celestial-filename-swap-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(temporary_root));
+
+    char saved_mapspath[HUGE_BUF], saved_datapath[HUGE_BUF];
+    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
+    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+    char datapath[HUGE_BUF], temporary_dir[HUGE_BUF], unique_dir[HUGE_BUF];
+    snprintf(VS(datapath), "%s/data", temporary_root);
+    snprintf(VS(temporary_dir), "%s/data/tmp", temporary_root);
+    snprintf(VS(unique_dir), "%s/data/unique-items", temporary_root);
+    ck_assert_int_eq(mkdir(datapath, 0700), 0);
+    ck_assert_int_eq(mkdir(temporary_dir, 0700), 0);
+    ck_assert_int_eq(mkdir(unique_dir, 0700), 0);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+
+    bool vertical = _i == 2 || _i == 3;
+    bool authored = _i == 4;
+    bool swap_neighbor = _i == 1 || _i == 3;
+    const char *source_path = vertical ? "/vertical_60_60" : "/world_5_5";
+    const char *neighbor_path = vertical ? "/vertical_60_60_1" : authored ? "/override" : "/world_5_6";
+    int tile = vertical ? TILED_UP : TILED_SOUTH;
+    int reverse = map_tiled_reverse[tile];
+    write_filename_tile_map(temporary_root,
+                            source_path,
+                            vertical ? "linked" : "open",
+                            authored ? "tile_path_3 /override\ncelestial_boundary_3 discontinuous\n" : NULL);
+    write_filename_tile_map(temporary_root,
+                            neighbor_path,
+                            "open",
+                            authored ? "tile_path_1 /world_5_5\ncelestial_boundary_1 discontinuous\n" : NULL);
+    if (authored) {
+        /* A real coordinate neighbor must not override the authored path. */
+        write_filename_tile_map(temporary_root, "/world_5_6", "open", NULL);
+    }
+
+    mapstruct *map = ready_map_name(source_path, NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(map);
+    ck_assert_str_eq(map->tile_path[tile], neighbor_path);
+    mapstruct *neighbor = ready_map_name(neighbor_path, NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(neighbor);
+    ck_assert_ptr_eq(map->tile_map[tile], neighbor);
+    ck_assert_ptr_eq(neighbor->tile_map[reverse], map);
+    object *marker = new_object(map, 2, 3);
+    FREE_AND_COPY_HASH(marker->name, "saved filename-tiled marker");
+    FREE_AND_COPY_HASH(marker->name_pl, "saved filename-tiled markers");
+    map->map_flags |= MAP_FLAG_FIXED_RTIME;
+    map->reset_time = seconds() + 3600;
+    neighbor->map_flags |= MAP_FLAG_FIXED_RTIME;
+    neighbor->reset_time = seconds() + 3600;
+
+    ck_assert(swap_map_checked(map, 1));
+    ck_assert_int_eq(map->in_memory, MAP_SWAPPED);
+    ck_assert_ptr_null(map->tile_path[tile]);
+    ck_assert_ptr_null(neighbor->tile_map[reverse]);
+    if (swap_neighbor) {
+        ck_assert(swap_map_checked(neighbor, 1));
+        ck_assert_int_eq(neighbor->in_memory, MAP_SWAPPED);
+    }
+
+    map = ready_map_name(source_path, NULL, MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(map);
+    ck_assert_int_eq(map->in_memory, MAP_IN_MEMORY);
+    /* This proves the saved map loaded, rather than falling back to its source. */
+    marker = GET_MAP_OB(map, 2, 3);
+    ck_assert_ptr_nonnull(marker);
+    ck_assert_str_eq(marker->name, "saved filename-tiled marker");
+    ck_assert_str_eq(map->tile_path[tile], neighbor_path);
+    ck_assert_int_eq(map->celestial_tile_path_seen[tile], authored);
+    ck_assert_int_eq(map->celestial_boundary[tile],
+                     authored ? CELESTIAL_BOUNDARY_DISCONTINUOUS : CELESTIAL_BOUNDARY_UNSET);
+    ck_assert_ptr_null(map->tile_path[TILED_EAST]);
+    neighbor = ready_map_name(neighbor_path, NULL, MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(neighbor);
+    ck_assert_ptr_eq(get_map_from_tiled(map, tile), neighbor);
+    ck_assert_ptr_eq(map->tile_map[tile], neighbor);
+    ck_assert_ptr_eq(neighbor->tile_map[reverse], map);
+    if (!vertical) {
+        int x = 19, y = 24;
+        ck_assert_ptr_eq(get_map_from_coord(map, &x, &y), neighbor);
+        ck_assert_int_eq(x, 19);
+        ck_assert_int_eq(y, 0);
+    }
+
+    char *saved = NULL;
+    size_t saved_size = 0;
+    FILE *saved_fp = open_memstream(&saved, &saved_size);
+    ck_assert_ptr_nonnull(saved_fp);
+    save_map_header(map, saved_fp, 1);
+    ck_assert_int_eq(fclose(saved_fp), 0);
+    if (authored) {
+        ck_assert_ptr_nonnull(strstr(saved, "tile_path_3 /override\ncelestial_boundary_3 discontinuous\n"));
+    } else {
+        ck_assert_ptr_null(strstr(saved, "tile_path_"));
+    }
+    free(saved);
+    delete_map(map);
+    delete_map(neighbor);
+
+    const char *logical_paths[] = {source_path, neighbor_path};
+    for (size_t i = 0; i < arraysize(logical_paths); i++) {
+        char path[HUGE_BUF];
+        snprintf(VS(path), "%s%s", temporary_root, logical_paths[i]);
+        ck_assert_int_eq(unlink(path), 0);
+        ck_assert_int_lt(snprintf(VS(path), "%s/data/unique-items/%s.v00",
+                                  temporary_root, logical_paths[i] + 1),
+                         (int)sizeof(path));
+        if (i == 0 || swap_neighbor) {
+            ck_assert_int_eq(unlink(path), 0);
+        } else {
+            ck_assert(!path_exists(path));
+        }
+    }
+    if (authored) {
+        char path[HUGE_BUF];
+        snprintf(VS(path), "%s/world_5_6", temporary_root);
+        ck_assert_int_eq(unlink(path), 0);
+    }
+    ck_assert_int_eq(rmdir(temporary_dir), 0);
+    ck_assert_int_eq(rmdir(unique_dir), 0);
+    ck_assert_int_eq(rmdir(datapath), 0);
+    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
+START_TEST(test_rejected_temporary_map_withdraws_its_tile_backlinks) {
+    char temporary_root[] = "/tmp/atrinik-celestial-filename-reject-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(temporary_root));
+    char saved_mapspath[HUGE_BUF];
+    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
+    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+
+    const char *source_path = "/failure_5_5";
+    const char *neighbor_path = "/failure_5_6";
+    bool conflicting_backlink = _i == 3;
+    write_filename_tile_map(temporary_root, source_path, "open", NULL);
+    mapstruct *unrelated = NULL;
+    if (conflicting_backlink) {
+        write_filename_tile_map(temporary_root, "/unrelated", "open", NULL);
+        unrelated = ready_map_name("/unrelated", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+        ck_assert_ptr_nonnull(unrelated);
+    }
+    write_filename_tile_map(temporary_root, neighbor_path, "open",
+                            conflicting_backlink
+                                ? "tile_path_1 /unrelated\ncelestial_boundary_1 discontinuous\n"
+                                : NULL);
+    mapstruct *neighbor = ready_map_name(neighbor_path, NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(neighbor);
+    ck_assert_ptr_eq(neighbor->tile_map[TILED_NORTH], unrelated);
+
+    char source_filename[HUGE_BUF], temporary_filename[HUGE_BUF];
+    snprintf(VS(source_filename), "%s%s", temporary_root, source_path);
+    snprintf(VS(temporary_filename), "%s/saved-map", temporary_root);
+    if (_i == 2) {
+        /* Rejecting a second, invalid source header must also undo its links. */
+        write_filename_tile_map(temporary_root, source_path, "linked", NULL);
+    } else {
+        ck_assert_int_eq(unlink(source_filename), 0);
+    }
+    FILE *fp = fopen(temporary_filename, "wb");
+    ck_assert_ptr_nonnull(fp);
+    ck_assert_int_ne(fputs("arch map\ncelestial_schema 1\nsky_above linked\n"
+                           "width 24\nheight 24\n", fp), EOF);
+    if (_i == 1) {
+        /* Publish an authored link, then fail parsing without the end marker. */
+        ck_assert_int_ne(fputs("tile_path_3 /failure_5_6\n"
+                               "celestial_boundary_3 discontinuous\n", fp), EOF);
+    } else {
+        /* The derived horizontal link exists, but the linked sky has no UP. */
+        ck_assert_int_ne(fputs("end\n", fp), EOF);
+    }
+    ck_assert_int_eq(fclose(fp), 0);
+    mapstruct *map = get_linked_map();
+    FREE_AND_COPY_HASH(map->path, source_path);
+    map->tmpname = xstrdup(temporary_filename);
+    shstr *source_path_sh = add_string(source_path);
+    ck_assert_ptr_eq(has_been_loaded_sh(source_path_sh), map);
+
+    ck_assert_ptr_null(ready_map_name(source_path, NULL, MAP_NO_DYNAMIC));
+    ck_assert_ptr_eq(neighbor->tile_map[TILED_NORTH], unrelated);
+    ck_assert_ptr_null(has_been_loaded_sh(source_path_sh));
+    free_string_shared(source_path_sh);
+    delete_map(neighbor);
+    if (unrelated != NULL) {
+        delete_map(unrelated);
+        char path[HUGE_BUF];
+        snprintf(VS(path), "%s/unrelated", temporary_root);
+        ck_assert_int_eq(unlink(path), 0);
+    }
+    char neighbor_filename[HUGE_BUF];
+    snprintf(VS(neighbor_filename), "%s%s", temporary_root, neighbor_path);
+    ck_assert_int_eq(unlink(neighbor_filename), 0);
+    ck_assert_int_eq(unlink(temporary_filename), 0);
+    if (_i == 2) {
+        ck_assert_int_eq(unlink(source_filename), 0);
+    }
+    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
 START_TEST(test_character_transaction_lifecycle_is_durable) {
     char temporary_root[] = "/tmp/atrinik-celestial-character-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
@@ -1907,6 +2111,8 @@ static Suite *suite(void) {
     tcase_add_loop_test(tc_core, test_inactive_runtime_private_player_save_roundtrip, 0, 4);
     tcase_add_loop_test(tc_core, test_active_runtime_private_player_identity_remains_owner_bound, 0, 2);
     tcase_add_test(tc_core, test_filename_tiling_restores_legacy_links);
+    tcase_add_loop_test(tc_core, test_filename_tiling_survives_temporary_map_reload, 0, 5);
+    tcase_add_loop_test(tc_core, test_rejected_temporary_map_withdraws_its_tile_backlinks, 0, 4);
     tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
     tcase_add_test(tc_core, test_character_transaction_recovery_quarantines_prepared_group);
     tcase_add_test(tc_core, test_committed_map_transaction_missing_unique_is_quarantined);
