@@ -3,7 +3,6 @@
   "build_image": "ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2",
   "platform_digest": "sha256:66a637c76f07d32ff933886a96bc5bd720fc695cf20a4acb9c1710983fdb7478",
   "producer_source": "4be36a1f1eebb667aad77c227f7855a4a656d150",
-  "runtime_base": "ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03",
   "snapshot": "20260810T000000Z",
   "openssl_version": "3.5.5",
   "evidence_sha256": {

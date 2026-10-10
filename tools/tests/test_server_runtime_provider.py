@@ -298,10 +298,12 @@ class ServerRuntimeProviderTests(unittest.TestCase):
         self.assertEqual(result.returncode, 123)  # xargs propagates child failure.
         self.assertEqual(len(calls), 2)
 
-    def test_docker_uses_locked_images_and_checks_without_tls_bypass(self):
+    def test_docker_uses_pinned_images_and_checks_without_tls_bypass(self):
         docker = (ROOT / "server/Dockerfile").read_text()
         self.assertIn("FROM " + LOCK["build_image"] + " AS build", docker)
-        self.assertIn("FROM " + LOCK["runtime_base"], docker)
+        # Dependabot owns the runtime image pin in Dockerfile. Validate an
+        # immutable Ubuntu reference without duplicating its current digest.
+        self.assertRegex(docker, r"(?m)^FROM ubuntu:[^\s@]+@sha256:[0-9a-f]{64}$")
         self.assertIn("https://snapshot.ubuntu.com/ubuntu/" + LOCK["snapshot"] + "/", docker)
         self.assertIn("RUN --network=none python3 tools/dependencies.py", docker)
         self.assertIn("COPY --from=build /opt/runtime-provider/ /usr/local/", docker)
