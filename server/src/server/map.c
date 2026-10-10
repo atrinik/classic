@@ -1801,12 +1801,17 @@ static void free_all_objects(mapstruct *m) {
  * If set, free all objects on the map.
  */
 void free_map(mapstruct *m, int flag) {
+    light_batch_flush();
     int i;
+
+    swap_cancel_pending(m);
+    celestial_light_forget(m);
 
     if (!m->in_memory) {
         return;
     }
 
+    light_map_prepare_unlink(m);
     remove_light_source_list(m);
 
     /* Teardown is not a sequence of gameplay geometry edits. new_save_map()
@@ -1865,6 +1870,7 @@ void free_map(mapstruct *m, int flag) {
 
     m->in_memory = MAP_SWAPPED;
     m->celestial_light_valid = false;
+    light_map_unlink_end();
 }
 
 /**
@@ -1874,7 +1880,11 @@ void free_map(mapstruct *m, int flag) {
  * The map to delete.
  */
 void delete_map(mapstruct *m) {
+    light_batch_flush();
     HARD_ASSERT(m != NULL);
+
+    swap_cancel_pending(m);
+    celestial_light_forget(m);
 
     if (m->in_memory == MAP_IN_MEMORY) {
         free_map(m, 1);
@@ -1997,6 +2007,7 @@ void clean_tmp_map(mapstruct *m) {
  * Free all allocated maps.
  */
 void free_all_maps(void) {
+    light_map_unlink_begin(true);
     mapstruct *map, *tmp;
 
     DL_FOREACH_SAFE(first_map, map, tmp) {
@@ -2008,6 +2019,7 @@ void free_all_maps(void) {
 
         delete_map(map);
     }
+    light_map_unlink_end();
 }
 
 /**
@@ -2823,6 +2835,8 @@ int wall_blocked(mapstruct *m, int x, int y) {
 }
 
 int map_get_darkness(mapstruct *m, int x, int y, object **mirror) {
+    light_map_unlink_flush();
+    light_batch_flush();
     MapSpace *msp;
     uint8_t outdoor;
     int darkness;

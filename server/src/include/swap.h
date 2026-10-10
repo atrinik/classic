@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -41,6 +41,8 @@ extern void read_map_log(void);
 
 extern void swap_map(mapstruct *map, int force_flag);
 bool swap_map_checked(mapstruct *map, int force_flag);
+
+void swap_cancel_pending(mapstruct *map);
 
 extern void check_active_maps(void);
 

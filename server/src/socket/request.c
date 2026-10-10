@@ -1276,6 +1276,8 @@ static packet_struct *map2_frame_level_chunk(int8_t depth, packet_struct *payloa
 
 /** Draw the client map. */
 void draw_client_map2(object *pl) {
+    light_map_unlink_flush();
+    light_batch_flush();
     static uint32_t map2_count = 0;
     MapCell *mp;
     MapSpace *msp;
@@ -1290,6 +1292,7 @@ void draw_client_map2(object *pl) {
     uint16_t light_next_radiance[NUM_SUB_LAYERS];
     uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
     MapSpace *light_spaces[NUM_SUB_LAYERS];
+    bool light_next_ready[NUM_SUB_LAYERS];
     int ext_flags, anim_num;
     int num_layers;
     object *tmp, *tmp2;
@@ -1307,6 +1310,7 @@ void draw_client_map2(object *pl) {
     uint64_t timed_light_start_seconds = 0;
     uint64_t timed_light_end_seconds = 0;
     uint8_t timed_light_flags = MAP2_LIGHT_KEYFRAME_CONTINUOUS;
+    size_t timed_light_flags_pos = 0;
 
     /* Any kind of special vision? */
     special_vision =
@@ -1324,18 +1328,19 @@ void draw_client_map2(object *pl) {
         CONTR(pl)->cs->lastmap_player_level_known = true;
     }
 
-    if (pl->map->celestial_schema == 1 &&
-        celestial_light_keyframe_ensure(pl->map, (uint64_t)todtick)) {
+    if (pl->map->celestial_schema == 1) {
+        bool next_ready = celestial_light_keyframe_request(pl->map, (uint64_t)todtick);
         timed_light_generation = celestial_light_generation(pl->map);
-        timed_light_descriptor =
-            timed_light_generation != 0 &&
-            (CONTR(pl)->map_update_cmd != MAP_UPDATE_CMD_SAME ||
-             timed_light_generation != CONTR(pl)->cs->lastmap_light_generation);
+        /* Visible neighboring/upper sources can finish independently of the
+         * player's map. Carry the bounded descriptor while comparing endpoint
+         * bytes below, so their completion is sent without another traversal
+         * of camera geometry or redundant tile payloads. */
+        timed_light_descriptor = timed_light_generation != 0;
         timed_light_start_seconds = (uint64_t)todtick * UINT64_C(60) * UINT64_C(60);
         timed_light_end_seconds = timed_light_start_seconds > UINT64_MAX - UINT64_C(3600)
                                       ? UINT64_MAX
                                       : timed_light_start_seconds + UINT64_C(3600);
-        if ((uint64_t)pticks % PTICKS_PER_CLOCK != 0) {
+        if (!next_ready || (uint64_t)pticks % PTICKS_PER_CLOCK != 0) {
             timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
         }
     }
@@ -1452,6 +1457,7 @@ void draw_client_map2(object *pl) {
         packet_debug_data(packet, 0, "Timed-light end game seconds");
         packet_writer_write_uint64(packet, timed_light_end_seconds);
         packet_debug_data(packet, 0, "Timed-light flags");
+        timed_light_flags_pos = packet->len;
         packet_writer_write_uint8(packet, timed_light_flags);
     }
 
@@ -1653,6 +1659,7 @@ void draw_client_map2(object *pl) {
                            0,
                            sizeof(light_next_rgb_radiance[sub_layer]));
                     light_spaces[sub_layer] = NULL;
+                    light_next_ready[sub_layer] = false;
                 }
 
                 /* Initialize default values for some variables. */
@@ -1753,7 +1760,11 @@ void draw_client_map2(object *pl) {
                             (!light_set[sub_layer] || (layer == LAYER_EFFECT && sub_layer > 0))) {
                             light_set[sub_layer] = 1;
                             if (tmp->map->celestial_schema == 1) {
-                                celestial_light_keyframe_ensure(tmp->map, (uint64_t)todtick);
+                                light_next_ready[sub_layer] =
+                                    celestial_light_keyframe_request(tmp->map, (uint64_t)todtick);
+                                if (!light_next_ready[sub_layer]) {
+                                    timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+                                }
                             }
                             light_spaces[sub_layer] = GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y);
                             raw_light[sub_layer] = map_get_darkness(tmp->map, tmp->x, tmp->y, NULL);
@@ -2218,6 +2229,7 @@ void draw_client_map2(object *pl) {
                            sizeof(light_next_rgb_radiance[sub_layer]));
 
                     if (light_set[sub_layer] && light_spaces[sub_layer] != NULL &&
+                        light_next_ready[sub_layer] &&
                         (light_spaces[sub_layer]->celestial_light_next_value !=
                              light_spaces[sub_layer]->celestial_light_value ||
                          memcmp(light_spaces[sub_layer]->celestial_light_next_rgb,
@@ -2592,6 +2604,9 @@ void draw_client_map2(object *pl) {
 
     uint16_t continuation_marker =
         continuation_packet_count | (timed_light_descriptor ? MAP2_CONTINUATION_TIMED_LIGHT : 0);
+    if (timed_light_descriptor) {
+        packet_header->data[timed_light_flags_pos] = timed_light_flags;
+    }
     packet_header->data[continuation_count_pos] = continuation_marker >> 8;
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));

@@ -1433,13 +1433,20 @@ bool socket_access_admin_permitted(socket_struct *cs, player *pl) {
 }
 
 static void socket_access_poll_one(socket_struct *cs, player *pl) {
+    /* Access polling precedes login timeout cleanup. A retained completion
+     * cannot revive an expired or disconnected login by refreshing its deadline. */
+    if (cs->access_auth_job != 0 && (cs->state != ST_LOGIN || socket_login_expired(cs))) {
+        access_server_cancel(cs->access_auth_job);
+        cs->access_auth_job = 0;
+        if (cs->state == ST_LOGIN)
+            cs->state = ST_DEAD;
+    }
     if (cs->access_auth_job != 0) {
         access_outcome_t outcome;
         access_token_ref_t ref;
         if (access_server_auth_poll(cs->access_auth_job, &outcome, &ref)) {
             cs->access_auth_job = 0;
-            bool accepted = outcome == ACCESS_COMMITTED &&
-                            access_server_session_check(&ref) == ACCESS_SESSION_VALID;
+            bool accepted = outcome == ACCESS_COMMITTED;
             if (accepted) {
                 cs->access_token = ref;
                 cs->access_authenticated = true;

@@ -31,6 +31,7 @@
 #ifndef MAP_H
 #define MAP_H
 
+#include <stddef.h>
 #include <decls.h>
 
 /** Number of darkness level. Add +1 for "total dark" */
@@ -427,7 +428,20 @@ typedef struct MapSpace_s {
 
     /** Extra flags from @ref MSP_EXTRA_xxx. */
     uint8_t extra_flags;
+
+    /** Published aggregate local-ray blockers, floors and roof surfaces. */
+    uint8_t light_geometry;
+
+    /** Exact five-face transport signature, occupying existing tail padding. */
+    uint16_t celestial_geometry;
 } MapSpace;
+
+/* Adding a geometry signature must not grow the retained per-cell allocation.
+ * The original structure ended at extra_flags. Keep this true on every ABI. */
+_Static_assert(sizeof(MapSpace) ==
+                   ((offsetof(MapSpace, extra_flags) + sizeof(((MapSpace *)0)->extra_flags) +
+                     _Alignof(MapSpace) - 1) / _Alignof(MapSpace)) * _Alignof(MapSpace),
+               "MapSpace geometry signatures must fit existing tail padding");
 
 /**
  * @defgroup map_flags Map flags
@@ -695,6 +709,9 @@ typedef struct mapdef {
     bool celestial_height_seen;
     bool celestial_region_seen;
 
+    /** Surviving local illumination that must be rebuilt after an unlink. */
+    bool local_light_unlink_pending;
+
     /** Immutable, canonicalized system metadata consumed during map loading. */
     celestial_rectangle_t *celestial_rectangles;
     uint16_t celestial_rectangle_count;
@@ -711,7 +728,10 @@ typedef struct mapdef {
     /** Key of the precomputed next-hour field. */
     uint64_t celestial_light_next_key;
 
-    /** Monotonic in-memory generation of the published current field. */
+    /** Absolute hour of the complete next field; phase keys alone may repeat. */
+    uint64_t celestial_light_next_hour;
+
+    /** Monotonic generation of the published field and endpoint readiness. */
     uint64_t celestial_light_generation_id;
 
     /** True when the next-hour field is complete for this map stack. */
@@ -752,8 +772,20 @@ typedef struct mapdef {
      */
     uint32_t reset_timeout;
 
-    /** When this reaches 0, the map will be swapped out. */
+    /** When this reaches 0, the map becomes eligible for ordinary swapping. */
     int32_t timeout;
+
+    /** FIFO ticket for pending ordinary expiry; zero means not queued. */
+    uint64_t swap_pending_order;
+
+    /** Map allocation identity captured when ordinary expiry was queued. */
+    uint32_t swap_pending_count;
+
+    /** Calls to check_active_maps() remaining before a failed save may retry. */
+    uint8_t swap_retry_ticks;
+
+    /** Consecutive ordinary save failures, capped for exponential backoff. */
+    uint8_t swap_failures;
 
     /** How long to wait before a map is swapped out. */
     uint32_t swap_time;

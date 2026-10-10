@@ -1341,6 +1341,33 @@ wrap is a fatal error, never an invitation to reuse a cache entry.
 - An hour, seasonal phase, lunar phase, or effective-profile change rebuilds
   only field tiles using the changed phase/profile.  It does not touch maps
   beyond discontinuous seams.
+  The runtime prepares the following hourly endpoint through resumable work
+  on the server thread, sharing a 2 ms monotonic budget per tick across queued
+  stacks in round-robin cell order. Ray traversal, transmission rounding and
+  the four Jacobi passes retain the synchronous solver's exact arithmetic.
+  The deadline is checked before each cell or bounded stage; allocation and a
+  single cell evaluation are indivisible. Scratch upper fields supply lower
+  injection. Partial next fields are never readable endpoints: publication
+  marks the complete stack ready only after every scalar/RGB word is copied.
+  A normal hour transition promotes a ready endpoint without solving it again.
+  Missing current fields still use the synchronous fail-closed solver; initial
+  loads, geometry edits and discontinuous time changes may require that work.
+  Pending camera samples use current=current with a SNAP descriptor. MAP2
+  carries the bounded descriptor on every celestial draw so independently
+  completed neighboring sources refresh their endpoints, while unchanged
+  tile endpoint payloads remain suppressed. Structural/topology/profile/hour
+  changes cancel or fence queued work; map teardown cancels retained references
+  before recycling storage.
+  Admission reserves `sizeof(job) + 16 * stack_cells + 29 * largest_level_cells`
+  bytes before allocating a job. All jobs share the existing 1,923,584-byte
+  transient limit, reserving 184,320 bytes (`45 * 64 * 64`) for one synchronous
+  current-field fallback. Runtime fallback solves cannot overlap on the server
+  thread. Admission that would exceed the remaining queued limit allocates
+  nothing and retries on a later request. Completion or cancellation releases
+  the reservation. The synchronous two-endpoint snapshot helper is retained
+  for offline callers/oracle validation; MAP2 uses the bounded runtime request.
+  The exact packed cell geometry signatures occupy preexisting `MapSpace`
+  tail padding; a compile-time assertion forbids growing that allocation.
 - A structural edit increments the affected map's structural revision and
   rebuilds classification plus affected stack/halo fields atomically.  The
   revision remains part of every dependent key even when a later edit restores

@@ -279,6 +279,10 @@ typedef struct socket_struct {
      */
     uint8_t password_fails;
 
+    /** Main-thread connection incarnation and outstanding password request. */
+    uint64_t auth_generation;
+    uint64_t auth_request;
+
     /** Send ext title to client. */
     uint8_t ext_title_flag;
 

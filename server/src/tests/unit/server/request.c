@@ -5,6 +5,7 @@
 #include <global.h>
 #include <server_main.h>
 #include <server.h>
+#include <server_clock_fake.h>
 #include <access_server.h>
 #include <check.h>
 #include <checkstd.h>
@@ -167,6 +168,218 @@ START_TEST(test_invalid_access_attempts_do_not_lock_out_valid_codes) {
     ck_assert(access_server_shutdown());
     access_server_deinit();
     access_server_route_for_test(NULL);
+    memcpy(settings.access_store, previous_store, sizeof(previous_store));
+    settings.access_required = previous_required;
+    settings.access_initialize = previous_initialize;
+    char snapshot[256];
+    snprintf(VS(snapshot), "%s/%s", directory, ACCESS_STORE_FILENAME);
+    ck_assert_int_eq(unlink(snapshot), 0);
+    ck_assert_int_eq(rmdir(directory), 0);
+}
+END_TEST
+#endif
+
+
+#ifdef __linux__
+START_TEST(test_access_completed_auth_waits_for_session_authority) {
+    const access_token_ref_t expected = {
+        .token_id = "11111111111111111111111111111111", .revision = 7,
+    };
+    const access_token_ref_t untouched = {
+        .token_id = "22222222222222222222222222222222", .revision = 9,
+    };
+    const access_session_state_t resolutions[] = {ACCESS_SESSION_VALID, ACCESS_SESSION_DENIED};
+    for (size_t i = 0; i < arraysize(resolutions); i++) {
+        uint64_t job = access_server_auth_result_for_test(ACCESS_COMMITTED, &expected);
+        ck_assert_uint_ne(job, 0);
+        access_session_state_t states[] = {ACCESS_SESSION_BUSY, ACCESS_SESSION_BUSY, resolutions[i]};
+        access_server_session_sequence_for_test(states, arraysize(states));
+        access_outcome_t outcome = ACCESS_INVALID;
+        access_token_ref_t ref = untouched;
+        for (unsigned int retry = 0; retry < 2; retry++) {
+            ck_assert(!access_server_auth_poll(job, &outcome, &ref));
+            ck_assert_int_eq(outcome, ACCESS_INVALID);
+            ck_assert_str_eq(ref.token_id, untouched.token_id);
+            ck_assert_uint_eq(ref.revision, untouched.revision);
+        }
+        ck_assert(access_server_auth_poll(job, &outcome, &ref));
+        ck_assert_int_eq(outcome, i == 0 ? ACCESS_COMMITTED : ACCESS_DENIED);
+        ck_assert_str_eq(ref.token_id, expected.token_id);
+        ck_assert_uint_eq(ref.revision, expected.revision);
+        ck_assert(!access_server_auth_poll(job, &outcome, &ref));
+    }
+    /* An already-failed authorization does not wait for store availability. */
+    uint64_t job = access_server_auth_result_for_test(ACCESS_UNAVAILABLE, &expected);
+    const access_session_state_t busy[] = {ACCESS_SESSION_BUSY};
+    access_server_session_sequence_for_test(busy, arraysize(busy));
+    access_outcome_t outcome;
+    access_token_ref_t ref;
+    ck_assert(access_server_auth_poll(job, &outcome, &ref));
+    ck_assert_int_eq(outcome, ACCESS_UNAVAILABLE);
+    access_server_session_sequence_for_test(NULL, 0);
+}
+END_TEST
+
+START_TEST(test_access_completed_auth_socket_defers_busy_result) {
+    server_clock_fake_install(UINT64_C(125000),
+                              (server_tick_t){10},
+                              (server_monotonic_t){UINT64_C(1000000)},
+                              (server_wall_utc_t){INT64_C(1700000000)});
+    bool saved_required = settings.access_required;
+    settings.access_required = true;
+    const access_token_ref_t expected = {
+        .token_id = "11111111111111111111111111111111", .revision = 7,
+    };
+    for (unsigned int denied = 0; denied < 2; denied++) {
+        socket_struct cs = {
+            .state = ST_LOGIN,
+            .socket_version = SOCKET_VERSION,
+            .access_policy_sent = true,
+            .access_transport_authenticated = true,
+            .access_attempted = true,
+        };
+        socket_login_deadline_refresh(&cs);
+        server_monotonic_t deadline = cs.login_deadline;
+        uint64_t job = access_server_auth_result_for_test(ACCESS_COMMITTED, &expected);
+        ck_assert_uint_ne(job, 0);
+        cs.access_auth_job = job;
+        const access_session_state_t states[] = {
+            ACCESS_SESSION_BUSY,
+            denied ? ACCESS_SESSION_DENIED : ACCESS_SESSION_VALID,
+            /* The final check also validates an already-admitted socket. */
+            ACCESS_SESSION_VALID,
+        };
+        access_server_session_sequence_for_test(states, arraysize(states));
+        socket_access_poll_for_test(&cs, NULL);
+        ck_assert_uint_eq(cs.access_auth_job, job);
+        ck_assert(!cs.access_authenticated);
+        ck_assert_int_eq(cs.state, ST_LOGIN);
+        ck_assert_uint_eq(cs.login_deadline.microseconds, deadline.microseconds);
+        ck_assert_ptr_null(cs.packets);
+        ck_assert_uint_eq(cs.access_token.revision, 0);
+        server_clock_fake_advance_monotonic(server_duration_from_seconds(1));
+        socket_access_poll_for_test(&cs, NULL);
+        ck_assert_uint_eq(cs.access_auth_job, 0);
+        ck_assert_int_eq(cs.access_authenticated, !denied);
+        ck_assert_int_eq(cs.state, denied ? ST_ZOMBIE : ST_LOGIN);
+        packet_struct *result = queued_command_payload_find(&cs, CLIENT_CMD_ACCESS_RESULT);
+        ck_assert_ptr_nonnull(result);
+        ck_assert_uint_eq(result->len, 2);
+        ck_assert_uint_eq(result->data[0], 1);
+        ck_assert_uint_eq(result->data[1], denied);
+        if (!denied) {
+            ck_assert_str_eq(cs.access_token.token_id, expected.token_id);
+            ck_assert_uint_eq(cs.access_token.revision, expected.revision);
+            ck_assert_uint_gt(cs.login_deadline.microseconds, deadline.microseconds);
+        } else {
+            ck_assert_uint_eq(cs.login_deadline.microseconds, deadline.microseconds);
+        }
+        access_outcome_t outcome;
+        access_token_ref_t ref;
+        ck_assert(!access_server_auth_poll(job, &outcome, &ref));
+        socket_buffer_clear(&cs);
+        access_server_session_sequence_for_test(NULL, 0);
+    }
+    settings.access_required = saved_required;
+    server_clock_fake_uninstall();
+}
+END_TEST
+
+START_TEST(test_access_completed_auth_cannot_revive_expired_login) {
+    server_clock_fake_install(UINT64_C(125000),
+                              (server_tick_t){10},
+                              (server_monotonic_t){UINT64_C(1000000)},
+                              (server_wall_utc_t){INT64_C(1700000000)});
+    bool saved_required = settings.access_required;
+    settings.access_required = true;
+    socket_struct cs = {.state = ST_LOGIN};
+    socket_login_deadline_refresh(&cs);
+    server_monotonic_t deadline = cs.login_deadline;
+    const access_token_ref_t expected = {
+        .token_id = "11111111111111111111111111111111", .revision = 7,
+    };
+    uint64_t job = access_server_auth_result_for_test(ACCESS_COMMITTED, &expected);
+    ck_assert_uint_ne(job, 0);
+    cs.access_auth_job = job;
+    const access_session_state_t states[] = {ACCESS_SESSION_BUSY, ACCESS_SESSION_VALID};
+    access_server_session_sequence_for_test(states, arraysize(states));
+    socket_access_poll_for_test(&cs, NULL);
+    ck_assert_uint_eq(cs.access_auth_job, job);
+    ck_assert(!cs.access_authenticated);
+    ck_assert_ptr_null(cs.packets);
+    server_clock_fake_advance_monotonic(server_duration_from_seconds(SOCKET_SETUP_TIMEOUT));
+    ck_assert(socket_login_expired(&cs));
+    socket_access_poll_for_test(&cs, NULL);
+    ck_assert_uint_eq(cs.access_auth_job, 0);
+    ck_assert_int_eq(cs.state, ST_DEAD);
+    ck_assert(!cs.access_authenticated);
+    ck_assert_ptr_null(cs.packets);
+    ck_assert_uint_eq(cs.login_deadline.microseconds, deadline.microseconds);
+    access_outcome_t outcome;
+    access_token_ref_t ref;
+    ck_assert(!access_server_auth_poll(job, &outcome, &ref));
+    access_server_session_sequence_for_test(NULL, 0);
+    settings.access_required = saved_required;
+    server_clock_fake_uninstall();
+}
+END_TEST
+
+START_TEST(test_access_completed_auth_reservations_cancel_and_shutdown) {
+    const access_token_ref_t expected = {
+        .token_id = "11111111111111111111111111111111", .revision = 7,
+    };
+    const access_session_state_t busy[] = {ACCESS_SESSION_BUSY};
+    uint64_t jobs[ACCESS_OUTBOX_LIMIT];
+    access_outcome_t outcome;
+    access_token_ref_t ref;
+    for (size_t i = 0; i < arraysize(jobs); i++) {
+        jobs[i] = access_server_auth_result_for_test(ACCESS_COMMITTED, &expected);
+        ck_assert_uint_ne(jobs[i], 0);
+        access_server_session_sequence_for_test(busy, arraysize(busy));
+        ck_assert(!access_server_auth_poll(jobs[i], &outcome, &ref));
+    }
+    ck_assert_uint_eq(access_server_auth_result_for_test(ACCESS_COMMITTED, &expected), 0);
+    /* Disconnect/timeout cancellation releases the retained reservation. */
+    uint64_t cancelled = jobs[0];
+    access_server_cancel(cancelled);
+    ck_assert(!access_server_auth_poll(cancelled, &outcome, &ref));
+    jobs[0] = access_server_auth_result_for_test(ACCESS_COMMITTED, &expected);
+    ck_assert_uint_gt(jobs[0], cancelled);
+    ck_assert_uint_eq(access_server_auth_result_for_test(ACCESS_COMMITTED, &expected), 0);
+    access_server_session_sequence_for_test(busy, arraysize(busy));
+    ck_assert(!access_server_auth_poll(jobs[0], &outcome, &ref));
+    access_server_session_sequence_for_test(NULL, 0);
+
+    /* Start a real worker with only completed jobs, so shutdown must join and
+     * clear every retained slot without depending on scheduling or store IO. */
+    char directory[] = "/tmp/atrinik-access-completion-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    uint8_t identity[32];
+    memset(identity, 0x11, sizeof(identity));
+    char identity_hex[65];
+    memset(identity_hex, '1', 64);
+    identity_hex[64] = 0;
+    access_store_t *store = NULL;
+    ck_assert_int_eq(access_store_open(&store, directory, identity, true, true), ACCESS_COMMITTED);
+    access_store_close(store);
+    char previous_store[sizeof(settings.access_store)];
+    memcpy(previous_store, settings.access_store, sizeof(previous_store));
+    bool previous_required = settings.access_required;
+    bool previous_initialize = settings.access_initialize;
+    snprintf(VS(settings.access_store), "%s", directory);
+    settings.access_required = true;
+    settings.access_initialize = false;
+    ck_assert(access_server_init(identity_hex));
+    ck_assert_uint_eq(access_server_auth_submit("0123456789ABCDEF"), 0);
+    ck_assert(access_server_shutdown());
+    for (size_t i = 0; i < arraysize(jobs); i++) {
+        ck_assert(!access_server_auth_poll(jobs[i], &outcome, &ref));
+        jobs[i] = access_server_auth_result_for_test(ACCESS_COMMITTED, &expected);
+        ck_assert_uint_ne(jobs[i], 0);
+    }
+    for (size_t i = 0; i < arraysize(jobs); i++)
+        access_server_cancel(jobs[i]);
+    access_server_deinit();
     memcpy(settings.access_store, previous_store, sizeof(previous_store));
     settings.access_required = previous_required;
     settings.access_initialize = previous_initialize;
@@ -1970,6 +2183,75 @@ START_TEST(test_map_exit_semantic_not_disclosed_by_boundary_geometry) {
 }
 END_TEST
 
+START_TEST(test_pending_neighbor_endpoint_resends_without_player_generation_change) {
+    mapstruct *west;
+    object *pl;
+    check_setup_env_pl(&west, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    mapstruct *maps[] = {west, east};
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i]->celestial_schema = 1;
+        maps[i]->celestial_schema_seen = true;
+        maps[i]->celestial_sky_above = CELESTIAL_SKY_OPEN;
+        maps[i]->celestial_sky_seen = true;
+        maps[i]->celestial_v1_header_seen = true;
+        maps[i]->celestial_width_seen = true;
+        maps[i]->celestial_height_seen = true;
+    }
+    FREE_AND_COPY_HASH(west->path, "/pending/west");
+    FREE_AND_COPY_HASH(east->path, "/pending/east");
+    FREE_AND_COPY_HASH(west->tile_path[TILED_EAST], east->path);
+    FREE_AND_COPY_HASH(east->tile_path[TILED_WEST], west->path);
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+    west->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    east->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    object *floor = arch_get("water_still");
+    ck_assert_ptr_nonnull(floor);
+    floor->x = 0;
+    floor->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(floor, east, NULL, 0));
+    request_move_player(&pl, west, 23, 12);
+    unsigned long saved_hour = todtick;
+    long saved_ticks = pticks;
+    todtick = 5 * HOURS_PER_MONTH + 7;
+    pticks = 0;
+    ck_assert(celestial_light_keyframe_ensure(west, (uint64_t)todtick));
+    ck_assert(!celestial_light_keyframe_request(east, (uint64_t)todtick));
+    /* Incomplete storage must never become a camera endpoint. */
+    east->spaces[0 + east->width * 12].celestial_light_next_value = INT32_MAX;
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2 + 1, cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert(cell->light_next_known[floor->sub_layer]);
+    ck_assert_uint_eq(cell->light_next_radiance[floor->sub_layer],
+                      cell->light_radiance[floor->sub_layer]);
+    packet_struct *packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[30], MAP2_LIGHT_KEYFRAME_SNAP);
+    uint64_t generation = celestial_light_generation(west);
+    celestial_light_process_steps_for_test(100000);
+    ck_assert(east->celestial_light_keyframe_valid);
+    ck_assert_uint_eq(celestial_light_generation(west), generation);
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    ck_assert_uint_eq(celestial_light_generation(west), generation);
+    ck_assert_uint_gt(cell->light_next_radiance[floor->sub_layer],
+                      cell->light_radiance[floor->sub_layer]);
+    packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
+    ck_assert_ptr_nonnull(packet);
+    ck_assert_uint_eq(packet->data[30], MAP2_LIGHT_KEYFRAME_CONTINUOUS);
+    todtick = saved_hour;
+    pticks = saved_ticks;
+}
+END_TEST
+
 START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates) {
     mapstruct *map;
     object *pl;
@@ -2523,6 +2805,10 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_access_busy_retains_received_and_queued_frames);
 #ifdef __linux__
     tcase_add_test(tc_core, test_invalid_access_attempts_do_not_lock_out_valid_codes);
+    tcase_add_test(tc_core, test_access_completed_auth_waits_for_session_authority);
+    tcase_add_test(tc_core, test_access_completed_auth_socket_defers_busy_result);
+    tcase_add_test(tc_core, test_access_completed_auth_cannot_revive_expired_login);
+    tcase_add_test(tc_core, test_access_completed_auth_reservations_cancel_and_shutdown);
 #endif
     tcase_add_test(tc_core, test_access_permissions_follow_the_active_character);
     tcase_add_test(tc_core, test_access_revocation_denies_queued_private_result);
@@ -2549,6 +2835,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
+    tcase_add_test(tc_core, test_pending_neighbor_endpoint_resends_without_player_generation_change);
     tcase_add_test(tc_core, test_timed_endpoint_refresh_keeps_colored_scalar_present);
     tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
