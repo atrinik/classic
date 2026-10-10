@@ -353,7 +353,7 @@ set(HAVE_SDL_TTF true)
 
 # LibXML2 is required.
 find_package(LibXml2 REQUIRED)
-find_package(OpenSSL REQUIRED)
+find_package(OpenSSL 3.5 REQUIRED)
 
 # Sound effects and music are core client functionality on every platform.
 find_package(SDL3_mixer 3.2.4 CONFIG REQUIRED)
@@ -1248,12 +1248,23 @@ else ()
     set(INSTALL_SUBDIR_SHARE "share/games/atrinik")
     set(INSTALL_SUBDIR_DOC "share/doc/atrinik")
 
-    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/atrinik.desktop DESTINATION "share/applications")
-    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/textures/icon.png DESTINATION "share/pixmaps" RENAME "atrinik.png")
+    set(ATRINIK_DESKTOP_FILE "${CMAKE_CURRENT_SOURCE_DIR}/atrinik.desktop")
+    if (PACKAGE_TYPE STREQUAL "deb")
+        file(READ "${ATRINIK_DESKTOP_FILE}" desktop_entry)
+        string(REPLACE "Exec=atrinik\n" "Exec=/usr/games/atrinik\n"
+            desktop_entry "${desktop_entry}")
+        set(ATRINIK_DESKTOP_FILE "${CMAKE_CURRENT_BINARY_DIR}/atrinik.desktop")
+        file(WRITE "${ATRINIK_DESKTOP_FILE}" "${desktop_entry}")
+    endif ()
+    install(FILES "${ATRINIK_DESKTOP_FILE}"
+        DESTINATION "share/applications" COMPONENT AtrinikClient)
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/textures/icon.png
+        DESTINATION "share/pixmaps" RENAME "atrinik.png" COMPONENT AtrinikClient)
 endif ()
 
 if (NOT WIN32 OR UNIX)
-    install(TARGETS atrinik DESTINATION ${INSTALL_SUBDIR_BIN})
+    install(TARGETS atrinik DESTINATION ${INSTALL_SUBDIR_BIN}
+        COMPONENT AtrinikClient)
 endif ()
 install(FILES
         ${CMAKE_CURRENT_SOURCE_DIR}/INSTALL
@@ -1261,16 +1272,16 @@ install(FILES
         ${ATRINIK_LICENSE_FILE}
         ${ATRINIK_ATTRIBUTIONS_FILE}
         ${CMAKE_CURRENT_SOURCE_DIR}/client.cfg
-        DESTINATION ${INSTALL_SUBDIR_DOC})
+        DESTINATION ${INSTALL_SUBDIR_DOC} COMPONENT AtrinikClient)
 install(DIRECTORY
         textures cache data fonts gfx_user settings sound srv_files
-        DESTINATION ${INSTALL_SUBDIR_SHARE}
+        DESTINATION ${INSTALL_SUBDIR_SHARE} COMPONENT AtrinikClient
         PATTERN ".git" EXCLUDE
         PATTERN "discord-application-id" EXCLUDE)
 if (ATRINIK_DISCORD_APPLICATION_ID_FILE)
     install(FILES "${ATRINIK_DISCORD_APPLICATION_ID_NORMALIZED}"
         DESTINATION "${INSTALL_SUBDIR_SHARE}/data"
-        RENAME discord-application-id)
+        RENAME discord-application-id COMPONENT AtrinikClient)
 endif ()
 
 include(InstallRequiredSystemLibraries)
@@ -1296,7 +1307,27 @@ if (MINGW)
 endif ()
 
 set(CPACK_DEBIAN_PACKAGE_NAME "atrinik")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6, libgcc-s1, libsdl3-0, libsdl3-image0, libsdl3-ttf0, libcurl4, timidity, zlib1g")
+# Debian owns system libraries; dpkg-shlibdeps adds the linked runtime closure.
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_DEBIAN_PACKAGE_DEPENDS
+    "libsdl3-0 (>= 3.4), libsdl3-image0 (>= 3.2), libsdl3-ttf0 (>= 3.2), libsdl3-mixer0 (>= 3.2.4), libssl3t64 (>= 3.5), ca-certificates, libvulkan1")
+if (PACKAGE_TYPE STREQUAL "deb")
+    if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+            NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+        message(FATAL_ERROR "Classic Debian packages require Linux amd64")
+    endif ()
+    if (NOT CMAKE_INSTALL_PREFIX STREQUAL "/usr")
+        message(FATAL_ERROR "Classic Debian packages require CMAKE_INSTALL_PREFIX=/usr")
+    endif ()
+    set(CPACK_GENERATOR "DEB")
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+    set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+    set(CPACK_PACKAGE_FILE_NAME
+        "atrinik-classic-client-${PACKAGE_VERSION}-linux-amd64")
+    # Exclude sibling protocol development headers and CMake exports.
+    set(CPACK_INSTALL_CMAKE_PROJECTS
+        "${CMAKE_CURRENT_BINARY_DIR};${CMAKE_PROJECT_NAME};AtrinikClient;/")
+endif ()
 set(CPACK_DEBIAN_PACKAGE_DESCRIPTION "Fantasy multiplayer online role-playing game with 2.5D graphics\n .\n Homepage: http://www.atrinik.org/")
 set(CPACK_DEBIAN_PACKAGE_SECTION "games")
 
