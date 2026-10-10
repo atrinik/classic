@@ -20,23 +20,32 @@ licenses remain in `/usr/local/share/licenses/`.
 
 The destination uses the digest-pinned Ubuntu base in
 [`server/Dockerfile`](../server/Dockerfile) and the signed `20260810T000000Z`
-snapshot. Dockerfile is the sole owner of the runtime base image pin, so
-Dependabot can update it without synchronizing a duplicate lock field. The
-provider lock continues to verify the copied libraries and installed package
-closure; a new base must still pass the actual assembly checks below.
+snapshot. Dockerfile is the sole owner of the runtime base image pin. The base
+and producer package closure must be qualified together: a newer base can carry
+utility packages with exact dependencies on newer versions of locked application
+libraries. The restored compatible base permits installation without package
+downgrades. A base update must pass the actual assembly checks below; changing an
+image digest alone does not qualify its installed package dependencies.
 A public distro CA bundle is copied from the compiler
 stage before HTTPS package acquisition, then the locked `ca-certificates` package
 owns runtime system trust. HTTPS peer verification and APT Release signature and
 package hash verification remain enabled. Historical Release expiry is disabled
 for this fixed snapshot only. The runtime installs exact versions from the lock,
 including the complete selected `Depends`/`Pre-Depends` graph for curl and the
-Python/server/plugin runtime roots. The 67-package closure comes from the actual
-published-provider source-9136 server/plugin/Python inventory, receipt hash
+Python/server/plugin runtime roots. The original 67-package closure comes from
+the actual published-provider source-9136 server/plugin/Python inventory, receipt hash
 `b70a977a3ffaf4c2d3d3fefd9a6e4a1cff4ee63692024a68418c5d6c22dfcd3b`.
 The lock retains each dependency expression and its installed, version-checked
 alternative or virtual provider selection; graph reachability must match the exact
-locked package set. This includes indirect GD image/X11 libraries, Python FFI and
-compression libraries, and `openssl-provider-legacy` because the actual
+locked package set. The complete 86-package closure additionally locks the base's
+`bsdutils`, `login`, `mount`, and `util-linux` roots and their selected dependencies
+from the same published producer. Its recorded package inventory receipt is
+`source_4be36_base_family_closure` in the lock. Every selected package version must
+satisfy its recorded dependency expression, including util-linux's exact
+`libuuid1`, `libblkid1`, `libmount1`, and `libsmartcols1` relations. The qualified
+application package versions and copied provider bytes remain unchanged.
+The application closure includes indirect GD image/X11 libraries, Python FFI
+and compression libraries, and `openssl-provider-legacy` because the actual
 `libssl3t64` package declares that dependency. This is package dependency closure,
 not a Classic call to load an optional OpenSSL provider. It never installs distro
 `libcurl4t64` over the qualified provider.

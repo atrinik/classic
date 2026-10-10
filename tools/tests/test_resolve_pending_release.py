@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 
 RELEASE_TOOLS = Path(__file__).resolve().parents[1] / "release"
@@ -898,6 +901,230 @@ class ResolvePendingReleaseTests(unittest.TestCase):
                 lambda path: draft(),
                 deleted.append,
             )
+        self.assertEqual(deleted, [])
+
+
+class ExactRetirementGuardTests(unittest.TestCase):
+    tag = "v5.80.0"
+    commit = "24bee6c8a830aa7372a30be6b842210b07639f73"
+    current = "c" * 40
+    release_id = 409250858
+    run_id = 38092568098
+
+    def setUp(self) -> None:
+        self.policy = json.loads(resolve_pending_release.POLICY.read_text())["failed_releases"]
+        self.disposition = self.policy[self.tag]
+        self.run = {
+            "id": self.run_id, "name": "Package Release",
+            "path": ".github/workflows/package-release.yml", "event": "workflow_dispatch",
+            "status": "completed", "conclusion": "failure", "run_attempt": 1,
+            "head_sha": self.commit, "head_branch": self.tag,
+            "repository": {"full_name": "atrinik/classic"},
+            "head_repository": {"full_name": "atrinik/classic"},
+            "created_at": "2026-10-10T22:44:52Z",
+        }
+        self.runs = [copy.deepcopy(self.run)]
+        self.jobs = [
+            {"name": resolve_pending_release.WINDOWS_JOB, "conclusion": "success"},
+            {"name": resolve_pending_release.IMAGE_JOB, "conclusion": "failure"},
+            {"name": resolve_pending_release.CANDIDATE_FINALIZER_JOB, "conclusion": "skipped"},
+            {"name": resolve_pending_release.PUBLISH_JOB, "conclusion": "skipped"},
+        ]
+        self.artifacts = [{"name": "release-client-linux-v5.80.0"}]
+        self.versions = []
+        self.requests = []
+        self.inventory_override = None
+        self.release = draft(id=self.release_id, tag_name=self.tag)
+        self.ref = {"ref": "refs/heads/main", "object": {"type": "commit", "sha": self.current}}
+
+    def request(self, path):
+        self.requests.append(path)
+        if "/jobs?" in path:
+            return {"total_count": len(self.jobs), "jobs": self.jobs}
+        if "/artifacts?" in path:
+            return {"total_count": len(self.artifacts), "artifacts": self.artifacts}
+        if "/actions/workflows/" in path:
+            self.assertNotIn("status=", path)
+            filters = parse_qs(urlsplit(path).query)
+            selected = self.runs
+            if "branch" in filters:
+                self.assertNotIn("created", filters)
+                selected = [run for run in self.runs if run.get("head_branch") == filters["branch"][0]]
+            elif "head_sha" in filters:
+                self.assertNotIn("created", filters)
+                selected = [run for run in self.runs if run.get("head_sha") == filters["head_sha"][0]]
+            else:
+                self.assertEqual(filters.get("created"), [">=2026-10-10T22:44:52Z"])
+                selected = [run for run in self.runs if run.get("created_at", "") >= "2026-10-10T22:44:52Z"]
+            return self.inventory_override or {"total_count": len(selected), "workflow_runs": selected}
+        if "/actions/runs/" in path:
+            self.assertTrue(path.endswith(str(self.run_id)))
+            return self.run
+        if "/packages/" in path:
+            return self.versions
+        if path.endswith("git/ref/heads/main"):
+            return self.ref
+        if path.endswith(f"releases/{self.release_id}"):
+            return self.release
+        raise AssertionError(path)
+
+    def guard(self):
+        with patch.object(resolve_pending_release, "is_ancestor", return_value=True):
+            resolve_pending_release.validate_retirement_guard(
+                "atrinik/classic", self.tag, self.current, self.disposition, self.request)
+
+    def test_incident_policy_selects_only_the_exact_unpublished_failure(self):
+        checked = []
+        decision = resolve_pending_release.resolve(
+            [self.release], self.policy, lambda tag: self.commit,
+            lambda run, windows, image: checked.append((run, windows, image)))
+        self.assertEqual(decision, {"action": "delete-empty-draft", "tag": self.tag,
+                                    "release_id": str(self.release_id)})
+        self.assertEqual(checked, [(self.run_id, "success", "failure")])
+        self.guard()
+        self.assertTrue(any("/packages/" in path for path in self.requests))
+        self.assertTrue(self.requests[-1].endswith("git/ref/heads/main"))
+
+    def test_incident_rejects_changed_draft_source_assets_and_multiple_drafts(self):
+        cases = (([draft(id=self.release_id + 1, tag_name=self.tag)], self.commit),
+                 ([draft(id=self.release_id, tag_name=self.tag, assets=[{"name": "partial.deb"}])], self.commit),
+                 ([draft(id=self.release_id, tag_name=self.tag, draft=False)], self.commit),
+                 ([self.release], "b" * 40), ([self.release, draft()], self.commit))
+        for releases, source in cases:
+            with self.subTest(releases=releases, source=source), self.assertRaises(
+                    resolve_pending_release.PendingReleaseError):
+                resolve_pending_release.resolve(releases, self.policy, lambda tag: source,
+                                                lambda run, windows, image: None)
+
+    def test_any_additional_queued_failed_successful_or_main_lineage_run_stops_retirement(self):
+        for branch, status, conclusion in ((self.tag, "queued", None),
+                (self.tag, "completed", "failure"), (self.tag, "completed", "success"),
+                ("main", "in_progress", None), ("v5.81.0", "completed", "success")):
+            self.runs = [copy.deepcopy(self.run), self.run | {
+                "id": self.run_id + 1, "head_branch": branch, "head_sha": self.current,
+                "status": status, "conclusion": conclusion}]
+            with self.subTest(branch=branch, status=status), self.assertRaisesRegex(
+                    resolve_pending_release.PendingReleaseError, "additional or changed"):
+                self.guard()
+
+    def test_earlier_tag_or_source_runs_cannot_hide_outside_lineage_time_window(self):
+        for branch, source, status, conclusion in (
+                (self.tag, self.current, "completed", "success"),
+                (self.tag, self.commit, "in_progress", None),
+                ("main", self.commit, "completed", "failure")):
+            self.runs = [copy.deepcopy(self.run), self.run | {
+                "id": self.run_id - 1, "head_branch": branch, "head_sha": source,
+                "status": status, "conclusion": conclusion, "created_at": "2026-10-09T12:00:00Z"}]
+            with self.subTest(branch=branch, status=status), self.assertRaisesRegex(
+                    resolve_pending_release.PendingReleaseError, "additional or changed"):
+                self.guard()
+
+    def test_each_exact_query_requires_its_expected_runs_and_correct_filter(self):
+        original = self.request
+        for selector in ("branch=", "head_sha="):
+            for response in ({"total_count": 0, "workflow_runs": []},
+                    {"total_count": 1, "workflow_runs": [self.run | {
+                        "head_branch": "feature", "head_sha": self.current}]}):
+                def request(path):
+                    return response if selector in path else original(path)
+                with self.subTest(selector=selector, response=response), patch.object(
+                        resolve_pending_release, "is_ancestor", return_value=True), self.assertRaises(
+                        resolve_pending_release.PendingReleaseError):
+                    resolve_pending_release.validate_retirement_guard(
+                        "atrinik/classic", self.tag, self.current, self.disposition, request)
+
+    def test_run_attempt_source_status_or_repository_drift_fails(self):
+        original = copy.deepcopy(self.run)
+        for changes in ({"run_attempt": 2}, {"run_attempt": True}, {"head_sha": self.current},
+                {"status": "queued"}, {"conclusion": "success"}, {"head_branch": "feature"},
+                {"repository": {"full_name": "fork/classic"}},
+                {"head_repository": {"full_name": "fork/classic"}}, {"created_at": "invalid"}):
+            self.run = original | changes
+            with self.subTest(changes=changes), self.assertRaises(resolve_pending_release.PendingReleaseError):
+                self.guard()
+
+    def test_successful_candidate_publication_or_changed_build_jobs_fail(self):
+        original = copy.deepcopy(self.jobs)
+        for index, conclusion in ((0, "failure"), (1, "success"), (2, "success"), (3, "success")):
+            self.jobs = copy.deepcopy(original)
+            self.jobs[index]["conclusion"] = conclusion
+            with self.subTest(index=index), self.assertRaisesRegex(
+                    resolve_pending_release.PendingReleaseError, "failed-candidate evidence"):
+                self.guard()
+
+    def test_even_expired_complete_candidate_artifacts_block_retirement(self):
+        for expired in (True, False):
+            self.artifacts = [{"name": "complete-release-candidate-v5.80.0", "expired": expired}]
+            with self.subTest(expired=expired), self.assertRaisesRegex(
+                    resolve_pending_release.PendingReleaseError, "complete release candidate"):
+                self.guard()
+
+    def test_incomplete_oversize_missing_duplicate_or_untrusted_run_inventory_fails(self):
+        for response in ({"total_count": 101, "workflow_runs": [self.run]},
+                {"total_count": 2, "workflow_runs": [self.run]},
+                {"total_count": 0, "workflow_runs": []},
+                {"total_count": 2, "workflow_runs": [self.run, self.run]},
+                {"total_count": 1, "workflow_runs": [self.run | {"event": "pull_request"}]},
+                {"total_count": 1, "workflow_runs": [self.run | {"status": "queued"}]}):
+            self.inventory_override = response
+            with self.subTest(response=response), self.assertRaises(resolve_pending_release.PendingReleaseError):
+                self.guard()
+
+    def test_registry_existing_image_malformed_or_exhausted_inventory_fails(self):
+        version = {"name": "sha256:" + "a" * 64,
+                   "metadata": {"container": {"tags": ["5.80.0"]}}}
+        for versions in ([version], {"message": "Forbidden"}, [{"name": "invalid"}],
+                         [version | {"metadata": {"container": {"tags": []}}}] * 100):
+            self.versions = versions
+            with self.subTest(versions_type=type(versions), length=len(versions)), self.assertRaises(
+                    resolve_pending_release.PendingReleaseError):
+                self.guard()
+        pages = [path for path in self.requests if "/packages/" in path]
+        self.assertLessEqual(len(pages), resolve_pending_release.MAX_API_PAGES + 3)
+
+    def test_registry_permissions_failure_is_not_absence(self):
+        request = self.request
+        def unavailable(path):
+            if "/packages/" in path:
+                raise resolve_pending_release.PendingReleaseError("HTTP 403 missing packages permission")
+            return request(path)
+        with patch.object(resolve_pending_release, "is_ancestor", return_value=True), self.assertRaisesRegex(
+                resolve_pending_release.PendingReleaseError, "HTTP 403"):
+            resolve_pending_release.validate_retirement_guard(
+                "atrinik/classic", self.tag, self.current, self.disposition, unavailable)
+
+    def test_changed_main_or_guard_policy_fails(self):
+        self.ref["object"]["sha"] = "b" * 40
+        with self.assertRaisesRegex(resolve_pending_release.PendingReleaseError, "main changed"):
+            self.guard()
+        self.ref["object"]["sha"] = self.current
+        self.disposition = self.disposition | {"retirement_guard": {"package_run_inventory": "unknown"}}
+        with self.assertRaisesRegex(resolve_pending_release.PendingReleaseError, "invalid exact"):
+            self.guard()
+
+    def test_repository_resolution_runs_guard_and_requires_main(self):
+        with patch.object(resolve_pending_release, "command", return_value=self.current), patch.object(
+                resolve_pending_release, "list_drafts", return_value=[self.release]), patch.object(
+                resolve_pending_release, "resolve", return_value={"action": "delete-empty-draft",
+                    "tag": self.tag, "release_id": str(self.release_id)}), patch.object(
+                resolve_pending_release, "api", side_effect=self.request), patch.object(
+                resolve_pending_release, "is_ancestor", return_value=True):
+            self.assertEqual(resolve_pending_release.resolve_repository("atrinik/classic")["action"],
+                             "delete-empty-draft")
+            with self.assertRaisesRegex(resolve_pending_release.PendingReleaseError, "requires current main"):
+                resolve_pending_release.resolve_repository("atrinik/classic", "5.80.x")
+
+    def test_guarded_delete_repeats_inventory_and_never_deletes_after_new_evidence(self):
+        decision = {"action": "delete-empty-draft", "tag": self.tag, "release_id": str(self.release_id)}
+        self.guard()  # Initial disposition was safe, but it is not cached authority.
+        self.runs.append(self.run | {"id": self.run_id + 1, "status": "queued", "conclusion": None})
+        deleted = []
+        def resolve_now():
+            self.guard()
+            return decision
+        with self.assertRaises(resolve_pending_release.PendingReleaseError):
+            resolve_pending_release.delete_policy_listed_empty_draft(
+                "atrinik/classic", self.tag, self.release_id, resolve_now, self.request, deleted.append)
         self.assertEqual(deleted, [])
 
 

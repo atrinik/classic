@@ -9,7 +9,8 @@
     "payload": "c5e71a9bf7e8f80fa80887d36057ad59942c40a85b8b122d18b450964e61e89b",
     "packages": "e8e8121787389444029abc0e2f9225e7456ce11e74f3908f615f900da3677fd2",
     "runtime_closure": "6739957d17e0fe6e780c4daaccb1d2d82422833c603d219aace58ed62f59c10f",
-    "source_9136_server_python_closure": "b70a977a3ffaf4c2d3d3fefd9a6e4a1cff4ee63692024a68418c5d6c22dfcd3b"
+    "source_9136_server_python_closure": "b70a977a3ffaf4c2d3d3fefd9a6e4a1cff4ee63692024a68418c5d6c22dfcd3b",
+    "source_4be36_base_family_closure": "7c6d141dd048015fd4a07c68adbb78e30d057305ff40a5c6c0acc5b6cd814d51"
   },
   "files": [
     {
@@ -77,6 +78,11 @@
   ],
   "packages": [
     {
+      "Package": "bsdutils",
+      "Version": "1:2.41.3-3ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
       "Package": "ca-certificates",
       "Version": "20260601~26.04.1",
       "Architecture": "all"
@@ -112,6 +118,21 @@
       "Architecture": "amd64"
     },
     {
+      "Package": "libaudit-common",
+      "Version": "1:4.1.2-1build1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "libaudit1",
+      "Version": "1:4.1.2-1build1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libblkid1",
+      "Version": "2.41.3-3ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
       "Package": "libbrotli1",
       "Version": "1.2.0-3build1",
       "Architecture": "amd64"
@@ -134,6 +155,11 @@
     {
       "Package": "libc6",
       "Version": "2.43-2ubuntu2.3",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libcap-ng0",
+      "Version": "0.8.5-4build5",
       "Architecture": "amd64"
     },
     {
@@ -232,6 +258,11 @@
       "Architecture": "amd64"
     },
     {
+      "Package": "libmount1",
+      "Version": "2.41.3-3ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
       "Package": "libncursesw6",
       "Version": "6.6+20251231-1",
       "Architecture": "amd64"
@@ -239,6 +270,31 @@
     {
       "Package": "libnghttp2-14",
       "Version": "1.68.0-2ubuntu0.2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpam-modules",
+      "Version": "1.7.0-5ubuntu3.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpam-modules-bin",
+      "Version": "1.7.0-5ubuntu3.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpam-runtime",
+      "Version": "1.7.0-5ubuntu3.1",
+      "Architecture": "all"
+    },
+    {
+      "Package": "libpam0g",
+      "Version": "1.7.0-5ubuntu3.1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libpcre2-8-0",
+      "Version": "10.46-1build1",
       "Architecture": "amd64"
     },
     {
@@ -277,8 +333,18 @@
       "Architecture": "amd64"
     },
     {
+      "Package": "libselinux1",
+      "Version": "3.9-4build1",
+      "Architecture": "amd64"
+    },
+    {
       "Package": "libsharpyuv0",
       "Version": "1.5.0-0.1build1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libsmartcols1",
+      "Version": "2.41.3-3ubuntu2",
       "Architecture": "amd64"
     },
     {
@@ -297,6 +363,11 @@
       "Architecture": "amd64"
     },
     {
+      "Package": "libsystemd0",
+      "Version": "259.5-0ubuntu3.3",
+      "Architecture": "amd64"
+    },
+    {
       "Package": "libtiff6",
       "Version": "4.7.0-3ubuntu4",
       "Architecture": "amd64"
@@ -304,6 +375,11 @@
     {
       "Package": "libtinfo6",
       "Version": "6.6+20251231-1",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "libudev1",
+      "Version": "259.5-0ubuntu3.3",
       "Architecture": "amd64"
     },
     {
@@ -357,9 +433,24 @@
       "Architecture": "amd64"
     },
     {
+      "Package": "login",
+      "Version": "1:4.16.0-2+really2.41.3-3ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
+      "Package": "login.defs",
+      "Version": "1:4.17.4-2ubuntu3",
+      "Architecture": "all"
+    },
+    {
       "Package": "media-types",
       "Version": "14.0.0build1",
       "Architecture": "all"
+    },
+    {
+      "Package": "mount",
+      "Version": "2.41.3-3ubuntu2",
+      "Architecture": "amd64"
     },
     {
       "Package": "netbase",
@@ -407,6 +498,11 @@
       "Architecture": "all"
     },
     {
+      "Package": "util-linux",
+      "Version": "2.41.3-3ubuntu2",
+      "Architecture": "amd64"
+    },
+    {
       "Package": "zlib1g",
       "Version": "1:1.3.dfsg+really1.3.1-1ubuntu3",
       "Architecture": "amd64"
@@ -427,6 +523,7 @@
     "loader": "/lib64/ld-linux-x86-64.so.2"
   },
   "package_roots": [
+    "bsdutils",
     "ca-certificates",
     "libbrotli1",
     "libc-bin",
@@ -445,14 +542,21 @@
     "libssl3t64",
     "libunistring5",
     "libzstd1",
+    "login",
+    "mount",
     "openssl",
     "python3",
     "python3-minimal",
     "python3.14",
     "python3.14-minimal",
+    "util-linux",
     "zlib1g"
   ],
   "package_dependencies": {
+    "bsdutils": [
+      "libc6",
+      "libsystemd0"
+    ],
     "ca-certificates": [
       "debconf",
       "openssl"
@@ -469,6 +573,15 @@
     "libaom3": [
       "libc6"
     ],
+    "libaudit-common": [],
+    "libaudit1": [
+      "libaudit-common",
+      "libc6",
+      "libcap-ng0"
+    ],
+    "libblkid1": [
+      "libc6"
+    ],
     "libbrotli1": [
       "libc6"
     ],
@@ -482,6 +595,9 @@
     "libc6": [
       "libc-gconv-modules-extra",
       "libgcc-s1"
+    ],
+    "libcap-ng0": [
+      "libc6"
     ],
     "libcrypt1": [
       "libc6"
@@ -571,11 +687,47 @@
     "libminiupnpc21": [
       "libc6"
     ],
+    "libmount1": [
+      "libblkid1",
+      "libc6",
+      "libselinux1"
+    ],
     "libncursesw6": [
       "libc6",
       "libtinfo6"
     ],
     "libnghttp2-14": [
+      "libc6"
+    ],
+    "libpam-modules": [
+      "debconf",
+      "libaudit1",
+      "libc6",
+      "libcrypt1",
+      "libdb5.3t64",
+      "libpam-modules-bin",
+      "libpam0g",
+      "libselinux1",
+      "libsystemd0"
+    ],
+    "libpam-modules-bin": [
+      "libaudit1",
+      "libc6",
+      "libcrypt1",
+      "libpam0g",
+      "libselinux1",
+      "libsystemd0"
+    ],
+    "libpam-runtime": [
+      "debconf",
+      "libpam-modules"
+    ],
+    "libpam0g": [
+      "debconf",
+      "libaudit1",
+      "libc6"
+    ],
+    "libpcre2-8-0": [
       "libc6"
     ],
     "libpng16-16t64": [
@@ -622,7 +774,14 @@
       "libtinfo6",
       "readline-common"
     ],
+    "libselinux1": [
+      "libc6",
+      "libpcre2-8-0"
+    ],
     "libsharpyuv0": [
+      "libc6"
+    ],
+    "libsmartcols1": [
       "libc6"
     ],
     "libsqlite3-0": [
@@ -639,6 +798,9 @@
       "libc6",
       "libgcc-s1"
     ],
+    "libsystemd0": [
+      "libc6"
+    ],
     "libtiff6": [
       "libc6",
       "libdeflate0",
@@ -651,6 +813,9 @@
       "zlib1g"
     ],
     "libtinfo6": [
+      "libc6"
+    ],
+    "libudev1": [
       "libc6"
     ],
     "libunistring5": [
@@ -687,7 +852,23 @@
     "libzstd1": [
       "libc6"
     ],
+    "login": [
+      "libaudit1",
+      "libc6",
+      "libpam-modules",
+      "libpam-runtime",
+      "libpam0g",
+      "login.defs"
+    ],
+    "login.defs": [],
     "media-types": [],
+    "mount": [
+      "libblkid1",
+      "libc6",
+      "libmount1",
+      "libselinux1",
+      "libsmartcols1"
+    ],
     "netbase": [],
     "openssl": [
       "libc6",
@@ -721,11 +902,40 @@
     "tzdata": [
       "debconf"
     ],
+    "util-linux": [
+      "libblkid1",
+      "libc6",
+      "libcap-ng0",
+      "libcrypt1",
+      "libmount1",
+      "libpam-modules",
+      "libpam-runtime",
+      "libpam0g",
+      "libselinux1",
+      "libsmartcols1",
+      "libsystemd0",
+      "libtinfo6",
+      "libudev1",
+      "libuuid1"
+    ],
     "zlib1g": [
       "libc6"
     ]
   },
   "package_dependency_selections": {
+    "bsdutils": {
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libsystemd0 (>= 254)",
+          "selected": "libsystemd0"
+        }
+      ],
+      "Pre-Depends": []
+    },
     "ca-certificates": {
       "Pre-Depends": [],
       "Depends": [
@@ -778,6 +988,36 @@
         }
       ]
     },
+    "libaudit-common": {
+      "Depends": [],
+      "Pre-Depends": []
+    },
+    "libaudit1": {
+      "Depends": [
+        {
+          "requirement": "libaudit-common (>= 1:4.1.2-1build1)",
+          "selected": "libaudit-common"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libcap-ng0 (>= 0.7.9)",
+          "selected": "libcap-ng0"
+        }
+      ],
+      "Pre-Depends": []
+    },
+    "libblkid1": {
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ],
+      "Pre-Depends": []
+    },
     "libbrotli1": {
       "Pre-Depends": [],
       "Depends": [
@@ -825,6 +1065,15 @@
           "selected": "libc-gconv-modules-extra"
         }
       ]
+    },
+    "libcap-ng0": {
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ],
+      "Pre-Depends": []
     },
     "libcrypt1": {
       "Pre-Depends": [],
@@ -1121,6 +1370,23 @@
         }
       ]
     },
+    "libmount1": {
+      "Depends": [
+        {
+          "requirement": "libblkid1 (= 2.41.3-3ubuntu2)",
+          "selected": "libblkid1"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libselinux1 (>= 3.1~)",
+          "selected": "libselinux1"
+        }
+      ],
+      "Pre-Depends": []
+    },
     "libncursesw6": {
       "Pre-Depends": [],
       "Depends": [
@@ -1142,6 +1408,119 @@
           "selected": "libc6"
         }
       ]
+    },
+    "libpam-modules": {
+      "Depends": [],
+      "Pre-Depends": [
+        {
+          "requirement": "libaudit1 (>= 1:2.2.1)",
+          "selected": "libaudit1"
+        },
+        {
+          "requirement": "libc6 (>= 2.43)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libcrypt1 (>= 1:4.3.0)",
+          "selected": "libcrypt1"
+        },
+        {
+          "requirement": "libdb5.3t64",
+          "selected": "libdb5.3t64"
+        },
+        {
+          "requirement": "libpam0g (>= 1.4.1)",
+          "selected": "libpam0g"
+        },
+        {
+          "requirement": "libselinux1 (>= 3.1~)",
+          "selected": "libselinux1"
+        },
+        {
+          "requirement": "libsystemd0 (>= 254)",
+          "selected": "libsystemd0"
+        },
+        {
+          "requirement": "debconf (>= 0.5) | debconf-2.0",
+          "selected": "debconf"
+        },
+        {
+          "requirement": "libpam-modules-bin (= 1.7.0-5ubuntu3.1)",
+          "selected": "libpam-modules-bin"
+        }
+      ]
+    },
+    "libpam-modules-bin": {
+      "Depends": [
+        {
+          "requirement": "libaudit1 (>= 1:2.2.1)",
+          "selected": "libaudit1"
+        },
+        {
+          "requirement": "libc6 (>= 2.43)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libcrypt1 (>= 1:4.3.0)",
+          "selected": "libcrypt1"
+        },
+        {
+          "requirement": "libpam0g (>= 0.99.7.1)",
+          "selected": "libpam0g"
+        },
+        {
+          "requirement": "libselinux1 (>= 3.1~)",
+          "selected": "libselinux1"
+        },
+        {
+          "requirement": "libsystemd0 (>= 254)",
+          "selected": "libsystemd0"
+        }
+      ],
+      "Pre-Depends": []
+    },
+    "libpam-runtime": {
+      "Depends": [
+        {
+          "requirement": "debconf (>= 0.5) | debconf-2.0",
+          "selected": "debconf"
+        },
+        {
+          "requirement": "debconf (>= 1.5.19) | cdebconf",
+          "selected": "debconf"
+        },
+        {
+          "requirement": "libpam-modules (>= 1.0.1-6)",
+          "selected": "libpam-modules"
+        }
+      ],
+      "Pre-Depends": []
+    },
+    "libpam0g": {
+      "Depends": [
+        {
+          "requirement": "libaudit1 (>= 1:2.2.1)",
+          "selected": "libaudit1"
+        },
+        {
+          "requirement": "libc6 (>= 2.43)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "debconf (>= 0.5) | debconf-2.0",
+          "selected": "debconf"
+        }
+      ],
+      "Pre-Depends": []
+    },
+    "libpcre2-8-0": {
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.34)",
+          "selected": "libc6"
+        }
+      ],
+      "Pre-Depends": []
     },
     "libpng16-16t64": {
       "Pre-Depends": [],
@@ -1298,6 +1677,19 @@
         }
       ]
     },
+    "libselinux1": {
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libpcre2-8-0 (>= 10.22)",
+          "selected": "libpcre2-8-0"
+        }
+      ],
+      "Pre-Depends": []
+    },
     "libsharpyuv0": {
       "Pre-Depends": [],
       "Depends": [
@@ -1306,6 +1698,15 @@
           "selected": "libc6"
         }
       ]
+    },
+    "libsmartcols1": {
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ],
+      "Pre-Depends": []
     },
     "libsqlite3-0": {
       "Pre-Depends": [],
@@ -1353,6 +1754,15 @@
           "selected": "libgcc-s1"
         }
       ]
+    },
+    "libsystemd0": {
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.39)",
+          "selected": "libc6"
+        }
+      ],
+      "Pre-Depends": []
     },
     "libtiff6": {
       "Pre-Depends": [],
@@ -1403,6 +1813,15 @@
           "selected": "libc6"
         }
       ]
+    },
+    "libudev1": {
+      "Depends": [
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        }
+      ],
+      "Pre-Depends": []
     },
     "libunistring5": {
       "Pre-Depends": [],
@@ -1513,9 +1932,68 @@
         }
       ]
     },
+    "login": {
+      "Depends": [
+        {
+          "requirement": "libpam-modules",
+          "selected": "libpam-modules"
+        },
+        {
+          "requirement": "libpam-runtime",
+          "selected": "libpam-runtime"
+        },
+        {
+          "requirement": "libaudit1 (>= 1:2.2.1)",
+          "selected": "libaudit1"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libpam0g (>= 0.99.7.1)",
+          "selected": "libpam0g"
+        }
+      ],
+      "Pre-Depends": [
+        {
+          "requirement": "login.defs (>= 1:4.16.0-1~)",
+          "selected": "login.defs"
+        }
+      ]
+    },
+    "login.defs": {
+      "Depends": [],
+      "Pre-Depends": []
+    },
     "media-types": {
       "Pre-Depends": [],
       "Depends": []
+    },
+    "mount": {
+      "Depends": [],
+      "Pre-Depends": [
+        {
+          "requirement": "libblkid1 (= 2.41.3-3ubuntu2)",
+          "selected": "libblkid1"
+        },
+        {
+          "requirement": "libc6 (>= 2.38)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libmount1 (= 2.41.3-3ubuntu2)",
+          "selected": "libmount1"
+        },
+        {
+          "requirement": "libselinux1 (>= 3.1~)",
+          "selected": "libselinux1"
+        },
+        {
+          "requirement": "libsmartcols1 (= 2.41.3-3ubuntu2)",
+          "selected": "libsmartcols1"
+        }
+      ]
     },
     "netbase": {
       "Pre-Depends": [],
@@ -1627,6 +2105,67 @@
         {
           "requirement": "debconf (>= 0.5) | debconf-2.0",
           "selected": "debconf"
+        }
+      ]
+    },
+    "util-linux": {
+      "Depends": [],
+      "Pre-Depends": [
+        {
+          "requirement": "libpam-modules",
+          "selected": "libpam-modules"
+        },
+        {
+          "requirement": "libpam-runtime",
+          "selected": "libpam-runtime"
+        },
+        {
+          "requirement": "libblkid1 (= 2.41.3-3ubuntu2)",
+          "selected": "libblkid1"
+        },
+        {
+          "requirement": "libc6 (>= 2.42)",
+          "selected": "libc6"
+        },
+        {
+          "requirement": "libcap-ng0 (>= 0.7.9)",
+          "selected": "libcap-ng0"
+        },
+        {
+          "requirement": "libcrypt1 (>= 1:4.1.0)",
+          "selected": "libcrypt1"
+        },
+        {
+          "requirement": "libmount1 (= 2.41.3-3ubuntu2)",
+          "selected": "libmount1"
+        },
+        {
+          "requirement": "libpam0g (>= 0.99.7.1)",
+          "selected": "libpam0g"
+        },
+        {
+          "requirement": "libselinux1 (>= 3.1~)",
+          "selected": "libselinux1"
+        },
+        {
+          "requirement": "libsmartcols1 (= 2.41.3-3ubuntu2)",
+          "selected": "libsmartcols1"
+        },
+        {
+          "requirement": "libsystemd0",
+          "selected": "libsystemd0"
+        },
+        {
+          "requirement": "libtinfo6 (>= 6)",
+          "selected": "libtinfo6"
+        },
+        {
+          "requirement": "libudev1 (>= 183)",
+          "selected": "libudev1"
+        },
+        {
+          "requirement": "libuuid1 (= 2.41.3-3ubuntu2)",
+          "selected": "libuuid1"
         }
       ]
     },

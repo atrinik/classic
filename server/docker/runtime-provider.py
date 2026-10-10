@@ -66,17 +66,44 @@ def validate_lock(lock):
     required_packages = {"libssl3t64", "openssl", "libc6", "libc-bin", "libnghttp2-14",
                          "libidn2-0", "libpsl5t64", "libzstd1", "libbrotli1", "libunistring5",
                          "zlib1g", "ca-certificates", "libgd3", "libminiupnpc21", "libcrypt1",
-                         "libreadline8t64", "python3", "libpython3.14"}
+                         "libreadline8t64", "python3", "libpython3.14", "bsdutils",
+                         "login", "mount", "util-linux", "libblkid1", "libmount1",
+                         "libsmartcols1", "libuuid1"}
     if not required_packages.issubset(packages):
         raise ProviderError("Missing direct or indirect runtime package")
     verify_package_closure(lock["package_roots"], lock["package_dependencies"], lock["packages"])
     selections = lock["package_dependency_selections"]
     if set(selections) != packages:
         raise ProviderError("Incomplete recorded dpkg dependency selections")
+    versions = {row["Package"]: row["Version"] for row in lock["packages"]}
     for name, fields in selections.items():
         selected = {row["selected"] for field in ("Depends", "Pre-Depends") for row in fields[field]}
         if selected != set(lock["package_dependencies"][name]):
             raise ProviderError(f"Recorded dpkg dependency edge mismatch: {name}")
+        for field in ("Depends", "Pre-Depends"):
+            for row in fields[field]:
+                verify_dependency_selection(name, row, versions)
+
+
+def verify_dependency_selection(package, selection, versions):
+    """Check that the locked selection satisfies its recorded dpkg relation."""
+    selected = selection["selected"]
+    for alternative in selection["requirement"].split(" | "):
+        match = re.fullmatch(r"([a-z0-9+.-]+)(?::any)?(?: \((<<|<=|=|>=|>>) ([^()]+)\))?",
+                             alternative)
+        if match is None:
+            raise ProviderError(f"Invalid recorded dpkg dependency: {package}")
+        name, operator, version = match.groups()
+        if name != selected:
+            continue
+        if selected not in versions:
+            break
+        if operator is None or subprocess.run(
+                ["dpkg", "--compare-versions", versions[selected], operator, version],
+                check=False).returncode == 0:
+            return
+        break
+    raise ProviderError(f"Unsatisfied locked dpkg dependency: {package}: {selection['requirement']}")
 
 
 def verify_payload(lock, prefix):
