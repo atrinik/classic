@@ -86,7 +86,7 @@ class LinuxPackageContractTests(unittest.TestCase):
             self.assertFalse((Path(directory) / "build").exists())
 
     @unittest.skipUnless(all(shutil.which(tool) for tool in
-                            ("cmake", "cpack", "dpkg-deb", "dpkg-shlibdeps")),
+                            ("cmake", "cpack", "dpkg-deb", "dpkg-shlibdeps", "file")),
                          "Debian packaging tools are required")
     def test_real_cpack_metadata_and_runtime_payload(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -128,8 +128,14 @@ install(FILES LICENSE.md DESTINATION include/atrinik)
             (source / "data/discord-application-id").write_text("excluded")
             build = Path(directory) / "build"
             def run(*arguments):
-                return subprocess.run(arguments, check=True, capture_output=True, text=True,
-                                      umask=0o077)
+                result = subprocess.run(arguments, capture_output=True, text=True,
+                                        umask=0o077)
+                self.assertEqual(
+                    result.returncode, 0,
+                    f"Command {arguments!r} failed with exit {result.returncode}:\n"
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+                )
+                return result
             run("cmake", "-S", str(source), "-B", str(build),
                 "-DCMAKE_INSTALL_PREFIX=/usr", "-DCMAKE_SYSTEM_PROCESSOR=x86_64")
             config = (build / "CPackConfig.cmake").read_text()
