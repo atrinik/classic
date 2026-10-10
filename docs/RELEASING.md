@@ -223,6 +223,40 @@ unpublished historical evidence. Ordinary semantic analysis selects the next
 version containing the Docker context correction and all later first-parent
 changes.
 
+The `v5.80.0` Package Release run `38092568098` failed while installing the
+server image's runtime provider packages. The base image retained
+`util-linux=2.41.3-3ubuntu2.2`, which requires the same `libuuid1` version,
+while the builder-derived provider lock required `libuuid1=2.41.3-3ubuntu2`.
+The Windows server, Windows client, Debian client, and source package jobs
+succeeded; complete-candidate validation and publication were skipped. The
+2026-10-10 audit found nine run artifacts, no complete release candidate,
+zero draft assets, and no `classic-server:5.80.0` registry manifest. The
+published `5.79.0` manifest remained readable as an independent registry
+access check.
+
+The policy binds only draft `409250858`, tag source
+`24bee6c8a830aa7372a30be6b842210b07639f73`, and failed run `38092568098`.
+Fixing the Dockerfile on main cannot repair the immutable tagged source.
+After the correction and this policy are reviewed and merged, successful main
+validation permits the existing guarded Semantic Release procedure to
+revalidate and remove that exact empty draft, retaining the immutable tag as
+unpublished historical evidence, then select the next semantic version.
+Preparing this policy performs no live draft, tag, image, or asset mutation.
+
+This incident opts into an additional retirement guard without changing the
+older recorded exceptions. On both disposition selection and the guarded
+DELETE path, it re-fetches the exact failed run and attempt, verifies its source
+and skipped candidate/publication jobs, rejects any complete candidate artifact,
+and requires the complete bounded Package Release inventory since that run's
+creation to contain exactly the listed relevant run IDs. Queued, rerun, or
+additional tag/main-lineage runs stop retirement. The current registry inventory
+must prove the versioned server image absent; permission errors, missing pages,
+malformed metadata, or an exhausted bound fail closed. The helper rechecks current
+main before returning, and the existing DELETE helper re-reads the exact empty
+draft immediately before deletion. These checks run under the publication queue;
+they do not make GitHub's release DELETE conditional or permit concurrent manual
+mutations. Local fixtures and this historical audit do not authorize deletion.
+
 If a failed run reached complete-candidate validation but a defect in its
 publication code makes a job rerun impossible, the semantic-release guard
 searches a bounded, paginated window of failed Package Release runs. It

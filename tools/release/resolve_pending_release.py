@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 from typing import Callable
+from urllib.parse import urlencode
+
+from check_registry_version import find_version
 
 from github_release import GitHubReleaseError, invoke, list_releases, parse_json
 
@@ -658,6 +662,129 @@ def delete_policy_listed_empty_draft(
     delete(expected_release_id)
 
 
+def validate_retirement_guard(
+    repository: str,
+    tag: str,
+    current_head: str,
+    disposition: dict[str, object],
+    request: Callable[[str], object],
+) -> None:
+    """Revalidate the opted-in incident before returning any DELETE disposition.
+
+    This is called again by guarded deletion under the existing publication lock.
+    The finite inventory is complete from the oldest listed run's creation time;
+    unlike recovery discovery, it must never silently truncate unknown runs.
+    """
+    guard = disposition.get("retirement_guard")
+    run_ids = disposition.get("failed_package_run_ids")
+    commit = disposition.get("commit")
+    if (
+        repository != "atrinik/classic"
+        or not isinstance(guard, dict)
+        or set(guard) != {"package_run_inventory", "run_attempts"}
+        or guard.get("package_run_inventory") != "exact-tag-and-lineage"
+        or not isinstance(run_ids, list)
+        or not run_ids
+        or any(type(run_id) is not int or run_id <= 0 for run_id in run_ids)
+        or len(set(run_ids)) != len(run_ids)
+        or not isinstance(commit, str)
+        or SHA_RE.fullmatch(commit) is None
+        or not isinstance(guard.get("run_attempts"), dict)
+        or set(guard["run_attempts"]) != {str(run_id) for run_id in run_ids}
+        or any(type(attempt) is not int or attempt <= 0
+               for attempt in guard["run_attempts"].values())
+    ):
+        raise PendingReleaseError("invalid exact failed-release retirement guard")
+
+    oldest = None
+    expected_runs: dict[int, dict[str, object]] = {}
+    for run_id in run_ids:
+        run = _validate_package_run(
+            repository, run_id, request(f"repos/{repository}/actions/runs/{run_id}")
+        )
+        if (run.get("id") != run_id or run.get("status") != "completed"
+                or run.get("repository", {}).get("full_name") != repository
+                or run.get("head_sha") != commit
+                or run.get("head_branch") not in {tag, "main"}
+                or type(run.get("run_attempt")) is not int
+                or run.get("run_attempt") != guard["run_attempts"][str(run_id)]):
+            raise PendingReleaseError("failed package run no longer matches the exact source/attempt")
+        created_at = run.get("created_at")
+        try:
+            created = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+        except (TypeError, ValueError) as error:
+            raise PendingReleaseError("failed package run has an invalid creation time") from error
+        oldest = min(oldest, created) if oldest is not None else created
+        expected_runs[run_id] = run
+        # Re-read jobs in this fresh inventory pass, not just the earlier resolver.
+        validate_failed_run(repository, run_id, disposition["windows_server_conclusion"],
+                            disposition["server_image_conclusion"], request)
+        for artifact in _collect_artifacts(repository, run_id, request):
+            name = artifact.get("name")
+            if not isinstance(name, str) or not name:
+                raise PendingReleaseError("failed package run has an invalid artifact inventory")
+            if name.startswith("complete-release-candidate-"):
+                raise PendingReleaseError("failed package run retains a complete release candidate")
+
+    query = urlencode({"event": "workflow_dispatch",
+                       "created": ">=" + oldest.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                       "per_page": 100})
+    inventory = request(f"repos/{repository}/actions/workflows/package-release.yml/runs?{query}")
+    if (not isinstance(inventory, dict) or type(inventory.get("total_count")) is not int
+            or not isinstance(inventory.get("workflow_runs"), list)
+            or not 0 <= inventory["total_count"] <= 100
+            or inventory["total_count"] != len(inventory["workflow_runs"])):
+        raise PendingReleaseError("retirement requires a complete bounded Package Release inventory")
+    relevant_ids: set[int] = set()
+    seen_ids: set[int] = set()
+    for run in inventory["workflow_runs"]:
+        if (not isinstance(run, dict) or type(run.get("id")) is not int or run["id"] <= 0
+                or run["id"] in seen_ids or run.get("name") != PACKAGE_RUN_NAME
+                or run.get("path") != PACKAGE_WORKFLOW_PATH
+                or run.get("event") != "workflow_dispatch"
+                or run.get("repository", {}).get("full_name") != repository
+                or run.get("head_repository", {}).get("full_name") != repository
+                or not isinstance(run.get("head_sha"), str)
+                or SHA_RE.fullmatch(run["head_sha"]) is None):
+            raise PendingReleaseError("retirement received an untrusted Package Release inventory")
+        seen_ids.add(run["id"])
+        relevant = (run.get("head_branch") in {tag, "main"} or run["head_sha"] == commit
+                    or (is_ancestor(commit, run["head_sha"])
+                        and is_ancestor(run["head_sha"], current_head)))
+        if relevant:
+            relevant_ids.add(run["id"])
+            expected = expected_runs.get(run["id"])
+            if expected is None or any(run.get(key) != expected.get(key) for key in
+                    ("head_sha", "head_branch", "run_attempt", "status", "conclusion", "created_at")):
+                raise PendingReleaseError("Package Release inventory has an additional or changed relevant run")
+    if relevant_ids != set(run_ids):
+        raise PendingReleaseError("Package Release inventory no longer contains exactly the listed failed runs")
+
+    # Transport, permissions, missing-package and malformed responses are errors,
+    # never absence. The workflow has packages:read; no broader credential is used.
+    for page in range(1, MAX_API_PAGES + 1):
+        versions = request("orgs/atrinik/packages/container/classic-server/versions"
+                           f"?per_page=100&page={page}")
+        if not isinstance(versions, list) or len(versions) > 100:
+            raise PendingReleaseError("cannot prove retired server image is absent")
+        try:
+            digest = find_version(versions, tag.removeprefix("v"))
+        except RuntimeError as error:
+            raise PendingReleaseError("cannot prove retired server image is absent") from error
+        if digest is not None:
+            raise PendingReleaseError("retired release already has a published server image")
+        if len(versions) < 100:
+            break
+    else:
+        raise PendingReleaseError("retirement registry inventory exceeds inspection bound")
+
+    ref = request(f"repos/{repository}/git/ref/heads/main")
+    if (not isinstance(ref, dict) or ref.get("ref") != "refs/heads/main"
+            or ref.get("object", {}).get("type") != "commit"
+            or ref["object"].get("sha") != current_head):
+        raise PendingReleaseError("main changed during failed-release retirement validation")
+
+
 def resolve_repository(repository: str, branch: str = "main") -> dict[str, str]:
     branch = validate_branch(branch)
     current_head = command("git", "rev-parse", "HEAD")
@@ -687,6 +814,12 @@ def resolve_repository(repository: str, branch: str = "main") -> dict[str, str]:
             repository, tag, tag_commit(tag), current_head, api
         ),
     )
+    if values["action"] == "delete-empty-draft":
+        disposition = policy["failed_releases"][values["tag"]]
+        if "retirement_guard" in disposition:
+            if branch != "main":
+                raise PendingReleaseError("exact failed-release retirement requires current main")
+            validate_retirement_guard(repository, values["tag"], current_head, disposition, api)
     if values["tag"] and not is_ancestor(
         f"refs/tags/{values['tag']}^{{commit}}", current_head
     ):

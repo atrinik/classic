@@ -421,6 +421,18 @@ def verify_release_tags(manifest: dict[str, Any], release_history_ref: str) -> N
                 "windows_server_conclusion": "success",
                 "server_image_conclusion": "failure",
             },
+            "v5.80.0": {
+                "commit": "24bee6c8a830aa7372a30be6b842210b07639f73",
+                "disposition": "delete-empty-draft",
+                "empty_draft_id": 409250858,
+                "failed_package_run_ids": [38092568098],
+                "windows_server_conclusion": "success",
+                "server_image_conclusion": "failure",
+                "retirement_guard": {
+                    "package_run_inventory": "exact-tag-and-lineage",
+                    "run_attempts": {"38092568098": 1},
+                },
+            },
         },
         "unexpected failed-release policy",
     )
