@@ -1206,6 +1206,21 @@ if (BUILD_TESTING)
 endif ()
 
 # Installer.
+if (PACKAGE_TYPE STREQUAL "deb")
+    # Debian payload directories must remain traversable with a restrictive
+    # build umask; these permissions also cover install-created ancestors.
+    set(CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
+        OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+        WORLD_READ WORLD_EXECUTE)
+    # CPack and install rules may create intermediate ancestors before applying
+    # default permissions to their final destination. Normalize only the owned
+    # package layout, including /usr, for standalone cpack invocations too.
+    foreach (directory IN ITEMS "." games share share/applications share/pixmaps
+            share/doc share/doc/atrinik share/games share/games/atrinik)
+        install(DIRECTORY DESTINATION "${directory}" COMPONENT AtrinikClient
+            DIRECTORY_PERMISSIONS ${CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS})
+    endforeach ()
+endif ()
 if (WIN32 AND NOT UNIX)
     set(INSTALL_SUBDIR_BIN ".")
     set(INSTALL_SUBDIR_SHARE ".")

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 022
 
 output_directory=${1:-build/packages}
 version=${ATRINIK_PACKAGE_VERSION:-}
@@ -70,8 +71,16 @@ for test_marker in '--gpu-player-view' 'injected GPU conformance fault'; do
   fi
 done
 
-cpack --config build/linux-release/CPackConfig.cmake -G DEB -B "${output_directory}"
-if [[ ! -f ${package} ]]; then
+staging_directory=$(mktemp -d "${output_directory}/.atrinik-linux-package.XXXXXX")
+trap 'rm -rf -- "${staging_directory}"' EXIT
+cpack --config build/linux-release/CPackConfig.cmake -G DEB -B "${staging_directory}"
+staged_package=${staging_directory}/atrinik-classic-client-${version}-linux-amd64.deb
+if [[ ! -f ${staged_package} ]]; then
   echo "Expected Linux client package is missing: ${package}" >&2
+  exit 1
+fi
+mv -n -- "${staged_package}" "${package}"
+if [[ -e ${staged_package} ]]; then
+  echo "Package output already exists: ${package}" >&2
   exit 1
 fi

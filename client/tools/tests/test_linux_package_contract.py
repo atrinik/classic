@@ -4,6 +4,7 @@
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -22,6 +23,9 @@ class LinuxPackageContractTests(unittest.TestCase):
         self.assertIn("-DFETCHCONTENT_FULLY_DISCONNECTED=ON", script)
         self.assertIn('build_parallelism=${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}', script)
         self.assertIn('--parallel "${build_parallelism}"', script)
+        self.assertIn("umask 022", script)
+        self.assertIn('mktemp -d "${output_directory}/.atrinik-linux-package.XXXXXX"', script)
+        self.assertIn('-G DEB -B "${staging_directory}"', script)
         for component in ("ATRINIK_PROTOCOL", "LIBATRINIK"):
             self.assertIn(f"-DFETCHCONTENT_SOURCE_DIR_{component}=", script)
         for marker in ("'--gpu-player-view'", "'injected GPU conformance fault'"):
@@ -124,7 +128,8 @@ install(FILES LICENSE.md DESTINATION include/atrinik)
             (source / "data/discord-application-id").write_text("excluded")
             build = Path(directory) / "build"
             def run(*arguments):
-                return subprocess.run(arguments, check=True, capture_output=True, text=True)
+                return subprocess.run(arguments, check=True, capture_output=True, text=True,
+                                      umask=0o077)
             run("cmake", "-S", str(source), "-B", str(build),
                 "-DCMAKE_INSTALL_PREFIX=/usr", "-DCMAKE_SYSTEM_PROCESSOR=x86_64")
             config = (build / "CPackConfig.cmake").read_text()
@@ -159,6 +164,14 @@ install(FILES LICENSE.md DESTINATION include/atrinik)
                              (source / "client.cfg").read_bytes())
             self.assertFalse((payload / "usr/include").exists())
             self.assertFalse((payload / "usr/lib").exists())
+            for path in payload.rglob("*"):
+                if path.is_dir():
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755,
+                                     str(path.relative_to(payload)))
+                elif path.is_file():
+                    self.assertTrue(path.stat().st_mode & stat.S_IROTH,
+                                    str(path.relative_to(payload)))
+            self.assertTrue((payload / "usr/games/atrinik").stat().st_mode & stat.S_IXOTH)
             self.assertFalse((payload / "usr/share/games/atrinik/data/discord-application-id").exists())
             self.assertEqual((payload / "usr/games/atrinik").read_bytes(),
                              Path("/bin/true").read_bytes())
