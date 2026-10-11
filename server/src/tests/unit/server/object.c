@@ -38,6 +38,7 @@
 #include <object.h>
 #include <object_methods.h>
 #include <player.h>
+#include <perception.h>
 #include <server.h>
 #include <server_item.h>
 #include <skills.h>
@@ -159,7 +160,7 @@ START_TEST(test_move_ob_rejects_invalid_directions) {
 }
 END_TEST
 
-START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
+START_TEST(test_find_enemy_rejects_exit_and_accepts_continuous_tiled_exit_enemy) {
     mapstruct *source;
     object *pl;
     check_setup_env_pl(&source, &pl);
@@ -214,6 +215,19 @@ START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
     ck_assert(!get_rangevector(monster, pl, &rv, RV_DIAGONAL_DISTANCE));
     rv.direction = INT_MIN;
 
+    /* Travel exits are not continuous geometry, even though the historical
+     * neighborhood helper follows them. A missing physical bridge fails closed. */
+    ck_assert(!perception_object_visible(monster, pl));
+    ck_assert_ptr_null(find_enemy(monster, &rv));
+    ck_assert_ptr_null(monster->enemy);
+    ck_assert_ptr_null(monster->attacked_by);
+
+    bridge->tile_map[TILED_EAST] = destination;
+    destination->tile_map[TILED_WEST] = bridge;
+    ck_assert(perception_object_visible(monster, pl));
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
+    rv.direction = INT_MIN;
     ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
                   "find_enemy returned an enemy with stale rv.direction %d",
@@ -271,6 +285,23 @@ START_TEST(test_player_clears_target_outside_map_neighborhood_before_self_heal) 
      * path can consume a dummy player's tick before reaching this hook. */
     ck_assert_ptr_nonnull(OBJECT_METHODS(pl->type)->process_func);
     OBJECT_METHODS(pl->type)->process_func(pl);
+    /* Physical neighborhood membership alone does not grant camera coverage. */
+    ck_assert_ptr_eq(CONTR(pl)->target_object, pl);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, 0);
+    ck_assert_ptr_nonnull(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_TARGET));
+
+    /* A continuous neighbor in the current visible viewport is selectable. */
+    object_remove(pl, 0);
+    pl->x = MAP_WIDTH(map) - 1;
+    pl->y = target->y;
+    pl = object_insert_map(pl, map, NULL, INS_NO_MERGE);
+    GET_MAP_SPACE_PTR(nearby, target->x, target->y)->light_value = 1280;
+    ck_assert(perception_player_authorized(CONTR(pl), target));
+    draw_client_map(pl);
+    CONTR(pl)->target_object = target;
+    CONTR(pl)->target_object_count = target->count;
+    socket_buffer_clear(CONTR(pl)->cs);
+    OBJECT_METHODS(pl->type)->process_func(pl);
     ck_assert_ptr_eq(CONTR(pl)->target_object, target);
     ck_assert_uint_eq(CONTR(pl)->target_object_count, target->count);
     ck_assert_ptr_null(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_TARGET));
@@ -307,7 +338,7 @@ START_TEST(test_player_clears_target_outside_map_neighborhood_before_self_heal) 
 }
 END_TEST
 
-START_TEST(test_find_enemy_returns_valid_direction_for_exit_tiled_enemy) {
+START_TEST(test_find_enemy_rejects_exit_and_accepts_continuous_exit_tiled_enemy) {
     mapstruct *source;
     object *pl;
     check_setup_env_pl(&source, &pl);
@@ -358,6 +389,19 @@ START_TEST(test_find_enemy_returns_valid_direction_for_exit_tiled_enemy) {
     };
 
     ck_assert(on_same_map(monster, pl));
+    /* Travel exits are not continuous geometry, even though the historical
+     * neighborhood helper follows them. A missing physical bridge fails closed. */
+    ck_assert(!perception_object_visible(monster, pl));
+    ck_assert_ptr_null(find_enemy(monster, &rv));
+    ck_assert_ptr_null(monster->enemy);
+    ck_assert_ptr_null(monster->attacked_by);
+
+    source->tile_map[TILED_EAST] = bridge;
+    bridge->tile_map[TILED_WEST] = source;
+    ck_assert(perception_object_visible(monster, pl));
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
+    rv.direction = INT_MIN;
     ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
                   "find_enemy returned an exit-tiled enemy with stale rv.direction %d",
@@ -376,7 +420,7 @@ START_TEST(test_find_enemy_returns_valid_direction_for_exit_tiled_enemy) {
 }
 END_TEST
 
-START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy) {
+START_TEST(test_find_enemy_rejects_exit_and_accepts_continuous_tiled_exit_tiled_enemy) {
     mapstruct *source;
     object *pl;
     check_setup_env_pl(&source, &pl);
@@ -436,6 +480,19 @@ START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy) {
                                pl,
                                &rv,
                                RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD));
+    rv.direction = INT_MIN;
+    /* Travel exits are not continuous geometry, even though the historical
+     * neighborhood helper follows them. A missing physical bridge fails closed. */
+    ck_assert(!perception_object_visible(monster, pl));
+    ck_assert_ptr_null(find_enemy(monster, &rv));
+    ck_assert_ptr_null(monster->enemy);
+    ck_assert_ptr_null(monster->attacked_by);
+
+    first_bridge->tile_map[TILED_EAST] = second_bridge;
+    second_bridge->tile_map[TILED_WEST] = first_bridge;
+    ck_assert(perception_object_visible(monster, pl));
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
     rv.direction = INT_MIN;
     ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
@@ -1569,10 +1626,10 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_return_home_waypoint_reactivation_resets_retry_progress);
     suite_add_tcase(s, tc_movement);
     tcase_add_test(tc_movement, test_move_ob_rejects_invalid_directions);
-    tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_enemy);
+    tcase_add_test(tc_core, test_find_enemy_rejects_exit_and_accepts_continuous_tiled_exit_enemy);
     tcase_add_test(tc_core, test_player_clears_target_outside_map_neighborhood_before_self_heal);
-    tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
-    tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);
+    tcase_add_test(tc_core, test_find_enemy_rejects_exit_and_accepts_continuous_exit_tiled_enemy);
+    tcase_add_test(tc_core, test_find_enemy_rejects_exit_and_accepts_continuous_tiled_exit_tiled_enemy);
     tcase_add_test(tc_core, test_object_can_merge);
     tcase_add_test(tc_core, test_object_custody_provenance);
     tcase_add_test(tc_core, test_object_custody_quantity_provenance);

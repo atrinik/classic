@@ -190,6 +190,7 @@ END_TEST
 void check_server_perception(void) {
     Suite *s = suite_create("server.perception");
     TCase *tc = tcase_create("physical-perception");
+    tcase_add_unchecked_fixture(tc, check_setup, check_teardown);
     tcase_add_checked_fixture(tc, check_test_setup, check_test_teardown);
     tcase_add_test(tc, test_monster_acquires_above_and_below_only_through_holes);
     tcase_add_test(tc, test_retained_enemy_loses_sight_without_losing_pursuit_or_casting);
