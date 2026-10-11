@@ -20,6 +20,7 @@
 #include <player.h>
 #include <plugin.h>
 #include <server.h>
+#include <tod.h>
 #include <toolkit/packet.h>
 
 static bool plugins_initialized;
@@ -218,11 +219,28 @@ START_TEST(test_queued_target_kick_observer_withdraws_dispatch_authority) {
     socket_struct *socket = controller->cs;
     draw_client_map(observer);
     socket_buffer_clear(socket);
-    ask_show(actor, "kick_observer");
     tag_t count = observer->count;
-
     queue_target_select(socket, socket->mapx_2 + actor->x - observer->x,
                         socket->mapy_2 + actor->y - observer->y, 0, actor->count);
+    ck_assert_int_eq(handle_newcs_player(controller), 0);
+    ck_assert_ptr_eq(controller->target_object, actor);
+    ask_show(actor, "kick_observer");
+    uint64_t queries = los_action_camera_queries_for_test();
+    for (int i = 0; i < 15; i++) {
+        queue_target_select(socket, socket->mapx_2 + actor->x - observer->x,
+                            socket->mapy_2 + actor->y - observer->y, 0, actor->count);
+    }
+    /* Replayed commands reach neither ASK_SHOW nor geometry. */
+    ck_assert_int_eq(handle_newcs_player(controller), 0);
+    ck_assert(player_connection_is_current(observer, count, controller, socket));
+    ck_assert_uint_eq(los_action_camera_queries_for_test(), queries);
+    ck_assert_uint_eq(socket->packet_recv_cmd->len, 0);
+    pticks++;
+    for (int i = 0; i < 15; i++) {
+        queue_target_select(socket, socket->mapx_2 + actor->x - observer->x,
+                            socket->mapy_2 + actor->y - observer->y, 0, actor->count);
+    }
+    /* Next-tick authorization can tear down a socket with queued replays. */
     ck_assert_int_eq(handle_newcs_player(controller), -1);
     ck_assert(!player_connection_is_current(observer, count, controller, socket));
 }

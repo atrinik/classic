@@ -69,6 +69,10 @@ extern void clear_los(object *op);
 #ifdef ATRINIK_TESTING
 /** Boundary injection for isolated counter tests; does not invalidate masks. */
 void los_epochs_set_for_test(uint64_t geometry, uint64_t publication);
+/** Cumulative fresh-action work; no full viewport rebuilds or column allocations. */
+uint64_t los_action_camera_queries_for_test(void);
+uint64_t los_action_camera_cells_for_test(void);
+uint64_t los_action_camera_flood_cells_for_test(void);
 uint64_t los_view_builds_for_test(void);
 uint64_t los_view_cache_hits_for_test(void);
 /** Counts for the last viewport update; fresh physical queries are excluded. */

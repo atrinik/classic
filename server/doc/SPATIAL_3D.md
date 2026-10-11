@@ -76,7 +76,15 @@ corner and terminal-slab rules. Prefix storage is bounded by two `uint16_t`
 fields per prefix coordinate on each advertised depth (56,628 bytes at the
 32-by-32 compile-time limit). No mutation, plugin call or yield may separate
 the snapshot from its use. Fresh physical action checks use current default
-traversal and fresh camera checks construct their own scope.
+traversal. Fresh camera checks inspect the requested column across every
+possible overhead story, without a full viewport build or its column allocation.
+Only relevant covered cells (and a positive-depth target itself) need a fresh
+cutaway membership test. That test lazily searches the current cardinally
+connected surface component and its nonrecursive diagonal wall perimeter.
+Open same-story columns require at most 25 default cell resolutions (31 for
+a downward query); bounded topology-resolver scratch remains unchanged. A pathological
+connected cutaway can still visit the viewport once per relevant overhead
+level. No result survives the synchronous query or is reused across callbacks.
 
 Completed camera classifications and sight masks may be retained across idle
 socket posts. Their key includes a process-wide nonwrapping LOS geometry epoch,
@@ -145,7 +153,16 @@ peers; update native and Python consumers together.
 
 Integers use existing network byte order. SELECT is PLAYING-only and binds a
 physical MAP2 part to its head's nonzero actor count; zero is never a wildcard.
-Malformed packets preserve state. A valid unauthorized request returns SELF
+Malformed packets preserve state. The connection admits at most one completely
+framed, in-range SELECT per simulation tick (`pticks`), including zero/stale
+counts and unavailable publications. Admission occurs before map resolution or
+visibility callbacks. Further SELECTs in that tick are discarded without a
+reply or selection change: first selection wins, and clients must issue a new
+selection on a later tick if desired. There is no deferred selection or saved
+actor/map pointer. CLEAR is immediate and never replenishes admission; therefore
+SELECT, CLEAR, SELECT in one tick ends at SELF. Publication withdrawal and avatar
+changes do not reset connection admission; fresh connection initialization does.
+An admitted unauthorized request returns SELF
 without disclosing the rejected actor. SELF carries count/depth zero. Parsers
 validate the complete payload and reject trailing bytes before mutation.
 Server action authority also requires a previously completely queued MAP2

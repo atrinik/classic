@@ -561,7 +561,82 @@ bool los_player_has_geometric_sight(object *pl, mapstruct *map, int x, int y) {
     return player_offset(pl, map, x, y, &dx, &dy, &dz) && player_ray(pl, dx, dy, dz, NULL);
 }
 
+#ifdef ATRINIK_TESTING
+static uint64_t action_camera_queries, action_camera_cells, action_camera_flood_cells;
+
+uint64_t los_action_camera_queries_for_test(void) {
+    return action_camera_queries;
+}
+uint64_t los_action_camera_cells_for_test(void) {
+    return action_camera_cells;
+}
+uint64_t los_action_camera_flood_cells_for_test(void) {
+    return action_camera_flood_cells;
+}
+#endif
+
+/** Fresh action-local lookup, never a retained viewport authorization. */
+static bool camera_action_cell(object *pl, int ax, int ay, int depth, spatial_cell *cell) {
+#ifdef ATRINIK_TESTING
+    action_camera_cells++;
+#endif
+    socket_struct *cs = CONTR(pl)->cs;
+    return spatial_resolve(pl->map, pl->x + ax - cs->mapx_2,
+                           pl->y + ay - cs->mapy_2, depth, cell);
+}
+
+/** Decide just one column's membership in the current overhead cutaway.
+ * Only surfaces connected by cardinal steps propagate; a wall can also belong
+ * to the one-cell diagonal perimeter. No wall perimeter becomes a flood seed.
+ * Most columns need no flood. The exceptional connected-component search is
+ * bounded by the viewport, with each cell visited by the flood at most once per level. */
+static bool camera_action_cutaway(object *pl, int ax, int ay, int depth,
+                                  const spatial_cell *target) {
+    bool surface = camera_surface(target->map, target->x, target->y);
+    bool wall = camera_wall(target->map, target->x, target->y);
+    if (!surface && !wall) {
+        return false;
+    }
+    socket_struct *cs = CONTR(pl)->cs;
+    spatial_cell center;
+    if (!camera_action_cell(pl, cs->mapx_2, cs->mapy_2, depth, &center) ||
+        !camera_surface(center.map, center.x, center.y)) {
+        return false;
+    }
+    bool seen[MAP_CLIENT_X][MAP_CLIENT_Y] = {{false}};
+    uint16_t queue[MAP_CLIENT_X * MAP_CLIENT_Y];
+    size_t first = 0, last = 0;
+    seen[cs->mapx_2][cs->mapy_2] = true;
+    queue[last++] = cs->mapx_2 * MAP_CLIENT_Y + cs->mapy_2;
+    static const int nx[] = {-1, 1, 0, 0}, ny[] = {0, 0, -1, 1};
+    while (first < last) {
+        int x = queue[first] / MAP_CLIENT_Y, y = queue[first++] % MAP_CLIENT_Y;
+        if ((x == ax && y == ay) || (wall && abs(x - ax) <= 1 && abs(y - ay) <= 1)) {
+            return true;
+        }
+        for (size_t n = 0; n < arraysize(nx); n++) {
+            int bx = x + nx[n], by = y + ny[n];
+            if (bx < 0 || by < 0 || bx >= cs->mapx || by >= cs->mapy || seen[bx][by]) {
+                continue;
+            }
+            seen[bx][by] = true;
+#ifdef ATRINIK_TESTING
+            action_camera_flood_cells++;
+#endif
+            spatial_cell cell;
+            if (camera_action_cell(pl, bx, by, depth, &cell) &&
+                camera_surface(cell.map, cell.x, cell.y)) {
+                queue[last++] = bx * MAP_CLIENT_Y + by;
+            }
+        }
+    }
+    return false;
+}
+
 los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, int y) {
+#ifdef ATRINIK_TESTING
+    action_camera_queries++;
+#endif
     int dx, dy, dz;
     if (!player_offset(pl, map, x, y, &dx, &dy, &dz)) {
         return LOS_CAMERA_HIDDEN;
@@ -569,12 +644,38 @@ los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, 
     if (CONTR(pl)->tls) {
         return LOS_CAMERA_VISIBLE;
     }
-    los_camera_view view;
-    camera_build(pl, &view, true);
-    los_camera_visibility visibility = camera_classify(&view, dx + CONTR(pl)->cs->mapx_2,
-                                                        dy + CONTR(pl)->cs->mapy_2, dz);
-    camera_destroy(&view);
-    return visibility;
+    int ax = dx + CONTR(pl)->cs->mapx_2, ay = dy + CONTR(pl)->cs->mapy_2;
+    spatial_cell target;
+    if (!camera_action_cell(pl, ax, ay, dz, &target) ||
+        (dz > 0 && camera_action_cutaway(pl, ax, ay, dz, &target))) {
+        return LOS_CAMERA_HIDDEN;
+    }
+    for (int z = 0; dz < 0 && z > dz; z--) {
+        spatial_cell cell;
+        if (!camera_action_cell(pl, ax, ay, z, &cell) ||
+            camera_surface(cell.map, cell.x, cell.y)) {
+            return LOS_CAMERA_HIDDEN;
+        }
+    }
+    /* Cover above the selected cell still spans all twelve possible overhead
+     * stories, including those outside the advertised relative depth range. */
+    for (int z = MAX(dz, 0) + 1; z <= LOS_OVERHEAD_LEVELS; z++) {
+        spatial_cell cell;
+        if (camera_action_cell(pl, ax, ay, z, &cell)) {
+            if (camera_surface(cell.map, cell.x, cell.y) &&
+                !camera_action_cutaway(pl, ax, ay, z, &cell)) {
+                return LOS_CAMERA_WALL_BOUNDARY;
+            }
+        } else {
+            spatial_cell previous;
+            if (camera_action_cell(pl, ax, ay, z - 1, &previous) &&
+                (previous.map->tile_path[TILED_UP] != NULL ||
+                 previous.map->tile_map[TILED_UP] != NULL)) {
+                return LOS_CAMERA_WALL_BOUNDARY;
+            }
+        }
+    }
+    return camera_roof(target.map, target.x, target.y) ? LOS_CAMERA_BOUNDARY : LOS_CAMERA_VISIBLE;
 }
 
 bool los_player_can_see_cell(object *pl, mapstruct *map, int x, int y) {

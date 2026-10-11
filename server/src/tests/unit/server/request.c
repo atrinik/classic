@@ -993,6 +993,7 @@ START_TEST(test_target_stale_forged_and_unavailable_depth_resolve_self) {
         pl->target_object = op;
         pl->target_object_count = op->count;
         socket_buffer_clear(pl->cs);
+        pticks++;
         socket_command_target(pl->cs, pl, select, sizeof(select), 0);
         ck_assert_ptr_eq(pl->target_object, op);
         ck_assert_uint_eq(pl->target_object_count, 0);
@@ -1002,6 +1003,7 @@ START_TEST(test_target_stale_forged_and_unavailable_depth_resolve_self) {
         ck_assert_uint_eq(packet->data[0], CMD_TARGET_SELF);
     }
     uint8_t clear = CMD_TARGET_CLEAR;
+    pticks++;
     socket_command_target(pl->cs, pl, &clear, sizeof(clear), 0);
     ck_assert_ptr_eq(pl->target_object, op);
     ck_assert_uint_eq(pl->target_object_count, 0);
@@ -1036,6 +1038,7 @@ START_TEST(test_target_exact_depth_and_count_authorize_upper_actor) {
     map_client_cache_clear(&pl->cs->lastmap);
     pl->cs->target_map_published_map = NULL;
     socket_buffer_clear(pl->cs);
+    pticks++;
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, op);
     ck_assert_uint_eq(pl->target_object_count, 0);
@@ -1049,6 +1052,7 @@ START_TEST(test_target_exact_depth_and_count_authorize_upper_actor) {
     draw_client_map(op);
     ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
     socket_buffer_clear(pl->cs);
+    pticks++;
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, actor);
     ck_assert_uint_eq(pl->target_object_count, actor->count);
@@ -1068,11 +1072,13 @@ START_TEST(test_target_exact_depth_and_count_authorize_upper_actor) {
     ck_assert(packet_reader_finish(&reader));
     /* The identity alone cannot select the actor at another physical depth. */
     select->data[3] = 0;
+    pticks++;
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, op);
     ck_assert_uint_eq(pl->target_object_count, 0);
     select->data[3] = 1;
     select->data[select->len - 1] ^= 1;
+    pticks++;
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, op);
     ck_assert_uint_eq(pl->target_object_count, 0);
@@ -1080,16 +1086,19 @@ START_TEST(test_target_exact_depth_and_count_authorize_upper_actor) {
     /* A movement before the next draw does not reinterpret the last queued
      * viewport's coordinates around the unpublished new player center. */
     request_move_player(&op, base, 13, 12);
+    pticks++;
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, actor);
     ck_assert_uint_eq(pl->target_object_count, actor->count);
     pl->cs->target_map_publication_pending = true;
+    pticks++;
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, op);
     ck_assert_uint_eq(pl->target_object_count, 0);
     pl->cs->target_map_publication_pending = false;
     object_remove(actor, 0);
     object_destroy(actor);
+    pticks++;
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, op);
     ck_assert_uint_eq(pl->target_object_count, 0);
@@ -1127,6 +1136,7 @@ START_TEST(test_target_publication_tracks_each_living_sub_layer) {
         packet_writer_write_uint8(select, pl->cs->mapy_2);
         packet_writer_write_int8(select, 0);
         packet_writer_write_uint32(select, actors[i]->count);
+        pticks++;
         socket_command_target(pl->cs, pl, select->data, select->len, 0);
         ck_assert_ptr_eq(pl->target_object, actors[i]);
         ck_assert_uint_eq(pl->target_object_count, actors[i]->count);
@@ -1167,6 +1177,116 @@ START_TEST(test_target_publication_tracks_each_living_sub_layer) {
     ck_assert(!target_player_authorized(pl, actors[1], NULL));
     object_remove(actors[1], 0);
     object_destroy(actors[1]);
+}
+END_TEST
+
+/* A published nonzero actor exercises actual perception and reply work. */
+START_TEST(test_target_replays_are_bounded_per_connection_tick) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    pl->tli = 1;
+    object *actor = arch_get("kobold");
+    actor->x = 13;
+    actor->y = 12;
+    actor = object_insert_map(actor, map, NULL, 0);
+    ck_assert_ptr_nonnull(actor);
+    ck_assert_uint_ne(actor->count, 0);
+    draw_client_map(op);
+    socket_buffer_clear(cs);
+    packet_struct *select = packet_new(SERVER_CMD_TARGET, 8, 0);
+    packet_writer_write_uint8(select, CMD_TARGET_MAPXY);
+    packet_writer_write_uint8(select, cs->mapx_2 + 1);
+    packet_writer_write_uint8(select, cs->mapy_2);
+    packet_writer_write_int8(select, 0);
+    packet_writer_write_uint32(select, actor->count);
+    /* Tick zero and malformed input must not accidentally exhaust admission. */
+    pticks = 0;
+    socket_command_target(cs, pl, select->data, select->len - 1, 0);
+    ck_assert(!cs->target_select_admitted);
+    uint64_t queries = los_action_camera_queries_for_test();
+    uint64_t cells = los_action_camera_cells_for_test();
+    uint64_t floods = los_action_camera_flood_cells_for_test();
+    socket_command_target(cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, actor);
+    ck_assert_uint_eq(pl->target_object_count, actor->count);
+    ck_assert_uint_eq(los_action_camera_queries_for_test() - queries, 2);
+    /* Two independent fresh authorizations inspect only an empty column. */
+    ck_assert_uint_le(los_action_camera_cells_for_test() - cells, 50);
+    ck_assert_uint_eq(los_action_camera_flood_cells_for_test(), floods);
+    queries = los_action_camera_queries_for_test();
+    cells = los_action_camera_cells_for_test();
+    socket_buffer_clear(cs);
+    for (int i = 0; i < 1000; i++) {
+        socket_command_target(cs, pl, select->data, select->len, 0);
+    }
+    ck_assert_uint_eq(los_action_camera_queries_for_test(), queries);
+    ck_assert_uint_eq(los_action_camera_cells_for_test(), cells);
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_TARGET));
+    ck_assert_ptr_eq(pl->target_object, actor);
+    /* CLEAR never waits and cannot replenish SELECT's allowance. */
+    uint8_t clear = CMD_TARGET_CLEAR;
+    socket_command_target(cs, pl, &clear, 1, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_uint_eq(pl->target_object_count, 0);
+    socket_buffer_clear(cs);
+    socket_command_target(cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_TARGET));
+    ck_assert_uint_eq(los_action_camera_queries_for_test(), queries);
+    /* A normal next-tick selection still obtains fresh authority. */
+    pticks++;
+    socket_command_target(cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, actor);
+    ck_assert_uint_eq(los_action_camera_queries_for_test(), queries + 2);
+    /* A zero actor count consumes admission and never acts as a wildcard. */
+    pticks++;
+    uint8_t zero[8];
+    memcpy(zero, select->data, sizeof(zero));
+    memset(zero + 4, 0, 4);
+    socket_command_target(cs, pl, zero, sizeof(zero), 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    socket_command_target(cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    /* Another connection has its own allowance in the same simulation tick. */
+    object *other;
+    mapstruct *other_map;
+    check_setup_env_pl(&other_map, &other);
+    player *other_pl = CONTR(other);
+    ck_assert(!other_pl->cs->target_select_admitted);
+    socket_buffer_clear(other_pl->cs);
+    socket_command_target(other_pl->cs, other_pl, zero, sizeof(zero), 0);
+    ck_assert(other_pl->cs->target_select_admitted);
+    ck_assert_ptr_nonnull(queued_command_find(other_pl->cs, CLIENT_CMD_TARGET));
+    /* Revoking the publication cannot reset connection admission. */
+    target_map_publication_forget_socket(cs, map);
+    ck_assert(cs->target_select_admitted);
+    ck_assert_int_eq(cs->target_select_tick, pticks);
+    socket_command_target(cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    /* No dropped request is pending when its actor is torn down. */
+    object_remove(actor, 0);
+    object_destroy(actor);
+    pticks++;
+    socket_command_target(cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    packet_free(select);
+}
+END_TEST
+
+START_TEST(test_target_admission_is_reset_on_connection_initialization) {
+    socket_struct *cs = xcalloc(1, sizeof(*cs));
+    cs->sc = socket_create("127.0.0.1", 13327, SOCKET_ROLE_SERVER, false);
+    ck_assert_ptr_nonnull(cs->sc);
+    cs->target_select_admitted = true;
+    cs->target_select_tick = pticks;
+    ck_assert(init_connection(cs));
+    ck_assert(!cs->target_select_admitted);
+    ck_assert_ptr_null(cs->target_map_published_map);
+    free_newsocket(cs);
 }
 END_TEST
 
@@ -3107,6 +3227,8 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
+    tcase_add_test(tc_core, test_target_admission_is_reset_on_connection_initialization);
+    tcase_add_test(tc_core, test_target_replays_are_bounded_per_connection_tick);
     tcase_add_test(tc_core, test_target_packet_includes_current_level_and_plain_name);
     tcase_add_test(tc_core, test_target_select_requires_exact_packet_before_mutation);
     tcase_add_test(tc_core, test_target_stale_forged_and_unavailable_depth_resolve_self);

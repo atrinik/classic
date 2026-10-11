@@ -293,7 +293,65 @@ static void assert_cached_masks_match_default(object *pl) {
     ck_assert_mem_eq(camera, CONTR(pl)->camera_visibility, sizeof(camera));
     ck_assert_mem_eq(sight, CONTR(pl)->blocked_los_depth, sizeof(sight));
     ck_assert_mem_eq(base, CONTR(pl)->blocked_los, sizeof(base));
+    /* Every physical query must agree with the independent full camera pass. */
+    socket_struct *cs = CONTR(pl)->cs;
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                spatial_cell cell;
+                if (spatial_resolve(pl->map, pl->x + ax - cs->mapx_2,
+                                     pl->y + ay - cs->mapy_2, depth, &cell)) {
+                    ck_assert_int_eq(los_player_cell_camera(pl, cell.map, cell.x, cell.y),
+                                     CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(depth)][ax][ay]);
+                }
+            }
+        }
+    }
 }
+
+START_TEST(test_focused_camera_matches_connected_cutaways_and_full_stack) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->mapx = cs->mapy = 7;
+    cs->mapx_2 = cs->mapy_2 = 3;
+    map->level_min = 0;
+    map->level_max = 12;
+    mapstruct *levels[13] = {map};
+    for (int z = 1; z <= 12; z++) {
+        levels[z] = add_level(levels[z - 1], z, 12);
+    }
+    object *bridge = place(levels[1], "water_still", 12, 12);
+    place(levels[1], "water_still", 13, 13); /* diagonal surface is disconnected */
+    object *wall = place(levels[1], "wall_wood_1", 11, 11);
+    CLEAR_FLAG(wall, FLAG_BLOCKSVIEW);
+    GET_MAP_SPACE_PTR(levels[1], 11, 11)->flags &= ~P_BLOCKSVIEW;
+    object *chain = place(levels[1], "wall_wood_1", 10, 10);
+    CLEAR_FLAG(chain, FLAG_BLOCKSVIEW);
+    GET_MAP_SPACE_PTR(levels[1], 10, 10)->flags &= ~P_BLOCKSVIEW;
+    place(levels[7], "roof_thatch", 14, 12);
+    place(levels[12], "roof_thatch", 14, 14);
+    ck_assert_int_eq(los_player_cell_camera(pl, levels[1], 13, 13), LOS_CAMERA_VISIBLE);
+    ck_assert_int_eq(los_player_cell_camera(pl, levels[1], 11, 11), LOS_CAMERA_HIDDEN);
+    ck_assert_int_eq(los_player_cell_camera(pl, levels[1], 10, 10), LOS_CAMERA_VISIBLE);
+    assert_cached_masks_match_default(pl);
+    object_remove(bridge, 0);
+    /* Fresh checks must see the mutation even with deliberately stale masks. */
+    ck_assert_int_eq(los_player_cell_camera(pl, levels[1], 11, 11), LOS_CAMERA_VISIBLE);
+    assert_cached_masks_match_default(pl);
+    bridge = place(levels[1], "water_still", 12, 12);
+    place(levels[1], "water_still", 13, 12);
+    ck_assert_int_eq(los_player_cell_camera(pl, levels[1], 13, 13), LOS_CAMERA_HIDDEN);
+    assert_cached_masks_match_default(pl);
+    object_remove(pl, 0);
+    pl = object_insert_map(pl, levels[6], NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+    assert_cached_masks_match_default(pl);
+    object_remove(bridge, 0);
+    assert_cached_masks_match_default(pl);
+}
+END_TEST
 
 START_TEST(test_cached_and_default_whole_masks_match_across_mixed_topology) {
     mapstruct *map;
@@ -551,6 +609,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_unavailable_link_and_tls_exception_fail_deliberately);
     tcase_add_test(tc, test_camera_hidden_depths_are_pruned_before_sight_checks);
     tcase_add_test(tc, test_scoped_cell_cache_matches_default_across_seams_and_invalid_stacks);
+    tcase_add_test(tc, test_focused_camera_matches_connected_cutaways_and_full_stack);
     tcase_add_test(tc, test_cached_and_default_whole_masks_match_across_mixed_topology);
     tcase_add_test(tc, test_zero_volume_proofs_skip_empty_rays_and_respect_current_slabs);
     tcase_add_test(tc, test_zero_volume_proof_matches_supercover_in_varied_blocked_scenes);

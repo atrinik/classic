@@ -1841,7 +1841,10 @@ display the complete profile digest used for continuous-link validation.
   component in the client viewport and omit it. Include the adjacent one-cell
   wall boundary without recursively following unrelated wall chains. Send
   camera-occluded cells with `MAP2_MASK_HARD_CLEAR` so cached roofs/walls cannot
-  reappear grey after re-entry.
+  reappear grey after re-entry. Fresh single-cell action checks use the same
+  column and connectivity rules through a lazy bounded search; they neither
+  rebuild the complete viewport nor reuse its retained authorization. See
+  [SPATIAL_3D.md](SPATIAL_3D.md) for target admission and action work bounds.
 - A depth's own gameplay mask limits its live content; loss of authorization
   must not automatically clear the complete structural cell. Downgrade to structural floor, floor-mask, and wall
   boundary so lower walls do not slice roofs. Stack occlusion decides whether

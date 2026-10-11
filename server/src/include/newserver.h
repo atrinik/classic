@@ -301,6 +301,9 @@ typedef struct socket_struct {
     uint8_t target_map_published_width;
     uint8_t target_map_published_height;
     bool target_map_publication_pending;
+    /** SELECT admission is per connection and simulation tick; CLEAR cannot reset it. */
+    long target_select_tick;
+    bool target_select_admitted;
 
     /** Player level used to calculate cached non-player name colors. */
     uint8_t lastmap_player_level;

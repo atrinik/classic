@@ -104,6 +104,8 @@ bool init_connection(socket_struct *ns) {
     ns->target_map_published_count = 0;
     ns->target_map_published_depths = 0;
     ns->target_map_publication_pending = false;
+    ns->target_select_tick = 0;
+    ns->target_select_admitted = false;
     ns->packets = NULL;
 
     return true;
@@ -166,6 +168,8 @@ static void free_newsocket_internal(socket_struct *ns, bool connected) {
     ns->target_map_published_count = 0;
     ns->target_map_published_depths = 0;
     ns->target_map_publication_pending = false;
+    ns->target_select_tick = 0;
+    ns->target_select_admitted = false;
 
     free(ns->account);
 

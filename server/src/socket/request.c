@@ -35,6 +35,7 @@
 
 #include <atrinik/protocol/target.h>
 #include <perception.h>
+#include <tod.h>
 #include <spatial.h>
 #include <global.h>
 #include <movement.h>
@@ -3142,6 +3143,17 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
          (x >= pl->cs->mapx || y >= pl->cs->mapy ||
           depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH))) {
         return;
+    }
+
+    /* Bound replay work before topology resolution or any visibility callback.
+     * Drops retain the current selection and create no deferred borrowed state.
+     * CLEAR stays immediate but cannot replenish this connection's budget. */
+    if (type == CMD_TARGET_MAPXY) {
+        if (pl->cs->target_select_admitted && pl->cs->target_select_tick == pticks) {
+            return;
+        }
+        pl->cs->target_select_admitted = true;
+        pl->cs->target_select_tick = pticks;
     }
 
     object *observer = pl->ob;
