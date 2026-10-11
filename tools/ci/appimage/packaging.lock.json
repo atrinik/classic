@@ -1201,7 +1201,8 @@
     "libxxhash0": "53acfd069ef57d3a68fc03d3ecdbcb7939c8083bae3fe52851da69b0383d7ee0",
     "libzstd1": "35e85e8e9bbb71492c5f5dddf39ed65b68775a02ad8d710c25d097b497f06c49",
     "mesa-libgallium": "cbf3d2eb38998daf390f52d49969d1be5607a6aee138351e161c12a6976ba49e",
-    "zlib1g": "9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6"
+    "zlib1g": "9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6",
+    "libasound2-data": "9b356b4fae53b5d5e7668e048f085d68a5039de7b6afbf465f50e81513334062"
   },
   "system_package_notice_files": {
     "apt": [
