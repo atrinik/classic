@@ -11240,6 +11240,130 @@ bool widget_map_fog_click_test(widgetdata *widget) {
     return success;
 }
 
+/** Verify depth cycling and projected sprite ownership against live MAP2 records. */
+static bool widget_map_target_depth_test(widgetdata *widget) {
+    if (widget == NULL || widget->surface == NULL || map_state_transaction_active()) {
+        return false;
+    }
+    map_cell_store_t *saved_levels[MAP2_LEVELS];
+    memcpy(saved_levels, level_cells, sizeof(saved_levels));
+    map_cell_store_t *saved_cells = cells;
+    size_t saved_level = current_level_index;
+    int saved_width = map_width, saved_height = map_height;
+    int saved_origin_x = map_cache_origin_x, saved_origin_y = map_cache_origin_y;
+    uint16_t saved_mask = map_level_mask;
+    widgetdata *saved_widget = cur_widget[MAP_ID];
+    map_render_context_t saved_context = map_retained_primary_context;
+    map_retained_projection_t saved_projection = map_retained_primary_projection;
+    memset(level_cells, 0, sizeof(level_cells));
+    map_width = map_height = 4;
+    map_cache_origin_x = map_cache_origin_y = 0;
+    map_level_mask = (UINT16_C(1) << MAP2_LEVELS) - 1;
+    cur_widget[MAP_ID] = widget;
+    const int layer = GET_MAP_LAYER(LAYER_LIVING, 0);
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        map_select_level(depth, true);
+        map_cell_t *cell = MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1);
+        map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, true);
+        record->face = 1;
+        record->visibility = (map_visibility_fade_t){.initialized = true,
+                                                    .authorized = true,
+                                                    .alpha = UINT8_MAX};
+        map_cell_actor_record(cell, 0, true)->target_object_count = 100 + depth;
+    }
+    bool success = true;
+    UT_array *targets = map_target_collect(0);
+    success = success && utarray_len(targets) == MAP2_LEVELS;
+    uint16_t found_mask = 0;
+    for (size_t index = 0; index < utarray_len(targets); index++) {
+        const map_target_struct *target = utarray_eltptr(targets, index);
+        found_mask |= UINT16_C(1) << MAP2_DEPTH_INDEX(target->depth);
+        success = success && target->count == (uint32_t)(100 + target->depth);
+    }
+    success = success && found_mask == map_level_mask;
+    utarray_free(targets);
+    /* A multipart identity in two physical cells appears only once per depth. */
+    map_select_level(0, false);
+    map_cell_t *duplicate = MAP_CELL_GET_MUTABLE(MAP_STARTX + 2, MAP_STARTY + 1);
+    map_cell_layer_record_t *duplicate_record = map_cell_layer_record(duplicate, layer, true);
+    duplicate_record->face = 1;
+    duplicate_record->visibility = (map_visibility_fade_t){.initialized = true,
+                                                          .authorized = true,
+                                                          .alpha = UINT8_MAX};
+    map_cell_actor_record(duplicate, 0, true)->target_object_count = 100;
+    targets = map_target_collect(0);
+    success = success && utarray_len(targets) == MAP2_LEVELS;
+    utarray_free(targets);
+    /* A fading revoked record and a remembered cell must never remain targets. */
+    map_select_level(-MAP2_MAX_DEPTH, false);
+    map_cell_t *revoked = MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1);
+    map_cell_layer_record(revoked, layer, false)->visibility.authorized = false;
+    map_select_level(MAP2_MAX_DEPTH, false);
+    MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1)->fow = true;
+    targets = map_target_collect(0);
+    success = success && utarray_len(targets) == MAP2_LEVELS - 2;
+    utarray_free(targets);
+
+    SDL_Surface *bitmap = SDL_CreateSurface(4, 4, SDL_PIXELFORMAT_RGBA32);
+    if (bitmap != NULL) {
+        SDL_FillSurfaceRect(bitmap, NULL, UINT32_MAX);
+        map_render_command_t commands[2] = {0};
+        for (size_t index = 0; index < arraysize(commands); index++) {
+            int depth = index == 0 ? -1 : 1;
+            map_select_level(depth, false);
+            map_cell_t *cell = MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1);
+            size_t physical = map_cache_physical_index(MAP_STARTX + 1, MAP_STARTY + 1);
+            commands[index] = (map_render_command_t){
+                .source = bitmap, .x = 10, .y = 20,
+                .bounds_x = 10, .bounds_y = 20, .bounds_w = 4, .bounds_h = 4,
+                .sort_y = (int)index, .tile_x = MAP_STARTX + 1, .tile_y = MAP_STARTY + 1,
+                .record_identity = cell->painter_identity,
+                .cell_generation = cells->headers[physical].generation,
+                .cell_revision = cells->headers[physical].revision,
+                .record_layer = layer, .object_layer = LAYER_LIVING, .depth = depth,
+            };
+        }
+        map_retained_primary_context = (map_render_context_t){.commands = commands,
+                                                              .commands_num = 2};
+        map_retained_projection_commit(widget->surface);
+        double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
+        int mx = widget_x(widget) + (int)(12 * zoom);
+        int my = widget_y(widget) + (int)(22 * zoom);
+        map_target_struct target;
+        success = success && map_mouse_target(mx, my, &target) &&
+                  target.depth == 1 && target.count == 101 && target.x == 1 && target.y == 1;
+        /* The projected top owner's revocation immediately exposes the lower
+         * live owner; its stale sprite can still fade without being selected. */
+        map_select_level(1, false);
+        map_cell_layer_record(MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1),
+                              layer, false)->visibility.authorized = false;
+        success = success && map_mouse_target(mx, my, &target) &&
+                  target.depth == -1 && target.count == 99;
+        map_select_level(-1, false);
+        map_cell_layer_record(MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1),
+                              layer, false)->visibility.authorized = false;
+        success = success && !map_mouse_target(mx, my, &target);
+        SDL_DestroySurface(bitmap);
+    } else {
+        success = false;
+    }
+    for (size_t index = 0; index < MAP2_LEVELS; index++) {
+        map_cell_store_destroy(level_cells[index]);
+    }
+    memcpy(level_cells, saved_levels, sizeof(level_cells));
+    cells = saved_cells;
+    current_level_index = saved_level;
+    map_width = saved_width;
+    map_height = saved_height;
+    map_cache_origin_x = saved_origin_x;
+    map_cache_origin_y = saved_origin_y;
+    map_level_mask = saved_mask;
+    cur_widget[MAP_ID] = saved_widget;
+    map_retained_primary_context = saved_context;
+    map_retained_primary_projection = saved_projection;
+    return success;
+}
+
 bool widget_map_interaction_test(widgetdata *widget) {
     int old_map_width = map_width;
     int old_map_height = map_height;
@@ -11273,7 +11397,7 @@ bool widget_map_interaction_test(widgetdata *widget) {
     map_interaction_test_active = false;
     map_width = old_map_width;
     map_height = old_map_height;
-    return success;
+    return success && widget_map_target_depth_test(widget);
 }
 
 bool widget_map_mouse_origin_test(int mx, int my, int expected_mx, int expected_my) {
