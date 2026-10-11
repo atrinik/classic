@@ -18,7 +18,9 @@ OPENSSL_MODULES="$appdir/usr/lib/ossl-modules"
 OPENSSL_CONF="$appdir/usr/share/atrinik/openssl.cnf"
 ALSA_CONFIG_DIR="$appdir/usr/share/alsa"
 ALSA_CONFIG_PATH="$ALSA_CONFIG_DIR/alsa.conf"
-if [ -z "${SSL_CERT_FILE:-}" ]; then
+if [ -n "${SSL_CERT_FILE:-}" ]; then
+    SSL_CERT_FILE=$(realpath -m -- "$SSL_CERT_FILE")
+else
     if [ -r /etc/ssl/certs/ca-certificates.crt ]; then
         SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     elif [ -r /etc/pki/tls/certs/ca-bundle.crt ]; then

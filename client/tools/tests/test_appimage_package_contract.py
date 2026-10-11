@@ -98,7 +98,7 @@ class AppImageContractTests(unittest.TestCase):
             caller = Path(directory) / 'other cwd'
             caller.mkdir()
             environment = dict(os.environ, ATRINIK_CONFIG_DIR='my config',
-                               LD_LIBRARY_PATH='/unrelated/host/libs', SSL_CERT_FILE='/custom/ca')
+                               LD_LIBRARY_PATH='/unrelated/host/libs', SSL_CERT_FILE='custom ca.pem')
             arguments = ['--server', 'space ; $value', '', '--config=x y']
             result = subprocess.run([str(appdir / 'AppRun'), *arguments], cwd=caller,
                                     env=environment, capture_output=True, text=True, check=True)
@@ -108,7 +108,7 @@ class AppImageContractTests(unittest.TestCase):
             self.assertEqual(data['config'], str(caller / 'my config'))
             self.assertEqual(data['ld'], str(appdir / 'usr/lib'))
             self.assertEqual(data['modules'], str(appdir / 'usr/lib/ossl-modules'))
-            self.assertEqual(data['ca'], '/custom/ca')
+            self.assertEqual(data['ca'], str(caller / 'custom ca.pem'))
 
     def test_default_home_remains_client_owned(self):
         with tempfile.TemporaryDirectory() as directory:
