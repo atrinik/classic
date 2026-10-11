@@ -34,6 +34,7 @@
 #include <gameplay_journal.h>
 #include <swap.h>
 #include <server_main.h>
+#include <server.h>
 #include <plugin.h>
 #include <links.h>
 #include <light.h>
