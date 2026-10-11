@@ -36,6 +36,7 @@
 #include <object_methods.h>
 #include <metrics.h>
 #include <player.h>
+#include <perception.h>
 #include <server.h>
 /**
  * Attempts to stick a projectile such as an arrow into the victim.
@@ -217,6 +218,7 @@ object *common_object_projectile_stop_spell(object *op, int reason) {
 
 /** @copydoc object_methods_t::projectile_fire_func */
 object *common_object_projectile_fire_missile(object *op, object *shooter, int dir) {
+    tag_t shooter_count = shooter->count;
     object_owner_set(op, shooter);
     op->direction = dir;
     SET_ANIMATION_STATE(op);
@@ -253,13 +255,31 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
     }
 
     object *target = NULL;
-    if (shooter->type == PLAYER &&
-        OBJECT_VALID(CONTR(shooter)->target_object, CONTR(shooter)->target_object_count)) {
-        target = CONTR(shooter)->target_object;
-    } else if (shooter->type != PLAYER && OBJECT_VALID(shooter->enemy, shooter->enemy_count)) {
-        target = shooter->enemy;
+    tag_t projectile_count = op->count;
+    /* Insertion and hidden-object plugins can mutate selection or identity.
+     * Reauthorize the current selection at the point that it supplies XYZ. */
+    if (OBJECT_VALID(shooter, shooter_count)) {
+        bool is_player = shooter->type == PLAYER;
+        object *selected = is_player ? CONTR(shooter)->target_object : shooter->enemy;
+        tag_t selected_count = is_player ? CONTR(shooter)->target_object_count : shooter->enemy_count;
+        if (OBJECT_VALID(selected, selected_count)) {
+            bool authorized = is_player
+                ? perception_player_authorized(CONTR(shooter), selected)
+                : perception_object_visible(shooter, selected);
+            if (authorized && OBJECT_VALID(shooter, shooter_count) &&
+                (shooter->type == PLAYER) == is_player &&
+                OBJECT_VALID(selected, selected_count) &&
+                (is_player ? CONTR(shooter)->target_object == selected &&
+                             CONTR(shooter)->target_object_count == selected_count
+                           : shooter->enemy == selected && shooter->enemy_count == selected_count)) {
+                target = selected;
+            }
+        }
     }
-    projectile3d_launch(op, shooter, target, dir);
+    if (!OBJECT_VALID(op, projectile_count)) {
+        return NULL;
+    }
+    projectile3d_launch(op, OBJECT_VALID(shooter, shooter_count) ? shooter : NULL, target, dir);
     object_process(op);
 
     return op;
