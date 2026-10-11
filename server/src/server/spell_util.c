@@ -881,8 +881,9 @@ void cone_drop(object *op) {
     new_ob->level = op->level;
     object_owner_copy(new_ob, op);
 
-    new_ob = object_insert_map(new_ob, op->map, op, INS_NO_MERGE);
+    /* Track before insertion: movement callbacks can save/unload a member map. */
     propagation_track_drop(op, new_ob);
+    object_insert_map(new_ob, op->map, op, INS_NO_MERGE);
 }
 
 /**

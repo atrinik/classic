@@ -375,6 +375,8 @@ static void collect(void) {
 }
 
 void propagation_expire_map(mapstruct *map) {
+    bool was_processing = processing;
+    processing = true;
     for (propagation_cast *cast = casts; cast != NULL; cast = cast->next) {
         for (size_t i = 0; i < cast->used; i++) {
             if (cast->entries[i].cell.map == map ||
@@ -390,6 +392,7 @@ void propagation_expire_map(mapstruct *map) {
             }
         }
     }
+    processing = was_processing;
     if (!processing) {
         collect();
     }
