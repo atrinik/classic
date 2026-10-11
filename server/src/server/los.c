@@ -43,6 +43,21 @@ typedef struct los_camera_view {
     uint16_t cover[MAP_CLIENT_X][MAP_CLIENT_Y];
 } los_camera_view;
 
+#ifdef ATRINIK_TESTING
+static size_t view_sight_checks[MAP2_LEVELS];
+static size_t view_camera_pruned[MAP2_LEVELS];
+
+size_t los_view_sight_checks_for_test(int depth) {
+    return depth >= -MAP2_MAX_DEPTH && depth <= MAP2_MAX_DEPTH
+               ? view_sight_checks[MAP2_DEPTH_INDEX(depth)] : 0;
+}
+
+size_t los_view_camera_pruned_for_test(int depth) {
+    return depth >= -MAP2_MAX_DEPTH && depth <= MAP2_MAX_DEPTH
+               ? view_camera_pruned[MAP2_DEPTH_INDEX(depth)] : 0;
+}
+#endif
+
 /* Kept for startup compatibility: sight has no precomputed 2D block table. */
 void init_block(void) {}
 
@@ -275,6 +290,10 @@ void clear_los(object *pl) {
 }
 
 void update_los(object *pl) {
+#ifdef ATRINIK_TESTING
+    memset(view_sight_checks, 0, sizeof(view_sight_checks));
+    memset(view_camera_pruned, 0, sizeof(view_camera_pruned));
+#endif
     clear_los(pl);
     if (QUERY_FLAG(pl, FLAG_REMOVED) || pl->map == NULL) {
         return;
@@ -301,8 +320,22 @@ void update_los(object *pl) {
                 if (spatial_resolve(pl->map, pl->x + dx, pl->y + dy, depth, &cell)) {
                     flags = GET_MAP_FLAGS(cell.map, cell.x, cell.y) & P_BLOCKSVIEW
                                 ? BLOCKED_LOS_BLOCKSVIEW : BLOCKED_LOS_VISIBLE;
-                    if (!player_ray(pl, dx, dy, depth)) {
+                    if (CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(depth)][ax][ay] ==
+                        LOS_CAMERA_HIDDEN) {
+                        /* Camera-hidden depths cannot disclose content. Prune
+                         * before physical rays; fresh perception queries use
+                         * player_ray directly and never trust this mask. */
                         flags |= BLOCKED_LOS_BLOCKED;
+#ifdef ATRINIK_TESTING
+                        view_camera_pruned[MAP2_DEPTH_INDEX(depth)]++;
+#endif
+                    } else {
+#ifdef ATRINIK_TESTING
+                        view_sight_checks[MAP2_DEPTH_INDEX(depth)]++;
+#endif
+                        if (!player_ray(pl, dx, dy, depth)) {
+                            flags |= BLOCKED_LOS_BLOCKED;
+                        }
                     }
                 }
                 CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(depth)][ax][ay] = flags;

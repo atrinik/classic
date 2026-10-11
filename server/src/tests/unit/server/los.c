@@ -178,6 +178,64 @@ START_TEST(test_unavailable_link_and_tls_exception_fail_deliberately) {
 }
 END_TEST
 
+START_TEST(test_camera_hidden_depths_are_pruned_before_sight_checks) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->mapx = cs->mapy = 5;
+    cs->mapx_2 = cs->mapy_2 = 2;
+    map->level_min = -1;
+    map->level_max = 1;
+    mapstruct *upper = add_level(map, 1, 1);
+    upper->level_min = -1;
+    mapstruct *lower = get_empty_map(24, 24);
+    map->tile_map[TILED_DOWN] = lower;
+    lower->tile_map[TILED_UP] = map;
+    lower->coords[2] = -1;
+    lower->level_min = -1;
+    lower->level_max = 1;
+    object *center_roof = NULL, *center_floor = NULL;
+    for (int x = 10; x <= 14; x++) {
+        for (int y = 10; y <= 14; y++) {
+            object *roof = place(upper, "roof_thatch", x, y);
+            object *floor = place(map, "water_still", x, y);
+            if (x == 12 && y == 12) {
+                center_roof = roof;
+                center_floor = floor;
+            }
+        }
+    }
+    update_los(pl);
+    size_t cells = (size_t)cs->mapx * cs->mapy;
+    /* The connected overhead cutaway and current floor completely hide
+     * their upper/lower depths. Each resolved cell is classified once. */
+    ck_assert_uint_eq(los_view_camera_pruned_for_test(1), cells);
+    ck_assert_uint_eq(los_view_camera_pruned_for_test(-1), cells);
+    ck_assert_uint_eq(los_view_sight_checks_for_test(1), 0);
+    ck_assert_uint_eq(los_view_sight_checks_for_test(-1), 0);
+    ck_assert_uint_eq(los_view_sight_checks_for_test(0), cells);
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        ck_assert_uint_le(los_view_sight_checks_for_test(depth) +
+                          los_view_camera_pruned_for_test(depth), cells);
+    }
+    ck_assert(CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(1)][2][2] & BLOCKED_LOS_BLOCKED);
+    ck_assert(CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(-1)][2][2] & BLOCKED_LOS_BLOCKED);
+    /* A cutaway affects camera eligibility alone. The fresh physical query
+     * remains authoritative and is separately blocked by the current slab. */
+    ck_assert(!los_player_has_geometric_sight(pl, upper, 12, 12));
+    ck_assert(!los_player_can_see_cell(pl, upper, 12, 12));
+    object_remove(center_roof, 0);
+    object_remove(center_floor, 0);
+    /* Geometry changed after the cached prepass. Physical queries and fresh
+     * player actions see the new opening without consulting its stale mask. */
+    ck_assert(los_player_has_geometric_sight(pl, upper, 12, 12));
+    ck_assert(los_player_can_see_cell(pl, upper, 12, 12));
+    ck_assert_uint_eq(CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(1)][2][2], LOS_CAMERA_HIDDEN);
+    ck_assert_uint_eq(los_view_sight_checks_for_test(1), 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("los");
     TCase *tc = tcase_create("Core");
@@ -192,6 +250,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_supercover_corners_do_not_expand_gameplay_sight);
     tcase_add_test(tc, test_floor_top_does_not_hide_occupants_from_camera);
     tcase_add_test(tc, test_unavailable_link_and_tls_exception_fail_deliberately);
+    tcase_add_test(tc, test_camera_hidden_depths_are_pruned_before_sight_checks);
     return s;
 }
 

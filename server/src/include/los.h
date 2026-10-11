@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -27,6 +27,7 @@
 
 #include <decls.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /**
  * @file
@@ -54,6 +55,12 @@ bool los_camera_layer_visible(los_camera_visibility visibility, int layer);
 extern void update_los(object *op);
 
 extern void clear_los(object *op);
+
+#ifdef ATRINIK_TESTING
+/** Counts for the last viewport update; fresh physical queries are excluded. */
+size_t los_view_sight_checks_for_test(int depth);
+size_t los_view_camera_pruned_for_test(int depth);
+#endif
 
 extern int obj_in_line_of_sight(object *obj, rv_vector *rv);
 
