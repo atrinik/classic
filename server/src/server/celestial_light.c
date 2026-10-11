@@ -39,6 +39,10 @@
 static size_t pending_memory, pending_memory_limit = CELESTIAL_PENDING_MEMORY_MAX;
 static celestial_dependencies *active_dependencies;
 
+static void celestial_spatial_observe(const mapstruct *map, void *context) {
+    if (map != NULL) (void)celestial_dependencies_observe(context, map);
+}
+
 static bool celestial_observe(const mapstruct *map) {
     return map == NULL || active_dependencies == NULL ||
            celestial_dependencies_observe(active_dependencies, map);
@@ -342,7 +346,8 @@ static bool celestial_sky_exit(const spatial_cell *cell) {
 
 static bool celestial_face_continuous(const spatial_face *face) {
     if (face->from.map == face->to.map) return true;
-    if (face->from.map == NULL || face->to.map == NULL) return false;
+    if (face->from.map == NULL || face->to.map == NULL ||
+        face->from.map->celestial_schema != 1 || face->to.map->celestial_schema != 1) return false;
     int tile = face->normal[2] > 0 ? TILED_UP : face->normal[2] < 0 ? TILED_DOWN :
                face->normal[0] > 0 ? TILED_EAST : face->normal[0] < 0 ? TILED_WEST :
                face->normal[1] > 0 ? TILED_SOUTH : TILED_NORTH;
@@ -708,6 +713,8 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
     }
     HARD_ASSERT(active_dependencies == NULL);
     active_dependencies = dependencies;
+    spatial_observer observer = spatial_observer_exchange(
+        (spatial_observer){celestial_spatial_observe, dependencies});
     (void)celestial_observe(map);
     mapstruct *levels[MAP2_LEVELS] = {0};
     size_t count = 0;
@@ -736,6 +743,7 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
             current->celestial_light_keyframe_valid = false;
         }
         (void)celestial_dependencies_finish(dependencies, levels, count, false);
+        (void)spatial_observer_exchange(observer);
         active_dependencies = NULL;
         celestial_dependencies_release(dependencies);
         pending_memory -= scratch;
@@ -811,6 +819,7 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
             levels[i]->celestial_light_valid = false;
         }
     }
+    (void)spatial_observer_exchange(observer);
     active_dependencies = NULL;
     celestial_dependencies_release(dependencies);
     pending_memory -= scratch;
@@ -846,7 +855,7 @@ static bool celestial_field_snapshot_save(mapstruct *map,
     return true;
 }
 
-static void celestial_field_snapshot_restore(celestial_field_snapshot_t *snapshot) {
+static bool celestial_field_snapshot_restore(celestial_field_snapshot_t *snapshot) {
     for (size_t i = 0; i < snapshot->count; i++) {
         snapshot->map->spaces[i].celestial_light_value = snapshot->value[i];
         memcpy(snapshot->map->spaces[i].celestial_light_rgb,
@@ -856,8 +865,9 @@ static void celestial_field_snapshot_restore(celestial_field_snapshot_t *snapsho
     snapshot->map->celestial_light_key = snapshot->key;
     snapshot->map->celestial_light_generation_id = snapshot->generation;
     snapshot->map->celestial_light_valid = snapshot->valid;
+    bool bound = true;
     if (snapshot->dependencies != NULL) {
-        (void)celestial_dependencies_field_bind(snapshot->dependencies, snapshot->map, false);
+        bound = celestial_dependencies_field_bind(snapshot->dependencies, snapshot->map, false);
         celestial_dependencies_release(snapshot->dependencies);
     } else {
         celestial_dependencies_field_release(snapshot->map, false);
@@ -866,6 +876,11 @@ static void celestial_field_snapshot_restore(celestial_field_snapshot_t *snapsho
     free(snapshot->rgb);
     snapshot->value = NULL;
     snapshot->rgb = NULL;
+    if (!bound) {
+        snapshot->map->celestial_light_valid = false;
+        celestial_dependencies_field_release(snapshot->map, false);
+    }
+    return bound;
 }
 
 uint64_t celestial_light_generation(const mapstruct *map) {
@@ -1194,7 +1209,10 @@ static void pending_process(size_t limit, uint64_t deadline) {
         job->validated_batch = batch;
         HARD_ASSERT(active_dependencies == NULL);
         active_dependencies = job->dependencies;
+        spatial_observer observer = spatial_observer_exchange(
+            (spatial_observer){celestial_spatial_observe, job->dependencies});
         bool finished = pending_step(job);
+        (void)spatial_observer_exchange(observer);
         active_dependencies = NULL;
         if (finished) pending_free(job);
         else pending_append(job);
@@ -1375,7 +1393,7 @@ bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour) {
     }
 
     for (size_t i = 0; i < count; i++) {
-        celestial_field_snapshot_restore(&snapshots[i]);
+        rebuilt &= celestial_field_snapshot_restore(&snapshots[i]);
         levels[i]->celestial_light_keyframe_valid = rebuilt;
         levels[i]->celestial_light_next_key = key_for_hour(levels[i], absolute_hour + 1);
         levels[i]->celestial_light_next_hour = absolute_hour + 1;
