@@ -11,7 +11,7 @@ source_root=$(realpath "$1")
 build_image=$2
 gpu_image=$3
 client_root=${source_root}/client
-coverage_build=${client_root}/build/linux-coverage
+coverage_build=${client_root}/build/llvm-coverage
 coverage_record=${coverage_build}/gpu-ui-closure.jsonl
 
 expected_revision=$(git -C "${source_root}" rev-parse --verify HEAD)
@@ -54,14 +54,14 @@ docker run --rm \
       python3 client/tools/dependencies.py verify
       python3 client/tools/verify_gpu_fixture_provenance.py
       cd client
-      cmake --preset linux-coverage \
+      cmake --preset llvm-coverage \
         -DCMAKE_TOOLCHAIN_FILE=/workspace/cmake/toolchains/llvm.cmake \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
         -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders
-      cmake --build --preset linux-coverage --parallel "$(nproc)"
-      python3 /workspace/tools/ci/llvm_coverage.py prepare --build-dir build/linux-coverage
-      ctest --preset linux-coverage --output-on-failure --no-tests=error -LE performance
+      cmake --build --preset llvm-coverage --parallel "$(nproc)"
+      python3 /workspace/tools/ci/llvm_coverage.py prepare --build-dir build/llvm-coverage
+      ctest --preset llvm-coverage --output-on-failure --no-tests=error -LE performance
     '
 
 if [[ ! -x ${coverage_build}/client-gpu-renderer-integration-tests ||
@@ -89,23 +89,23 @@ docker run --rm \
   --network none \
   --env ATRINIK_GPU_CONFORMANCE_DRIVER=vulkan \
   --env ATRINIK_GPU_CONFORMANCE_REQUIRED=1 \
-  --env ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY=build/linux-coverage/review \
+  --env ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY=build/llvm-coverage/review \
   --env SDL_VIDEODRIVER=x11 \
   --env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
   --env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
-  --env LLVM_PROFILE_FILE="${compiled_home}/build/linux-coverage/llvm-profiles/%m-%p.profraw" \
+  --env LLVM_PROFILE_FILE="${compiled_home}/build/llvm-coverage/llvm-profiles/%m-%p.profraw" \
   --volume "${source_root}:${compiled_root}" \
   --workdir "${compiled_home}" \
   "${gpu_image}" \
   sh -c "xvfb-run -a sh -c 'set -eu; \
-    mkdir -p build/linux-coverage/review; \
-    ./build/linux-coverage/client-gpu-renderer-integration-tests; \
-    ./build/linux-coverage/atrinik --gpu-player-view \
+    mkdir -p build/llvm-coverage/review; \
+    ./build/llvm-coverage/client-gpu-renderer-integration-tests; \
+    ./build/llvm-coverage/atrinik --gpu-player-view \
       src/tests/fixtures/player_view/gpu-ui-closure.xml \
-      > build/linux-coverage/gpu-ui-closure.jsonl; \
+      > build/llvm-coverage/gpu-ui-closure.jsonl; \
     if ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY= \
       ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH=intro_server_browser \
-      ./build/linux-coverage/atrinik --gpu-player-view \
+      ./build/llvm-coverage/atrinik --gpu-player-view \
         src/tests/fixtures/player_view/gpu-ui-closure.xml >/dev/null 2>&1; then \
       echo GPU UI closure accepted a suppressed root glyph >&2; \
       exit 1; \
@@ -121,5 +121,5 @@ docker run --rm \
   --workdir "${compiled_root}/client" \
   "${build_image}" \
   python3 ../tools/ci/llvm_coverage.py export \
-    --build-dir build/linux-coverage --source-root .. \
+    --build-dir build/llvm-coverage --source-root .. \
     --component client --output coverage.lcov

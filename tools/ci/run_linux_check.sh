@@ -44,12 +44,12 @@ launcher=(
 
 # CTest supplies binary/process-specific profiles for parallel tests and plugins.
 prepare_coverage() {
-  python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir build/linux-coverage
+  python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir build/llvm-coverage
 }
 export_coverage() {
   local module=$1
   python3 "${source_root}/tools/ci/llvm_coverage.py" export \
-    --build-dir build/linux-coverage --source-root "${source_root}" \
+    --build-dir build/llvm-coverage --source-root "${source_root}" \
     --component "${module}" --output coverage.lcov
 }
 
@@ -103,12 +103,12 @@ case "${component}" in
     ctest --test-dir "${source_root}/protocol/build/check" --output-on-failure
 
     pushd "${source_root}/libatrinik" >/dev/null
-    cmake --preset linux-coverage \
+    cmake --preset llvm-coverage \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
+    cmake --build --preset llvm-coverage --parallel "${jobs}"
     prepare_coverage
-    ctest --preset linux-coverage
+    ctest --preset llvm-coverage
     export_coverage libatrinik
     cmake --preset linux-sanitizers \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
@@ -134,12 +134,12 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset linux-coverage \
+    cmake --preset llvm-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
+    cmake --build --preset llvm-coverage --parallel "${jobs}"
     prepare_coverage
-    ctest --preset linux-coverage --parallel 4 -LE performance
+    ctest --preset llvm-coverage --parallel 4 -LE performance
     export_coverage server
     cmake --preset linux-release \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
@@ -158,11 +158,11 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset linux-coverage \
+    cmake --preset llvm-coverage \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
+    cmake --build --preset llvm-coverage --parallel "${jobs}"
     prepare_coverage
-    ctest --preset linux-coverage -LE performance
+    ctest --preset llvm-coverage -LE performance
     export_coverage client
     cmake --preset linux-release \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"

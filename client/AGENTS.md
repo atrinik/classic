@@ -99,7 +99,7 @@
 - Validate dependency changes with `python3 tools/dependencies.py verify` and
   all native changes with `./atrinik build client --profile PROFILE --test`
   from the workspace. Use the workspace topology lifecycle for live checks.
-- For substantial native logic changes, also run the `linux-coverage` preset
+- For substantial native logic changes, also run the `llvm-coverage` preset
   and native LLVM LCOV export documented in `README.md`; keep source/test exclusions
   intentional.
 - Commits and pull-request titles use Conventional Commits. Classic uses one

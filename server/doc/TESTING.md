@@ -37,16 +37,17 @@ libatrinik code, the integrated build and standalone modules.
 From the server directory in a full Classic checkout:
 
 ```sh
-cmake --preset linux-coverage \
-  -DCMAKE_TOOLCHAIN_FILE="$PWD/../cmake/toolchains/llvm.cmake"
-cmake --build --preset linux-coverage
-python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/linux-coverage
-ctest --preset linux-coverage --parallel 4 -LE performance
-python3 ../tools/ci/llvm_coverage.py export --build-dir build/linux-coverage \
+cmake --preset llvm-coverage
+cmake --build --preset llvm-coverage
+python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/llvm-coverage
+ctest --preset llvm-coverage --parallel 4 -LE performance
+python3 ../tools/ci/llvm_coverage.py export --build-dir build/llvm-coverage \
   --source-root .. --component server --output coverage.lcov
 ```
 
-The coverage test preset sets `LLVM_PROFILE_FILE` to the build's isolated
+The `llvm-coverage` preset selects a separate `build/llvm-coverage` cache so
+existing compiler selections in `linux-coverage` trees remain intact. The
+coverage test preset sets `LLVM_PROFILE_FILE` to the build's isolated
 `llvm-profiles/%m-%p.profraw` path. The binary signature and process ID separate
 parallel processes and instrumented plugins. `prepare` clears only that build's
 previous profiles before a fresh pass; additional runtime probes retain the

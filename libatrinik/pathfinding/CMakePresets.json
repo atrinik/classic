@@ -1,0 +1,27 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "llvm-coverage",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/llvm-coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": true,
+        "ENABLE_COVERAGE": true,
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../../cmake/toolchains/llvm.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "llvm-coverage", "configurePreset": "llvm-coverage"}
+  ],
+  "testPresets": [
+    {
+      "name": "llvm-coverage",
+      "configurePreset": "llvm-coverage",
+      "environment": {"LLVM_PROFILE_FILE": "${sourceDir}/build/llvm-coverage/llvm-profiles/%m-%p.profraw"},
+      "output": {"outputOnFailure": true}
+    }
+  ]
+}

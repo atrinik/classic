@@ -950,14 +950,16 @@ class WorkflowContractTests(unittest.TestCase):
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
             encoding="utf-8"
         )
+        self.assertIn("coverage_preset=linux-coverage", runner)
+        self.assertIn("coverage_preset=llvm-coverage", runner)
         server = runner[runner.index("  server)") : runner.index("  client)")]
-        coverage = server.index("cmake --preset linux-coverage")
+        coverage = server.index('cmake --preset "${coverage_preset}"')
         release = server.index("cmake --preset linux-release")
         sanitizers = server.index("cmake --preset linux-sanitizers")
         self.assertLess(coverage, release)
         self.assertLess(release, sanitizers)
         self.assertIn("cmake --build --preset linux-release --parallel", server)
-        for preset in ("linux-coverage", "linux-release", "linux-sanitizers"):
+        for preset in ('"${coverage_preset}"', "linux-release", "linux-sanitizers"):
             self.assertIn(f"ctest --preset {preset} --parallel 4", server)
             self.assertIn(f"ctest --preset {preset} --parallel 4 -LE performance", server)
 
@@ -971,6 +973,7 @@ class WorkflowContractTests(unittest.TestCase):
                 "linux-debug": 4,
                 "linux-sanitizers": 4,
                 "linux-coverage": 4,
+                "llvm-coverage": 4,
                 "linux-release": 4,
             },
         )
@@ -1015,7 +1018,7 @@ class WorkflowContractTests(unittest.TestCase):
         client = runner[client_start : runner.index("  client-benchmark)", client_start)]
         for name, component in (("server", server), ("client", client)):
             with self.subTest(component=name):
-                coverage = component.index("cmake --preset linux-coverage")
+                coverage = component.index('cmake --preset "${coverage_preset}"')
                 release = component.index("cmake --preset linux-release")
                 sanitizers = component.index("cmake --preset linux-sanitizers")
                 self.assertLess(coverage, release)
@@ -1027,7 +1030,7 @@ class WorkflowContractTests(unittest.TestCase):
                     )
                 else:
                     self.assertNotIn("-DENABLE_PRECOMPILED_HEADERS=OFF", component)
-                self.assertIn("ctest --preset linux-coverage", component)
+                self.assertIn('ctest --preset "${coverage_preset}"', component)
                 self.assertIn("ctest --preset linux-release", component)
                 self.assertIn("ctest --preset linux-sanitizers", component)
 
@@ -2049,8 +2052,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--env ATRINIK_BENCHMARK_REVISION="${expected_revision}"', gpu_coverage)
         self.assertIn("verify_gpu_coverage_record.py", gpu_coverage)
         self.assertIn("ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH", gpu_coverage)
-        self.assertIn("cmake --preset linux-coverage", gpu_coverage)
-        self.assertIn("ctest --preset linux-coverage", gpu_coverage)
+        self.assertIn("coverage_preset=linux-coverage", gpu_coverage)
+        self.assertIn("coverage_preset=llvm-coverage", gpu_coverage)
+        self.assertIn('--env ATRINIK_COVERAGE_DIRECTORY="${coverage_directory}"', gpu_coverage)
+        self.assertIn('cmake --preset "${ATRINIK_COVERAGE_PRESET}"', gpu_coverage)
+        self.assertIn('ctest --preset "${ATRINIK_COVERAGE_PRESET}"', gpu_coverage)
         self.assertIn("lvp_icd.json", gpu_coverage)
         self.assertIn("--network none", gpu_coverage)
         self.assertIn("tools/ci/run_gpu_coverage.sh", client)
