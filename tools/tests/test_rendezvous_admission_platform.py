@@ -24,8 +24,19 @@ class AdmissionPlatformTests(unittest.TestCase):
         (self.root / "curl/curl.h").write_text('''#ifndef CURL_FIXTURE_H
 #define CURL_FIXTURE_H
 #include <stdlib.h>
+#include <stdio.h>
 typedef struct { int unused; } CURL;
 typedef int CURLcode;
+typedef struct { int marker; } curl_cancel_t;
+typedef struct { unsigned int version_num; int features; const char *ares; } curl_version_info_data;
+#define CURL_VERSION_ASYNCHDNS 1
+#define CURLVERSION_NOW 0
+#define CURLINFO_SSL_VERIFYRESULT 2
+#define CURLINFO_RESPONSE_CODE 3
+#define CURLINFO_OS_ERRNO 4
+CURLcode curl_perform_cancellable(CURL *, const curl_cancel_t *);
+CURLcode curl_easy_getinfo(CURL *, int, long *);
+const curl_version_info_data *curl_version_info(int);
 #define CURLOPT_CAINFO 1
 #define CURLE_OK 0
 CURL *curl_easy_init(void);
@@ -61,6 +72,8 @@ void curl_easy_cleanup(CURL *);
                 called = "__wrap_curl_easy_init" if source_wrap else "curl_easy_init"
                 real = "curl_easy_init" if source_wrap else "__real_curl_easy_init"
                 self.assertIn(f"CURL *curl = {called}();", admission)
+                self.assertIn("test_perform_cancellable(curl, &bounded)", admission)
+                self.assertIn("CURLcode result = curl_perform_cancellable(handle, cancel);", wrapper)
                 self.assertIn(f"CURL *handle = {real}();", wrapper)
                 self.assertNotIn("CURL *handle = __wrap_curl_easy_init();", wrapper)
                 for option in ("CURLOPT_SSL_VERIFYPEER, 1L", "CURLOPT_SSL_VERIFYHOST, 2L",
@@ -71,9 +84,13 @@ void curl_easy_cleanup(CURL *);
         preamble = HTTPS.read_text().split("static rendezvous_admission_result_t solve_fast", 1)[0]
         # Only this fixture replaces dependencies. The preceding preprocessing
         # test separately exercises the actual included production source.
+        preamble = preamble.replace('#include "../rendezvous_admission.h"', '#include <curl/curl.h>')
         preamble = preamble.replace('#include "../rendezvous_admission.c"', '''
 #include <curl/curl.h>
 CURL *fixture_admission_init(void) { return curl_easy_init(); }
+CURLcode fixture_admission_perform(CURL *handle, const curl_cancel_t *cancel) {
+    return curl_perform_cancellable(handle, cancel);
+}
 ''').replace('#include "../socket_private.h"', "")
         (self.root / "wrapper.c").write_text(preamble + '''
 #include <assert.h>
@@ -96,6 +113,25 @@ void curl_easy_cleanup(CURL *handle) {
     assert(handle == &fixture_handle);
     cleanup_calls++;
 }
+static CURLcode transfer_result;
+static const curl_cancel_t *expected_cancel;
+static int fail_info, no_version;
+CURLcode curl_perform_cancellable(CURL *handle, const curl_cancel_t *cancel) {
+    assert(handle == &fixture_handle && cancel == expected_cancel);
+    return transfer_result;
+}
+CURLcode curl_easy_getinfo(CURL *handle, int option, long *value) {
+    assert(handle == &fixture_handle);
+    if (fail_info) return 48;
+    *value = option == CURLINFO_SSL_VERIFYRESULT ? 20 :
+             option == CURLINFO_RESPONSE_CODE ? 0 : 61;
+    return CURLE_OK;
+}
+const curl_version_info_data *curl_version_info(int age) {
+    assert(age == CURLVERSION_NOW);
+    static const curl_version_info_data version = {530944, CURL_VERSION_ASYNCHDNS, "synthetic"};
+    return no_version ? NULL : &version;
+}
 int main(void) {
     (void)ticket;
     (void)server_id;
@@ -113,6 +149,14 @@ int main(void) {
     fail_init = 1;
     assert(fixture_admission_init() == NULL);
     assert(init_calls == 4 && setopt_calls == 2 && cleanup_calls == 1);
+    assert(ca_init_calls == 4 && ca_set_calls == 2 && ca_set_result == 1);
+    curl_cancel_t cancel = {42};
+    expected_cancel = &cancel;
+    transfer_result = 60;
+    assert(fixture_admission_perform(&fixture_handle, &cancel) == 60);
+    fail_info = no_version = 1;
+    transfer_result = 4;
+    assert(fixture_admission_perform(&fixture_handle, &cancel) == 4);
     return 0;
 }
 ''')
@@ -120,7 +164,16 @@ int main(void) {
         self.run_checked([shutil.which("cc"), "-std=c17", "-D_POSIX_C_SOURCE=200809L",
                           "-DATRINIK_TEST_SOURCE_WRAP", "-Wall", "-Wextra", "-Werror",
                           "-I", str(self.root), str(self.root / "wrapper.c"), "-o", str(binary)])
-        self.run_checked([str(binary)])
+        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr.splitlines(), [
+            "HTTPS admission transport init_calls=4 ca_calls=2 ca_result=1 "
+            "curl_code=60 verify=20 verify_info=0 status=0 status_info=0 "
+            "os_errno=61 os_info=0 version=530944 async_dns=1 ares=1",
+            "HTTPS admission transport init_calls=4 ca_calls=2 ca_result=1 "
+            "curl_code=4 verify=-1 verify_info=48 status=-1 status_info=48 "
+            "os_errno=-1 os_info=48 version=0 async_dns=0 ares=0",
+        ])
 
     @unittest.skipUnless(shutil.which("cmake"), "CMake is required")
     def test_platform_configure_keeps_https_test_on_apple_without_gnu_wrap(self):

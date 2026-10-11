@@ -46,6 +46,24 @@ class AdmissionHTTPSFixtureTests(unittest.TestCase):
         self.assertNotIn("secret", message)
         self.assertNotIn("line 150", message)
 
+    def test_native_failure_retains_transport_evidence_without_text_fields(self):
+        transport = (b"HTTPS admission transport init_calls=1 ca_calls=1 ca_result=0 "
+                     b"curl_code=60 verify=20 verify_info=0 status=0 status_info=0 "
+                     b"os_errno=-1 os_info=0 version=530944 async_dns=1 ares=1")
+        result = subprocess.CompletedProcess(
+            [], 1, stdout=b"private", stderr=transport + b"\n" + transport + b" secret\n")
+        message = FIXTURE.native_failure(result, "valid", 0)
+        self.assertIn(transport.decode("ascii"), message)
+        self.assertEqual(message.count("HTTPS admission transport"), 1)
+        self.assertNotIn("secret", message)
+        self.assertNotIn("private", message)
+        for invalid in (transport.replace(b"ca_calls=1", b"ca_calls=99999999999"),
+                        transport.replace(b"ares=1", b"ares=2"),
+                        transport.replace(b"verify=20", b"verify=private")):
+            result.stderr = invalid
+            self.assertIn("no numeric native diagnostics",
+                          FIXTURE.native_failure(result, "valid", 0))
+
     def test_native_failure_handles_missing_and_excessive_diagnostics(self):
         result = subprocess.CompletedProcess([], -6, stdout=b"", stderr=b"\xffarbitrary\n")
         self.assertIn("exit=-6; requests=1; no numeric native diagnostics",

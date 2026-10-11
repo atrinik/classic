@@ -152,7 +152,13 @@ def native_failure(result, mode, requests):
     for line in result.stderr[:4096].decode("ascii", errors="replace").splitlines():
         if re.fullmatch(r"HTTPS admission assertion at line [0-9]{1,6}|"
                         r"HTTPS admission outcome result=[0-9]{1,3} "
-                        r"solver_calls=[0-9]{1,10} elapsed_ms=[0-9]{1,20}", line):
+                        r"solver_calls=[0-9]{1,10} elapsed_ms=[0-9]{1,20}|"
+                        r"HTTPS admission transport init_calls=[0-9]{1,10} ca_calls=[0-9]{1,10} "
+                        r"ca_result=-?[0-9]{1,3} curl_code=[0-9]{1,3} "
+                        r"verify=-?[0-9]{1,20} verify_info=[0-9]{1,3} "
+                        r"status=-?[0-9]{1,20} status_info=[0-9]{1,3} "
+                        r"os_errno=-?[0-9]{1,20} os_info=[0-9]{1,3} "
+                        r"version=[0-9]{1,10} async_dns=[01] ares=[01]", line):
             diagnostics.append(line)
     detail = "; ".join(diagnostics[:3]) or "no numeric native diagnostics"
     return (f"native HTTPS admission case failed: {mode}; "

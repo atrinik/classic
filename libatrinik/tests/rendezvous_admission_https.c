@@ -1,5 +1,12 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
+#include "../rendezvous_admission.h"
+
+/* Observe the real cancellable transfer before production cleans up its handle.
+ * Only numeric metadata is retained; never log URLs, headers or TLS text. */
+static CURLcode test_perform_cancellable(CURL *handle, const curl_cancel_t *cancel);
+#define curl_perform_cancellable test_perform_cancellable
+
 /* The private prepare seam preserves the production HTTPS/parser path while
  * selecting eight-bit work solely in this independently linked test. */
 #ifdef ATRINIK_TEST_SOURCE_WRAP
@@ -10,6 +17,7 @@ CURL *__wrap_curl_easy_init(void);
 #define curl_easy_init __wrap_curl_easy_init
 #endif
 #include "../rendezvous_admission.c"
+#undef curl_perform_cancellable
 #ifdef ATRINIK_TEST_SOURCE_WRAP
 #undef curl_easy_init
 #endif
@@ -27,6 +35,9 @@ CURL *__wrap_curl_easy_init(void);
 static const char ticket[] = "2222222222222222222222222222222222222222222222222222222222222222";
 static const char server_id[] = "1111111111111111111111111111111111111111111111111111111111111111";
 static unsigned int solver_calls;
+static unsigned int ca_init_calls;
+static unsigned int ca_set_calls;
+static int ca_set_result = -1;
 
 #ifdef ATRINIK_TEST_SOURCE_WRAP
 #define __real_curl_easy_init curl_easy_init
@@ -34,15 +45,45 @@ static unsigned int solver_calls;
 CURL *__real_curl_easy_init(void);
 #endif
 CURL *__wrap_curl_easy_init(void) {
+    ca_init_calls++;
     CURL *handle = __real_curl_easy_init();
     const char *ca = getenv("ATRINIK_TEST_ADMISSION_CA");
     if (handle != NULL && ca != NULL) {
-        if (curl_easy_setopt(handle, CURLOPT_CAINFO, ca) != CURLE_OK) {
+        ca_set_calls++;
+        ca_set_result = (int)curl_easy_setopt(handle, CURLOPT_CAINFO, ca);
+        if (ca_set_result != CURLE_OK) {
             curl_easy_cleanup(handle);
             return NULL;
         }
     }
     return handle;
+}
+
+static CURLcode test_perform_cancellable(CURL *handle, const curl_cancel_t *cancel) {
+    CURLcode result = curl_perform_cancellable(handle, cancel);
+    long verify = -1, status = -1, os_error = -1;
+    CURLcode verify_info = curl_easy_getinfo(handle, CURLINFO_SSL_VERIFYRESULT, &verify);
+    CURLcode status_info = curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status);
+    CURLcode os_info = curl_easy_getinfo(handle, CURLINFO_OS_ERRNO, &os_error);
+    const curl_version_info_data *version = curl_version_info(CURLVERSION_NOW);
+    fprintf(stderr,
+            "HTTPS admission transport init_calls=%u ca_calls=%u ca_result=%d "
+            "curl_code=%d verify=%ld verify_info=%d status=%ld status_info=%d "
+            "os_errno=%ld os_info=%d version=%u async_dns=%d ares=%d\n",
+            ca_init_calls,
+            ca_set_calls,
+            ca_set_result,
+            (int)result,
+            verify,
+            (int)verify_info,
+            status,
+            (int)status_info,
+            os_error,
+            (int)os_info,
+            version != NULL ? version->version_num : 0U,
+            version != NULL && (version->features & CURL_VERSION_ASYNCHDNS) != 0,
+            version != NULL && version->ares != NULL);
+    return result;
 }
 
 static rendezvous_admission_result_t solve_fast(const rendezvous_admission_challenge_t *challenge,
