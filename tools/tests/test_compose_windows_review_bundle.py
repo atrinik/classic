@@ -370,12 +370,63 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         self.assertLess(ownership, message)
         self.assertIn("SendMessageTimeoutW(mainWindow, 0, UIntPtr.Zero,\n            IntPtr.Zero, 0x0002 | 0x0020, 250, out result)", probe)
         self.assertEqual(probe.count("SendMessageTimeoutW("), 2)  # declaration and one call
-        self.assertIn("Snapshot($Client.Id, $Client.MainWindowHandle)", probe)
+        self.assertIn("Snapshot($Client, $Client.MainWindowHandle)", probe)
         self.assertIn("<client close timeout snapshot unavailable>", probe)
         self.assertEqual(smoke.count("(Get-ClientCloseTimeoutSnapshot $launcherClient)"), 1)
         for forbidden in ("PostMessage", "CloseMainWindow()", "GetWindowText", "MainWindowTitle",
                           "Suspend", "Resume", "Terminate", "Dump", "ReadProcessMemory", ".Kill("):
             self.assertNotIn(forbidden, probe)
+
+    def test_wait_chain_probe_pins_identity_and_does_not_expand_access(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("private static string WaitChain(", 1)[1].split("public static string Snapshot(", 1)[0]
+        self.assertIn("var processHandle = client.SafeHandle;", probe)
+        self.assertIn("processHandle.DangerousAddRef(ref retained)", probe)
+        self.assertIn("OpenThread(0x00100800, false, mainThread)", probe)
+        query = probe.index("bool accepted = GetThreadWaitChain")
+        for identity in (
+            "GetWindowThreadProcessId(mainWindow, out owner) != mainThread",
+            "owner != (uint)processId || GetProcessIdOfThread(thread) != owner",
+            "WaitForSingleObject(processHandle.DangerousGetHandle(), 0) != 258",
+            "WaitForSingleObject(thread, 0) != 258",
+        ):
+            self.assertLess(probe.index(identity), query)
+        self.assertIn("GetThreadWaitChain(session, UIntPtr.Zero, 0x4,", probe)
+        for forbidden in ("AdjustTokenPrivileges", "DebugActiveProcess", "ReadProcessMemory",
+                          "GetThreadContext", "SuspendThread", "CreateRemoteThread"):
+            self.assertNotIn(forbidden, smoke)
+
+    def test_wait_chain_callback_lifetime_and_observer_are_bounded(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("private static string WaitChain(", 1)[1].split("public static string Snapshot(", 1)[0]
+        self.assertIn("OpenThreadWaitChainSession(1, callback)", probe)
+        self.assertIn("Marshal.AllocHGlobal(NodeSize * MaxNodes)", probe)
+        self.assertIn("completed.WaitOne(1000) ? callbackResult : \"wct_query_timeout\"", probe)
+        self.assertIn("observer.IsBackground = true", probe)
+        self.assertIn('observer.Join(1500) ? result : "wct_observer_timeout"', probe)
+        cancel = probe.index("CloseThreadWaitChainSession(session)")
+        for release in ("GC.KeepAlive(callback)", "Marshal.FreeHGlobal(nodes)",
+                        "CloseHandle(thread)", "processHandle.DangerousRelease()"):
+            self.assertLess(cancel, probe.index(release))
+        self.assertIn('if (!accepted && error != 997)', probe)
+        self.assertIn('"wct_thread_error=" + Marshal.GetLastWin32Error()', probe)
+        self.assertIn('"wct_session_error=" + Marshal.GetLastWin32Error()', probe)
+        self.assertIn('"wct_query_error=" + error', probe)
+
+    def test_wait_chain_output_excludes_object_names_and_external_identities(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        formatter = smoke.split("private static string FormatWaitChain(", 1)[1].split("private static string WaitChain(", 1)[0]
+        self.assertIn("if (status != 0) return \"wct_error=\" + status", formatter)
+        self.assertIn("if (length < 1 || length > MaxNodes)", formatter)
+        boundary = formatter.index('rows.Add("external_thread_boundary")')
+        thread_output = formatter.index('row += " thread="')
+        self.assertLess(boundary, thread_output)
+        self.assertIn("break;", formatter[boundary:thread_output])
+        for forbidden in ("PtrToString", "ObjectName", "WaitTime", "ContextSwitches",
+                          '" process="', '" pid="'):
+            self.assertNotIn(forbidden, formatter)
+        self.assertIn('type < types.Length ? types[type] : "Unknown"', formatter)
+        self.assertIn('state < statuses.Length ? statuses[state] : "Unknown"', formatter)
 
     def test_lifecycle_evidence_is_bounded_and_uploaded_before_cleanup(self) -> None:
         root = MODULE_PATH.parents[2]

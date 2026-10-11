@@ -174,7 +174,149 @@ public static class AtrinikReviewCloseTimeoutProbe {
     private static extern IntPtr SendMessageTimeoutW(IntPtr window, uint message,
         UIntPtr wParam, IntPtr lParam, uint flags, uint timeout, out UIntPtr result);
 
-    public static string Snapshot(int processId, IntPtr mainWindow) {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenThread(uint access, bool inherit, uint threadId);
+    [DllImport("kernel32.dll")]
+    private static extern uint GetProcessIdOfThread(IntPtr thread);
+    [DllImport("kernel32.dll")]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+    private delegate void WaitChainCallback(IntPtr session, UIntPtr context, uint status,
+        IntPtr count, IntPtr nodes, IntPtr cycle);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern IntPtr OpenThreadWaitChainSession(uint flags, WaitChainCallback callback);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetThreadWaitChain(IntPtr session, UIntPtr context, uint flags,
+        uint threadId, IntPtr count, IntPtr nodes, IntPtr cycle);
+    [DllImport("advapi32.dll")]
+    private static extern void CloseThreadWaitChainSession(IntPtr session);
+
+    // ABI and async lifetime contracts:
+    // https://learn.microsoft.com/windows/win32/api/wct/ns-wct-waitchain_node_info
+    // https://learn.microsoft.com/windows/win32/api/wct/nf-wct-closethreadwaitchainsession
+    // Windows SDK wct.h: two DWORD enums followed by an 8-byte-aligned union
+    // containing WCHAR[128], LARGE_INTEGER and BOOL (280 bytes on Windows x64).
+    // No object-name bytes are decoded. Only the thread arm is ever read.
+    private const int NodeSize = 280, MaxNodes = 16;
+    private static string FormatWaitChain(uint processId, uint status, IntPtr count,
+        IntPtr nodes, IntPtr cycle) {
+        if (status != 0) return "wct_error=" + status;
+        int length = Marshal.ReadInt32(count);
+        if (length < 1 || length > MaxNodes) return "wct_invalid_count";
+        var rows = new System.Collections.Generic.List<string>();
+        string[] types = { "Unknown", "CriticalSection", "SendMessage", "Mutex", "Alpc",
+            "Com", "ThreadWait", "ProcessWait", "Thread", "ComActivation", "Unknown",
+            "SocketIo", "SmbIo" };
+        string[] statuses = { "Unknown", "NoAccess", "Running", "Blocked", "PidOnly",
+            "PidOnlyRpcss", "Owned", "NotOwned", "Abandoned", "Unknown", "Error" };
+        for (int index = 0; index < length; ++index) {
+            IntPtr node = IntPtr.Add(nodes, index * NodeSize);
+            int type = Marshal.ReadInt32(node), state = Marshal.ReadInt32(node, 4);
+            string row = "type=" + (type >= 0 && type < types.Length ? types[type] : "Unknown") +
+                " status=" + (state >= 0 && state < statuses.Length ? statuses[state] : "Unknown");
+            if (type == 8) { // WctThreadType
+                if (unchecked((uint)Marshal.ReadInt32(node, 8)) != processId) {
+                    rows.Add("external_thread_boundary");
+                    break; // Neither follow nor expose another process/thread identity.
+                }
+                row += " thread=" + unchecked((uint)Marshal.ReadInt32(node, 12));
+            }
+            rows.Add(row);
+        }
+        return "wct_nodes=" + length + " cycle=" + (Marshal.ReadInt32(cycle) != 0) +
+            "; " + String.Join("; ", rows);
+    }
+
+    private static string WaitChain(Process client, IntPtr mainWindow, uint mainThread) {
+        if (IntPtr.Size != 8) return "wct_unsupported_architecture";
+        // Pin the original Process object's handle, not a rediscovered PID. The
+        // observer owns this reference even if its bounded caller returns early.
+        int processId = client.Id;
+        var processHandle = client.SafeHandle;
+        bool retained = false;
+        string result = "wct_unavailable";
+        var observer = new System.Threading.Thread(delegate() {
+            IntPtr thread = IntPtr.Zero, session = IntPtr.Zero;
+            IntPtr count = IntPtr.Zero, nodes = IntPtr.Zero, cycle = IntPtr.Zero;
+            WaitChainCallback callback = null;
+            string callbackResult = "wct_callback_unavailable";
+            using (var completed = new System.Threading.ManualResetEvent(false)) {
+                try {
+                    // QUERY_LIMITED_INFORMATION | SYNCHRONIZE; no suspend or write access.
+                    thread = OpenThread(0x00100800, false, mainThread);
+                    if (thread == IntPtr.Zero) {
+                        result = "wct_thread_error=" + Marshal.GetLastWin32Error();
+                        return;
+                    }
+                    count = Marshal.AllocHGlobal(4);
+                    nodes = Marshal.AllocHGlobal(NodeSize * MaxNodes);
+                    cycle = Marshal.AllocHGlobal(4);
+                    Marshal.WriteInt32(count, MaxNodes);
+                    Marshal.WriteInt32(cycle, 0);
+                    callback = delegate(IntPtr handle, UIntPtr context, uint status,
+                                        IntPtr observedCount, IntPtr observedNodes, IntPtr observedCycle) {
+                        try {
+                            callbackResult = FormatWaitChain((uint)processId, status, observedCount,
+                                observedNodes, observedCycle);
+                        } catch { callbackResult = "wct_callback_unavailable"; }
+                        finally { completed.Set(); }
+                    };
+                    session = OpenThreadWaitChainSession(1, callback); // WCT_ASYNC_OPEN_FLAG
+                    if (session == IntPtr.Zero) {
+                        result = "wct_session_error=" + Marshal.GetLastWin32Error();
+                        return;
+                    }
+                    uint owner;
+                    // Held native handles prevent ID reuse; recheck HWND/thread
+                    // ownership and both lifetimes immediately before the query.
+                    if (GetWindowThreadProcessId(mainWindow, out owner) != mainThread ||
+                        owner != (uint)processId || GetProcessIdOfThread(thread) != owner ||
+                        WaitForSingleObject(processHandle.DangerousGetHandle(), 0) != 258 ||
+                        WaitForSingleObject(thread, 0) != 258) {
+                        result = "wct_owned_thread_changed";
+                        return;
+                    }
+                    // Inspect the target's critical sections, but do not traverse
+                    // other processes or enumerate out-of-process COM servers.
+                    bool accepted = GetThreadWaitChain(session, UIntPtr.Zero, 0x4,
+                        mainThread, count, nodes, cycle); // WCT_OUT_OF_PROC_CS_FLAG
+                    int error = Marshal.GetLastWin32Error();
+                    if (!accepted && error != 997) { // ERROR_IO_PENDING
+                        result = "wct_query_error=" + error;
+                        return;
+                    }
+                    result = completed.WaitOne(1000) ? callbackResult : "wct_query_timeout";
+                } catch { result = "wct_unavailable"; }
+                finally {
+                    // Close cancels outstanding async work and waits for callbacks.
+                    // Keep callback, buffers and event alive until it returns.
+                    if (session != IntPtr.Zero) CloseThreadWaitChainSession(session);
+                    GC.KeepAlive(callback);
+                    if (cycle != IntPtr.Zero) Marshal.FreeHGlobal(cycle);
+                    if (nodes != IntPtr.Zero) Marshal.FreeHGlobal(nodes);
+                    if (count != IntPtr.Zero) Marshal.FreeHGlobal(count);
+                    if (thread != IntPtr.Zero) CloseHandle(thread);
+                    processHandle.DangerousRelease();
+                }
+            }
+        });
+        observer.IsBackground = true;
+        try {
+            processHandle.DangerousAddRef(ref retained);
+            observer.Start();
+        }
+        catch {
+            if (retained) processHandle.DangerousRelease();
+            return "wct_observer_unavailable";
+        }
+        // Also bound cancellation/interop; a pending observer retains its own
+        // resources, prints nothing later, and cannot hold up smoke containment.
+        return observer.Join(1500) ? result : "wct_observer_timeout";
+    }
+
+    public static string Snapshot(Process client, IntPtr mainWindow) {
+        int processId = client.Id;
         uint owner;
         uint mainThread = GetWindowThreadProcessId(mainWindow, out owner);
         if (mainWindow == IntPtr.Zero || mainThread == 0 || owner != (uint)processId)
@@ -206,7 +348,8 @@ public static class AtrinikReviewCloseTimeoutProbe {
         bool acknowledged = SendMessageTimeoutW(mainWindow, 0, UIntPtr.Zero,
             IntPtr.Zero, 0x0002 | 0x0020, 250, out result) != IntPtr.Zero;
         return String.Format("pid={0} main_hwnd={1} thread={2} state={3} wait={4} wm_null_ack={5}",
-            processId, mainWindow.ToInt64(), mainThread, state, wait, acknowledged);
+            processId, mainWindow.ToInt64(), mainThread, state, wait, acknowledged) +
+            "; " + WaitChain(client, mainWindow, mainThread);
     }
 }
 '@ -ErrorAction Stop
@@ -214,7 +357,7 @@ public static class AtrinikReviewCloseTimeoutProbe {
         if ($Client.HasExited) {
             return "client_exited=True"
         }
-        return [AtrinikReviewCloseTimeoutProbe]::Snapshot($Client.Id, $Client.MainWindowHandle)
+        return [AtrinikReviewCloseTimeoutProbe]::Snapshot($Client, $Client.MainWindowHandle)
     } catch {
         return "<client close timeout snapshot unavailable>"
     }
