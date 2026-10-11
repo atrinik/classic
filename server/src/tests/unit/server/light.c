@@ -1495,10 +1495,16 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    TCase *tc_oracle = tcase_create("Rebuild oracle");
+    tcase_add_unchecked_fixture(tc_oracle, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_oracle, check_test_setup, check_test_teardown);
+    /* Preserve all resident sources and full-field comparisons under instrumentation. */
+    tcase_set_timeout(tc_oracle, 60);
+    suite_add_tcase(s, tc_oracle);
     tcase_add_test(tc_core, test_light_level_anchors);
     tcase_add_test(tc_core, test_local_glass_floor_attenuates_color_and_neutral_darkness);
     tcase_add_test(tc_core, test_rebuild_preserves_incoming_light_from_third_horizontal_map);
-    tcase_add_test(tc_core, test_rebuild_matches_incremental_oracle_for_all_resident_sources);
+    tcase_add_test(tc_oracle, test_rebuild_matches_incremental_oracle_for_all_resident_sources);
     tcase_add_test(tc_core, test_unchanged_geometry_updates_do_not_rebuild_or_invalidate);
     tcase_add_test(tc_core, test_geometry_tracks_last_blocker_and_cleared_flag);
     tcase_add_test(tc_core, test_geometry_batches_flush_before_read_and_at_scope_end);
