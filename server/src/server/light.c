@@ -32,6 +32,7 @@
 #include <server_main.h>
 #include <light.h>
 #include <object.h>
+#include <spatial.h>
 
 #define NR_LIGHT_MASK 10
 #define MAX_LIGHT_SOURCE 13
@@ -525,49 +526,12 @@ static void light_component_collect(light_map_set *component, const light_map_se
     graph->index = index;
 }
 
-static mapstruct *light_vertical_map(mapstruct *map, int z) {
-    int direction = z < 0 ? TILED_DOWN : TILED_UP;
-
-    for (int depth = 0; depth < abs(z); depth++) {
-        map = light_loaded_tile(map, direction);
-
-        if (map == NULL) {
-            return NULL;
-        }
-    }
-
-    return map;
-}
-
 static mapstruct *light_resolve_space(mapstruct *map, int x, int y, int z, int *rx, int *ry) {
-    mapstruct *level = light_vertical_map(map, z);
-
-    *rx = x;
-    *ry = y;
-
-    if (level != NULL) {
-        mapstruct *resolved = get_map_from_coord2(level, rx, ry);
-
-        if (resolved != NULL) {
-            return resolved;
-        }
-    }
-
-    /* Some map sets only link their levels from each horizontal tile. Try
-     * crossing the horizontal boundary before moving vertically as well. */
-    *rx = x;
-    *ry = y;
-    mapstruct *side = get_map_from_coord2(map, rx, ry);
-
-    if (side == NULL) {
-        return NULL;
-    }
-
-    level = light_vertical_map(side, z);
-    /* Vertical neighbors can have different dimensions. The coordinates
-     * resolved on the horizontal base map must be resolved again there; never
-     * publish an out-of-range space after the alternate traversal order. */
-    return level == NULL ? NULL : get_map_from_coord2(level, rx, ry);
+    spatial_cell cell;
+    if (!spatial_resolve(map, x, y, z, &cell)) return NULL;
+    *rx = cell.x;
+    *ry = cell.y;
+    return cell.map;
 }
 
 /** Equal dimensions and support shorter than a map side bound every resolved
@@ -669,110 +633,22 @@ static void light_reach_collect(light_map_set *result, const light_map_set *seed
     free(horizontal.maps);
 }
 
-static bool light_space_has_floor(mapstruct *map, int x, int y) {
-    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
-        if (QUERY_FLAG(tmp, FLAG_IS_FLOOR)) {
-            return true;
-        }
+/** The radial mask stays authoritative; physical crossings attenuate it in
+ * travel order before signed scalar and normalized color aggregation. */
+static int light_path_value(mapstruct *map, int x, int y, int dx, int dy, int dz,
+                            int value) {
+    spatial_cursor ray;
+    if (!spatial_ray_init(&ray, map, x, y, dx, dy, dz)) return 0;
+    int sign = value < 0 ? -1 : 1;
+    int32_t transmitted = abs(value);
+    spatial_event event;
+    int status;
+    while ((status = spatial_ray_next(&ray, &event)) == 1) {
+        if (!event.valid) return 0;
+        transmitted = spatial_light_attenuate(transmitted, spatial_event_light(&event));
+        if (transmitted == 0) return 0;
     }
-
-    return false;
-}
-
-/** Whether a map space contains a roof/camera surface that ends local rays. */
-static bool light_space_has_roof(mapstruct *map, int x, int y) {
-    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
-        if (object_is_roof_surface(tmp)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static int light_round_div(int value, int divisor) {
-    if (value < 0) {
-        return -((-value + divisor / 2) / divisor);
-    }
-
-    return (value + divisor / 2) / divisor;
-}
-
-static bool light_path_is_clear(mapstruct *map, int x, int y, int dx, int dy, int dz) {
-    int steps = MAX(abs(dx), MAX(abs(dy), abs(dz)));
-    int previous_x = 0, previous_y = 0, previous_z = 0;
-    int previous_rx, previous_ry;
-    mapstruct *previous_map = light_resolve_space(map, x, y, 0, &previous_rx, &previous_ry);
-
-    if (previous_map == NULL) {
-        return false;
-    }
-
-    for (int step = 1; step <= steps; step++) {
-        int current_x = light_round_div(dx * step, steps);
-        int current_y = light_round_div(dy * step, steps);
-        int current_z = light_round_div(dz * step, steps);
-
-        if (current_x == previous_x && current_y == previous_y && current_z == previous_z) {
-            continue;
-        }
-
-        int current_rx, current_ry;
-        mapstruct *current_map = light_resolve_space(map,
-                                                     x + current_x,
-                                                     y + current_y,
-                                                     current_z,
-                                                     &current_rx,
-                                                     &current_ry);
-
-        if (current_map == NULL) {
-            return false;
-        }
-
-        bool target = step == steps;
-
-        /* A roof receives the ray on its exposed face, but an opaque camera
-         * surface cannot pass local light to a higher or farther target. */
-        if (!target && light_space_has_roof(current_map, current_rx, current_ry)) {
-            return false;
-        }
-
-        if (current_z != previous_z) {
-            mapstruct *upper_map;
-            int upper_x, upper_y;
-
-            if (current_z > previous_z) {
-                upper_map = current_map;
-                upper_x = current_rx;
-                upper_y = current_ry;
-            } else {
-                upper_map = previous_map;
-                upper_x = previous_rx;
-                upper_y = previous_ry;
-            }
-
-            /* A floor owns the boundary below its map level. Opaque target
-             * cells are allowed to receive light on their exposed face, but
-             * the ray never continues through them. */
-            if (light_space_has_floor(upper_map, upper_x, upper_y) &&
-                !(target && (GET_MAP_FLAGS(current_map, current_rx, current_ry) & P_BLOCKSVIEW))) {
-                return false;
-            }
-        }
-
-        if (!target && (GET_MAP_FLAGS(current_map, current_rx, current_ry) & P_BLOCKSVIEW)) {
-            return false;
-        }
-
-        previous_x = current_x;
-        previous_y = current_y;
-        previous_z = current_z;
-        previous_map = current_map;
-        previous_rx = current_rx;
-        previous_ry = current_ry;
-    }
-
-    return true;
+    return status == 0 ? sign * transmitted : 0;
 }
 
 /** Calculate the deterministic monotonic radial profile at one distance. */
@@ -860,10 +736,12 @@ static void light_mask_adjust(mapstruct *map,
 
                 if (target == NULL || (only_map != NULL && target != only_map) ||
                     (only_maps != NULL && !light_map_set_contains(only_maps, target)) ||
-                    (other_only && target == map) || !light_path_is_clear(map, x, y, dx, dy, dz)) {
+                    (other_only && target == map)) {
                     continue;
                 }
 
+                value = light_path_value(map, x, y, dx, dy, dz, value);
+                if (value == 0) continue;
                 MapSpace *space = GET_MAP_SPACE_PTR(target, xt, yt);
                 if (component == LIGHT_MASK_SCALAR) {
                     space->light_source_value += value;

@@ -269,7 +269,7 @@ START_TEST(test_real_wilderness_midnight_full_and_new_moon_samples) {
 }
 END_TEST
 
-START_TEST(test_celestial_uses_directional_shadow_and_reseeds_after_bound) {
+START_TEST(test_celestial_elevation_bounds_shadow_and_requires_proven_sky) {
     mapstruct *map = open_fixture(40, 1);
     object *wall = arch_get("wall_wood_1");
     ck_assert_ptr_nonnull(wall);
@@ -278,14 +278,26 @@ START_TEST(test_celestial_uses_directional_shadow_and_reseeds_after_bound) {
     ck_assert_ptr_nonnull(object_insert_map(wall, map, NULL, 0));
 
     ck_assert(celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 7));
-    for (int x = 39; x >= 35; x--) {
+    /* tan(elevation)=8481/sqrt(32768^2-8481^2): two horizontal
+     * crossings precede the top face. The receiving wall is illuminated. */
+    for (int x = 35; x <= 37; x++) {
         ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 378);
     }
-    for (int x = 34; x >= 3; x--) {
+    for (int x = 33; x <= 34; x++) {
         ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 130);
     }
-    for (int x = 2; x >= 0; x--) {
+    for (int x = 0; x <= 32; x++) {
         ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 378);
+    }
+    /* Missing horizontal neighbors cannot manufacture a sky exit. */
+    for (int x = 38; x <= 39; x++) {
+        ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 130);
+    }
+    /* Zenith has no horizontal crossing, so the same wall casts no
+     * sideways shadow and the map edge remains a proven upward exit. */
+    ck_assert(celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 12));
+    for (int x = 0; x < 40; x++) {
+        ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 1281);
     }
 }
 END_TEST
@@ -847,7 +859,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_unloaded_lower_map_does_not_gate_upper_light);
     tcase_add_test(tc_core, test_real_wilderness_midnight_full_and_new_moon_samples);
     tcase_add_test(tc_core, test_derived_horizontal_neighbors_preserve_day_and_lunar_light);
-    tcase_add_test(tc_core, test_celestial_uses_directional_shadow_and_reseeds_after_bound);
+    tcase_add_test(tc_core, test_celestial_elevation_bounds_shadow_and_requires_proven_sky);
     tcase_add_test(tc_core, test_celestial_lunar_and_starlight_are_additive);
     tcase_add_test(tc_core, test_celestial_invalid_topology_fails_closed);
     tcase_add_test(tc_core, test_celestial_rebuild_reaches_existing_radiance_resolver);

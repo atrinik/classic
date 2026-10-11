@@ -22,6 +22,7 @@
 #include <object.h>
 #include <region.h>
 #include <server_main.h>
+#include <spatial.h>
 #include <tod.h>
 #include <toolkit/datetime.h>
 
@@ -47,6 +48,8 @@ typedef struct celestial_model {
     uint16_t moon_color[3];
     uint16_t starlight_color[3];
     uint16_t solar_brightness;
+    int32_t solar_elevation;
+    int32_t moon_elevation;
     uint8_t solar_direction;
     uint8_t moon_direction;
 } celestial_model;
@@ -100,6 +103,7 @@ static void celestial_model_for_map(const mapstruct *map,
     model->solar_direction = solar_azimuth[phases.solar];
 
     int32_t elevation = solar_elevation_at(phases.solar, phases.season);
+    model->solar_elevation = elevation;
     uint16_t factor = season_factor[phases.season / HOURS_PER_MONTH];
     int32_t twilight = -(int32_t)celestial_round(UINT64_C(8481) * factor, 32768);
     if (elevation > 0) {
@@ -132,6 +136,7 @@ static void celestial_model_for_map(const mapstruct *map,
         return;
     }
     model->moon_direction = lunar.azimuth;
+    model->moon_elevation = lunar.elevation;
     model->moon = lunar.moon_strength;
     model->starlight = lunar.starlight_strength;
     memcpy(model->moon_color, profile->moon_linear, sizeof(model->moon_color));
@@ -295,68 +300,148 @@ static uint8_t incoming_face(int dx, int dy) {
     return CELESTIAL_FACE_NORTH;
 }
 
-static int32_t *cell_at(int32_t *values, const mapstruct *map, int x, int y) {
-    return &values[x + map->width * y];
+/* A backtrace has at most 32 horizontal events and thirteen vertical exits.
+ * Store coefficients rather than pre-rounded gains: radiance rounds separately
+ * at each physical crossing in source-to-receiver order. */
+#define CELESTIAL_RAY_EVENTS (CELESTIAL_DIRECT_REACH + MAP2_LEVELS)
+typedef struct celestial_ray {
+    spatial_cursor cursor;
+    uint16_t coefficients[CELESTIAL_RAY_EVENTS];
+    bool apertures[CELESTIAL_RAY_EVENTS];
+    unsigned count, horizontal;
+    bool done, sky;
+} celestial_ray;
+
+static uint32_t celestial_sqrt(uint64_t value) {
+    uint64_t root = 0, bit = UINT64_C(1) << 62;
+    while (bit > value) bit >>= 2;
+    while (bit != 0) {
+        if (value >= root + bit) {
+            value -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (uint32_t)root;
 }
 
-static void transport_line(const mapstruct *map,
-                           const uint8_t *exposed,
-                           const celestial_model *model,
-                           int32_t *values,
-                           int32_t *aperture_values,
-                           uint8_t direction,
-                           bool use_moon) {
+static void celestial_ray_init(celestial_ray *ray, mapstruct *map, int x, int y,
+                               uint8_t direction, int32_t elevation) {
+    memset(ray, 0, sizeof(*ray));
+    if (elevation <= 0) {
+        ray->done = true;
+        return;
+    }
     int dx, dy;
     direction_delta(direction, &dx, &dy);
-    int width = map->width;
-    int height = map->height;
-    int starts = (dx != 0 ? height : width) + (dy != 0 ? width : 0);
+    uint64_t horizontal_squared = UINT64_C(32768) * 32768 -
+                                  (uint64_t)elevation * elevation;
+    uint32_t horizontal = celestial_sqrt(horizontal_squared /
+                                        (dx != 0 && dy != 0 ? 2 : 1));
+    /* Azimuth names the source; direction_delta names light travel. */
+    ray->done = !spatial_direction_init(&ray->cursor, map, x, y,
+                                        -dx * (int)horizontal, -dy * (int)horizontal,
+                                        elevation, CELESTIAL_RAY_EVENTS);
+}
 
-    for (int start = 0; start < starts; start++) {
-        int x;
-        int y;
-        if (dx != 0 && start < height) {
-            x = dx < 0 ? width - 1 : 0;
-            y = start;
-        } else if (dy != 0) {
-            int offset = dx != 0 ? start - height : start;
-            x = offset;
-            y = dy < 0 ? height - 1 : 0;
-            if (dx != 0 && (x < 0 || x >= width)) {
-                continue;
-            }
-            if (dx == 0 && offset >= width) {
-                continue;
-            }
-        } else {
+static bool celestial_sky_exit(const spatial_cell *cell) {
+    if (cell->map == NULL || cell->map->celestial_sky_above == CELESTIAL_SKY_LINKED)
+        return false;
+    /* This checks sealed-cap openings/covered exceptions only after a real
+     * upward exit. It cannot skip any intervening physical face. */
+    return celestial_structure_cell_exposed(cell->map, cell->x, cell->y);
+}
+
+static bool celestial_face_continuous(const spatial_face *face) {
+    if (face->from.map == face->to.map) return true;
+    if (face->from.map == NULL || face->to.map == NULL) return false;
+    int tile = face->normal[2] > 0 ? TILED_UP : face->normal[2] < 0 ? TILED_DOWN :
+               face->normal[0] > 0 ? TILED_EAST : face->normal[0] < 0 ? TILED_WEST :
+               face->normal[1] > 0 ? TILED_SOUTH : TILED_NORTH;
+    static const int opposite[TILED_NUM] = {
+        TILED_SOUTH, TILED_WEST, TILED_NORTH, TILED_EAST,
+        TILED_SOUTHWEST, TILED_NORTHWEST, TILED_NORTHEAST, TILED_SOUTHEAST,
+        TILED_DOWN, TILED_UP};
+    const mapstruct *from = face->from.map, *to = face->to.map;
+    return from->tile_map[tile] == to && to->tile_map[opposite[tile]] == from &&
+           from->celestial_boundary[tile] == CELESTIAL_BOUNDARY_CONTINUOUS &&
+           to->celestial_boundary[opposite[tile]] == CELESTIAL_BOUNDARY_CONTINUOUS &&
+           memcmp(region_celestial_for_map(from)->digest,
+                  region_celestial_for_map(to)->digest, 32) == 0;
+}
+
+/* One bounded crossing per call, also used by the runtime deadline scheduler. */
+static void celestial_ray_step(celestial_ray *ray) {
+    if (ray->done) return;
+    spatial_event event;
+    if (spatial_ray_next(&ray->cursor, &event) != 1) {
+        ray->done = true;
+        return;
+    }
+    if ((event.axes & 3) != 0 && ++ray->horizontal > CELESTIAL_DIRECT_REACH) {
+        ray->done = true;
+        return;
+    }
+    uint16_t coefficient = CELESTIAL_SCALE;
+    bool aperture = false, sky = false;
+    for (size_t i = 0; i < event.face_count; i++) {
+        spatial_face face = event.faces[i];
+        if (face.to.map == NULL && face.normal[2] > 0 &&
+            celestial_sky_exit(&face.from)) {
+            sky = true;
             continue;
         }
+        if (!celestial_face_continuous(&face)) {
+            ray->done = true;
+            return;
+        }
+        spatial_cell swap = face.from;
+        face.from = face.to;
+        face.to = swap;
+        for (size_t axis = 0; axis < 3; axis++) face.normal[axis] = -face.normal[axis];
+        bool crossed_aperture = false;
+        coefficient = MIN(coefficient, spatial_face_light(&face, &crossed_aperture));
+        aperture |= crossed_aperture;
+    }
+    if (ray->count == CELESTIAL_RAY_EVENTS || coefficient == 0) {
+        ray->done = true;
+        return;
+    }
+    ray->coefficients[ray->count] = coefficient;
+    ray->apertures[ray->count++] = aperture;
+    if (sky) {
+        ray->sky = true;
+        ray->done = true;
+    }
+}
 
-        int32_t direct = 0;
-        int32_t aperture_direct = 0;
-        uint8_t cooldown = 0;
-        while (x >= 0 && y >= 0 && x < width && y < height) {
-            int index = x + width * y;
-            if (cooldown == 0 && exposed[index]) {
-                direct = use_moon ? model->moon : model->direct;
-            }
-            *cell_at(values, map, x, y) = MAX(*cell_at(values, map, x, y), direct);
-            aperture_values[index] = MAX(aperture_values[index], aperture_direct);
+static int32_t celestial_ray_value(const celestial_ray *ray, int32_t source,
+                                   int32_t *aperture) {
+    int32_t value = ray->sky ? source : 0;
+    int32_t spill = 0;
+    for (unsigned i = ray->count; i-- > 0;) {
+        value = transmit(value, ray->coefficients[i]);
+        spill = transmit(spill, ray->coefficients[i]);
+        if (ray->apertures[i]) spill = value;
+    }
+    if (aperture != NULL) *aperture = spill;
+    return value;
+}
 
-            bool aperture = false;
-            uint16_t coefficient = step_coefficient(map, x, y, dx, dy, &aperture);
-            direct = transmit(direct, coefficient);
-            aperture_direct = transmit(aperture_direct, coefficient);
-            if (aperture) {
-                aperture_direct = direct;
-            }
-            if (coefficient < CELESTIAL_SCALE) {
-                cooldown = CELESTIAL_DIRECT_REACH;
-            } else if (cooldown != 0) {
-                cooldown--;
-            }
-            x += dx;
-            y += dy;
+static void transport_line(mapstruct *map, const celestial_model *model,
+                           int32_t *values, int32_t *apertures, bool moon) {
+    for (int y = 0; y < map->height; y++) {
+        for (int x = 0; x < map->width; x++) {
+            celestial_ray ray;
+            celestial_ray_init(&ray, map, x, y,
+                               moon ? model->moon_direction : model->solar_direction,
+                               moon ? model->moon_elevation : model->solar_elevation);
+            while (!ray.done) celestial_ray_step(&ray);
+            int index = x + map->width * y;
+            values[index] = celestial_ray_value(&ray, moon ? model->moon : model->direct,
+                                                 &apertures[index]);
         }
     }
 }
@@ -422,7 +507,10 @@ static uint64_t celestial_key(const mapstruct *map,
         hash ^= (uint64_t)(value);                                                              \
         hash *= UINT64_C(1099511628211);                                                        \
     } while (0)
-    MIX_CELESTIAL(profile->revision);
+    MIX_CELESTIAL(2); /* 3D transport algorithm; authored schema is unchanged. */
+    for (size_t byte = 0; byte < sizeof(profile->digest); byte++) {
+        MIX_CELESTIAL(profile->digest[byte]);
+    }
     MIX_CELESTIAL(effective_phases.solar);
     MIX_CELESTIAL(effective_phases.season);
     (void)celestial_override_apply(profile->lunar_period, &effective_phases.lunar);
@@ -445,7 +533,7 @@ static uint64_t celestial_key(const mapstruct *map,
 }
 
 static bool collect_stack(mapstruct *map, mapstruct *levels[MAP2_LEVELS], size_t *count) {
-    /* Sky exposure and injection flow down from the resolved upper maps.
+    /* Sky exposure and transport use the resolved upper maps.
      * A lower map cannot affect this map, and may be hidden/unloaded beneath
      * an opaque floor. Solve only the requested map and its upper chain. */
     mapstruct *cursor = map;
@@ -464,15 +552,12 @@ static bool collect_stack(mapstruct *map, mapstruct *levels[MAP2_LEVELS], size_t
 
 static void publish_map_field(mapstruct *map,
                               const celestial_model *model,
-                              const uint8_t *exposed,
                               int32_t *direct,
                               int32_t *diffuse,
                               int32_t *aperture_direct,
                               int32_t *moon,
                               int32_t *moon_aperture,
-                              int32_t *starlight,
-                              const int32_t *injected,
-                              const int32_t injected_rgb[][3]) {
+                              int32_t *starlight) {
     for (int y = 0; y < map->height; y++) {
         for (int x = 0; x < map->width; x++) {
             int index = x + map->width * y;
@@ -494,10 +579,6 @@ static void publish_map_field(mapstruct *map,
                 rgb[channel] += celestial_scale_value(starlight[index],
                                                        model->starlight_color[channel],
                                                        UINT16_MAX);
-            }
-            if (!exposed[index] && injected[index] > value) {
-                value = injected[index];
-                memcpy(rgb, injected_rgb[index], sizeof(rgb));
             }
             space->celestial_light_value = value;
             memcpy(space->celestial_light_rgb, rgb, sizeof(rgb));
@@ -594,61 +675,35 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
         int32_t *moon = xcalloc(cells, sizeof(*moon));
         int32_t *moon_aperture = xcalloc(cells, sizeof(*moon_aperture));
         int32_t *starlight = xcalloc(cells, sizeof(*starlight));
-        int32_t *injected = xcalloc(cells, sizeof(*injected));
-        int32_t(*injected_rgb)[3] = xcalloc(cells, sizeof(*injected_rgb));
-
-        mapstruct *upper = level + 1 < count ? levels[level + 1] : NULL;
         for (int y = 0; y < current->height; y++) {
             for (int x = 0; x < current->width; x++) {
                 int index = x + current->width * y;
                 exposed[index] = celestial_structure_cell_exposed(current, x, y);
-                if (exposed[index]) {
-                    diffuse[index] = model.diffuse;
-                    starlight[index] = model.starlight;
-                } else if (upper != NULL && x < upper->width && y < upper->height) {
-                    const MapSpace *above = GET_MAP_SPACE_PTR(upper, x, y);
-                    uint16_t coefficient = edge_coefficient(upper, x, y, CELESTIAL_FACE_DOWN, NULL);
-                    injected[index] = transmit(above->celestial_light_value, coefficient);
-                    for (size_t channel = 0; channel < 3; channel++) {
-                        injected_rgb[index][channel] =
-                            transmit(above->celestial_light_rgb[channel], coefficient);
-                    }
-                }
+                celestial_ray ray;
+                celestial_ray_init(&ray, current, x, y, NORTH, 32768);
+                while (!ray.done) celestial_ray_step(&ray);
+                diffuse[index] = celestial_ray_value(&ray, model.diffuse, NULL);
+                starlight[index] = celestial_ray_value(&ray, model.starlight, NULL);
             }
         }
 
         region_celestial_phases_t phases;
         region_celestial_phases(region_celestial_for_map(current), absolute_hour, &phases);
-        transport_line(current,
-                       exposed,
-                       &model,
-                       direct,
-                       aperture_direct,
-                       model.solar_direction,
-                       false);
+        transport_line(current, &model, direct, aperture_direct, false);
         if (model.moon != 0) {
-            transport_line(current,
-                           exposed,
-                           &model,
-                           moon,
-                           moon_aperture,
-                           model.moon_direction,
-                           true);
+            transport_line(current, &model, moon, moon_aperture, true);
         }
         relax_diffuse(current, diffuse);
         relax_diffuse(current, aperture_direct);
         relax_diffuse(current, starlight);
         publish_map_field(current,
                           &model,
-                          exposed,
                           direct,
                           diffuse,
                           aperture_direct,
                           moon,
                           moon_aperture,
-                          starlight,
-                          injected,
-                          injected_rgb);
+                          starlight);
 
         const region_celestial_profile_t *profile = region_celestial_for_map(current);
         uint64_t previous_key = current->celestial_light_key;
@@ -664,8 +719,6 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
         }
         current->celestial_light_valid = true;
         current->celestial_light_keyframe_valid = false;
-        free(injected_rgb);
-        free(injected);
         free(starlight);
         free(moon);
         free(moon_aperture);
@@ -728,9 +781,9 @@ uint64_t celestial_light_generation(const mapstruct *map) {
 }
 
 /* A queued solve never mutates the current field. Each step evaluates one
- * cell (or advances one bounded stage), with the original ray order and Jacobi
- * pass order. Upper-level injection reads this job's completed scratch field,
- * rather than a published field for a different hour. All work is server-thread
+ * crossing, cell, or bounded stage with identical ray arithmetic and Jacobi
+ * pass order. No directional component is copied from another level's field.
+ * All work is server-thread
  * owned; forget() removes references before map storage can be recycled. */
 typedef struct celestial_pending_level {
     mapstruct *map;
@@ -765,9 +818,8 @@ typedef struct celestial_pending {
     celestial_model model;
     uint8_t *exposed;
     int32_t *direct, *diffuse, *aperture, *moon, *moon_aperture, *stars, *next_values;
-    int pass, ray_start, ray_x, ray_y;
-    int32_t ray_direct, ray_aperture;
-    uint8_t ray_cooldown;
+    int pass;
+    celestial_ray ray;
     bool ray_active;
 } celestial_pending_t;
 
@@ -857,58 +909,28 @@ static void pending_append(celestial_pending_t *job) {
 }
 
 static void pending_ray_reset(celestial_pending_t *job) {
-    job->ray_start = 0;
+    job->cell = 0;
     job->ray_active = false;
 }
 
 static bool pending_ray_step(celestial_pending_t *job, bool moon) {
     celestial_pending_level_t *level = &job->levels[job->level];
-    int dx, dy;
-    direction_delta(moon ? job->model.moon_direction : job->model.solar_direction, &dx, &dy);
-    /* The synchronous traversal skips the second width of starts when
-     * dx == 0. Enumerate only those rays that actually enter the map. */
-    int starts = dx == 0 ? level->width
-                         : level->height + (dy != 0 ? level->width : 0);
     if (!job->ray_active) {
-        if (job->ray_start == starts) {
-            return true;
-        }
-        int start = job->ray_start++;
-        if (dx != 0 && start < level->height) {
-            job->ray_x = dx < 0 ? level->width - 1 : 0;
-            job->ray_y = start;
-        } else {
-            job->ray_x = dx != 0 ? start - level->height : start;
-            job->ray_y = dy < 0 ? level->height - 1 : 0;
-        }
-        job->ray_direct = job->ray_aperture = 0;
-        job->ray_cooldown = 0;
+        celestial_ray_init(&job->ray, level->map, (int)(job->cell % level->width),
+                           (int)(job->cell / level->width),
+                           moon ? job->model.moon_direction : job->model.solar_direction,
+                           moon ? job->model.moon_elevation : job->model.solar_elevation);
         job->ray_active = true;
     }
-    int index = job->ray_x + level->width * job->ray_y;
-    if (job->ray_cooldown == 0 && job->exposed[index]) {
-        job->ray_direct = moon ? job->model.moon : job->model.direct;
+    celestial_ray_step(&job->ray);
+    if (job->ray.done) {
+        int32_t *values = moon ? job->moon : job->direct;
+        int32_t *apertures = moon ? job->moon_aperture : job->aperture;
+        values[job->cell] = celestial_ray_value(&job->ray,
+            moon ? job->model.moon : job->model.direct, &apertures[job->cell]);
+        job->ray_active = false;
+        if (++job->cell == level->cells) return true;
     }
-    int32_t *values = moon ? job->moon : job->direct;
-    int32_t *apertures = moon ? job->moon_aperture : job->aperture;
-    values[index] = MAX(values[index], job->ray_direct);
-    apertures[index] = MAX(apertures[index], job->ray_aperture);
-    bool aperture = false;
-    uint16_t coefficient = step_coefficient(level->map, job->ray_x, job->ray_y, dx, dy, &aperture);
-    job->ray_direct = transmit(job->ray_direct, coefficient);
-    job->ray_aperture = transmit(job->ray_aperture, coefficient);
-    if (aperture) {
-        job->ray_aperture = job->ray_direct;
-    }
-    if (coefficient < CELESTIAL_SCALE) {
-        job->ray_cooldown = CELESTIAL_DIRECT_REACH;
-    } else if (job->ray_cooldown != 0) {
-        job->ray_cooldown--;
-    }
-    job->ray_x += dx;
-    job->ray_y += dy;
-    job->ray_active = job->ray_x >= 0 && job->ray_y >= 0 &&
-                      job->ray_x < level->width && job->ray_y < level->height;
     return false;
 }
 
@@ -964,15 +986,20 @@ static bool pending_step(celestial_pending_t *job) {
         job->stage = CELESTIAL_EXPOSE;
         break;
     case CELESTIAL_EXPOSE:
-        job->exposed[job->cell] = celestial_structure_cell_exposed(level->map, x, y);
-        if (job->exposed[job->cell]) {
-            job->diffuse[job->cell] = job->model.diffuse;
-            job->stars[job->cell] = job->model.starlight;
+        if (!job->ray_active) {
+            job->exposed[job->cell] = celestial_structure_cell_exposed(level->map, x, y);
+            celestial_ray_init(&job->ray, level->map, x, y, NORTH, 32768);
+            job->ray_active = true;
         }
-        if (++job->cell == level->cells) {
-            job->cell = 0;
-            job->stage = CELESTIAL_SUN;
-            pending_ray_reset(job);
+        celestial_ray_step(&job->ray);
+        if (job->ray.done) {
+            job->diffuse[job->cell] = celestial_ray_value(&job->ray, job->model.diffuse, NULL);
+            job->stars[job->cell] = celestial_ray_value(&job->ray, job->model.starlight, NULL);
+            job->ray_active = false;
+            if (++job->cell == level->cells) {
+                job->stage = CELESTIAL_SUN;
+                pending_ray_reset(job);
+            }
         }
         break;
     case CELESTIAL_SUN:
@@ -1003,20 +1030,6 @@ static bool pending_step(celestial_pending_t *job) {
             level->rgb[cell][channel] = celestial_scale_value(solar, job->model.solar_color[channel], UINT16_MAX) +
                 celestial_scale_value(moon, job->model.moon_color[channel], UINT16_MAX) +
                 celestial_scale_value(job->stars[cell], job->model.starlight_color[channel], UINT16_MAX);
-        }
-        if (!job->exposed[cell] && job->level + 1 < job->count) {
-            const celestial_pending_level_t *upper = &job->levels[job->level + 1];
-            if (x < upper->width && y < upper->height) {
-                size_t above = x + upper->width * y;
-                uint16_t coefficient = edge_coefficient(upper->map, x, y, CELESTIAL_FACE_DOWN, NULL);
-                int32_t injected = transmit(upper->value[above], coefficient);
-                if (injected > level->value[cell]) {
-                    level->value[cell] = injected;
-                    for (size_t channel = 0; channel < 3; channel++) {
-                        level->rgb[cell][channel] = transmit(upper->rgb[above][channel], coefficient);
-                    }
-                }
-            }
         }
         if (++job->cell == level->cells) {
             job->cell = 0;

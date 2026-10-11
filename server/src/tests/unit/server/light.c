@@ -1447,6 +1447,35 @@ START_TEST(test_light_level_interpolation) {
 }
 END_TEST
 
+START_TEST(test_local_glass_floor_attenuates_color_and_neutral_darkness) {
+    mapstruct *lower = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    link_stacked_maps(lower, upper);
+    object *floor = arch_get("water_still");
+    floor->x = floor->y = 4;
+    object_set_value(floor, "celestial_transmission", "glass", 1);
+    ck_assert_ptr_nonnull(object_insert_map(floor, upper, NULL, 0));
+    object *source = add_colored_light(lower, 4, 4, 13, UINT32_C(0xff0000));
+    MapSpace *sample = GET_MAP_SPACE_PTR(upper, 4, 4);
+    /* The unchanged distance-one radial sample is 720, then glass is 3/4. */
+    ck_assert_int_eq(sample->light_source_value, 540);
+    ck_assert_int_eq(sample->light_source_positive_value, 540);
+    ck_assert_int_eq(sample->light_source_color[0], INT64_C(540) * UINT16_MAX);
+    ck_assert_int_eq(sample->light_source_color[1], 0);
+    ck_assert_int_eq(sample->light_source_color[2], 0);
+    object_remove(source, 0);
+    object_destroy(source);
+    ck_assert_int_eq(sample->light_source_value, 0);
+    source = add_colored_light(lower, 4, 4, -13, UINT32_C(0xff0000));
+    ck_assert_int_eq(sample->light_source_value, -540);
+    ck_assert_int_eq(sample->light_source_positive_value, 0);
+    ck_assert_int_eq(sample->light_source_color[0], 0);
+    object_remove(source, 0);
+    object_destroy(source);
+    ck_assert_int_eq(sample->light_source_value, 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("light");
     TCase *tc_core = tcase_create("Core");
@@ -1456,6 +1485,7 @@ static Suite *suite(void) {
 
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_light_level_anchors);
+    tcase_add_test(tc_core, test_local_glass_floor_attenuates_color_and_neutral_darkness);
     tcase_add_test(tc_core, test_rebuild_preserves_incoming_light_from_third_horizontal_map);
     tcase_add_test(tc_core, test_rebuild_matches_incremental_oracle_for_all_resident_sources);
     tcase_add_test(tc_core, test_unchanged_geometry_updates_do_not_rebuild_or_invalidate);
