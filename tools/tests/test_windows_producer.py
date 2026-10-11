@@ -150,8 +150,34 @@ class WindowsProducerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'LLVM compiler descriptor'):
                 producer.select_producer(self.root, self.revision)
 
-    def test_historical_registry_is_exact_two_source_commits(self) -> None:
+    def test_actual_reviewed_source_commits_when_history_is_available(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        for revision in producer.HISTORICAL:
+            available = subprocess.run(['git', '-C', str(repository), 'cat-file', '-e',
+                                        revision + '^{commit}'], capture_output=True)
+            if available.returncode != 0:
+                self.skipTest('reviewed source history is absent from this checkout')
+        source = self.root / 'historical-source'
+        subprocess.run(['git', 'clone', '--quiet', '--shared', '--no-checkout',
+                        str(repository), str(source)], check=True, capture_output=True)
+        for revision in producer.HISTORICAL:
+            with self.subTest(revision=revision):
+                subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach',
+                                revision], check=True, capture_output=True)
+                result = subprocess.run(['python3', str(self.selector), '--source-root', str(source),
+                                         '--revision', revision], check=True, capture_output=True,
+                                        text=True)
+                selected = json.loads(result.stdout)
+                self.assertEqual(selected['windows_image'], producer.MXE_IMAGE)
+                self.assertEqual(selected['windows_mode'], 'mxe')
+                self.assertEqual(selected['environment']['MXE_TARGET'],
+                                 'x86_64-w64-mingw32.shared')
+
+    def test_historical_registry_is_exact_five_source_commits(self) -> None:
         self.assertEqual(set(producer.HISTORICAL), {
+            '994e6fdc20da962be9c11055bda28ef5561a1dea',
+            '24bee6c8a830aa7372a30be6b842210b07639f73',
+            'c5a8f9fa2bdcfbae9311093fb69907c8d64b35d4',
             'fd4943252ac872fce2995c286b10a0c6d249aba3',
             '2349e0e14276fee251250cd451da6da0e68a3148',
         })
