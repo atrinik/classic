@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -149,6 +150,44 @@ class WindowsProducerTests(unittest.TestCase):
             self.revision = self.commit()
             with self.assertRaisesRegex(ValueError, 'LLVM compiler descriptor'):
                 producer.select_producer(self.root, self.revision)
+
+    def test_actual_current_recipe_selects_without_registry_overrides(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        revision = subprocess.run(['git', '-C', str(repository), 'rev-parse', 'HEAD'],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+        source = self.root / 'current-source'
+        subprocess.run(['git', 'clone', '--quiet', '--shared', '--no-checkout',
+                        str(repository), str(source)], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', revision],
+                       check=True, capture_output=True)
+        result = subprocess.run([sys.executable, str(self.selector), '--source-root', str(source),
+                                 '--revision', revision], check=True, capture_output=True, text=True)
+        selected = json.loads(result.stdout)
+        self.assertEqual(selected['windows_image'], producer.LLVM_IMAGE)
+        self.assertEqual(selected['windows_mode'], 'llvm')
+        self.assertEqual(selected['environment']['ATRINIK_WINDOWS_TARGET'], 'x86_64-w64-mingw32')
+        self.assertFalse(subprocess.run(['git', '-C', str(source), 'status', '--porcelain'],
+                                        check=True, capture_output=True).stdout)
+        # Authenticate the authored scripts, including rejecting committed drift
+        # on either helper rather than silently admitting a newer source recipe.
+        for path in ('client/tools/build-windows-package.sh', 'server/tools/build-windows-package.sh'):
+            with self.subTest(path=path):
+                subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', revision],
+                               check=True, capture_output=True)
+                target = source / path
+                target.write_bytes(target.read_bytes() + b'\n# unreviewed recipe change\n')
+                subprocess.run(['git', '-C', str(source), 'add', path], check=True, capture_output=True)
+                subprocess.run(['git', '-C', str(source), '-c', 'commit.gpgsign=false',
+                                '-c', 'user.name=Windows producer fixture',
+                                '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet',
+                                '-m', 'unreviewed recipe fixture'], check=True, capture_output=True)
+                changed = subprocess.run(['git', '-C', str(source), 'rev-parse', 'HEAD'],
+                                         check=True, capture_output=True, text=True).stdout.strip()
+                rejected = subprocess.run([sys.executable, str(self.selector), '--source-root',
+                                           str(source), '--revision', changed], capture_output=True, text=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertEqual(rejected.stdout, '')
+                self.assertIn('unapproved Windows source recipe: ' + path, rejected.stderr)
 
     def test_actual_reviewed_source_commits_when_history_is_available(self) -> None:
         repository = Path(__file__).resolve().parents[2]
