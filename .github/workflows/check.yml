@@ -702,6 +702,13 @@ jobs:
               Remove-Item -LiteralPath $extractRoot -Recurse -Force
             }
           }
+      - name: Verify owned Windows stack diagnostic lifecycle
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tools/tests/windows_wait_chain_fixture.ps1 -Native
+          if ($LASTEXITCODE -ne 0) {
+            throw "Owned Windows stack diagnostic lifecycle qualification failed"
+          }
       - name: Execute private-state and protocol tests on Windows
         shell: pwsh
         run: |
