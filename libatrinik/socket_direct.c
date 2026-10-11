@@ -26,7 +26,6 @@
 #define SOCKET_RENDEZVOUS_AUTH_FRAMES_MAX 4U
 #define SOCKET_RENDEZVOUS_AUTH_BYTES_MAX 2048U
 #define SOCKET_RENDEZVOUS_SIGNAL_BYTES_MAX 9216U
-#define SOCKET_RENDEZVOUS_RETRY_AFTER_MAX (24U * 60U * 60U)
 #define SOCKET_STUN_ATTEMPT_BUDGET_MS 3000U
 #define SOCKET_RENDEZVOUS_RESERVED_BUDGET_MS 5000U
 #define SOCKET_STUN_RESOLVER_WORKERS_MAX 4U
@@ -639,7 +638,7 @@ size_t socket_rendezvous_attempt_header(char *data, size_t size, size_t count, v
         if (length > 0 && length < sizeof(value)) {
             memcpy(value, cursor, length);
             value[length] = '\0';
-            if (string_parse_uint64(value, 10, 1, SOCKET_RENDEZVOUS_RETRY_AFTER_MAX, &parsed)) {
+            if (string_parse_uint64(value, 10, 1, RENDEZVOUS_ADMISSION_RETRY_AFTER_MAX, &parsed)) {
                 attempt->retry_after_seconds = (uint32_t)parsed;
             }
         }
@@ -1735,14 +1734,20 @@ size_t socket_rendezvous_client(socket_t *sc,
     }
 
     char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U];
+    uint32_t retry_after_seconds = 0;
     rendezvous_admission_result_t admission = rendezvous_admission_prepare(
-        url, attempt->server_id, attempt->ticket, attempt->deadline_ms, NULL, proof);
+        url, attempt->server_id, attempt->ticket, attempt->deadline_ms, NULL, proof,
+        &retry_after_seconds);
     if (admission != RENDEZVOUS_ADMISSION_OK) {
         failure->code = admission == RENDEZVOUS_ADMISSION_TIMEOUT
                             ? SOCKET_CONNECT_FAILURE_TIMEOUT
                             : admission == RENDEZVOUS_ADMISSION_PROTOCOL
                                   ? SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL
                                   : SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
+        if (admission == RENDEZVOUS_ADMISSION_RATE_LIMITED) {
+            failure->code = SOCKET_CONNECT_FAILURE_RATE_LIMITED;
+            failure->retry_after_seconds = retry_after_seconds;
+        }
         socket_rendezvous_attempt_fail(attempt);
         return 0;
     }

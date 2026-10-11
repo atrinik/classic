@@ -7,8 +7,8 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 
-#define ADMISSION_SCHEMA "atrinik-rendezvous-admission-v1"
-#define WORK_DOMAIN "atrinik-rendezvous-work-v1"
+#define ADMISSION_SCHEMA ATRINIK_RENDEZVOUS_ADMISSION_SCHEMA
+#define WORK_DOMAIN ATRINIK_RENDEZVOUS_ADMISSION_WORK_DOMAIN
 
 static bool admission_digest(const void *data, size_t size, unsigned char digest[32]) {
     unsigned int written = 0;
@@ -94,7 +94,7 @@ static bool admission_decimal(const char *start, size_t size, uint64_t *value) {
             return false;
         result = result * 10U + (unsigned int)(start[i] - '0');
     }
-    if (result > UINT64_C(253402300799))
+    if (result > ATRINIK_RENDEZVOUS_ADMISSION_UTC_SECONDS_MAX)
         return false;
     *value = result;
     return true;
@@ -115,7 +115,9 @@ admission_token(const char *token, const char *ticket_hash, uint64_t now, uint64
     const char *issued = key_end + 1, *issued_end = strchr(issued, '.');
     uint64_t iat;
     if (issued_end == NULL || !admission_decimal(issued, (size_t)(issued_end - issued), &iat) ||
-        iat > UINT64_C(253402300799) - 60 || iat > now || now - iat >= 60)
+        iat > ATRINIK_RENDEZVOUS_ADMISSION_UTC_SECONDS_MAX -
+                  ATRINIK_RENDEZVOUS_ADMISSION_LIFETIME_SECONDS ||
+        iat > now || now - iat >= ATRINIK_RENDEZVOUS_ADMISSION_LIFETIME_SECONDS)
         return false;
     const char *hash = issued_end + 1;
     if (strlen(hash) != 64 + 1 + 32 + 1 + 64)
@@ -129,7 +131,7 @@ admission_token(const char *token, const char *ticket_hash, uint64_t now, uint64
     }
     if (ticket_hash != NULL && CRYPTO_memcmp(hash, ticket_hash, 64) != 0)
         return false;
-    *expires_at = iat + 60;
+    *expires_at = iat + ATRINIK_RENDEZVOUS_ADMISSION_LIFETIME_SECONDS;
     return true;
 }
 
@@ -142,12 +144,13 @@ bool rendezvous_admission_parse(const char *body,
         return false;
     OPENSSL_cleanse(out, sizeof(*out));
     static const char prefix[] = "{\"schema\":\"" ADMISSION_SCHEMA "\",\"challenge\":\"";
-    static const char middle[] = "\",\"difficulty\":24,\"expiresAt\":\"";
-    if (body == NULL || size > 512 || size < sizeof(prefix) + sizeof(middle) ||
-        memchr(body, 0, size) != NULL || !string_is_hex_fixed(ticket_hash, 64, true) ||
+    static const char middle[] = "\",\"difficulty\":";
+    if (body == NULL || size > ATRINIK_RENDEZVOUS_ADMISSION_RESPONSE_MAX ||
+        size < sizeof(prefix) + sizeof(middle) || memchr(body, 0, size) != NULL ||
+        !string_is_hex_fixed(ticket_hash, 64, true) ||
         memcmp(body, prefix, sizeof(prefix) - 1) != 0)
         return false;
-    char copy[513];
+    char copy[ATRINIK_RENDEZVOUS_ADMISSION_RESPONSE_MAX + 1U];
     memcpy(copy, body, size);
     copy[size] = 0;
     char *token = copy + sizeof(prefix) - 1, *end = strchr(token, '"');
@@ -156,9 +159,20 @@ bool rendezvous_admission_parse(const char *body,
     rendezvous_admission_challenge_t parsed = {0};
     if (ok) {
         memcpy(parsed.token, token, (size_t)(end - token));
-        const char *expiry = end + sizeof(middle) - 1, *expiry_end = strchr(expiry, '"');
+        const char *difficulty = end + sizeof(middle) - 1;
+        const char *difficulty_end = strchr(difficulty, ',');
+        uint64_t parsed_difficulty = 0;
+        static const char expiry_prefix[] = ",\"expiresAt\":\"";
+        ok = difficulty_end != NULL &&
+             admission_decimal(difficulty,
+                               (size_t)(difficulty_end - difficulty),
+                               &parsed_difficulty) &&
+             parsed_difficulty == RENDEZVOUS_ADMISSION_DIFFICULTY &&
+             strncmp(difficulty_end, expiry_prefix, sizeof(expiry_prefix) - 1) == 0;
+        const char *expiry = ok ? difficulty_end + sizeof(expiry_prefix) - 1 : "";
+        const char *expiry_end = strchr(expiry, '"');
         uint64_t declared = 0;
-        ok = expiry_end != NULL && strcmp(expiry_end, "\"}") == 0 &&
+        ok = ok && expiry_end != NULL && strcmp(expiry_end, "\"}") == 0 &&
              admission_decimal(expiry, (size_t)(expiry_end - expiry), &declared) &&
              admission_token(parsed.token, ticket_hash, now, &parsed.expires_at) &&
              declared == parsed.expires_at;
@@ -204,7 +218,7 @@ admission_solve(const rendezvous_admission_challenge_t *challenge,
     rendezvous_admission_result_t result = RENDEZVOUS_ADMISSION_UNAVAILABLE;
     for (uint64_t trial = 0; ctx != NULL && trial < MIN(trials, RENDEZVOUS_ADMISSION_TRIALS_MAX);
          trial++) {
-        if ((trial & 4095U) == 0) {
+        if (trial % ATRINIK_RENDEZVOUS_ADMISSION_CHECK_INTERVAL == 0) {
             if (curl_cancelled(cancel)) {
                 result = RENDEZVOUS_ADMISSION_CANCELLED;
                 break;
@@ -274,9 +288,13 @@ static bool admission_cancelled(void *context) {
 }
 
 typedef struct admission_response {
-    char body[513];
+    char body[ATRINIK_RENDEZVOUS_ADMISSION_RESPONSE_MAX + 1U];
     size_t used;
     size_t header_bytes;
+    uint32_t retry_after_seconds;
+    bool retry_after_seen;
+    bool content_type_seen;
+    bool application_json;
     bool no_store;
 } admission_response_t;
 
@@ -300,8 +318,53 @@ static size_t admission_header(char *data, size_t size, size_t count, void *cont
     if (n > 8192 - response->header_bytes)
         return 0;
     response->header_bytes += n;
-    if (n >= 5 && memcmp(data, "HTTP/", 5) == 0)
+    if (n >= 5 && memcmp(data, "HTTP/", 5) == 0) {
         response->no_store = false;
+        response->retry_after_seconds = 0;
+        response->retry_after_seen = false;
+        response->content_type_seen = false;
+        response->application_json = false;
+    }
+    static const char content_name[] = "Content-Type:";
+    if (n >= sizeof(content_name) - 1 &&
+        strncasecmp(data, content_name, sizeof(content_name) - 1) == 0) {
+        response->application_json = false;
+        if (response->content_type_seen)
+            return n;
+        response->content_type_seen = true;
+        const char *p = data + sizeof(content_name) - 1, *end = data + n;
+        while (p < end && (*p == ' ' || *p == '\t'))
+            p++;
+        while (end > p && (end[-1] == '\r' || end[-1] == '\n' || end[-1] == ' ' || end[-1] == '\t'))
+            end--;
+        static const char value[] = "application/json";
+        response->application_json =
+            (size_t)(end - p) == sizeof(value) - 1 && memcmp(p, value, sizeof(value) - 1) == 0;
+        return n;
+    }
+    static const char retry_name[] = "Retry-After:";
+    if (n >= sizeof(retry_name) - 1 && strncasecmp(data, retry_name, sizeof(retry_name) - 1) == 0) {
+        response->retry_after_seconds = 0;
+        if (response->retry_after_seen)
+            return n;
+        response->retry_after_seen = true;
+        const char *p = data + sizeof(retry_name) - 1, *end = data + n;
+        while (p < end && (*p == ' ' || *p == '\t'))
+            p++;
+        while (end > p && (end[-1] == '\r' || end[-1] == '\n' || end[-1] == ' ' || end[-1] == '\t'))
+            end--;
+        if (p == end || end - p > 10)
+            return n;
+        uint64_t value = 0;
+        for (; p < end; p++) {
+            if (*p < '0' || *p > '9')
+                return n;
+            value = value * 10U + (unsigned int)(*p - '0');
+        }
+        if (value >= 1 && value <= RENDEZVOUS_ADMISSION_RETRY_AFTER_MAX)
+            response->retry_after_seconds = (uint32_t)value;
+        return n;
+    }
     static const char name[] = "Cache-Control:";
     if (n >= sizeof(name) - 1 && strncasecmp(data, name, sizeof(name) - 1) == 0) {
         const char *p = data + sizeof(name) - 1, *end = data + n;
@@ -323,10 +386,13 @@ admission_prepare(const char *websocket_url,
                   uint64_t deadline_ms,
                   const curl_cancel_t *cancel,
                   char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U],
+                  uint32_t *retry_after_seconds,
                   rendezvous_admission_result_t (*solver)(const rendezvous_admission_challenge_t *,
                                                           uint64_t,
                                                           const curl_cancel_t *,
                                                           char *)) {
+    if (retry_after_seconds != NULL)
+        *retry_after_seconds = 0;
     if (proof == NULL)
         return RENDEZVOUS_ADMISSION_PROTOCOL;
     OPENSSL_cleanse(proof, RENDEZVOUS_ADMISSION_PROOF_MAX + 1U);
@@ -335,7 +401,7 @@ admission_prepare(const char *websocket_url,
     uint64_t now_ms = datetime_monotonic_ms();
     if (now_ms >= deadline_ms)
         return RENDEZVOUS_ADMISSION_TIMEOUT;
-    char url[1024], hash[65] = {0}, request[256] = {0};
+    char url[1024], hash[65] = {0}, request[ATRINIK_RENDEZVOUS_ADMISSION_REQUEST_MAX + 1U] = {0};
     if (!rendezvous_admission_url(websocket_url, server_id, url, sizeof(url)) ||
         !rendezvous_admission_ticket_hash(ticket, hash))
         return RENDEZVOUS_ADMISSION_PROTOCOL;
@@ -384,9 +450,13 @@ admission_prepare(const char *websocket_url,
             result = RENDEZVOUS_ADMISSION_TIMEOUT;
         else if (transferred == CURLE_ABORTED_BY_CALLBACK)
             result = RENDEZVOUS_ADMISSION_CANCELLED;
-        else if (transferred == CURLE_OK && status == 200) {
+        else if (transferred == CURLE_OK && status == 429) {
+            result = RENDEZVOUS_ADMISSION_RATE_LIMITED;
+            if (retry_after_seconds != NULL)
+                *retry_after_seconds = response.retry_after_seconds;
+        } else if (transferred == CURLE_OK && status == 200) {
             result = RENDEZVOUS_ADMISSION_PROTOCOL;
-            if (response.no_store && now >= 0 &&
+            if (response.no_store && response.application_json && now >= 0 &&
                 rendezvous_admission_parse(response.body,
                                            response.used,
                                            hash,
@@ -410,13 +480,15 @@ rendezvous_admission_prepare(const char *websocket_url,
                              const char *ticket,
                              uint64_t deadline_ms,
                              const curl_cancel_t *cancel,
-                             char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]) {
+                             char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U],
+                             uint32_t *retry_after_seconds) {
     return admission_prepare(websocket_url,
                              server_id,
                              ticket,
                              deadline_ms,
                              cancel,
                              proof,
+                             retry_after_seconds,
                              rendezvous_admission_solve);
 }
 
@@ -450,7 +522,7 @@ struct curl_slist *rendezvous_admission_headers(const char *proof,
               *p == '.' || *p == '_' || *p == '-'))
             return NULL;
     struct curl_slist *headers = NULL;
-    bool ok = *proof != 0 && admission_append(&headers, "X-Atrinik-Rendezvous-Admission", proof);
+    bool ok = *proof != 0 && admission_append(&headers, ATRINIK_RENDEZVOUS_ADMISSION_HEADER, proof);
     if (grant != NULL) {
         char bearer[72];
         ok = ok && string_is_hex_fixed(grant->grant, 64, true) &&
@@ -460,12 +532,14 @@ struct curl_slist *rendezvous_admission_headers(const char *proof,
             snprintf(bearer, sizeof(bearer), "Bearer %s", grant->grant);
             ok =
                 admission_append(&headers, "Authorization", bearer) &&
-                admission_append(&headers, "X-Atrinik-Access-Client-Nonce", grant->client_nonce) &&
+                admission_append(&headers,
+                                 ATRINIK_RENDEZVOUS_ADMISSION_CLIENT_NONCE_HEADER,
+                                 grant->client_nonce) &&
                 admission_append(&headers, "Sec-WebSocket-Protocol", RENDEZVOUS_ACCESS_SUBPROTOCOL);
         }
         OPENSSL_cleanse(bearer, sizeof(bearer));
     } else
-        ok = ok && admission_append(&headers, "X-Atrinik-Rendezvous-Ticket", ticket);
+        ok = ok && admission_append(&headers, ATRINIK_RENDEZVOUS_ADMISSION_TICKET_HEADER, ticket);
     if (!ok) {
         rendezvous_admission_headers_free(headers);
         return NULL;

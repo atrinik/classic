@@ -7,9 +7,12 @@ Atrinik classic client, server, tests, and tooling. Its public CMake target is
 `Atrinik::Core`; the installed static library is named `libatrinik`.
 
 Integrated classic builds use the sibling `protocol/` source from the same
-commit. Standalone builds retain a checksum-pinned protocol archive fallback
-from `dependencies.lock.json`. Override that source explicitly when composing
-another checkout:
+commit. The historical checksum-pinned archive in `dependencies.lock.json`
+lacks the new generated rendezvous admission definitions and now fails configure.
+Until a matching immutable artifact is published, select matching sibling,
+embedded, explicitly supplied, or installed Classic protocol sources. The
+historical lock is preserved; no unreleased artifact or checksum is substituted.
+Override the source explicitly when composing another checkout:
 
 ```sh
 cmake -S . -B build \
@@ -112,7 +115,11 @@ The protected grant is redeemed before WebSocket allocation; the
 codes never enter these APIs. Header lists returned by the admission helper must
 be released with `rendezvous_admission_headers_free`; caller-owned challenge and
 proof buffers must be cleansed after use. Independent calls are thread-safe;
-outputs never retain borrowed inputs. PoW imposes a computational cost, with no
+outputs never retain borrowed inputs. Challenge HTTP 429 terminates the attempt
+with `RENDEZVOUS_ADMISSION_RATE_LIMITED`; the optional caller-owned retry delay
+is zero unless one decimal `Retry-After` value in 1..86400 seconds is valid.
+The client preserves that bounded delay in its rate-limit failure result.
+PoW imposes a computational cost, with no
 fairness guarantee against sustained anonymous load. Slow devices may time out
 and must not bypass the proof. QUIC transport is enabled only with OpenSSL 3.5
 or newer.

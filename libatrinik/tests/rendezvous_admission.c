@@ -104,6 +104,48 @@ static int test_parse(void) {
     return 0;
 }
 
+static int test_retry_after(void) {
+    const struct {
+        const char *value;
+        uint32_t expected;
+    } cases[] = {{"1", 1},
+                 {"37", 37},
+                 {"86400", 86400},
+                 {"0", 0},
+                 {"86401", 0},
+                 {"18446744073709551616", 0},
+                 {"9999999999", 0},
+                 {"+37", 0},
+                 {"-37", 0},
+                 {"37seconds", 0},
+                 {"", 0},
+                 {"Wed, 21 Oct 2026 07:28:00 GMT", 0}};
+    for (size_t i = 0; i < arraysize(cases); i++) {
+        admission_response_t response = {0};
+        char header[128];
+        int n = snprintf(header, sizeof(header), "rEtRy-AfTeR: \t%s \r\n", cases[i].value);
+        REQUIRE(n > 0 && (size_t)n < sizeof(header));
+        REQUIRE(admission_header(header, 1, (size_t)n, &response) == (size_t)n);
+        REQUIRE(response.retry_after_seconds == cases[i].expected);
+    }
+    admission_response_t response = {0};
+    char valid[] = "Retry-After: 37\r\n";
+    REQUIRE(admission_header(valid, 1, sizeof(valid) - 1, &response) == sizeof(valid) - 1);
+    REQUIRE(response.retry_after_seconds == 37);
+    REQUIRE(admission_header(valid, 1, sizeof(valid) - 1, &response) == sizeof(valid) - 1);
+    REQUIRE(response.retry_after_seconds == 0);
+    char status[] = "HTTP/1.1 429 Too Many Requests\r\n";
+    REQUIRE(admission_header(status, 1, sizeof(status) - 1, &response) == sizeof(status) - 1);
+    REQUIRE(!response.retry_after_seen && response.retry_after_seconds == 0);
+    REQUIRE(admission_header(valid, 1, sizeof(valid) - 1, &response) == sizeof(valid) - 1);
+    REQUIRE(response.retry_after_seconds == 37);
+    char embedded[] = "Retry-After: 7\0bad\r\n";
+    memset(&response, 0, sizeof(response));
+    REQUIRE(admission_header(embedded, 1, sizeof(embedded) - 1, &response) == sizeof(embedded) - 1);
+    REQUIRE(response.retry_after_seconds == 0);
+    return 0;
+}
+
 static uint64_t fake_now;
 static unsigned int clock_calls, cancel_calls;
 static uint64_t test_clock(void) {
@@ -175,10 +217,17 @@ static int test_solver(void) {
     REQUIRE(zeroed(proof, sizeof(proof)));
     cancel_limit = 1;
     cancel_calls = 0;
-    REQUIRE(rendezvous_admission_prepare("bad", server_id, ticket, 999999, &cancel, proof) ==
+    REQUIRE(rendezvous_admission_prepare("bad", server_id, ticket, 999999, &cancel, proof, NULL) ==
             RENDEZVOUS_ADMISSION_CANCELLED);
-    REQUIRE(rendezvous_admission_prepare("bad", server_id, ticket, 0, NULL, proof) ==
-            RENDEZVOUS_ADMISSION_TIMEOUT);
+    uint32_t retry_after_seconds = 37;
+    REQUIRE(rendezvous_admission_prepare("bad",
+                                         server_id,
+                                         ticket,
+                                         0,
+                                         NULL,
+                                         proof,
+                                         &retry_after_seconds) == RENDEZVOUS_ADMISSION_TIMEOUT);
+    REQUIRE(retry_after_seconds == 0);
     return 0;
 }
 
@@ -269,6 +318,7 @@ int main(int argc, char **argv) {
     }
     REQUIRE(test_vectors() == 0);
     REQUIRE(test_parse() == 0);
+    REQUIRE(test_retry_after() == 0);
     REQUIRE(test_solver() == 0);
     REQUIRE(test_urls_headers() == 0);
     toolkit_deinit();

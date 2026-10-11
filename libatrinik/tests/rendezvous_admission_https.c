@@ -4,6 +4,7 @@
  * selecting eight-bit work solely in this independently linked test. */
 #include "../rendezvous_admission.c"
 #include <toolkit/logger.h>
+#include "../socket_private.h"
 
 #define REQUIRE(x)                                                               \
     do {                                                                         \
@@ -58,12 +59,47 @@ static bool zeroed(const void *data, size_t size) {
     return true;
 }
 
+static bool local_candidate(socket_t *socket,
+                            bool directory_allowed,
+                            char *host,
+                            size_t capacity,
+                            uint16_t *port) {
+    (void)socket;
+    (void)directory_allowed;
+    int n = snprintf(host, capacity, "127.0.0.1");
+    *port = 13327;
+    return n > 0 && (size_t)n < capacity;
+}
+
+static int test_rate_limit_mapping(const char *url) {
+    socket_t socket = {0};
+    socket_rendezvous_attempt_t *attempt =
+        socket_rendezvous_attempt_create(server_id, ticket, NULL, datetime_monotonic_ms() + 5000);
+    REQUIRE(attempt != NULL);
+    socket_direct_candidate_t candidate;
+    memset(&candidate, 0xa5, sizeof(candidate));
+    socket_connect_failure_t failure = {.retry_after_seconds = UINT32_MAX};
+    socket_rendezvous_fallback_set_for_test(local_candidate);
+    size_t count = socket_rendezvous_client(&socket, url, NULL, attempt, &candidate, 1, &failure);
+    socket_rendezvous_fallback_set_for_test(NULL);
+    REQUIRE(count == 0 && failure.code == SOCKET_CONNECT_FAILURE_RATE_LIMITED);
+    REQUIRE(failure.retry_after_seconds == 37 && zeroed(&candidate, sizeof(candidate)));
+    REQUIRE(!socket_rendezvous_attempt_peer_traffic_allowed(attempt));
+    socket_rendezvous_attempt_destroy(attempt);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     REQUIRE(argc == 3);
     toolkit_import(logger);
     toolkit_import(datetime);
     toolkit_import(curl);
     const char *mode = argv[2];
+    if (strcmp(mode, "rate-socket") == 0) {
+        int result = test_rate_limit_mapping(argv[1]);
+        toolkit_deinit();
+        return result;
+    }
     uint64_t start = datetime_monotonic_ms();
     uint64_t cancellation_time = start + 200;
     curl_cancel_t cancel = {.cancelled = cancel_after, .context = &cancellation_time};
@@ -72,12 +108,14 @@ int main(int argc, char **argv) {
     uint64_t deadline = start + (deadline_case ? 250 : 5000);
     char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U];
     memset(proof, 0xa5, sizeof(proof));
+    uint32_t retry_after_seconds = UINT32_MAX;
     rendezvous_admission_result_t result = admission_prepare(argv[1],
                                                              server_id,
                                                              ticket,
                                                              deadline,
                                                              cancel_case ? &cancel : NULL,
                                                              proof,
+                                                             &retry_after_seconds,
                                                              solve_fast);
     uint64_t elapsed = datetime_monotonic_ms() - start;
     if (strcmp(mode, "valid") == 0) {
@@ -102,16 +140,24 @@ int main(int argc, char **argv) {
         OPENSSL_cleanse(digest, sizeof(digest));
     } else {
         REQUIRE(solver_calls == 0 && zeroed(proof, sizeof(proof)));
-        if (deadline_case) {
+        if (strncmp(mode, "rate-", 5) == 0) {
+            uint32_t expected = strcmp(mode, "rate-valid") == 0 ? 37U
+                                : strcmp(mode, "rate-max") == 0 ? 86400U
+                                                                : 0U;
+            REQUIRE(result == RENDEZVOUS_ADMISSION_RATE_LIMITED && retry_after_seconds == expected);
+        } else if (deadline_case) {
             REQUIRE(result == RENDEZVOUS_ADMISSION_TIMEOUT && elapsed < 1500);
         } else if (cancel_case) {
             REQUIRE(result == RENDEZVOUS_ADMISSION_CANCELLED && elapsed < 1500);
-        } else if (strcmp(mode, "malformed") == 0 || strcmp(mode, "missing-no-store") == 0) {
+        } else if (strcmp(mode, "malformed") == 0 || strcmp(mode, "missing-no-store") == 0 ||
+                   strncmp(mode, "media-type-", 11) == 0) {
             REQUIRE(result == RENDEZVOUS_ADMISSION_PROTOCOL);
         } else {
             REQUIRE(result == RENDEZVOUS_ADMISSION_UNAVAILABLE);
         }
     }
+    if (strncmp(mode, "rate-", 5) != 0)
+        REQUIRE(retry_after_seconds == 0);
     OPENSSL_cleanse(proof, sizeof(proof));
     toolkit_deinit();
     return 0;

@@ -110,8 +110,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif server.mode == "oversized":
             body = b"x" * 513
         try:
-            self.send_response(302 if server.mode == "redirect" else 200)
-            self.send_header("Content-Type", "application/json")
+            self.send_response(302 if server.mode == "redirect" else
+                               429 if server.mode.startswith("rate-") else 200)
+            retry_after = {
+                "rate-valid": "37", "rate-socket": "37", "rate-duplicate": "37",
+                "rate-zero": "0", "rate-max": "86400", "rate-malformed": "soon",
+                "rate-overflow": "18446744073709551616", "rate-excessive": "86401",
+                "rate-date": "Wed, 21 Oct 2026 07:28:00 GMT",
+            }.get(server.mode)
+            if retry_after is not None:
+                self.send_header("Retry-After", retry_after)
+                if server.mode == "rate-duplicate":
+                    self.send_header("Retry-After", "17")
+            media_type = {
+                "media-type-wrong": "text/plain", "media-type-case": "Application/JSON",
+                "media-type-parameters": "application/json; charset=utf-8",
+            }.get(server.mode, "application/json")
+            if server.mode != "media-type-missing":
+                self.send_header("Content-Type", media_type)
+            if server.mode == "media-type-duplicate":
+                self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             if server.mode != "missing-no-store":
                 self.send_header("Cache-Control", "no-store")
@@ -171,10 +189,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="atrinik-admission-https-") as directory:
         ca, other_ca, cert, key = certificates(Path(directory))
         modes = ("valid", "malformed", "missing-no-store", "oversized", "redirect",
-                 "deadline", "cancel", "wrong-host", "untrusted")
+                 "deadline", "cancel", "wrong-host", "untrusted",
+                 "rate-valid", "rate-max", "rate-malformed", "rate-overflow",
+                 "rate-excessive", "rate-date", "rate-missing", "rate-zero", "rate-duplicate",
+                 "rate-socket", "media-type-wrong", "media-type-missing", "media-type-duplicate",
+                 "media-type-case", "media-type-parameters")
         for mode in modes:
             run_case(sys.argv[1], mode, ca, other_ca, cert, key)
-    print("verified HTTPS admission: nine transport cases passed")
+    print(f"verified HTTPS admission: {len(modes)} transport cases passed")
 
 
 if __name__ == "__main__":
