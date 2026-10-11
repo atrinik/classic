@@ -1008,6 +1008,68 @@ START_TEST(test_target_stale_forged_and_unavailable_depth_resolve_self) {
 }
 END_TEST
 
+START_TEST(test_target_exact_depth_and_count_authorize_upper_actor) {
+    mapstruct *base;
+    object *op;
+    check_setup_env_pl(&base, &op);
+    request_move_player(&op, base, 12, 12);
+    player *pl = CONTR(op);
+    pl->tli = 1;
+    mapstruct *upper = get_empty_map(24, 24);
+    base->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = base;
+    base->coords[2] = 0;
+    upper->coords[2] = 1;
+    base->level_min = upper->level_min = 0;
+    base->level_max = upper->level_max = 1;
+    object *actor = arch_get("kobold");
+    actor->x = op->x + 1;
+    actor->y = op->y;
+    actor = object_insert_map(actor, upper, NULL, 0);
+    ck_assert_ptr_nonnull(actor);
+    packet_struct *select = packet_new(SERVER_CMD_TARGET, 8, 0);
+    packet_writer_write_uint8(select, CMD_TARGET_MAPXY);
+    packet_writer_write_uint8(select, pl->cs->mapx_2 + 1);
+    packet_writer_write_uint8(select, pl->cs->mapy_2);
+    packet_writer_write_int8(select, 1);
+    packet_writer_write_uint32(select, actor->count);
+    socket_buffer_clear(pl->cs);
+    socket_command_target(pl->cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, actor);
+    ck_assert_uint_eq(pl->target_object_count, actor->count);
+    packet_struct *reply = queued_command_find(pl->cs, CLIENT_CMD_TARGET);
+    ck_assert_ptr_nonnull(reply);
+    packet_reader_t reader;
+    packet_reader_init(&reader, reply->data, reply->len);
+    ck_assert_uint_ne(packet_reader_read_uint8(&reader), CMD_TARGET_SELF);
+    char value[MAX_BUF];
+    ck_assert(packet_reader_read_string(&reader, VS(value)));
+    ck_assert(packet_reader_read_string(&reader, VS(value)));
+    packet_reader_read_uint8(&reader);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), actor->count);
+    ck_assert_int_eq(packet_reader_read_int8(&reader), 1);
+    packet_reader_read_uint8(&reader);
+    packet_reader_read_uint8(&reader);
+    ck_assert(packet_reader_finish(&reader));
+    /* The identity alone cannot select the actor at another physical depth. */
+    select->data[3] = 0;
+    socket_command_target(pl->cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_uint_eq(pl->target_object_count, 0);
+    select->data[3] = 1;
+    select->data[select->len - 1] ^= 1;
+    socket_command_target(pl->cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_uint_eq(pl->target_object_count, 0);
+    select->data[select->len - 1] ^= 1;
+    object_destroy(actor);
+    socket_command_target(pl->cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_uint_eq(pl->target_object_count, 0);
+    packet_free(select);
+}
+END_TEST
+
 START_TEST(test_wizardry_level_change_refreshes_spell_cost_once) {
     mapstruct *map;
     object *pl;
@@ -2856,6 +2918,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_target_packet_includes_current_level_and_plain_name);
     tcase_add_test(tc_core, test_target_select_requires_exact_packet_before_mutation);
     tcase_add_test(tc_core, test_target_stale_forged_and_unavailable_depth_resolve_self);
+    tcase_add_test(tc_core, test_target_exact_depth_and_count_authorize_upper_actor);
     tcase_add_test(tc_core, test_wizardry_level_change_refreshes_spell_cost_once);
     tcase_add_test(tc_core, test_setup_round_trip_uses_current_option_ids);
     tcase_add_test(tc_core, test_setup_rejects_unknown_option);
