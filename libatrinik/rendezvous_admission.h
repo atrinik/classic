@@ -44,23 +44,23 @@ bool rendezvous_admission_parse(const char *body,
  * context are borrowed and checked at most every 4096 trials. Solving requires
  * <= 2^27 hashes and <= min(original deadline, start+10s, challenge expiry).
  * No retry, fallback, or difficulty negotiation is performed. */
-rendezvous_admission_result_t rendezvous_admission_solve(
-    const rendezvous_admission_challenge_t *challenge,
-    uint64_t deadline_ms,
-    const curl_cancel_t *cancel,
-    char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]);
-rendezvous_admission_result_t rendezvous_admission_prepare(
-    const char *websocket_url,
-    const char *server_id,
-    const char *ticket,
-    uint64_t deadline_ms,
-    const curl_cancel_t *cancel,
-    char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]);
+rendezvous_admission_result_t
+rendezvous_admission_solve(const rendezvous_admission_challenge_t *challenge,
+                           uint64_t deadline_ms,
+                           const curl_cancel_t *cancel,
+                           char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]);
+rendezvous_admission_result_t
+rendezvous_admission_prepare(const char *websocket_url,
+                             const char *server_id,
+                             const char *ticket,
+                             uint64_t deadline_ms,
+                             const curl_cancel_t *cancel,
+                             char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]);
 /* Returns an owned secret header list, or NULL. The protected grant must bind
  * this ticket; it supplies only headers, never URL/subprotocol credentials.
  * Release every returned list with the cleansing function below. */
 struct curl_slist *rendezvous_admission_headers(const char *proof,
-                                               const char *ticket,
-                                               const rendezvous_access_grant_t *grant);
+                                                const char *ticket,
+                                                const rendezvous_access_grant_t *grant);
 void rendezvous_admission_headers_free(struct curl_slist *headers);
 #endif

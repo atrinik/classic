@@ -24,7 +24,8 @@ bool rendezvous_admission_ticket_hash(const char *ticket, char out[65]) {
     unsigned char binary[32], digest[32];
     for (size_t i = 0; i < sizeof(binary); i++) {
         unsigned int hi = ticket[i * 2] <= '9' ? ticket[i * 2] - '0' : ticket[i * 2] - 'a' + 10;
-        unsigned int lo = ticket[i * 2 + 1] <= '9' ? ticket[i * 2 + 1] - '0' : ticket[i * 2 + 1] - 'a' + 10;
+        unsigned int lo =
+            ticket[i * 2 + 1] <= '9' ? ticket[i * 2 + 1] - '0' : ticket[i * 2 + 1] - 'a' + 10;
         binary[i] = (unsigned char)((hi << 4) | lo);
     }
     bool ok = admission_digest(binary, sizeof(binary), digest) &&
@@ -52,8 +53,7 @@ bool rendezvous_admission_url(const char *websocket_url,
     if (path == NULL || path == authority || (size_t)(path - authority) > 270)
         return false;
     char origin[280], validated[1024], expected[1024], suffix[100];
-    int n = snprintf(origin, sizeof(origin), "https://%.*s",
-                     (int)(path - authority), authority);
+    int n = snprintf(origin, sizeof(origin), "https://%.*s", (int)(path - authority), authority);
     if (n <= 0 || (size_t)n >= sizeof(origin) ||
         !metaserver_url_access(origin, NULL, false, validated, sizeof(validated)))
         return false;
@@ -64,11 +64,16 @@ bool rendezvous_admission_url(const char *websocket_url,
         size_t path_size = strlen(path), suffix_size = strlen(suffix);
         if (path_size < suffix_size || strcmp(path + path_size - suffix_size, suffix) != 0)
             return false;
-        n = snprintf(validated, sizeof(validated), "%s%.*s", origin,
-                     (int)(path_size - suffix_size), path);
-        ok = n > 0 && (size_t)n < sizeof(validated) &&
-             metaserver_url_rendezvous(validated, server_id, "client", expected, sizeof(expected)) &&
-             strcmp(expected, websocket_url) == 0;
+        n = snprintf(validated,
+                     sizeof(validated),
+                     "%s%.*s",
+                     origin,
+                     (int)(path_size - suffix_size),
+                     path);
+        ok =
+            n > 0 && (size_t)n < sizeof(validated) &&
+            metaserver_url_rendezvous(validated, server_id, "client", expected, sizeof(expected)) &&
+            strcmp(expected, websocket_url) == 0;
     }
     if (!ok)
         return false;
@@ -95,8 +100,8 @@ static bool admission_decimal(const char *start, size_t size, uint64_t *value) {
     return true;
 }
 
-static bool admission_token(const char *token, const char *ticket_hash, uint64_t now,
-                            uint64_t *expires_at) {
+static bool
+admission_token(const char *token, const char *ticket_hash, uint64_t now, uint64_t *expires_at) {
     size_t size = strlen(token);
     if (size > RENDEZVOUS_ADMISSION_TOKEN_MAX || strncmp(token, "v1.", 3) != 0)
         return false;
@@ -104,8 +109,8 @@ static bool admission_token(const char *token, const char *ticket_hash, uint64_t
     if (key_end == NULL || key_end == key || key_end - key > 32)
         return false;
     for (const char *p = key; p < key_end; p++)
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-'))
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
+              *p == '_' || *p == '-'))
             return false;
     const char *issued = key_end + 1, *issued_end = strchr(issued, '.');
     uint64_t iat;
@@ -128,8 +133,11 @@ static bool admission_token(const char *token, const char *ticket_hash, uint64_t
     return true;
 }
 
-bool rendezvous_admission_parse(const char *body, size_t size, const char *ticket_hash,
-                                uint64_t now, rendezvous_admission_challenge_t *out) {
+bool rendezvous_admission_parse(const char *body,
+                                size_t size,
+                                const char *ticket_hash,
+                                uint64_t now,
+                                rendezvous_admission_challenge_t *out) {
     if (out == NULL)
         return false;
     OPENSSL_cleanse(out, sizeof(*out));
@@ -164,11 +172,15 @@ bool rendezvous_admission_parse(const char *body, size_t size, const char *ticke
 
 /* Private parameterization permits fast deterministic unit tests without a
  * production API capable of negotiating weaker work or increasing the budget. */
-static rendezvous_admission_result_t admission_solve(
-    const rendezvous_admission_challenge_t *challenge, uint64_t deadline_ms,
-    const curl_cancel_t *cancel, char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U],
-    unsigned int difficulty, uint64_t trials, uint64_t (*clock_ms)(void),
-    time_t (*clock_wall)(time_t *)) {
+static rendezvous_admission_result_t
+admission_solve(const rendezvous_admission_challenge_t *challenge,
+                uint64_t deadline_ms,
+                const curl_cancel_t *cancel,
+                char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U],
+                unsigned int difficulty,
+                uint64_t trials,
+                uint64_t (*clock_ms)(void),
+                time_t (*clock_wall)(time_t *)) {
     if (proof == NULL)
         return RENDEZVOUS_ADMISSION_PROTOCOL;
     OPENSSL_cleanse(proof, RENDEZVOUS_ADMISSION_PROOF_MAX + 1U);
@@ -190,7 +202,8 @@ static rendezvous_admission_result_t admission_solve(
     unsigned char digest[32];
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     rendezvous_admission_result_t result = RENDEZVOUS_ADMISSION_UNAVAILABLE;
-    for (uint64_t trial = 0; ctx != NULL && trial < MIN(trials, RENDEZVOUS_ADMISSION_TRIALS_MAX); trial++) {
+    for (uint64_t trial = 0; ctx != NULL && trial < MIN(trials, RENDEZVOUS_ADMISSION_TRIALS_MAX);
+         trial++) {
         if ((trial & 4095U) == 0) {
             if (curl_cancelled(cancel)) {
                 result = RENDEZVOUS_ADMISSION_CANCELLED;
@@ -235,11 +248,19 @@ static rendezvous_admission_result_t admission_solve(
     return result;
 }
 
-rendezvous_admission_result_t rendezvous_admission_solve(
-    const rendezvous_admission_challenge_t *challenge, uint64_t deadline_ms,
-    const curl_cancel_t *cancel, char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]) {
-    return admission_solve(challenge, deadline_ms, cancel, proof, RENDEZVOUS_ADMISSION_DIFFICULTY,
-                           RENDEZVOUS_ADMISSION_TRIALS_MAX, datetime_monotonic_ms, time);
+rendezvous_admission_result_t
+rendezvous_admission_solve(const rendezvous_admission_challenge_t *challenge,
+                           uint64_t deadline_ms,
+                           const curl_cancel_t *cancel,
+                           char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]) {
+    return admission_solve(challenge,
+                           deadline_ms,
+                           cancel,
+                           proof,
+                           RENDEZVOUS_ADMISSION_DIFFICULTY,
+                           RENDEZVOUS_ADMISSION_TRIALS_MAX,
+                           datetime_monotonic_ms,
+                           time);
 }
 
 typedef struct admission_cancel {
@@ -293,10 +314,19 @@ static size_t admission_header(char *data, size_t size, size_t count, void *cont
     return n;
 }
 
-rendezvous_admission_result_t rendezvous_admission_prepare(
-    const char *websocket_url, const char *server_id, const char *ticket,
-    uint64_t deadline_ms, const curl_cancel_t *cancel,
-    char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]) {
+/* Tests may inject only a private solver callback into this translation unit;
+ * the public entry point below always selects the production fixed24 solver. */
+static rendezvous_admission_result_t
+admission_prepare(const char *websocket_url,
+                  const char *server_id,
+                  const char *ticket,
+                  uint64_t deadline_ms,
+                  const curl_cancel_t *cancel,
+                  char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U],
+                  rendezvous_admission_result_t (*solver)(const rendezvous_admission_challenge_t *,
+                                                          uint64_t,
+                                                          const curl_cancel_t *,
+                                                          char *)) {
     if (proof == NULL)
         return RENDEZVOUS_ADMISSION_PROTOCOL;
     OPENSSL_cleanse(proof, RENDEZVOUS_ADMISSION_PROOF_MAX + 1U);
@@ -309,13 +339,17 @@ rendezvous_admission_result_t rendezvous_admission_prepare(
     if (!rendezvous_admission_url(websocket_url, server_id, url, sizeof(url)) ||
         !rendezvous_admission_ticket_hash(ticket, hash))
         return RENDEZVOUS_ADMISSION_PROTOCOL;
-    int n = snprintf(request, sizeof(request), "{\"schema\":\"" ADMISSION_SCHEMA "\",\"ticketHash\":\"%s\"}", hash);
+    int n = snprintf(request,
+                     sizeof(request),
+                     "{\"schema\":\"" ADMISSION_SCHEMA "\",\"ticketHash\":\"%s\"}",
+                     hash);
     admission_response_t response = {0};
     rendezvous_admission_challenge_t challenge = {0};
     rendezvous_admission_result_t result = RENDEZVOUS_ADMISSION_UNAVAILABLE;
     CURL *curl = curl_easy_init();
     struct curl_slist *headers = curl_slist_append(NULL, "Content-Type: application/json");
-    struct curl_slist *added = headers != NULL ? curl_slist_append(headers, "Cache-Control: no-store") : NULL;
+    struct curl_slist *added =
+        headers != NULL ? curl_slist_append(headers, "Cache-Control: no-store") : NULL;
     if (added != NULL)
         headers = added;
     if (curl != NULL && added != NULL && n > 0 && (size_t)n < sizeof(request)) {
@@ -353,8 +387,12 @@ rendezvous_admission_result_t rendezvous_admission_prepare(
         else if (transferred == CURLE_OK && status == 200) {
             result = RENDEZVOUS_ADMISSION_PROTOCOL;
             if (response.no_store && now >= 0 &&
-                rendezvous_admission_parse(response.body, response.used, hash, (uint64_t)now, &challenge))
-                result = rendezvous_admission_solve(&challenge, deadline_ms, cancel, proof);
+                rendezvous_admission_parse(response.body,
+                                           response.used,
+                                           hash,
+                                           (uint64_t)now,
+                                           &challenge))
+                result = solver(&challenge, deadline_ms, cancel, proof);
         }
     }
     curl_easy_cleanup(curl);
@@ -364,6 +402,22 @@ rendezvous_admission_result_t rendezvous_admission_prepare(
     OPENSSL_cleanse(&response, sizeof(response));
     OPENSSL_cleanse(&challenge, sizeof(challenge));
     return result;
+}
+
+rendezvous_admission_result_t
+rendezvous_admission_prepare(const char *websocket_url,
+                             const char *server_id,
+                             const char *ticket,
+                             uint64_t deadline_ms,
+                             const curl_cancel_t *cancel,
+                             char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U]) {
+    return admission_prepare(websocket_url,
+                             server_id,
+                             ticket,
+                             deadline_ms,
+                             cancel,
+                             proof,
+                             rendezvous_admission_solve);
 }
 
 void rendezvous_admission_headers_free(struct curl_slist *headers) {
@@ -376,7 +430,8 @@ void rendezvous_admission_headers_free(struct curl_slist *headers) {
 static bool admission_append(struct curl_slist **headers, const char *name, const char *value) {
     char line[320];
     int n = snprintf(line, sizeof(line), "%s: %s", name, value);
-    struct curl_slist *added = n > 0 && (size_t)n < sizeof(line) ? curl_slist_append(*headers, line) : NULL;
+    struct curl_slist *added =
+        n > 0 && (size_t)n < sizeof(line) ? curl_slist_append(*headers, line) : NULL;
     OPENSSL_cleanse(line, sizeof(line));
     if (added == NULL)
         return false;
@@ -384,26 +439,29 @@ static bool admission_append(struct curl_slist **headers, const char *name, cons
     return true;
 }
 
-struct curl_slist *rendezvous_admission_headers(const char *proof, const char *ticket,
-                                               const rendezvous_access_grant_t *grant) {
+struct curl_slist *rendezvous_admission_headers(const char *proof,
+                                                const char *ticket,
+                                                const rendezvous_access_grant_t *grant) {
     if (proof == NULL || strlen(proof) > RENDEZVOUS_ADMISSION_PROOF_MAX ||
         !string_is_hex_fixed(ticket, 64, true))
         return NULL;
     for (const char *p = proof; *p != 0; p++)
-        if (!( (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-               (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
+              *p == '.' || *p == '_' || *p == '-'))
             return NULL;
     struct curl_slist *headers = NULL;
     bool ok = *proof != 0 && admission_append(&headers, "X-Atrinik-Rendezvous-Admission", proof);
     if (grant != NULL) {
         char bearer[72];
         ok = ok && string_is_hex_fixed(grant->grant, 64, true) &&
-             string_is_hex_fixed(grant->client_nonce, 64, true) && strcmp(ticket, grant->grant) == 0;
+             string_is_hex_fixed(grant->client_nonce, 64, true) &&
+             strcmp(ticket, grant->grant) == 0;
         if (ok) {
             snprintf(bearer, sizeof(bearer), "Bearer %s", grant->grant);
-            ok = admission_append(&headers, "Authorization", bearer) &&
-                 admission_append(&headers, "X-Atrinik-Access-Client-Nonce", grant->client_nonce) &&
-                 admission_append(&headers, "Sec-WebSocket-Protocol", RENDEZVOUS_ACCESS_SUBPROTOCOL);
+            ok =
+                admission_append(&headers, "Authorization", bearer) &&
+                admission_append(&headers, "X-Atrinik-Access-Client-Nonce", grant->client_nonce) &&
+                admission_append(&headers, "Sec-WebSocket-Protocol", RENDEZVOUS_ACCESS_SUBPROTOCOL);
         }
         OPENSSL_cleanse(bearer, sizeof(bearer));
     } else

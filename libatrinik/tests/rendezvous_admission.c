@@ -3,18 +3,25 @@
 /* Compile the implementation into this test so its private solver can exercise
  * low difficulty and deterministic clocks; production exports only fixed24. */
 #include "../rendezvous_admission.c"
+#include <toolkit/logger.h>
 
-#define REQUIRE(x) do { if (!(x)) { fprintf(stderr, "line %d\n", __LINE__); return 1; } } while (0)
+#define REQUIRE(x)                                  \
+    do {                                            \
+        if (!(x)) {                                 \
+            fprintf(stderr, "line %d\n", __LINE__); \
+            return 1;                               \
+        }                                           \
+    } while (0)
 
 static const char ticket[] = "2222222222222222222222222222222222222222222222222222222222222222";
 static const char server_id[] = "1111111111111111111111111111111111111111111111111111111111111111";
-static const char ticket_hash[] = "9f72ea0cf49536e3c66c787f705186df9a4378083753ae9536d65b3ad7fcddc4";
+static const char ticket_hash[] =
+    "9f72ea0cf49536e3c66c787f705186df9a4378083753ae9536d65b3ad7fcddc4";
 /* Independent protocol/fixtures/rendezvous-admission-v1.json vector. */
-static const char token[] =
-    "v1.synthetic_current.1800000000."
-    "9f72ea0cf49536e3c66c787f705186df9a4378083753ae9536d65b3ad7fcddc4."
-    "33333333333333333333333333333333."
-    "45548449753e9460a1b06d180786d4472060f536cf1c0f667371d3519abc4f8f";
+static const char token[] = "v1.synthetic_current.1800000000."
+                            "9f72ea0cf49536e3c66c787f705186df9a4378083753ae9536d65b3ad7fcddc4."
+                            "33333333333333333333333333333333."
+                            "45548449753e9460a1b06d180786d4472060f536cf1c0f667371d3519abc4f8f";
 
 static bool zeroed(const void *data, size_t size) {
     const unsigned char *p = data;
@@ -44,8 +51,11 @@ static int test_vectors(void) {
 
 static int test_parse(void) {
     char body[513];
-    int n = snprintf(body, sizeof(body),
-                     "{\"schema\":\"" ADMISSION_SCHEMA "\",\"challenge\":\"%s\",\"difficulty\":24,\"expiresAt\":\"1800000060\"}", token);
+    int n = snprintf(body,
+                     sizeof(body),
+                     "{\"schema\":\"" ADMISSION_SCHEMA
+                     "\",\"challenge\":\"%s\",\"difficulty\":24,\"expiresAt\":\"1800000060\"}",
+                     token);
     REQUIRE(n > 0 && (size_t)n < sizeof(body));
     rendezvous_admission_challenge_t out;
     REQUIRE(rendezvous_admission_parse(body, (size_t)n, ticket_hash, 1800000000, &out));
@@ -122,7 +132,8 @@ static int test_solver(void) {
     char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U];
     fake_now = 1000;
     clock_calls = 0;
-    REQUIRE(admission_solve(&challenge, 20000, NULL, proof, 8, 100000, test_clock, test_wall) == RENDEZVOUS_ADMISSION_OK);
+    REQUIRE(admission_solve(&challenge, 20000, NULL, proof, 8, 100000, test_clock, test_wall) ==
+            RENDEZVOUS_ADMISSION_OK);
     REQUIRE(strncmp(proof, challenge.token, strlen(challenge.token)) == 0);
     REQUIRE(strlen(proof) == strlen(challenge.token) + 17);
     REQUIRE(strcmp(proof + strlen(challenge.token) + 1, "00000000000000a7") == 0);
@@ -134,60 +145,91 @@ static int test_solver(void) {
     memcpy(input + prefix, solution, 16);
     unsigned char digest[32];
     REQUIRE(admission_digest(input, prefix + 16, digest) && digest[0] == 0);
-    REQUIRE(admission_solve(&challenge, 1000, NULL, proof, 256, 10000, test_clock, test_wall) == RENDEZVOUS_ADMISSION_TIMEOUT);
+    REQUIRE(admission_solve(&challenge, 1000, NULL, proof, 256, 10000, test_clock, test_wall) ==
+            RENDEZVOUS_ADMISSION_TIMEOUT);
     REQUIRE(zeroed(proof, sizeof(proof)));
     unsigned int cancel_limit = 1;
     curl_cancel_t cancel = {.cancelled = cancelled, .context = &cancel_limit};
     cancel_calls = 0;
-    REQUIRE(admission_solve(&challenge, 20000, &cancel, proof, 24, 10000, test_clock, test_wall) == RENDEZVOUS_ADMISSION_CANCELLED);
+    REQUIRE(admission_solve(&challenge, 20000, &cancel, proof, 24, 10000, test_clock, test_wall) ==
+            RENDEZVOUS_ADMISSION_CANCELLED);
     REQUIRE(cancel_calls == 1 && zeroed(proof, sizeof(proof)));
     cancel_calls = 0;
     cancel_limit = 2;
-    REQUIRE(admission_solve(&challenge, 20000, &cancel, proof, 256, 100000, test_clock, test_wall) == RENDEZVOUS_ADMISSION_CANCELLED);
+    REQUIRE(
+        admission_solve(&challenge, 20000, &cancel, proof, 256, 100000, test_clock, test_wall) ==
+        RENDEZVOUS_ADMISSION_CANCELLED);
     REQUIRE(cancel_calls == 2 && zeroed(proof, sizeof(proof)));
     fake_now = 0;
-    REQUIRE(admission_solve(&challenge, 999999, NULL, proof, 256, 100000, advancing_clock, test_wall) == RENDEZVOUS_ADMISSION_TIMEOUT);
+    REQUIRE(
+        admission_solve(&challenge, 999999, NULL, proof, 256, 100000, advancing_clock, test_wall) ==
+        RENDEZVOUS_ADMISSION_TIMEOUT);
     fake_now = 1000;
-    REQUIRE(admission_solve(&challenge, 20000, NULL, proof, 256, 1, test_clock, test_wall) == RENDEZVOUS_ADMISSION_UNAVAILABLE);
+    REQUIRE(admission_solve(&challenge, 20000, NULL, proof, 256, 1, test_clock, test_wall) ==
+            RENDEZVOUS_ADMISSION_UNAVAILABLE);
     REQUIRE(zeroed(proof, sizeof(proof)));
     cancel_limit = 1;
     cancel_calls = 0;
-    REQUIRE(rendezvous_admission_prepare("bad", server_id, ticket, 999999, &cancel, proof) == RENDEZVOUS_ADMISSION_CANCELLED);
-    REQUIRE(rendezvous_admission_prepare("bad", server_id, ticket, 0, NULL, proof) == RENDEZVOUS_ADMISSION_TIMEOUT);
+    REQUIRE(rendezvous_admission_prepare("bad", server_id, ticket, 999999, &cancel, proof) ==
+            RENDEZVOUS_ADMISSION_CANCELLED);
+    REQUIRE(rendezvous_admission_prepare("bad", server_id, ticket, 0, NULL, proof) ==
+            RENDEZVOUS_ADMISSION_TIMEOUT);
     return 0;
 }
 
 static int test_urls_headers(void) {
     char url[1024], expected[1024], source[1024];
-    snprintf(expected, sizeof(expected), "https://rendezvous.example.invalid/v1/rendezvous/challenge/classic/%s", server_id);
-    snprintf(source, sizeof(source), "wss://rendezvous.example.invalid/servers/%s?role=client", server_id);
-    REQUIRE(rendezvous_admission_url(source, server_id, url, sizeof(url)) && strcmp(url, expected) == 0);
-    snprintf(source, sizeof(source), "wss://rendezvous.example.invalid/v1/access/rendezvous/classic/%s", server_id);
-    REQUIRE(rendezvous_admission_url(source, server_id, url, sizeof(url)) && strcmp(url, expected) == 0);
-    snprintf(source, sizeof(source), "wss://rendezvous.example.invalid/prefix/servers/%s?role=client", server_id);
-    REQUIRE(rendezvous_admission_url(source, server_id, url, sizeof(url)) && strcmp(url, expected) == 0);
+    snprintf(expected,
+             sizeof(expected),
+             "https://rendezvous.example.invalid/v1/rendezvous/challenge/classic/%s",
+             server_id);
+    snprintf(source,
+             sizeof(source),
+             "wss://rendezvous.example.invalid/servers/%s?role=client",
+             server_id);
+    REQUIRE(rendezvous_admission_url(source, server_id, url, sizeof(url)) &&
+            strcmp(url, expected) == 0);
+    snprintf(source,
+             sizeof(source),
+             "wss://rendezvous.example.invalid/v1/access/rendezvous/classic/%s",
+             server_id);
+    REQUIRE(rendezvous_admission_url(source, server_id, url, sizeof(url)) &&
+            strcmp(url, expected) == 0);
+    snprintf(source,
+             sizeof(source),
+             "wss://rendezvous.example.invalid/prefix/servers/%s?role=client",
+             server_id);
+    REQUIRE(rendezvous_admission_url(source, server_id, url, sizeof(url)) &&
+            strcmp(url, expected) == 0);
     REQUIRE(!rendezvous_admission_url(source, ticket, url, sizeof(url)) && url[0] == 0);
     char insecure[1024];
     snprintf(insecure, sizeof(insecure), "ws://127.0.0.1/servers/%s?role=client", server_id);
     REQUIRE(!rendezvous_admission_url(insecure, server_id, url, sizeof(url)) && url[0] == 0);
     REQUIRE(!rendezvous_admission_url(source, server_id, url, 10) && url[0] == 0);
-    const char *invalid[] = {"https://rendezvous.example.invalid", "ws://remote.example.invalid/",
-                             "wss://user:pass@remote.example.invalid/", "wss://remote.example.invalid:443/#fragment"};
+    const char *invalid[] = {"https://rendezvous.example.invalid",
+                             "ws://remote.example.invalid/",
+                             "wss://user:pass@remote.example.invalid/",
+                             "wss://remote.example.invalid:443/#fragment"};
     for (size_t i = 0; i < arraysize(invalid); i++)
         REQUIRE(!rendezvous_admission_url(invalid[i], server_id, url, sizeof(url)));
     char proof[257];
     snprintf(proof, sizeof(proof), "%s.000000000129985a", token);
     struct curl_slist *headers = rendezvous_admission_headers(proof, ticket, NULL);
-    REQUIRE(headers != NULL && strstr(headers->data, "X-Atrinik-Rendezvous-Admission: ") == headers->data);
-    REQUIRE(headers->next != NULL && strstr(headers->next->data, ticket) != NULL && headers->next->next == NULL);
+    REQUIRE(headers != NULL &&
+            strstr(headers->data, "X-Atrinik-Rendezvous-Admission: ") == headers->data);
+    REQUIRE(headers->next != NULL && strstr(headers->next->data, ticket) != NULL &&
+            headers->next->next == NULL);
     rendezvous_admission_headers_free(headers);
     rendezvous_access_grant_t grant = {0};
     memcpy(grant.grant, ticket, sizeof(grant.grant));
     memcpy(grant.client_nonce, server_id, sizeof(grant.client_nonce));
     headers = rendezvous_admission_headers(proof, ticket, &grant);
-    REQUIRE(headers != NULL && strstr(headers->next->data, "Authorization: Bearer ") == headers->next->data);
-    REQUIRE(strstr(headers->next->next->data, "X-Atrinik-Access-Client-Nonce: ") == headers->next->next->data);
-    REQUIRE(strcmp(headers->next->next->next->data, "Sec-WebSocket-Protocol: " RENDEZVOUS_ACCESS_SUBPROTOCOL) == 0);
+    REQUIRE(headers != NULL &&
+            strstr(headers->next->data, "Authorization: Bearer ") == headers->next->data);
+    REQUIRE(strstr(headers->next->next->data, "X-Atrinik-Access-Client-Nonce: ") ==
+            headers->next->next->data);
+    REQUIRE(strcmp(headers->next->next->next->data,
+                   "Sec-WebSocket-Protocol: " RENDEZVOUS_ACCESS_SUBPROTOCOL) == 0);
     REQUIRE(headers->next->next->next->next == NULL);
     rendezvous_admission_headers_free(headers);
     REQUIRE(rendezvous_admission_headers(proof, server_id, &grant) == NULL);
@@ -196,17 +238,24 @@ static int test_urls_headers(void) {
 }
 
 int main(int argc, char **argv) {
+    toolkit_import(logger);
     toolkit_import(datetime);
     if (argc == 2 && strcmp(argv[1], "--benchmark") == 0) {
         rendezvous_admission_challenge_t challenge = {.expires_at = 1800000060};
         memcpy(challenge.token, token, sizeof(token));
         char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U];
         uint64_t start = datetime_monotonic_ms();
-        rendezvous_admission_result_t result = admission_solve(
-            &challenge, start + 15000, NULL, proof, RENDEZVOUS_ADMISSION_DIFFICULTY,
-            RENDEZVOUS_ADMISSION_TRIALS_MAX, datetime_monotonic_ms, test_wall);
+        rendezvous_admission_result_t result = admission_solve(&challenge,
+                                                               start + 15000,
+                                                               NULL,
+                                                               proof,
+                                                               RENDEZVOUS_ADMISSION_DIFFICULTY,
+                                                               RENDEZVOUS_ADMISSION_TRIALS_MAX,
+                                                               datetime_monotonic_ms,
+                                                               test_wall);
         printf("fixed24 result=%u elapsed_ms=%llu known_trials=19503195\n",
-               (unsigned int)result, (unsigned long long)(datetime_monotonic_ms() - start));
+               (unsigned int)result,
+               (unsigned long long)(datetime_monotonic_ms() - start));
         if (result == RENDEZVOUS_ADMISSION_OK)
             REQUIRE(strcmp(proof + strlen(token) + 1, "000000000129985a") == 0);
         OPENSSL_cleanse(proof, sizeof(proof));

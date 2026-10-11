@@ -613,6 +613,23 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     add_test(NAME libatrinik-rendezvous-admission COMMAND libatrinik-rendezvous-admission)
     set_tests_properties(libatrinik-rendezvous-admission PROPERTIES TIMEOUT 15)
 
+    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        find_program(ATRINIK_TEST_OPENSSL openssl REQUIRED)
+        add_executable(libatrinik-rendezvous-admission-https
+            tests/rendezvous_admission_https.c)
+        atrinik_configure_target(libatrinik-rendezvous-admission-https)
+        target_link_options(libatrinik-rendezvous-admission-https PRIVATE
+            "-Wl,--wrap=curl_easy_init")
+        target_link_libraries(libatrinik-rendezvous-admission-https PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-rendezvous-admission-https
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/rendezvous_admission_https.py"
+                "$<TARGET_FILE:libatrinik-rendezvous-admission-https>"
+                "${ATRINIK_TEST_OPENSSL}")
+        set_tests_properties(libatrinik-rendezvous-admission-https PROPERTIES TIMEOUT 45)
+    endif ()
+
     add_executable(libatrinik-rendezvous tests/rendezvous.c)
     atrinik_configure_target(libatrinik-rendezvous)
     target_link_libraries(libatrinik-rendezvous PRIVATE Atrinik::Core)
