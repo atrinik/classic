@@ -264,7 +264,7 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
         tag_t selected_count = is_player ? CONTR(shooter)->target_object_count : shooter->enemy_count;
         if (OBJECT_VALID(selected, selected_count)) {
             bool authorized = is_player
-                ? perception_player_authorized(CONTR(shooter), selected)
+                ? target_player_authorized(CONTR(shooter), selected, NULL)
                 : perception_object_visible(shooter, selected);
             if (authorized && OBJECT_VALID(shooter, shooter_count) &&
                 (shooter->type == PLAYER) == is_player &&

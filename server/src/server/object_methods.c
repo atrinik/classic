@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <server_main.h>
+#include <server.h>
 #include <movement.h>
 #include <plugin.h>
 #include <arch.h>
@@ -365,15 +366,27 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(shooter != NULL);
 
+    tag_t op_count = op->count, shooter_count = shooter->count;
+    bool is_player = shooter->type == PLAYER;
+    object *selected = is_player ? CONTR(shooter)->target_object : shooter->enemy;
+    tag_t selected_count = is_player ? CONTR(shooter)->target_object_count : shooter->enemy_count;
     object *target = NULL;
-    if (shooter->type == PLAYER &&
-        OBJECT_VALID(CONTR(shooter)->target_object, CONTR(shooter)->target_object_count) &&
-        CONTR(shooter)->target_object != shooter &&
-        perception_player_authorized(CONTR(shooter), CONTR(shooter)->target_object)) {
-        target = CONTR(shooter)->target_object;
-    } else if (shooter->type != PLAYER && OBJECT_VALID(shooter->enemy, shooter->enemy_count) &&
-               perception_object_visible(shooter, shooter->enemy)) {
-        target = shooter->enemy;
+    if (selected != shooter && OBJECT_VALID(selected, selected_count)) {
+        bool authorized = is_player
+            ? target_player_authorized(CONTR(shooter), selected, NULL)
+            : perception_object_visible(shooter, selected);
+        if (authorized && OBJECT_VALID(shooter, shooter_count) &&
+            (shooter->type == PLAYER) == is_player && OBJECT_VALID(selected, selected_count) &&
+            (is_player ? CONTR(shooter)->target_object == selected &&
+                         CONTR(shooter)->target_object_count == selected_count
+                       : shooter->enemy == selected && shooter->enemy_count == selected_count)) {
+            target = selected;
+        }
+    }
+    /* Hidden-object plugins must not leave stale inputs for direction or fire. */
+    if (!OBJECT_VALID(op, op_count) || !OBJECT_VALID(shooter, shooter_count) ||
+        (shooter->type == PLAYER) != is_player) {
+        return OBJECT_METHOD_UNHANDLED;
     }
     bool vertical_aim = false;
     if (dir == 0 && target != NULL) {

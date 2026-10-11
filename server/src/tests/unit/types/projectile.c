@@ -4,6 +4,7 @@
 
 #include <global.h>
 #include <server_main.h>
+#include <server.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -823,24 +824,50 @@ START_TEST(test_missile_launch_reauthorizes_retained_target) {
     target->x = pl->x + 3;
     target->y = pl->y;
     target = object_insert_map(target, upper, NULL, INS_NO_MERGE);
-    ck_assert(perception_player_authorized(CONTR(pl), target));
+    draw_client_map(pl);
+    ck_assert(target_player_authorized(CONTR(pl), target, NULL));
     CONTR(pl)->target_object = target;
     CONTR(pl)->target_object_count = target->count;
 
+    object *published_arrow = arch_get("arrow");
+    published_arrow->last_sp = 4;
+    published_arrow = common_object_projectile_fire_missile(published_arrow, pl, 7);
+    ck_assert_ptr_nonnull(published_arrow);
+    ck_assert_int_eq(published_arrow->projectile.heading[0], 65536);
+    ck_assert_int_gt(published_arrow->projectile.heading[2], 0);
+    object_remove(published_arrow, 0);
+    object_destroy(published_arrow);
+
     /* Selection is valid initially. Hide or move it behind newly opaque
      * geometry without running target maintenance before the direct launch. */
-    for (int mode = 0; mode < 2; mode++) {
+    for (int mode = 0; mode < 3; mode++) {
         if (mode == 0) {
             SET_FLAG(target, FLAG_IS_INVISIBLE);
-        } else {
+        } else if (mode == 1) {
             CLEAR_FLAG(target, FLAG_IS_INVISIBLE);
             object_remove(target, 0);
             target = object_insert_map(target, map, NULL, INS_NO_MERGE);
-            ck_assert(perception_player_authorized(CONTR(pl), target));
+            draw_client_map(pl);
+            ck_assert(target_player_authorized(CONTR(pl), target, NULL));
             GET_MAP_SPACE_PTR(map, pl->x + 1, pl->y)->flags |= P_BLOCKSVIEW;
+        } else {
+            GET_MAP_SPACE_PTR(map, pl->x + 1, pl->y)->flags &= ~P_BLOCKSVIEW;
+            draw_client_map(pl);
+            ck_assert(target_player_authorized(CONTR(pl), target, NULL));
+            object_remove(target, 0);
+            target->x++;
+            target->y++;
+            target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+            /* Current sight cannot authorize an unpublished actor position. */
+            ck_assert(perception_player_authorized(CONTR(pl), target));
         }
         ck_assert(OBJECT_VALID(target, CONTR(pl)->target_object_count));
-        ck_assert(!perception_player_authorized(CONTR(pl), target));
+        ck_assert(!target_player_authorized(CONTR(pl), target, NULL));
+        object *bow = arch_get("bow_short");
+        pl->direction = 7;
+        object_ranged_fire(bow, pl, 0, NULL);
+        ck_assert_int_eq(pl->direction, 7);
+        object_destroy(bow);
         object *arrow = arch_get("arrow");
         arrow->last_sp = 4;
         arrow = common_object_projectile_fire_missile(arrow, pl, 7);
