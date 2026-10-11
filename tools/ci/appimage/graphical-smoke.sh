@@ -19,7 +19,9 @@ mkdir "$evidence"
 evidence=$(realpath -e "$evidence")
 [[ $evidence == /tmp/* ]]
 # Host services/drivers are allowed. SDL and cURL must come from the AppImage.
-if ldconfig -p | grep -E 'libSDL3|libcares|libcurl'; then
+# Some host graphics services depend on the distinct libcurl-gnutls SONAME;
+# that provider cannot satisfy the application's OpenSSL-backed libcurl.so.4.
+if ldconfig -p | grep -E 'libSDL3|libcares\.so|libcurl\.so'; then
   echo 'graphical host unexpectedly contains application libraries' >&2
   exit 1
 fi
