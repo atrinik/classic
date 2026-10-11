@@ -35,8 +35,19 @@ bool perception_identity_visible(const object *observer, const object *target) {
         return false;
     }
     tag_t observer_count = observer->count, target_count = target->count;
+    const player *observer_controller = observer->type == PLAYER ? CONTR(observer) : NULL;
+    const socket_struct *observer_socket = observer_controller != NULL ? observer_controller->cs : NULL;
+    const player *target_controller = target->type == PLAYER ? CONTR(target) : NULL;
+    const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
     bool hidden = OBJECT_IS_HIDDEN((object *)observer, (object *)target);
-    return !hidden && OBJECT_VALID(observer, observer_count) &&
+    /* Logout can be followed by pool reclamation inside the same callback.
+     * A pointer/count check is safe only after the live connection owns it. */
+    return !hidden &&
+           (observer_controller == NULL ||
+            player_connection_is_current(observer, observer_count, observer_controller, observer_socket)) &&
+           (target_controller == NULL ||
+            player_connection_is_current(target, target_count, target_controller, target_socket)) &&
+           OBJECT_VALID(observer, observer_count) &&
            OBJECT_VALID(target, target_count) && observer->map != NULL &&
            target->map != NULL && observer->env == NULL && target->env == NULL &&
            perception_flags_visible(observer, target);
@@ -111,13 +122,19 @@ bool perception_player_authorized(const player *pl, const object *target) {
     const object *observer = pl->ob, *head = HEAD(target);
     tag_t observer_count = observer->count, head_count = head->count;
     tag_t target_count = target->count;
+    const socket_struct *observer_socket = pl->cs;
+    const player *target_controller = head->type == PLAYER ? CONTR(head) : NULL;
+    const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
     bool single_part = target->head != NULL;
     for (const object *part = target; part != NULL; part = single_part ? NULL : part->more) {
         tag_t part_count = part->count;
         bool authorized = perception_player_part_authorized(pl, part);
         /* EVENT_ASK_SHOW may remove or replace any actor. Validate the whole
          * borrowed multipart identity before returning or reading the next link. */
-        if (!OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(head, head_count) ||
+        if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+            (target_controller != NULL &&
+             !player_connection_is_current(head, head_count, target_controller, target_socket)) ||
+            !OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(head, head_count) ||
             !OBJECT_VALID(target, target_count) || !OBJECT_VALID(part, part_count) ||
             pl->ob != observer || HEAD(target) != head) {
             return false;

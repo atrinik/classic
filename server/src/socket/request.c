@@ -356,6 +356,12 @@ void esrv_update_stats(player *pl) {
     target_rejected |= pl->target_object != selected_target ||
                        pl->target_object_count != selected_count;
     if (target_rejected) {
+        /* Authorization may have reclaimed the selected actor. Do not pass
+         * that rejected borrowed pointer through authorization a second time. */
+        if (pl->target_object == selected_target && pl->target_object_count == selected_count) {
+            pl->target_object = pl->ob;
+            pl->target_object_count = 0;
+        }
         send_target_command(pl);
         if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
             observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
@@ -2935,6 +2941,8 @@ bool target_player_authorized(const player *pl, const object *target, int *depth
     const socket_struct *observer_socket = pl->cs;
     const object *head = HEAD(target);
     tag_t observer_count = observer->count, target_count = target->count, head_count = head->count;
+    const player *target_controller = head->type == PLAYER ? CONTR(head) : NULL;
+    const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
     bool single_part = target->head != NULL;
     for (const object *part = target; part != NULL;) {
         tag_t part_count = part->count;
@@ -2942,6 +2950,8 @@ bool target_player_authorized(const player *pl, const object *target, int *depth
                           perception_player_part_authorized(pl, part);
         /* EVENT_ASK_SHOW may delete, remove or recycle any borrowed actor. */
         if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+            (target_controller != NULL &&
+             !player_connection_is_current(head, head_count, target_controller, target_socket)) ||
             !OBJECT_ACTIVE(observer) || observer_socket->state == ST_DEAD ||
             observer_socket->state == ST_ZOMBIE || !OBJECT_VALID(target, target_count) || !OBJECT_VALID(head, head_count) ||
             !OBJECT_VALID(part, part_count)) {
@@ -3183,6 +3193,8 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
             FOR_MAP_LAYER_BEGIN(cell.map, cell.x, cell.y, LAYER_LIVING, -1, part) {
                 object *head = HEAD(part);
                 tag_t part_count = part->count, head_count = head->count;
+                const player *target_controller = head->type == PLAYER ? CONTR(head) : NULL;
+                const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
                 int published_depth;
                 bool authorized = head != pl->ob && head->count == count && IS_LIVE(head) &&
                                   target_player_part_published(pl, part, &published_depth) &&
@@ -3195,7 +3207,9 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
                     observer_socket->state == ST_ZOMBIE) {
                     return;
                 }
-                if (!OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count)) {
+                if ((target_controller != NULL &&
+                     !player_connection_is_current(head, head_count, target_controller, target_socket)) ||
+                    !OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count)) {
                     FOR_MAP_LAYER_BREAK;
                 }
                 if (authorized && target_player_part_published(pl, part, &published_depth) &&

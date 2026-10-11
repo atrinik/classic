@@ -16,8 +16,10 @@ if calls == trigger_call and actor.ReadKey("actor_callback_done") != "1":
         observer.Controller().ExecuteCommand("/kick " + observer.name)
     elif mode == "teleport_observer":
         observer.TeleportTo(actor.ReadKey("callback_destination"), 17, 17)
-    elif mode == "kick_target":
+    elif mode in ("kick_target", "kick_target_reclaim"):
         observer.Controller().ExecuteCommand("/kick " + actor.name)
+        if mode == "kick_target_reclaim":
+            observer.Controller().ExecuteCommand("/memfree objects")
     elif mode == "kick_caster":
         observer.Controller().ExecuteCommand("/kick " + actor.ReadKey("callback_caster"))
     elif mode in ("recycle_observer", "recycle_observer_third", "recycle_target"):

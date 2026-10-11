@@ -14,11 +14,13 @@
 #include <object_methods.h>
 #include <player.h>
 #include <plugin.h>
+#include <perception.h>
 #include <propagation.h>
 #include <server.h>
 #include <spells.h>
 #include <skills.h>
 #include <toolkit/math.h>
+#include <toolkit/mempool.h>
 #include <toolkit/packet.h>
 
 static bool plugins_initialized;
@@ -520,6 +522,114 @@ START_TEST(test_monster_bow_preserves_successful_fire_and_pursuit) {
 }
 END_TEST
 
+/* Force the target into a new normal-sized object puddle. Holding the old
+ * free chunks avoids changing allocator configuration or mocking logout. */
+static object *reclaimable_target(mapstruct *map, mempool_struct *pool,
+                                  mempool_chunk_struct **target_storage) {
+    size_t num_held = pool->nrof_free[0];
+    object **held = xcalloc(MAX(num_held, 1), sizeof(*held));
+    for (size_t i = 0; i < num_held; i++) {
+        held[i] = object_get();
+    }
+    ck_assert_uint_eq(pool->nrof_free[0], 0);
+    object *target = player_get_dummy("actor-reclaim-target", NULL);
+    ck_assert_ptr_nonnull(pool->puddlelist[0]);
+    *target_storage = pool->puddlelist[0]->first_chunk;
+    uintptr_t address = (uintptr_t)MEM_POOLDATA(target);
+    uintptr_t first = (uintptr_t)*target_storage;
+    ck_assert(address >= first &&
+              address < first + pool->expand_size * (sizeof(mempool_chunk_struct) + pool->chunksize));
+    object_remove(target, 0);
+    target->x = 13;
+    target->y = 12;
+    target = object_insert_map(target, map, NULL, 0);
+    for (size_t i = 0; i < num_held; i++) {
+        object_destroy(held[i]);
+    }
+    efree(held);
+    return target;
+}
+
+START_TEST(test_target_logout_reclaims_storage_across_authorization_callers) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    player *controller = CONTR(pl);
+    controller->cmd_permissions = xrealloc(controller->cmd_permissions, 2 * sizeof(char *));
+    controller->cmd_permissions[1] = xstrdup("memfree");
+    controller->num_cmd_permissions = 2;
+    mempool_struct *pool = mempool_find("objects");
+    ck_assert_ptr_nonnull(pool);
+    mempool_chunk_struct *target_storage;
+    object *target = reclaimable_target(map, pool, &target_storage);
+    player *target_controller = CONTR(target);
+    socket_struct *target_socket = target_controller->cs;
+    tag_t target_count = target->count;
+    draw_client_map(pl);
+    ck_assert(target_player_authorized(controller, target, NULL));
+    controller->target_object = target;
+    controller->target_object_count = target_count;
+    ask_show(target, "kick_target_reclaim");
+    size_t reserved = propagation_reserved_cells();
+
+    switch (_i) {
+        case 0:
+            ck_assert(!perception_identity_visible(pl, target));
+            break;
+        case 1:
+            ck_assert(!perception_object_visible(pl, target));
+            break;
+        case 2:
+            ck_assert(!perception_player_part_authorized(controller, target));
+            break;
+        case 3:
+            ck_assert(!perception_player_authorized(controller, target));
+            break;
+        case 4:
+            ck_assert(!target_player_authorized(controller, target, NULL));
+            break;
+        case 5:
+            send_target_command(controller);
+            break;
+        case 6:
+            esrv_update_stats(controller);
+            break;
+        case 7:
+            ck_assert_int_eq(cast_cause_disease(pl, pl, 3, spellarch[SP_CAUSE_COLD], SP_CAUSE_COLD), 0);
+            break;
+        default: {
+            packet_struct *select = packet_new(SERVER_CMD_TARGET, 8, 0);
+            packet_writer_write_uint8(select, CMD_TARGET_MAPXY);
+            packet_writer_write_uint8(select, controller->cs->mapx_2 + 1);
+            packet_writer_write_uint8(select, controller->cs->mapy_2);
+            packet_writer_write_int8(select, 0);
+            packet_writer_write_uint32(select, target_count);
+            pticks++;
+            socket_command_target(controller->cs, controller, select->data, select->len, 0);
+            packet_free(select);
+            break;
+        }
+    }
+
+    ck_assert(!player_connection_is_current(target, target_count, target_controller, target_socket));
+    /* Prove the callback freed the backing allocation, rather than merely
+     * invalidating an object count in still-readable pool storage. */
+    for (mempool_puddle_struct *puddle = pool->puddlelist[0]; puddle != NULL; puddle = puddle->next) {
+        ck_assert_ptr_ne(puddle->first_chunk, target_storage);
+    }
+    ck_assert_uint_eq(propagation_reserved_cells(), reserved);
+    if (_i == 5 || _i == 6 || _i == 8) {
+        ck_assert_ptr_eq(controller->target_object, pl);
+        ck_assert_uint_eq(controller->target_object_count, 0);
+        ck_assert_ptr_null(pl->enemy);
+    } else {
+        /* Direct predicates leave selection management to their caller. */
+        controller->target_object = pl;
+        controller->target_object_count = 0;
+    }
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("server.actor_callbacks");
     TCase *tc = tcase_create("callbacks");
@@ -536,6 +646,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_fire_command_aborts_after_ranged_logout);
     tcase_add_test(tc, test_monster_bow_aborts_after_later_ranged_recycling);
     tcase_add_test(tc, test_monster_bow_preserves_successful_fire_and_pursuit);
+    tcase_add_loop_test(tc, test_target_logout_reclaims_storage_across_authorization_callers, 0, 9);
     suite_add_tcase(s, tc);
     return s;
 }
