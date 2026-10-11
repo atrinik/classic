@@ -50,3 +50,56 @@ build on each supported Mac architecture, followed by the unchanged Metal
 reference and minimum hardware qualification rows in
 `.github/workflows/gpu-qualification.yml`. These rows retain their GPU checks,
 stress runs, lifecycle recovery, production fixtures and human-approved goldens.
+
+## Hosted native CPU qualification
+
+`.github/workflows/llvm-macos-qualification.yml` supplies a bounded manual and
+reusable CPU qualification lane. Its Linux job produces the existing locked
+shader cohort for the exact selected source SHA; its native `macos-15` job
+checks Darwin/ARM64 before preparing the pinned LLVM archive and running the
+C/C++ SDK probes. GitHub currently documents this standard runner as an
+[ARM64 M1 host with three CPUs and 7 GiB RAM](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+The [runner inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md)
+provides CMake, Ninja, Homebrew and Xcode; the lane records the actual image,
+OS, selected SDK and disk space instead of inferring them from the label.
+
+The native job installs ARM64 Homebrew bottles for the current application
+prerequisites: SDL3, SDL3_image, SDL3_ttf, SDL3_mixer, OpenSSL 3, libxml2,
+libidn2, curl, zlib, Readline, Flex, MiniUPnPc, libgd, Check and Python 3.12.
+The official [SDL3](https://formulae.brew.sh/formula/sdl3),
+[SDL3_mixer](https://formulae.brew.sh/formula/sdl3_mixer) and
+[OpenSSL 3](https://formulae.brew.sh/formula/openssl@3) formulae currently supply
+bottles meeting Classic's required versions. CMake remains the authority for
+required versions at execution. Homebrew dependencies and hosted SDK images
+can change; the exact installed versions and formula metadata are retained
+with each qualification run. This lane does not create a released dependency
+producer or qualify different dependency versions by inference.
+
+The complete integrated Release graph builds protocol, libatrinik, pathfinding,
+client, server, the server Python plugin and all test executables through LLVM
+23.1.3. Existing feature, warning, PCH and optimization defaults remain in use.
+Builds and tests use two jobs. Locked sound, content, resources and libpcpnatpmp
+inputs use their existing verification helpers. CTest excludes the
+`gpu-conformance` and `performance` labels; native CPU test discovery must include
+every component and the Python plugin before tests run. GPU test executables
+still compile. The source-only GPU fixture provenance helper runs explicitly alongside
+locked runtime acquisition, while hardware GPU tests, benchmarks and Metal
+reference/minimum qualification remain separate acceptance requirements.
+
+Each run retains source identity, SDK/host and dependency inventory, native
+probe/configure/build logs, CMake cache and compile commands, selected test
+inventory, JUnit results and failure logs in the
+`macos-llvm-cpu-qualification-SHA` artifact. Downloaded LLVM/source archives are
+removed only after verified preparation and successful probes to recover the
+runner's limited disk space. Missing prerequisites, failed probes, absent test
+groups, build failures and test failures fail the lane. A source fixture pass
+or workflow definition alone is not native acceptance. Intel macOS remains a
+separate qualification target.
+
+A new manual workflow must exist on the repository's default branch before
+GitHub accepts a direct `workflow_dispatch`, as documented in
+[manual workflow execution](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+Before that, an existing manual workflow may call this local reusable workflow
+from the selected source branch. The coordinator owns publication, caller
+integration and authorized dispatch; this lane has only read permissions and
+publishes no application packages.

@@ -1,0 +1,200 @@
+name: Native macOS LLVM qualification
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: classic-llvm-macos-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  shaders:
+    name: Prepare matching locked shader inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Bind exact source and compile the locked shader cohort
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          tools/ci/prepare_gpu_shaders.sh \
+            "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}/macos-shader-downloads" \
+            "${GITHUB_WORKSPACE}/build/macos-qualification-shaders"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-llvm-shaders-${{ github.sha }}
+          path: build/macos-qualification-shaders
+          if-no-files-found: error
+          retention-days: 1
+
+  native-macos:
+    name: ARM64 SDK probes and Classic CPU tests
+    needs: shaders
+    # GitHub's macos-15 standard runner is ARM64; fail closed if that changes.
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      CTEST_PARALLEL_LEVEL: "2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: macos-llvm-shaders-${{ github.sha }}
+          path: build/macos-qualification-shaders
+      - name: Record native host and source prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --porcelain=v1 --untracked-files=normal)"
+          mkdir -p build/macos-qualification-evidence
+          {
+            git rev-parse HEAD
+            printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            sw_vers
+            uname -a
+            xcodebuild -version
+            xcrun --sdk macosx --show-sdk-path
+            xcrun --sdk macosx --show-sdk-version
+            cmake --version
+            ninja --version
+            brew config
+            df -h "${RUNNER_TEMP}" "${GITHUB_WORKSPACE}"
+          } > build/macos-qualification-evidence/host.txt
+      - name: Install the unchanged platform dependency features
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install --force-bottle \
+            pkgconf flex check miniupnpc gd libidn2 curl openssl@3 zlib \
+            libxml2 readline python@3.12 sdl3 sdl3_image sdl3_ttf sdl3_mixer \
+            2>&1 | tee build/macos-qualification-evidence/dependency-install.log
+          brew list --versions > build/macos-qualification-evidence/dependency-versions.txt
+          brew info --json=v2 --installed > build/macos-qualification-evidence/dependencies.json
+          echo "$(brew --prefix python@3.12)/libexec/bin" >> "${GITHUB_PATH}"
+          echo "$(brew --prefix flex)/bin" >> "${GITHUB_PATH}"
+      - name: Verify pinned LLVM and compile and run native C and C++ SDK probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci/prepare_macos_llvm.sh "${RUNNER_TEMP}/classic-llvm-macos" \
+            2>&1 | tee build/macos-qualification-evidence/llvm-sdk-probes.log
+          echo "${RUNNER_TEMP}/classic-llvm-macos/llvm/bin" >> "${GITHUB_PATH}"
+          cp "${RUNNER_TEMP}/classic-llvm-macos/stage/probe/CMakeCache.txt" \
+            build/macos-qualification-evidence/probe-CMakeCache.txt
+          # These are exact task-owned downloads, already verified and installed.
+          # Free their space before building the native application graph.
+          rm "${RUNNER_TEMP}/classic-llvm-macos/stage/LLVM-23.1.3-macOS-ARM64.tar.xz" \
+             "${RUNNER_TEMP}/classic-llvm-macos/stage/llvm-project-23.1.3.src.tar.xz"
+      - name: Acquire and verify the existing locked runtime and source inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 client/tools/dependencies.py sync --root client --refresh
+          python3 client/tools/dependencies.py verify --root client
+          python3 server/tools/dependencies.py sync --root server --refresh
+          python3 server/tools/dependencies.py verify --root server
+          python3 client/tools/verify_gpu_fixture_provenance.py
+          pcp_source=$(python3 server/tools/dependencies.py source \
+            --root server --source-lock server/cmake/immutable_sources.lock.json \
+            --source-name libpcpnatpmp --cache "${RUNNER_TEMP}/macos-source-cache")
+          echo "ATRINIK_MACOS_PCP_SOURCE=${pcp_source}" >> "${GITHUB_ENV}"
+      - name: Configure the complete Classic Release graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix=$(brew --prefix)
+          python_prefix=$(brew --prefix python@3.12)
+          export PKG_CONFIG_PATH="${prefix}/lib/pkgconfig"
+          for formula in openssl@3 curl libxml2 zlib readline; do
+            formula_prefix=$(brew --prefix "${formula}")
+            PKG_CONFIG_PATH="${formula_prefix}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+          done
+          cmake -S . -B build/macos-qualification -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/cmake/toolchains/llvm-macos.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DPACKAGE_TYPE=none \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            "-DCMAKE_PREFIX_PATH=${prefix};$(brew --prefix openssl@3);$(brew --prefix curl);$(brew --prefix libxml2);$(brew --prefix zlib);$(brew --prefix readline);${python_prefix}" \
+            "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" \
+            "-DCURL_ROOT=$(brew --prefix curl)" \
+            "-DPython_ROOT_DIR=${python_prefix}" -DPython_FIND_FRAMEWORK=LAST \
+            "-DPython3_EXECUTABLE=${python_prefix}/bin/python3.12" \
+            "-DFLEX_EXECUTABLE=$(brew --prefix flex)/bin/flex" \
+            "-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=${ATRINIK_MACOS_PCP_SOURCE}" \
+            "-DATRINIK_GPU_SHADER_DIRECTORY=${GITHUB_WORKSPACE}/build/macos-qualification-shaders" \
+            2>&1 | tee build/macos-qualification-evidence/configure.log
+      - name: Verify required production features were retained
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          cache = {}
+          for line in Path('build/macos-qualification/CMakeCache.txt').read_text().splitlines():
+              if line and not line.startswith(('#', '//')) and '=' in line and ':' in line:
+                  key, value = line.split('=', 1)
+                  cache[key.split(':', 1)[0]] = value
+          for option in ('ATRINIK_BUILD_CLIENT', 'ATRINIK_BUILD_SERVER', 'ENABLE_WARNING_ERRORS',
+                         'ENABLE_PYTHON_PLUGIN', 'ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS'):
+              if cache.get(option) != 'ON':
+                  raise SystemExit(f'required production feature absent: {option}')
+          if not cache.get('GD_LIBRARY') or cache['GD_LIBRARY'].endswith('-NOTFOUND'):
+              raise SystemExit('required world maker dependency absent: GD_LIBRARY')
+          PY
+      - name: Build the production client, server, library and test executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/macos-qualification --parallel 2 \
+            2>&1 | tee build/macos-qualification-evidence/build.log
+      - name: Verify CPU test discovery and run the non-GPU suites
+        shell: bash
+        env:
+          SDL_AUDIO_DRIVER: dummy
+        run: |
+          set -euo pipefail
+          ctest --test-dir build/macos-qualification --show-only=json-v1 \
+            -LE 'gpu-conformance|performance' > build/macos-qualification-evidence/tests.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('build/macos-qualification-evidence/tests.json').read_text())
+          names = [test['name'] for test in data['tests']]
+          for prefix in ('protocol-', 'libatrinik-', 'atrinik-pathfinding', 'client-', 'server-unit-', 'server-plugin-python'):
+              if not any(name.startswith(prefix) for name in names):
+                  raise SystemExit(f'missing required native CPU tests: {prefix}')
+          print(f'{len(names)} native CPU tests selected')
+          PY
+          ctest --test-dir build/macos-qualification --output-on-failure \
+            --no-tests=error --parallel 2 -LE 'gpu-conformance|performance' \
+            --output-junit "${GITHUB_WORKSPACE}/build/macos-qualification-evidence/tests.xml" \
+            2>&1 | tee build/macos-qualification-evidence/tests.log
+      - name: Retain exact native evidence and failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-llvm-cpu-qualification-${{ github.sha }}
+          path: |
+            build/macos-qualification-evidence
+            build/macos-qualification/CMakeCache.txt
+            build/macos-qualification/compile_commands.json
+            build/macos-qualification/CMakeFiles/CMakeConfigureLog.yaml
+            build/macos-qualification/Testing/Temporary/LastTest.log
+          if-no-files-found: error
+          retention-days: 14
