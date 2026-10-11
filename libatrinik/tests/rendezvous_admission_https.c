@@ -133,6 +133,13 @@ int main(int argc, char **argv) {
                                                              solve_fast);
     uint64_t elapsed = datetime_monotonic_ms() - start;
     if (strcmp(mode, "valid") == 0) {
+        if (result != RENDEZVOUS_ADMISSION_OK || solver_calls != 1) {
+            fprintf(stderr,
+                    "HTTPS admission outcome result=%d solver_calls=%u elapsed_ms=%llu\n",
+                    (int)result,
+                    solver_calls,
+                    (unsigned long long)elapsed);
+        }
         REQUIRE(result == RENDEZVOUS_ADMISSION_OK && solver_calls == 1);
         char *separator = strrchr(proof, '.');
         REQUIRE(separator != NULL && string_is_hex_fixed(separator + 1, 16, true));

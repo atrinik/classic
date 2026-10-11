@@ -8,6 +8,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import re
 import ssl
 import subprocess
 import sys
@@ -35,7 +36,8 @@ def certificates(root):
     ca_key, ca_cert = root / "ca.key", root / "ca.pem"
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
             "-subj", "/CN=Atrinik admission test CA", "-keyout", ca_key,
-            "-out", ca_cert, "-addext", "basicConstraints=critical,CA:TRUE")
+            "-out", ca_cert, "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign")
     key, csr, cert = root / "server.key", root / "server.csr", root / "server.pem"
     openssl("req", "-new", "-newkey", "rsa:2048", "-nodes",
             "-subj", "/CN=localhost", "-keyout", key, "-out", csr)
@@ -43,6 +45,7 @@ def certificates(root):
     extensions.write_text(
         "subjectAltName=DNS:localhost\n"
         "basicConstraints=critical,CA:FALSE\n"
+        "keyUsage=critical,digitalSignature,keyEncipherment\n"
         "extendedKeyUsage=serverAuth\n", encoding="ascii",
     )
     openssl("x509", "-req", "-in", csr, "-CA", ca_cert, "-CAkey", ca_key,
@@ -50,7 +53,8 @@ def certificates(root):
     other_ca = root / "other-ca.pem"
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
             "-subj", "/CN=Unrelated admission test CA", "-keyout", root / "other.key",
-            "-out", other_ca, "-addext", "basicConstraints=critical,CA:TRUE")
+            "-out", other_ca, "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign")
     return ca_cert, other_ca, cert, key
 
 
@@ -141,6 +145,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pass
 
 
+def native_failure(result, mode, requests):
+    # Native output can contain URLs or attempt secrets. Retain only these
+    # bounded test-owned numeric diagnostics, never arbitrary stdout/stderr.
+    diagnostics = []
+    for line in result.stderr[:4096].decode("ascii", errors="replace").splitlines():
+        if re.fullmatch(r"HTTPS admission assertion at line [0-9]{1,6}|"
+                        r"HTTPS admission outcome result=[0-9]{1,3} "
+                        r"solver_calls=[0-9]{1,10} elapsed_ms=[0-9]{1,20}", line):
+            diagnostics.append(line)
+    detail = "; ".join(diagnostics[:3]) or "no numeric native diagnostics"
+    return (f"native HTTPS admission case failed: {mode}; "
+            f"exit={result.returncode}; requests={requests}; {detail}")
+
+
 def run_case(binary, mode, ca, other_ca, cert, key):
     with Fixture(("127.0.0.1", 0), Handler) as server:
         server.mode = mode
@@ -164,7 +182,7 @@ def run_case(binary, mode, ca, other_ca, cert, key):
             result = subprocess.run([binary, url, mode], env=env, capture_output=True,
                                     timeout=8, check=False)
             if result.returncode:
-                raise RuntimeError(f"native HTTPS admission case failed: {mode}")
+                raise RuntimeError(native_failure(result, mode, server.requests))
             if server.errors:
                 raise RuntimeError(f"HTTPS fixture request check failed: {mode}: "
                                    + ",".join(server.errors[:3]))
