@@ -56,8 +56,8 @@ MXE_RECIPE = {
 LLVM_RECIPE = {
     "client/tools/build-windows-package.sh": "635c2eba2923b0a90c6d2896ae7f00c85f15685b1acd74b0e78cffe8ce365d99",
     "server/tools/build-windows-package.sh": "14b93dc0f22ad945225712833d044d48704134f1b3ce768b10451998dd6916c2",
-    "client/CMakeLists.txt": "f4a8595ffe7f4c4888b77eea2c8ddc248a6e0c74c733bc87b7b7bafb88d19f12",
-    "server/CMakeLists.txt": "e9bac9c28d7f4f180dcf0f6496e8b429722ac5e8a82a60454381ac9125c21e1b",
+    "client/CMakeLists.txt": "f13c97b203a198cdf5848a48bcbc218641d2787422eb6c194a2eeb37b3474e83",
+    "server/CMakeLists.txt": "ecdfbfd98d6864d7f43541409a21e63e5db024ac0c65ba8b161c5dc22e8a941a",
     "tools/ci/stage_windows_runtime.py": "2640baf4187bce4afca95da560cff08e4bdf8802840245c3cbf26eff372691e9",
     "cmake/toolchains/llvm.cmake": "b1eb85208a5f44a5b28956c33b92d86c4f056da1cac9355b483a84b46d55a513",
 }
