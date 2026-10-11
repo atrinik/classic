@@ -73,7 +73,7 @@ def _safe_name(name: str) -> bool:
 
 
 def _link_destination(name: str, target: str) -> str:
-    if not target or target.startswith("/") or "\\" in target or any(ord(c) < 32 for c in target):
+    if not target or target.startswith("/") or "\\" in target or any(ord(c) < 32 or ord(c) == 127 for c in target):
         raise ValueError(f"unsafe AppImage symlink: {name}")
     parts = list(PurePosixPath(name).parent.parts)
     for part in target.split("/"):
@@ -92,6 +92,7 @@ def _listing(output: str) -> dict[str, Entry]:
     entries: dict[str, Entry] = {}
     pattern = re.compile(r"^([dl-][rwxstST-]{9})\s+(\d+)/(\d+)\s+(\d+)\s+\d{4}-\d\d-\d\d\s+\d\d:\d\d\s+(.*)$")
     total = 0
+    root_seen = False
     for line in output.splitlines():
         if not line.strip():
             continue
@@ -100,6 +101,10 @@ def _listing(output: str) -> dict[str, Entry]:
             raise ValueError("unsafe or unrecognized SquashFS member listing")
         mode, uid, gid, size, name = match.groups()
         if name == "squashfs-root" and mode[0] == "d":
+            if (root_seen or int(uid) != 0 or int(gid) != 0 or any(c in mode for c in "sStT")
+                    or mode[7] != "r" or mode[9] != "x"):
+                raise ValueError("unsafe AppImage filesystem root")
+            root_seen = True
             continue
         if not name.startswith("squashfs-root/"):
             raise ValueError("unexpected SquashFS root")

@@ -57,6 +57,13 @@ class ListingTests(unittest.TestCase):
         listing += self.row("usr/lib/libtest.so.1", "lrwxrwxrwx", " -> libtest.so.1.2")
         self.assertEqual(len(appimage._listing(listing)), 4)
 
+    def test_unsafe_filesystem_root_rejected(self):
+        for row in ("drwxr-xr-x 1000/1000 1 2026-10-10 00:00 squashfs-root\n",
+                    "drwxr-sr-x 0/0 1 2026-10-10 00:00 squashfs-root\n",
+                    "drwxr-x--- 0/0 1 2026-10-10 00:00 squashfs-root\n"):
+            with self.subTest(row=row), self.assertRaisesRegex(ValueError, "filesystem root"):
+                appimage._listing(row)
+
 
 @unittest.skipUnless(all(Path("/usr/bin", tool).is_file() for tool in ("readelf", "unsquashfs", "mksquashfs"))
                      and Path("/usr/bin/true").is_file()
