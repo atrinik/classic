@@ -12,7 +12,7 @@ if [[ ${ATRINIK_LLVM_TOOLCHAIN:-0} == 1 ]]; then
   export LLVM_PROFILE_FILE="$(python3 /workspace/tools/ci/llvm_coverage.py prepare \
     --build-dir /tmp/admin-shutdown-coverage)"
   clang -std=c17 -Wall -Wextra -Werror \
-    -fprofile-instr-generate -fcoverage-mapping -DATRINIK_TESTING \
+    -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic -DATRINIK_TESTING \
     --rtlib=compiler-rt --unwindlib=libunwind -fuse-ld=lld \
     -shared -fPIC -I/workspace/server/src/include \
     /workspace/server/src/server/admin_shutdown.c -o admin_shutdown.so

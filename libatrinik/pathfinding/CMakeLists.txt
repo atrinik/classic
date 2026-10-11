@@ -22,7 +22,7 @@ endif ()
 
 if (ENABLE_COVERAGE)
     if (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT MINGW)
-        add_compile_options(-fprofile-instr-generate -fcoverage-mapping -O0 -g)
+        add_compile_options(-fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic -O0 -g)
         add_link_options(-fprofile-instr-generate)
     elseif (CMAKE_C_COMPILER_ID STREQUAL "GNU")
         # Transitional support for the previous immutable producer image.
