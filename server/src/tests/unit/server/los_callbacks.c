@@ -130,7 +130,7 @@ static void assert_fresh_publication(object *pl) {
     draw_client_map(pl);
     ck_assert_uint_gt(queued_map_packets(cs), 0);
     ck_assert_ptr_eq(cs->target_map_published_map, pl->map);
-    ck_assert_uint_eq(cs->target_map_published_count, pl->count);
+    ck_assert_uint_eq(cs->target_map_published_count, pl->map->count);
     ck_assert_uint_ne(cs->target_map_published_depths, 0);
     ck_assert_ptr_nonnull(map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false));
 }
@@ -155,6 +155,29 @@ START_TEST(test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh) {
     assert_aborted(pl);
 
     assert_fresh_publication(pl);
+}
+END_TEST
+
+/* This reaches draw_client_map2's own callback-abort cleanup: no retained
+ * target invokes ASK_SHOW beforehand, and /kick frees the saved controller
+ * and socket while MAP2 is being assembled. */
+START_TEST(test_ask_show_kicking_observer_during_direct_map2_withdraws_authority) {
+    mapstruct *map;
+    object *observer;
+    fixture(&map, &observer);
+    name_player(observer, "los-direct-kick-observer");
+    object *actor = place(map, "raas", 13, 12);
+    ask_show(actor, "kick_observer");
+    player *controller = CONTR(observer);
+    socket_struct *socket = controller->cs;
+    tag_t count = observer->count;
+
+    draw_client_map2(observer);
+
+    /* The helper walks the live list before examining a captured pointer, so
+     * this proves no MAP2 authority remains without dereferencing freed state. */
+    ck_assert(!player_connection_is_current(observer, count, controller, socket));
+    (void)map;
 }
 END_TEST
 
@@ -190,7 +213,7 @@ START_TEST(test_ask_show_kicking_observer_withdraws_snapshot_and_continues_postp
     ck_assert(player_connection_is_current(survivor, survivor_count,
                                             survivor_controller, survivor_socket));
     ck_assert_ptr_eq(survivor_socket->target_map_published_map, map);
-    ck_assert_uint_eq(survivor_socket->target_map_published_count, survivor->count);
+    ck_assert_uint_eq(survivor_socket->target_map_published_count, map->count);
     player_logout(survivor_controller);
 }
 END_TEST
@@ -223,7 +246,7 @@ START_TEST(test_ask_show_kicking_next_player_rejects_postprocess_snapshot) {
                                             observer_controller, observer_socket));
     ck_assert(!player_connection_is_current(next, next_count, next_controller, next_socket));
     ck_assert_ptr_eq(observer_socket->target_map_published_map, map);
-    ck_assert_uint_eq(observer_socket->target_map_published_count, observer->count);
+    ck_assert_uint_eq(observer_socket->target_map_published_count, map->count);
     player_logout(observer_controller);
 }
 END_TEST
@@ -389,6 +412,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh);
     tcase_add_test(tc, test_ask_show_viewstate_change_withdraws_earlier_dark_actor);
     tcase_add_test(tc, test_ask_show_kicking_observer_withdraws_snapshot_and_continues_postprocess);
+    tcase_add_test(tc, test_ask_show_kicking_observer_during_direct_map2_withdraws_authority);
     tcase_add_test(tc, test_ask_show_kicking_next_player_rejects_postprocess_snapshot);
     tcase_add_test(tc, test_ask_show_upper_roof_aborts_stale_map2_and_hides_actor);
     tcase_add_test(tc, test_ask_show_mutating_earlier_actor_aborts_whole_map2_transaction);
