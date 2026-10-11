@@ -61,3 +61,18 @@ for name in linuxdeploy appimagetool runtime; do
  mkdir -p "${prefix}/share/licenses/${dest}"
  cp "/inputs/tools/${name}-LICENSE" "${prefix}/share/licenses/${dest}/LICENSE"
 done
+
+python3 - <<'PYLICENSE'
+import json,pathlib,tarfile,hashlib
+lock=json.loads(pathlib.Path('/inputs/packaging.lock.json').read_text())
+notice=pathlib.Path('/opt/atrinik-appimage/share/licenses/appimage-runtime/LICENSE')
+with notice.open('ab') as out:
+ for e in lock['runtime_sources']:
+  archive=pathlib.Path('/inputs/runtime-sources')/e['filename']
+  assert hashlib.sha256(archive.read_bytes()).hexdigest()==e['sha256']
+  with tarfile.open(archive) as source:
+   files=[m for m in source.getmembers() if m.isfile() and (any(pathlib.PurePosixPath(m.name).name.lower().startswith(k) for k in ('license','copying','copyright','notice','lgpl')) or m.name.endswith('/'+e['license_file']))]
+   if not files: raise RuntimeError('missing runtime component licenses: '+e['name'])
+   for m in files:
+    out.write(('\n===== '+e['name']+' '+m.name+' =====\n').encode());out.write(source.extractfile(m).read());out.write(b'\n')
+PYLICENSE

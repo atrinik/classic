@@ -95,7 +95,7 @@
     "url": "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64",
     "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
     "size": 944632,
-    "license": "MIT",
+    "license": "MIT AND LGPL-2.1-or-later AND BSD-2-Clause AND BSD-3-Clause AND Zlib",
     "license_file": "LICENSE"
   },
   "host_libraries": [
@@ -174,6 +174,170 @@
       "name": "linuxdeploy-LICENSE",
       "url": "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy/1-alpha-20251107-1/LICENSE.txt",
       "sha256": "1edb41ae7601854ae15d113c3700beebd0ea3ed05b85e3786a94a72bb9916091"
+    }
+  ],
+  "runtime_sources": [
+    {
+      "name": "runtime",
+      "version": "20251108",
+      "url": "https://github.com/AppImage/type2-runtime/archive/refs/tags/20251108.tar.gz",
+      "sha256": "4c4f6df4647c9f01f871d7edd3716d8aeeffda9d22ffbebe3fccd95a6ab52c95",
+      "license": "MIT",
+      "filename": "runtime.tar.gz",
+      "license_file": "LICENSE",
+      "version_evidence": "pinned upstream runtime recipe"
+    },
+    {
+      "name": "musl",
+      "version": "1.2.5",
+      "url": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "license": "MIT",
+      "filename": "musl.tar.gz",
+      "license_file": "COPYRIGHT",
+      "version_evidence": "historical Alpine3.21 source package recipe"
+    },
+    {
+      "name": "libfuse",
+      "version": "3.15.0",
+      "url": "https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz",
+      "sha256": "70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0",
+      "license": "LGPL-2.1-or-later",
+      "filename": "libfuse.tar.xz",
+      "license_file": "LGPL2.txt",
+      "version_evidence": "pinned upstream runtime recipe"
+    },
+    {
+      "name": "squashfuse",
+      "version": "0.5.2",
+      "url": "https://github.com/vasi/squashfuse/archive/0.5.2.tar.gz",
+      "sha256": "db0238c5981dabbd80ee09ae15387f390091668ca060a7bc38047912491443d3",
+      "license": "BSD-2-Clause",
+      "filename": "squashfuse.tar.gz",
+      "license_file": "LICENSE",
+      "version_evidence": "pinned upstream runtime recipe"
+    },
+    {
+      "name": "zstd",
+      "version": "1.5.6",
+      "url": "https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz",
+      "sha256": "8c29e06cf42aacc1eafc4077ae2ec6c6fcb96a626157e0593d5e82a34fd403c1",
+      "license": "BSD-3-Clause OR GPL-2.0-only",
+      "filename": "zstd.tar.gz",
+      "license_file": "LICENSE",
+      "version_evidence": "embedded version string"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "url": "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+      "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+      "license": "Zlib",
+      "filename": "zlib.tar.gz",
+      "license_file": "README",
+      "version_evidence": "embedded version string"
+    },
+    {
+      "name": "mimalloc",
+      "version": "2.1.7",
+      "url": "https://github.com/microsoft/mimalloc/archive/refs/tags/v2.1.7.tar.gz",
+      "sha256": "0eed39319f139afde8515010ff59baf24de9e47ea316a315398e8027d198202d",
+      "license": "MIT",
+      "filename": "mimalloc.tar.gz",
+      "license_file": "LICENSE",
+      "version_evidence": "historical Alpine3.21 source package recipe"
+    }
+  ],
+  "runtime_recipes": [
+    {
+      "name": "alpine-musl-APKBUILD",
+      "filename": "alpine-musl-APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/APKBUILD",
+      "sha256": "5c31b8e5c25bcc4fe51e913dce8e057bebaf9c8980b88f76bc19d05d67a906ba"
+    },
+    {
+      "name": "alpine-musl-CVE-2025-26519.patch",
+      "filename": "alpine-musl-CVE-2025-26519.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/CVE-2025-26519.patch",
+      "sha256": "ab382da2bb5e1cc32d8904be28fb13f8ad3ce813967bd4bf7f5b1c6baee33e17"
+    },
+    {
+      "name": "alpine-musl-__stack_chk_fail_local.c",
+      "filename": "alpine-musl-__stack_chk_fail_local.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/__stack_chk_fail_local.c",
+      "sha256": "299a7d75a09de3e2e11e7fb4acc3182e4a14e868093d2f30938fce9bfcff13da"
+    },
+    {
+      "name": "alpine-musl-getconf.c",
+      "filename": "alpine-musl-getconf.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/getconf.c",
+      "sha256": "d87d0cbb3690ae2c5d8cc218349fd8278b93855dd625deaf7ae50e320aad247c"
+    },
+    {
+      "name": "alpine-musl-getent.c",
+      "filename": "alpine-musl-getent.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/getent.c",
+      "sha256": "b25f32d306d542246e9358ef65cd67c12b3e3a77656bc467853d3b0c76b5fbbd"
+    },
+    {
+      "name": "alpine-musl-handle-aux-at_base.patch",
+      "filename": "alpine-musl-handle-aux-at_base.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/handle-aux-at_base.patch",
+      "sha256": "2a65e03b94217063d72fe998e5fb2e25cd01716078a3ba1b0ab574ab205111e6"
+    },
+    {
+      "name": "alpine-musl-iconv.c",
+      "filename": "alpine-musl-iconv.c",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/iconv.c",
+      "sha256": "f79a2930a2e5bb0624321589edf8b889d1e9b603e01e6b7ae214616605b3fdd7"
+    },
+    {
+      "name": "alpine-musl-isatty-glibc-align.patch",
+      "filename": "alpine-musl-isatty-glibc-align.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/isatty-glibc-align.patch",
+      "sha256": "1321d542b40921a4c248bb2d15dbd03fcbbf008c8725eb2043d3cab62faeba48"
+    },
+    {
+      "name": "alpine-musl-ldconfig",
+      "filename": "alpine-musl-ldconfig",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/ldconfig",
+      "sha256": "b4a2c06db38742e8c42c3c9838b285a7d8cdac6c091ff3df5ff9a15f1e41b9c7"
+    },
+    {
+      "name": "alpine-musl-ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
+      "filename": "alpine-musl-ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/ldso-fix-non-functional-fix-to-early-dynamic-PAGE_SI.patch",
+      "sha256": "7f5806124d4a89536e53a07bfe95fcd0a8f1b7a27fc0dfc89c78c724dea1c924"
+    },
+    {
+      "name": "alpine-musl-loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+      "filename": "alpine-musl-loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/loongarch64-Add-lsx-and-lasx-vector-structure-defini.patch",
+      "sha256": "28efacd507c01b89e1725ed33723f3f9fdfe6cb83eb78ffea1e2acb7fda8a52c"
+    },
+    {
+      "name": "alpine-musl-loongarch64-add-TLSDESC-support.patch",
+      "filename": "alpine-musl-loongarch64-add-TLSDESC-support.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/loongarch64-add-TLSDESC-support.patch",
+      "sha256": "1efb4604e0b28b84e10faf37d17bad448510e73f6a3db89c8be47d38b9e85138"
+    },
+    {
+      "name": "alpine-musl-loongarch64-add-bits-hwcap.h.patch",
+      "filename": "alpine-musl-loongarch64-add-bits-hwcap.h.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/loongarch64-add-bits-hwcap.h.patch",
+      "sha256": "8849080b49dff046b1f29db24e54ffe6262b5884078091994db77efdafca2505"
+    },
+    {
+      "name": "alpine-musl-loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
+      "filename": "alpine-musl-loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/efd4d5df7be0ea48d98512671f676fc5ceb14899/main/musl/loongarch64-add-fpu-and-simd-context-to-signal.h.patch",
+      "sha256": "d73f85a90fe52930dd8b5d16cb7f3369a994918c0e41ae3c3dc9a25df4b45099"
+    },
+    {
+      "name": "alpine-mimalloc2-APKBUILD",
+      "filename": "alpine-mimalloc2-APKBUILD",
+      "url": "https://raw.githubusercontent.com/alpinelinux/aports/5a1a5dc3216a69e3cd66a57ee07cb5ef01b8be39/community/mimalloc2/APKBUILD",
+      "sha256": "bb2618381e98ef508b41697d9177b7d1fef6f61bf38543aa055b9e0002c3c54b"
     }
   ]
 }

@@ -45,11 +45,18 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     cache = args.cache or args.output / '.cache'
     cache.mkdir(parents=True, exist_ok=True)
+    for entry in lock['runtime_recipes']:
+        download(entry, args.output / 'runtime-recipes' / entry['filename'], cache)
+    for entry in lock['runtime_sources']:
+        download(entry, args.output / 'runtime-sources' / entry['filename'], cache)
     for entry in lock['sources']:
         download(entry, args.output / 'sources' / (entry['name'] + '.tar.gz'), cache)
     for entry in lock['tools'] + [dict(lock['runtime'], name='runtime')] + lock['bootstrap'] + lock['license_inputs']:
         download(entry, args.output / 'tools' / entry['name'], cache)
-    (args.output / 'dependency-inputs.lock.json').write_text(json.dumps({k: lock[k] for k in ('sources', 'tools', 'runtime', 'license_inputs')}, sort_keys=True) + '\n')
+    (args.output / 'dependency-inputs.lock.json').write_text(json.dumps({k: lock[k] for k in ('sources', 'tools', 'runtime', 'license_inputs', 'runtime_sources')}, sort_keys=True) + '\n')
+    probe = root / 'runtime-probe.c'
+    if probe.is_file() and probe.resolve() != (args.output / probe.name).resolve():
+        shutil.copyfile(probe, args.output / probe.name)
     for name in ('Dockerfile', 'build-dependencies.sh', 'packaging.lock.json'):
         if (root / name).resolve() != (args.output / name).resolve():
             shutil.copyfile(root / name, args.output / name)
