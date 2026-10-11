@@ -91,6 +91,9 @@ class AppImageTests(unittest.TestCase):
             "sources": [], "tools": {},
             "system_library_packages": {"libzstd.so.1": "libzstd1"},
             "system_package_versions": {"libzstd1": "fixture-version"},
+            "system_package_licenses": {"libzstd1": "BSD-3-Clause"},
+            "system_package_copyright_sha256": {
+                "libzstd1": hashlib.sha256(b"fixture system notice\n").hexdigest()},
             "host_libraries": ["libc.so.6", "libm.so.6", "ld-linux-x86-64.so.2", "libcrypto.so.3"],
             "required_libraries": ["libzstd.so.1"], "dlopen_libraries": [],
             "notices": ["usr/share/doc/atrinik/LICENSE.md", "usr/share/doc/atrinik/ATTRIBUTIONS.md"],
@@ -127,7 +130,7 @@ class AppImageTests(unittest.TestCase):
                          "build_features": {"testing": False, "coverage": False, "sanitizers": False},
                          "bundled_libraries": ["libzstd.so.1"],
                          "bundled_library_records": [{"name": "libzstd.so.1", "path": self.library_name,
-                             "version": "fixture-version", "license": "NOASSERTION", "source": "deb:libzstd1",
+                             "version": "fixture-version", "license": "BSD-3-Clause", "source": "deb:libzstd1",
                              "sha256": hashlib.sha256(library.read_bytes()).hexdigest()}],
                          "native_inputs": {key: self.lock[key] for key in ("sources", "tools", "runtime")}}
 
@@ -326,6 +329,21 @@ class AppImageTests(unittest.TestCase):
             record["version"] = "0.0.0"
             with self.assertRaisesRegex(ValueError, "provenance"):
                 self.validate()
+
+    def test_system_license_and_notice_are_bound_to_trusted_lock(self):
+        notice = self.payload / "usr/share/doc/atrinik/licenses/system/libzstd1/copyright"
+        notice.write_text("substituted copyright and license\n")
+        with self.assertRaisesRegex(ValueError, "system copyright"):
+            self.validate()
+        notice.write_text("fixture system notice\n")
+        self.metadata["bundled_library_records"][0]["license"] = "NOASSERTION"
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            self.validate()
+        self.lock["system_package_licenses"]["libzstd1"] = "NOASSERTION"
+        self.lock_path.write_text(json.dumps(self.lock, sort_keys=True))
+        self.metadata["lock_sha256"] = hashlib.sha256(self.lock_path.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "actual license expression"):
+            self.validate()
 
     def test_openssl_provider_config_and_nested_modules(self):
         config = self.payload / "usr/share/atrinik/openssl.cnf"

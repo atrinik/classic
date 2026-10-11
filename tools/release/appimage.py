@@ -394,10 +394,16 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
             version_name = lock.get("system_package_versions", {}).get(package)
             if not package or not version_name:
                 raise ValueError(f"AppImage library has no trusted system package: {soname}")
-            source_name, license_name = "deb:" + package, "NOASSERTION"
-            required(f"usr/share/doc/atrinik/licenses/system/{package}/copyright")
+            source_name = "deb:" + package
+            license_name = lock.get("system_package_licenses", {}).get(package)
+            copyright_digest = lock.get("system_package_copyright_sha256", {}).get(package)
+            notice = required(f"usr/share/doc/atrinik/licenses/system/{package}/copyright")
+            if _sha256(notice) != copyright_digest:
+                raise ValueError(f"AppImage system copyright differs from trusted lock: {package}")
         if not isinstance(version_name, str) or not version_name or not isinstance(license_name, str) or not license_name:
             raise ValueError(f"AppImage library has incomplete source provenance: {soname}")
+        if re.search(r"\b(?:NOASSERTION|NONE)\b", license_name):
+            raise ValueError(f"AppImage library has no actual license expression: {soname}")
         expected_records.append({"name": soname, "path": name, "version": version_name,
                                  "sha256": file_inventory[name], "license": license_name,
                                  "source": source_name})
