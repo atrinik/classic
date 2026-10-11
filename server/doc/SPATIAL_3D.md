@@ -245,9 +245,13 @@ record fails loading. No runtime pointer or map-lifetime token is saved.
 
 ## Propagating effects
 
-Propagation state is cast-owned and transient. Save/unload of any participating
-map expires the complete cast, not a subset that could resume from stale
-borrowed topology. No cast frontier/visited state is persisted and no save
+Propagation state is cast-owned and transient. A resident map checkpoint through
+[`new_save_map()`](../src/server/map.c) (including `Map.Save`) preserves pending
+work, cast reservations and linked-map cast groups on both success and failure;
+the resident simulation continues. Actual map free/unload teardown through
+`free_map()` expires the complete cast touching that map, including linked
+members on surviving maps, rather than leaving a subset that could resume from
+stale borrowed topology. No cast frontier/visited state is persisted and no save
 schema migration is required. Admission reserves the complete bounded volume before effects or costs: at
 most 65536 entries per cast and 1048576 entries globally. A fair round-robin
 scheduler shares one aggregate 4096-expansion budget per simulation tick and
@@ -281,8 +285,15 @@ fresh cross-depth perception, exact-part authorization, stale/depth/count
 selection rejection and transactional target parsing. Projectile tests cover
 numeric copy/save round trips, floor/hole reflection, homing and simultaneous
 axis reflection. Effects require around-cover paths, cast deduplication,
-periodic damage, aggregate work/memory exhaustion, and whole-cast save/unload
-expiry. Lighting requires the algorithm-2 cases in MAP_RENDERING.md.
+periodic damage, aggregate work/memory exhaustion, resident checkpoint
+preservation and whole-cast free/unload expiry. The three iterations of
+`test_resident_save_preserves_pending_propagation_until_teardown` in
+[`propagation.c`](../src/tests/unit/server/propagation.c) cover checkpoint
+success, primary-file open failure and atomic publication failure after
+serialization. Each verifies that pending work and linked-group reservations
+survive the checkpoint, then that teardown of one map expires the entire linked
+group and releases its capacity. Lighting requires the algorithm-2 cases in
+MAP_RENDERING.md.
 
 Run generated protocol checks and affected native CTest suites on the
 integrated revision through the pinned wrapper build. Offline unit evidence
