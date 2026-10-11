@@ -10,6 +10,7 @@
 #include <object.h>
 #include <object_methods.h>
 #include <player.h>
+#include <plugin.h>
 #include <propagation.h>
 #include <server.h>
 #include <spells.h>
@@ -259,6 +260,95 @@ START_TEST(test_propagation_pending_owner_after_reclamation) {
 }
 END_TEST
 
+/* Reuse the real callback's named-object Destroy + /memfree branch. The
+ * cached next object lives alone in its puddle, while actor/survivor remain. */
+START_TEST(test_disease_visit_stops_before_reclaimed_next_cursor) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/python/retained-disease-iterator");
+    FREE_AND_COPY_HASH(pl->name, "actor-callback-player");
+    CONTR(pl)->tls = 0;
+    CONTR(pl)->cmd_permissions = xcalloc(1, sizeof(char *));
+    CONTR(pl)->cmd_permissions[0] = xstrdup("memfree");
+    CONTR(pl)->num_cmd_permissions = 1;
+    static bool plugins_initialized;
+    if (!plugins_initialized) {
+        init_plugins();
+        plugins_initialized = true;
+    }
+
+    object *disease = place(map, "empty_archetype", 12, 12);
+    disease->type = DISEASE;
+    disease->magic = 1;
+    disease->stats.wc = 127;
+    disease->value = 10;
+    FREE_AND_COPY_HASH(disease->race, "*");
+    object *actor = place(map, "raas", 13, 12);
+    CLEAR_FLAG(actor, FLAG_NO_PASS);
+    object *survivor = place(map, "raas", 13, 12);
+    object_remove(survivor, 0);
+    survivor->layer = LAYER_EFFECT;
+    survivor->sub_layer = 1;
+    CLEAR_FLAG(survivor, FLAG_NO_PASS);
+    survivor = object_insert_map(survivor, map, NULL, INS_NO_MERGE | INS_NO_WALK_ON);
+    object *event = object_get();
+    event->type = EVENT_OBJECT;
+    event->sub_type = EVENT_ASK_SHOW;
+    FREE_AND_COPY_HASH(event->name, "Python");
+    FREE_AND_COPY_HASH(event->race, "events/python_unit_actor_callbacks.py");
+    FREE_AND_COPY_HASH(event->slaying, _i == 0 ? "visible" : "gate_destroy_guard_reclaim");
+    object_insert_into(event, actor, INS_NO_MERGE);
+    object_process(disease);
+    mempool_chunk_struct *storage;
+    object *next = isolated_target(map, &storage);
+    object_remove(next, 0);
+    next->x = 13;
+    next->y = 12;
+    next->layer = LAYER_EFFECT;
+    next->type = MONSTER;
+    SET_FLAG(next, FLAG_MONSTER);
+    monster_data_init(next);
+    FREE_AND_COPY_HASH(next->name, "callback gate guard");
+    next = object_insert_map(next, map, NULL, INS_NO_MERGE | INS_NO_WALK_ON);
+    ck_assert_ptr_eq(actor->above, next);
+    ck_assert_ptr_eq(next->above, survivor);
+    uint64_t epoch = object_reclamation_epoch();
+
+    propagation_tick();
+
+    ck_assert_str_eq(object_get_value(actor, "actor_callback_done"), "1");
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+    bool actor_infected = false, survivor_infected = false;
+    FOR_INV_PREPARE(actor, item) {
+        actor_infected |= item->type == DISEASE;
+    }
+    FOR_INV_FINISH();
+    FOR_INV_PREPARE(survivor, item) {
+        survivor_infected |= item->type == DISEASE;
+    }
+    FOR_INV_FINISH();
+    ck_assert_int_eq(actor_infected, _i == 0);
+    ck_assert_int_eq(survivor_infected, _i == 0);
+    if (_i == 0) {
+        ck_assert(object_reclamation_is_current(epoch));
+        bool next_infected = false;
+        FOR_INV_PREPARE(next, item) {
+            next_infected |= item->type == DISEASE;
+        }
+        FOR_INV_FINISH();
+        ck_assert(next_infected);
+    } else {
+        ck_assert(!object_reclamation_is_current(epoch));
+        mempool_struct *pool = mempool_find("objects");
+        for (mempool_puddle_struct *puddle = pool->puddlelist[0]; puddle != NULL;
+             puddle = puddle->next) {
+            ck_assert_ptr_ne(puddle->first_chunk, storage);
+        }
+    }
+}
+END_TEST
+
 void check_server_retained_gameplay(void) {
     Suite *suite = suite_create("retained_gameplay");
     TCase *core = tcase_create("Core");
@@ -270,6 +360,7 @@ void check_server_retained_gameplay(void) {
     tcase_add_test(core, test_swarm_next_tick_after_target_reclamation);
     tcase_add_loop_test(core, test_propagation_pending_source_after_reclamation, 0, 2);
     tcase_add_loop_test(core, test_propagation_pending_owner_after_reclamation, 0, 2);
+    tcase_add_loop_test(core, test_disease_visit_stops_before_reclaimed_next_cursor, 0, 2);
     suite_add_tcase(suite, core);
     check_run_suite(suite, __FILE__);
 }

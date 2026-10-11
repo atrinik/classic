@@ -127,8 +127,23 @@ static void disease_remove_symptoms(object *op) {
 static void disease_infection_visit(object *disease, mapstruct *map, int x, int y, int unused) {
     (void)unused;
     object *source = disease->env != NULL ? disease->env : disease;
+    tag_t disease_count = disease->count, source_count = source->count;
+    uint64_t reclamation = object_reclamation_epoch();
     FOR_MAP_PREPARE(map, x, y, target) {
-        if (IS_LIVE(target) && perception_identity_visible(source, target)) {
+        if (!IS_LIVE(target)) {
+            continue;
+        }
+        tag_t target_count = target->count;
+        bool visible = perception_identity_visible(source, target);
+        /* ASK_SHOW can destroy any object, including the iterator's cached
+         * next object. Stop before the macro reads that borrowed cursor, even
+         * when perception itself safely rejected the current target. */
+        if (!object_reclamation_is_current(reclamation) ||
+            !object_reference_is_current(disease, disease_count) ||
+            !object_reference_is_current(source, source_count)) {
+            return;
+        }
+        if (visible && object_reference_is_current(target, target_count)) {
             disease_infect(disease, target, 0);
         }
     }
