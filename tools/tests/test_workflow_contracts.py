@@ -1542,13 +1542,18 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(
             candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: llvm-23.1.3-{WINDOWS_PRODUCER_REVISION}-{digest}"), 1
         )
-        self.assertEqual(candidate.count(image), 4)
+        from tools.release.windows_producer import LLVM_IMAGE, MXE_IMAGE
+        self.assertEqual(LLVM_IMAGE, image)
+        self.assertNotEqual(MXE_IMAGE, LLVM_IMAGE)
+        self.assertIn("windows_cache_epoch: ${{ steps.metadata.outputs.windows_cache_epoch }}", candidate)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", candidate)
         for job, component in ((client_job, "client"), (server_job, "server")):
             with self.subTest(component=component):
                 self.assertIn(f"path: {component}/build/ccache", job)
                 self.assertIn(f"windows-{component}-ccache-v1-", job)
-                self.assertEqual(job.count(digest), 2)
+                self.assertIn("WINDOWS_BUILD_IMAGE: ${{ needs.metadata.outputs.windows_image }}", job)
+                self.assertIn("WINDOWS_BUILD_CACHE_EPOCH: ${{ needs.metadata.outputs.windows_cache_epoch }}", job)
+                self.assertEqual(job.count('"${WINDOWS_BUILD_IMAGE}"'), 2)
                 self.assertEqual(job.count("${{ env.WINDOWS_BUILD_CACHE_EPOCH }}"), 2)
                 self.assertIn("${{ runner.os }}-${{ runner.arch }}", job)
                 self.assertIn("${{ needs.metadata.outputs.version }}", job)
@@ -1560,13 +1565,12 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn(
                     f"--env CCACHE_TEMPDIR=/tmp/atrinik-{component}-ccache", job
                 )
-                self.assertIn(
-                    "--env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:", job
-                )
+                self.assertIn('"${producer_environment[@]}"', job)
+                self.assertIn('--format docker-env > "${arguments_path}"', job)
         self.assertEqual(candidate.count("ccache --zero-stats"), 2)
         self.assertEqual(candidate.count("ccache --show-stats"), 2)
         self.assertEqual(candidate.count("--env CCACHE_MAXSIZE=500M"), 2)
-        self.assertEqual(candidate.count("--env PATH=/opt/llvm-mingw/bin:"), 2)
+        self.assertEqual(candidate.count('"${producer_environment[@]}"'), 2)
 
     def test_discord_application_id_is_release_only_package_data(self) -> None:
         package = self.text("package-release.yml")
@@ -1612,15 +1616,74 @@ class WorkflowContractTests(unittest.TestCase):
             package_script,
         )
 
-    def test_only_release_metadata_checkouts_require_full_history(self) -> None:
+    def test_candidate_windows_jobs_execute_the_authenticated_producer_environment(self) -> None:
+        from tools.release.windows_producer import select_producer
+        workflow = self.text("build-release-candidate.yml")
+        for revision in ("5dc27699ccabea180d932265654c3d7a03b8a943",
+                         "fd4943252ac872fce2995c286b10a0c6d249aba3",
+                         "34bbad5c3f4d9b303c17aec5e2c75b3550ec8983",
+                         "994e6fdc20da962be9c11055bda28ef5561a1dea",
+                         "24bee6c8a830aa7372a30be6b842210b07639f73",
+                         "c5a8f9fa2bdcfbae9311093fb69907c8d64b35d4",
+                         "2349e0e14276fee251250cd451da6da0e68a3148"):
+            with tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary) / "source"
+                subprocess.run(["git", "clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(workspace)], check=True)
+                subprocess.run(["git", "-C", str(workspace), "checkout", "--quiet", "--detach", revision], check=True)
+                expected = select_producer(workspace, revision)
+                trusted = workspace / "build/windows-automation/tools/release"
+                trusted.mkdir(parents=True)
+                shutil.copyfile(ROOT / "tools/release/windows_producer.py", trusted / "windows_producer.py")
+                binary = workspace / "fixture-bin"
+                binary.mkdir()
+                docker = binary / "docker"
+                docker.write_text("#!/usr/bin/env python3\nimport json,pathlib,sys\npathlib.Path('docker-arguments.json').write_text(json.dumps(sys.argv[1:]))\n")
+                docker.chmod(0o755)
+                for job, end in (("client-windows", "server-windows"), ("server-windows", "server-image")):
+                    with self.subTest(revision=revision, job=job):
+                        section = workflow.split("  " + job + ":\n", 1)[1].split("  " + end + ":\n", 1)[0]
+                        self.assertIn("WINDOWS_BUILD_IMAGE: ${{ needs.metadata.outputs.windows_image }}", section)
+                        self.assertIn("WINDOWS_BUILD_CACHE_EPOCH: ${{ needs.metadata.outputs.windows_cache_epoch }}", section)
+                        self.assertIn('docker pull "${WINDOWS_BUILD_IMAGE}"', section)
+                        step = section.split("      - name: Build portable package from monorepo siblings", 1)[1].split("      - uses:", 1)[0]
+                        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+                        environment = dict(os.environ, PATH=str(binary) + ":" + os.environ["PATH"],
+                                           GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace),
+                                           RELEASE_REVISION=revision, RELEASE_VERSION="0.0.0", DISCORD_CONFIG_FILE="",
+                                           WINDOWS_BUILD_IMAGE=expected["windows_image"])
+                        result = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=workspace,
+                                                env=environment, capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        arguments = json.loads((workspace / "docker-arguments.json").read_text())
+                        selected = dict(argument.split("=", 1) for index, argument in enumerate(arguments)
+                                        if index and arguments[index - 1] == "--env")
+                        for name, value in expected["environment"].items():
+                            self.assertEqual(selected[name], value)
+                        forbidden_prefix = "ATRINIK_WINDOWS_" if expected["windows_mode"] == "mxe" else "MXE_"
+                        self.assertFalse(any(name.startswith(forbidden_prefix) for name in selected))
+                        self.assertIn(expected["windows_image"], arguments)
+                        self.assertNotIn("classic-check", expected["windows_image"])
+                        self.assertEqual(arguments[arguments.index("--network") + 1], "none")
+                # Selector failure must stop the actual workflow before Docker.
+                (workspace / "client/tools/build-windows-package.sh").write_text("unapproved source")
+                (workspace / "docker-arguments.json").unlink()
+                rejected = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=workspace,
+                                          env=environment, capture_output=True, text=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertFalse((workspace / "docker-arguments.json").exists())
+
+    def test_release_producer_validation_checkouts_require_history(self) -> None:
         candidate = self.text("build-release-candidate.yml")
         metadata_job = candidate[
             candidate.index("  metadata:") : candidate.index("  sources:")
         ]
-        remaining_jobs = candidate[candidate.index("  sources:") :]
-        self.assertEqual(candidate.count("fetch-depth: 0"), 1)
+        appimage = candidate[candidate.index("  client-appimage:"):candidate.index("  client-windows:")]
+        finalizer = candidate[candidate.index("  candidate:"):]
+        self.assertEqual(candidate.count("fetch-depth: 0"), 3)
         self.assertEqual(metadata_job.count("fetch-depth: 0"), 1)
-        self.assertNotIn("fetch-depth: 0", remaining_jobs)
+        self.assertEqual(appimage.count("fetch-depth: 0"), 1)
+        self.assertIn("path: candidate-source\n          persist-credentials: false\n          fetch-depth: 0", appimage)
+        self.assertEqual(finalizer.count("fetch-depth: 0"), 1)
 
     def test_core_uploads_exercised_python_release_tool_coverage(self) -> None:
         workflow = self.text("check.yml")

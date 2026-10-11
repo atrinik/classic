@@ -216,14 +216,14 @@ sys.exit(7 if os.environ['FAIL_VALIDATION'] == '1' else 0)
             resolver = workspace / 'tools/release'
             resolver.mkdir(parents=True)
             shutil.copy2(ROOT / 'tools/release/resolve_compiler_image.py', resolver)
-            (trusted / 'prepare.py').write_text("""import argparse, pathlib
+            (trusted / 'prepare.py').write_text("""import argparse, json, pathlib
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', type=pathlib.Path, required=True)
 parser.add_argument('--compiler-image', required=True)
 parser.add_argument('--source-packaging-lock', type=pathlib.Path)
 args = parser.parse_args()
 assert args.source_packaging_lock is not None
-assert args.source_packaging_lock.read_bytes() == b'{}'
+assert json.loads(args.source_packaging_lock.read_bytes()) == {'compiler': {'image': 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64}}
 out = args.output
 out.mkdir(parents=True)
 (out / 'packaging.lock.json').write_text('{"fixture": "locked inputs"}\\n')
@@ -245,7 +245,7 @@ elif sys.argv[1:3] == ['image', 'inspect']:
             candidate = workspace / 'candidate-source/tools/ci/appimage'
             candidate.mkdir(parents=True)
             (candidate / 'prepare.py').write_text('raise RuntimeError("candidate executed")')
-            (candidate / 'packaging.lock.json').write_text('{}')
+            (candidate / 'packaging.lock.json').write_text(json.dumps({'compiler': {'image': 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64}}))
             source = workspace / 'candidate-source'
             for arguments in (['init', '--quiet'], ['add', '.'],
                               ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',

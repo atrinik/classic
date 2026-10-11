@@ -9,11 +9,23 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import sys
 import tempfile
 import urllib.request
 
-LLVM_NOTICE_PATHS = tuple('usr/share/doc/atrinik/licenses/llvm/' + name + '-LICENSE.TXT'
-                         for name in ('llvm', 'clang', 'clang-tools-extra', 'lld', 'compiler-rt', 'libunwind'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'release'))
+from resolve_compiler_image import HISTORICAL_APPIMAGE_FILES, HISTORICAL_IMAGE
+
+
+def historical_recipe():
+    root = Path(__file__).resolve().parent / 'historical'
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('retained historical producer must be a regular directory')
+    for name, expected in HISTORICAL_APPIMAGE_FILES.items():
+        path = root / name
+        if path.is_symlink() or not path.is_file() or digest(path) != expected:
+            raise ValueError(f'retained historical producer integrity mismatch: {name}')
+    return root
 
 
 def digest(path):
@@ -68,18 +80,9 @@ def select_packaging_lock(trusted_lock, image, source_lock_path=None):
     if not isinstance(source_lock, dict):
         raise ValueError('source packaging lock requires a compiler descriptor')
     if 'compiler' not in source_lock:
-        # Pre-LLVM schema-3 releases retain their publication lock verbatim.
-        # The execution recipe remains the approved current LLVM recipe;
-        # only the compiler record and its six newly required notice entries
-        # may be absent from the historical source contract.
-        if trusted_lock['compiler'].get('image') is not None and image != trusted_lock['compiler']['image']:
-            raise ValueError('--compiler-image differs from the trusted packaging lock')
-        if any(trusted_lock['notices'].count(path) != 1 for path in LLVM_NOTICE_PATHS):
-            raise ValueError('trusted SDK lacks the complete LLVM notice contract')
-        legacy = {key: value for key, value in trusted_lock.items() if key != 'compiler'}
-        legacy['notices'] = [path for path in trusted_lock['notices'] if path not in LLVM_NOTICE_PATHS]
-        if json.dumps(source_lock, sort_keys=True) != json.dumps(legacy, sort_keys=True):
+        if image != HISTORICAL_IMAGE or hashlib.sha256(data).hexdigest() != HISTORICAL_APPIMAGE_FILES['packaging.lock.json']:
             raise ValueError('source packaging lock differs from the supported pre-LLVM recipe')
+        historical_recipe()
         return source_lock, data
     if not isinstance(source_lock['compiler'], dict):
         raise ValueError('source packaging lock requires a compiler descriptor')
@@ -105,9 +108,10 @@ def main():
     trusted_lock = json.loads(original_lock)
     try:
         publication_lock, selected_lock_bytes = select_packaging_lock(trusted_lock, args.compiler_image, args.source_packaging_lock)
+        recipe_root = root if 'compiler' in publication_lock else historical_recipe()
     except (OSError, ValueError, UnicodeError) as error:
         parser.error(str(error))
-    lock = publication_lock if 'compiler' in publication_lock else trusted_lock
+    lock = publication_lock
     if args.output.resolve() == root:
         parser.error('--output must be a separate generated context directory')
     args.output.mkdir(parents=True, exist_ok=True)
@@ -124,17 +128,23 @@ def main():
         jobs.append((entry, args.output / 'tools' / entry['name']))
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda job: download(job[0], job[1], cache), jobs))
-    (args.output / 'dependency-inputs.lock.json').write_text(json.dumps({k: lock[k] for k in ('sources', 'tools', 'runtime', 'license_inputs', 'runtime_sources', 'base_image', 'compiler')}, sort_keys=True) + '\n')
+    input_keys = ('sources', 'tools', 'runtime', 'license_inputs', 'runtime_sources', 'base_image')
+    if 'compiler' in lock:
+        input_keys += ('compiler',)
+    (args.output / 'dependency-inputs.lock.json').write_text(json.dumps({k: lock[k] for k in input_keys}, sort_keys=True) + '\n')
     (args.output / 'compiler-image.txt').write_text(args.compiler_image + '\n')
     for name in ('runtime-probe.c', 'graphical-probe.c'):
-        probe = root / name
+        probe = recipe_root / name
         if probe.is_file() and probe.resolve() != (args.output / probe.name).resolve():
             shutil.copyfile(probe, args.output / probe.name)
-    for name in ('build-dependencies.sh', 'compiler.py'):
-        if (root / name).resolve() != (args.output / name).resolve():
-            shutil.copyfile(root / name, args.output / name)
+    for name in ('build-dependencies.sh',) + (('compiler.py',) if 'compiler' in lock else ()):
+        if (recipe_root / name).resolve() != (args.output / name).resolve():
+            shutil.copyfile(recipe_root / name, args.output / name)
     (args.output / 'packaging.lock.json').write_bytes(selected_lock_bytes if selected_lock_bytes is not None else original_lock.encode())
-    (args.output / 'Dockerfile').write_text((root / 'Dockerfile').read_text().replace('FROM ${ATRINIK_COMPILER_IMAGE} AS compiler', f'FROM {args.compiler_image} AS compiler'))
+    dockerfile = (recipe_root / 'Dockerfile').read_bytes()
+    if 'compiler' in lock:
+        dockerfile = dockerfile.replace(b'FROM ${ATRINIK_COMPILER_IMAGE} AS compiler', f'FROM {args.compiler_image} AS compiler'.encode())
+    (args.output / 'Dockerfile').write_bytes(dockerfile)
 
 
 if __name__ == '__main__':

@@ -10,7 +10,7 @@ import tempfile
 import textwrap
 import unittest
 
-from tools.release.resolve_compiler_image import LOCK, resolve_descriptor, resolve_image
+from tools.release.resolve_compiler_image import HISTORICAL_IMAGE, HISTORICAL_SOURCE_LIMIT, LOCK, resolve_descriptor, resolve_image
 
 
 OLD_IMAGE = "ghcr.io/atrinik/classic-build:2.0.0@sha256:" + "a" * 64
@@ -62,16 +62,11 @@ class CompilerImageTests(unittest.TestCase):
             ["git", "-C", str(self.root), "show", revision + ":" + LOCK]))
         self.assertEqual(json.loads(output.read_text())["compiler"], compiler)
         historical = self.commit({})
-        subprocess.run(["python3", str(resolver), "--source-root", str(self.root),
-                        "--revision", historical, "--current-image", CURRENT_IMAGE,
-                        "--source-packaging-lock-output", str(output)], check=True, capture_output=True)
-        self.assertEqual(output.read_bytes(), b"{}")
-        self.git("rm", LOCK)
-        self.git("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "no lock")
-        subprocess.run(["python3", str(resolver), "--source-root", str(self.root),
-                        "--revision", self.git("rev-parse", "HEAD"), "--current-image", CURRENT_IMAGE,
-                        "--source-packaging-lock-output", str(output)], check=True, capture_output=True)
-        self.assertEqual(output.read_bytes(), b"")
+        rejected = subprocess.run(["python3", str(resolver), "--source-root", str(self.root),
+                                   "--revision", historical, "--current-image", CURRENT_IMAGE,
+                                   "--source-packaging-lock-output", str(output)], capture_output=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(json.loads(output.read_bytes())["compiler"], compiler)
 
     def test_historical_assembler_accepts_exported_original_lock_and_rejects_new_lock(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -105,9 +100,26 @@ class CompilerImageTests(unittest.TestCase):
             historical["assemble"](self.root / "rejected-appdir", prefix, "5.0.0", baseline)
         self.assertFalse((self.root / "rejected-appdir").exists())
 
-    def test_historical_gcc_descriptor_absence_uses_approved_current_pin(self) -> None:
+    def test_approved_historical_schemas_keep_original_gcc_producer(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        for revision in ("34bbad5c3f4d9b303c17aec5e2c75b3550ec8983", HISTORICAL_SOURCE_LIMIT, "994e6fdc20da962be9c11055bda28ef5561a1dea",
+                         "24bee6c8a830aa7372a30be6b842210b07639f73", "c5a8f9fa2bdcfbae9311093fb69907c8d64b35d4",
+                         "2349e0e14276fee251250cd451da6da0e68a3148"):
+            with self.subTest(revision=revision):
+                self.assertEqual(resolve_image(root, revision, CURRENT_IMAGE), HISTORICAL_IMAGE)
+                self.assertIsNone(resolve_image(root, revision, CURRENT_IMAGE, source_finalizer=True))
+
+    def test_actual_schema1_without_authenticated_producer_is_rejected(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        revision = "5999d3c95c56f490a9005efe009d8300204f789b"
+        with self.assertRaisesRegex(ValueError, "approved historical release schema"):
+            resolve_image(root, revision, CURRENT_IMAGE)
+
+    def test_unrecognized_missing_descriptor_never_falls_back(self) -> None:
         revision = self.commit({"base_image": "historical-sdk"})
-        self.assertEqual(resolve_image(self.root, revision, CURRENT_IMAGE), CURRENT_IMAGE)
+        for finalizer in (False, True):
+            with self.subTest(finalizer=finalizer), self.assertRaisesRegex(ValueError, "approved historical history"):
+                resolve_image(self.root, revision, CURRENT_IMAGE, source_finalizer=finalizer)
 
     def test_existing_llvm_descriptor_never_falls_back(self) -> None:
         for compiler in ({}, {"image": "ghcr.io/atrinik/classic-build:latest"}, None):
@@ -133,8 +145,10 @@ class CompilerImageTests(unittest.TestCase):
             resolve_image(self.root, self.git("rev-parse", "HEAD"), CURRENT_IMAGE)
 
     def test_historical_finalizer_workflow_gets_no_unsupported_compiler_argument(self) -> None:
-        revision = self.commit({"base_image": "historical-sdk"})
         source_root = Path(__file__).resolve().parents[2]
+        self.git("fetch", "--quiet", str(source_root), HISTORICAL_SOURCE_LIMIT)
+        self.git("checkout", "--quiet", "--detach", HISTORICAL_SOURCE_LIMIT)
+        revision = HISTORICAL_SOURCE_LIMIT
         workflow = (source_root / ".github/workflows/build-release-candidate.yml").read_text()
         step = workflow.split("      - name: Validate and index the complete candidate", 1)[1].split("      - uses:", 1)[0]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
@@ -142,7 +156,7 @@ class CompilerImageTests(unittest.TestCase):
         trusted.mkdir(parents=True)
         shutil.copy2(source_root / "tools/release/resolve_compiler_image.py", trusted)
         historical = self.root / "tools/release"
-        historical.mkdir(parents=True)
+        historical.mkdir(parents=True, exist_ok=True)
         (historical / "finalize_artifacts.py").write_text("""import argparse, json, pathlib, sys
 parser = argparse.ArgumentParser()
 for name in ('version', 'revision', 'source-epoch', 'directory'):

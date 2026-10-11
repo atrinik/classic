@@ -1,6 +1,6 @@
 # Copyright 2026 The Atrinik Project
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Exercise the pinned pre-LLVM assembler's lock and complete-notice boundary."""
+"""Exercise the pinned pre-LLVM assembler with its original GCC producer lock."""
 import importlib.util
 import json
 from pathlib import Path
@@ -26,7 +26,7 @@ class StopAfterCompleteNotices(Exception):
 
 
 class HistoricalAssemblerTests(unittest.TestCase):
-    def test_prepared_historical_lock_passes_actual_assembler_and_keeps_llvm_notices(self):
+    def test_prepared_gcc_lock_passes_actual_historical_assembler(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / 'source'
@@ -36,8 +36,7 @@ class HistoricalAssemblerTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(historical_blob(name))
             historical_lock = source / 'tools/ci/appimage/packaging.lock.json'
-            approved_lock = json.loads(Path(__file__).with_name('packaging.lock.json').read_text())
-            image = approved_lock['compiler'].get('image') or 'ghcr.io/atrinik/classic-build:1.2.3@sha256:' + 'a' * 64
+            image = prepare.HISTORICAL_IMAGE
             context = root / 'context'
             def materialize(entry, destination, cache):
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -48,7 +47,7 @@ class HistoricalAssemblerTests(unittest.TestCase):
                 prepare.main()
             self.assertEqual((context / 'packaging.lock.json').read_bytes(), historical_lock.read_bytes())
             execution = json.loads((context / 'dependency-inputs.lock.json').read_text())
-            self.assertEqual(execution['compiler'], approved_lock['compiler'])
+            self.assertNotIn('compiler', execution)
 
             prefix = root / 'prefix'
             prefix.mkdir()
@@ -57,10 +56,7 @@ class HistoricalAssemblerTests(unittest.TestCase):
             shutil.copyfile('/usr/bin/true', prefix / 'bin/openssl')
             (prefix / 'lib/ossl-modules').mkdir(parents=True)
             shutil.copyfile('/usr/bin/true', prefix / 'lib/ossl-modules/legacy.so')
-            notices = prefix / 'share/licenses/llvm'
-            notices.mkdir(parents=True)
-            for name in approved_lock['compiler']['notices']:
-                (notices / name).write_bytes((name + '\nComplete notice fixture\n').encode() * 100)
+            (prefix / 'share/licenses').mkdir(parents=True)
             appdir = root / 'AppDir'
             (appdir / 'usr/share/doc/atrinik').mkdir(parents=True)
             (appdir / 'usr/bin').mkdir(parents=True)
@@ -76,11 +72,9 @@ class HistoricalAssemblerTests(unittest.TestCase):
             with patch.object(assembler.shutil, 'copytree', side_effect=copy_until_notices):
                 with self.assertRaises(StopAfterCompleteNotices):
                     assembler.assemble(appdir, prefix, '5.39.0', 'a' * 40)
-            # Stop before the platform library closure, after the real historical
-            # assembler passes its exact SHA gate and copies every LLVM notice.
-            for name in approved_lock['compiler']['notices']:
-                self.assertEqual((appdir / 'usr/share/doc/atrinik/licenses/llvm' / name).read_bytes(),
-                                 (notices / name).read_bytes())
+            # The genuine old assembler passed its exact lock gate and reached
+            # common licenses. GCC recovery must not inject LLVM compiler notices.
+            self.assertFalse((appdir / 'usr/share/doc/atrinik/licenses/llvm').exists())
             (prefix / 'packaging.lock.json').write_bytes(Path(__file__).with_name('packaging.lock.json').read_bytes())
             with self.assertRaisesRegex(ValueError, 'packaging lock differs from source lock'):
                 assembler.assemble(appdir, prefix, '5.39.0', 'a' * 40)

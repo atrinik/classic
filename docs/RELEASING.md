@@ -566,6 +566,30 @@ current checkout's trusted inputs. LLVM packages require the approved compiler
 image from the trusted caller or an exact image pin in the source lock;
 inspection rejects a different well-formed digest. Candidate code cannot replace that caller's
 validator or redefine the supported host-library boundary.
+Historical source without a compiler descriptor never inherits the current
+LLVM image. The trusted resolver authenticates the approved pre-LLVM history,
+release schema and original producer inputs before selecting the immutable
+Classic Linux SDK 1.16. Schema-3 source at
+`fd4943252ac872fce2995c286b10a0c6d249aba3` uses the byte-identical retained
+Ubuntu 24.04/GCC AppImage recipe under `tools/ci/appimage/historical/`, its
+original packaging lock and six-key dependency-input manifest. Its source
+finalizer receives no unsupported compiler-image argument. Schema-2 recovery
+retains the authenticated original Debian recipe. Current LLVM source uses
+its exact compiler descriptor and matching LLVM recipe; unrecognized history,
+missing or malformed descriptors and changed producer inputs fail closed.
+Schema-1 source at `34bbad5c3f4d9b303c17aec5e2c75b3550ec8983` retains its
+original twelve assets, authenticated workflow, finalizer and installed-library
+helper, with no Linux client package recipe. The four approved first-parent
+schema-2 revisions from `994e6fdc20da962be9c11055bda28ef5561a1dea` through
+`2349e0e14276fee251250cd451da6da0e68a3148` retain their Debian client. Other
+schema-1 source requires separate producer authentication before rebuilding.
+Windows candidate metadata independently authenticates its producer recipe.
+Approved historical source uses the original general SDK 1.16 MXE image and
+environment; current source uses the general SDK 1.18 LLVM environment. Both
+Windows package jobs consume that selection and partition compiler caches by
+producer. Historical source and its DLL, Python and license staging remain
+unchanged. Selector and assembler fixtures prove these routing boundaries;
+they do not qualify a complete rebuilt historical release.
 SDK assembly uses the matching LLVM 23 `llvm-readelf`. The trusted host
 inspector uses `/usr/bin/llvm-readelf` from the distribution's `llvm` package
 only for read-only artifact inspection, preserving historical release recovery
