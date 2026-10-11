@@ -34,7 +34,7 @@
   top-level CMake/CTest suite, the standalone `pathfinding/` build and tests,
   install/package consumption, and downstream client/server builds through the
   workspace when a public API changes.
-- For substantial native logic changes, also run the `linux-coverage` preset
+- For substantial native logic changes, also run the `llvm-coverage` preset
   and native LLVM LCOV export documented in `README.md`; include both core and standalone
   pathfinding coverage without counting test or build output as source.
 - Commits and pull-request titles use Conventional Commits. Classic uses one

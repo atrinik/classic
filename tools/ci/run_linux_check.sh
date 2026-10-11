@@ -34,9 +34,13 @@ test "$(stat --format='%a' "${CCACHE_DIR}")" = 1777
 test "$(jq -r '.target' /usr/local/share/atrinik/classic-toolchain.json)" = classic-final
 test "$(jq -r '.platform' /usr/local/share/atrinik/classic-toolchain.json)" = linux/amd64
 llvm_toolchain=${ATRINIK_LLVM_TOOLCHAIN:-0}
+coverage_preset=linux-coverage
+coverage_directory=build/linux-coverage
 if [[ ${llvm_toolchain} == 1 ]]; then
   test "$(jq -r '.tools.clang' /usr/local/share/atrinik/classic-toolchain.json)" = 23.1.3
   export CC=clang CXX=clang++
+  coverage_preset=llvm-coverage
+  coverage_directory=build/llvm-coverage
 else
   # Transitional validation for the previously released immutable image.
   test "$(jq -r '.tools.gcc' /usr/local/share/atrinik/classic-toolchain.json)" = 15.2.0
@@ -54,14 +58,14 @@ fi
 # supplies %m-%p profile names, separating parallel processes and shared plugins.
 prepare_coverage() {
   if [[ ${llvm_toolchain} == 1 ]]; then
-    python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir build/linux-coverage
+    python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir "${coverage_directory}"
   fi
 }
 export_coverage() {
   local module=$1
   if [[ ${llvm_toolchain} == 1 ]]; then
     python3 "${source_root}/tools/ci/llvm_coverage.py" export \
-      --build-dir build/linux-coverage --source-root "${source_root}" \
+      --build-dir "${coverage_directory}" --source-root "${source_root}" \
       --component "${module}" --output coverage.lcov
   elif [[ ${module} == libatrinik ]]; then
     gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
@@ -125,12 +129,12 @@ case "${component}" in
     ctest --test-dir "${source_root}/protocol/build/check" --output-on-failure
 
     pushd "${source_root}/libatrinik" >/dev/null
-    cmake --preset linux-coverage \
+    cmake --preset "${coverage_preset}" \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
+    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
     prepare_coverage
-    ctest --preset linux-coverage
+    ctest --preset "${coverage_preset}"
     export_coverage libatrinik
     cmake --preset linux-sanitizers \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
@@ -156,12 +160,12 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset linux-coverage \
+    cmake --preset "${coverage_preset}" \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
+    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
     prepare_coverage
-    ctest --preset linux-coverage --parallel 4 -LE performance
+    ctest --preset "${coverage_preset}" --parallel 4 -LE performance
     export_coverage server
     cmake --preset linux-release \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
@@ -180,11 +184,11 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset linux-coverage \
+    cmake --preset "${coverage_preset}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
+    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
     prepare_coverage
-    ctest --preset linux-coverage -LE performance
+    ctest --preset "${coverage_preset}" -LE performance
     export_coverage client
     cmake --preset linux-release \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"

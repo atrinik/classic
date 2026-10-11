@@ -30,6 +30,14 @@
       }
     },
     {
+      "name": "llvm-coverage",
+      "inherits": "linux-coverage",
+      "binaryDir": "${sourceDir}/build/integrated-llvm-coverage",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/llvm.cmake"
+      }
+    },
+    {
       "name": "linux-sanitizers",
       "inherits": "linux-debug",
       "binaryDir": "${sourceDir}/build/integrated-linux-sanitizers",
@@ -42,6 +50,7 @@
     {"name": "linux-debug", "configurePreset": "linux-debug"},
     {"name": "linux-release", "configurePreset": "linux-release"},
     {"name": "linux-coverage", "configurePreset": "linux-coverage"},
+    {"name": "llvm-coverage", "configurePreset": "llvm-coverage"},
     {"name": "linux-sanitizers", "configurePreset": "linux-sanitizers"}
   ],
   "testPresets": [
@@ -58,8 +67,13 @@
     {
       "name": "linux-coverage",
       "configurePreset": "linux-coverage",
-      "environment": {"LLVM_PROFILE_FILE": "${sourceDir}/build/integrated-linux-coverage/llvm-profiles/%m-%p.profraw"},
       "output": {"outputOnFailure": true}
+    },
+    {
+      "name": "llvm-coverage",
+      "inherits": "linux-coverage",
+      "configurePreset": "llvm-coverage",
+      "environment": {"LLVM_PROFILE_FILE": "${sourceDir}/build/integrated-llvm-coverage/llvm-profiles/%m-%p.profraw"}
     },
     {
       "name": "linux-sanitizers",

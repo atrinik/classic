@@ -35,12 +35,16 @@
 
  To collect line, function, and branch coverage from the native tests in a full
  Classic checkout, use the pinned LLVM 23.1.3 toolchain and native profiles:
-  $ cmake --preset linux-coverage -DCMAKE_TOOLCHAIN_FILE="$PWD/../cmake/toolchains/llvm.cmake"
-  $ cmake --build --preset linux-coverage
-  $ python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/linux-coverage
-  $ ctest --preset linux-coverage
-  $ python3 ../tools/ci/llvm_coverage.py export --build-dir build/linux-coverage \
+  $ cmake --preset llvm-coverage
+  $ cmake --build --preset llvm-coverage
+  $ python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/llvm-coverage
+  $ ctest --preset llvm-coverage
+  $ python3 ../tools/ci/llvm_coverage.py export --build-dir build/llvm-coverage \
       --source-root .. --component server --output coverage.lcov
+
+ The llvm-coverage preset selects the pinned toolchain and its own
+ build/llvm-coverage cache and profiles. Existing linux-coverage build trees
+ remain available for the previously released producer.
 
  The server's simulation, monotonic, UTC wall, round-generation, and authored
  world-time domains are documented in doc/SERVER_CLOCKS.md. New deadlines must

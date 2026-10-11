@@ -25,12 +25,16 @@
 
  To collect line, function, and branch coverage from the native tests in a full
  Classic checkout, use the pinned LLVM 23.1.3 toolchain and native profiles:
-  $ cmake --preset linux-coverage -DCMAKE_TOOLCHAIN_FILE="$PWD/../cmake/toolchains/llvm.cmake"
-  $ cmake --build --preset linux-coverage
-  $ python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/linux-coverage
-  $ ctest --preset linux-coverage
-  $ python3 ../tools/ci/llvm_coverage.py export --build-dir build/linux-coverage \
+  $ cmake --preset llvm-coverage
+  $ cmake --build --preset llvm-coverage
+  $ python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/llvm-coverage
+  $ ctest --preset llvm-coverage
+  $ python3 ../tools/ci/llvm_coverage.py export --build-dir build/llvm-coverage \
       --source-root .. --component client --output coverage.lcov
+
+ The llvm-coverage preset selects the pinned toolchain and its own
+ build/llvm-coverage cache and profiles. Existing linux-coverage build trees
+ remain available for the previously released producer.
 
  The client requires SDL 3.4 or newer, SDL3_image 3.2 or newer, SDL3_ttf 3.2
  or newer, and SDL3_mixer 3.2.4 or newer. The supported mixer contract contains
@@ -566,5 +570,5 @@ Book writing
 
  Focused regression validation is `ctest --test-dir BUILD -R client-book-edit
  --output-on-failure`; the normal client suite also exercises command dispatch and
- retained popup/GPU behavior. Use the documented linux-coverage preset for native
+ retained popup/GPU behavior. Use the documented llvm-coverage preset for native
  coverage, and the workspace wrapper for integrated client/server execution.
