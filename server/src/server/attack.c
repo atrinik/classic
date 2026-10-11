@@ -392,10 +392,12 @@ static void attack_player_retarget(object *player_obj, object *attacker, int dam
         return;
     }
 
+    uint64_t reclamation = object_reclamation_epoch();
     bool active_target = attack_player_target_is_active(player_obj);
     /* A false authorization result can mean that ASK_SHOW logged the player
      * out or recycled the attacker, rather than merely hiding a target. */
-    if (!player_connection_is_current(player_obj, player_count, pl, socket) ||
+    if (!object_reclamation_is_current(reclamation) ||
+        !player_connection_is_current(player_obj, player_count, pl, socket) ||
         !OBJECT_VALID(player_obj, player_count) || !OBJECT_VALID(attacker, attacker_count) ||
         active_target) {
         return;
@@ -721,10 +723,12 @@ static int attack_object_internal(object *op, object *hitter, bool target_was_un
     play_sound_map(hitter->map, CMD_SOUND_EFFECT, sound, hitter->x, hitter->y, 0, 0);
 
     int dam;
+    uint64_t reclamation = object_reclamation_epoch();
     OBJECTS_DESTROYED_BEGIN(op, hitter) {
         if (attack_map && QUERY_FLAG(op, FLAG_HITBACK) && IS_LIVE(hitter)) {
             dam = attack_hit_situational(hitter, op, rndm(0, op->stats.dam));
-            if (OBJECTS_DESTROYED_ANY(op, hitter) || attack_check_abort(op, hitter, attack_map)) {
+            if (!object_reclamation_is_current(reclamation) ||
+                OBJECTS_DESTROYED_ANY(op, hitter) || attack_check_abort(op, hitter, attack_map)) {
                 return dam;
             }
         }
@@ -743,6 +747,9 @@ static int attack_object_internal(object *op, object *hitter, bool target_was_un
     }
     OBJECTS_DESTROYED_END();
 
+    if (!object_reclamation_is_current(reclamation)) {
+        return dam;
+    }
     if (dam > 0 && metrics_owner->type == PLAYER) {
         if (metrics_melee) {
             metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_MELEE_HITS, 1);
@@ -1086,8 +1093,10 @@ static int attack_hit_internal(object *op,
     tag_t owner_count = hitter_owner->count;
     player *victim_controller = op->type == PLAYER ? CONTR(op) : NULL;
     socket_struct *victim_socket = victim_controller != NULL ? victim_controller->cs : NULL;
+    uint64_t reclamation = object_reclamation_epoch();
     attack_player_retarget(op, hitter_owner, dam);
-    if ((victim_controller != NULL &&
+    if (!object_reclamation_is_current(reclamation) ||
+        (victim_controller != NULL &&
          !player_connection_is_current(op, victim_count, victim_controller, victim_socket)) ||
         !OBJECT_VALID(op, victim_count) || !OBJECT_VALID(hitter, hitter_count) ||
         !OBJECT_VALID(hitter_owner, owner_count) || !attack_check_sanity(op, hitter, NULL)) {
@@ -1316,7 +1325,11 @@ void attack_hit_map(object *op, int dir, bool multi_reduce) {
             dam /= (tmp->quick_pos >> 4) + 1;
         }
 
+        uint64_t reclamation = object_reclamation_epoch();
         attack_hit_situational(tmp, op, dam);
+        if (!object_reclamation_is_current(reclamation)) {
+            return;
+        }
     }
     FOR_MAP_LAYER_END
 }

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -116,6 +116,13 @@ static int sort_puddle_by_nrof_free(void *a, void *b, void *args) {
     }
 }
 
+/** Advance before releasing chunk storage; saturation permanently invalidates snapshots. */
+static void mempool_note_reclamation(mempool_struct *pool) {
+    if (pool->storage_reclamation_epoch != UINT64_MAX) {
+        pool->storage_reclamation_epoch++;
+    }
+}
+
 /**
  * Go through the freelists and free puddles with no used chunks.
  *
@@ -170,6 +177,7 @@ static size_t mempool_free_puddles(mempool_struct *pool) {
             /* Can we actually free this puddle? */
             if (puddle->nrof_free == nrof_arrays || (deiniting && pool == pool_puddle)) {
                 /* Yup. Forget about it. */
+                mempool_note_reclamation(pool);
                 free(puddle->first_chunk);
 
                 if (!deiniting || pool != pool_puddle) {
@@ -233,6 +241,7 @@ mempool_struct *mempool_create(const char *description,
     pool->expand_size = expand;
     pool->chunksize = size;
     pool->flags = flags;
+    pool->storage_reclamation_epoch = 0;
     pool->initialisator = initialisator;
     pool->deinitialisator = deinitialisator;
     pool->constructor = constructor;
@@ -568,6 +577,7 @@ void mempool_return_chunk(mempool_struct *pool, size_t arraysize_exp, void *data
             pool->deinitialisator(MEM_USERDATA(chunk));
         }
 
+        mempool_note_reclamation(pool);
         free(chunk);
         pool->nrof_allocated[arraysize_exp]--;
     } else {
@@ -585,6 +595,18 @@ size_t mempool_reclaim(mempool_struct *pool) {
     }
 
     return mempool_free_puddles(pool);
+}
+
+uint64_t mempool_reclamation_epoch(const mempool_struct *pool) {
+    HARD_ASSERT(pool != NULL);
+
+    return pool->storage_reclamation_epoch;
+}
+
+bool mempool_reclamation_is_current(const mempool_struct *pool, uint64_t epoch) {
+    HARD_ASSERT(pool != NULL);
+
+    return epoch != UINT64_MAX && pool->storage_reclamation_epoch == epoch;
 }
 
 void mempool_leak_info_all(StringBuffer *sb) {

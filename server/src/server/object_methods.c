@@ -366,6 +366,7 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(shooter != NULL);
 
+    uint64_t reclamation = object_reclamation_epoch();
     tag_t op_count = op->count, shooter_count = shooter->count;
     bool is_player = shooter->type == PLAYER;
     player *controller = is_player ? CONTR(shooter) : NULL;
@@ -379,7 +380,8 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
             : perception_object_visible(shooter, selected);
         /* Prove connection ownership before touching either the shooter or
          * its inventory: logout may reclaim both object pool pages. */
-        if (is_player && !player_connection_is_current(shooter, shooter_count, controller, socket)) {
+        if (!object_reclamation_is_current(reclamation) ||
+            (is_player && !player_connection_is_current(shooter, shooter_count, controller, socket))) {
             return OBJECT_METHOD_UNHANDLED;
         }
         if (authorized && OBJECT_VALID(shooter, shooter_count) &&

@@ -394,6 +394,7 @@ object *check_enemy(object *npc, rv_vector *rv) {
 object *find_enemy(object *npc, rv_vector *rv) {
     object *tmp = NULL;
     tag_t npc_count = npc->count;
+    uint64_t reclamation = object_reclamation_epoch();
     uint64_t publication = los_publication_epoch();
 
     /* If we are berserk, we don't care about others - we attack all we can
@@ -402,7 +403,8 @@ object *find_enemy(object *npc, rv_vector *rv) {
         /* Always clear the attacker entry */
         npc->attacked_by = NULL;
         tmp = find_nearest_enemy(npc);
-        if (!OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+        if (!object_reclamation_is_current(reclamation) ||
+            !OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
             return NULL;
         }
 
@@ -432,7 +434,8 @@ object *find_enemy(object *npc, rv_vector *rv) {
 
                 bool visible = monster_rangevector(npc, attacker, rv) &&
                                perception_object_visible(npc, attacker);
-                if (!OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+                if (!object_reclamation_is_current(reclamation) ||
+                    !OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
                     return NULL;
                 }
                 if (visible) {
@@ -451,7 +454,8 @@ object *find_enemy(object *npc, rv_vector *rv) {
          * one. */
         if (!QUERY_FLAG(npc, FLAG_UNAGGRESSIVE)) {
             tmp = find_nearest_enemy(npc);
-            if (!OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+            if (!object_reclamation_is_current(reclamation) ||
+                !OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
                 return NULL;
             }
 
@@ -546,6 +550,7 @@ static void process_func(object *op) {
 
     object *enemy;
     tag_t op_count = op->count;
+    uint64_t reclamation = object_reclamation_epoch();
     uint64_t publication = los_publication_epoch();
     bool enemy_visible = false;
     rv_vector rv;
@@ -558,14 +563,16 @@ static void process_func(object *op) {
         enemy = NULL;
     } else {
         enemy = find_enemy(op, &rv);
-        if (!OBJECT_VALID(op, op_count) || publication != los_publication_epoch()) {
+        if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count) ||
+            publication != los_publication_epoch()) {
             return;
         }
         if (enemy != NULL) {
             enemy_visible = perception_object_visible(op, enemy);
             /* False can mean destruction/recycling. The range vector also
              * borrows multipart/map state invalidated by callback mutations. */
-            if (!OBJECT_VALID(op, op_count) || publication != los_publication_epoch()) {
+            if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count) ||
+                publication != los_publication_epoch()) {
                 return;
             }
         }
@@ -633,7 +640,7 @@ static void process_func(object *op) {
             if (QUERY_FLAG(op, FLAG_CAST_SPELL) && !op->last_grace) {
                 publication = los_publication_epoch();
                 bool cast = monster_cast_spell(op, op, 0, NULL, SPELL_DESC_FRIENDLY);
-                if (!OBJECT_VALID(op, op_count)) {
+                if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count)) {
                     return;
                 }
                 if (cast) {
@@ -742,7 +749,7 @@ static void process_func(object *op) {
                                                dir,
                                                &rv,
                                                SPELL_DESC_DIRECTION | SPELL_DESC_ENEMY | SPELL_DESC_SELF);
-                if (!OBJECT_VALID(op, op_count)) {
+                if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count)) {
                     return;
                 }
                 if (cast) {
@@ -759,7 +766,8 @@ static void process_func(object *op) {
                 OBJECT_VALID(op->enemy, op->enemy_count)) {
                 publication = los_publication_epoch();
                 bool visible = perception_object_visible(op, op->enemy);
-                if (!OBJECT_VALID(op, op_count) || publication != los_publication_epoch()) {
+                if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count) ||
+                    publication != los_publication_epoch()) {
                     return;
                 }
                 if (visible && rndm_chance(4)) {
@@ -774,7 +782,8 @@ static void process_func(object *op) {
                     /* A normal shot changes map publication too. Fence the
                      * retained range-vector actors themselves so a valid
                      * fire-and-pursue tick keeps its ordinary continuation. */
-                    if ((enemy_controller != NULL &&
+                    if (!object_reclamation_is_current(reclamation) ||
+                        (enemy_controller != NULL &&
                          !player_connection_is_current(enemy, enemy_count, enemy_controller, enemy_socket)) ||
                         !OBJECT_VALID(op, op_count) || !OBJECT_VALID(part, part_count) ||
                         !OBJECT_VALID(enemy, enemy_count) || op->enemy != enemy ||
@@ -911,6 +920,9 @@ static void process_func(object *op) {
             /* As long we are > 0, we are not ready to swing */
             if (op->weapon_speed_left <= 0) {
                 skill_attack(enemy, part, 0, NULL);
+                if (!object_reclamation_is_current(reclamation)) {
+                    return;
+                }
                 op->weapon_speed_left += FABS((int)op->weapon_speed_left) + 1;
             }
 
@@ -919,6 +931,9 @@ static void process_func(object *op) {
             /* As long we are > 0, we are not ready to swing */
             if (op->weapon_speed_left <= 0) {
                 skill_attack(enemy, part, 0, NULL);
+                if (!object_reclamation_is_current(reclamation)) {
+                    return;
+                }
                 op->weapon_speed_left += FABS((int)op->weapon_speed_left) + 1;
             }
         }
@@ -1041,10 +1056,12 @@ static object *find_nearest_enemy(object *ob) {
                         continue;
                     }
                     uint64_t publication = los_publication_epoch();
+                    uint64_t reclamation = object_reclamation_epoch();
                     bool detected = can_detect_target(ob, tmp, aggro_range, aggro_stealth, &rv);
                     /* Do not advance a borrowed stack/map iterator after a
                      * callback mutates it, even when detection returns false. */
-                    if (!OBJECT_VALID(ob, observer_count) || publication != los_publication_epoch()) {
+                    if (!object_reclamation_is_current(reclamation) ||
+                        !OBJECT_VALID(ob, observer_count) || publication != los_publication_epoch()) {
                         return NULL;
                     }
                     if (!detected) {
@@ -1272,9 +1289,11 @@ static int monster_cast_spell(object *head, object *part, int dir, rv_vector *rv
         tag_t head_count = head->count, part_count = part->count;
         tag_t spell_count = spell_item->count;
         uint64_t publication = los_publication_epoch();
+        uint64_t reclamation = object_reclamation_epoch();
         bool visible = OBJECT_VALID(head->enemy, head->enemy_count) &&
                        perception_object_visible(head, head->enemy);
-        if (!OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count) ||
+        if (!object_reclamation_is_current(reclamation) ||
+            !OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count) ||
             !OBJECT_VALID(spell_item, spell_count) || publication != los_publication_epoch() ||
             !visible) {
             return 0;

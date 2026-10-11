@@ -216,9 +216,26 @@ object *common_object_projectile_stop_spell(object *op, int reason) {
     return NULL;
 }
 
+/* After storage reclamation, recover only through the live active list.
+ * Comparing a captured address is safe; its fields are not. */
+static void projectile_abort_reclaimed_launch(const object *borrowed, tag_t count) {
+    for (object *current = active_objects; current != NULL; current = current->active_next) {
+        if (current == borrowed && current->count == count) {
+            if (!QUERY_FLAG(current, FLAG_REMOVED)) {
+                object_remove(current, REMOVE_NO_WALK_OFF);
+            }
+            object_destroy(current);
+            return;
+        }
+    }
+}
+
 /** @copydoc object_methods_t::projectile_fire_func */
 object *common_object_projectile_fire_missile(object *op, object *shooter, int dir) {
     tag_t shooter_count = shooter->count;
+    tag_t projectile_count = op->count;
+    uint64_t reclamation = object_reclamation_epoch();
+    const object *borrowed_projectile = op;
     bool is_player = shooter->type == PLAYER;
     player *controller = is_player ? CONTR(shooter) : NULL;
     socket_struct *socket = is_player ? controller->cs : NULL;
@@ -253,12 +270,16 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
     op->sub_layer = shooter->sub_layer;
     op = object_insert_map(op, shooter->map, op, 0);
 
+    if (!object_reclamation_is_current(reclamation)) {
+        projectile_abort_reclaimed_launch(borrowed_projectile, projectile_count);
+        return NULL;
+    }
     if (!op) {
         return NULL;
     }
 
     object *target = NULL;
-    tag_t projectile_count = op->count;
+    projectile_count = op->count;
     /* Insertion and hidden-object plugins can mutate selection or identity.
      * Reauthorize the current selection at the point that it supplies XYZ. */
     bool shooter_current = !is_player ||
@@ -270,6 +291,10 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
             bool authorized = is_player
                 ? target_player_authorized(CONTR(shooter), selected, NULL)
                 : perception_object_visible(shooter, selected);
+            if (!object_reclamation_is_current(reclamation)) {
+                projectile_abort_reclaimed_launch(op, projectile_count);
+                return NULL;
+            }
             shooter_current = !is_player ||
                 player_connection_is_current(shooter, shooter_count, controller, socket);
             if (shooter_current && authorized && OBJECT_VALID(shooter, shooter_count) &&
@@ -288,13 +313,18 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
     if (!shooter_current || !OBJECT_VALID(shooter, shooter_count)) {
         /* Returning NULL also prevents bow/throw callers from accessing a
          * departed shooter for metrics and sound after the callback. */
-        object_remove(op, 0);
+        object_remove(op, REMOVE_NO_WALK_OFF);
         object_destroy(op);
         return NULL;
     }
     projectile3d_launch(op, shooter, target, dir);
     object_process(op);
 
+    if (!object_reclamation_is_current(reclamation) ||
+        (is_player && !player_connection_is_current(shooter, shooter_count, controller, socket)) ||
+        !OBJECT_VALID(shooter, shooter_count)) {
+        return NULL;
+    }
     return op;
 }
 
@@ -322,9 +352,13 @@ int common_object_projectile_hit(object *op, object *victim) {
             !QUERY_FLAG(op, FLAG_IS_SPELL) && owner != NULL && owner->type == PLAYER;
         op = projectile_stick(op, victim);
 
+        uint64_t reclamation = object_reclamation_epoch();
         OBJ_DESTROYED_BEGIN(op) {
             dam = attack_hit_situational(victim, op, op->stats.dam);
 
+            if (!object_reclamation_is_current(reclamation)) {
+                return OBJECT_METHOD_ERROR;
+            }
             if (dam > 0 && OBJECT_VALID(owner, owner_count) && owner->type == PLAYER) {
                 if (metrics_projectile) {
                     metrics_add(&CONTR(owner)->metrics, METRIC_CHARACTER_PROJECTILE_HITS, 1);

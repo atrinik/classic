@@ -39,10 +39,11 @@ bool perception_identity_visible(const object *observer, const object *target) {
     const socket_struct *observer_socket = observer_controller != NULL ? observer_controller->cs : NULL;
     const player *target_controller = target->type == PLAYER ? CONTR(target) : NULL;
     const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
+    uint64_t reclamation = object_reclamation_epoch();
     bool hidden = OBJECT_IS_HIDDEN((object *)observer, (object *)target);
     /* Logout can be followed by pool reclamation inside the same callback.
      * A pointer/count check is safe only after the live connection owns it. */
-    return !hidden &&
+    return object_reclamation_is_current(reclamation) && !hidden &&
            (observer_controller == NULL ||
             player_connection_is_current(observer, observer_count, observer_controller, observer_socket)) &&
            (target_controller == NULL ||
@@ -128,10 +129,12 @@ bool perception_player_authorized(const player *pl, const object *target) {
     bool single_part = target->head != NULL;
     for (const object *part = target; part != NULL; part = single_part ? NULL : part->more) {
         tag_t part_count = part->count;
+        uint64_t reclamation = object_reclamation_epoch();
         bool authorized = perception_player_part_authorized(pl, part);
         /* EVENT_ASK_SHOW may remove or replace any actor. Validate the whole
          * borrowed multipart identity before returning or reading the next link. */
-        if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        if (!object_reclamation_is_current(reclamation) ||
+            !player_connection_is_current(observer, observer_count, pl, observer_socket) ||
             (target_controller != NULL &&
              !player_connection_is_current(head, head_count, target_controller, target_socket)) ||
             !OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(head, head_count) ||

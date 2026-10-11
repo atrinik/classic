@@ -939,6 +939,10 @@ object *object_owner(object *op);
 void object_copy(object *op, const object *src, bool no_speed);
 void object_copy_full(object *op, const object *src);
 void object_init(void);
+/** Snapshot storage reclamation before a callback borrows object pointers. */
+uint64_t object_reclamation_epoch(void);
+/** False after any object storage was freed, or once the epoch saturates. */
+bool object_reclamation_is_current(uint64_t epoch);
 void object_deinit(void);
 object *object_get(void);
 void object_update_turnable(object *op);

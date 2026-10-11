@@ -487,6 +487,14 @@ static bool object_validator(void *ptr) {
     return op->count != 0 && !QUERY_FLAG(op, FLAG_REMOVED);
 }
 
+uint64_t object_reclamation_epoch(void) {
+    return mempool_reclamation_epoch(pool_object);
+}
+
+bool object_reclamation_is_current(uint64_t epoch) {
+    return mempool_reclamation_is_current(pool_object, epoch);
+}
+
 /**
  * Initialize the object API.
  */

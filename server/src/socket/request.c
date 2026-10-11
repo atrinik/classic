@@ -346,6 +346,7 @@ void esrv_update_stats(player *pl) {
      * the target reply, even when no level change would trigger a refresh. */
     object *selected_target = pl->target_object;
     tag_t selected_count = pl->target_object_count;
+    uint64_t reclamation = object_reclamation_epoch();
     bool target_rejected = pl->target_object != NULL && pl->target_object != pl->ob &&
                            (!OBJECT_VALID(pl->target_object, pl->target_object_count) ||
                             !target_player_authorized(pl, pl->target_object, NULL));
@@ -353,7 +354,8 @@ void esrv_update_stats(player *pl) {
         observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
         return;
     }
-    target_rejected |= pl->target_object != selected_target ||
+    target_rejected |= !object_reclamation_is_current(reclamation) ||
+                       pl->target_object != selected_target ||
                        pl->target_object_count != selected_count;
     if (target_rejected) {
         /* Authorization may have reclaimed the selected actor. Do not pass
@@ -1593,10 +1595,12 @@ void draw_client_map2(object *pl) {
                                 mapstruct *part_map = tmp->map, *head_map = callback_head->map;
                                 int part_x = tmp->x, part_y = tmp->y;
                                 int head_x = callback_head->x, head_y = callback_head->y;
+                                uint64_t reclamation = object_reclamation_epoch();
                                 hidden = OBJECT_IS_HIDDEN(pl, callback_head);
                                 /* Scripts may remove/recycle any borrowed object, move the
                                  * observer, or mutate cover elsewhere in the viewport. */
-                                if (!player_connection_is_current(pl, view_player_count,
+                                if (!object_reclamation_is_current(reclamation) ||
+                                    !player_connection_is_current(pl, view_player_count,
                                                                   view_player, view_socket) ||
                                     view_socket->state == ST_DEAD || view_socket->state == ST_ZOMBIE ||
                                     !los_view_is_current(pl) ||
@@ -2776,8 +2780,10 @@ void socket_command_fire(socket_struct *ns, player *pl, uint8_t *data, size_t le
     object *observer = pl->ob;
     tag_t observer_count = observer->count;
     socket_struct *observer_socket = pl->cs;
+    uint64_t reclamation = object_reclamation_epoch();
     object_ranged_fire(tmp, observer, dir, &delay);
-    if (!player_connection_is_current(observer, observer_count, pl, observer_socket)) {
+    if (!object_reclamation_is_current(reclamation) ||
+        !player_connection_is_current(observer, observer_count, pl, observer_socket)) {
         return;
     }
 
@@ -2946,10 +2952,12 @@ bool target_player_authorized(const player *pl, const object *target, int *depth
     bool single_part = target->head != NULL;
     for (const object *part = target; part != NULL;) {
         tag_t part_count = part->count;
+        uint64_t reclamation = object_reclamation_epoch();
         bool authorized = target_player_part_published(pl, part, depth) &&
                           perception_player_part_authorized(pl, part);
         /* EVENT_ASK_SHOW may delete, remove or recycle any borrowed actor. */
-        if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        if (!object_reclamation_is_current(reclamation) ||
+            !player_connection_is_current(observer, observer_count, pl, observer_socket) ||
             (target_controller != NULL &&
              !player_connection_is_current(head, head_count, target_controller, target_socket)) ||
             !OBJECT_ACTIVE(observer) || observer_socket->state == ST_DEAD ||
@@ -2984,6 +2992,7 @@ void send_target_command(player *pl) {
     object *selected_target = pl->target_object;
     tag_t selected_count = pl->target_object_count;
     int target_depth = 0;
+    uint64_t reclamation = object_reclamation_epoch();
     bool target_authorized = pl->target_object != NULL && pl->target_object != pl->ob &&
                              OBJECT_VALID(pl->target_object, pl->target_object_count) &&
                              target_player_authorized(pl, pl->target_object, &target_depth);
@@ -2991,7 +3000,10 @@ void send_target_command(player *pl) {
         observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
         return;
     }
-    target_authorized &= pl->target_object == selected_target &&
+    /* The live player-list check above freshly owns pl and its observer.
+     * On reclamation, discard the borrowed target and serialize SELF. */
+    target_authorized &= object_reclamation_is_current(reclamation) &&
+                         pl->target_object == selected_target &&
                          pl->target_object_count == selected_count;
     packet = packet_new(CLIENT_CMD_TARGET, 64, 64);
 
@@ -3196,6 +3208,7 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
                 const player *target_controller = head->type == PLAYER ? CONTR(head) : NULL;
                 const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
                 int published_depth;
+                uint64_t reclamation = object_reclamation_epoch();
                 bool authorized = head != pl->ob && head->count == count && IS_LIVE(head) &&
                                   target_player_part_published(pl, part, &published_depth) &&
                                   published_depth == depth &&
@@ -3207,7 +3220,8 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
                     observer_socket->state == ST_ZOMBIE) {
                     return;
                 }
-                if ((target_controller != NULL &&
+                if (!object_reclamation_is_current(reclamation) ||
+                    (target_controller != NULL &&
                      !player_connection_is_current(head, head_count, target_controller, target_socket)) ||
                     !OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count)) {
                     FOR_MAP_LAYER_BREAK;

@@ -52,16 +52,19 @@ typedef struct spell_actor_ref {
     tag_t count;
     player *controller;
     socket_struct *socket;
+    uint64_t reclamation;
 } spell_actor_ref;
 
 static spell_actor_ref spell_actor_capture(object *ob) {
     player *controller = ob->type == PLAYER ? CONTR(ob) : NULL;
     return (spell_actor_ref){ob, ob->count, controller,
-                             controller != NULL ? controller->cs : NULL};
+                             controller != NULL ? controller->cs : NULL,
+                             object_reclamation_epoch()};
 }
 
 static bool spell_actor_current(spell_actor_ref ref) {
-    return (ref.controller == NULL ||
+    return object_reclamation_is_current(ref.reclamation) &&
+           (ref.controller == NULL ||
             player_connection_is_current(ref.ob, ref.count, ref.controller, ref.socket)) &&
            OBJECT_VALID(ref.ob, ref.count);
 }
@@ -504,13 +507,14 @@ int cast_spell(object *op,
             return retval - 1;
         }
     }
-    if (!OBJECT_VALID(op, admitted_source) || !OBJECT_VALID(caster, admitted_caster) ||
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref) ||
+        !OBJECT_VALID(op, admitted_source) || !OBJECT_VALID(caster, admitted_caster) ||
         (target != NULL && !OBJECT_VALID(target, admitted_target))) {
         propagation_admission_end(&admission);
         return 0;
     }
     if (triggered_spell_event &&
-        (!spell_target_authorized(op, target, type) || !OBJECT_VALID(caster, admitted_caster))) {
+        (!spell_target_authorized(op, target, type) || !spell_actor_current(caster_ref))) {
         propagation_admission_end(&admission);
         return 0;
     }
@@ -1035,11 +1039,15 @@ void explode_object(object *op) {
         caster = op;
     }
 
+    spell_actor_ref source_ref = spell_actor_capture(op);
     cast_cone(op, caster, 0, spells[op->stats.sp].bdur, op->stats.sp, op->other_arch);
+    if (!spell_actor_current(source_ref)) {
+        return;
+    }
 
     OBJECTS_DESTROYED_BEGIN(op) {
         attack_hit_map(op, 0, false);
-        if (OBJECTS_DESTROYED(op)) {
+        if (!spell_actor_current(source_ref) || OBJECTS_DESTROYED(op)) {
             return;
         }
     }
@@ -1082,9 +1090,10 @@ void check_fired_arch(object *op) {
             continue;
         }
 
+        uint64_t reclamation = object_reclamation_epoch();
         OBJECTS_DESTROYED_BEGIN(op) {
             int dam = attack_hit_situational(tmp, op, op->stats.dam);
-            if (OBJECTS_DESTROYED(op)) {
+            if (!object_reclamation_is_current(reclamation) || OBJECTS_DESTROYED(op)) {
                 return;
             }
 

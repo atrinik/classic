@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -41,7 +41,17 @@ static int ranged_fire_func(object *op, object *shooter, int dir, double *delay)
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(shooter != NULL);
 
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t item_count = op->count, shooter_count = shooter->count;
+    player *controller = shooter->type == PLAYER ? CONTR(shooter) : NULL;
+    socket_struct *socket = controller != NULL ? controller->cs : NULL;
     int cost = cast_spell(shooter, shooter, dir, op->stats.sp, 0, CAST_NORMAL, NULL);
+    if (!object_reclamation_is_current(reclamation) ||
+        (controller != NULL &&
+         !player_connection_is_current(shooter, shooter_count, controller, socket)) ||
+        !OBJECT_VALID(op, item_count) || !OBJECT_VALID(shooter, shooter_count)) {
+        return OBJECT_METHOD_UNHANDLED;
+    }
     if (cost != 0) {
         if (shooter->type == PLAYER) {
             metrics_add(&CONTR(shooter)->metrics, METRIC_CHARACTER_SPELLS_CAST, 1);

@@ -1267,12 +1267,14 @@ int cast_cause_disease(object *op,
     if (target != op && OBJECT_VALID(target, target_count)) {
         player *target_controller = target->type == PLAYER ? CONTR(target) : NULL;
         socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
+        uint64_t reclamation = object_reclamation_epoch();
         bool authorized = source_controller != NULL
             ? target_player_authorized(source_controller, target, NULL)
             : perception_object_visible(op, target);
         /* Check connections before dereferencing any captured actor.
          * An ASK_SHOW callback can tear down the source or a separate caster. */
-        if ((source_controller != NULL &&
+        if (!object_reclamation_is_current(reclamation) ||
+            (source_controller != NULL &&
              !player_connection_is_current(op, source_count, source_controller, source_socket)) ||
             (caster_controller != NULL &&
              !player_connection_is_current(caster, caster_count, caster_controller, caster_socket)) ||

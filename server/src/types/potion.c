@@ -233,10 +233,19 @@ static int apply_func(object *op, object *applier, int aflags) {
         op->last_eat = 0;
     }
 
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t item_count = op->count, applier_count = applier->count;
+    player *controller = CONTR(applier);
+    socket_struct *socket = controller->cs;
     if (op->stats.sp != SP_NO_SPELL) {
         potion_apply_spell(op, applier);
     } else {
         potion_apply_effects(op, applier);
+    }
+    if (!object_reclamation_is_current(reclamation) ||
+        !player_connection_is_current(applier, applier_count, controller, socket) ||
+        !OBJECT_VALID(op, item_count) || !OBJECT_VALID(applier, applier_count)) {
+        return OBJECT_METHOD_UNHANDLED;
     }
 
     decrease_ob(op);
