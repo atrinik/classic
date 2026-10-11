@@ -432,8 +432,11 @@ static void assert_python_roof_flag_transaction(const char *mode,
     object *pl;
     fixture(&map, &pl);
     mapstruct *upper = upper_level(map);
-    object *actor = place(map, "raas", 13, 12);
-    object *roof = place(upper, "roof_thatch", 13, 12);
+    /* The target can start camera-hidden for the *_off cases, so ASK_SHOW
+     * belongs to a separate visible trigger. */
+    object *trigger = place(map, "raas", 13, 12);
+    object *subject = place(map, "raas", 14, 12);
+    object *roof = place(upper, "roof_thatch", subject->x, subject->y);
     if (initial_floor) {
         SET_FLAG(roof, FLAG_IS_FLOOR);
     } else {
@@ -445,12 +448,14 @@ static void assert_python_roof_flag_transaction(const char *mode,
         CLEAR_FLAG(roof, FLAG_HIDDEN);
     }
     object_update(roof, UP_OBJ_FLAGS);
-    ck_assert(object_set_value(actor, "los_ask_show_upper_path", upper->path, true));
-    ask_show(actor, mode);
+    ck_assert(object_set_value(trigger, "los_ask_show_upper_path", upper->path, true));
+    ck_assert(object_set_value(trigger, "los_ask_show_roof_x", "14", true));
+    ck_assert(object_set_value(trigger, "los_ask_show_roof_y", "12", true));
+    ask_show(trigger, mode);
 
     update_los(pl);
     ck_assert(los_view_is_current(pl));
-    ck_assert_int_eq(los_player_can_see_cell(pl, map, actor->x, actor->y), initially_visible);
+    ck_assert_int_eq(los_player_can_see_cell(pl, map, subject->x, subject->y), initially_visible);
     uint64_t geometry_before = los_geometry_epoch();
     uint64_t publication_before = los_publication_epoch();
     socket_buffer_clear(CONTR(pl)->cs);
@@ -461,22 +466,30 @@ static void assert_python_roof_flag_transaction(const char *mode,
 
     /* Fresh physical queries must observe the Python-set flag before a second
      * MAP2 publication has a chance to rebuild the cached view. */
-    ck_assert_int_eq(los_player_can_see_cell(pl, map, actor->x, actor->y), finally_visible);
-    ck_assert_int_eq(los_player_cell_camera(pl, map, actor->x, actor->y),
+    ck_assert_int_eq(los_player_can_see_cell(pl, map, subject->x, subject->y), finally_visible);
+    ck_assert_int_eq(los_player_cell_camera(pl, map, subject->x, subject->y),
                      finally_visible ? LOS_CAMERA_VISIBLE : LOS_CAMERA_WALL_BOUNDARY);
     update_los(pl);
     ck_assert(los_view_is_current(pl));
-    ck_assert_int_eq(los_player_can_see_cell(pl, map, actor->x, actor->y), finally_visible);
+    ck_assert_int_eq(los_player_can_see_cell(pl, map, subject->x, subject->y), finally_visible);
 }
 
-START_TEST(test_ask_show_python_floor_setter_invalidates_warmed_los) {
+START_TEST(test_ask_show_python_floor_on_invalidates_warmed_los) {
     assert_python_roof_flag_transaction("floor_on", false, false, true, false);
+}
+END_TEST
+
+START_TEST(test_ask_show_python_floor_off_invalidates_warmed_los) {
     assert_python_roof_flag_transaction("floor_off", true, false, false, true);
 }
 END_TEST
 
-START_TEST(test_ask_show_python_hidden_setter_invalidates_warmed_los) {
+START_TEST(test_ask_show_python_hidden_on_invalidates_warmed_los) {
     assert_python_roof_flag_transaction("hidden_on", false, false, true, false);
+}
+END_TEST
+
+START_TEST(test_ask_show_python_hidden_off_invalidates_warmed_los) {
     assert_python_roof_flag_transaction("hidden_off", false, true, false, true);
 }
 END_TEST
@@ -495,8 +508,10 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_ask_show_upper_roof_aborts_stale_map2_and_hides_actor);
     tcase_add_test(tc, test_ask_show_mutating_earlier_actor_aborts_whole_map2_transaction);
     tcase_add_test(tc, test_ask_show_moving_earlier_actor_aborts_whole_map2_transaction);
-    tcase_add_test(tc, test_ask_show_python_floor_setter_invalidates_warmed_los);
-    tcase_add_test(tc, test_ask_show_python_hidden_setter_invalidates_warmed_los);
+    tcase_add_test(tc, test_ask_show_python_floor_on_invalidates_warmed_los);
+    tcase_add_test(tc, test_ask_show_python_floor_off_invalidates_warmed_los);
+    tcase_add_test(tc, test_ask_show_python_hidden_on_invalidates_warmed_los);
+    tcase_add_test(tc, test_ask_show_python_hidden_off_invalidates_warmed_los);
     suite_add_tcase(s, tc);
     return s;
 }
