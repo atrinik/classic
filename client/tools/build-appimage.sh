@@ -78,6 +78,7 @@ export ARCH=x86_64
 env -u VERSION "${prefix}/tools/appimagetool" --mksquashfs-opt -no-xattrs \
   --mksquashfs-opt -processors --mksquashfs-opt "${build_parallelism}" --runtime-file "${prefix}/tools/runtime" \
   "${appdir}" "${staging_directory}/package.AppImage"
+python3 ../tools/ci/appimage/finalize_runtime.py "${staging_directory}/package.AppImage"
 python3 ../tools/release/appimage.py "${staging_directory}/package.AppImage" "${version}"
 chmod 0755 "${staging_directory}/package.AppImage"
 mv -n -- "${staging_directory}/package.AppImage" "${package}"
