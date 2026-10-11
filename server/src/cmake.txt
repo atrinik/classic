@@ -99,6 +99,8 @@ set(SERVER_CORE_SOURCES
 	src/server/links.c
 	src/server/living.c
 	src/server/los.c
+	src/server/spatial.c
+	src/server/perception.c
 	src/server/main.c
 	src/server/map.c
 	src/server/metrics.c
