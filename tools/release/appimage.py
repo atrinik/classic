@@ -457,7 +457,7 @@ def read_appimage_inventory(path: Path | str, version: str, *, revision: str | N
     with tempfile.TemporaryDirectory(prefix="atrinik-appimage-inspect-") as temporary:
         snapshot = Path(temporary) / "candidate.AppImage"
         try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(descriptor, "rb") as image_stream:
                 identity = os.fstat(image_stream.fileno())
                 if not stat.S_ISREG(identity.st_mode) or identity.st_size > MAX_IMAGE:

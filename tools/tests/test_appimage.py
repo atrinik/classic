@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -237,6 +238,19 @@ class AppImageTests(unittest.TestCase):
         candidate.write_bytes(self.seal(self.runtime + b"hsqsbroken"))
         with self.assertRaisesRegex(ValueError, "SquashFS"):
             self.validate(candidate)
+
+    def test_fifo_candidate_is_rejected_without_blocking(self):
+        candidate = self.root / "fifo.AppImage"
+        os.mkfifo(candidate)
+        script = ("import sys; sys.path.insert(0, sys.argv[1]); "
+                  "from appimage import validate_appimage; "
+                  "validate_appimage(sys.argv[2], sys.argv[3], source_root=sys.argv[4])")
+        result = subprocess.run([sys.executable, "-c", script,
+                                 str(Path(appimage.__file__).parent), str(candidate),
+                                 self.version, str(self.source)], capture_output=True,
+                                text=True, timeout=3)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("bounded regular file", result.stderr)
 
     def test_escape_rejected_before_extraction(self):
         (self.payload / "escape").symlink_to("../../outside")
