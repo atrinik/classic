@@ -562,23 +562,19 @@ int cast_spell(object *op,
             break;
 
         case SP_METEOR_SWARM:
-            success = 1;
-            fire_swarm(op, caster, dir, spellarch[type], SP_METEOR, 3, 0);
+            success = fire_swarm(op, caster, dir, spellarch[type], SP_METEOR, 3, 0);
             break;
 
         case SP_FROST_NOVA:
-            success = 1;
-            fire_swarm(op, caster, dir, spellarch[type], SP_ASTEROID, 3, 0);
+            success = fire_swarm(op, caster, dir, spellarch[type], SP_ASTEROID, 3, 0);
             break;
 
         case SP_BULLET_SWARM:
-            success = 1;
-            fire_swarm(op, caster, dir, spellarch[type], SP_BULLET, 5, 0);
+            success = fire_swarm(op, caster, dir, spellarch[type], SP_BULLET, 5, 0);
             break;
 
         case SP_BULLET_STORM:
-            success = 1;
-            fire_swarm(op, caster, dir, spellarch[type], SP_BULLET, 3, 0);
+            success = fire_swarm(op, caster, dir, spellarch[type], SP_BULLET, 3, 0);
             break;
 
         case SP_DESTRUCTION:
@@ -802,8 +798,9 @@ int fire_arch_from_position(object *op,
 
     /* Reserve explosion capacity while rejection still precedes casting costs. */
     tmp->map = cell.map;
-    if (tmp->other_arch != NULL && tmp->type != SWARM_SPELL &&
-        !propagation_reserve_explosion(tmp, spells[type].bdur / 2)) {
+    if ((tmp->other_arch != NULL || (op->type == SWARM_SPELL && op->propagation != NULL)) &&
+        tmp->type != SWARM_SPELL &&
+        !propagation_reserve_explosion_from(tmp, op, spells[type].bdur / 2)) {
         tmp->map = NULL;
         object_destroy(tmp);
         return 0;
@@ -1189,7 +1186,7 @@ int SP_level_spellpoint_cost(object *caster, int spell_type, int caster_level) {
  * @param magic
  * Magic.
  */
-void fire_swarm(object *op,
+int fire_swarm(object *op,
                 object *caster,
                 int dir,
                 struct archetype *swarm_type,
@@ -1214,7 +1211,19 @@ void fire_swarm(object *op,
     tmp->other_arch = swarm_type;
     tmp->direction = dir;
 
-    object_insert_map(tmp, op->map, op, 0);
+    object *target = spell_aim_target(op);
+    if (target != NULL) {
+        tmp->enemy = target;
+        tmp->enemy_count = target->count;
+    }
+    SET_FLAG(tmp, FLAG_NO_SAVE);
+    tmp->map = op->map;
+    if (!propagation_reserve_swarm(tmp, spells[spell_type].bdur / 2, (unsigned)n)) {
+        tmp->map = NULL;
+        object_destroy(tmp);
+        return 0;
+    }
+    return object_insert_map(tmp, op->map, op, INS_NO_MERGE) != NULL;
 }
 
 /**

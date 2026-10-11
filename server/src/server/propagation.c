@@ -24,7 +24,8 @@ struct propagation_cast {
     propagation_cast *next;
     struct propagation_entry *entries;
     uint32_t *hash;
-    size_t capacity, hash_size, used, active;
+    size_t capacity, hash_size, used, active, reservation;
+    uint64_t group;
     uint32_t first, last;
     int radius, axis[3], damage, level, argument;
     archetype_t *arch;
@@ -37,6 +38,7 @@ struct propagation_cast {
 static propagation_cast *casts, *last_cast, *cursor;
 static size_t reserved, last_expansions;
 static bool processing;
+static uint64_t next_group;
 
 static size_t volume(int radius) {
     if (radius < 0 || radius > 35) {
@@ -100,19 +102,24 @@ static void enqueue(struct propagation_entry *entry) {
     cast->last = index;
 }
 
-static propagation_cast *create(object *source, int radius) {
+static propagation_cast *create_reserved(object *source, int radius, size_t capacity,
+                                         size_t reservation, propagation_cast *credit) {
     object *location = source;
     while (location->env != NULL) {
         location = location->env;
     }
-    if (location->map == NULL || !propagation_can_admit(radius)) {
+    if (location->map == NULL || capacity == 0 || reservation > PROPAGATION_CAST_CELLS ||
+        (credit != NULL ? credit->reservation <= reservation :
+         reservation > PROPAGATION_GLOBAL_CELLS - reserved)) {
         return NULL;
     }
     propagation_cast *cast = calloc(1, sizeof(*cast));
     if (cast == NULL) {
         return NULL;
     }
-    cast->capacity = volume(radius);
+    cast->capacity = capacity;
+    cast->reservation = reservation;
+    cast->group = credit != NULL ? credit->group : ++next_group;
     cast->hash_size = 1;
     while (cast->hash_size < cast->capacity * 2) {
         cast->hash_size *= 2;
@@ -143,8 +150,34 @@ static propagation_cast *create(object *source, int radius) {
         casts = cast;
     }
     last_cast = cast;
-    reserved += cast->capacity;
+    if (credit != NULL) {
+        credit->reservation -= reservation;
+    } else {
+        reserved += reservation;
+    }
     return cast;
+}
+
+static propagation_cast *create(object *source, int radius) {
+    return create_reserved(source, radius, volume(radius), volume(radius), NULL);
+}
+
+bool propagation_reserve_swarm(object *effect, int strength, unsigned count) {
+    size_t cells = volume(strength + 1);
+    if (cells == 0 || count == 0 || count > (PROPAGATION_CAST_CELLS - 1) / cells) {
+        return false;
+    }
+    propagation_cast *cast = create_reserved(effect, 0, 1, 1 + count * cells, NULL);
+    if (cast == NULL) {
+        return false;
+    }
+    cast->first = cast->last = NO_ENTRY;
+    cast->entries[0].queued = false;
+    cast->entries[0].effect = effect;
+    cast->entries[0].effect_count = effect->count;
+    effect->propagation = &cast->entries[0];
+    cast->active = 1;
+    return true;
 }
 
 bool propagation_area(object *source, int radius, propagation_visit visit, int argument) {
@@ -157,11 +190,14 @@ bool propagation_area(object *source, int radius, propagation_visit visit, int a
     return true;
 }
 
-bool propagation_reserve_explosion(object *effect, int strength) {
+bool propagation_reserve_explosion_from(object *effect, object *parent, int strength) {
     if (strength < 0 || strength >= 35) {
         return false;
     }
-    propagation_cast *cast = create(effect, strength + 1);
+    propagation_cast *credit = parent != NULL && parent->type == SWARM_SPELL &&
+        parent->propagation != NULL ? parent->propagation->cast : NULL;
+    size_t cells = volume(strength + 1);
+    propagation_cast *cast = create_reserved(effect, strength + 1, cells, cells, credit);
     if (cast == NULL) {
         return false;
     }
@@ -173,6 +209,10 @@ bool propagation_reserve_explosion(object *effect, int strength) {
     effect->propagation = &cast->entries[0];
     cast->active = 1;
     return true;
+}
+
+bool propagation_reserve_explosion(object *effect, int strength) {
+    return propagation_reserve_explosion_from(effect, NULL, strength);
 }
 
 bool propagation_cone(object *source, object *caster, archetype_t *arch,
@@ -295,7 +335,7 @@ static void collect(void) {
             if (cursor == cast) {
                 cursor = cast->next;
             }
-            reserved -= cast->capacity;
+            reserved -= cast->reservation;
             free(cast->entries);
             free(cast->hash);
             free(cast);
@@ -312,7 +352,12 @@ void propagation_expire_map(mapstruct *map) {
             if (cast->entries[i].cell.map == map ||
                 (cast->entries[i].effect != NULL && cast->entries[i].effect->map == map) ||
                 (cast->entries[i].drop != NULL && cast->entries[i].drop->map == map)) {
-                cancel(cast);
+                uint64_t group = cast->group;
+                for (propagation_cast *member = casts; member != NULL; member = member->next) {
+                    if (member->group == group) {
+                        cancel(member);
+                    }
+                }
                 break;
             }
         }

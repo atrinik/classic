@@ -176,6 +176,37 @@ START_TEST(test_cone_children_expire_together_across_stories) {
 }
 END_TEST
 
+START_TEST(test_swarm_reservation_transfer_and_group_expiry) {
+    mapstruct *lower = get_empty_map(5, 5), *upper = get_empty_map(5, 5);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    object *parent = source_on(lower, 2, 2);
+    parent->type = SWARM_SPELL;
+    ck_assert(!propagation_reserve_swarm(parent, 35, 3));
+    ck_assert(propagation_reserve_swarm(parent, 3, 3));
+    size_t reserved_before = propagation_reserved_cells();
+    object *child = source_on(upper, 2, 2);
+    ck_assert(propagation_reserve_explosion_from(child, parent, 3));
+    ck_assert_uint_eq(propagation_reserved_cells(), reserved_before);
+    tag_t parent_count = parent->count, child_count = child->count;
+    propagation_expire_map(upper);
+    ck_assert(!OBJECT_VALID(parent, parent_count));
+    ck_assert(!OBJECT_VALID(child, child_count));
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+    delete_map(lower);
+    delete_map(upper);
+}
+END_TEST
+
+START_TEST(test_rain_heal_no_target_fails_without_reservation) {
+    mapstruct *map = get_empty_map(5, 5);
+    object *source = source_on(map, 2, 2);
+    ck_assert_int_eq(cast_heal_around(source, 1, SP_RAIN_HEAL), 0);
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+    delete_map(map);
+}
+END_TEST
+
 void check_server_propagation(void) {
     Suite *suite = suite_create("propagation");
     TCase *core = tcase_create("Core");
@@ -187,6 +218,8 @@ void check_server_propagation(void) {
     tcase_add_test(core, test_pending_source_destruction_and_reservation_cleanup);
     tcase_add_test(core, test_spread_around_cover_but_not_closed_story_slabs);
     tcase_add_test(core, test_cone_children_expire_together_across_stories);
+    tcase_add_test(core, test_swarm_reservation_transfer_and_group_expiry);
+    tcase_add_test(core, test_rain_heal_no_target_fails_without_reservation);
     suite_add_tcase(suite, core);
     check_run_suite(suite, __FILE__);
 }

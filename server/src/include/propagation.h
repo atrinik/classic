@@ -16,6 +16,8 @@ bool propagation_area(object *source, int radius, propagation_visit visit, int a
 bool propagation_cone(object *source, object *caster, archetype_t *arch,
                       int strength, int damage, int dx, int dy, int dz);
 bool propagation_reserve_explosion(object *effect, int strength);
+bool propagation_reserve_explosion_from(object *effect, object *parent, int strength);
+bool propagation_reserve_swarm(object *effect, int strength, unsigned count);
 void propagation_expand(object *effect);
 void propagation_track_drop(object *effect, object *drop);
 void propagation_object_destroyed(object *effect);

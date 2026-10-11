@@ -316,6 +316,32 @@ static void rain_heal_visit(object *source, mapstruct *map, int x, int y, int le
     FOR_MAP_FINISH();
 }
 
+/* Rain healing's historical failure when nobody can benefit is decided
+ * before accepting the deferred cast. The one-step volume is at most 27 cells. */
+static bool rain_heal_has_target(object *source) {
+    for (int dz = -1; dz <= 1; dz++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                spatial_cell cell;
+                if (!spatial_resolve(source->map, source->x + dx, source->y + dy, dz, &cell) ||
+                    ((dx != 0 || dy != 0 || dz != 0) &&
+                     !spatial_ray_clear(source->map, source->x, source->y, dx, dy, dz,
+                                        SPATIAL_COMBAT, false))) {
+                    continue;
+                }
+                FOR_MAP_PREPARE(cell.map, cell.x, cell.y, part) {
+                    object *target = HEAD(part);
+                    if (target != source && IS_LIVE(target) && is_friend_of(source, target)) {
+                        return true;
+                    }
+                }
+                FOR_MAP_FINISH();
+            }
+        }
+    }
+    return false;
+}
+
 /**
  * Cast an area of effect healing spell.
  * @param op
@@ -332,7 +358,7 @@ int cast_heal_around(object *op, int level, int type) {
 
     switch (type) {
         case SP_RAIN_HEAL:
-            success = propagation_area(op, 1, rain_heal_visit, level);
+            success = rain_heal_has_target(op) && propagation_area(op, 1, rain_heal_visit, level);
             break;
 
         case SP_PARTY_HEAL: {
