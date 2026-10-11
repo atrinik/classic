@@ -191,6 +191,7 @@ def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
         })
     manifest = {
         'schema': 1, 'version': version, 'revision': revision,
+        'source_date_epoch': int(os.environ['SOURCE_DATE_EPOCH']),
         'lock_sha256': sha256(lock_path),
         'build_features': {'testing': False, 'coverage': False, 'sanitizers': False},
         'bundled_libraries': bundled,

@@ -35,6 +35,12 @@ prefix=${ATRINIK_APPIMAGE_PREFIX:-/opt/atrinik-appimage}
 [[ -f ${prefix}/packaging.lock.json && -x ${prefix}/tools/appimagetool ]]
 revision=${ATRINIK_SOURCE_REVISION:-$(git rev-parse HEAD)}
 [[ ${revision} =~ ^[0-9a-f]{40}$ ]]
+source_date_epoch=${SOURCE_DATE_EPOCH:-$(git show -s --format=%ct "${revision}")}
+if [[ ! ${source_date_epoch} =~ ^(0|[1-9][0-9]{0,9})$ ]] || (( source_date_epoch > 4294967295 )); then
+  echo 'SOURCE_DATE_EPOCH must be an unsigned 32-bit commit timestamp' >&2
+  exit 1
+fi
+export SOURCE_DATE_EPOCH=${source_date_epoch}
 discord_config_file=${ATRINIK_DISCORD_APPLICATION_ID_FILE:-}
 if [[ -n ${discord_config_file} ]]; then
   discord_config_file=$(realpath -e "${discord_config_file}")
@@ -76,7 +82,9 @@ python3 ../tools/ci/appimage/assemble.py "${appdir}" "${prefix}" "${version}" "$
 # Always use the locked, already-verified runtime: appimagetool must not fetch it.
 export ARCH=x86_64
 env -u VERSION "${prefix}/tools/appimagetool" --mksquashfs-opt -no-xattrs \
-  --mksquashfs-opt -processors --mksquashfs-opt "${build_parallelism}" --runtime-file "${prefix}/tools/runtime" \
+  --mksquashfs-opt -processors --mksquashfs-opt "${build_parallelism}" \
+  --mksquashfs-opt -all-time --mksquashfs-opt "${source_date_epoch}" \
+  --mksquashfs-opt -mkfs-time --mksquashfs-opt "${source_date_epoch}" --runtime-file "${prefix}/tools/runtime" \
   "${appdir}" "${staging_directory}/package.AppImage"
 python3 ../tools/ci/appimage/finalize_runtime.py "${staging_directory}/package.AppImage"
 python3 ../tools/release/appimage.py "${staging_directory}/package.AppImage" "${version}"
