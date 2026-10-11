@@ -27,7 +27,12 @@
   Cancellable access HTTP uses a qualified c-ares libcurl hostname resolver;
   threaded DNS cleanup is not a bounded cancellation primitive. Keep normal
   transfer and stalled DNS/HTTP cancellation tests with the qualified build.
-  Caller-owned secret buffers must be cleansed. Grant routing never substitutes
+  `rendezvous_admission.h` owns mandatory pre-upgrade challenge/proof admission
+  for both open and protected clients, with fixed 24-bit work, at most 2^27
+  trials/10 seconds and original attempt deadlines. Keep low-difficulty test
+  seams private; no fallback or secret URL/subprotocol fields are permitted.
+  Protected grants are redeemed before upgrade; access_init/ready only confirm
+  the already-bound grant. Caller-owned secret buffers must be cleansed. Grant routing never substitutes
   for the game server's encrypted access gate. Mark secret packets sensitive
   before writing; receive-buffer owners separately cleanse consumed bytes.
 - Follow the root `.clang-format` and CMake target/export conventions. Validate the
