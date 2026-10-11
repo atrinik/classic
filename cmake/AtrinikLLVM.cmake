@@ -40,6 +40,13 @@ function(atrinik_require_llvm)
         if (CMAKE_CXX_COMPILER_LOADED)
             list(APPEND windows_languages CXX)
         endif ()
+        if (CMAKE_CONFIGURATION_TYPES)
+            set(windows_configurations ${CMAKE_CONFIGURATION_TYPES})
+        elseif (CMAKE_BUILD_TYPE)
+            set(windows_configurations "${CMAKE_BUILD_TYPE}")
+        else ()
+            set(windows_configurations __default)
+        endif ()
         foreach (language IN LISTS windows_languages)
             if (NOT CMAKE_${language}_COMPILER_FRONTEND_VARIANT STREQUAL "GNU" OR
                     CMAKE_${language}_SIMULATE_ID STREQUAL "MSVC")
@@ -52,16 +59,28 @@ function(atrinik_require_llvm)
             if (CMAKE_${language}_COMPILER_TARGET)
                 list(APPEND target_arguments "--target=${CMAKE_${language}_COMPILER_TARGET}")
             endif ()
-            execute_process(COMMAND "${CMAKE_${language}_COMPILER}" ${target_arguments} -dumpmachine
-                OUTPUT_VARIABLE windows_target ERROR_VARIABLE target_error
-                RESULT_VARIABLE target_result OUTPUT_STRIP_TRAILING_WHITESPACE)
-            # LLVM-MinGW's mingw32 driver alias reports the canonical Windows
-            # GNU triple. Check the selected compiler, not its executable name.
-            if (NOT target_result EQUAL 0 OR
-                    NOT windows_target MATCHES "^x86_64-w64-(mingw32|windows-gnu)$")
-                message(FATAL_ERROR
-                    "Classic Windows builds require the x86_64-w64-mingw32 target: ${windows_target}${target_error}")
-            endif ()
+            separate_arguments(common_arguments NATIVE_COMMAND "${CMAKE_${language}_FLAGS}")
+            list(APPEND target_arguments ${common_arguments})
+            foreach (configuration IN LISTS windows_configurations)
+                set(configuration_arguments)
+                if (NOT configuration STREQUAL __default)
+                    string(TOUPPER "${configuration}" configuration_upper)
+                    separate_arguments(configuration_arguments NATIVE_COMMAND
+                        "${CMAKE_${language}_FLAGS_${configuration_upper}}")
+                endif ()
+                execute_process(COMMAND "${CMAKE_${language}_COMPILER}"
+                    ${target_arguments} ${configuration_arguments} -dumpmachine
+                    OUTPUT_VARIABLE windows_target ERROR_VARIABLE target_error
+                    RESULT_VARIABLE target_result OUTPUT_STRIP_TRAILING_WHITESPACE)
+                # LLVM-MinGW's alias reports the canonical Windows GNU triple.
+                # Include flags in compile order: each enabled configuration
+                # can override the default target or pointer architecture.
+                if (NOT target_result EQUAL 0 OR
+                        NOT windows_target MATCHES "^x86_64-w64-(mingw32|windows-gnu)$")
+                    message(FATAL_ERROR
+                        "Classic Windows builds require the x86_64-w64-mingw32 target (${language}/${configuration}): ${windows_target}${target_error}")
+                endif ()
+            endforeach ()
         endforeach ()
     endif ()
     foreach (tool CMAKE_AR CMAKE_RANLIB CMAKE_LINKER CMAKE_NM CMAKE_STRIP

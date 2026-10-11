@@ -169,6 +169,43 @@ atrinik_require_llvm()
 ''')
                 self.assertEqual(result.returncode == 0, accepted, result.stderr)
 
+    def test_windows_common_and_enabled_configuration_flags_cannot_change_abi(self):
+        compiler = self.root / "flag-driver"
+        compiler.write_text('''#!/bin/sh
+target=x86_64-w64-windows-gnu
+for argument do
+    case $argument in
+        --target=*) target=${argument#--target=} ;;
+        -m32) target=i686-w64-windows-gnu ;;
+    esac
+done
+printf '%s\\n' "$target"
+''')
+        compiler.chmod(0o755)
+        for language in ("C", "CXX"):
+            for selection, accepted in (
+                (f'set(CMAKE_{language}_FLAGS "-O2 --target=x86_64-pc-windows-msvc")', False),
+                (f'set(CMAKE_{language}_FLAGS "-m32")', False),
+                (f'set(CMAKE_BUILD_TYPE Release)\nset(CMAKE_{language}_FLAGS_RELEASE "--target=x86_64-pc-windows-msvc")', False),
+                (f'set(CMAKE_CONFIGURATION_TYPES "Debug;Release")\nset(CMAKE_{language}_FLAGS_RELEASE "-m32")', False),
+                (f'set(CMAKE_BUILD_TYPE Release)\nset(CMAKE_{language}_COMPILER_TARGET x86_64-pc-windows-msvc)\n'
+                 f'set(CMAKE_{language}_FLAGS_RELEASE "--target=x86_64-w64-windows-gnu")', True),
+                (f'set(CMAKE_CONFIGURATION_TYPES "Debug;Release")\nset(CMAKE_{language}_FLAGS "-Wall -O2")\n'
+                 f'set(CMAKE_{language}_FLAGS_RELEASE "-DNDEBUG")', True),
+            ):
+                with self.subTest(language=language, selection=selection):
+                    result = self.script(self.settings("Windows") + f'''
+set(CMAKE_C_COMPILER "{compiler}")
+set(CMAKE_CXX_COMPILER_LOADED TRUE)
+set(CMAKE_CXX_COMPILER_ID Clang)
+set(CMAKE_CXX_COMPILER_VERSION 23.1.3)
+set(CMAKE_CXX_COMPILER_FRONTEND_VARIANT GNU)
+set(CMAKE_CXX_COMPILER "{compiler}")
+{selection}
+atrinik_require_llvm()
+''')
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
     def test_mismatched_archive_tools_are_rejected(self):
         self.tool.write_text("#!/bin/sh\nprintf 'GNU ar 2.45\\n'\n")
         result = self.script(self.settings() + "atrinik_require_llvm()\n")
