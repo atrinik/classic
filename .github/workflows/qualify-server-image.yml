@@ -25,6 +25,7 @@ jobs:
       packages: read
     env:
       SOURCE_REVISION: ${{ github.sha }}
+      QUALIFICATION_IMAGE_TAG: classic-server-qualification:${{ github.run_id }}-${{ github.run_attempt }}
       DOCKER_BUILD_SUMMARY: true
       DOCKER_BUILD_RECORD_UPLOAD: true
       DOCKER_BUILD_RECORD_RETENTION_DAYS: 14
@@ -78,11 +79,11 @@ jobs:
           # run keeps build records and runtime evidence, not release provenance.
           provenance: false
           sbom: false
-          tags: classic-server-qualification:${{ github.run_id }}-${{ github.run_attempt }}
+          tags: ${{ env.QUALIFICATION_IMAGE_TAG }}
       - name: Retain build identity
         env:
-          IMAGE_ID: ${{ steps.image.outputs.imageid }}
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          CONFIG_DIGEST: ${{ steps.image.outputs.imageid }}
+          MANIFEST_DIGEST: ${{ steps.image.outputs.digest }}
           BUILD_METADATA: ${{ steps.image.outputs.metadata }}
         run: |
           python3 - <<'PY'
@@ -90,15 +91,16 @@ jobs:
           from pathlib import Path
           Path('build/server-image-evidence/build.json').write_text(json.dumps({
               'source_revision': os.environ['SOURCE_REVISION'],
-              'image_id': os.environ['IMAGE_ID'], 'digest': os.environ['IMAGE_DIGEST'],
+              'image_tag': os.environ['QUALIFICATION_IMAGE_TAG'],
+              'config_digest': os.environ['CONFIG_DIGEST'],
+              'manifest_digest': os.environ['MANIFEST_DIGEST'],
               'metadata': json.loads(os.environ['BUILD_METADATA']),
           }, indent=2) + '\n')
           PY
       - name: Qualify final image behavior and lifecycle
-        env:
-          IMAGE_ID: ${{ steps.image.outputs.imageid }}
         run: >-
-          python3 tools/ci/qualify_server_image.py --image-id "${IMAGE_ID}"
+          python3 tools/ci/qualify_server_image.py --image-tag "${QUALIFICATION_IMAGE_TAG}"
+          --build-evidence build/server-image-evidence/build.json
           --revision "${SOURCE_REVISION}" --output build/server-image-evidence/runtime
       - name: Retain bounded qualification evidence, including failures
         if: always()

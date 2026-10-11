@@ -19,6 +19,8 @@ MAP = "/shattered_islands/world_0_70"
 READY = "Server ready. Waiting for connections"
 SAVED = "Server saves complete; releasing resources."
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+MANIFEST_TYPES = {"application/vnd.oci.image.manifest.v1+json",
+                  "application/vnd.docker.distribution.manifest.v2+json"}
 
 
 class QualificationError(RuntimeError):
@@ -36,16 +38,59 @@ def command(*args, timeout=30):
     return result.stdout
 
 
-def validate_image(image, image_id, revision):
-    require(image.get("Id") == image_id, "Loaded image ID differs from the build output")
+def validate_descriptor(descriptor, manifest_digest):
+    require(isinstance(descriptor, dict), "Expected decoded manifest descriptor object")
+    require(isinstance(descriptor.get("mediaType"), str) and descriptor["mediaType"] in MANIFEST_TYPES,
+            "Expected a single image manifest, not an index or artifact")
+    require(descriptor.get("digest") == manifest_digest, "Manifest descriptor digest mismatch")
+    require(type(descriptor.get("size")) is int and descriptor["size"] > 0, "Invalid manifest descriptor size")
+    require("artifactType" not in descriptor, "Artifact descriptors are not runtime images")
+    if "platform" in descriptor:
+        platform = descriptor["platform"]
+        require(isinstance(platform, dict) and platform.get("os") == "linux"
+                and platform.get("architecture") == "amd64", "Wrong descriptor platform")
+
+
+def validate_build(build, image_tag, revision):
+    require(isinstance(image_tag, str) and re.fullmatch(r"classic-server-qualification:[1-9][0-9]*-[1-9][0-9]*", image_tag),
+            "Expected the owned run/attempt qualification tag")
+    require(isinstance(build, dict) and build.get("source_revision") == revision
+            and build.get("image_tag") == image_tag, "Build evidence source or tag mismatch")
+    for name in ("config_digest", "manifest_digest"):
+        require(isinstance(build.get(name), str) and DIGEST.fullmatch(build[name]), f"Invalid expected {name}")
+    require(build["config_digest"] != build["manifest_digest"], "Config and manifest identities must be distinct")
+    metadata = build.get("metadata")
+    require(isinstance(metadata, dict), "Expected BuildKit metadata object")
+    require(metadata.get("containerimage.config.digest") == build["config_digest"],
+            "Build config output differs from metadata")
+    require(metadata.get("containerimage.digest") == build["manifest_digest"],
+            "Build manifest output differs from metadata")
+    validate_descriptor(metadata.get("containerimage.descriptor"), build["manifest_digest"])
+
+
+def validate_image(image, build, revision):
+    require(isinstance(image, dict), "Expected Docker image object")
+    descriptor = image.get("Descriptor")
+    if descriptor is None:
+        require(image.get("Id") == build["config_digest"], "Legacy Docker ID differs from expected config digest")
+        identity_kind = "legacy-config"
+    else:
+        validate_descriptor(descriptor, build["manifest_digest"])
+        expected = build["metadata"]["containerimage.descriptor"]
+        require(all(descriptor[key] == expected[key] for key in ("digest", "mediaType", "size")),
+                "Docker manifest descriptor differs from BuildKit metadata")
+        require(image.get("Id") == build["manifest_digest"], "Docker ID differs from expected manifest digest")
+        identity_kind = "manifest"
     require(image.get("Architecture") == "amd64" and image.get("Os") == "linux", "Wrong image platform")
-    config = image["Config"]
+    config = image.get("Config")
+    require(isinstance(config, dict), "Expected Docker image configuration")
     require(config.get("User") == "atrinik", "Final image must default to the nonroot atrinik user")
     require(config.get("Entrypoint") == ["atrinik-server-entrypoint"], "Wrong final image entrypoint")
     require(not config.get("Volumes"), "Unexpected image volumes")
     labels = config.get("Labels") or {}
     require(labels.get("org.opencontainers.image.revision") == revision, "Image source revision mismatch")
     require(labels.get("org.opencontainers.image.version") == "0.0.0", "Qualification version must be 0.0.0")
+    return identity_kind
 
 
 def validate_container(container, container_id, image_id, owner):
@@ -76,26 +121,43 @@ def validate_benchmark(output):
 
 
 class Qualification:
-    def __init__(self, image_id, revision, output):
-        self.image_id = image_id
+    def __init__(self, image_tag, build, revision, output):
+        self.image_tag = image_tag
+        self.build = build
+        self.image_id = None
         self.revision = revision
         self.output = output
         self.owner = uuid.uuid4().hex
         self.containers = []
-        self.evidence = {"schema_version": 1, "source_revision": revision, "image_id": image_id,
+        self.evidence = {"schema_version": 1, "source_revision": revision, "image_tag": image_tag,
                          "owner": self.owner, "result": "failed", "containers": [], "cleanup": []}
 
     def write(self, name, value):
         (self.output / name).write_text(json.dumps(value, indent=2) + "\n")
 
+    def resolve_image(self):
+        validate_build(self.build, self.image_tag, self.revision)
+        self.evidence.update(expected_config_digest=self.build["config_digest"],
+                             expected_manifest_digest=self.build["manifest_digest"])
+        images = json.loads(command("docker", "image", "inspect", self.image_tag))
+        require(isinstance(images, list) and len(images) == 1, "Expected one image for the owned tag")
+        image = images[0]
+        identity_kind = validate_image(image, self.build, self.revision)
+        self.image_id = image["Id"]
+        self.evidence.update(image_id=self.image_id, image_identity_kind=identity_kind)
+        self.write("image.json", {key: image[key] for key in
+                                 ("Id", "Descriptor", "Architecture", "Os", "Created", "Config") if key in image})
+
     def inspect(self, container_id):
         image = json.loads(command("docker", "image", "inspect", self.image_id))[0]
-        validate_image(image, self.image_id, self.revision)
+        validate_image(image, self.build, self.revision)
+        require(image["Id"] == self.image_id, "Resolved Docker image ID changed")
         container = json.loads(command("docker", "container", "inspect", container_id))[0]
         validate_container(container, container_id, self.image_id, self.owner)
         return container
 
     def create(self, purpose, *args):
+        require(self.image_id is not None, "Resolve and validate the built image before creating containers")
         container_id = command(
             "docker", "create", "--name", f"classic-qualification-{self.owner}-{purpose}",
             "--label", f"{OWNER_LABEL}={self.owner}", "--network", "none", "--cap-drop", "ALL",
@@ -212,13 +274,10 @@ class Qualification:
         self.output.mkdir(parents=True, exist_ok=False)
         try:
             require(re.fullmatch(r"[0-9a-f]{40}", self.revision), "Expected full source commit")
-            require(DIGEST.fullmatch(self.image_id), "Expected immutable build image ID")
             require(command("git", "-C", str(ROOT), "rev-parse", "HEAD").strip() == self.revision, "Source HEAD differs")
             require(not command("git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no").strip(),
                     "Tracked source is dirty")
-            image = json.loads(command("docker", "image", "inspect", self.image_id))[0]
-            validate_image(image, self.image_id, self.revision)
-            self.write("image.json", {key: image[key] for key in ("Id", "Architecture", "Os", "Created", "Config")})
+            self.resolve_image()
             self.evidence["source_inputs"] = {
                 name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
                 for name in ("server/Dockerfile", "server/docker/runtime-provider.lock.json", "dependencies.bundle.json")}
@@ -243,11 +302,13 @@ class Qualification:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image-id", required=True)
+    parser.add_argument("--image-tag", required=True)
+    parser.add_argument("--build-evidence", required=True, type=Path)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    Qualification(args.image_id, args.revision, args.output).run()
+    build = json.loads(args.build_evidence.read_text())
+    Qualification(args.image_tag, build, args.revision, args.output).run()
 
 
 if __name__ == "__main__":

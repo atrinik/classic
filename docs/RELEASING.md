@@ -744,7 +744,14 @@ continues to verify cached source archives and configure offline. Its final-stag
 APT install still needs the signed, locked Ubuntu snapshot; dependency-bundle
 verification does not claim that the entire Docker build is network-free.
 
-`tools/ci/qualify_server_image.py` consumes the build's immutable local image ID.
+`tools/ci/qualify_server_image.py` resolves this run's unique local image tag and
+checks it against the action's config and manifest digests plus decoded BuildKit
+metadata. Legacy Docker must report the config digest as its image ID with no
+manifest descriptor; modern Docker must report the manifest digest as its ID and
+a matching typed single-manifest descriptor. Indexes, rewritten digests and
+unknown identity shapes fail closed. Evidence retains expected config and manifest
+digests separately from the observed Docker ID; modern inspect does not independently
+expose the config digest. All later operations use the validated immutable Docker ID.
 It uses UUID-labelled containers, the image's default UID 10001, no host mounts,
 no published ports, no external network, dropped capabilities, bounded resources
 and disposable container state. It exercises the existing offline benchmark on
