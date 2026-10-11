@@ -7,6 +7,8 @@
 #include <check_utils.h>
 #include <propagation.h>
 #include <object_methods.h>
+#include <object.h>
+#include <sys/stat.h>
 #include <player.h>
 #include <server.h>
 #include <monster_data.h>
@@ -200,6 +202,91 @@ START_TEST(test_swarm_reservation_transfer_and_group_expiry) {
     ck_assert_uint_eq(propagation_reserved_cells(), 0);
     delete_map(lower);
     delete_map(upper);
+}
+END_TEST
+
+/* Both a resident checkpoint and its failure paths preserve pending work.
+ * A linked-map cast group must survive too; only actual teardown cancels it. */
+START_TEST(test_resident_save_preserves_pending_propagation_until_teardown) {
+    char directory[] = "/tmp/atrinik-propagation-save-XXXXXX";
+    ck_assert_ptr_nonnull(mkdtemp(directory));
+    char path[HUGE_BUF];
+    int written = snprintf(VS(path), "%s/%s", directory,
+                           _i == 1 ? "missing/runtime.map" : "runtime.map");
+    ck_assert_int_ge(written, 0);
+    ck_assert_uint_lt((size_t)written, sizeof(path));
+    mapstruct *lower = get_empty_map(5, 5), *upper = get_empty_map(5, 5);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    if (_i == 1) {
+        /* Missing parent causes primary open to fail before MAP_SAVING. */
+        FREE_AND_COPY_HASH(upper->path, "/tests/propagation-save-failure");
+        upper->tmpname = xstrdup(path);
+    } else {
+        upper->map_flags |= MAP_FLAG_UNIQUE;
+        FREE_AND_COPY_HASH(upper->path, path);
+        if (_i == 2) {
+            /* An existing directory forces atomic publication to fail after
+             * serialization, exercising restoration of MAP_IN_MEMORY. */
+            ck_assert_int_eq(mkdir(path, 0700), 0);
+        }
+    }
+    object *parent = source_on(lower, 2, 2);
+    parent->type = SWARM_SPELL;
+    ck_assert(propagation_reserve_swarm(parent, 3, 3));
+    object *child = source_on(upper, 2, 2);
+    ck_assert(propagation_reserve_explosion_from(child, parent, 3));
+    tag_t parent_count = parent->count, child_count = child->count;
+    object *pending = source_on(upper, 1, 1);
+    tag_t pending_count = pending->count;
+    memset(visits, 0, sizeof(visits));
+    ck_assert(propagation_area(pending, 0, visit, 1));
+    size_t reserved = propagation_reserved_cells();
+    ck_assert_uint_gt(reserved, 1);
+
+    ck_assert_int_eq(new_save_map(upper, 0), _i == 0 ? 0 : -1);
+
+    ck_assert_int_eq(upper->in_memory, MAP_IN_MEMORY);
+    ck_assert_ptr_nonnull(upper->spaces);
+    ck_assert_ptr_eq(lower->tile_map[TILED_UP], upper);
+    ck_assert(object_reference_is_current(parent, parent_count));
+    ck_assert(object_reference_is_current(child, child_count));
+    ck_assert(object_reference_is_current(pending, pending_count));
+    ck_assert_ptr_nonnull(parent->propagation);
+    ck_assert_ptr_nonnull(child->propagation);
+    ck_assert_uint_eq(propagation_reserved_cells(), reserved);
+    ck_assert_uint_eq(visits[1], 0);
+    if (_i == 0) {
+        struct stat saved;
+        ck_assert_int_eq(stat(path, &saved), 0);
+        ck_assert(S_ISREG(saved.st_mode));
+        ck_assert_int_gt(saved.st_size, 0);
+    }
+    propagation_tick();
+    ck_assert_uint_eq(visits[1], 1);
+    ck_assert_uint_eq(propagation_reserved_cells(), reserved - 1);
+
+    /* Teardown still expires the entire linked group, including the parent
+     * on the surviving map, and releases all reservation capacity. */
+    free_map(upper, 1);
+    ck_assert_int_eq(lower->in_memory, MAP_IN_MEMORY);
+    ck_assert(!object_reference_is_current(parent, parent_count));
+    ck_assert(!object_reference_is_current(child, child_count));
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+    propagation_tick();
+    ck_assert_uint_eq(propagation_last_expansions(), 0);
+    ck_assert_uint_eq(visits[1], 1);
+    delete_map(lower);
+    if (_i == 1) {
+        clean_tmp_map(upper);
+    }
+    delete_map(upper);
+    if (_i == 0) {
+        ck_assert_int_eq(unlink(path), 0);
+    } else if (_i == 2) {
+        ck_assert_int_eq(rmdir(path), 0);
+    }
+    ck_assert_int_eq(rmdir(directory), 0);
 }
 END_TEST
 
@@ -415,6 +502,7 @@ void check_server_propagation(void) {
     tcase_add_test(core, test_spread_around_cover_but_not_closed_story_slabs);
     tcase_add_test(core, test_cone_children_expire_together_across_stories);
     tcase_add_test(core, test_swarm_reservation_transfer_and_group_expiry);
+    tcase_add_loop_test(core, test_resident_save_preserves_pending_propagation_until_teardown, 0, 3);
     tcase_add_test(core, test_rain_heal_no_target_fails_without_reservation);
     tcase_add_test(core, test_disease_open_route_around_cover_retains_identity_and_slabs);
     tcase_add_test(core, test_targeted_spell_rejects_stale_identity_xray_and_glass);

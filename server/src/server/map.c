@@ -1634,7 +1634,8 @@ static void map_atomic_cancel(map_atomic_file_t *file) {
  *
  */
 int new_save_map(mapstruct *m, int flag) {
-    propagation_expire_map(m);
+    /* A checkpoint leaves the resident simulation running, including pending
+     * propagation. Only map teardown in free_map() expires those casts. */
     FILE *fp, *fp2;
     char filename[HUGE_BUF], buf[MAX_BUF];
     map_atomic_file_t primary, unique;
