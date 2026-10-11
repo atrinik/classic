@@ -66,6 +66,33 @@ def verify_recipe(root: Path, revision: str, recipe: dict[str, str]) -> None:
             raise ValueError(f"Windows checkout differs from selected source: {path}")
 
 
+def verify_llvm_descriptor(root: Path, revision: str) -> None:
+    path = "tools/ci/appimage/packaging.lock.json"
+    entry = git(root, "ls-tree", revision, "--", path).decode().split()
+    if len(entry) != 4 or entry[:2] != ["100644", "blob"] or entry[3] != path:
+        raise ValueError("current Windows source requires its LLVM compiler descriptor")
+    source = git(root, "show", revision + ":" + path)
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate LLVM source descriptor key: {key}")
+            result[key] = value
+        return result
+
+    descriptor = json.loads(source, object_pairs_hook=unique_object)
+    compiler = descriptor.get("compiler") if isinstance(descriptor, dict) else None
+    if (not isinstance(compiler, dict) or compiler.get("family") != "Clang"
+            or not isinstance(compiler.get("image"), str)
+            or re.fullmatch(r"ghcr\.io/atrinik/classic-build:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}",
+                            compiler["image"]) is None):
+        raise ValueError("current Windows source requires its immutable LLVM compiler descriptor")
+    local = root / path
+    if local.is_symlink() or not local.is_file() or local.read_bytes() != source:
+        raise ValueError("LLVM compiler descriptor checkout differs from selected source")
+
+
 def select_producer(root: Path, revision: str) -> dict[str, object]:
     if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         raise ValueError("Windows revision must be an exact lowercase commit SHA")
@@ -89,6 +116,7 @@ def select_producer(root: Path, revision: str) -> dict[str, object]:
         image, mode, epoch = MXE_IMAGE, "mxe", "mxe-gcc-general-1.16-4266256d"
     else:
         verify_recipe(root, revision, LLVM_RECIPE)
+        verify_llvm_descriptor(root, revision)
         environment = {
             "PATH": "/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:" + SYSTEM_PATH,
             "ATRINIK_WINDOWS_TOOLCHAIN_FILE": "/opt/atrinik-windows/share/cmake/llvm-mingw.cmake",

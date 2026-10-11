@@ -22,6 +22,10 @@ class WindowsProducerTests(unittest.TestCase):
         self.git('config', 'user.name', 'Windows producer fixture')
         self.git('config', 'user.email', 'fixture@example.invalid')
         self.recipe = {'client/CMakeLists.txt': self.blob('client/CMakeLists.txt', b'recipe\n')}
+        self.descriptor_path = 'tools/ci/appimage/packaging.lock.json'
+        self.blob(self.descriptor_path, json.dumps({'compiler': {
+            'family': 'Clang', 'image': 'ghcr.io/atrinik/classic-build:1.18.0@sha256:' + 'a' * 64
+        }}).encode())
         self.revision = self.commit()
         self.selector = Path(producer.__file__).resolve()
 
@@ -128,6 +132,23 @@ class WindowsProducerTests(unittest.TestCase):
         arguments = printed.getvalue().splitlines()
         self.assertEqual(arguments[::2], ['--env'] * 4)
         self.assertTrue(all('=' in argument for argument in arguments[1::2]))
+
+    def test_current_llvm_rejects_absent_malformed_and_dirty_compiler_descriptor(self) -> None:
+        with patch.object(producer, 'LLVM_RECIPE', self.recipe):
+            (self.root / self.descriptor_path).write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'descriptor checkout differs'):
+                producer.select_producer(self.root, self.revision)
+            self.revision = self.commit()
+            with self.assertRaisesRegex(ValueError, 'immutable LLVM compiler descriptor'):
+                producer.select_producer(self.root, self.revision)
+            self.blob(self.descriptor_path, b'{"compiler":{},"compiler":{}}')
+            self.revision = self.commit()
+            with self.assertRaisesRegex(ValueError, 'duplicate LLVM source descriptor'):
+                producer.select_producer(self.root, self.revision)
+            (self.root / self.descriptor_path).unlink()
+            self.revision = self.commit()
+            with self.assertRaisesRegex(ValueError, 'LLVM compiler descriptor'):
+                producer.select_producer(self.root, self.revision)
 
     def test_historical_registry_is_exact_two_source_commits(self) -> None:
         self.assertEqual(set(producer.HISTORICAL), {
