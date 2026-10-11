@@ -14,14 +14,14 @@ import tempfile
 
 from locked_inputs import load_locked_inputs
 
-from finalize_artifacts import sha256
+from finalize_artifacts import build_spdx, sha256
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULES = ("client", "server", "editor", "libatrinik", "protocol")
 
 
 def expected_names(version: str, schema: int) -> set[str]:
-    if schema not in (1, 2):
+    if type(schema) is not int or schema not in (1, 2, 3):
         raise RuntimeError("unsupported release artifact schema")
     names = {f"atrinik-classic-{version}.tar.gz"}
     names.update(f"atrinik-classic-{module}-{version}.tar.gz" for module in MODULES)
@@ -31,14 +31,16 @@ def expected_names(version: str, schema: int) -> set[str]:
                   f"atrinik-classic-{version}.spdx.json", "release-manifest.json", "SHA256SUMS"})
     if schema == 2:
         names.add(f"atrinik-classic-client-{version}-linux-amd64.deb")
+    if schema == 3:
+        names.add(f"atrinik-classic-client-{version}-linux-x86_64.AppImage")
     return names
 
 
-def git_value(root: Path, *args: str) -> str:
+def git_value(root: Path, *args: str, preserve_whitespace: bool = False) -> str:
     result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
     if result.returncode:
         raise RuntimeError("cannot read immutable source contract: " + result.stderr.strip())
-    return result.stdout.strip()
+    return result.stdout if preserve_whitespace else result.stdout.strip()
 
 
 def source_schema(root: Path, revision: str) -> int:
@@ -48,7 +50,7 @@ def source_schema(root: Path, revision: str) -> int:
     tree = ast.parse(source)
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "RELEASE_ARTIFACT_SCHEMA" for t in node.targets):
-            if isinstance(node.value, ast.Constant) and type(node.value.value) is int and node.value.value in (1, 2):
+            if isinstance(node.value, ast.Constant) and type(node.value.value) is int and node.value.value in (1, 2, 3):
                 return node.value.value
             raise RuntimeError("unsupported source release artifact contract")
     # Historical releases predate the explicit constant. Recognize their exact
@@ -173,12 +175,39 @@ def validate_source_metadata(manifest: dict, source_root: Path, revision: str, v
             path = root / component / "dependencies.lock.json"
             path.parent.mkdir()
             path.write_text(git_value(source_root, "show", f"{revision}:{component}/dependencies.lock.json"))
-        inputs = load_locked_inputs(version, root)
-    if schema == 1:
-        for record in inputs:
-            record["affects"] = [name for name in record["affects"] if not name.endswith(".deb")]
+        inputs = load_locked_inputs(version, root, schema)
     if manifest.get("locked_inputs") != inputs:
         raise RuntimeError("candidate locked inputs differ from source")
+    if schema == 3:
+        packaging_lock = json.loads(git_value(source_root, "show", f"{revision}:tools/ci/appimage/packaging.lock.json"))
+        if manifest.get("appimage_packaging_lock") != packaging_lock:
+            raise RuntimeError("candidate AppImage packaging lock differs from source")
+
+
+def validate_appimage_metadata(directory: Path, manifest: dict, source_root: Path,
+                               revision: str, version: str) -> None:
+    # The helper's current checkout cannot stand in for a historical source.
+    # Give the package validator only the trusted files from this exact commit.
+    from appimage import TRUSTED_SOURCE_FILES, read_appimage_inventory
+    with tempfile.TemporaryDirectory(prefix="atrinik-appimage-contract-") as temporary:
+        root = Path(temporary)
+        for relative in TRUSTED_SOURCE_FILES:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(git_value(source_root, "show", f"{revision}:{relative}", preserve_whitespace=True))
+        inventory = read_appimage_inventory(
+            directory / f"atrinik-classic-client-{version}-linux-x86_64.AppImage",
+            version, revision=revision, source_root=root, source_date_epoch=manifest["source_epoch"],
+        )
+    if manifest.get("appimage_inventory") != inventory:
+        raise RuntimeError("candidate AppImage inventory differs from validated package")
+    sbom_name = f"atrinik-classic-{version}.spdx.json"
+    paths = sorted(path for path in directory.iterdir()
+                   if path.name not in ("SHA256SUMS", "release-manifest.json", sbom_name))
+    expected = build_spdx(paths, version, revision, manifest["source_epoch"],
+                          manifest["locked_inputs"], inventory, manifest["appimage_packaging_lock"])
+    if json.loads((directory / sbom_name).read_text()) != expected:
+        raise RuntimeError("candidate SPDX differs from AppImage and locked inputs")
 
 
 def validate_candidate(directory: Path, tag: str, revision: str, source_root: Path = ROOT) -> dict[str, tuple[int, str]]:
@@ -222,6 +251,8 @@ def validate_candidate(directory: Path, tag: str, revision: str, source_root: Pa
         raise RuntimeError("candidate checksums differ")
     if schema == 2:
         validate_deb(directory / f"atrinik-classic-client-{version}-linux-amd64.deb", version)
+    if schema == 3:
+        validate_appimage_metadata(directory, manifest, source_root, revision, version)
     return actual
 
 

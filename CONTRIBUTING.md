@@ -20,7 +20,7 @@ minor version, while a numeric `X.Y.x` maintenance branch advances only its patc
 version from the published `vX.Y.0` baseline. A breaking marker or `feat` on a
 maintenance branch is rejected as out of range. Successful trusted main-push
 Check completions automatically release checked batches of unreleased changes,
-including the complete Linux Debian client package. Package Release completion
+including the complete Linux AppImage client package. Package Release completion
 reconciles later checked batches through the shared publication queue. The
 separate development server images use `0.0.0` plus the exact source revision.
 See `docs/RELEASING.md` for publication, manual retry, and guarded recovery.
@@ -153,6 +153,16 @@ Follow [client/INSTALL](client/INSTALL) for the dependency validation, CMake,
 and CTest workflow. Preserve license and attribution files when changing
 bundled graphics or fonts. Update source and sound locks only to immutable
 published releases after independently verifying their checksums.
+
+Linux release packaging uses the pinned Ubuntu 24.04 AppImage producer and
+`client/tools/build-appimage.sh`, with `ATRINIK_PACKAGE_VERSION` required. Run
+the trusted `tools/release/appimage.py PATH VERSION` validator on the resulting
+image; release callers also bind
+`--revision FULL_SHA --source-root TRUSTED_CHECKOUT`. Keep the application dependency closure, decoder contract, host-library
+exclusions and corresponding notices together; source-build dependency minimums
+remain unchanged. See [Linux client qualification](docs/RELEASING.md#linux-client-qualification)
+for headless checks and separate desktop acceptance. Historical Debian release
+recovery retains its original schema and package checks.
 
 ### Server
 

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class LinuxDebWorkflowTests(unittest.TestCase):
     def test_candidate_requires_offline_build_and_clean_install(self) -> None:
         workflow = (ROOT / '.github/workflows/build-release-candidate.yml').read_text()
-        job = workflow.split('  client-linux:\n', 1)[1].split('  client-windows:\n', 1)[0]
+        job = workflow.split('  client-linux:\n', 1)[1].split('  client-appimage:\n', 1)[0]
         self.assertIn('needs: [metadata, dependencies, gpu-shaders]', job)
         self.assertIn("if: needs.metadata.outputs.artifact_schema == '2'", job)
         self.assertIn('ref: ${{ needs.metadata.outputs.commit }}', job)
@@ -38,7 +38,7 @@ class LinuxDebWorkflowTests(unittest.TestCase):
 
     def test_candidate_automation_and_source_have_separate_authority(self) -> None:
         workflow = (ROOT / '.github/workflows/build-release-candidate.yml').read_text()
-        job = workflow.split('  client-linux:\n', 1)[1].split('  client-windows:\n', 1)[0]
+        job = workflow.split('  client-linux:\n', 1)[1].split('  client-appimage:\n', 1)[0]
         checkouts = re.findall(r'uses: actions/checkout@.*?\n(.*?)(?=      -)', job, re.DOTALL)
         self.assertEqual(len(checkouts), 2)
         self.assertIn('ref: ${{ github.sha }}', checkouts[0])

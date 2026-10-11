@@ -69,6 +69,26 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertEqual(result["codeql_languages"], "c-cpp")
         self.assertEqual(result["codeql_paths"], ["client"])
 
+    def test_appimage_producer_changes_select_only_client_native_builds(self) -> None:
+        for path in ("client/tools/build-appimage.sh", "tools/ci/appimage/Dockerfile",
+                     "tools/ci/appimage/packaging.lock.json", "tools/ci/appimage/prepare.py",
+                     "tools/ci/appimage/smoke.sh", "tools/ci/appimage/graphical.Dockerfile",
+                     "tools/ci/appimage/graphical-smoke.sh", "tools/ci/appimage/graphical-probe.c",
+                     "tools/ci/appimage/export_graphical_evidence.py"):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertFalse(result["server"])
+                self.assertTrue(result["windows"])
+
+    def test_appimage_release_contract_selects_both_native_consumers(self) -> None:
+        for path in ("tools/release/appimage.py", "tools/release/artifacts.schema.json",
+                     ".github/workflows/build-release-candidate.yml"):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+
     def test_shared_native_change_selects_both_components(self) -> None:
         result = classify_changes.classify(["protocol/schema/commands.jsonl"])
         self.assertTrue(result["client"])

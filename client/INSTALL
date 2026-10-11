@@ -64,12 +64,20 @@ into `atrinik`. Local source runs may instead set the public, non-secret
 `data/discord-application-id` file. Never supply a Discord Client Secret,
 OAuth token, bot token, authorization code, or user credential.
 
-Linux amd64 releases include a Debian package. Install the downloaded file with
-`sudo apt install ./atrinik-classic-client-VERSION-linux-amd64.deb`, then use the
-desktop entry or `/usr/games/atrinik`. System libraries are APT dependencies,
-with minimum capability versions rather than exact pins. Debian testing is the
-build/install baseline; use a newer distribution if your repositories cannot
-satisfy the dependencies. See `../docs/RELEASING.md` for the artifact contract.
+Linux x86_64 releases provide
+`atrinik-classic-client-VERSION-linux-x86_64.AppImage`. Verify the downloaded
+file against `SHA256SUMS`, make it executable with `chmod +x`, and run it directly.
+The baseline is Ubuntu 24.04 or newer x86_64 with glibc >= 2.39. The AppImage
+bundles SDL >= 3.4 and the other application libraries; no APT SDL installation
+is required. The host still supplies the kernel, hardware GPU drivers, Vulkan
+loader, and desktop/audio services. Alpine/musl and ARM are outside this contract.
+If FUSE mounting is unavailable, pass `--appimage-extract-and-run`; the pinned
+static-FUSE type-2 runtime does not require host libfuse2. Replace the downloaded
+file to upgrade; user data remains in `.atrinik/<major>.x/`, including when
+`ATRINIK_CONFIG_DIR` selects an isolated configuration base. There is no automatic
+updater or store integration. See `../docs/RELEASING.md` for packaging and
+separate desktop qualification. Source-build dependency requirements above are
+unchanged.
 
 Windows portable packages install the checked-in Mozilla-derived `ca-bundle.crt`.
 The client release helper explicitly selects that source bundle; standalone CMake

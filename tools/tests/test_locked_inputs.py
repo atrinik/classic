@@ -49,13 +49,25 @@ class LockedInputsTests(unittest.TestCase):
     def test_inputs_record_coordinates_and_affected_artifacts(self) -> None:
         inputs = locked_inputs.load_locked_inputs("5.6.0", self.root)
         self.assertEqual([record["name"] for record in inputs], ["content", "sound"])
-        self.assertIn("atrinik-classic-client-5.6.0-linux-amd64.deb", inputs[1]["affects"])
+        self.assertIn("atrinik-classic-client-5.6.0-linux-x86_64.AppImage", inputs[1]["affects"])
         content = inputs[0]
         self.assertIn(
             "atrinik-classic-server-5.6.0-windows-x86_64.zip",
             content["affects"],
         )
         self.assertIn("ghcr.io/atrinik/classic-server:5.6.0", content["affects"])
+
+    def test_schema_mappings_preserve_historical_artifact_semantics(self) -> None:
+        for schema, suffix in ((1, None), (2, "linux-amd64.deb"), (3, "linux-x86_64.AppImage")):
+            with self.subTest(schema=schema):
+                sound = locked_inputs.load_locked_inputs("5.6.0", self.root, schema)[1]
+                expected = ["atrinik-classic-client-5.6.0-windows-x86_64.zip"]
+                if suffix:
+                    expected.append("atrinik-classic-client-5.6.0-" + suffix)
+                self.assertEqual(sound["affects"], expected)
+        for schema in (True, 0, 4, "3"):
+            with self.assertRaises(locked_inputs.LockedInputError):
+                locked_inputs.load_locked_inputs("5.6.0", self.root, schema)
 
     def test_server_image_labels_include_every_provenance_coordinate(self) -> None:
         inputs = locked_inputs.load_locked_inputs("5.6.0", self.root)
