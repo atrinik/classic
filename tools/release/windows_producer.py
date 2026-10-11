@@ -140,6 +140,7 @@ def select_producer(root: Path, revision: str) -> dict[str, object]:
             "ATRINIK_WINDOWS_TOOLCHAIN_FILE": "/opt/atrinik-windows/share/cmake/llvm-mingw.cmake",
             "ATRINIK_WINDOWS_TARGET": "x86_64-w64-mingw32",
             "ATRINIK_WINDOWS_RUNTIME_DIR": "/opt/atrinik-windows/bin",
+            "ATRINIK_WINDOWS_HOST_PYTHON": "/usr/bin/python3",
         }
         image, mode, epoch = LLVM_IMAGE, "llvm", "llvm-mingw-1.18-01065f08"
     return {"windows_image": image, "windows_mode": mode,

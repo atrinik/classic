@@ -1670,6 +1670,11 @@ class WorkflowContractTests(unittest.TestCase):
                                         if index and arguments[index - 1] == "--env")
                         for name, value in expected["environment"].items():
                             self.assertEqual(selected[name], value)
+                        if revision == current_revision:
+                            self.assertEqual(selected["ATRINIK_WINDOWS_HOST_PYTHON"], "/usr/bin/python3")
+                            self.assertEqual(arguments.count("ATRINIK_WINDOWS_HOST_PYTHON=/usr/bin/python3"), 1)
+                        else:
+                            self.assertNotIn("ATRINIK_WINDOWS_HOST_PYTHON", selected)
                         forbidden_prefix = "ATRINIK_WINDOWS_" if expected["windows_mode"] == "mxe" else "MXE_"
                         self.assertFalse(any(name.startswith(forbidden_prefix) for name in selected))
                         self.assertIn(expected["windows_image"], arguments)

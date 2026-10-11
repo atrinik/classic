@@ -53,6 +53,7 @@ class WindowsProducerTests(unittest.TestCase):
         self.assertIn('llvm-mingw', selected['windows_cache_epoch'])
         environment = selected['environment']
         self.assertEqual(environment['ATRINIK_WINDOWS_TARGET'], 'x86_64-w64-mingw32')
+        self.assertEqual(environment['ATRINIK_WINDOWS_HOST_PYTHON'], '/usr/bin/python3')
         self.assertTrue(environment['PATH'].startswith('/opt/llvm-mingw/bin:'))
         self.assertFalse(any(name.startswith('MXE_') for name in environment))
 
@@ -131,7 +132,8 @@ class WindowsProducerTests(unittest.TestCase):
             'windows_image=' + producer.LLVM_IMAGE, 'windows_mode=llvm',
             'windows_cache_epoch=llvm-mingw-1.18-01065f08'])
         arguments = printed.getvalue().splitlines()
-        self.assertEqual(arguments[::2], ['--env'] * 4)
+        self.assertEqual(arguments[::2], ['--env'] * 5)
+        self.assertIn('ATRINIK_WINDOWS_HOST_PYTHON=/usr/bin/python3', arguments[1::2])
         self.assertTrue(all('=' in argument for argument in arguments[1::2]))
 
     def test_current_llvm_rejects_absent_malformed_and_dirty_compiler_descriptor(self) -> None:
@@ -166,6 +168,7 @@ class WindowsProducerTests(unittest.TestCase):
         self.assertEqual(selected['windows_image'], producer.LLVM_IMAGE)
         self.assertEqual(selected['windows_mode'], 'llvm')
         self.assertEqual(selected['environment']['ATRINIK_WINDOWS_TARGET'], 'x86_64-w64-mingw32')
+        self.assertEqual(selected['environment']['ATRINIK_WINDOWS_HOST_PYTHON'], '/usr/bin/python3')
         self.assertFalse(subprocess.run(['git', '-C', str(source), 'status', '--porcelain'],
                                         check=True, capture_output=True).stdout)
         # Authenticate the authored scripts, including rejecting committed drift
@@ -209,6 +212,7 @@ class WindowsProducerTests(unittest.TestCase):
                 selected = json.loads(result.stdout)
                 self.assertEqual(selected['windows_image'], producer.MXE_IMAGE)
                 self.assertEqual(selected['windows_mode'], 'mxe')
+                self.assertNotIn('ATRINIK_WINDOWS_HOST_PYTHON', selected['environment'])
                 self.assertEqual(selected['environment']['MXE_TARGET'],
                                  'x86_64-w64-mingw32.shared')
 
