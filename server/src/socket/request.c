@@ -1245,7 +1245,11 @@ void draw_client_map2(object *pl) {
                 msp = GET_MAP_SPACE_PTR(m, nx, ny);
                 blocksview = d & BLOCKED_LOS_BLOCKED;
                 bool camera_covered = level_visibility != MAP_LEVEL_VISIBLE;
-                bool tile_fow = camera_covered || blocksview;
+                /* An exposed roof/floor receives incident light even when its
+                 * slab blocks sight to occupants. Only covered storeys and
+                 * ordinary base LOS loss enter remembered fog presentation. */
+                bool tile_fow = level_visibility == MAP_LEVEL_WALL_BOUNDARY ||
+                                (depth == 0 && blocksview);
                 if (depth < 0 && blocksview) {
                     map_if_clearcell(true);
                     continue;
