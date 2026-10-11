@@ -23,7 +23,9 @@ class LLVMToolchainTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.capture = self.root / "options.txt"
         self.tool = self.root / "llvm-tool"
-        self.tool.write_text("#!/bin/sh\nprintf 'LLVM version 23.1.3\\n'\n")
+        self.tool.write_text("#!/bin/sh\nif test \"$1\" = -dumpmachine; then\n"
+                             "  printf 'x86_64-w64-windows-gnu\\n'\n"
+                             "else\n  printf 'LLVM version 23.1.3\\n'\nfi\n")
         self.tool.chmod(0o755)
 
     def script(self, body):
@@ -35,6 +37,7 @@ class LLVMToolchainTests(unittest.TestCase):
         return f'''
 set(CMAKE_C_COMPILER_ID "{compiler}")
 set(CMAKE_C_COMPILER_VERSION "{version}")
+set(CMAKE_C_COMPILER "{self.tool}")
 set(CMAKE_SYSTEM_NAME "{platform}")
 set(CMAKE_AR "{self.tool}")
 set(CMAKE_RANLIB "{self.tool}")
@@ -47,7 +50,10 @@ set(CMAKE_READELF "{self.tool}")
 function(add_link_options)
     file(WRITE "{self.capture}" "${{ARGV}}")
 endfunction()
-'''
+''' + ('''set(MINGW TRUE)
+set(CMAKE_SIZEOF_VOID_P 8)
+set(CMAKE_C_COMPILER_FRONTEND_VARIANT GNU)
+''' if platform == "Windows" else "")
 
     def test_native_default_selects_pinned_toolchain_from_module_directory(self):
         result = self.script(f'''
@@ -90,6 +96,78 @@ endif ()
                 result = self.script(self.settings(compiler=compiler, version=version) + "atrinik_require_llvm()\n")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("require Clang 23.1.3", result.stderr)
+
+    def test_windows_rejects_msvc_frontend_and_non_mingw_configurations(self):
+        for selection, message in (
+            ("set(MINGW FALSE)", "64-bit LLVM-MinGW"),
+            ("set(CMAKE_SIZEOF_VOID_P 4)", "64-bit LLVM-MinGW"),
+            ("set(CMAKE_C_COMPILER_FRONTEND_VARIANT MSVC)", "GNU frontend"),
+            ("set(CMAKE_C_SIMULATE_ID MSVC)", "GNU frontend"),
+            ("unset(CMAKE_C_COMPILER_FRONTEND_VARIANT)", "GNU frontend"),
+        ):
+            with self.subTest(selection=selection):
+                result = self.script(self.settings("Windows") + selection + "\natrinik_require_llvm()\n")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_windows_checks_the_compiler_target_instead_of_its_name(self):
+        # A correctly named wrapper and matching LLVM version are insufficient.
+        compiler = self.root / "x86_64-w64-mingw32-clang"
+        for target, accepted in (("x86_64-w64-windows-gnu", True),
+                                 ("x86_64-w64-mingw32", True),
+                                 ("x86_64-pc-windows-msvc", False),
+                                 ("x86_64-pc-windows-gnu", False),
+                                 ("aarch64-w64-windows-gnu", False),
+                                 ("i686-w64-windows-gnu", False),
+                                 ("x86_64-unknown-linux-gnu", False),
+                                 ("", False)):
+            compiler.write_text(f"#!/bin/sh\nprintf '%s\\n' '{target}'\n")
+            compiler.chmod(0o755)
+            with self.subTest(target=target):
+                result = self.script(self.settings("Windows") +
+                                     f'set(CMAKE_C_COMPILER "{compiler}")\natrinik_require_llvm()\n')
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                if not accepted:
+                    self.assertIn("x86_64-w64-mingw32 target", result.stderr)
+
+    def test_windows_explicit_target_and_driver_arguments_are_checked(self):
+        compiler = self.root / "driver"
+        compiler.write_text('''#!/bin/sh
+test "$1" = --driver-mode=gcc || exit 1
+case $2 in
+  --target=x86_64-w64-mingw32) echo x86_64-w64-windows-gnu ;;
+  --target=x86_64-pc-windows-msvc) echo x86_64-pc-windows-msvc ;;
+  *) exit 1 ;;
+esac
+''')
+        compiler.chmod(0o755)
+        for target, accepted in (("x86_64-w64-mingw32", True), ("x86_64-pc-windows-msvc", False)):
+            with self.subTest(target=target):
+                result = self.script(self.settings("Windows") + f'''
+set(CMAKE_C_COMPILER "{compiler}")
+set(CMAKE_C_COMPILER_ARG1 --driver-mode=gcc)
+set(CMAKE_C_COMPILER_TARGET "{target}")
+atrinik_require_llvm()
+''')
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_windows_loaded_cpp_compiler_must_use_the_same_supported_abi(self):
+        for frontend, target, accepted in (("GNU", "x86_64-w64-windows-gnu", True),
+                                           ("MSVC", "x86_64-w64-windows-gnu", False),
+                                           ("GNU", "x86_64-pc-windows-msvc", False)):
+            compiler = self.root / "clang++"
+            compiler.write_text(f"#!/bin/sh\nprintf '%s\\n' '{target}'\n")
+            compiler.chmod(0o755)
+            with self.subTest(frontend=frontend, target=target):
+                result = self.script(self.settings("Windows") + f'''
+set(CMAKE_CXX_COMPILER_LOADED TRUE)
+set(CMAKE_CXX_COMPILER_ID Clang)
+set(CMAKE_CXX_COMPILER_VERSION 23.1.3)
+set(CMAKE_CXX_COMPILER_FRONTEND_VARIANT "{frontend}")
+set(CMAKE_CXX_COMPILER "{compiler}")
+atrinik_require_llvm()
+''')
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
 
     def test_mismatched_archive_tools_are_rejected(self):
         self.tool.write_text("#!/bin/sh\nprintf 'GNU ar 2.45\\n'\n")

@@ -32,6 +32,38 @@ function(atrinik_require_llvm)
              NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "23.1.3"))
         message(FATAL_ERROR "Classic C++ build dependencies require Clang 23.1.3")
     endif ()
+    if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        if (NOT MINGW OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+            message(FATAL_ERROR "Classic Windows builds require 64-bit LLVM-MinGW")
+        endif ()
+        set(windows_languages C)
+        if (CMAKE_CXX_COMPILER_LOADED)
+            list(APPEND windows_languages CXX)
+        endif ()
+        foreach (language IN LISTS windows_languages)
+            if (NOT CMAKE_${language}_COMPILER_FRONTEND_VARIANT STREQUAL "GNU" OR
+                    CMAKE_${language}_SIMULATE_ID STREQUAL "MSVC")
+                message(FATAL_ERROR "Classic Windows builds require the LLVM-MinGW GNU frontend")
+            endif ()
+            set(target_arguments)
+            if (CMAKE_${language}_COMPILER_ARG1)
+                separate_arguments(target_arguments NATIVE_COMMAND "${CMAKE_${language}_COMPILER_ARG1}")
+            endif ()
+            if (CMAKE_${language}_COMPILER_TARGET)
+                list(APPEND target_arguments "--target=${CMAKE_${language}_COMPILER_TARGET}")
+            endif ()
+            execute_process(COMMAND "${CMAKE_${language}_COMPILER}" ${target_arguments} -dumpmachine
+                OUTPUT_VARIABLE windows_target ERROR_VARIABLE target_error
+                RESULT_VARIABLE target_result OUTPUT_STRIP_TRAILING_WHITESPACE)
+            # LLVM-MinGW's mingw32 driver alias reports the canonical Windows
+            # GNU triple. Check the selected compiler, not its executable name.
+            if (NOT target_result EQUAL 0 OR
+                    NOT windows_target MATCHES "^x86_64-w64-(mingw32|windows-gnu)$")
+                message(FATAL_ERROR
+                    "Classic Windows builds require the x86_64-w64-mingw32 target: ${windows_target}${target_error}")
+            endif ()
+        endforeach ()
+    endif ()
     foreach (tool CMAKE_AR CMAKE_RANLIB CMAKE_LINKER CMAKE_NM CMAKE_STRIP
             CMAKE_OBJCOPY CMAKE_OBJDUMP CMAKE_READELF)
         execute_process(COMMAND "${${tool}}" --version
