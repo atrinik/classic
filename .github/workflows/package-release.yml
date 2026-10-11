@@ -25,7 +25,7 @@ permissions:
   packages: read
 
 env:
-  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.17.0@sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1
 
 concurrency:
   group: classic-release-publication

@@ -31,8 +31,8 @@ concurrency:
 
 env:
   COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
-  CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.17.0@sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1
+  CLASSIC_LINUX_IMAGE_DIGEST: sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1
   CLASSIC_GPU_COVERAGE_IMAGE: ghcr.io/atrinik/linux-build:1.16.0@sha256:89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e
   # Historical baseline for the paired native Windows font comparison.
   CLASSIC_WINDOWS_FONT_BASELINE_IMAGE: ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69

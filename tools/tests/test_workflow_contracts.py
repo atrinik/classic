@@ -24,13 +24,16 @@ class WorkflowContractTests(unittest.TestCase):
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
     def test_final_published_provider_pins_and_installed_library_lane(self) -> None:
-        classic = "ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2"
-        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml", "build-release-candidate.yml"):
+        classic = "ghcr.io/atrinik/classic-build:1.17.0@sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1"
+        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml",
+                     "build-release-candidate.yml", "package-release.yml", "gpu-qualification.yml"):
             with self.subTest(workflow=name):
                 workflow = self.text(name)
                 self.assertIn(f"CLASSIC_LINUX_IMAGE: {classic}", workflow)
-                if name != "build-release-candidate.yml":
-                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2", workflow)
+                if name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml"):
+                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1", workflow)
+        compiler = json.loads((ROOT / "tools/ci/appimage/packaging.lock.json").read_text())["compiler"]
+        self.assertEqual(compiler["image"], classic)
         candidate = self.text("build-release-candidate.yml")
         sources = candidate[candidate.index("  sources:"):candidate.index("  client-linux:")]
         lane = sources[sources.index("      - name: Pull the immutable installed-library"):]
