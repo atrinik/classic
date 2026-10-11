@@ -18,6 +18,8 @@ START_TEST(test_sampled_two_seam_change_and_unrelated_edit) {
     }
     maps[0].tile_map[TILED_EAST] = &maps[1];
     maps[1].tile_map[TILED_EAST] = &maps[2];
+    maps[0].celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    maps[1].celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
     size_t reserved = 0;
     celestial_dependencies *ctx = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 8);
     ck_assert_ptr_nonnull(ctx);
@@ -41,9 +43,10 @@ START_TEST(test_unresolved_edge_becomes_ready) {
     source.in_memory = MAP_IN_MEMORY;
     target.in_memory = MAP_LOADING;
     source.tile_map[TILED_EAST] = &target;
+    source.celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
     size_t reserved = 0;
     celestial_dependencies *ctx = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 4);
-    /* Failed traversal still observes its source, including every tile edge. */
+    /* Failed traversal still observes its source, including unready edges. */
     ck_assert(celestial_dependencies_observe(ctx, &source));
     ck_assert(celestial_dependencies_references_map(ctx, &target));
     ck_assert(celestial_dependencies_fresh(ctx));
@@ -67,6 +70,7 @@ START_TEST(test_forget_guards_unready_target_and_sample_lifetime) {
     ck_assert_ptr_nonnull(target);
     target->in_memory = MAP_LOADING;
     source.tile_map[TILED_EAST] = target;
+    source.celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
     size_t reserved = 0;
     celestial_dependencies *pending = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 4);
     celestial_dependencies *current = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 4);
@@ -208,6 +212,54 @@ START_TEST(test_large_endpoint_promotion_charges_shared_context_once) {
 }
 END_TEST
 
+START_TEST(test_atomic_replacement_credits_only_released_contexts) {
+    mapstruct maps[40] = {0};
+    mapstruct *output[] = {&maps[0]};
+    size_t reserved = 0;
+    for (size_t replacement = 0; replacement < 2; replacement++) {
+        celestial_dependencies *ctx = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 40);
+        for (size_t i = 0; i < 40; i++) {
+            ck_assert(celestial_dependencies_observe(ctx, &maps[i]));
+        }
+        ck_assert(celestial_dependencies_finish(ctx, output, 1, false));
+        celestial_dependencies_release(ctx);
+    }
+    celestial_dependencies *snapshot = celestial_dependencies_field_get(&maps[0], false);
+    celestial_dependencies *ctx = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 40);
+    for (size_t i = 0; i < 40; i++) {
+        ck_assert(celestial_dependencies_observe(ctx, &maps[i]));
+    }
+    ck_assert(!celestial_dependencies_finish(ctx, output, 1, false));
+    ck_assert(celestial_dependencies_field_fresh(&maps[0], false));
+    celestial_dependencies_release(ctx);
+    celestial_dependencies_release(snapshot);
+    celestial_dependencies_field_forget(&maps[0]);
+    ck_assert_uint_eq(reserved, 0);
+}
+END_TEST
+
+START_TEST(test_discontinuous_and_travel_targets_are_independent) {
+    mapstruct source = {0}, target = {0};
+    source.tile_map[TILED_EAST] = &target;
+    source.celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    size_t reserved = 0;
+    for (size_t kind = 0; kind < 2; kind++) {
+        celestial_dependencies *ctx = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 4);
+        ck_assert(celestial_dependencies_observe(ctx, &source));
+        ck_assert(!celestial_dependencies_references_map(ctx, &target));
+        celestial_dependencies_forget(&target);
+        target.in_memory = MAP_IN_MEMORY;
+        ck_assert(celestial_dependencies_fresh(ctx));
+        source.tile_map[TILED_EAST] = NULL;
+        ck_assert(celestial_dependencies_fresh(ctx));
+        celestial_dependencies_release(ctx);
+        source.tile_map[TILED_EAST] = &target;
+        source.celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_UNSET;
+    }
+    ck_assert_uint_eq(reserved, 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_dependencies");
     TCase *tc = tcase_create("Core");
@@ -222,6 +274,8 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_current_next_publication_snapshot_and_unload);
     tcase_add_test(tc, test_retained_capacity_failure_is_atomic);
     tcase_add_test(tc, test_large_endpoint_promotion_charges_shared_context_once);
+    tcase_add_test(tc, test_atomic_replacement_credits_only_released_contexts);
+    tcase_add_test(tc, test_discontinuous_and_travel_targets_are_independent);
     return s;
 }
 

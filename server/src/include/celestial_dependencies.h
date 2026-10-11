@@ -33,7 +33,9 @@ bool celestial_dependencies_finish(celestial_dependencies *ctx,
                                     mapstruct *const *maps, size_t count, bool next);
 bool celestial_dependencies_field_fresh(const mapstruct *map, bool next);
 /* get returns an owned reference (or NULL); bind accepts a completed context
- * and keeps its own reference, permitting snapshot restoration/promotion. */
+ * and keeps its own reference, permitting snapshot restoration/promotion.
+ * Snapshot references are scoped to a synchronous server-thread operation and
+ * must be released before any output map's actual teardown. */
 celestial_dependencies *celestial_dependencies_field_get(const mapstruct *map, bool next);
 bool celestial_dependencies_field_bind(celestial_dependencies *ctx,
                                         mapstruct *map, bool next);

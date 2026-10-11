@@ -36,6 +36,16 @@ static celestial_dependencies *contexts;
 static field_binding *bindings;
 static size_t retained_bytes, binding_count;
 
+static const mapstruct *edge_target(const mapstruct *map, size_t edge) {
+    if (edge != TILED_UP && edge != TILED_DOWN &&
+        (map->celestial_boundary[edge] == CELESTIAL_BOUNDARY_DISCONTINUOUS ||
+         (!map->celestial_tile_path_seen[edge] &&
+          map->celestial_boundary[edge] == CELESTIAL_BOUNDARY_UNSET))) {
+        return NULL;
+    }
+    return map->tile_map[edge];
+}
+
 static bool retained_fits(size_t added_bytes, size_t added_bindings) {
     if (binding_count > SIZE_MAX / FIELD_METADATA_LIMIT - added_bindings ||
         added_bytes > SIZE_MAX - retained_bytes) {
@@ -43,6 +53,33 @@ static bool retained_fits(size_t added_bytes, size_t added_bindings) {
     }
     return retained_bytes + added_bytes <=
            (binding_count + added_bindings) * FIELD_METADATA_LIMIT;
+}
+
+/* Credit only contexts for which this atomic publication removes EVERY
+ * remaining reference. Snapshot and opposite-endpoint references retain their
+ * charge; replacing several slots sharing one context releases it only once. */
+static size_t replacement_credit(field_binding *const *selected, size_t count, bool next) {
+    size_t credit = 0;
+    for (size_t i = 0; i < count; i++) {
+        celestial_dependencies *old = selected[i]->fields[next];
+        if (old == NULL) {
+            continue;
+        }
+        size_t replaced = 0;
+        bool first = true;
+        for (size_t j = 0; j < count; j++) {
+            if (selected[j]->fields[next] == old) {
+                replaced++;
+                if (j < i) {
+                    first = false;
+                }
+            }
+        }
+        if (first && replaced == old->references) {
+            credit += old->bytes;
+        }
+    }
+    return credit;
 }
 
 /* Raw input is zero-initialized, including padding. Target metadata is read
@@ -79,7 +116,7 @@ static void signature(const mapstruct *map, unsigned char output[SHA256_DIGEST_L
         memcpy(raw.profile, profile->digest, sizeof(raw.profile));
     }
     for (size_t i = 0; i < TILED_NUM; i++) {
-        const mapstruct *target = map->tile_map[i];
+        const mapstruct *target = edge_target(map, i);
         raw.edges[i].target = (uintptr_t)target;
         raw.edges[i].path = (uintptr_t)map->tile_path[i];
         raw.edges[i].boundary = map->celestial_boundary[i];
@@ -170,7 +207,7 @@ bool celestial_dependencies_observe_at(celestial_dependencies *ctx,
     entry->transform[1] = ty;
     entry->transform[2] = z;
     for (size_t i = 0; i < TILED_NUM; i++) {
-        entry->edges[i] = map->tile_map[i];
+        entry->edges[i] = edge_target(map, i);
     }
     signature(map, entry->signature);
     return true;
@@ -188,7 +225,7 @@ bool celestial_dependencies_fresh(const celestial_dependencies *ctx) {
         /* A newly linked target is not one of our retained lifetime handles.
          * Detect that change before signature() can inspect its residency. */
         for (size_t j = 0; j < TILED_NUM; j++) {
-            if (ctx->entries[i].map->tile_map[j] != ctx->entries[i].edges[j]) {
+            if (edge_target(ctx->entries[i].map, j) != ctx->entries[i].edges[j]) {
                 return false;
             }
         }
@@ -304,7 +341,14 @@ bool celestial_dependencies_finish(celestial_dependencies *ctx,
             selected[i]->map = maps[i];
         }
     }
-    if (!retained_fits(ctx->bytes + reserved, added_bindings)) {
+    size_t credit = replacement_credit(selected, count, next);
+    HARD_ASSERT(credit <= retained_bytes);
+    if (binding_count > SIZE_MAX / FIELD_METADATA_LIMIT - added_bindings) {
+        goto fail;
+    }
+    size_t final_limit = (binding_count + added_bindings) * FIELD_METADATA_LIMIT;
+    if (ctx->bytes + reserved > final_limit ||
+        retained_bytes - credit > final_limit - ctx->bytes - reserved) {
         goto fail;
     }
     retained_bytes += ctx->bytes + reserved;
