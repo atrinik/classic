@@ -96,7 +96,9 @@
     "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
     "size": 944632,
     "license": "MIT AND LGPL-2.1-or-later AND BSD-2-Clause AND BSD-3-Clause AND Zlib",
-    "license_file": "LICENSE"
+    "license_file": "LICENSE",
+    "digest_md5_offset": 932096,
+    "digest_md5_size": 16
   },
   "host_libraries": [
     "ld-linux-x86-64.so.2",

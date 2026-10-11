@@ -13,6 +13,7 @@ RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && printf '%s\n' \
     libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
     libasound2-dev libpulse-dev libdbus-1-dev libudev-dev libdecor-0-dev libdrm-dev \
     libgbm-dev libegl-dev libgl-dev && dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /build-packages.tsv && rm -rf /var/lib/apt/lists/*
+RUN sed -i 's/ main universe$/ main/' /etc/apt/sources.list && apt-get -o APT::Update::Error-Mode=any update && apt-get install -y --no-install-recommends libvulkan-dev desktop-file-utils && dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /build-packages.tsv && rm -rf /var/lib/apt/lists/*
 COPY sources /inputs/sources
 COPY tools /inputs/tools
 COPY runtime-sources /inputs/runtime-sources
