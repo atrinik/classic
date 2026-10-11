@@ -1431,7 +1431,7 @@ int cast_transform_wealth(object *op) {
     /* Figure out our value of money to give to player. */
     int64_t source_value;
     if (!shop_money_object_counted(op, marked) || !shop_money_object_value(marked, &source_value) ||
-        source_value > INT64_MAX / TRANSFORM_WEALTH_SACRIFICE || !shop_coins_available()) {
+        source_value > (float)INT64_MAX / TRANSFORM_WEALTH_SACRIFICE || !shop_coins_available()) {
         free(name);
         return 0;
     }

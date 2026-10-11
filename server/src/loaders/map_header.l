@@ -2,7 +2,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 The Atrinik Project                         *
+ *   Copyright 2009-2026 The Atrinik Project                         *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -35,7 +35,7 @@ static const char *yval(void);
 static bool parse_int(const char *value, int minimum, int maximum, int *result);
 
 static char msgbuf[HUGE_BUF];
-static int lex_error, msg_flag;
+static int msg_flag;
 
 #define IVAL atoi(yval())
 
@@ -75,11 +75,6 @@ WS  [ \t]*
 %option stack
 
 %%
-
-%{
-/* Declare some local variables */
-lex_error = 0;
-%}
 
 ^name{S}             FREE_AND_COPY_HASH(m->name, yval());
 ^bg_music{S}         FREE_AND_COPY_HASH(m->bg_music, yval());

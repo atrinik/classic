@@ -1258,13 +1258,19 @@ static void test_production_completion_budget(void) {
     TEST_CHECK(test_asset_active == 0);
     TEST_CHECK(face_loader_test_wait_results(TEST_BUDGET_FACE_COUNT, TEST_ASYNC_TIMEOUT_MS));
 
+    size_t cache_enqueues_before = test_cache_enqueues;
     size_t redraws_before = test_book_redraws;
+    size_t interface_redraws_before = test_interface_redraws;
+    size_t widget_redraws_before = test_widget_redraws;
     size_t active_effect_redraws_before = test_active_effect_redraws;
     test_budget_clock_calls = 0;
     image_face_requests_test_clock_set(test_budget_clock);
     image_face_requests_service();
     TEST_CHECK(test_loaded_budget_faces() == 1);
+    TEST_CHECK(test_cache_enqueues == cache_enqueues_before + 1);
     TEST_CHECK(test_book_redraws == redraws_before + 1);
+    TEST_CHECK(test_interface_redraws == interface_redraws_before + 1);
+    TEST_CHECK(test_widget_redraws == widget_redraws_before + 4);
     TEST_CHECK(test_active_effect_redraws == active_effect_redraws_before + 1);
 
     image_face_requests_test_clock_set(NULL);

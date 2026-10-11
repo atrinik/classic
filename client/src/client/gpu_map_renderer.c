@@ -264,7 +264,6 @@ static size_t projected_light_row_gpu_bytes;
 static SDL_GPUTexture *albedo_target;
 static SDL_GPUTexture *owner_target;
 static SDL_GPUTexture *final_target;
-static SDL_Texture *wrapped_final_target;
 static gpu_map_target_set_t map_targets[2];
 static size_t active_target_index;
 static SDL_GPUCommandBuffer *map_command_buffer;
@@ -1032,7 +1031,6 @@ static void gpu_map_target_activate(size_t index) {
     albedo_target = target->albedo;
     owner_target = target->owner;
     final_target = target->final;
-    wrapped_final_target = target->wrapped_final;
     target_width = target->width;
     target_height = target->height;
 }
@@ -1072,7 +1070,6 @@ static void gpu_map_targets_destroy(void) {
     albedo_target = NULL;
     owner_target = NULL;
     final_target = NULL;
-    wrapped_final_target = NULL;
     target_width = 0;
     target_height = 0;
     active_target_index = 0;
