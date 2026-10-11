@@ -1,3 +1,5 @@
+# Copyright 2026 The Atrinik Project
+# SPDX-License-Identifier: GPL-2.0-or-later
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,11 +14,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-WINDOWS_PRODUCER_REVISION = "1d82af6036b831d97cc470e2230357047e4c78f8"
-WINDOWS_GENERAL_DIGEST = "914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325"
-WINDOWS_FOCUSED_DIGEST = "eb1fbbfbfbe0b784cdc705f3a1a01b8d69b84338adcb6eb9d8e418a743c8ec09"
-WINDOWS_GENERAL_IMAGE = f"ghcr.io/atrinik/windows-build:candidate-sha-{WINDOWS_PRODUCER_REVISION}@sha256:{WINDOWS_GENERAL_DIGEST}"
-WINDOWS_FOCUSED_IMAGE = f"ghcr.io/atrinik/windows-build:classic-check-candidate-sha-{WINDOWS_PRODUCER_REVISION}@sha256:{WINDOWS_FOCUSED_DIGEST}"
+WINDOWS_PRODUCER_REVISION = "4af130578df18a1944880cd279c7f23afe9cc668"
+WINDOWS_GENERAL_DIGEST = "01065f081cdf843a6591abf25f2b27734103ab385c5aa003b2eeb9a3a1ca0e5a"
+WINDOWS_FOCUSED_DIGEST = "5140299dee8e89a90c05c8372bc3e41a1819fdef5a9cfc9fcdbb0eaa07859bfd"
+WINDOWS_GENERAL_IMAGE = f"ghcr.io/atrinik/windows-build:1.18.0@sha256:{WINDOWS_GENERAL_DIGEST}"
+WINDOWS_FOCUSED_IMAGE = f"ghcr.io/atrinik/windows-build:classic-check-1.18.0@sha256:{WINDOWS_FOCUSED_DIGEST}"
 
 
 class WorkflowContractTests(unittest.TestCase):
@@ -24,16 +26,19 @@ class WorkflowContractTests(unittest.TestCase):
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
     def test_final_published_provider_pins_and_installed_library_lane(self) -> None:
-        classic = "ghcr.io/atrinik/classic-build:1.17.0@sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1"
+        classic = "ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449"
         for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml",
                      "build-release-candidate.yml", "package-release.yml", "gpu-qualification.yml"):
             with self.subTest(workflow=name):
                 workflow = self.text(name)
                 self.assertIn(f"CLASSIC_LINUX_IMAGE: {classic}", workflow)
                 if name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml"):
-                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1", workflow)
+                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449", workflow)
         compiler = json.loads((ROOT / "tools/ci/appimage/packaging.lock.json").read_text())["compiler"]
         self.assertEqual(compiler["image"], classic)
+        self.assertIn(f"FROM {classic} AS build", (ROOT / "server/Dockerfile").read_text())
+        self.assertIn(f"grep -Fx 'FROM {classic} AS build' server/Dockerfile",
+                      self.text("qualify-server-image.yml"))
         candidate = self.text("build-release-candidate.yml")
         sources = candidate[candidate.index("  sources:"):candidate.index("  client-linux:")]
         lane = sources[sources.index("      - name: Pull the immutable installed-library"):]
@@ -2405,8 +2410,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("tools/ci/run_gpu_coverage.sh", client)
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage_job)
         broad_image = (
-            "ghcr.io/atrinik/linux-build:1.17.0@sha256:"
-            "4ca8e921b616d20b18fcef901bd554488b4d5a68a7c4304268dedef23723a3bf"
+            "ghcr.io/atrinik/linux-build:1.18.0@sha256:"
+            "613cf43ab07634db005a28462a009c4c28c90dccb1b5175e13e8072b6dfe8d72"
         )
         self.assertIn(f"CLASSIC_GPU_COVERAGE_IMAGE: {broad_image}", workflow)
         self.assertIn(

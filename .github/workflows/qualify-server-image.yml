@@ -38,7 +38,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "${SOURCE_REVISION}"
           test -z "$(git status --porcelain)"
-          grep -Fx 'FROM ghcr.io/atrinik/classic-build:1.17.0@sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1 AS build' server/Dockerfile
+          grep -Fx 'FROM ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449 AS build' server/Dockerfile
           mkdir -p build/server-image-evidence
           git show -s --format=fuller HEAD > build/server-image-evidence/source.txt
           docker version > build/server-image-evidence/docker-version.txt

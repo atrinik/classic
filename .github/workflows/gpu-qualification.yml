@@ -12,9 +12,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.17.0@sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1
-  CLASSIC_LINUX_RUNTIME_IMAGE: ghcr.io/atrinik/linux-build:1.17.0@sha256:4ca8e921b616d20b18fcef901bd554488b4d5a68a7c4304268dedef23723a3bf
-  CLASSIC_WINDOWS_IMAGE: ghcr.io/atrinik/windows-build:candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449
+  CLASSIC_LINUX_RUNTIME_IMAGE: ghcr.io/atrinik/linux-build:1.18.0@sha256:613cf43ab07634db005a28462a009c4c28c90dccb1b5175e13e8072b6dfe8d72
+  CLASSIC_WINDOWS_IMAGE: ghcr.io/atrinik/windows-build:1.18.0@sha256:01065f081cdf843a6591abf25f2b27734103ab385c5aa003b2eeb9a3a1ca0e5a
 
 jobs:
   shaders:
