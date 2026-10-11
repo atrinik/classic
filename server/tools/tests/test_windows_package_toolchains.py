@@ -19,6 +19,7 @@ with open(os.environ["FIXTURE_CALLS"], "a") as output:
     output.write(json.dumps({"tool": name, "args": args,
                             "path": os.environ["PATH"],
                             "toolchain": os.environ.get("CMAKE_TOOLCHAIN_FILE"),
+                            "python_no_bytecode": os.environ.get("PYTHONDONTWRITEBYTECODE"),
                             "cc": os.environ.get("CC"), "cxx": os.environ.get("CXX")}) + "\n")
 if name == "git":
     print(os.environ["FIXTURE_REPOSITORY"])
@@ -88,6 +89,7 @@ class WindowsPackageToolchainTests(unittest.TestCase):
                 "PATH": inherited_path, "CC": str(mingw / "clang"),
                 "CXX": str(mingw / "clang++"), "FIXTURE_CALLS": str(log),
                 "CMAKE_TOOLCHAIN_FILE": str(toolchain),
+                "PYTHONDONTWRITEBYTECODE": "0",
                 "FIXTURE_REPOSITORY": str(repository), "ATRINIK_PACKAGE_VERSION": "0.0.0",
                 "ATRINIK_WINDOWS_TOOLCHAIN_FILE": str(toolchain),
                 "ATRINIK_WINDOWS_TARGET": "x86_64-w64-mingw32",
@@ -133,10 +135,13 @@ class WindowsPackageToolchainTests(unittest.TestCase):
             self.assertIn("plugin_python", native_build["args"])
             worldmaker = next(call for call in calls if call["tool"] == "atrinik-server")
             self.assertEqual(worldmaker["path"], native["path"])
+            self.assertEqual(worldmaker["python_no_bytecode"], "1")
             self.assertIn("--worldmaker", worldmaker["args"])
             cross_build = next(call for call in calls if call["tool"] == "cmake"
                                and call["args"][:2] == ["--build", "build/windows-release"])
             self.assertEqual(cross_build["path"], inherited_path)
+            self.assertEqual(cross["python_no_bytecode"], "0")
+            self.assertEqual(cross_build["python_no_bytecode"], "0")
 
 
 if __name__ == "__main__":
