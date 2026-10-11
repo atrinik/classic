@@ -101,8 +101,14 @@ START_TEST(test_retained_pursuit_after_destroy_and_reclaim) {
     SET_FLAG(waypoint, FLAG_DAMNED);
     waypoint->stats.hp = 7;
     waypoint->stats.sp = 8;
-    object *spawn = object_get();
-    spawn->type = SPAWN_POINT;
+    /* Map insertion requires an archetype (including its multipart metadata).
+     * Keep this fixture idle until its explicit process call below. */
+    object *spawn = arch_get("spawn_point");
+    ck_assert_ptr_nonnull(spawn);
+    ck_assert_int_eq(spawn->type, SPAWN_POINT);
+    spawn->speed = 0;
+    object_update_speed(spawn);
+    spawn->last_sp = -1;
     spawn->x = 10;
     spawn->y = 10;
     spawn = object_insert_map(spawn, map, NULL, INS_NO_MERGE);
