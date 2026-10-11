@@ -762,8 +762,31 @@ static void process_func(object *op) {
                 if (!OBJECT_VALID(op, op_count) || publication != los_publication_epoch()) {
                     return;
                 }
-                if (visible && rndm_chance(4) && monster_use_bow(op, part, dir) && rndm_chance(2)) {
-                    return;
+                if (visible && rndm_chance(4)) {
+                    tag_t part_count = part->count, enemy_count = enemy->count;
+                    player *enemy_controller = enemy->type == PLAYER ? CONTR(enemy) : NULL;
+                    socket_struct *enemy_socket = enemy_controller != NULL ? enemy_controller->cs : NULL;
+                    mapstruct *source_map = part->map, *enemy_map = enemy->map;
+                    tag_t source_map_count = source_map->count, enemy_map_count = enemy_map->count;
+                    int16_t source_x = part->x, source_y = part->y;
+                    int16_t enemy_x = enemy->x, enemy_y = enemy->y;
+                    bool fired = monster_use_bow(op, part, dir);
+                    /* A normal shot changes map publication too. Fence the
+                     * retained range-vector actors themselves so a valid
+                     * fire-and-pursue tick keeps its ordinary continuation. */
+                    if ((enemy_controller != NULL &&
+                         !player_connection_is_current(enemy, enemy_count, enemy_controller, enemy_socket)) ||
+                        !OBJECT_VALID(op, op_count) || !OBJECT_VALID(part, part_count) ||
+                        !OBJECT_VALID(enemy, enemy_count) || op->enemy != enemy ||
+                        op->enemy_count != enemy_count || part->map != source_map ||
+                        enemy->map != enemy_map || source_map->count != source_map_count ||
+                        enemy_map->count != enemy_map_count || part->x != source_x ||
+                        part->y != source_y || enemy->x != enemy_x || enemy->y != enemy_y) {
+                        return;
+                    }
+                    if (fired && rndm_chance(2)) {
+                        return;
+                    }
                 }
             }
         }

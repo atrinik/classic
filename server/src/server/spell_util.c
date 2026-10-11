@@ -866,6 +866,12 @@ int fire_arch_from_position(object *op,
     spell_actor_ref source_ref = spell_actor_capture(op);
     spell_actor_ref caster_ref = spell_actor_capture(caster);
     spell_actor_ref env_ref = spell_actor_capture(env);
+    mapstruct *origin_map = env->map;
+    tag_t origin_map_count = origin_map->count;
+    int16_t origin_x = env->x, origin_y = env->y;
+    object *source_env = op->env;
+    mapstruct *source_map = op->map;
+    int16_t source_x = op->x, source_y = op->y;
     object *observer = object_owner(op);
     if (observer == NULL) {
         observer = env;
@@ -889,8 +895,16 @@ int fire_arch_from_position(object *op,
         object_destroy(tmp);
         return 0;
     }
-    /* Resolve again: callbacks may have relocated the source or its map. */
-    if (env->map == NULL || !spatial_resolve(env->map, x, y, 0, &cell)) {
+    object *current_env = op;
+    while (current_env->env != NULL) {
+        current_env = current_env->env;
+    }
+    /* x/y belongs to the captured origin. A live actor may have teleported
+     * during authorization, which must not rebase those coordinates silently. */
+    if (current_env != env || env->map != origin_map || env->map->count != origin_map_count ||
+        env->x != origin_x || env->y != origin_y || op->env != source_env ||
+        op->map != source_map || op->x != source_x || op->y != source_y ||
+        !spatial_resolve(env->map, x, y, 0, &cell)) {
         object_destroy(tmp);
         return 0;
     }

@@ -2767,7 +2767,13 @@ void socket_command_fire(socket_struct *ns, player *pl, uint8_t *data, size_t le
     skill_time = skills[pl->ob->chosen_skill->stats.sp].time;
     delay = 0;
 
-    object_ranged_fire(tmp, pl->ob, dir, &delay);
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+    object_ranged_fire(tmp, observer, dir, &delay);
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket)) {
+        return;
+    }
 
     if (skill_time > 1.0) {
         skill_time -= (SK_level(pl->ob) / 10.0 / 3.0) * 0.1;

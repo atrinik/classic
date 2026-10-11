@@ -1256,14 +1256,34 @@ int cast_cause_disease(object *op,
                        int dir,
                        struct archetype *disease_arch,
                        int type) {
+    tag_t source_count = op->count, caster_count = caster->count;
+    player *source_controller = op->type == PLAYER ? CONTR(op) : NULL;
+    socket_struct *source_socket = source_controller != NULL ? source_controller->cs : NULL;
+    player *caster_controller = caster->type == PLAYER ? CONTR(caster) : NULL;
+    socket_struct *caster_socket = caster_controller != NULL ? caster_controller->cs : NULL;
     int dx = freearr_x[absdir(dir)], dy = freearr_y[absdir(dir)], dz = 0;
     object *target = op->type == PLAYER ? CONTR(op)->target_object : op->enemy;
     tag_t target_count = op->type == PLAYER ? CONTR(op)->target_object_count : op->enemy_count;
-    if (target != op && OBJECT_VALID(target, target_count) &&
-        (op->type == PLAYER ? target_player_authorized(CONTR(op), target, NULL) :
-         perception_object_visible(op, target))) {
+    if (target != op && OBJECT_VALID(target, target_count)) {
+        player *target_controller = target->type == PLAYER ? CONTR(target) : NULL;
+        socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
+        bool authorized = source_controller != NULL
+            ? target_player_authorized(source_controller, target, NULL)
+            : perception_object_visible(op, target);
+        /* Check connections before dereferencing any captured actor.
+         * An ASK_SHOW callback can tear down the source or a separate caster. */
+        if ((source_controller != NULL &&
+             !player_connection_is_current(op, source_count, source_controller, source_socket)) ||
+            (caster_controller != NULL &&
+             !player_connection_is_current(caster, caster_count, caster_controller, caster_socket)) ||
+            (target_controller != NULL &&
+             !player_connection_is_current(target, target_count, target_controller, target_socket)) ||
+            !OBJECT_VALID(op, source_count) || !OBJECT_VALID(caster, caster_count) ||
+            !OBJECT_VALID(target, target_count)) {
+            return 0;
+        }
         int ox, oy, oz;
-        if (spatial_offset(op->map, target->map, &ox, &oy, &oz)) {
+        if (authorized && spatial_offset(op->map, target->map, &ox, &oy, &oz)) {
             dx = target->x + ox - op->x;
             dy = target->y + oy - op->y;
             dz = oz;

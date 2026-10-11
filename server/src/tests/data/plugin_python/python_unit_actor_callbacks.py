@@ -8,13 +8,20 @@ observer = Atrinik.WhoIsActivator()
 mode = Atrinik.GetOptions()
 calls = int(actor.ReadKey("actor_callback_calls") or "0") + 1
 actor.WriteKey("actor_callback_calls", str(calls))
-deferred = mode in ("destroy_spell_second", "destroy_target_second")
-if (not deferred or calls == 2) and actor.ReadKey("actor_callback_done") != "1":
+trigger_call = 3 if mode == "recycle_observer_third" else (
+    2 if mode in ("destroy_spell_second", "destroy_target_second", "kick_observer_second") else 1)
+if calls == trigger_call and actor.ReadKey("actor_callback_done") != "1":
     actor.WriteKey("actor_callback_done", "1")
-    if mode == "kick_observer":
+    if mode in ("kick_observer", "kick_observer_second"):
         observer.Controller().ExecuteCommand("/kick " + observer.name)
-    elif mode in ("recycle_observer", "recycle_target"):
-        victim = observer if mode == "recycle_observer" else actor
+    elif mode == "teleport_observer":
+        observer.TeleportTo(actor.ReadKey("callback_destination"), 17, 17)
+    elif mode == "kick_target":
+        observer.Controller().ExecuteCommand("/kick " + actor.name)
+    elif mode == "kick_caster":
+        observer.Controller().ExecuteCommand("/kick " + actor.ReadKey("callback_caster"))
+    elif mode in ("recycle_observer", "recycle_observer_third", "recycle_target"):
+        victim = actor if mode == "recycle_target" else observer
         origin, x, y = victim.map, victim.x, victim.y
         victim.Destroy()
         replacement = origin.CreateObject("raas", x, y)

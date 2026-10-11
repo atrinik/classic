@@ -219,6 +219,9 @@ object *common_object_projectile_stop_spell(object *op, int reason) {
 /** @copydoc object_methods_t::projectile_fire_func */
 object *common_object_projectile_fire_missile(object *op, object *shooter, int dir) {
     tag_t shooter_count = shooter->count;
+    bool is_player = shooter->type == PLAYER;
+    player *controller = is_player ? CONTR(shooter) : NULL;
+    socket_struct *socket = is_player ? controller->cs : NULL;
     object_owner_set(op, shooter);
     op->direction = dir;
     SET_ANIMATION_STATE(op);
@@ -258,15 +261,18 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
     tag_t projectile_count = op->count;
     /* Insertion and hidden-object plugins can mutate selection or identity.
      * Reauthorize the current selection at the point that it supplies XYZ. */
-    if (OBJECT_VALID(shooter, shooter_count)) {
-        bool is_player = shooter->type == PLAYER;
+    bool shooter_current = !is_player ||
+        player_connection_is_current(shooter, shooter_count, controller, socket);
+    if (shooter_current && OBJECT_VALID(shooter, shooter_count)) {
         object *selected = is_player ? CONTR(shooter)->target_object : shooter->enemy;
         tag_t selected_count = is_player ? CONTR(shooter)->target_object_count : shooter->enemy_count;
         if (OBJECT_VALID(selected, selected_count)) {
             bool authorized = is_player
                 ? target_player_authorized(CONTR(shooter), selected, NULL)
                 : perception_object_visible(shooter, selected);
-            if (authorized && OBJECT_VALID(shooter, shooter_count) &&
+            shooter_current = !is_player ||
+                player_connection_is_current(shooter, shooter_count, controller, socket);
+            if (shooter_current && authorized && OBJECT_VALID(shooter, shooter_count) &&
                 (shooter->type == PLAYER) == is_player &&
                 OBJECT_VALID(selected, selected_count) &&
                 (is_player ? CONTR(shooter)->target_object == selected &&
@@ -279,7 +285,14 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
     if (!OBJECT_VALID(op, projectile_count)) {
         return NULL;
     }
-    projectile3d_launch(op, OBJECT_VALID(shooter, shooter_count) ? shooter : NULL, target, dir);
+    if (!shooter_current || !OBJECT_VALID(shooter, shooter_count)) {
+        /* Returning NULL also prevents bow/throw callers from accessing a
+         * departed shooter for metrics and sound after the callback. */
+        object_remove(op, 0);
+        object_destroy(op);
+        return NULL;
+    }
+    projectile3d_launch(op, shooter, target, dir);
     object_process(op);
 
     return op;

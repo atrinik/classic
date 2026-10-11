@@ -368,13 +368,20 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
 
     tag_t op_count = op->count, shooter_count = shooter->count;
     bool is_player = shooter->type == PLAYER;
-    object *selected = is_player ? CONTR(shooter)->target_object : shooter->enemy;
+    player *controller = is_player ? CONTR(shooter) : NULL;
+    socket_struct *socket = is_player ? controller->cs : NULL;
+    object *selected = is_player ? controller->target_object : shooter->enemy;
     tag_t selected_count = is_player ? CONTR(shooter)->target_object_count : shooter->enemy_count;
     object *target = NULL;
     if (selected != shooter && OBJECT_VALID(selected, selected_count)) {
         bool authorized = is_player
             ? target_player_authorized(CONTR(shooter), selected, NULL)
             : perception_object_visible(shooter, selected);
+        /* Prove connection ownership before touching either the shooter or
+         * its inventory: logout may reclaim both object pool pages. */
+        if (is_player && !player_connection_is_current(shooter, shooter_count, controller, socket)) {
+            return OBJECT_METHOD_UNHANDLED;
+        }
         if (authorized && OBJECT_VALID(shooter, shooter_count) &&
             (shooter->type == PLAYER) == is_player && OBJECT_VALID(selected, selected_count) &&
             (is_player ? CONTR(shooter)->target_object == selected &&
