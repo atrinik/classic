@@ -842,6 +842,51 @@ START_TEST(test_celestial_pending_stack_exact_and_membership_fenced) {
 }
 END_TEST
 
+START_TEST(test_continuous_seam_matches_single_map_spill) {
+    mapstruct *joined = open_fixture(8, 5);
+    mapstruct *left = open_fixture(4, 5);
+    mapstruct *right = open_fixture(4, 5);
+    FREE_AND_COPY_HASH(left->path, "/halo/left");
+    FREE_AND_COPY_HASH(right->path, "/halo/right");
+    FREE_AND_COPY_HASH(left->tile_path[TILED_EAST], right->path);
+    FREE_AND_COPY_HASH(right->tile_path[TILED_WEST], left->path);
+    left->tile_map[TILED_EAST] = right;
+    right->tile_map[TILED_WEST] = left;
+    left->celestial_tile_path_seen[TILED_EAST] = true;
+    right->celestial_tile_path_seen[TILED_WEST] = true;
+    left->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    right->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    mapstruct *covered[] = {joined, left};
+    for (size_t i = 0; i < arraysize(covered); i++) {
+        covered[i]->celestial_rectangles = xcalloc(1, sizeof(celestial_rectangle_t));
+        covered[i]->celestial_rectangle_count = 1;
+        covered[i]->celestial_rectangles[0] = (celestial_rectangle_t){
+            .type = CELESTIAL_RECT_SKY_COVERED, .width = 4, .height = 5};
+    }
+    uint64_t hour = 5 * HOURS_PER_MONTH + 12;
+    ck_assert(celestial_light_rebuild(joined, hour));
+    ck_assert(celestial_light_rebuild(left, hour));
+    ck_assert(celestial_light_rebuild(right, hour));
+    /* Covered cells receive only bounded diffuse spill from across the seam. */
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(left, 3, 2)->celestial_light_value, 0);
+    for (int y = 0; y < 5; y++) {
+        for (int x = 0; x < 8; x++) {
+            const MapSpace *expected = GET_MAP_SPACE_PTR(joined, x, y);
+            const MapSpace *actual = GET_MAP_SPACE_PTR(x < 4 ? left : right, x % 4, y);
+            ck_assert_int_eq(actual->celestial_light_value, expected->celestial_light_value);
+            ck_assert_int_eq(memcmp(actual->celestial_light_rgb, expected->celestial_light_rgb,
+                                    sizeof(actual->celestial_light_rgb)), 0);
+        }
+    }
+    left->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    right->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    ck_assert(celestial_light_rebuild(left, hour));
+    for (size_t cell = 0; cell < 20; cell++) {
+        ck_assert_int_eq(left->spaces[cell].celestial_light_value, 0);
+    }
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_light");
     TCase *tc_core = tcase_create("Core");
@@ -854,6 +899,7 @@ static Suite *suite(void) {
     tcase_set_timeout(tc_real_maps, 30);
     suite_add_tcase(s, tc_real_maps);
     tcase_add_test(tc_core, test_celestial_open_field_matches_daylight_anchor);
+    tcase_add_test(tc_core, test_continuous_seam_matches_single_map_spill);
     tcase_add_test(tc_core, test_discontinuous_horizontal_neighbor_is_not_a_local_light_dependency);
     tcase_add_test(tc_real_maps, test_brynknot_and_outside_fields_follow_settime);
     tcase_add_test(tc_core, test_unloaded_lower_map_does_not_gate_upper_light);
