@@ -4,6 +4,10 @@
 #include <curl/curl.h>
 #include <dlfcn.h>
 #include <stdio.h>
+#ifdef ATRINIK_CURL_COHORT
+#include <ares.h>
+#include <mach-o/dyld.h>
+#endif
 
 static void json_string(const char *text)
 {
@@ -49,7 +53,7 @@ static size_t discard(char *data, size_t size, size_t count, void *context)
 }
 
 /* No curlrc, proxy, netrc, credentials, redirects, or weakened TLS checks. */
-static int public_tls(const char *bundle)
+static int tls_request(const char *url, const char *bundle, const char *resolve)
 {
     CURL *handle = curl_easy_init();
     CURLcode result = CURLE_FAILED_INIT;
@@ -58,6 +62,7 @@ static int public_tls(const char *bundle)
     char error[CURL_ERROR_SIZE] = {0};
     const char *default_bundle = NULL;
     const char *default_path = NULL;
+    struct curl_slist *addresses = NULL;
     if (handle != NULL) {
 #define SET(option, value) do { \
     result = curl_easy_setopt(handle, option, value); \
@@ -67,7 +72,7 @@ static int public_tls(const char *bundle)
         if (result != CURLE_OK) goto finished;
         result = curl_easy_getinfo(handle, CURLINFO_CAPATH, &default_path);
         if (result != CURLE_OK) goto finished;
-        SET(CURLOPT_URL, "https://curl.se/");
+        SET(CURLOPT_URL, url);
         SET(CURLOPT_PROXY, "");
         SET(CURLOPT_NETRC, CURL_NETRC_IGNORED);
         SET(CURLOPT_FOLLOWLOCATION, 0L);
@@ -77,6 +82,14 @@ static int public_tls(const char *bundle)
         SET(CURLOPT_TIMEOUT, 45L);
         SET(CURLOPT_WRITEFUNCTION, discard);
         SET(CURLOPT_ERRORBUFFER, error);
+        if (resolve != NULL) {
+            addresses = curl_slist_append(NULL, resolve);
+            if (addresses == NULL) {
+                result = CURLE_OUT_OF_MEMORY;
+                goto finished;
+            }
+            SET(CURLOPT_RESOLVE, addresses);
+        }
         if (bundle != NULL) {
             SET(CURLOPT_CAINFO, bundle);
         }
@@ -100,12 +113,22 @@ finished:
     json_string(default_path);
     printf("}");
     curl_easy_cleanup(handle);
+    curl_slist_free_all(addresses);
     return result == CURLE_OK && status >= 200 && status < 400;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc != 2 || curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+#ifdef ATRINIK_CURL_COHORT
+    if (argc != 5) {
+        return 2;
+    }
+#else
+    if (argc != 2) {
+        return 2;
+    }
+#endif
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         return 2;
     }
     curl_version_info_data *info = curl_version_info(CURLVERSION_NOW);
@@ -147,10 +170,52 @@ int main(int argc, char **argv)
     printf(",\"protocols\":");
     string_array(info->protocols);
     printf(",\"public_tls_default\":");
-    int default_ok = public_tls(NULL);
+    int default_ok = tls_request("https://curl.se/", NULL, NULL);
     printf(",\"public_tls_bundle\":");
-    int bundle_ok = public_tls(argv[1]);
+    int bundle_ok = tls_request("https://curl.se/", argv[1], NULL);
+#ifdef ATRINIK_CURL_COHORT
+    Dl_info cares_provider = {0};
+    void *cares_symbol = dlsym(RTLD_DEFAULT, "ares_version");
+    if (cares_symbol == NULL || dladdr(cares_symbol, &cares_provider) == 0) {
+        curl_global_cleanup();
+        return 2;
+    }
+    printf(",\"cares_version\":");
+    json_string(ares_version(NULL));
+    printf(",\"cares_header_version\":");
+    json_string(ARES_VERSION_STR);
+    printf(",\"loaded_cares_library\":");
+    json_string(cares_provider.dli_fname);
+    printf(",\"public_tls_unrelated\":");
+    tls_request("https://curl.se/", argv[2], NULL);
+    char trusted_url[128], wrong_url[128], wrong_resolve[128];
+    int trusted_size = snprintf(trusted_url, sizeof(trusted_url), "https://localhost:%s/", argv[4]);
+    int wrong_size = snprintf(wrong_url, sizeof(wrong_url), "https://wrong.invalid:%s/", argv[4]);
+    int resolve_size = snprintf(wrong_resolve, sizeof(wrong_resolve), "wrong.invalid:%s:127.0.0.1", argv[4]);
+    if (trusted_size < 0 || (size_t) trusted_size >= sizeof(trusted_url) ||
+        wrong_size < 0 || (size_t) wrong_size >= sizeof(wrong_url) ||
+        resolve_size < 0 || (size_t) resolve_size >= sizeof(wrong_resolve)) {
+        curl_global_cleanup();
+        return 2;
+    }
+    printf(",\"private_tls_trusted\":");
+    int private_ok = tls_request(trusted_url, argv[3], NULL);
+    printf(",\"private_tls_untrusted\":");
+    tls_request(trusted_url, NULL, NULL);
+    printf(",\"private_tls_wrong_hostname\":");
+    tls_request(wrong_url, argv[3], wrong_resolve);
+    printf(",\"loaded_images\":[");
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        if (i != 0) {
+            putchar(',');
+        }
+        json_string(_dyld_get_image_name(i));
+    }
+    printf("]");
+#else
+    int private_ok = 1;
+#endif
     printf("}\n");
     curl_global_cleanup();
-    return default_ok && bundle_ok ? 0 : 1;
+    return default_ok && bundle_ok && private_ok ? 0 : 1;
 }

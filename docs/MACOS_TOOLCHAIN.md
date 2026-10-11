@@ -101,6 +101,63 @@ dependency acceptance. The exact feature, protocol and trust baseline must be
 preserved when the resolver provider changes. Linux and Windows curl policies
 do not establish the native Mac baseline.
 
+`tools/ci/macos-curl-toolchain.json` records the authenticated ARM64 baseline
+from native run `38122697026` at Classic
+`8048191fc62554be68647463a18fc5b956d06f8d`: curl 8.22.0, 20 features and
+25 protocols, OpenSSL 3.6.4 and Apple SecTrust, system zlib and Apple IDN,
+native Kerberos/LDAP, HTTP/2 and HTTP/3, SSH2, compression and suffix policy.
+The measured Homebrew resolver is threaded and does not meet Classic's
+cancellation contract. The native helper replaces it with pinned c-ares 1.34.6
+while retaining every measured feature/protocol and TLS policy:
+
+```sh
+python3 tools/ci/prepare_macos_curl.py \
+  --prefix /absolute/absent/task-curl-directory \
+  --llvm-prefix /absolute/task-llvm-directory/llvm \
+  --baseline /absolute/curl-baseline/baseline.json \
+  --ca-bundle "$PWD/client/ca-bundle.crt" --jobs 2
+```
+
+The helper is native ARM64 only; its absent prefix preserves interrupted
+stages. Verified release archives and full notices accompany both shared
+libraries. c-ares uses the existing native CMake toolchain; curl uses explicit
+arguments translated from the measured formula's configure policy, preserving
+Kerberos/LDAP and SDK zlib discovery. Both use LLVM 23.1.3, compiler-rt and
+Mach-O LLD with native Release `-O3 -DNDEBUG`, without LTO/PGO or Linux unwind
+flags. Generated resolver configuration must select c-ares and exclude the
+threaded/hybrid backend. Unknown baseline changes or missing runtime
+capabilities fail with named evidence rather than silently reducing features.
+
+Select this prefix first in CMake and pkg-config, with
+`CURL_NO_CURL_CMAKE=TRUE`, `CURL_ROOT`, explicit `CURL_INCLUDE_DIR` and
+`CURL_LIBRARY_RELEASE` pointing to its headers and dylib. After configuring
+Classic, verify selection before building:
+
+```sh
+python3 tools/ci/prepare_macos_curl.py \
+  --prefix /absolute/task-curl-directory \
+  --verify-consumer-cache build/macos-qualification/CMakeCache.txt
+```
+
+The helper binds selected headers and loaded curl/c-ares images to the owned
+prefix, captures native dependency keg paths/hashes, and records system image
+names plus SDK/OS identity. Many system dylibs reside only in the dyld shared
+cache and cannot be hashed as filesystem files. It requires ordinary public
+HTTPS with default trust and the locked Classic bundle, rejects that endpoint
+with a fresh unrelated CA, and checks a private loopback TLS chain with trusted,
+untrusted and wrong-hostname cases. Peer and hostname checks stay enabled;
+private CA tests do not opt back into native CA trust. SecTrust and OpenSSL
+fallback configuration are retained, while public success alone cannot prove
+which trust engine executed.
+
+Upload only the helper's `evidence/` directory and the existing application
+reports. Private fixture keys remain in `stage/private-tls/`, outside uploaded
+evidence. The owned absolute dylib install names describe a CI-local dependency
+cohort; they do not qualify a relocatable Mac package. Helper probes and cache
+selection do not qualify Classic cancellation or the application: the unchanged
+`libatrinik-curl` stalled-DNS tests and the supported Release/CPU suites must
+also pass with this cohort. Intel, packaged Mac and GPU acceptance stay separate.
+
 `tools/ci/prepare_macos_mixer.sh` builds the SHA-verified SDL3_mixer source
 from the existing packaging lock with native LLVM and the same decoder options
 as the Linux and Windows producers. Homebrew's mixer enables additional

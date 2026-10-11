@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "llvm_version": "23.1.3",
+  "architecture": "arm64",
+  "baseline": {
+    "run_id": 38122697026,
+    "artifact_id": 11696680160,
+    "artifact_sha256": "521996348a6ae724044f3af51271d2b690c9a77ad3d59674ee1744fd0e161fd7",
+    "source_commit": "8048191fc62554be68647463a18fc5b956d06f8d",
+    "json_sha256": "ec4d94deb2c25871f406b82f0ec1f93b1130456bf7fdd78b2dc55999a309e186",
+    "formula_sha256": "518c363f0092cc18c09a385768edea00ccdb8ffc76796eb403a76b146f624932",
+    "features": [
+      "alt-svc",
+      "AsynchDNS",
+      "brotli",
+      "GSS-API",
+      "HSTS",
+      "HTTP2",
+      "HTTP3",
+      "HTTPS-proxy",
+      "IDN",
+      "IPv6",
+      "Kerberos",
+      "Largefile",
+      "libz",
+      "PSL",
+      "AppleSecTrust",
+      "SPNEGO",
+      "SSL",
+      "threadsafe",
+      "UnixSockets",
+      "zstd"
+    ],
+    "protocols": [
+      "dict",
+      "file",
+      "ftp",
+      "ftps",
+      "gopher",
+      "gophers",
+      "http",
+      "https",
+      "imap",
+      "imaps",
+      "ldap",
+      "ldaps",
+      "mqtt",
+      "mqtts",
+      "pop3",
+      "pop3s",
+      "rtsp",
+      "scp",
+      "sftp",
+      "smtp",
+      "smtps",
+      "telnet",
+      "tftp",
+      "ws",
+      "wss"
+    ],
+    "versions": {
+      "version": "8.22.0",
+      "ssl_version": "OpenSSL/3.6.4",
+      "libz_version": "1.2.12",
+      "libssh_version": "libssh2/1.11.1",
+      "brotli_version": "brotli/1.2.0",
+      "nghttp2_version": "1.70.0",
+      "quic_version": "ngtcp2/1.25.0 nghttp3/1.18.0",
+      "zstd_version": "zstd/1.5.7"
+    }
+  },
+  "sources": {
+    "curl": {
+      "version": "8.22.0",
+      "archive": "curl-8.22.0.tar.bz2",
+      "url": "https://curl.se/download/curl-8.22.0.tar.bz2",
+      "sha256": "5d956a6a22b3c279f50c421ee5d3c9e9d660cb6f115dcf881b579e952130549c",
+      "directory": "curl-8.22.0",
+      "notice": "COPYING"
+    },
+    "cares": {
+      "version": "1.34.6",
+      "archive": "c-ares-1.34.6.tar.gz",
+      "url": "https://github.com/c-ares/c-ares/releases/download/v1.34.6/c-ares-1.34.6.tar.gz",
+      "sha256": "912dd7cc3b3e8a79c52fd7fb9c0f4ecf0aaa73e45efda880266a2d6e26b84ef5",
+      "directory": "c-ares-1.34.6",
+      "notice": "LICENSE.md"
+    }
+  },
+  "dependency_formulae": [
+    "openssl@3",
+    "brotli",
+    "libnghttp2",
+    "libnghttp3",
+    "libngtcp2",
+    "libpsl",
+    "libssh2",
+    "zstd"
+  ],
+  "ca_bundle_sha256": "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505",
+  "public_url": "https://curl.se/",
+  "required_config": [
+    "USE_ARES",
+    "USE_RESOLV_ARES",
+    "USE_OPENSSL",
+    "USE_APPLE_SECTRUST",
+    "CURL_CA_FALLBACK",
+    "USE_APPLE_IDN",
+    "HAVE_GSSAPI",
+    "USE_LIBSSH2",
+    "USE_NGHTTP2",
+    "USE_NGHTTP3",
+    "USE_NGTCP2",
+    "USE_LIBPSL",
+    "HAVE_BROTLI",
+    "HAVE_ZSTD"
+  ],
+  "forbidden_config": [
+    "USE_RESOLV_THREADED",
+    "CURL_DISABLE_LDAP",
+    "CURL_DISABLE_LDAPS",
+    "CURL_CA_BUNDLE",
+    "CURL_CA_PATH",
+    "HAVE_GSSAPPLE"
+  ],
+  "scope": "Native ARM64 CI dependency cohort; no packaging or Intel Mac acceptance",
+  "required_platform_images": [
+    "/System/Library/Frameworks/Kerberos.framework/Versions/A/Kerberos",
+    "/System/Library/Frameworks/LDAP.framework/Versions/A/LDAP",
+    "/usr/lib/libz.1.dylib",
+    "/usr/lib/libicucore.A.dylib"
+  ]
+}
