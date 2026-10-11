@@ -24,6 +24,9 @@
 static bool plugins_initialized;
 
 static void fixture(mapstruct **map, object **pl) {
+    /* This suite assembles and inspects queued MAP2 packets directly. Unlike
+     * request's wider setup, it must claim the packet toolkit explicitly. */
+    toolkit_import(packet);
     check_setup_env_pl(map, pl);
     object_remove(*pl, 0);
     (*pl)->x = 12;
