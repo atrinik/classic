@@ -8317,7 +8317,8 @@ typedef struct map_target_seen {
 
 /** Collect exact identities from all current MAP2 levels without changing selection. */
 static UT_array *map_target_collect(uint8_t is_friend) {
-    UT_icd icd = {sizeof(map_target_struct), NULL, NULL, NULL};
+    /* UT_array retains this descriptor after the collected array is returned. */
+    static const UT_icd icd = {sizeof(map_target_struct), NULL, NULL, NULL};
     UT_array *targets;
     utarray_new(targets, &icd);
     if (map_state_transaction_active()) {
