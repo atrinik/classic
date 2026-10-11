@@ -299,7 +299,12 @@ def zero_maps(report, source_root, component):
         if filename:
             if filename in maps:
                 raise ValueError("duplicate production source in LLVM JSON")
-            maps[filename] = [normalized(entry), []]
+            mapping = normalized(entry)
+            # LLVM's outer expansion collection follows object/function
+            # discovery order. Each descriptor owns its filename table and
+            # regions; preserve its internal ordering and duplicate multiplicity.
+            mapping["expansions"].sort(key=lambda value: json.dumps(value, sort_keys=True))
+            maps[filename] = [mapping, []]
     for function in data["functions"]:
         if (set(function) != {"branches", "count", "filenames", "mcdc_records", "name", "regions"} or
                 function["count"] != 0 or function["mcdc_records"]):

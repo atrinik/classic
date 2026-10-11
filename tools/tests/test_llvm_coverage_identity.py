@@ -206,6 +206,34 @@ class CompleteReportTests(unittest.TestCase):
         relative = document([mapping("client/src/shared.c")], [function("client/src/shared.c")])
         self.assertIn(self.measured, self.complete(associated=relative))
 
+    def test_outer_expansion_order_is_independent_of_object_discovery(self):
+        baseline = json.loads(self.baseline)
+        associated = json.loads(self.associated)
+        expansions = [{"filenames": [self.shared, "client/src/header.h"],
+                       "branches": [[line, 1, line, 8, 0, 0, 1, 0, 4],
+                                    [line, 2, line, 7, 0, 0, 1, 0, 4]],
+                       "source_region": [line, 1, line, 8, 0, 0, 1, 1],
+                       "target_regions": [[line, 1, line, 8, 0, 1, 0, 0],
+                                          [line, 2, line, 7, 0, 1, 0, 0]]}
+                      for line in (1, 2)]
+        baseline["data"][0]["files"][0]["expansions"] = expansions
+        associated["data"][0]["files"][0]["expansions"] = list(reversed(expansions))
+        self.assertIn(self.measured, self.complete(baseline=json.dumps(baseline), associated=json.dumps(associated)))
+        for change in ("coordinate", "duplicate", "remove", "filenames", "branches", "regions"):
+            altered = copy.deepcopy(baseline)
+            entries = altered["data"][0]["files"][0]["expansions"]
+            if change == "coordinate":
+                entries[0]["source_region"][1] += 1
+            elif change == "duplicate":
+                entries.append(copy.deepcopy(entries[0]))
+            elif change == "remove":
+                entries.pop()
+            else:
+                key = {"filenames": "filenames", "branches": "branches", "regions": "target_regions"}[change]
+                entries[0][key].reverse()
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.complete(baseline=json.dumps(altered), associated=json.dumps(associated))
+
     def test_changed_shared_segments_branches_expansions_and_functions_rejected(self):
         for field in ("segments", "branches", "expansions", "functions"):
             baseline = json.loads(self.baseline)
