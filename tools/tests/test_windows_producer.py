@@ -173,8 +173,9 @@ class WindowsProducerTests(unittest.TestCase):
                 self.assertEqual(selected['environment']['MXE_TARGET'],
                                  'x86_64-w64-mingw32.shared')
 
-    def test_historical_registry_is_exact_five_source_commits(self) -> None:
+    def test_historical_registry_is_exact_six_source_commits(self) -> None:
         self.assertEqual(set(producer.HISTORICAL), {
+            '34bbad5c3f4d9b303c17aec5e2c75b3550ec8983',
             '994e6fdc20da962be9c11055bda28ef5561a1dea',
             '24bee6c8a830aa7372a30be6b842210b07639f73',
             'c5a8f9fa2bdcfbae9311093fb69907c8d64b35d4',

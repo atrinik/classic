@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Select an authenticated Windows recipe without changing candidate source.
 
-The registry deliberately admits only five reviewed pre-LLVM source commits.
-Schema 1 has no authenticated producer in this registry and fails closed.
+The registry deliberately admits only six reviewed pre-LLVM source commits.
+Schema 1 is admitted only for its exact authenticated registry entry; unknown
+source fails closed.
 A source recipe change requires reviewing and updating its digest registry; an
 absent compiler descriptor never grants an automatic historical fallback.
 """
@@ -21,6 +22,10 @@ import subprocess
 LLVM_IMAGE = "ghcr.io/atrinik/windows-build:1.18.0@sha256:01065f081cdf843a6591abf25f2b27734103ab385c5aa003b2eeb9a3a1ca0e5a"
 MXE_IMAGE = "ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
 HISTORICAL = {
+    "34bbad5c3f4d9b303c17aec5e2c75b3550ec8983": {
+        "client/CMakeLists.txt": "a75d70efe1d736d10496d993bde83bf49012789dcf370d2b962f7d2bff64de03",
+        ".github/workflows/build-release-candidate.yml": "8497f85c816911f81ca541b4950843c593b961f58462bef24f533c63beb44f90",
+    },
     "994e6fdc20da962be9c11055bda28ef5561a1dea": {
         "client/CMakeLists.txt": "443e654babcb909ef3a78eb4798a23420d732ede073f652fcf98b042ca8433d3",
         ".github/workflows/build-release-candidate.yml": "aa39a531b2c8b1248bc1f3aed94a6b44ae013e2bdc0259db2289b9abb242d646",
