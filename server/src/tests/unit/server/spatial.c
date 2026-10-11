@@ -226,8 +226,12 @@ START_TEST(test_offset_shortest_paths_detect_ambiguity) {
     /* A shortest direct diagonal cannot hide the inconsistent local diamond. */
     link_maps(&a, &target, TILED_NORTHEAST);
     ck_assert(!spatial_offset(&a, &target, &dx, &dy, &dz));
+    spatial_cell cell;
+    ck_assert(!spatial_resolve(&a, 4, -1, 0, &cell));
     north.width = 4;
     ck_assert(spatial_offset(&a, &target, &dx, &dy, &dz));
+    ck_assert(spatial_resolve(&a, 4, -1, 0, &cell));
+    ck_assert_ptr_eq(cell.map, &target);
 }
 END_TEST
 
@@ -307,6 +311,28 @@ START_TEST(test_observer_scope_and_failed_dependencies) {
 }
 END_TEST
 
+START_TEST(test_observer_records_conflicting_seam_alternative) {
+    mapstruct a, east, north, target;
+    MapSpace as[16], es[16], ns[16], ts[16];
+    fixture(&a, as); fixture(&east, es); fixture(&north, ns); fixture(&target, ts);
+    link_maps(&a, &east, TILED_EAST);
+    link_maps(&a, &north, TILED_NORTH);
+    link_maps(&east, &target, TILED_NORTH);
+    link_maps(&north, &target, TILED_EAST);
+    link_maps(&a, &target, TILED_NORTHEAST);
+    north.width = 3;
+    observation seen = {0};
+    spatial_observer previous = spatial_observer_exchange(
+        (spatial_observer){.visit = observe_map, .context = &seen});
+    spatial_cell cell;
+    ck_assert(!spatial_resolve(&a, 4, -1, 0, &cell));
+    ck_assert(observed(&seen, &a));
+    ck_assert(observed(&seen, &target));
+    ck_assert(observed(&seen, &north));
+    spatial_observer_exchange(previous);
+}
+END_TEST
+
 void check_server_spatial(void) {
     toolkit_import(shstr);
     Suite *suite = suite_create("spatial");
@@ -322,6 +348,7 @@ void check_server_spatial(void) {
     tcase_add_test(tc, test_offset_shortest_paths_detect_ambiguity);
     tcase_add_test(tc, test_offset_nearest_route_checks_nested_local_diamond);
     tcase_add_test(tc, test_observer_scope_and_failed_dependencies);
+    tcase_add_test(tc, test_observer_records_conflicting_seam_alternative);
     suite_add_tcase(suite, tc);
     check_run_suite(suite, __FILE__);
 }

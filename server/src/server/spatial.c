@@ -175,6 +175,10 @@ static bool resolve_search(mapstruct *origin, int x, int y, int z,
                 }
                 continue;
             }
+            if (target == NULL && !local_alternatives_valid(&node, &next)) {
+                valid = false;
+                break;
+            }
             if (target != NULL && next.map == target) {
                 if (!stack_valid(next.map) ||
                     (found && memcmp(result->offset, next.offset, sizeof(next.offset)) != 0)) {
