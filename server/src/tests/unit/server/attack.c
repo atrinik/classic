@@ -34,6 +34,7 @@
 #include <monster_data.h>
 #include <object_methods.h>
 #include <player.h>
+#include <perception.h>
 #include <skills.h>
 #include <toolkit/packet.h>
 
@@ -227,6 +228,39 @@ START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
     socket_buffer_clear(CONTR(pl)->cs);
     ck_assert_int_eq(attack_hit_nonlethal(pl, attacker, 10), 0);
     ck_assert_uint_eq(attack_test_hurt_sounds(pl, NULL, 0), 0);
+}
+END_TEST
+
+START_TEST(test_retaliation_requires_current_actor_publication) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/tests/attack-unpublished");
+    CONTR(pl)->cs->state = ST_PLAYING;
+    CONTR(pl)->target_object = NULL;
+    CONTR(pl)->target_object_count = 0;
+    CONTR(pl)->combat = 0;
+    object *attacker = arch_get("kobold");
+    attacker->x = pl->x + 1;
+    attacker->y = pl->y;
+    attacker = object_insert_map(attacker, map, NULL, INS_NO_MERGE);
+    monster_data_init(attacker);
+    GET_MAP_SPACE_PTR(map, attacker->x, attacker->y)->light_value = 1280;
+    ck_assert(perception_player_authorized(CONTR(pl), attacker));
+    ck_assert(!target_player_authorized(CONTR(pl), attacker, NULL));
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_null(CONTR(pl)->target_object);
+    ck_assert_uint_eq(CONTR(pl)->combat, 0);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
+
+    draw_client_map(pl);
+    ck_assert(target_player_authorized(CONTR(pl), attacker, NULL));
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, attacker);
+    ck_assert_uint_eq(CONTR(pl)->combat, 1);
+    attack_test_assert_target_packet(pl, attacker);
 }
 END_TEST
 
@@ -921,6 +955,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_retaliation_requires_current_actor_publication);
     tcase_add_test(tc_core, test_player_retaliates_when_no_target_or_combat_is_disabled);
     tcase_add_test(tc_core, test_player_retaliation_preserves_active_target);
     tcase_add_test(tc_core, test_player_retaliation_replaces_non_aggro_target);

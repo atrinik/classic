@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include <global.h>
 #include <server_main.h>
+#include <server.h>
 #include <attack.h>
 #include <check.h>
 #include <checkstd.h>
@@ -138,6 +139,16 @@ START_TEST(test_player_retained_target_revalidates_geometry_and_light) {
     CONTR(pl)->target_object = npc;
     CONTR(pl)->target_object_count = npc->count;
     CONTR(pl)->combat = 1;
+    ck_assert(!target_player_authorized(CONTR(pl), npc, NULL));
+    OBJECT_METHODS(pl->type)->process_func(pl);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, pl);
+    ck_assert_ptr_null(pl->enemy);
+    draw_client_map(pl);
+    ck_assert(target_player_authorized(CONTR(pl), npc, NULL));
+    CONTR(pl)->target_object = npc;
+    CONTR(pl)->target_object_count = npc->count;
+    OBJECT_METHODS(pl->type)->process_func(pl);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, npc);
     /* Cached 2D LOS is deliberately permissive: it cannot authorize a target. */
     memset(CONTR(pl)->blocked_los, 0, sizeof(CONTR(pl)->blocked_los));
     GET_MAP_SPACE_PTR(map, pl->x + 1, pl->y)->flags |= P_BLOCKSVIEW;
