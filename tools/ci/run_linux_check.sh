@@ -51,6 +51,9 @@ launcher=(
   "-DCMAKE_TOOLCHAIN_FILE=${source_root}/cmake/toolchains/llvm.cmake"
 )
 
+# Noncoverage tests select their build tree directly: before CTest 3.30, a
+# --preset ignores --test-dir. Keep their output/parallel settings explicit.
+
 # CTest supplies binary/process-specific profiles for parallel tests and plugins.
 prepare_coverage() {
   python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir build/llvm-coverage
@@ -124,7 +127,7 @@ case "${component}" in
       "${launcher[@]}"
     cmake --build "${sanitizer_directory}" --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers --test-dir "${sanitizer_directory}"
+      ctest --test-dir "${sanitizer_directory}" --output-on-failure
     cmake -S . -B "${library_release_directory}" -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="${PWD}/${install_directory}" \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
@@ -153,12 +156,12 @@ case "${component}" in
     cmake --preset linux-release -B "${release_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build "${release_directory}" --parallel "${jobs}"
-    ctest --preset linux-release --test-dir "${release_directory}" --parallel 4 -LE performance
+    ctest --test-dir "${release_directory}" --output-on-failure --parallel 4 -LE performance
     cmake --preset linux-sanitizers -B "${sanitizer_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build "${sanitizer_directory}" --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers --test-dir "${sanitizer_directory}" --parallel 4 -LE performance
+      ctest --test-dir "${sanitizer_directory}" --output-on-failure --parallel 4 -LE performance
     popd >/dev/null
     ;;
   client)
@@ -176,12 +179,12 @@ case "${component}" in
     cmake --preset linux-release -B "${release_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build "${release_directory}" --parallel "${jobs}"
-    ctest --preset linux-release --test-dir "${release_directory}" -LE performance
+    ctest --test-dir "${release_directory}" --output-on-failure -LE performance
     cmake --preset linux-sanitizers -B "${sanitizer_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build "${sanitizer_directory}" --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers --test-dir "${sanitizer_directory}" -LE performance
+      ctest --test-dir "${sanitizer_directory}" --output-on-failure -LE performance
     popd >/dev/null
     ;;
   client-benchmark)
