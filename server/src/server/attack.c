@@ -1155,6 +1155,13 @@ static int attack_hit_internal(object *op,
     if (!object_reference_is_current(op->enemy, op->enemy_count) && !IS_INVISIBLE(hitter_owner, op) &&
         !QUERY_FLAG(op, FLAG_INVULNERABLE)) {
         set_npc_enemy(op, hitter_owner, NULL);
+        if (!object_reclamation_is_current(reclamation) ||
+            (victim_controller != NULL &&
+             !player_connection_is_current(op, victim_count, victim_controller, victim_socket)) ||
+            !OBJECT_VALID(op, victim_count) || !OBJECT_VALID(hitter, hitter_count) ||
+            !OBJECT_VALID(hitter_owner, owner_count)) {
+            return 0;
+        }
     }
 
     /* Reset the cache so that we send damage numbers to clients. */
@@ -1684,7 +1691,8 @@ bool attack_kill(object *op, object *hitter) {
          * 2. NPC kill hit will overwrite player target on drop.
          * 3. Kill hit will count if target was an NPC.
          */
-        if (owner->type != PLAYER || op->enemy == NULL || op->enemy->type != PLAYER) {
+        if (owner->type != PLAYER ||
+            !object_reference_is_current(op->enemy, op->enemy_count) || op->enemy->type != PLAYER) {
             op->enemy = owner;
             op->enemy_count = owner->count;
         }

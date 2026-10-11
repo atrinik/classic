@@ -1825,6 +1825,66 @@ START_TEST(test_retained_object_references_validate_storage_before_identity) {
 }
 END_TEST
 
+START_TEST(test_later_actors_reject_a_reclaimed_shared_target) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *other = player_get_dummy("retained-other-player", NULL);
+    object_remove(other, 0);
+    other->x = other->y = 4;
+    other = object_insert_map(other, map, NULL, 0);
+    object *npc = arch_get("raas");
+    npc->x = npc->y = 5;
+    npc = object_insert_map(npc, map, NULL, INS_NO_MERGE);
+    monster_data_init(npc);
+    SET_FLAG(npc, FLAG_UNAGGRESSIVE);
+    SET_FLAG(npc, FLAG_STAND_STILL);
+    npc->stats.Int = 0;
+
+    mempool_struct *pool = mempool_find("objects");
+    size_t num_held = pool->nrof_free[0];
+    object **held = xcalloc(MAX(num_held, 1), sizeof(*held));
+    for (size_t i = 0; i < num_held; i++) {
+        held[i] = object_get();
+    }
+    object *target = arch_get("raas");
+    target->x = target->y = 6;
+    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+    monster_data_init(target);
+    tag_t count = target->count;
+    mempool_chunk_struct *storage = pool->puddlelist[0]->first_chunk;
+    for (size_t i = 0; i < num_held; i++) {
+        object_destroy(held[i]);
+    }
+    efree(held);
+    CONTR(pl)->target_object = CONTR(other)->target_object = target;
+    CONTR(pl)->target_object_count = CONTR(other)->target_object_count = count;
+    npc->enemy = npc->attacked_by = target;
+    npc->enemy_count = npc->attacked_by_count = count;
+    object_remove(target, REMOVE_NO_WALK_OFF);
+    object_destroy(target);
+    ck_assert_uint_gt(mempool_reclaim(pool), 0);
+    for (mempool_puddle_struct *puddle = pool->puddlelist[0]; puddle != NULL; puddle = puddle->next) {
+        ck_assert_ptr_ne(puddle->first_chunk, storage);
+    }
+
+    /* These are later actions: their newly captured epochs cannot establish
+     * ownership of the target retained by several independent actors. */
+    ck_assert(!player_target_is_in_map_neighborhood(CONTR(pl)));
+    ck_assert(!player_target_is_in_map_neighborhood(CONTR(other)));
+    ck_assert(!target_player_authorized(CONTR(pl), target, NULL));
+    send_target_command(CONTR(pl));
+    esrv_update_stats(CONTR(other));
+    ck_assert_ptr_eq(CONTR(pl)->target_object, pl);
+    ck_assert_ptr_eq(CONTR(other)->target_object, other);
+    rv_vector rv;
+    ck_assert_ptr_null(find_enemy(npc, &rv));
+    ck_assert_ptr_null(npc->enemy);
+    object_process(npc);
+    ck_assert_ptr_null(npc->enemy);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("object");
     TCase *tc_core = tcase_create("Core");
@@ -1837,6 +1897,7 @@ static Suite *suite(void) {
 
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_retained_object_references_validate_storage_before_identity);
+    tcase_add_test(tc_core, test_later_actors_reject_a_reclaimed_shared_target);
     tcase_add_test(tc_core, test_los_geometry_tracks_stack_semantics_only);
     tcase_add_test(tc_core, test_los_geometry_direct_position_refresh);
     tcase_add_test(tc_core, test_los_geometry_map_arrival_unlink_and_reincarnation);

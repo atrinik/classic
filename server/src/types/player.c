@@ -224,7 +224,7 @@ bool player_target_is_in_map_neighborhood(const player *pl) {
         return true;
     }
 
-    if (!OBJECT_VALID(target, pl->target_object_count) || target->map == NULL) {
+    if (!object_reference_is_current(target, pl->target_object_count) || target->map == NULL) {
         return false;
     }
 
@@ -3960,8 +3960,21 @@ void player_set_talking_to(player *pl, object *npc) {
     HARD_ASSERT(pl != NULL);
     HARD_ASSERT(npc != NULL);
 
-    if (OBJECT_VALID(pl->talking_to, pl->talking_to_count) && pl->talking_to != npc) {
+    if (!object_storage_is_owned(npc)) {
+        return;
+    }
+    tag_t npc_count = npc->count;
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *socket = pl->cs;
+    uint64_t reclamation = object_reclamation_epoch();
+    if (object_reference_is_current(pl->talking_to, pl->talking_to_count) && pl->talking_to != npc) {
         monster_data_dialogs_remove(pl->talking_to, pl->ob);
+        if (!object_reclamation_is_current(reclamation) ||
+            !player_connection_is_current(observer, observer_count, pl, socket) ||
+            !OBJECT_VALID(npc, npc_count)) {
+            return;
+        }
     }
 
     pl->talking_to = npc;
@@ -4476,7 +4489,7 @@ static bool player_target_needs_update(const player *pl) {
         return target == NULL;
     }
 
-    return !OBJECT_VALID(target, pl->target_object_count) ||
+    return !object_reference_is_current(target, pl->target_object_count) ||
            !target_player_authorized(pl, target, NULL);
 }
 
@@ -4489,13 +4502,15 @@ static bool player_update_target(player *pl) {
     }
     object *selected_target = pl->target_object;
     tag_t selected_count = pl->target_object_count;
+    uint64_t reclamation = object_reclamation_epoch();
     bool needs_update = player_target_needs_update(pl);
     if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
         !OBJECT_ACTIVE(observer) || observer->map == NULL ||
         observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
         return false;
     }
-    needs_update |= pl->target_object != selected_target ||
+    needs_update |= !object_reclamation_is_current(reclamation) ||
+                    pl->target_object != selected_target ||
                     pl->target_object_count != selected_count;
     if (!needs_update) {
         return true;
@@ -4579,7 +4594,7 @@ static void process_func(object *op) {
 
     /* Use the target system to hit our target - don't hit friendly
      * objects, ourselves or when we are not in combat mode. */
-    if (pl->target_object && OBJECT_ACTIVE(pl->target_object) &&
+    if (object_reference_is_current(pl->target_object, pl->target_object_count) &&
         pl->target_object_count != pl->ob->count && pl->combat &&
         !is_friend_of(pl->ob, pl->target_object)) {
         if (global_round_tag >= pl->action_attack) {
@@ -4587,16 +4602,23 @@ static void process_func(object *op) {
             pl->ob->enemy = pl->target_object;
             pl->ob->enemy_count = pl->target_object_count;
 
-            if (!OBJECT_VALID(pl->ob->enemy, pl->ob->enemy_count) ||
+            if (!object_reference_is_current(pl->ob->enemy, pl->ob->enemy_count) ||
                 pl->ob->enemy->owner == pl->ob) {
                 pl->ob->enemy = NULL;
             } else if (attack_is_melee_range(pl->ob, pl->ob->enemy)) {
                 object *target = pl->ob->enemy;
-                bool target_unaware = !OBJECT_VALID(target->enemy, target->enemy_count) &&
-                                      !OBJECT_VALID(target->attacked_by, target->attacked_by_count);
+                bool target_unaware = !object_reference_is_current(target->enemy, target->enemy_count) &&
+                                      !object_reference_is_current(target->attacked_by, target->attacked_by_count);
 
-                if (!OBJECT_VALID(target->enemy, target->enemy_count)) {
+                uint64_t reclamation = object_reclamation_epoch();
+                tag_t target_count = target->count;
+                if (!object_reference_is_current(target->enemy, target->enemy_count)) {
                     set_npc_enemy(target, pl->ob, NULL);
+                    if (!object_reclamation_is_current(reclamation) ||
+                        !player_connection_is_current(op, observer_count, pl, observer_socket) ||
+                        !OBJECT_VALID(target, target_count)) {
+                        return;
+                    }
                 } else {
                     /* Our target already has an enemy - then note we had
                      * attacked */
@@ -4609,6 +4631,10 @@ static void process_func(object *op) {
                     skill_attack_unaware(target, pl->ob, 0, NULL);
                 } else {
                     skill_attack(target, pl->ob, 0, NULL);
+                }
+                if (!object_reclamation_is_current(reclamation) ||
+                    !player_connection_is_current(op, observer_count, pl, observer_socket)) {
+                    return;
                 }
 
                 pl->action_attack = global_round_tag + pl->ob->weapon_speed;

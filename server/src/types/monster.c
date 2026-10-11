@@ -132,6 +132,9 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
     object *aggro_wp;
     rv_vector rv2;
 
+    if (enemy != NULL && !object_storage_is_owned(enemy)) {
+        enemy = NULL;
+    }
     /* Do nothing if new enemy == old enemy */
     if (enemy == npc->enemy && (enemy == NULL || enemy->count == npc->enemy_count)) {
         return;
@@ -254,8 +257,16 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
     }
 
     if (enemy != NULL) {
+        uint64_t reclamation = object_reclamation_epoch();
+        tag_t npc_count = npc->count;
         monster_enemy_signal(npc, enemy);
+        if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+            return;
+        }
         monster_guard_activate_gate(npc, 1);
+        if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+            return;
+        }
         monster_data_dialogs_purge(npc);
     } else {
         object_set_value(npc, "was_provoked", NULL, 0);
@@ -275,37 +286,59 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
  */
 static void
 monster_enemy_signal_map(object *npc, mapstruct *map, object *spawn_point, uint32_t dist) {
-    objectlink *ol;
-
-    for (ol = map->linked_spawn_points; ol != NULL; ol = ol->next) {
-        if (ol->objlink.ob == spawn_point) {
-            continue;
-        }
-
-        /* Ensure the spawn point has a spawned monster. */
-        if (!object_reference_is_current(ol->objlink.ob->enemy, ol->objlink.ob->enemy_count)) {
-            continue;
-        }
-
-        /* Ensure the spawned monster doesn't yet have an enemy. */
-        if (object_reference_is_current(ol->objlink.ob->enemy->enemy, ol->objlink.ob->enemy->enemy_count)) {
-            continue;
-        }
-
-        rv_vector rv;
-
-        if ((spawn_point->title == NULL || ol->objlink.ob->title != spawn_point->title) &&
-            (!get_rangevector(npc, ol->objlink.ob->enemy, &rv, RV_DIAGONAL_DISTANCE) ||
-             rv.distance > dist || !monster_is_ally_of(npc, ol->objlink.ob->enemy))) {
-            continue;
-        }
-
-        if (object_get_value(npc, "was_provoked") != NULL) {
-            object_set_value(ol->objlink.ob->enemy, "was_provoked", "1", 1);
-        }
-
-        set_npc_enemy(ol->objlink.ob->enemy, npc->enemy, NULL);
+    /* A guard callback can unlink spawn-point records. Snapshot identities,
+     * not list links, so normal gate/face updates still signal every ally. */
+    struct signal_ref { object *op; tag_t count; };
+    size_t count = 0;
+    for (objectlink *ol = map->linked_spawn_points; ol != NULL; ol = ol->next) {
+        count++;
     }
+    struct signal_ref *refs = xcalloc(MAX(count, 1), sizeof(*refs));
+    size_t used = 0;
+    for (objectlink *ol = map->linked_spawn_points; ol != NULL; ol = ol->next) {
+        if (object_storage_is_owned(ol->objlink.ob)) {
+            refs[used++] = (struct signal_ref){ol->objlink.ob, ol->objlink.ob->count};
+        }
+    }
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t npc_count = npc->count, spawn_count = spawn_point->count;
+    object *enemy = npc->enemy;
+    tag_t enemy_count = npc->enemy_count;
+    mapstruct *source_map = npc->map;
+    int16_t source_x = npc->x, source_y = npc->y;
+    if (!object_reference_is_current(enemy, enemy_count)) {
+        efree(refs);
+        return;
+    }
+    for (size_t i = 0; i < used; i++) {
+        object *other = refs[i].op;
+        if (!object_reference_is_current(other, refs[i].count) ||
+            other->map != map || other == spawn_point) {
+            continue;
+        }
+        if (!object_reference_is_current(other->enemy, other->enemy_count) ||
+            object_reference_is_current(other->enemy->enemy, other->enemy->enemy_count)) {
+            continue;
+        }
+        rv_vector rv;
+        if ((spawn_point->title == NULL || other->title != spawn_point->title) &&
+            (!get_rangevector(npc, other->enemy, &rv, RV_DIAGONAL_DISTANCE) ||
+             rv.distance > dist || !monster_is_ally_of(npc, other->enemy))) {
+            continue;
+        }
+        if (object_get_value(npc, "was_provoked") != NULL) {
+            object_set_value(other->enemy, "was_provoked", "1", 1);
+        }
+        set_npc_enemy(other->enemy, enemy, NULL);
+        if (!object_reclamation_is_current(reclamation) ||
+            !OBJECT_VALID(npc, npc_count) || !OBJECT_VALID(spawn_point, spawn_count) ||
+            !object_reference_is_current(enemy, enemy_count) || npc->enemy != enemy ||
+            npc->enemy_count != enemy_count || npc->map != source_map ||
+            npc->x != source_x || npc->y != source_y) {
+            break;
+        }
+    }
+    efree(refs);
 }
 
 /**
@@ -321,6 +354,9 @@ void monster_enemy_signal(object *npc, object *enemy) {
     HARD_ASSERT(npc != NULL);
     HARD_ASSERT(enemy != NULL);
 
+    if (!object_storage_is_owned(enemy)) {
+        return;
+    }
     SOFT_ASSERT(npc->map != NULL, "NPC has no map: %s", object_get_str(npc));
     SOFT_ASSERT(enemy->map != NULL, "Enemy has no map: %s", object_get_str(enemy));
 
@@ -332,7 +368,7 @@ void monster_enemy_signal(object *npc, object *enemy) {
     spawn_point_info = object_find_type(npc, SPAWN_POINT_INFO);
 
     if (spawn_point_info == NULL ||
-        !OBJECT_VALID(spawn_point_info->owner, spawn_point_info->ownercount)) {
+        !object_reference_is_current(spawn_point_info->owner, spawn_point_info->ownercount)) {
         return;
     }
 
@@ -347,13 +383,36 @@ void monster_enemy_signal(object *npc, object *enemy) {
         }
     }
 
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t npc_count = npc->count, info_count = spawn_point_info->count;
+    object *source_spawn = spawn_point_info->owner;
+    tag_t source_spawn_count = spawn_point_info->ownercount;
+    mapstruct *source_map = npc->map;
+    tag_t source_map_count = source_map->count;
+    int16_t source_x = npc->x, source_y = npc->y;
     /* Signal the map the spawn point is on. */
-    monster_enemy_signal_map(npc, npc->map, spawn_point_info->owner, dist);
+    monster_enemy_signal_map(npc, npc->map, source_spawn, dist);
+    if (!object_reclamation_is_current(reclamation) ||
+        !OBJECT_VALID(npc, npc_count) || !OBJECT_VALID(spawn_point_info, info_count) ||
+        !object_reference_is_current(source_spawn, source_spawn_count) ||
+        spawn_point_info->owner != source_spawn || spawn_point_info->ownercount != source_spawn_count ||
+        npc->map != source_map || source_map->count != source_map_count ||
+        npc->x != source_x || npc->y != source_y) {
+        return;
+    }
 
     /* Signal all the tiled maps that are in memory. */
     for (size_t i = 0; i < TILED_NUM_DIR; i++) {
         if (npc->map->tile_map[i] != NULL && npc->map->tile_map[i]->in_memory == MAP_IN_MEMORY) {
-            monster_enemy_signal_map(npc, npc->map->tile_map[i], spawn_point_info->owner, dist);
+            monster_enemy_signal_map(npc, npc->map->tile_map[i], source_spawn, dist);
+            if (!object_reclamation_is_current(reclamation) ||
+                !OBJECT_VALID(npc, npc_count) || !OBJECT_VALID(spawn_point_info, info_count) ||
+                !object_reference_is_current(source_spawn, source_spawn_count) ||
+                spawn_point_info->owner != source_spawn || spawn_point_info->ownercount != source_spawn_count ||
+                npc->map != source_map || source_map->count != source_map_count ||
+                npc->x != source_x || npc->y != source_y) {
+                return;
+            }
         }
     }
 }
@@ -443,6 +502,9 @@ object *find_enemy(object *npc, rv_vector *rv) {
 
                     CLEAR_FLAG(npc, FLAG_SLEEP);
                     set_npc_enemy(npc, attacker, NULL);
+                    if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+                        return NULL;
+                    }
 
                     /* Face our attacker */
                     return npc->enemy;
@@ -468,8 +530,14 @@ object *find_enemy(object *npc, rv_vector *rv) {
         }
     }
 
+    if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+        return NULL;
+    }
     if (tmp != NULL) {
         monster_enemy_signal(npc, tmp);
+        if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+            return NULL;
+        }
     }
 
     return tmp;
@@ -542,15 +610,18 @@ static void process_func(object *op) {
     /* If we are here, we're never paralyzed anymore */
     CLEAR_FLAG(op, FLAG_PARALYZED);
 
-    /* Cleanup stale interfaces. */
+    tag_t op_count = op->count;
+    uint64_t reclamation = object_reclamation_epoch();
+    /* Cleanup may close a guard dialogue and run a gate script. */
     monster_data_dialogs_cleanup(op);
+    if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count)) {
+        return;
+    }
 
     /* Here is the heart of the mob attack and target area.
      * find_enemy() checks the old enemy or gets us a new one. */
 
     object *enemy;
-    tag_t op_count = op->count;
-    uint64_t reclamation = object_reclamation_epoch();
     uint64_t publication = los_publication_epoch();
     bool enemy_visible = false;
     rv_vector rv;
@@ -661,7 +732,7 @@ static void process_func(object *op) {
         if (QUERY_FLAG(op, FLAG_ONLY_ATTACK) ||
             ((spawn_point_info = object_find_type(op, SPAWN_POINT_INFO)) &&
              spawn_point_info->owner &&
-             !OBJECT_VALID(spawn_point_info->owner, spawn_point_info->ownercount))) {
+             !object_reference_is_current(spawn_point_info->owner, spawn_point_info->ownercount))) {
             monster_drop_arrows(op);
             object_remove(op, 0);
             object_destroy(op);

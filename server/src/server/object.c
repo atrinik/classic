@@ -2043,11 +2043,9 @@ void object_drop_inventory(object *op) {
         return;
     }
 
-    object *enemy;
-    if (op->enemy != NULL && op->enemy->type == PLAYER) {
-        enemy = op->enemy;
-    } else {
-        enemy = object_owner(op->enemy);
+    object *enemy = NULL;
+    if (object_reference_matches(op->enemy, op->enemy_count)) {
+        enemy = op->enemy->type == PLAYER ? op->enemy : object_owner(op->enemy);
     }
 
     object *corpse = NULL;
@@ -2095,7 +2093,7 @@ void object_drop_inventory(object *op) {
         /* If we have a corpse put the item in it. */
         if (corpse != NULL &&
             !(tmp->type == ARROW && tmp->attacked_by_count != 0 && enemy != NULL &&
-              OBJECT_VALID(tmp->attacked_by, tmp->attacked_by_count) &&
+              object_reference_is_current(tmp->attacked_by, tmp->attacked_by_count) &&
               tmp->attacked_by_count != enemy->count &&
               !(tmp->attacked_by->type == PLAYER && enemy->type == PLAYER &&
                 CONTR(tmp->attacked_by)->party != NULL &&
