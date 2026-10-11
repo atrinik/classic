@@ -7,6 +7,7 @@
 #include "socket_private.h"
 #include "string.h"
 #include "datetime.h"
+#include "rendezvous_admission.h"
 
 #include <curl/curl.h>
 #include <openssl/crypto.h>
@@ -1733,21 +1734,34 @@ size_t socket_rendezvous_client(socket_t *sc,
         return 0;
     }
 
-    CURL *curl = curl_easy_init();
-    if (curl == NULL) {
-        failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
+    char proof[RENDEZVOUS_ADMISSION_PROOF_MAX + 1U];
+    rendezvous_admission_result_t admission = rendezvous_admission_prepare(
+        url, attempt->server_id, attempt->ticket, attempt->deadline_ms, NULL, proof);
+    if (admission != RENDEZVOUS_ADMISSION_OK) {
+        failure->code = admission == RENDEZVOUS_ADMISSION_TIMEOUT
+                            ? SOCKET_CONNECT_FAILURE_TIMEOUT
+                            : admission == RENDEZVOUS_ADMISSION_PROTOCOL
+                                  ? SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL
+                                  : SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
+        socket_rendezvous_attempt_fail(attempt);
         return 0;
     }
-    struct curl_slist *headers = NULL;
-    if (attempt->authorization_required) {
-        headers = curl_slist_append(NULL, "Sec-WebSocket-Protocol: " RENDEZVOUS_ACCESS_SUBPROTOCOL);
-        if (headers == NULL) {
-            failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
-            curl_easy_cleanup(curl);
-            return 0;
-        }
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    struct curl_slist *headers = rendezvous_admission_headers(
+        proof, attempt->ticket, attempt->authorization_required ? &attempt->grant : NULL);
+    OPENSSL_cleanse(proof, sizeof(proof));
+    CURL *curl = headers != NULL ? curl_easy_init() : NULL;
+    if (curl == NULL) {
+        failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
+        rendezvous_admission_headers_free(headers);
+        socket_rendezvous_attempt_fail(attempt);
+        return 0;
     }
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 0L);
+    curl_easy_setopt(curl, CURLOPT_NETRC, CURL_NETRC_IGNORED);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, socket_rendezvous_attempt_header);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, attempt);
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -1755,7 +1769,7 @@ size_t socket_rendezvous_client(socket_t *sc,
     now_ms = datetime_monotonic_ms();
     if (socket_rendezvous_attempt_expired(attempt, now_ms)) {
         failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
-        curl_slist_free_all(headers);
+        rendezvous_admission_headers_free(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
@@ -1778,7 +1792,7 @@ size_t socket_rendezvous_client(socket_t *sc,
         } else if (response_code == 429) {
             failure->code = SOCKET_CONNECT_FAILURE_RATE_LIMITED;
             failure->retry_after_seconds = socket_rendezvous_attempt_retry_after(attempt);
-        } else if (response_code == 400 || response_code == 426 ||
+        } else if (response_code == 400 || response_code == 426 || response_code == 428 ||
                    (result == CURLE_OK && !socket_rendezvous_attempt_protocol_valid(attempt))) {
             failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
         } else if (result == CURLE_OPERATION_TIMEDOUT ||
@@ -1792,7 +1806,7 @@ size_t socket_rendezvous_client(socket_t *sc,
         } else {
             LOG(ERROR, "Rendezvous connection failed: grant subprotocol was not selected");
         }
-        curl_slist_free_all(headers);
+        rendezvous_admission_headers_free(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
@@ -1802,7 +1816,7 @@ size_t socket_rendezvous_client(socket_t *sc,
         if (authorization != SOCKET_CONNECT_FAILURE_NONE) {
             failure->code = authorization;
             LOG(ERROR, "Rendezvous grant authorization failed");
-            curl_slist_free_all(headers);
+            rendezvous_admission_headers_free(headers);
             curl_easy_cleanup(curl);
             return 0;
         }
@@ -1810,7 +1824,7 @@ size_t socket_rendezvous_client(socket_t *sc,
     if (socket_rendezvous_attempt_expired(attempt, datetime_monotonic_ms())) {
         failure->code = SOCKET_CONNECT_FAILURE_TIMEOUT;
         LOG(ERROR, "Rendezvous grant authorization failed");
-        curl_slist_free_all(headers);
+        rendezvous_admission_headers_free(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
@@ -1818,19 +1832,19 @@ size_t socket_rendezvous_client(socket_t *sc,
     char candidate[256];
     if (!socket_rendezvous_attempt_client_candidate(attempt, host, port, VS(candidate))) {
         failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
-        curl_slist_free_all(headers);
+        rendezvous_admission_headers_free(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
     if (!socket_websocket_send_text(curl, candidate)) {
         failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_UNAVAILABLE;
-        curl_slist_free_all(headers);
+        rendezvous_admission_headers_free(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
     if (!socket_rendezvous_attempt_peer_traffic_allowed(attempt)) {
         failure->code = SOCKET_CONNECT_FAILURE_RENDEZVOUS_PROTOCOL;
-        curl_slist_free_all(headers);
+        rendezvous_admission_headers_free(headers);
         curl_easy_cleanup(curl);
         return 0;
     }
@@ -1905,7 +1919,7 @@ size_t socket_rendezvous_client(socket_t *sc,
         punches_sent,
         punch_attempts,
         (uint64_t)punches_received);
-    curl_slist_free_all(headers);
+    rendezvous_admission_headers_free(headers);
     curl_easy_cleanup(curl);
     if (!complete || !valid || count == 0 || count > capacity) {
         memset(candidates, 0, capacity * sizeof(*candidates));

@@ -359,6 +359,7 @@ set(LIBATRINIK_PUBLIC_HEADER_NAMES
     porting.h
     process.h
     rendezvous.h
+    rendezvous_admission.h
     shstr.h
     signals.h
     socket.h
@@ -425,6 +426,7 @@ set(TOOLKIT_SOURCES
     porting.c
     process.c
     rendezvous.c
+    rendezvous_admission.c
     shstr.c
     signals.c
     socket.c
@@ -604,6 +606,12 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=fsync" "-Wl,--wrap=close")
     endif ()
     add_test(NAME libatrinik-path COMMAND libatrinik-path)
+
+    add_executable(libatrinik-rendezvous-admission tests/rendezvous_admission.c)
+    atrinik_configure_target(libatrinik-rendezvous-admission)
+    target_link_libraries(libatrinik-rendezvous-admission PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-rendezvous-admission COMMAND libatrinik-rendezvous-admission)
+    set_tests_properties(libatrinik-rendezvous-admission PROPERTIES TIMEOUT 15)
 
     add_executable(libatrinik-rendezvous tests/rendezvous.c)
     atrinik_configure_target(libatrinik-rendezvous)
