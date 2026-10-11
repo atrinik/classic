@@ -3,11 +3,15 @@
 
 import importlib.util
 import json
+import platform
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import tarfile
 import unittest
+
+from tools.release import package_sources
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("llvm_coverage", ROOT / "tools/ci/llvm_coverage.py")
@@ -42,12 +46,84 @@ class CoveragePresetTests(unittest.TestCase):
                 tested = preset(data["testPresets"], "llvm-coverage")
                 self.assertTrue(configured["cacheVariables"]["ENABLE_COVERAGE"])
                 self.assertEqual(configured["cacheVariables"]["CMAKE_BUILD_TYPE"], "Debug")
-                toolchain = configured["cacheVariables"]["CMAKE_TOOLCHAIN_FILE"].replace("${sourceDir}", str(source))
-                self.assertEqual(Path(toolchain).resolve(), ROOT / "cmake/toolchains/llvm.cmake")
+                # The entry point selects the shared toolchain by physical module
+                # location; a fixed preset path breaks scoped source archives.
+                self.assertNotIn("CMAKE_TOOLCHAIN_FILE", configured["cacheVariables"])
+                self.assertNotIn("toolchainFile", configured)
                 self.assertEqual(built["configurePreset"], "llvm-coverage")
                 self.assertEqual(tested["configurePreset"], "llvm-coverage")
                 self.assertEqual(tested["environment"]["LLVM_PROFILE_FILE"],
                                  configured["binaryDir"] + "/llvm-profiles/%m-%p.profraw")
+
+
+    def assert_configure_selects_toolchain(self, source, build, toolchain):
+        # Run actual preset configuration and the actual authored CMake prefix.
+        # Abort at project() before language detection: this verifies selection
+        # without inventing compiler identity or permitting a product policy bypass.
+        build.mkdir(parents=True)
+        probe = build / "toolchain-selection-probe.cmake"
+        probe.write_text(f'''
+file(REAL_PATH "${{CMAKE_TOOLCHAIN_FILE}}" selected_toolchain)
+if (NOT selected_toolchain STREQUAL "{toolchain.as_posix()}" OR
+        NOT EXISTS "${{selected_toolchain}}")
+    message(FATAL_ERROR "Unexpected selected toolchain: ${{CMAKE_TOOLCHAIN_FILE}}")
+endif ()
+if (NOT ENABLE_COVERAGE OR NOT BUILD_TESTING OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(FATAL_ERROR "Coverage preset options were not applied")
+endif ()
+message(FATAL_ERROR "ATRINIK_TOOLCHAIN_SELECTION_PROBE_COMPLETED")
+''', encoding="utf-8")
+        result = subprocess.run(
+            ["cmake", "--preset", "llvm-coverage", "-B", str(build),
+             "-DATRINIK_PACKAGE_VERSION=9.8.7",
+             "-DCMAKE_PROJECT_INCLUDE_BEFORE=" + str(probe)],
+            cwd=source, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ATRINIK_TOOLCHAIN_SELECTION_PROBE_COMPLETED",
+                      result.stdout + result.stderr)
+
+    @unittest.skipUnless(shutil.which("cmake") and platform.system() == "Linux",
+                         "Native Linux CMake selection probe unavailable")
+    def test_actual_checkout_presets_select_shared_native_toolchain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, module in enumerate(MODULES):
+                with self.subTest(module=module):
+                    self.assert_configure_selects_toolchain(
+                        ROOT / module, Path(temporary) / str(index),
+                        ROOT / "cmake/toolchains/llvm.cmake")
+
+    @unittest.skipUnless(shutil.which("cmake") and platform.system() == "Linux",
+                         "Native Linux CMake selection probe unavailable")
+    def test_actual_scoped_archive_presets_select_packaged_native_toolchain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_tar = root / "source.tar"
+            # Package the actual authored entry points/presets and shared modules
+            # through the release archiver. Dependencies beyond project() are not
+            # needed for this deliberately bounded selection probe.
+            with tarfile.open(source_tar, "w") as archive:
+                for module in MODULES:
+                    for name in ("CMakeLists.txt", "CMakePresets.json"):
+                        relative = Path(module) / name
+                        archive.add(ROOT / relative, arcname=relative.as_posix())
+                archive.add(ROOT / "cmake", arcname="cmake")
+            for scope in ("root", "client", "server", "libatrinik"):
+                with self.subTest(scope=scope):
+                    package = root / (scope + ".tar.gz")
+                    package_sources.build_archive(source_tar, package, scope,
+                                                  "9.8.7", 42, "f" * 40)
+                    destination = root / scope
+                    with tarfile.open(package) as archive:
+                        archive.extractall(destination, filter="data")
+                    source = next(destination.iterdir())
+                    toolchain = source / "cmake/toolchains/llvm.cmake"
+                    self.assert_configure_selects_toolchain(
+                        source, root / (scope + "-build"), toolchain)
+                    pathfinding = source / ("libatrinik/pathfinding" if scope == "root" else
+                                            "pathfinding" if scope == "libatrinik" else
+                                            "dependencies/libatrinik/pathfinding")
+                    self.assert_configure_selects_toolchain(
+                        pathfinding, root / (scope + "-pathfinding-build"), toolchain)
 
     def test_native_profile_preparation_leaves_existing_gcc_cache_untouched(self):
         for module in MODULES[:-1]:

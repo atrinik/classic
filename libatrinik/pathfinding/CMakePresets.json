@@ -8,8 +8,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": true,
-        "ENABLE_COVERAGE": true,
-        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/../../cmake/toolchains/llvm.cmake"
+        "ENABLE_COVERAGE": true
       }
     }
   ],

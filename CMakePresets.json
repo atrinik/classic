@@ -32,10 +32,7 @@
     {
       "name": "llvm-coverage",
       "inherits": "linux-coverage",
-      "binaryDir": "${sourceDir}/build/integrated-llvm-coverage",
-      "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/llvm.cmake"
-      }
+      "binaryDir": "${sourceDir}/build/integrated-llvm-coverage"
     },
     {
       "name": "linux-sanitizers",
