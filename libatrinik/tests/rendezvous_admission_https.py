@@ -33,28 +33,38 @@ def openssl(*args):
 
 
 def certificates(root):
+    # req otherwise inherits x509_extensions from the host openssl.cnf, even
+    # with -addext. Own the complete CA/request profile on every platform.
+    config = root / "openssl.cnf"
+    config.write_text(
+        "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ca\n"
+        "[dn]\nCN=Atrinik admission test CA\n"
+        "[ca]\nbasicConstraints=critical,CA:TRUE\n"
+        "keyUsage=critical,keyCertSign,cRLSign\n"
+        "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n",
+        encoding="ascii",
+    )
     ca_key, ca_cert = root / "ca.key", root / "ca.pem"
-    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-            "-subj", "/CN=Atrinik admission test CA", "-keyout", ca_key,
-            "-out", ca_cert, "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1",
+            "-config", config, "-keyout", ca_key, "-out", ca_cert)
     key, csr, cert = root / "server.key", root / "server.csr", root / "server.pem"
-    openssl("req", "-new", "-newkey", "rsa:2048", "-nodes",
+    openssl("req", "-new", "-newkey", "rsa:2048", "-sha256", "-nodes", "-config", config,
             "-subj", "/CN=localhost", "-keyout", key, "-out", csr)
     extensions = root / "extensions.conf"
     extensions.write_text(
-        "subjectAltName=DNS:localhost\n"
+        "[server]\nsubjectAltName=DNS:localhost\n"
         "basicConstraints=critical,CA:FALSE\n"
         "keyUsage=critical,digitalSignature,keyEncipherment\n"
-        "extendedKeyUsage=serverAuth\n", encoding="ascii",
+        "extendedKeyUsage=serverAuth\n"
+        "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n", encoding="ascii",
     )
     openssl("x509", "-req", "-in", csr, "-CA", ca_cert, "-CAkey", ca_key,
-            "-CAcreateserial", "-days", "1", "-extfile", extensions, "-out", cert)
+            "-CAcreateserial", "-days", "1", "-sha256", "-extfile", extensions,
+            "-extensions", "server", "-out", cert)
     other_ca = root / "other-ca.pem"
-    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-            "-subj", "/CN=Unrelated admission test CA", "-keyout", root / "other.key",
-            "-out", other_ca, "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1",
+            "-config", config, "-subj", "/CN=Unrelated admission test CA",
+            "-keyout", root / "other.key", "-out", other_ca)
     return ca_cert, other_ca, cert, key
 
 
@@ -217,6 +227,17 @@ def run_case(binary, mode, ca, other_ca, cert, key, *, diagnostic=False, deadlin
                 raise RuntimeError("TLS fixture did not stop")
 
 
+def verification_errors(stderr):
+    # OpenSSL also prints certificate subjects and paths. Retain only numeric
+    # verification errors/depths, with bounded input and output.
+    errors = []
+    for line in stderr[:4096].decode("ascii", errors="replace").splitlines():
+        match = re.fullmatch(r"error ([0-9]{1,3}) at ([0-9]{1,3}) depth lookup:[^\r\n]*", line)
+        if match:
+            errors.append(f"verify_error={match[1]} depth={match[2]}")
+    return "; ".join(errors[:3]) or "no numeric verification errors"
+
+
 def verify_certificates(ca, other_ca, cert):
     cases = ((ca, "localhost", 0), (other_ca, "localhost", 2), (ca, "wrong.invalid", 2))
     for index, (authority, hostname, expected) in enumerate(cases, 1):
@@ -224,13 +245,14 @@ def verify_certificates(ca, other_ca, cert):
             result = subprocess.run(
                 [OPENSSL, "verify", "-x509_strict", "-purpose", "sslserver",
                  "-verify_hostname", hostname, "-CAfile", str(authority), str(cert)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15, check=False)
         except (subprocess.TimeoutExpired, OSError) as error:
             raise RuntimeError(f"HTTPS fixture certificate preflight case={index} "
                                f"error={type(error).__name__}") from None
         if result.returncode != expected:
             raise RuntimeError(f"HTTPS fixture certificate preflight case={index} "
-                               f"exit={result.returncode} expected={expected}")
+                               f"exit={result.returncode} expected={expected}; "
+                               + verification_errors(result.stderr))
     print("HTTPS fixture certificate preflight trusted=0 untrusted=2 wrong_host=2", flush=True)
 
 

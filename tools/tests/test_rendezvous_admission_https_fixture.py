@@ -4,6 +4,7 @@
 import contextlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -30,6 +31,35 @@ class AdmissionHTTPSFixtureTests(unittest.TestCase):
                              "HTTPS fixture certificate preflight trusted=0 untrusted=2 wrong_host=2\n")
             with self.assertRaisesRegex(RuntimeError, "preflight case=1 exit=2 expected=0"):
                 FIXTURE.verify_certificates(other_ca, ca, certificate)
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL is required")
+    def test_certificate_profiles_are_independent_of_host_request_extensions(self):
+        with tempfile.TemporaryDirectory(prefix="admission-host-config-") as directory:
+            root = Path(directory)
+            host_config = root / "host-openssl.cnf"
+            host_config.write_text(
+                "[req]\ndistinguished_name=dn\nx509_extensions=host_ca\n"
+                "[dn]\n[host_ca]\nbasicConstraints=critical,CA:TRUE\n"
+                "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n"
+                "nameConstraints=critical,excluded;DNS:localhost\n", encoding="ascii")
+            with mock.patch.dict(os.environ, {"OPENSSL_CONF": str(host_config)}):
+                ca, other_ca, certificate, _ = FIXTURE.certificates(root)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    FIXTURE.verify_certificates(ca, other_ca, certificate)
+
+    def test_certificate_failure_retains_only_bounded_numeric_errors(self):
+        stderr = (b"private certificate subject and file path\n"
+                  b"error 20 at 0 depth lookup: private details\n"
+                  b"error 86 at 1 depth lookup: more private details\n"
+                  b"error 1234 at 0 depth lookup: invalid error width\n")
+        self.assertEqual(FIXTURE.verification_errors(stderr),
+                         "verify_error=20 depth=0; verify_error=86 depth=1")
+        self.assertEqual(FIXTURE.verification_errors(b"\xffprivate"),
+                         "no numeric verification errors")
+        self.assertEqual(FIXTURE.verification_errors(b"x" * 4096 + stderr),
+                         "no numeric verification errors")
+        repeated = b"error 20 at 0 depth lookup: private\n" * 100
+        self.assertEqual(FIXTURE.verification_errors(repeated).count("verify_error=20"), 3)
 
     def test_native_failure_retains_only_bounded_numeric_diagnostics(self):
         result = subprocess.CompletedProcess(
