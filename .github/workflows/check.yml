@@ -423,8 +423,11 @@ jobs:
                 -B build/font-baseline -G Ninja -DCMAKE_BUILD_TYPE=Release
               cmake --build build/font-baseline --target client-font-render-probe --parallel 2
               test "$(git -C build/font-baseline-source rev-parse HEAD)" = fd4943252ac872fce2995c286b10a0c6d249aba3
-              python3 build/font-baseline-source/tools/ci/stage_windows_runtime.py \
+              python3 tools/ci/stage_historical_windows_font.py \
+                --historical-helper build/font-baseline-source/tools/ci/stage_windows_runtime.py \
+                --producer-image "${BASELINE_IMAGE}" \
                 --objdump x86_64-w64-mingw32.shared-objdump --runtime-dir "${MXE_RUNTIME_DIR}" \
+                --notice-dir /opt/mxe/usr/x86_64-w64-mingw32.shared/share/licenses \
                 --output-dir build/font-baseline-bundle \
                 build/font-baseline/client-font-render-probe.exe
               sha256sum build/font-baseline-source/tools/ci/stage_windows_runtime.py \

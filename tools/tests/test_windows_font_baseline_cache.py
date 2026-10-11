@@ -33,14 +33,19 @@ class WindowsFontBaselineCacheTests(unittest.TestCase):
                 (readonly / "tmp").mkdir(parents=True)
                 (readonly / "tmp").chmod(0o555)
                 readonly.chmod(0o555)
-                source = root / "build/font-baseline-source/tools/ci"
+                source = root / "tools/ci"
                 source.mkdir(parents=True)
-                (source / "stage_windows_runtime.py").write_text('''import pathlib, sys
+                (source / "stage_historical_windows_font.py").write_text('''import pathlib, sys
 assert '--objdump' in sys.argv and 'x86_64-w64-mingw32.shared-objdump' in sys.argv
+assert '--historical-helper' in sys.argv and 'build/font-baseline-source/tools/ci/stage_windows_runtime.py' in sys.argv
+assert '--producer-image' in sys.argv and '--notice-dir' in sys.argv
 output = pathlib.Path(sys.argv[sys.argv.index('--output-dir') + 1])
 output.mkdir(parents=True)
 (output / 'staged.txt').write_text('historical helper staged baseline')
 ''')
+                historical = root / "build/font-baseline-source/tools/ci"
+                historical.mkdir(parents=True)
+                (historical / "stage_windows_runtime.py").write_text("immutable helper bytes")
                 fake = binary / "fake"
                 fake.write_text('''#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys, tempfile
