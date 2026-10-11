@@ -9,6 +9,7 @@
 #include <player.h>
 #include <object.h>
 #include <los.h>
+#include <spatial.h>
 #include <arch.h>
 
 static void fixture(mapstruct **map, object **pl) {
@@ -102,6 +103,7 @@ START_TEST(test_depth_masks_use_each_ray_instead_of_base_silhouette) {
     update_los(pl);
     int ax = CONTR(pl)->cs->mapx_2 + 2, ay = CONTR(pl)->cs->mapy_2;
     ck_assert(CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(0)][ax][ay] & BLOCKED_LOS_BLOCKED);
+    ck_assert(CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(2)][ax][ay] & BLOCKED_LOS_BLOCKED);
     ck_assert(!(CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(3)][ax][ay] & BLOCKED_LOS_BLOCKED));
     ck_assert_int_eq(CONTR(pl)->blocked_los[ax][ay],
                      CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(0)][ax][ay]);
@@ -215,6 +217,8 @@ START_TEST(test_camera_hidden_depths_are_pruned_before_sight_checks) {
     ck_assert_uint_eq(los_view_sight_checks_for_test(1), 0);
     ck_assert_uint_eq(los_view_sight_checks_for_test(-1), 0);
     ck_assert_uint_eq(los_view_sight_checks_for_test(0), cells);
+    ck_assert_uint_le(los_view_cell_resolves_for_test(),
+                      cells * (SPATIAL_STACK_LEVELS - 1 + MAP2_MAX_DEPTH + 1));
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         ck_assert_uint_le(los_view_sight_checks_for_test(depth) +
                           los_view_camera_pruned_for_test(depth), cells);
