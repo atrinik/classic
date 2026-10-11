@@ -3028,7 +3028,7 @@ START_TEST(test_map_name_metadata_handles_transient_unnamed_maps) {
     char name[MAX_BUF];
     packet_reader_init(&reader, packet->data, packet->len);
     ck_assert(packet_reader_read_string(&reader, VS(name)));
-    ck_assert_str_eq(name, "[b][o=#000000]/tests/unnamed-map[/o][/b]");
+    ck_assert_str_eq(name, "[b][o=#000000]Unnamed map[/o][/b]");
     packet_free(packet);
 
     FREE_AND_CLEAR_HASH(map->path);
