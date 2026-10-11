@@ -50,6 +50,8 @@ with open(os.environ['COMMAND_LOG'], 'a') as log:
 if name == 'uname':
     print(os.environ.get('FIXTURE_SYSTEM', 'Darwin'))
 elif name == 'brew':
+    if args == ['--prefix', 'opusfile'] and os.environ.get('FAIL_DEPENDENCY') == '1':
+        sys.exit(23)
     print(os.environ['DEPENDENCY_PREFIX'])
 elif name == 'curl':
     shutil.copyfile(os.environ['SOURCE_ARCHIVE'], args[args.index('--output') + 1])
@@ -120,6 +122,12 @@ elif name == 'cmake':
             result, calls = self.invoke(root, helper, environment)
             self.assertEqual(result.returncode, 17, result.stderr)
             self.assertFalse(any("--install" in call["args"] for call in calls))
+
+    def test_dependency_lookup_failure_is_preserved(self):
+        with self.fixture(FAIL_DEPENDENCY="1") as (root, helper, lock, environment):
+            result, calls = self.invoke(root, helper, environment)
+            self.assertEqual(result.returncode, 23, result.stderr)
+            self.assertFalse(any(call["name"] == "cmake" for call in calls))
 
     def test_runtime_contract_failure_is_preserved(self):
         with self.fixture(PROBE_EXIT="9") as (root, helper, lock, environment):
