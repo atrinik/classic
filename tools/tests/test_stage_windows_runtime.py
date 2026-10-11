@@ -120,7 +120,17 @@ DelayImport {
                 stage_windows_runtime.imported_dlls("llvm-readobj", Path("fixture.exe"))
 
     def test_system_ucrt_and_external_python_crt_are_not_staged(self) -> None:
-        for name in ("ucrtbase.dll", "api-ms-win-crt-runtime-l1-1-0.dll", "msvcrt.dll"):
+        for name in ("ucrtbase.dll", "api-ms-win-crt-runtime-l1-1-0.dll"):
+            self.assertTrue(stage_windows_runtime.is_system_dll(name))
+        self.assertFalse(stage_windows_runtime.is_system_dll("msvcrt.dll"))
+        self.assertTrue(stage_windows_runtime.is_system_dll("msvcrt.dll", external_python=True))
+
+    def test_inbox_driver_import_is_parsed_and_only_explicit_system_driver_is_accepted(self) -> None:
+        imports = stage_windows_runtime.parse_imports("Format: COFF-x86-64\nImport {\nName: WINSPOOL.DRV\n}\n")
+        self.assertEqual(imports, {"WINSPOOL.DRV"})
+        self.assertTrue(stage_windows_runtime.is_system_dll("WINSPOOL.DRV"))
+        self.assertFalse(stage_windows_runtime.is_system_dll("unknown.drv"))
+        for name in ("dwrite.dll", "d3d11.dll", "netapi32.dll", "userenv.dll", "usp10.dll", "avrt.dll"):
             self.assertTrue(stage_windows_runtime.is_system_dll(name))
 
     def test_gcc_runtime_in_imports_or_unused_prefix_fails(self) -> None:

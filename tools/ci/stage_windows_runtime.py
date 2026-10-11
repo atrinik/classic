@@ -16,51 +16,80 @@ from typing import Callable, Iterable
 
 
 DLL_NAME = re.compile(r"[A-Za-z0-9_+.-]+\.dll", re.IGNORECASE)
+IMPORT_NAME = re.compile(r"[A-Za-z0-9_+.-]+\.(?:dll|drv)", re.IGNORECASE)
 GCC_RUNTIME = re.compile(
     r"(?:libgcc_s|libstdc\+\+|libssp|libgomp|libatomic|libquadmath)[^/]*\.dll",
     re.IGNORECASE,
 )
 SYSTEM_DLLS = {
     "advapi32.dll",
+    "avrt.dll",
     "bcrypt.dll",
+    "cabinet.dll",
     "cfgmgr32.dll",
     "comctl32.dll",
     "comdlg32.dll",
     "crypt32.dll",
+    "d2d1.dll",
+    "d3d11.dll",
     "d3d12.dll",
+    "d3d9.dll",
     "d3dcompiler_47.dll",
+    "dbghelp.dll",
+    "dinput8.dll",
     "dnsapi.dll",
     "dwmapi.dll",
+    "dwrite.dll",
     "dxgi.dll",
     "gdi32.dll",
+    "gdiplus.dll",
     "hid.dll",
     "imagehlp.dll",
     "imm32.dll",
     "iphlpapi.dll",
     "kernel32.dll",
-    "msvcrt.dll",
+    "ksuser.dll",
+    "mf.dll",
+    "mfplat.dll",
+    "mfreadwrite.dll",
+    "mfuuid.dll",
+    "msimg32.dll",
     "mswsock.dll",
     "ncrypt.dll",
+    "netapi32.dll",
+    "netio.dll",
     "normaliz.dll",
+    "ntdll.dll",
     "ole32.dll",
     "oleaut32.dll",
+    "opengl32.dll",
     "powrprof.dll",
+    "propsys.dll",
     "psapi.dll",
     "rpcrt4.dll",
+    "runtimeobject.dll",
     "secur32.dll",
     "setupapi.dll",
     "shell32.dll",
     "shlwapi.dll",
-    "user32.dll",
     "ucrtbase.dll",
+    "uiautomationcore.dll",
+    "user32.dll",
+    "userenv.dll",
+    "usp10.dll",
     "uxtheme.dll",
     "version.dll",
+    "winhttp.dll",
+    "wininet.dll",
     "winmm.dll",
+    "winspool.drv",
     "wintrust.dll",
     "wldap32.dll",
     "ws2_32.dll",
     "wsock32.dll",
+    "wtsapi32.dll",
 }
+
 MAX_RUNTIME_DLLS = 256
 
 
@@ -82,7 +111,7 @@ def parse_imports(output: str) -> set[str]:
             block = []
         elif block is not None:
             if stripped == "}":
-                if len(block) != 1 or DLL_NAME.fullmatch(block[0]) is None:
+                if len(block) != 1 or IMPORT_NAME.fullmatch(block[0]) is None:
                     raise StageError("LLVM COFF import block has an invalid DLL name")
                 imports.add(block[0])
                 block = None
@@ -109,10 +138,11 @@ def imported_dlls(readobj: str, binary: Path) -> set[str]:
     return parse_imports(result.stdout)
 
 
-def is_system_dll(name: str) -> bool:
+def is_system_dll(name: str, *, external_python: bool = False) -> bool:
     normalized = name.lower()
     return (
         normalized in SYSTEM_DLLS
+        or external_python and normalized == "msvcrt.dll"
         or normalized.startswith("api-ms-win-")
         or normalized.startswith("ext-ms-win-")
     )
@@ -196,7 +226,9 @@ def hash_record(value, name: str) -> str:
     return value
 
 
-def producer_inventory(path: Path, runtime_dir: Path) -> tuple[dict[str, dict], dict[str, tuple[Path, str]]]:
+def producer_inventory(path: Path, runtime_dir: Path,
+                       inspector: Callable[[Path], set[str]] | None = None,
+                       ) -> tuple[dict[str, dict], dict[str, tuple[Path, str]]]:
     manifest = read_inventory(path)
     if manifest.get("schema_version") != 2 or not isinstance(manifest.get("dlls"), dict):
         raise StageError("unsupported producer PE inventory schema")
@@ -248,9 +280,29 @@ def producer_inventory(path: Path, runtime_dir: Path) -> tuple[dict[str, dict], 
         hash_record(record.get("sha256"), name)
         hash_record(record.get("source_sha256"), f"{name} source")
         imports = record.get("imports")
-        if not isinstance(imports, list) or any(not isinstance(item, str) or DLL_NAME.fullmatch(item) is None for item in imports):
+        if not isinstance(imports, list) or any(not isinstance(item, str) or IMPORT_NAME.fullmatch(item) is None for item in imports):
             raise StageError(f"invalid producer imports: {name}")
         records[name.lower()] = {**record, "imports": [item.lower() for item in imports]}
+    modules = manifest.get("modules", {})
+    if not isinstance(modules, dict) or len(modules) > MAX_RUNTIME_DLLS:
+        raise StageError("invalid producer module inventory")
+    module_names = set()
+    with tempfile.TemporaryDirectory(prefix="atrinik-module-inspection-") as temporary:
+        for name, record in modules.items():
+            relative = safe_relative_path(name)
+            if relative.suffix.lower() != ".dll" or name.lower() in module_names or not isinstance(record, dict):
+                raise StageError(f"invalid producer module record: {name}")
+            module_names.add(name.lower())
+            if record.get("owner") not in owners:
+                raise StageError(f"producer module has no notice owner: {name}")
+            hash_record(record.get("source_sha256"), f"{name} source")
+            imports = record.get("imports")
+            if not isinstance(imports, list) or any(not isinstance(item, str) or IMPORT_NAME.fullmatch(item) is None for item in imports):
+                raise StageError(f"invalid producer module imports: {name}")
+            snapshot = Path(temporary) / relative
+            copy_snapshot(runtime_dir.parent / relative, snapshot, hash_record(record.get("sha256"), name))
+            if inspector is not None and {item.lower() for item in inspector(snapshot)} != {item.lower() for item in imports}:
+                raise StageError(f"module imports differ from producer inventory: {name}")
     return records, notice_files
 
 
@@ -323,6 +375,7 @@ def stage_runtime(
         for name, (source, digest) in producer_notices.items():
             copy_snapshot(source, output_dir / "licenses" / safe_relative_path(name), digest)
     python_binaries = []
+    python_sources: dict[str, Path] = {}
     if python_runtime is not None:
         if python_inventory_path is None:
             raise StageError("Python runtime requires a producer file inventory")
@@ -330,10 +383,8 @@ def stage_runtime(
         for binary in python_binaries:
             if binary.suffix.lower() == ".dll":
                 name = binary.name.lower()
-                if name in sources:
-                    raise StageError(f"duplicate case-insensitive runtime DLL: {binary.name}")
-                sources[name] = binary
-    queue: list[tuple[Path, Path, dict | None]] = []
+                python_sources[name] = binary
+    queue: list[tuple[Path, Path, dict | None, bool]] = []
     staged: dict[str, Path] = {}
 
     with tempfile.TemporaryDirectory(prefix="atrinik-pe-inspection-") as temporary:
@@ -361,36 +412,58 @@ def stage_runtime(
                 inspection = output_dir / source.name if copy else inspection_dir / source.name
                 copy_snapshot(source, inspection, record["sha256"] if record else None)
             staged[normalized] = source
-            queue.append((source, inspection, record))
+            queue.append((source, inspection, record, external))
 
         for binary in binaries:
             stage(binary, copy=not dlls_only)
-        for binary in python_binaries:
-            stage(binary, copy=False, external=True)
 
         position = 0
         runtime_count = 0
-        while position < len(queue):
-            original, binary, record = queue[position]
-            position += 1
-            imports = inspector(binary)
-            if record is not None and {name.lower() for name in imports} != set(record["imports"]):
-                raise StageError(f"runtime imports differ from producer inventory: {original.name}")
-            for dependency in sorted(imports, key=str.lower):
-                if DLL_NAME.fullmatch(dependency) is None:
-                    raise StageError(f"invalid imported DLL name for {binary.name}: {dependency}")
-                normalized = dependency.lower()
-                if GCC_RUNTIME.fullmatch(normalized):
-                    raise StageError(f"GCC runtime DLL in LLVM closure: {dependency}")
-                if is_system_dll(dependency) or normalized in staged:
-                    continue
-                source = sources.get(normalized)
-                if source is None:
-                    raise StageError(f"unresolved runtime DLL for {binary.name}: {dependency}")
-                runtime_count += 1
-                if runtime_count > MAX_RUNTIME_DLLS:
-                    raise StageError("Windows runtime dependency closure is unexpectedly large")
-                stage(source)
+
+        def inspect_queue() -> None:
+            nonlocal position, runtime_count
+            while position < len(queue):
+                original, binary, record, external = queue[position]
+                position += 1
+                imports = inspector(binary)
+                if record is not None and {name.lower() for name in imports} != set(record["imports"]):
+                    raise StageError(f"runtime imports differ from producer inventory: {original.name}")
+                for dependency in sorted(imports, key=str.lower):
+                    if IMPORT_NAME.fullmatch(dependency) is None:
+                        raise StageError(f"invalid imported DLL name for {binary.name}: {dependency}")
+                    normalized = dependency.lower()
+                    if GCC_RUNTIME.fullmatch(normalized):
+                        raise StageError(f"GCC runtime DLL in LLVM closure: {dependency}")
+                    if is_system_dll(dependency, external_python=external):
+                        continue
+                    # Resolve the actual target graph before admitting all of
+                    # Python's sealed files. A full SDK's unused duplicate is
+                    # harmless; a target import needing it cannot share the
+                    # package filename with Python's independently built DLL.
+                    if not external and normalized in sources and normalized in python_sources:
+                        raise StageError(f"reachable DLL provider conflict: {dependency}")
+                    python_source = python_sources.get(normalized)
+                    source = python_source if external and python_source is not None else sources.get(normalized)
+                    selected_external = source is not None and source == python_source
+                    if source is None:
+                        source = python_source
+                        selected_external = source is not None
+                    previous = staged.get(normalized)
+                    if previous is not None:
+                        if source is not None and previous != source:
+                            raise StageError(f"reachable DLL provider conflict: {dependency}")
+                        continue
+                    if source is None:
+                        raise StageError(f"unresolved runtime DLL for {binary.name}: {dependency}")
+                    runtime_count += 1
+                    if runtime_count > MAX_RUNTIME_DLLS:
+                        raise StageError("Windows runtime dependency closure is unexpectedly large")
+                    stage(source, copy=not selected_external, external=selected_external)
+
+        inspect_queue()
+        for binary in python_binaries:
+            stage(binary, copy=False, external=True)
+        inspect_queue()
 
     return sorted((path.relative_to(output_dir).as_posix() for path in output_dir.rglob("*")
                    if path.is_file()), key=str.lower)
@@ -433,7 +506,8 @@ def main() -> int:
                 frozen_python = snapshot_dir / "python-runtime.json"
                 copy_snapshot(arguments.python_inventory or inventory_path.parent / "python-runtime.json", frozen_python,
                               max_bytes=4 * 1024 * 1024)
-            records, notices = producer_inventory(frozen_inventory, arguments.runtime_dir[0])
+            records, notices = producer_inventory(frozen_inventory, arguments.runtime_dir[0],
+                lambda binary: imported_dlls(arguments.readobj, binary))
             staged = stage_runtime(
                 arguments.binaries,
                 arguments.runtime_dir,

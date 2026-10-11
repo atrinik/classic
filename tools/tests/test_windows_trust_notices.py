@@ -343,6 +343,70 @@ class WindowsTrustNoticesTests(unittest.TestCase):
                 self.assertFalse((root / "installed/server/late.pyd").exists())
                 self.assertFalse((root / "installed/server/nested/libgcc_s_seh-1.dll").exists())
 
+    def test_python_sealed_libffi_ignores_only_unreachable_sdk_duplicate(self):
+        for reachable in (False, True):
+            with self.subTest(reachable=reachable):
+                root, result, _, _ = self.fixture("server", cares=False, python=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                inventories = root / "toolchain/share/atrinik/windows-dependencies"
+                target_bytes, python_bytes = b"LLVM SDK ffi", b"sealed CPython ffi"
+                (root / "toolchain/bin/libffi-8.dll").write_bytes(target_bytes)
+                (root / "python/libffi-8.dll").write_bytes(python_bytes)
+                python_receipt = json.loads((inventories / "python-runtime.json").read_text())
+                python_receipt["files"]["libffi-8.dll"] = {"sha256": hashlib.sha256(python_bytes).hexdigest()}
+                (inventories / "python-runtime.json").write_text(json.dumps(python_receipt))
+                producer_receipt = json.loads((inventories / "pe-closure.json").read_text())
+                producer_receipt["dlls"]["libffi-8.dll"] = {
+                    "owner": "fixture-curl", "source_sha256": "1" * 64,
+                    "sha256": hashlib.sha256(target_bytes).hexdigest(), "imports": []}
+                producer_receipt["dlls"]["libcurl-4.dll"]["imports"] = ["libffi-8.dll"] if reachable else []
+                (inventories / "pe-closure.json").write_text(json.dumps(producer_receipt))
+                inspector = root / "llvm-readobj"
+                script = inspector.read_text()
+                script += ('\nif binary.name == "_ssl.pyd":\n'
+                           '    print("Import {\\nName: libffi-8.dll\\n}")\n')
+                if reachable:
+                    script += ('\nif binary.name == "libcurl-4.dll":\n'
+                               '    print("Import {\\nName: libffi-8.dll\\n}")\n')
+                inspector.write_text(script)
+                if reachable:
+                    result = self.install_result(root)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("reachable DLL provider conflict", " ".join((result.stdout + result.stderr).split()))
+                else:
+                    with self.package(root, "server") as archive:
+                        filename = next(name for name in archive.namelist() if name.endswith("/server/libffi-8.dll"))
+                        self.assertEqual(archive.read(filename), python_bytes)
+
+    def test_producer_nested_modules_are_checked_without_flattening(self):
+        for damage in (None, "bytes", "imports", "owner"):
+            with self.subTest(damage=damage):
+                root, result, _, _ = self.fixture("client", cares=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                module = root / "toolchain/lib/ossl-modules/legacy.dll"
+                module.parent.mkdir(parents=True)
+                module.write_bytes(b"verified legacy module")
+                inventory = root / "toolchain/share/atrinik/windows-dependencies/pe-closure.json"
+                manifest = json.loads(inventory.read_text())
+                record = {"sha256": hashlib.sha256(module.read_bytes()).hexdigest(),
+                          "owner": "fixture-curl", "source_sha256": "1" * 64, "imports": []}
+                if damage == "owner":
+                    record["owner"] = "unowned"
+                elif damage == "imports":
+                    record["imports"] = ["kernel32.dll"]
+                elif damage == "bytes":
+                    module.write_bytes(b"changed module")
+                manifest["modules"] = {"lib/ossl-modules/legacy.dll": record}
+                inventory.write_text(json.dumps(manifest))
+                if damage is None:
+                    with self.package(root, "client") as archive:
+                        self.assertFalse(any(name.endswith("legacy.dll") for name in archive.namelist()))
+                        metadata = next(name for name in archive.namelist() if name.endswith("windows-pe-closure.json"))
+                        self.assertIn("modules", json.loads(archive.read(metadata)))
+                else:
+                    result = self.install_result(root)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,12 @@ schema-1 `python-runtime.json` receipt of every relative file and its SHA-256.
 At install time it snapshots the entire recursive Python tree, rejects file
 additions, removals, changed bytes and symlinks, and inspects every copied DLL,
 extension and executable. The installer ships this validated snapshot.
+The target dependency graph is resolved first. An unused SDK DLL with the same
+name as a sealed Python DLL stays out of the package; Python retains its own
+receipt-checked bytes. A reachable target import needing that name fails with
+a provider conflict. Nested producer modules keep their prefix-relative paths
+in the optional `modules` inventory; their bytes, imports and notices are
+validated without flattening them into the application DLL directory.
 
 Both packages retain the producer's `windows-dependencies.json` and
 `windows-pe-closure.json` below `licenses/`, every dependency notice listed by
