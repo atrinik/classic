@@ -38,6 +38,29 @@ static unsigned int solver_calls;
 static unsigned int ca_init_calls;
 static unsigned int ca_set_calls;
 static int ca_set_result = -1;
+static bool diagnostic_easy;
+static unsigned int ca_file_seen, ca_file_matches, native_store_seen;
+
+/* libcurl debug data is not NUL-terminated and can include attempt secrets.
+ * Inspect only exact test-owned trust messages; discard every other byte. */
+static int trust_debug(CURL *handle, curl_infotype type, char *data, size_t size, void *context) {
+    (void)handle;
+    (void)context;
+    if (type != CURLINFO_TEXT)
+        return 0;
+    const char prefix[] = "  CAfile: ";
+    const char native[] = "  Native: Apple SecTrust\n";
+    if (size >= sizeof(prefix) - 1 && memcmp(data, prefix, sizeof(prefix) - 1) == 0) {
+        ca_file_seen++;
+        const char *ca = getenv("ATRINIK_TEST_ADMISSION_CA");
+        if (ca != NULL && size == sizeof(prefix) - 1 + strlen(ca) + 1 &&
+            memcmp(data + sizeof(prefix) - 1, ca, strlen(ca)) == 0 && data[size - 1] == '\n')
+            ca_file_matches++;
+    }
+    if (size == sizeof(native) - 1 && memcmp(data, native, size) == 0)
+        native_store_seen++;
+    return 0;
+}
 
 #ifdef ATRINIK_TEST_SOURCE_WRAP
 #define __real_curl_easy_init curl_easy_init
@@ -60,7 +83,14 @@ CURL *__wrap_curl_easy_init(void) {
 }
 
 static CURLcode test_perform_cancellable(CURL *handle, const curl_cancel_t *cancel) {
-    CURLcode result = curl_perform_cancellable(handle, cancel);
+    CURLcode debug_result = curl_easy_setopt(handle, CURLOPT_DEBUGFUNCTION, trust_debug);
+    /* Never enable default verbose output if the private callback was rejected. */
+    CURLcode verbose_result = debug_result == CURLE_OK
+                                  ? curl_easy_setopt(handle, CURLOPT_VERBOSE, 1L)
+                                  : debug_result;
+    CURLcode result = verbose_result != CURLE_OK ? verbose_result
+                      : diagnostic_easy ? curl_easy_perform(handle)
+                                        : curl_perform_cancellable(handle, cancel);
     long verify = -1, status = -1, os_error = -1;
     CURLcode verify_info = curl_easy_getinfo(handle, CURLINFO_SSL_VERIFYRESULT, &verify);
     CURLcode status_info = curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status);
@@ -69,7 +99,8 @@ static CURLcode test_perform_cancellable(CURL *handle, const curl_cancel_t *canc
     fprintf(stderr,
             "HTTPS admission transport init_calls=%u ca_calls=%u ca_result=%d "
             "curl_code=%d verify=%ld verify_info=%d status=%ld status_info=%d "
-            "os_errno=%ld os_info=%d version=%u async_dns=%d ares=%d\n",
+            "os_errno=%ld os_info=%d version=%u async_dns=%d ares=%d "
+            "ca_seen=%u ca_matches=%u native_seen=%u debug_result=%d verbose_result=%d easy=%d\n",
             ca_init_calls,
             ca_set_calls,
             ca_set_result,
@@ -82,7 +113,13 @@ static CURLcode test_perform_cancellable(CURL *handle, const curl_cancel_t *canc
             (int)os_info,
             version != NULL ? version->version_num : 0U,
             version != NULL && (version->features & CURL_VERSION_ASYNCHDNS) != 0,
-            version != NULL && version->ares != NULL);
+            version != NULL && version->ares != NULL,
+            ca_file_seen,
+            ca_file_matches,
+            native_store_seen,
+            (int)debug_result,
+            (int)verbose_result,
+            diagnostic_easy);
     return result;
 }
 
@@ -150,6 +187,7 @@ int main(int argc, char **argv) {
     toolkit_import(datetime);
     toolkit_import(curl);
     const char *mode = argv[2];
+    diagnostic_easy = strcmp(mode, "diagnostic-easy") == 0;
     if (strcmp(mode, "rate-socket") == 0) {
         int result = test_rate_limit_mapping(argv[1]);
         toolkit_deinit();
@@ -173,7 +211,7 @@ int main(int argc, char **argv) {
                                                              &retry_after_seconds,
                                                              solve_fast);
     uint64_t elapsed = datetime_monotonic_ms() - start;
-    if (strcmp(mode, "valid") == 0) {
+    if (strcmp(mode, "valid") == 0 || diagnostic_easy) {
         if (result != RENDEZVOUS_ADMISSION_OK || solver_calls != 1) {
             fprintf(stderr,
                     "HTTPS admission outcome result=%d solver_calls=%u elapsed_ms=%llu\n",

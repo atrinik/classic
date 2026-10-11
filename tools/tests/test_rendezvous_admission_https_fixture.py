@@ -1,12 +1,15 @@
 # Copyright 2026 The Atrinik Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import contextlib
 import importlib.util
+import io
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -20,16 +23,13 @@ class AdmissionHTTPSFixtureTests(unittest.TestCase):
     def test_certificate_chain_obeys_strict_server_verification(self):
         with tempfile.TemporaryDirectory(prefix="admission-certificate-") as directory:
             ca, other_ca, certificate, _ = FIXTURE.certificates(Path(directory))
-            for authority, hostname, expected in (
-                    (ca, "localhost", 0), (other_ca, "localhost", 2),
-                    (ca, "wrong.invalid", 2)):
-                with self.subTest(authority=authority.name, hostname=hostname):
-                    result = subprocess.run(
-                        [shutil.which("openssl"), "verify", "-x509_strict",
-                         "-purpose", "sslserver", "-verify_hostname", hostname,
-                         "-CAfile", str(authority), str(certificate)],
-                        capture_output=True, text=True, timeout=15)
-                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                FIXTURE.verify_certificates(ca, other_ca, certificate)
+            self.assertEqual(output.getvalue(),
+                             "HTTPS fixture certificate preflight trusted=0 untrusted=2 wrong_host=2\n")
+            with self.assertRaisesRegex(RuntimeError, "preflight case=1 exit=2 expected=0"):
+                FIXTURE.verify_certificates(other_ca, ca, certificate)
 
     def test_native_failure_retains_only_bounded_numeric_diagnostics(self):
         result = subprocess.CompletedProcess(
@@ -49,7 +49,8 @@ class AdmissionHTTPSFixtureTests(unittest.TestCase):
     def test_native_failure_retains_transport_evidence_without_text_fields(self):
         transport = (b"HTTPS admission transport init_calls=1 ca_calls=1 ca_result=0 "
                      b"curl_code=60 verify=20 verify_info=0 status=0 status_info=0 "
-                     b"os_errno=-1 os_info=0 version=530944 async_dns=1 ares=1")
+                     b"os_errno=-1 os_info=0 version=530944 async_dns=1 ares=1 "
+                     b"ca_seen=1 ca_matches=1 native_seen=0 debug_result=0 verbose_result=0 easy=0")
         result = subprocess.CompletedProcess(
             [], 1, stdout=b"private", stderr=transport + b"\n" + transport + b" secret\n")
         message = FIXTURE.native_failure(result, "valid", 0)
@@ -63,6 +64,63 @@ class AdmissionHTTPSFixtureTests(unittest.TestCase):
             result.stderr = invalid
             self.assertIn("no numeric native diagnostics",
                           FIXTURE.native_failure(result, "valid", 0))
+
+    def test_successful_diagnostic_preserves_original_failure_and_deadline(self):
+        with mock.patch.object(FIXTURE, "certificates", return_value=(1, 2, 3, 4)), \
+             mock.patch.object(FIXTURE, "verify_certificates"), \
+             mock.patch.object(FIXTURE.sys, "argv", ["fixture", "binary", "openssl"]), \
+             mock.patch.object(FIXTURE, "run_case", side_effect=[
+                 RuntimeError("original exit=1; requests=0; curl_code=60"),
+                 "diagnostic only: exit=0; requests=1; curl_code=0"]) as run:
+            with self.assertRaisesRegex(RuntimeError, "original exit=1; requests=0; curl_code=60") as error:
+                FIXTURE.main()
+            self.assertIn("diagnostic only: exit=0; requests=1", str(error.exception))
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[0].args[1], "valid")
+            self.assertEqual(run.call_args_list[1].args[1], "diagnostic-easy")
+            self.assertTrue(run.call_args_list[1].kwargs["diagnostic"])
+            self.assertEqual(run.call_args_list[0].kwargs["deadline"],
+                             run.call_args_list[1].kwargs["deadline"])
+
+    def test_exhausted_deadline_does_not_launch_a_diagnostic(self):
+        with mock.patch.object(FIXTURE, "Fixture") as server, \
+             mock.patch.object(FIXTURE.subprocess, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "deadline exhausted"):
+                FIXTURE.run_case("private binary", "diagnostic-easy", 1, 2, 3, 4,
+                                 diagnostic=True, deadline=0)
+            server.assert_not_called()
+            run.assert_not_called()
+
+    def test_certificate_preflight_timeout_is_sanitized(self):
+        with mock.patch.object(FIXTURE.subprocess, "run", side_effect=
+                               subprocess.TimeoutExpired("private certificate path", 15)):
+            with self.assertRaises(RuntimeError) as error:
+                FIXTURE.verify_certificates("private CA", "other CA", "private cert")
+            self.assertEqual(str(error.exception),
+                             "HTTPS fixture certificate preflight case=1 error=TimeoutExpired")
+
+    def test_diagnostic_timeout_preserves_original_failure(self):
+        with mock.patch.object(FIXTURE, "certificates", return_value=(1, 2, 3, 4)), \
+             mock.patch.object(FIXTURE, "verify_certificates"), \
+             mock.patch.object(FIXTURE.sys, "argv", ["fixture", "binary", "openssl"]), \
+             mock.patch.object(FIXTURE, "run_case", side_effect=[
+                 RuntimeError("original exit=1; requests=0"),
+                 subprocess.TimeoutExpired("private command", 1)]):
+            with self.assertRaises(RuntimeError) as error:
+                FIXTURE.main()
+            self.assertIn("original exit=1; requests=0", str(error.exception))
+            self.assertIn("HTTPS diagnostic unavailable: TimeoutExpired", str(error.exception))
+            self.assertNotIn("private command", str(error.exception))
+
+    def test_negative_cases_never_run_diagnostic(self):
+        with mock.patch.object(FIXTURE, "certificates", return_value=(1, 2, 3, 4)), \
+             mock.patch.object(FIXTURE, "verify_certificates"), \
+             mock.patch.object(FIXTURE.sys, "argv", ["fixture", "binary", "openssl"]), \
+             mock.patch.object(FIXTURE, "run_case", side_effect=[None, RuntimeError("malformed")]) as run:
+            with self.assertRaisesRegex(RuntimeError, "malformed"):
+                FIXTURE.main()
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[1].args[1], "malformed")
 
     def test_native_failure_handles_missing_and_excessive_diagnostics(self):
         result = subprocess.CompletedProcess([], -6, stdout=b"", stderr=b"\xffarbitrary\n")

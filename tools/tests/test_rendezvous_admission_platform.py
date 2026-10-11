@@ -25,8 +25,17 @@ class AdmissionPlatformTests(unittest.TestCase):
 #define CURL_FIXTURE_H
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
+#include <stdarg.h>
 typedef struct { int unused; } CURL;
 typedef int CURLcode;
+typedef int curl_infotype;
+#define CURLINFO_TEXT 0
+#define CURLOPT_DEBUGFUNCTION 2
+#define CURLOPT_VERBOSE 3
+typedef int (*curl_debug_callback)(CURL *, curl_infotype, char *, size_t, void *);
+CURLcode curl_easy_perform(CURL *);
 typedef struct { int marker; } curl_cancel_t;
 typedef struct { unsigned int version_num; int features; const char *ares; } curl_version_info_data;
 #define CURL_VERSION_ASYNCHDNS 1
@@ -40,7 +49,7 @@ const curl_version_info_data *curl_version_info(int);
 #define CURLOPT_CAINFO 1
 #define CURLE_OK 0
 CURL *curl_easy_init(void);
-CURLcode curl_easy_setopt(CURL *, int, const char *);
+CURLcode curl_easy_setopt(CURL *, int, ...);
 void curl_easy_cleanup(CURL *);
 #endif
 ''')
@@ -73,7 +82,7 @@ void curl_easy_cleanup(CURL *);
                 real = "curl_easy_init" if source_wrap else "__real_curl_easy_init"
                 self.assertIn(f"CURL *curl = {called}();", admission)
                 self.assertIn("test_perform_cancellable(curl, &bounded)", admission)
-                self.assertIn("CURLcode result = curl_perform_cancellable(handle, cancel);", wrapper)
+                self.assertIn(": curl_perform_cancellable(handle, cancel);", wrapper)
                 self.assertIn(f"CURL *handle = {real}();", wrapper)
                 self.assertNotIn("CURL *handle = __wrap_curl_easy_init();", wrapper)
                 for option in ("CURLOPT_SSL_VERIFYPEER, 1L", "CURLOPT_SSL_VERIFYHOST, 2L",
@@ -103,10 +112,22 @@ CURL *curl_easy_init(void) {
     assert(++init_calls < 10);
     return fail_init ? NULL : &fixture_handle;
 }
-CURLcode curl_easy_setopt(CURL *handle, int option, const char *ca) {
-    assert(handle == &fixture_handle && option == CURLOPT_CAINFO);
-    setopt_calls++;
-    selected_ca = ca;
+static curl_debug_callback debug_callback;
+static int verbose_enabled;
+CURLcode curl_easy_setopt(CURL *handle, int option, ...) {
+    assert(handle == &fixture_handle);
+    va_list args;
+    va_start(args, option);
+    if (option == CURLOPT_DEBUGFUNCTION)
+        debug_callback = va_arg(args, curl_debug_callback);
+    else if (option == CURLOPT_VERBOSE)
+        verbose_enabled = (int)va_arg(args, long);
+    else {
+        assert(option == CURLOPT_CAINFO);
+        setopt_calls++;
+        selected_ca = va_arg(args, const char *);
+    }
+    va_end(args);
     return fail_setopt ? 1 : CURLE_OK;
 }
 void curl_easy_cleanup(CURL *handle) {
@@ -116,8 +137,18 @@ void curl_easy_cleanup(CURL *handle) {
 static CURLcode transfer_result;
 static const curl_cancel_t *expected_cancel;
 static int fail_info, no_version;
+static unsigned int easy_calls, cancellable_calls;
 CURLcode curl_perform_cancellable(CURL *handle, const curl_cancel_t *cancel) {
     assert(handle == &fixture_handle && cancel == expected_cancel);
+    cancellable_calls++;
+    assert(verbose_enabled == 1 && debug_callback != NULL);
+    char ca_message[] = "  CAfile: fixture-ca.pem\\n";
+    debug_callback(handle, CURLINFO_TEXT, ca_message, sizeof(ca_message) - 1, NULL);
+    return transfer_result;
+}
+CURLcode curl_easy_perform(CURL *handle) {
+    assert(handle == &fixture_handle);
+    easy_calls++;
     return transfer_result;
 }
 CURLcode curl_easy_getinfo(CURL *handle, int option, long *value) {
@@ -150,6 +181,7 @@ int main(void) {
     assert(fixture_admission_init() == NULL);
     assert(init_calls == 4 && setopt_calls == 2 && cleanup_calls == 1);
     assert(ca_init_calls == 4 && ca_set_calls == 2 && ca_set_result == 1);
+    fail_setopt = 0;
     curl_cancel_t cancel = {42};
     expected_cancel = &cancel;
     transfer_result = 60;
@@ -157,6 +189,19 @@ int main(void) {
     fail_info = no_version = 1;
     transfer_result = 4;
     assert(fixture_admission_perform(&fixture_handle, &cancel) == 4);
+    assert(cancellable_calls == 2 && easy_calls == 0);
+    diagnostic_easy = true;
+    transfer_result = 0;
+    assert(fixture_admission_perform(&fixture_handle, &cancel) == 0);
+    assert(cancellable_calls == 2 && easy_calls == 1);
+    char secret[] = "private URL certificate and attempt secret";
+    trust_debug(&fixture_handle, CURLINFO_TEXT, secret, sizeof(secret) - 1, NULL);
+    trust_debug(&fixture_handle, 1, secret, sizeof(secret) - 1, NULL);
+    char mismatch[] = "  CAfile: wrong-ca.pem\\n";
+    trust_debug(&fixture_handle, CURLINFO_TEXT, mismatch, sizeof(mismatch) - 1, NULL);
+    char native[] = "  Native: Apple SecTrust\\n";
+    trust_debug(&fixture_handle, CURLINFO_TEXT, native, sizeof(native) - 1, NULL);
+    assert(ca_file_seen == 3 && ca_file_matches == 2 && native_store_seen == 1);
     return 0;
 }
 ''')
@@ -169,10 +214,16 @@ int main(void) {
         self.assertEqual(result.stderr.splitlines(), [
             "HTTPS admission transport init_calls=4 ca_calls=2 ca_result=1 "
             "curl_code=60 verify=20 verify_info=0 status=0 status_info=0 "
-            "os_errno=61 os_info=0 version=530944 async_dns=1 ares=1",
+            "os_errno=61 os_info=0 version=530944 async_dns=1 ares=1 "
+            "ca_seen=1 ca_matches=1 native_seen=0 debug_result=0 verbose_result=0 easy=0",
             "HTTPS admission transport init_calls=4 ca_calls=2 ca_result=1 "
             "curl_code=4 verify=-1 verify_info=48 status=-1 status_info=48 "
-            "os_errno=-1 os_info=48 version=0 async_dns=0 ares=0",
+            "os_errno=-1 os_info=48 version=0 async_dns=0 ares=0 "
+            "ca_seen=2 ca_matches=2 native_seen=0 debug_result=0 verbose_result=0 easy=0",
+            "HTTPS admission transport init_calls=4 ca_calls=2 ca_result=1 "
+            "curl_code=0 verify=-1 verify_info=48 status=-1 status_info=48 "
+            "os_errno=-1 os_info=48 version=0 async_dns=0 ares=0 "
+            "ca_seen=2 ca_matches=2 native_seen=0 debug_result=0 verbose_result=0 easy=1",
         ])
 
     @unittest.skipUnless(shutil.which("cmake"), "CMake is required")

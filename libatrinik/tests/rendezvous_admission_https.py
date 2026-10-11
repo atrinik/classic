@@ -145,7 +145,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pass
 
 
-def native_failure(result, mode, requests):
+def native_failure(result, mode, requests, *, diagnostic=False):
     # Native output can contain URLs or attempt secrets. Retain only these
     # bounded test-owned numeric diagnostics, never arbitrary stdout/stderr.
     diagnostics = []
@@ -158,14 +158,21 @@ def native_failure(result, mode, requests):
                         r"verify=-?[0-9]{1,20} verify_info=[0-9]{1,3} "
                         r"status=-?[0-9]{1,20} status_info=[0-9]{1,3} "
                         r"os_errno=-?[0-9]{1,20} os_info=[0-9]{1,3} "
-                        r"version=[0-9]{1,10} async_dns=[01] ares=[01]", line):
+                        r"version=[0-9]{1,10} async_dns=[01] ares=[01] "
+                        r"ca_seen=[0-9]{1,10} ca_matches=[0-9]{1,10} native_seen=[0-9]{1,10} "
+                        r"debug_result=[0-9]{1,3} verbose_result=[0-9]{1,3} easy=[01]", line):
             diagnostics.append(line)
     detail = "; ".join(diagnostics[:3]) or "no numeric native diagnostics"
-    return (f"native HTTPS admission case failed: {mode}; "
+    kind = "diagnostic only" if diagnostic else "case failed"
+    return (f"native HTTPS admission {kind}: {mode}; "
             f"exit={result.returncode}; requests={requests}; {detail}")
 
 
-def run_case(binary, mode, ca, other_ca, cert, key):
+def run_case(binary, mode, ca, other_ca, cert, key, *, diagnostic=False, deadline=None):
+    if deadline is None:
+        deadline = time.monotonic() + 8
+    if time.monotonic() >= deadline:
+        raise RuntimeError("HTTPS diagnostic deadline exhausted")
     with Fixture(("127.0.0.1", 0), Handler) as server:
         server.mode = mode
         server.errors = []
@@ -185,8 +192,13 @@ def run_case(binary, mode, ca, other_ca, cert, key):
         # Keep localhost evidence independent of machine proxy configuration.
         env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1"
         try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("HTTPS diagnostic deadline exhausted")
             result = subprocess.run([binary, url, mode], env=env, capture_output=True,
-                                    timeout=8, check=False)
+                                    timeout=remaining, check=False)
+            if diagnostic:
+                return native_failure(result, mode, server.requests, diagnostic=True)
             if result.returncode:
                 raise RuntimeError(native_failure(result, mode, server.requests))
             if server.errors:
@@ -205,6 +217,23 @@ def run_case(binary, mode, ca, other_ca, cert, key):
                 raise RuntimeError("TLS fixture did not stop")
 
 
+def verify_certificates(ca, other_ca, cert):
+    cases = ((ca, "localhost", 0), (other_ca, "localhost", 2), (ca, "wrong.invalid", 2))
+    for index, (authority, hostname, expected) in enumerate(cases, 1):
+        try:
+            result = subprocess.run(
+                [OPENSSL, "verify", "-x509_strict", "-purpose", "sslserver",
+                 "-verify_hostname", hostname, "-CAfile", str(authority), str(cert)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+        except (subprocess.TimeoutExpired, OSError) as error:
+            raise RuntimeError(f"HTTPS fixture certificate preflight case={index} "
+                               f"error={type(error).__name__}") from None
+        if result.returncode != expected:
+            raise RuntimeError(f"HTTPS fixture certificate preflight case={index} "
+                               f"exit={result.returncode} expected={expected}")
+    print("HTTPS fixture certificate preflight trusted=0 untrusted=2 wrong_host=2", flush=True)
+
+
 def main():
     global OPENSSL
     if len(sys.argv) != 3:
@@ -212,6 +241,7 @@ def main():
     OPENSSL = sys.argv[2]
     with tempfile.TemporaryDirectory(prefix="atrinik-admission-https-") as directory:
         ca, other_ca, cert, key = certificates(Path(directory))
+        verify_certificates(ca, other_ca, cert)
         modes = ("valid", "malformed", "missing-no-store", "oversized", "redirect",
                  "deadline", "cancel", "wrong-host", "untrusted",
                  "rate-valid", "rate-max", "rate-malformed", "rate-overflow",
@@ -219,7 +249,21 @@ def main():
                  "rate-socket", "media-type-wrong", "media-type-missing", "media-type-duplicate",
                  "media-type-case", "media-type-parameters")
         for mode in modes:
-            run_case(sys.argv[1], mode, ca, other_ca, cert, key)
+            deadline = time.monotonic() + 8
+            try:
+                run_case(sys.argv[1], mode, ca, other_ca, cert, key, deadline=deadline)
+            except RuntimeError as original:
+                if mode != "valid":
+                    raise
+                # Compare the exact generated chain and admission request with
+                # curl_easy_perform only after acceptance already failed. This
+                # never replaces the cancellable case or converts failure to success.
+                try:
+                    diagnostic = run_case(sys.argv[1], "diagnostic-easy", ca, other_ca,
+                                          cert, key, diagnostic=True, deadline=deadline)
+                except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
+                    diagnostic = "HTTPS diagnostic unavailable: " + type(error).__name__
+                raise RuntimeError(str(original) + "; " + diagnostic) from None
     print(f"verified HTTPS admission: {len(modes)} transport cases passed")
 
 
