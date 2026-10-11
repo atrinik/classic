@@ -73,7 +73,8 @@ class ClassifyChangesTests(unittest.TestCase):
         for path in ("client/tools/build-appimage.sh", "tools/ci/appimage/Dockerfile",
                      "tools/ci/appimage/packaging.lock.json", "tools/ci/appimage/prepare.py",
                      "tools/ci/appimage/smoke.sh", "tools/ci/appimage/graphical.Dockerfile",
-                     "tools/ci/appimage/graphical-smoke.sh", "tools/ci/appimage/graphical-probe.c"):
+                     "tools/ci/appimage/graphical-smoke.sh", "tools/ci/appimage/graphical-probe.c",
+                     "tools/ci/appimage/export_graphical_evidence.py"):
             with self.subTest(path=path):
                 result = classify_changes.classify([path])
                 self.assertTrue(result["client"])

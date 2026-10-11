@@ -265,28 +265,64 @@ sys.exit(7 if failed and 'classic-appimage-' + failed in sys.argv else 0)
                     self.assertIn('ATRINIK_APPIMAGE_RUNTIME_PROBE=/input/appimage-runtime-probe', call)
                     self.assertEqual(call[-2:], ['/packages/atrinik-classic-client-0.0.0-linux-x86_64.AppImage', '0.0.0'])
 
-    def test_graphical_qualification_uses_only_isolated_readonly_inputs(self) -> None:
+    def test_graphical_qualification_retains_safe_evidence_and_removes_only_owned_container(self) -> None:
+        from tools.tests.test_export_graphical_evidence import archive_bytes, exporter
+        import shutil
+        import tarfile
+
         job = self.job()
         step = job.split('      - name: Qualify graphical dependencies, virtual window, and virtual audio', 1)[1].split('      - uses:', 1)[0]
         script = textwrap.dedent(step.split('        run: |\n', 1)[1])
-        for failure in ('0', '1'):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+        for case in ('success', 'smoke-failure', 'unsafe-archive', 'copy-failure', 'wrong-owner'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
                 workspace = Path(temporary)
                 (workspace / 'bin').mkdir()
                 (workspace / 'build/appimage-evidence').mkdir(parents=True)
+                (workspace / 'host-private').write_text('private')
+                helper = workspace / 'tools/ci/appimage/export_graphical_evidence.py'
+                helper.parent.mkdir(parents=True)
+                shutil.copyfile(ROOT / 'tools/ci/appimage/export_graphical_evidence.py', helper)
+                records = [(name, name.encode(), tarfile.REGTYPE) for name in exporter.FILES]
+                if case == 'smoke-failure':
+                    records = [('probe.log', b'failure diagnostic', tarfile.REGTYPE)]
+                elif case == 'unsafe-archive':
+                    records = [('../../host-private', b'replace private', tarfile.REGTYPE)]
+                (workspace / 'copy.tar').write_bytes(archive_bytes(records))
                 docker = workspace / 'bin/docker'
                 docker.write_text(f'#!{sys.executable}\n' + """import json, os, pathlib, sys
-pathlib.Path('docker-args.json').write_text(json.dumps(sys.argv[1:]))
-sys.exit(7 if os.environ['FAIL_GRAPHICAL'] == '1' else 0)
+with pathlib.Path('docker-calls.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\\n')
+case = os.environ['GRAPHICAL_CASE']
+action = sys.argv[1]
+if action == 'create':
+    print('a' * 64)
+elif action == 'start':
+    sys.exit(7 if case == 'smoke-failure' else 0)
+elif action == 'cp':
+    if case == 'copy-failure':
+        sys.exit(9)
+    sys.stdout.buffer.write(pathlib.Path('copy.tar').read_bytes())
+elif action == 'inspect':
+    print('/changed-owner 123-2' if case == 'wrong-owner' else '/classic-appimage-graphical-123-2 123-2')
+elif action == 'rm':
+    pathlib.Path('container-removed').write_text(sys.argv[-1])
+else:
+    sys.exit(99)
 """)
                 docker.chmod(0o755)
                 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
                     cwd=workspace, capture_output=True, text=True,
                     env=dict(os.environ, GITHUB_WORKSPACE=str(workspace),
-                             RELEASE_VERSION='5.17.0', FAIL_GRAPHICAL=failure,
+                             GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='2',
+                             RELEASE_VERSION='5.17.0', GRAPHICAL_CASE=case,
                              PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
-                self.assertEqual(result.returncode, 7 if failure == '1' else 0, result.stderr)
-                args = json.loads((workspace / 'docker-args.json').read_text())
+                self.assertEqual(result.returncode == 0, case == 'success', result.stderr)
+                calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
+                args = calls[0]
+                self.assertEqual(args[0], 'create')
+                self.assertNotIn('--rm', args)
+                self.assertIn('classic-appimage-graphical-123-2', args)
+                self.assertIn('atrinik.ci.graphical-owner=123-2', args)
                 self.assertEqual(args[args.index('--network') + 1], 'none')
                 self.assertEqual(args[args.index('--cap-drop') + 1], 'ALL')
                 self.assertEqual(args[args.index('--security-opt') + 1], 'no-new-privileges')
@@ -302,9 +338,28 @@ sys.exit(7 if os.environ['FAIL_GRAPHICAL'] == '1' else 0)
                                             '5.17.0', '/tmp/graphical-evidence'])
                 for forbidden in ('--privileged', '--device', '--env-file', '--volume', '--publish'):
                     self.assertNotIn(forbidden, args)
+                self.assertEqual(calls[1], ['start', '--attach', 'a' * 64])
+                self.assertEqual(calls[2], ['cp', 'a' * 64 + ':/tmp/graphical-evidence/.', '-'])
+                self.assertEqual(calls[3][-1], 'a' * 64)
+                if case == 'wrong-owner':
+                    self.assertFalse((workspace / 'container-removed').exists())
+                    self.assertEqual(len(calls), 4)
+                else:
+                    self.assertEqual(calls[-1], ['rm', '--force', 'a' * 64])
+                    self.assertEqual((workspace / 'container-removed').read_text(), 'a' * 64)
+                evidence = workspace / 'build/appimage-evidence/graphical'
+                if case in ('success', 'wrong-owner'):
+                    self.assertEqual({file.name for file in evidence.iterdir()}, exporter.FILES)
+                    self.assertEqual((evidence / 'software-vulkan-frame.xwd').read_bytes(), b'software-vulkan-frame.xwd')
+                elif case == 'smoke-failure':
+                    self.assertEqual(result.returncode, 7)
+                    self.assertEqual((evidence / 'probe.log').read_bytes(), b'failure diagnostic')
+                else:
+                    self.assertFalse(evidence.exists())
+                self.assertEqual((workspace / 'host-private').read_text(), 'private')
         self.assertLess(job.index('payload-validation.log'), job.index('bash /graphical-smoke.sh'))
         self.assertLess(job.index('bash /smoke.sh'), job.index('bash /graphical-smoke.sh'))
-        self.assertLess(job.index('bash /graphical-smoke.sh'), job.index('name: release-client-appimage-'))
+        self.assertLess(job.index('export_graphical_evidence.py'), job.index('name: release-client-appimage-'))
 
     def test_container_boundary_and_host_output_validation(self) -> None:
         workflow = (ROOT / '.github/workflows/build-release-candidate.yml').read_text()

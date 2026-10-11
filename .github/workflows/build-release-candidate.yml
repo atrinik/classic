@@ -479,7 +479,11 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
         run: |
-          docker run --rm --platform linux/amd64 --network none \
+          container_name="classic-appimage-graphical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          owner="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container_id=$(docker create --name "${container_name}" \
+            --label "atrinik.ci.graphical-owner=${owner}" \
+            --platform linux/amd64 --network none \
             --cap-drop ALL --security-opt no-new-privileges \
             --user "$(id -u):$(id -g)" --cpus 2 --memory 4g \
             --env ATRINIK_APPIMAGE_SMOKE_CONTAINER=1 \
@@ -489,8 +493,38 @@ jobs:
             --mount "type=bind,source=$GITHUB_WORKSPACE/build/appimage-graphical-probe,target=/input/appimage-graphical-probe,readonly" \
             classic-appimage-graphical bash /graphical-smoke.sh \
             "/packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage" \
-            "${RELEASE_VERSION}" /tmp/graphical-evidence \
-            > build/appimage-evidence/graphical-qualification.log 2>&1
+            "${RELEASE_VERSION}" /tmp/graphical-evidence)
+          [[ ${container_id} =~ ^[0-9a-f]{64}$ ]]
+          cleanup() {
+            status=$?
+            trap - EXIT
+            identity=$(docker inspect --format \
+              '{{.Name}} {{index .Config.Labels "atrinik.ci.graphical-owner"}}' \
+              "${container_id}") || exit 1
+            if test "${identity}" != "/${container_name} ${owner}"; then
+              echo "refusing to remove graphical container with changed ownership" >&2
+              exit 1
+            fi
+            docker rm --force "${container_id}" \
+              > build/appimage-evidence/graphical-cleanup.log 2>&1 || status=1
+            exit "${status}"
+          }
+          trap cleanup EXIT
+          smoke_status=0
+          docker start --attach "${container_id}" \
+            > build/appimage-evidence/graphical-qualification.log 2>&1 || smoke_status=$?
+          completeness=()
+          if test "${smoke_status}" -eq 0; then
+            completeness=(--complete)
+          fi
+          export_status=0
+          docker cp "${container_id}:/tmp/graphical-evidence/." - \
+            2> build/appimage-evidence/graphical-copy.log | \
+            python3 tools/ci/appimage/export_graphical_evidence.py \
+              --output build/appimage-evidence/graphical "${completeness[@]}" \
+              > build/appimage-evidence/graphical-export.log 2>&1 || export_status=$?
+          test "${smoke_status}" -eq 0 || exit "${smoke_status}"
+          test "${export_status}" -eq 0 || exit "${export_status}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-client-appimage-${{ needs.metadata.outputs.tag }}
