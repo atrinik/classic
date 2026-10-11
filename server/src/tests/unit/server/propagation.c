@@ -8,6 +8,7 @@
 #include <propagation.h>
 #include <object_methods.h>
 #include <player.h>
+#include <server.h>
 #include <monster_data.h>
 #include <perception.h>
 #include <spatial.h>
@@ -282,6 +283,12 @@ START_TEST(test_targeted_spell_rejects_stale_identity_xray_and_glass) {
     object *target = test_creature(map, 10, 8);
     CONTR(source)->target_object = target;
     CONTR(source)->target_object_count = target->count;
+    /* Geometric visibility alone does not authorize an unpublished actor. */
+    ck_assert(perception_player_authorized(CONTR(source), target));
+    ck_assert(!target_player_authorized(CONTR(source), target, NULL));
+    ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    draw_client_map(source);
+    ck_assert(target_player_authorized(CONTR(source), target, NULL));
     SET_FLAG(target, FLAG_IS_INVISIBLE);
     ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
     ck_assert_int_eq(target->stats.hp, 1);
@@ -301,6 +308,18 @@ START_TEST(test_targeted_spell_rejects_stale_identity_xray_and_glass) {
     ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
     ck_assert_int_eq(target->stats.hp, 1);
     object_destruct(wall);
+    ck_assert_int_ne(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    ck_assert_int_gt(target->stats.hp, 1);
+    /* Moving into a new visible cell revokes the old publication identity. */
+    target->stats.hp = 1;
+    object_remove(target, 0);
+    target->x++;
+    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+    ck_assert(perception_player_authorized(CONTR(source), target));
+    ck_assert(!target_player_authorized(CONTR(source), target, NULL));
+    ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    draw_client_map(source);
+    ck_assert(target_player_authorized(CONTR(source), target, NULL));
     ck_assert_int_ne(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
     ck_assert_int_gt(target->stats.hp, 1);
 }
@@ -337,6 +356,51 @@ START_TEST(test_targeted_spell_vertical_range_and_open_floor_hole) {
 }
 END_TEST
 
+START_TEST(test_pre_event_escrow_survives_callback_exhaustion_and_nested_casts) {
+    mapstruct *map = get_empty_map(5, 5);
+    object *source = source_on(map, 2, 2);
+    int range = MAX(SP_level_strength_adjust(source, SP_DESTRUCTION), spells[SP_DESTRUCTION].bdur);
+    propagation_admission outer;
+    ck_assert(propagation_admission_begin(&outer, range, 1, false));
+    /* Simulate the map callback consuming every unreserved cell. */
+    while (propagation_area(source, 35, visit, 1)) {}
+    while (propagation_area(source, 0, visit, 1)) {}
+    ck_assert_uint_eq(propagation_reserved_cells(), PROPAGATION_GLOBAL_CELLS);
+    propagation_admission nested;
+    ck_assert(propagation_admission_begin(&nested, -1, 1, false));
+    propagation_admission_activate(&nested);
+    ck_assert_int_eq(cast_destruction(source, source, 1), 0);
+    propagation_admission_end(&nested);
+    ck_assert_int_eq(cast_destruction(source, source, 1), 0);
+    /* The original cast still owns its credit after the callback returns. */
+    propagation_admission_activate(&outer);
+    ck_assert_int_ne(cast_destruction(source, source, 1), 0);
+    propagation_admission_end(&outer);
+    ck_assert_uint_eq(propagation_reserved_cells(), PROPAGATION_GLOBAL_CELLS);
+    propagation_expire_map(map);
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+    delete_map(map);
+}
+END_TEST
+
+START_TEST(test_admission_override_and_failed_creation_refund) {
+    propagation_admission admission;
+    ck_assert(propagation_admission_begin(&admission, 3, 1, false));
+    ck_assert_uint_gt(propagation_reserved_cells(), 0);
+    propagation_admission_end(&admission);
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+    ck_assert(propagation_admission_begin(&admission, 3, 1, false));
+    size_t reserved_before = propagation_reserved_cells();
+    propagation_admission_activate(&admission);
+    object *removed_source = object_get();
+    ck_assert(!propagation_area(removed_source, 3, visit, 1));
+    ck_assert_uint_eq(propagation_reserved_cells(), reserved_before);
+    propagation_admission_end(&admission);
+    object_destroy(removed_source);
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+}
+END_TEST
+
 void check_server_propagation(void) {
     Suite *suite = suite_create("propagation");
     TCase *core = tcase_create("Core");
@@ -353,6 +417,8 @@ void check_server_propagation(void) {
     tcase_add_test(core, test_disease_open_route_around_cover_retains_identity_and_slabs);
     tcase_add_test(core, test_targeted_spell_rejects_stale_identity_xray_and_glass);
     tcase_add_test(core, test_targeted_spell_vertical_range_and_open_floor_hole);
+    tcase_add_test(core, test_pre_event_escrow_survives_callback_exhaustion_and_nested_casts);
+    tcase_add_test(core, test_admission_override_and_failed_creation_refund);
     suite_add_tcase(suite, core);
     check_run_suite(suite, __FILE__);
 }

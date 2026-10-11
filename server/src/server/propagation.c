@@ -39,6 +39,7 @@ static propagation_cast *casts, *last_cast, *ready_first, *ready_last;
 static size_t reserved, last_expansions;
 static bool processing;
 static uint64_t next_group;
+static propagation_admission *admission_current;
 
 static size_t volume(int radius) {
     if (radius < 0 || radius > 35) {
@@ -47,6 +48,36 @@ static size_t volume(int radius) {
     size_t side = 2u * (unsigned)radius + 1u;
     size_t cells = side * side * MIN(side, 13u);
     return cells <= PROPAGATION_CAST_CELLS ? cells : 0;
+}
+
+bool propagation_admission_begin(propagation_admission *admission, int radius,
+                                 unsigned copies, bool swarm) {
+    size_t cells = radius < 0 ? 0 : volume(radius);
+    size_t overhead = swarm ? 1 : 0;
+    if ((radius >= 0 && (cells == 0 || copies == 0 ||
+         copies > (PROPAGATION_CAST_CELLS - overhead) / cells)) ||
+        cells * copies + overhead > PROPAGATION_GLOBAL_CELLS - reserved) {
+        return false;
+    }
+    admission->remaining = cells * copies + overhead;
+    admission->active = false;
+    admission->previous = admission_current;
+    admission_current = admission;
+    reserved += admission->remaining;
+    return true;
+}
+
+void propagation_admission_activate(propagation_admission *admission) {
+    HARD_ASSERT(admission_current == admission);
+    admission->active = true;
+}
+
+void propagation_admission_end(propagation_admission *admission) {
+    HARD_ASSERT(admission_current == admission);
+    reserved -= admission->remaining;
+    admission_current = admission->previous;
+    admission->remaining = 0;
+    admission->active = false;
 }
 
 bool propagation_can_admit(int radius) {
@@ -123,9 +154,11 @@ static propagation_cast *create_reserved(object *source, int radius, size_t capa
     while (location->env != NULL) {
         location = location->env;
     }
+    bool escrow = credit == NULL && admission_current != NULL && admission_current->active &&
+        admission_current->remaining >= reservation;
     if (location->map == NULL || capacity == 0 || reservation > PROPAGATION_CAST_CELLS ||
         (credit != NULL ? credit->reservation <= reservation :
-         reservation > PROPAGATION_GLOBAL_CELLS - reserved)) {
+         !escrow && reservation > PROPAGATION_GLOBAL_CELLS - reserved)) {
         return NULL;
     }
     propagation_cast *cast = calloc(1, sizeof(*cast));
@@ -167,6 +200,8 @@ static propagation_cast *create_reserved(object *source, int radius, size_t capa
     last_cast = cast;
     if (credit != NULL) {
         credit->reservation -= reservation;
+    } else if (escrow) {
+        admission_current->remaining -= reservation;
     } else {
         reserved += reservation;
     }

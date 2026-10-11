@@ -299,11 +299,11 @@ static void destruction_visit(object *source, mapstruct *map, int x, int y, int 
     object_destroy(hitter);
 }
 
-void cast_destruction(object *op, object *caster, int dam) {
+int cast_destruction(object *op, object *caster, int dam) {
     int range = MAX(SP_level_strength_adjust(caster, SP_DESTRUCTION), spells[SP_DESTRUCTION].bdur);
     dam = MIN(INT16_MAX, dam + SP_level_dam_adjust(caster, SP_DESTRUCTION, false));
     unsigned argument = ((unsigned)SK_level(caster) << 16) | (unsigned)MAX(0, dam);
-    propagation_area(op, range, destruction_visit, (int)argument);
+    return propagation_area(op, range, destruction_visit, (int)argument);
 }
 
 static void rain_heal_visit(object *source, mapstruct *map, int x, int y, int level) {
@@ -1260,7 +1260,7 @@ int cast_cause_disease(object *op,
     object *target = op->type == PLAYER ? CONTR(op)->target_object : op->enemy;
     tag_t target_count = op->type == PLAYER ? CONTR(op)->target_object_count : op->enemy_count;
     if (target != op && OBJECT_VALID(target, target_count) &&
-        (op->type == PLAYER ? perception_player_authorized(CONTR(op), target) :
+        (op->type == PLAYER ? target_player_authorized(CONTR(op), target, NULL) :
          perception_object_visible(op, target))) {
         int ox, oy, oz;
         if (spatial_offset(op->map, target->map, &ox, &oy, &oz)) {

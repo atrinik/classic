@@ -52,8 +52,35 @@ static object *spell_aim_target(object *source) {
     if (target == source || !OBJECT_VALID(target, count)) {
         return NULL;
     }
-    return (source->type == PLAYER ? perception_player_authorized(CONTR(source), target) :
+    return (source->type == PLAYER ? target_player_authorized(CONTR(source), target, NULL) :
             perception_object_visible(source, target)) ? target : NULL;
+}
+
+static bool spell_target_authorized(object *op, object *target, int type) {
+    /* Retained identity and camera authorization are fresh requirements for
+     * targeted spatial spells. Xray can disclose a target but never lets magic
+     * cross solid combat geometry. Self/inventory and party spells stay exempt. */
+    if (target != NULL && target != op && !(spells[type].flags & SPELL_DESC_DIRECTION)) {
+        int dx, dy, dz;
+        tag_t target_count = target->count, source_count = op->count;
+        if (!(op->type == PLAYER ? target_player_authorized(CONTR(op), target, NULL) :
+              perception_object_visible(op, target)) ||
+            !OBJECT_VALID(op, source_count) || !OBJECT_VALID(target, target_count) ||
+            !spatial_offset(op->map, target->map, &dx, &dy, &dz)) {
+            return false;
+        }
+        dx += target->x - op->x;
+        dy += target->y - op->y;
+        if (abs(dz) > 6 || MAX(abs(dx), MAX(abs(dy), abs(dz))) > spells[type].range) {
+            draw_info(COLOR_WHITE, op, "Your target is out of range!");
+            return false;
+        }
+        if (!spatial_ray_clear(op->map, op->x, op->y, dx, dy, dz, SPATIAL_COMBAT, false)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 /**
@@ -385,31 +412,14 @@ int cast_spell(object *op,
         return 0;
     }
 
-    /* Retained identity and camera authorization are fresh requirements for
-     * targeted spatial spells. Xray can disclose a target but never lets magic
-     * cross solid combat geometry. Self/inventory and party spells stay exempt. */
-    if (target != NULL && target != op && !(spells[type].flags & SPELL_DESC_DIRECTION)) {
-        int dx, dy, dz;
-        tag_t target_count = target->count, source_count = op->count;
-        if (!(op->type == PLAYER ? perception_player_authorized(CONTR(op), target) :
-              perception_object_visible(op, target)) ||
-            !OBJECT_VALID(op, source_count) || !OBJECT_VALID(target, target_count) ||
-            !spatial_offset(op->map, target->map, &dx, &dy, &dz)) {
-            return 0;
-        }
-        dx += target->x - op->x;
-        dy += target->y - op->y;
-        if (abs(dz) > 6 || MAX(abs(dx), MAX(abs(dy), abs(dz))) > spells[type].range) {
-            draw_info(COLOR_WHITE, op, "Your target is out of range!");
-            return 0;
-        }
-        if (!spatial_ray_clear(op->map, op->x, op->y, dx, dy, dz, SPATIAL_COMBAT, false)) {
-            return 0;
-        }
+    if (!spell_target_authorized(op, target, type)) {
+        return 0;
     }
 
     /* Reject an over-bound area before map events, combat marking or costs. */
     int propagation_radius = -1;
+    unsigned propagation_copies = 1;
+    bool propagation_swarm = false;
     switch ((enum spellnrs)type) {
         case SP_ICESTORM:
         case SP_FIRESTORM:
@@ -422,24 +432,62 @@ int cast_spell(object *op,
         case SP_RAIN_HEAL:
             propagation_radius = 1;
             break;
+        case SP_BULLET:
+        case SP_CAUSE_LIGHT:
+        case SP_MAGIC_MISSILE:
+        case SP_POISON_FOG:
+        case SP_METEOR:
+        case SP_ASTEROID:
+            if (spellarch[type] != NULL && spellarch[type]->clone.other_arch != NULL) {
+                propagation_radius = spells[type].bdur / 2 + 1;
+            }
+            break;
+        case SP_METEOR_SWARM:
+        case SP_FROST_NOVA:
+        case SP_BULLET_SWARM:
+        case SP_BULLET_STORM: {
+            int child_type = type == SP_METEOR_SWARM ? SP_METEOR :
+                type == SP_FROST_NOVA ? SP_ASTEROID : SP_BULLET;
+            propagation_radius = spells[child_type].bdur / 2 + 1;
+            propagation_copies = type == SP_BULLET_SWARM ? 5 : 3;
+            propagation_swarm = true;
+            break;
+        }
         default:
             break;
     }
-    if (propagation_radius >= 0 && !propagation_can_admit(propagation_radius)) {
+    propagation_admission admission;
+    if (!propagation_admission_begin(&admission, propagation_radius, propagation_copies,
+                                      propagation_swarm)) {
         draw_info(COLOR_WHITE, op, "There is too much magic in motion to cast that spell.");
         return 0;
     }
 
-    /* Trigger the map-wide spell event. */
-    if (op->map && op->map->events) {
+    tag_t admitted_source = op->count, admitted_caster = caster->count;
+    tag_t admitted_target = target != NULL ? target->count : 0;
+    /* Trigger the map-wide spell event only after reserving capacity. */
+    bool triggered_spell_event = op->map != NULL && op->map->events != NULL;
+    if (triggered_spell_event) {
         int retval =
             trigger_map_event(MEVENT_SPELL_CAST, op->map, op, caster, NULL, stringarg, type);
 
         /* So the plugin's return value can affect the returned value. */
         if (retval) {
+            propagation_admission_end(&admission);
             return retval - 1;
         }
     }
+    if (!OBJECT_VALID(op, admitted_source) || !OBJECT_VALID(caster, admitted_caster) ||
+        (target != NULL && !OBJECT_VALID(target, admitted_target))) {
+        propagation_admission_end(&admission);
+        return 0;
+    }
+    if (triggered_spell_event &&
+        (!spell_target_authorized(op, target, type) || !OBJECT_VALID(caster, admitted_caster))) {
+        propagation_admission_end(&admission);
+        return 0;
+    }
+    propagation_admission_activate(&admission);
 
     if (caster->type == PLAYER &&
         ((spells[type].flags & SPELL_DESC_ENEMY) != 0 ||
@@ -583,8 +631,7 @@ int cast_spell(object *op,
             break;
 
         case SP_DESTRUCTION:
-            success = 1;
-            cast_destruction(op, caster, 5 + op->stats.Int);
+            success = cast_destruction(op, caster, 5 + op->stats.Int);
             break;
 
         case SP_TRANSFORM_WEALTH:
@@ -609,6 +656,7 @@ int cast_spell(object *op,
             break;
     }
 
+    propagation_admission_end(&admission);
     play_sound_map(op->map, CMD_SOUND_EFFECT, spells[type].sound, op->x, op->y, 0, 0);
 
     if (item == CAST_NPC) {
@@ -789,7 +837,7 @@ int fire_arch_from_position(object *op,
         observer = env;
     }
     if (target != NULL && target != observer &&
-        !(observer->type == PLAYER ? perception_player_authorized(CONTR(observer), target) :
+        !(observer->type == PLAYER ? target_player_authorized(CONTR(observer), target, NULL) :
           perception_object_visible(observer, target))) {
         target = NULL;
     }
