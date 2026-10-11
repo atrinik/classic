@@ -144,6 +144,23 @@ static MapCell *actor_cache_cell(socket_struct *cs, const object *pl, const obje
                                  cs->mapy_2 + actor->y - pl->y, false);
 }
 
+static void queue_target_select(socket_struct *cs, uint8_t x, uint8_t y, int8_t depth,
+                                tag_t actor_count) {
+    uint8_t frame[] = {
+        SERVER_CMD_TARGET,
+        CMD_TARGET_MAPXY,
+        x,
+        y,
+        (uint8_t)depth,
+        (uint8_t)(actor_count >> 24),
+        (uint8_t)(actor_count >> 16),
+        (uint8_t)(actor_count >> 8),
+        (uint8_t)actor_count,
+    };
+    ck_assert_uint_eq(sizeof(frame), 1U + TARGET_SELECT_PAYLOAD_SIZE);
+    ck_assert(socket_server_command_queue_append(cs, frame, sizeof(frame)));
+}
+
 START_TEST(test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh) {
     mapstruct *map;
     object *pl;
@@ -158,6 +175,30 @@ START_TEST(test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh) {
     assert_aborted(pl);
 
     assert_fresh_publication(pl);
+}
+END_TEST
+
+/* The client-target queue reaches the normal command dispatcher, whose target
+ * authorization invokes ASK_SHOW before accepting the exact 1084 MAPXY
+ * identity. The callback frees its own observer while handle_newcs_player is
+ * still unwinding the command loop. */
+START_TEST(test_queued_target_kick_observer_withdraws_dispatch_authority) {
+    mapstruct *map;
+    object *observer;
+    fixture(&map, &observer);
+    name_player(observer, "los-target-kick-observer");
+    object *actor = place(map, "raas", 13, 12);
+    player *controller = CONTR(observer);
+    socket_struct *socket = controller->cs;
+    draw_client_map(observer);
+    socket_buffer_clear(socket);
+    ask_show(actor, "kick_observer");
+    tag_t count = observer->count;
+
+    queue_target_select(socket, socket->mapx_2 + actor->x - observer->x,
+                        socket->mapy_2 + actor->y - observer->y, 0, actor->count);
+    ck_assert_int_eq(handle_newcs_player(controller), -1);
+    ck_assert(!player_connection_is_current(observer, count, controller, socket));
 }
 END_TEST
 
@@ -416,6 +457,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_ask_show_viewstate_change_withdraws_earlier_dark_actor);
     tcase_add_test(tc, test_ask_show_kicking_observer_withdraws_snapshot_and_continues_postprocess);
     tcase_add_test(tc, test_ask_show_kicking_observer_during_direct_map2_withdraws_authority);
+    tcase_add_test(tc, test_queued_target_kick_observer_withdraws_dispatch_authority);
     tcase_add_test(tc, test_ask_show_kicking_next_player_rejects_postprocess_snapshot);
     tcase_add_test(tc, test_ask_show_upper_roof_aborts_stale_map2_and_hides_actor);
     tcase_add_test(tc, test_ask_show_mutating_earlier_actor_aborts_whole_map2_transaction);
