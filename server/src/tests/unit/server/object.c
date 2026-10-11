@@ -1777,7 +1777,10 @@ START_TEST(test_retained_object_references_validate_storage_before_identity) {
     for (size_t i = 0; i < num_held; i++) {
         held[i] = object_get();
     }
-    object *target = object_get();
+    /* Map insertion requires an archetype. Allocate it only after draining
+     * the free chunks so the target still owns the fresh puddle below. */
+    object *target = arch_get("letter");
+    ck_assert_ptr_nonnull(target);
     tag_t count = target->count;
     mempool_chunk_struct *storage = pool->puddlelist[0]->first_chunk;
     ck_assert_ptr_eq(MEM_POOLDATA(target), storage);
