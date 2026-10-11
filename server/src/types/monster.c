@@ -49,6 +49,8 @@
 #include <object.h>
 #include <object_methods.h>
 #include <waypoint.h>
+#include <perception.h>
+#include <spatial.h>
 
 static int can_detect_enemy(object *op, object *enemy, rv_vector *rv);
 static object *find_nearest_enemy(object *ob);
@@ -70,6 +72,43 @@ static void pace_moveh(object *ob);
 static void pace2_movev(object *ob);
 static void pace2_moveh(object *ob);
 static void rand_move(object *ob);
+
+/* Acquisition is bounded to 65,533 cells across all thirteen physical stories.
+ * Existing object-pair range is Euclidean; one physical story has unit height. */
+#define MONSTER_PERCEPTION_RADIUS 35
+
+static bool monster_rangevector(object *observer, object *target, rv_vector *rv) {
+    bool found = false;
+    unsigned best = 0;
+    for (object *part = observer; part != NULL; part = part->more) {
+        int dx, dy, dz;
+        if (part->map == NULL || target->map == NULL ||
+            !spatial_offset(part->map, target->map, &dx, &dy, &dz)) {
+            continue;
+        }
+        dx += target->x - part->x;
+        dy += target->y - part->y;
+        if (abs(dz) > MAP2_MAX_DEPTH) {
+            continue;
+        }
+        /* Bound before multiplication, including a retained distant enemy. */
+        if (abs(dx) > 32767 || abs(dy) > 32767) {
+            continue;
+        }
+        unsigned square = (unsigned)(dx * dx) + (unsigned)(dy * dy) + (unsigned)(dz * dz);
+        if (!found || square < best) {
+            found = true;
+            best = square;
+            rv->distance_x = dx;
+            rv->distance_y = dy;
+            rv->distance_z = dz;
+            rv->distance = isqrt(square);
+            rv->direction = coords_distance_to_dir(-dx, -dy);
+            rv->part = part;
+        }
+    }
+    return found;
+}
 
 /**
  * Update (or clear) an NPC's enemy. Perform most of the housekeeping
@@ -115,11 +154,7 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
             rv = &rv2;
         }
 
-        get_rangevector(npc,
-                        enemy,
-                        rv,
-                        RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD |
-                            RV_RECURSIVE_SEARCH_EXTENDED);
+        monster_rangevector(npc, enemy, rv);
         npc->enemy_count = enemy->count;
 
         /* important: that's our "we lose aggro count" - reset to zero here */
@@ -367,7 +402,7 @@ object *find_enemy(object *npc, rv_vector *rv) {
         tmp = find_nearest_enemy(npc);
 
         if (tmp) {
-            get_rangevector(npc, tmp, rv, 0);
+            monster_rangevector(npc, tmp, rv);
         }
 
         return tmp;
@@ -390,12 +425,8 @@ object *find_enemy(object *npc, rv_vector *rv) {
                 /* Always clear the attacker entry */
                 npc->attacked_by = NULL;
 
-                if (on_same_map(npc, attacker) &&
-                    get_rangevector(npc,
-                                    attacker,
-                                    rv,
-                                    RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD |
-                                        RV_RECURSIVE_SEARCH_EXTENDED)) {
+                if (monster_rangevector(npc, attacker, rv) &&
+                    perception_object_visible(npc, attacker)) {
                     /* The only thing we must know... */
 
                     CLEAR_FLAG(npc, FLAG_SLEEP);
@@ -429,9 +460,8 @@ object *find_enemy(object *npc, rv_vector *rv) {
 }
 
 /**
- * Controls if monster still can see/detect its enemy.
- *
- * Includes visibility but also map and area control.
+ * Check a retained enemy's loaded physical neighborhood and aggro timeout.
+ * Current sight is checked separately before aimed actions.
  * @param op
  * The monster object.
  * @param enemy
@@ -442,20 +472,10 @@ object *find_enemy(object *npc, rv_vector *rv) {
  * 1 if can see/detect, 0 otherwise.
  */
 static int can_detect_enemy(object *op, object *enemy, rv_vector *rv) {
-    /* Will check for legal maps too */
-    if (!op || !enemy || !on_same_map(op, enemy)) {
-        return 0;
-    }
-
-    /* We check for sys_invisible and normal */
-    if (IS_INVISIBLE(enemy, op) || QUERY_FLAG(enemy, FLAG_INVULNERABLE)) {
-        return 0;
-    }
-
-    if (!get_rangevector(op,
-                         enemy,
-                         rv,
-                         RV_RECURSIVE_SEARCH | RV_NO_LOAD | RV_RECURSIVE_SEARCH_EXTENDED)) {
+    /* Retain pursuit memory when current sight is lost. Aiming is separately
+     * gated by fresh physical perception in process_func(). */
+    if (op == NULL || enemy == NULL || QUERY_FLAG(enemy, FLAG_INVULNERABLE) ||
+        !monster_rangevector(op, enemy, rv)) {
         return 0;
     }
 
@@ -513,6 +533,7 @@ static void process_func(object *op) {
      * find_enemy() checks the old enemy or gets us a new one. */
 
     object *enemy;
+    bool enemy_visible = false;
     rv_vector rv;
     /* We never ever attack */
     if (QUERY_FLAG(op, FLAG_NO_ATTACK)) {
@@ -522,15 +543,16 @@ static void process_func(object *op) {
 
         enemy = NULL;
     } else if ((enemy = find_enemy(op, &rv)) != NULL) {
+        enemy_visible = perception_object_visible(op, enemy);
         CLEAR_FLAG(op, FLAG_SLEEP);
         op->direction = rv.direction;
 
-        if (rv.distance <= 1 && rv.distance_z == 0) {
+        if (enemy_visible && rv.distance <= 1 && rv.distance_z == 0) {
             op->anim_flags |= ANIM_FLAG_ATTACKING;
         }
 
-        if (!enemy->attacked_by ||
-            (enemy->attacked_by && enemy->attacked_by_distance > (int)rv.distance)) {
+        if (enemy_visible && (!enemy->attacked_by ||
+            (enemy->attacked_by && enemy->attacked_by_distance > (int)rv.distance))) {
             /* We have an enemy, just tell him we want him dead */
             enemy->attacked_by = op;
             enemy->attacked_by_count = op->count;
@@ -677,7 +699,7 @@ static void process_func(object *op) {
             op->last_grace--;
         }
 
-        if (op->stats.Dex && rndm_chance(op->stats.Dex)) {
+        if (enemy_visible && op->stats.Dex && rndm_chance(op->stats.Dex)) {
             if (QUERY_FLAG(op, FLAG_CAST_SPELL) && !op->last_grace) {
                 if (monster_cast_spell(op,
                                        part,
@@ -752,7 +774,8 @@ static void process_func(object *op) {
     /* Try to move closer to enemy, or follow whatever special attack behavior
      * is */
     if (!QUERY_FLAG(op, FLAG_STAND_STILL) &&
-        (QUERY_FLAG(op, FLAG_SCARED) || QUERY_FLAG(op, FLAG_RUN_AWAY) || !can_hit(part, &rv) ||
+        (QUERY_FLAG(op, FLAG_SCARED) || QUERY_FLAG(op, FLAG_RUN_AWAY) || !enemy_visible ||
+         !can_hit(part, &rv) ||
          ((op->attack_move_type & LO4) && special_dir != dir))) {
         object *aggro_wp = waypoint_get_aggro(op);
 
@@ -808,7 +831,8 @@ static void process_func(object *op) {
     }
 
     /* Hit enemy if possible */
-    if (!QUERY_FLAG(op, FLAG_SCARED) && !QUERY_FLAG(enemy, FLAG_REMOVED) && can_hit(part, &rv)) {
+    if (enemy_visible && !QUERY_FLAG(op, FLAG_SCARED) && !QUERY_FLAG(enemy, FLAG_REMOVED) &&
+        can_hit(part, &rv)) {
         if (QUERY_FLAG(op, FLAG_RUN_AWAY)) {
             part->stats.wc -= 10;
 
@@ -838,7 +862,9 @@ static void process_func(object *op) {
         return;
     }
 
-    monster_data_enemy_update(op, enemy);
+    if (enemy_visible) {
+        monster_data_enemy_update(op, enemy);
+    }
 }
 
 /**
@@ -873,7 +899,7 @@ static int can_detect_target(object *op,
         return 0;
     }
 
-    if (!get_rangevector(op, target, rv, 0)) {
+    if (!monster_rangevector(op, target, rv) || !perception_object_visible(op, target)) {
         return 0;
     }
 
@@ -921,46 +947,32 @@ static object *find_nearest_enemy(object *ob) {
         aggro_stealth = MIN_MON_RADIUS;
     }
 
-    for (i = -aggro_range; i <= aggro_range; i++) {
-        for (j = -aggro_range; j <= aggro_range; j++) {
-            xt = ob->x + i;
-            yt = ob->y + j;
-
-            if (!(m = get_map_from_coord2(ob->map, &xt, &yt))) {
-                continue;
-            }
-
-            /* Nothing alive here? Move on... */
-            if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
-                continue;
-            }
-
-            for (tmp = GET_MAP_OB(m, xt, yt); tmp; tmp = tmp->above) {
-                /* Get head. */
-                if (tmp->head) {
-                    tmp = tmp->head;
-                }
-
-                /* Skip the monster looking for enemy and not alive objects. */
-                if (tmp == ob || !IS_LIVE(tmp)) {
+    aggro_range = MIN(aggro_range, MONSTER_PERCEPTION_RADIUS);
+    for (int z = -MIN(aggro_range, MAP2_MAX_DEPTH); z <= MIN(aggro_range, MAP2_MAX_DEPTH); z++) {
+        for (i = -aggro_range; i <= aggro_range; i++) {
+            for (j = -aggro_range; j <= aggro_range; j++) {
+                spatial_cell cell;
+                if (!spatial_resolve(ob->map, ob->x + i, ob->y + j, z, &cell)) {
                     continue;
                 }
-
-                if (!can_detect_target(ob, tmp, aggro_range, aggro_stealth, &rv)) {
+                m = cell.map;
+                xt = cell.x;
+                yt = cell.y;
+                if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
                     continue;
                 }
-
-                if (!obj_in_line_of_sight(tmp, &rv)) {
-                    continue;
+                /* Never replace the stack iterator with a multipart head. */
+                for (object *stack = GET_MAP_OB(m, xt, yt); stack != NULL; stack = stack->above) {
+                    tmp = HEAD(stack);
+                    if (tmp == ob || !IS_LIVE(tmp) ||
+                        !can_detect_target(ob, tmp, aggro_range, aggro_stealth, &rv)) {
+                        continue;
+                    }
+                    if (!is_friend_of(ob, tmp)) {
+                        return tmp;
+                    }
+                    monster_guard_check(ob, tmp, NULL, rv.distance);
                 }
-
-                /* Now check the friend status, whether we can reach the enemy,
-                 * and LOS. */
-                if (!is_friend_of(ob, tmp)) {
-                    return tmp;
-                }
-
-                monster_guard_check(ob, tmp, NULL, rv.distance);
             }
         }
     }

@@ -38,6 +38,8 @@
 #include <server_item.h>
 #include <monster.h>
 #include <los.h>
+#include <perception.h>
+#include <spatial.h>
 #include <initialization.h>
 #include <hiscore.h>
 #include <account.h>
@@ -212,7 +214,6 @@ static char *player_resolve_saved_path(const player *pl, const char *value) {
  */
 bool player_target_is_in_map_neighborhood(const player *pl) {
     object *target;
-    rv_vector rv;
 
     if (pl == NULL || pl->ob == NULL || pl->ob->map == NULL || pl->target_object == NULL) {
         return false;
@@ -227,7 +228,9 @@ bool player_target_is_in_map_neighborhood(const player *pl) {
         return false;
     }
 
-    return get_rangevector(pl->ob, target, &rv, 0);
+    int dx, dy, dz;
+    return spatial_offset(pl->ob->map, target->map, &dx, &dy, &dz) &&
+           abs(dz) <= MAP2_MAX_DEPTH;
 }
 
 /**
@@ -4454,10 +4457,7 @@ static bool player_target_needs_update(const player *pl) {
     }
 
     return !OBJECT_VALID(target, pl->target_object_count) ||
-           QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
-           (QUERY_FLAG(target, FLAG_IS_INVISIBLE) &&
-            !QUERY_FLAG(pl->ob, FLAG_SEE_INVISIBLE)) ||
-           !player_target_is_in_map_neighborhood(pl);
+           !perception_player_authorized(pl, target);
 }
 
 static void player_update_target(player *pl) {
@@ -4482,7 +4482,12 @@ static void process_func(object *op) {
     player *pl = CONTR(op);
     int retval;
 
-    while ((retval = handle_newcs_player(pl)) == 1) {}
+    /* Packet actions may aim at a retained selection, so refresh before the
+     * first action and between queued actions that can change visibility. */
+    player_update_target(pl);
+    while ((retval = handle_newcs_player(pl)) == 1) {
+        player_update_target(pl);
+    }
 
     if (retval == -1) {
         return;
@@ -4520,8 +4525,7 @@ static void process_func(object *op) {
         }
     }
 
-    /* Clear targets that are no longer locally reachable before processing
-     * player actions, so spells use the normal self-target fallback. */
+    /* Refresh again after following/transfers and before automatic attacks. */
     player_update_target(pl);
 
     /* Use the target system to hit our target - don't hit friendly

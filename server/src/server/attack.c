@@ -44,6 +44,7 @@
 #include <disease.h>
 #include <skills.h>
 #include <player_status.h>
+#include <perception.h>
 
 /**
  * Names of attack types to use when saving them to file.
@@ -348,8 +349,7 @@ static bool attack_player_target_is_active(object *player_obj) {
     if (!pl->combat || target == NULL || target == player_obj ||
         !OBJECT_VALID(target, pl->target_object_count) || !IS_LIVE(target) ||
         target->stats.hp <= 0 || QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
-        IS_INVISIBLE(target, player_obj) || OBJECT_IS_HIDDEN(player_obj, target) ||
-        is_friend_of(player_obj, target) || !player_target_is_in_map_neighborhood(pl) ||
+        !perception_player_authorized(pl, target) || is_friend_of(player_obj, target) ||
         !OBJECT_VALID(target->enemy, target->enemy_count) || target->enemy != player_obj) {
         return false;
     }
@@ -380,12 +380,10 @@ static void attack_player_retarget(object *player_obj, object *attacker, int dam
     }
 
     attacker = HEAD(attacker);
-    rv_vector rv;
     if (attacker == player_obj || !OBJECT_ACTIVE(attacker) || !IS_LIVE(attacker) ||
         attacker->stats.hp <= 0 || QUERY_FLAG(attacker, FLAG_SYS_OBJECT) ||
         attacker->env != NULL || player_obj->map == NULL || attacker->map == NULL ||
-        !get_rangevector(player_obj, attacker, &rv, 0) ||
-        IS_INVISIBLE(attacker, player_obj) || OBJECT_IS_HIDDEN(player_obj, attacker) ||
+        !perception_player_authorized(CONTR(player_obj), attacker) ||
         is_friend_of(attacker, player_obj) || attack_player_target_is_active(player_obj)) {
         return;
     }
