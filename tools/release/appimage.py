@@ -227,7 +227,7 @@ def _json(path: Path) -> dict:
     return result
 
 
-def _elf(path: Path, *, executable: bool = False) -> tuple[set[str], str | None]:
+def _elf(path: Path, *, executable: bool = False, lock: dict | None = None) -> tuple[set[str], str | None]:
     if path.stat().st_size > 256 * 1024**2:
         raise ValueError(f"AppImage ELF exceeds inspection limits: {path.name}")
     data = path.read_bytes()
@@ -257,8 +257,16 @@ def _elf(path: Path, *, executable: bool = False) -> tuple[set[str], str | None]
         raise ValueError(f"AppImage ELF contains test instrumentation: {path.name}")
     program = _run("readelf", "--wide", "--program-headers", str(path))
     interpreters = re.findall(r"\[Requesting program interpreter: ([^\]]+)\]", program)
+    # This locked libcap build deliberately supports direct execution while
+    # remaining a shared library. Preserve the library rule for every other
+    # SONAME and package, including other libraries produced by libcap2.
+    libcap_interpreter = (not executable and path.name == "libcap.so.2"
+                          and sonames == ["libcap.so.2"] and lock is not None
+                          and lock.get("system_library_packages", {}).get("libcap.so.2") == "libcap2"
+                          and lock.get("system_package_versions", {}).get("libcap2") == "1:2.66-5ubuntu2.4"
+                          and interpreters == ["/lib64/ld-linux-x86-64.so.2"])
     if (executable and interpreters != ["/lib64/ld-linux-x86-64.so.2"]
-            or not executable and (interpreters or data[16:18] != b"\x03\0")):
+            or not executable and (interpreters and not libcap_interpreter or data[16:18] != b"\x03\0")):
         raise ValueError(f"AppImage ELF has an unexpected program interpreter: {path.name}")
     return needed, sonames[0] if sonames else None
 
@@ -480,14 +488,14 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
             continue
         file = root / name
         if name == "usr/lib/ossl-modules/legacy.so":
-            needed, soname = _elf(file)
+            needed, soname = _elf(file, lock=lock)
             if soname is not None:
                 raise ValueError("AppImage OpenSSL provider has unexpected SONAME")
             dependencies[name] = needed
         elif name.startswith("usr/lib/"):
             if PurePosixPath(name).parent != PurePosixPath("usr/lib") or ".so" not in file.name or HOST_ONLY.fullmatch(file.name):
                 raise ValueError(f"forbidden AppImage bundled library: {name}")
-            needed, soname = _elf(file)
+            needed, soname = _elf(file, lock=lock)
             if soname is None or HOST_ONLY.fullmatch(soname) or soname in providers:
                 raise ValueError(f"invalid or duplicate AppImage library SONAME: {name}")
             providers[soname] = name

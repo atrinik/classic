@@ -470,6 +470,34 @@ class AppImageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expected):
                     appimage._elf(elf, executable=True)
 
+    def test_libcap_interpreter_exception_requires_exact_locked_identity(self):
+        cap = self.write("usr/lib/libcap.so.2", Path("/usr/bin/true").read_bytes())
+        psx = self.write("usr/lib/libpsx.so.2", cap.read_bytes())
+        lock = {"system_library_packages": {"libcap.so.2": "libcap2"},
+                "system_package_versions": {"libcap2": "1:2.66-5ubuntu2.4"}}
+        program = "[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]"
+        def inspect(path, trusted_lock, soname="libcap.so.2", interpreter=program):
+            dynamic = f"(SONAME) Library soname: [{soname}]"
+            with mock.patch.object(appimage, "_run", side_effect=[dynamic, "", "", interpreter]):
+                return appimage._elf(path, lock=trusted_lock)
+        self.assertEqual(inspect(cap, lock), (set(), "libcap.so.2"))
+        for path, trusted_lock, soname, interpreter in (
+            (cap, None, "libcap.so.2", program),
+            (cap, dict(lock, system_library_packages={"libcap.so.2": "unrelated"}), "libcap.so.2", program),
+            (cap, dict(lock, system_package_versions={"libcap2": "1:2.66-5ubuntu2.5"}), "libcap.so.2", program),
+            (cap, lock, "libpsx.so.2", program),
+            (psx, lock, "libcap.so.2", program),
+            (cap, lock, "libcap.so.2", "[Requesting program interpreter: /evil/ld-linux-x86-64.so.2]"),
+            (cap, lock, "libcap.so.2", program + "\n" + program),
+        ):
+            with self.subTest(path=path.name, lock=trusted_lock, soname=soname), self.assertRaisesRegex(ValueError, "interpreter"):
+                inspect(path, trusted_lock, soname, interpreter)
+        data = bytearray(cap.read_bytes())
+        data[16:18] = b"\x02\0"  # ET_EXEC remains forbidden for shared libraries.
+        cap.write_bytes(data)
+        with self.assertRaisesRegex(ValueError, "interpreter"):
+            inspect(cap, lock)
+
     def test_library_provenance_is_bound_to_locked_package_and_file(self):
         record = self.metadata["bundled_library_records"][0]
         for field, value in (("source", "deb:unrelated"), ("version", "unlocked-version"),
