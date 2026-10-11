@@ -39,17 +39,17 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && printf '%s\n' \
  'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261010T000000Z noble main' \
  'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261010T000000Z noble-updates main' > /etc/apt/sources.list && \
- apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update && apt-get install -y --no-install-recommends binutils util-linux coreutils && rm -rf /var/lib/apt/lists/* /etc/ssl/certs/ca-certificates.crt
+ apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update && apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt install -y --no-install-recommends binutils util-linux coreutils && rm -rf /var/lib/apt/lists/* /etc/ssl/certs/ca-certificates.crt
 
 FROM ubuntu:26.04@sha256:88a381d5b5eeb2b35d3ad70925a362c37ce569daf43ede89ff818ec20e4d3794 AS smoke-ubuntu26
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && printf '%s\n' \
  'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261001T000000Z resolute main' \
  'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261001T000000Z resolute-updates main' > /etc/apt/sources.list && \
- apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update && apt-get install -y --no-install-recommends binutils util-linux coreutils && rm -rf /var/lib/apt/lists/* /etc/ssl/certs/ca-certificates.crt
+ apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update && apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt install -y --no-install-recommends binutils util-linux coreutils && rm -rf /var/lib/apt/lists/* /etc/ssl/certs/ca-certificates.crt
 
 FROM debian:13-slim@sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483 AS smoke-debian13
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN rm -f /etc/apt/sources.list.d/debian.sources && printf '%s\n' \
  'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg check-valid-until=no] https://snapshot.debian.org/archive/debian/20261001T000000Z/ trixie main' > /etc/apt/sources.list && \
- apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update && apt-get install -y --no-install-recommends binutils util-linux coreutils && rm -rf /var/lib/apt/lists/* /etc/ssl/certs/ca-certificates.crt
+ apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update && apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt install -y --no-install-recommends binutils util-linux coreutils && rm -rf /var/lib/apt/lists/* /etc/ssl/certs/ca-certificates.crt
