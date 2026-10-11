@@ -4457,7 +4457,7 @@ static bool player_target_needs_update(const player *pl) {
     }
 
     return !OBJECT_VALID(target, pl->target_object_count) ||
-           !perception_player_authorized(pl, target);
+           !target_player_authorized(pl, target, NULL);
 }
 
 static void player_update_target(player *pl) {

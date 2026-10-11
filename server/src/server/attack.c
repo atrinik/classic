@@ -349,7 +349,7 @@ static bool attack_player_target_is_active(object *player_obj) {
     if (!pl->combat || target == NULL || target == player_obj ||
         !OBJECT_VALID(target, pl->target_object_count) || !IS_LIVE(target) ||
         target->stats.hp <= 0 || QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
-        !perception_player_authorized(pl, target) || is_friend_of(player_obj, target) ||
+        !target_player_authorized(pl, target, NULL) || is_friend_of(player_obj, target) ||
         !OBJECT_VALID(target->enemy, target->enemy_count) || target->enemy != player_obj) {
         return false;
     }
@@ -383,7 +383,7 @@ static void attack_player_retarget(object *player_obj, object *attacker, int dam
     if (attacker == player_obj || !OBJECT_ACTIVE(attacker) || !IS_LIVE(attacker) ||
         attacker->stats.hp <= 0 || QUERY_FLAG(attacker, FLAG_SYS_OBJECT) ||
         attacker->env != NULL || player_obj->map == NULL || attacker->map == NULL ||
-        !perception_player_authorized(CONTR(player_obj), attacker) ||
+        !target_player_authorized(CONTR(player_obj), attacker, NULL) ||
         is_friend_of(attacker, player_obj) || attack_player_target_is_active(player_obj)) {
         return;
     }
