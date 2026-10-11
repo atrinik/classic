@@ -2,7 +2,17 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 /* The private prepare seam preserves the production HTTPS/parser path while
  * selecting eight-bit work solely in this independently linked test. */
+#ifdef ATRINIK_TEST_SOURCE_WRAP
+/* Mach-O has no GNU --wrap. Load declarations before redirecting only calls
+ * in the production implementation included below. */
+#include <curl/curl.h>
+CURL *__wrap_curl_easy_init(void);
+#define curl_easy_init __wrap_curl_easy_init
+#endif
 #include "../rendezvous_admission.c"
+#ifdef ATRINIK_TEST_SOURCE_WRAP
+#undef curl_easy_init
+#endif
 #include <toolkit/logger.h>
 #include "../socket_private.h"
 
@@ -18,7 +28,11 @@ static const char ticket[] = "22222222222222222222222222222222222222222222222222
 static const char server_id[] = "1111111111111111111111111111111111111111111111111111111111111111";
 static unsigned int solver_calls;
 
+#ifdef ATRINIK_TEST_SOURCE_WRAP
+#define __real_curl_easy_init curl_easy_init
+#else
 CURL *__real_curl_easy_init(void);
+#endif
 CURL *__wrap_curl_easy_init(void) {
     CURL *handle = __real_curl_easy_init();
     const char *ca = getenv("ATRINIK_TEST_ADMISSION_CA");

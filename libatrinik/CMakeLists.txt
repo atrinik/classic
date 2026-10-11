@@ -676,8 +676,13 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         add_executable(libatrinik-rendezvous-admission-https
             tests/rendezvous_admission_https.c)
         atrinik_configure_target(libatrinik-rendezvous-admission-https)
-        target_link_options(libatrinik-rendezvous-admission-https PRIVATE
-            "-Wl,--wrap=curl_easy_init")
+        if (APPLE)
+            target_compile_definitions(libatrinik-rendezvous-admission-https PRIVATE
+                ATRINIK_TEST_SOURCE_WRAP)
+        else ()
+            target_link_options(libatrinik-rendezvous-admission-https PRIVATE
+                "-Wl,--wrap=curl_easy_init")
+        endif ()
         target_link_libraries(libatrinik-rendezvous-admission-https PRIVATE Atrinik::Core)
         add_test(NAME libatrinik-rendezvous-admission-https
             COMMAND "${Python3_EXECUTABLE}"
