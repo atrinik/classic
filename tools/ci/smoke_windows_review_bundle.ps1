@@ -205,6 +205,7 @@ public static class AtrinikReviewCloseTimeoutProbe {
         int length = Marshal.ReadInt32(count);
         if (length < 1 || length > MaxNodes) return "wct_invalid_count";
         var rows = new System.Collections.Generic.List<string>();
+        bool externalBoundary = false;
         string[] types = { "Unknown", "CriticalSection", "SendMessage", "Mutex", "Alpc",
             "Com", "ThreadWait", "ProcessWait", "Thread", "ComActivation", "Unknown",
             "SocketIo", "SmbIo" };
@@ -218,13 +219,17 @@ public static class AtrinikReviewCloseTimeoutProbe {
             if (type == 8) { // WctThreadType
                 if (unchecked((uint)Marshal.ReadInt32(node, 8)) != processId) {
                     rows.Add("external_thread_boundary");
-                    break; // Neither follow nor expose another process/thread identity.
+                    externalBoundary = true;
+                    break; // Retain no identities or later rows beyond the client boundary.
                 }
                 row += " thread=" + unchecked((uint)Marshal.ReadInt32(node, 12));
             }
             rows.Add(row);
         }
-        return "wct_nodes=" + length + " cycle=" + (Marshal.ReadInt32(cycle) != 0) +
+        // WCT may have traversed farther. Do not report its hidden node count or
+        // attribute a cycle involving omitted nodes to the retained client rows.
+        return "wct_nodes=" + rows.Count + " cycle=" +
+            (externalBoundary ? "unavailable" : (Marshal.ReadInt32(cycle) != 0).ToString()) +
             "; " + String.Join("; ", rows);
     }
 
@@ -277,10 +282,14 @@ public static class AtrinikReviewCloseTimeoutProbe {
                         result = "wct_owned_thread_changed";
                         return;
                     }
-                    // Inspect the target's critical sections, but do not traverse
-                    // other processes or enumerate out-of-process COM servers.
-                    bool accepted = GetThreadWaitChain(session, UIntPtr.Zero, 0x4,
-                        mainThread, count, nodes, cycle); // WCT_OUT_OF_PROC_CS_FLAG
+                    // Allow cross-process chain traversal and critical-section
+                    // lookup from this external observer of the verified client.
+                    // WCT may traverse beyond the client; the formatter retains
+                    // rows only up to its first external-client thread boundary.
+                    // Do not enable out-of-process COM server enumeration.
+                    // https://learn.microsoft.com/windows/win32/api/wct/nf-wct-getthreadwaitchain
+                    bool accepted = GetThreadWaitChain(session, UIntPtr.Zero, 0x1 | 0x4,
+                        mainThread, count, nodes, cycle); // OUT_OF_PROC | OUT_OF_PROC_CS
                     int error = Marshal.GetLastWin32Error();
                     if (!accepted && error != 997) { // ERROR_IO_PENDING
                         result = "wct_query_error=" + error;

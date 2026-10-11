@@ -391,7 +391,9 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
             "WaitForSingleObject(thread, 0) != 258",
         ):
             self.assertLess(probe.index(identity), query)
-        self.assertIn("GetThreadWaitChain(session, UIntPtr.Zero, 0x4,", probe)
+        # The owned client is external to PowerShell; traversal and critical
+        # section lookup are separate SDK flags. COM expansion stays disabled.
+        self.assertIn("GetThreadWaitChain(session, UIntPtr.Zero, 0x1 | 0x4,", probe)
         for forbidden in ("AdjustTokenPrivileges", "DebugActiveProcess", "ReadProcessMemory",
                           "GetThreadContext", "SuspendThread", "CreateRemoteThread"):
             self.assertNotIn(forbidden, smoke)
@@ -422,6 +424,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         thread_output = formatter.index('row += " thread="')
         self.assertLess(boundary, thread_output)
         self.assertIn("break;", formatter[boundary:thread_output])
+        self.assertIn('"wct_nodes=" + rows.Count', formatter)
+        self.assertIn('externalBoundary ? "unavailable"', formatter)
         for forbidden in ("PtrToString", "ObjectName", "WaitTime", "ContextSwitches",
                           '" process="', '" pid="'):
             self.assertNotIn(forbidden, formatter)

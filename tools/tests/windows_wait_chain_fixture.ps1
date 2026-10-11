@@ -44,9 +44,25 @@ try {
 
     [System.Runtime.InteropServices.Marshal]::WriteInt32($nodes, 568, 404)
     [System.Runtime.InteropServices.Marshal]::WriteInt32($nodes, 572, 505)
-    $expected = "wct_nodes=3 cycle=True; type=Thread status=Blocked thread=202; " +
+    $expected = "wct_nodes=3 cycle=unavailable; type=Thread status=Blocked thread=202; " +
         "type=CriticalSection status=Owned; external_thread_boundary"
     if ((Format-Chain) -cne $expected) { throw "External identity boundary mismatch" }
+
+    # Native traversal may continue beyond the first external thread, including
+    # a later return to the client. Neither those rows nor aggregate information
+    # about the omitted chain may escape the formatter boundary.
+    [System.Runtime.InteropServices.Marshal]::WriteInt32($count, 5)
+    foreach ($entry in @(
+        @(840, 3), @(844, 6),
+        @(1120, 8), @(1124, 3), @(1128, 101), @(1132, 606)
+    )) {
+        [System.Runtime.InteropServices.Marshal]::WriteInt32($nodes, $entry[0], $entry[1])
+    }
+    [System.Runtime.InteropServices.Marshal]::Copy($privateName, 0,
+        [IntPtr]::Add($nodes, 848), $privateName.Length)
+    if ((Format-Chain) -cne $expected) { throw "Post-boundary rows or count escaped" }
+    [System.Runtime.InteropServices.Marshal]::WriteInt32($cycle, 0)
+    if ((Format-Chain) -cne $expected) { throw "Post-boundary cycle escaped" }
 
     [System.Runtime.InteropServices.Marshal]::WriteInt32($count, 1)
     [System.Runtime.InteropServices.Marshal]::WriteInt32($cycle, 0)
