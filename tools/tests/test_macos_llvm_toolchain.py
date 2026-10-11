@@ -122,6 +122,46 @@ endforeach ()
         result = self.script(body)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_modern_sdk_cpp_headers_work_without_legacy_xcode_header_directory(self):
+        headers = self.sdk / "usr/include/c++/v1"
+        headers.mkdir(parents=True)
+        (self.apple_usr / "include/c++/v1").rmdir()
+        result = self.script(self.settings() + f'''
+if (NOT apple_cxx_headers STREQUAL "{headers}")
+    message(FATAL_ERROR "modern SDK headers not selected")
+endif ()
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_explicit_sdk_cpp_headers_take_precedence_over_legacy_xcode_headers(self):
+        selected_sdk = self.root / "Older selected MacOSX.sdk"
+        headers = selected_sdk / "usr/include/c++/v1"
+        headers.mkdir(parents=True)
+        result = self.script(f'set(CMAKE_OSX_SYSROOT "{selected_sdk}")\n' + self.settings() + f'''
+if (NOT apple_cxx_headers STREQUAL "{headers}" OR
+        NOT CMAKE_OSX_SYSROOT STREQUAL "{selected_sdk}")
+    message(FATAL_ERROR "explicit SDK selection changed")
+endif ()
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_named_sdk_resolves_headers_without_overwriting_caller_selection(self):
+        headers = self.sdk / "usr/include/c++/v1"
+        headers.mkdir(parents=True)
+        result = self.script('set(CMAKE_OSX_SYSROOT macosx)\n' + self.settings() + f'''
+if (NOT apple_cxx_headers STREQUAL "{headers}" OR
+        NOT CMAKE_OSX_SYSROOT STREQUAL "macosx")
+    message(FATAL_ERROR "named SDK selection changed")
+endif ()
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unresolved_sdk_rejected_even_with_legacy_headers_available(self):
+        self.xcrun.write_text('#!/bin/sh\nexit 1\n')
+        result = self.script('set(CMAKE_OSX_SYSROOT unavailable-sdk)\n' + self.settings())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("selected Xcode macOS SDK", result.stderr)
+
     def test_explicit_sdk_deployment_and_architectures_are_preserved(self):
         result = self.script('''
 set(CMAKE_OSX_SYSROOT explicit-sdk)

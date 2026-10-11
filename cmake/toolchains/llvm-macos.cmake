@@ -39,13 +39,27 @@ if (NOT CMAKE_OSX_SYSROOT)
     endif ()
     set(CMAKE_OSX_SYSROOT "${sdk}" CACHE PATH "Selected Xcode macOS SDK")
 endif ()
-execute_process(COMMAND "${ATRINIK_XCRUN}" --sdk macosx --find clang++
-    OUTPUT_VARIABLE apple_cxx OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE apple_result)
-get_filename_component(apple_bin "${apple_cxx}" DIRECTORY)
-get_filename_component(apple_usr "${apple_bin}" DIRECTORY)
-set(apple_cxx_headers "${apple_usr}/include/c++/v1")
-if (NOT apple_result EQUAL 0 OR NOT IS_DIRECTORY "${apple_cxx_headers}")
-    message(FATAL_ERROR "The selected Xcode platform libc++ headers are required")
+# Platform libc++ headers may live in the SDK or beside Apple Clang;
+# both layouts remain platform-owned.
+set(apple_sdk "${CMAKE_OSX_SYSROOT}")
+if (NOT IS_DIRECTORY "${apple_sdk}")
+    # CMake also accepts a named SDK such as macosx instead of an absolute path.
+    execute_process(COMMAND "${ATRINIK_XCRUN}" --sdk "${CMAKE_OSX_SYSROOT}" --show-sdk-path
+        OUTPUT_VARIABLE apple_sdk OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE apple_sdk_result)
+    if (NOT apple_sdk_result EQUAL 0 OR NOT IS_DIRECTORY "${apple_sdk}")
+        message(FATAL_ERROR "A selected Xcode macOS SDK is required")
+    endif ()
+endif ()
+set(apple_cxx_headers "${apple_sdk}/usr/include/c++/v1")
+if (NOT IS_DIRECTORY "${apple_cxx_headers}")
+    execute_process(COMMAND "${ATRINIK_XCRUN}" --sdk macosx --find clang++
+        OUTPUT_VARIABLE apple_cxx OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE apple_result)
+    get_filename_component(apple_bin "${apple_cxx}" DIRECTORY)
+    get_filename_component(apple_usr "${apple_bin}" DIRECTORY)
+    set(apple_cxx_headers "${apple_usr}/include/c++/v1")
+    if (NOT apple_result EQUAL 0 OR NOT IS_DIRECTORY "${apple_cxx_headers}")
+        message(FATAL_ERROR "The selected Xcode platform libc++ headers are required")
+    endif ()
 endif ()
 # Avoid the downloaded cohort's newer libc++ headers with the system libc++ ABI.
 set(CMAKE_CXX_FLAGS_INIT "-nostdinc++ -isystem \"${apple_cxx_headers}\"")

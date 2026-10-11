@@ -38,8 +38,12 @@ builtins archive must exist. Complete LLVM/runtime notices accompany the install
 Darwin builds automatically select this toolchain before `project()` when no
 explicit toolchain was supplied. An explicit `CMAKE_OSX_SYSROOT`, deployment
 target and architecture list are preserved. Without an SDK override, `xcrun`
-selects the macOS SDK. The platform libc++ headers come from the selected Xcode
-toolchain rather than the downloaded LLVM cohort. Mach-O LLD is selected by its
+selects the macOS SDK. The platform libc++ headers come first from
+`usr/include/c++/v1` in the selected SDK, with the selected Apple Clang
+toolchain's `include/c++/v1` as a
+fallback for older Xcode layouts. Named SDKs resolve through `xcrun` without
+overwriting the caller's SDK selection. The downloaded LLVM cohort's libc++
+headers are not used with the system libc++ runtime. Mach-O LLD is selected by its
 absolute path, following [LLD's native macOS interface](https://lld.llvm.org/MachO/index.html).
 
 Linux CMake-script fixtures verify selection, version rejection, platform-header
