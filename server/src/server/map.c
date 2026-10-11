@@ -1818,6 +1818,7 @@ static void free_all_objects(mapstruct *m) {
  * If set, free all objects on the map.
  */
 void free_map(mapstruct *m, int flag) {
+    target_map_publication_forget(m);
     propagation_expire_map(m);
     light_batch_flush();
     int i;
@@ -1902,6 +1903,7 @@ void free_map(mapstruct *m, int flag) {
  * The map to delete.
  */
 void delete_map(mapstruct *m) {
+    target_map_publication_forget(m);
     light_batch_flush();
     HARD_ASSERT(m != NULL);
 
