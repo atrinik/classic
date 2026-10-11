@@ -17,6 +17,7 @@ $launcherOutputTask = $null
 $launcherErrorTask = $null
 $launcherServer = $null
 $launcherClient = $null
+$launcherClientLog = $null
 $bodySucceeded = $false
 $clientCloseStarted = $false
 $portProbe = [System.Net.Sockets.UdpClient]::new(0)
@@ -57,6 +58,43 @@ function Get-LauncherLogTail([string]$Path) {
         ) -join [System.Environment]::NewLine)
     } catch {
         return "<log unavailable>"
+    }
+}
+
+# Retain only fixed lifecycle messages from the actual launcher log before its
+# temporary directory is removed. The closed grammar excludes private payloads.
+function Save-ClientLifecycleEvidence([string]$Path) {
+    try {
+        $lines = @("<client lifecycle log unavailable>")
+        if ($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            # Bound the read as well as the retained output. Oversize evidence
+            # remains unavailable; it must never change smoke acceptance.
+            $reader = [System.IO.StreamReader]::new([System.IO.File]::Open(
+                $Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::ReadWrite))
+            try {
+                $buffer = [char[]]::new(16777217)
+                $count = $reader.ReadBlock($buffer, 0, $buffer.Length)
+            } finally {
+                $reader.Dispose()
+            }
+            if ($count -le 16777216) {
+                $text = [string]::new($buffer, 0, $count)
+                $pattern = "(?m)^\[[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\] INFO[ ]+\[(?:socket_command_player|main|Event_PollInputDevice|system_end):[0-9]{1,10}\] (?:Gameplay ready\.|First gameplay frame presented\.|Client (?:window close event received|quit event received|quit event polling completed|main loop exited|shutdown complete)\.|Client shutdown stage: (?:UI cleanup|network connection|directory workers|audio|settings and assets|image workers|image packs|asset requests|toolkit, GPU, window and SDL)\.)\r?$"
+                $lines = @([regex]::Matches($text, $pattern) | Select-Object -First 32 |
+                    ForEach-Object { $_.Value.TrimEnd([char]13) })
+                if ($lines.Count -eq 0) { $lines = @("<client lifecycle markers unavailable>") }
+            } else {
+                $lines = @("<client lifecycle log exceeds 16 Mi-character read limit>")
+            }
+        }
+        $evidence = Join-Path (Split-Path -Parent $packagePath) "review-client-lifecycle.log"
+        @("revision=$Revision") + $lines | Set-Content -LiteralPath $evidence -Encoding utf8 -ErrorAction Stop
+        Write-Host ("Client lifecycle evidence:" + [System.Environment]::NewLine +
+            ($lines -join [System.Environment]::NewLine))
+    } catch {
+        # Evidence is best effort and cannot replace an acceptance failure.
+        Write-Warning "Client lifecycle evidence could not be retained"
     }
 }
 
@@ -583,6 +621,7 @@ try {
     }
     throw
 } finally {
+    Save-ClientLifecycleEvidence $launcherClientLog
     $cleanupFailures = [System.Collections.Generic.List[string]]::new()
     if ($null -ne $process) {
         try {

@@ -921,6 +921,7 @@ jobs:
         with:
           name: native-windows-font-comparison-${{ env.COVERAGE_SHA }}-${{ github.run_attempt }}
           path: |
+            build/native-windows-tests/review-client-lifecycle.log
             build/native-windows-tests/font-baseline-result
             build/native-windows-tests/font-candidate-result
             build/native-windows-tests/font-baseline/staging-helper.sha256

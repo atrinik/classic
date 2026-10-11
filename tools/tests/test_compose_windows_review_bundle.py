@@ -377,6 +377,64 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                           "Suspend", "Resume", "Terminate", "Dump", "ReadProcessMemory", ".Kill("):
             self.assertNotIn(forbidden, probe)
 
+    def test_lifecycle_evidence_is_bounded_and_uploaded_before_cleanup(self) -> None:
+        root = MODULE_PATH.parents[2]
+        smoke = (root / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        helper = smoke.split("function Save-ClientLifecycleEvidence", 1)[1].split("# Read-only HWND evidence:", 1)[0]
+        self.assertIn("[System.IO.FileAccess]::Read", helper)
+        self.assertIn("[System.IO.FileShare]::ReadWrite", helper)
+        self.assertIn("[char[]]::new(16777217)", helper)
+        self.assertIn("$reader.ReadBlock($buffer, 0, $buffer.Length)", helper)
+        self.assertIn("if ($count -le 16777216)", helper)
+        self.assertIn("$reader.Dispose()", helper)
+        self.assertIn("Select-Object -First 32", helper)
+        self.assertIn('Join-Path (Split-Path -Parent $packagePath) "review-client-lifecycle.log"', helper)
+        self.assertIn('Write-Warning "Client lifecycle evidence could not be retained"', helper)
+        self.assertNotIn("throw", helper)
+        self.assertIn('$launcherClientLog = Join-Path $reviewRoot "client.log"', smoke)
+        cleanup = smoke.split("} finally {\n    Save-ClientLifecycleEvidence $launcherClientLog", 1)[1]
+        self.assertIn("Remove-Item -LiteralPath $smokeRoot", cleanup)
+        self.assertEqual(smoke.count("Save-ClientLifecycleEvidence $launcherClientLog"), 1)
+        workflow = (root / ".github/workflows/check.yml").read_text()
+        upload = workflow.split("name: native-windows-font-comparison-", 1)[1].split("  server:", 1)[0]
+        self.assertIn("build/native-windows-tests/review-client-lifecycle.log", upload)
+        self.assertIn("if: always()", workflow.split("name: native-windows-font-comparison-", 1)[0].rsplit("- uses:", 1)[1])
+
+    def test_lifecycle_evidence_keeps_only_fixed_raw_stage_lines(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        pattern = re.search(r'\$pattern = "([^"]+)"', smoke).group(1)
+        stamp = "[2026/10/11 11:36:14.936572] INFO   "
+        messages = (
+            ("socket_command_player", "Gameplay ready."),
+            ("main", "First gameplay frame presented."),
+            ("Event_PollInputDevice", "Client window close event received."),
+            ("Event_PollInputDevice", "Client quit event received."),
+            ("main", "Client quit event polling completed."),
+            ("main", "Client main loop exited."),
+            ("system_end", "Client shutdown complete."),
+        ) + tuple(("system_end", "Client shutdown stage: " + stage + ".") for stage in (
+            "UI cleanup", "network connection", "directory workers", "audio",
+            "settings and assets", "image workers", "image packs", "asset requests",
+            "toolkit, GPU, window and SDL",
+        ))
+        expected = [stamp + "[" + function + ":123] " + message for function, message in messages]
+        rejected = [
+            stamp + "[main:123] password=private-value",
+            expected[0] + " token=private-value",
+            "private-value " + expected[0],
+            expected[0].replace("INFO", "\x1bINFO"),
+            expected[0].replace("socket_command_player", "private_value"),
+            stamp + "[system_end:123] Client shutdown stage: private-value.",
+            stamp + "[main:123] https://example.invalid/private-value",
+        ]
+        for newline in ("\n", "\r\n"):
+            log = newline.join(rejected + expected) + newline
+            selected = [match.group(0).rstrip("\r") for match in re.finditer(pattern, log)][:32]
+            self.assertEqual(selected, expected)
+            self.assertNotIn("private-value", "\n".join(selected))
+        repeated = "\n".join(expected * 4)
+        self.assertEqual(len(list(re.finditer(pattern, repeated))[:32]), 32)
+
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
