@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -41,16 +41,14 @@ static void process_func(object *op) {
     /* Custom handling for the magic missile spell bullets, so that they
      * follow the target. */
     if (op->stats.sp == SP_MAGIC_MISSILE) {
-        rv_vector rv;
-
-        if (!OBJECT_VALID(op->enemy, op->enemy_count) || !get_rangevector(op, op->enemy, &rv, 0)) {
-            object_remove(op, 0);
-            object_destroy(op);
-            return;
+        if (op->projectile.version == 0) {
+            projectile3d_launch(op, op, NULL, op->direction);
         }
-
-        op->direction = rv.direction;
-        SET_ANIMATION_STATE(op);
+        /* Loss of a target or sight does not erase an already-fired missile.
+         * Re-aim only from its current geometry and retain its last heading. */
+        if (OBJECT_VALID(op->enemy, op->enemy_count)) {
+            projectile3d_aim(op, op->enemy);
+        }
     }
 
     common_object_projectile_process(op);

@@ -32,6 +32,7 @@
 #include <movement.h>
 #include <object.h>
 #include <object_methods.h>
+#include <spatial.h>
 
 /**
  * Cardinal direction adjustments for swarm spells.
@@ -86,11 +87,8 @@ static void process_func(object *op) {
     int x = target_x - freearr_x[basedir];
     int y = target_y - freearr_y[basedir];
 
-    if (get_map_from_coord(op->map, &x, &y) == NULL) {
-        return;
-    }
-
-    if (wall(op->map, x, y)) {
+    spatial_cell launch;
+    if (!spatial_resolve(op->map, x, y, 0, &launch) || wall(launch.map, launch.x, launch.y)) {
         return;
     }
 
@@ -100,7 +98,8 @@ static void process_func(object *op) {
     }
 
     /* Bombs away! */
-    fire_arch_from_position(op, caster, x, y, basedir, op->other_arch, op->stats.sp, NULL);
+    object *target = OBJECT_VALID(op->enemy, op->enemy_count) ? op->enemy : NULL;
+    fire_arch_from_position(op, caster, x, y, basedir, op->other_arch, op->stats.sp, target);
 }
 
 /**

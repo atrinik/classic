@@ -14,6 +14,9 @@
 #include <object_methods.h>
 #include <player.h>
 #include <skills.h>
+#include <map.h>
+#include <projectile3d.h>
+#include <toolkit/string.h>
 #include <toolkit/packet.h>
 
 #define TEST_BASE_DAMAGE 24
@@ -673,6 +676,128 @@ START_TEST(test_archery_blocked_and_lethal_impact_ordering) {
 }
 END_TEST
 
+START_TEST(test_trajectory_value_copy_and_save_roundtrip) {
+    object *arrow = arch_get("arrow");
+    ck_assert(projectile3d_parse(arrow, "1 32768 -65536 16384 123 456 789 12 -2"));
+    object *copy = object_clone(arrow);
+    projectile3d_reflect(copy, 7);
+    ck_assert_int_eq(arrow->projectile.heading[0], 32768);
+    ck_assert_int_eq(copy->projectile.heading[0], -32768);
+    ck_assert_int_eq(copy->projectile.heading[2], -16384);
+    projectile3d_reset(copy);
+    ck_assert(projectile3d_valid(&arrow->projectile));
+    stringbuffer *sb = stringbuffer_new();
+    object_dump_rec(arrow, sb);
+    char *dump = stringbuffer_finish(sb);
+    object *loaded = object_load_str(dump);
+    ck_assert_ptr_nonnull(loaded);
+    ck_assert(projectile3d_valid(&loaded->projectile));
+    ck_assert_int_eq(loaded->projectile.fraction[2], 789);
+    ck_assert_int_eq(loaded->projectile.depth, -2);
+    ck_assert_int_eq(loaded->projectile.remaining, 12);
+    free(dump);
+    object_destroy(copy);
+    object_destroy(loaded);
+    object_destroy(arrow);
+
+    loaded = object_load_str("arch arrow\ndirection 3\nend\n");
+    ck_assert_ptr_nonnull(loaded);
+    ck_assert_uint_eq(loaded->projectile.version, 0);
+    object_destroy(loaded);
+    static const char *invalid[] = {
+        "2 65536 0 0 0 0 0 1 0", "1 65537 0 0 0 0 0 1 0",
+        "1 0 0 0 0 0 0 1 0", "1 65536 0 0 -1 0 0 1 0",
+        "1 65536 0 0 0 0 0 1 7", "1 65536 0 0 0 0 0 -1 0",
+        "1 65536 0 0 0 0 0 1 0 trailing", "1 999999999999999999999 0 0 0 0 0 1 0"
+    };
+    ck_assert_ptr_null(object_load_str("arch arrow\nprojectile3d 2 65536 0 0 0 0 0 1 0\nend\n"));
+    ck_assert_ptr_null(object_load_str("arch sack\nprojectile3d 1 65536 0 0 0 0 0 1 0\nend\n"));
+    arrow = arch_get("arrow");
+    for (size_t j = 0; j < arraysize(invalid); j++) {
+        ck_assert(!projectile3d_parse(arrow, invalid[j]));
+        ck_assert_uint_eq(arrow->projectile.version, 0);
+    }
+    object_destroy(arrow);
+}
+END_TEST
+
+static object *trajectory_arrow(mapstruct *map) {
+    object *arrow = arch_get("arrow");
+    arrow->x = arrow->y = 2;
+    arrow->last_sp = 8;
+    arrow->speed = 1.0;
+    arrow->direction = 3;
+    SET_FLAG(arrow, FLAG_IS_MISSILE);
+    return object_insert_map(arrow, map, NULL, INS_NO_MERGE | INS_NO_WALK_ON);
+}
+
+START_TEST(test_trajectory_floor_hole_reflection_and_homing) {
+    mapstruct *lower = get_empty_map(5, 5);
+    mapstruct *upper = get_empty_map(5, 5);
+    mapstruct *bottom = get_empty_map(5, 5);
+    lower->tile_map[TILED_DOWN] = bottom;
+    bottom->tile_map[TILED_UP] = lower;
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    object *target = object_get();
+    target->map = upper;
+    target->x = target->y = 2;
+    object *arrow = trajectory_arrow(lower);
+    projectile3d_launch(arrow, arrow, target, 3);
+    ck_assert_int_eq(arrow->projectile.heading[0], 0);
+    ck_assert_int_eq(arrow->projectile.heading[2], 65536);
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_ptr_eq(arrow->map, upper);
+    ck_assert_int_eq(arrow->projectile.depth, 1);
+    object_remove(arrow, 0);
+    object_destroy(arrow);
+
+    object *floor = object_get();
+    floor->x = floor->y = 2;
+    floor->layer = LAYER_FLOOR;
+    SET_FLAG(floor, FLAG_IS_FLOOR);
+    floor = object_insert_map(floor, upper, NULL, INS_NO_WALK_ON);
+    ck_assert_ptr_nonnull(floor);
+    arrow = trajectory_arrow(lower);
+    projectile3d_launch(arrow, arrow, target, 3);
+    SET_FLAG(arrow, FLAG_REFLECTING);
+    ck_assert(!projectile3d_aim(arrow, target));
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_ptr_eq(arrow->map, lower);
+    ck_assert_int_eq(arrow->projectile.heading[2], -65536);
+    ck_assert_int_eq(arrow->projectile.fraction[2], 65536);
+    /* A reflected boundary is not encountered a second time at t=0. */
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_ptr_eq(arrow->map, bottom);
+    ck_assert_int_eq(arrow->projectile.fraction[2], 65536);
+    object_projectile_stop(arrow, OBJECT_PROJECTILE_PICKUP);
+    ck_assert_uint_eq(arrow->projectile.version, 0);
+    target->map = NULL;
+    object_destroy(target);
+}
+END_TEST
+
+START_TEST(test_trajectory_corner_reflects_both_axes_once) {
+    mapstruct *map = get_empty_map(5, 5);
+    object *arrow = trajectory_arrow(map);
+    object *wall = arch_get("wall_wood_1");
+    wall->x = wall->y = 3;
+    ck_assert_ptr_nonnull(object_insert_map(wall, map, NULL, INS_NO_WALK_ON));
+    projectile3d_launch(arrow, arrow, NULL, 4);
+    SET_FLAG(arrow, FLAG_REFLECTING);
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_int_eq(arrow->x, 2);
+    ck_assert_int_eq(arrow->y, 2);
+    ck_assert_int_eq(arrow->projectile.heading[0], -65536);
+    ck_assert_int_eq(arrow->projectile.heading[1], -65536);
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_int_eq(arrow->projectile.fraction[0], 65536);
+    ck_assert_int_eq(arrow->projectile.fraction[1], 65536);
+    ck_assert_int_eq(arrow->x, 1);
+    ck_assert_int_eq(arrow->y, 1);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("projectile");
     TCase *tc_core = tcase_create("Core");
@@ -680,6 +805,9 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_trajectory_value_copy_and_save_roundtrip);
+    tcase_add_test(tc_core, test_trajectory_floor_hole_reflection_and_homing);
+    tcase_add_test(tc_core, test_trajectory_corner_reflects_both_axes_once);
     tcase_add_test(tc_core, test_invalid_projectile_directions_stop_before_lookup);
     tcase_add_test(tc_core, test_archery_impact_bonuses_and_feedback);
     tcase_add_test(tc_core, test_archery_unaware_state_is_impact_time_and_validated);

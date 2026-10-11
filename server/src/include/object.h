@@ -32,6 +32,7 @@
 
 #include <decls.h>
 #include <attack.h>
+#include <projectile3d.h>
 
 /**
  * Get the weight of an object. If the object is a container or doesn't
@@ -393,6 +394,9 @@ struct obj {
 
     /** the level of this object (most used for mobs & player) */
     int8_t level;
+
+    /** Independent, versioned numeric projectile trajectory. */
+    projectile3d_state projectile;
 
     /** Means the object is moving that way. */
     int8_t direction;

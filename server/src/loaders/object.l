@@ -43,6 +43,7 @@
 
 typedef struct stable_identity_state {
     bool record_started;
+    bool saw_projectile;
     bool saw_name;
     bool saw_name_pl;
     bool saw_numeric_sp;
@@ -511,6 +512,12 @@ stable_identity_state *identity = &identities[*depth];
 ^object_int2{S}      op->attacked_by_count = IVAL;
 ^object_int3{S}      op->ownercount = IVAL;
 ^last_heal{S}        op->last_heal = IVAL;
+^projectile3d{S}      {
+                        if (identity->saw_projectile || !projectile3d_parse(op, yval())) {
+                            lex_error = 1;
+                        }
+                        identity->saw_projectile = true;
+                    }
 ^last_sp{S}          op->last_sp = IVAL;
 ^last_grace{S}       op->last_grace = IVAL;
 ^last_grace_add{S}   op->last_grace += IVAL;
@@ -1073,6 +1080,11 @@ finalize_object_record (object *op, const stable_identity_state *identity)
 {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(identity != NULL);
+
+    if (identity->saw_projectile &&
+        (op->type != ARROW || !projectile3d_valid(&op->projectile))) {
+        return 1;
+    }
 
     if (identity->saw_name && !identity->saw_name_pl) {
         FREE_AND_CLEAR_HASH(op->name_pl);
@@ -1842,6 +1854,15 @@ get_ob_diff (StringBuffer *sb, const object *op, const object *op2)
 
     if (op->level != op2->level) {
         SAVE_INT(sb, "level", op->level);
+    }
+
+    if (op->type == ARROW && projectile3d_valid(&op->projectile)) {
+        const projectile3d_state *p = &op->projectile;
+        stringbuffer_append_printf(sb,
+            "projectile3d 1 %d %d %d %d %d %d %d %d\n",
+            p->heading[0], p->heading[1], p->heading[2],
+            p->fraction[0], p->fraction[1], p->fraction[2],
+            p->remaining, p->depth);
     }
 
     if (op->direction != op2->direction) {

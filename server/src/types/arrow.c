@@ -45,7 +45,10 @@ static int ranged_fire_func(object *op, object *shooter, int dir, double *delay)
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(shooter != NULL);
 
-    if (dir == 0) {
+    bool selected_target = shooter->type == PLAYER
+        ? OBJECT_VALID(CONTR(shooter)->target_object, CONTR(shooter)->target_object_count)
+        : OBJECT_VALID(shooter->enemy, shooter->enemy_count);
+    if (dir == 0 && !selected_target) {
         draw_info(COLOR_WHITE, shooter, "You can't throw that at yourself.");
         return OBJECT_METHOD_UNHANDLED;
     }

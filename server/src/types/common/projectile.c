@@ -70,129 +70,33 @@ static object *projectile_stick(object *op, object *victim) {
 
 /** @copydoc object_methods_t::process_func */
 void common_object_projectile_process(object *op) {
-    mapstruct *m;
-    int x, y;
-
-    if (!op->map) {
+    if (op->map == NULL) {
         return;
     }
-
-    if (!movement_direction_valid(op, op->direction, false) || op->last_sp-- <= 0) {
+    /* Legacy saves have no trajectory record and resume on their original
+     * level. A selected target is used only at an explicit new launch. */
+    if (op->projectile.version == 0) {
+        projectile3d_launch(op, op, NULL, op->direction);
+    }
+    if (!projectile3d_valid(&op->projectile) || op->last_sp-- <= 0) {
         object_projectile_stop(op, OBJECT_PROJECTILE_STOP_EOL);
         return;
     }
-
-    x = op->x + DIRX(op);
-    y = op->y + DIRY(op);
-    m = get_map_from_coord(op->map, &x, &y);
-
-    if (!m) {
-        object_remove(op, 0);
-        object_destroy(op);
-        return;
-    }
-
-    if (wall(m, x, y)) {
-        if (QUERY_FLAG(op, FLAG_REFLECTING)) {
-            if (op->direction & 1) {
-                op->direction = absdir(op->direction + 4);
-            } else {
-                int left, right;
-
-                left = wall(op->map,
-                            op->x + freearr_x[absdir(op->direction - 1)],
-                            op->y + freearr_y[absdir(op->direction - 1)]);
-                right = wall(op->map,
-                             op->x + freearr_x[absdir(op->direction + 1)],
-                             op->y + freearr_y[absdir(op->direction + 1)]);
-
-                if (left == right) {
-                    op->direction = absdir(op->direction + 4);
-                } else if (left) {
-                    op->direction = absdir(op->direction + 2);
-                } else if (right) {
-                    op->direction = absdir(op->direction - 2);
-                }
-            }
-
-            SET_ANIMATION_STATE(op);
-        } else {
-            object_projectile_stop(op, OBJECT_PROJECTILE_STOP_WALL);
-            return;
-        }
-    }
-
-    op = object_projectile_move(op);
-
-    if (!op) {
-        return;
-    }
-
-    if (GET_MAP_FLAGS(op->map, op->x, op->y) & (P_IS_MONSTER | P_IS_PLAYER)) {
-        object *tmp;
-        int ret;
-
-        FOR_MAP_LAYER_BEGIN(op->map, op->x, op->y, LAYER_LIVING, -1, tmp) {
-            tmp = HEAD(tmp);
-
-            if (((QUERY_FLAG(op, FLAG_IS_MISSILE) && QUERY_FLAG(tmp, FLAG_REFL_MISSILE)) ||
-                 (QUERY_FLAG(op, FLAG_IS_SPELL) && QUERY_FLAG(tmp, FLAG_REFL_SPELL))) &&
-                rndm(0, 99) < 90 - (op->level / 10)) {
-                op->direction = absdir(op->direction + 4);
-                SET_ANIMATION_STATE(op);
-                FOR_MAP_LAYER_BREAK;
-            } else {
-                ret = object_projectile_hit(op, tmp);
-
-                if (ret == OBJECT_METHOD_OK) {
-                    object_projectile_stop(op, OBJECT_PROJECTILE_STOP_HIT);
-                    return;
-                } else if (ret == OBJECT_METHOD_ERROR) {
-                    return;
-                }
-            }
-        }
-        FOR_MAP_LAYER_END;
-    }
+    op->projectile.remaining = MAX(0, op->last_sp);
+    object_projectile_move(op);
 }
 
 /** @copydoc object_methods_t::projectile_move_func */
 object *common_object_projectile_move(object *op) {
-    mapstruct *m;
-    int x, y;
-
-    if (!movement_direction_valid(op, op->direction, false)) {
-        object_projectile_stop(op, OBJECT_PROJECTILE_STOP_WALL);
-        return NULL;
+    if (op->projectile.version == 0) {
+        projectile3d_launch(op, op, NULL, op->direction);
     }
-
-    x = op->x + freearr_x[op->direction];
-    y = op->y + freearr_y[op->direction];
-
-    m = get_map_from_coord(op->map, &x, &y);
-
-    if (m == NULL) {
-        object_projectile_stop(op, OBJECT_PROJECTILE_STOP_WALL);
-        return NULL;
-    }
-
-    OBJ_DESTROYED_BEGIN(op) {
-        if (!object_move_to(op, op->direction, op, m, x, y)) {
-            object_projectile_stop(op, OBJECT_PROJECTILE_STOP_WALL);
-            return NULL;
-        }
-
-        if (OBJ_DESTROYED(op)) {
-            return NULL;
-        }
-    }
-    OBJ_DESTROYED_END();
-
-    return op;
+    return projectile3d_move(op);
 }
 
 /** @copydoc object_methods_t::projectile_stop_func */
 object *common_object_projectile_stop_missile(object *op, int reason) {
+    projectile3d_reset(op);
     /* Reset 'owner' when picking it up. */
     if (reason == OBJECT_PROJECTILE_PICKUP) {
         op->attacked_by = NULL;
@@ -299,6 +203,8 @@ object *common_object_projectile_stop_spell(object *op, int reason) {
         return op;
     }
 
+    projectile3d_reset(op);
+
     if (op->other_arch) {
         explode_object(op);
     } else {
@@ -346,6 +252,14 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
         return NULL;
     }
 
+    object *target = NULL;
+    if (shooter->type == PLAYER &&
+        OBJECT_VALID(CONTR(shooter)->target_object, CONTR(shooter)->target_object_count)) {
+        target = CONTR(shooter)->target_object;
+    } else if (shooter->type != PLAYER && OBJECT_VALID(shooter->enemy, shooter->enemy_count)) {
+        target = shooter->enemy;
+    }
+    projectile3d_launch(op, shooter, target, dir);
     object_process(op);
 
     return op;
