@@ -103,6 +103,7 @@ class ClassifyChangesTests(unittest.TestCase):
         for path in ("cmake/toolchains/llvm.cmake", "cmake/toolchains/llvm-macos.cmake",
                      "cmake/AtrinikLLVM.cmake", "tools/ci/llvm_coverage.py",
                      "tools/tests/test_llvm_coverage.py",
+                     "tools/tests/test_llvm_coverage_identity.py",
                      "tools/tests/test_llvm_toolchain.py",
                      "tools/tests/test_llvm_runtime_notices.py",
                      "tools/tests/test_macos_llvm_toolchain.py",

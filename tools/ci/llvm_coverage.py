@@ -16,6 +16,7 @@ import sys
 
 LLVM_VERSION = "23.1.3"
 PROFILE_DIRECTORY = "llvm-profiles"
+RAW_MAGIC = 0xFF6C70726F667281  # LLVM little-endian, 64-bit frontend profile.
 
 
 def run(command):
@@ -260,12 +261,14 @@ def zero_maps(report, source_root, component):
                 raise ValueError("unsupported or nonzero LLVM baseline mapping")
 
     def summary(metrics):
-        if not set(metrics) <= {"branches", "functions", "instantiations", "lines", "regions", "mcdc"}:
+        if set(metrics) != {"branches", "functions", "instantiations", "lines", "regions", "mcdc"}:
             raise ValueError("unsupported LLVM coverage summary")
         for metric in metrics.values():
             if (not {"count", "covered", "percent"} <= set(metric) <= {"count", "covered", "percent", "notcovered"} or
                     type(metric["count"]) is not int or metric["count"] < 0 or
-                    metric["covered"] != 0 or metric["percent"] != 0 or
+                    type(metric["covered"]) is not int or metric["covered"] != 0 or
+                    type(metric["percent"]) not in (int, float) or metric["percent"] != 0 or
+                    type(metric.get("notcovered", metric["count"])) is not int or
                     metric.get("notcovered", metric["count"]) != metric["count"]):
                 raise ValueError("unsupported or nonzero LLVM baseline summary")
 
@@ -313,7 +316,7 @@ def zero_maps(report, source_root, component):
     return maps
 
 
-def lcov_records(report, source_root, component):
+def lcov_records(report, source_root, component, zero=False):
     root = source_root.resolve()
     prefixes = source_prefixes(root, component)
     records = {}
@@ -332,6 +335,41 @@ def lcov_records(report, source_root, component):
         sources = [line[3:] for line in pending if line.startswith("SF:")]
         if len(sources) != 1:
             raise ValueError("missing or duplicate source in LLVM LCOV record")
+        summaries = {}
+        declarations, functions, lines, branches = [], [], {}, {}
+        for entry in pending:
+            key, value = entry.split(":", 1)
+            if key in {"FNF", "FNH", "LF", "LH", "BRF", "BRH"}:
+                if key in summaries:
+                    raise ValueError("duplicate LLVM LCOV summary")
+                summaries[key] = int(value)
+            elif key == "FN":
+                declarations.append(value.split(",", 1)[1])
+            elif key == "FNDA":
+                count, name = value.split(",", 1)
+                functions.append(name)
+                if zero and int(count):
+                    raise ValueError("nonzero LLVM LCOV baseline function")
+            elif key in {"DA", "BRDA"}:
+                fields = value.split(",")
+                identity = tuple(fields[:-1])
+                target = lines if key == "DA" else branches
+                if identity in target:
+                    raise ValueError("duplicate LLVM LCOV counter")
+                count = 0 if fields[-1] == "-" else int(fields[-1])
+                target[identity] = count
+                if zero and count:
+                    raise ValueError("nonzero LLVM LCOV baseline counter")
+        if (set(summaries) != {"FNF", "FNH", "LF", "LH", "BRF", "BRH"} or
+                sorted(declarations) != sorted(functions) or
+                (summaries["FNF"] and not declarations) or
+                summaries["FNH"] > summaries["FNF"] or
+                summaries["LH"] > summaries["LF"] or summaries["BRH"] > summaries["BRF"] or
+                (summaries["LF"] and not lines) or (summaries["BRF"] and not branches) or
+                (zero and any(summaries[key] for key in ("FNH", "LH", "BRH")))):
+            raise ValueError("incomplete or inconsistent LLVM LCOV summaries")
+        # LLVM summaries group source functions/lines/branches differently from
+        # instantiated macro records. Preserve them; do not count flat rows.
         filename = production_path(sources[0], root, prefixes)
         if filename:
             if filename in records:
@@ -347,7 +385,7 @@ def complete_report(cov, objects, executed, merged, source_root, component):
     measured = lcov_records(run(object_arguments(cov, executed, "-format=lcov", f"-instr-profile={merged}")), source_root, component)
     baseline = zero_maps(run(object_arguments(cov, objects, "-empty-profile")), source_root, component)
     associated = zero_maps(run(object_arguments(cov, executed, "-empty-profile")), source_root, component)
-    zero_records = lcov_records(run(object_arguments(cov, objects, "-empty-profile", "-format=lcov")), source_root, component)
+    zero_records = lcov_records(run(object_arguments(cov, objects, "-empty-profile", "-format=lcov")), source_root, component, zero=True)
     if not measured or set(measured) != set(associated) or set(zero_records) != set(baseline):
         raise ValueError("coverage export contains no intended production C sources or inconsistent file sets")
     # LCOV branch IDs are ordinal within a line, including macro expansions.
@@ -377,6 +415,11 @@ def export(build_dir, source_root, component, output, compiler=None):
     profiles = sorted(directory.glob("*.profraw"))
     if not profiles or any(path.is_symlink() or path.stat().st_size == 0 for path in profiles):
         raise ValueError("missing, empty or symlinked LLVM raw profiles")
+    for profile in profiles:
+        with profile.open("rb") as stream:
+            header = stream.read(16)
+        if len(header) != 16 or struct.unpack("<QQ", header) != (RAW_MAGIC, 11):
+            raise ValueError(f"unsupported or malformed LLVM 23 raw profile header: {profile}")
     if compiler is None:
         cache = build_dir / "CMakeCache.txt"
         match = re.search(r"^CMAKE_C_COMPILER:(?:FILEPATH|STRING)=(.+)$", cache.read_text(), re.MULTILINE)

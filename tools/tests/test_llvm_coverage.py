@@ -32,8 +32,8 @@ def record(path, count=1):
 
 
 def zero_json(paths):
-    summary = {key: {"count": 2 if key == "branches" else 1, "covered": 0, "percent": 0}
-               for key in ("branches", "functions", "instantiations", "lines", "regions")}
+    summary = {key: {"count": 2 if key == "branches" else 0 if key == "mcdc" else 1, "covered": 0, "percent": 0}
+               for key in ("branches", "functions", "instantiations", "lines", "regions", "mcdc")}
     files = [{"filename": str(path), "branches": [[1, 1, 1, 8, 0, 0, 0, 0, 4]],
               "expansions": [], "mcdc_records": [],
               "segments": [[1, 1, 0, True, True, False], [1, 8, 0, False, False, False]],
@@ -77,7 +77,7 @@ class NativeCoverageTests(unittest.TestCase):
 
     def fixture(self):
         coverage.prepare(self.build)
-        (self.build / "llvm-profiles" / "binary-123.profraw").write_bytes(b"profile")
+        (self.build / "llvm-profiles" / "binary-123.profraw").write_bytes(struct.pack("<QQ", coverage.RAW_MAGIC, 11) + b"profile")
         (self.build / "CMakeCache.txt").write_text("CMAKE_C_COMPILER:FILEPATH=/opt/llvm/bin/clang\n")
         (self.build / "atrinik-server").write_bytes(b"\x7fELFbinary__llvm_covmap")
         plugins = self.build / "plugins"
@@ -225,7 +225,7 @@ elif sys.argv[1] == "export":
                 build = package / "build/llvm-coverage"
                 build.mkdir(parents=True)
                 coverage.prepare(build)
-                (build / "llvm-profiles/module-123.profraw").write_bytes(b"profile fixture")
+                (build / "llvm-profiles/module-123.profraw").write_bytes(struct.pack("<QQ", coverage.RAW_MAGIC, 11) + b"profile fixture")
                 (build / "CMakeCache.txt").write_text("CMAKE_C_COMPILER:FILEPATH=" + str(tool) + "\n")
                 metadata = self.root / (scope + "-elf.json")
                 metadata.write_text(elf_fixture(build / "native-test"))

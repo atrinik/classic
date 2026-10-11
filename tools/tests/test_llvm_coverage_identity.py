@@ -33,8 +33,8 @@ def mapping(filename):
     return {"filename": filename, "branches": [[1, 1, 1, 8, 0, 0, 0, 0, 4]],
             "expansions": [], "mcdc_records": [],
             "segments": [[1, 1, 0, True, True, False], [1, 8, 0, False, False, False]],
-            "summary": {key: {"count": 2 if key == "branches" else 1, "covered": 0, "percent": 0} for key in
-                        ("branches", "functions", "instantiations", "lines", "regions")}}
+            "summary": {key: {"count": 2 if key == "branches" else 0 if key == "mcdc" else 1, "covered": 0, "percent": 0} for key in
+                        ("branches", "functions", "instantiations", "lines", "regions", "mcdc")}}
 
 
 def function(filename, name="f"):
@@ -44,7 +44,7 @@ def function(filename, name="f"):
 
 def document(files, functions):
     return json.dumps({"type": "llvm.coverage.json.export", "version": "3.1.0",
-                       "data": [{"files": files, "functions": functions, "totals": {}}]})
+                       "data": [{"files": files, "functions": functions, "totals": mapping("unused")["summary"]}]})
 
 
 def lcov(filename, count=0):
@@ -210,14 +210,27 @@ class CompleteReportTests(unittest.TestCase):
                 self.complete(baseline=json.dumps(baseline))
 
     def test_malformed_measured_lcov_rejected(self):
-        for measured in (self.measured.removesuffix("end_of_record\n"),
+        for measured in (f"SF:{self.shared}\nend_of_record\n",
+                         self.measured.removesuffix("end_of_record\n"),
                          self.measured.replace("DA:1,7", "DA:1,-1"),
+                         self.measured.replace("LH:1", "LH:2"),
+                         self.measured.replace("BRH:1", "BRH:3"),
+                         self.measured.replace("FNH:1", "FNH:2"),
+                         self.measured.replace("FNF:1", "FNF:1\nFNF:1"),
                          self.measured.replace("FN:1,f", f"SF:{self.unique}\nFN:1,f")):
             with self.subTest(measured=measured), self.assertRaises(ValueError):
                 self.complete(measured=measured)
 
+    def test_zero_baseline_lcov_must_have_only_zero_counts(self):
+        with self.assertRaises(ValueError):
+            self.complete(zero=lcov(self.shared) + lcov(self.unique, 77))
+
+    def test_function_summaries_preserve_llvm_instantiation_grouping(self):
+        measured = self.measured.replace("FN:1,f", "FN:1,f\nFN:1,g").replace("FNDA:7,f", "FNDA:7,f\nFNDA:0,g")
+        self.assertIn(measured, self.complete(measured=measured))
+
     def test_unknown_schema_mcdc_and_duplicate_sources_rejected(self):
-        for change in ("version", "file-key", "mcdc", "duplicate-json", "nonzero-function"):
+        for change in ("version", "file-key", "mcdc", "duplicate-json", "nonzero-function", "missing-summary"):
             baseline = json.loads(self.baseline)
             if change == "version":
                 baseline["version"] = "4.0.0"
@@ -227,6 +240,8 @@ class CompleteReportTests(unittest.TestCase):
                 baseline["data"][0]["files"][0]["mcdc_records"] = [[1]]
             elif change == "duplicate-json":
                 baseline["data"][0]["files"].append(copy.deepcopy(baseline["data"][0]["files"][0]))
+            elif change == "missing-summary":
+                baseline["data"][0]["files"][0]["summary"].pop("mcdc")
             else:
                 baseline["data"][0]["functions"][0]["count"] = 1
             with self.subTest(change=change), self.assertRaises(ValueError):
@@ -340,6 +355,20 @@ class NativeLLVM23Tests(unittest.TestCase):
         self.compile("test", [self.test_main, self.common])
         with self.assertRaises(ValueError):
             cov.executed_objects(cov.coverage_objects(self.build), self.profiles, self.profdata, self.readobj)
+
+    def test_native_renamed_text_indexed_and_truncated_raw_profiles_rejected(self):
+        original = self.profiles[0].read_bytes()
+        text = cov.run([self.profdata, "show", "--all-functions", "--counts", "--text", str(self.profiles[0])]).encode()
+        indexed = self.root / "indexed.profdata"
+        cov.run([self.profdata, "merge", "-o", str(indexed), str(self.profiles[0])])
+        for data in (text, indexed.read_bytes(), original[:16]):
+            self.profiles[0].write_bytes(data)
+            output = self.root / "coverage.lcov"
+            output.write_text("stale")
+            with self.subTest(format=data[:16]), self.assertRaises((ValueError, subprocess.CalledProcessError)):
+                cov.export(self.build, self.root, "client", str(output), compiler=self.clang)
+            self.assertFalse(output.exists())
+        self.profiles[0].write_bytes(original)
 
     def test_native_unique_internal_names_preserve_unused_inline_mapping(self):
         header = self.tests / "shared.h"
