@@ -1221,7 +1221,7 @@ void draw_client_map2(object *pl) {
                 /* Space is out of map or blocked. Update space and clear values if
                  * needed. */
                 if (d & BLOCKED_LOS_OUT_OF_MAP) {
-                    map_if_clearcell(false);
+                    map_if_clearcell(depth != 0);
                     continue;
                 }
 
@@ -1375,7 +1375,8 @@ void draw_client_map2(object *pl) {
                         mask |= MAP2_MASK_SUPPORT_HEIGHT;
                     }
                 }
-                if (depth == 0 && !tile_fow && !MAP_UNIQUE(m) && m->region != NULL &&
+                if (depth == 0 && level_visibility == MAP_LEVEL_VISIBLE && !blocksview &&
+                    !MAP_UNIQUE(m) && m->region != NULL &&
                     region_find_with_map(m->region) != NULL) {
                     exploration_mark(CONTR(pl)->cs, m->path, MAP_WIDTH(m), MAP_HEIGHT(m), nx, ny);
                 }
@@ -1391,14 +1392,6 @@ void draw_client_map2(object *pl) {
                         tmp = GET_MAP_SPACE_LAYER(msp, layer, sub_layer);
 
                         if (!map_level_layer_visible(level_visibility, layer)) {
-                            tmp = NULL;
-                        }
-
-                        /* EXIT faces on the wall layer are gameplay content.
-                         * Clearing just their semantic bit still reveals portals
-                         * beneath roofs. Remove the complete cached layer. */
-                        if (tmp != NULL && (camera_covered || blocksview) &&
-                            tmp->type == EXIT) {
                             tmp = NULL;
                         }
 
@@ -1424,6 +1417,14 @@ void draw_client_map2(object *pl) {
                                     break;
                                 }
                             }
+                        }
+
+                        /* EXIT faces on the wall layer are gameplay content.
+                         * Clearing just their semantic bit still reveals portals
+                         * beneath roofs. Remove the complete cached layer. */
+                        if (tmp != NULL && (camera_covered || blocksview) &&
+                            (tmp->head != NULL ? tmp->head : tmp)->type == EXIT) {
+                            tmp = NULL;
                         }
 
                         if (tmp != NULL && tmp->layer != LAYER_WALL &&

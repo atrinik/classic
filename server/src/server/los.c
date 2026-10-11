@@ -212,8 +212,10 @@ bool los_camera_layer_visible(los_camera_visibility visibility, int layer) {
 static bool player_offset(object *pl, mapstruct *map, int x, int y,
                           int *dx, int *dy, int *dz) {
     int mx, my;
-    if (pl == NULL || CONTR(pl) == NULL || CONTR(pl)->cs == NULL || pl->map == NULL ||
-        map == NULL || !spatial_offset(pl->map, map, &mx, &my, dz)) {
+    if (pl == NULL || pl->type != PLAYER || QUERY_FLAG(pl, FLAG_REMOVED) ||
+        CONTR(pl) == NULL || CONTR(pl)->cs == NULL || pl->map == NULL || map == NULL ||
+        x < 0 || y < 0 || x >= MAP_WIDTH(map) || y >= MAP_HEIGHT(map) ||
+        !spatial_offset(pl->map, map, &mx, &my, dz)) {
         return false;
     }
     *dx = mx + x - pl->x;
@@ -262,7 +264,11 @@ bool los_player_can_see_cell(object *pl, mapstruct *map, int x, int y) {
 }
 
 void clear_los(object *pl) {
-    memset(CONTR(pl)->blocked_los, BLOCKED_LOS_OUT_OF_MAP, sizeof(CONTR(pl)->blocked_los));
+    for (int ax = 0; ax < MAP_CLIENT_X; ax++) {
+        for (int ay = 0; ay < MAP_CLIENT_Y; ay++) {
+            CONTR(pl)->blocked_los[ax][ay] = BLOCKED_LOS_OUT_OF_MAP;
+        }
+    }
     memset(CONTR(pl)->blocked_los_depth, BLOCKED_LOS_OUT_OF_MAP,
            sizeof(CONTR(pl)->blocked_los_depth));
     memset(CONTR(pl)->camera_visibility, LOS_CAMERA_HIDDEN, sizeof(CONTR(pl)->camera_visibility));
