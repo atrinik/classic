@@ -46,6 +46,7 @@ class ReleaseAppImageIntegrationTests(unittest.TestCase):
         self.git("tag", "v" + self.version)
         self.epoch = int(self.git("show", "-s", "--format=%ct", self.revision))
         self.package.metadata["revision"] = self.revision
+        self.package.metadata["source_date_epoch"] = self.epoch
         self.package.metadata["lock_sha256"] = hashlib.sha256(self.package.lock_path.read_bytes()).hexdigest()
         self.package.metadata["native_inputs"] = {
             key: self.package.lock[key] for key in ("sources", "tools", "runtime")
@@ -89,6 +90,13 @@ class ReleaseAppImageIntegrationTests(unittest.TestCase):
     def test_complete_candidate_uses_immutable_tls_resources_with_real_inspector(self):
         self.candidate()
         self.assertEqual(len(self.validate()), 13)
+        sbom = json.loads((self.assets / f"atrinik-classic-{self.version}.spdx.json").read_text())
+        notice = self.package.metadata["system_license_notices"][0]
+        self.assertEqual(sbom["hasExtractedLicensingInfos"][0]["licenseId"], notice["license_id"])
+        self.assertEqual(sbom["hasExtractedLicensingInfos"][0]["extractedText"], notice["text"])
+        library = next(record for record in sbom["packages"] if record["name"] == "libzstd.so.1")
+        self.assertEqual(library["licenseDeclared"], "NOASSERTION")
+        self.assertIn(notice["license_id"], library["comment"])
         # Current checkout bytes cannot replace this candidate's committed trust.
         (self.source / "client/ca-bundle.crt").write_text("uncommitted trust change\n")
         (self.source / "tools/ci/appimage/openssl.cnf").write_text("uncommitted config change\n")
@@ -98,6 +106,24 @@ class ReleaseAppImageIntegrationTests(unittest.TestCase):
         self.package.write("usr/share/atrinik/ca-bundle.crt", "forged certificate trust\n")
         self.candidate(invalid_spdx=True)
         with self.assertRaisesRegex(ValueError, "certificate trust differs from trusted source"):
+            self.validate()
+
+    def test_resealed_source_epoch_tampering_is_rejected_before_spdx(self):
+        self.package.metadata["source_date_epoch"] = self.epoch + 1
+        self.candidate(invalid_spdx=True)
+        with self.assertRaisesRegex(ValueError, "source epoch differs from trusted source"):
+            self.validate()
+
+    def test_resealed_copyright_tampering_is_rejected_before_spdx(self):
+        self.package.write("usr/share/doc/atrinik/licenses/system/libzstd1/copyright", "forged source copyright\n")
+        self.candidate(invalid_spdx=True)
+        with self.assertRaisesRegex(ValueError, "copyright differs from trusted lock"):
+            self.validate()
+
+    def test_resealed_referenced_license_tampering_is_rejected_before_spdx(self):
+        self.package.write("usr/share/doc/atrinik/licenses/system/common-licenses/BSD", "forged referenced license\n")
+        self.candidate(invalid_spdx=True)
+        with self.assertRaisesRegex(ValueError, "notice differs from trusted lock"):
             self.validate()
 
     def test_resealed_openssl_config_tampering_is_rejected_before_spdx(self):

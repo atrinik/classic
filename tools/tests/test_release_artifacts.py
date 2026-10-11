@@ -219,7 +219,8 @@ class ReleaseArtifactsTests(unittest.TestCase):
         sbom = artifacts.build_spdx([image], self.version, self.revision, 123, [], inventory)
         sbom_path = self.directory / f"atrinik-classic-{self.version}.spdx.json"
         sbom_path.write_text(json.dumps(sbom))
-        def reader(path, version, *, revision, source_root):
+        def reader(path, version, *, revision, source_root, source_date_epoch):
+            self.assertEqual(source_date_epoch, manifest["source_epoch"])
             self.assertEqual(path, image)
             self.assertEqual((version, revision), (self.version, self.revision))
             for relative, content in trusted_files.items():

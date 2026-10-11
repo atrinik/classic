@@ -197,7 +197,7 @@ def validate_appimage_metadata(directory: Path, manifest: dict, source_root: Pat
             path.write_text(git_value(source_root, "show", f"{revision}:{relative}", preserve_whitespace=True))
         inventory = read_appimage_inventory(
             directory / f"atrinik-classic-client-{version}-linux-x86_64.AppImage",
-            version, revision=revision, source_root=root,
+            version, revision=revision, source_root=root, source_date_epoch=manifest["source_epoch"],
         )
     if manifest.get("appimage_inventory") != inventory:
         raise RuntimeError("candidate AppImage inventory differs from validated package")
