@@ -22,6 +22,7 @@ COHORT = importlib.util.module_from_spec(SPEC)
 sys.path.insert(0, str(CI))
 try:
     SPEC.loader.exec_module(COHORT)
+    import collect_macos_curl as COLLECTOR
 finally:
     sys.path.pop(0)
 
@@ -50,6 +51,8 @@ class MacOSCurlCohortTests(unittest.TestCase):
                             "default_ca_bundle": None, "default_ca_path": None}
         for name in ("public_tls_unrelated", "private_tls_untrusted", "private_tls_wrong_hostname"):
             result[name] = {"code": 60, "status": 0, "ssl_verify_result": 20}
+        result["loaded_images"] = ["/usr/lib/libSystem.B.dylib"]
+        result["dependency_install_names"] = {"/usr/lib/libSystem.B.dylib": []}
         return result
 
     def baseline(self):
@@ -277,10 +280,15 @@ class MacOSCurlCohortTests(unittest.TestCase):
                                "/usr/lib/libz.1.dylib", "/usr/lib/libicucore.A.dylib"]
             data["loaded_images"].extend(platform_images)
             # macOS shared-cache install names need no ordinary filesystem file.
+            data["dependency_install_names"] = {image: [] for image in data["loaded_images"]}
+            data["dependency_install_names"][str(curl)] = [str(cares)]
+            data["symbol_providers"] = {name: str(curl) for name in COLLECTOR.CURL_APIS}
+            data["symbol_providers"]["ares_version"] = str(cares)
             COHORT.validate_loaded(data, prefix, files, probe, platform_images)
             for missing in platform_images:
                 changed = copy.deepcopy(data)
                 changed["loaded_images"].remove(missing)
+                del changed["dependency_install_names"][missing]
                 with self.subTest(missing_platform=missing), self.assertRaisesRegex(ValueError, "baseline SDK"):
                     COHORT.validate_loaded(changed, prefix, files, probe, platform_images)
             mutations = [("loaded_library", str(foreign)), ("loaded_cares_library", str(foreign)),
@@ -299,6 +307,7 @@ class MacOSCurlCohortTests(unittest.TestCase):
             for additional in ("/usr/lib/libcurl.4.dylib", "/usr/lib/libcares.2.dylib", str(foreign)):
                 changed = copy.deepcopy(data)
                 changed["loaded_images"].append(additional)
+                changed["dependency_install_names"][additional] = []
                 with self.subTest(extra_provider=additional), self.assertRaises(ValueError):
                     COHORT.validate_loaded(changed, prefix, captured_foreign_files, probe)
             with self.assertRaises(ValueError):
@@ -310,6 +319,123 @@ class MacOSCurlCohortTests(unittest.TestCase):
             curl.symlink_to(foreign)
             with self.assertRaises(ValueError):
                 COHORT.validate_loaded(data, prefix, files, probe)
+
+    def test_system_curl_requires_preserved_baseline_platform_chain_and_owned_api_bindings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = root / "cohort"
+            curl, cares = prefix / "lib/libcurl.dylib", prefix / "lib/libcares.dylib"
+            probe, foreign = root / "probe", root / "brew/libcurl.4.dylib"
+            bottle = root / "baseline/libcurl.dylib"
+            for path in (curl, cares, probe, foreign, bottle):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"same-version fixture")
+            platform_root = "/usr/lib/libldap.dylib"
+            intermediary = "/System/Library/Frameworks/fixture.framework/fixture"
+            system = COLLECTOR.SYSTEM_CURL
+            platform = [platform_root, intermediary, system]
+            baseline = {"loaded_library": str(bottle), "loaded_images": [str(bottle), *platform],
+                        "dependency_install_names": {str(bottle): [platform_root], platform_root: [intermediary],
+                                                     intermediary: [system], system: []}}
+            data = {"loaded_library": str(curl), "loaded_cares_library": str(cares),
+                    "loaded_images": [str(curl), str(cares), str(probe), *platform],
+                    "dependency_install_names": {str(curl): [str(cares), platform_root], str(cares): [], str(probe): [str(curl)],
+                                                 **{key: copy.deepcopy(value) for key, value in baseline["dependency_install_names"].items()
+                                                    if key != str(bottle)}},
+                    "symbol_providers": {**{name: str(curl) for name in COLLECTOR.CURL_APIS},
+                                         "ares_version": str(cares)}}
+            files = {str(foreign): COHORT.digest(foreign)}
+
+            def validate(candidate=data, prior=baseline, roots=(platform_root,)):
+                COHORT.validate_loaded(candidate, prefix, files, probe, baseline=prior, platform_roots=roots)
+
+            validate()
+            with self.assertRaises(ValueError):
+                validate(prior=None)
+            with self.assertRaises(ValueError):
+                validate(roots=())
+            for side in ("baseline", "candidate"):
+                selected = str(bottle) if side == "baseline" else str(curl)
+                for parent, child in ((selected, platform_root), (platform_root, intermediary), (intermediary, system)):
+                    changed_data, changed_baseline = copy.deepcopy(data), copy.deepcopy(baseline)
+                    changed = changed_baseline if side == "baseline" else changed_data
+                    changed["dependency_install_names"][parent].remove(child)
+                    with self.subTest(side=side, missing_edge=(parent, child)), self.assertRaises(ValueError):
+                        validate(changed_data, changed_baseline)
+            changed = copy.deepcopy(data)
+            changed["dependency_install_names"][platform_root] = [system]
+            with self.assertRaisesRegex(ValueError, "preserve"):
+                validate(changed)
+            changed = copy.deepcopy(data)
+            other_root = "/usr/lib/libkrb5.dylib"
+            changed["loaded_images"].append(other_root)
+            changed["dependency_install_names"][other_root] = [system]
+            changed["dependency_install_names"][str(curl)] = [str(cares), other_root]
+            with self.assertRaisesRegex(ValueError, "preserve"):
+                validate(changed, roots=(platform_root, other_root))
+            for edge in (str(foreign), "@rpath/libcurl.4.dylib", "/usr/lib/../lib/libcurl.4.dylib"):
+                changed = copy.deepcopy(data)
+                changed["dependency_install_names"][intermediary] = [edge]
+                if edge == str(foreign):
+                    changed["loaded_images"].append(edge)
+                    changed["dependency_install_names"][edge] = [system]
+                with self.subTest(foreign_edge=edge), self.assertRaises(ValueError):
+                    validate(changed)
+            for missing in (intermediary, system):
+                changed = copy.deepcopy(baseline)
+                changed["loaded_images"].remove(missing)
+                del changed["dependency_install_names"][missing]
+                with self.subTest(baseline_missing_image=missing), self.assertRaises(ValueError):
+                    validate(prior=changed)
+            for extra in (str(foreign), "/usr/lib/libcurl.3.dylib", "/usr/lib/libcares.2.dylib"):
+                changed = copy.deepcopy(data)
+                changed["loaded_images"].append(extra)
+                changed["dependency_install_names"][extra] = []
+                with self.subTest(extra_provider=extra), self.assertRaises(ValueError):
+                    validate(changed)
+            for api in data["symbol_providers"]:
+                changed = copy.deepcopy(data)
+                changed["symbol_providers"][api] = str(foreign)
+                with self.subTest(api=api), self.assertRaises(ValueError):
+                    validate(changed)
+            changed = copy.deepcopy(data)
+            changed["dependency_install_names"][str(curl)] = []
+            with self.assertRaisesRegex(ValueError, "c-ares dependency edge"):
+                validate(changed)
+
+    def test_baseline_binding_requires_same_workflow_source_provider_and_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = root / "bottle"
+            library = prefix / "lib/libcurl.dylib"
+            library.parent.mkdir(parents=True)
+            library.write_bytes(b"baseline curl")
+            environment = {"GITHUB_RUN_ID": "17", "GITHUB_RUN_ATTEMPT": "1",
+                           "GITHUB_JOB": "native-curl", "GITHUB_REPOSITORY": "atrinik/classic"}
+            runtime = self.runtime()
+            runtime.update(loaded_library=str(library), loaded_images=[str(library)],
+                           dependency_install_names={str(library): []},
+                           symbol_providers={name: str(library) for name in COLLECTOR.CURL_APIS})
+            record = {"schema_version": 2, "source_commit": "a" * 40,
+                      "qualification_identity": COLLECTOR.qualification_identity(environment),
+                      "selected_library": str(library), "selected_library_sha256": COHORT.digest(library),
+                      "prefix": str(prefix), "runtime": runtime}
+            COHORT.bind_baseline(record, "a" * 40, environment)
+            for key, value in (("schema_version", 1), ("source_commit", "b" * 40)):
+                changed = dict(record, **{key: value})
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    COHORT.bind_baseline(changed, "a" * 40, environment)
+            for key, value in (("GITHUB_RUN_ID", "18"), ("GITHUB_RUN_ATTEMPT", "2"), ("GITHUB_JOB", "other-job")):
+                with self.subTest(identity=key), self.assertRaises(ValueError):
+                    COHORT.bind_baseline(record, "a" * 40, dict(environment, **{key: value}))
+            changed = copy.deepcopy(record)
+            changed["runtime"]["loaded_images"] = []
+            changed["runtime"]["dependency_install_names"] = {}
+            with self.assertRaises(ValueError):
+                COHORT.bind_baseline(changed, "a" * 40, environment)
+            library.write_bytes(b"baseline bytes replaced after collection")
+            with self.assertRaisesRegex(ValueError, "bytes changed"):
+                COHORT.bind_baseline(record, "a" * 40, environment)
 
     def test_header_directories_are_owned_even_for_same_version_headers(self):
         with tempfile.TemporaryDirectory() as directory:

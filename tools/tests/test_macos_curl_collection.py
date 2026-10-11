@@ -36,12 +36,109 @@ class MacOSCurlCollectionTests(unittest.TestCase):
         bundle.write_text("fixture CA, never used for a network request")
         data = {
             "header_version_num": 0x081600, "version_num": 0x081600,
+            "loaded_images": [str(library)], "dependency_install_names": {str(library): []},
+            "symbol_providers": {name: str(library) for name in COLLECTOR.CURL_APIS},
             "loaded_library": str(library), "features": ["SSL", "AsynchDNS", "HTTP3"],
             "protocols": ["http", "https", "ldap"],
             "public_tls_default": {"code": 0, "status": 200},
             "public_tls_bundle": {"code": 0, "status": 200},
         }
         return prefix, library, llvm, bundle, data
+
+    def test_inventory_requires_complete_canonical_unique_loaded_images_and_edges(self):
+        images = ["/fixture/probe", "/usr/lib/libSystem.B.dylib"]
+        original = {"loaded_images": images,
+                    "dependency_install_names": {images[0]: [images[1], "@rpath/optional.dylib"], images[1]: []}}
+        COLLECTOR.validate_inventory(original)
+        changes = [("loaded_images", []), ("loaded_images", images + [images[0]]),
+                   ("loaded_images", ["relative.dylib"]), ("loaded_images", ["/usr/lib/../foreign.dylib"]),
+                   ("loaded_images", ["/usr//lib/foreign.dylib"]), ("loaded_images", ["/usr/lib/./foreign.dylib"]),
+                   ("loaded_images", [f"/fixture/image-{number}" for number in range(4097)]),
+                   ("dependency_install_names", {images[0]: []}),
+                   ("dependency_install_names", {**original["dependency_install_names"], "/unloaded": []})]
+        for invalid in (None, "not-a-list", [""], [None], ["bad\0install-name"], ["/too-many"] * 16385):
+            changes.append(("dependency_install_names", {images[0]: invalid, images[1]: []}))
+        for key, value in changes:
+            data = dict(original, **{key: value})
+            with self.subTest(key=key, value=str(value)[:100]), self.assertRaises(ValueError):
+                COLLECTOR.validate_inventory(data)
+
+    def test_every_directly_used_curl_api_must_bind_the_selected_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix, library, _, _, original = self.fixture(Path(directory))
+            foreign = Path(directory) / "same-version-foreign.dylib"
+            foreign.write_bytes(library.read_bytes())
+            COLLECTOR.validate_provider(original, library, prefix)
+            for api in COLLECTOR.CURL_APIS:
+                for replacement in (str(foreign), "relative.dylib"):
+                    data = copy.deepcopy(original)
+                    data["symbol_providers"][api] = replacement
+                    with self.subTest(api=api, replacement=replacement), self.assertRaises(ValueError):
+                        COLLECTOR.validate_provider(data, library, prefix)
+                data = copy.deepcopy(original)
+                del data["symbol_providers"][api]
+                with self.subTest(missing_api=api), self.assertRaises(ValueError):
+                    COLLECTOR.validate_provider(data, library, prefix)
+            data = copy.deepcopy(original)
+            data["symbol_providers"]["unknown_api"] = str(library)
+            with self.assertRaises(ValueError):
+                COLLECTOR.validate_provider(data, library, prefix)
+            data = copy.deepcopy(original)
+            data["loaded_images"] = [str(foreign)]
+            data["dependency_install_names"] = {str(foreign): []}
+            with self.assertRaisesRegex(ValueError, "absent"):
+                COLLECTOR.validate_provider(data, library, prefix)
+
+    def test_baseline_rejects_additional_resolver_and_nonexact_curl_images(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix, library, _, _, original = self.fixture(Path(directory))
+            foreign = Path(directory) / "foreign/libcurl.dylib"
+            foreign.parent.mkdir()
+            foreign.write_bytes(library.read_bytes())
+            for extra in (str(foreign), "/usr/lib/libcurl.3.dylib", "/usr/lib/libcares.2.dylib"):
+                data = copy.deepcopy(original)
+                data["loaded_images"].append(extra)
+                data["dependency_install_names"][extra] = []
+                with self.subTest(extra=extra), self.assertRaises(ValueError):
+                    COLLECTOR.validate_provider(data, library, prefix)
+
+    def test_qualification_identity_is_scoped_to_one_native_workflow_execution(self):
+        original = {"GITHUB_RUN_ID": "17", "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_JOB": "native-curl_qualification", "GITHUB_REPOSITORY": "atrinik/classic"}
+        self.assertEqual(COLLECTOR.qualification_identity(original),
+                         {"run_id": "17", "run_attempt": "1", "job": "native-curl_qualification",
+                          "repository": "atrinik/classic"})
+        for key in original:
+            missing = dict(original)
+            del missing[key]
+            with self.subTest(missing=key), self.assertRaises(KeyError):
+                COLLECTOR.qualification_identity(missing)
+        for key, values in (("GITHUB_RUN_ID", ("0", "-1", "17x")), ("GITHUB_RUN_ATTEMPT", ("0", "", "1.0")),
+                            ("GITHUB_JOB", ("", "../../job", "job name")),
+                            ("GITHUB_REPOSITORY", ("other/classic", "atrinik/other"))):
+            for value in values:
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    COLLECTOR.qualification_identity(dict(original, **{key: value}))
+
+    def test_probe_emits_inventory_for_baseline_and_cohort_modes(self):
+        source = (ROOT / "tools/ci/macos_curl_probe/main.c").read_text()
+        conditions = []
+        inventory_calls = 0
+        providers = set()
+        for line in source.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("#if ", "#ifdef ", "#ifndef ")):
+                conditions.append(stripped)
+            elif stripped.startswith("#endif"):
+                conditions.pop()
+            if "if (!image_inventory())" in line:
+                inventory_calls += 1
+                self.assertFalse(any("ATRINIK_CURL_COHORT" in condition for condition in conditions))
+            if stripped.startswith("PROVIDER(curl_"):
+                providers.add(stripped.split("(", 1)[1].split(")", 1)[0])
+                self.assertFalse(any("ATRINIK_CURL_COHORT" in condition for condition in conditions))
+        self.assertEqual(inventory_calls, 1)
+        self.assertEqual(providers, set(COLLECTOR.CURL_APIS))
 
     def test_environment_removes_tls_proxy_loader_and_compile_overrides(self):
         environment = {
@@ -116,7 +213,9 @@ class MacOSCurlCollectionTests(unittest.TestCase):
                 with patch.object(COLLECTOR.platform, "system", return_value="Darwin"), \
                         patch.object(COLLECTOR, "CA_SHA256", COLLECTOR.digest(bundle)), \
                         patch.object(COLLECTOR.subprocess, "run", side_effect=run), \
-                        patch.dict(COLLECTOR.os.environ, {"HTTPS_PROXY": "https://foreign.invalid"}), \
+                        patch.dict(COLLECTOR.os.environ, {"HTTPS_PROXY": "https://foreign.invalid",
+                            "GITHUB_RUN_ID": "17", "GITHUB_RUN_ATTEMPT": "1",
+                            "GITHUB_JOB": "native-curl", "GITHUB_REPOSITORY": "atrinik/classic"}), \
                         contextlib.redirect_stdout(io.StringIO()):
                     if runtime_status:
                         with self.assertRaisesRegex(ValueError, "verified public TLS"):
