@@ -277,6 +277,7 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/pr-benchmarks.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/server_benchmark.py \
             --material cmake/toolchains/llvm.cmake \
             --material cmake/AtrinikLLVM.cmake \
             --material tools/ci/llvm_coverage.py \
@@ -288,28 +289,15 @@ jobs:
           path: ${{ runner.temp }}/classic-ccache/server-benchmark
           key: ${{ steps.linux-cache.outputs.key }}
           restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
-      - name: Pull pinned Classic Linux environment
-        run: docker pull "${CLASSIC_LINUX_IMAGE}"
-      - name: Prepare isolated server benchmark compiler cache
+      - name: Build and compare the server content-loader probes in their pinned cohorts
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          mkdir -p "${RUNNER_TEMP}/classic-ccache/server-benchmark"
-          chmod 1777 "${RUNNER_TEMP}/classic-ccache/server-benchmark"
-      - name: Build and compare the server content-loader probe
-        run: |
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            --network none \
-            --env ATRINIK_LLVM_TOOLCHAIN=1 \
-            --env CCACHE_DIR=/cache/ccache \
-            --env CCACHE_MAXSIZE=500M \
-            --env HOME=/tmp/classic-home \
-            --env ATRINIK_BENCHMARK_BASE_SHA="${{ github.event.pull_request.base.sha }}" \
-            --env ATRINIK_BENCHMARK_REVISION="${{ github.event.pull_request.head.sha }}" \
-            --volume "${GITHUB_WORKSPACE}:/workspace" \
-            --volume "${RUNNER_TEMP}/classic-ccache/server-benchmark:/cache/ccache" \
-            --workdir /workspace \
-            "${CLASSIC_LINUX_IMAGE}" \
-            tools/ci/run_linux_check.sh server-benchmark /workspace
+          python3 tools/ci/server_benchmark.py compare \
+            --source-root "${GITHUB_WORKSPACE}" \
+            --base "${BASE_SHA}" --head "${HEAD_SHA}" \
+            --cache "${RUNNER_TEMP}/classic-ccache/server-benchmark"
       - name: Publish server benchmark job summary
         if: always()
         run: |

@@ -1217,7 +1217,7 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn('-B "${sanitizer_directory}"', line)
         for root in ("source_root", "baseline_root"):
             self.assertIn(f'${{{root}}}/client/${{release_directory}}/atrinik', runner)
-            self.assertIn(f'${{{root}}}/server/${{release_directory}}', runner)
+        self.assertIn('${source_root}/server/${release_directory}', runner)
         for operation in (
             'cmake -S "${source_root}/protocol" -B "${source_root}/protocol/${protocol_directory}"',
             'cmake --build "${source_root}/protocol/${protocol_directory}"',
@@ -1496,7 +1496,9 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         for material in benchmark_materials:
             self.assertEqual(client_benchmark.count(f"--material {material}"), 1)
-        self.assertIn("tools/ci/run_linux_check.sh server-benchmark", workflow)
+        self.assertIn("python3 tools/ci/server_benchmark.py compare", workflow)
+        self.assertIn('--base "${BASE_SHA}" --head "${HEAD_SHA}"', workflow)
+        self.assertNotIn("tools/ci/run_linux_check.sh server-benchmark /workspace", workflow)
         self.assertNotIn("recover_attested_dependency_bundle.sh", workflow)
         self.assertNotIn("--trusted-bundle", workflow)
         self.assertIn("github.event.pull_request.base.sha", workflow)
@@ -2169,7 +2171,10 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("bundle-verify", runner)
-        self.assertEqual(runner.count("--offline"), 8)
+        self.assertEqual(runner.count("--offline"), 6)
+        benchmark = (ROOT / "tools/ci/server_benchmark.py").read_text()
+        self.assertEqual(benchmark.count('"--offline"'), 2)
+        self.assertIn('"bundle-verify"', benchmark)
         self.assertIn('build/dependency-source-cache', runner)
         self.assertIn('--downloads "${dependency_downloads}"', runner)
         self.assertIn('"${baseline_root}/client/dependencies.lock.json"', runner)
