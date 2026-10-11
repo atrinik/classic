@@ -94,9 +94,11 @@ class AppImageTests(unittest.TestCase):
             "sources": [], "tools": {},
             "system_library_packages": {"libzstd.so.1": "libzstd1"},
             "system_package_versions": {"libzstd1": "fixture-version"},
-            "system_package_licenses": {"libzstd1": "BSD-3-Clause"},
+            "system_package_licenses": {"libzstd1": "LicenseRef-Debian-libzstd1"},
             "system_package_copyright_sha256": {
                 "libzstd1": hashlib.sha256(b"fixture system notice\n").hexdigest()},
+            "system_package_notice_files": {"libzstd1": ["BSD"]},
+            "system_common_license_sha256": {"BSD": hashlib.sha256(b"fixture common BSD notice\n").hexdigest()},
             "host_libraries": ["libc.so.6", "libm.so.6", "ld-linux-x86-64.so.2", "libcrypto.so.3"],
             "required_libraries": ["libzstd.so.1"], "dlopen_libraries": [],
             "notices": ["usr/share/doc/atrinik/LICENSE.md", "usr/share/doc/atrinik/ATTRIBUTIONS.md"],
@@ -125,6 +127,7 @@ class AppImageTests(unittest.TestCase):
         for name in self.lock["notices"]:
             self.write(name, "fixture copyright and license\n")
         self.write("usr/share/doc/atrinik/licenses/system/libzstd1/copyright", "fixture system notice\n")
+        self.write("usr/share/doc/atrinik/licenses/system/common-licenses/BSD", "fixture common BSD notice\n")
         self.write("usr/share/games/atrinik/client.cfg", "fixture config\n")
         for directory in ("data", "sound", "fonts", "textures"):
             self.write(f"usr/share/games/atrinik/{directory}/fixture", "fixture\n")
@@ -133,9 +136,10 @@ class AppImageTests(unittest.TestCase):
                          "build_features": {"testing": False, "coverage": False, "sanitizers": False},
                          "bundled_libraries": ["libzstd.so.1"],
                          "bundled_library_records": [{"name": "libzstd.so.1", "path": self.library_name,
-                             "version": "fixture-version", "license": "BSD-3-Clause", "source": "deb:libzstd1",
+                             "version": "fixture-version", "license": "LicenseRef-Debian-libzstd1", "source": "deb:libzstd1",
                              "sha256": hashlib.sha256(library.read_bytes()).hexdigest()}],
-                         "native_inputs": {key: self.lock[key] for key in ("sources", "tools", "runtime")}}
+                         "native_inputs": {key: self.lock[key] for key in ("sources", "tools", "runtime")},
+                         "system_license_notices": appimage.system_license_notices(self.payload, self.lock, ["libzstd1"])}
 
     def write(self, name, data, executable=False):
         path = self.payload / name
@@ -389,6 +393,7 @@ class AppImageTests(unittest.TestCase):
         self.metadata["native_inputs"]["sources"] = self.lock["sources"]
         record = self.metadata["bundled_library_records"][0]
         record.update(source="FixtureSDL", version="3.4.2", license="Zlib")
+        self.metadata["system_license_notices"] = []
         with mock.patch.dict(appimage.SOURCE_LIBRARIES, {"libzstd.so.1": "FixtureSDL"}):
             self.validate()
             record["version"] = "0.0.0"
@@ -409,6 +414,38 @@ class AppImageTests(unittest.TestCase):
         self.metadata["lock_sha256"] = hashlib.sha256(self.lock_path.read_bytes()).hexdigest()
         with self.assertRaisesRegex(ValueError, "actual license expression"):
             self.validate()
+
+    def test_full_system_notice_records_reject_self_consistent_forgery(self):
+        record = self.metadata["system_license_notices"][0]
+        original = dict(record)
+        for field, value in (("text", "invented notice text\n"), ("license_id", "LicenseRef-Unrelated"),
+                             ("files", []), ("package", "unrelated"), ("sha256", "0" * 64)):
+            record[field] = value
+            if field == "text":
+                record["sha256"] = hashlib.sha256(value.encode()).hexdigest()
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "notice inventory"):
+                self.validate()
+            record.clear()
+            record.update(original)
+        notice = self.payload / "usr/share/doc/atrinik/licenses/system/common-licenses/BSD"
+        notice.write_text("invented common license\n")
+        with self.assertRaisesRegex(ValueError, "notice differs"):
+            self.validate()
+
+    def test_notice_helper_rejects_traversal_symlinks_and_missing_common_text(self):
+        path = self.payload / "usr/share/doc/atrinik/licenses/system/common-licenses/BSD"
+        original = path.read_bytes()
+        path.unlink()
+        with self.assertRaisesRegex(ValueError, "missing required notice"):
+            appimage.system_license_notices(self.payload, self.lock, ["libzstd1"])
+        path.symlink_to("../libzstd1/copyright")
+        with self.assertRaisesRegex(ValueError, "bounded regular file"):
+            appimage.system_license_notices(self.payload, self.lock, ["libzstd1"])
+        path.unlink()
+        path.write_bytes(original)
+        self.lock["system_package_notice_files"]["libzstd1"] = ["../../outside"]
+        with self.assertRaisesRegex(ValueError, "common-license names"):
+            appimage.system_license_notices(self.payload, self.lock, ["libzstd1"])
 
     def test_openssl_provider_config_and_nested_modules(self):
         config = self.payload / "usr/share/atrinik/openssl.cnf"

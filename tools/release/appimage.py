@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 from dataclasses import dataclass
 import hashlib
 import json
@@ -270,6 +271,56 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def system_license_notices(root: Path | str, lock: dict, packages: Iterable[str]) -> list[dict]:
+    """Inventory locked notice texts without inferring their legal scope."""
+    root = Path(root)
+    package_names = list(packages)
+    if any(not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name)
+           for name in package_names):
+        raise ValueError("invalid AppImage system notice package")
+    records = []
+    total = 0
+    for package in sorted(set(package_names)):
+        license_id = lock.get("system_package_licenses", {}).get(package)
+        if not isinstance(license_id, str) or not re.fullmatch(r"LicenseRef-[A-Za-z0-9.-]+", license_id):
+            raise ValueError(f"AppImage package has no source-bound notice LicenseRef: {package}")
+        common = lock.get("system_package_notice_files", {}).get(package)
+        if (not isinstance(common, list) or any(not isinstance(name, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", name) for name in common)
+                or common != sorted(set(common))):
+            raise ValueError(f"invalid common-license names in trusted AppImage lock: {package}")
+        paths = [(f"usr/share/doc/atrinik/licenses/system/{package}/copyright",
+                  lock.get("system_package_copyright_sha256", {}).get(package))]
+        paths.extend((f"usr/share/doc/atrinik/licenses/system/common-licenses/{name}",
+                      lock.get("system_common_license_sha256", {}).get(name)) for name in common)
+        files, texts = [], []
+        for relative, expected in paths:
+            path = root / relative
+            try:
+                identity = path.lstat()
+                if not stat.S_ISREG(identity.st_mode) or not 0 < identity.st_size <= 4 * 1024**2:
+                    raise ValueError(f"AppImage notice must be a bounded regular file: {relative}")
+                data = path.read_bytes()
+            except OSError as exc:
+                raise ValueError(f"AppImage missing required notice: {relative}") from exc
+            digest = hashlib.sha256(data).hexdigest()
+            if digest != expected:
+                raise ValueError(f"AppImage notice differs from trusted lock: {relative}")
+            try:
+                text = data.decode("utf-8")
+            except UnicodeError as exc:
+                raise ValueError(f"AppImage notice is not exact UTF-8 text: {relative}") from exc
+            files.append({"path": relative, "sha256": digest})
+            texts.append(f"===== {relative} =====\n" + text + "\n")
+        text = "".join(texts)
+        total += len(text.encode("utf-8"))
+        if total > 4 * 1024**2:
+            raise ValueError("AppImage system notice inventory exceeds metadata limits")
+        records.append({"package": package, "license_id": license_id, "text": text,
+                        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "files": files})
+    return records
+
+
 def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
              lock_digest: str, source_root: Path, revision: str | None) -> dict:
     allowed = ("usr/bin", "usr/lib", "usr/share/games/atrinik", "usr/share/doc/atrinik",
@@ -413,6 +464,7 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
         raise ValueError("AppImage library provenance records are incomplete")
     sources = {item["name"]: item for item in lock.get("sources", [])}
     expected_records = []
+    system_packages = set()
     for soname, name in sorted(providers.items()):
         if soname in SOURCE_LIBRARIES:
             source_name = SOURCE_LIBRARIES[soname]
@@ -426,6 +478,7 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
             if not package or not version_name:
                 raise ValueError(f"AppImage library has no trusted system package: {soname}")
             source_name = "deb:" + package
+            system_packages.add(package)
             license_name = lock.get("system_package_licenses", {}).get(package)
             copyright_digest = lock.get("system_package_copyright_sha256", {}).get(package)
             notice = required(f"usr/share/doc/atrinik/licenses/system/{package}/copyright")
@@ -440,6 +493,10 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
                                  "source": source_name})
     if records != expected_records:
         raise ValueError("AppImage library provenance differs from trusted lock or ELF payload")
+    if any(name.startswith("usr/share/alsa/") and entry.kind == "-" for name, entry in entries.items()):
+        system_packages.add("libasound2-data")
+    if metadata.get("system_license_notices") != system_license_notices(root, lock, system_packages):
+        raise ValueError("AppImage system notice inventory differs from trusted texts")
     return metadata
 
 
