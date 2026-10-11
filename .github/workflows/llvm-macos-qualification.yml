@@ -82,13 +82,12 @@ jobs:
         run: |
           set -euo pipefail
           brew install --force-bottle \
-            pkgconf flex check miniupnpc gd libidn2 curl openssl@3 zlib \
+            pkgconf libidn2 curl openssl@3 zlib \
             libxml2 readline python@3.12 sdl3 sdl3_image sdl3_ttf sdl3_mixer \
             2>&1 | tee build/macos-qualification-evidence/dependency-install.log
           brew list --versions > build/macos-qualification-evidence/dependency-versions.txt
           brew info --json=v2 --installed > build/macos-qualification-evidence/dependencies.json
           echo "$(brew --prefix python@3.12)/libexec/bin" >> "${GITHUB_PATH}"
-          echo "$(brew --prefix flex)/bin" >> "${GITHUB_PATH}"
       - name: Verify pinned LLVM and compile and run native C and C++ SDK probes
         shell: bash
         run: |
@@ -108,14 +107,8 @@ jobs:
           set -euo pipefail
           python3 client/tools/dependencies.py sync --root client --refresh
           python3 client/tools/dependencies.py verify --root client
-          python3 server/tools/dependencies.py sync --root server --refresh
-          python3 server/tools/dependencies.py verify --root server
           python3 client/tools/verify_gpu_fixture_provenance.py
-          pcp_source=$(python3 server/tools/dependencies.py source \
-            --root server --source-lock server/cmake/immutable_sources.lock.json \
-            --source-name libpcpnatpmp --cache "${RUNNER_TEMP}/macos-source-cache")
-          echo "ATRINIK_MACOS_PCP_SOURCE=${pcp_source}" >> "${GITHUB_ENV}"
-      - name: Configure the complete Classic Release graph
+      - name: Configure the supported macOS Classic Release targets
         shell: bash
         run: |
           set -euo pipefail
@@ -129,14 +122,12 @@ jobs:
           cmake -S . -B build/macos-qualification -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/cmake/toolchains/llvm-macos.cmake" \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DPACKAGE_TYPE=none \
+            -DATRINIK_BUILD_CLIENT=ON -DATRINIK_BUILD_SERVER=OFF \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             "-DCMAKE_PREFIX_PATH=${prefix};$(brew --prefix openssl@3);$(brew --prefix curl);$(brew --prefix libxml2);$(brew --prefix zlib);$(brew --prefix readline);${python_prefix}" \
             "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" \
             "-DCURL_ROOT=$(brew --prefix curl)" \
-            "-DPython_ROOT_DIR=${python_prefix}" -DPython_FIND_FRAMEWORK=LAST \
             "-DPython3_EXECUTABLE=${python_prefix}/bin/python3.12" \
-            "-DFLEX_EXECUTABLE=$(brew --prefix flex)/bin/flex" \
-            "-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=${ATRINIK_MACOS_PCP_SOURCE}" \
             "-DATRINIK_GPU_SHADER_DIRECTORY=${GITHUB_WORKSPACE}/build/macos-qualification-shaders" \
             2>&1 | tee build/macos-qualification-evidence/configure.log
       - name: Verify required production features were retained
@@ -150,14 +141,18 @@ jobs:
               if line and not line.startswith(('#', '//')) and '=' in line and ':' in line:
                   key, value = line.split('=', 1)
                   cache[key.split(':', 1)[0]] = value
-          for option in ('ATRINIK_BUILD_CLIENT', 'ATRINIK_BUILD_SERVER', 'ENABLE_WARNING_ERRORS',
-                         'ENABLE_PYTHON_PLUGIN', 'ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS'):
-              if cache.get(option) != 'ON':
-                  raise SystemExit(f'required production feature absent: {option}')
-          if not cache.get('GD_LIBRARY') or cache['GD_LIBRARY'].endswith('-NOTFOUND'):
-              raise SystemExit('required world maker dependency absent: GD_LIBRARY')
+          required = {
+              'ATRINIK_BUILD_CLIENT': 'ON', 'ATRINIK_BUILD_SERVER': 'OFF',
+              'ENABLE_WARNING_ERRORS': 'ON', 'BUILD_TESTING': 'ON',
+              'CMAKE_BUILD_TYPE': 'Release',
+          }
+          for option, value in required.items():
+              if cache.get(option) != value:
+                  raise SystemExit(f'required macOS build setting absent: {option}={value}')
+          if not cache.get('READLINE_LIBRARY') or cache['READLINE_LIBRARY'].endswith('-NOTFOUND'):
+              raise SystemExit('required toolkit dependency absent: READLINE_LIBRARY')
           PY
-      - name: Build the production client, server, library and test executables
+      - name: Build the production client, shared libraries and test executables
         shell: bash
         run: |
           set -euo pipefail
@@ -176,9 +171,11 @@ jobs:
           from pathlib import Path
           data = json.loads(Path('build/macos-qualification-evidence/tests.json').read_text())
           names = [test['name'] for test in data['tests']]
-          for prefix in ('protocol-', 'libatrinik-', 'atrinik-pathfinding', 'client-', 'server-unit-', 'server-plugin-python'):
+          for prefix in ('protocol-', 'libatrinik-', 'atrinik-pathfinding', 'client-'):
               if not any(name.startswith(prefix) for name in names):
                   raise SystemExit(f'missing required native CPU tests: {prefix}')
+          if any(name.startswith('server-') for name in names):
+              raise SystemExit('unsupported server tests included in macOS qualification')
           print(f'{len(names)} native CPU tests selected')
           PY
           ctest --test-dir build/macos-qualification --output-on-failure \

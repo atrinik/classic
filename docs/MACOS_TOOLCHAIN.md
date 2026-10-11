@@ -71,7 +71,10 @@ OS, selected SDK and disk space instead of inferring them from the label.
 
 The native job installs ARM64 Homebrew bottles for the current application
 prerequisites: SDL3, SDL3_image, SDL3_ttf, SDL3_mixer, OpenSSL 3, libxml2,
-libidn2, curl, zlib, Readline, Flex, MiniUPnPc, libgd, Check and Python 3.12.
+libidn2, curl, zlib, Readline and Python 3.12. Python supplies the protocol,
+client and validation tooling interpreter. Readline retains the toolkit's
+interactive console feature. Flex, MiniUPnPc, libgd, Check and libpcpnatpmp
+belong to the server build and are not acquired by this Mac lane.
 The official [SDL3](https://formulae.brew.sh/formula/sdl3),
 [SDL3_mixer](https://formulae.brew.sh/formula/sdl3_mixer) and
 [OpenSSL 3](https://formulae.brew.sh/formula/openssl@3) formulae currently supply
@@ -81,13 +84,18 @@ can change; the exact installed versions and formula metadata are retained
 with each qualification run. This lane does not create a released dependency
 producer or qualify different dependency versions by inference.
 
-The complete integrated Release graph builds protocol, libatrinik, pathfinding,
-client, server, the server Python plugin and all test executables through LLVM
-23.1.3. Existing feature, warning, PCH and optimization defaults remain in use.
-Builds and tests use two jobs. Locked sound, content, resources and libpcpnatpmp
-inputs use their existing verification helpers. CTest excludes the
-`gpu-conformance` and `performance` labels; native CPU test discovery must include
-every component and the Python plugin before tests run. GPU test executables
+The integrated root selects `ATRINIK_BUILD_CLIENT=ON` and
+`ATRINIK_BUILD_SERVER=OFF`, building the supported macOS protocol, libatrinik,
+pathfinding, client and test targets through LLVM 23.1.3. The server access
+backend deliberately supports Linux and Windows only; this lane preserves that
+restriction. Server, worldmaker and server Python-plugin acceptance remains
+required in the Linux and Windows lanes. Existing client/library feature,
+warning and optimization defaults remain in use, including Release optimization
+and warnings as errors. Builds and tests use two jobs. Locked sound, content and
+resources use their existing verification helpers. CTest excludes the
+`gpu-conformance` and `performance` labels; native CPU discovery must include
+protocol, library, pathfinding and client tests and reject server tests before
+tests run. GPU test executables
 still compile. The source-only GPU fixture provenance helper runs explicitly alongside
 locked runtime acquisition, while hardware GPU tests, benchmarks and Metal
 reference/minimum qualification remain separate acceptance requirements.

@@ -23,10 +23,10 @@ def embedded_python_script(index):
 
 
 class MacOSQualificationWorkflowTests(unittest.TestCase):
-    def test_discovery_requires_each_native_component_and_python_plugin(self):
+    def test_discovery_requires_each_supported_native_component(self):
         names = [
             "protocol-generate-check", "libatrinik-smoke", "atrinik-pathfinding",
-            "client-help-parser", "server-unit-object", "server-plugin-python",
+            "client-help-parser",
         ]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -48,11 +48,19 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
                     if excluded:
                         self.assertIn("missing required native CPU tests", result.stderr)
 
-    def test_disabled_python_pch_and_missing_world_maker_fail_qualification(self):
+            (evidence / "tests.json").write_text(json.dumps({
+                "tests": [{"name": name} for name in [*names, "server-unit-object"]]
+            }))
+            result = subprocess.run([shutil.which("python3"), str(script)], cwd=root,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unsupported server tests", result.stderr)
+
+    def test_incorrect_platform_scope_or_disabled_required_features_fail(self):
         enabled = {
-            "ATRINIK_BUILD_CLIENT": "ON", "ATRINIK_BUILD_SERVER": "ON",
-            "ENABLE_WARNING_ERRORS": "ON", "ENABLE_PYTHON_PLUGIN": "ON",
-            "ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS": "ON", "GD_LIBRARY": "/native/libgd.dylib",
+            "ATRINIK_BUILD_CLIENT": "ON", "ATRINIK_BUILD_SERVER": "OFF",
+            "ENABLE_WARNING_ERRORS": "ON", "BUILD_TESTING": "ON",
+            "CMAKE_BUILD_TYPE": "Release", "READLINE_LIBRARY": "/native/libreadline.dylib",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -63,7 +71,10 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
             for disabled in [None, *enabled]:
                 cache = dict(enabled)
                 if disabled:
-                    cache[disabled] = "GD_LIBRARY-NOTFOUND" if disabled == "GD_LIBRARY" else "OFF"
+                    cache[disabled] = {
+                        "ATRINIK_BUILD_SERVER": "ON", "CMAKE_BUILD_TYPE": "Debug",
+                        "READLINE_LIBRARY": "READLINE_LIBRARY-NOTFOUND",
+                    }.get(disabled, "OFF")
                 (build / "CMakeCache.txt").write_text("".join(
                     f"{key}:STRING={value}\n" for key, value in cache.items()
                 ))
@@ -97,9 +108,10 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
         self.assertIn("--no-tests=error", text)
         self.assertIn("--output-junit", text)
         self.assertIn("-LE 'gpu-conformance|performance'", text)
+        self.assertIn("-DATRINIK_BUILD_CLIENT=ON -DATRINIK_BUILD_SERVER=OFF", text)
         for option in (
             "ENABLE_PYTHON_PLUGIN", "ENABLE_PRECOMPILED_HEADERS", "ENABLE_WARNING_ERRORS",
-            "ATRINIK_BUILD_CLIENT", "ATRINIK_BUILD_SERVER", "ENABLE_COVERAGE",
+            "ENABLE_COVERAGE",
             "ENABLE_SANITIZERS", "CMAKE_INTERPROCEDURAL_OPTIMIZATION",
         ):
             self.assertNotIn("-D" + option, text)
@@ -107,6 +119,11 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
         self.assertIn("prepare_macos_llvm.sh", text)
         self.assertIn("-DCMAKE_BUILD_TYPE=Release", text)
         self.assertIn("cmake --build build/macos-qualification --parallel 2", text)
+        self.assertNotIn("server/tools/dependencies.py", text)
+        self.assertNotIn("FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP", text)
+        self.assertNotIn("server-plugin-python", text)
+        self.assertNotIn("complete Classic Release graph", text)
+        self.assertNotIn("GD_LIBRARY", text)
 
     @unittest.skipUnless(shutil.which("bash"), "Bash unavailable")
     def test_embedded_shell_recipes_are_valid(self):
