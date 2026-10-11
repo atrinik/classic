@@ -575,6 +575,26 @@ class FinalizeArtifactsTests(unittest.TestCase):
         self.assertIn({"spdxElementId": "SPDXRef-AppImageLibrary-1", "relationshipType": "GENERATED_FROM",
                        "relatedSpdxElement": "SPDXRef-AppImageInput-SDL3"}, spdx["relationships"])
 
+    def test_spdx_records_each_immutable_static_runtime_source(self) -> None:
+        image = self.root / "atrinik-classic-client-5.6.0-linux-x86_64.AppImage"
+        image.write_bytes(b"image")
+        runtime = {"version": "20251108", "url": "https://example.invalid/runtime",
+                   "sha256": "a" * 64, "license": "MIT AND LGPL-2.1-or-later"}
+        inventory = {"lock_sha256": "b" * 64, "native_inputs": {
+            "sources": [], "tools": [], "runtime": runtime}, "bundled_library_records": []}
+        source = {"name": "libfuse", "version": "3.15.0", "url": "https://example.invalid/libfuse.tar.gz",
+                  "sha256": "c" * 64, "license": "LGPL-2.1-or-later"}
+        spdx = finalize_artifacts.build_spdx([image], "5.6.0", "d" * 40, 123, [], inventory,
+                                            {"runtime_sources": [source]})
+        package = next(package for package in spdx["packages"] if package["name"] == "libfuse")
+        self.assertEqual(package["versionInfo"], "3.15.0")
+        self.assertEqual(package["checksums"], [{"algorithm": "SHA256", "checksumValue": "c" * 64}])
+        self.assertEqual(package["licenseDeclared"], "LGPL-2.1-or-later")
+        for relation in ("DEPENDS_ON", "GENERATED_FROM"):
+            self.assertIn({"spdxElementId": "SPDXRef-AppImageInput-appimage-runtime",
+                           "relationshipType": relation,
+                           "relatedSpdxElement": "SPDXRef-AppImageRuntimeSource-libfuse"}, spdx["relationships"])
+
     def test_finalizer_rejects_wrong_checkout_schema_or_epoch_before_writes(self) -> None:
         arguments = ["finalize_artifacts.py", "--version", "5.6.0", "--revision", "c" * 40,
                      "--source-epoch", "123", "--directory", str(self.root)]

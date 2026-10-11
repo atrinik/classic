@@ -188,10 +188,10 @@ def validate_appimage_metadata(directory: Path, manifest: dict, source_root: Pat
                                revision: str, version: str) -> None:
     # The helper's current checkout cannot stand in for a historical source.
     # Give the package validator only the trusted files from this exact commit.
-    from appimage import read_appimage_inventory
+    from appimage import TRUSTED_SOURCE_FILES, read_appimage_inventory
     with tempfile.TemporaryDirectory(prefix="atrinik-appimage-contract-") as temporary:
         root = Path(temporary)
-        for relative in ("tools/ci/appimage/packaging.lock.json", "tools/ci/appimage/AppRun"):
+        for relative in TRUSTED_SOURCE_FILES:
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(git_value(source_root, "show", f"{revision}:{relative}", preserve_whitespace=True))
@@ -205,7 +205,7 @@ def validate_appimage_metadata(directory: Path, manifest: dict, source_root: Pat
     paths = sorted(path for path in directory.iterdir()
                    if path.name not in ("SHA256SUMS", "release-manifest.json", sbom_name))
     expected = build_spdx(paths, version, revision, manifest["source_epoch"],
-                          manifest["locked_inputs"], inventory)
+                          manifest["locked_inputs"], inventory, manifest["appimage_packaging_lock"])
     if json.loads((directory / sbom_name).read_text()) != expected:
         raise RuntimeError("candidate SPDX differs from AppImage and locked inputs")
 

@@ -205,27 +205,32 @@ class ReleaseArtifactsTests(unittest.TestCase):
         image.write_bytes(b"image")
         lock_text = '{"schema_version": 1}'
         launcher_text = "#!/bin/sh\nexec usr/bin/atrinik\n"
+        trusted_files = {"tools/ci/appimage/packaging.lock.json": lock_text,
+                         "tools/ci/appimage/AppRun": launcher_text,
+                         "tools/ci/appimage/openssl.cnf": "trusted configuration\n",
+                         "client/ca-bundle.crt": "trusted certificate bundle\n"}
         inventory = {"schema": 1, "version": self.version, "revision": self.revision,
                      "lock_sha256": hashlib.sha256(lock_text.encode()).hexdigest(),
                      "native_inputs": {"sources": [], "tools": [], "runtime": {
                          "version": "1", "url": "https://example.invalid/runtime", "sha256": "a" * 64,
                          "license": "MIT"}}, "bundled_libraries": [], "bundled_library_records": [], "files": {}}
-        manifest = {"source_epoch": 123, "locked_inputs": [], "appimage_inventory": inventory}
+        manifest = {"source_epoch": 123, "locked_inputs": [], "appimage_inventory": inventory,
+                    "appimage_packaging_lock": json.loads(lock_text)}
         sbom = artifacts.build_spdx([image], self.version, self.revision, 123, [], inventory)
         sbom_path = self.directory / f"atrinik-classic-{self.version}.spdx.json"
         sbom_path.write_text(json.dumps(sbom))
         def reader(path, version, *, revision, source_root):
             self.assertEqual(path, image)
             self.assertEqual((version, revision), (self.version, self.revision))
-            self.assertEqual((source_root / "tools/ci/appimage/packaging.lock.json").read_text(), lock_text)
-            self.assertEqual((source_root / "tools/ci/appimage/AppRun").read_text(), launcher_text)
+            for relative, content in trusted_files.items():
+                self.assertEqual((source_root / relative).read_text(), content)
             return inventory
         def source(root, *args, **kwargs):
             self.assertTrue(kwargs.get("preserve_whitespace"))
             self.assertEqual(root, self.root)
             self.assertTrue(args[1].startswith(self.revision + ":"))
-            return lock_text if args[1].endswith("packaging.lock.json") else launcher_text
-        with mock.patch.object(artifacts, "git_value", side_effect=source), mock.patch.dict(sys.modules, {"appimage": mock.Mock(read_appimage_inventory=reader)}):
+            return trusted_files[args[1].split(":", 1)[1]]
+        with mock.patch.object(artifacts, "git_value", side_effect=source), mock.patch.dict(sys.modules, {"appimage": mock.Mock(read_appimage_inventory=reader, TRUSTED_SOURCE_FILES=tuple(trusted_files))}):
             artifacts.validate_appimage_metadata(self.directory, manifest, self.root, self.revision, self.version)
             manifest["appimage_inventory"] = {**inventory, "revision": "d" * 40}
             with self.assertRaisesRegex(RuntimeError, "inventory"):

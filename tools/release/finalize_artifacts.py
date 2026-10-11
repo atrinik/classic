@@ -441,6 +441,7 @@ def build_spdx(
     source_epoch: int,
     locked_inputs: list[dict[str, object]],
     appimage_inventory: dict[str, object] | None = None,
+    appimage_packaging_lock: dict[str, object] | None = None,
 ) -> dict[str, object]:
     created = datetime.fromtimestamp(source_epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     packages = []
@@ -529,6 +530,19 @@ def build_spdx(
             })
             relationships.append({"spdxElementId": image_id, "relationshipType": "DEPENDS_ON",
                                   "relatedSpdxElement": identifier})
+        for record in (appimage_packaging_lock or {}).get("runtime_sources", []):
+            identifier = f"SPDXRef-AppImageRuntimeSource-{re.sub(r'[^A-Za-z0-9.-]', '-', record['name'])}"
+            packages.append({
+                "SPDXID": identifier, "name": record["name"], "versionInfo": record["version"],
+                "downloadLocation": record["url"], "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": record["sha256"]}],
+                "licenseConcluded": "NOASSERTION", "licenseDeclared": record["license"],
+                "copyrightText": "NOASSERTION",
+                "sourceInfo": f"Static runtime input locked by tools/ci/appimage/packaging.lock.json ({appimage_inventory['lock_sha256']})",
+            })
+            for relation in ("DEPENDS_ON", "GENERATED_FROM"):
+                relationships.append({"spdxElementId": "SPDXRef-AppImageInput-appimage-runtime",
+                                      "relationshipType": relation, "relatedSpdxElement": identifier})
         for index, record in enumerate(appimage_inventory["bundled_library_records"], start=1):
             identifier = f"SPDXRef-AppImageLibrary-{index}"
             packages.append({
@@ -683,8 +697,8 @@ def main() -> int:
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
     )
     validate_wheel(wheel_path, arguments.version)
-    from appimage import read_appimage_inventory
-    for relative in ("tools/ci/appimage/packaging.lock.json", "tools/ci/appimage/AppRun"):
+    from appimage import TRUSTED_SOURCE_FILES, read_appimage_inventory
+    for relative in TRUSTED_SOURCE_FILES:
         if (root / relative).read_text() != git_value(root, "show", f"{arguments.revision}:{relative}", preserve_whitespace=True):
             raise RuntimeError(f"release finalizer source file differs: {relative}")
     inventory = read_appimage_inventory(
@@ -703,6 +717,7 @@ def main() -> int:
                 arguments.source_epoch,
                 locked_inputs,
                 inventory,
+                packaging_lock,
             ),
             indent=2,
         )
