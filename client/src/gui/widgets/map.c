@@ -11242,9 +11242,22 @@ bool widget_map_fog_click_test(widgetdata *widget) {
 
 /** Verify depth cycling and projected sprite ownership against live MAP2 records. */
 static bool widget_map_target_depth_test(widgetdata *widget) {
-    if (widget == NULL || widget->surface == NULL || map_state_transaction_active()) {
+    if (widget == NULL || map_state_transaction_active()) {
         return false;
     }
+    /* The widget-priority fixture exercises input before its first draw, so
+     * provide a task-owned projection surface without requiring a renderer. */
+    SDL_Surface *saved_surface = widget->surface;
+    SDL_Surface *test_surface = NULL;
+    if (saved_surface == NULL) {
+        test_surface = SDL_CreateSurface(64, 64, SDL_PIXELFORMAT_RGBA32);
+        if (test_surface == NULL) {
+            return false;
+        }
+        widget->surface = test_surface;
+    }
+    int64_t saved_zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM);
+    setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, 100);
     map_cell_store_t *saved_levels[MAP2_LEVELS];
     memcpy(saved_levels, level_cells, sizeof(saved_levels));
     map_cell_store_t *saved_cells = cells;
@@ -11361,6 +11374,9 @@ static bool widget_map_target_depth_test(widgetdata *widget) {
     cur_widget[MAP_ID] = saved_widget;
     map_retained_primary_context = saved_context;
     map_retained_primary_projection = saved_projection;
+    setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, saved_zoom);
+    widget->surface = saved_surface;
+    SDL_DestroySurface(test_surface);
     return success;
 }
 

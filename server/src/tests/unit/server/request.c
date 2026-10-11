@@ -2129,6 +2129,11 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
 
     mapstruct *dock_map = ready_map_name("/shattered_islands/world_5_84", NULL, 0);
     ck_assert_ptr_nonnull(dock_map);
+    /* MAP2 observes loaded topology only. Explicitly load the real authored
+     * upper map whose exposed roof geometry this fixture intends to verify. */
+    mapstruct *dock_roof = get_map_from_tiled(dock_map, TILED_UP);
+    ck_assert_ptr_nonnull(dock_roof);
+    ck_assert_str_eq(dock_roof->path, "/shattered_islands/world_5_84_1");
     object_remove(pl, 0);
     pl->x = 9;
     pl->y = 15;
@@ -2141,8 +2146,10 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     CONTR(pl)->update_los = 1;
     socket_buffer_clear(cs);
     draw_client_map(pl);
-    ck_assert_msg(map_cache_has_roof(cs, 1),
-                  "Incuna dock roofs are absent at the reported position");
+    /* The authored (7,18) dock roof is outside the player's cutaway component
+     * and lies in the published viewport at offset (-2,+3). */
+    ck_assert_msg(map_cache_cell_has_roof(cs, 1, cs->mapx_2 - 2, cs->mapy_2 + 3),
+                  "Loaded Incuna dock roof is absent from its published physical cell");
     packet = queued_command_payload_find(cs, CLIENT_CMD_MAP);
     ck_assert_ptr_nonnull(packet);
     ck_assert(map_protocol_validate(packet->data, packet->len, 0, cs->mapx, cs->mapy));
@@ -2159,8 +2166,8 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
         ck_assert_msg(map_packet_level_size(packet, 1, &roof_delta_size),
                       "Incuna dock roof level was omitted after login");
         dock_stable_roof_level_found |= roof_delta_size == 0;
-        ck_assert_msg(map_cache_has_roof(cs, 1),
-                      "Incuna dock roofs disappeared after an unchanged update");
+        ck_assert_msg(map_cache_cell_has_roof(cs, 1, cs->mapx_2 - 2, cs->mapy_2 + 3),
+                      "Loaded Incuna dock roof disappeared from its unchanged physical cell");
     }
     ck_assert_msg(dock_stable_roof_level_found,
                   "Incuna dock roof level did not reach a stable empty delta");
