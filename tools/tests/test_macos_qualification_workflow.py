@@ -61,6 +61,7 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
             "ATRINIK_BUILD_CLIENT": "ON", "ATRINIK_BUILD_SERVER": "OFF",
             "ENABLE_WARNING_ERRORS": "ON", "BUILD_TESTING": "ON",
             "CMAKE_BUILD_TYPE": "Release", "READLINE_LIBRARY": "/native/libreadline.dylib",
+            "READLINE_INCLUDE_DIR": "/native/include",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -74,6 +75,7 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
                     cache[disabled] = {
                         "ATRINIK_BUILD_SERVER": "ON", "CMAKE_BUILD_TYPE": "Debug",
                         "READLINE_LIBRARY": "READLINE_LIBRARY-NOTFOUND",
+                        "READLINE_INCLUDE_DIR": "READLINE_INCLUDE_DIR-NOTFOUND",
                     }.get(disabled, "OFF")
                 (build / "CMakeCache.txt").write_text("".join(
                     f"{key}:STRING={value}\n" for key, value in cache.items()
@@ -124,6 +126,8 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
         self.assertNotIn("server-plugin-python", text)
         self.assertNotIn("complete Classic Release graph", text)
         self.assertNotIn("GD_LIBRARY", text)
+        self.assertIn('"-DREADLINE_INCLUDE_DIR=${readline_prefix}/include"', text)
+        self.assertIn('"-DREADLINE_LIBRARY=${readline_prefix}/lib/libreadline.dylib"', text)
 
     @unittest.skipUnless(shutil.which("bash"), "Bash unavailable")
     def test_build_collects_reachable_errors_and_preserves_failure_through_tee(self):

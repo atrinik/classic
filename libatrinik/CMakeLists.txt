@@ -196,8 +196,13 @@ else ()
 endif ()
 
 find_library(READLINE_LIBRARY readline)
+find_path(READLINE_INCLUDE_DIR readline/readline.h)
 
 if (READLINE_LIBRARY)
+    if (NOT READLINE_INCLUDE_DIR OR
+            NOT EXISTS "${READLINE_INCLUDE_DIR}/readline/readline.h")
+        message(FATAL_ERROR "The selected Readline library requires matching Readline headers")
+    endif ()
     set(HAVE_READLINE true)
 else ()
     message(STATUS "Could not find readline library, simple interactive console will be compiled instead.")
@@ -484,11 +489,13 @@ endif ()
 
 # Link readline if available.
 if (HAVE_READLINE)
+    target_include_directories(${ATRINIK_TOOLKIT} PRIVATE ${READLINE_INCLUDE_DIR})
     target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE ${READLINE_LIBRARY})
 endif ()
 
 if (TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
-    target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    # metaserver_publisher.h exposes OpenSSL types to Core consumers.
+    target_link_libraries(${ATRINIK_TOOLKIT} PUBLIC OpenSSL::Crypto PRIVATE OpenSSL::SSL)
 else ()
     target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE ${OPENSSL_LIBRARIES})
 endif ()
