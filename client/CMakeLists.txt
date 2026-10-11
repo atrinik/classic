@@ -1136,6 +1136,22 @@ if (BUILD_TESTING)
     target_link_libraries(client-textwin-event-tests PRIVATE Atrinik::Core SDL3::SDL3)
     add_test(NAME client-textwin-event COMMAND client-textwin-event-tests)
 
+    add_executable(client-item-drag-tests src/tests/item_drag.c)
+    atrinik_configure_target(client-item-drag-tests)
+    target_compile_definitions(client-item-drag-tests PRIVATE SDL_DISABLE_OLD_NAMES)
+    target_compile_options(client-item-drag-tests PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+    target_link_options(client-item-drag-tests PRIVATE
+        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+    target_include_directories(client-item-drag-tests BEFORE PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gui/toolkit/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(client-item-drag-tests PRIVATE
+        Atrinik::Core SDL3::SDL3)
+    add_test(NAME client-item-drag COMMAND client-item-drag-tests)
+
     add_executable(client-notification-tests src/tests/notification.c)
     atrinik_configure_target(client-notification-tests)
     target_compile_definitions(client-notification-tests PRIVATE SDL_DISABLE_OLD_NAMES)
