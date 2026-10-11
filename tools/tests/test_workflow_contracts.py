@@ -52,7 +52,8 @@ class WorkflowContractTests(unittest.TestCase):
                        check.index("      - name: Build portable Windows server package")]
         package = check[check.index("      - name: Build portable Windows server package"):
                         check.index("  windows-test:")]
-        self.assertEqual(target.count(WINDOWS_FOCUSED_IMAGE), 2)
+        self.assertEqual(target.count(WINDOWS_GENERAL_IMAGE), 2)
+        self.assertNotIn(WINDOWS_FOCUSED_IMAGE, target)
         self.assertEqual(target.count("-DENABLE_PYTHON_PLUGIN=OFF"), 2)
         self.assertNotIn("worldmaker", target)
         self.assertNotIn("WINDOWS_PYTHON", target)
@@ -71,6 +72,67 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn(WINDOWS_FOCUSED_IMAGE, gpu)
         for digest in (WINDOWS_GENERAL_DIGEST, WINDOWS_FOCUSED_DIGEST):
             self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake unavailable")
+    def test_windows_server_sdk_roles_include_host_lexer_generators_with_python_off(self) -> None:
+        # Use the actual unconditional server lookup, without compiling the app.
+        # PythonOFF removes its plugin, not the Flex-generated loader sources.
+        server = (ROOT / "server/CMakeLists.txt").read_text()
+        required_flex = re.findall(r"^find_package\(FLEX REQUIRED\)$", server, re.MULTILINE)
+        self.assertEqual(required_flex, ["find_package(FLEX REQUIRED)"])
+        self.assertIn("flex_target(${name}", server)
+        integrated = (ROOT / "CMakeLists.txt").read_text()
+        self.assertIn('option(ATRINIK_BUILD_SERVER "Build the classic server" ON)', integrated)
+        self.assertIn("add_subdirectory(server)", integrated)
+        check = self.text("check.yml")
+        for name, next_name, source in (
+            ("Cross-build and stage standalone tests", "Cross-build Windows server", "."),
+            ("Cross-build Windows server", "Build portable Windows server package", "server"),
+        ):
+            with self.subTest(step=name):
+                step = check[check.index(f"      - name: {name}\n"):
+                             check.index(f"      - name: {next_name}\n")]
+                self.assertIn(WINDOWS_GENERAL_IMAGE, step)
+                self.assertNotIn(WINDOWS_FOCUSED_IMAGE, step)
+                commands = re.sub(r"\\\n\s*", " ", step)
+                configure = next(line for line in commands.splitlines()
+                                 if line.strip().startswith("cmake ") and f"-S {source} " in line)
+                self.assertIn("-DENABLE_PYTHON_PLUGIN=OFF", configure)
+                self.assertIn("-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source", configure)
+                if source == ".":
+                    self.assertIn("-DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders", configure)
+                    self.assertIn('-DPATCH_EXECUTABLE="$(command -v patch)"', step)
+                    self.assertIn("-P /workspace/server/cmake/apply_patch_idempotent.cmake", step)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = root / "required-generators.cmake"
+            fixture.write_text("\n".join((
+                "set(ENABLE_PYTHON_PLUGIN OFF)",
+                "set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)",
+                "set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH FALSE)",
+                required_flex[0],
+                # Bison belongs to the general producer's host generator cohort;
+                # the current server directly invokes Flex for its three lexers.
+                "find_package(BISON REQUIRED)",
+            )) + "\n")
+            for role in ("focused", "general"):
+                sdk = root / role
+                sdk.mkdir()
+                if role == "general":
+                    for tool, version in (("flex", "flex 2.6.4"), ("bison", "bison (GNU Bison) 3.8.2")):
+                        executable = sdk / tool
+                        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
+                        executable.chmod(0o755)
+                result = subprocess.run([shutil.which("cmake"), f"-DCMAKE_PROGRAM_PATH={sdk}",
+                                         "-P", str(fixture)], capture_output=True, text=True)
+                with self.subTest(sdk=role):
+                    if role == "focused":
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("FLEX_EXECUTABLE", result.stdout + result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn("Found FLEX", result.stdout)
+                        self.assertIn("Found BISON", result.stdout)
 
     def test_native_consumers_require_llvm_and_native_lcov(self) -> None:
         for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml"):
@@ -1564,8 +1626,8 @@ class WorkflowContractTests(unittest.TestCase):
         aggregate = workflow[workflow.index("  classic-validation:") :]
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
-        self.assertEqual(build.count(WINDOWS_FOCUSED_IMAGE), 3)
-        self.assertEqual(build.count(WINDOWS_GENERAL_IMAGE), 2)
+        self.assertNotIn(WINDOWS_FOCUSED_IMAGE, build)
+        self.assertEqual(build.count(WINDOWS_GENERAL_IMAGE), 4)
         self.assertNotIn("windows-build:1.16.0", build)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
         self.assertEqual(build.count("--network none"), 4)
