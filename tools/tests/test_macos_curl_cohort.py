@@ -47,6 +47,39 @@ class MacOSCurlCohortTests(unittest.TestCase):
         runtime["ares"] = None
         return {"runtime": runtime, "ca_bundle_sha256": self.manifest["ca_bundle_sha256"]}
 
+    def test_native_environment_removes_ambient_build_and_trust_overrides(self):
+        retained = {"PATH": "/fixture/bin", "HOME": "/fixture/home", "NORMAL": "retained",
+                    "SOURCE_DATE_EPOCH": "1791676800"}
+        overrides = {
+            "CONFIG_SITE": "/foreign/site", "CONFIG_SHELL": "/foreign/shell",
+            "BASH_ENV": "/foreign/bash-env", "ENV": "/foreign/env",
+            "MAKEFLAGS": "-e CC=foreign", "MFLAGS": "-e", "GNUMAKEFLAGS": "-e",
+            "MAKELEVEL": "3", "MAKEOVERRIDES": "CC=foreign",
+            "LIBS": "-lforeign", "CPP": "/foreign/cpp", "AR": "/foreign/ar", "ARFLAGS": "foreign",
+            "RANLIB": "/foreign/ranlib", "RANLIBFLAGS": "foreign", "NM": "/foreign/nm",
+            "LD": "/foreign/ld", "AS": "/foreign/as", "OBJCOPY": "/foreign/objcopy",
+            "OBJDUMP": "/foreign/objdump", "STRIP": "/foreign/strip",
+            "CC": "/foreign/cc", "CXX": "/foreign/cxx", "CFLAGS": "-O0",
+            "CXXFLAGS": "-O0", "CPPFLAGS": "-I/foreign", "LDFLAGS": "-L/foreign",
+            "PKG_CONFIG": "/foreign/pkg-config", "PKG_CONFIG_PATH": "/foreign/pkgconfig",
+            "PKG_CONFIG_LIBDIR": "/foreign/pkgconfig", "PKG_CONFIG_SYSTEM_INCLUDE_PATH": "/foreign/include",
+            "PKG_CONFIG_SYSTEM_LIBRARY_PATH": "/foreign/lib", "LIBRARY_PATH": "/foreign/lib",
+            "CCC_OVERRIDE_OPTIONS": "+-O0", "CCC_ADD_ARGS": "-O0",
+            "ac_cv_func_getaddrinfo": "no", "curl_cv_ssl": "foreign", "custom_cv_value": "foreign",
+            "CMAKE_C_COMPILER_LAUNCHER": "/foreign/launcher", "CMAKE_TOOLCHAIN_FILE": "/foreign/toolchain",
+            "CMAKE_CUSTOM_OVERRIDE": "foreign", "CCACHE_PREFIX": "/foreign/launcher",
+            "CCACHE_CUSTOM_OVERRIDE": "foreign", "DISTCC_HOSTS": "foreign", "DISTCC_CUSTOM_OVERRIDE": "foreign",
+            "DYLD_INSERT_LIBRARIES": "/foreign.dylib", "LD_PRELOAD": "/foreign.so",
+            "HTTPS_PROXY": "https://foreign.invalid", "all_proxy": "socks://foreign.invalid",
+            "SSL_CERT_FILE": "/foreign/ca", "CURL_CA_BUNDLE": "/foreign/ca",
+            "OPENSSL_CONF": "/foreign/openssl.cnf", "OPENSSL_MODULES": "/foreign/modules",
+        }
+        original = dict(retained, **overrides)
+        cleaned = COHORT.native_environment(original)
+        self.assertEqual(cleaned, dict(retained, CONFIG_SITE="/dev/null", CONFIG_SHELL="/bin/sh"))
+        self.assertEqual(original, dict(retained, **overrides))
+        self.assertNotIn("SOURCE_DATE_EPOCH", COHORT.native_environment({"PATH": "/fixture/bin"}))
+
     def test_manifest_rejects_unsupported_schema_toolchain_and_malformed_digest(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
