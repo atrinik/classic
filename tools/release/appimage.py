@@ -144,12 +144,23 @@ def _runtime_offset(path: Path, lock: dict) -> int:
     runtime = lock.get("runtime", {})
     size = runtime.get("size")
     digest = runtime.get("sha256")
-    if type(size) is not int or not 20 <= size <= 16 * 1024**2 or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+    md5_offset = runtime.get("digest_md5_offset")
+    md5_size = runtime.get("digest_md5_size")
+    if (type(size) is not int or not 64 <= size <= 16 * 1024**2
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or type(md5_offset) is not int or type(md5_size) is not int or md5_size != 16
+            or not 64 <= md5_offset <= size - md5_size):
         raise ValueError("trusted AppImage runtime lock is incomplete")
     with path.open("rb") as stream:
         prefix = stream.read(size)
-        if (prefix[:6] != b"\x7fELF\x02\x01" or prefix[8:11] != b"AI\x02"
-                or prefix[18:20] != b"\x3e\x00" or hashlib.sha256(prefix).hexdigest() != digest):
+        # appimagetool 1.9.1 writes this 16-byte field after constructing the
+        # image. Its offset and original zero bytes are attested by the trusted
+        # runtime lock. Never locate or resize a mutable section from candidate
+        # ELF metadata: the normalized hash still binds every other byte,
+        # including the section table identifying this exact field.
+        normalized = prefix[:md5_offset] + bytes(md5_size) + prefix[md5_offset + md5_size:]
+        if (len(prefix) != size or prefix[:6] != b"\x7fELF\x02\x01" or prefix[8:11] != b"AI\x02"
+                or prefix[18:20] != b"\x3e\x00" or hashlib.sha256(normalized).hexdigest() != digest):
             raise ValueError("AppImage runtime differs from trusted x86_64 type-2 runtime")
         # AppImage producers may align the SquashFS after the exact runtime.
         # Only zero padding is permitted; searching arbitrary payload bytes for

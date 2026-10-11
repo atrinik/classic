@@ -79,7 +79,7 @@ class AppImageTests(unittest.TestCase):
         self.source = self.root / "source"
         self.version = "5.17.0"
         self.revision = "a" * 40
-        runtime = bytearray(64)
+        runtime = bytearray(128)
         runtime[:6] = b"\x7fELF\x02\x01"
         runtime[8:11] = b"AI\x02"
         runtime[18:20] = b"\x3e\x00"
@@ -87,6 +87,7 @@ class AppImageTests(unittest.TestCase):
         self.lock = {
             "schema": 1,
             "runtime": {"version": "fixture", "size": len(runtime),
+                        "digest_md5_offset": 80, "digest_md5_size": 16,
                         "sha256": hashlib.sha256(runtime).hexdigest()},
             "sources": [], "tools": {},
             "system_library_packages": {"libzstd.so.1": "libzstd1"},
@@ -187,6 +188,29 @@ class AppImageTests(unittest.TestCase):
                 self.validate(image)
         with self.assertRaisesRegex(ValueError, "SquashFS"):
             self.validate(self.image(padding=b"untrusted-prefix"))
+
+    def test_only_trusted_runtime_md5_field_may_change(self):
+        image = self.image()
+        data = bytearray(image.read_bytes())
+        data[80:96] = bytes(range(16))
+        image.write_bytes(data)
+        self.validate(image)
+        for offset in (79, 96):
+            changed = bytearray(data)
+            changed[offset] ^= 1
+            image.write_bytes(changed)
+            with self.subTest(offset=offset), self.assertRaisesRegex(ValueError, "runtime"):
+                self.validate(image)
+
+    def test_runtime_mutable_field_bounds_come_only_from_trusted_lock(self):
+        image = self.image()
+        for field, value in (("digest_md5_offset", 8), ("digest_md5_offset", 127),
+                             ("digest_md5_offset", True), ("digest_md5_size", 17),
+                             ("digest_md5_size", "16")):
+            lock = dict(self.lock, runtime=dict(self.lock["runtime"]))
+            lock["runtime"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, "runtime lock"):
+                appimage._runtime_offset(image, lock)
 
     def test_candidate_symlink_and_truncated_squashfs(self):
         candidate = self.image()
