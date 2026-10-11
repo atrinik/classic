@@ -55,7 +55,7 @@ class AppImageWorkflowTests(unittest.TestCase):
         self.assertIn('cp build/appimage-context/packaging.lock.json build/appimage-evidence/', preparation)
         self.assertIn('cat /build-packages.tsv', preparation)
         self.assertLess(job.index('cat /build-packages.tsv'), job.index('Build AppImage with offline'))
-        smoke = job.split('      - name: Smoke in clean', 1)[1].split('      - uses:', 1)[0]
+        smoke = job.split('      - name: Smoke in clean', 1)[1].split('      - name:', 1)[0].split('      - uses:', 1)[0]
         self.assertIn('for runtime in ubuntu24 ubuntu26 debian13', smoke)
         self.assertIn('--network none', smoke)
         self.assertIn('--env ATRINIK_APPIMAGE_SMOKE_CONTAINER=1', smoke)
@@ -170,8 +170,11 @@ elif sys.argv[1:3] == ['image', 'inspect']:
             self.assertEqual((workspace / 'build/appimage-evidence/build-packages.tsv').read_text(),
                              'fixture-package\t1.2.3\n')
             calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
-            targets = [call[call.index('--target') + 1] for call in calls if call[0] == 'build']
+            targets = [call[call.index('--target') + 1] for call in calls if call[0] == 'build' and '--target' in call]
             self.assertEqual(targets, ['build', 'smoke-ubuntu24', 'smoke-ubuntu26', 'smoke-debian13'])
+            graphical = next(call for call in calls if 'classic-appimage-graphical' in call and call[0] == 'build')
+            self.assertIn('tools/ci/appimage/graphical.Dockerfile', graphical)
+            self.assertEqual(graphical[-1], 'build/appimage-context')
             for call in calls:
                 self.assertNotIn('candidate-source', ' '.join(call))
             self.assertEqual(calls[-1], ['run', '--rm', '--network', 'none',
@@ -179,19 +182,22 @@ elif sys.argv[1:3] == ['image', 'inspect']:
 
     def test_probe_capture_rejects_failures_and_nonregular_host_outputs(self) -> None:
         job = self.job()
-        step = job.split('      - name: Capture trusted runtime acceptance probe', 1)[1].split('      - name:', 1)[0]
+        step = job.split('      - name: Capture trusted runtime and graphical qualification probes', 1)[1].split('      - name:', 1)[0]
         script = textwrap.dedent(step.split('        run: |\n', 1)[1])
-        for output_type in ('file', 'empty', 'failure', 'symlink', 'directory'):
-            with self.subTest(output_type=output_type), tempfile.TemporaryDirectory() as temporary:
+        cases = [('file', '')] + [(kind, probe) for kind in ('empty', 'failure', 'symlink', 'directory')
+                                  for probe in ('appimage-runtime-probe', 'appimage-graphical-probe')]
+        for output_type, bad_probe in cases:
+            with self.subTest(output_type=output_type, bad_probe=bad_probe), tempfile.TemporaryDirectory() as temporary:
                 workspace = Path(temporary)
                 (workspace / 'bin').mkdir()
                 (workspace / 'build').mkdir()
                 (workspace / 'host-private').write_text('private')
                 docker = workspace / 'bin/docker'
                 docker.write_text(f'#!{sys.executable}\n' + """import json, os, pathlib, sys
-pathlib.Path('docker-args.json').write_text(json.dumps(sys.argv[1:]))
-kind = os.environ['OUTPUT_TYPE']
-probe = pathlib.Path('build/appimage-runtime-probe')
+with pathlib.Path('docker-calls.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\\n')
+probe = pathlib.Path('build') / pathlib.Path(sys.argv[-1]).name
+kind = os.environ['OUTPUT_TYPE'] if probe.name == os.environ['BAD_PROBE'] else 'file'
 if kind == 'failure':
     sys.exit(7)
 elif kind == 'symlink':
@@ -206,22 +212,26 @@ if kind != 'empty':
                 docker.chmod(0o755)
                 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
                     cwd=workspace, capture_output=True, text=True,
-                    env=dict(os.environ, OUTPUT_TYPE=output_type,
+                    env=dict(os.environ, OUTPUT_TYPE=output_type, BAD_PROBE=bad_probe,
                              PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
                 self.assertEqual(result.returncode == 0, output_type == 'file', result.stderr)
-                args = json.loads((workspace / 'docker-args.json').read_text())
-                self.assertEqual(args[-3:], ['classic-appimage-build', 'cat', '/appimage-runtime-probe'])
-                self.assertEqual(args[args.index('--network') + 1], 'none')
-                self.assertNotIn('--mount', args)
-                self.assertNotIn('candidate-source', ' '.join(args))
+                calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
+                self.assertEqual(len(calls), 1 if bad_probe == 'appimage-runtime-probe' else 2)
+                for index, args in enumerate(calls):
+                    probe_name = ('appimage-runtime-probe', 'appimage-graphical-probe')[index]
+                    self.assertEqual(args[-3:], ['classic-appimage-build', 'cat', '/' + probe_name])
+                    self.assertEqual(args[args.index('--network') + 1], 'none')
+                    self.assertNotIn('--mount', args)
+                    self.assertNotIn('candidate-source', ' '.join(args))
                 self.assertEqual((workspace / 'host-private').read_text(), 'private')
                 if output_type == 'file':
-                    self.assertEqual((workspace / 'build/appimage-runtime-probe').read_bytes(), b'trusted probe fixture')
-                    self.assertEqual((workspace / 'build/appimage-runtime-probe').stat().st_mode & 0o777, 0o755)
-        self.assertLess(job.index('Capture trusted runtime acceptance probe'), job.index('Build AppImage with offline'))
+                    for probe in ('appimage-runtime-probe', 'appimage-graphical-probe'):
+                        self.assertEqual((workspace / 'build' / probe).read_bytes(), b'trusted probe fixture')
+                        self.assertEqual((workspace / 'build' / probe).stat().st_mode & 0o777, 0o755)
+        self.assertLess(job.index('Capture trusted runtime and graphical qualification probes'), job.index('Build AppImage with offline'))
 
     def test_smoke_loop_requires_each_clean_runtime_success(self) -> None:
-        smoke = self.job().split('      - name: Smoke in clean', 1)[1].split('      - uses:', 1)[0]
+        smoke = self.job().split('      - name: Smoke in clean', 1)[1].split('      - name:', 1)[0].split('      - uses:', 1)[0]
         script = textwrap.dedent(smoke.split('        run: |\n', 1)[1])
         for fail_runtime in ('', 'ubuntu24', 'ubuntu26', 'debian13'):
             with self.subTest(fail_runtime=fail_runtime), tempfile.TemporaryDirectory() as temporary:
@@ -254,6 +264,47 @@ sys.exit(7 if failed and 'classic-appimage-' + failed in sys.argv else 0)
                     self.assertIn(f'type=bind,source={workspace}/build/appimage-runtime-probe,target=/input/appimage-runtime-probe,readonly', mounts)
                     self.assertIn('ATRINIK_APPIMAGE_RUNTIME_PROBE=/input/appimage-runtime-probe', call)
                     self.assertEqual(call[-2:], ['/packages/atrinik-classic-client-0.0.0-linux-x86_64.AppImage', '0.0.0'])
+
+    def test_graphical_qualification_uses_only_isolated_readonly_inputs(self) -> None:
+        job = self.job()
+        step = job.split('      - name: Qualify graphical dependencies, virtual window, and virtual audio', 1)[1].split('      - uses:', 1)[0]
+        script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+        for failure in ('0', '1'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                (workspace / 'bin').mkdir()
+                (workspace / 'build/appimage-evidence').mkdir(parents=True)
+                docker = workspace / 'bin/docker'
+                docker.write_text(f'#!{sys.executable}\n' + """import json, os, pathlib, sys
+pathlib.Path('docker-args.json').write_text(json.dumps(sys.argv[1:]))
+sys.exit(7 if os.environ['FAIL_GRAPHICAL'] == '1' else 0)
+""")
+                docker.chmod(0o755)
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                    cwd=workspace, capture_output=True, text=True,
+                    env=dict(os.environ, GITHUB_WORKSPACE=str(workspace),
+                             RELEASE_VERSION='5.17.0', FAIL_GRAPHICAL=failure,
+                             PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+                self.assertEqual(result.returncode, 7 if failure == '1' else 0, result.stderr)
+                args = json.loads((workspace / 'docker-args.json').read_text())
+                self.assertEqual(args[args.index('--network') + 1], 'none')
+                self.assertEqual(args[args.index('--cap-drop') + 1], 'ALL')
+                self.assertEqual(args[args.index('--security-opt') + 1], 'no-new-privileges')
+                self.assertIn('--user', args)
+                self.assertIn('ATRINIK_APPIMAGE_SMOKE_CONTAINER=1', args)
+                self.assertIn('ATRINIK_APPIMAGE_GRAPHICAL_PROBE=/input/appimage-graphical-probe', args)
+                mounts = [args[i + 1] for i, arg in enumerate(args) if arg == '--mount']
+                self.assertEqual(mounts, [
+                    f'type=bind,source={workspace}/build/appimage-packages,target=/packages,readonly',
+                    f'type=bind,source={workspace}/tools/ci/appimage/graphical-smoke.sh,target=/graphical-smoke.sh,readonly',
+                    f'type=bind,source={workspace}/build/appimage-graphical-probe,target=/input/appimage-graphical-probe,readonly'])
+                self.assertEqual(args[-3:], ['/packages/atrinik-classic-client-5.17.0-linux-x86_64.AppImage',
+                                            '5.17.0', '/tmp/graphical-evidence'])
+                for forbidden in ('--privileged', '--device', '--env-file', '--volume', '--publish'):
+                    self.assertNotIn(forbidden, args)
+        self.assertLess(job.index('payload-validation.log'), job.index('bash /graphical-smoke.sh'))
+        self.assertLess(job.index('bash /smoke.sh'), job.index('bash /graphical-smoke.sh'))
+        self.assertLess(job.index('bash /graphical-smoke.sh'), job.index('name: release-client-appimage-'))
 
     def test_container_boundary_and_host_output_validation(self) -> None:
         workflow = (ROOT / '.github/workflows/build-release-candidate.yml').read_text()

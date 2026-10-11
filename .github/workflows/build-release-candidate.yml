@@ -389,22 +389,27 @@ jobs:
               --file build/appimage-context/Dockerfile build/appimage-context \
               > "build/appimage-evidence/image-${runtime}.log" 2>&1
           done
+          docker build --platform linux/amd64 --tag classic-appimage-graphical \
+            --file tools/ci/appimage/graphical.Dockerfile build/appimage-context \
+            > build/appimage-evidence/image-graphical.log 2>&1
           docker image inspect classic-appimage-build classic-appimage-ubuntu24 \
-            classic-appimage-ubuntu26 classic-appimage-debian13 \
+            classic-appimage-ubuntu26 classic-appimage-debian13 classic-appimage-graphical \
             --format '{{.Id}}' > build/appimage-evidence/images.txt
           docker run --rm --network none classic-appimage-build cat /build-packages.tsv \
             > build/appimage-evidence/build-packages.tsv
-      - name: Capture trusted runtime acceptance probe
+      - name: Capture trusted runtime and graphical qualification probes
         run: |
-          docker run --rm --platform linux/amd64 --network none \
-            --cap-drop ALL --security-opt no-new-privileges \
-            --user "$(id -u):$(id -g)" --cpus 2 --memory 4g \
-            classic-appimage-build cat /appimage-runtime-probe \
-            > build/appimage-runtime-probe
-          test -f build/appimage-runtime-probe
-          test ! -L build/appimage-runtime-probe
-          test -s build/appimage-runtime-probe
-          chmod 0755 build/appimage-runtime-probe
+          for probe in appimage-runtime-probe appimage-graphical-probe; do
+            docker run --rm --platform linux/amd64 --network none \
+              --cap-drop ALL --security-opt no-new-privileges \
+              --user "$(id -u):$(id -g)" --cpus 2 --memory 4g \
+              classic-appimage-build cat "/${probe}" \
+              > "build/${probe}"
+            test -f "build/${probe}"
+            test ! -L "build/${probe}"
+            test -s "build/${probe}"
+            chmod 0755 "build/${probe}"
+          done
       - name: Build AppImage with offline release inputs
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -470,6 +475,22 @@ jobs:
               "/packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage" \
               "${RELEASE_VERSION}" > "build/appimage-evidence/smoke-${runtime}.log" 2>&1
           done
+      - name: Qualify graphical dependencies, virtual window, and virtual audio
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          docker run --rm --platform linux/amd64 --network none \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" --cpus 2 --memory 4g \
+            --env ATRINIK_APPIMAGE_SMOKE_CONTAINER=1 \
+            --env ATRINIK_APPIMAGE_GRAPHICAL_PROBE=/input/appimage-graphical-probe \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/appimage-packages,target=/packages,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tools/ci/appimage/graphical-smoke.sh,target=/graphical-smoke.sh,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/appimage-graphical-probe,target=/input/appimage-graphical-probe,readonly" \
+            classic-appimage-graphical bash /graphical-smoke.sh \
+            "/packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage" \
+            "${RELEASE_VERSION}" /tmp/graphical-evidence \
+            > build/appimage-evidence/graphical-qualification.log 2>&1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-client-appimage-${{ needs.metadata.outputs.tag }}

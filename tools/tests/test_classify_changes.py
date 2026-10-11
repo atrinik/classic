@@ -72,7 +72,8 @@ class ClassifyChangesTests(unittest.TestCase):
     def test_appimage_producer_changes_select_only_client_native_builds(self) -> None:
         for path in ("client/tools/build-appimage.sh", "tools/ci/appimage/Dockerfile",
                      "tools/ci/appimage/packaging.lock.json", "tools/ci/appimage/prepare.py",
-                     "tools/ci/appimage/smoke.sh"):
+                     "tools/ci/appimage/smoke.sh", "tools/ci/appimage/graphical.Dockerfile",
+                     "tools/ci/appimage/graphical-smoke.sh", "tools/ci/appimage/graphical-probe.c"):
             with self.subTest(path=path):
                 result = classify_changes.classify([path])
                 self.assertTrue(result["client"])
