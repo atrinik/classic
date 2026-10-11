@@ -54,14 +54,16 @@ staging_directory=$(mktemp -d "${output_directory}/.atrinik-appimage.XXXXXX")
 trap 'rm -rf -- "${staging_directory}"' EXIT
 export CMAKE_PREFIX_PATH=${prefix}
 export PKG_CONFIG_PATH=${prefix}/lib/pkgconfig
-export LD_LIBRARY_PATH=${prefix}/lib
+# Host build tools use the host loader; only dependency discovery/deployment
+# needs the SDK paths. CMake imports carry their own link-time library paths.
+unset LD_LIBRARY_PATH
 python3 tools/dependencies.py sync --cache "${ATRINIK_DEPENDENCY_DOWNLOADS}" --refresh --offline
 python3 tools/dependencies.py verify
 python3 tools/verify_gpu_fixture_provenance.py
 build_directory=${ATRINIK_APPIMAGE_BUILD_DIRECTORY:-build/appimage-release}
 cmake -S . -B "${build_directory}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
-  -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_TESTING=OFF -DPACKAGE_TYPE=appimage \
+  -DBUILD_TESTING=OFF -DPACKAGE_TYPE=appimage \
   -DATRINIK_PACKAGE_VERSION="${version}" -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
   "-DCMAKE_C_FLAGS=-ffile-prefix-map=$(realpath ..)=. -fdebug-prefix-map=$(realpath ..)=." \
   "-DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=$(realpath ../protocol)" \
@@ -74,7 +76,7 @@ DESTDIR="${appdir}" cmake --install "${build_directory}" --component AtrinikClie
 # The pinned deployment tool handles desktop integration; the explicit closure
 # step also includes libraries excluded by its generic desktop policy and dlopen.
 export NO_STRIP=1
-"${prefix}/tools/linuxdeploy" --appdir "${appdir}" \
+LD_LIBRARY_PATH=${prefix}/lib "${prefix}/tools/linuxdeploy" --appdir "${appdir}" \
   --executable "${appdir}/usr/bin/atrinik" \
   --desktop-file "${appdir}/usr/share/applications/atrinik.desktop" \
   --icon-file "${appdir}/usr/share/pixmaps/atrinik.png"
