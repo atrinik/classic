@@ -753,10 +753,10 @@ START_TEST(test_trajectory_floor_hole_reflection_and_homing) {
     object_remove(arrow, 0);
     object_destroy(arrow);
 
-    object *floor = object_get();
+    /* Map insertion requires an archetype, even for structural fixtures. */
+    object *floor = arch_get("floor_stone1a");
+    ck_assert_ptr_nonnull(floor);
     floor->x = floor->y = 2;
-    floor->layer = LAYER_FLOOR;
-    SET_FLAG(floor, FLAG_IS_FLOOR);
     floor = object_insert_map(floor, upper, NULL, INS_NO_WALK_ON);
     ck_assert_ptr_nonnull(floor);
     arrow = trajectory_arrow(lower);
