@@ -2,6 +2,23 @@
 
 set -euo pipefail
 
+# atrinik-windows-host-python-contract: 1
+# Managed producers bind host helpers and CMake discovery independently of PATH.
+# Generic callers retain their existing interpreter discovery when unset.
+host_python=python3
+host_python_arguments=()
+if [[ ${ATRINIK_WINDOWS_HOST_PYTHON+x} ]]; then
+  if [[ ${ATRINIK_WINDOWS_HOST_PYTHON} != /usr/bin/python3 || ! -x /usr/bin/python3 ]]; then
+    echo "ATRINIK_WINDOWS_HOST_PYTHON must identify /usr/bin/python3" >&2
+    exit 1
+  fi
+  host_python=/usr/bin/python3
+  host_python_arguments+=(
+    -DPython3_EXECUTABLE=/usr/bin/python3
+    -DPython3_FIND_VIRTUALENV=STANDARD
+  )
+fi
+
 output_directory=${1:-build/packages}
 version=${ATRINIK_PACKAGE_VERSION:-}
 if [[ ! ${version} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -73,8 +90,8 @@ else
   if [[ -n ${dependency_downloads} ]]; then
     dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
   fi
-  python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
-  python3 tools/dependencies.py verify
+  "${host_python}" tools/dependencies.py sync "${dependency_sync_arguments[@]}"
+  "${host_python}" tools/dependencies.py verify
 fi
 provenance_arguments=()
 if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
@@ -85,7 +102,7 @@ if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
     --profile-resources "${profile_resources}"
   )
 fi
-python3 ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runtime/content "${provenance_arguments[@]}"
+"${host_python}" ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runtime/content "${provenance_arguments[@]}"
 
 dependency_arguments=()
 native_compiler_arguments=()
@@ -170,6 +187,7 @@ native_llvm cmake -S . -B "${region_build}" -G Ninja \
   -DPACKAGE_TYPE=none \
   -DATRINIK_PACKAGE_VERSION="${version}" \
   "${native_compiler_arguments[@]}" \
+  "${host_python_arguments[@]}" \
   "${dependency_arguments[@]}"
 native_llvm cmake --build "${region_build}" \
   --target atrinik-server plugin_arena plugin_python --parallel "$(nproc)"
@@ -210,6 +228,7 @@ cmake -S . -B build/windows-release -G Ninja \
   -DATRINIK_WINDOWS_PYTHON_LIBRARY="${ATRINIK_WINDOWS_PYTHON_LIBRARY}" \
   -DATRINIK_WINDOWS_PYTHON_RUNTIME_DIR="${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}" \
   -DATRINIK_SERVER_PACKAGE_ROOT="${repository_root}/${package_root}" \
+  "${host_python_arguments[@]}" \
   "${dependency_arguments[@]}"
 cmake --build build/windows-release --parallel "$(nproc)"
 mkdir -p "${output_directory}"

@@ -415,9 +415,9 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("client-gpu-fixture-provenance", cmake)
         self.assertIn("DEPENDS client-gpu-fixture-provenance", cmake)
-        self.assertIn("python3 tools/verify_gpu_fixture_provenance.py", client_package)
+        self.assertIn('"${host_python}" tools/verify_gpu_fixture_provenance.py', client_package)
         self.assertIn(
-            "python3 ../client/tools/verify_gpu_fixture_provenance.py "
+            '"${host_python}" ../client/tools/verify_gpu_fixture_provenance.py '
             "--content-runtime runtime/content",
             server_package,
         )
@@ -623,8 +623,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('expected_sound=$(realpath -e sound)', script)
         self.assertIn('selected_sound=$(realpath -e "${profile_sound}")', script)
         self.assertIn('find -P "${profile_sound}" ! -type d ! -type f', script)
-        self.assertIn('python3 tools/dependencies.py sync', script)
-        self.assertIn('python3 tools/dependencies.py verify', script)
+        self.assertIn('"${host_python}" tools/dependencies.py sync', script)
+        self.assertIn('"${host_python}" tools/dependencies.py verify', script)
         self.assertIn(
             'profile_content=${ATRINIK_PROFILE_CONTENT_DIR:-}', server_script
         )
@@ -636,8 +636,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(
             "PYTHONDONTWRITEBYTECODE=1 native_llvm ./atrinik-server", server_script
         )
-        self.assertIn('python3 tools/dependencies.py sync', server_script)
-        self.assertIn('python3 tools/dependencies.py verify', server_script)
+        self.assertIn('"${host_python}" tools/dependencies.py sync', server_script)
+        self.assertIn('"${host_python}" tools/dependencies.py verify', server_script)
         for workflow in ("build-release-candidate.yml", "package-release.yml"):
             workflow_text = self.text(workflow)
             self.assertNotIn("ATRINIK_PROFILE_SOUND_DIR", workflow_text)

@@ -2,6 +2,23 @@
 
 set -euo pipefail
 
+# atrinik-windows-host-python-contract: 1
+# Managed producers bind host helpers and CMake discovery independently of PATH.
+# Generic callers retain their existing interpreter discovery when unset.
+host_python=python3
+host_python_arguments=()
+if [[ ${ATRINIK_WINDOWS_HOST_PYTHON+x} ]]; then
+  if [[ ${ATRINIK_WINDOWS_HOST_PYTHON} != /usr/bin/python3 || ! -x /usr/bin/python3 ]]; then
+    echo "ATRINIK_WINDOWS_HOST_PYTHON must identify /usr/bin/python3" >&2
+    exit 1
+  fi
+  host_python=/usr/bin/python3
+  host_python_arguments+=(
+    -DPython3_EXECUTABLE=/usr/bin/python3
+    -DPython3_FIND_VIRTUALENV=STANDARD
+  )
+fi
+
 output_directory=${1:-build/packages}
 version=${ATRINIK_PACKAGE_VERSION:-}
 if [[ ! ${version} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -53,10 +70,10 @@ else
     fi
     dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
   fi
-  python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
-  python3 tools/dependencies.py verify
+  "${host_python}" tools/dependencies.py sync "${dependency_sync_arguments[@]}"
+  "${host_python}" tools/dependencies.py verify
 fi
-python3 tools/verify_gpu_fixture_provenance.py
+"${host_python}" tools/verify_gpu_fixture_provenance.py
 mkdir -p "${output_directory}"
 
 dependency_arguments=()
@@ -93,6 +110,7 @@ cmake -S . -B build/windows-release -G Ninja \
   -DATRINIK_WINDOWS_RUNTIME_DIR="${ATRINIK_WINDOWS_RUNTIME_DIR}" \
   "-DATRINIK_CA_BUNDLE=${PWD}/ca-bundle.crt" \
   "-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}" \
+  "${host_python_arguments[@]}" \
   "${dependency_arguments[@]}"
 cmake --build build/windows-release --parallel "$(nproc)"
 
