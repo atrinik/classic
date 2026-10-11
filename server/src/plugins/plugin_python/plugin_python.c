@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project                            *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -768,6 +768,8 @@ static int do_script(PythonContext *context, const char *filename, bool *executi
 
         path = hooks->map_get_path(env->map, filename, 0, NULL);
         FREE_AND_COPY_HASH(context->event->race, path);
+        /* Replacing race releases the shared string passed as filename. */
+        filename = context->event->race;
         xfree(path);
     }
 
