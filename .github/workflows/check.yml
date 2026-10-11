@@ -863,21 +863,57 @@ jobs:
               (Join-Path $bundle "$producer/client-font-render-probe.exe")
             if ($LASTEXITCODE -ne 0) { throw "Font output regression failed: $producer" }
           }
-          $baseline = Join-Path $bundle "font-baseline-result"
-          $candidate = Join-Path $bundle "font-candidate-result"
-          New-Item -ItemType Directory -Path $baseline, $candidate | Out-Null
-          function Invoke-FontProbe($executable, $output) {
-            $process = Start-Process -FilePath $executable -PassThru -NoNewWindow `
-              -ArgumentList @("`"$fonts`"", "`"$output`"")
-            if (-not $process.WaitForExit(120000)) {
-              $process.Kill($true)
-              $process.WaitForExit()
-              throw "Font probe exceeded its 120-second deadline"
-            }
-            if ($process.ExitCode -ne 0) { throw "Font probe failed: $($process.ExitCode)" }
+          $baselineResult = Join-Path $bundle "font-baseline-result"
+          $candidateResult = Join-Path $bundle "font-candidate-result"
+          foreach ($result in @($baselineResult, $candidateResult)) {
+            if (Test-Path -LiteralPath $result) { throw "Font result directory already exists: $result" }
+            New-Item -ItemType Directory -Path $result | Out-Null
           }
-          Invoke-FontProbe (Join-Path $bundle "font-baseline/client-font-render-probe.exe") $baseline
-          Invoke-FontProbe (Join-Path $bundle "font-candidate/client-font-render-probe.exe") $candidate
+          $baseline = Join-Path $baselineResult "render"
+          $candidate = Join-Path $candidateResult "render"
+          function Invoke-FontProbe($producer, $executable, $result) {
+            if ((Get-ChildItem -LiteralPath $result -Force | Measure-Object).Count -ne 0) {
+              throw "Font result directory is not empty: $producer"
+            }
+            $output = Join-Path $result "render"
+            New-Item -ItemType Directory -Path $output | Out-Null
+            $stdout = Join-Path $result "probe.stdout.log"
+            $stderr = Join-Path $result "probe.stderr.log"
+            $process = $null
+            Write-Host "Font probe start: producer=$producer executable=$executable output=$output"
+            try {
+              $process = Start-Process -FilePath $executable -PassThru -NoNewWindow `
+                -ArgumentList @("`"$fonts`"", "`"$output`"") `
+                -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+              Write-Host "Font probe launched: producer=$producer native_pid=$($process.Id)"
+              if (-not $process.WaitForExit(120000)) {
+                $process.Kill($true)
+                $process.WaitForExit()
+                throw "Font probe exceeded its 120-second deadline"
+              }
+              if ($process.ExitCode -ne 0) { throw "Font probe failed: $($process.ExitCode)" }
+            } finally {
+              $nativePid = if ($null -ne $process) { $process.Id } else { "not-started" }
+              $exitCode = if ($null -eq $process) { "not-started" } elseif ($process.HasExited) { $process.ExitCode } else { "running" }
+              Write-Host "Font probe finish: producer=$producer native_pid=$nativePid exit_code=$exitCode"
+              foreach ($stream in @("stdout", "stderr")) {
+                $log = Join-Path $result "probe.$stream.log"
+                Write-Host "Font probe log tail: producer=$producer stream=$stream path=$log"
+                if (Test-Path -LiteralPath $log) {
+                  try {
+                    Get-Content -LiteralPath $log -Tail 40 | ForEach-Object {
+                      $line = if ($_.Length -gt 1024) { $_.Substring(0, 1024) + " [truncated]" } else { $_ }
+                      Write-Host "[$producer/$stream] $line"
+                    }
+                  } catch {
+                    Write-Warning "Cannot read font probe log tail: producer=$producer stream=$stream error=$_"
+                  }
+                }
+              }
+            }
+          }
+          Invoke-FontProbe "baseline" (Join-Path $bundle "font-baseline/client-font-render-probe.exe") $baselineResult
+          Invoke-FontProbe "candidate" (Join-Path $bundle "font-candidate/client-font-render-probe.exe") $candidateResult
           python (Join-Path $bundle "compare_font_render.py") $baseline $candidate
           if ($LASTEXITCODE -ne 0) { throw "LLVM font rendering differs: $LASTEXITCODE" }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

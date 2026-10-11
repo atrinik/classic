@@ -210,6 +210,38 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", comparison)
         self.assertIn("if: always()", comparison)
 
+    def test_windows_font_probe_logs_preserve_strict_comparison_and_failure_evidence(self) -> None:
+        comparison = self.text("check.yml").split(
+            "      - name: Require identical baseline and LLVM font rendering\n", 1)[1].split(
+                "  server:\n    name: Server validation", 1)[0]
+        capture = comparison.split("          function Invoke-FontProbe(", 1)[1].split(
+            '          Invoke-FontProbe "baseline"', 1)[0]
+        self.assertLess(capture.index("Font result directory is not empty:"),
+                        capture.index("Start-Process -FilePath"))
+        self.assertIn("Font result directory already exists:", comparison)
+        self.assertNotIn("New-Item -ItemType Directory -Force", comparison)
+        self.assertIn('$output = Join-Path $result "render"', capture)
+        self.assertIn('-RedirectStandardOutput $stdout -RedirectStandardError $stderr', capture)
+        self.assertIn('$stdout = Join-Path $result "probe.stdout.log"', capture)
+        self.assertIn('$stderr = Join-Path $result "probe.stderr.log"', capture)
+        self.assertIn('Font probe start: producer=$producer executable=$executable', capture)
+        self.assertIn('Font probe launched: producer=$producer native_pid=$($process.Id)', capture)
+        self.assertIn('} finally {', capture)
+        self.assertIn('Font probe finish: producer=$producer native_pid=$nativePid exit_code=$exitCode', capture)
+        self.assertIn('Get-Content -LiteralPath $log -Tail 40', capture)
+        self.assertIn('$_.Length -gt 1024', capture)
+        self.assertIn('Write-Warning "Cannot read font probe log tail:', capture)
+        self.assertNotIn('ReadToEnd', capture)
+        self.assertNotIn('2>&1', capture)
+        self.assertIn('$baseline = Join-Path $baselineResult "render"', comparison)
+        self.assertIn('$candidate = Join-Path $candidateResult "render"', comparison)
+        self.assertIn('client-font-render-probe.exe") $baselineResult', comparison)
+        self.assertIn('client-font-render-probe.exe") $candidateResult', comparison)
+        self.assertIn('"compare_font_render.py") $baseline $candidate', comparison)
+        self.assertIn('build/native-windows-tests/font-baseline-result', comparison)
+        self.assertIn('build/native-windows-tests/font-candidate-result', comparison)
+        self.assertIn('if: always()', comparison)
+
     def test_native_version_package_acceptance_runs_in_pinned_core_container(self) -> None:
         core = self.text("check.yml").split("  core:\n", 1)[1].split("  windows-test-build:\n", 1)[0]
         self.assertIn("CI= python3 -m coverage run --append", core)
