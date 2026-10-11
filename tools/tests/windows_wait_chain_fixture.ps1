@@ -1,4 +1,4 @@
-# Copyright (C) 2026 The Atrinik Project
+# Copyright 2026 The Atrinik Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Compile the actual smoke observer and exercise its formatter without invoking
 # any native Windows API. Run with PowerShell 7 on Linux or Windows.
