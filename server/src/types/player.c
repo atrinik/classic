@@ -38,6 +38,8 @@
 #include <server_item.h>
 #include <monster.h>
 #include <los.h>
+#include <perception.h>
+#include <spatial.h>
 #include <initialization.h>
 #include <hiscore.h>
 #include <account.h>
@@ -212,7 +214,6 @@ static char *player_resolve_saved_path(const player *pl, const char *value) {
  */
 bool player_target_is_in_map_neighborhood(const player *pl) {
     object *target;
-    rv_vector rv;
 
     if (pl == NULL || pl->ob == NULL || pl->ob->map == NULL || pl->target_object == NULL) {
         return false;
@@ -223,11 +224,13 @@ bool player_target_is_in_map_neighborhood(const player *pl) {
         return true;
     }
 
-    if (!OBJECT_VALID(target, pl->target_object_count) || target->map == NULL) {
+    if (!object_reference_is_current(target, pl->target_object_count) || target->map == NULL) {
         return false;
     }
 
-    return get_rangevector(pl->ob, target, &rv, 0);
+    int dx, dy, dz;
+    return spatial_offset(pl->ob->map, target->map, &dx, &dy, &dz) &&
+           abs(dz) <= MAP2_MAX_DEPTH;
 }
 
 /**
@@ -277,6 +280,21 @@ bool player_disconnect_all_checked(void) {
 
 void player_disconnect_all(void) {
     (void)player_disconnect_all_checked();
+}
+
+/** Validate borrowed identities without dereferencing released pool storage. */
+bool player_connection_is_current(const object *observer, tag_t count,
+                                  const player *controller, const socket_struct *socket) {
+    /* Never inspect a captured pointer until the live list proves ownership.
+     * Scripts may synchronously log out players and reclaim free pool pages. */
+    for (const player *current = first_player; current != NULL; current = current->next) {
+        if (current == controller) {
+            return current->ob == observer && current->cs == socket && observer != NULL &&
+                   socket != NULL && count != 0 && current->ob->count == count &&
+                   current->ob->type == PLAYER && CONTR(current->ob) == current;
+        }
+    }
+    return false;
 }
 
 /**
@@ -559,9 +577,14 @@ int handle_newcs_player(player *pl) {
         player_status_update_paralysis(pl->ob);
     }
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
     socket_server_handle_client(pl);
 
-    if (!pl->ob || !OBJECT_ACTIVE(pl->ob) || pl->cs->state == ST_DEAD) {
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        !OBJECT_ACTIVE(observer) || observer_socket->state == ST_DEAD ||
+        observer_socket->state == ST_ZOMBIE) {
         return -1;
     }
 
@@ -2685,7 +2708,18 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
     }
 
     if (tmp->type == ARROW) {
-        object_projectile_stop(tmp, OBJECT_PROJECTILE_PICKUP);
+        uint64_t reclamation = object_reclamation_epoch();
+        tag_t pl_count = pl->count, op_count = op->count, tmp_count = tmp->count;
+        player *controller = pl->type == PLAYER ? CONTR(pl) : NULL;
+        socket_struct *socket = controller != NULL ? controller->cs : NULL;
+        object *stopped = object_projectile_stop(tmp, OBJECT_PROJECTILE_PICKUP);
+        if (!object_reclamation_is_current(reclamation) ||
+            (controller != NULL && !player_connection_is_current(pl, pl_count, controller, socket)) ||
+            !object_reference_is_current(pl, pl_count) ||
+            !object_reference_is_current(op, op_count) ||
+            !object_reference_is_current(tmp, tmp_count) || stopped != tmp) {
+            return;
+        }
     }
 
     /* Trigger the PICKUP event */
@@ -2862,10 +2896,19 @@ void pick_up(object *op, object *alt, int no_mevent) {
         return;
     }
 
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t op_count = op->count;
+    player *controller = op->type == PLAYER ? CONTR(op) : NULL;
+    socket_struct *socket = controller != NULL ? controller->cs : NULL;
     pick_up_object(op, alt, tmp, count, no_mevent);
 
-    if (op->type == PLAYER) {
-        CONTR(op)->count = 0;
+    if (!object_reclamation_is_current(reclamation) ||
+        (controller != NULL && !player_connection_is_current(op, op_count, controller, socket)) ||
+        !object_reference_is_current(op, op_count)) {
+        return;
+    }
+    if (controller != NULL) {
+        controller->count = 0;
     }
 }
 
@@ -3937,8 +3980,21 @@ void player_set_talking_to(player *pl, object *npc) {
     HARD_ASSERT(pl != NULL);
     HARD_ASSERT(npc != NULL);
 
-    if (OBJECT_VALID(pl->talking_to, pl->talking_to_count) && pl->talking_to != npc) {
+    if (!object_storage_is_owned(npc)) {
+        return;
+    }
+    tag_t npc_count = npc->count;
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *socket = pl->cs;
+    uint64_t reclamation = object_reclamation_epoch();
+    if (object_reference_is_current(pl->talking_to, pl->talking_to_count) && pl->talking_to != npc) {
         monster_data_dialogs_remove(pl->talking_to, pl->ob);
+        if (!object_reclamation_is_current(reclamation) ||
+            !player_connection_is_current(observer, observer_count, pl, socket) ||
+            !OBJECT_VALID(npc, npc_count)) {
+            return;
+        }
     }
 
     pl->talking_to = npc;
@@ -4453,16 +4509,31 @@ static bool player_target_needs_update(const player *pl) {
         return target == NULL;
     }
 
-    return !OBJECT_VALID(target, pl->target_object_count) ||
-           QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
-           (QUERY_FLAG(target, FLAG_IS_INVISIBLE) &&
-            !QUERY_FLAG(pl->ob, FLAG_SEE_INVISIBLE)) ||
-           !player_target_is_in_map_neighborhood(pl);
+    return !object_reference_is_current(target, pl->target_object_count) ||
+           !target_player_authorized(pl, target, NULL);
 }
 
-static void player_update_target(player *pl) {
-    if (!pl->ob->map || !player_target_needs_update(pl)) {
-        return;
+static bool player_update_target(player *pl) {
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+    if (!OBJECT_ACTIVE(observer) || observer->map == NULL) {
+        return false;
+    }
+    object *selected_target = pl->target_object;
+    tag_t selected_count = pl->target_object_count;
+    uint64_t reclamation = object_reclamation_epoch();
+    bool needs_update = player_target_needs_update(pl);
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        !OBJECT_ACTIVE(observer) || observer->map == NULL ||
+        observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+        return false;
+    }
+    needs_update |= !object_reclamation_is_current(reclamation) ||
+                    pl->target_object != selected_target ||
+                    pl->target_object_count != selected_count;
+    if (!needs_update) {
+        return true;
     }
 
     /* send_target_command() validates object lifetime and visibility, but a
@@ -4473,6 +4544,9 @@ static void player_update_target(player *pl) {
     }
 
     send_target_command(pl);
+    return player_connection_is_current(observer, observer_count, pl, observer_socket) &&
+           OBJECT_ACTIVE(observer) && observer->map != NULL &&
+           observer_socket->state != ST_DEAD && observer_socket->state != ST_ZOMBIE;
 }
 
 /** @copydoc object_methods_t::process_func */
@@ -4480,9 +4554,21 @@ static void process_func(object *op) {
     HARD_ASSERT(op != NULL);
 
     player *pl = CONTR(op);
+    tag_t observer_count = op->count;
+    socket_struct *observer_socket = pl->cs;
     int retval;
 
-    while ((retval = handle_newcs_player(pl)) == 1) {}
+    /* Packet actions may aim at a retained selection, so refresh before the
+     * first action and between queued actions that can change visibility. */
+    if (!player_update_target(pl)) {
+        return;
+    }
+    while ((retval = handle_newcs_player(pl)) == 1) {
+        if (!player_connection_is_current(op, observer_count, pl, observer_socket) ||
+            !player_update_target(pl)) {
+            return;
+        }
+    }
 
     if (retval == -1) {
         return;
@@ -4520,13 +4606,15 @@ static void process_func(object *op) {
         }
     }
 
-    /* Clear targets that are no longer locally reachable before processing
-     * player actions, so spells use the normal self-target fallback. */
-    player_update_target(pl);
+    /* Refresh again after following/transfers and before automatic attacks. */
+    if (!player_connection_is_current(op, observer_count, pl, observer_socket) ||
+        !player_update_target(pl)) {
+        return;
+    }
 
     /* Use the target system to hit our target - don't hit friendly
      * objects, ourselves or when we are not in combat mode. */
-    if (pl->target_object && OBJECT_ACTIVE(pl->target_object) &&
+    if (object_reference_is_current(pl->target_object, pl->target_object_count) &&
         pl->target_object_count != pl->ob->count && pl->combat &&
         !is_friend_of(pl->ob, pl->target_object)) {
         if (global_round_tag >= pl->action_attack) {
@@ -4534,16 +4622,23 @@ static void process_func(object *op) {
             pl->ob->enemy = pl->target_object;
             pl->ob->enemy_count = pl->target_object_count;
 
-            if (!OBJECT_VALID(pl->ob->enemy, pl->ob->enemy_count) ||
+            if (!object_reference_is_current(pl->ob->enemy, pl->ob->enemy_count) ||
                 pl->ob->enemy->owner == pl->ob) {
                 pl->ob->enemy = NULL;
             } else if (attack_is_melee_range(pl->ob, pl->ob->enemy)) {
                 object *target = pl->ob->enemy;
-                bool target_unaware = !OBJECT_VALID(target->enemy, target->enemy_count) &&
-                                      !OBJECT_VALID(target->attacked_by, target->attacked_by_count);
+                bool target_unaware = !object_reference_is_current(target->enemy, target->enemy_count) &&
+                                      !object_reference_is_current(target->attacked_by, target->attacked_by_count);
 
-                if (!OBJECT_VALID(target->enemy, target->enemy_count)) {
+                uint64_t reclamation = object_reclamation_epoch();
+                tag_t target_count = target->count;
+                if (!object_reference_is_current(target->enemy, target->enemy_count)) {
                     set_npc_enemy(target, pl->ob, NULL);
+                    if (!object_reclamation_is_current(reclamation) ||
+                        !player_connection_is_current(op, observer_count, pl, observer_socket) ||
+                        !OBJECT_VALID(target, target_count)) {
+                        return;
+                    }
                 } else {
                     /* Our target already has an enemy - then note we had
                      * attacked */
@@ -4556,6 +4651,10 @@ static void process_func(object *op) {
                     skill_attack_unaware(target, pl->ob, 0, NULL);
                 } else {
                     skill_attack(target, pl->ob, 0, NULL);
+                }
+                if (!object_reclamation_is_current(reclamation) ||
+                    !player_connection_is_current(op, observer_count, pl, observer_socket)) {
+                    return;
                 }
 
                 pl->action_attack = global_round_tag + pl->ob->weapon_speed;
@@ -4585,7 +4684,9 @@ static void process_func(object *op) {
 #endif
 
     /* Check if our target is still valid - if not, update client. */
-    player_update_target(pl);
+    if (player_connection_is_current(op, observer_count, pl, observer_socket)) {
+        (void)player_update_target(pl);
+    }
 }
 
 /**

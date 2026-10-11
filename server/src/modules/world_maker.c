@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <los.h>
 #include <server_main.h>
 #include <server.h>
 #include <region.h>
@@ -407,6 +408,7 @@ static void region_add_rec(wm_region *r, mapstruct *m, const char *region_name) 
 
         /* Load the map if needed. */
         if (!m->tile_map[i]) {
+            los_geometry_changed();
             m->tile_map[i] =
                 ready_map_name(m->tile_path[i], NULL, MAP_NAME_SHARED | MAP_NO_DYNAMIC);
 

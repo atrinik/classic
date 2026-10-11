@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -311,7 +311,7 @@ extern int cast_create_food(object *op, object *caster, int dir, const char *str
 
 extern int cast_wor(object *op, object *caster);
 
-extern void cast_destruction(object *op, object *caster, int dam);
+extern int cast_destruction(object *op, object *caster, int dam);
 
 extern int cast_heal_around(object *op, int level, int type);
 
@@ -396,7 +396,7 @@ extern int SP_level_strength_adjust(object *caster, int spell_type);
 
 extern int SP_level_spellpoint_cost(object *caster, int spell_type, int caster_level);
 
-extern void fire_swarm(object *op,
+extern int fire_swarm(object *op,
                        object *caster,
                        int dir,
                        struct archetype *swarm_type,

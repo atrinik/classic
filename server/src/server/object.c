@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <propagation.h>
 #include <server_main.h>
 #include <swap.h>
 #include <server_item.h>
@@ -484,6 +485,45 @@ static void object_debugger(void *ptr, char *buf, size_t size) {
 static bool object_validator(void *ptr) {
     object *op = ptr;
     return op->count != 0 && !QUERY_FLAG(op, FLAG_REMOVED);
+}
+
+bool object_storage_is_owned(const object *op) {
+    /* Object storage uses exponent-zero pooled allocations. Unlike callback
+     * epochs, this admission check also covers references saved before a
+     * reclamation. Inspect only owned metadata until the slot is established.
+     * The server never enables bypass mode for this pool; reject it closed. */
+    if (op == NULL || pool_object == NULL || (pool_object->flags & MEMPOOL_BYPASS_POOLS)) {
+        return false;
+    }
+    uintptr_t address = (uintptr_t)op;
+    size_t stride = sizeof(mempool_chunk_struct) + pool_object->chunksize;
+    for (const mempool_puddle_struct *puddle = pool_object->puddlelist[0];
+         puddle != NULL; puddle = puddle->next) {
+        uintptr_t first = (uintptr_t)MEM_USERDATA(puddle->first_chunk);
+        if (address >= first) {
+            uintptr_t offset = address - first;
+            if (offset % stride == 0 && offset / stride < pool_object->expand_size) {
+                return !CHUNK_FREE(op);
+            }
+        }
+    }
+    return false;
+}
+
+bool object_reference_matches(const object *op, tag_t count) {
+    return count != 0 && object_storage_is_owned(op) && op->count == count;
+}
+
+bool object_reference_is_current(const object *op, tag_t count) {
+    return object_reference_matches(op, count) && !QUERY_FLAG(op, FLAG_REMOVED);
+}
+
+uint64_t object_reclamation_epoch(void) {
+    return mempool_reclamation_epoch(pool_object);
+}
+
+bool object_reclamation_is_current(uint64_t epoch) {
+    return mempool_reclamation_is_current(pool_object, epoch);
 }
 
 /**
@@ -1449,7 +1489,7 @@ static void object_owner_set_internal(object *op, object *owner) {
     HARD_ASSERT(owner != NULL);
 
     while (owner->owner != NULL && owner != owner->owner &&
-           owner->ownercount == owner->owner->count) {
+           object_reference_matches(owner->owner, owner->ownercount)) {
         owner = owner->owner;
     }
 
@@ -1545,7 +1585,7 @@ object *object_owner(object *op) {
         return NULL;
     }
 
-    if (OBJECT_FREE(op) || op->owner->count != op->ownercount) {
+    if (OBJECT_FREE(op) || !object_reference_matches(op->owner, op->ownercount)) {
         op->owner = NULL;
         return NULL;
     }
@@ -1583,6 +1623,7 @@ void object_copy(object *op, const object *src, bool no_speed) {
 
     bool is_removed = QUERY_FLAG(op, FLAG_REMOVED);
 
+    propagation_object_destroyed(op);
     object_combat_contributions_free(op);
 
     FREE_ONLY_HASH(op->name);
@@ -1812,6 +1853,10 @@ void object_update(object *op, int action) {
         return;
     }
 
+    /* Object updates are mutation notifications. A later ASK_SHOW callback
+     * must not publish a packet containing an earlier actor's old state. */
+    los_publication_changed();
+
     /* No need to change anything except the map update counter. */
     if (action == UP_OBJ_FACE) {
         INC_MAP_UPDATE_COUNTER(op->map, op->x, op->y);
@@ -1821,6 +1866,9 @@ void object_update(object *op, int action) {
     MapSpace *msp = GET_MAP_SPACE_PTR(op->map, op->x, op->y);
     int newflags = msp->flags;
     int flags = newflags;
+
+    los_geometry_refresh(op->map, op->x, op->y);
+    newflags = msp->flags;
 
     if (action == UP_OBJ_INSERT) {
         msp->update_tile++;
@@ -1959,8 +2007,8 @@ void object_update(object *op, int action) {
             geometry |= 4U;
         }
     }
-    bool local_changed = msp->light_geometry != geometry;
-    msp->light_geometry = geometry;
+    bool local_changed = (msp->light_geometry & 0x07U) != geometry;
+    msp->light_geometry = (msp->light_geometry & 0xf0U) | geometry;
     bool celestial_changed = celestial_light_geometry_update(op->map, op->x, op->y);
     if (op->map->in_memory == MAP_IN_MEMORY) {
         light_geometry_changed(op->map, local_changed, celestial_changed);
@@ -1995,11 +2043,9 @@ void object_drop_inventory(object *op) {
         return;
     }
 
-    object *enemy;
-    if (op->enemy != NULL && op->enemy->type == PLAYER) {
-        enemy = op->enemy;
-    } else {
-        enemy = object_owner(op->enemy);
+    object *enemy = NULL;
+    if (object_reference_matches(op->enemy, op->enemy_count)) {
+        enemy = op->enemy->type == PLAYER ? op->enemy : object_owner(op->enemy);
     }
 
     object *corpse = NULL;
@@ -2047,7 +2093,7 @@ void object_drop_inventory(object *op) {
         /* If we have a corpse put the item in it. */
         if (corpse != NULL &&
             !(tmp->type == ARROW && tmp->attacked_by_count != 0 && enemy != NULL &&
-              OBJECT_VALID(tmp->attacked_by, tmp->attacked_by_count) &&
+              object_reference_is_current(tmp->attacked_by, tmp->attacked_by_count) &&
               tmp->attacked_by_count != enemy->count &&
               !(tmp->attacked_by->type == PLAYER && enemy->type == PLAYER &&
                 CONTR(tmp->attacked_by)->party != NULL &&
@@ -2151,6 +2197,7 @@ void object_destroy(object *op) {
     }
 
     object_free_key_values(op);
+    propagation_object_destroyed(op);
     object_combat_contributions_free(op);
 
     if (QUERY_FLAG(op, FLAG_IS_LINKED)) {
@@ -2648,6 +2695,10 @@ object *object_insert_map(object *op, mapstruct *m, object *originator, int flag
 
         SET_MAP_SPACE_FIRST(msp, op);
     }
+
+    /* Publish mutations before object callbacks can perform sight queries. */
+    los_publication_changed();
+    los_geometry_refresh(op->map, op->x, op->y);
 
     /* Some object-type-specific adjustments/initialization. */
     if (op->type == PLAYER) {

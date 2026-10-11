@@ -34,6 +34,8 @@
  */
 
 #include <global.h>
+#include <propagation.h>
+#include <perception.h>
 #include <server_main.h>
 #include <server.h>
 #include <monster.h>
@@ -122,55 +124,35 @@ static void disease_remove_symptoms(object *op) {
  * @param op
  * Disease infecting.
  */
-static void disease_check_infection(object *op) {
-    HARD_ASSERT(op != NULL);
-
-    int x, y;
-    mapstruct *map;
-    if (op->env != NULL) {
-        x = op->env->x;
-        y = op->env->y;
-        map = op->env->map;
-    } else {
-        x = op->x;
-        y = op->y;
-        map = op->map;
-    }
-
-    if (map == NULL) {
-        return;
-    }
-
-    int range = abs(op->magic);
-    for (int i = -range; i <= range; i++) {
-        for (int j = -range; j <= range; j++) {
-            int xt = x + i;
-            int yt = y + j;
-            mapstruct *m = get_map_from_coord(map, &xt, &yt);
-            if (m == NULL) {
-                continue;
-            }
-
-            if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
-                continue;
-            }
-
-            FOR_MAP_PREPARE(m, xt, yt, tmp) {
-                if (!IS_LIVE(tmp)) {
-                    continue;
-                }
-
-                rv_vector rv;
-                if (!get_rangevector(op->env ? op->env : op, tmp, &rv, 0) ||
-                    !obj_in_line_of_sight(tmp, &rv)) {
-                    continue;
-                }
-
-                disease_infect(op, tmp, 0);
-            }
-            FOR_MAP_FINISH();
+static void disease_infection_visit(object *disease, mapstruct *map, int x, int y, int unused) {
+    (void)unused;
+    object *source = disease->env != NULL ? disease->env : disease;
+    tag_t disease_count = disease->count, source_count = source->count;
+    uint64_t reclamation = object_reclamation_epoch();
+    FOR_MAP_PREPARE(map, x, y, target) {
+        if (!IS_LIVE(target)) {
+            continue;
+        }
+        tag_t target_count = target->count;
+        bool visible = perception_identity_visible(source, target);
+        /* ASK_SHOW can destroy any object, including the iterator's cached
+         * next object. Stop before the macro reads that borrowed cursor, even
+         * when perception itself safely rejected the current target. */
+        if (!object_reclamation_is_current(reclamation) ||
+            !object_reference_is_current(disease, disease_count) ||
+            !object_reference_is_current(source, source_count)) {
+            return;
+        }
+        if (visible && object_reference_is_current(target, target_count)) {
+            disease_infect(disease, target, 0);
         }
     }
+    FOR_MAP_FINISH();
+}
+
+static void disease_check_infection(object *op) {
+    HARD_ASSERT(op != NULL);
+    propagation_area(op, abs(op->magic), disease_infection_visit, 0);
 }
 
 /**

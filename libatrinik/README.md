@@ -8,7 +8,12 @@ Atrinik classic client, server, tests, and tooling. Its public CMake target is
 
 Integrated classic builds use the sibling `protocol/` source from the same
 commit. The historical checksum-pinned archive in `dependencies.lock.json`
-lacks the new generated rendezvous admission definitions and now fails configure.
+lacks the generated rendezvous admission definitions and current TALK API, so it
+already fails configure. Public `socket.h` exports the canonical TALK modes 1–7
+and authored framing header. Configuration and installed-package consumption
+require protocol revision 1084 or later with those definitions, the 4095-byte
+message bound and eight-byte fixed framing; a package carrying admission alone
+is insufficient. Endpoint handshakes still enforce their exact wire revision.
 Until a matching immutable artifact is published, select matching sibling,
 embedded, explicitly supplied, or installed Classic protocol sources. The
 historical lock is preserved; no unreleased artifact or checksum is substituted.

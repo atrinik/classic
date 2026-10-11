@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -115,6 +115,9 @@ typedef struct mempool_struct {
      * Special handling flags. See @ref mempool_flags
      */
     uint32_t flags;
+
+    /** Chunk-storage reclamations, saturating at UINT64_MAX. */
+    uint64_t storage_reclamation_epoch;
 
     /**
      * First free chunk.
@@ -297,6 +300,37 @@ extern void mempool_return_chunk(mempool_struct *pool, size_t arraysize_exp, voi
  * Number of reclaimed puddles.
  */
 extern size_t mempool_reclaim(mempool_struct *pool);
+
+/**
+ * Snapshot the pool's chunk-storage reclamation epoch.
+ *
+ * Starts at zero and advances before each puddle or bypass chunk storage free,
+ * including shutdown reclamation. UINT64_MAX is a saturated, invalid snapshot.
+ * Allocating, returning pooled chunks, and reclaiming without freeing storage
+ * do not advance it. This does not track logical chunk reuse or other pools.
+ *
+ * The caller retains ownership of the snapshot. The pool must remain alive;
+ * pool operations and these reads require the same external serialization as
+ * other mempool operations. No synchronization is provided by this API.
+ *
+ * @param pool Live, non-NULL pool to snapshot.
+ * @return The current epoch, or UINT64_MAX after saturation.
+ */
+extern uint64_t mempool_reclamation_epoch(const mempool_struct *pool);
+
+/**
+ * Check a snapshot from the same live pool before accessing retained chunks.
+ *
+ * Returns false if chunk storage was freed since the snapshot or if the epoch
+ * has saturated. A true result does not establish that a chunk is still in use;
+ * callers must separately validate its logical identity. The pool must remain
+ * alive, and snapshot/check/access must obey its external serialization rules.
+ *
+ * @param pool Live, non-NULL pool used to obtain the snapshot.
+ * @param epoch Snapshot returned by mempool_reclamation_epoch().
+ * @return True only for an unchanged, non-saturated epoch.
+ */
+extern bool mempool_reclamation_is_current(const mempool_struct *pool, uint64_t epoch);
 
 /**
  * Gather leak information from all the registered pools into the specified

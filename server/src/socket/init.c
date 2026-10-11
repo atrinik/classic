@@ -100,6 +100,14 @@ bool init_connection(socket_struct *ns) {
     packet_writer_set_limit(ns->packet_recv_cmd, SOCKET_COMMAND_QUEUE_STORAGE_MAX);
 
     memset(&ns->lastmap, 0, sizeof(struct Map));
+    ns->target_map_published_map = NULL;
+    ns->target_map_published_count = 0;
+    ns->target_map_published_depths = 0;
+    ns->target_map_publication_pending = false;
+    ns->target_select_tick = 0;
+    ns->target_select_admitted = false;
+    ns->talk_target_tick = 0;
+    ns->talk_target_admitted = false;
     ns->packets = NULL;
 
     return true;
@@ -133,6 +141,8 @@ void free_all_newserver(void) {
 
     socket_destroy(init_sockets[0].sc);
     free(init_sockets);
+    init_sockets = NULL;
+    socket_info.allocated_sockets = 0;
 }
 
 /**
@@ -156,6 +166,14 @@ static void free_newsocket_internal(socket_struct *ns, bool connected) {
     }
 
     map_client_cache_free(&ns->lastmap);
+    ns->target_map_published_map = NULL;
+    ns->target_map_published_count = 0;
+    ns->target_map_published_depths = 0;
+    ns->target_map_publication_pending = false;
+    ns->target_select_tick = 0;
+    ns->target_select_admitted = false;
+    ns->talk_target_tick = 0;
+    ns->talk_target_admitted = false;
 
     free(ns->account);
 

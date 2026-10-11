@@ -225,6 +225,11 @@ struct pl_player {
      */
     int blocked_los[MAP_CLIENT_X][MAP_CLIENT_Y];
 
+    /** Physical sight for each transmitted depth; depth zero is mirrored above. */
+    uint8_t blocked_los_depth[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+    /** Camera eligibility built before any physical rays, never action authority. */
+    uint8_t camera_visibility[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+
     /** This is initialized from init_player_exp(). */
     int last_skill_index;
 
@@ -354,6 +359,15 @@ struct pl_player {
 
     /** Last weight limit sent to client. */
     uint32_t last_weight_limit;
+
+    /** Cached viewport masks only; never actor, light or action authority. */
+    mapstruct *los_view_map;
+    uint64_t los_view_epoch;
+    uint32_t los_view_map_count;
+    int los_view_x, los_view_y;
+    int los_view_width, los_view_height, los_view_half_x, los_view_half_y;
+    bool los_view_tls, los_view_blind, los_view_xrays, los_view_valid;
+    bool map2_serializing;
 
     /** If true, update line of sight with update_los(). */
     uint32_t update_los : 1;
@@ -523,6 +537,11 @@ bool player_disconnect_all_checked(void);
 player *find_player(const char *plname);
 player *find_player_sh(shstr *plname);
 void display_motd(object *op);
+/** Validate a borrowed connection against the live list, even while its actor
+ * is temporarily removed/unmapped. Spatial callers separately require activity. */
+bool player_connection_is_current(const object *observer, tag_t count,
+                                  const player *controller, const socket_struct *socket);
+
 void free_player(player *pl);
 void give_initial_items(object *pl, treasure_list_t *items);
 int handle_newcs_player(player *pl);

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -130,6 +130,14 @@ static player *socket_server_player_find(socket_struct *cs);
  */
 static csocket_entry_t *client_sockets;
 static size_t client_sockets_count;
+
+void socket_target_publications_forget(mapstruct *map) {
+    csocket_entry_t *entry;
+    DL_FOREACH(client_sockets, entry) {
+        target_map_publication_forget_socket(entry->cs, map);
+    }
+}
+
 /** Round-robin cursor for pending-login transport work. */
 static size_t client_service_cursor;
 /** Round-robin cursor for logged-in transport work. */
@@ -680,11 +688,18 @@ socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_
         pl = socket_server_player_find(cs);
     }
 
+    object *observer = pl != NULL ? pl->ob : NULL;
+    tag_t observer_count = observer != NULL ? observer->count : 0;
     packet_reader_scope_t scope;
     packet_reader_scope_begin(&scope);
     packet_reader_init_at(&reader, data + pos, len - pos, 0);
     socket_commands[type].handle_func(cs, pl, data + pos, len - pos, 0);
     packet_error_t error = packet_reader_scope_finish(&scope);
+    /* Playing commands can invoke scripts that synchronously log out their
+     * observer. Finishing the reader scope needs no borrowed packet bytes. */
+    if (observer != NULL && !player_connection_is_current(observer, observer_count, pl, cs)) {
+        return SOCKET_COMMAND_HANDLED;
+    }
     if (error != PACKET_ERROR_NONE) {
         LOG(DEVEL,
             "Rejected malformed %s command: %s",
@@ -1059,6 +1074,10 @@ void socket_server_command_queue_reset(socket_struct *cs) {
 void socket_server_handle_client(player *pl) {
     HARD_ASSERT(pl != NULL);
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer != NULL ? observer->count : 0;
+    socket_struct *observer_socket = pl->cs;
+
     if (!socket_server_command_queue_compact(pl->cs)) {
         LOG(ERROR, "Discarding an inconsistent buffered player-command queue");
         socket_server_command_queue_reset(pl->cs);
@@ -1088,8 +1107,12 @@ void socket_server_handle_client(player *pl) {
             pl->cs->keepalive = 0;
         }
 
-        if (socket_server_handle_command(pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2) ==
-            SOCKET_COMMAND_DEFER)
+        socket_command_result_t result = socket_server_handle_command(
+            pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2);
+        if (!player_connection_is_current(observer, observer_count, pl, observer_socket)) {
+            return;
+        }
+        if (result == SOCKET_COMMAND_DEFER)
             break;
         packet_delete(pl->cs->packet_recv_cmd, 0, len);
         pl->cs->packet_recv_cmd_base += len;
@@ -1692,8 +1715,37 @@ void socket_server_post_process(void) {
         }
     }
 
-    player *pl, *pl_tmp;
-    DL_FOREACH_SAFE(first_player, pl, pl_tmp) {
+    /* MAP2/LOGOUT scripts can synchronously remove this player or any later
+     * player. A saved next-controller pointer is therefore not a safe iterator.
+     * Live-list membership and the object incarnation reject removed/reused
+     * entries before any captured object, controller or socket is dereferenced. */
+    size_t player_count = 0;
+    for (player *pl = first_player; pl != NULL; pl = pl->next) {
+        HARD_ASSERT(player_count != SIZE_MAX);
+        player_count++;
+    }
+    struct player_snapshot {
+        object *ob;
+        tag_t count;
+        player *controller;
+        socket_struct *socket;
+    } *players;
+    HARD_ASSERT(player_count <= SIZE_MAX / sizeof(*players));
+    players = xcalloc(player_count, sizeof(*players));
+    size_t player_index = 0;
+    for (player *pl = first_player; pl != NULL; pl = pl->next) {
+        players[player_index++] = (struct player_snapshot) {
+            .ob = pl->ob, .count = pl->ob->count, .controller = pl, .socket = pl->cs,
+        };
+    }
+    for (player_index = 0; player_index < player_count; player_index++) {
+        struct player_snapshot *snapshot = &players[player_index];
+        object *observer = snapshot->ob;
+        if (!player_connection_is_current(observer, snapshot->count,
+                                          snapshot->controller, snapshot->socket)) {
+            continue;
+        }
+        player *pl = snapshot->controller;
         if (server_socket_csocket_is_zombie(pl->cs) &&
             pl->cs->login_count++ >= MAX_TICKS_MULTIPLIER) {
             pl->cs->state = ST_DEAD;
@@ -1701,6 +1753,11 @@ void socket_server_post_process(void) {
         if (pl->cs->state == ST_DEAD) {
             if (!player_logout_checked(pl))
                 access_server_save_failed();
+            continue;
+        }
+
+        if (pl->cs->state == ST_ZOMBIE) {
+            socket_buffer_write(pl->cs);
             continue;
         }
 
@@ -1727,10 +1784,27 @@ void socket_server_post_process(void) {
         }
 
         esrv_update_stats(pl);
+        if (!player_connection_is_current(observer, snapshot->count, pl, snapshot->socket) ||
+            snapshot->socket->state == ST_DEAD) {
+            continue;
+        }
+        if (pl->cs->state == ST_ZOMBIE) {
+            socket_buffer_write(pl->cs);
+            continue;
+        }
         party_update_who(pl);
 
-        if (pl->ob->map != NULL) {
-            draw_client_map(pl->ob);
+        if (OBJECT_ACTIVE(observer) && observer->map != NULL) {
+            draw_client_map(observer);
+            if (!player_connection_is_current(observer, snapshot->count, pl, snapshot->socket) ||
+                pl->cs->state == ST_DEAD) {
+                continue;
+            }
+            if (pl->cs->state == ST_ZOMBIE || !OBJECT_ACTIVE(observer) || observer->map == NULL ||
+                observer->map->in_memory != MAP_IN_MEMORY) {
+                socket_buffer_write(pl->cs);
+                continue;
+            }
 
             uint32_t update_tile = GET_MAP_UPDATE_COUNTER(pl->ob->map, pl->ob->x, pl->ob->y);
             if (update_tile != pl->cs->update_tile) {
@@ -1741,6 +1815,7 @@ void socket_server_post_process(void) {
 
         socket_buffer_write(pl->cs);
     }
+    free(players);
 
     /* The pass above can enqueue map/asset responses. Permit one immediate
      * transport retry, but let the transport poller back off if a socket

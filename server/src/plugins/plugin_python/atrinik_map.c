@@ -1065,6 +1065,9 @@ static int set_attribute(Atrinik_Map *map, PyObject *value, void *context) {
     if (generic_field_setter(context, map->map, value) == -1) {
         return -1;
     }
+    /* Darkness and presentation edits can invalidate cells already serialized
+     * by an outer ASK_SHOW callback without changing physical LOS geometry. */
+    hooks->los_publication_changed();
 
     if (((fields_struct *)context)->offset == offsetof(mapstruct, darkness)) {
         hooks->set_map_darkness(map->map, map->map->darkness);
@@ -1120,6 +1123,7 @@ static int Map_SetFlag(Atrinik_Map *map, PyObject *val, void *context) {
         return -1;
     }
 
+    bool was_set = (map->map->map_flags & (1U << flagno)) != 0;
     if (val == Py_True) {
         map->map->map_flags |= (1U << flagno);
     } else if (val == Py_False) {
@@ -1127,6 +1131,10 @@ static int Map_SetFlag(Atrinik_Map *map, PyObject *val, void *context) {
     } else {
         PyErr_SetString(PyExc_TypeError, "Flag value must be either True or False.");
         return -1;
+    }
+
+    if (was_set != ((map->map->map_flags & (1U << flagno)) != 0)) {
+        hooks->los_publication_changed();
     }
 
     return 0;

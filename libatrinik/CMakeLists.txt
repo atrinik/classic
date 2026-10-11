@@ -156,24 +156,9 @@ option(LIBATRINIK_PACKAGE_LAYOUT
     "Use the namespaced include layout from the standalone source package"
     ${LIBATRINIK_PACKAGE_LAYOUT_DEFAULT})
 
-# Admission wire definitions are owned by the selected protocol package. Older
-# locked releases or installed SDKs must fail at configure, never silently use
-# library-local copies of this mandatory client contract.
-get_target_property(atrinik_protocol_include_dirs Atrinik::Protocol INTERFACE_INCLUDE_DIRECTORIES)
-set(atrinik_protocol_has_admission false)
-foreach (include_dir IN LISTS atrinik_protocol_include_dirs)
-    if (include_dir MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
-        set(include_dir "${CMAKE_MATCH_1}")
-    endif ()
-    if (EXISTS "${include_dir}/atrinik/protocol/rendezvous_admission.h")
-        set(atrinik_protocol_has_admission true)
-    endif ()
-endforeach ()
-if (NOT atrinik_protocol_has_admission)
-    message(FATAL_ERROR
-        "Selected Atrinik::Protocol lacks generated rendezvous admission definitions; "
-        "use matching sibling, embedded, explicit-source, or installed Classic protocol sources.")
-endif ()
+# Public socket headers require canonical game/TALK and admission definitions.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireClassicProtocol.cmake")
+atrinik_require_classic_protocol()
 
 set(ATRINIK_TOOLKIT atrinik-core)
 
@@ -565,6 +550,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfig.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/LibAtrinikConfigVersion.cmake"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireClassicProtocol.cmake"
         DESTINATION lib/cmake/LibAtrinik)
 endif ()
 

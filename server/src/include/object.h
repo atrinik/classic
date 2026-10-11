@@ -32,6 +32,7 @@
 
 #include <decls.h>
 #include <attack.h>
+#include <projectile3d.h>
 
 /**
  * Get the weight of an object. If the object is a container or doesn't
@@ -182,6 +183,9 @@ struct obj {
 
     /** Per-player, per-skill damage participation for kill experience. */
     combat_contribution_t *combat_contributions;
+
+    /** Transient propagation membership; never copied or serialized. */
+    struct propagation_entry *propagation;
 
     /* These get an extra add_refcount(), after having been copied by memcpy().
      * All fields below this point are automatically copied by memcpy. If
@@ -393,6 +397,9 @@ struct obj {
 
     /** the level of this object (most used for mobs & player) */
     int8_t level;
+
+    /** Independent, versioned numeric projectile trajectory. */
+    projectile3d_state projectile;
 
     /** Means the object is moving that way. */
     int8_t direction;
@@ -739,7 +746,7 @@ typedef struct magic_mirror_struct {
  */
 #define OBJECT_CAN_TALK(ob)                                                \
     ((ob)->type == MONSTER && ((ob)->msg || HAS_EVENT((ob), EVENT_SAY)) && \
-     !OBJECT_VALID((ob)->enemy, (ob)->enemy_count))
+     !object_reference_is_current((ob)->enemy, (ob)->enemy_count))
 
 /**
  * Check whether an object is cursed/damned.
@@ -932,6 +939,17 @@ object *object_owner(object *op);
 void object_copy(object *op, const object *src, bool no_speed);
 void object_copy_full(object *op, const object *src);
 void object_init(void);
+/** Snapshot storage reclamation before a callback borrows object pointers. */
+uint64_t object_reclamation_epoch(void);
+/** False after any object storage was freed, or once the epoch saturates. */
+bool object_reclamation_is_current(uint64_t epoch);
+/** Prove a pointer names an allocated, aligned slot in the live object pool.
+ * Does not establish incarnation or active-map policy. Server-thread only. */
+bool object_storage_is_owned(const object *op);
+/** Allocation-safe incarnation check, including removed/inventory objects. */
+bool object_reference_matches(const object *op, tag_t count);
+/** Allocation-safe equivalent of OBJECT_VALID for retained references. */
+bool object_reference_is_current(const object *op, tag_t count);
 void object_deinit(void);
 object *object_get(void);
 void object_update_turnable(object *op);

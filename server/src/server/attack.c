@@ -44,6 +44,7 @@
 #include <disease.h>
 #include <skills.h>
 #include <player_status.h>
+#include <perception.h>
 
 /**
  * Names of attack types to use when saving them to file.
@@ -140,8 +141,8 @@ static attack_bonus_t attack_bonus_calculate(object *victim,
         return bonus;
     }
 
-    if ((target_was_unaware || (!OBJECT_VALID(victim->enemy, victim->enemy_count) &&
-                                !OBJECT_VALID(victim->attacked_by, victim->attacked_by_count))) &&
+    if ((target_was_unaware || (!object_reference_is_current(victim->enemy, victim->enemy_count) &&
+                                !object_reference_is_current(victim->attacked_by, victim->attacked_by_count))) &&
         !IS_INVISIBLE(owner, victim)) {
         bonus.reasons |= ATTACK_BONUS_UNAWARE;
     }
@@ -346,11 +347,10 @@ static bool attack_player_target_is_active(object *player_obj) {
     object *target = pl->target_object;
 
     if (!pl->combat || target == NULL || target == player_obj ||
-        !OBJECT_VALID(target, pl->target_object_count) || !IS_LIVE(target) ||
+        !object_reference_is_current(target, pl->target_object_count) || !IS_LIVE(target) ||
         target->stats.hp <= 0 || QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
-        IS_INVISIBLE(target, player_obj) || OBJECT_IS_HIDDEN(player_obj, target) ||
-        is_friend_of(player_obj, target) || !player_target_is_in_map_neighborhood(pl) ||
-        !OBJECT_VALID(target->enemy, target->enemy_count) || target->enemy != player_obj) {
+        !target_player_authorized(pl, target, NULL) || is_friend_of(player_obj, target) ||
+        !object_reference_is_current(target->enemy, target->enemy_count) || target->enemy != player_obj) {
         return false;
     }
 
@@ -379,18 +379,30 @@ static void attack_player_retarget(object *player_obj, object *attacker, int dam
         return;
     }
 
+    player *pl = CONTR(player_obj);
+    socket_struct *socket = pl->cs;
+    tag_t player_count = player_obj->count;
     attacker = HEAD(attacker);
-    rv_vector rv;
+    tag_t attacker_count = attacker->count;
     if (attacker == player_obj || !OBJECT_ACTIVE(attacker) || !IS_LIVE(attacker) ||
         attacker->stats.hp <= 0 || QUERY_FLAG(attacker, FLAG_SYS_OBJECT) ||
         attacker->env != NULL || player_obj->map == NULL || attacker->map == NULL ||
-        !get_rangevector(player_obj, attacker, &rv, 0) ||
-        IS_INVISIBLE(attacker, player_obj) || OBJECT_IS_HIDDEN(player_obj, attacker) ||
-        is_friend_of(attacker, player_obj) || attack_player_target_is_active(player_obj)) {
+        !target_player_authorized(CONTR(player_obj), attacker, NULL) ||
+        is_friend_of(attacker, player_obj)) {
         return;
     }
 
-    player *pl = CONTR(player_obj);
+    uint64_t reclamation = object_reclamation_epoch();
+    bool active_target = attack_player_target_is_active(player_obj);
+    /* A false authorization result can mean that ASK_SHOW logged the player
+     * out or recycled the attacker, rather than merely hiding a target. */
+    if (!object_reclamation_is_current(reclamation) ||
+        !player_connection_is_current(player_obj, player_count, pl, socket) ||
+        !OBJECT_VALID(player_obj, player_count) || !OBJECT_VALID(attacker, attacker_count) ||
+        active_target) {
+        return;
+    }
+
     pl->target_object = attacker;
     pl->target_object_count = attacker->count;
     pl->combat = 1;
@@ -711,10 +723,12 @@ static int attack_object_internal(object *op, object *hitter, bool target_was_un
     play_sound_map(hitter->map, CMD_SOUND_EFFECT, sound, hitter->x, hitter->y, 0, 0);
 
     int dam;
+    uint64_t reclamation = object_reclamation_epoch();
     OBJECTS_DESTROYED_BEGIN(op, hitter) {
         if (attack_map && QUERY_FLAG(op, FLAG_HITBACK) && IS_LIVE(hitter)) {
             dam = attack_hit_situational(hitter, op, rndm(0, op->stats.dam));
-            if (OBJECTS_DESTROYED_ANY(op, hitter) || attack_check_abort(op, hitter, attack_map)) {
+            if (!object_reclamation_is_current(reclamation) ||
+                OBJECTS_DESTROYED_ANY(op, hitter) || attack_check_abort(op, hitter, attack_map)) {
                 return dam;
             }
         }
@@ -733,6 +747,9 @@ static int attack_object_internal(object *op, object *hitter, bool target_was_un
     }
     OBJECTS_DESTROYED_END();
 
+    if (!object_reclamation_is_current(reclamation)) {
+        return dam;
+    }
     if (dam > 0 && metrics_owner->type == PLAYER) {
         if (metrics_melee) {
             metrics_add(&CONTR(metrics_owner)->metrics, METRIC_CHARACTER_MELEE_HITS, 1);
@@ -1072,7 +1089,19 @@ static int attack_hit_internal(object *op,
         return 0;
     }
 
+    tag_t victim_count = op->count, hitter_count = hitter->count;
+    tag_t owner_count = hitter_owner->count;
+    player *victim_controller = op->type == PLAYER ? CONTR(op) : NULL;
+    socket_struct *victim_socket = victim_controller != NULL ? victim_controller->cs : NULL;
+    uint64_t reclamation = object_reclamation_epoch();
     attack_player_retarget(op, hitter_owner, dam);
+    if (!object_reclamation_is_current(reclamation) ||
+        (victim_controller != NULL &&
+         !player_connection_is_current(op, victim_count, victim_controller, victim_socket)) ||
+        !OBJECT_VALID(op, victim_count) || !OBJECT_VALID(hitter, hitter_count) ||
+        !OBJECT_VALID(hitter_owner, owner_count) || !attack_check_sanity(op, hitter, NULL)) {
+        return 0;
+    }
 
     attack_bonus_t bonus = {.damage = dam};
     if (situational) {
@@ -1123,9 +1152,16 @@ static int attack_hit_internal(object *op,
     }
 
     /* If one gets attacked, the attacker will become the enemy */
-    if (!OBJECT_VALID(op->enemy, op->enemy_count) && !IS_INVISIBLE(hitter_owner, op) &&
+    if (!object_reference_is_current(op->enemy, op->enemy_count) && !IS_INVISIBLE(hitter_owner, op) &&
         !QUERY_FLAG(op, FLAG_INVULNERABLE)) {
         set_npc_enemy(op, hitter_owner, NULL);
+        if (!object_reclamation_is_current(reclamation) ||
+            (victim_controller != NULL &&
+             !player_connection_is_current(op, victim_count, victim_controller, victim_socket)) ||
+            !OBJECT_VALID(op, victim_count) || !OBJECT_VALID(hitter, hitter_count) ||
+            !OBJECT_VALID(hitter_owner, owner_count)) {
+            return 0;
+        }
     }
 
     /* Reset the cache so that we send damage numbers to clients. */
@@ -1296,7 +1332,11 @@ void attack_hit_map(object *op, int dir, bool multi_reduce) {
             dam /= (tmp->quick_pos >> 4) + 1;
         }
 
+        uint64_t reclamation = object_reclamation_epoch();
         attack_hit_situational(tmp, op, dam);
+        if (!object_reclamation_is_current(reclamation)) {
+            return;
+        }
     }
     FOR_MAP_LAYER_END
 }
@@ -1651,7 +1691,8 @@ bool attack_kill(object *op, object *hitter) {
          * 2. NPC kill hit will overwrite player target on drop.
          * 3. Kill hit will count if target was an NPC.
          */
-        if (owner->type != PLAYER || op->enemy == NULL || op->enemy->type != PLAYER) {
+        if (owner->type != PLAYER ||
+            !object_reference_is_current(op->enemy, op->enemy_count) || op->enemy->type != PLAYER) {
             op->enemy = owner;
             op->enemy_count = owner->count;
         }

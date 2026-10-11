@@ -49,6 +49,8 @@
 #include <object.h>
 #include <object_methods.h>
 #include <waypoint.h>
+#include <perception.h>
+#include <spatial.h>
 
 static int can_detect_enemy(object *op, object *enemy, rv_vector *rv);
 static object *find_nearest_enemy(object *ob);
@@ -70,6 +72,43 @@ static void pace_moveh(object *ob);
 static void pace2_movev(object *ob);
 static void pace2_moveh(object *ob);
 static void rand_move(object *ob);
+
+/* Acquisition is bounded to 65,533 cells across all thirteen physical stories.
+ * Existing object-pair range is Euclidean; one physical story has unit height. */
+#define MONSTER_PERCEPTION_RADIUS 35
+
+static bool monster_rangevector(object *observer, object *target, rv_vector *rv) {
+    bool found = false;
+    unsigned best = 0;
+    for (object *part = observer; part != NULL; part = part->more) {
+        int dx, dy, dz;
+        if (part->map == NULL || target->map == NULL ||
+            !spatial_offset(part->map, target->map, &dx, &dy, &dz)) {
+            continue;
+        }
+        dx += target->x - part->x;
+        dy += target->y - part->y;
+        if (abs(dz) > MAP2_MAX_DEPTH) {
+            continue;
+        }
+        /* Bound before multiplication, including a retained distant enemy. */
+        if (abs(dx) > 32767 || abs(dy) > 32767) {
+            continue;
+        }
+        unsigned square = (unsigned)(dx * dx) + (unsigned)(dy * dy) + (unsigned)(dz * dz);
+        if (!found || square < best) {
+            found = true;
+            best = square;
+            rv->distance_x = dx;
+            rv->distance_y = dy;
+            rv->distance_z = dz;
+            rv->distance = isqrt(square);
+            rv->direction = coords_distance_to_dir(-dx, -dy);
+            rv->part = part;
+        }
+    }
+    return found;
+}
 
 /**
  * Update (or clear) an NPC's enemy. Perform most of the housekeeping
@@ -93,6 +132,9 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
     object *aggro_wp;
     rv_vector rv2;
 
+    if (enemy != NULL && !object_storage_is_owned(enemy)) {
+        enemy = NULL;
+    }
     /* Do nothing if new enemy == old enemy */
     if (enemy == npc->enemy && (enemy == NULL || enemy->count == npc->enemy_count)) {
         return;
@@ -115,11 +157,7 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
             rv = &rv2;
         }
 
-        get_rangevector(npc,
-                        enemy,
-                        rv,
-                        RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD |
-                            RV_RECURSIVE_SEARCH_EXTENDED);
+        monster_rangevector(npc, enemy, rv);
         npc->enemy_count = enemy->count;
 
         /* important: that's our "we lose aggro count" - reset to zero here */
@@ -219,8 +257,16 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
     }
 
     if (enemy != NULL) {
+        uint64_t reclamation = object_reclamation_epoch();
+        tag_t npc_count = npc->count;
         monster_enemy_signal(npc, enemy);
+        if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+            return;
+        }
         monster_guard_activate_gate(npc, 1);
+        if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+            return;
+        }
         monster_data_dialogs_purge(npc);
     } else {
         object_set_value(npc, "was_provoked", NULL, 0);
@@ -240,37 +286,59 @@ void set_npc_enemy(object *npc, object *enemy, rv_vector *rv) {
  */
 static void
 monster_enemy_signal_map(object *npc, mapstruct *map, object *spawn_point, uint32_t dist) {
-    objectlink *ol;
-
-    for (ol = map->linked_spawn_points; ol != NULL; ol = ol->next) {
-        if (ol->objlink.ob == spawn_point) {
-            continue;
-        }
-
-        /* Ensure the spawn point has a spawned monster. */
-        if (!OBJECT_VALID(ol->objlink.ob->enemy, ol->objlink.ob->enemy_count)) {
-            continue;
-        }
-
-        /* Ensure the spawned monster doesn't yet have an enemy. */
-        if (OBJECT_VALID(ol->objlink.ob->enemy->enemy, ol->objlink.ob->enemy->enemy_count)) {
-            continue;
-        }
-
-        rv_vector rv;
-
-        if ((spawn_point->title == NULL || ol->objlink.ob->title != spawn_point->title) &&
-            (!get_rangevector(npc, ol->objlink.ob->enemy, &rv, RV_DIAGONAL_DISTANCE) ||
-             rv.distance > dist || !monster_is_ally_of(npc, ol->objlink.ob->enemy))) {
-            continue;
-        }
-
-        if (object_get_value(npc, "was_provoked") != NULL) {
-            object_set_value(ol->objlink.ob->enemy, "was_provoked", "1", 1);
-        }
-
-        set_npc_enemy(ol->objlink.ob->enemy, npc->enemy, NULL);
+    /* A guard callback can unlink spawn-point records. Snapshot identities,
+     * not list links, so normal gate/face updates still signal every ally. */
+    struct signal_ref { object *op; tag_t count; };
+    size_t count = 0;
+    for (objectlink *ol = map->linked_spawn_points; ol != NULL; ol = ol->next) {
+        count++;
     }
+    struct signal_ref *refs = xcalloc(MAX(count, 1), sizeof(*refs));
+    size_t used = 0;
+    for (objectlink *ol = map->linked_spawn_points; ol != NULL; ol = ol->next) {
+        if (object_storage_is_owned(ol->objlink.ob)) {
+            refs[used++] = (struct signal_ref){ol->objlink.ob, ol->objlink.ob->count};
+        }
+    }
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t npc_count = npc->count, spawn_count = spawn_point->count;
+    object *enemy = npc->enemy;
+    tag_t enemy_count = npc->enemy_count;
+    mapstruct *source_map = npc->map;
+    int16_t source_x = npc->x, source_y = npc->y;
+    if (!object_reference_is_current(enemy, enemy_count)) {
+        xfree(refs);
+        return;
+    }
+    for (size_t i = 0; i < used; i++) {
+        object *other = refs[i].op;
+        if (!object_reference_is_current(other, refs[i].count) ||
+            other->map != map || other == spawn_point) {
+            continue;
+        }
+        if (!object_reference_is_current(other->enemy, other->enemy_count) ||
+            object_reference_is_current(other->enemy->enemy, other->enemy->enemy_count)) {
+            continue;
+        }
+        rv_vector rv;
+        if ((spawn_point->title == NULL || other->title != spawn_point->title) &&
+            (!get_rangevector(npc, other->enemy, &rv, RV_DIAGONAL_DISTANCE) ||
+             rv.distance > dist || !monster_is_ally_of(npc, other->enemy))) {
+            continue;
+        }
+        if (object_get_value(npc, "was_provoked") != NULL) {
+            object_set_value(other->enemy, "was_provoked", "1", 1);
+        }
+        set_npc_enemy(other->enemy, enemy, NULL);
+        if (!object_reclamation_is_current(reclamation) ||
+            !OBJECT_VALID(npc, npc_count) || !OBJECT_VALID(spawn_point, spawn_count) ||
+            !object_reference_is_current(enemy, enemy_count) || npc->enemy != enemy ||
+            npc->enemy_count != enemy_count || npc->map != source_map ||
+            npc->x != source_x || npc->y != source_y) {
+            break;
+        }
+    }
+    xfree(refs);
 }
 
 /**
@@ -286,6 +354,9 @@ void monster_enemy_signal(object *npc, object *enemy) {
     HARD_ASSERT(npc != NULL);
     HARD_ASSERT(enemy != NULL);
 
+    if (!object_storage_is_owned(enemy)) {
+        return;
+    }
     SOFT_ASSERT(npc->map != NULL, "NPC has no map: %s", object_get_str(npc));
     SOFT_ASSERT(enemy->map != NULL, "Enemy has no map: %s", object_get_str(enemy));
 
@@ -297,7 +368,7 @@ void monster_enemy_signal(object *npc, object *enemy) {
     spawn_point_info = object_find_type(npc, SPAWN_POINT_INFO);
 
     if (spawn_point_info == NULL ||
-        !OBJECT_VALID(spawn_point_info->owner, spawn_point_info->ownercount)) {
+        !object_reference_is_current(spawn_point_info->owner, spawn_point_info->ownercount)) {
         return;
     }
 
@@ -312,13 +383,36 @@ void monster_enemy_signal(object *npc, object *enemy) {
         }
     }
 
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t npc_count = npc->count, info_count = spawn_point_info->count;
+    object *source_spawn = spawn_point_info->owner;
+    tag_t source_spawn_count = spawn_point_info->ownercount;
+    mapstruct *source_map = npc->map;
+    tag_t source_map_count = source_map->count;
+    int16_t source_x = npc->x, source_y = npc->y;
     /* Signal the map the spawn point is on. */
-    monster_enemy_signal_map(npc, npc->map, spawn_point_info->owner, dist);
+    monster_enemy_signal_map(npc, npc->map, source_spawn, dist);
+    if (!object_reclamation_is_current(reclamation) ||
+        !OBJECT_VALID(npc, npc_count) || !OBJECT_VALID(spawn_point_info, info_count) ||
+        !object_reference_is_current(source_spawn, source_spawn_count) ||
+        spawn_point_info->owner != source_spawn || spawn_point_info->ownercount != source_spawn_count ||
+        npc->map != source_map || source_map->count != source_map_count ||
+        npc->x != source_x || npc->y != source_y) {
+        return;
+    }
 
     /* Signal all the tiled maps that are in memory. */
     for (size_t i = 0; i < TILED_NUM_DIR; i++) {
         if (npc->map->tile_map[i] != NULL && npc->map->tile_map[i]->in_memory == MAP_IN_MEMORY) {
-            monster_enemy_signal_map(npc, npc->map->tile_map[i], spawn_point_info->owner, dist);
+            monster_enemy_signal_map(npc, npc->map->tile_map[i], source_spawn, dist);
+            if (!object_reclamation_is_current(reclamation) ||
+                !OBJECT_VALID(npc, npc_count) || !OBJECT_VALID(spawn_point_info, info_count) ||
+                !object_reference_is_current(source_spawn, source_spawn_count) ||
+                spawn_point_info->owner != source_spawn || spawn_point_info->ownercount != source_spawn_count ||
+                npc->map != source_map || source_map->count != source_map_count ||
+                npc->x != source_x || npc->y != source_y) {
+                return;
+            }
         }
     }
 }
@@ -337,7 +431,7 @@ object *check_enemy(object *npc, rv_vector *rv) {
         return NULL;
     }
 
-    if (!OBJECT_VALID(npc->enemy, npc->enemy_count) || npc == npc->enemy || !IS_LIVE(npc->enemy) ||
+    if (!object_reference_is_current(npc->enemy, npc->enemy_count) || npc == npc->enemy || !IS_LIVE(npc->enemy) ||
         is_friend_of(npc, npc->enemy)) {
         set_npc_enemy(npc, NULL, NULL);
         return NULL;
@@ -358,6 +452,9 @@ object *check_enemy(object *npc, rv_vector *rv) {
  */
 object *find_enemy(object *npc, rv_vector *rv) {
     object *tmp = NULL;
+    tag_t npc_count = npc->count;
+    uint64_t reclamation = object_reclamation_epoch();
+    uint64_t publication = los_publication_epoch();
 
     /* If we are berserk, we don't care about others - we attack all we can
      * find. */
@@ -365,9 +462,13 @@ object *find_enemy(object *npc, rv_vector *rv) {
         /* Always clear the attacker entry */
         npc->attacked_by = NULL;
         tmp = find_nearest_enemy(npc);
+        if (!object_reclamation_is_current(reclamation) ||
+            !OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+            return NULL;
+        }
 
         if (tmp) {
-            get_rangevector(npc, tmp, rv, 0);
+            monster_rangevector(npc, tmp, rv);
         }
 
         return tmp;
@@ -377,7 +478,7 @@ object *find_enemy(object *npc, rv_vector *rv) {
 
     if (!tmp) {
         /* If we have an attacker, check him */
-        if (OBJECT_VALID(npc->attacked_by, npc->attacked_by_count) &&
+        if (object_reference_is_current(npc->attacked_by, npc->attacked_by_count) &&
             !IS_INVISIBLE(npc->attacked_by, npc) &&
             !QUERY_FLAG(npc->attacked_by, FLAG_INVULNERABLE)) {
             /* We don't want a fight evil vs evil or good against non evil. */
@@ -390,16 +491,20 @@ object *find_enemy(object *npc, rv_vector *rv) {
                 /* Always clear the attacker entry */
                 npc->attacked_by = NULL;
 
-                if (on_same_map(npc, attacker) &&
-                    get_rangevector(npc,
-                                    attacker,
-                                    rv,
-                                    RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD |
-                                        RV_RECURSIVE_SEARCH_EXTENDED)) {
+                bool visible = monster_rangevector(npc, attacker, rv) &&
+                               perception_object_visible(npc, attacker);
+                if (!object_reclamation_is_current(reclamation) ||
+                    !OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+                    return NULL;
+                }
+                if (visible) {
                     /* The only thing we must know... */
 
                     CLEAR_FLAG(npc, FLAG_SLEEP);
                     set_npc_enemy(npc, attacker, NULL);
+                    if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+                        return NULL;
+                    }
 
                     /* Face our attacker */
                     return npc->enemy;
@@ -411,6 +516,10 @@ object *find_enemy(object *npc, rv_vector *rv) {
          * one. */
         if (!QUERY_FLAG(npc, FLAG_UNAGGRESSIVE)) {
             tmp = find_nearest_enemy(npc);
+            if (!object_reclamation_is_current(reclamation) ||
+                !OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+                return NULL;
+            }
 
             if (tmp != npc->enemy) {
                 set_npc_enemy(npc, tmp, rv);
@@ -421,17 +530,22 @@ object *find_enemy(object *npc, rv_vector *rv) {
         }
     }
 
+    if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+        return NULL;
+    }
     if (tmp != NULL) {
         monster_enemy_signal(npc, tmp);
+        if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(npc, npc_count)) {
+            return NULL;
+        }
     }
 
     return tmp;
 }
 
 /**
- * Controls if monster still can see/detect its enemy.
- *
- * Includes visibility but also map and area control.
+ * Check a retained enemy's loaded physical neighborhood and aggro timeout.
+ * Current sight is checked separately before aimed actions.
  * @param op
  * The monster object.
  * @param enemy
@@ -442,20 +556,10 @@ object *find_enemy(object *npc, rv_vector *rv) {
  * 1 if can see/detect, 0 otherwise.
  */
 static int can_detect_enemy(object *op, object *enemy, rv_vector *rv) {
-    /* Will check for legal maps too */
-    if (!op || !enemy || !on_same_map(op, enemy)) {
-        return 0;
-    }
-
-    /* We check for sys_invisible and normal */
-    if (IS_INVISIBLE(enemy, op) || QUERY_FLAG(enemy, FLAG_INVULNERABLE)) {
-        return 0;
-    }
-
-    if (!get_rangevector(op,
-                         enemy,
-                         rv,
-                         RV_RECURSIVE_SEARCH | RV_NO_LOAD | RV_RECURSIVE_SEARCH_EXTENDED)) {
+    /* Retain pursuit memory when current sight is lost. Aiming is separately
+     * gated by fresh physical perception in process_func(). */
+    if (op == NULL || enemy == NULL || QUERY_FLAG(enemy, FLAG_INVULNERABLE) ||
+        !monster_rangevector(op, enemy, rv)) {
         return 0;
     }
 
@@ -506,13 +610,20 @@ static void process_func(object *op) {
     /* If we are here, we're never paralyzed anymore */
     CLEAR_FLAG(op, FLAG_PARALYZED);
 
-    /* Cleanup stale interfaces. */
+    tag_t op_count = op->count;
+    uint64_t reclamation = object_reclamation_epoch();
+    /* Cleanup may close a guard dialogue and run a gate script. */
     monster_data_dialogs_cleanup(op);
+    if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count)) {
+        return;
+    }
 
     /* Here is the heart of the mob attack and target area.
      * find_enemy() checks the old enemy or gets us a new one. */
 
     object *enemy;
+    uint64_t publication = los_publication_epoch();
+    bool enemy_visible = false;
     rv_vector rv;
     /* We never ever attack */
     if (QUERY_FLAG(op, FLAG_NO_ATTACK)) {
@@ -521,16 +632,32 @@ static void process_func(object *op) {
         }
 
         enemy = NULL;
-    } else if ((enemy = find_enemy(op, &rv)) != NULL) {
+    } else {
+        enemy = find_enemy(op, &rv);
+        if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count) ||
+            publication != los_publication_epoch()) {
+            return;
+        }
+        if (enemy != NULL) {
+            enemy_visible = perception_object_visible(op, enemy);
+            /* False can mean destruction/recycling. The range vector also
+             * borrows multipart/map state invalidated by callback mutations. */
+            if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count) ||
+                publication != los_publication_epoch()) {
+                return;
+            }
+        }
+    }
+    if (enemy != NULL) {
         CLEAR_FLAG(op, FLAG_SLEEP);
         op->direction = rv.direction;
 
-        if (rv.distance <= 1 && rv.distance_z == 0) {
+        if (enemy_visible && rv.distance <= 1 && rv.distance_z == 0) {
             op->anim_flags |= ANIM_FLAG_ATTACKING;
         }
 
-        if (!enemy->attacked_by ||
-            (enemy->attacked_by && enemy->attacked_by_distance > (int)rv.distance)) {
+        if (enemy_visible && (!enemy->attacked_by ||
+            (enemy->attacked_by && enemy->attacked_by_distance > (int)rv.distance))) {
             /* We have an enemy, just tell him we want him dead */
             enemy->attacked_by = op;
             enemy->attacked_by_count = op->count;
@@ -582,9 +709,17 @@ static void process_func(object *op) {
 
         if (op->stats.Dex && rndm_chance(op->stats.Dex)) {
             if (QUERY_FLAG(op, FLAG_CAST_SPELL) && !op->last_grace) {
-                if (monster_cast_spell(op, op, 0, NULL, SPELL_DESC_FRIENDLY)) {
+                publication = los_publication_epoch();
+                bool cast = monster_cast_spell(op, op, 0, NULL, SPELL_DESC_FRIENDLY);
+                if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count)) {
+                    return;
+                }
+                if (cast) {
                     /* Add monster casting delay */
                     op->last_grace += op->magic;
+                }
+                if (publication != los_publication_epoch()) {
+                    return;
                 }
             }
         }
@@ -597,7 +732,7 @@ static void process_func(object *op) {
         if (QUERY_FLAG(op, FLAG_ONLY_ATTACK) ||
             ((spawn_point_info = object_find_type(op, SPAWN_POINT_INFO)) &&
              spawn_point_info->owner &&
-             !OBJECT_VALID(spawn_point_info->owner, spawn_point_info->ownercount))) {
+             !object_reference_is_current(spawn_point_info->owner, spawn_point_info->ownercount))) {
             monster_drop_arrows(op);
             object_remove(op, 0);
             object_destroy(op);
@@ -679,20 +814,59 @@ static void process_func(object *op) {
 
         if (op->stats.Dex && rndm_chance(op->stats.Dex)) {
             if (QUERY_FLAG(op, FLAG_CAST_SPELL) && !op->last_grace) {
-                if (monster_cast_spell(op,
-                                       part,
-                                       dir,
-                                       &rv,
-                                       SPELL_DESC_DIRECTION | SPELL_DESC_ENEMY | SPELL_DESC_SELF)) {
+                publication = los_publication_epoch();
+                bool cast = monster_cast_spell(op,
+                                               part,
+                                               dir,
+                                               &rv,
+                                               SPELL_DESC_DIRECTION | SPELL_DESC_ENEMY | SPELL_DESC_SELF);
+                if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count)) {
+                    return;
+                }
+                if (cast) {
                     /* Add monster casting delay */
                     op->last_grace += op->magic;
                     return;
                 }
+                if (publication != los_publication_epoch()) {
+                    return;
+                }
             }
 
-            if (QUERY_FLAG(op, FLAG_READY_BOW) && rndm_chance(4)) {
-                if (monster_use_bow(op, part, dir) && rndm_chance(2)) {
+            if (enemy_visible && QUERY_FLAG(op, FLAG_READY_BOW) &&
+                object_reference_is_current(op->enemy, op->enemy_count)) {
+                publication = los_publication_epoch();
+                bool visible = perception_object_visible(op, op->enemy);
+                if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count) ||
+                    publication != los_publication_epoch()) {
                     return;
+                }
+                if (visible && rndm_chance(4)) {
+                    tag_t part_count = part->count, enemy_count = enemy->count;
+                    player *enemy_controller = enemy->type == PLAYER ? CONTR(enemy) : NULL;
+                    socket_struct *enemy_socket = enemy_controller != NULL ? enemy_controller->cs : NULL;
+                    mapstruct *source_map = part->map, *enemy_map = enemy->map;
+                    tag_t source_map_count = source_map->count, enemy_map_count = enemy_map->count;
+                    int16_t source_x = part->x, source_y = part->y;
+                    int16_t enemy_x = enemy->x, enemy_y = enemy->y;
+                    bool fired = monster_use_bow(op, part, dir);
+                    /* A normal shot changes map publication too. Fence the
+                     * retained range-vector actors themselves so a valid
+                     * fire-and-pursue tick keeps its ordinary continuation. */
+                    if (!object_reclamation_is_current(reclamation) ||
+                        (enemy_controller != NULL &&
+                         !player_connection_is_current(enemy, enemy_count, enemy_controller, enemy_socket)) ||
+                        !OBJECT_VALID(op, op_count) || !OBJECT_VALID(part, part_count) ||
+                        !OBJECT_VALID(enemy, enemy_count) || op->enemy != enemy ||
+                        op->enemy_count != enemy_count || part->map != source_map ||
+                        enemy->map != enemy_map || source_map->count != source_map_count ||
+                        enemy_map->count != enemy_map_count || part->x != source_x ||
+                        part->y != source_y || enemy->x != enemy_x || enemy->y != enemy_y) {
+                        return;
+                    }
+                    if (fired && rndm_chance(2)) {
+                        return;
+                    }
                 }
             }
         }
@@ -752,7 +926,8 @@ static void process_func(object *op) {
     /* Try to move closer to enemy, or follow whatever special attack behavior
      * is */
     if (!QUERY_FLAG(op, FLAG_STAND_STILL) &&
-        (QUERY_FLAG(op, FLAG_SCARED) || QUERY_FLAG(op, FLAG_RUN_AWAY) || !can_hit(part, &rv) ||
+        (QUERY_FLAG(op, FLAG_SCARED) || QUERY_FLAG(op, FLAG_RUN_AWAY) || !enemy_visible ||
+         !can_hit(part, &rv) ||
          ((op->attack_move_type & LO4) && special_dir != dir))) {
         object *aggro_wp = waypoint_get_aggro(op);
 
@@ -808,13 +983,17 @@ static void process_func(object *op) {
     }
 
     /* Hit enemy if possible */
-    if (!QUERY_FLAG(op, FLAG_SCARED) && !QUERY_FLAG(enemy, FLAG_REMOVED) && can_hit(part, &rv)) {
+    if (enemy_visible && !QUERY_FLAG(op, FLAG_SCARED) && !QUERY_FLAG(enemy, FLAG_REMOVED) &&
+        can_hit(part, &rv)) {
         if (QUERY_FLAG(op, FLAG_RUN_AWAY)) {
             part->stats.wc -= 10;
 
             /* As long we are > 0, we are not ready to swing */
             if (op->weapon_speed_left <= 0) {
                 skill_attack(enemy, part, 0, NULL);
+                if (!object_reclamation_is_current(reclamation)) {
+                    return;
+                }
                 op->weapon_speed_left += FABS((int)op->weapon_speed_left) + 1;
             }
 
@@ -823,6 +1002,9 @@ static void process_func(object *op) {
             /* As long we are > 0, we are not ready to swing */
             if (op->weapon_speed_left <= 0) {
                 skill_attack(enemy, part, 0, NULL);
+                if (!object_reclamation_is_current(reclamation)) {
+                    return;
+                }
                 op->weapon_speed_left += FABS((int)op->weapon_speed_left) + 1;
             }
         }
@@ -838,7 +1020,9 @@ static void process_func(object *op) {
         return;
     }
 
-    monster_data_enemy_update(op, enemy);
+    if (enemy_visible) {
+        monster_data_enemy_update(op, enemy);
+    }
 }
 
 /**
@@ -873,7 +1057,7 @@ static int can_detect_target(object *op,
         return 0;
     }
 
-    if (!get_rangevector(op, target, rv, 0)) {
+    if (!monster_rangevector(op, target, rv) || !perception_object_visible(op, target)) {
         return 0;
     }
 
@@ -921,46 +1105,44 @@ static object *find_nearest_enemy(object *ob) {
         aggro_stealth = MIN_MON_RADIUS;
     }
 
-    for (i = -aggro_range; i <= aggro_range; i++) {
-        for (j = -aggro_range; j <= aggro_range; j++) {
-            xt = ob->x + i;
-            yt = ob->y + j;
-
-            if (!(m = get_map_from_coord2(ob->map, &xt, &yt))) {
-                continue;
-            }
-
-            /* Nothing alive here? Move on... */
-            if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
-                continue;
-            }
-
-            for (tmp = GET_MAP_OB(m, xt, yt); tmp; tmp = tmp->above) {
-                /* Get head. */
-                if (tmp->head) {
-                    tmp = tmp->head;
-                }
-
-                /* Skip the monster looking for enemy and not alive objects. */
-                if (tmp == ob || !IS_LIVE(tmp)) {
+    tag_t observer_count = ob->count;
+    aggro_range = MIN(aggro_range, MONSTER_PERCEPTION_RADIUS);
+    for (int z = -MIN(aggro_range, MAP2_MAX_DEPTH); z <= MIN(aggro_range, MAP2_MAX_DEPTH); z++) {
+        for (i = -aggro_range; i <= aggro_range; i++) {
+            for (j = -aggro_range; j <= aggro_range; j++) {
+                spatial_cell cell;
+                if (!spatial_resolve(ob->map, ob->x + i, ob->y + j, z, &cell)) {
                     continue;
                 }
-
-                if (!can_detect_target(ob, tmp, aggro_range, aggro_stealth, &rv)) {
+                m = cell.map;
+                xt = cell.x;
+                yt = cell.y;
+                if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
                     continue;
                 }
-
-                if (!obj_in_line_of_sight(tmp, &rv)) {
-                    continue;
+                /* Never replace the stack iterator with a multipart head. */
+                for (object *stack = GET_MAP_OB(m, xt, yt); stack != NULL; stack = stack->above) {
+                    tmp = HEAD(stack);
+                    if (tmp == ob || !IS_LIVE(tmp)) {
+                        continue;
+                    }
+                    uint64_t publication = los_publication_epoch();
+                    uint64_t reclamation = object_reclamation_epoch();
+                    bool detected = can_detect_target(ob, tmp, aggro_range, aggro_stealth, &rv);
+                    /* Do not advance a borrowed stack/map iterator after a
+                     * callback mutates it, even when detection returns false. */
+                    if (!object_reclamation_is_current(reclamation) ||
+                        !OBJECT_VALID(ob, observer_count) || publication != los_publication_epoch()) {
+                        return NULL;
+                    }
+                    if (!detected) {
+                        continue;
+                    }
+                    if (!is_friend_of(ob, tmp)) {
+                        return tmp;
+                    }
+                    monster_guard_check(ob, tmp, NULL, rv.distance);
                 }
-
-                /* Now check the friend status, whether we can reach the enemy,
-                 * and LOS. */
-                if (!is_friend_of(ob, tmp)) {
-                    return tmp;
-                }
-
-                monster_guard_check(ob, tmp, NULL, rv.distance);
             }
         }
     }
@@ -1170,6 +1352,23 @@ static int monster_cast_spell(object *head, object *part, int dir, rv_vector *rv
 
     if (sp_typ == -1 || (sp = find_spell(sp_typ)) == NULL) {
         return 0;
+    }
+
+    /* Recheck the selected spell, including its long-range alternate. Self
+     * recovery remains possible during pursuit; every aimed cast needs sight. */
+    if (rv != NULL && !(sp->flags & SPELL_DESC_SELF)) {
+        tag_t head_count = head->count, part_count = part->count;
+        tag_t spell_count = spell_item->count;
+        uint64_t publication = los_publication_epoch();
+        uint64_t reclamation = object_reclamation_epoch();
+        bool visible = object_reference_is_current(head->enemy, head->enemy_count) &&
+                       perception_object_visible(head, head->enemy);
+        if (!object_reclamation_is_current(reclamation) ||
+            !OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count) ||
+            !OBJECT_VALID(spell_item, spell_count) || publication != los_publication_epoch() ||
+            !visible) {
+            return 0;
+        }
     }
 
     /* Monster doesn't have enough spellpoints */
@@ -1614,6 +1813,38 @@ static char *find_matching_message(const char *msg, const char *match) {
     }
 }
 
+/* Validate borrowed dialogue actors before any post-script pointer read. If
+ * storage was reclaimed, only the live player list may re-establish observer
+ * ownership. Drop matching retained dialogue/selection references as well. */
+bool monster_dialogue_is_current(object *observer, tag_t observer_count,
+                                  player *controller, socket_struct *socket,
+                                  object *npc, tag_t npc_count, uint64_t reclamation) {
+    bool storage = object_reclamation_is_current(reclamation);
+    bool connection = controller != NULL &&
+                      player_connection_is_current(observer, observer_count, controller, socket);
+    if (controller != NULL && !connection) {
+        return false;
+    }
+    if (!storage || !OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(npc, npc_count)) {
+        if (connection && !object_reference_is_current(npc, npc_count)) {
+            if (controller->talking_to == npc && controller->talking_to_count == npc_count) {
+                controller->talking_to = NULL;
+                controller->talking_to_count = 0;
+            }
+            if (controller->target_object == npc && controller->target_object_count == npc_count) {
+                controller->target_object = observer;
+                controller->target_object_count = 0;
+            }
+            if (observer->enemy == npc && observer->enemy_count == npc_count) {
+                observer->enemy = NULL;
+                observer->enemy_count = 0;
+            }
+        }
+        return false;
+    }
+    return true;
+}
+
 /**
  * Give an object the chance to handle something being said.
  *
@@ -1629,6 +1860,10 @@ static char *find_matching_message(const char *msg, const char *match) {
  */
 int talk_to_npc(object *op, object *npc, char *txt) {
     size_t ret = 0;
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t observer_count = op->count, npc_count = npc->count;
+    player *controller = op->type == PLAYER ? CONTR(op) : NULL;
+    socket_struct *socket = controller != NULL ? controller->cs : NULL;
 
     if (HAS_EVENT(npc, EVENT_SAY)) {
         /* Trigger the SAY event */
@@ -1684,8 +1919,17 @@ int talk_to_npc(object *op, object *npc, char *txt) {
         }
     }
 
-    if (op->type == PLAYER) {
-        player_set_talking_to(CONTR(op), npc);
+    /* SAY and the target notification can synchronously reclaim the player. */
+    if (!monster_dialogue_is_current(op, observer_count, controller, socket,
+                                     npc, npc_count, reclamation)) {
+        return 0;
+    }
+    if (controller != NULL) {
+        player_set_talking_to(controller, npc);
+    }
+    if (!monster_dialogue_is_current(op, observer_count, controller, socket,
+                                     npc, npc_count, reclamation)) {
+        return 0;
     }
 
     uint32_t secs = INTERFACE_TIMEOUT(ret);
@@ -1731,11 +1975,11 @@ int is_friend_of(object *op, object *obj) {
         return 1;
     }
 
-    if (op->type == MONSTER && OBJECT_VALID(op->enemy, op->enemy_count) && obj == op->enemy) {
+    if (op->type == MONSTER && object_reference_is_current(op->enemy, op->enemy_count) && obj == op->enemy) {
         return 0;
     }
 
-    if (obj->type == MONSTER && OBJECT_VALID(obj->enemy, obj->enemy_count) && op == obj->enemy) {
+    if (obj->type == MONSTER && object_reference_is_current(obj->enemy, obj->enemy_count) && op == obj->enemy) {
         return 0;
     }
 

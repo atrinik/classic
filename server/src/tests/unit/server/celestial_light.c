@@ -24,6 +24,7 @@
 #include <object.h>
 #include <region.h>
 #include <time.h>
+#include <signal.h>
 
 static mapstruct *open_fixture(int width, int height) {
     mapstruct *map = get_empty_map(width, height);
@@ -269,7 +270,7 @@ START_TEST(test_real_wilderness_midnight_full_and_new_moon_samples) {
 }
 END_TEST
 
-START_TEST(test_celestial_uses_directional_shadow_and_reseeds_after_bound) {
+START_TEST(test_celestial_elevation_bounds_shadow_and_requires_proven_sky) {
     mapstruct *map = open_fixture(40, 1);
     object *wall = arch_get("wall_wood_1");
     ck_assert_ptr_nonnull(wall);
@@ -278,14 +279,26 @@ START_TEST(test_celestial_uses_directional_shadow_and_reseeds_after_bound) {
     ck_assert_ptr_nonnull(object_insert_map(wall, map, NULL, 0));
 
     ck_assert(celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 7));
-    for (int x = 39; x >= 35; x--) {
+    /* tan(elevation)=8481/sqrt(32768^2-8481^2): two horizontal
+     * crossings precede the top face. The receiving wall is illuminated. */
+    for (int x = 35; x <= 37; x++) {
         ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 378);
     }
-    for (int x = 34; x >= 3; x--) {
+    for (int x = 33; x <= 34; x++) {
         ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 130);
     }
-    for (int x = 2; x >= 0; x--) {
+    for (int x = 0; x <= 32; x++) {
         ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 378);
+    }
+    /* Missing horizontal neighbors cannot manufacture a sky exit. */
+    for (int x = 38; x <= 39; x++) {
+        ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 130);
+    }
+    /* Zenith has no horizontal crossing, so the same wall casts no
+     * sideways shadow and the map edge remains a proven upward exit. */
+    ck_assert(celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 12));
+    for (int x = 0; x < 40; x++) {
+        ck_assert_int_eq(GET_MAP_SPACE_PTR(map, x, 0)->celestial_light_value, 1281);
     }
 }
 END_TEST
@@ -830,24 +843,351 @@ START_TEST(test_celestial_pending_stack_exact_and_membership_fenced) {
 }
 END_TEST
 
+START_TEST(test_continuous_seam_matches_single_map_spill) {
+    mapstruct *joined = open_fixture(8, 5);
+    mapstruct *left = open_fixture(4, 5);
+    mapstruct *right = open_fixture(4, 5);
+    FREE_AND_COPY_HASH(left->path, "/halo/left");
+    FREE_AND_COPY_HASH(right->path, "/halo/right");
+    FREE_AND_COPY_HASH(left->tile_path[TILED_EAST], right->path);
+    FREE_AND_COPY_HASH(right->tile_path[TILED_WEST], left->path);
+    left->tile_map[TILED_EAST] = right;
+    right->tile_map[TILED_WEST] = left;
+    left->celestial_tile_path_seen[TILED_EAST] = true;
+    right->celestial_tile_path_seen[TILED_WEST] = true;
+    left->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    right->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    mapstruct *covered[] = {joined, left};
+    for (size_t i = 0; i < arraysize(covered); i++) {
+        covered[i]->celestial_rectangles = xcalloc(1, sizeof(celestial_rectangle_t));
+        covered[i]->celestial_rectangle_count = 1;
+        covered[i]->celestial_rectangles[0] = (celestial_rectangle_t){
+            .type = CELESTIAL_RECT_SKY_COVERED, .width = 4, .height = 5};
+    }
+    uint64_t hour = 5 * HOURS_PER_MONTH + 12;
+    ck_assert(celestial_light_rebuild(joined, hour));
+    ck_assert(celestial_light_rebuild(left, hour));
+    ck_assert(celestial_light_rebuild(right, hour));
+    /* Covered cells receive only bounded diffuse spill from across the seam. */
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(left, 3, 2)->celestial_light_value, 0);
+    for (int y = 0; y < 5; y++) {
+        for (int x = 0; x < 8; x++) {
+            const MapSpace *expected = GET_MAP_SPACE_PTR(joined, x, y);
+            const MapSpace *actual = GET_MAP_SPACE_PTR(x < 4 ? left : right, x % 4, y);
+            ck_assert_int_eq(actual->celestial_light_value, expected->celestial_light_value);
+            ck_assert_int_eq(memcmp(actual->celestial_light_rgb, expected->celestial_light_rgb,
+                                    sizeof(actual->celestial_light_rgb)), 0);
+        }
+    }
+    left->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    right->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_DISCONTINUOUS;
+    ck_assert(celestial_light_rebuild(left, hour));
+    for (size_t cell = 0; cell < 20; cell++) {
+        ck_assert_int_eq(left->spaces[cell].celestial_light_value, 0);
+    }
+}
+END_TEST
+
+START_TEST(test_remote_two_seam_geometry_fences_current_and_pending_fields) {
+    mapstruct *maps[] = {open_fixture(2, 5), open_fixture(2, 5), open_fixture(2, 5)};
+    mapstruct *unrelated = open_fixture(2, 5);
+    const char *paths[] = {"/dependencies/a", "/dependencies/b", "/dependencies/c"};
+    for (size_t i = 0; i < 3; i++) FREE_AND_COPY_HASH(maps[i]->path, paths[i]);
+    for (size_t i = 0; i < 2; i++) {
+        FREE_AND_COPY_HASH(maps[i]->tile_path[TILED_EAST], maps[i + 1]->path);
+        FREE_AND_COPY_HASH(maps[i + 1]->tile_path[TILED_WEST], maps[i]->path);
+        maps[i]->tile_map[TILED_EAST] = maps[i + 1];
+        maps[i + 1]->tile_map[TILED_WEST] = maps[i];
+        maps[i]->celestial_tile_path_seen[TILED_EAST] = true;
+        maps[i + 1]->celestial_tile_path_seen[TILED_WEST] = true;
+        maps[i]->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+        maps[i + 1]->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+        maps[i]->celestial_rectangles = xcalloc(1, sizeof(celestial_rectangle_t));
+        maps[i]->celestial_rectangle_count = 1;
+        maps[i]->celestial_rectangles[0] = (celestial_rectangle_t){
+            .type = CELESTIAL_RECT_SKY_COVERED, .width = 2, .height = 5};
+    }
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    celestial_light_ensure(maps[0]);
+    celestial_light_ensure(unrelated);
+    ck_assert_int_gt(maps[0]->spaces[5].celestial_light_value, 0);
+    uint64_t generation = celestial_light_generation(maps[0]);
+    uint64_t other_generation = celestial_light_generation(unrelated);
+    ck_assert(!celestial_light_keyframe_request(maps[0], (uint64_t)todtick));
+    celestial_light_process_steps_for_test(200);
+    maps[2]->celestial_rectangles = xcalloc(1, sizeof(celestial_rectangle_t));
+    maps[2]->celestial_rectangle_count = 1;
+    maps[2]->celestial_rectangles[0] = (celestial_rectangle_t){
+        .type = CELESTIAL_RECT_SKY_COVERED, .width = 2, .height = 5};
+    celestial_light_invalidate(maps[2]);
+    celestial_light_process_steps_for_test(100000);
+    ck_assert(!maps[0]->celestial_light_keyframe_valid);
+    celestial_light_ensure(maps[0]);
+    ck_assert_uint_gt(celestial_light_generation(maps[0]), generation);
+    for (size_t cell = 0; cell < 10; cell++) {
+        ck_assert_int_eq(maps[0]->spaces[cell].celestial_light_value, 0);
+    }
+    celestial_light_ensure(unrelated);
+    ck_assert_uint_eq(celestial_light_generation(unrelated), other_generation);
+    todtick = saved_hour;
+}
+END_TEST
+
+START_TEST(test_current_reservation_failure_clears_both_published_endpoints) {
+    mapstruct *map = open_fixture(9, 9);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    ck_assert_int_gt(map->spaces[40].celestial_light_value, 0);
+    ck_assert_int_gt(map->spaces[40].celestial_light_next_value, 0);
+    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    celestial_light_invalidate(map);
+    celestial_light_current_reservation_fail_for_test(true);
+    celestial_light_ensure(map);
+    celestial_light_current_reservation_fail_for_test(false);
+    ck_assert(!map->celestial_light_valid);
+    ck_assert(!map->celestial_light_keyframe_valid);
+    for (size_t i = 0; i < 81; i++) {
+        ck_assert_int_eq(map->spaces[i].celestial_light_value, 0);
+        ck_assert_int_eq(map->spaces[i].celestial_light_next_value, 0);
+        for (size_t channel = 0; channel < 3; channel++) {
+            ck_assert_int_eq(map->spaces[i].celestial_light_rgb[channel], 0);
+            ck_assert_int_eq(map->spaces[i].celestial_light_next_rgb[channel], 0);
+        }
+    }
+    celestial_light_ensure(map);
+    ck_assert(map->celestial_light_valid);
+    ck_assert_int_eq(map->spaces[40].celestial_light_value, 0);
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    celestial_light_invalidate(map);
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    ck_assert_int_gt(map->spaces[40].celestial_light_value, 0);
+    ck_assert_int_gt(map->spaces[40].celestial_light_next_value, 0);
+    todtick = saved_hour;
+}
+END_TEST
+
+enum generation_path {
+    GENERATION_CURRENT,
+    GENERATION_FAILED_RESERVATION,
+    GENERATION_INVALID_STACK,
+    GENERATION_PENDING_COMMIT,
+    GENERATION_PENDING_REPLACEMENT,
+    GENERATION_PROMOTION,
+    GENERATION_PATHS,
+};
+
+/* Exercise the production increments, including the exceptional clear path
+ * and both asynchronous endpoint publications. The same preparation is checked
+ * by the successful MAX-1 tests before the corresponding death tests. */
+static mapstruct *generation_fixture(enum generation_path path) {
+    mapstruct *map = open_fixture(1, 1);
+    todtick = 5 * HOURS_PER_MONTH + 7;
+    if (path >= GENERATION_PENDING_COMMIT) {
+        ck_assert(!celestial_light_keyframe_request(map, (uint64_t)todtick));
+        if (path != GENERATION_PENDING_COMMIT) {
+            celestial_light_process_steps_for_test(100000);
+            ck_assert(map->celestial_light_keyframe_valid);
+        }
+        if (path == GENERATION_PENDING_REPLACEMENT) {
+            map->celestial_light_next_hour = 0;
+        } else if (path == GENERATION_PROMOTION) {
+            todtick++;
+        }
+    } else if (path == GENERATION_FAILED_RESERVATION) {
+        celestial_light_current_reservation_fail_for_test(true);
+    } else if (path == GENERATION_INVALID_STACK) {
+        map->celestial_sky_above = CELESTIAL_SKY_LINKED;
+        FREE_AND_COPY_HASH(map->tile_path[TILED_UP], "/tests/missing-upper");
+    }
+    return map;
+}
+
+static void generation_advance(mapstruct *map, enum generation_path path) {
+    switch (path) {
+        case GENERATION_PENDING_COMMIT:
+            celestial_light_process_steps_for_test(100000);
+            break;
+        case GENERATION_PENDING_REPLACEMENT:
+            (void)celestial_light_keyframe_request(map, (uint64_t)todtick);
+            break;
+        case GENERATION_PROMOTION:
+            celestial_light_ensure(map);
+            break;
+        default:
+            (void)celestial_light_rebuild(map, (uint64_t)todtick);
+            break;
+    }
+}
+
+START_TEST(test_celestial_generation_reaches_max_without_wrapping) {
+    unsigned long saved_hour = todtick;
+    mapstruct *map = generation_fixture(_i);
+    map->celestial_light_generation_id = UINT64_MAX - 1;
+    uint64_t rebuilds = celestial_light_rebuilds_for_test();
+    generation_advance(map, _i);
+    uint64_t generation = map->celestial_light_generation_id;
+    map->celestial_light_generation_id = 1;
+    celestial_light_current_reservation_fail_for_test(false);
+    celestial_light_forget(map);
+    todtick = saved_hour;
+    ck_assert_uint_eq(generation, UINT64_MAX);
+    if (_i >= GENERATION_PENDING_COMMIT) {
+        ck_assert_uint_eq(celestial_light_rebuilds_for_test(), rebuilds);
+    }
+}
+END_TEST
+
+START_TEST(test_celestial_current_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_CURRENT);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_CURRENT);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_failed_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_FAILED_RESERVATION);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_FAILED_RESERVATION);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_invalid_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_INVALID_STACK);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_INVALID_STACK);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_pending_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_PENDING_COMMIT);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_PENDING_COMMIT);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_replacement_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_PENDING_REPLACEMENT);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_PENDING_REPLACEMENT);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_promoted_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_PROMOTION);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_PROMOTION);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_structure_revision_reaches_max_without_wrapping) {
+    mapstruct *map = open_fixture(1, 1), *target = map;
+    if (_i == 1) {
+        target = open_fixture(1, 1);
+        map->tile_map[TILED_DOWN] = target;
+        target->tile_map[TILED_UP] = map;
+    }
+    target->celestial_structure_revision = UINT64_MAX - 1;
+    celestial_light_invalidate(map);
+    uint64_t revision = target->celestial_structure_revision;
+    target->celestial_structure_revision = 0;
+    ck_assert_uint_eq(revision, UINT64_MAX);
+}
+END_TEST
+
+START_TEST(test_celestial_upper_revision_overflow_is_fatal) {
+    mapstruct *map = open_fixture(1, 1);
+    map->celestial_structure_revision = UINT64_MAX;
+    celestial_light_invalidate(map);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_lower_revision_overflow_is_fatal) {
+    mapstruct *map = open_fixture(1, 1), *lower = open_fixture(1, 1);
+    map->tile_map[TILED_DOWN] = lower;
+    lower->tile_map[TILED_UP] = map;
+    lower->celestial_structure_revision = UINT64_MAX;
+    celestial_light_invalidate(map);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_pending_batch_reaches_max_without_wrapping) {
+    uint64_t saved = celestial_light_pending_batch_exchange_for_test(UINT64_MAX - 1);
+    celestial_light_process_pending(1);
+    uint64_t batch = celestial_light_pending_batch_exchange_for_test(saved);
+    ck_assert_uint_eq(batch, UINT64_MAX);
+}
+END_TEST
+
+START_TEST(test_celestial_pending_batch_overflow_is_fatal) {
+    (void)celestial_light_pending_batch_exchange_for_test(UINT64_MAX);
+    celestial_light_process_pending(1);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_light");
     TCase *tc_core = tcase_create("Core");
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_loop_test(tc_core, test_celestial_generation_reaches_max_without_wrapping,
+                       0, GENERATION_PATHS);
+    tcase_add_loop_test(tc_core, test_celestial_structure_revision_reaches_max_without_wrapping,
+                       0, 2);
+    tcase_add_test(tc_core, test_celestial_pending_batch_reaches_max_without_wrapping);
+#ifdef NDEBUG
+#define ADD_OVERFLOW_TEST(name) tcase_add_exit_test(tc_core, name, EXIT_FAILURE)
+#else
+#define ADD_OVERFLOW_TEST(name) tcase_add_test_raise_signal(tc_core, name, SIGABRT)
+#endif
+    ADD_OVERFLOW_TEST(test_celestial_current_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_failed_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_invalid_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_pending_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_replacement_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_promoted_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_upper_revision_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_lower_revision_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_pending_batch_overflow_is_fatal);
+#undef ADD_OVERFLOW_TEST
     TCase *tc_real_maps = tcase_create("Real maps");
     tcase_add_unchecked_fixture(tc_real_maps, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_real_maps, check_test_setup, check_test_teardown);
-    tcase_set_timeout(tc_real_maps, 30);
+    /* Keep all 13 authored maps and both clock endpoints under instrumentation. */
+    tcase_set_timeout(tc_real_maps, 120);
     suite_add_tcase(s, tc_real_maps);
+    TCase *tc_memory = tcase_create("Pending memory");
+    tcase_add_unchecked_fixture(tc_memory, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_memory, check_test_setup, check_test_teardown);
+    /* Two 64x64 maps complete current and capped pending solves under sanitizers. */
+    tcase_set_timeout(tc_memory, 60);
+    suite_add_tcase(s, tc_memory);
+    TCase *tc_oracle = tcase_create("Pending oracle");
+    tcase_add_unchecked_fixture(tc_oracle, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_oracle, check_test_setup, check_test_teardown);
+    /* Keep all 24 full-field comparisons under combined coverage/sanitizers. */
+    tcase_set_timeout(tc_oracle, 60);
+    suite_add_tcase(s, tc_oracle);
     tcase_add_test(tc_core, test_celestial_open_field_matches_daylight_anchor);
+    tcase_add_test(tc_core, test_continuous_seam_matches_single_map_spill);
+    tcase_add_test(tc_core, test_remote_two_seam_geometry_fences_current_and_pending_fields);
     tcase_add_test(tc_core, test_discontinuous_horizontal_neighbor_is_not_a_local_light_dependency);
     tcase_add_test(tc_real_maps, test_brynknot_and_outside_fields_follow_settime);
     tcase_add_test(tc_core, test_unloaded_lower_map_does_not_gate_upper_light);
     tcase_add_test(tc_core, test_real_wilderness_midnight_full_and_new_moon_samples);
     tcase_add_test(tc_core, test_derived_horizontal_neighbors_preserve_day_and_lunar_light);
-    tcase_add_test(tc_core, test_celestial_uses_directional_shadow_and_reseeds_after_bound);
+    tcase_add_test(tc_core, test_celestial_elevation_bounds_shadow_and_requires_proven_sky);
     tcase_add_test(tc_core, test_celestial_lunar_and_starlight_are_additive);
     tcase_add_test(tc_core, test_celestial_invalid_topology_fails_closed);
     tcase_add_test(tc_core, test_celestial_rebuild_reaches_existing_radiance_resolver);
@@ -860,9 +1200,10 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_celestial_override_invalidates_loaded_keyframes);
     tcase_add_test(tc_core, test_celestial_command_lifecycle_and_permission_gate);
     tcase_add_test(tc_core, test_celestial_64x64_build_is_bounded);
-    tcase_add_test(tc_core, test_celestial_pending_matches_synchronous_oracle);
+    tcase_add_test(tc_oracle, test_celestial_pending_matches_synchronous_oracle);
     tcase_add_test(tc_core, test_celestial_geometry_signature_is_exact_and_uses_existing_padding);
-    tcase_add_test(tc_core, test_celestial_pending_memory_is_bounded_and_released);
+    tcase_add_test(tc_memory, test_celestial_pending_memory_is_bounded_and_released);
+    tcase_add_test(tc_core, test_current_reservation_failure_clears_both_published_endpoints);
     tcase_add_test(tc_core, test_celestial_pending_promotes_without_rebuild_and_jumps_fall_back);
     tcase_add_test(tc_core, test_celestial_pending_is_fair_and_geometry_cancels);
     tcase_add_test(tc_core, test_celestial_pending_stack_exact_and_membership_fenced);

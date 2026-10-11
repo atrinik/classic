@@ -14,6 +14,7 @@
 #include <global.h>
 
 #include <celestial_lunar.h>
+#include <celestial_dependencies.h>
 #include <celestial_override.h>
 #include <celestial_structure.h>
 #include <initialization.h>
@@ -22,6 +23,7 @@
 #include <object.h>
 #include <region.h>
 #include <server_main.h>
+#include <spatial.h>
 #include <tod.h>
 #include <toolkit/datetime.h>
 
@@ -31,8 +33,35 @@
 #define CELESTIAL_DIRECT_REACH 32
 #define CELESTIAL_SPILL_PASSES 4
 
+/* All solve allocations, including dependency snapshots, share one ceiling. */
+#define CELESTIAL_PENDING_MEMORY_MAX ((size_t)1923584)
+#define CELESTIAL_CURRENT_SCRATCH_MAX ((size_t)45 * 64 * 64)
+static size_t pending_memory, pending_memory_limit = CELESTIAL_PENDING_MEMORY_MAX;
+static celestial_dependencies *active_dependencies;
+
+static void celestial_spatial_observe(const mapstruct *map, void *context) {
+    if (map != NULL) (void)celestial_dependencies_observe(context, map);
+}
+
+static bool celestial_observe(const mapstruct *map) {
+    return map == NULL || active_dependencies == NULL ||
+           celestial_dependencies_observe(active_dependencies, map);
+}
+
+static bool celestial_observe_event(const spatial_event *event) {
+    for (size_t i = 0; i < event->face_count; i++) {
+        if (!celestial_observe(event->faces[i].from.map) ||
+            !celestial_observe(event->faces[i].to.map)) return false;
+    }
+    return true;
+}
+
 #ifdef ATRINIK_TESTING
 static uint64_t rebuild_count;
+static bool current_reservation_fail;
+void celestial_light_current_reservation_fail_for_test(bool fail) {
+    current_reservation_fail = fail;
+}
 uint64_t celestial_light_rebuilds_for_test(void) {
     return rebuild_count;
 }
@@ -47,6 +76,8 @@ typedef struct celestial_model {
     uint16_t moon_color[3];
     uint16_t starlight_color[3];
     uint16_t solar_brightness;
+    int32_t solar_elevation;
+    int32_t moon_elevation;
     uint8_t solar_direction;
     uint8_t moon_direction;
 } celestial_model;
@@ -100,6 +131,7 @@ static void celestial_model_for_map(const mapstruct *map,
     model->solar_direction = solar_azimuth[phases.solar];
 
     int32_t elevation = solar_elevation_at(phases.solar, phases.season);
+    model->solar_elevation = elevation;
     uint16_t factor = season_factor[phases.season / HOURS_PER_MONTH];
     int32_t twilight = -(int32_t)celestial_round(UINT64_C(8481) * factor, 32768);
     if (elevation > 0) {
@@ -132,6 +164,7 @@ static void celestial_model_for_map(const mapstruct *map,
         return;
     }
     model->moon_direction = lunar.azimuth;
+    model->moon_elevation = lunar.elevation;
     model->moon = lunar.moon_strength;
     model->starlight = lunar.starlight_strength;
     memcpy(model->moon_color, profile->moon_linear, sizeof(model->moon_color));
@@ -190,8 +223,6 @@ static uint16_t edge_coefficient(const mapstruct *map, int x, int y, uint8_t fac
     return coefficient;
 }
 
-static uint8_t incoming_face(int dx, int dy);
-
 bool celestial_light_geometry_update(mapstruct *map, int x, int y) {
     if (map->celestial_schema != 1) {
         return false;
@@ -220,25 +251,6 @@ bool celestial_light_geometry_update(mapstruct *map, int x, int y) {
     bool changed = signature != previous;
     space->celestial_geometry = signature;
     return changed;
-}
-
-static uint16_t step_coefficient(const mapstruct *map, int x, int y, int dx, int dy,
-                                 bool *aperture) {
-    if (dx != 0 && dy != 0) {
-        bool horizontal_aperture = false;
-        bool vertical_aperture = false;
-        uint16_t horizontal = edge_coefficient(
-            map, x, y, dx < 0 ? CELESTIAL_FACE_EAST : CELESTIAL_FACE_WEST,
-            &horizontal_aperture);
-        uint16_t vertical = edge_coefficient(
-            map, x, y, dy < 0 ? CELESTIAL_FACE_SOUTH : CELESTIAL_FACE_NORTH,
-            &vertical_aperture);
-        if (aperture != NULL) {
-            *aperture = horizontal_aperture || vertical_aperture;
-        }
-        return MIN(horizontal, vertical);
-    }
-    return edge_coefficient(map, x, y, incoming_face(dx, dy), aperture);
 }
 
 static int32_t transmit(int32_t value, uint16_t coefficient) {
@@ -282,116 +294,250 @@ static void direction_delta(uint8_t direction, int *dx, int *dy) {
     }
 }
 
-static uint8_t incoming_face(int dx, int dy) {
-    if (dx < 0) {
-        return CELESTIAL_FACE_EAST;
+/* A backtrace has at most 32 horizontal events and thirteen vertical exits.
+ * Store coefficients rather than pre-rounded gains: radiance rounds separately
+ * at each physical crossing in source-to-receiver order. */
+#define CELESTIAL_RAY_EVENTS (CELESTIAL_DIRECT_REACH + MAP2_LEVELS)
+typedef struct celestial_ray {
+    spatial_cursor cursor;
+    uint16_t coefficients[CELESTIAL_RAY_EVENTS];
+    bool apertures[CELESTIAL_RAY_EVENTS];
+    unsigned count, horizontal;
+    bool done, sky;
+} celestial_ray;
+
+static uint32_t celestial_sqrt(uint64_t value) {
+    uint64_t root = 0, bit = UINT64_C(1) << 62;
+    while (bit > value) bit >>= 2;
+    while (bit != 0) {
+        if (value >= root + bit) {
+            value -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
     }
-    if (dx > 0) {
-        return CELESTIAL_FACE_WEST;
-    }
-    if (dy < 0) {
-        return CELESTIAL_FACE_SOUTH;
-    }
-    return CELESTIAL_FACE_NORTH;
+    return (uint32_t)root;
 }
 
-static int32_t *cell_at(int32_t *values, const mapstruct *map, int x, int y) {
-    return &values[x + map->width * y];
-}
-
-static void transport_line(const mapstruct *map,
-                           const uint8_t *exposed,
-                           const celestial_model *model,
-                           int32_t *values,
-                           int32_t *aperture_values,
-                           uint8_t direction,
-                           bool use_moon) {
+static void celestial_ray_init(celestial_ray *ray, mapstruct *map, int x, int y,
+                               uint8_t direction, int32_t elevation) {
+    memset(ray, 0, sizeof(*ray));
+    if (elevation <= 0) {
+        ray->done = true;
+        return;
+    }
     int dx, dy;
     direction_delta(direction, &dx, &dy);
-    int width = map->width;
-    int height = map->height;
-    int starts = (dx != 0 ? height : width) + (dy != 0 ? width : 0);
+    uint64_t horizontal_squared = UINT64_C(32768) * 32768 -
+                                  (uint64_t)elevation * elevation;
+    uint32_t horizontal = celestial_sqrt(horizontal_squared /
+                                        (dx != 0 && dy != 0 ? 2 : 1));
+    /* Azimuth names the source; direction_delta names light travel. */
+    ray->done = !celestial_observe(map) || !spatial_direction_init(&ray->cursor, map, x, y,
+                                        -dx * (int)horizontal, -dy * (int)horizontal,
+                                        elevation, CELESTIAL_RAY_EVENTS);
+}
 
-    for (int start = 0; start < starts; start++) {
-        int x;
-        int y;
-        if (dx != 0 && start < height) {
-            x = dx < 0 ? width - 1 : 0;
-            y = start;
-        } else if (dy != 0) {
-            int offset = dx != 0 ? start - height : start;
-            x = offset;
-            y = dy < 0 ? height - 1 : 0;
-            if (dx != 0 && (x < 0 || x >= width)) {
-                continue;
-            }
-            if (dx == 0 && offset >= width) {
-                continue;
-            }
-        } else {
+static bool celestial_sky_exit(const spatial_cell *cell) {
+    if (cell->map == NULL || cell->map->celestial_sky_above == CELESTIAL_SKY_LINKED)
+        return false;
+    /* This checks sealed-cap openings/covered exceptions only after a real
+     * upward exit. It cannot skip any intervening physical face. */
+    return celestial_structure_cell_exposed(cell->map, cell->x, cell->y);
+}
+
+static bool celestial_face_continuous(const spatial_face *face) {
+    if (face->from.map == face->to.map) return true;
+    if (face->from.map == NULL || face->to.map == NULL ||
+        face->from.map->celestial_schema != 1 || face->to.map->celestial_schema != 1) return false;
+    int tile = face->normal[2] > 0 ? TILED_UP : face->normal[2] < 0 ? TILED_DOWN :
+               face->normal[0] > 0 ? TILED_EAST : face->normal[0] < 0 ? TILED_WEST :
+               face->normal[1] > 0 ? TILED_SOUTH : TILED_NORTH;
+    static const int opposite[TILED_NUM] = {
+        TILED_SOUTH, TILED_WEST, TILED_NORTH, TILED_EAST,
+        TILED_SOUTHWEST, TILED_NORTHWEST, TILED_NORTHEAST, TILED_SOUTHEAST,
+        TILED_DOWN, TILED_UP};
+    const mapstruct *from = face->from.map, *to = face->to.map;
+    return from->tile_map[tile] == to && to->tile_map[opposite[tile]] == from &&
+           from->celestial_boundary[tile] == CELESTIAL_BOUNDARY_CONTINUOUS &&
+           to->celestial_boundary[opposite[tile]] == CELESTIAL_BOUNDARY_CONTINUOUS &&
+           memcmp(region_celestial_for_map(from)->digest,
+                  region_celestial_for_map(to)->digest, 32) == 0;
+}
+
+/* One bounded crossing per call, also used by the runtime deadline scheduler. */
+static void celestial_ray_step(celestial_ray *ray) {
+    if (ray->done) return;
+    spatial_event event;
+    if (spatial_ray_next(&ray->cursor, &event) != 1) {
+        ray->done = true;
+        return;
+    }
+    if (!celestial_observe_event(&event)) {
+        ray->done = true;
+        return;
+    }
+    if ((event.axes & 3) != 0 && ++ray->horizontal > CELESTIAL_DIRECT_REACH) {
+        ray->done = true;
+        return;
+    }
+    uint16_t coefficient = CELESTIAL_SCALE;
+    bool aperture = false, sky = false;
+    for (size_t i = 0; i < event.face_count; i++) {
+        spatial_face face = event.faces[i];
+        if (face.to.map == NULL && face.normal[2] > 0 &&
+            celestial_sky_exit(&face.from)) {
+            sky = true;
             continue;
         }
+        if (!celestial_face_continuous(&face)) {
+            ray->done = true;
+            return;
+        }
+        spatial_cell swap = face.from;
+        face.from = face.to;
+        face.to = swap;
+        for (size_t axis = 0; axis < 3; axis++) face.normal[axis] = -face.normal[axis];
+        bool crossed_aperture = false;
+        coefficient = MIN(coefficient, spatial_face_light(&face, &crossed_aperture));
+        aperture |= crossed_aperture;
+    }
+    if (ray->count == CELESTIAL_RAY_EVENTS || coefficient == 0) {
+        ray->done = true;
+        return;
+    }
+    ray->coefficients[ray->count] = coefficient;
+    ray->apertures[ray->count++] = aperture;
+    if (sky) {
+        ray->sky = true;
+        ray->done = true;
+    }
+}
 
-        int32_t direct = 0;
-        int32_t aperture_direct = 0;
-        uint8_t cooldown = 0;
-        while (x >= 0 && y >= 0 && x < width && y < height) {
+static int32_t celestial_ray_value(const celestial_ray *ray, int32_t source,
+                                   int32_t *aperture) {
+    int32_t value = ray->sky ? source : 0;
+    int32_t spill = 0;
+    for (unsigned i = ray->count; i-- > 0;) {
+        value = transmit(value, ray->coefficients[i]);
+        spill = transmit(spill, ray->coefficients[i]);
+        if (ray->apertures[i]) spill = value;
+    }
+    if (aperture != NULL) *aperture = spill;
+    return value;
+}
+
+/* Four spill cells around the output plus each seed's 32-cell directional
+ * backtrace give the frozen 36-cell dependency halo. Only one level's seed
+ * buffers exist at once, including for thirteen-member stacks. */
+static int celestial_scratch_width(const mapstruct *map) {
+    return map->width + 2 * CELESTIAL_SPILL_PASSES;
+}
+
+static int celestial_scratch_height(const mapstruct *map) {
+    return map->height + 2 * CELESTIAL_SPILL_PASSES;
+}
+
+static size_t celestial_scratch_cells(const mapstruct *map) {
+    return (size_t)celestial_scratch_width(map) * celestial_scratch_height(map);
+}
+
+static bool celestial_halo_cell(mapstruct *map, int x, int y, spatial_cell *cell) {
+    if (!celestial_observe(map)) return false;
+    x -= CELESTIAL_SPILL_PASSES;
+    y -= CELESTIAL_SPILL_PASSES;
+    int start_x = MAX(0, MIN(x, map->width - 1));
+    int start_y = MAX(0, MIN(y, map->height - 1));
+    if (start_x != x || start_y != y) {
+        spatial_cursor cursor;
+        if (!spatial_ray_init(&cursor, map, start_x, start_y, x - start_x, y - start_y, 0))
+            return false;
+        spatial_event event;
+        int status;
+        while ((status = spatial_ray_next(&cursor, &event)) == 1) {
+            if (!celestial_observe_event(&event) || !event.valid) return false;
+            for (size_t face = 0; face < event.face_count; face++) {
+                if (!celestial_face_continuous(&event.faces[face])) return false;
+            }
+        }
+        if (status != 0) return false;
+    }
+    return spatial_resolve(map, x, y, 0, cell) && celestial_observe(cell->map);
+}
+
+static void celestial_halo_ray(celestial_ray *ray, mapstruct *map, int x, int y,
+                               uint8_t direction, int32_t elevation) {
+    spatial_cell cell;
+    if (!celestial_halo_cell(map, x, y, &cell)) {
+        memset(ray, 0, sizeof(*ray));
+        ray->done = true;
+        return;
+    }
+    celestial_ray_init(ray, cell.map, cell.x, cell.y, direction, elevation);
+}
+
+static uint16_t celestial_spill_coefficient(mapstruct *map, int x, int y, int dx, int dy) {
+    spatial_cell cell;
+    if (!celestial_halo_cell(map, x + dx, y + dy, &cell)) return 0;
+    spatial_cursor cursor;
+    spatial_event event;
+    if (!spatial_ray_init(&cursor, cell.map, cell.x, cell.y, -dx, -dy, 0) ||
+        spatial_ray_next(&cursor, &event) != 1 ||
+        !celestial_observe_event(&event) || !event.valid) return 0;
+    for (size_t face = 0; face < event.face_count; face++) {
+        if (!celestial_face_continuous(&event.faces[face])) return 0;
+    }
+    return spatial_event_light(&event);
+}
+
+static void transport_line(mapstruct *map, const celestial_model *model,
+                           int32_t *values, int32_t *apertures, bool moon) {
+    int width = celestial_scratch_width(map), height = celestial_scratch_height(map);
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            celestial_ray ray;
+            celestial_halo_ray(&ray, map, x, y,
+                               moon ? model->moon_direction : model->solar_direction,
+                               moon ? model->moon_elevation : model->solar_elevation);
+            while (!ray.done) celestial_ray_step(&ray);
             int index = x + width * y;
-            if (cooldown == 0 && exposed[index]) {
-                direct = use_moon ? model->moon : model->direct;
-            }
-            *cell_at(values, map, x, y) = MAX(*cell_at(values, map, x, y), direct);
-            aperture_values[index] = MAX(aperture_values[index], aperture_direct);
-
-            bool aperture = false;
-            uint16_t coefficient = step_coefficient(map, x, y, dx, dy, &aperture);
-            direct = transmit(direct, coefficient);
-            aperture_direct = transmit(aperture_direct, coefficient);
-            if (aperture) {
-                aperture_direct = direct;
-            }
-            if (coefficient < CELESTIAL_SCALE) {
-                cooldown = CELESTIAL_DIRECT_REACH;
-            } else if (cooldown != 0) {
-                cooldown--;
-            }
-            x += dx;
-            y += dy;
+            values[index] = celestial_ray_value(&ray, moon ? model->moon : model->direct,
+                                                 &apertures[index]);
         }
     }
 }
 
-static void relax_diffuse(const mapstruct *map, int32_t *values) {
-    size_t count = (size_t)map->width * map->height;
+static void relax_diffuse(mapstruct *map, int32_t *values) {
+    int width = celestial_scratch_width(map), height = celestial_scratch_height(map);
+    size_t count = (size_t)width * height;
+    bool active = false;
+    for (size_t i = 0; i < count; i++) active |= values[i] != 0;
+    if (!active) return;
     int32_t *next = xcalloc(count, sizeof(*next));
     int32_t *original = values;
-
     for (int pass = 0; pass < CELESTIAL_SPILL_PASSES; pass++) {
-        memcpy(next, values, count * sizeof(*next));
-        for (int y = 0; y < map->height; y++) {
-            for (int x = 0; x < map->width; x++) {
-                int32_t best = values[x + map->width * y];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int32_t best = values[x + width * y];
                 for (int dy = -1; dy <= 1; dy++) {
                     for (int dx = -1; dx <= 1; dx++) {
                         if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 ||
-                            x + dx >= map->width || y + dy >= map->height) {
-                            continue;
-                        }
-                        uint16_t coefficient = step_coefficient(map, x, y, dx, dy, NULL);
-                        int32_t candidate = transmit(
-                            values[(x + dx) + map->width * (y + dy)], coefficient);
+                            x + dx >= width || y + dy >= height) continue;
+                        uint16_t coefficient = celestial_spill_coefficient(map, x, y, dx, dy);
+                        int32_t candidate = transmit(values[x + dx + width * (y + dy)], coefficient);
                         candidate = transmit(candidate, dx != 0 && dy != 0 ? 181 : 192);
                         best = MAX(best, candidate);
                     }
                 }
-                next[x + map->width * y] = best;
+                next[x + width * y] = best;
             }
         }
         int32_t *swap = values;
         values = next;
         next = swap;
     }
-
     if (values != original) {
         memcpy(original, values, count * sizeof(*original));
         free(values);
@@ -422,7 +568,10 @@ static uint64_t celestial_key(const mapstruct *map,
         hash ^= (uint64_t)(value);                                                              \
         hash *= UINT64_C(1099511628211);                                                        \
     } while (0)
-    MIX_CELESTIAL(profile->revision);
+    MIX_CELESTIAL(2); /* 3D transport algorithm; authored schema is unchanged. */
+    for (size_t byte = 0; byte < sizeof(profile->digest); byte++) {
+        MIX_CELESTIAL(profile->digest[byte]);
+    }
     MIX_CELESTIAL(effective_phases.solar);
     MIX_CELESTIAL(effective_phases.season);
     (void)celestial_override_apply(profile->lunar_period, &effective_phases.lunar);
@@ -437,20 +586,31 @@ static uint64_t celestial_key(const mapstruct *map,
     MIX_CELESTIAL(map->celestial_structure_revision);
     MIX_CELESTIAL(map->celestial_schema);
     for (size_t i = 0; i < TILED_NUM; i++) {
-        MIX_CELESTIAL((uintptr_t)map->tile_map[i]);
-        MIX_CELESTIAL(map->tile_map[i] != NULL ? map->tile_map[i]->in_memory : 0);
+        MIX_CELESTIAL(map->celestial_boundary[i]);
+        MIX_CELESTIAL(map->celestial_tile_path_seen[i]);
+        MIX_CELESTIAL((uintptr_t)map->tile_path[i]);
+        bool relevant = i >= TILED_UP ||
+            (map->celestial_boundary[i] != CELESTIAL_BOUNDARY_DISCONTINUOUS &&
+             (map->celestial_tile_path_seen[i] ||
+              map->celestial_boundary[i] != CELESTIAL_BOUNDARY_UNSET));
+        if (relevant) {
+            MIX_CELESTIAL((uintptr_t)map->tile_map[i]);
+            MIX_CELESTIAL(map->tile_map[i] != NULL ? map->tile_map[i]->in_memory : 0);
+        }
     }
 #undef MIX_CELESTIAL
     return hash;
 }
 
 static bool collect_stack(mapstruct *map, mapstruct *levels[MAP2_LEVELS], size_t *count) {
-    /* Sky exposure and injection flow down from the resolved upper maps.
+    /* Sky exposure and transport use the resolved upper maps.
      * A lower map cannot affect this map, and may be hidden/unloaded beneath
      * an opaque floor. Solve only the requested map and its upper chain. */
     mapstruct *cursor = map;
     while (cursor != NULL) {
-        if (*count >= MAP2_LEVELS || cursor->in_memory != MAP_IN_MEMORY) {
+        if (*count >= MAP2_LEVELS || cursor->in_memory != MAP_IN_MEMORY ||
+            cursor->width < 1 || cursor->height < 1 ||
+            cursor->width > 64 || cursor->height > 64) {
             return false;
         }
         levels[(*count)++] = cursor;
@@ -462,20 +622,37 @@ static bool collect_stack(mapstruct *map, mapstruct *levels[MAP2_LEVELS], size_t
     return *count != 0;
 }
 
+/** No rejected synchronous solve may leave readable radiance behind. */
+static void celestial_clear_failed_stack(mapstruct *map) {
+    mapstruct *levels[MAP2_LEVELS] = {0};
+    size_t count = 0;
+    (void)collect_stack(map, levels, &count);
+    for (size_t i = 0; i < count; i++) {
+        mapstruct *current = levels[i];
+        clear_map_field(current);
+        current->celestial_light_valid = false;
+        current->celestial_light_keyframe_valid = false;
+        if (current->celestial_light_generation_id == UINT64_MAX) {
+            IMPOSSIBLE();
+        }
+        current->celestial_light_generation_id++;
+        celestial_dependencies_field_release(current, false);
+        celestial_dependencies_field_release(current, true);
+    }
+}
+
 static void publish_map_field(mapstruct *map,
                               const celestial_model *model,
-                              const uint8_t *exposed,
                               int32_t *direct,
                               int32_t *diffuse,
                               int32_t *aperture_direct,
                               int32_t *moon,
                               int32_t *moon_aperture,
-                              int32_t *starlight,
-                              const int32_t *injected,
-                              const int32_t injected_rgb[][3]) {
+                              int32_t *starlight) {
     for (int y = 0; y < map->height; y++) {
         for (int x = 0; x < map->width; x++) {
-            int index = x + map->width * y;
+            int index = x + CELESTIAL_SPILL_PASSES + celestial_scratch_width(map) *
+                        (y + CELESTIAL_SPILL_PASSES);
             int32_t solar = celestial_scale_value(direct[index] + diffuse[index] +
                                                       aperture_direct[index],
                                                   model->solar_brightness,
@@ -495,10 +672,6 @@ static void publish_map_field(mapstruct *map,
                                                        model->starlight_color[channel],
                                                        UINT16_MAX);
             }
-            if (!exposed[index] && injected[index] > value) {
-                value = injected[index];
-                memcpy(rgb, injected_rgb[index], sizeof(rgb));
-            }
             space->celestial_light_value = value;
             memcpy(space->celestial_light_rgb, rgb, sizeof(rgb));
         }
@@ -509,11 +682,12 @@ void celestial_light_invalidate(mapstruct *map) {
     if (map == NULL) {
         return;
     }
+    celestial_dependencies_forget(map);
     celestial_light_forget(map);
     mapstruct *cursor = map;
     for (size_t i = 0; i < MAP2_LEVELS && cursor != NULL; i++) {
         if (cursor->celestial_structure_revision == UINT64_MAX) {
-            HARD_ASSERT(false);
+            IMPOSSIBLE();
         }
         cursor->celestial_structure_revision++;
         celestial_light_forget(cursor);
@@ -524,7 +698,7 @@ void celestial_light_invalidate(mapstruct *map) {
     cursor = map->tile_map[TILED_DOWN];
     for (size_t i = 0; i < MAP2_LEVELS && cursor != NULL; i++) {
         if (cursor->celestial_structure_revision == UINT64_MAX) {
-            HARD_ASSERT(false);
+            IMPOSSIBLE();
         }
         cursor->celestial_structure_revision++;
         celestial_light_forget(cursor);
@@ -555,11 +729,37 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
     rebuild_count++;
 #endif
 
+    /* The synchronous fallback is server-thread exclusive. Its existing
+     * reserve covers the largest one-level halo plus dependency bookkeeping. */
+    size_t scratch = 28 * celestial_scratch_cells(map);
+    bool reservation_available = pending_memory <= CELESTIAL_PENDING_MEMORY_MAX - scratch;
+#ifdef ATRINIK_TESTING
+    reservation_available &= !current_reservation_fail;
+#endif
+    if (map->width < 1 || map->height < 1 || map->width > 64 || map->height > 64 ||
+        !reservation_available) {
+        celestial_clear_failed_stack(map);
+        return false;
+    }
+    pending_memory += scratch;
+    celestial_dependencies *dependencies = celestial_dependencies_begin(
+        &pending_memory, CELESTIAL_PENDING_MEMORY_MAX, CELESTIAL_PENDING_MEMORY_MAX / 64);
+    if (dependencies == NULL) {
+        pending_memory -= scratch;
+        celestial_clear_failed_stack(map);
+        return false;
+    }
+    HARD_ASSERT(active_dependencies == NULL);
+    active_dependencies = dependencies;
+    spatial_observer observer = spatial_observer_exchange(
+        (spatial_observer){celestial_spatial_observe, dependencies});
+    (void)celestial_observe(map);
     mapstruct *levels[MAP2_LEVELS] = {0};
     size_t count = 0;
     char error[HUGE_BUF];
-    if (!collect_stack(map, levels, &count) ||
-        !celestial_structure_validate_light_dependencies(map, VS(error))) {
+    bool stack_valid = collect_stack(map, levels, &count);
+    for (size_t i = 0; i < count; i++) (void)celestial_observe(levels[i]);
+    if (!stack_valid || !celestial_structure_validate_light_dependencies(map, VS(error))) {
         for (size_t i = 0; i < count; i++) {
             mapstruct *current = levels[i];
             clear_map_field(current);
@@ -569,9 +769,10 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
             uint64_t key = celestial_key(current, profile, &phases);
             if (current->celestial_light_generation_id == 0) {
                 current->celestial_light_generation_id = 1;
-            } else if (!current->celestial_light_valid || current->celestial_light_key != key) {
+            } else if (!current->celestial_light_valid || current->celestial_light_key != key ||
+                       !celestial_dependencies_field_fresh(current, false)) {
                 if (current->celestial_light_generation_id == UINT64_MAX) {
-                    HARD_ASSERT(false);
+                    IMPOSSIBLE();
                 }
                 current->celestial_light_generation_id++;
             }
@@ -579,106 +780,90 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
             current->celestial_light_valid = true;
             current->celestial_light_keyframe_valid = false;
         }
+        (void)celestial_dependencies_finish(dependencies, levels, count, false);
+        (void)spatial_observer_exchange(observer);
+        active_dependencies = NULL;
+        celestial_dependencies_release(dependencies);
+        pending_memory -= scratch;
         return false;
     }
 
     for (size_t level = count; level-- > 0;) {
         mapstruct *current = levels[level];
-        size_t cells = (size_t)current->width * current->height;
+        size_t cells = celestial_scratch_cells(current);
         celestial_model model;
         celestial_model_for_map(current, absolute_hour, &model);
-        uint8_t *exposed = xcalloc(cells, sizeof(*exposed));
         int32_t *direct = xcalloc(cells, sizeof(*direct));
         int32_t *diffuse = xcalloc(cells, sizeof(*diffuse));
         int32_t *aperture_direct = xcalloc(cells, sizeof(*aperture_direct));
         int32_t *moon = xcalloc(cells, sizeof(*moon));
         int32_t *moon_aperture = xcalloc(cells, sizeof(*moon_aperture));
         int32_t *starlight = xcalloc(cells, sizeof(*starlight));
-        int32_t *injected = xcalloc(cells, sizeof(*injected));
-        int32_t(*injected_rgb)[3] = xcalloc(cells, sizeof(*injected_rgb));
-
-        mapstruct *upper = level + 1 < count ? levels[level + 1] : NULL;
-        for (int y = 0; y < current->height; y++) {
-            for (int x = 0; x < current->width; x++) {
-                int index = x + current->width * y;
-                exposed[index] = celestial_structure_cell_exposed(current, x, y);
-                if (exposed[index]) {
-                    diffuse[index] = model.diffuse;
-                    starlight[index] = model.starlight;
-                } else if (upper != NULL && x < upper->width && y < upper->height) {
-                    const MapSpace *above = GET_MAP_SPACE_PTR(upper, x, y);
-                    uint16_t coefficient = edge_coefficient(upper, x, y, CELESTIAL_FACE_DOWN, NULL);
-                    injected[index] = transmit(above->celestial_light_value, coefficient);
-                    for (size_t channel = 0; channel < 3; channel++) {
-                        injected_rgb[index][channel] =
-                            transmit(above->celestial_light_rgb[channel], coefficient);
-                    }
-                }
+        for (int y = 0; y < celestial_scratch_height(current); y++) {
+            for (int x = 0; x < celestial_scratch_width(current); x++) {
+                int index = x + celestial_scratch_width(current) * y;
+                celestial_ray ray;
+                celestial_halo_ray(&ray, current, x, y, NORTH, 32768);
+                while (!ray.done) celestial_ray_step(&ray);
+                diffuse[index] = celestial_ray_value(&ray, model.diffuse, NULL);
+                starlight[index] = celestial_ray_value(&ray, model.starlight, NULL);
             }
         }
 
         region_celestial_phases_t phases;
         region_celestial_phases(region_celestial_for_map(current), absolute_hour, &phases);
-        transport_line(current,
-                       exposed,
-                       &model,
-                       direct,
-                       aperture_direct,
-                       model.solar_direction,
-                       false);
+        transport_line(current, &model, direct, aperture_direct, false);
         if (model.moon != 0) {
-            transport_line(current,
-                           exposed,
-                           &model,
-                           moon,
-                           moon_aperture,
-                           model.moon_direction,
-                           true);
+            transport_line(current, &model, moon, moon_aperture, true);
         }
         relax_diffuse(current, diffuse);
         relax_diffuse(current, aperture_direct);
         relax_diffuse(current, starlight);
         publish_map_field(current,
                           &model,
-                          exposed,
                           direct,
                           diffuse,
                           aperture_direct,
                           moon,
                           moon_aperture,
-                          starlight,
-                          injected,
-                          injected_rgb);
+                          starlight);
 
         const region_celestial_profile_t *profile = region_celestial_for_map(current);
         uint64_t previous_key = current->celestial_light_key;
-        bool previous_valid = current->celestial_light_valid;
+        bool previous_valid = current->celestial_light_valid &&
+                              celestial_dependencies_field_fresh(current, false);
         current->celestial_light_key = celestial_key(current, profile, &phases);
         if (current->celestial_light_generation_id == 0) {
             current->celestial_light_generation_id = 1;
         } else if (!previous_valid || previous_key != current->celestial_light_key) {
             if (current->celestial_light_generation_id == UINT64_MAX) {
-                HARD_ASSERT(false);
+                IMPOSSIBLE();
             }
             current->celestial_light_generation_id++;
         }
         current->celestial_light_valid = true;
         current->celestial_light_keyframe_valid = false;
-        free(injected_rgb);
-        free(injected);
         free(starlight);
         free(moon);
         free(moon_aperture);
         free(aperture_direct);
         free(diffuse);
         free(direct);
-        free(exposed);
     }
-    return true;
+    bool complete = celestial_dependencies_finish(dependencies, levels, count, false);
+    if (!complete) {
+        celestial_clear_failed_stack(map);
+    }
+    (void)spatial_observer_exchange(observer);
+    active_dependencies = NULL;
+    celestial_dependencies_release(dependencies);
+    pending_memory -= scratch;
+    return complete;
 }
 
 typedef struct celestial_field_snapshot {
     mapstruct *map;
+    celestial_dependencies *dependencies;
     size_t count;
     int32_t *value;
     int32_t(*rgb)[3];
@@ -691,6 +876,7 @@ typedef struct celestial_field_snapshot {
 static bool celestial_field_snapshot_save(mapstruct *map,
                                           celestial_field_snapshot_t *snapshot) {
     snapshot->map = map;
+    snapshot->dependencies = celestial_dependencies_field_get(map, false);
     snapshot->count = (size_t)map->width * map->height;
     snapshot->value = xcalloc(snapshot->count, sizeof(*snapshot->value));
     snapshot->rgb = xcalloc(snapshot->count, sizeof(*snapshot->rgb));
@@ -704,7 +890,7 @@ static bool celestial_field_snapshot_save(mapstruct *map,
     return true;
 }
 
-static void celestial_field_snapshot_restore(celestial_field_snapshot_t *snapshot) {
+static bool celestial_field_snapshot_restore(celestial_field_snapshot_t *snapshot) {
     for (size_t i = 0; i < snapshot->count; i++) {
         snapshot->map->spaces[i].celestial_light_value = snapshot->value[i];
         memcpy(snapshot->map->spaces[i].celestial_light_rgb,
@@ -714,10 +900,22 @@ static void celestial_field_snapshot_restore(celestial_field_snapshot_t *snapsho
     snapshot->map->celestial_light_key = snapshot->key;
     snapshot->map->celestial_light_generation_id = snapshot->generation;
     snapshot->map->celestial_light_valid = snapshot->valid;
+    bool bound = true;
+    if (snapshot->dependencies != NULL) {
+        bound = celestial_dependencies_field_bind(snapshot->dependencies, snapshot->map, false);
+        celestial_dependencies_release(snapshot->dependencies);
+    } else {
+        celestial_dependencies_field_release(snapshot->map, false);
+    }
     free(snapshot->value);
     free(snapshot->rgb);
     snapshot->value = NULL;
     snapshot->rgb = NULL;
+    if (!bound) {
+        snapshot->map->celestial_light_valid = false;
+        celestial_dependencies_field_release(snapshot->map, false);
+    }
+    return bound;
 }
 
 uint64_t celestial_light_generation(const mapstruct *map) {
@@ -728,9 +926,9 @@ uint64_t celestial_light_generation(const mapstruct *map) {
 }
 
 /* A queued solve never mutates the current field. Each step evaluates one
- * cell (or advances one bounded stage), with the original ray order and Jacobi
- * pass order. Upper-level injection reads this job's completed scratch field,
- * rather than a published field for a different hour. All work is server-thread
+ * crossing, cell, or bounded stage with identical ray arithmetic and Jacobi
+ * pass order. No directional component is copied from another level's field.
+ * All work is server-thread
  * owned; forget() removes references before map storage can be recycled. */
 typedef struct celestial_pending_level {
     mapstruct *map;
@@ -760,26 +958,23 @@ typedef struct celestial_pending {
     uint64_t source_hour;
     size_t count, level, cell, steps;
     size_t reservation;
+    uint64_t validated_batch;
+    celestial_dependencies *dependencies;
     celestial_pending_level_t levels[MAP2_LEVELS];
     celestial_pending_stage_t stage;
     celestial_model model;
-    uint8_t *exposed;
     int32_t *direct, *diffuse, *aperture, *moon, *moon_aperture, *stars, *next_values;
-    int pass, ray_start, ray_x, ray_y;
-    int32_t ray_direct, ray_aperture;
-    uint8_t ray_cooldown;
+    int pass;
+    celestial_ray ray;
     bool ray_active;
+    bool diffuse_active, aperture_active, stars_active;
 } celestial_pending_t;
 
 static celestial_pending_t *pending_head, *pending_tail;
+static uint64_t pending_batch;
 
-/* Includes all output/scratch arrays and job descriptors, across all jobs. */
-#define CELESTIAL_PENDING_MEMORY_MAX ((size_t)1923584)
-#define CELESTIAL_CURRENT_SCRATCH_MAX ((size_t)45 * 64 * 64)
-static size_t pending_memory, pending_memory_limit = CELESTIAL_PENDING_MEMORY_MAX;
 
 static void pending_free_scratch(celestial_pending_t *job) {
-    free(job->exposed);
     free(job->direct);
     free(job->diffuse);
     free(job->aperture);
@@ -787,12 +982,12 @@ static void pending_free_scratch(celestial_pending_t *job) {
     free(job->moon_aperture);
     free(job->stars);
     free(job->next_values);
-    job->exposed = NULL;
     job->direct = job->diffuse = job->aperture = NULL;
     job->moon = job->moon_aperture = job->stars = job->next_values = NULL;
 }
 
 static void pending_free(celestial_pending_t *job) {
+    celestial_dependencies_release(job->dependencies);
     pending_free_scratch(job);
     for (size_t i = 0; i < job->count; i++) {
         free(job->levels[i].value);
@@ -808,7 +1003,7 @@ void celestial_light_forget(mapstruct *map) {
     pending_tail = NULL;
     while (*link != NULL) {
         celestial_pending_t *job = *link;
-        bool retained = false;
+        bool retained = celestial_dependencies_references_map(job->dependencies, map);
         for (size_t i = 0; i < job->count; i++) {
             retained |= job->levels[i].map == map;
         }
@@ -830,7 +1025,8 @@ static uint64_t key_for_hour(const mapstruct *map, uint64_t hour) {
 }
 
 static bool pending_fresh(const celestial_pending_t *job) {
-    if (job->source_hour != (uint64_t)todtick) {
+    if (job->source_hour != (uint64_t)todtick ||
+        !celestial_dependencies_fresh(job->dependencies)) {
         return false;
     }
     for (size_t i = 0; i < job->count; i++) {
@@ -857,80 +1053,51 @@ static void pending_append(celestial_pending_t *job) {
 }
 
 static void pending_ray_reset(celestial_pending_t *job) {
-    job->ray_start = 0;
+    job->cell = 0;
     job->ray_active = false;
 }
 
 static bool pending_ray_step(celestial_pending_t *job, bool moon) {
     celestial_pending_level_t *level = &job->levels[job->level];
-    int dx, dy;
-    direction_delta(moon ? job->model.moon_direction : job->model.solar_direction, &dx, &dy);
-    /* The synchronous traversal skips the second width of starts when
-     * dx == 0. Enumerate only those rays that actually enter the map. */
-    int starts = dx == 0 ? level->width
-                         : level->height + (dy != 0 ? level->width : 0);
     if (!job->ray_active) {
-        if (job->ray_start == starts) {
-            return true;
-        }
-        int start = job->ray_start++;
-        if (dx != 0 && start < level->height) {
-            job->ray_x = dx < 0 ? level->width - 1 : 0;
-            job->ray_y = start;
-        } else {
-            job->ray_x = dx != 0 ? start - level->height : start;
-            job->ray_y = dy < 0 ? level->height - 1 : 0;
-        }
-        job->ray_direct = job->ray_aperture = 0;
-        job->ray_cooldown = 0;
+        celestial_halo_ray(&job->ray, level->map, (int)(job->cell % celestial_scratch_width(level->map)),
+                           (int)(job->cell / celestial_scratch_width(level->map)),
+                           moon ? job->model.moon_direction : job->model.solar_direction,
+                           moon ? job->model.moon_elevation : job->model.solar_elevation);
         job->ray_active = true;
     }
-    int index = job->ray_x + level->width * job->ray_y;
-    if (job->ray_cooldown == 0 && job->exposed[index]) {
-        job->ray_direct = moon ? job->model.moon : job->model.direct;
+    celestial_ray_step(&job->ray);
+    if (job->ray.done) {
+        int32_t *values = moon ? job->moon : job->direct;
+        int32_t *apertures = moon ? job->moon_aperture : job->aperture;
+        values[job->cell] = celestial_ray_value(&job->ray,
+            moon ? job->model.moon : job->model.direct, &apertures[job->cell]);
+        if (!moon) job->aperture_active |= apertures[job->cell] != 0;
+        job->ray_active = false;
+        if (++job->cell == celestial_scratch_cells(level->map)) return true;
     }
-    int32_t *values = moon ? job->moon : job->direct;
-    int32_t *apertures = moon ? job->moon_aperture : job->aperture;
-    values[index] = MAX(values[index], job->ray_direct);
-    apertures[index] = MAX(apertures[index], job->ray_aperture);
-    bool aperture = false;
-    uint16_t coefficient = step_coefficient(level->map, job->ray_x, job->ray_y, dx, dy, &aperture);
-    job->ray_direct = transmit(job->ray_direct, coefficient);
-    job->ray_aperture = transmit(job->ray_aperture, coefficient);
-    if (aperture) {
-        job->ray_aperture = job->ray_direct;
-    }
-    if (coefficient < CELESTIAL_SCALE) {
-        job->ray_cooldown = CELESTIAL_DIRECT_REACH;
-    } else if (job->ray_cooldown != 0) {
-        job->ray_cooldown--;
-    }
-    job->ray_x += dx;
-    job->ray_y += dy;
-    job->ray_active = job->ray_x >= 0 && job->ray_y >= 0 &&
-                      job->ray_x < level->width && job->ray_y < level->height;
     return false;
 }
 
 static void pending_relax_step(celestial_pending_t *job, int32_t **values) {
     celestial_pending_level_t *level = &job->levels[job->level];
-    int x = (int)(job->cell % level->width);
-    int y = (int)(job->cell / level->width);
+    int x = (int)(job->cell % celestial_scratch_width(level->map));
+    int y = (int)(job->cell / celestial_scratch_width(level->map));
     int32_t best = (*values)[job->cell];
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 ||
-                x + dx >= level->width || y + dy >= level->height) {
+                x + dx >= celestial_scratch_width(level->map) || y + dy >= celestial_scratch_height(level->map)) {
                 continue;
             }
-            uint16_t coefficient = step_coefficient(level->map, x, y, dx, dy, NULL);
-            int32_t candidate = transmit((*values)[x + dx + level->width * (y + dy)], coefficient);
+            uint16_t coefficient = celestial_spill_coefficient(level->map, x, y, dx, dy);
+            int32_t candidate = transmit((*values)[x + dx + celestial_scratch_width(level->map) * (y + dy)], coefficient);
             candidate = transmit(candidate, dx != 0 && dy != 0 ? 181 : 192);
             best = MAX(best, candidate);
         }
     }
     job->next_values[job->cell++] = best;
-    if (job->cell == level->cells) {
+    if (job->cell == celestial_scratch_cells(level->map)) {
         int32_t *swap = *values;
         *values = job->next_values;
         job->next_values = swap;
@@ -950,29 +1117,37 @@ static bool pending_step(celestial_pending_t *job) {
     job->steps++;
     switch (job->stage) {
     case CELESTIAL_PREPARE:
+        job->diffuse_active = job->aperture_active = job->stars_active = false;
         celestial_model_for_map(level->map, job->source_hour + 1, &job->model);
-        job->exposed = xcalloc(level->cells, sizeof(*job->exposed));
-        job->direct = xcalloc(level->cells, sizeof(*job->direct));
-        job->diffuse = xcalloc(level->cells, sizeof(*job->diffuse));
-        job->aperture = xcalloc(level->cells, sizeof(*job->aperture));
-        job->moon = xcalloc(level->cells, sizeof(*job->moon));
-        job->moon_aperture = xcalloc(level->cells, sizeof(*job->moon_aperture));
-        job->stars = xcalloc(level->cells, sizeof(*job->stars));
-        job->next_values = xcalloc(level->cells, sizeof(*job->next_values));
+        job->direct = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->direct));
+        job->diffuse = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->diffuse));
+        job->aperture = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->aperture));
+        job->moon = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->moon));
+        job->moon_aperture = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->moon_aperture));
+        job->stars = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->stars));
+        job->next_values = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->next_values));
         level->value = xcalloc(level->cells, sizeof(*level->value));
         level->rgb = xcalloc(level->cells, sizeof(*level->rgb));
         job->stage = CELESTIAL_EXPOSE;
         break;
     case CELESTIAL_EXPOSE:
-        job->exposed[job->cell] = celestial_structure_cell_exposed(level->map, x, y);
-        if (job->exposed[job->cell]) {
-            job->diffuse[job->cell] = job->model.diffuse;
-            job->stars[job->cell] = job->model.starlight;
+        if (!job->ray_active) {
+            celestial_halo_ray(&job->ray, level->map,
+                (int)(job->cell % celestial_scratch_width(level->map)),
+                (int)(job->cell / celestial_scratch_width(level->map)), NORTH, 32768);
+            job->ray_active = true;
         }
-        if (++job->cell == level->cells) {
-            job->cell = 0;
-            job->stage = CELESTIAL_SUN;
-            pending_ray_reset(job);
+        celestial_ray_step(&job->ray);
+        if (job->ray.done) {
+            job->diffuse[job->cell] = celestial_ray_value(&job->ray, job->model.diffuse, NULL);
+            job->stars[job->cell] = celestial_ray_value(&job->ray, job->model.starlight, NULL);
+            job->diffuse_active |= job->diffuse[job->cell] != 0;
+            job->stars_active |= job->stars[job->cell] != 0;
+            job->ray_active = false;
+            if (++job->cell == celestial_scratch_cells(level->map)) {
+                job->stage = CELESTIAL_SUN;
+                pending_ray_reset(job);
+            }
         }
         break;
     case CELESTIAL_SUN:
@@ -984,39 +1159,30 @@ static bool pending_step(celestial_pending_t *job) {
         }
         break;
     case CELESTIAL_DIFFUSE:
-        pending_relax_step(job, &job->diffuse);
+        if (job->diffuse_active) pending_relax_step(job, &job->diffuse);
+        else job->stage++;
         break;
     case CELESTIAL_APERTURE:
-        pending_relax_step(job, &job->aperture);
+        if (job->aperture_active) pending_relax_step(job, &job->aperture);
+        else job->stage++;
         break;
     case CELESTIAL_STARS:
-        pending_relax_step(job, &job->stars);
+        if (job->stars_active) pending_relax_step(job, &job->stars);
+        else job->stage++;
         break;
     case CELESTIAL_OUTPUT: {
         size_t cell = job->cell;
-        int32_t solar = celestial_scale_value(job->direct[cell] + job->diffuse[cell] +
-                                                 job->aperture[cell],
+        size_t sample = x + CELESTIAL_SPILL_PASSES + celestial_scratch_width(level->map) *
+                        (y + CELESTIAL_SPILL_PASSES);
+        int32_t solar = celestial_scale_value(job->direct[sample] + job->diffuse[sample] +
+                                                 job->aperture[sample],
                                              job->model.solar_brightness, 256);
-        int32_t moon = job->moon[cell] + job->moon_aperture[cell];
-        level->value[cell] = solar + moon + job->stars[cell];
+        int32_t moon = job->moon[sample] + job->moon_aperture[sample];
+        level->value[cell] = solar + moon + job->stars[sample];
         for (size_t channel = 0; channel < 3; channel++) {
             level->rgb[cell][channel] = celestial_scale_value(solar, job->model.solar_color[channel], UINT16_MAX) +
                 celestial_scale_value(moon, job->model.moon_color[channel], UINT16_MAX) +
-                celestial_scale_value(job->stars[cell], job->model.starlight_color[channel], UINT16_MAX);
-        }
-        if (!job->exposed[cell] && job->level + 1 < job->count) {
-            const celestial_pending_level_t *upper = &job->levels[job->level + 1];
-            if (x < upper->width && y < upper->height) {
-                size_t above = x + upper->width * y;
-                uint16_t coefficient = edge_coefficient(upper->map, x, y, CELESTIAL_FACE_DOWN, NULL);
-                int32_t injected = transmit(upper->value[above], coefficient);
-                if (injected > level->value[cell]) {
-                    level->value[cell] = injected;
-                    for (size_t channel = 0; channel < 3; channel++) {
-                        level->rgb[cell][channel] = transmit(upper->rgb[above][channel], coefficient);
-                    }
-                }
-            }
+                celestial_scale_value(job->stars[sample], job->model.starlight_color[channel], UINT16_MAX);
         }
         if (++job->cell == level->cells) {
             job->cell = 0;
@@ -1037,6 +1203,10 @@ static bool pending_step(celestial_pending_t *job) {
         if (++job->cell == level->cells) {
             job->cell = 0;
             if (++job->level == job->count) {
+                mapstruct *maps[MAP2_LEVELS];
+                for (size_t i = 0; i < job->count; i++) maps[i] = job->levels[i].map;
+                if (!celestial_dependencies_finish(job->dependencies, maps, job->count, true))
+                    return true;
                 for (size_t i = 0; i < job->count; i++) {
                     mapstruct *map = job->levels[i].map;
                     map->celestial_light_next_key = job->levels[i].key;
@@ -1044,7 +1214,7 @@ static bool pending_step(celestial_pending_t *job) {
                     /* Readiness changes the transmitted endpoint pair, even
                      * when the current scalar/RGB field remains identical. */
                     if (map->celestial_light_generation_id == UINT64_MAX) {
-                        HARD_ASSERT(false);
+                        IMPOSSIBLE();
                     }
                     map->celestial_light_generation_id++;
                     map->celestial_light_keyframe_valid = true;
@@ -1058,6 +1228,10 @@ static bool pending_step(celestial_pending_t *job) {
 }
 
 static void pending_process(size_t limit, uint64_t deadline) {
+    if (pending_batch == UINT64_MAX) {
+        IMPOSSIBLE();
+    }
+    pending_batch++;
     while (pending_head != NULL && limit-- != 0 &&
            (deadline == 0 || datetime_monotonic_us() < deadline)) {
         celestial_pending_t *job = pending_head;
@@ -1065,11 +1239,20 @@ static void pending_process(size_t limit, uint64_t deadline) {
         if (pending_head == NULL) {
             pending_tail = NULL;
         }
-        if (!pending_fresh(job) || pending_step(job)) {
+        if (job->validated_batch != pending_batch && !pending_fresh(job)) {
             pending_free(job);
-        } else {
-            pending_append(job);
+            continue;
         }
+        job->validated_batch = pending_batch;
+        HARD_ASSERT(active_dependencies == NULL);
+        active_dependencies = job->dependencies;
+        spatial_observer observer = spatial_observer_exchange(
+            (spatial_observer){celestial_spatial_observe, job->dependencies});
+        bool finished = pending_step(job);
+        (void)spatial_observer_exchange(observer);
+        active_dependencies = NULL;
+        if (finished) pending_free(job);
+        else pending_append(job);
     }
 }
 
@@ -1081,6 +1264,12 @@ void celestial_light_process_pending(uint64_t budget_us) {
 }
 
 #ifdef ATRINIK_TESTING
+uint64_t celestial_light_pending_batch_exchange_for_test(uint64_t batch) {
+    uint64_t previous = pending_batch;
+    pending_batch = batch;
+    return previous;
+}
+
 void celestial_light_process_steps_for_test(size_t steps) {
     pending_process(steps, 0);
 }
@@ -1117,7 +1306,8 @@ bool celestial_light_keyframe_request(mapstruct *map, uint64_t absolute_hour) {
     }
     bool ready = true;
     for (size_t i = 0; i < count; i++) {
-        ready &= levels[i]->celestial_light_keyframe_valid &&
+        ready &= celestial_dependencies_field_fresh(levels[i], true) &&
+                 levels[i]->celestial_light_keyframe_valid &&
                  levels[i]->celestial_light_next_hour == absolute_hour + 1 &&
                  levels[i]->celestial_light_next_key == key_for_hour(levels[i], absolute_hour + 1);
     }
@@ -1146,12 +1336,12 @@ bool celestial_light_keyframe_request(mapstruct *map, uint64_t absolute_hour) {
             return false;
         }
         reservation += cells * 16;
-        largest = MAX(largest, cells);
+        largest = MAX(largest, celestial_scratch_cells(levels[i]));
     }
-    if (largest > (SIZE_MAX - reservation) / 29) {
+    if (largest > (SIZE_MAX - reservation) / 28) {
         return false;
     }
-    reservation += largest * 29;
+    reservation += largest * 28;
     size_t limit = MIN(pending_memory_limit,
                        CELESTIAL_PENDING_MEMORY_MAX - CELESTIAL_CURRENT_SCRATCH_MAX);
     if (pending_memory > limit || reservation > limit - pending_memory) {
@@ -1172,6 +1362,18 @@ bool celestial_light_keyframe_request(mapstruct *map, uint64_t absolute_hour) {
     job->source_hour = absolute_hour;
     job->count = count;
     job->level = count - 1;
+    job->dependencies = celestial_dependencies_begin(&pending_memory, limit,
+                                                      CELESTIAL_PENDING_MEMORY_MAX / 64);
+    if (job->dependencies == NULL) {
+        pending_free(job);
+        return false;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (!celestial_dependencies_observe(job->dependencies, levels[i])) {
+            pending_free(job);
+            return false;
+        }
+    }
     for (size_t i = 0; i < count; i++) {
         mapstruct *current = levels[i];
         job->levels[i] = (celestial_pending_level_t){
@@ -1180,7 +1382,7 @@ bool celestial_light_keyframe_request(mapstruct *map, uint64_t absolute_hour) {
             .key = key_for_hour(current, absolute_hour + 1)};
         if (current->celestial_light_keyframe_valid) {
             if (current->celestial_light_generation_id == UINT64_MAX) {
-                HARD_ASSERT(false);
+                IMPOSSIBLE();
             }
             current->celestial_light_generation_id++;
         }
@@ -1204,7 +1406,8 @@ bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour) {
     region_celestial_phases_t next_phases;
     region_celestial_phases(profile, absolute_hour + 1, &next_phases);
     uint64_t next_key = celestial_key(map, profile, &next_phases);
-    if (map->celestial_light_keyframe_valid && map->celestial_light_next_key == next_key &&
+    if (celestial_dependencies_field_fresh(map, true) &&
+        map->celestial_light_keyframe_valid && map->celestial_light_next_key == next_key &&
         map->celestial_light_next_hour == absolute_hour + 1) {
         return true;
     }
@@ -1224,6 +1427,9 @@ bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour) {
     bool rebuilt = celestial_light_rebuild(map, absolute_hour + 1);
     if (rebuilt) {
         for (size_t i = 0; i < count; i++) {
+            celestial_dependencies *next = celestial_dependencies_field_get(levels[i], false);
+            rebuilt &= next != NULL && celestial_dependencies_field_bind(next, levels[i], true);
+            celestial_dependencies_release(next);
             for (size_t cell = 0; cell < snapshots[i].count; cell++) {
                 levels[i]->spaces[cell].celestial_light_next_value =
                     levels[i]->spaces[cell].celestial_light_value;
@@ -1235,7 +1441,7 @@ bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour) {
     }
 
     for (size_t i = 0; i < count; i++) {
-        celestial_field_snapshot_restore(&snapshots[i]);
+        rebuilt &= celestial_field_snapshot_restore(&snapshots[i]);
         levels[i]->celestial_light_keyframe_valid = rebuilt;
         levels[i]->celestial_light_next_key = key_for_hour(levels[i], absolute_hour + 1);
         levels[i]->celestial_light_next_hour = absolute_hour + 1;
@@ -1251,12 +1457,14 @@ void celestial_light_ensure(mapstruct *map) {
     region_celestial_phases_t phases;
     region_celestial_phases(profile, (uint64_t)todtick, &phases);
     uint64_t key = celestial_key(map, profile, &phases);
-    if (!map->celestial_light_valid || map->celestial_light_key != key) {
+    if (!map->celestial_light_valid || map->celestial_light_key != key ||
+        !celestial_dependencies_field_fresh(map, false)) {
         mapstruct *levels[MAP2_LEVELS] = {0};
         size_t count = 0;
         bool ready = collect_stack(map, levels, &count);
         for (size_t i = 0; i < count; i++) {
-            ready &= levels[i]->celestial_light_keyframe_valid &&
+            ready &= celestial_dependencies_field_fresh(levels[i], true) &&
+                 levels[i]->celestial_light_keyframe_valid &&
                      levels[i]->celestial_light_next_hour == (uint64_t)todtick &&
                      levels[i]->celestial_light_next_key == key_for_hour(levels[i], (uint64_t)todtick);
         }
@@ -1276,9 +1484,16 @@ void celestial_light_ensure(mapstruct *map) {
                        sizeof(current->spaces[cell].celestial_light_rgb));
             }
             if (current->celestial_light_generation_id == UINT64_MAX) {
-                HARD_ASSERT(false);
+                IMPOSSIBLE();
             }
             current->celestial_light_generation_id++;
+            celestial_dependencies *next = celestial_dependencies_field_get(current, true);
+            bool bound = next != NULL && celestial_dependencies_field_bind(next, current, false);
+            celestial_dependencies_release(next);
+            if (!bound) {
+                IMPOSSIBLE();
+            }
+            celestial_dependencies_field_release(current, true);
             current->celestial_light_key = current->celestial_light_next_key;
             current->celestial_light_valid = true;
             current->celestial_light_keyframe_valid = false;

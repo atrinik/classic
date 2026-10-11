@@ -21,6 +21,110 @@
         }                                                                                   \
     } while (0)
 
+Client_Player cpl;
+static unsigned target_redraws;
+void widget_redraw_all(int widget_type_id) {
+    (void)widget_type_id;
+    target_redraws++;
+}
+void map_redraw_request(map_redraw_reason_t reason) {
+    TEST_CHECK(reason == MAP_REDRAW_REASON_UI);
+}
+
+static void test_target_packet_is_transactional(void) {
+    packet_struct *packet = packet_new(0, 64, 64);
+    packet_writer_write_uint8(packet, CMD_TARGET_ENEMY);
+    packet_writer_write_cstring(packet, "ff0000");
+    packet_writer_write_cstring(packet, "Upper actor");
+    packet_writer_write_uint8(packet, 42);
+    packet_writer_write_uint32(packet, UINT32_MAX);
+    packet_writer_write_int8(packet, MAP2_MAX_DEPTH);
+    packet_writer_write_uint8(packet, 1);
+    packet_writer_write_uint8(packet, 0);
+    memset(&cpl, 0, sizeof(cpl));
+    cpl.target_actor_count = 123;
+    cpl.target_relative_depth = -1;
+    cpl.target_is_friend = 1;
+    Client_Player before = cpl;
+    for (size_t len = 0; len < packet->len; len++) {
+        socket_command_target(packet->data, len, 0);
+        TEST_CHECK(memcmp(&cpl, &before, sizeof(cpl)) == 0 && target_redraws == 0);
+    }
+    socket_command_target(packet->data, packet->len, 0);
+    TEST_CHECK(cpl.target_actor_count == UINT32_MAX &&
+               cpl.target_relative_depth == MAP2_MAX_DEPTH && cpl.target_level == 42 &&
+               strcmp(cpl.target_name, "Upper actor") == 0 && target_redraws == 1 &&
+               cpl.target_is_friend == 0);
+    before = cpl;
+    packet_writer_write_uint8(packet, 0);
+    socket_command_target(packet->data, packet->len, 0);
+    TEST_CHECK(memcmp(&cpl, &before, sizeof(cpl)) == 0 && target_redraws == 1);
+    packet->len--;
+    /* SELF may never smuggle an actor count or nonzero depth. */
+    packet->data[0] = CMD_TARGET_SELF;
+    socket_command_target(packet->data, packet->len, 0);
+    TEST_CHECK(memcmp(&cpl, &before, sizeof(cpl)) == 0 && target_redraws == 1);
+    packet->data[0] = CMD_TARGET_ENEMY;
+    packet->data[packet->len - 3] = MAP2_MAX_DEPTH + 1;
+    socket_command_target(packet->data, packet->len, 0);
+    TEST_CHECK(memcmp(&cpl, &before, sizeof(cpl)) == 0 && target_redraws == 1);
+    packet_free(packet);
+    packet = packet_new(0, 64, 64);
+    packet_writer_write_uint8(packet, CMD_TARGET_SELF);
+    packet_writer_write_cstring(packet, "ffff00");
+    packet_writer_write_cstring(packet, "Self");
+    packet_writer_write_uint8(packet, 1);
+    packet_writer_write_uint32(packet, 0);
+    packet_writer_write_int8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    socket_command_target(packet->data, packet->len, 0);
+    TEST_CHECK(cpl.target_actor_count == 0 && cpl.target_relative_depth == 0 &&
+               cpl.target_code == CMD_TARGET_SELF && target_redraws == 2 &&
+               cpl.target_is_friend == 0);
+    /* Revision 1084 preserves the complete u8 range at both endpoints. */
+    const uint8_t values[] = {0, 1, 2, UINT8_MAX};
+    for (size_t combat = 0; combat < sizeof(values); combat++) {
+        for (size_t force = 0; force < sizeof(values); force++) {
+            packet->data[packet->len - 2] = values[combat];
+            packet->data[packet->len - 1] = values[force];
+            socket_command_target(packet->data, packet->len, 0);
+            TEST_CHECK(cpl.combat == values[combat] && cpl.combat_force == values[force] &&
+                       cpl.target_is_friend == 0);
+        }
+    }
+    packet_free(packet);
+
+    const uint8_t codes[] = {CMD_TARGET_ENEMY, CMD_TARGET_NEUTRAL, CMD_TARGET_FRIEND};
+    for (size_t index = 0; index < sizeof(codes); index++) {
+        packet = packet_new(0, 64, 64);
+        packet_writer_write_uint8(packet, codes[index]);
+        packet_writer_write_cstring(packet, "ffffff");
+        packet_writer_write_cstring(packet, "Class actor");
+        packet_writer_write_uint8(packet, 1);
+        packet_writer_write_uint32(packet, 42);
+        packet_writer_write_int8(packet, -1);
+        packet_writer_write_uint8(packet, 2);
+        packet_writer_write_uint8(packet, UINT8_MAX);
+        before = cpl;
+        socket_command_target(packet->data, packet->len - 1, 0);
+        TEST_CHECK(memcmp(&cpl, &before, sizeof(cpl)) == 0);
+        socket_command_target(packet->data, packet->len, 0);
+        TEST_CHECK(cpl.target_code == codes[index] && cpl.target_actor_count == 42 &&
+                   cpl.target_relative_depth == -1 &&
+                   cpl.target_is_friend == (codes[index] != CMD_TARGET_ENEMY));
+        before = cpl;
+        packet->data[0] = CMD_TARGET_FRIEND + 1;
+        socket_command_target(packet->data, packet->len, 0);
+        TEST_CHECK(memcmp(&cpl, &before, sizeof(cpl)) == 0);
+        packet->data[0] = codes[index];
+        packet->data[packet->len - 3] = MAP2_MAX_DEPTH + 1;
+        socket_command_target(packet->data, packet->len, 0);
+        TEST_CHECK(memcmp(&cpl, &before, sizeof(cpl)) == 0);
+        packet_free(packet);
+    }
+}
+
 /* Resolve an introduced item while keeping the production command decoder and
  * update mutation path. Rendering and secondary UI effects are irrelevant here. */
 static object introduced_item;
@@ -498,6 +602,7 @@ static void test_bounded_fuzz_regression(void) {
 
 int main(void) {
     toolkit_import(packet);
+    test_target_packet_is_transactional();
     test_book_command();
     test_item_command();
     test_update_requires_introduced_tag();

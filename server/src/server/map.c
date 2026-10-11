@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -28,13 +28,17 @@
  */
 
 #include <global.h>
+#include <propagation.h>
 #include <celestial_structure.h>
+#include <celestial_dependencies.h>
 #include <gameplay_journal.h>
 #include <swap.h>
 #include <server_main.h>
+#include <server.h>
 #include <plugin.h>
 #include <links.h>
 #include <light.h>
+#include <los.h>
 #include <initialization.h>
 #include <connection.h>
 #include <loader.h>
@@ -148,12 +152,21 @@ static bool map_validator(void *ptr) {
     return map->count != 0;
 }
 
+/** Publish residency changes before callbacks can observe the new state. */
+static void map_set_memory_state(mapstruct *map, uint32_t state) {
+    if (map->in_memory != state) {
+        los_geometry_changed();
+        map->in_memory = state;
+    }
+}
+
 /** @copydoc chunk_constructor */
 static void map_constructor(void *ptr) {
     mapstruct *map = ptr;
+    los_geometry_changed();
     DL_APPEND(first_map, map);
 
-    map->in_memory = MAP_SWAPPED;
+    map_set_memory_state(map, MAP_SWAPPED);
 
     /* The maps used to pick up default x and y values from the
      * map archetype. Mimic that behavior. */
@@ -172,6 +185,9 @@ static void map_constructor(void *ptr) {
 /** @copydoc chunk_constructor */
 static void map_destructor(void *ptr) {
     mapstruct *map = ptr;
+    los_geometry_changed();
+    celestial_dependencies_forget(map);
+    celestial_dependencies_field_forget(map);
     if (!map->global_removed) {
         DL_DELETE(first_map, map);
     }
@@ -231,6 +247,7 @@ static inline mapstruct *load_and_link_tiled_map(mapstruct *orig_map, int tile_n
     }
 
     if (orig_map->tile_map[tile_num] == NULL) {
+        los_geometry_changed();
         orig_map->tile_map[tile_num] = map;
         map->tile_map[map_tiled_reverse[tile_num]] = orig_map;
     } else if (map != orig_map->tile_map[tile_num]) {
@@ -238,6 +255,7 @@ static inline mapstruct *load_and_link_tiled_map(mapstruct *orig_map, int tile_n
                   orig_map->tile_path[tile_num],
                   tile_num,
                   orig_map->path);
+        los_geometry_changed();
         FREE_AND_CLEAR_HASH(orig_map->tile_path[tile_num]);
         delete_map(map);
         return NULL;
@@ -907,7 +925,7 @@ static bool load_objects(mapstruct *m, FILE *fp, int mapflags) {
     delete_loader_buffer(buffer);
     object_destroy(op);
 
-    m->in_memory = MAP_IN_MEMORY;
+    map_set_memory_state(m, MAP_IN_MEMORY);
     check_light_source_list(m);
 
     if (m->celestial_schema == 1 && object_errors) {
@@ -1026,6 +1044,9 @@ void set_map_darkness(mapstruct *m, int value) {
         value = MAX_DARKNESS;
     }
 
+    if (m->light_value != (int32_t)global_darkness_table[value]) {
+        los_publication_changed();
+    }
     MAP_DARKNESS(m) = (int32_t)value;
     m->light_value = (int32_t)global_darkness_table[value];
 }
@@ -1049,7 +1070,7 @@ static void allocate_map(mapstruct *m) {
     SOFT_ASSERT(m->spaces == NULL, "Map spaces are not NULL: %s", m->path);
     SOFT_ASSERT(m->buttons == NULL, "Buttons are not NULL: %s", m->path);
 
-    m->in_memory = MAP_LOADING;
+    map_set_memory_state(m, MAP_LOADING);
 
     m->spaces = xcalloc(MAP_WIDTH(m) * MAP_HEIGHT(m), sizeof(*m->spaces));
 }
@@ -1071,7 +1092,7 @@ mapstruct *get_empty_map(int sizex, int sizey) {
     m->height = sizey;
     allocate_map(m);
 
-    m->in_memory = MAP_IN_MEMORY;
+    map_set_memory_state(m, MAP_IN_MEMORY);
 
     return m;
 }
@@ -1085,6 +1106,10 @@ void map_set_tile(mapstruct *m, int tile, const char *pathname) {
     HARD_ASSERT(pathname != NULL);
 
     SOFT_ASSERT(tile >= 0 && tile < TILED_NUM, "Invalid tile: %d", tile);
+
+    /* Paths, missing-neighbor arrivals and reciprocal-link repairs all change
+     * the resolved geometry, including schema-0 maps. */
+    los_geometry_changed();
 
     if (m->tile_path[tile] != NULL) {
         LOG(BUG, "Tile location %d duplicated (%s <-> %s)", tile, m->path, m->tile_path[tile]);
@@ -1316,7 +1341,7 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
 
     allocate_map(m);
 
-    m->in_memory = MAP_LOADING;
+    map_set_memory_state(m, MAP_LOADING);
 
     if (fp != NULL) {
         bool objects_valid = load_objects(m, fp, (flags & (MAP_BLOCK | MAP_STYLE)) | MAP_ORIGINAL);
@@ -1327,7 +1352,7 @@ mapstruct *load_original_map(const char *filename, mapstruct *originator, int fl
             return NULL;
         }
     } else {
-        m->in_memory = MAP_IN_MEMORY;
+        map_set_memory_state(m, MAP_IN_MEMORY);
     }
 
     if (!MAP_DIFFICULTY(m)) {
@@ -1410,7 +1435,7 @@ static mapstruct *load_temporary_map(mapstruct *m, int flags) {
 
     allocate_map(m);
 
-    m->in_memory = MAP_LOADING;
+    map_set_memory_state(m, MAP_LOADING);
     bool objects_valid = load_objects(m, fp, 0);
     fclose(fp);
     if (!objects_valid) {
@@ -1499,7 +1524,7 @@ static bool load_unique_objects(mapstruct *m) {
         }
     }
 
-    m->in_memory = MAP_LOADING;
+    map_set_memory_state(m, MAP_LOADING);
 
     /* If we have loaded unique items from */
     if (m->tmpname == NULL) {
@@ -1609,6 +1634,8 @@ static void map_atomic_cancel(map_atomic_file_t *file) {
  *
  */
 int new_save_map(mapstruct *m, int flag) {
+    /* A checkpoint leaves the resident simulation running, including pending
+     * propagation. Only map teardown in free_map() expires those casts. */
     FILE *fp, *fp2;
     char filename[HUGE_BUF], buf[MAX_BUF];
     map_atomic_file_t primary, unique;
@@ -1692,7 +1719,7 @@ int new_save_map(mapstruct *m, int flag) {
     fp = primary.fp;
 
     int previous_in_memory = m->in_memory;
-    m->in_memory = MAP_SAVING;
+    map_set_memory_state(m, MAP_SAVING);
 
     save_map_header(m, fp, flag);
     if (m->celestial_schema == 1) {
@@ -1708,7 +1735,7 @@ int new_save_map(mapstruct *m, int flag) {
         if (!map_atomic_open(&unique, buf)) {
             LOG(BUG, "Can't open unique items file %s", buf);
             map_atomic_cancel(&primary);
-            m->in_memory = previous_in_memory;
+            map_set_memory_state(m, previous_in_memory);
             if (celestial_transaction) {
                 char transaction_error[HUGE_BUF];
                 (void)celestial_structure_finish_map_transaction(m, VS(transaction_error));
@@ -1730,7 +1757,7 @@ int new_save_map(mapstruct *m, int flag) {
 
     if (!MAP_UNIQUE(m) && !map_atomic_publish(&unique)) {
         map_atomic_cancel(&primary);
-        m->in_memory = previous_in_memory;
+        map_set_memory_state(m, previous_in_memory);
         if (celestial_transaction) {
             char transaction_error[HUGE_BUF];
             (void)celestial_structure_finish_map_transaction(m, VS(transaction_error));
@@ -1738,7 +1765,7 @@ int new_save_map(mapstruct *m, int flag) {
         return -1;
     }
     if (!map_atomic_publish(&primary)) {
-        m->in_memory = previous_in_memory;
+        map_set_memory_state(m, previous_in_memory);
         if (celestial_transaction) {
             char transaction_error[HUGE_BUF];
             (void)celestial_structure_finish_map_transaction(m, VS(transaction_error));
@@ -1752,7 +1779,7 @@ int new_save_map(mapstruct *m, int flag) {
                 "Celestial-v1 map %s was saved without a provenance ledger: %s",
                 m->path != NULL ? m->path : "<runtime>",
                 provenance_error);
-            m->in_memory = previous_in_memory;
+            map_set_memory_state(m, previous_in_memory);
             return -1;
         }
     }
@@ -1763,7 +1790,7 @@ int new_save_map(mapstruct *m, int flag) {
                 "Celestial map transaction for %s remains prepared: %s",
                 m->path != NULL ? m->path : "<runtime>",
                 transaction_error);
-            m->in_memory = previous_in_memory;
+            map_set_memory_state(m, previous_in_memory);
             return -1;
         }
         if (!celestial_structure_finish_map_transaction(m, VS(transaction_error))) {
@@ -1771,14 +1798,14 @@ int new_save_map(mapstruct *m, int flag) {
                 "Celestial map transaction for %s committed but could not be retired: %s",
                 m->path != NULL ? m->path : "<runtime>",
                 transaction_error);
-            m->in_memory = previous_in_memory;
+            map_set_memory_state(m, previous_in_memory);
             return -1;
         }
     }
 
     /* Saving is non-destructive. Restore the lifecycle state so a subsequent
      * reload still tears down the in-memory objects before reusing the map. */
-    m->in_memory = previous_in_memory;
+    map_set_memory_state(m, previous_in_memory);
     return 0;
 }
 
@@ -1813,10 +1840,14 @@ static void free_all_objects(mapstruct *m) {
  * If set, free all objects on the map.
  */
 void free_map(mapstruct *m, int flag) {
+    target_map_publication_forget(m);
+    propagation_expire_map(m);
     light_batch_flush();
     int i;
 
     swap_cancel_pending(m);
+    celestial_dependencies_forget(m);
+    celestial_dependencies_field_forget(m);
     celestial_light_forget(m);
 
     if (!m->in_memory) {
@@ -1832,7 +1863,7 @@ void free_map(mapstruct *m, int flag) {
      * outgoing light while the original resident topology still exists, then
      * invalidate surviving celestial dependencies once before unlinking it. */
     celestial_light_invalidate(m);
-    m->in_memory = MAP_SAVING;
+    map_set_memory_state(m, MAP_SAVING);
 
     if (m->buttons) {
         free_objectlinkpt(m->buttons);
@@ -1851,6 +1882,7 @@ void free_map(mapstruct *m, int flag) {
     celestial_structure_free(m);
     m->first_light = NULL;
 
+    los_geometry_changed();
     for (i = 0; i < TILED_NUM; i++) {
         /* Delete the backlinks in other tiled maps to our map */
         if (m->tile_map[i]) {
@@ -1882,7 +1914,7 @@ void free_map(mapstruct *m, int flag) {
         m->events = NULL;
     }
 
-    m->in_memory = MAP_SWAPPED;
+    map_set_memory_state(m, MAP_SWAPPED);
     m->celestial_light_valid = false;
     light_map_unlink_end();
 }
@@ -1894,10 +1926,13 @@ void free_map(mapstruct *m, int flag) {
  * The map to delete.
  */
 void delete_map(mapstruct *m) {
+    target_map_publication_forget(m);
     light_batch_flush();
     HARD_ASSERT(m != NULL);
 
     swap_cancel_pending(m);
+    celestial_dependencies_forget(m);
+    celestial_dependencies_field_forget(m);
     celestial_light_forget(m);
 
     if (m->in_memory == MAP_IN_MEMORY) {
@@ -1995,7 +2030,7 @@ mapstruct *ready_map_name(const char *name, mapstruct *originator, int flags) {
         }
 
         clean_tmp_map(m);
-        m->in_memory = MAP_IN_MEMORY;
+        map_set_memory_state(m, MAP_IN_MEMORY);
     }
 
     return m;
@@ -2028,12 +2063,44 @@ void free_all_maps(void) {
         /* I think some of the callers above before it gets here set this to be
          * saving, but we still want to free this data */
         if (map->in_memory == MAP_SAVING) {
-            map->in_memory = MAP_IN_MEMORY;
+            map_set_memory_state(map, MAP_IN_MEMORY);
         }
 
         delete_map(map);
     }
     light_map_unlink_end();
+}
+
+/**
+ * Refresh the gameplay/camera geometry published for one complete live stack.
+ * This deliberately excludes actors, radiance and celestial transmission.
+ * Call before any callback can query a changed stack. The high nibble shares
+ * the retained light signature byte without changing the per-cell allocation.
+ */
+void los_geometry_refresh(mapstruct *map, int x, int y) {
+    HARD_ASSERT(map != NULL);
+    MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+    uint8_t geometry = 0;
+    for (object *op = space->first; op != NULL; op = op->above) {
+        if (QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
+            geometry |= 1U;
+        }
+        if (QUERY_FLAG(op, FLAG_IS_FLOOR)) {
+            geometry |= 2U;
+        }
+        if (object_is_roof_surface(op)) {
+            geometry |= 4U;
+        }
+        if (op->layer == LAYER_WALL) {
+            geometry |= 8U;
+        }
+    }
+    if ((space->light_geometry >> 4) != geometry) {
+        los_geometry_changed();
+        space->light_geometry = (space->light_geometry & 0x0fU) | (geometry << 4);
+    }
+    /* Physical rays read P_BLOCKSVIEW directly, including from callbacks. */
+    space->flags = (space->flags & ~P_BLOCKSVIEW) | ((geometry & 1U) ? P_BLOCKSVIEW : 0);
 }
 
 /**
@@ -2152,6 +2219,7 @@ void update_position(mapstruct *m, int x, int y) {
     }
 #endif
 
+    los_geometry_refresh(m, x, y);
     SET_MAP_FLAGS(m, x, y, flags);
     SET_MAP_MOVE_FLAGS(m, x, y, move_flags);
 }
@@ -2506,7 +2574,7 @@ mapstruct *get_map_from_coord2(mapstruct *m, int *x, int *y) {
  * @return
  * Direction.
  */
-static int coords_distance_to_dir(int x, int y) {
+int coords_distance_to_dir(int x, int y) {
     int q;
     if (!y) {
         q = -300 * x;

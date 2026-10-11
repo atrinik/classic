@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -429,7 +429,7 @@ typedef struct MapSpace_s {
     /** Extra flags from @ref MSP_EXTRA_xxx. */
     uint8_t extra_flags;
 
-    /** Published aggregate local-ray blockers, floors and roof surfaces. */
+    /** Low 3 bits: local-ray geometry. High 4 bits: published LOS geometry. */
     uint8_t light_geometry;
 
     /** Exact five-face transport signature, occupying existing tail padding. */
@@ -1052,6 +1052,7 @@ void set_map_darkness(mapstruct *m, int value);
 mapstruct *get_linked_map(void);
 mapstruct *get_empty_map(int sizex, int sizey);
 void map_set_tile(mapstruct *m, int tile, const char *pathname);
+void los_geometry_refresh(mapstruct *map, int x, int y);
 mapstruct *load_original_map(const char *filename, mapstruct *originator, int flags);
 int new_save_map(mapstruct *m, int flag);
 void free_map(mapstruct *m, int flag);
@@ -1064,6 +1065,8 @@ void set_map_reset_time(mapstruct *map);
 mapstruct *get_map_from_tiled(mapstruct *m, int tiled);
 mapstruct *get_map_from_coord(mapstruct *m, int *x, int *y);
 mapstruct *get_map_from_coord2(mapstruct *m, int *x, int *y);
+/** Convert a planar displacement to the established eight-direction facing. */
+int coords_distance_to_dir(int x, int y);
 int get_rangevector(object *op1, object *op2, rv_vector *retval, int flags);
 int get_rangevector_from_mapcoords(mapstruct *map1,
                                    int x,
