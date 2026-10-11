@@ -49,6 +49,36 @@ class ClassifyChangesTests(unittest.TestCase):
         )
         self.assertTrue(benchmark_tool["benchmark_client"])
 
+    def test_server_benchmark_contract_paths_select_server_suite_and_native_jobs(self) -> None:
+        for path in (
+            "tools/ci/server_benchmark.py",
+            "tools/tests/test_server_benchmark.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify_changes.is_native_shared(path))
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+                self.assertTrue(result["windows"])
+                self.assertTrue(result["benchmark_server"])
+                self.assertFalse(result["benchmark_client"])
+                self.assertEqual(result["codeql_languages"], "python")
+
+    def test_server_benchmark_contract_routing_uses_exact_paths(self) -> None:
+        for path in (
+            "tools/ci/server_benchmark.py.bak",
+            "tools/tests/test_server_benchmark.py.bak",
+            "tools/tests/test_other_benchmark.py",
+        ):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertFalse(result["benchmark_server"])
+                self.assertFalse(result["benchmark_client"])
+                if path.startswith("tools/tests/"):
+                    self.assertFalse(result["client"])
+                    self.assertFalse(result["server"])
+                    self.assertFalse(result["windows"])
+
     def test_benchmark_contract_change_selects_both_suites(self) -> None:
         for path in (
             ".github/workflows/pr-benchmarks.yml",

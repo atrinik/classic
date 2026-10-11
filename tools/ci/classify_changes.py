@@ -24,6 +24,7 @@ NATIVE_SHARED_PATHS = {
     "CMakePresets.json",
     "codecov.yml",
     "tools/tests/test_coverage_presets.py",
+    "tools/tests/test_server_benchmark.py",
     "tools/tests/test_llvm_coverage.py",
     "tools/tests/test_llvm_coverage_identity.py",
     "tools/tests/test_llvm_toolchain.py",
@@ -57,6 +58,7 @@ WINDOWS_TEST_PREFIXES = (
     "tools/ci/",
 )
 WINDOWS_TEST_PATHS = {
+    "tools/tests/test_server_benchmark.py",
     "CMakeLists.txt", "cmake/AtrinikLLVM.cmake", "cmake/InstallLLVMRuntime.cmake",
     "cmake/InstallWindowsRuntime.cmake", "cmake/toolchains/llvm.cmake",
     "cmake/toolchains/llvm-macos.cmake", "tools/tests/test_macos_llvm_toolchain.py",
@@ -104,6 +106,8 @@ SERVER_BENCHMARK_PREFIXES = ("server/cmake/", "server/src/")
 SERVER_BENCHMARK_PATHS = {
     "server/CMakeLists.txt",
     "server/CMakePresets.json",
+    "tools/ci/server_benchmark.py",
+    "tools/tests/test_server_benchmark.py",
 }
 
 
