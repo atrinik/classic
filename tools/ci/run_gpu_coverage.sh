@@ -11,7 +11,13 @@ source_root=$(realpath "$1")
 build_image=$2
 gpu_image=$3
 client_root=${source_root}/client
-coverage_build=${client_root}/build/linux-coverage
+coverage_preset=linux-coverage
+coverage_directory=build/linux-coverage
+if [[ ${ATRINIK_LLVM_TOOLCHAIN:-0} == 1 ]]; then
+  coverage_preset=llvm-coverage
+  coverage_directory=build/llvm-coverage
+fi
+coverage_build=${client_root}/${coverage_directory}
 coverage_record=${coverage_build}/gpu-ui-closure.jsonl
 
 expected_revision=$(git -C "${source_root}" rev-parse --verify HEAD)
@@ -39,6 +45,9 @@ docker run --rm \
   --network none \
   --env ATRINIK_BENCHMARK_REVISION="${expected_revision}" \
   --env ATRINIK_BENCHMARK_DIRTY=false \
+  --env ATRINIK_LLVM_TOOLCHAIN="${ATRINIK_LLVM_TOOLCHAIN:-0}" \
+  --env ATRINIK_COVERAGE_PRESET="${coverage_preset}" \
+  --env ATRINIK_COVERAGE_DIRECTORY="${coverage_directory}" \
   --volume "${source_root}:/workspace" \
   --workdir /workspace \
   "${build_image}" \
@@ -54,12 +63,15 @@ docker run --rm \
       python3 client/tools/dependencies.py verify
       python3 client/tools/verify_gpu_fixture_provenance.py
       cd client
-      cmake --preset linux-coverage \
+      cmake --preset "${ATRINIK_COVERAGE_PRESET}" \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
         -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders
-      cmake --build --preset linux-coverage --parallel "$(nproc)"
-      ctest --preset linux-coverage --output-on-failure --no-tests=error -LE performance
+      cmake --build --preset "${ATRINIK_COVERAGE_PRESET}" --parallel "$(nproc)"
+      if [ "${ATRINIK_LLVM_TOOLCHAIN}" = 1 ]; then
+        python3 /workspace/tools/ci/llvm_coverage.py prepare --build-dir "${ATRINIK_COVERAGE_DIRECTORY}"
+      fi
+      ctest --preset "${ATRINIK_COVERAGE_PRESET}" --output-on-failure --no-tests=error -LE performance
     '
 
 if [[ ! -x ${coverage_build}/client-gpu-renderer-integration-tests ||
@@ -87,22 +99,23 @@ docker run --rm \
   --network none \
   --env ATRINIK_GPU_CONFORMANCE_DRIVER=vulkan \
   --env ATRINIK_GPU_CONFORMANCE_REQUIRED=1 \
-  --env ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY=build/linux-coverage/review \
+  --env ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY="${coverage_directory}/review" \
   --env SDL_VIDEODRIVER=x11 \
   --env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
   --env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  --env LLVM_PROFILE_FILE="${compiled_home}/${coverage_directory}/llvm-profiles/%m-%p.profraw" \
   --volume "${source_root}:${compiled_root}" \
   --workdir "${compiled_home}" \
   "${gpu_image}" \
   sh -c "xvfb-run -a sh -c 'set -eu; \
-    mkdir -p build/linux-coverage/review; \
-    ./build/linux-coverage/client-gpu-renderer-integration-tests; \
-    ./build/linux-coverage/atrinik --gpu-player-view \
+    mkdir -p ${coverage_directory}/review; \
+    ./${coverage_directory}/client-gpu-renderer-integration-tests; \
+    ./${coverage_directory}/atrinik --gpu-player-view \
       src/tests/fixtures/player_view/gpu-ui-closure.xml \
-      > build/linux-coverage/gpu-ui-closure.jsonl; \
+      > ${coverage_directory}/gpu-ui-closure.jsonl; \
     if ATRINIK_GPU_CONFORMANCE_REVIEW_DIRECTORY= \
       ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH=intro_server_browser \
-      ./build/linux-coverage/atrinik --gpu-player-view \
+      ./${coverage_directory}/atrinik --gpu-player-view \
         src/tests/fixtures/player_view/gpu-ui-closure.xml >/dev/null 2>&1; then \
       echo GPU UI closure accepted a suppressed root glyph >&2; \
       exit 1; \
@@ -116,7 +129,17 @@ docker run --rm \
   --network none \
   --volume "${source_root}:${compiled_root}" \
   --workdir "${compiled_root}/client" \
+  --env ATRINIK_LLVM_TOOLCHAIN="${ATRINIK_LLVM_TOOLCHAIN:-0}" \
+  --env ATRINIK_COVERAGE_PRESET="${coverage_preset}" \
+  --env ATRINIK_COVERAGE_DIRECTORY="${coverage_directory}" \
   "${build_image}" \
-  gcovr --root . --filter src/ --exclude src/tests/ \
-    --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-    --print-summary --xml coverage.xml
+  sh -c '
+    if [ "${ATRINIK_LLVM_TOOLCHAIN}" = 1 ]; then
+      python3 ../tools/ci/llvm_coverage.py export \
+        --build-dir "${ATRINIK_COVERAGE_DIRECTORY}" --source-root .. \
+        --component client --output coverage.lcov
+    else
+      gcovr --root . --filter src/ --exclude src/tests/ \
+        --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
+        --print-summary --xml coverage.xml
+    fi'

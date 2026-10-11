@@ -33,12 +33,71 @@ test -w "${CCACHE_DIR}"
 test "$(stat --format='%a' "${CCACHE_DIR}")" = 1777
 test "$(jq -r '.target' /usr/local/share/atrinik/classic-toolchain.json)" = classic-final
 test "$(jq -r '.platform' /usr/local/share/atrinik/classic-toolchain.json)" = linux/amd64
-test "$(jq -r '.tools.gcc' /usr/local/share/atrinik/classic-toolchain.json)" = 15.2.0
+llvm_toolchain=${ATRINIK_LLVM_TOOLCHAIN:-0}
+coverage_preset=linux-coverage
+coverage_directory=build/linux-coverage
+release_directory=build/linux-release
+integrated_release_directory=build/integrated-linux-release
+sanitizer_directory=build/linux-sanitizers
+protocol_directory=build/check
+library_release_directory=build/release
+install_directory=build/install
+consumer_directory=build/consumer
+if [[ ${llvm_toolchain} == 1 ]]; then
+  test "$(jq -r '.tools.clang' /usr/local/share/atrinik/classic-toolchain.json)" = 23.1.3
+  export CC=clang CXX=clang++
+  coverage_preset=llvm-coverage
+  coverage_directory=build/llvm-coverage
+  # CMake retains its compiler in the cache even when CC/CXX change. Keep every
+  # compiler-specific validation tree separate from the transitional GCC lane.
+  release_directory=build/llvm-release
+  integrated_release_directory=build/integrated-llvm-release
+  sanitizer_directory=build/llvm-sanitizers
+  protocol_directory=build/llvm-check
+  library_release_directory=build/llvm-release
+  install_directory=build/llvm-install
+  consumer_directory=build/llvm-consumer
+else
+  # Transitional validation for the previously released immutable image.
+  test "$(jq -r '.tools.gcc' /usr/local/share/atrinik/classic-toolchain.json)" = 15.2.0
+fi
 
 launcher=(
   -DCMAKE_C_COMPILER_LAUNCHER=ccache
   -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 )
+if [[ ${llvm_toolchain} == 1 ]]; then
+  launcher+=("-DCMAKE_TOOLCHAIN_FILE=${source_root}/cmake/toolchains/llvm.cmake")
+fi
+
+# Noncoverage tests select their build tree directly: before CTest 3.30, a
+# --preset ignores --test-dir. Keep their output/parallel settings explicit.
+
+# These functions run in the owning module directory. CTest's coverage preset
+# supplies %m-%p profile names, separating parallel processes and shared plugins.
+prepare_coverage() {
+  if [[ ${llvm_toolchain} == 1 ]]; then
+    python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir "${coverage_directory}"
+  fi
+}
+export_coverage() {
+  local module=$1
+  if [[ ${llvm_toolchain} == 1 ]]; then
+    python3 "${source_root}/tools/ci/llvm_coverage.py" export \
+      --build-dir "${coverage_directory}" --source-root "${source_root}" \
+      --component "${module}" --output coverage.lcov
+  elif [[ ${module} == libatrinik ]]; then
+    gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
+      --exclude '.*/build/.*' \
+      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
+      --print-summary --xml coverage.xml
+  else
+    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
+      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
+      --print-summary --xml coverage.xml
+  fi
+}
+
 sibling_sources=(
   -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${source_root}/protocol"
   -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${source_root}/libatrinik"
@@ -83,37 +142,35 @@ ccache --zero-stats >/dev/null
 
 case "${component}" in
   core)
-    cmake -S "${source_root}/protocol" -B "${source_root}/protocol/build/check" \
+    cmake -S "${source_root}/protocol" -B "${source_root}/protocol/${protocol_directory}" \
       -G Ninja -DCMAKE_BUILD_TYPE=Release "${launcher[@]}"
-    cmake --build "${source_root}/protocol/build/check" --parallel "${jobs}"
-    ctest --test-dir "${source_root}/protocol/build/check" --output-on-failure
+    cmake --build "${source_root}/protocol/${protocol_directory}" --parallel "${jobs}"
+    ctest --test-dir "${source_root}/protocol/${protocol_directory}" --output-on-failure
 
     pushd "${source_root}/libatrinik" >/dev/null
-    cmake --preset linux-coverage \
+    cmake --preset "${coverage_preset}" \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
-    ctest --preset linux-coverage
-    gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
-      --exclude '.*/build/.*' \
-      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-      --print-summary --xml coverage.xml
-    cmake --preset linux-sanitizers \
+    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
+    prepare_coverage
+    ctest --preset "${coverage_preset}"
+    export_coverage libatrinik
+    cmake --preset linux-sanitizers -B "${sanitizer_directory}" \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
-    cmake --build --preset linux-sanitizers --parallel "${jobs}"
+    cmake --build "${sanitizer_directory}" --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers
-    cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX="${PWD}/build/install" \
+      ctest --test-dir "${sanitizer_directory}" --output-on-failure
+    cmake -S . -B "${library_release_directory}" -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="${PWD}/${install_directory}" \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
-    cmake --build build/release --parallel "${jobs}"
-    cmake --install build/release
-    cmake -S tests/consumer -B build/consumer \
-      -DCMAKE_PREFIX_PATH="${PWD}/build/install" "${launcher[@]}"
-    cmake --build build/consumer --parallel "${jobs}"
-    build/consumer/libatrinik-consumer
+    cmake --build "${library_release_directory}" --parallel "${jobs}"
+    cmake --install "${library_release_directory}"
+    cmake -S tests/consumer -B "${consumer_directory}" \
+      -DCMAKE_PREFIX_PATH="${PWD}/${install_directory}" "${launcher[@]}"
+    cmake --build "${consumer_directory}" --parallel "${jobs}"
+    "${consumer_directory}/libatrinik-consumer"
     popd >/dev/null
     ;;
   server)
@@ -122,23 +179,22 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset linux-coverage \
+    cmake --preset "${coverage_preset}" \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
-    ctest --preset linux-coverage --parallel 4 -LE performance
-    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
-      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-      --print-summary --xml coverage.xml
-    cmake --preset linux-release \
+    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
+    prepare_coverage
+    ctest --preset "${coverage_preset}" --parallel 4 -LE performance
+    export_coverage server
+    cmake --preset linux-release -B "${release_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-release --parallel "${jobs}"
-    ctest --preset linux-release --parallel 4 -LE performance
-    cmake --preset linux-sanitizers \
+    cmake --build "${release_directory}" --parallel "${jobs}"
+    ctest --test-dir "${release_directory}" --output-on-failure --parallel 4 -LE performance
+    cmake --preset linux-sanitizers -B "${sanitizer_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-sanitizers --parallel "${jobs}"
+    cmake --build "${sanitizer_directory}" --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers --parallel 4 -LE performance
+      ctest --test-dir "${sanitizer_directory}" --output-on-failure --parallel 4 -LE performance
     popd >/dev/null
     ;;
   client)
@@ -147,22 +203,21 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset linux-coverage \
+    cmake --preset "${coverage_preset}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-coverage --parallel "${jobs}"
-    ctest --preset linux-coverage -LE performance
-    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
-      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-      --print-summary --xml coverage.xml
-    cmake --preset linux-release \
+    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
+    prepare_coverage
+    ctest --preset "${coverage_preset}" -LE performance
+    export_coverage client
+    cmake --preset linux-release -B "${release_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-release --parallel "${jobs}"
-    ctest --preset linux-release -LE performance
-    cmake --preset linux-sanitizers \
+    cmake --build "${release_directory}" --parallel "${jobs}"
+    ctest --test-dir "${release_directory}" --output-on-failure -LE performance
+    cmake --preset linux-sanitizers -B "${sanitizer_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-sanitizers --parallel "${jobs}"
+    cmake --build "${sanitizer_directory}" --parallel "${jobs}"
     env ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
-      ctest --preset linux-sanitizers -LE performance
+      ctest --test-dir "${sanitizer_directory}" --output-on-failure -LE performance
     popd >/dev/null
     ;;
   client-benchmark)
@@ -177,9 +232,9 @@ case "${component}" in
     python3 tools/dependencies.py verify
     env ATRINIK_BENCHMARK_REVISION="${ATRINIK_BENCHMARK_REVISION:-unknown}" \
       ATRINIK_BENCHMARK_DIRTY=false \
-      cmake --preset linux-release \
+      cmake --preset linux-release -B "${release_directory}" \
         "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-release --target atrinik --parallel "${jobs}"
+    cmake --build "${release_directory}" --target atrinik --parallel "${jobs}"
     if [[ ! -f ${source_root}/client/src/client/player_view.c ]]; then
       printf '%s\n' \
         '{"schema_version":1,"skipped":true,"reason":"gpu-hardware-qualification-required"}' \
@@ -368,11 +423,11 @@ case "${component}" in
         --lock "${baseline_root}/client/dependencies.lock.json"
       env ATRINIK_BENCHMARK_REVISION="${benchmark_base_sha}" \
         ATRINIK_BENCHMARK_DIRTY=false \
-        cmake --preset linux-release \
+        cmake --preset linux-release -B "${release_directory}" \
         "${launcher[@]}" \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${baseline_root}/protocol" \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${baseline_root}/libatrinik"
-      cmake --build --preset linux-release --target atrinik --parallel "${jobs}"
+      cmake --build "${release_directory}" --target atrinik --parallel "${jobs}"
       popd >/dev/null
       if ! git -C "${baseline_root}" diff --quiet HEAD --; then
         echo "benchmark comparison build modified its immutable base source" >&2
@@ -387,10 +442,10 @@ case "${component}" in
     if [[ ${lighting_comparison} == true ]]; then
       command_status=0
       python3 "${source_root}/client/tools/benchmark_lighting_regression.py" \
-        --baseline-client "${baseline_root}/client/build/linux-release/atrinik" \
+        --baseline-client "${baseline_root}/client/${release_directory}/atrinik" \
         --baseline-manifest \
           "${baseline_root}/client/src/tests/fixtures/player_view/colored-smooth.xml" \
-        --candidate-client "${source_root}/client/build/linux-release/atrinik" \
+        --candidate-client "${source_root}/client/${release_directory}/atrinik" \
         --candidate-manifest \
           "${source_root}/client/src/tests/fixtures/player_view/colored-smooth.xml" \
         --samples 3 \
@@ -414,7 +469,7 @@ case "${component}" in
     probe_status=0
     if [[ ${movement_action} != skip ]]; then
       python3 "${source_root}/client/tools/verify_movement_probe_control.py" \
-        "${source_root}/client/build/linux-release/atrinik" \
+        "${source_root}/client/${release_directory}/atrinik" \
         "${source_root}/client/src/tests/fixtures/player_view/movement-lighting-isolated.xml" \
         || probe_status=$?
     fi
@@ -425,11 +480,11 @@ case "${component}" in
     command_status=0
     if [[ ${movement_action} == compare ]]; then
       python3 "${source_root}/client/tools/benchmark_movement_regression.py" compare \
-        --baseline-client "${baseline_root}/client/build/linux-release/atrinik" \
+        --baseline-client "${baseline_root}/client/${release_directory}/atrinik" \
         --baseline-manifest \
           "${baseline_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
         --baseline-schema "${movement_baseline_schema}" \
-        --candidate-client "${source_root}/client/build/linux-release/atrinik" \
+        --candidate-client "${source_root}/client/${release_directory}/atrinik" \
         --candidate-manifest \
           "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
         --discrete-manifest \
@@ -451,7 +506,7 @@ case "${component}" in
         movement_matrix_arguments+=(--full-matrix)
       fi
       python3 "${source_root}/client/tools/benchmark_movement_regression.py" candidate-only \
-        --candidate-client "${source_root}/client/build/linux-release/atrinik" \
+        --candidate-client "${source_root}/client/${release_directory}/atrinik" \
         --candidate-manifest \
           "${source_root}/client/src/tests/fixtures/player_view/movement-colored.xml" \
         --candidate-revision "${ATRINIK_BENCHMARK_REVISION:-unknown}" \
@@ -488,8 +543,8 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset linux-release "${launcher[@]}" "${sibling_sources[@]}"
-    cmake --build --preset linux-release --parallel "${jobs}"
+    cmake --preset linux-release -B "${release_directory}" "${launcher[@]}" "${sibling_sources[@]}"
+    cmake --build "${release_directory}" --parallel "${jobs}"
     popd >/dev/null
 
     baseline_root="${source_root}/build/ci-server-benchmark-baseline"
@@ -515,22 +570,22 @@ case "${component}" in
       --downloads "${dependency_downloads}" \
       --offline)
     pushd "${baseline_root}/server" >/dev/null
-    cmake --preset linux-release \
+    cmake --preset linux-release -B "${release_directory}" \
       "${launcher[@]}" \
       -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${baseline_root}/protocol" \
       -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${baseline_root}/libatrinik" \
       -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP="${baseline_pcpnatpmp_source}"
-    cmake --build --preset linux-release --parallel "${jobs}"
+    cmake --build "${release_directory}" --parallel "${jobs}"
     popd >/dev/null
     if ! git -C "${baseline_root}" diff --quiet HEAD --; then
       echo "server benchmark build modified its immutable base source" >&2
       exit 2
     fi
 
-    ctest --test-dir "${baseline_root}/server/build/linux-release" \
+    ctest --test-dir "${baseline_root}/server/${release_directory}" \
       --verbose -R '^server-content-benchmark$' 2>&1 | \
       tee "${source_root}/build/ci-evidence/server-content-benchmark-base.log"
-    ctest --test-dir "${source_root}/server/build/linux-release" \
+    ctest --test-dir "${source_root}/server/${release_directory}" \
       --verbose -R '^server-content-benchmark$' 2>&1 | \
       tee "${source_root}/build/ci-evidence/server-content-benchmark-head.log"
     # Markdown code spans are intentionally literal.
@@ -549,10 +604,10 @@ case "${component}" in
     ;;
   integrated)
     pushd "${source_root}" >/dev/null
-    cmake --preset linux-release \
+    cmake --preset linux-release -B "${integrated_release_directory}" \
       -DBUILD_TESTING=OFF \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset linux-release --parallel "${jobs}"
+    cmake --build "${integrated_release_directory}" --parallel "${jobs}"
     popd >/dev/null
     ;;
 esac
