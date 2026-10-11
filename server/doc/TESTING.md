@@ -57,10 +57,6 @@ version mismatches and LLVM diagnostics fail collection. Compare sequential and
 parallel LCOV counts and stress randomized four-way scheduling before accepting
 parallel coverage evidence.
 
-During the immutable producer transition only, the previous GCC image retains
-object-adjacent `.gcda` profiles, atomic counters and gcovr export. New LLVM
-coverage does not consume those files.
-
 Use `ctest --preset PRESET --schedule-random --repeat until-fail:COUNT` for a
 stress pass. A failure's working files are attributable at
 `build/PRESET/server-test-runtimes/TEST-NAME`; CTest stdout/stderr remains in

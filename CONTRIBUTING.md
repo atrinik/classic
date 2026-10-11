@@ -114,6 +114,14 @@ packages. Producers verify their checkout and name uploaded artifacts with that
 revision; consumers select the matching revision before verifying locked inputs.
 Push, merge-group, and manual runs build one cohort for the event revision.
 
+Native Classic builds require Clang 23.1.3, LLD, compiler-rt and LLVM archive
+tools. Linux links also select matching libunwind; Windows uses the pinned
+LLVM-MinGW UCRT toolchain. The integrated and standalone CMake entry points
+select the native Linux toolchain by default and validate explicit toolchains
+after compiler detection. Keep existing debug/release optimization and portable
+CPU flags; do not enable LTO or PGO. Native test coverage uses LLVM source
+profiles and LCOV, with atomic counters and isolated binary/process filenames.
+
 Linux Check compiles protocol/libatrinik, server, and client inside the exact
 digest-pinned `ghcr.io/atrinik/classic-build` image declared in
 `.github/workflows/check.yml`. Each job restores only its own ccache directory,
@@ -131,7 +139,7 @@ candidate. Use that candidate digest only for pre-merge consumer evidence. Once
 the devcontainer change is released, verify the release image's embedded
 inventory and source coordinates, then replace both image and digest constants
 with its versioned digest before making the Classic pull request ready. Update
-the compiler identity if needed, and increment `CLASSIC_LINUX_CCACHE_EPOCH` for any
+the LLVM identity if needed, and increment `CLASSIC_LINUX_CCACHE_EPOCH` for any
 cache contract change not represented by the hashed configuration inputs. Run
 the cache-key unit tests, then use cold and repeated Check runs to inspect the
 raw ccache artifacts and image timing summary before accepting the pin.

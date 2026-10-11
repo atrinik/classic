@@ -31,6 +31,12 @@
 - The root CMake project is the integrated client/server graph and must add
   protocol and libatrinik exactly once. Keep component CMake entry points,
   presets, source packaging, and installed consumers independently functional.
+- Native C17 builds require Clang 23.1.3, LLD and compiler-rt, with matching
+  libunwind on Linux or the LLVM-MinGW UCRT toolchain on Windows. Integrated
+  and standalone CMake entry points validate that cohort. Preserve build-type
+  optimization and explicit portable CPU flags; do not enable LTO or PGO.
+  Native coverage uses atomic LLVM counters and binary/process-specific raw
+  profiles, exported to LCOV with matching llvm-profdata and llvm-cov.
 - All Atrinik-authored source in this monorepo, including `protocol/`, is
   GPL-2.0-or-later under the single root `LICENSE.md`. Preserve every compatible
   third-party asset/code notice, attribution, imported commit map, retired-ref

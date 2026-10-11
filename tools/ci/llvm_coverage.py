@@ -70,8 +70,14 @@ def coverage_objects(build_dir):
 
 def filter_lcov(report, source_root, component):
     root = source_root.resolve()
-    prefixes = [root / component] if component != "all" else [
-        root / "client", root / "server", root / "libatrinik"]
+    modules = ("client", "server", "libatrinik") if component == "all" else (component,)
+    prefixes = []
+    for module in modules:
+        prefix = root / module
+        # Scoped source archives retain their module layout at archive root.
+        if component != "all" and not prefix.is_dir():
+            prefix = root
+        prefixes.append((module, prefix))
     records = []
     for record in report.split("end_of_record"):
         match = re.search(r"^SF:(.+)$", record, re.MULTILINE)
@@ -81,7 +87,7 @@ def filter_lcov(report, source_root, component):
         if not path.is_absolute():
             path = root / path
         path = path.resolve()
-        for prefix in prefixes:
+        for module, prefix in prefixes:
             if not path.is_relative_to(prefix):
                 continue
             relative = path.relative_to(prefix)
@@ -89,7 +95,7 @@ def filter_lcov(report, source_root, component):
             # bundled upstream sources never contribute to Classic coverage.
             excluded = {"tests", "build", "dependencies", "_deps", "third_party", "third-party"}
             if path.suffix == ".c" and not excluded.intersection(relative.parts):
-                if prefix.name == "libatrinik" or relative.parts[0] == "src":
+                if module == "libatrinik" or relative.parts[0] == "src":
                     records.append(record.strip() + "\nend_of_record\n")
             break
     if not records:

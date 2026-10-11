@@ -12,11 +12,16 @@ if (NOT ATRINIK_INTEGRATED_BUILD)
             "${ATRINIK_COMPONENT_SOURCE_DIR}/../cmake/AtrinikVersion.cmake")
     endif ()
     include("${ATRINIK_VERSION_MODULE}")
+    get_filename_component(ATRINIK_CMAKE_MODULE_DIR "${ATRINIK_VERSION_MODULE}" DIRECTORY)
+    include("${ATRINIK_CMAKE_MODULE_DIR}/AtrinikLLVM.cmake")
+    unset(ATRINIK_CMAKE_MODULE_DIR)
     unset(ATRINIK_VERSION_MODULE)
     unset(ATRINIK_COMPONENT_CMAKE_FILE)
     unset(ATRINIK_COMPONENT_SOURCE_DIR)
     atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
+    atrinik_initialize_llvm_toolchain()
     project(atrinik-client VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
+    atrinik_require_llvm()
     atrinik_initialize_version_metadata()
 endif ()
 
@@ -168,7 +173,7 @@ atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
-option(ENABLE_COVERAGE "Enable native compiler coverage instrumentation" OFF)
+option(ENABLE_COVERAGE "Enable native LLVM coverage instrumentation" OFF)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, appimage, deb, rpm, nsis, or zip)")
 set(ATRINIK_DISCORD_APPLICATION_ID_FILE "" CACHE FILEPATH
     "Optional file containing the public Discord Application ID")
@@ -216,7 +221,7 @@ function(atrinik_configure_target target)
     target_compile_features(${target} PRIVATE c_std_17)
     target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
     atrinik_apply_version_metadata(${target})
-    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wno-unused-parameter -fno-common)
         if (ENABLE_WARNING_ERRORS)
@@ -224,8 +229,8 @@ function(atrinik_configure_target target)
         endif ()
     endif ()
     if (ENABLE_SANITIZERS)
-        if (MINGW OR NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-            message(FATAL_ERROR "ENABLE_SANITIZERS requires native GCC or Clang")
+        if (MINGW OR NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+            message(FATAL_ERROR "ENABLE_SANITIZERS requires native Clang")
         endif ()
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -240,15 +245,8 @@ function(atrinik_configure_target target)
             if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
                 target_link_options(${target} PRIVATE -fprofile-instr-generate)
             endif ()
-        elseif (CMAKE_C_COMPILER_ID STREQUAL "GNU")
-            # Transitional support for the previous immutable producer image.
-            target_compile_options(${target} PRIVATE
-                --coverage -fprofile-abs-path -O0 -g)
-            if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
-                target_link_options(${target} PRIVATE --coverage)
-            endif ()
         else ()
-            message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang or GCC")
+            message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang")
         endif ()
     endif ()
 endfunction()
@@ -974,10 +972,10 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-compound-packet-tests)
     # Keep optimized switch tables separate when discarding unrelated handlers.
     target_compile_options(client-compound-packet-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-fdata-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-fdata-sections>)
     target_link_options(client-compound-packet-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
     target_compile_definitions(client-compound-packet-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-compound-packet-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -995,10 +993,10 @@ if (BUILD_TESTING)
         src/tests/book_edit.c src/client/book_edit_packet.c src/client/book_edit_model.c src/gui/toolkit/text_input.c)
     atrinik_configure_target(client-book-edit-tests)
     target_compile_options(client-book-edit-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-fdata-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-fdata-sections>)
     target_link_options(client-book-edit-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
     target_compile_definitions(client-book-edit-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-book-edit-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -1176,9 +1174,9 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-item-drag-tests)
     target_compile_definitions(client-item-drag-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_compile_options(client-item-drag-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-item-drag-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
     target_include_directories(client-item-drag-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -1192,9 +1190,9 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-notification-tests)
     target_compile_definitions(client-notification-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_compile_options(client-notification-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-notification-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
     target_include_directories(client-notification-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -1225,9 +1223,9 @@ if (BUILD_TESTING)
         ATRINIK_RENDER_PROFILER_TESTING
         SDL_DISABLE_OLD_NAMES)
     target_compile_options(client-render-profiler-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-render-profiler-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
     target_include_directories(client-render-profiler-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include

@@ -1,6 +1,6 @@
 add_executable(atrinik-pathfinding-tests test_pathfinding.c)
 target_link_libraries(atrinik-pathfinding-tests PRIVATE Atrinik::Pathfinding)
-if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(atrinik-pathfinding-tests PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
     if (NOT DEFINED ENABLE_WARNING_ERRORS OR ENABLE_WARNING_ERRORS)

@@ -76,12 +76,19 @@ class NativeCoverageTests(unittest.TestCase):
         self.assertEqual(actual, record(self.root / paths[0]) + record(self.root / paths[1]))
 
     def test_library_includes_standalone_pathfinding_without_tests(self):
+        (self.root / "libatrinik").mkdir()
         report = "".join(record(self.root / path) for path in
                          ["libatrinik/socket.c", "libatrinik/pathfinding/pathfinding.c",
                           "libatrinik/pathfinding/tests/test.c", "libatrinik/dependencies/source.c"])
         self.assertEqual(coverage.filter_lcov(report, self.root, "libatrinik"),
                          record(self.root / "libatrinik/socket.c") +
                          record(self.root / "libatrinik/pathfinding/pathfinding.c"))
+
+    def test_scoped_source_archive_uses_module_root_layout(self):
+        scoped = self.root / "atrinik-classic-libatrinik-5.1.0"
+        scoped.mkdir()
+        report = record(scoped / "socket.c") + record(scoped / "pathfinding/pathfinding.c")
+        self.assertEqual(coverage.filter_lcov(report, scoped, "libatrinik"), report)
 
     def test_no_profile_is_a_failure(self):
         coverage.prepare(self.build)
