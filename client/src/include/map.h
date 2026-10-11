@@ -296,6 +296,7 @@ typedef struct map_lighting_diagnostic {
 
 typedef struct map_target_struct {
     uint32_t count;
+    int8_t depth;
     int x;
     int y;
 } map_target_struct;

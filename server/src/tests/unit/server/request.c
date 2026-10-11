@@ -938,9 +938,73 @@ START_TEST(test_target_packet_includes_current_level_and_plain_name) {
     ck_assert(packet_reader_read_string(&reader, VS(name)));
     ck_assert_str_eq(name, pl->name);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), 42);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), 0);
+    ck_assert_int_eq(packet_reader_read_int8(&reader), 0);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), CONTR(pl)->combat);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), CONTR(pl)->combat_force);
     ck_assert(packet_reader_finish(&reader));
+}
+END_TEST
+
+START_TEST(test_target_select_requires_exact_packet_before_mutation) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    const uint32_t previous_count = 0x12345678;
+    uint8_t select[] = {CMD_TARGET_MAPXY, pl->cs->mapx_2, pl->cs->mapy_2,
+                        0, 0x12, 0x34, 0x56, 0x78, 0};
+    for (size_t len = 0; len < sizeof(select); len++) {
+        if (len == 8) {
+            continue;
+        }
+        pl->target_object = op;
+        pl->target_object_count = previous_count;
+        socket_buffer_clear(pl->cs);
+        socket_command_target(pl->cs, pl, select, len, 0);
+        ck_assert_ptr_eq(pl->target_object, op);
+        ck_assert_uint_eq(pl->target_object_count, previous_count);
+        ck_assert_ptr_null(queued_command_find(pl->cs, CLIENT_CMD_TARGET));
+    }
+    const uint8_t invalid[][8] = {
+        {CMD_TARGET_MAPXY, 255, 0, 0, 0, 0, 0, 1},
+        {CMD_TARGET_MAPXY, 0, 255, 0, 0, 0, 0, 1},
+        {CMD_TARGET_MAPXY, 0, 0, MAP2_MAX_DEPTH + 1, 0, 0, 0, 1},
+        {CMD_TARGET_MAPXY, 0, 0, (uint8_t)(-MAP2_MAX_DEPTH - 1), 0, 0, 0, 1},
+        {255, 0, 0, 0, 0, 0, 0, 1},
+        {CMD_TARGET_CLEAR, 0, 0, 0, 0, 0, 0, 0},
+    };
+    for (size_t i = 0; i < arraysize(invalid); i++) {
+        socket_command_target(pl->cs, pl, (uint8_t *)invalid[i], sizeof(invalid[i]), 0);
+        ck_assert_ptr_eq(pl->target_object, op);
+        ck_assert_uint_eq(pl->target_object_count, previous_count);
+    }
+}
+END_TEST
+
+START_TEST(test_target_stale_forged_and_unavailable_depth_resolve_self) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        uint8_t select[] = {CMD_TARGET_MAPXY, pl->cs->mapx_2, pl->cs->mapy_2,
+                            (uint8_t)depth, 0xff, 0xff, 0xff, 0xff};
+        pl->target_object = op;
+        pl->target_object_count = op->count;
+        socket_buffer_clear(pl->cs);
+        socket_command_target(pl->cs, pl, select, sizeof(select), 0);
+        ck_assert_ptr_eq(pl->target_object, op);
+        ck_assert_uint_eq(pl->target_object_count, 0);
+        ck_assert_ptr_null(op->enemy);
+        packet_struct *packet = queued_command_find(pl->cs, CLIENT_CMD_TARGET);
+        ck_assert_ptr_nonnull(packet);
+        ck_assert_uint_eq(packet->data[0], CMD_TARGET_SELF);
+    }
+    uint8_t clear = CMD_TARGET_CLEAR;
+    socket_command_target(pl->cs, pl, &clear, sizeof(clear), 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_uint_eq(pl->target_object_count, 0);
 }
 END_TEST
 
@@ -2790,6 +2854,8 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_target_packet_includes_current_level_and_plain_name);
+    tcase_add_test(tc_core, test_target_select_requires_exact_packet_before_mutation);
+    tcase_add_test(tc_core, test_target_stale_forged_and_unavailable_depth_resolve_self);
     tcase_add_test(tc_core, test_wizardry_level_change_refreshes_spell_cost_once);
     tcase_add_test(tc_core, test_setup_round_trip_uses_current_option_ids);
     tcase_add_test(tc_core, test_setup_rejects_unknown_option);

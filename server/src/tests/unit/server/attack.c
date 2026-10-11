@@ -133,6 +133,8 @@ static void attack_test_assert_target_packet(object *pl, object *target) {
     ck_assert(packet_reader_read_string(&reader, VS(name)));
     ck_assert_str_eq(name, target->name);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), target->level);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), target->count);
+    ck_assert_int_eq(packet_reader_read_int8(&reader), 0);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), CONTR(pl)->combat);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), CONTR(pl)->combat_force);
     ck_assert(packet_reader_finish(&reader));

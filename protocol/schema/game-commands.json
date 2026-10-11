@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol_version": 1083,
+  "protocol_version": 1084,
   "item_name_size": 128,
   "item_extra_message_size": 256,
   "player_status": {

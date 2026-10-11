@@ -151,6 +151,10 @@ typedef struct Player_Struct {
     /** Target level. */
     uint8_t target_level;
 
+    /** Authoritative target identity and live MAP2 relative depth. */
+    uint32_t target_actor_count;
+    int8_t target_relative_depth;
+
     int warn_hp;
 
     /** Currently marked item. */

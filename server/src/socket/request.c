@@ -33,6 +33,9 @@
  * way, we can use one dispatch table.
  */
 
+#include <atrinik/protocol/target.h>
+#include <perception.h>
+#include <spatial.h>
 #include <global.h>
 #include <movement.h>
 #include <server_main.h>
@@ -2692,14 +2695,19 @@ void send_target_command(player *pl) {
         return;
     }
 
+    int target_depth = 0, dx, dy;
+    bool target_authorized = pl->target_object != NULL && pl->target_object != pl->ob &&
+                             OBJECT_VALID(pl->target_object, pl->target_object_count) &&
+                             perception_player_authorized(pl, pl->target_object) &&
+                             spatial_offset(pl->ob->map, pl->target_object->map,
+                                            &dx, &dy, &target_depth) &&
+                             target_depth >= -MAP2_MAX_DEPTH && target_depth <= MAP2_MAX_DEPTH;
     packet = packet_new(CLIENT_CMD_TARGET, 64, 64);
 
     pl->ob->enemy = NULL;
     pl->ob->enemy_count = 0;
 
-    if (!pl->target_object || pl->target_object == pl->ob ||
-        !OBJECT_VALID(pl->target_object, pl->target_object_count) ||
-        IS_INVISIBLE(pl->target_object, pl->ob)) {
+    if (!target_authorized) {
         packet_debug_data(packet, 0, "Target command type");
         packet_writer_write_uint8(packet, CMD_TARGET_SELF);
         packet_debug_data(packet, 0, "Color");
@@ -2738,6 +2746,10 @@ void send_target_command(player *pl) {
         packet_writer_write_uint8(packet, pl->target_object->level);
     }
 
+    packet_debug_data(packet, 0, "Target actor identity");
+    packet_writer_write_uint32(packet, pl->target_object_count);
+    packet_debug_data(packet, 0, "Target relative depth");
+    packet_writer_write_int8(packet, target_authorized ? target_depth : 0);
     packet_debug_data(packet, 0, "Combat mode");
     packet_writer_write_uint8(packet, pl->combat);
     packet_debug_data(packet, 0, "Combat force mode");
@@ -2834,85 +2846,53 @@ void generate_quick_name(player *pl) {
 }
 
 void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
+    (void)ns;
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
-    uint8_t type;
-
-    type = packet_reader_read_uint8(&reader);
-
+    uint8_t type = packet_reader_read_uint8(&reader);
+    uint8_t x = 0, y = 0;
+    int8_t depth = 0;
+    uint32_t count = 0;
     if (type == CMD_TARGET_MAPXY) {
-        uint8_t x, y;
-        uint32_t count, target_object_count;
-        int i, xt, yt;
-        mapstruct *m;
-        object *tmp;
-
         x = packet_reader_read_uint8(&reader);
         y = packet_reader_read_uint8(&reader);
+        depth = packet_reader_read_int8(&reader);
         count = packet_reader_read_uint32(&reader);
+    } else if (type != CMD_TARGET_CLEAR) {
+        return;
+    }
+    /* Exact framing and semantic validation precede every state mutation. */
+    if (!packet_reader_finish(&reader) || pl == NULL || pl->ob == NULL ||
+        pl->ob->map == NULL ||
+        (type == CMD_TARGET_MAPXY &&
+         (x >= pl->cs->mapx || y >= pl->cs->mapy ||
+          depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH))) {
+        return;
+    }
 
-        /* Validate the passed x/y. */
-        if (x >= pl->cs->mapx || y >= pl->cs->mapy) {
-            LOG(PACKET, "Invalid X/Y: %d, %d", x, y);
-            return;
-        }
-
-        target_object_count = pl->target_object_count;
-        pl->target_object = NULL;
-        pl->target_object_count = 0;
-
-        for (i = 0; i <= SIZEOFFREE1 && !pl->target_object_count; i++) {
-            /* Check whether we are still in range of the player's
-             * viewport, and whether the player can see the square. */
-            if (x + freearr_x[i] < 0 || x + freearr_x[i] >= pl->cs->mapx || y + freearr_y[i] < 0 ||
-                y + freearr_y[i] >= pl->cs->mapy ||
-                pl->blocked_los[x + freearr_x[i]][y + freearr_y[i]] > BLOCKED_LOS_BLOCKSVIEW) {
-                continue;
-            }
-
-            /* The x/y we got above is from the client's map, so 0,0 is
-             * actually topmost (northwest) corner of the map in the client,
-             * and not 0,0 of the actual map, so we need to transform it to
-             * actual map coordinates. */
-            xt = pl->ob->x + (x - pl->cs->mapx_2) + freearr_x[i];
-            yt = pl->ob->y + (y - pl->cs->mapy_2) + freearr_y[i];
-            m = get_map_from_coord(pl->ob->map, &xt, &yt);
-
-            /* Invalid x/y. */
-            if (!m) {
-                continue;
-            }
-
-            /* Nothing alive on this spot. */
-            if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
-                continue;
-            }
-
-            FOR_MAP_LAYER_BEGIN(m, xt, yt, LAYER_LIVING, -1, tmp) {
-                tmp = HEAD(tmp);
-
-                if ((!count || tmp->count == count) && IS_LIVE(tmp) && tmp != pl->ob &&
-                    !IS_INVISIBLE(tmp, pl->ob) && !OBJECT_IS_HIDDEN(pl->ob, tmp)) {
-                    pl->target_object = tmp;
-                    pl->target_object_count = tmp->count;
+    object *target = NULL;
+    if (type == CMD_TARGET_MAPXY && count != 0) {
+        spatial_cell cell;
+        int xt = pl->ob->x + x - pl->cs->mapx_2;
+        int yt = pl->ob->y + y - pl->cs->mapy_2;
+        if (spatial_resolve(pl->ob->map, xt, yt, depth, &cell)) {
+            object *part;
+            FOR_MAP_LAYER_BEGIN(cell.map, cell.x, cell.y, LAYER_LIVING, -1, part) {
+                object *head = HEAD(part);
+                if (head != pl->ob && head->count == count && IS_LIVE(head) &&
+                    perception_player_part_authorized(pl, part)) {
+                    target = head;
                     FOR_MAP_LAYER_BREAK;
                 }
             }
             FOR_MAP_LAYER_END
         }
-
-        if (pl->target_object_count != target_object_count) {
-            send_target_command(pl);
-        }
-    } else if (type == CMD_TARGET_CLEAR) {
-        if (pl->target_object_count) {
-            pl->target_object = NULL;
-            pl->target_object_count = 0;
-            send_target_command(pl);
-        }
-    } else {
-        LOG(PACKET, "Invalid type: %d", type);
     }
+    /* A well-formed unauthorized request always resolves to SELF. Reply even
+     * when already SELF, so authorization failures reveal no target metadata. */
+    pl->target_object = target;
+    pl->target_object_count = target != NULL ? target->count : 0;
+    send_target_command(pl);
 }
 
 void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {

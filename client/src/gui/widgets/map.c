@@ -29,6 +29,7 @@
  * @author Zoey Rose
  */
 
+#include <atrinik/protocol/target.h>
 #include <mouse.h>
 #include <ctype.h>
 #include <errno.h>
@@ -4431,7 +4432,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         context->tiles_num++;
     }
 
-    if (data->primary_level && data->layer == LAYER_LIVING && !data->cell->fow &&
+    if (data->layer == LAYER_LIVING && !data->cell->fow &&
         (!transient || map_visibility_fade_interactive(fade)) &&
         map_cell_actor_record_read(data->cell, data->sub_layer)->probe != 0) {
         map_render_context_t *context = data->render_context;
@@ -8245,7 +8246,7 @@ static void send_move_path(int tx, int ty) {
  * @param count
  * NPC's UID.
  */
-static void send_target(int x, int y, uint32_t count) {
+static void send_target(int x, int y, int8_t depth, uint32_t count) {
     packet_struct *packet;
 
     if ((x < 0 || y < 0 || x >= map_width || y >= map_height) && !(x == -1 && y == -1)) {
@@ -8258,7 +8259,7 @@ static void send_target(int x, int y, uint32_t count) {
     }
 #endif
 
-    packet = packet_new(SERVER_CMD_TARGET, 16, 0);
+    packet = packet_new(SERVER_CMD_TARGET, TARGET_SELECT_PAYLOAD_SIZE, 0);
 
     if (x == -1 && y == -1) {
         packet_writer_write_uint8(packet, CMD_TARGET_CLEAR);
@@ -8266,6 +8267,7 @@ static void send_target(int x, int y, uint32_t count) {
         packet_writer_write_uint8(packet, CMD_TARGET_MAPXY);
         packet_writer_write_uint8(packet, x);
         packet_writer_write_uint8(packet, y);
+        packet_writer_write_int8(packet, depth);
         packet_writer_write_uint32(packet, count);
     }
 
@@ -8299,57 +8301,94 @@ static int map_target_cmp(const void *a, const void *b) {
     } else if (dist1 > dist2) {
         return 1;
     } else {
-        return 0;
+        const map_target_struct *left = a, *right = b;
+        if (left->depth != right->depth) {
+            return left->depth < right->depth ? -1 : 1;
+        }
+        return left->count < right->count ? -1 : left->count > right->count;
     }
 }
 
-/**
- * Target something on the map.
- * @param is_friend
- * 1 if targeting friendlies only.
- */
-void map_target_handle(uint8_t is_friend) {
+typedef struct map_target_seen {
+    uint64_t key;
+    UT_hash_handle hh;
+} map_target_seen_t;
+
+/** Collect exact identities from all current MAP2 levels without changing selection. */
+static UT_array *map_target_collect(uint8_t is_friend) {
+    UT_icd icd = {sizeof(map_target_struct), NULL, NULL, NULL};
+    UT_array *targets;
+    utarray_new(targets, &icd);
+    if (map_state_transaction_active()) {
+        return targets;
+    }
     int x, y, layer;
     map_cell_t *cell;
-    UT_array *targets;
-    UT_icd icd = {sizeof(map_target_struct), NULL, NULL, NULL};
-    map_target_struct *p;
-    uint32_t curr_target;
+    map_target_seen_t *seen = NULL;
+    size_t saved_level = current_level_index;
 
-    if (cpl.target_is_friend != is_friend) {
-        cpl.target_object_index = 0;
-    }
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        if (!(map_level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) ||
+            !map_select_level(depth, false)) {
+            continue;
+        }
 
-    utarray_new(targets, &icd);
-    curr_target = 0;
+        for (x = 0; x < map_width; x++) {
+            for (y = 0; y < map_height; y++) {
+                cell = MAP_CELL_GET_MIDDLE(x, y);
 
-    for (x = 0; x < map_width; x++) {
-        for (y = 0; y < map_height; y++) {
-            cell = MAP_CELL_GET_MIDDLE(x, y);
+                if (cell->fow) {
+                    continue;
+                }
 
-            if (cell->fow) {
-                continue;
-            }
+                for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    layer = GET_MAP_LAYER(LAYER_LIVING, sub_layer);
+                    if (map_cell_layer_record_read(cell, layer)->face &&
+                        map_visibility_fade_interactive(
+                            &map_cell_layer_record_read(cell, layer)->visibility) &&
+                        map_cell_actor_record_read(cell, sub_layer)->target_object_count &&
+                        map_cell_actor_record_read(cell, sub_layer)->target_is_friend == is_friend) {
+                        map_target_struct target;
 
-            for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                layer = GET_MAP_LAYER(LAYER_LIVING, sub_layer);
-                if (map_cell_layer_record_read(cell, layer)->face &&
-                    map_cell_actor_record_read(cell, sub_layer)->target_object_count &&
-                    map_cell_actor_record_read(cell, sub_layer)->target_is_friend == is_friend) {
-                    map_target_struct target;
-
-                    target.count = map_cell_actor_record_read(cell, sub_layer)->target_object_count;
-                    target.x = x;
-                    target.y = y;
-                    utarray_push_back(targets, &target);
-
-                    if (map_cell_actor_record_read(cell, sub_layer)->probe != 0) {
-                        curr_target = target.count;
+                        target.count =
+                            map_cell_actor_record_read(cell, sub_layer)->target_object_count;
+                        target.x = x;
+                        target.y = y;
+                        target.depth = depth;
+                        uint64_t key = ((uint64_t)target.count << 8U) |
+                                       (uint8_t)(depth + MAP2_MAX_DEPTH);
+                        map_target_seen_t *entry;
+                        HASH_FIND(hh, seen, &key, sizeof(key), entry);
+                        if (entry == NULL) {
+                            entry = xcalloc(1, sizeof(*entry));
+                            entry->key = key;
+                            HASH_ADD(hh, seen, key, sizeof(entry->key), entry);
+                            utarray_push_back(targets, &target);
+                        }
                     }
                 }
             }
         }
     }
+    current_level_index = saved_level;
+    cells = level_cells[saved_level];
+
+    map_target_seen_t *entry, *next;
+    HASH_ITER(hh, seen, entry, next) {
+        HASH_DEL(seen, entry);
+        free(entry);
+    }
+    return targets;
+}
+
+/** Target the next current actor of the requested friend class. */
+void map_target_handle(uint8_t is_friend) {
+    if (cpl.target_is_friend != is_friend) {
+        cpl.target_object_index = 0;
+    }
+    UT_array *targets = map_target_collect(is_friend);
+    map_target_struct *p;
+    uint32_t curr_target = cpl.target_actor_count;
 
     utarray_sort(targets, map_target_cmp);
 
@@ -8360,7 +8399,7 @@ void map_target_handle(uint8_t is_friend) {
     if (cpl.target_object_index == 0) {
         p = (map_target_struct *)utarray_front(targets);
 
-        if (p != NULL && p->count == curr_target) {
+        if (p != NULL && p->count == curr_target && p->depth == cpl.target_relative_depth) {
             cpl.target_object_index++;
         }
     }
@@ -8368,10 +8407,10 @@ void map_target_handle(uint8_t is_friend) {
     p = (map_target_struct *)utarray_eltptr(targets, cpl.target_object_index);
 
     if (p != NULL) {
-        send_target(p->x, p->y, p->count);
+        send_target(p->x, p->y, p->depth, p->count);
         cpl.target_object_index++;
     } else if (cpl.target_is_friend != is_friend) {
-        send_target(-1, -1, 0);
+        send_target(-1, -1, 0, 0);
     }
 
     cpl.target_is_friend = is_friend;
@@ -8526,6 +8565,101 @@ static void menu_map_walk_here(widgetdata *widget, widgetdata *menuitem, SDL_Eve
     }
 }
 
+/** Resolve the frontmost current living sprite at a screen coordinate. */
+static bool map_mouse_target(int mx, int my, map_target_struct *target) {
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_interaction_test_active) {
+        *target = (map_target_struct){.x = 2, .y = 3, .depth = 0, .count = 1};
+        return true;
+    }
+#endif
+    if (map_state_transaction_active() || cur_widget[MAP_ID] == NULL ||
+        cur_widget[MAP_ID]->surface == NULL ||
+        !map_retained_projection_matches(cur_widget[MAP_ID]->surface)) {
+        return false;
+    }
+    map_mouse_to_local_coords(&mx, &my);
+    double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
+    if (zoom <= 0) {
+        return false;
+    }
+    mx /= zoom;
+    my /= zoom;
+    size_t saved_level = current_level_index;
+    const map_render_command_t *owner = NULL;
+    uint32_t count = 0;
+    map_render_context_t *context = &map_retained_primary_context;
+    for (size_t index = 0; index < context->commands_num; index++) {
+        const map_render_command_t *command = &context->commands[index];
+        if (command->object_layer != LAYER_LIVING || command->presentation_stale ||
+            command->fogged || command->local_player || command->bounds_w <= 0 ||
+            mx < command->bounds_x || mx >= command->bounds_x + command->bounds_w ||
+            my < command->bounds_y || my >= command->bounds_y + command->bounds_h ||
+            (owner != NULL && map_render_command_compare(owner, command) >= 0)) {
+            continue;
+        }
+        map_cell_t *cell = NULL;
+        if (!map_retained_cell_matches(command->depth,
+                                        command->tile_x,
+                                        command->tile_y,
+                                        command->record_identity,
+                                        command->cell_generation,
+                                        command->cell_revision,
+                                        &cell) || cell->fow ||
+            !map_visibility_fade_interactive(
+                &map_cell_layer_record_read(cell, command->record_layer)->visibility)) {
+            continue;
+        }
+        uint32_t actor_count =
+            map_cell_actor_record_read(cell, command->sub_layer)->target_object_count;
+        if (actor_count == 0) {
+            continue;
+        }
+        SDL_Surface *geometry = map_render_command_geometry(command);
+        if (geometry == NULL) {
+            continue;
+        }
+        bool locked = SDL_MUSTLOCK(geometry);
+        bool hit = false;
+        if (!locked || SDL_LockSurface(geometry)) {
+            int local_x = mx - command->x, local_y = my - command->y;
+            hit = surface_pixel_visible(geometry, local_x, local_y) ||
+                  (command->draw_double &&
+                   surface_pixel_visible(geometry, local_x, local_y + 22));
+            if (locked) {
+                SDL_UnlockSurface(geometry);
+            }
+        }
+        if (geometry != command->source) {
+            SDL_DestroySurface(geometry);
+        }
+        if (hit) {
+            owner = command;
+            count = actor_count;
+        }
+    }
+    current_level_index = saved_level;
+    cells = level_cells[saved_level];
+    if (owner == NULL) {
+        return false;
+    }
+    *target = (map_target_struct){.x = owner->tile_x - MAP_STARTX,
+                                  .y = owner->tile_y - MAP_STARTY,
+                                  .depth = owner->depth,
+                                  .count = count};
+    return true;
+}
+
+/** Target one exact sprite, or clear if the click has no current actor owner. */
+static void map_send_mouse_target(int mx, int my) {
+    map_target_struct target;
+    if (map_mouse_target(mx, my, &target)) {
+        send_target(target.x, target.y, target.depth, target.count);
+    } else {
+        send_target(-1, -1, 0, 0);
+    }
+}
+
 /**
  * Handle the "Talk To NPC" option in map widget menu.
  * @param widget
@@ -8536,19 +8670,13 @@ static void menu_map_walk_here(widgetdata *widget, widgetdata *menuitem, SDL_Eve
  * Event.
  */
 static void menu_map_talk_to(widgetdata *widget, widgetdata *menuitem, SDL_Event *event) {
-    int tx, ty;
-
-    if (mouse_to_tile_coords(cur_widget[MENU_ID]->x, cur_widget[MENU_ID]->y, &tx, &ty)) {
-        int rx = tx - map_width * (MAP_FOW_SIZE / 2);
-        int ry = ty - map_height * (MAP_FOW_SIZE / 2);
-        send_target(rx, ry, 0);
+    map_send_mouse_target(cur_widget[MENU_ID]->x, cur_widget[MENU_ID]->y);
 #ifdef ATRINIK_WIDGET_TESTS
-        if (map_interaction_test_active) {
-            map_interaction_test_talks++;
-        }
-#endif
-        keybind_process_command("?HELLO");
+    if (map_interaction_test_active) {
+        map_interaction_test_talks++;
     }
+#endif
+    keybind_process_command("?HELLO");
 }
 
 typedef struct map_menu_action {
@@ -8719,7 +8847,15 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
     /* Check if the mouse is in play field. */
     int tx, ty;
     if (!mouse_to_tile_coords(event_mouse_x(event), event_mouse_y(event), &tx, &ty)) {
-        return 0;
+        map_target_struct target;
+        if ((event->type != SDL_EVENT_MOUSE_BUTTON_UP &&
+             event->type != SDL_EVENT_MOUSE_BUTTON_DOWN) ||
+            event->button.button != SDL_BUTTON_RIGHT ||
+            !map_mouse_target(event_mouse_x(event), event_mouse_y(event), &target)) {
+            return 0;
+        }
+        tx = target.x + MAP_STARTX;
+        ty = target.y + MAP_STARTY;
     }
 
     int rx = tx - map_width * (MAP_FOW_SIZE / 2);
@@ -8730,7 +8866,7 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
          * otherwise the widget menu will be created. */
         if (event->button.button == SDL_BUTTON_RIGHT &&
             client_ui_ticks() - right_click_ticks < 500) {
-            send_target(rx, ry, 0);
+            map_send_mouse_target(event_mouse_x(event), event_mouse_y(event));
         }
 
         right_click_ticks = -1;

@@ -246,12 +246,28 @@ void socket_command_drawinfo(uint8_t *data, size_t len, size_t pos) {
 void socket_command_target(uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
-    cpl.target_code = packet_reader_read_uint8(&reader);
-    packet_reader_read_string(&reader, cpl.target_color, sizeof(cpl.target_color));
-    packet_reader_read_string(&reader, cpl.target_name, sizeof(cpl.target_name));
-    cpl.target_level = packet_reader_read_uint8(&reader);
-    cpl.combat = packet_reader_read_uint8(&reader);
-    cpl.combat_force = packet_reader_read_uint8(&reader);
+    uint8_t code = packet_reader_read_uint8(&reader);
+    char color[sizeof(cpl.target_color)] = {0}, name[sizeof(cpl.target_name)] = {0};
+    packet_reader_read_string(&reader, color, sizeof(color));
+    packet_reader_read_string(&reader, name, sizeof(name));
+    uint8_t level = packet_reader_read_uint8(&reader);
+    uint32_t count = packet_reader_read_uint32(&reader);
+    int8_t depth = packet_reader_read_int8(&reader);
+    uint8_t combat = packet_reader_read_uint8(&reader);
+    uint8_t combat_force = packet_reader_read_uint8(&reader);
+    if (!packet_reader_finish(&reader) || code > CMD_TARGET_FRIEND ||
+        depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || combat > 1 || combat_force > 1 ||
+        (code == CMD_TARGET_SELF ? count != 0 || depth != 0 : count == 0)) {
+        return;
+    }
+    cpl.target_code = code;
+    memcpy(cpl.target_color, color, sizeof(color));
+    memcpy(cpl.target_name, name, sizeof(name));
+    cpl.target_level = level;
+    cpl.target_actor_count = count;
+    cpl.target_relative_depth = depth;
+    cpl.combat = combat;
+    cpl.combat_force = combat_force;
     WIDGET_REDRAW_ALL(TARGET_ID);
 
     map_redraw_request(MAP_REDRAW_REASON_UI);
