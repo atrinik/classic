@@ -109,8 +109,9 @@
   output-directory argument. Bundle verified sound, shaders and application
   libraries; preserve the exact mixer decoder contract and host GPU/Vulkan
   boundary. Root Release Candidate validates the AppImage with trusted
-  `../tools/release/appimage.py PATH VERSION` and headless smoke. Retain the unified
-  version, schema-3 release contract and historical schema-1/schema-2 recovery;
+  `../tools/release/appimage.py PATH VERSION`, binding the exact commit with
+  `--revision FULL_SHA --source-root TRUSTED_CHECKOUT`, and headless smoke. Retain
+  the unified version, schema-3 release contract and historical schema-1/schema-2 recovery;
   desktop rendering and audible proof remain separate acceptance.
 - Keep generated output under `build/`, preserve unrelated work, and finish
   with `git diff --check`.

@@ -544,14 +544,19 @@ SDL >= 3.4, image/ttf/mixer, libcurl built with c-ares and OpenSSL, and their
 required library closure. Preserve the mixer decoder set exactly: WAV,
 STBVORBIS, OPUS, VOC, AIFF, AU, DRMP3, SINEWAVE and RAW; MIDI and module
 decoders remain absent. The producer retains dependency and tool identities,
-licenses and checked sound/shader inputs with its packaging evidence.
+licenses and checked sound/shader inputs with its packaging evidence. Retain
+the source/license appendix for the bundled application libraries and the
+static runtime, including its musl, FUSE and squashfuse components.
 
 `client/tools/build-appimage.sh [OUTPUT_DIRECTORY]` requires
 `ATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH` and emits the exact versioned
 AppImage. The trusted caller validates it using
-`python3 tools/release/appimage.py PATH VERSION`. Candidate code cannot replace
-that caller's validator or redefine the supported host-library boundary.
-The trusted caller supplies `tools/ci/appimage-client/prepare.py`, its Dockerfile
+`python3 tools/release/appimage.py PATH VERSION --revision FULL_SHA
+--source-root TRUSTED_CHECKOUT`. Release callers bind both the exact source
+commit and its checkout; standalone inspection may omit these flags and use the
+current checkout's trusted inputs. Candidate code cannot replace that caller's
+validator or redefine the supported host-library boundary.
+The trusted caller supplies `tools/ci/appimage/prepare.py`, its Dockerfile
 and `smoke.sh`. The exact candidate checkout and staged inputs are read-only
 container inputs; candidate code runs from a private copy as a non-root user,
 with networking disabled, dropped capabilities and no-new-privileges. Only the

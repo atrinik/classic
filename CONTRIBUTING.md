@@ -157,7 +157,8 @@ published releases after independently verifying their checksums.
 Linux release packaging uses the pinned Ubuntu 24.04 AppImage producer and
 `client/tools/build-appimage.sh`, with `ATRINIK_PACKAGE_VERSION` required. Run
 the trusted `tools/release/appimage.py PATH VERSION` validator on the resulting
-image. Keep the application dependency closure, decoder contract, host-library
+image; release callers also bind
+`--revision FULL_SHA --source-root TRUSTED_CHECKOUT`. Keep the application dependency closure, decoder contract, host-library
 exclusions and corresponding notices together; source-build dependency minimums
 remain unchanged. See [Linux client qualification](docs/RELEASING.md#linux-client-qualification)
 for headless checks and separate desktop acceptance. Historical Debian release
