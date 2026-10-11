@@ -87,35 +87,66 @@ endforeach()
             outputs.append(result.stdout.strip())
         return outputs[0], outputs[1]
 
+    def copy_shared_cmake(self, destination: Path) -> None:
+        destination.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(MODULE, destination / MODULE.name)
+        shutil.copy2(ROOT / "cmake/AtrinikLLVM.cmake", destination / "AtrinikLLVM.cmake")
+        shutil.copytree(ROOT / "cmake/toolchains", destination / "toolchains", dirs_exist_ok=True)
+
     def assert_component_version_probe(self, source: Path, build: Path, *, version: str = "9.8.7", explicit: bool = True) -> None:
-        probe = self.root / "component-version-probe.cmake"
+        # Evaluate the real entry point only through its authored project VERSION
+        # call. Script-mode interception avoids compiler/toolchain discovery;
+        # no product build can continue past this deliberate fatal boundary.
+        build.mkdir(parents=True, exist_ok=True)
+        probe = build / "component-version-probe.cmake"
         probe.write_text(
-            """
-if (NOT PROJECT_VERSION STREQUAL "9.8.7")
-    message(FATAL_ERROR "Unexpected project version: ${PROJECT_VERSION}")
-endif ()
-message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
-""".lstrip().replace("9.8.7", version),
-            encoding="utf-8",
-        )
+            f'''
+set(CMAKE_SOURCE_DIR "{source.as_posix()}")
+set(CMAKE_CURRENT_SOURCE_DIR "{source.as_posix()}")
+set(CMAKE_BINARY_DIR "{build.as_posix()}")
+set(CMAKE_CURRENT_BINARY_DIR "{build.as_posix()}")
+function(project)
+    cmake_parse_arguments(PROBE "" "VERSION" "" ${{ARGN}})
+    if (NOT PROBE_VERSION STREQUAL "{version}")
+        message(FATAL_ERROR "Unexpected project version: ${{PROBE_VERSION}}")
+    endif ()
+    message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
+endfunction()
+include("{(source / 'CMakeLists.txt').as_posix()}")
+'''.lstrip(), encoding="utf-8")
         result = subprocess.run(
-            [
-                "cmake",
-                "-S",
-                str(source),
-                "-B",
-                str(build),
-                *(["-DATRINIK_PACKAGE_VERSION=" + version] if explicit else []),
-                f"-DCMAKE_PROJECT_INCLUDE={probe}",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+            ["cmake", *(["-DATRINIK_PACKAGE_VERSION=" + version] if explicit else []), "-P", str(probe)],
+            check=False, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            "ATRINIK_VERSION_PROBE_COMPLETED", result.stdout + result.stderr
-        )
+        self.assertIn("ATRINIK_VERSION_PROBE_COMPLETED", result.stdout + result.stderr)
+
+    def require_native_llvm(self) -> None:
+        missing = []
+        for name in ("clang", "clang++", "llvm-ar", "llvm-ranlib", "ld.lld"):
+            tool = shutil.which(name)
+            if tool is None:
+                missing.append(name)
+                continue
+            result = subprocess.run([tool, "--version"], capture_output=True, text=True)
+            if result.returncode or not re.search(r"(?:[Vv]ersion |LLD )23\.1\.3(?![\d.])", result.stdout):
+                missing.append(name + " 23.1.3")
+        if missing:
+            reason = "real native LLVM package test requires " + ", ".join(missing)
+            if os.environ.get("CI", "").lower() not in ("", "0", "false"):
+                self.fail(reason)
+            self.skipTest(reason)
+
+    def test_native_package_requirement_fails_when_ci_lacks_llvm(self) -> None:
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CI": "true"}), mock.patch.object(shutil, "which", return_value=None):
+            with self.assertRaisesRegex(self.failureException, "real native LLVM package test requires"):
+                self.require_native_llvm()
+
+    def test_native_package_requirement_reports_local_missing_llvm(self) -> None:
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CI": ""}), mock.patch.object(shutil, "which", return_value=None):
+            with self.assertRaisesRegex(unittest.SkipTest, "real native LLVM package test requires"):
+                self.require_native_llvm()
 
     def test_explicit_version_is_embedded_identically_for_both_consumers(self) -> None:
         result = self.configure(
@@ -288,8 +319,7 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
             with self.subTest(layout=layout):
                 package = self.root / layout
                 package.mkdir()
-                (package / "cmake").mkdir()
-                shutil.copy2(MODULE, package / "cmake/AtrinikVersion.cmake")
+                self.copy_shared_cmake(package / "cmake")
                 (package / "VERSION").write_text("5.68.0\n")
                 if layout == "standalone":
                     protocol = package
@@ -298,12 +328,15 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                 shutil.copytree(ROOT / "protocol", protocol, dirs_exist_ok=True,
                                 ignore=shutil.ignore_patterns("build", "__pycache__"))
                 if layout == "unified":
-                    shutil.copy2(ROOT / "CMakeLists.txt", package / "CMakeLists.txt")
-                    # Exercise actual root/protocol configuration and package-version
-                    # generation without compiling unrelated gameplay dependencies.
-                    for consumer in ("libatrinik", "client", "server"):
-                        (package / consumer).mkdir()
-                        (package / consumer / "CMakeLists.txt").write_text("")
+                    # This fixture checks protocol package metadata, without
+                    # entering the native game compiler/dependency graph.
+                    (package / "CMakeLists.txt").write_text(
+                        'cmake_minimum_required(VERSION 3.21)\n'
+                        'include(cmake/AtrinikVersion.cmake)\n'
+                        'atrinik_resolve_version(ATRINIK_SOURCE_VERSION)\n'
+                        'project(protocol-version-probe VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES NONE)\n'
+                        'set(ATRINIK_INTEGRATED_BUILD ON)\n'
+                        'add_subdirectory(protocol)\n')
                     configure_source = package
                 else:
                     (protocol / "VERSION").write_text("5.68.0\n")
@@ -317,8 +350,7 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
 
     def test_physical_component_and_symlink_views_use_owner_tag_without_override(self) -> None:
         owner = self.root / "classic-owner"
-        (owner / "cmake").mkdir(parents=True)
-        shutil.copy2(MODULE, owner / "cmake/AtrinikVersion.cmake")
+        self.copy_shared_cmake(owner / "cmake")
         for component in ("client", "server", "protocol", "libatrinik"):
             (owner / component).mkdir()
             shutil.copy2(ROOT / component / "CMakeLists.txt", owner / component / "CMakeLists.txt")
@@ -337,9 +369,9 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                                                         version="5.68.0", explicit=False)
 
     def test_pathfinding_physical_tag_untagged_and_installed_package(self) -> None:
+        self.require_native_llvm()
         owner = self.root / "classic-owner"
-        (owner / "cmake").mkdir(parents=True)
-        shutil.copy2(MODULE, owner / "cmake/AtrinikVersion.cmake")
+        self.copy_shared_cmake(owner / "cmake")
         shutil.copytree(ROOT / "libatrinik/pathfinding", owner / "libatrinik/pathfinding")
         self.initialize_git(owner)
         self.git(owner, "tag", "v5.68.0")
@@ -369,14 +401,15 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                 'add_executable(consumer main.c)\ntarget_link_libraries(consumer PRIVATE Atrinik::Pathfinding)\n')
             (consumer / "main.c").write_text('int main(void) { return 0; }\n')
             subprocess.run(["cmake", "-S", str(consumer), "-B", str(consumer / "build"),
-                            "-DCMAKE_PREFIX_PATH=" + str(install)], check=True, capture_output=True)
+                            "-DCMAKE_PREFIX_PATH=" + str(install),
+                            "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "cmake/toolchains/llvm.cmake")],
+                           check=True, capture_output=True)
             subprocess.run(["cmake", "--build", str(consumer / "build")],
                            check=True, capture_output=True)
 
     def test_generated_archives_keep_owner_identity_and_pathfinding_package_version(self) -> None:
         owner = self.root / "owner"
-        (owner / "cmake").mkdir(parents=True)
-        shutil.copy2(MODULE, owner / "cmake/AtrinikVersion.cmake")
+        self.copy_shared_cmake(owner / "cmake")
         shutil.copytree(ROOT / "protocol", owner / "protocol",
                         ignore=shutil.ignore_patterns("build", "__pycache__"))
         shutil.copytree(ROOT / "libatrinik/pathfinding", owner / "libatrinik/pathfinding")
@@ -408,11 +441,7 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                                         "pathfinding" if scope == "libatrinik" else
                                         "dependencies/libatrinik/pathfinding")
                 build = self.root / (scope + "-pathfinding-build")
-                result = subprocess.run(["cmake", "-Werror=dev", "-S", str(pathfinding), "-B", str(build)],
-                                        capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn('set(PACKAGE_VERSION "5.68.0")',
-                              (build / "AtrinikPathfindingConfigVersion.cmake").read_text())
+                self.assert_component_version_probe(pathfinding, build, version="5.68.0", explicit=False)
                 if scope in ("client", "server"):
                     self.source = package
                     result = self.configure()
@@ -469,7 +498,7 @@ message(FATAL_ERROR "ATRINIK_VERSION_PROBE_COMPLETED")
                 (package / "cmake" / entry.name).symlink_to(
                     entry, target_is_directory=entry.is_dir()
                 )
-            shutil.copy2(MODULE, package / "cmake" / MODULE.name)
+            self.copy_shared_cmake(package / "cmake")
             self.assert_component_version_probe(
                 package, self.root / f"{component}-package-build"
             )
