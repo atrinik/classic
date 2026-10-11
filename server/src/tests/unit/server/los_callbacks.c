@@ -115,6 +115,12 @@ static void assert_fresh_publication(object *pl) {
     ck_assert_ptr_nonnull(map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false));
 }
 
+static MapCell *actor_cache_cell(socket_struct *cs, const object *pl, const object *actor) {
+    return map_client_cache_cell(&cs->lastmap, 0,
+                                 cs->mapx_2 + actor->x - pl->x,
+                                 cs->mapy_2 + actor->y - pl->y, false);
+}
+
 START_TEST(test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh) {
     mapstruct *map;
     object *pl;
@@ -129,6 +135,36 @@ START_TEST(test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh) {
     assert_aborted(pl);
 
     assert_fresh_publication(pl);
+}
+END_TEST
+
+/* The east actor is serialized while the observer's trusted light override is
+ * live. The later callback removes that observer state, so publishing the
+ * already framed actor would disclose a dark live identity. */
+START_TEST(test_ask_show_viewstate_change_withdraws_earlier_dark_actor) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    map->light_value = -80;
+    CONTR(pl)->tli = 1;
+    object *earlier = place(map, "raas", 14, 12);
+    object *later = place(map, "raas", 13, 12);
+    ask_show(later, "viewstate");
+
+    update_los(pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    socket_buffer_clear(cs);
+    uint64_t before = los_publication_epoch();
+    draw_client_map2(pl);
+    ck_assert_uint_gt(los_publication_epoch(), before);
+    ck_assert_int_eq(CONTR(pl)->tli, 0);
+    assert_aborted(pl);
+
+    assert_fresh_publication(pl);
+    MapCell *cell = actor_cache_cell(cs, pl, earlier);
+    ck_assert_ptr_nonnull(cell);
+    size_t layer = NUM_LAYERS * earlier->sub_layer + earlier->layer - 1;
+    ck_assert_uint_eq(cell->faces[layer], 0);
 }
 END_TEST
 
@@ -261,6 +297,7 @@ static Suite *suite(void) {
     Suite *s = suite_create("server.los_callbacks");
     TCase *tc = tcase_create("callbacks");
     tcase_add_test(tc, test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh);
+    tcase_add_test(tc, test_ask_show_viewstate_change_withdraws_earlier_dark_actor);
     tcase_add_test(tc, test_ask_show_upper_roof_aborts_stale_map2_and_hides_actor);
     tcase_add_test(tc, test_ask_show_mutating_earlier_actor_aborts_whole_map2_transaction);
     tcase_add_test(tc, test_ask_show_moving_earlier_actor_aborts_whole_map2_transaction);
