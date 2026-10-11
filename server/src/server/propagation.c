@@ -460,7 +460,7 @@ static bool in_cone(const propagation_cast *cast, int dx, int dy, int dz) {
 
 static void expand(propagation_cast *cast, struct propagation_entry *entry) {
     if (cast->visit != NULL) {
-        if (!OBJECT_VALID(cast->source, cast->source_count)) {
+        if (!object_reference_is_current(cast->source, cast->source_count)) {
             cancel(cast);
             return;
         }
@@ -508,7 +508,7 @@ static void expand(propagation_cast *cast, struct propagation_entry *entry) {
                 child->effect_count = effect->count;
                 cast->active++;
                 SET_FLAG(effect, FLAG_NO_SAVE);
-                if (OBJECT_VALID(cast->owner, cast->owner_count)) {
+                if (object_reference_is_current(cast->owner, cast->owner_count)) {
                     object_owner_set(effect, cast->owner);
                 }
                 effect = object_insert_map(effect, cell.map, NULL, INS_NO_MERGE);

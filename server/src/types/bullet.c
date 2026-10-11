@@ -46,7 +46,7 @@ static void process_func(object *op) {
         }
         /* Loss of a target or sight does not erase an already-fired missile.
          * Re-aim only from its current geometry and retain its last heading. */
-        if (OBJECT_VALID(op->enemy, op->enemy_count)) {
+        if (object_reference_is_current(op->enemy, op->enemy_count)) {
             projectile3d_aim(op, op->enemy);
         }
     }

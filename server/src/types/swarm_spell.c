@@ -98,7 +98,7 @@ static void process_func(object *op) {
     }
 
     /* Bombs away! */
-    object *target = OBJECT_VALID(op->enemy, op->enemy_count) ? op->enemy : NULL;
+    object *target = object_reference_is_current(op->enemy, op->enemy_count) ? op->enemy : NULL;
     fire_arch_from_position(op, caster, x, y, basedir, op->other_arch, op->stats.sp, target);
 }
 
