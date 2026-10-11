@@ -188,6 +188,26 @@ START_TEST(test_retained_capacity_failure_is_atomic) {
 }
 END_TEST
 
+START_TEST(test_large_endpoint_promotion_charges_shared_context_once) {
+    mapstruct maps[40] = {0};
+    mapstruct *output[] = {&maps[0]};
+    size_t reserved = 0;
+    celestial_dependencies *ctx = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 40);
+    for (size_t i = 0; i < 40; i++) {
+        ck_assert(celestial_dependencies_observe(ctx, &maps[i]));
+    }
+    ck_assert_uint_gt(celestial_dependencies_bytes(ctx), 4096);
+    ck_assert_uint_lt(celestial_dependencies_bytes(ctx), 8192);
+    ck_assert(celestial_dependencies_finish(ctx, output, 1, true));
+    ck_assert(celestial_dependencies_field_bind(ctx, &maps[0], false));
+    celestial_dependencies_field_release(&maps[0], true);
+    celestial_dependencies_release(ctx);
+    ck_assert(celestial_dependencies_field_fresh(&maps[0], false));
+    celestial_dependencies_field_forget(&maps[0]);
+    ck_assert_uint_eq(reserved, 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_dependencies");
     TCase *tc = tcase_create("Core");
@@ -201,6 +221,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_capacity_and_reservation_fail_closed_and_release);
     tcase_add_test(tc, test_current_next_publication_snapshot_and_unload);
     tcase_add_test(tc, test_retained_capacity_failure_is_atomic);
+    tcase_add_test(tc, test_large_endpoint_promotion_charges_shared_context_once);
     return s;
 }
 
