@@ -40,3 +40,9 @@
 
 - Revision 1083 appends BOOK_EDIT at C2S 26 and S2C 33 while preserving
   published access and exploration IDs. The version handshake rejects earlier peers.
+
+- Revision 1084 preserves command/subtype IDs and adds exact depth/count
+  target identity. `include/atrinik/protocol/target.h` owns TARGET framing;
+  update native/Python consumers and malformed-input fixtures together. The
+  coordinated spatial contract is
+  [`SPATIAL_3D.md`](../server/doc/SPATIAL_3D.md).

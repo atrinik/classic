@@ -166,8 +166,10 @@ cache.
 - `src/server/light.c` propagates source masks as spherical 3D volumes across
   horizontal and `TILED_UP`/`TILED_DOWN` links. Opaque cells stop rays after
   receiving light on their exposed face, and a floor on the upper level blocks
-  a ray crossing that vertical boundary. Search depth follows `MAP2_MAX_DEPTH`,
-  the maximum depth serialized to the client.
+  a ray crossing that vertical boundary. Physical traversal follows the resolved thirteen-level stack; viewer-relative
+  MAP2 clipping does not define light transport. Crossed boundary coefficients
+  attenuate the retained radial profile using the shared 3D traversal in
+  [SPATIAL_3D.md](SPATIAL_3D.md).
 - `glow_radius` is a bounded strength/profile selector, not a literal map-cell
   radius. Each profile defines center intensity, support radius, and falloff.
   Radial falloff preserves historical center intensity and uses integer
@@ -425,18 +427,15 @@ receives light on top and applies transmission only to the downward crossing.
 It does not attenuate a horizontal ray travelling across that exposed top
 face.  A wall, door, window, grate, or railing owns vertical exit faces.  Its
 optional `celestial_faces` is either `all` or a comma-separated subset in
-canonical `N,E,S,W` order; absent means `all`.  On a cardinal scan, a boundary
-cell receives incoming light and its exit face in the travel direction applies
-the coefficient to the next cell.  A diagonal exit applies the minimum of its
-two cardinal exit faces.  `celestial_faces` is invalid on a horizontal
-floor/roof.  Thus consecutive outdoor floor cells transmit horizontal sun
-unchanged, while the same floors block light to the aligned depth below.
-The vertical coverage scan tests only `DOWN`; `N,E,S,W` can never cover the
-aligned cell on a lower map.  Directional horizontal sweeps test only the
-cardinal exit face(s) crossed by that step.  An upper-level wall with no
-floor/roof therefore leaves the aligned lower cell sky-exposed while still
-blocking the relevant horizontal ray.  This exact upper-wall/no-floor case and
-the same cell with a floor are required regression fixtures.
+canonical `N,E,S,W` order; absent means `all`.  A receiving surface records incident light before its outgoing face is crossed.
+All faces touched at one simultaneous two- or three-axis event combine by
+minimum coefficient. Distinct events apply transmission sequentially with
+half-up rounding at each crossing. `celestial_faces` is invalid on a horizontal
+floor/roof. The stable vertical coverage scan tests only `DOWN`; `N,E,S,W`
+cannot cover an aligned lower cell. Directional rays test every crossed
+physical face, including upper walls without floors. Such a wall leaves the
+lower cell's stable exposure unchanged while it may intercept an oblique ray.
+Camera cutaways never remove any of these physical boundaries.
 
 When a physical stack cannot express a local aperture or virtual cover, an
 author may place a typed rectangular exception:
@@ -863,119 +862,67 @@ post-snapshot/pre-`PREPARED` mutation, both failure
 scopes and coordinate-safe fallbacks, and crashes before
 and after every map/ledger/player write, fsync, rename, and commit state.
 
-At a discontinuous vertical seam, upper-profile radiance stops.  The lower map
-evaluates its own profile at the same absolute `todtick` and injects that local
-component at the seam, then applies the upper horizontal face's transmission:
-`opaque` yields zero, `glass` yields `round_half_up(local*192/256)`, `grate`
-yields `round_half_up(local*224/256)`, and an explicit open aperture yields the
-full local value.  This interface injection is not stable sky exposure.  It
-continues downward under the ordinary highest-boundary rule.  The stack cache
-key contains the ordered profile digest for every depth, never one digest for
-the whole stack.
+At a discontinuous seam, celestial transport stops. The destination evaluates
+its own effective profile through its own validated sky-entry paths; no
+aligned aggregate injection may bypass physical boundaries or substitute for
+a proven sky exit. Ordered per-depth profile digests remain cache inputs.
 
-#### Bounded field construction
+#### Bounded field construction: transport algorithm 2
 
-The implementation constructs one shared field per resolved vertical stack,
-never one field for an unbounded horizontal component and
-never one emitter per sky-exposed tile.  More precisely, the cache manager
-stores one shared field under the ordered lowest-to-highest tuple of canonical
-map path, content revision, and transform; every loaded member references that
-one tuple, so a thirteen-map stack is never retained thirteen times.  A v1 map
-is at most 64x64; a larger map fails schema validation.  Stable exposure and
-transmission are separate arrays.
+Algorithm 2 replaces the former horizontal scan/cooldown and aligned aggregate
+injection. The authored `celestial_schema 1`, region profile digests, calendar,
+brightness/color model, aggregate Q5.11 MAP2 fields, and persistence schema do
+not change. Runtime keys include the transport algorithm revision; derived
+fields are not persisted and need no cache-file migration.
 
-Diffuse sky and starlight seed every sky-exposed face with their local-profile
-value.  Directional sun and moon use scan lines in source-to-destination order
-with an exact state `(direct, aperture_direct, cooldown)`.  Initialize all
-three to zero on halo entry.  At each cell, in this order:
+Each receiver traces toward the sun or moon through shared integer supercover
+boundary events. Existing Q15 sine elevation supplies the vertical component;
+the horizontal magnitude is the integer square root of `32768²-elevation²`
+(split equally between the two horizontal components for diagonal azimuths).
+Elevation already scales source strength in the calendar model and is not
+applied again as an incidence multiplier. At nonpositive elevation direct
+light is zero.
 
-1. If `cooldown == 0` and the receiving face is sky-exposed, replace `direct`
-   with the unattenuated local-profile direct value.  This is the only sky
-   seed; a covered face never seeds.  It lets a ray that entered under cover
-   acquire direct light when it first reaches exposed terrain.
-2. Record `direct` as the cell's incident directional value and record
-   `aperture_direct` in a separate spill-eligible seed buffer.
-3. Multiply both transport values by the crossed face coefficient with the
-   ordinary rounding rule.  If the crossed face is an authored transmissive
-   surface or exact `DOOR`/`GATE` aperture, set outgoing `aperture_direct` to
-   the resulting outgoing `direct`; this includes an open dynamic aperture
-   whose coefficient is 256.  Crossing an empty edge never qualifies it.
-4. If the coefficient is below 256, set outgoing `cooldown = 32`; otherwise,
-   if incoming `cooldown > 0`, subtract one, and leave zero at zero.  A later
-   sky seed replaces `direct` but does not manufacture
-   `aperture_direct`; that buffer changes only by transport or a real aperture
-   crossing.
+A trace admits at most 32 events containing horizontal progression and at
+most `32 + MAP2_LEVELS` total events. A vertical-only zenith ray uses no
+horizontal reach. Light is admitted only after a real upward exit reaches a
+validated open sky boundary or an authored opening in a sealed cap. Missing,
+ambiguous, unresolved, or discontinuous topology never invents sky. A physical
+floor/roof or virtual cover remains a transmission boundary even beside an
+opening. Failure to prove sky entry within the bound gives zero direct light;
+there is no cooldown reseeding behind a wall.
 
-The boundary cell is step zero.  Its next 32 cells observe cooldown values
-32 down to 1 before decrement and cannot sky-seed; cell 33 observes zero and
-may return to full direct light.  An opaque boundary receives incident light
-but emits zero, glass/grate emits the attenuated value, and an open door emits
-the full value while marking the separate aperture buffer.  For diagonal rays,
-one supercover move is one ray step and crosses both cardinal edges.  This is
-the exact 32-cell reach; there is no Euclidean-distance alternative.
+Record crossed coefficients, then apply them in source-to-receiver order.
+Every simultaneous event uses the minimum over all touched faces; distinct
+events multiply sequentially with half-up rounding after each `value*c/256`.
+Coefficients remain opaque 0, glass 192, grate 224, and open 256. This preserves
+incident surface light and prevents edge/corner leaks. Aperture-qualified
+light remains separate from direct light so empty space does not manufacture
+a spill seed. Diffuse sky and starlight use vertical sky-entry traces and the
+same physical transmission rules.
 
-In an aligned vertical column, only the highest relevant boundary face seeds.
-Open cells above a lower surface are transport nodes.  The value crossing each
-lower face follows the same coefficient and rounding rule.
+Diffuse, starlight, and aperture spill retain exactly four horizontal Jacobi
+max-relaxation passes: immutable prior and distinct next buffers; no summed
+neighbour amplification or in-place flood. Apply the shared edge/corner
+coefficient first, then cardinal `192/256` or diagonal `181/256`, rounding half
+up after each multiplication. Retain separate solar/lunar components through
+color recombination and the existing ambient/profile replacement rules.
 
-Diagonal sweeps use a supercover step.  A diagonal crosses both adjacent
-cardinal edges; its coefficient is the minimum of those edge coefficients,
-so two touching opaque corners never leak.  Ties use north before south and
-west before east solely to make traversal reproducible; max-composition makes
-the final field independent of that tie order.
+The output belongs to the resolved canonical thirteen-level stack rather than
+a viewer-relative suffix. Scratch is per level, and pending work retains a
+bounded receiver/ray cursor rather than a synchronous unbounded sweep. Every
+crossing and relaxation is charged to the existing step/deadline and memory
+budgets. Continuous seams require resident reciprocal links, consistent integer
+transforms and matching effective profiles. Their dependency halo remains 36
+horizontal cells (32 direct plus four spill), bounded at 136x136x13 or 240,448
+sampled coordinates for a 64x64 stack. Only output fields are retained; no
+emitter objects are created for sky-exposed tiles. Missing halo samples give
+zero and retain retry dependencies. Keys and invalidation include sampled
+structure, aperture revisions, transforms, profiles, and algorithm revision.
 
-Diffuse sky, starlight, and the separate `aperture_direct` seed buffer receive
-exactly four relaxation passes, never an unbounded flood fill.  Each cell
-takes the maximum of its prior value and transmitted neighbours, not their
-sum.  Cardinal spill uses `192/256`; diagonal spill uses `181/256` after the
-same corner minimum.  The fixed pass count bounds spill to four cells and
-prevents area amplification.  Direct sun and moon are directional; diffuse
-sky and starlight are not.  Insertion order, object order, load order, and
-thread scheduling cannot change the result.  Required whole-array fixtures
-include a 40-cell ray covered at cells 0..4 then exposed with no boundary
-(`direct` is 0 for 0..4 and full for 5..39; `aperture_direct` is all zero), and
-otherwise identical exposed rays with an empty exit versus an open door exit
-after cell 4 (both direct arrays stay full, while only the door case has full
-`aperture_direct` from cell 5 onward and therefore spills laterally).
-
-Every relaxation is a Jacobi pass: read an immutable prior buffer and write a
-distinct next buffer.  For each neighbour, multiply its prior value by the
-edge/corner transmission first, then by the cardinal or diagonal spill factor,
-rounding half up after each integer-scaled-by-256 multiplication.  The next
-value is the maximum
-of the cell's prior value and all candidate values.  Swap buffers only after
-all cells finish.  In-place propagation is forbidden because it can travel
-more than one cell per pass and depend on traversal order.
-
-The complete construction is O(number of resolved cells): classification, at
-most two direct sweeps (sun and moon), and exactly four fixed spill passes for
-each non-zero component.  It is forbidden to expand sky-exposed cells into
-light-source objects or to use an open-ended queue.
-
-A `continuous` horizontal seam supplies read-only authored structure and phase
-inputs through a transient
-36-cell halo: 32 cells for direct reach plus four for spill.  The halo may
-cross further reciprocal continuous seams, but clips at the exact coordinate
-radius and never transfers cache ownership.  At 64x64 and thirteen depths its
-bounding envelope is at most 136x136x13, or 240,448 sampled cells, regardless
-of the size of the tiled world.  Only the 64x64x13 output cells are retained.
-A halo coordinate must resolve to exactly one `(canonical map path, x, y,
-canonical stack index)` independent of traversal path.  Validation composes
-the existing integer seam transforms for every continuous path reachable
-within 36 cells and rejects either two different targets for one logical
-coordinate or one target assigned to two logical coordinates.  Every
-commuting square must agree: E-then-N, N-then-E, and a direct NE edge resolve
-the same map/cell when present, and crossing a horizontal seam then UP equals
-UP then that depth's corresponding horizontal seam.  The check is bounded by
-the same halo envelope and runs before publication.  Fixtures include a valid
-three-route NE diamond, a conflicting offset/target diamond, a valid
-horizontal/vertical square, and a conflicting depth square; no traversal-order
-tie-break is permitted.
-A blocker invalidates output fields whose clipped halos contain it; profile
-differences at a discontinuous seam cannot fan out beyond either owner.  This
-makes a continuous two-map fixture byte-identical to a single-map sweep while
-keeping Creation-sized horizontal tilings out of one cache/invalidation
-domain.
+See [SPATIAL_3D.md](SPATIAL_3D.md) for geometry, policy separation and regression
+requirements. Calendar/model vectors below remain unchanged; obsolete 2D
+transport output vectors are replaced by the algorithm-2 fixtures below.
 
 #### Calendar and celestial model
 
@@ -1194,7 +1141,7 @@ solar_scalar = round_half_up((transported_direct + transported_diffuse) *
 solar_rgb[channel] = round_half_up(solar_scalar * C[channel] / 65535)
 ```
 
-Direct and diffuse remain separate scalar fields through their distinct sweep,
+Direct and diffuse remain separate scalar fields through their distinct transport,
 transmission, and spill rules.  At each output cell, the displayed order and
 roundings are mandatory: sum the two transported scalars, scale that sum once,
 then project the rounded scalar through the interpolated normalized color.
@@ -1424,50 +1371,31 @@ are input/lifecycle checksums, not viewer-visible protocol fields.
 
 #### Synthetic structural fixtures
 
-Implementation tests must build the following maps in memory.  Coordinates
-are zero-based.  Unless stated otherwise, use a fixed summer phase, isolate the
-direct-sun component at raw 960, and send it from east to west across a 7x5
-map.  `front` means the east-facing exposed cell; `behind` is the immediately
-west-adjacent cell.  Assertions are made before diffuse spill unless a spill
-value is named.
+Algorithm-2 fixtures use real positive Q15 elevation and validated sky entry;
+an artificial horizontal 960 ray is no longer a celestial model fixture.
+The former cardinal grids and 32-cell cooldown/reseed vectors are superseded.
+Unchanged calendar/model and input/lifecycle checksums above are not transport
+output fingerprints and must not be rewritten merely because the algorithm
+changed. Update an output golden only for an explained physical difference.
 
-| Fixture | Exact authored structure | Required assertion |
-| --- | --- | --- |
-| exterior wall | Opaque wall at `(3,1..3)` | Each front cell receives 960; direct behind is 0. |
-| door closed/open | Wall above, door at `(3,2)`, wall below | Closed matches the wall without changing exposure; open transmits 960 only through that aperture and changes the two lifecycle hashes above. |
-| transmissive doors | Same aperture using a curtain, bar, and door-gate | Closed curtain exactly matches the 720 window array; closed bar and door-gate match the 840 grate array; all three open states match `door-open`, and reload preserves the authoritative flag and exact array. |
-| gate closed/open/reload | Same aperture using `GATE` | Solid `opaque`/`open` state produces the exact closed-wall/open-door arrays; grate `grate`/`open` state produces the grate/open-door arrays. `FLAG_NO_PASS` survives save/reload and reproduces the matching array byte-for-byte. |
-| window | `glass` at `(3,2)` | Front receives 960; behind receives exactly 720. |
-| grate | `grate` at `(3,2)` | Front receives 960; behind receives exactly 840. |
-| open run and reach | 40x1 open map, opaque wall at `(35,0)` | With E source, `x=39..35` is 960, `x=34..3` is 0 (steps 1..32), and `x=2..0` is reseeded 960. |
-| outdoor floor run | Solid floors across depth 0, open sky, no vertical walls | Horizontal direct remains 960 across every top face; aligned depth -1 is 0 beneath each floor. |
-| enclosed room | 7x7 opaque perimeter and solid roof at depth +1 over `(1..5,1..5)` | Roof faces are lit; all aligned base interior cells are covered. No exterior edge leaks around a corner. |
-| courtyard | Enclosed-room roof except `(3,3)` | Only the courtyard column is stably exposed; exactly four max/spill passes soften adjacent covered cells. |
-| glass roof | Enclosed-room roof with `glass` at `(3,3)` | The aligned base cell receives 720 from direct 960 without becoming sky-exposed. |
-| balcony | Solid depth +1 floor at `(2..4,2)` and `grate` railing at `(2..4,1)` | Base cells below the floor are covered; objects on the balcony face are exposed; the railing transmits 840. |
-| upper floor and hidden roof | Solid floor at depth +1 `(2,2)` and `LAYER_WALL sky_boundary 1` at `(3,2)` | Both top faces receive light; aligned depth 0 contents are covered; base floors under their own contents do not cover them. |
-| multiple covers | Opaque faces at the same coordinate on depths +2 and +1 above depth 0 | The +2 face wins and covers both lower depths. Removing it exposes only the +1 face; unresolved +2 remains fail-closed. |
-| horizontal seam | Two reciprocal 5x5 east/west maps | `continuous` with equal profile digests is byte-identical to one 10x5 sweep; `discontinuous` stops transport and evaluates the destination locally. |
-| linked depth | Reciprocal aligned 5x5 up/down maps, then a missing, cyclic, and shifted variant | The valid pair follows highest-face coverage; each invalid variant reports validation failure and exposes no false sky. |
-| unequal-profile depth | Reciprocal 3x3 up/down maps with a discontinuous seam; upper raw direct 960, lower raw direct 320 | The lower aligned cell is 0 under opaque, 240 under glass, 280 under grate, and 320 under open; upper-profile 960 never crosses. |
+Required spatial-lighting cases include:
 
-The door fixture additionally checks four-pass spill, the 32-cell direct-reach
-limit, and a rapid closed/open/closed sequence.  The final closed field and
-classification bytes equal the initial closed state; its lifecycle hash is the
-distinct `door-reclosed` hash because the canonical generation advances to
-`r3`.
-All fixtures run with maps loaded in both orders and objects inserted in both
-orders; aggregate radiance and classification must be identical.
+- Low sun intercepted by an upper wall with no floor; zenith light reaches the
+  lower receiver while the stable exposure classification remains unchanged.
+- Opaque, glass, grate and open slab crossings, including stacked sequential
+  boundaries and simultaneous two-/three-axis corners. A lit receiving surface
+  stays lit while opaque outgoing transmission is zero.
+- Roof-only hidden wall-layer cover, sealed-cap openings and virtual cover;
+  camera cutaway has no effect on radiance or sky entry.
+- Full thirteen-level traversal, resident reciprocal horizontal/vertical seams,
+  missing/ambiguous/cyclic links, profile discontinuity and bounded horizon.
+- Positive, colored and negative local lights with unchanged falloff profiles
+  and oriented 3D attenuation; ambient replacement remains local.
+- Identical completed outputs from synchronous and deadline-sliced work,
+  insertion/load-order invariance, and aperture close/open/reclose invalidation.
 
-For the 7x5 cardinal fixtures, serialize the pre-softening direct scalar grid
-as five rows in increasing `y`, each row listing `x=0..6`.  The exact grids are:
-
-```text
-wall-or-closed=960,960,960,960,960,960,960;0,0,0,960,960,960,960;0,0,0,960,960,960,960;0,0,0,960,960,960,960;960,960,960,960,960,960,960
-door-open=960,960,960,960,960,960,960;0,0,0,960,960,960,960;960,960,960,960,960,960,960;0,0,0,960,960,960,960;960,960,960,960,960,960,960
-window=960,960,960,960,960,960,960;0,0,0,960,960,960,960;720,720,720,960,960,960,960;0,0,0,960,960,960,960;960,960,960,960,960,960,960
-grate=960,960,960,960,960,960,960;0,0,0,960,960,960,960;840,840,840,960,960,960,960;0,0,0,960,960,960,960;960,960,960,960,960,960,960
-```
+The following four-pass spill vectors retain their horizontal relaxation
+meaning and factors; they do not define sun/moon direction or sky entry.
 
 A separate 11x11 covered-plane/aperture fixture seeds raw 256 at `(5,5)` and
 runs the four Jacobi softening passes.  The `corner` case makes only the two
@@ -1571,13 +1499,17 @@ A worst-case 136x136x13 scratch halo may additionally consume at most
 1,923,584 transient bytes at eight bytes per sample and is released after
 atomic publication; it is not retained cache memory.
 
-A sampled-cell visit is one read/classify/transport or relaxation evaluation
-for an output or halo coordinate; repeats in different passes count again.
-The worst cold limit is exactly `240448*24`, and the phase-update limit is
-exactly `240448*18`, so halo construction, seam dependency reads, both direct
-sweeps, and all fixed passes are inside the enforced count.  Implementations
-may reuse already validated neighbour classification, but may not exclude halo
-work from the counter.
+Algorithm-2 accounting charges each pending ray boundary event as a step,
+including up to 45 stored crossings per receiver, and charges halo mapping and
+Jacobi neighbour classification as bounded work. The former claim that two
+horizontal sweeps fit `240448*24` cold and `240448*18` phase visits is not an
+algorithm-2 cost proof. Retain those acceptance ceilings until the integrated
+counter/fixtures either demonstrate compliance or explicitly revise the
+budget with measured evidence; an unmeasured limit is not a passed check.
+Deadline slicing changes scheduling, not the completed field or acceptance
+threshold. Pending jobs retain one ray cursor and per-level scratch (six
+fields plus a next buffer), not thirteen simultaneous direct-component halos;
+the existing global 1,923,584-byte reservation remains authoritative.
 Content validation rejects a dynamic aperture whose maximum clipped influence
 would exceed the toggle limit before the map becomes runnable.  Runtime
 lighting never vetoes or rolls back authoritative gameplay aperture state.  If
@@ -1868,10 +1800,11 @@ display the complete profile digest used for continuous-link validation.
   into its own length-delimited `CLIENT_CMD_MAP` level block. Each depth owns an
   independent `MapCell` delta cache in `socket_struct.lastmap`; never fold upper
   or lower objects into base-map sublayers.
-- `src/server/los.c` remains the two-dimensional gameplay LOS/fog authority.
-  Its base mask protects actors, items, effects, targeting, and unexplored cells
-  across depths. Structural shell/roof visibility is a camera decision in
-  `request.c`; do not turn gameplay LOS into a voxel volume.
+- `src/server/los.c` owns independent physical 3D gameplay masks for each
+  advertised depth, using the shared traversal in [SPATIAL_3D.md](SPATIAL_3D.md).
+  Actors, items, effects and targets require authorization on their actual
+  physical cell. Structural shell/roof visibility remains a separate camera
+  decision in `request.c`; a visible shell does not authorize its contents.
 - Send objects on authoritative layers. Walls/roofs remain `LAYER_WALL`; the
   client uses explicit depth for projection. Send both halves of every
   `draw_double` object regardless of player quadrant.
@@ -1888,7 +1821,8 @@ display the complete profile digest used for continuous-link validation.
   outlines eligible objects after the complete world pass only at the player's
   physical depth. This presentation does not broaden line of sight or disclose
   layer-0/system exits, unexplored transitions, or hidden objects that the
-  server did not serialize.
+  server did not serialize. Covered boundary walls cannot retain `EXIT`
+  eligibility: structural disclosure alone does not authorize an interaction.
 - Upper-level visibility is camera-top-down. A solid floor, gameplay-opaque
   cell, or hidden wall-layer roof limits enclosed storeys below to their
   structural boundary without removing a middle-storey exterior wall. A
@@ -1901,8 +1835,8 @@ display the complete profile digest used for continuous-link validation.
   wall boundary without recursively following unrelated wall chains. Send
   camera-occluded cells with `MAP2_MASK_HARD_CLEAR` so cached roofs/walls cannot
   reappear grey after re-entry.
-- Base-map LOS limits gameplay content on positive depths but must not clear
-  their complete cells. Downgrade to structural floor, floor-mask, and wall
+- A depth's own gameplay mask limits its live content; loss of authorization
+  must not automatically clear the complete structural cell. Downgrade to structural floor, floor-mask, and wall
   boundary so lower walls do not slice roofs. Stack occlusion decides whether
   positive-depth structure is disclosed.
 - Base-depth blocked cells use ordinary fog clear: never-seen cells remain
