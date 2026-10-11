@@ -233,6 +233,8 @@ static bool has_disease(object *target) {
 
 START_TEST(test_disease_open_route_around_cover_retains_identity_and_slabs) {
     mapstruct *lower = get_empty_map(5, 5), *upper = get_empty_map(5, 5);
+    FREE_AND_COPY_HASH(lower->path, "/tests/propagation/disease-lower");
+    FREE_AND_COPY_HASH(upper->path, "/tests/propagation/disease-upper");
     lower->tile_map[TILED_UP] = upper;
     upper->tile_map[TILED_DOWN] = lower;
     object *disease = source_on(lower, 1, 2);
