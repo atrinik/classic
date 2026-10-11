@@ -37,7 +37,9 @@ bool perception_identity_visible(const object *observer, const object *target) {
     tag_t observer_count = observer->count, target_count = target->count;
     bool hidden = OBJECT_IS_HIDDEN((object *)observer, (object *)target);
     return !hidden && OBJECT_VALID(observer, observer_count) &&
-           OBJECT_VALID(target, target_count);
+           OBJECT_VALID(target, target_count) && observer->map != NULL &&
+           target->map != NULL && observer->env == NULL && target->env == NULL &&
+           perception_flags_visible(observer, target);
 }
 
 static bool perception_part_visible(const object *observer, const object *part) {
@@ -61,15 +63,19 @@ static bool perception_part_visible(const object *observer, const object *part) 
 }
 
 bool perception_object_visible(const object *observer, const object *target) {
-    if (target == NULL) {
+    if (observer == NULL || target == NULL) {
         return false;
     }
-    tag_t target_count = target->count;
-    if (!perception_identity_visible(observer, HEAD(target)) ||
-        !OBJECT_VALID(target, target_count)) {
+    const object *head = HEAD(target);
+    tag_t observer_count = observer->count, target_count = target->count;
+    tag_t head_count = head->count;
+    bool single_part = target->head != NULL;
+    if (!perception_identity_visible(observer, head) ||
+        !OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(head, head_count) ||
+        !OBJECT_VALID(target, target_count) || HEAD(target) != head) {
         return false;
     }
-    for (const object *part = target; part != NULL; part = target->head ? NULL : part->more) {
+    for (const object *part = target; part != NULL; part = single_part ? NULL : part->more) {
         if (perception_part_visible(observer, part)) {
             return true;
         }
@@ -81,30 +87,43 @@ bool perception_player_part_authorized(const player *pl, const object *part) {
     if (pl == NULL || pl->ob == NULL || part == NULL) {
         return false;
     }
-    tag_t part_count = part->count;
-    if (!perception_identity_visible(pl->ob, HEAD(part)) ||
-        !OBJECT_VALID(part, part_count) || !perception_flags_visible(pl->ob, part) ||
-        QUERY_FLAG(HEAD(part), FLAG_HIDDEN) || QUERY_FLAG(part, FLAG_HIDDEN) ||
-        !los_player_can_see_cell(pl->ob, part->map, part->x, part->y)) {
+    object *observer = pl->ob;
+    const object *head = HEAD(part);
+    tag_t observer_count = observer->count, head_count = head->count, part_count = part->count;
+    if (!perception_identity_visible(observer, head) ||
+        !OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(head, head_count) ||
+        !OBJECT_VALID(part, part_count) || HEAD(part) != head || pl->ob != observer ||
+        !perception_flags_visible(observer, part) ||
+        QUERY_FLAG(head, FLAG_HIDDEN) || QUERY_FLAG(part, FLAG_HIDDEN) ||
+        !los_player_can_see_cell(observer, part->map, part->x, part->y)) {
         return false;
     }
     /* MAP2 live objects use the aggregate sample of their actual physical cell.
      * Xray and the explicit operator light override preserve their exceptions. */
-    return part == pl->ob || QUERY_FLAG(pl->ob, FLAG_XRAYS) || pl->tli ||
+    return part == observer || QUERY_FLAG(observer, FLAG_XRAYS) || pl->tli ||
            map_get_darkness(part->map, part->x, part->y, NULL) > 0;
 }
 
 bool perception_player_authorized(const player *pl, const object *target) {
-    if (target == NULL) {
+    if (pl == NULL || pl->ob == NULL || target == NULL) {
         return false;
     }
-    for (const object *part = target; part != NULL; part = target->head ? NULL : part->more) {
+    const object *observer = pl->ob, *head = HEAD(target);
+    tag_t observer_count = observer->count, head_count = head->count;
+    tag_t target_count = target->count;
+    bool single_part = target->head != NULL;
+    for (const object *part = target; part != NULL; part = single_part ? NULL : part->more) {
         tag_t part_count = part->count;
-        if (perception_player_part_authorized(pl, part)) {
-            return true;
-        }
-        if (!OBJECT_VALID(part, part_count)) {
+        bool authorized = perception_player_part_authorized(pl, part);
+        /* EVENT_ASK_SHOW may remove or replace any actor. Validate the whole
+         * borrowed multipart identity before returning or reading the next link. */
+        if (!OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(head, head_count) ||
+            !OBJECT_VALID(target, target_count) || !OBJECT_VALID(part, part_count) ||
+            pl->ob != observer || HEAD(target) != head) {
             return false;
+        }
+        if (authorized) {
+            return true;
         }
     }
     return false;
