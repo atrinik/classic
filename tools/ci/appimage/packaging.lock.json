@@ -2245,5 +2245,26 @@
     "mesa-libgallium": "8b60ee4638cf3a886313e6bd0ca9565f85c5c3525105dee680be8af5f3f11e4f",
     "zlib1g": "90a7a9ba7a51a49b6a70f01b81dfcb8cfa5f23659daf38948d59308ad0b0165e",
     "libasound2-data": "47a678eb76579653d645b8b33f02bcf046ff032d40e0b69d163eff7ec5e60561"
+  },
+  "elf_inspection_exceptions": {
+    "libglib-2.0.so.0": {
+      "package": "libglib2.0-0t64",
+      "sha256": "4c4a843991d23faad741a33b99bf049bee88b7b0827956ea1cdc563816a5332b",
+      "soname": "libglib-2.0.so.0",
+      "version": "2.80.0-6ubuntu3.9",
+      "weak_undefined_symbols": [
+        "__lsan_enable",
+        "__lsan_ignore_object"
+      ]
+    },
+    "libpulsecommon-16.1.so": {
+      "build_paths": [
+        "/build/pulseaudio-zYFgiu/pulseaudio-16.1+dfsg1/obj-x86_64-linux-gnu"
+      ],
+      "package": "libpulse0",
+      "sha256": "00561562aaf1e87c03ca88acdbfb1b33c209e777ffb2fc422ea03146abbe49f4",
+      "soname": "libpulsecommon-16.1.so",
+      "version": "1:16.1+dfsg1-2ubuntu10.1"
+    }
   }
 }
