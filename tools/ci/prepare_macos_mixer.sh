@@ -33,7 +33,11 @@ curl --fail --location --retry 3 "${url}" --output "${stage}/source.tar.gz"
 printf '%s  %s\n' "${digest}" "${stage}/source.tar.gz" | shasum -a 256 --check
 tar -xf "${stage}/source.tar.gz" -C "${stage}"
 prefix=$(brew --prefix)
-export PKG_CONFIG_PATH="$(brew --prefix opusfile)/lib/pkgconfig:$(brew --prefix opus)/lib/pkgconfig:$(brew --prefix libogg)/lib/pkgconfig:${prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+opusfile_prefix=$(brew --prefix opusfile)
+opus_prefix=$(brew --prefix opus)
+ogg_prefix=$(brew --prefix libogg)
+PKG_CONFIG_PATH="${opusfile_prefix}/lib/pkgconfig:${opus_prefix}/lib/pkgconfig:${ogg_prefix}/lib/pkgconfig:${prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PKG_CONFIG_PATH
 toolchain="${repository}/cmake/toolchains/llvm-macos.cmake"
 cmake -S "${stage}/${source}" -B "${stage}/build" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="${toolchain}" -DCMAKE_BUILD_TYPE=Release \
