@@ -196,12 +196,32 @@ else ()
 endif ()
 
 find_library(READLINE_LIBRARY readline)
-find_path(READLINE_INCLUDE_DIR readline/readline.h)
 
 if (READLINE_LIBRARY)
+    if (NOT EXISTS "${READLINE_LIBRARY}")
+        message(FATAL_ERROR "The selected Readline library does not exist")
+    endif ()
+    # Resolve both sides of opt/Cellar or system-library symlinks before pairing.
+    file(REAL_PATH "${READLINE_LIBRARY}" atrinik_readline_library)
+    get_filename_component(atrinik_readline_libdir "${atrinik_readline_library}" DIRECTORY)
+    if (atrinik_readline_libdir MATCHES "^(.+)/(lib|lib64)(/[^/]+)?$")
+        set(atrinik_readline_headers "${CMAKE_MATCH_1}/include")
+    elseif (atrinik_readline_libdir MATCHES "^/(lib|lib64)(/[^/]+)?$")
+        # Non-usr-merged system layouts still pair /lib with /usr/include.
+        set(atrinik_readline_headers "/usr/include")
+    else ()
+        message(FATAL_ERROR "The selected Readline library requires a supported lib/lib64 prefix")
+    endif ()
+    find_path(READLINE_INCLUDE_DIR readline/readline.h
+        PATHS "${atrinik_readline_headers}" NO_DEFAULT_PATH)
     if (NOT READLINE_INCLUDE_DIR OR
             NOT EXISTS "${READLINE_INCLUDE_DIR}/readline/readline.h")
         message(FATAL_ERROR "The selected Readline library requires matching Readline headers")
+    endif ()
+    file(REAL_PATH "${READLINE_INCLUDE_DIR}" atrinik_readline_selected_headers)
+    file(REAL_PATH "${atrinik_readline_headers}" atrinik_readline_expected_headers)
+    if (NOT atrinik_readline_selected_headers STREQUAL atrinik_readline_expected_headers)
+        message(FATAL_ERROR "Readline headers and library must come from the same resolved prefix")
     endif ()
     set(HAVE_READLINE true)
 else ()

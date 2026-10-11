@@ -86,6 +86,48 @@ export(TARGETS core FILE "${{CMAKE_BINARY_DIR}}/CoreTargets.cmake")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires matching Readline headers", result.stderr)
 
+    def test_selected_library_rejects_explicit_headers_from_another_prefix(self):
+        other = self.root / "other-readline/include/readline"
+        other.mkdir(parents=True)
+        (other / "readline.h").write_text("#define ATRINIK_READLINE_FIXTURE 2\n")
+        result = self.configure(f"-DREADLINE_INCLUDE_DIR={other.parent}")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("same resolved prefix", result.stderr)
+
+    def test_missing_selected_headers_do_not_fall_back_to_another_prefix(self):
+        (self.prefix / "include/readline/readline.h").unlink()
+        other = self.root / "other-readline/include/readline"
+        other.mkdir(parents=True)
+        (other / "readline.h").write_text("#define ATRINIK_READLINE_FIXTURE 2\n")
+        result = self.configure(f"-DCMAKE_PREFIX_PATH={self.prefix};{other.parent.parent}")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires matching Readline headers", result.stderr)
+
+    def test_multiarch_library_pairs_with_the_prefix_include_directory(self):
+        multiarch = self.prefix / "lib/x86_64-linux-gnu"
+        multiarch.mkdir()
+        library = multiarch / "libreadline.a"
+        (self.prefix / "lib/libreadline.a").rename(library)
+        result = self.configure(f"-DREADLINE_LIBRARY={library}")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = subprocess.run([shutil.which("cmake"), "--build", str(self.root / "build"),
+                                 "--parallel", "2"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_brew_style_symlink_prefix_pairs_with_resolved_headers(self):
+        alias = self.root / "opt/readline"
+        alias.parent.mkdir()
+        alias.symlink_to(self.prefix, target_is_directory=True)
+        result = self.configure(f"-DREADLINE_LIBRARY={alias}/lib/libreadline.a",
+                                f"-DREADLINE_INCLUDE_DIR={alias}/include")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_no_selected_library_preserves_optional_console_fallback(self):
+        (self.prefix / "include/readline/readline.h").unlink()
+        result = self.configure("-DREADLINE_LIBRARY:FILEPATH=")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("simple interactive console", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
