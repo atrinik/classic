@@ -537,6 +537,10 @@ bool player_disconnect_all_checked(void);
 player *find_player(const char *plname);
 player *find_player_sh(shstr *plname);
 void display_motd(object *op);
+/** Validate a borrowed player connection against the live player list first. */
+bool player_connection_is_current(const object *observer, tag_t count,
+                                  const player *controller, const socket_struct *socket);
+
 void free_player(player *pl);
 void give_initial_items(object *pl, treasure_list_t *items);
 int handle_newcs_player(player *pl);

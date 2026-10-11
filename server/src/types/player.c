@@ -282,6 +282,22 @@ void player_disconnect_all(void) {
     (void)player_disconnect_all_checked();
 }
 
+/** Validate borrowed identities without dereferencing released pool storage. */
+bool player_connection_is_current(const object *observer, tag_t count,
+                                  const player *controller, const socket_struct *socket) {
+    /* Never inspect a captured pointer until the live list proves ownership.
+     * Scripts may synchronously log out players and reclaim free pool pages. */
+    for (const player *current = first_player; current != NULL; current = current->next) {
+        if (current == controller) {
+            return current->ob == observer && current->cs == socket && observer != NULL &&
+                   socket != NULL && OBJECT_VALID(current->ob, count) &&
+                   current->ob->type == PLAYER && CONTR(current->ob) == current;
+        }
+    }
+    return false;
+}
+
+
 /**
  * Loop through the player list and find player specified by plname.
  *

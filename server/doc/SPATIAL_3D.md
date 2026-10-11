@@ -102,6 +102,12 @@ the whole pending MAP2 publication, clears its delta cache and target publicatio
 references, and requests a complete map on the next socket post. Exploration
 grants are deferred until the same publication fence passes. The final fence and
 queue append run synchronously without callbacks or yields.
+Visibility callbacks may synchronously log out the observer or another player.
+Packet-local buffers are released independently; connection cleanup first checks
+live-list membership, controller/socket identity and observer incarnation. The
+socket post pass snapshots connection identities and skips deleted or replaced
+entries after callbacks, including target-stat authorization before map drawing.
+New connections wait until the next post pass.
 
 Test-only counters distinguish sight candidates, camera-pruned cells, coordinate
 resolution calls, successful clear-volume proofs and actual ray traversals, plus

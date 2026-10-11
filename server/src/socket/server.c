@@ -1695,8 +1695,37 @@ void socket_server_post_process(void) {
         }
     }
 
-    player *pl, *pl_tmp;
-    DL_FOREACH_SAFE(first_player, pl, pl_tmp) {
+    /* MAP2/LOGOUT scripts can synchronously remove this player or any later
+     * player. A saved next-controller pointer is therefore not a safe iterator.
+     * Live-list membership and the object incarnation reject removed/reused
+     * entries before any captured object, controller or socket is dereferenced. */
+    size_t player_count = 0;
+    for (player *pl = first_player; pl != NULL; pl = pl->next) {
+        HARD_ASSERT(player_count != SIZE_MAX);
+        player_count++;
+    }
+    struct player_snapshot {
+        object *ob;
+        tag_t count;
+        player *controller;
+        socket_struct *socket;
+    } *players;
+    HARD_ASSERT(player_count <= SIZE_MAX / sizeof(*players));
+    players = xcalloc(player_count, sizeof(*players));
+    size_t player_index = 0;
+    for (player *pl = first_player; pl != NULL; pl = pl->next) {
+        players[player_index++] = (struct player_snapshot) {
+            .ob = pl->ob, .count = pl->ob->count, .controller = pl, .socket = pl->cs,
+        };
+    }
+    for (player_index = 0; player_index < player_count; player_index++) {
+        struct player_snapshot *snapshot = &players[player_index];
+        object *observer = snapshot->ob;
+        if (!player_connection_is_current(observer, snapshot->count,
+                                          snapshot->controller, snapshot->socket)) {
+            continue;
+        }
+        player *pl = snapshot->controller;
         if (server_socket_csocket_is_zombie(pl->cs) &&
             pl->cs->login_count++ >= MAX_TICKS_MULTIPLIER) {
             pl->cs->state = ST_DEAD;
@@ -1704,6 +1733,11 @@ void socket_server_post_process(void) {
         if (pl->cs->state == ST_DEAD) {
             if (!player_logout_checked(pl))
                 access_server_save_failed();
+            continue;
+        }
+
+        if (pl->cs->state == ST_ZOMBIE) {
+            socket_buffer_write(pl->cs);
             continue;
         }
 
@@ -1730,10 +1764,27 @@ void socket_server_post_process(void) {
         }
 
         esrv_update_stats(pl);
+        if (!player_connection_is_current(observer, snapshot->count, pl, snapshot->socket) ||
+            snapshot->socket->state == ST_DEAD) {
+            continue;
+        }
+        if (pl->cs->state == ST_ZOMBIE) {
+            socket_buffer_write(pl->cs);
+            continue;
+        }
         party_update_who(pl);
 
         if (pl->ob->map != NULL) {
-            draw_client_map(pl->ob);
+            draw_client_map(observer);
+            if (!player_connection_is_current(observer, snapshot->count, pl, snapshot->socket) ||
+                pl->cs->state == ST_DEAD) {
+                continue;
+            }
+            if (pl->cs->state == ST_ZOMBIE || observer->map == NULL ||
+                observer->map->in_memory != MAP_IN_MEMORY) {
+                socket_buffer_write(pl->cs);
+                continue;
+            }
 
             uint32_t update_tile = GET_MAP_UPDATE_COUNTER(pl->ob->map, pl->ob->x, pl->ob->y);
             if (update_tile != pl->cs->update_tile) {
@@ -1744,6 +1795,7 @@ void socket_server_post_process(void) {
 
         socket_buffer_write(pl->cs);
     }
+    free(players);
 
     /* The pass above can enqueue map/asset responses. Permit one immediate
      * transport retry, but let the transport poller back off if a socket

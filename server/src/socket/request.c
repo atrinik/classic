@@ -297,6 +297,10 @@ void esrv_update_stats(player *pl) {
 
     SOFT_ASSERT(pl->ob != NULL, "Player has no object!");
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+
 #define _Add(_old, _new, _type, _bitsize)               \
     if (packet == NULL) {                               \
         packet = packet_new(CLIENT_CMD_STATS, 32, 128); \
@@ -339,10 +343,23 @@ void esrv_update_stats(player *pl) {
 
     /* HP and level metadata retain the same queued-publication authority as
      * the target reply, even when no level change would trigger a refresh. */
-    if (pl->target_object != NULL && pl->target_object != pl->ob &&
-        (!OBJECT_VALID(pl->target_object, pl->target_object_count) ||
-         !target_player_authorized(pl, pl->target_object, NULL))) {
+    object *selected_target = pl->target_object;
+    tag_t selected_count = pl->target_object_count;
+    bool target_rejected = pl->target_object != NULL && pl->target_object != pl->ob &&
+                           (!OBJECT_VALID(pl->target_object, pl->target_object_count) ||
+                            !target_player_authorized(pl, pl->target_object, NULL));
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+        return;
+    }
+    target_rejected |= pl->target_object != selected_target ||
+                       pl->target_object_count != selected_count;
+    if (target_rejected) {
         send_target_command(pl);
+        if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+            observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+            return;
+        }
     }
     int target_level = pl->ob->level;
     if (pl->target_object != NULL &&
@@ -352,6 +369,10 @@ void esrv_update_stats(player *pl) {
 
     if (pl->last_target_level != target_level || pl->last_target_viewer_level != pl->ob->level) {
         send_target_command(pl);
+        if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+            observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+            return;
+        }
     }
 
     if (pl->target_object && pl->target_object != pl->ob) {
@@ -700,9 +721,10 @@ void draw_client_map(object *pl) {
     /* Callbacks inside MAP2 may invalidate the observer as well as geometry. */
     tag_t player_count = pl->count;
     player *view_player = CONTR(pl);
+    socket_struct *view_socket = view_player->cs;
     draw_client_map2(pl);
-    if (!OBJECT_VALID(pl, player_count) || CONTR(pl) != view_player ||
-        view_player->cs->target_map_published_map == NULL) {
+    if (!player_connection_is_current(pl, player_count, view_player, view_socket) ||
+        view_socket->target_map_published_map == NULL) {
         return;
     }
 
@@ -1567,8 +1589,10 @@ void draw_client_map2(object *pl) {
                                 hidden = OBJECT_IS_HIDDEN(pl, callback_head);
                                 /* Scripts may remove/recycle any borrowed object, move the
                                  * observer, or mutate cover elsewhere in the viewport. */
-                                if (!OBJECT_VALID(pl, view_player_count) || CONTR(pl) != view_player ||
-                                    view_player->cs != view_socket || !los_view_is_current(pl) ||
+                                if (!player_connection_is_current(pl, view_player_count,
+                                                                  view_player, view_socket) ||
+                                    view_socket->state == ST_DEAD || view_socket->state == ST_ZOMBIE ||
+                                    !los_view_is_current(pl) ||
                                     publication_epoch != los_publication_epoch() ||
                                     !OBJECT_VALID(tmp, part_count) || !OBJECT_ACTIVE(tmp) ||
                                     !OBJECT_VALID(callback_head, head_count) ||
@@ -2386,7 +2410,8 @@ void draw_client_map2(object *pl) {
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
     /* No callback or yield may separate this fence from queue publication. */
-    if (!los_view_is_current(pl) || publication_epoch != los_publication_epoch()) {
+    if (!los_view_is_current(pl) || publication_epoch != los_publication_epoch() ||
+        view_socket->state == ST_DEAD || view_socket->state == ST_ZOMBIE) {
         goto abort_map;
     }
     for (size_t i = 0; i < explored_count; i++) {
@@ -2470,14 +2495,17 @@ abort_map:
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         packet_free(continuation_packets[i]);
     }
-    /* A partially changed delta cache cannot describe any client generation. */
-    map_client_cache_clear(&view_socket->lastmap);
-    view_socket->lastmap_light_generation = 0;
-    view_socket->target_map_published_map = NULL;
-    view_socket->target_map_published_count = 0;
-    view_socket->target_map_published_depths = 0;
-    view_socket->target_map_publication_pending = false;
-    if (OBJECT_VALID(pl, view_player_count) && CONTR(pl) == view_player) {
+    /* Logout may have freed both controller and socket inside ASK_SHOW. Its
+     * teardown already withdraws publication and frees the old delta cache.
+     * Only touch a connection still owned by this exact live observer. */
+    if (player_connection_is_current(pl, view_player_count, view_player, view_socket)) {
+        /* A partially changed delta cache cannot describe a client generation. */
+        map_client_cache_clear(&view_socket->lastmap);
+        view_socket->lastmap_light_generation = 0;
+        view_socket->target_map_published_map = NULL;
+        view_socket->target_map_published_count = 0;
+        view_socket->target_map_published_depths = 0;
+        view_socket->target_map_publication_pending = false;
         view_player->last_update = NULL;
         view_player->los_view_valid = false;
         view_player->update_los = 1;
@@ -2897,6 +2925,7 @@ bool target_player_authorized(const player *pl, const object *target, int *depth
         return false;
     }
     const object *observer = pl->ob;
+    const socket_struct *observer_socket = pl->cs;
     const object *head = HEAD(target);
     tag_t observer_count = observer->count, target_count = target->count, head_count = head->count;
     bool single_part = target->head != NULL;
@@ -2905,7 +2934,8 @@ bool target_player_authorized(const player *pl, const object *target, int *depth
         bool authorized = target_player_part_published(pl, part, depth) &&
                           perception_player_part_authorized(pl, part);
         /* EVENT_ASK_SHOW may delete, remove or recycle any borrowed actor. */
-        if (pl->ob != observer || !OBJECT_VALID(observer, observer_count) ||
+        if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+            observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE ||
             !OBJECT_VALID(target, target_count) || !OBJECT_VALID(head, head_count) ||
             !OBJECT_VALID(part, part_count)) {
             return false;
@@ -2931,10 +2961,21 @@ void send_target_command(player *pl) {
         return;
     }
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+    object *selected_target = pl->target_object;
+    tag_t selected_count = pl->target_object_count;
     int target_depth = 0;
     bool target_authorized = pl->target_object != NULL && pl->target_object != pl->ob &&
                              OBJECT_VALID(pl->target_object, pl->target_object_count) &&
                              target_player_authorized(pl, pl->target_object, &target_depth);
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+        return;
+    }
+    target_authorized &= pl->target_object == selected_target &&
+                         pl->target_object_count == selected_count;
     packet = packet_new(CLIENT_CMD_TARGET, 64, 64);
 
     pl->ob->enemy = NULL;
