@@ -7,9 +7,12 @@ Atrinik classic client, server, tests, and tooling. Its public CMake target is
 `Atrinik::Core`; the installed static library is named `libatrinik`.
 
 Integrated classic builds use the sibling `protocol/` source from the same
-commit. Standalone builds retain a checksum-pinned protocol archive fallback
-from `dependencies.lock.json`. Override that source explicitly when composing
-another checkout:
+commit. The historical checksum-pinned archive in `dependencies.lock.json`
+lacks the new generated rendezvous admission definitions and now fails configure.
+Until a matching immutable artifact is published, select matching sibling,
+embedded, explicitly supplied, or installed Classic protocol sources. The
+historical lock is preserved; no unreleased artifact or checksum is substituted.
+Override the source explicitly when composing another checkout:
 
 ```sh
 cmake -S . -B build \
@@ -90,7 +93,7 @@ The helper alone does not provide admission or route registration.
 `socket_quic_client_create` owns the complete client connection attempt. It
 pins any one-use routing grant's server ID to the expected QUIC certificate
 fingerprint before discovery, and applies one absolute 15-second deadline to
-address resolution, STUN, WebSocket authorization, candidate collection, and
+address resolution, STUN, admission challenge/proof, WebSocket authorization, candidate collection, and
 the QUIC candidate race. Its optional `socket_connect_failure_t` output is a
 bounded, credential-free value owned by the caller. The function borrows all
 string and grant inputs only for the duration of the call.
@@ -101,9 +104,25 @@ grant, deadline, protocol state, and counters. It is mutable, must be released
 with `socket_rendezvous_attempt_destroy`, and is not safe to share between
 threads; independent attempts may run concurrently. Server candidate output is
 transactional and remains empty if any frame is malformed, out of order,
-over-budget, or belongs to another ticket. The `access_init` / `access_ready` exchange consumes the metaserver's one-use
-grant; candidate tickets are bound to that same grant. Reusable game admission
-codes never enter these APIs. QUIC transport is enabled only with OpenSSL 3.5
+over-budget, or belongs to another ticket. The HTTPS challenge and admission proof precede every client WebSocket upgrade.
+`rendezvous_admission.h` owns strict challenge parsing, binary-ticket hashing,
+fixed 24-bit SHA-256 proof solving and secret header construction. The solver
+checks cancellation/deadlines at most every 4096 trials, stops after 2^27 trials
+or ten seconds, and never extends the original connection deadline. HTTPS uses
+verified certificates with no redirects or credential-bearing URLs. Missing or
+unsupported challenges fail closed; older Workers need a coordinated upgrade.
+The protected grant is redeemed before WebSocket allocation; the
+`access_init` / `access_ready` exchange confirms that same preauthorized grant; candidate tickets are bound to that same grant. Reusable game admission
+codes never enter these APIs. Header lists returned by the admission helper must
+be released with `rendezvous_admission_headers_free`; caller-owned challenge and
+proof buffers must be cleansed after use. Independent calls are thread-safe;
+outputs never retain borrowed inputs. Challenge HTTP 429 terminates the attempt
+with `RENDEZVOUS_ADMISSION_RATE_LIMITED`; the optional caller-owned retry delay
+is zero unless one decimal `Retry-After` value in 1..86400 seconds is valid.
+The client preserves that bounded delay in its rate-limit failure result.
+PoW imposes a computational cost, with no
+fairness guarantee against sustained anonymous load. Slow devices may time out
+and must not bypass the proof. QUIC transport is enabled only with OpenSSL 3.5
 or newer.
 
 `access_resolve` performs one bounded nonredirecting HTTPS POST against an
