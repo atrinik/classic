@@ -58,6 +58,10 @@ static bool celestial_observe_event(const spatial_event *event) {
 
 #ifdef ATRINIK_TESTING
 static uint64_t rebuild_count;
+static bool current_reservation_fail;
+void celestial_light_current_reservation_fail_for_test(bool fail) {
+    current_reservation_fail = fail;
+}
 uint64_t celestial_light_rebuilds_for_test(void) {
     return rebuild_count;
 }
@@ -618,6 +622,23 @@ static bool collect_stack(mapstruct *map, mapstruct *levels[MAP2_LEVELS], size_t
     return *count != 0;
 }
 
+/** No rejected synchronous solve may leave readable radiance behind. */
+static void celestial_clear_failed_stack(mapstruct *map) {
+    mapstruct *levels[MAP2_LEVELS] = {0};
+    size_t count = 0;
+    (void)collect_stack(map, levels, &count);
+    for (size_t i = 0; i < count; i++) {
+        mapstruct *current = levels[i];
+        clear_map_field(current);
+        current->celestial_light_valid = false;
+        current->celestial_light_keyframe_valid = false;
+        HARD_ASSERT(current->celestial_light_generation_id != UINT64_MAX);
+        current->celestial_light_generation_id++;
+        celestial_dependencies_field_release(current, false);
+        celestial_dependencies_field_release(current, true);
+    }
+}
+
 static void publish_map_field(mapstruct *map,
                               const celestial_model *model,
                               int32_t *direct,
@@ -709,15 +730,21 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
     /* The synchronous fallback is server-thread exclusive. Its existing
      * reserve covers the largest one-level halo plus dependency bookkeeping. */
     size_t scratch = 28 * celestial_scratch_cells(map);
+    bool reservation_available = pending_memory <= CELESTIAL_PENDING_MEMORY_MAX - scratch;
+#ifdef ATRINIK_TESTING
+    reservation_available &= !current_reservation_fail;
+#endif
     if (map->width < 1 || map->height < 1 || map->width > 64 || map->height > 64 ||
-        pending_memory > CELESTIAL_PENDING_MEMORY_MAX - scratch) return false;
+        !reservation_available) {
+        celestial_clear_failed_stack(map);
+        return false;
+    }
     pending_memory += scratch;
     celestial_dependencies *dependencies = celestial_dependencies_begin(
         &pending_memory, CELESTIAL_PENDING_MEMORY_MAX, CELESTIAL_PENDING_MEMORY_MAX / 64);
     if (dependencies == NULL) {
         pending_memory -= scratch;
-        clear_map_field(map);
-        map->celestial_light_valid = false;
+        celestial_clear_failed_stack(map);
         return false;
     }
     HARD_ASSERT(active_dependencies == NULL);
@@ -823,10 +850,7 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
     }
     bool complete = celestial_dependencies_finish(dependencies, levels, count, false);
     if (!complete) {
-        for (size_t i = 0; i < count; i++) {
-            clear_map_field(levels[i]);
-            levels[i]->celestial_light_valid = false;
-        }
+        celestial_clear_failed_stack(map);
     }
     (void)spatial_observer_exchange(observer);
     active_dependencies = NULL;
@@ -1335,8 +1359,13 @@ bool celestial_light_keyframe_request(mapstruct *map, uint64_t absolute_hour) {
         return false;
     }
     for (size_t i = 0; i < count; i++) {
+        if (!celestial_dependencies_observe(job->dependencies, levels[i])) {
+            pending_free(job);
+            return false;
+        }
+    }
+    for (size_t i = 0; i < count; i++) {
         mapstruct *current = levels[i];
-        (void)celestial_dependencies_observe(job->dependencies, current);
         job->levels[i] = (celestial_pending_level_t){
             .map = current, .spaces = current->spaces, .width = current->width,
             .height = current->height, .cells = (size_t)current->width * current->height,

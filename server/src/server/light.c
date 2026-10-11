@@ -658,6 +658,17 @@ static bool light_face_continuous(const spatial_face *face) {
                   region_celestial_for_map(to)->digest, 32) == 0;
 }
 
+/** A terminal roof/wall sample represents its incident surface, not the
+ * inaccessible contents behind it. A plain floor still covers its contents. */
+static bool light_terminal_surface(const spatial_cell *cell) {
+    if ((GET_MAP_FLAGS(cell->map, cell->x, cell->y) & P_BLOCKSVIEW) != 0) return true;
+    for (const object *op = GET_MAP_OB(cell->map, cell->x, cell->y);
+         op != NULL; op = op->above) {
+        if (object_is_roof_surface(op)) return true;
+    }
+    return false;
+}
+
 /** The radial mask stays authoritative; physical crossings attenuate it in
  * travel order before signed scalar and normalized color aggregation. */
 static int light_path_value(mapstruct *map, int x, int y, int dx, int dy, int dz,
@@ -673,7 +684,23 @@ static int light_path_value(mapstruct *map, int x, int y, int dx, int dy, int dz
         for (size_t i = 0; i < event.face_count; i++) {
             if (!light_face_continuous(&event.faces[i])) return 0;
         }
-        transmitted = spatial_light_attenuate(transmitted, spatial_event_light(&event));
+        uint16_t coefficient = SPATIAL_LIGHT_SCALE;
+        bool incident = event.terminal && light_terminal_surface(&event.destination);
+        for (size_t i = 0; i < event.face_count; i++) {
+            const spatial_face *face = &event.faces[i];
+            if (incident && face->normal[2] > 0 &&
+                face->to.map == event.destination.map &&
+                face->to.x == event.destination.x && face->to.y == event.destination.y &&
+                face->to.z == event.destination.z) {
+                /* Only the receiving slab is exempt. Grazing faces and
+                 * virtual cover on the source side retain their coefficient. */
+                coefficient = MIN(coefficient,
+                    spatial_cell_light_face(&face->from, 0, 0, 1, NULL));
+            } else {
+                coefficient = MIN(coefficient, spatial_face_light(face, NULL));
+            }
+        }
+        transmitted = spatial_light_attenuate(transmitted, coefficient);
         if (transmitted == 0) return 0;
     }
     return status == 0 ? sign * transmitted : 0;

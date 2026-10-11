@@ -933,6 +933,40 @@ START_TEST(test_remote_two_seam_geometry_fences_current_and_pending_fields) {
 }
 END_TEST
 
+START_TEST(test_current_reservation_failure_clears_both_published_endpoints) {
+    mapstruct *map = open_fixture(9, 9);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    ck_assert_int_gt(map->spaces[40].celestial_light_value, 0);
+    ck_assert_int_gt(map->spaces[40].celestial_light_next_value, 0);
+    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    celestial_light_invalidate(map);
+    celestial_light_current_reservation_fail_for_test(true);
+    celestial_light_ensure(map);
+    celestial_light_current_reservation_fail_for_test(false);
+    ck_assert(!map->celestial_light_valid);
+    ck_assert(!map->celestial_light_keyframe_valid);
+    for (size_t i = 0; i < 81; i++) {
+        ck_assert_int_eq(map->spaces[i].celestial_light_value, 0);
+        ck_assert_int_eq(map->spaces[i].celestial_light_next_value, 0);
+        for (size_t channel = 0; channel < 3; channel++) {
+            ck_assert_int_eq(map->spaces[i].celestial_light_rgb[channel], 0);
+            ck_assert_int_eq(map->spaces[i].celestial_light_next_rgb[channel], 0);
+        }
+    }
+    celestial_light_ensure(map);
+    ck_assert(map->celestial_light_valid);
+    ck_assert_int_eq(map->spaces[40].celestial_light_value, 0);
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    celestial_light_invalidate(map);
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    ck_assert_int_gt(map->spaces[40].celestial_light_value, 0);
+    ck_assert_int_gt(map->spaces[40].celestial_light_next_value, 0);
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_light");
     TCase *tc_core = tcase_create("Core");
@@ -968,6 +1002,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_celestial_pending_matches_synchronous_oracle);
     tcase_add_test(tc_core, test_celestial_geometry_signature_is_exact_and_uses_existing_padding);
     tcase_add_test(tc_core, test_celestial_pending_memory_is_bounded_and_released);
+    tcase_add_test(tc_core, test_current_reservation_failure_clears_both_published_endpoints);
     tcase_add_test(tc_core, test_celestial_pending_promotes_without_rebuild_and_jumps_fall_back);
     tcase_add_test(tc_core, test_celestial_pending_is_fair_and_geometry_cancels);
     tcase_add_test(tc_core, test_celestial_pending_stack_exact_and_membership_fenced);
