@@ -1383,7 +1383,8 @@ if (PACKAGE_TYPE STREQUAL "deb")
     # default permissions to their final destination. Normalize only the owned
     # package layout, including /usr, for standalone cpack invocations too.
     foreach (directory IN ITEMS "." games share share/applications share/pixmaps
-            share/doc share/doc/atrinik share/games share/games/atrinik)
+            share/doc share/doc/atrinik share/doc/atrinik/licenses
+            share/doc/atrinik/licenses/llvm share/games share/games/atrinik)
         install(DIRECTORY DESTINATION "${directory}" COMPONENT AtrinikClient
             DIRECTORY_PERMISSIONS ${CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS})
     endforeach ()
