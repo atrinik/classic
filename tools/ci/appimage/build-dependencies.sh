@@ -39,7 +39,7 @@ import json,pathlib
 lock=json.loads(pathlib.Path('/inputs/packaging.lock.json').read_text())
 for e in lock['sources']:
  root=pathlib.Path('/build')/e['source_directory']; target=pathlib.Path('/opt/atrinik-appimage/share/licenses')/e['name']/'LICENSE';target.parent.mkdir(parents=True,exist_ok=True)
- files=sorted(p for p in root.rglob('*') if p.is_file() and any(p.name.lower().startswith(k) for k in ('license','copying','copyright','notice')))
+ files=sorted(p for p in root.rglob('*') if p.is_file() and any(k in p.name.lower() for k in ('license','copying','copyright','notice')))
  files += sorted(p for p in root.rglob('*.h') if p.name.startswith(('dr_', 'stb_')))
  if root/e['license_file'] not in files: raise RuntimeError('missing license '+e['name'])
  with target.open('wb') as out:
@@ -71,7 +71,7 @@ with notice.open('ab') as out:
   archive=pathlib.Path('/inputs/runtime-sources')/e['filename']
   assert hashlib.sha256(archive.read_bytes()).hexdigest()==e['sha256']
   with tarfile.open(archive) as source:
-   files=[m for m in source.getmembers() if m.isfile() and (any(pathlib.PurePosixPath(m.name).name.lower().startswith(k) for k in ('license','copying','copyright','notice','lgpl')) or m.name.endswith('/'+e['license_file']))]
+   files=[m for m in source.getmembers() if m.isfile() and (any(k in pathlib.PurePosixPath(m.name).name.lower() for k in ('license','copying','copyright','notice','lgpl')) or m.name.endswith('/'+e['license_file']))]
    if not files: raise RuntimeError('missing runtime component licenses: '+e['name'])
    for m in files:
     out.write(('\n===== '+e['name']+' '+m.name+' =====\n').encode());out.write(source.extractfile(m).read());out.write(b'\n')
