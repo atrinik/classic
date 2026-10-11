@@ -61,6 +61,7 @@ class MacOSCurlCohortTests(unittest.TestCase):
             "OBJDUMP": "/foreign/objdump", "STRIP": "/foreign/strip",
             "CC": "/foreign/cc", "CXX": "/foreign/cxx", "CFLAGS": "-O0",
             "CXXFLAGS": "-O0", "CPPFLAGS": "-I/foreign", "LDFLAGS": "-L/foreign",
+            "PKGCONFIG": "/foreign/pkg-config", "KRB5CONFIG": "/foreign/krb5-config",
             "PKG_CONFIG": "/foreign/pkg-config", "PKG_CONFIG_PATH": "/foreign/pkgconfig",
             "PKG_CONFIG_LIBDIR": "/foreign/pkgconfig", "PKG_CONFIG_SYSTEM_INCLUDE_PATH": "/foreign/include",
             "PKG_CONFIG_SYSTEM_LIBRARY_PATH": "/foreign/lib", "LIBRARY_PATH": "/foreign/lib",
