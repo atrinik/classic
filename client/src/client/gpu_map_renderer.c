@@ -272,6 +272,9 @@ static gpu_map_pending_submission_t *pending_submissions;
 static gpu_map_pending_submission_t *pending_submissions_tail;
 static gpu_map_pending_submission_t *abandoned_submissions;
 static size_t pending_submission_count;
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+static bool pending_poll_deferred;
+#endif
 static uint64_t next_pending_submission_id = 1;
 static uint64_t next_map_generation = 1;
 static SDL_Surface *solid_surface;
@@ -1445,6 +1448,9 @@ static void gpu_map_pending_abandoned_destroy(void) {
 
 static void gpu_map_pending_poll(void) {
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    if (pending_poll_deferred) {
+        return;
+    }
     if (pending_submissions != NULL &&
         gpu_renderer_conformance_fault_take(GPU_RENDERER_CONFORMANCE_FAULT_FENCE)) {
         gpu_map_pending_abandon_all();
@@ -1751,7 +1757,10 @@ static bool gpu_map_world_instance_buffers_reserve(gpu_map_target_set_t *target,
         SDL_ReleaseGPUTransferBuffer(map_device, transfer);
         return false;
     }
-    if (!gpu_map_pending_wait_all()) {
+    /* A new target has no previous instance resources to protect. In
+     * particular, allocating the first minimap must not drain unrelated
+     * primary-map work before the event loop can present or accept close. */
+    if (target->world_instance_buffer != NULL && !gpu_map_pending_wait_all()) {
         SDL_ReleaseGPUBuffer(map_device, buffer);
         SDL_ReleaseGPUTransferBuffer(map_device, transfer);
         return false;
@@ -2771,6 +2780,9 @@ void gpu_map_renderer_set_invalidation_hint(gpu_renderer_map_invalidation_reason
 }
 
 void gpu_map_renderer_destroy(void) {
+#ifdef ATRINIK_GPU_CONFORMANCE_TESTS
+    pending_poll_deferred = false;
+#endif
     gpu_map_presentation_release(staged_scene);
     staged_scene = NULL;
     gpu_map_presentation_release(presented_scene);
@@ -4285,6 +4297,10 @@ size_t gpu_map_renderer_lit_instance_count(bool auxiliary) {
         }
     }
     return count;
+}
+
+void gpu_map_renderer_conformance_defer_completion(bool defer) {
+    pending_poll_deferred = defer;
 }
 
 size_t gpu_map_renderer_pending_submission_count(void) {
