@@ -4,11 +4,16 @@
 import contextlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tarfile
+import sys
 import unittest
 from unittest.mock import patch
+
+from tools.release import package_sources
 
 spec = importlib.util.spec_from_file_location(
     "llvm_coverage", Path(__file__).resolve().parents[1] / "ci" / "llvm_coverage.py")
@@ -27,6 +32,8 @@ class NativeCoverageTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.build = self.root / "server" / "build" / "linux-coverage"
         self.build.mkdir(parents=True)
+        (self.root / "client").mkdir()
+        (self.root / "libatrinik").mkdir()
 
     def fixture(self):
         coverage.prepare(self.build)
@@ -76,7 +83,6 @@ class NativeCoverageTests(unittest.TestCase):
         self.assertEqual(actual, record(self.root / paths[0]) + record(self.root / paths[1]))
 
     def test_library_includes_standalone_pathfinding_without_tests(self):
-        (self.root / "libatrinik").mkdir()
         report = "".join(record(self.root / path) for path in
                          ["libatrinik/socket.c", "libatrinik/pathfinding/pathfinding.c",
                           "libatrinik/pathfinding/tests/test.c", "libatrinik/dependencies/source.c"])
@@ -84,9 +90,142 @@ class NativeCoverageTests(unittest.TestCase):
                          record(self.root / "libatrinik/socket.c") +
                          record(self.root / "libatrinik/pathfinding/pathfinding.c"))
 
+    def test_scoped_filter_requires_matching_archive_identity(self):
+        scoped = self.root / "scoped"
+        scoped.mkdir()
+        (scoped / "server").mkdir()  # A directory name cannot override archive owner identity.
+        cmake = scoped / "CMakeLists.txt"
+        version = scoped / "VERSION"
+        revision = scoped / "SOURCE_REVISION"
+        report = record(scoped / "src/server/main.c")
+        variants = (
+            (None, "5.1.0", "a" * 40),
+            ("project(atrinik-classic LANGUAGES C)", "5.1.0", "a" * 40),
+            ("project(atrinik-client LANGUAGES C)", "5.1.0", "a" * 40),
+            ("project(atrinik-server LANGUAGES C)", "not-a-version", "a" * 40),
+            ("project(atrinik-server LANGUAGES C)", "5.1.0", "not-a-revision"),
+            ("project(atrinik-server LANGUAGES C)\nproject(atrinik-client)", "5.1.0", "a" * 40),
+        )
+        for project, package_version, source_revision in variants:
+            with self.subTest(project=project, version=package_version, revision=source_revision):
+                if project is None:
+                    cmake.unlink(missing_ok=True)
+                else:
+                    cmake.write_text(project)
+                version.write_text(package_version)
+                revision.write_text(source_revision)
+                # An integrated archive identity keeps the narrower server/
+                # prefix and rejects flattened src/ records at the filter stage.
+                error = "no intended production" if project and "atrinik-classic" in project else "does not identify"
+                with self.assertRaisesRegex(ValueError, error):
+                    coverage.filter_lcov(report, scoped, "server")
+        # A renamed generated archive remains valid; recognition does not depend
+        # on its extraction directory's spelling.
+        cmake.write_text('project("atrinik-server" LANGUAGES C)')
+        version.write_text("5.1.0")
+        revision.write_text("a" * 40)
+        self.assertEqual(coverage.filter_lcov(report, scoped, "server"), report)
+
+    def test_missing_monorepo_component_does_not_widen_filter_to_root(self):
+        (self.root / "libatrinik").rmdir()
+        (self.root / "CMakeLists.txt").write_text("project(atrinik-classic LANGUAGES C)")
+        (self.root / "VERSION").write_text("5.1.0")
+        (self.root / "SOURCE_REVISION").write_text("a" * 40)
+        with self.assertRaisesRegex(ValueError, "does not identify"):
+            coverage.filter_lcov(record(self.root / "server/src/server/main.c"),
+                                 self.root, "libatrinik")
+
+    def test_all_keeps_monorepo_owner_prefixes(self):
+        production = ["client/src/client/main.c", "server/src/server/main.c",
+                      "libatrinik/socket.c", "libatrinik/pathfinding/pathfinding.c"]
+        excluded = ["src/server/main.c", "client/src/tests/unit.c",
+                    "server/build/generated.c", "libatrinik/dependencies/upstream.c"]
+        expected = "".join(record(self.root / name) for name in production)
+        self.assertEqual(coverage.filter_lcov(
+            expected + "".join(record(self.root / name) for name in excluded), self.root, "all"),
+            expected)
+
+    def test_generated_scoped_archives_export_production_lcov_through_packaged_cli(self):
+        owner = Path(__file__).resolve().parents[2]
+        source_tar = self.root / "source.tar"
+        authored = ["tools/ci/llvm_coverage.py", "CMakeLists.txt",
+                    "client/CMakeLists.txt", "server/CMakeLists.txt", "libatrinik/CMakeLists.txt",
+                    "client/src/client/main.c", "server/src/server/main.c",
+                    "libatrinik/socket.c", "libatrinik/pathfinding/pathfinding.c"]
+        with tarfile.open(source_tar, "w") as archive:
+            for name in authored:
+                archive.add(owner / name, arcname=name)
+        tool = self.root / "llvm-tool-fixture"
+        tool.write_text(f'''#!{sys.executable}
+import os
+from pathlib import Path
+import sys
+if sys.argv[1] == "--version":
+    print("LLVM version 23.1.3")
+elif sys.argv[1] == "export":
+    sys.stdout.write(Path(os.environ["COVERAGE_FIXTURE_REPORT"]).read_text())
+''')
+        tool.chmod(0o755)
+        for scope in ("root", "client", "server", "libatrinik"):
+            with self.subTest(scope=scope):
+                archive = self.root / (scope + ".tar.gz")
+                package_sources.build_archive(source_tar, archive, scope, "5.1.0", 42, "a" * 40)
+                destination = self.root / (scope + "-archive")
+                with tarfile.open(archive) as source:
+                    source.extractall(destination, filter="data")
+                package = next(destination.iterdir())
+                build = package / "build/llvm-coverage"
+                build.mkdir(parents=True)
+                coverage.prepare(build)
+                (build / "llvm-profiles/module-123.profraw").write_bytes(b"profile fixture")
+                (build / "CMakeCache.txt").write_text("CMAKE_C_COMPILER:FILEPATH=" + str(tool) + "\n")
+                (build / "native-test").write_bytes(b"\x7fELFnative fixture__llvm_covmap")
+                production = (["client/src/client/main.c", "server/src/server/main.c",
+                               "libatrinik/socket.c", "libatrinik/pathfinding/pathfinding.c"]
+                              if scope == "root" else
+                              ["socket.c", "pathfinding/pathfinding.c"] if scope == "libatrinik"
+                              else [f"src/{scope}/main.c"])
+                positive = "".join(record(package / name) for name in production)
+                # Relative source paths are also valid in LLVM LCOV output.
+                positive += record(production[0])
+                negative = "".join(record(package / name) for name in (
+                    "src/tests/unit.c", "tests/unit.c", "build/generated.c",
+                    "dependencies/libatrinik/socket.c", "_deps/upstream.c",
+                    "third_party/upstream.c", "third-party/upstream.c", "header.h"))
+                negative += record(self.root / "client/src/client/main.c")
+                negative += record("../outside.c")
+                report = self.root / (scope + "-tool-report.lcov")
+                report.write_text(positive + negative)
+                output = package / "coverage.lcov"
+                command = [sys.executable, str(package / "tools/ci/llvm_coverage.py"), "export",
+                           "--build-dir", str(build), "--source-root", str(package),
+                           "--component", "all" if scope == "root" else scope, "--output", str(output)]
+                environment = {**os.environ, "LLVM_COV": str(tool), "LLVM_PROFDATA": str(tool),
+                               "COVERAGE_FIXTURE_REPORT": str(report)}
+                result = subprocess.run(command, env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(output.read_text(), positive)
+                # Excluded-only output and malformed archive identity must fail
+                # collection and remove the previous report instead of uploading it.
+                report.write_text(negative)
+                result = subprocess.run(command, env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("no intended production", result.stderr)
+                self.assertFalse(output.exists())
+                report.write_text(positive)
+                output.write_text("stale")
+                (package / "SOURCE_REVISION").write_text("malformed")
+                result = subprocess.run(command, env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("does not identify", result.stderr)
+                self.assertFalse(output.exists())
+
     def test_scoped_source_archive_uses_module_root_layout(self):
         scoped = self.root / "atrinik-classic-libatrinik-5.1.0"
         scoped.mkdir()
+        (scoped / "VERSION").write_text("5.1.0")
+        (scoped / "SOURCE_REVISION").write_text("a" * 40)
+        (scoped / "CMakeLists.txt").write_text("project(libatrinik LANGUAGES C)")
         report = record(scoped / "socket.c") + record(scoped / "pathfinding/pathfinding.c")
         self.assertEqual(coverage.filter_lcov(report, scoped, "libatrinik"), report)
 

@@ -68,16 +68,37 @@ def coverage_objects(build_dir):
     return objects
 
 
+def source_prefixes(root, component):
+    modules = ("client", "server", "libatrinik") if component == "all" else (component,)
+    projects = {"client": "atrinik-client", "server": "atrinik-server", "libatrinik": "libatrinik"}
+    # Generated release identity makes a flattened component root explicit. Check
+    # it before directory names, so a scoped archive cannot impersonate another
+    # component merely by containing a same-named subdirectory.
+    if (root / "VERSION").exists() or (root / "SOURCE_REVISION").exists():
+        try:
+            version = (root / "VERSION").read_text().strip()
+            revision = (root / "SOURCE_REVISION").read_text().strip()
+            cmake = (root / "CMakeLists.txt").read_text()
+        except OSError as error:
+            raise ValueError("source root does not identify the requested Classic component") from error
+        names = [quoted or plain for quoted, plain in re.findall(
+            r'^\s*(?i:project)\s*\(\s*(?:"([^"]+)"|([\w-]+))(?=\s|\))', cmake, re.MULTILINE)]
+        if (not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) or
+                not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision) or len(names) != 1):
+            raise ValueError("source root does not identify the requested Classic component")
+        if names[0] != "atrinik-classic":
+            if component == "all" or names[0] != projects[component]:
+                raise ValueError("source root does not identify the requested Classic component")
+            return [(component, root)]
+    # A missing monorepo component must never widen the filter to the root.
+    if component != "all" and not (root / component).is_dir():
+        raise ValueError("source root does not identify the requested Classic component")
+    return [(module, root / module) for module in modules]
+
+
 def filter_lcov(report, source_root, component):
     root = source_root.resolve()
-    modules = ("client", "server", "libatrinik") if component == "all" else (component,)
-    prefixes = []
-    for module in modules:
-        prefix = root / module
-        # Scoped source archives retain their module layout at archive root.
-        if component != "all" and not prefix.is_dir():
-            prefix = root
-        prefixes.append((module, prefix))
+    prefixes = source_prefixes(root, component)
     records = []
     for record in report.split("end_of_record"):
         match = re.search(r"^SF:(.+)$", record, re.MULTILINE)
