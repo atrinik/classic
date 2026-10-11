@@ -34,6 +34,16 @@ SOURCE_LIBRARIES = {
     "libssl.so.3": "openssl", "libcrypto.so.3": "openssl",
     "libcurl.so.4": "curl", "libcares.so.2": "c-ares",
 }
+INSPECTION_EXCEPTIONS = {
+    "libglib-2.0.so.0": {
+        "package": "libglib2.0-0t64", "version": "2.80.0-6ubuntu3.9", "soname": "libglib-2.0.so.0",
+        "weak_undefined_symbols": ["__lsan_enable", "__lsan_ignore_object"],
+    },
+    "libpulsecommon-16.1.so": {
+        "package": "libpulse0", "version": "1:16.1+dfsg1-2ubuntu10.1", "soname": "libpulsecommon-16.1.so",
+        "build_paths": ["/build/pulseaudio-zYFgiu/pulseaudio-16.1+dfsg1/obj-x86_64-linux-gnu"],
+    },
+}
 OPENSSL_CONFIG = ["openssl_conf = openssl_init", "[openssl_init]", "providers = provider_sect",
                   "[provider_sect]", "default = default_sect", "legacy = legacy_sect",
                   "[default_sect]", "activate = 1", "[legacy_sect]", "activate = 1"]
@@ -233,15 +243,35 @@ def _elf(path: Path, *, executable: bool = False, lock: dict | None = None) -> t
     data = path.read_bytes()
     if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != b"\x3e\x00" or data[16:18] not in {b"\x02\0", b"\x03\0"}:
         raise ValueError(f"AppImage ELF must be little-endian x86_64: {path.name}")
-    if BUILD_PATHS.search(data):
-        raise ValueError(f"AppImage ELF contains an absolute build path: {path.name}")
-    if TEST_FEATURES.search(data):
-        raise ValueError(f"AppImage ELF contains test instrumentation: {path.name}")
     dynamic = _run("readelf", "--wide", "--dynamic", str(path))
     needed = set(re.findall(r"\(NEEDED\).*Shared library: \[([^\]]+)\]", dynamic))
     sonames = re.findall(r"\(SONAME\).*Library soname: \[([^\]]+)\]", dynamic)
     if len(sonames) > 1 or any(not _safe_name(n) or "/" in n for n in needed | set(sonames)):
         raise ValueError(f"unsafe ELF library identity: {path.name}")
+    # These reviewed vendor builds contain optional weak LSan hooks or a build
+    # tree detector. Only an exact locked file can receive either exception.
+    expected = INSPECTION_EXCEPTIONS.get(path.name)
+    exception = (lock or {}).get("elf_inspection_exceptions", {}).get(path.name)
+    inspection_data = data
+    accepted = None
+    if (expected is not None and isinstance(exception, dict) and not executable
+            and data[16:18] == b"\x03\0" and sonames == [expected["soname"]]
+            and set(exception) == set(expected) | {"sha256"}
+            and all(exception.get(key) == value for key, value in expected.items())
+            and (lock or {}).get("system_library_packages", {}).get(path.name) == expected["package"]
+            and (lock or {}).get("system_package_versions", {}).get(expected["package"]) == expected["version"]
+            and re.fullmatch(r"[0-9a-f]{64}", str(exception.get("sha256", "")))
+            and hashlib.sha256(data).hexdigest() == exception["sha256"]):
+        accepted = expected
+        for token in expected.get("build_paths", []) + expected.get("weak_undefined_symbols", []):
+            pattern = rb"(?<=\0)" + re.escape(token.encode()) + rb"(?=\0)"
+            inspection_data, count = re.subn(pattern, lambda match: b"\0" * len(match[0]), inspection_data)
+            if count != 1:
+                raise ValueError(f"AppImage ELF inspection exception has unexpected tokens: {path.name}")
+    if BUILD_PATHS.search(inspection_data):
+        raise ValueError(f"AppImage ELF contains an absolute build path: {path.name}")
+    if TEST_FEATURES.search(inspection_data):
+        raise ValueError(f"AppImage ELF contains test instrumentation: {path.name}")
     for search_path in re.findall(r"\((?:RPATH|RUNPATH)\).*Library (?:rpath|runpath): \[([^\]]*)\]", dynamic):
         for item in search_path.split(":"):
             if item not in {"$ORIGIN", "${ORIGIN}", "$ORIGIN/../lib", "${ORIGIN}/../lib", "$ORIGIN/..", "${ORIGIN}/.."}:
@@ -253,6 +283,12 @@ def _elf(path: Path, *, executable: bool = False, lock: dict | None = None) -> t
     if "GLIBC_PRIVATE" in versions:
         raise ValueError(f"AppImage requires private glibc symbols: {path.name}")
     symbols = _run("readelf", "--wide", "--symbols", str(path))
+    if accepted is not None:
+        for symbol in accepted.get("weak_undefined_symbols", []):
+            row = r"^[ \t]*[0-9]+:[ \t]+0+[ \t]+0[ \t]+NOTYPE[ \t]+WEAK[ \t]+DEFAULT[ \t]+UND[ \t]+" + re.escape(symbol) + r"[ \t]*$"
+            symbols, count = re.subn(row, "", symbols, flags=re.MULTILINE)
+            if count != 1:
+                raise ValueError(f"AppImage ELF inspection exception has unexpected symbols: {path.name}")
     if TEST_FEATURES.search(symbols.encode()):
         raise ValueError(f"AppImage ELF contains test instrumentation: {path.name}")
     program = _run("readelf", "--wide", "--program-headers", str(path))

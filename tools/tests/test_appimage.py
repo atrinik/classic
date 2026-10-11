@@ -512,6 +512,61 @@ class AppImageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "required file"):
             self.validate()
 
+    def test_locked_vendor_elf_exceptions_require_exact_file_and_identity(self):
+        for name, expected in appimage.INSPECTION_EXCEPTIONS.items():
+            tokens = expected.get("weak_undefined_symbols", []) + expected.get("build_paths", [])
+            data = Path("/usr/bin/true").read_bytes() + b"\0" + b"\0".join(token.encode() for token in tokens) + b"\0"
+            elf = self.write("usr/lib/" + name, data)
+            entry = dict(expected, sha256=hashlib.sha256(data).hexdigest())
+            lock = {"system_library_packages": {name: expected["package"]},
+                    "system_package_versions": {expected["package"]: expected["version"]},
+                    "elf_inspection_exceptions": {name: entry}}
+            symbols = "\n".join("  1: 0000000000000000 0 NOTYPE WEAK DEFAULT UND " + token
+                                for token in expected.get("weak_undefined_symbols", []))
+            def inspect(trusted=lock, soname=name, rows=symbols, path=elf):
+                with mock.patch.object(appimage, "_run", side_effect=[f"(SONAME) Library soname: [{soname}]", "", rows, ""]):
+                    return appimage._elf(path, lock=trusted)
+            with self.subTest(name=name):
+                self.assertEqual(inspect(), (set(), name))
+                for trusted, soname in (
+                    (None, name),
+                    (dict(lock, elf_inspection_exceptions={}), name),
+                    (dict(lock, elf_inspection_exceptions={name: dict(entry, sha256="0" * 64)}), name),
+                    (dict(lock, system_library_packages={name: "unrelated"}), name),
+                    (dict(lock, system_package_versions={expected["package"]: "unlocked"}), name),
+                    (lock, "libunrelated.so.0"),
+                ):
+                    with self.subTest(trusted=trusted, soname=soname), self.assertRaisesRegex(ValueError, "instrumentation|build path"):
+                        inspect(trusted, soname)
+                unrelated = self.write("usr/lib/libunrelated.so.0", data)
+                with self.assertRaisesRegex(ValueError, "instrumentation|build path"):
+                    inspect(path=unrelated)
+                elf.write_bytes(data + b"altered")
+                with self.assertRaisesRegex(ValueError, "instrumentation|build path"):
+                    inspect()
+                for extra in (b"\0__asan_init\0", b"\0__lsan_enable_suffix\0", b"\0/build/other\0"):
+                    elf.write_bytes(data + extra)
+                    entry["sha256"] = hashlib.sha256(elf.read_bytes()).hexdigest()
+                    with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "instrumentation|build path"):
+                        inspect()
+
+    def test_glib_exception_requires_exact_weak_undefined_symbol_rows(self):
+        name = "libglib-2.0.so.0"
+        expected = appimage.INSPECTION_EXCEPTIONS[name]
+        data = Path("/usr/bin/true").read_bytes() + b"\0__lsan_enable\0__lsan_ignore_object\0"
+        elf = self.write("usr/lib/" + name, data)
+        lock = {"system_library_packages": {name: expected["package"]},
+                "system_package_versions": {expected["package"]: expected["version"]},
+                "elf_inspection_exceptions": {name: dict(expected, sha256=hashlib.sha256(data).hexdigest())}}
+        rows = "  1: 0000000000000000 0 NOTYPE WEAK DEFAULT UND __lsan_enable\n  2: 0000000000000000 0 NOTYPE WEAK DEFAULT UND __lsan_ignore_object"
+        for mutation in (rows.replace("WEAK", "GLOBAL"), rows.replace("UND", "12"),
+                         rows.replace("NOTYPE", "OBJECT"), rows.replace("0000000000000000", "0000000000000001"),
+                         rows.replace(" 0 NOTYPE", " 8 NOTYPE"), rows.replace("__lsan_enable", "__lsan_enable_suffix"),
+                         rows + "\n" + rows, rows + "\n  3: 0 0 NOTYPE WEAK DEFAULT UND __asan_init"):
+            with self.subTest(rows=mutation), mock.patch.object(appimage, "_run", side_effect=[f"(SONAME) Library soname: [{name}]", "", mutation, ""]):
+                with self.assertRaisesRegex(ValueError, "symbols|instrumentation"):
+                    appimage._elf(elf, lock=lock)
+
     def test_extended_attributes_and_trailing_payload_rejected(self):
         for mutation in ("xattrs", "trailing"):
             image = self.image()
