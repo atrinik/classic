@@ -207,8 +207,8 @@ jobs:
       - name: Install trusted AppImage fixture inspection tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends squashfs-tools binutils libzstd1 libssl3t64
-          test -x /usr/bin/readelf
+          sudo apt-get install --yes --no-install-recommends squashfs-tools llvm libzstd1 libssl3t64
+          test -x /usr/bin/llvm-readelf
           test -x /usr/bin/unsquashfs
           test -x /usr/bin/mksquashfs
           test -x /usr/bin/true

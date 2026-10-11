@@ -243,7 +243,7 @@ def _elf(path: Path, *, executable: bool = False, lock: dict | None = None) -> t
     data = path.read_bytes()
     if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != b"\x3e\x00" or data[16:18] not in {b"\x02\0", b"\x03\0"}:
         raise ValueError(f"AppImage ELF must be little-endian x86_64: {path.name}")
-    dynamic = _run("readelf", "--wide", "--dynamic", str(path))
+    dynamic = _run("llvm-readelf", "--wide", "--dynamic", str(path))
     needed = set(re.findall(r"\(NEEDED\).*Shared library: \[([^\]]+)\]", dynamic))
     sonames = re.findall(r"\(SONAME\).*Library soname: \[([^\]]+)\]", dynamic)
     if len(sonames) > 1 or any(not _safe_name(n) or "/" in n for n in needed | set(sonames)):
@@ -276,13 +276,13 @@ def _elf(path: Path, *, executable: bool = False, lock: dict | None = None) -> t
         for item in search_path.split(":"):
             if item not in {"$ORIGIN", "${ORIGIN}", "$ORIGIN/../lib", "${ORIGIN}/../lib", "$ORIGIN/..", "${ORIGIN}/.."}:
                 raise ValueError(f"unsafe ELF library search path: {path.name}")
-    versions = _run("readelf", "--wide", "--version-info", str(path))
+    versions = _run("llvm-readelf", "--wide", "--version-info", str(path))
     for major, minor in re.findall(r"\bGLIBC_(\d+)\.(\d+)(?:\.\d+)?\b", versions):
         if (int(major), int(minor)) > (2, 39):
             raise ValueError(f"AppImage requires glibc newer than 2.39: {path.name}")
     if "GLIBC_PRIVATE" in versions:
         raise ValueError(f"AppImage requires private glibc symbols: {path.name}")
-    symbols = _run("readelf", "--wide", "--symbols", str(path))
+    symbols = _run("llvm-readelf", "--wide", "--symbols", str(path))
     if accepted is not None:
         for symbol in accepted.get("weak_undefined_symbols", []):
             row = r"^[ \t]*[0-9]+:[ \t]+0+[ \t]+(?:0|0x0)[ \t]+NOTYPE[ \t]+WEAK[ \t]+DEFAULT[ \t]+UND[ \t]+" + re.escape(symbol) + r"[ \t]*$"
@@ -291,7 +291,7 @@ def _elf(path: Path, *, executable: bool = False, lock: dict | None = None) -> t
                 raise ValueError(f"AppImage ELF inspection exception has unexpected symbols: {path.name}")
     if TEST_FEATURES.search(symbols.encode()):
         raise ValueError(f"AppImage ELF contains test instrumentation: {path.name}")
-    program = _run("readelf", "--wide", "--program-headers", str(path))
+    program = _run("llvm-readelf", "--wide", "--program-headers", str(path))
     interpreters = re.findall(r"\[Requesting program interpreter: ([^\]]+)\]", program)
     # This locked libcap build deliberately supports direct execution while
     # remaining a shared library. Preserve the library rule for every other

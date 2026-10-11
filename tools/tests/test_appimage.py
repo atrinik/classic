@@ -67,7 +67,39 @@ class ListingTests(unittest.TestCase):
                 appimage._listing(row)
 
 
-@unittest.skipUnless(all(Path("/usr/bin", tool).is_file() for tool in ("readelf", "unsquashfs", "mksquashfs"))
+class TrustedToolTests(unittest.TestCase):
+    def test_llvm_inspector_ignores_candidate_tool_and_loader_environment(self):
+        environment = {"PATH": "/candidate/bin", "READELF": "/candidate/readelf",
+                       "LD_LIBRARY_PATH": "/candidate/lib", "LD_PRELOAD": "/candidate/hook.so",
+                       "PYTHONPATH": "/candidate/python", "PYTHONHOME": "/candidate/home",
+                       "LC_ALL": "candidate", "GIT_CONFIG": "/candidate/git"}
+        result = subprocess.CompletedProcess([], 0, stdout=b"LLVM fixture", stderr=b"")
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(Path, "is_file", return_value=True), \
+                mock.patch.object(appimage.subprocess, "run", return_value=result) as run:
+            self.assertEqual(appimage._run("llvm-readelf", "--dynamic", "fixture"), "LLVM fixture")
+        arguments, options = run.call_args
+        self.assertEqual(arguments[0], ["/usr/bin/llvm-readelf", "--dynamic", "fixture"])
+        self.assertEqual(options["env"]["PATH"], "/usr/bin:/bin")
+        self.assertEqual(options["env"]["LC_ALL"], "C")
+        for name in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH", "PYTHONHOME", "GIT_CONFIG"):
+            self.assertNotIn(name, options["env"])
+
+    def test_missing_or_failed_llvm_inspector_has_no_gnu_fallback(self):
+        with mock.patch.object(Path, "is_file", return_value=False), \
+                mock.patch.object(appimage.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "/usr/bin/llvm-readelf"):
+                appimage._run("llvm-readelf", "--dynamic", "fixture")
+            run.assert_not_called()
+        result = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"malformed ELF")
+        with mock.patch.object(Path, "is_file", return_value=True), \
+                mock.patch.object(appimage.subprocess, "run", return_value=result) as run:
+            with self.assertRaisesRegex(ValueError, "llvm-readelf inspection failed: malformed ELF"):
+                appimage._run("llvm-readelf", "--dynamic", "fixture")
+            self.assertEqual(run.call_count, 1)
+
+
+@unittest.skipUnless(all(Path("/usr/bin", tool).is_file() for tool in ("llvm-readelf", "unsquashfs", "mksquashfs"))
                      and Path("/usr/bin/true").is_file()
                      and Path("/usr/lib/x86_64-linux-gnu/libzstd.so.1").is_file()
                      and Path("/usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so").is_file(),
@@ -244,7 +276,7 @@ class AppImageTests(unittest.TestCase):
         image = self.image(padding=b"\0" * 4096)
         with mock.patch.object(appimage, "_run", wraps=appimage._run) as run:
             self.assertIsNone(self.validate(image))
-            self.assertTrue(all(call.args[0] in {"unsquashfs", "readelf"} for call in run.call_args_list))
+            self.assertTrue(all(call.args[0] in {"unsquashfs", "llvm-readelf"} for call in run.call_args_list))
         inventory = appimage.read_appimage_inventory(image, self.version, revision=self.revision, source_root=self.source)
         self.assertEqual(inventory, self.metadata)
 
@@ -623,9 +655,29 @@ class AppImageTests(unittest.TestCase):
         fixtures = Path(__file__).parent / "fixtures/llvm-readelf-23.1.3"
         outputs = [(fixtures / (name + ".txt")).read_text()
                    for name in ("dynamic", "versions", "symbols", "program")]
-        with mock.patch.object(appimage, "_run", side_effect=outputs):
+        with mock.patch.object(appimage, "_run", side_effect=outputs) as run:
             needed, _ = appimage._elf(Path("/usr/bin/true"), executable=True)
         self.assertIn("libc.so.6", needed)
+        self.assertEqual([call.args[0] for call in run.call_args_list], ["llvm-readelf"] * 4)
+        # Mutate the recorded LLVM output itself: changing inspectors must
+        # preserve every security/compatibility field consumed by the parser.
+        mutations = (
+            (0, outputs[0] + "\n  0x000000000000000e (SONAME) Library soname: [../unsafe.so]", "library identity"),
+            (0, outputs[0] + "\n  0x000000000000000e (SONAME) Library soname: [libone.so]\n  0x000000000000000e (SONAME) Library soname: [libtwo.so]", "library identity"),
+            (0, outputs[0] + "\n  0x000000000000001d (RUNPATH) Library runpath: [/tmp/unsafe]", "search path"),
+            (1, outputs[1].replace("GLIBC_2.34", "GLIBC_2.40"), "glibc newer"),
+            (1, outputs[1].replace("GLIBC_2.34", "GLIBC_PRIVATE"), "private glibc"),
+            (2, outputs[2] + "\n   50: 0000000000000000 0 NOTYPE GLOBAL DEFAULT UND __asan_init", "instrumentation"),
+            (3, outputs[3].replace("/lib64/ld-linux-x86-64.so.2", "/unsafe/ld.so"), "interpreter"),
+            (3, outputs[3] + "\n      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]", "interpreter"),
+        )
+        for index, output, expected in mutations:
+            changed = outputs.copy()
+            changed[index] = output
+            with self.subTest(expected=expected, index=index), \
+                    mock.patch.object(appimage, "_run", side_effect=changed), \
+                    self.assertRaisesRegex(ValueError, expected):
+                appimage._elf(Path("/usr/bin/true"), executable=True)
         # Real LLVM SONAME/dynamic output drives the SDK closure parser too.
         import importlib.util
         spec = importlib.util.spec_from_file_location("appimage_assemble", Path(__file__).parents[1] / "ci/appimage/assemble.py")

@@ -130,19 +130,19 @@ class AppImageWorkflowTests(unittest.TestCase):
         self.assertIn('python3 tools/release/appimage.py', job)
         self.assertLess(job.index('payload-validation.log'), job.index('bash /smoke.sh'))
         finalizer = self.workflow().split('  candidate:\n', 1)[1]
-        self.assertLess(finalizer.index('squashfs-tools binutils'), finalizer.index('finalize_artifacts.py'))
+        self.assertLess(finalizer.index('squashfs-tools llvm'), finalizer.index('finalize_artifacts.py'))
         for name, first_consumer in (('package-release.yml', 'release_artifacts.py'),
                                      ('promote-latest.yml', 'check_latest_release.py')):
             workflow = (ROOT / '.github/workflows' / name).read_text()
-            self.assertLess(workflow.index('squashfs-tools binutils'), workflow.index(first_consumer))
+            self.assertLess(workflow.index('squashfs-tools llvm'), workflow.index(first_consumer))
         check = (ROOT / '.github/workflows/check.yml').read_text()
         core = check.split('  core:\n', 1)[1].split('  windows-test-build:\n', 1)[0]
-        self.assertIn('squashfs-tools binutils libzstd1', core)
-        self.assertLess(core.index('squashfs-tools binutils libzstd1'), core.index('-m unittest discover -s tools/tests'))
-        for prerequisite in ('readelf', 'unsquashfs', 'mksquashfs', 'true'):
+        self.assertIn('squashfs-tools llvm libzstd1', core)
+        self.assertLess(core.index('squashfs-tools llvm libzstd1'), core.index('-m unittest discover -s tools/tests'))
+        for prerequisite in ('llvm-readelf', 'unsquashfs', 'mksquashfs', 'true'):
             self.assertIn(f'test -x /usr/bin/{prerequisite}', core)
         self.assertIn('test -f /usr/lib/x86_64-linux-gnu/libzstd.so.1', core)
-        self.assertIn('squashfs-tools binutils libzstd1 libssl3t64', core)
+        self.assertIn('squashfs-tools llvm libzstd1 libssl3t64', core)
         self.assertIn('test -f /usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so', core)
         package = (ROOT / '.github/workflows/package-release.yml').read_text()
         self.assertIn('            build/release/*.AppImage\n', package)

@@ -2366,7 +2366,7 @@ class WorkflowContractTests(unittest.TestCase):
                     # Host-only payload fixtures need SquashFS inspection.
                     # Native compilation still uses only the pinned image.
                     preparation, native = job.split("      - name: Install Python test coverage tooling", 1)
-                    self.assertIn("squashfs-tools binutils libzstd1", preparation)
+                    self.assertIn("squashfs-tools llvm libzstd1", preparation)
                     self.assertNotIn("apt-get", native)
                 else:
                     self.assertNotIn("apt-get", job)
