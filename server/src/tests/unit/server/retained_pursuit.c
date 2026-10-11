@@ -256,6 +256,123 @@ START_TEST(test_retained_enemy_rejects_removed_or_wrong_identity) {
 }
 END_TEST
 
+static object *plugin_tick_player(mapstruct *map, const char *name, int x) {
+    object *op = player_get_dummy(name, NULL);
+    object_remove(op, 0);
+    op->x = x;
+    op->y = 12;
+    op = object_insert_map(op, map, NULL, 0);
+    ck_assert_ptr_nonnull(op);
+    CONTR(op)->tls = 0;
+    CLEAR_FLAG(op, FLAG_BLIND);
+    CLEAR_FLAG(op, FLAG_XRAYS);
+    return op;
+}
+
+/* Exercise the actual offline Atrinik.Process() publication pass, including
+ * its continuation after the current or a later player leaves synchronously. */
+START_TEST(test_plugin_tick_map_publication_survives_player_logout) {
+    toolkit_import(packet);
+    mapstruct *map;
+    object *observer;
+    check_setup_env_pl(&map, &observer);
+    FREE_AND_COPY_HASH(map->path, "/python/retained-plugin-tick");
+    FREE_AND_COPY_HASH(observer->name, "plugin-tick-observer");
+    object_remove(observer, 0);
+    observer->x = observer->y = 12;
+    observer = object_insert_map(observer, map, NULL, 0);
+    ck_assert_ptr_nonnull(observer);
+    player *controller = CONTR(observer);
+    controller->tls = 0;
+    controller->cmd_permissions = xcalloc(2, sizeof(char *));
+    controller->cmd_permissions[0] = xstrdup("kick");
+    controller->cmd_permissions[1] = xstrdup("memfree");
+    controller->num_cmd_permissions = 2;
+    CLEAR_FLAG(observer, FLAG_BLIND);
+    CLEAR_FLAG(observer, FLAG_XRAYS);
+    if (!plugins_initialized) {
+        init_plugins();
+        plugins_initialized = true;
+    }
+    for (int x = 0; x < MAP_WIDTH(map); x++) {
+        for (int y = 0; y < MAP_HEIGHT(map); y++) {
+            GET_MAP_SPACE_PTR(map, x, y)->light_value = 1280;
+        }
+    }
+
+    mempool_struct *pool = mempool_find("objects");
+    ck_assert_ptr_nonnull(pool);
+    size_t held_count = _i == 3 ? pool->nrof_free[0] : 0;
+    object **held = xcalloc(MAX(held_count, 1), sizeof(*held));
+    for (size_t i = 0; i < held_count; i++) {
+        held[i] = object_get();
+    }
+    object *next = plugin_tick_player(map, "plugin-tick-next", 13);
+    mempool_chunk_struct *storage = pool->puddlelist[0]->first_chunk;
+    if (_i == 3) {
+        uintptr_t address = (uintptr_t)MEM_POOLDATA(next);
+        uintptr_t first = (uintptr_t)storage;
+        ck_assert(address >= first &&
+                  address < first + pool->expand_size *
+                      (sizeof(mempool_chunk_struct) + pool->chunksize));
+    }
+    for (size_t i = 0; i < held_count; i++) {
+        object_destroy(held[i]);
+    }
+    xfree(held);
+    object *survivor = plugin_tick_player(map, "plugin-tick-survivor", 10);
+    object *actor = _i == 3 ? next : place(map, 14, 12);
+    const char *modes[] = {"kick_observer", "kick_caster", "visible", "kick_target_reclaim"};
+    if (_i == 1) {
+        ck_assert(object_set_value(actor, "callback_caster", next->name, true));
+    }
+    object *event = object_get();
+    event->type = EVENT_OBJECT;
+    event->sub_type = EVENT_ASK_SHOW;
+    FREE_AND_COPY_HASH(event->name, "Python");
+    FREE_AND_COPY_HASH(event->race, "events/python_unit_actor_callbacks.py");
+    FREE_AND_COPY_HASH(event->slaying, modes[_i]);
+    object_insert_into(event, actor, INS_NO_MERGE);
+    /* Keep simulation from invoking ASK_SHOW before the publication loop. */
+    observer->speed = next->speed = survivor->speed = actor->speed = 0;
+    object_update_speed(observer);
+    object_update_speed(next);
+    object_update_speed(survivor);
+    object_update_speed(actor);
+    tag_t count = observer->count, next_count = next->count, survivor_count = survivor->count;
+    socket_struct *socket = controller->cs;
+    player *next_controller = CONTR(next), *survivor_controller = CONTR(survivor);
+    socket_struct *next_socket = next_controller->cs, *survivor_socket = survivor_controller->cs;
+    ck_assert_ptr_eq(controller->next, next_controller);
+    ck_assert_ptr_eq(next_controller->next, survivor_controller);
+    ck_assert_ptr_ne(survivor_socket->target_map_published_map, map);
+    uint64_t epoch = object_reclamation_epoch();
+    bool previous_plugin_tests = settings.plugin_unit_tests;
+    settings.plugin_unit_tests = true;
+
+    main_process();
+
+    settings.plugin_unit_tests = previous_plugin_tests;
+    ck_assert_int_eq(player_connection_is_current(observer, count, controller, socket), _i != 0);
+    ck_assert_int_eq(player_connection_is_current(next, next_count, next_controller, next_socket),
+                     _i == 0 || _i == 2);
+    ck_assert(player_connection_is_current(survivor, survivor_count,
+                                           survivor_controller, survivor_socket));
+    ck_assert_ptr_eq(survivor_socket->target_map_published_map, map);
+    ck_assert_uint_eq(survivor_socket->target_map_published_count, map->count);
+    if (_i == 3) {
+        ck_assert(!object_reclamation_is_current(epoch));
+        assert_reclaimed(pool, storage);
+    } else {
+        ck_assert_str_eq(object_get_value(actor, "actor_callback_done"), "1");
+    }
+    if (_i == 2) {
+        ck_assert_ptr_eq(socket->target_map_published_map, map);
+        ck_assert_ptr_eq(next_socket->target_map_published_map, map);
+    }
+}
+END_TEST
+
 void check_server_retained_pursuit(void) {
     Suite *s = suite_create("server.retained_pursuit");
     TCase *tc = tcase_create("retained references");
@@ -264,6 +381,7 @@ void check_server_retained_pursuit(void) {
     tcase_add_loop_test(tc, test_retained_pursuit_after_destroy_and_reclaim, 0, 14);
     tcase_add_loop_test(tc, test_queue_skips_reclaimed_waypoint_or_owner, 0, 2);
     tcase_add_loop_test(tc, test_retained_enemy_rejects_removed_or_wrong_identity, 0, 2);
+    tcase_add_loop_test(tc, test_plugin_tick_map_publication_survives_player_logout, 0, 4);
     suite_add_tcase(s, tc);
     check_run_suite(s, __FILE__);
 }

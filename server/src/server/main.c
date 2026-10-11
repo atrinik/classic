@@ -692,14 +692,46 @@ void main_process(void) {
      * Queue normal MAP2 snapshots so these tests exercise the same published
      * target identity as a playing client, without writing to a socket. */
     if (settings.plugin_unit_tests) {
-        player *pl;
-        DL_FOREACH(first_player, pl) {
-            if (pl->cs != NULL && pl->cs->state == ST_PLAYING && pl->ob != NULL &&
-                OBJECT_ACTIVE(pl->ob) && pl->ob->env == NULL && pl->ob->map != NULL &&
-                pl->ob->map->in_memory == MAP_IN_MEMORY && pl->ob->map->spaces != NULL) {
-                draw_client_map(pl->ob);
+        /* ASK_SHOW may remove this player or any later player, including
+         * their controller, socket and object storage. Snapshot identities
+         * before callbacks and admit each entry through the current live list;
+         * even a saved next-controller pointer is unsafe after drawing. */
+        size_t player_count = 0;
+        for (player *pl = first_player; pl != NULL; pl = pl->next) {
+            HARD_ASSERT(player_count != SIZE_MAX);
+            player_count++;
+        }
+        struct player_snapshot {
+            object *ob;
+            tag_t count;
+            player *controller;
+            socket_struct *socket;
+        } *players;
+        HARD_ASSERT(player_count <= SIZE_MAX / sizeof(*players));
+        players = xcalloc(player_count, sizeof(*players));
+        size_t player_index = 0;
+        for (player *pl = first_player; pl != NULL; pl = pl->next) {
+            players[player_index++] = (struct player_snapshot) {
+                .ob = pl->ob,
+                .count = pl->ob != NULL ? pl->ob->count : 0,
+                .controller = pl,
+                .socket = pl->cs,
+            };
+        }
+        for (player_index = 0; player_index < player_count; player_index++) {
+            const struct player_snapshot *snapshot = &players[player_index];
+            object *observer = snapshot->ob;
+            if (!player_connection_is_current(observer, snapshot->count,
+                                              snapshot->controller, snapshot->socket)) {
+                continue;
+            }
+            if (snapshot->socket->state == ST_PLAYING && OBJECT_ACTIVE(observer) &&
+                observer->env == NULL && observer->map != NULL &&
+                observer->map->in_memory == MAP_IN_MEMORY && observer->map->spaces != NULL) {
+                draw_client_map(observer);
             }
         }
+        free(players);
     }
 }
 
