@@ -433,6 +433,13 @@ endif ()
 if (BUILD_TESTING)
     set(ATRINIK_PYTHON3_EXECUTABLE "${Python3_EXECUTABLE}")
 
+    # Headless dependency equivalence probe, also built independently by the
+    # pinned Windows baseline producer (tools/ci/font-render-probe).
+    add_executable(client-font-render-probe src/tests/font_render.c)
+    atrinik_configure_target(client-font-render-probe)
+    target_link_libraries(client-font-render-probe PRIVATE
+        SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+
     set(ATRINIK_GPU_FIXTURE_PROVENANCE_COMMAND
         "${ATRINIK_PYTHON3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_gpu_fixture_provenance.py")
