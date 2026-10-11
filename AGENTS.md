@@ -83,7 +83,7 @@
   reconciles later checked main batches; semantic analysis, packaging, and
   recovery share the non-cancelling publication queue. Latest promotion keeps
   its separate alias lock. Each release includes the complete artifact
-  contract, including the Linux Debian client. Numeric maintenance pushes and
+  contract, including the Linux AppImage client. Numeric maintenance pushes and
   manual retries retain branch/check validation and guarded recovery. See
   `docs/RELEASING.md`; source publication does not authorize runtime deployment.
 - Checked main source builds also publish `classic-server:source-COMMIT` and

@@ -456,7 +456,8 @@ complete `classic` supply-chain profile before resuming publication.
    draft as its last release mutation and verifies that GitHub reports an
    immutable, non-prerelease release with the exact asset digests. A retry also
    accepts that exact published state and skips every immutable release write.
-   Schema 2 requires thirteen assets including the Debian client; historical
+   Schema 3 requires thirteen assets including the AppImage client; historical
+   schema-2 recovery retains thirteen assets including the Debian client, and
    schema-1 recovery retains its original twelve-asset contract.
 8. A separate job dispatches the globally serialized Promote Latest Release
    workflow after successful publication. It selects the highest published
@@ -523,7 +524,7 @@ their generated `VERSION` file as the deterministic offline fallback.
 | `atrinik-classic-{client,server,editor,libatrinik,protocol}-VERSION.tar.gz` | Scoped source with root license, attributions, provenance, and `VERSION`; native consumers include matching sibling dependency source |
 | `atrinik_classic_protocol-VERSION-py3-none-any.whl` | Python bindings; distribution name `atrinik-classic-protocol` |
 | `atrinik-classic-{client,server}-VERSION-windows-x86_64.zip` | Portable Windows packages built against sibling protocol and libatrinik |
-| `atrinik-classic-client-VERSION-linux-amd64.deb` | Linux client using APT-managed runtime libraries; SDL 3.4 or newer |
+| `atrinik-classic-client-VERSION-linux-x86_64.AppImage` | Linux x86_64 client with bundled application libraries; Ubuntu 24.04+ / glibc 2.39 baseline |
 | `atrinik-classic-VERSION.spdx.json` | SPDX 2.3 manifest for downloadable artifacts |
 | `release-manifest.json` | Machine-readable commit, epoch, sizes, hashes, and locked sound/content/resource inputs with affected artifacts |
 | `SHA256SUMS` | SHA-256 for every preceding release file |
@@ -535,16 +536,30 @@ separately reviewed GPL checkout. Automating that JAR requires an independently
 verified immutable upstream revision and dependency contract. The editor has no
 Linux binary bundle.
 
-The Linux client Debian package is built and installation-tested on Debian
-testing (`forky`), using the digest-pinned base and signed APT snapshot in
-`tools/ci/debian-client/Dockerfile`. The recorded build-package inventory is
-retained as workflow evidence. The trusted workflow caller supplies the Dockerfile and
-installation smoke script; the exact candidate checkout and staged inputs are
-read-only container inputs. Candidate code runs offline as an ordinary user
-from a private copy inside the build container, with only the package output
-directory writable on the runner. The job rejects symlink outputs and uploads
-only the expected regular `.deb` file. The real packaging fixture runs in this
-Debian image, which includes all required packaging tools.
+The Linux client AppImage producer uses pinned Ubuntu 24.04 x86_64 inputs and
+rebuilds the qualified native dependency versions for the glibc 2.39 baseline.
+The packaging tools are linuxdeploy `1-alpha-20251107-1`, appimagetool `1.9.1`,
+and the static-FUSE type-2 runtime `20251108`. Application dependencies include
+SDL >= 3.4, image/ttf/mixer, libcurl built with c-ares and OpenSSL, and their
+required library closure. Preserve the mixer decoder set exactly: WAV,
+STBVORBIS, OPUS, VOC, AIFF, AU, DRMP3, SINEWAVE and RAW; MIDI and module
+decoders remain absent. The producer retains dependency and tool identities,
+licenses and checked sound/shader inputs with its packaging evidence.
+
+`client/tools/build-appimage.sh [OUTPUT_DIRECTORY]` requires
+`ATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH` and emits the exact versioned
+AppImage. The trusted caller validates it using
+`python3 tools/release/appimage.py PATH VERSION`. Candidate code cannot replace
+that caller's validator or redefine the supported host-library boundary.
+The trusted caller supplies `tools/ci/appimage-client/prepare.py`, its Dockerfile
+and `smoke.sh`. The exact candidate checkout and staged inputs are read-only
+container inputs; candidate code runs from a private copy as a non-root user,
+with networking disabled, dropped capabilities and no-new-privileges. Only the
+output directory is a writable host mount. The output must be the expected
+regular file. Validation checks the packaged dependency closure and baseline
+rather than relying on the producer's newer host libraries. The AppImage
+replaces the Debian package in new candidates and remains covered by the hash manifest, SPDX and attestation
+checks of the closed candidate/publication pipeline.
 
 The client and server source archives include the matching protocol and
 libatrinik trees under `dependencies/`; the libatrinik archive includes the
@@ -552,8 +567,8 @@ matching protocol tree. Their CMake configuration selects those packaged
 sources automatically, so an exported scope never follows the replacement
 repositories or depends on a separately mutable classic release.
 
-The Windows and Debian clients consume the checksum-pinned sound release. The portable
-server and server image consume the checksum-pinned classic content and
+The Windows and AppImage clients consume the checksum-pinned sound release.
+The portable server and server image consume the checksum-pinned classic content and
 resources releases. Their lock path, repository, tag, commit, URL, SHA-256,
 destination, and affected artifacts are recorded in `release-manifest.json`
 and the SPDX relationships; the server image repeats its applicable coordinates
@@ -563,41 +578,77 @@ manifest digest, and source-lock digests used to acquire those inputs.
 
 ### Installing the Linux client
 
-Download `atrinik-classic-client-VERSION-linux-amd64.deb` from the release,
-verify it against `SHA256SUMS`, then install it through APT:
+Download `atrinik-classic-client-VERSION-linux-x86_64.AppImage` from the release
+and verify it against `SHA256SUMS`. Make the file executable and run it directly:
 
 ```sh
-sudo apt install ./atrinik-classic-client-VERSION-linux-amd64.deb
-/usr/games/atrinik
+chmod +x atrinik-classic-client-VERSION-linux-x86_64.AppImage
+./atrinik-classic-client-VERSION-linux-x86_64.AppImage
 ```
 
-The desktop entry also starts the installed client. Packages contain client
-files and verified sound, not private copies of system libraries. CPack uses
-`dpkg-shlibdeps` to generate the linked runtime dependencies and retains the
-capability minimums SDL >= 3.4, SDL3_image/SDL3_ttf >= 3.2, SDL3_mixer >= 3.2.4,
-and OpenSSL >= 3.5, plus certificate trust and the Vulkan loader. Newer library
-versions are allowed; exact build-package versions are not runtime pins.
+The supported baseline is Ubuntu 24.04 or newer on x86_64 with glibc >= 2.39.
+Other distributions meeting that boundary need their own qualification; the
+package does not promise arbitrary glibc compatibility, Alpine/musl or ARM.
+SDL and application libraries are bundled, so no APT SDL installation is needed.
+The host supplies the kernel, hardware GPU drivers, Vulkan loader, display
+server and audio services. Production play still requires the supported
+hardware SDL_GPU contract.
 
-APT must find compatible dependencies in the configured repositories. When an
-older Debian or Ubuntu release cannot satisfy them, use Debian testing or a
-newer distribution; the package does not lower the SDL requirement or add a
-repository automatically. Other distributions are best effort. Running the
-game still requires a supported hardware GPU and installed drivers. Headless
-installation smoke verifies loader resolution, the CLI, repeat installation,
-and removal preserving user data; it does not claim graphical or audible proof.
+The pinned static-FUSE type-2 runtime needs no host libfuse2. If `/dev/fuse`
+is unavailable or mounting is denied, use extraction mode:
 
-Release-manifest schema 2 includes the Debian package in its exact 13-file
-contract. Historical schema 1 retains its original 12 files. Publication and
-recovery select the schema from the original source revision, validate the
-manifest, locked inputs and every artifact hash, and never append a Debian
-package to an already published release. Automatic main releases use the
-complete schema-2 contract, including the Debian client.
+```sh
+./atrinik-classic-client-VERSION-linux-x86_64.AppImage --appimage-extract-and-run
+```
+
+Upgrade by downloading and verifying the next release, then replacing the old
+AppImage. User settings and cached data remain in `.atrinik/<major>.x/`;
+`ATRINIK_CONFIG_DIR` still selects an isolated configuration base. Removing the
+AppImage leaves that user data in place. There is no automatic updater or store
+integration.
+
+Release-manifest schema 3 has an exact 13-file contract with the AppImage in
+place of the Debian package. Historical schema 2 retains its 13 files including
+`atrinik-classic-client-VERSION-linux-amd64.deb`; schema 1 retains its original
+12 files. Publication and recovery select the schema of the original source
+revision, validate the manifest, locked inputs and every artifact hash, and
+never append or replace a platform artifact in an already published release.
+Automatic main releases use the complete schema-3 contract; the checked-batch
+queue, immutable publication and recovery safeguards remain unchanged.
+
+### Linux client qualification
+
+A candidate needs the builder, trusted structural/dependency/baseline validator
+and headless runtime checks on the pinned Ubuntu 24.04, Ubuntu 26.04 and Debian
+13 smoke images. Complete candidate and rehearsal validation requires all three
+smoke jobs; Check's fixtures provide narrower packaging regressions. Normal
+mounting and extraction-mode startup are separate paths; test extraction with `/dev/fuse` unavailable. Loader resolution,
+CLI/version output, decoder availability, repeated runs, and replacement/removal
+preserving isolated user data are headless checks. A configured check or a
+successful `--version` command is not evidence of graphical or audible behavior.
+Record actual results for the exact candidate; this contract alone does not
+assert that a new AppImage has passed qualification.
+
+On Lyra's Ubuntu 26.04 desktop, record the candidate SHA-256, host/driver identity
+and an isolated `ATRINIK_CONFIG_DIR`, then complete this acceptance checklist:
+
+- Start the downloaded AppImage normally and confirm the intended hardware GPU.
+- Observe intro/UI and gameplay rendering, including normal map presentation.
+- Hear music and sound effects through the normal desktop audio service.
+- Connect to an authorized isolated local Classic server and enter play.
+- Replace the AppImage and confirm settings remain usable; remove only the
+  task-owned executable and retain user data.
+
+Desktop acceptance requires those observations and must be reported separately
+from headless evidence. It authorizes no live game deployment or upgrade. Use
+the isolated wrapper topology lifecycle below for local server acceptance.
 
 ## Rehearsal and verification
 
-Release Rehearsal invokes the same source, wheel, Windows, Debian client
-build/install, image, and closed-set validation jobs with version `0.0.0`, retains the candidate assets for 30 days,
-pulls the exact durable dependency bundle before its build fan-out, and has no
+Release Rehearsal invokes the same source, wheel, Windows, AppImage client
+build/validation, image, and closed-set validation jobs with version `0.0.0`,
+retains the candidate assets for 30 days, pulls the exact durable dependency
+bundle before its build fan-out, and has no
 publishing job or write permissions. Run it before initial
 activation and after material release-pipeline changes. The versioned image
 build uses `push: false`.

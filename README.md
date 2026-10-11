@@ -111,9 +111,26 @@ After the documented post-merge rehearsal and activation step, one successful
 `Classic validation` result on `main` drives the complete repository through
 semantic-release. The first unified version is `v5.6.0`; later tags remain on
 the unprefixed `v5.x.x` line and are derived from the squash-merge title.
-Source archives, the protocol wheel, portable Windows packages, SPDX,
-checksums, locked runtime-input evidence, attestations, and
+Source archives, the protocol wheel, portable Windows packages, the Linux
+AppImage, SPDX, checksums, locked runtime-input evidence, attestations, and
 `ghcr.io/atrinik/classic-server` are built from the same commit. See
 [docs/RELEASING.md](docs/RELEASING.md) for the artifact,
 digest-pinned durable dependency bundle, offline rehearsal, recovery, and
 rollback contracts.
+
+The Linux client download is
+`atrinik-classic-client-VERSION-linux-x86_64.AppImage`. On Ubuntu 24.04 or newer
+x86_64 (glibc 2.39 or newer), verify its `SHA256SUMS`, then run:
+
+```sh
+chmod +x atrinik-classic-client-VERSION-linux-x86_64.AppImage
+./atrinik-classic-client-VERSION-linux-x86_64.AppImage
+```
+
+SDL and the other application libraries are bundled; installing SDL through APT
+is unnecessary. A supported hardware GPU, its installed drivers, Vulkan loader
+and desktop/audio services remain host requirements. If FUSE mounting is
+unavailable, use `--appimage-extract-and-run`. Downloading a newer file and
+replacing the old one preserves `.atrinik/<major>.x/` user data. See
+[Linux client installation](docs/RELEASING.md#installing-the-linux-client) for
+the support boundary and qualification requirements.

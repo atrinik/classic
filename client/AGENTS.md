@@ -104,10 +104,14 @@
   intentional.
 - Commits and pull-request titles use Conventional Commits. Classic uses one
   repository-wide release line; keep client release assets coherent with it.
-- Linux amd64 release packaging uses `tools/build-linux-package.sh`, staged
-  verified sound and shader inputs, and APT-managed system libraries with SDL
-  >= 3.4. Root Release Candidate builds and installation-tests the Debian package
-  on pinned Debian testing inputs; retain the unified version and release contract.
+- Linux x86_64 release packaging uses `tools/build-appimage.sh` in the pinned
+  Ubuntu 24.04 producer with required `ATRINIK_PACKAGE_VERSION` and an optional
+  output-directory argument. Bundle verified sound, shaders and application
+  libraries; preserve the exact mixer decoder contract and host GPU/Vulkan
+  boundary. Root Release Candidate validates the AppImage with trusted
+  `../tools/release/appimage.py PATH VERSION` and headless smoke. Retain the unified
+  version, schema-3 release contract and historical schema-1/schema-2 recovery;
+  desktop rendering and audible proof remain separate acceptance.
 - Keep generated output under `build/`, preserve unrelated work, and finish
   with `git diff --check`.
 - Update this `AGENTS.md` in the same change when major rework alters ownership,
