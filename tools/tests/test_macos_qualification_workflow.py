@@ -76,6 +76,17 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
                     if disabled:
                         self.assertIn("absent", result.stderr)
 
+    def test_existing_check_dispatch_calls_native_lane_without_gpu_authority(self):
+        text = (ROOT / ".github/workflows/check.yml").read_text()
+        self.assertIn("      native_macos_qualification:\n", text)
+        block = text.split("  native-macos-qualification:\n", 1)[1].split("\n  gpu-qualification:", 1)[0]
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.native_macos_qualification", block)
+        self.assertIn("contents: read", block)
+        self.assertIn("uses: ./.github/workflows/llvm-macos-qualification.yml", block)
+        self.assertNotIn("secrets:", block)
+        self.assertNotIn("with:", block)
+        self.assertNotIn("gpu_qualification", block)
+
     def test_manual_lane_keeps_production_features_and_gpu_boundary(self):
         text = WORKFLOW.read_text()
         self.assertIn("  workflow_call:\n  workflow_dispatch:", text)
