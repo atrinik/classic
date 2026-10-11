@@ -42,6 +42,15 @@ static void fixture(mapstruct **map, object **pl) {
     CLEAR_FLAG(*pl, FLAG_BLIND);
     CLEAR_FLAG(*pl, FLAG_XRAYS);
 
+    /* MAP2 does not invoke ASK_SHOW for live actors that are removed by the
+     * darkness gate before visibility callbacks.  Keep normal callback cases
+     * illuminated; the viewstate case explicitly restores darkness below. */
+    for (int x = 0; x < MAP_WIDTH(*map); x++) {
+        for (int y = 0; y < MAP_HEIGHT(*map); y++) {
+            GET_MAP_SPACE_PTR(*map, x, y)->light_value = 1280;
+        }
+    }
+
     if (!plugins_initialized) {
         init_plugins();
         plugins_initialized = true;
@@ -68,6 +77,11 @@ static mapstruct *upper_level(mapstruct *base) {
     base->level_min = 0;
     base->level_max = upper->level_max = 1;
     upper->level_min = 0;
+    for (int x = 0; x < MAP_WIDTH(upper); x++) {
+        for (int y = 0; y < MAP_HEIGHT(upper); y++) {
+            GET_MAP_SPACE_PTR(upper, x, y)->light_value = 1280;
+        }
+    }
     return upper;
 }
 
@@ -124,7 +138,14 @@ static void assert_aborted(object *pl) {
     ck_assert_uint_eq(cs->target_map_published_count, 0);
     ck_assert_uint_eq(cs->target_map_published_depths, 0);
     ck_assert(!cs->target_map_publication_pending);
-    ck_assert_ptr_null(map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false));
+    /* Clear retains the lazily allocated cache level, but invalidates every
+     * publication field after sound_ambient_count. */
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    MapCell cleared = {0};
+    ck_assert_mem_eq(&cell->cleared,
+                     &cleared.cleared,
+                     sizeof(*cell) - offsetof(MapCell, cleared));
     ck_assert_uint_eq(cs->lastmap_light_generation, 0);
     ck_assert_ptr_null(view->last_update);
     ck_assert(!view->los_view_valid);
@@ -307,6 +328,11 @@ START_TEST(test_ask_show_viewstate_change_withdraws_earlier_dark_actor) {
     mapstruct *map;
     object *pl;
     fixture(&map, &pl);
+    for (int x = 0; x < MAP_WIDTH(map); x++) {
+        for (int y = 0; y < MAP_HEIGHT(map); y++) {
+            GET_MAP_SPACE_PTR(map, x, y)->light_value = 0;
+        }
+    }
     map->light_value = -80;
     CONTR(pl)->tli = 1;
     object *earlier = place(map, "raas", 14, 12);
