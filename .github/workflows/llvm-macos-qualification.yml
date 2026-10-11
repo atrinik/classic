@@ -156,7 +156,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build build/macos-qualification --parallel 2 \
+          cmake --build build/macos-qualification --parallel 2 -- -k 0 \
             2>&1 | tee build/macos-qualification-evidence/build.log
       - name: Verify CPU test discovery and run the non-GPU suites
         shell: bash

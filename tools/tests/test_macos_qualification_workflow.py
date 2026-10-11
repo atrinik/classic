@@ -118,12 +118,40 @@ class MacOSQualificationWorkflowTests(unittest.TestCase):
         self.assertNotIn("ATRINIK_GPU_CONFORMANCE_QUALIFIED_HARDWARE", text)
         self.assertIn("prepare_macos_llvm.sh", text)
         self.assertIn("-DCMAKE_BUILD_TYPE=Release", text)
-        self.assertIn("cmake --build build/macos-qualification --parallel 2", text)
+        self.assertIn("cmake --build build/macos-qualification --parallel 2 -- -k 0", text)
         self.assertNotIn("server/tools/dependencies.py", text)
         self.assertNotIn("FETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP", text)
         self.assertNotIn("server-plugin-python", text)
         self.assertNotIn("complete Classic Release graph", text)
         self.assertNotIn("GD_LIBRARY", text)
+
+    @unittest.skipUnless(shutil.which("bash"), "Bash unavailable")
+    def test_build_collects_reachable_errors_and_preserves_failure_through_tee(self):
+        text = WORKFLOW.read_text()
+        build_step = text.split("      - name: Build the production client, shared libraries and test executables\n", 1)[1]
+        recipe = build_step.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+        script = "\n".join(line[10:] for line in recipe.splitlines()) + "\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "build/macos-qualification-evidence").mkdir(parents=True)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_cmake = fake_bin / "cmake"
+            fake_cmake.write_text('''#!/usr/bin/env bash
+printf '%s\\n' "$@" > arguments.txt
+echo 'reachable native compile failure'
+exit 7
+''')
+            fake_cmake.chmod(0o755)
+            script = f'export PATH="{fake_bin}:$PATH"\n' + script
+            result = subprocess.run(["bash"], input=script, cwd=root,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertEqual((root / "arguments.txt").read_text().splitlines(), [
+                "--build", "build/macos-qualification", "--parallel", "2", "--", "-k", "0",
+            ])
+            self.assertIn("reachable native compile failure",
+                          (root / "build/macos-qualification-evidence/build.log").read_text())
 
     @unittest.skipUnless(shutil.which("bash"), "Bash unavailable")
     def test_embedded_shell_recipes_are_valid(self):
