@@ -5,6 +5,7 @@ import os
 import shutil
 from pathlib import Path
 import subprocess
+import runpy
 import tempfile
 import textwrap
 import unittest
@@ -64,7 +65,45 @@ class CompilerImageTests(unittest.TestCase):
         subprocess.run(["python3", str(resolver), "--source-root", str(self.root),
                         "--revision", historical, "--current-image", CURRENT_IMAGE,
                         "--source-packaging-lock-output", str(output)], check=True, capture_output=True)
-        self.assertEqual(output.read_text(), "")
+        self.assertEqual(output.read_bytes(), b"{}")
+        self.git("rm", LOCK)
+        self.git("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "no lock")
+        subprocess.run(["python3", str(resolver), "--source-root", str(self.root),
+                        "--revision", self.git("rev-parse", "HEAD"), "--current-image", CURRENT_IMAGE,
+                        "--source-packaging-lock-output", str(output)], check=True, capture_output=True)
+        self.assertEqual(output.read_bytes(), b"")
+
+    def test_historical_assembler_accepts_exported_original_lock_and_rejects_new_lock(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        baseline = "fd4943252ac872fce2995c286b10a0c6d249aba3"
+        source = self.root / "historical/tools/ci/appimage"
+        source.mkdir(parents=True)
+        for name in ("assemble.py", "packaging.lock.json"):
+            content = subprocess.check_output(
+                ["git", "-C", str(root), "show", baseline + ":tools/ci/appimage/" + name])
+            (source / name).write_bytes(content)
+        resolver = root / "tools/release/resolve_compiler_image.py"
+        prefix = self.root / "prefix"
+        prefix.mkdir()
+        exported = prefix / "packaging.lock.json"
+        subprocess.run(["python3", str(resolver), "--source-root", str(root),
+                        "--revision", baseline, "--current-image", CURRENT_IMAGE,
+                        "--source-packaging-lock-output", str(exported)], check=True, capture_output=True)
+        self.assertEqual(exported.read_bytes(), (source / "packaging.lock.json").read_bytes())
+        historical = runpy.run_path(str(source / "assemble.py"))
+        appdir = self.root / "appdir"
+        (appdir / "usr/share/doc").mkdir(parents=True)
+        # The actual historical assembler passes its lock gate and reaches the
+        # first omitted payload fixture. No application build is needed.
+        with self.assertRaises(FileNotFoundError) as reached_payload:
+            historical["assemble"](appdir, prefix, "5.0.0", baseline)
+        self.assertIn("AppRun", str(reached_payload.exception))
+        altered = json.loads(exported.read_bytes())
+        altered["compiler"] = {"image": CURRENT_IMAGE}
+        exported.write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ValueError, "packaging lock differs from source lock"):
+            historical["assemble"](self.root / "rejected-appdir", prefix, "5.0.0", baseline)
+        self.assertFalse((self.root / "rejected-appdir").exists())
 
     def test_historical_gcc_descriptor_absence_uses_approved_current_pin(self) -> None:
         revision = self.commit({"base_image": "historical-sdk"})

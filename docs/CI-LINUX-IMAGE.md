@@ -233,6 +233,11 @@ The trusted AppImage preparation script accepts the extracted source lock
 only when every field except the immutable compiler image matches its
 approved lock. It preserves the validated original lock bytes, including
 their source hash, and retains approved SDK recipes and dependency URLs.
+Historical locks without a compiler descriptor also retain their exact bytes
+for the source assembler. Preparation accepts only the approved legacy
+projection: the current recipe with its compiler descriptor and six LLVM
+notice entries removed. The execution dependency descriptor and installed
+LLVM notices remain current; other historical recipe changes fail validation.
 
 The existing immutable 1.16.0 provider image pins are retained while the new
 LLVM producer is qualified and published. Those historical images do not

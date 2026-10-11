@@ -25,7 +25,7 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def resolve_descriptor(root: Path, revision: str, current_image: str) -> dict[str, object] | None:
+def source_lock_bytes(root: Path, revision: str, current_image: str) -> bytes | None:
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("release revision must be an exact lowercase commit SHA")
     if IMAGE.fullmatch(current_image) is None:
@@ -42,7 +42,14 @@ def resolve_descriptor(root: Path, revision: str, current_image: str) -> dict[st
     fields = entry.decode().split()
     if fields[:2] != ["100644", "blob"]:
         raise ValueError("release packaging lock must be a regular Git blob")
-    locked = json.loads(git("show", revision + ":" + LOCK), object_pairs_hook=unique_object)
+    return git("show", revision + ":" + LOCK)
+
+
+def resolve_descriptor(root: Path, revision: str, current_image: str) -> dict[str, object] | None:
+    lock_bytes = source_lock_bytes(root, revision, current_image)
+    if lock_bytes is None:
+        return None
+    locked = json.loads(lock_bytes, object_pairs_hook=unique_object)
     if not isinstance(locked, dict):
         raise ValueError("release packaging lock must be an object")
     if "compiler" not in locked:
@@ -71,17 +78,14 @@ def main() -> int:
     parser.add_argument("--source-finalizer-arguments", action="store_true",
                         help="emit only arguments supported by the selected source finalizer")
     parser.add_argument("--source-packaging-lock-output", type=Path,
-                        help="write exact tagged LLVM source lock bytes for trusted SDK validation")
+                        help="write exact tagged source lock bytes for trusted SDK validation")
     options = parser.parse_args()
     try:
         image = resolve_image(options.source_root, options.revision, options.current_image,
                               source_finalizer=options.source_finalizer_arguments)
         if options.source_packaging_lock_output is not None:
-            descriptor = resolve_descriptor(options.source_root, options.revision, options.current_image)
-            lock_bytes = b"" if descriptor is None else subprocess.run(
-                ["git", "-C", str(options.source_root), "show", options.revision + ":" + LOCK],
-                check=True, capture_output=True, timeout=30).stdout
-            options.source_packaging_lock_output.write_bytes(lock_bytes)
+            lock_bytes = source_lock_bytes(options.source_root, options.revision, options.current_image)
+            options.source_packaging_lock_output.write_bytes(lock_bytes or b"")
         if image is not None:
             if options.source_finalizer_arguments:
                 print("--compiler-image")

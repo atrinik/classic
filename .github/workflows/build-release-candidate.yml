@@ -397,15 +397,15 @@ jobs:
           RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
         run: |
           mkdir -p build/appimage-evidence build/appimage-packages build/discord-config
-          descriptor_path=$(mktemp "${RUNNER_TEMP}/classic-compiler-descriptor.XXXXXX")
-          trap 'rm -f "${descriptor_path}"' EXIT
+          source_lock_path=$(mktemp "${RUNNER_TEMP}/classic-source-packaging-lock.XXXXXX")
+          trap 'rm -f "${source_lock_path}"' EXIT
           python3 tools/release/resolve_compiler_image.py \
             --source-root "${GITHUB_WORKSPACE}/candidate-source" --revision "${RELEASE_REVISION}" \
-            --current-image "${CLASSIC_LINUX_IMAGE}" --source-packaging-lock-output "${descriptor_path}" \
+            --current-image "${CLASSIC_LINUX_IMAGE}" --source-packaging-lock-output "${source_lock_path}" \
             > build/appimage-evidence/compiler-image.txt
           compiler_arguments=()
-          if test -s "${descriptor_path}"; then
-            compiler_arguments=(--source-packaging-lock "${descriptor_path}")
+          if test -s "${source_lock_path}"; then
+            compiler_arguments=(--source-packaging-lock "${source_lock_path}")
           fi
           python3 tools/ci/appimage/prepare.py --output build/appimage-context \
             --compiler-image "${CLASSIC_LINUX_IMAGE}" "${compiler_arguments[@]}" \

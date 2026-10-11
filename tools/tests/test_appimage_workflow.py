@@ -107,7 +107,7 @@ class AppImageWorkflowTests(unittest.TestCase):
         preparation = job.split('      - name: Prepare pinned Ubuntu', 1)[1].split('      - name:', 1)[0]
         self.assertIn('tools/release/resolve_compiler_image.py', preparation)
         self.assertIn('--source-root "${GITHUB_WORKSPACE}/candidate-source"', preparation)
-        self.assertIn('compiler_arguments=(--source-packaging-lock "${descriptor_path}")', preparation)
+        self.assertIn('compiler_arguments=(--source-packaging-lock "${source_lock_path}")', preparation)
         self.assertIn('prepare.py --output build/appimage-context', preparation)
         self.assertIn('--file build/appimage-context/Dockerfile build/appimage-context', preparation)
         self.assertIn('cp build/appimage-context/packaging.lock.json build/appimage-evidence/', preparation)
@@ -203,8 +203,11 @@ sys.exit(7 if os.environ['FAIL_VALIDATION'] == '1' else 0)
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', type=pathlib.Path, required=True)
 parser.add_argument('--compiler-image', required=True)
-parser.add_argument('--source-packaging-lock')
-out = parser.parse_args().output
+parser.add_argument('--source-packaging-lock', type=pathlib.Path)
+args = parser.parse_args()
+assert args.source_packaging_lock is not None
+assert args.source_packaging_lock.read_bytes() == b'{}'
+out = args.output
 out.mkdir(parents=True)
 (out / 'packaging.lock.json').write_text('{"fixture": "locked inputs"}\\n')
 (out / 'Dockerfile').write_text('fixture trusted Dockerfile\\n')
