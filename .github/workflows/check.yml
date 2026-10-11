@@ -473,7 +473,7 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DATRINIK_PROTOCOL_SOURCE_DIR=/workspace/protocol
               cmake --build libatrinik/build/windows-tests \
-                --target libatrinik-path libatrinik-rendezvous libatrinik-signals \
+                --target libatrinik-console libatrinik-path libatrinik-rendezvous libatrinik-signals \
                   libatrinik-metaserver-publisher \
                   libatrinik-metaserver-url libatrinik-socket-address libatrinik-socket-quic \
                   libatrinik-stun \
@@ -539,6 +539,7 @@ jobs:
                 --readobj llvm-readobj \
                 --runtime-dir "${ATRINIK_WINDOWS_RUNTIME_DIR}" \
                 --output-dir "${stage}" \
+                libatrinik/build/windows-tests/libatrinik-console.exe \
                 libatrinik/build/windows-tests/libatrinik-path.exe \
                 libatrinik/build/windows-tests/libatrinik-rendezvous.exe \
                 libatrinik/build/windows-tests/libatrinik-signals.exe \
@@ -710,6 +711,11 @@ jobs:
           $junction = Join-Path $bundle "junction"
           New-Item -ItemType Directory -Path $junctionTarget | Out-Null
           New-Item -ItemType Junction -Path $junction -Target $junctionTarget | Out-Null
+          & (Join-Path $bundle "libatrinik-console.exe")
+          if ($LASTEXITCODE -ne 0) {
+            throw "libatrinik-console.exe failed with exit code ${LASTEXITCODE}"
+          }
+
           & (Join-Path $bundle "libatrinik-path.exe") $junction
           if ($LASTEXITCODE -ne 0) {
             throw "libatrinik-path.exe failed with exit code ${LASTEXITCODE}"

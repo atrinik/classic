@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -297,6 +297,25 @@ static void console_print(const char *str) {
 
 #endif
 
+#ifndef HAVE_READLINE
+/** Read and queue one line; EOF or an input error ends the reader. */
+static bool console_read_line(FILE *stream) {
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t numread = getline(&line, &len, stream);
+    if (numread <= 0) {
+        free(line);
+        return false;
+    }
+
+    pthread_mutex_lock(&command_process_queue_mutex);
+    utarray_push_back(command_process_queue, &line);
+    pthread_mutex_unlock(&command_process_queue_mutex);
+    free(line);
+    return true;
+}
+#endif
+
 /**
  * Thread for acquiring stdin data.
  * @param dummy
@@ -305,11 +324,7 @@ static void console_print(const char *str) {
  * NULL.
  */
 static void *do_thread(void *dummy) {
-#ifndef HAVE_READLINE
-    char *line;
-    ssize_t numread;
-    size_t len;
-#else
+#ifdef HAVE_READLINE
     fd_set fds;
 
     FD_ZERO(&fds);
@@ -327,16 +342,9 @@ static void *do_thread(void *dummy) {
             pthread_mutex_unlock(&rl_mutex);
         }
 #else
-        line = NULL;
-        numread = getline(&line, &len, stdin);
-
-        if (numread <= 0) {
-            continue;
+        if (!console_read_line(stdin)) {
+            break;
         }
-
-        pthread_mutex_lock(&command_process_queue_mutex);
-        utarray_push_back(command_process_queue, &line);
-        pthread_mutex_unlock(&command_process_queue_mutex);
 #endif
 
         usleep(10000);
@@ -417,12 +425,13 @@ void console_command_handle(void) {
         return;
     }
 
-    /* Remove the newline. */
-    cp = strchr(*line, '\n');
-
-    if (cp) {
-        *cp = '\0';
+    /* Embedded Python switches Windows CRT stdin to binary mode. Accept
+     * redirected CRLF input as well as LF, independent of stream translation. */
+    size_t length = strcspn(*line, "\n");
+    if ((*line)[length] == '\n' && length > 0 && (*line)[length - 1] == '\r') {
+        length--;
     }
+    (*line)[length] = '\0';
 
     /* Remove the command from the parameters. */
     cp = strchr(*line, ' ');

@@ -611,6 +611,14 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-clioptions PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-clioptions COMMAND libatrinik-clioptions)
 
+    # Exercise binary console input and the Windows getline fallback on every
+    # platform, including Linux ASan builds whose libc already has getline.
+    add_executable(libatrinik-console tests/console.c
+        tests/wrapped/console.c tests/wrapped/porting_getline.c)
+    atrinik_configure_target(libatrinik-console)
+    target_link_libraries(libatrinik-console PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-console COMMAND libatrinik-console)
+
     add_executable(libatrinik-string tests/string.c)
     atrinik_configure_target(libatrinik-string)
     target_link_libraries(libatrinik-string PRIVATE Atrinik::Core)
