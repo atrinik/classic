@@ -75,7 +75,7 @@ export NO_STRIP=1
 python3 ../tools/ci/appimage/assemble.py "${appdir}" "${prefix}" "${version}" "${revision}"
 # Always use the locked, already-verified runtime: appimagetool must not fetch it.
 export ARCH=x86_64
-"${prefix}/tools/appimagetool" --mksquashfs-opt -no-xattrs \
+env -u VERSION "${prefix}/tools/appimagetool" --mksquashfs-opt -no-xattrs \
   --mksquashfs-opt -processors --mksquashfs-opt "${build_parallelism}" --runtime-file "${prefix}/tools/runtime" \
   "${appdir}" "${staging_directory}/package.AppImage"
 python3 ../tools/release/appimage.py "${staging_directory}/package.AppImage" "${version}"
