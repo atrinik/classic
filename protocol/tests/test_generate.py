@@ -32,6 +32,12 @@ class GenerateTests(unittest.TestCase):
         self.assertEqual((s2c["ACCESS_RESULT"], s2c["ACCESS_ADMIN_RESULT"],
                           s2c["ACCESS_POLICY"]), (29, 30, 31))
         self.assertEqual((c2s["BOOK_EDIT"], s2c["BOOK_EDIT"]), (26, 33))
+    def test_depth_targeting_preserves_published_target_command_ids(self) -> None:
+        schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
+        c2s = {entry["symbol"]: entry["id"] for entry in schema["client_to_server"]}
+        s2c = {entry["symbol"]: entry["id"] for entry in schema["server_to_client"]}
+        self.assertEqual((c2s["TARGET"], s2c["TARGET"]), (22, 5))
+
     def test_combined_access_and_exploration_command_ids(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         expected = {
