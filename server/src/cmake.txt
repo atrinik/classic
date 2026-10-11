@@ -101,6 +101,8 @@ set(SERVER_CORE_SOURCES
 	src/server/los.c
 	src/server/spatial.c
 	src/server/perception.c
+	src/types/common/projectile3d.c
+	src/server/propagation.c
 	src/server/main.c
 	src/server/map.c
 	src/server/metrics.c

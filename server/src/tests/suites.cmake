@@ -23,6 +23,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.light|check_server_light|src/tests/unit/server/light.c"
     "server.los|check_server_los|src/tests/unit/server/los.c"
     "server.perception|check_server_perception|src/tests/unit/server/perception.c"
+    "server.propagation|check_server_propagation|src/tests/unit/server/propagation.c"
     "server.spatial|check_server_spatial|src/tests/unit/server/spatial.c"
     "server.spatial_lighting|check_server_spatial_lighting|src/tests/unit/server/spatial_lighting.c"
     "server.object|check_server_object|src/tests/unit/server/object.c"

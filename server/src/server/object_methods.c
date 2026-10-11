@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -35,6 +35,8 @@
 #include <player.h>
 #include <object.h>
 #include <object_methods.h>
+#include <perception.h>
+#include <spatial.h>
 
 /**
  * Registered method handlers.
@@ -363,13 +365,28 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(shooter != NULL);
 
-    /* No direction, try to get a direction to the player's target, if any. */
-    if (dir == 0 && op->type == BOW && shooter->type == PLAYER &&
-        OBJECT_VALID(CONTR(shooter)->target_object, CONTR(shooter)->target_object_count)) {
-        dir = object_dir_to_target(shooter, CONTR(shooter)->target_object);
+    object *target = NULL;
+    if (shooter->type == PLAYER &&
+        OBJECT_VALID(CONTR(shooter)->target_object, CONTR(shooter)->target_object_count) &&
+        CONTR(shooter)->target_object != shooter &&
+        perception_player_authorized(CONTR(shooter), CONTR(shooter)->target_object)) {
+        target = CONTR(shooter)->target_object;
+    } else if (shooter->type != PLAYER && OBJECT_VALID(shooter->enemy, shooter->enemy_count) &&
+               perception_object_visible(shooter, shooter->enemy)) {
+        target = shooter->enemy;
+    }
+    bool vertical_aim = false;
+    if (dir == 0 && target != NULL) {
+        int dx, dy, dz;
+        if (spatial_offset(shooter->map, target->map, &dx, &dy, &dz)) {
+            dx += target->x - shooter->x;
+            dy += target->y - shooter->y;
+            dir = coords_distance_to_dir(-dx, -dy);
+            vertical_aim = dx == 0 && dy == 0 && dz != 0;
+        }
     }
 
-    if (dir == 0) {
+    if (dir == 0 && !vertical_aim) {
         dir = shooter->direction;
         SOFT_ASSERT_RC(dir != 0,
                        OBJECT_METHOD_UNHANDLED,
@@ -378,7 +395,7 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
                        object_get_str(shooter));
     }
 
-    if (!movement_direction_valid(shooter, dir, false)) {
+    if (!movement_direction_valid(shooter, dir, vertical_aim)) {
         return OBJECT_METHOD_UNHANDLED;
     }
 
@@ -386,7 +403,9 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
         dir = get_randomized_dir(dir);
     }
 
-    shooter->direction = dir;
+    if (dir != 0) {
+        shooter->direction = dir;
+    }
 
     for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {

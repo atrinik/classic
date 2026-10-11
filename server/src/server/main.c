@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <light.h>
+#include <propagation.h>
 #include <admin_shutdown.h>
 #include <exploration.h>
 #include <access_server.h>
@@ -668,6 +669,7 @@ void main_process(void) {
 
     /* "do" something with objects with speed */
     process_events();
+    propagation_tick();
     stage_started_us = server_stage_finished("process-events", stage_started_us);
 
     /* Removes unused maps after a certain timeout */
