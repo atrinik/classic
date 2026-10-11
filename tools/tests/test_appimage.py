@@ -635,6 +635,17 @@ class AppImageTests(unittest.TestCase):
             self.assertEqual(assemble.dynamic(Path("fixture")), (["libc.so.6"], None))
             self.assertEqual(run.call_args.args[0], "llvm-readelf")
 
+    def test_pre_llvm_inventory_preserves_all_llvm_notices_without_new_metadata(self):
+        self.assertNotIn("compiler", self.lock)
+        native_inputs = json.loads(json.dumps(self.metadata["native_inputs"]))
+        for name in ("llvm", "clang", "clang-tools-extra", "lld", "compiler-rt", "libunwind"):
+            self.write(f"usr/share/doc/atrinik/licenses/llvm/{name}-LICENSE.TXT", f"{name} complete fixture notice\n")
+        self.validate()
+        self.assertEqual(self.metadata["native_inputs"], native_inputs)
+        self.metadata["native_inputs"]["compiler"] = {"version": "23.1.3"}
+        with self.assertRaisesRegex(ValueError, "native inputs differ from trusted lock"):
+            self.validate()
+
     def test_extended_attributes_and_trailing_payload_rejected(self):
         for mutation in ("xattrs", "trailing"):
             image = self.image()

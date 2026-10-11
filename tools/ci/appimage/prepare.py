@@ -12,6 +12,9 @@ import stat
 import tempfile
 import urllib.request
 
+LLVM_NOTICE_PATHS = tuple('usr/share/doc/atrinik/licenses/llvm/' + name + '-LICENSE.TXT'
+                         for name in ('llvm', 'clang', 'clang-tools-extra', 'lld', 'compiler-rt', 'libunwind'))
+
 
 def digest(path):
     with path.open('rb') as stream:
@@ -62,7 +65,23 @@ def select_packaging_lock(trusted_lock, image, source_lock_path=None):
             result[key] = value
         return result
     source_lock = json.loads(data, object_pairs_hook=pairs)
-    if not isinstance(source_lock, dict) or not isinstance(source_lock.get('compiler'), dict):
+    if not isinstance(source_lock, dict):
+        raise ValueError('source packaging lock requires a compiler descriptor')
+    if 'compiler' not in source_lock:
+        # Pre-LLVM schema-3 releases retain their publication lock verbatim.
+        # The execution recipe remains the approved current LLVM recipe;
+        # only the compiler record and its six newly required notice entries
+        # may be absent from the historical source contract.
+        if trusted_lock['compiler'].get('image') is not None and image != trusted_lock['compiler']['image']:
+            raise ValueError('--compiler-image differs from the trusted packaging lock')
+        if any(trusted_lock['notices'].count(path) != 1 for path in LLVM_NOTICE_PATHS):
+            raise ValueError('trusted SDK lacks the complete LLVM notice contract')
+        legacy = {key: value for key, value in trusted_lock.items() if key != 'compiler'}
+        legacy['notices'] = [path for path in trusted_lock['notices'] if path not in LLVM_NOTICE_PATHS]
+        if json.dumps(source_lock, sort_keys=True) != json.dumps(legacy, sort_keys=True):
+            raise ValueError('source packaging lock differs from the supported pre-LLVM recipe')
+        return source_lock, data
+    if not isinstance(source_lock['compiler'], dict):
         raise ValueError('source packaging lock requires a compiler descriptor')
     if source_lock['compiler'].get('image') != image:
         raise ValueError('source packaging lock compiler image differs from --compiler-image')
@@ -83,11 +102,12 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
     original_lock = (root / 'packaging.lock.json').read_text()
-    lock = json.loads(original_lock)
+    trusted_lock = json.loads(original_lock)
     try:
-        lock, selected_lock_bytes = select_packaging_lock(lock, args.compiler_image, args.source_packaging_lock)
+        publication_lock, selected_lock_bytes = select_packaging_lock(trusted_lock, args.compiler_image, args.source_packaging_lock)
     except (OSError, ValueError, UnicodeError) as error:
         parser.error(str(error))
+    lock = publication_lock if 'compiler' in publication_lock else trusted_lock
     if args.output.resolve() == root:
         parser.error('--output must be a separate generated context directory')
     args.output.mkdir(parents=True, exist_ok=True)

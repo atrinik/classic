@@ -70,8 +70,58 @@ class IntegrityTests(unittest.TestCase):
                 prepare.select_packaging_lock(trusted, image, path)
             del historical['compiler']
             path.write_text(json.dumps(historical))
+            with self.assertRaisesRegex(ValueError, 'supported pre-LLVM recipe'):
+                prepare.select_packaging_lock(trusted, image, path)
+
+    def test_pre_llvm_projection_preserves_source_bytes_and_current_approved_image(self):
+        trusted = self.trusted_lock()
+        image = trusted['compiler']['image']
+        legacy = {key: value for key, value in trusted.items() if key != 'compiler'}
+        legacy['notices'] = [path for path in trusted['notices'] if path not in prepare.LLVM_NOTICE_PATHS]
+        raw = (json.dumps(legacy, indent=7) + '\n\n').encode()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'legacy-lock.json'
+            path.write_bytes(raw)
+            self.assertEqual(prepare.select_packaging_lock(trusted, image, path), (legacy, raw))
+            with self.assertRaisesRegex(ValueError, 'trusted packaging lock'):
+                prepare.select_packaging_lock(trusted, image.replace('a' * 64, 'b' * 64), path)
+            changed = copy.deepcopy(legacy)
+            changed['sources'][0]['url'] = 'https://example.invalid/private-source'
+            path.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError, 'supported pre-LLVM recipe'):
+                prepare.select_packaging_lock(trusted, image, path)
+            changed = copy.deepcopy(legacy)
+            changed['compiler'] = None
+            path.write_text(json.dumps(changed))
             with self.assertRaisesRegex(ValueError, 'requires a compiler descriptor'):
                 prepare.select_packaging_lock(trusted, image, path)
+            changed = copy.deepcopy(legacy)
+            changed['notices'].pop()
+            path.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError, 'supported pre-LLVM recipe'):
+                prepare.select_packaging_lock(trusted, image, path)
+
+    def test_pre_llvm_context_keeps_execution_compiler_and_all_notice_installation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trusted = json.loads((Path(__file__).with_name('packaging.lock.json')).read_text())
+            image = trusted['compiler'].get('image') or 'ghcr.io/atrinik/classic-build:1.2.3@sha256:' + 'a' * 64
+            legacy = {key: value for key, value in trusted.items() if key != 'compiler'}
+            legacy['notices'] = [path for path in trusted['notices'] if path not in prepare.LLVM_NOTICE_PATHS]
+            raw = (json.dumps(legacy, sort_keys=True, indent=7) + '\n\n').encode()
+            path = root / 'legacy-lock.json'
+            path.write_bytes(raw)
+            output = root / 'context'
+            def materialize(entry, destination, cache):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b'fixture')
+            args = ['prepare.py', '--output', str(output), '--compiler-image', image,
+                    '--source-packaging-lock', str(path)]
+            with patch.object(sys, 'argv', args), patch.object(prepare, 'download', side_effect=materialize):
+                prepare.main()
+            self.assertEqual((output / 'packaging.lock.json').read_bytes(), raw)
+            inputs = json.loads((output / 'dependency-inputs.lock.json').read_text())
+            self.assertEqual(inputs['compiler'], trusted['compiler'])
 
     def test_source_lock_paths_shapes_and_duplicate_keys_fail_before_materialization(self):
         trusted = self.trusted_lock()
