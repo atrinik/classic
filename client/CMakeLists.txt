@@ -1370,7 +1370,11 @@ if (WIN32 AND NOT UNIX)
         install(DIRECTORY timidity DESTINATION ${INSTALL_SUBDIR_BIN})
     endif ()
 else ()
-    set(INSTALL_SUBDIR_BIN "games")
+    if (PACKAGE_TYPE STREQUAL "appimage")
+        set(INSTALL_SUBDIR_BIN "bin")
+    else ()
+        set(INSTALL_SUBDIR_BIN "games")
+    endif ()
     set(INSTALL_SUBDIR_SHARE "share/games/atrinik")
     set(INSTALL_SUBDIR_DOC "share/doc/atrinik")
 
@@ -1404,7 +1408,7 @@ install(DIRECTORY
         DESTINATION ${INSTALL_SUBDIR_SHARE} COMPONENT AtrinikClient
         PATTERN ".git" EXCLUDE
         PATTERN "discord-application-id" EXCLUDE)
-if (PACKAGE_TYPE STREQUAL "deb")
+if (PACKAGE_TYPE STREQUAL "deb" OR PACKAGE_TYPE STREQUAL "appimage")
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/client.cfg"
         DESTINATION ${INSTALL_SUBDIR_SHARE} COMPONENT AtrinikClient)
 endif ()

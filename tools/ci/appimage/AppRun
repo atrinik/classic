@@ -1,0 +1,32 @@
+#!/bin/sh
+# Copyright 2026 The Atrinik Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+set -eu
+appdir=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd -P)
+# Resolve relative user configuration against the caller before changing cwd.
+if [ -n "${ATRINIK_CONFIG_DIR:-}" ]; then
+    ATRINIK_CONFIG_DIR=$(realpath -m -- "$ATRINIK_CONFIG_DIR")
+    export ATRINIK_CONFIG_DIR
+elif [ -z "${HOME:-}" ]; then
+    echo 'Atrinik requires HOME or ATRINIK_CONFIG_DIR for persistent user data' >&2
+    exit 1
+fi
+# Application providers take precedence over unrelated host application libraries.
+# Driver/plugin loading continues to use the host loader's ordinary system paths.
+LD_LIBRARY_PATH="$appdir/usr/lib"
+OPENSSL_MODULES="$appdir/usr/lib/ossl-modules"
+OPENSSL_CONF="$appdir/usr/share/atrinik/openssl.cnf"
+ALSA_CONFIG_DIR="$appdir/usr/share/alsa"
+ALSA_CONFIG_PATH="$ALSA_CONFIG_DIR/alsa.conf"
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+    if [ -r /etc/ssl/certs/ca-certificates.crt ]; then
+        SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+    elif [ -r /etc/pki/tls/certs/ca-bundle.crt ]; then
+        SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
+    else
+        SSL_CERT_FILE="$appdir/usr/share/atrinik/ca-bundle.crt"
+    fi
+fi
+export LD_LIBRARY_PATH OPENSSL_MODULES OPENSSL_CONF SSL_CERT_FILE ALSA_CONFIG_DIR ALSA_CONFIG_PATH
+cd -- "$appdir/usr/share/games/atrinik"
+exec "$appdir/usr/bin/atrinik" "$@"
