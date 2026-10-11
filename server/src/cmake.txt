@@ -85,6 +85,7 @@ set(SERVER_CORE_SOURCES
 	src/server/connection.c
 	src/server/content_benchmark.c
 	src/server/walking_route.c
+	src/server/celestial_dependencies.c
 	src/server/celestial_light.c
 	src/server/celestial_structure.c
 	src/server/exp.c
@@ -99,6 +100,10 @@ set(SERVER_CORE_SOURCES
 	src/server/links.c
 	src/server/living.c
 	src/server/los.c
+	src/server/spatial.c
+	src/server/perception.c
+	src/types/common/projectile3d.c
+	src/server/propagation.c
 	src/server/main.c
 	src/server/map.c
 	src/server/metrics.c

@@ -20,6 +20,10 @@
 - Command identifiers are generated from the sibling `protocol/` module. Treat
   packet-layout changes as coordinated monorepo protocol work and update both
   producer and consumer in one pull request and profile.
+- Protocol 1084 targeting binds the exact live MAP2 physical part, relative
+  depth and nonzero actor count. Parse complete results before mutation and
+  clear identity on reconnect; remembered geometry is never a click/cycle
+  candidate. See [`SPATIAL_3D.md`](../server/doc/SPATIAL_3D.md).
 - Preserve SDL3 surface ownership, color keys, alpha/blend modes, clipping,
   texture invalidation, and mutable-backbuffer semantics. Exact black remains
   the transparency key when image decoding falls back, and mutable chat

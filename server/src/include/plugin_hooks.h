@@ -59,6 +59,7 @@
 #include <initialization.h>
 #include <living.h>
 #include <light.h>
+#include <los.h>
 #include <loader.h>
 #include <monster.h>
 #include <monster_data.h>
@@ -772,6 +773,8 @@ struct plugin_hooklist
     PLUGIN_HOOK_FUNCTION(object_semantic_result_t, bank_name_info_reason, object *, const char *)
     PLUGIN_HOOK_FUNCTION(bool, gameplay_journal_required, void)
     PLUGIN_HOOK_FUNCTION(void, light_source_prepare_change, void)
+    PLUGIN_HOOK_FUNCTION(void, object_update, object *, int)
+    PLUGIN_HOOK_FUNCTION(void, los_publication_changed, void)
 
 };
 // clang-format on

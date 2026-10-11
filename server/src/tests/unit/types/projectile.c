@@ -4,6 +4,7 @@
 
 #include <global.h>
 #include <server_main.h>
+#include <server.h>
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
@@ -14,6 +15,10 @@
 #include <object_methods.h>
 #include <player.h>
 #include <skills.h>
+#include <map.h>
+#include <projectile3d.h>
+#include <perception.h>
+#include <toolkit/string.h>
 #include <toolkit/packet.h>
 
 #define TEST_BASE_DAMAGE 24
@@ -673,6 +678,230 @@ START_TEST(test_archery_blocked_and_lethal_impact_ordering) {
 }
 END_TEST
 
+START_TEST(test_trajectory_value_copy_and_save_roundtrip) {
+    object *arrow = arch_get("arrow");
+    ck_assert(projectile3d_parse(arrow, "1 32768 -65536 16384 123 456 789 12 -2"));
+    object *copy = object_clone(arrow);
+    projectile3d_reflect(copy, 7);
+    ck_assert_int_eq(arrow->projectile.heading[0], 32768);
+    ck_assert_int_eq(copy->projectile.heading[0], -32768);
+    ck_assert_int_eq(copy->projectile.heading[2], -16384);
+    projectile3d_reset(copy);
+    ck_assert(projectile3d_valid(&arrow->projectile));
+    StringBuffer *sb = stringbuffer_new();
+    object_dump_rec(arrow, sb);
+    char *dump = stringbuffer_finish(sb);
+    object *loaded = object_load_str(dump);
+    ck_assert_ptr_nonnull(loaded);
+    ck_assert(projectile3d_valid(&loaded->projectile));
+    ck_assert_int_eq(loaded->projectile.fraction[2], 789);
+    ck_assert_int_eq(loaded->projectile.depth, -2);
+    ck_assert_int_eq(loaded->projectile.remaining, 12);
+    free(dump);
+    object_destroy(copy);
+    object_destroy(loaded);
+    object_destroy(arrow);
+
+    loaded = object_load_str("arch arrow\ndirection 3\nend\n");
+    ck_assert_ptr_nonnull(loaded);
+    ck_assert_uint_eq(loaded->projectile.version, 0);
+    object_destroy(loaded);
+    static const char *invalid[] = {
+        "2 65536 0 0 0 0 0 1 0", "1 65537 0 0 0 0 0 1 0",
+        "1 0 0 0 0 0 0 1 0", "1 65536 0 0 -1 0 0 1 0",
+        "1 65536 0 0 0 0 0 1 7", "1 65536 0 0 0 0 0 -1 0",
+        "1 65536 0 0 0 0 0 1 0 trailing", "1 999999999999999999999 0 0 0 0 0 1 0"
+    };
+    ck_assert_ptr_null(object_load_str("arch arrow\nprojectile3d 2 65536 0 0 0 0 0 1 0\nend\n"));
+    ck_assert_ptr_null(object_load_str("arch sack\nprojectile3d 1 65536 0 0 0 0 0 1 0\nend\n"));
+    arrow = arch_get("arrow");
+    for (size_t j = 0; j < arraysize(invalid); j++) {
+        ck_assert(!projectile3d_parse(arrow, invalid[j]));
+        ck_assert_uint_eq(arrow->projectile.version, 0);
+    }
+    object_destroy(arrow);
+}
+END_TEST
+
+static object *trajectory_arrow(mapstruct *map) {
+    object *arrow = arch_get("arrow");
+    arrow->x = arrow->y = 2;
+    arrow->last_sp = 8;
+    arrow->speed = 1.0;
+    arrow->direction = 3;
+    SET_FLAG(arrow, FLAG_IS_MISSILE);
+    return object_insert_map(arrow, map, NULL, INS_NO_MERGE | INS_NO_WALK_ON);
+}
+
+START_TEST(test_trajectory_floor_hole_reflection_and_homing) {
+    mapstruct *lower = get_empty_map(5, 5);
+    mapstruct *upper = get_empty_map(5, 5);
+    mapstruct *bottom = get_empty_map(5, 5);
+    lower->tile_map[TILED_DOWN] = bottom;
+    bottom->tile_map[TILED_UP] = lower;
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    object *target = object_get();
+    target->map = upper;
+    target->x = target->y = 2;
+    object *arrow = trajectory_arrow(lower);
+    projectile3d_launch(arrow, arrow, target, 3);
+    ck_assert_int_eq(arrow->projectile.heading[0], 0);
+    ck_assert_int_eq(arrow->projectile.heading[2], 65536);
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_ptr_eq(arrow->map, upper);
+    ck_assert_int_eq(arrow->projectile.depth, 1);
+    object_remove(arrow, 0);
+    object_destroy(arrow);
+
+    /* Map insertion requires an archetype, even for structural fixtures. */
+    object *floor = arch_get("floor_stone1a");
+    ck_assert_ptr_nonnull(floor);
+    floor->x = floor->y = 2;
+    floor = object_insert_map(floor, upper, NULL, INS_NO_WALK_ON);
+    ck_assert_ptr_nonnull(floor);
+    arrow = trajectory_arrow(lower);
+    projectile3d_launch(arrow, arrow, target, 3);
+    SET_FLAG(arrow, FLAG_REFLECTING);
+    ck_assert(!projectile3d_aim(arrow, target));
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_ptr_eq(arrow->map, lower);
+    ck_assert_int_eq(arrow->projectile.heading[2], -65536);
+    ck_assert_int_eq(arrow->projectile.fraction[2], 65536);
+    /* A reflected boundary is not encountered a second time at t=0. */
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_ptr_eq(arrow->map, bottom);
+    ck_assert_int_eq(arrow->projectile.fraction[2], 65536);
+    object_projectile_stop(arrow, OBJECT_PROJECTILE_PICKUP);
+    ck_assert_uint_eq(arrow->projectile.version, 0);
+    target->map = NULL;
+    object_destroy(target);
+}
+END_TEST
+
+START_TEST(test_trajectory_corner_reflects_both_axes_once) {
+    mapstruct *map = get_empty_map(5, 5);
+    object *arrow = trajectory_arrow(map);
+    object *wall = arch_get("wall_wood_1");
+    wall->x = wall->y = 3;
+    ck_assert_ptr_nonnull(object_insert_map(wall, map, NULL, INS_NO_WALK_ON));
+    projectile3d_launch(arrow, arrow, NULL, 4);
+    SET_FLAG(arrow, FLAG_REFLECTING);
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_int_eq(arrow->x, 2);
+    ck_assert_int_eq(arrow->y, 2);
+    ck_assert_int_eq(arrow->projectile.heading[0], -65536);
+    ck_assert_int_eq(arrow->projectile.heading[1], -65536);
+    ck_assert_ptr_eq(projectile3d_move(arrow), arrow);
+    ck_assert_int_eq(arrow->projectile.fraction[0], 65536);
+    ck_assert_int_eq(arrow->projectile.fraction[1], 65536);
+    ck_assert_int_eq(arrow->x, 1);
+    ck_assert_int_eq(arrow->y, 1);
+}
+END_TEST
+
+START_TEST(test_missile_launch_reauthorizes_retained_target) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/tests/projectile/launch-lower");
+    object_remove(pl, 0);
+    pl->x = pl->y = 8;
+    pl = object_insert_map(pl, map, NULL, INS_NO_MERGE);
+    CONTR(pl)->cs->state = ST_PLAYING;
+    CONTR(pl)->tls = CONTR(pl)->tli = CONTR(pl)->tsi = 0;
+    mapstruct *upper = get_empty_map(MAP_WIDTH(map), MAP_HEIGHT(map));
+    FREE_AND_COPY_HASH(upper->path, "/tests/projectile/launch-upper");
+    map->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = map;
+    for (int x = 0; x < MAP_WIDTH(map); x++) {
+        for (int y = 0; y < MAP_HEIGHT(map); y++) {
+            GET_MAP_SPACE_PTR(map, x, y)->light_value = 1280;
+            GET_MAP_SPACE_PTR(upper, x, y)->light_value = 1280;
+        }
+    }
+    object *target = arch_get("kobold");
+    target->x = pl->x + 3;
+    target->y = pl->y;
+    target = object_insert_map(target, upper, NULL, INS_NO_MERGE);
+    draw_client_map(pl);
+    ck_assert(target_player_authorized(CONTR(pl), target, NULL));
+    CONTR(pl)->target_object = target;
+    CONTR(pl)->target_object_count = target->count;
+
+    object *published_arrow = arch_get("arrow");
+    published_arrow->last_sp = 4;
+    published_arrow = common_object_projectile_fire_missile(published_arrow, pl, 7);
+    ck_assert_ptr_nonnull(published_arrow);
+    ck_assert_int_eq(published_arrow->projectile.heading[0], 65536);
+    ck_assert_int_gt(published_arrow->projectile.heading[2], 0);
+    object_remove(published_arrow, 0);
+    object_destroy(published_arrow);
+
+    /* Selection is valid initially. Hide or move it behind newly opaque
+     * geometry without running target maintenance before the direct launch. */
+    for (int mode = 0; mode < 3; mode++) {
+        if (mode == 0) {
+            SET_FLAG(target, FLAG_IS_INVISIBLE);
+        } else if (mode == 1) {
+            CLEAR_FLAG(target, FLAG_IS_INVISIBLE);
+            object_remove(target, 0);
+            target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+            draw_client_map(pl);
+            ck_assert(target_player_authorized(CONTR(pl), target, NULL));
+            GET_MAP_SPACE_PTR(map, pl->x + 1, pl->y)->flags |= P_BLOCKSVIEW;
+        } else {
+            GET_MAP_SPACE_PTR(map, pl->x + 1, pl->y)->flags &= ~P_BLOCKSVIEW;
+            draw_client_map(pl);
+            ck_assert(target_player_authorized(CONTR(pl), target, NULL));
+            object_remove(target, 0);
+            target->x++;
+            target->y++;
+            target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+            /* Current sight cannot authorize an unpublished actor position. */
+            ck_assert(perception_player_authorized(CONTR(pl), target));
+        }
+        ck_assert(OBJECT_VALID(target, CONTR(pl)->target_object_count));
+        ck_assert(!target_player_authorized(CONTR(pl), target, NULL));
+        object *bow = arch_get("bow_short");
+        pl->direction = 7;
+        object_ranged_fire(bow, pl, 0, NULL);
+        ck_assert_int_eq(pl->direction, 7);
+        object_destroy(bow);
+        object *arrow = arch_get("arrow");
+        arrow->last_sp = 4;
+        arrow = common_object_projectile_fire_missile(arrow, pl, 7);
+        ck_assert_ptr_nonnull(arrow);
+        ck_assert_ptr_eq(arrow->map, map);
+        ck_assert_int_eq(arrow->x, pl->x - 1);
+        ck_assert_int_eq(arrow->projectile.heading[0], -65536);
+        ck_assert_int_eq(arrow->projectile.heading[1], 0);
+        ck_assert_int_eq(arrow->projectile.heading[2], 0);
+        object_remove(arrow, 0);
+        object_destroy(arrow);
+    }
+
+    GET_MAP_SPACE_PTR(map, pl->x + 1, pl->y)->flags &= ~P_BLOCKSVIEW;
+    object *npc = arch_get("kobold");
+    npc->x = pl->x;
+    npc->y = pl->y + 3;
+    npc = object_insert_map(npc, map, NULL, INS_NO_MERGE);
+    npc->enemy = target;
+    npc->enemy_count = target->count;
+    CLEAR_FLAG(npc, FLAG_SEE_INVISIBLE);
+    ck_assert(perception_object_visible(npc, target));
+    SET_FLAG(target, FLAG_IS_INVISIBLE);
+    ck_assert(!perception_object_visible(npc, target));
+    object *arrow = arch_get("arrow");
+    arrow->last_sp = 4;
+    arrow = common_object_projectile_fire_missile(arrow, npc, 7);
+    ck_assert_ptr_nonnull(arrow);
+    ck_assert_int_eq(arrow->projectile.heading[0], -65536);
+    ck_assert_int_eq(arrow->projectile.heading[1], 0);
+    ck_assert_int_eq(arrow->projectile.heading[2], 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("projectile");
     TCase *tc_core = tcase_create("Core");
@@ -680,6 +909,10 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_missile_launch_reauthorizes_retained_target);
+    tcase_add_test(tc_core, test_trajectory_value_copy_and_save_roundtrip);
+    tcase_add_test(tc_core, test_trajectory_floor_hole_reflection_and_homing);
+    tcase_add_test(tc_core, test_trajectory_corner_reflects_both_axes_once);
     tcase_add_test(tc_core, test_invalid_projectile_directions_stop_before_lookup);
     tcase_add_test(tc_core, test_archery_impact_bonuses_and_feedback);
     tcase_add_test(tc_core, test_archery_unaware_state_is_impact_time_and_validated);

@@ -38,6 +38,8 @@ def load_schema(path: Path) -> dict[str, object]:
         "item_name_size",
         "item_extra_message_size",
         "player_status",
+        "talk_modes",
+        "talk_npc_target_message_max",
         *DIRECTIONS,
     }:
         raise ValueError("schema root has missing or unsupported keys")
@@ -104,6 +106,22 @@ def load_schema(path: Path) -> dict[str, object]:
             raise ValueError(f"duplicate player_status operation symbol: {symbol}")
         seen_status_symbols.add(symbol)
 
+    if type(data["talk_npc_target_message_max"]) is not int or not 1 <= data["talk_npc_target_message_max"] <= 4095:
+        raise ValueError("talk_npc_target_message_max exceeds supported bounded input")
+    talk_modes = data["talk_modes"]
+    if not isinstance(talk_modes, list) or not talk_modes or len(talk_modes) > 255:
+        raise ValueError("talk_modes must fit in the nonzero uint8 space")
+    seen_talk_symbols: set[str] = set()
+    for expected_id, mode in enumerate(talk_modes, 1):
+        if not isinstance(mode, dict) or set(mode) != {"id", "symbol"}:
+            raise ValueError("talk_modes entry has an invalid shape")
+        if type(mode["id"]) is not int or mode["id"] != expected_id:
+            raise ValueError(f"talk_modes ID must be the contiguous value {expected_id}")
+        symbol = mode["symbol"]
+        if not isinstance(symbol, str) or not SYMBOL_RE.fullmatch(symbol) or symbol in seen_talk_symbols:
+            raise ValueError("talk_modes symbol is invalid or duplicated")
+        seen_talk_symbols.add(symbol)
+
     for direction in DIRECTIONS:
         commands = data[direction]
         if not isinstance(commands, list) or not commands:
@@ -153,6 +171,7 @@ def render_header(schema: dict[str, object]) -> str:
         "#define ATRINIK_PROTOCOL_GAME_COMMANDS_H\n\n",
         f"#define ATRINIK_PROTOCOL_VERSION {schema['protocol_version']}U\n",
         "#define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION\n",
+        f"#define TALK_NPC_TARGET_MESSAGE_MAX {schema['talk_npc_target_message_max']}U\n",
         f"#define ATRINIK_PROTOCOL_ITEM_NAME_SIZE {schema['item_name_size']}U\n\n",
         f"#define ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE {schema['item_extra_message_size']}U\n\n",
         f"#define ATRINIK_PLAYER_STATUS_MAX_STATUSES {schema['player_status']['max_statuses']}U\n",
@@ -167,9 +186,12 @@ def render_header(schema: dict[str, object]) -> str:
         [
             f"    PLAYER_STATUS_OPERATION_NROF = {len(schema['player_status']['operations'])}\n",
             "} atrinik_player_status_operation_t;\n\n",
-            "typedef enum atrinik_client_to_server_command {\n",
+            "typedef enum atrinik_talk_mode {\n",
         ]
     )
+    for mode in schema["talk_modes"]:
+        lines.append(f"    CMD_TALK_{mode['symbol']} = {mode['id']},\n")
+    lines.extend(["} atrinik_talk_mode_t;\n\n", "typedef enum atrinik_client_to_server_command {\n"])
     for command in schema["client_to_server"]:
         lines.append(f"    SERVER_CMD_{command['symbol']} = {command['id']},\n")
     lines.extend(
@@ -251,6 +273,7 @@ def render_python(schema: dict[str, object]) -> str:
         generated_banner("#"),
         "from enum import IntEnum\n\n",
         f"PROTOCOL_VERSION = {schema['protocol_version']}\n\n\n",
+        f"TALK_NPC_TARGET_MESSAGE_MAX = {schema['talk_npc_target_message_max']}\n\n\n",
         f"ITEM_NAME_SIZE = {schema['item_name_size']}\n\n\n",
         f"ITEM_EXTRA_MESSAGE_SIZE = {schema['item_extra_message_size']}\n\n\n",
         f"PLAYER_STATUS_MAX_STATUSES = {schema['player_status']['max_statuses']}\n",
@@ -261,6 +284,9 @@ def render_python(schema: dict[str, object]) -> str:
     ]
     for operation in schema["player_status"]["operations"]:
         lines.append(f"    {operation['symbol']} = {operation['id']}\n")
+    lines.extend(["\n\nclass TalkMode(IntEnum):\n"])
+    for mode in schema["talk_modes"]:
+        lines.append(f"    {mode['symbol']} = {mode['id']}\n")
     lines.extend(["\n\nclass ClientToServerCommand(IntEnum):\n"])
     for command in schema["client_to_server"]:
         lines.append(f"    {command['symbol']} = {command['id']}\n")
@@ -283,6 +309,8 @@ def render_python_init(schema: dict[str, object]) -> str:
         "PROTOCOL_VERSION",
         "PlayerStatusOperation",
         "ServerToClientCommand",
+        "TalkMode",
+        "TALK_NPC_TARGET_MESSAGE_MAX",
     ]
     lines = [
         generated_banner("#"),

@@ -23,6 +23,7 @@
  ************************************************************************/
 
 #include <global.h>
+#include <toolkit/mempool.h>
 #include <server_main.h>
 #include <check.h>
 #include <checkstd.h>
@@ -32,12 +33,14 @@
 #include <arch.h>
 #include <loader.h>
 #include <living.h>
+#include <los.h>
 #include <monster.h>
 #include <monster_data.h>
 #include <movement.h>
 #include <object.h>
 #include <object_methods.h>
 #include <player.h>
+#include <perception.h>
 #include <server.h>
 #include <server_item.h>
 #include <skills.h>
@@ -159,7 +162,7 @@ START_TEST(test_move_ob_rejects_invalid_directions) {
 }
 END_TEST
 
-START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
+START_TEST(test_find_enemy_rejects_exit_and_accepts_continuous_tiled_exit_enemy) {
     mapstruct *source;
     object *pl;
     check_setup_env_pl(&source, &pl);
@@ -214,6 +217,19 @@ START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_enemy) {
     ck_assert(!get_rangevector(monster, pl, &rv, RV_DIAGONAL_DISTANCE));
     rv.direction = INT_MIN;
 
+    /* Travel exits are not continuous geometry, even though the historical
+     * neighborhood helper follows them. A missing physical bridge fails closed. */
+    ck_assert(!perception_object_visible(monster, pl));
+    ck_assert_ptr_null(find_enemy(monster, &rv));
+    ck_assert_ptr_null(monster->enemy);
+    ck_assert_ptr_null(monster->attacked_by);
+
+    bridge->tile_map[TILED_EAST] = destination;
+    destination->tile_map[TILED_WEST] = bridge;
+    ck_assert(perception_object_visible(monster, pl));
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
+    rv.direction = INT_MIN;
     ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
                   "find_enemy returned an enemy with stale rv.direction %d",
@@ -251,7 +267,10 @@ START_TEST(test_player_clears_target_outside_map_neighborhood_before_self_heal) 
     object *pl;
     check_setup_env_pl(&map, &pl);
 
+    FREE_AND_COPY_HASH(map->path, "/tests/target-neighborhood-source");
+
     mapstruct *nearby = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(nearby->path, "/tests/target-neighborhood-nearby");
     map->tile_map[TILED_EAST] = nearby;
     nearby->tile_map[TILED_WEST] = map;
 
@@ -270,6 +289,23 @@ START_TEST(test_player_clears_target_outside_map_neighborhood_before_self_heal) 
     /* Exercise the player hook directly; the generic object pre-processing
      * path can consume a dummy player's tick before reaching this hook. */
     ck_assert_ptr_nonnull(OBJECT_METHODS(pl->type)->process_func);
+    OBJECT_METHODS(pl->type)->process_func(pl);
+    /* Physical neighborhood membership alone does not grant camera coverage. */
+    ck_assert_ptr_eq(CONTR(pl)->target_object, pl);
+    ck_assert_uint_eq(CONTR(pl)->target_object_count, 0);
+    ck_assert_ptr_nonnull(queued_command_find(CONTR(pl)->cs, CLIENT_CMD_TARGET));
+
+    /* A continuous neighbor in the current visible viewport is selectable. */
+    object_remove(pl, 0);
+    pl->x = MAP_WIDTH(map) - 1;
+    pl->y = target->y;
+    pl = object_insert_map(pl, map, NULL, INS_NO_MERGE);
+    GET_MAP_SPACE_PTR(nearby, target->x, target->y)->light_value = 1280;
+    ck_assert(perception_player_authorized(CONTR(pl), target));
+    draw_client_map(pl);
+    CONTR(pl)->target_object = target;
+    CONTR(pl)->target_object_count = target->count;
+    socket_buffer_clear(CONTR(pl)->cs);
     OBJECT_METHODS(pl->type)->process_func(pl);
     ck_assert_ptr_eq(CONTR(pl)->target_object, target);
     ck_assert_uint_eq(CONTR(pl)->target_object_count, target->count);
@@ -307,7 +343,7 @@ START_TEST(test_player_clears_target_outside_map_neighborhood_before_self_heal) 
 }
 END_TEST
 
-START_TEST(test_find_enemy_returns_valid_direction_for_exit_tiled_enemy) {
+START_TEST(test_find_enemy_rejects_exit_and_accepts_continuous_exit_tiled_enemy) {
     mapstruct *source;
     object *pl;
     check_setup_env_pl(&source, &pl);
@@ -358,6 +394,19 @@ START_TEST(test_find_enemy_returns_valid_direction_for_exit_tiled_enemy) {
     };
 
     ck_assert(on_same_map(monster, pl));
+    /* Travel exits are not continuous geometry, even though the historical
+     * neighborhood helper follows them. A missing physical bridge fails closed. */
+    ck_assert(!perception_object_visible(monster, pl));
+    ck_assert_ptr_null(find_enemy(monster, &rv));
+    ck_assert_ptr_null(monster->enemy);
+    ck_assert_ptr_null(monster->attacked_by);
+
+    source->tile_map[TILED_EAST] = bridge;
+    bridge->tile_map[TILED_WEST] = source;
+    ck_assert(perception_object_visible(monster, pl));
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
+    rv.direction = INT_MIN;
     ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
                   "find_enemy returned an exit-tiled enemy with stale rv.direction %d",
@@ -376,7 +425,7 @@ START_TEST(test_find_enemy_returns_valid_direction_for_exit_tiled_enemy) {
 }
 END_TEST
 
-START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy) {
+START_TEST(test_find_enemy_rejects_exit_and_accepts_continuous_tiled_exit_tiled_enemy) {
     mapstruct *source;
     object *pl;
     check_setup_env_pl(&source, &pl);
@@ -436,6 +485,19 @@ START_TEST(test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy) {
                                pl,
                                &rv,
                                RV_DIAGONAL_DISTANCE | RV_RECURSIVE_SEARCH | RV_NO_LOAD));
+    rv.direction = INT_MIN;
+    /* Travel exits are not continuous geometry, even though the historical
+     * neighborhood helper follows them. A missing physical bridge fails closed. */
+    ck_assert(!perception_object_visible(monster, pl));
+    ck_assert_ptr_null(find_enemy(monster, &rv));
+    ck_assert_ptr_null(monster->enemy);
+    ck_assert_ptr_null(monster->attacked_by);
+
+    first_bridge->tile_map[TILED_EAST] = second_bridge;
+    second_bridge->tile_map[TILED_WEST] = first_bridge;
+    ck_assert(perception_object_visible(monster, pl));
+    monster->attacked_by = pl;
+    monster->attacked_by_count = pl->count;
     rv.direction = INT_MIN;
     ck_assert_ptr_eq(find_enemy(monster, &rv), pl);
     ck_assert_msg(rv.direction > 0 && rv.direction <= NUM_DIRECTION,
@@ -1555,6 +1617,277 @@ START_TEST(test_underground_city_map_reloads_preserve_active_list) {
 }
 END_TEST
 
+/* These mutation tests use schema-0 maps deliberately: celestial revision
+ * changes cannot substitute for gameplay/camera geometry invalidation. */
+START_TEST(test_los_geometry_tracks_stack_semantics_only) {
+    mapstruct *map = get_empty_map(24, 24);
+    uint64_t epoch = los_geometry_epoch();
+    object *actor = arch_get("kobold");
+    actor->x = 10;
+    actor->y = 10;
+    actor = object_insert_map(actor, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(actor);
+    ck_assert(los_geometry_epoch() == epoch);
+    object_remove(actor, 0);
+    actor->x++;
+    actor = object_insert_map(actor, map, NULL, INS_NO_MERGE);
+    ck_assert(los_geometry_epoch() == epoch);
+
+    object *wall = arch_get("wall_wood_1");
+    wall->x = 10;
+    wall->y = 10;
+    wall = object_insert_map(wall, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(wall);
+    ck_assert(los_geometry_epoch() > epoch);
+    ck_assert(GET_MAP_FLAGS(map, 10, 10) & P_BLOCKSVIEW);
+    epoch = los_geometry_epoch();
+    object_update(wall, UP_OBJ_ALL);
+    ck_assert(los_geometry_epoch() == epoch);
+
+    object *duplicate = arch_get("wall_wood_1");
+    duplicate->x = 10;
+    duplicate->y = 10;
+    duplicate = object_insert_map(duplicate, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(duplicate);
+    ck_assert(los_geometry_epoch() == epoch);
+    object_remove(duplicate, 0);
+    object_destroy(duplicate);
+    ck_assert(los_geometry_epoch() == epoch);
+
+    CLEAR_FLAG(wall, FLAG_BLOCKSVIEW);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    ck_assert(!(GET_MAP_FLAGS(map, 10, 10) & P_BLOCKSVIEW));
+    epoch = los_geometry_epoch();
+    SET_FLAG(wall, FLAG_HIDDEN);
+    object_update(wall, UP_OBJ_FLAGFACE);
+    ck_assert(los_geometry_epoch() > epoch);
+    epoch = los_geometry_epoch();
+    SET_FLAG(wall, FLAG_IS_FLOOR);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    epoch = los_geometry_epoch();
+    CLEAR_FLAG(wall, FLAG_IS_FLOOR);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    epoch = los_geometry_epoch();
+    CLEAR_FLAG(wall, FLAG_HIDDEN);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    epoch = los_geometry_epoch();
+    /* A transparent, visible wall still affects camera boundary retention. */
+    object_remove(wall, 0);
+    ck_assert(los_geometry_epoch() > epoch);
+    object_destroy(wall);
+    object_remove(actor, 0);
+    object_destroy(actor);
+    delete_map(map);
+}
+END_TEST
+
+START_TEST(test_los_geometry_direct_position_refresh) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object_remove(pl, 0);
+    pl->x = 12;
+    pl->y = 12;
+    pl = object_insert_map(pl, map, NULL, 0);
+    object *wall = arch_get("wall_wood_1");
+    wall->x = 13;
+    wall->y = 12;
+    wall = object_insert_map(wall, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(wall);
+    update_los(pl);
+    ck_assert(!los_player_has_geometric_sight(pl, map, 14, 12));
+    uint64_t epoch = los_geometry_epoch();
+    CLEAR_FLAG(wall, FLAG_BLOCKSVIEW);
+    SET_MAP_FLAGS(map, 13, 12, GET_MAP_FLAGS(map, 13, 12) | P_NEED_UPDATE);
+    update_position(map, 13, 12);
+    ck_assert(los_geometry_epoch() > epoch);
+    ck_assert(los_player_has_geometric_sight(pl, map, 14, 12));
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    epoch = los_geometry_epoch();
+    SET_FLAG(wall, FLAG_BLOCKSVIEW);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    ck_assert(!los_player_has_geometric_sight(pl, map, 14, 12));
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    object_remove(pl, 0);
+    object_destroy(pl);
+    delete_map(map);
+}
+END_TEST
+
+START_TEST(test_los_geometry_map_arrival_unlink_and_reincarnation) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/tests/los-epoch-lower");
+    map->level_min = 0;
+    map->level_max = 1;
+    map_set_tile(map, TILED_UP, "/tests/los-epoch-upper");
+    update_los(pl);
+    uint64_t epoch = los_geometry_epoch();
+    mapstruct *upper = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(upper->path, "/tests/los-epoch-upper");
+    upper->level_min = 0;
+    upper->level_max = 1;
+    upper->coords[2] = 1;
+    map_set_tile(upper, TILED_DOWN, map->path);
+    ck_assert_ptr_eq(map->tile_map[TILED_UP], upper);
+    ck_assert_ptr_eq(upper->tile_map[TILED_DOWN], map);
+    ck_assert(los_geometry_epoch() > epoch);
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    epoch = los_geometry_epoch();
+    tag_t old_count = upper->count;
+    delete_map(upper);
+    ck_assert_ptr_null(map->tile_map[TILED_UP]);
+    ck_assert(los_geometry_epoch() > epoch);
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    epoch = los_geometry_epoch();
+    upper = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(upper->path, "/tests/los-epoch-upper");
+    upper->level_min = 0;
+    upper->level_max = 1;
+    upper->coords[2] = 1;
+    ck_assert(upper->count != old_count);
+    map_set_tile(upper, TILED_DOWN, map->path);
+    ck_assert(los_geometry_epoch() > epoch);
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    delete_map(upper);
+    object_remove(pl, 0);
+    object_destroy(pl);
+    delete_map(map);
+}
+END_TEST
+
+START_TEST(test_retained_object_references_validate_storage_before_identity) {
+    mapstruct *map = get_empty_map(8, 8);
+    object *owner = object_get();
+    mempool_struct *pool = mempool_find("objects");
+    ck_assert_ptr_nonnull(pool);
+    size_t num_held = pool->nrof_free[0];
+    object **held = xcalloc(MAX(num_held, 1), sizeof(*held));
+    for (size_t i = 0; i < num_held; i++) {
+        held[i] = object_get();
+    }
+    /* Map insertion requires an archetype. Allocate it only after draining
+     * the free chunks so the target still owns the fresh puddle below. */
+    object *target = arch_get("letter");
+    ck_assert_ptr_nonnull(target);
+    tag_t count = target->count;
+    mempool_chunk_struct *storage = pool->puddlelist[0]->first_chunk;
+    ck_assert_ptr_eq(MEM_POOLDATA(target), storage);
+    ck_assert(object_storage_is_owned(target));
+    ck_assert(object_reference_matches(target, count));
+    ck_assert(!object_reference_is_current(target, count));
+    ck_assert(!object_reference_matches(target, 0));
+    ck_assert(!object_reference_matches(target, count + 1));
+    object foreign = {0};
+    ck_assert(!object_storage_is_owned(&foreign));
+    ck_assert(!object_storage_is_owned((const object *)((uintptr_t)target + 1)));
+    ck_assert(!object_storage_is_owned(NULL));
+
+    target->x = target->y = 3;
+    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+    ck_assert(object_reference_is_current(target, count));
+    object_owner_set(owner, target);
+    object_remove(target, REMOVE_NO_WALK_OFF);
+    ck_assert(object_reference_matches(target, count));
+    ck_assert(!object_reference_is_current(target, count));
+    ck_assert_ptr_eq(object_owner(owner), target);
+    object_destroy(target);
+    ck_assert(!object_storage_is_owned(target));
+    object *replacement = object_get();
+    ck_assert_ptr_eq(replacement, target);
+    ck_assert(!object_reference_matches(target, count));
+    ck_assert(object_reference_matches(replacement, replacement->count));
+    object_destroy(replacement);
+    for (size_t i = 0; i < num_held; i++) {
+        object_destroy(held[i]);
+    }
+    xfree(held);
+    uint64_t epoch = object_reclamation_epoch();
+    ck_assert_uint_gt(mempool_reclaim(pool), 0);
+    ck_assert(!object_reclamation_is_current(epoch));
+    for (mempool_puddle_struct *puddle = pool->puddlelist[0]; puddle != NULL; puddle = puddle->next) {
+        ck_assert_ptr_ne(puddle->first_chunk, storage);
+    }
+    ck_assert(!object_storage_is_owned(target));
+    ck_assert(!object_reference_matches(target, count));
+    ck_assert(!object_reference_is_current(target, count));
+    ck_assert_ptr_null(object_owner(owner));
+    object_destroy(owner);
+    delete_map(map);
+}
+END_TEST
+
+START_TEST(test_later_actors_reject_a_reclaimed_shared_target) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object *other = player_get_dummy("retained-other-player", NULL);
+    object_remove(other, 0);
+    other->x = other->y = 4;
+    other = object_insert_map(other, map, NULL, 0);
+    object *npc = arch_get("raas");
+    npc->x = npc->y = 5;
+    npc = object_insert_map(npc, map, NULL, INS_NO_MERGE);
+    monster_data_init(npc);
+    SET_FLAG(npc, FLAG_UNAGGRESSIVE);
+    SET_FLAG(npc, FLAG_STAND_STILL);
+    npc->stats.Int = 0;
+
+    mempool_struct *pool = mempool_find("objects");
+    size_t num_held = pool->nrof_free[0];
+    object **held = xcalloc(MAX(num_held, 1), sizeof(*held));
+    for (size_t i = 0; i < num_held; i++) {
+        held[i] = object_get();
+    }
+    object *target = arch_get("raas");
+    target->x = target->y = 6;
+    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+    monster_data_init(target);
+    tag_t count = target->count;
+    mempool_chunk_struct *storage = pool->puddlelist[0]->first_chunk;
+    for (size_t i = 0; i < num_held; i++) {
+        object_destroy(held[i]);
+    }
+    xfree(held);
+    CONTR(pl)->target_object = CONTR(other)->target_object = target;
+    CONTR(pl)->target_object_count = CONTR(other)->target_object_count = count;
+    npc->enemy = npc->attacked_by = target;
+    npc->enemy_count = npc->attacked_by_count = count;
+    object_remove(target, REMOVE_NO_WALK_OFF);
+    object_destroy(target);
+    ck_assert_uint_gt(mempool_reclaim(pool), 0);
+    for (mempool_puddle_struct *puddle = pool->puddlelist[0]; puddle != NULL; puddle = puddle->next) {
+        ck_assert_ptr_ne(puddle->first_chunk, storage);
+    }
+
+    /* These are later actions: their newly captured epochs cannot establish
+     * ownership of the target retained by several independent actors. */
+    ck_assert(!player_target_is_in_map_neighborhood(CONTR(pl)));
+    ck_assert(!player_target_is_in_map_neighborhood(CONTR(other)));
+    ck_assert(!target_player_authorized(CONTR(pl), target, NULL));
+    send_target_command(CONTR(pl));
+    esrv_update_stats(CONTR(other));
+    ck_assert_ptr_eq(CONTR(pl)->target_object, pl);
+    ck_assert_ptr_eq(CONTR(other)->target_object, other);
+    rv_vector rv;
+    ck_assert_ptr_null(find_enemy(npc, &rv));
+    ck_assert_ptr_null(npc->enemy);
+    object_process(npc);
+    ck_assert_ptr_null(npc->enemy);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("object");
     TCase *tc_core = tcase_create("Core");
@@ -1566,13 +1899,18 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_movement, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_retained_object_references_validate_storage_before_identity);
+    tcase_add_test(tc_core, test_later_actors_reject_a_reclaimed_shared_target);
+    tcase_add_test(tc_core, test_los_geometry_tracks_stack_semantics_only);
+    tcase_add_test(tc_core, test_los_geometry_direct_position_refresh);
+    tcase_add_test(tc_core, test_los_geometry_map_arrival_unlink_and_reincarnation);
     tcase_add_test(tc_core, test_return_home_waypoint_reactivation_resets_retry_progress);
     suite_add_tcase(s, tc_movement);
     tcase_add_test(tc_movement, test_move_ob_rejects_invalid_directions);
-    tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_enemy);
+    tcase_add_test(tc_core, test_find_enemy_rejects_exit_and_accepts_continuous_tiled_exit_enemy);
     tcase_add_test(tc_core, test_player_clears_target_outside_map_neighborhood_before_self_heal);
-    tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_exit_tiled_enemy);
-    tcase_add_test(tc_core, test_find_enemy_returns_valid_direction_for_tiled_exit_tiled_enemy);
+    tcase_add_test(tc_core, test_find_enemy_rejects_exit_and_accepts_continuous_exit_tiled_enemy);
+    tcase_add_test(tc_core, test_find_enemy_rejects_exit_and_accepts_continuous_tiled_exit_tiled_enemy);
     tcase_add_test(tc_core, test_object_can_merge);
     tcase_add_test(tc_core, test_object_custody_provenance);
     tcase_add_test(tc_core, test_object_custody_quantity_provenance);

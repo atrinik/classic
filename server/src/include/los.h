@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -26,6 +26,9 @@
 #define LOS_H
 
 #include <decls.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 /**
  * @file
@@ -36,11 +39,55 @@
 
 extern void init_block(void);
 
-extern void set_block(int x, int y, int bx, int by);
+/** Camera presentation is independent of physical sight. */
+typedef enum los_camera_visibility {
+    LOS_CAMERA_HIDDEN,
+    LOS_CAMERA_WALL_BOUNDARY,
+    LOS_CAMERA_BOUNDARY,
+    LOS_CAMERA_VISIBLE,
+} los_camera_visibility;
+
+/** Fresh checks; do not use mutable viewport masks to authorize actions. */
+bool los_player_can_see_cell(object *pl, mapstruct *map, int x, int y);
+bool los_player_has_geometric_sight(object *pl, mapstruct *map, int x, int y);
+los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, int y);
+bool los_camera_layer_visible(los_camera_visibility visibility, int layer);
+
+/** Server-thread geometry generation. Never wraps or grants action authority. */
+uint64_t los_geometry_epoch(void);
+void los_geometry_changed(void);
+/** Draw-transaction mutation generation, independent of reusable LOS masks. */
+uint64_t los_publication_epoch(void);
+void los_publication_changed(void);
+/** Checks retained masks against current geometry and all observer inputs. */
+bool los_view_is_current(object *pl);
 
 extern void update_los(object *op);
 
 extern void clear_los(object *op);
+
+#ifdef ATRINIK_TESTING
+/** Boundary injection for isolated counter tests; does not invalidate masks. */
+void los_epochs_set_for_test(uint64_t geometry, uint64_t publication);
+/** Cumulative fresh-action work; no full viewport rebuilds or column allocations. */
+uint64_t los_action_camera_queries_for_test(void);
+uint64_t los_action_camera_cells_for_test(void);
+uint64_t los_action_camera_flood_cells_for_test(void);
+uint64_t los_view_builds_for_test(void);
+uint64_t los_view_cache_hits_for_test(void);
+/** Counts for the last viewport update; fresh physical queries are excluded. */
+size_t los_view_sight_checks_for_test(int depth);
+size_t los_view_camera_pruned_for_test(int depth);
+/** Default cell resolution calls in the last transient viewport cache. */
+size_t los_view_cell_resolves_for_test(void);
+/** Zero-volume proofs and actual ray traversals in the last viewport update. */
+size_t los_view_clear_proofs_for_test(int depth);
+size_t los_view_ray_traces_for_test(int depth);
+/** Compare every query in one fresh viewport scope against the default resolver. */
+bool los_view_matches_default_for_test(object *pl);
+/** Reference update using default resolution for every cell and ray step. */
+void los_update_uncached_for_test(object *pl);
+#endif
 
 extern int obj_in_line_of_sight(object *obj, rv_vector *rv);
 

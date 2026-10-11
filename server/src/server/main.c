@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,6 +29,7 @@
 
 #include <global.h>
 #include <light.h>
+#include <propagation.h>
 #include <admin_shutdown.h>
 #include <exploration.h>
 #include <access_server.h>
@@ -283,7 +284,7 @@ void process_events(void) {
 
             object_process(op);
 
-            if (OBJECT_DESTROYED(op, tag)) {
+            if (!object_reference_matches(op, tag)) {
                 continue;
             }
         }
@@ -293,7 +294,8 @@ void process_events(void) {
         }
 
         if (op->anim_flags & ANIM_FLAG_STOP_ATTACKING) {
-            if (op->enemy == NULL || !attack_is_melee_range(op, op->enemy)) {
+            if (!object_reference_is_current(op->enemy, op->enemy_count) ||
+                !attack_is_melee_range(op, op->enemy)) {
                 op->anim_flags &= ~ANIM_FLAG_ATTACKING;
             }
 
@@ -315,7 +317,7 @@ void process_events(void) {
                 if (op->anim_flags & ANIM_FLAG_MOVING) {
                     if ((op->anim_flags & ANIM_FLAG_ATTACKING &&
                          !(op->anim_flags & ANIM_FLAG_STOP_ATTACKING)) ||
-                        op->type == PLAYER || !OBJECT_VALID(op->enemy, op->enemy_count)) {
+                        op->type == PLAYER || !object_reference_is_current(op->enemy, op->enemy_count)) {
                         op->anim_flags |= ANIM_FLAG_STOP_MOVING;
                     }
                 }
@@ -668,6 +670,7 @@ void main_process(void) {
 
     /* "do" something with objects with speed */
     process_events();
+    propagation_tick();
     stage_started_us = server_stage_finished("process-events", stage_started_us);
 
     /* Removes unused maps after a certain timeout */
@@ -683,6 +686,53 @@ void main_process(void) {
 
     trigger_global_event(GEVENT_TICK, NULL, NULL);
     server_stage_finished("tick-plugins", stage_started_us);
+
+    /* Atrinik.Process() is the offline plugin-test tick. Its harness exits
+     * before the ordinary server loop and therefore has no socket post-pass.
+     * Queue normal MAP2 snapshots so these tests exercise the same published
+     * target identity as a playing client, without writing to a socket. */
+    if (settings.plugin_unit_tests) {
+        /* ASK_SHOW may remove this player or any later player, including
+         * their controller, socket and object storage. Snapshot identities
+         * before callbacks and admit each entry through the current live list;
+         * even a saved next-controller pointer is unsafe after drawing. */
+        size_t player_count = 0;
+        for (player *pl = first_player; pl != NULL; pl = pl->next) {
+            HARD_ASSERT(player_count != SIZE_MAX);
+            player_count++;
+        }
+        struct player_snapshot {
+            object *ob;
+            tag_t count;
+            player *controller;
+            socket_struct *socket;
+        } *players;
+        HARD_ASSERT(player_count <= SIZE_MAX / sizeof(*players));
+        players = xcalloc(player_count, sizeof(*players));
+        size_t player_index = 0;
+        for (player *pl = first_player; pl != NULL; pl = pl->next) {
+            players[player_index++] = (struct player_snapshot) {
+                .ob = pl->ob,
+                .count = pl->ob != NULL ? pl->ob->count : 0,
+                .controller = pl,
+                .socket = pl->cs,
+            };
+        }
+        for (player_index = 0; player_index < player_count; player_index++) {
+            const struct player_snapshot *snapshot = &players[player_index];
+            object *observer = snapshot->ob;
+            if (!player_connection_is_current(observer, snapshot->count,
+                                              snapshot->controller, snapshot->socket)) {
+                continue;
+            }
+            if (snapshot->socket->state == ST_PLAYING && OBJECT_ACTIVE(observer) &&
+                observer->env == NULL && observer->map != NULL &&
+                observer->map->in_memory == MAP_IN_MEMORY && observer->map->spaces != NULL) {
+                draw_client_map(observer);
+            }
+        }
+        free(players);
+    }
 }
 
 /**

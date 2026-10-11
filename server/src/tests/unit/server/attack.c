@@ -34,6 +34,7 @@
 #include <monster_data.h>
 #include <object_methods.h>
 #include <player.h>
+#include <perception.h>
 #include <skills.h>
 #include <toolkit/packet.h>
 
@@ -45,6 +46,23 @@ static object *attack_test_target(mapstruct *map, object *pl) {
     object *target = arch_get("kobold");
     target->x = pl->x + 1;
     target->y = pl->y;
+    /* Each ordinary actor needs its own visible physical cell. Two heads on
+     * one living sub-layer would publish only the top actor's identity. */
+    if (GET_MAP_FLAGS(map, target->x, target->y) & (P_IS_PLAYER | P_IS_MONSTER)) {
+        bool found = false;
+        for (int i = 1; i <= SIZEOFFREE3; i++) {
+            int x = pl->x + freearr_x[i], y = pl->y + freearr_y[i];
+            if (x < 0 || y < 0 || x >= MAP_WIDTH(map) || y >= MAP_HEIGHT(map) ||
+                (GET_MAP_FLAGS(map, x, y) & (P_IS_PLAYER | P_IS_MONSTER))) {
+                continue;
+            }
+            target->x = x;
+            target->y = y;
+            found = true;
+            break;
+        }
+        ck_assert_msg(found, "No separate visible actor cell in combat fixture");
+    }
     target = object_insert_map(target, map, NULL, INS_NO_MERGE);
     monster_data_init(target);
     target = HEAD(target);
@@ -54,6 +72,10 @@ static object *attack_test_target(mapstruct *map, object *pl) {
     target->block = 0;
     target->absorb = 0;
     memset(target->protection, 0, sizeof(target->protection));
+    /* Combat selection uses the same lit, queued MAP2 identity as gameplay. */
+    GET_MAP_SPACE_PTR(map, target->x, target->y)->light_value = 1280;
+    CONTR(pl)->cs->state = ST_PLAYING;
+    draw_client_map(pl);
     return target;
 }
 
@@ -133,6 +155,8 @@ static void attack_test_assert_target_packet(object *pl, object *target) {
     ck_assert(packet_reader_read_string(&reader, VS(name)));
     ck_assert_str_eq(name, target->name);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), target->level);
+    ck_assert_uint_eq(packet_reader_read_uint32(&reader), target->count);
+    ck_assert_int_eq(packet_reader_read_int8(&reader), 0);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), CONTR(pl)->combat);
     ck_assert_uint_eq(packet_reader_read_uint8(&reader), CONTR(pl)->combat_force);
     ck_assert(packet_reader_finish(&reader));
@@ -224,6 +248,40 @@ START_TEST(test_player_hurt_sound_selection_and_damage_gate) {
 }
 END_TEST
 
+START_TEST(test_retaliation_requires_current_actor_publication) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/tests/attack-unpublished");
+    CONTR(pl)->cs->state = ST_PLAYING;
+    CONTR(pl)->target_object = NULL;
+    CONTR(pl)->target_object_count = 0;
+    CONTR(pl)->combat = 0;
+    object *attacker = arch_get("kobold");
+    attacker->x = pl->x + 1;
+    attacker->y = pl->y;
+    attacker = object_insert_map(attacker, map, NULL, INS_NO_MERGE);
+    monster_data_init(attacker);
+    attacker->stats.hp = attacker->stats.maxhp = 1000;
+    GET_MAP_SPACE_PTR(map, attacker->x, attacker->y)->light_value = 1280;
+    ck_assert(perception_player_authorized(CONTR(pl), attacker));
+    ck_assert(!target_player_authorized(CONTR(pl), attacker, NULL));
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_null(CONTR(pl)->target_object);
+    ck_assert_uint_eq(CONTR(pl)->combat, 0);
+    ck_assert_ptr_null(attack_test_target_packet(pl));
+
+    draw_client_map(pl);
+    ck_assert(target_player_authorized(CONTR(pl), attacker, NULL));
+    socket_buffer_clear(CONTR(pl)->cs);
+    ck_assert_int_gt(attack_hit(pl, attacker, 1), 0);
+    ck_assert_ptr_eq(CONTR(pl)->target_object, attacker);
+    ck_assert_uint_eq(CONTR(pl)->combat, 1);
+    attack_test_assert_target_packet(pl, attacker);
+}
+END_TEST
+
 START_TEST(test_player_retaliates_when_no_target_or_combat_is_disabled) {
     mapstruct *map;
     object *pl;
@@ -248,6 +306,8 @@ START_TEST(test_player_retaliates_when_no_target_or_combat_is_disabled) {
     attack_test_assert_target_packet(pl, attacker);
 
     object *old_target = attack_test_target(map, pl);
+    ck_assert(target_player_authorized(CONTR(pl), attacker, NULL));
+    ck_assert(target_player_authorized(CONTR(pl), old_target, NULL));
     CONTR(pl)->target_object = old_target;
     CONTR(pl)->target_object_count = old_target->count;
     CONTR(pl)->combat = 0;
@@ -273,6 +333,8 @@ START_TEST(test_player_retaliation_preserves_active_target) {
     target->y = pl->y;
     target = object_insert_map(target, map, NULL, INS_NO_MERGE);
     ck_assert_ptr_nonnull(target);
+    GET_MAP_SPACE_PTR(map, target->x, target->y)->light_value = 1280;
+    draw_client_map(pl);
     ck_assert(!attack_is_melee_range(pl, target));
     target->enemy = pl;
     target->enemy_count = pl->count;
@@ -300,6 +362,8 @@ START_TEST(test_player_retaliation_replaces_non_aggro_target) {
     target->y = pl->y;
     target = object_insert_map(target, map, NULL, INS_NO_MERGE);
     ck_assert_ptr_nonnull(target);
+    GET_MAP_SPACE_PTR(map, target->x, target->y)->light_value = 1280;
+    draw_client_map(pl);
     CONTR(pl)->target_object = target;
     CONTR(pl)->target_object_count = target->count;
     CONTR(pl)->combat = 1;
@@ -319,6 +383,8 @@ START_TEST(test_player_retaliation_replaces_unavailable_targets) {
 
     object *attacker = attack_test_target(map, pl);
     object *old_target = attack_test_target(map, pl);
+    ck_assert(target_player_authorized(CONTR(pl), attacker, NULL));
+    ck_assert(target_player_authorized(CONTR(pl), old_target, NULL));
 
     CONTR(pl)->target_object = old_target;
     CONTR(pl)->target_object_count = old_target->count + 1;
@@ -911,6 +977,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_retaliation_requires_current_actor_publication);
     tcase_add_test(tc_core, test_player_retaliates_when_no_target_or_combat_is_disabled);
     tcase_add_test(tc_core, test_player_retaliation_preserves_active_target);
     tcase_add_test(tc_core, test_player_retaliation_replaces_non_aggro_target);

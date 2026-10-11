@@ -105,4 +105,4 @@ includes attributions and provenance evidence.
 [Classic admission contract](RENDEZVOUS_ADMISSION.md) owns the mandatory pre-upgrade
 challenge/work identities in `schema/rendezvous-admission.json`, their generated
 C/Python bindings and shared synthetic fixture. Run the existing generator and
-protocol tests after transport schema edits; game command revision stays1083.
+protocol tests after transport schema edits; game command revision stays 1084.

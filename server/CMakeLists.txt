@@ -156,8 +156,8 @@ endif ()
 file(STRINGS
     "${atrinik_protocol_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
     ATRINIK_PROTOCOL_VERSION_LINE REGEX "^#define ATRINIK_PROTOCOL_VERSION [0-9]+U$")
-if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1083U$")
-    message(FATAL_ERROR "Server requires classic game protocol v1083")
+if (NOT ATRINIK_PROTOCOL_VERSION_LINE MATCHES " 1084U$")
+    message(FATAL_ERROR "Server requires classic game protocol v1084")
 endif ()
 if (NOT TARGET Atrinik::Core)
     set(LIBATRINIK_PACKAGE_LAYOUT ON CACHE BOOL "" FORCE)
@@ -468,6 +468,7 @@ if (BUILD_TESTING AND NOT MINGW)
             ${CMAKE_CURRENT_SOURCE_DIR}/server.cfg
             ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/content_benchmark
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_actor_callbacks.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_books.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_calendar.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_fail.py

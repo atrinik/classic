@@ -29,6 +29,8 @@
  * @author Zoey Rose
  */
 
+#include <atrinik/protocol/target.h>
+#include <atrinik/protocol/talk.h>
 #include <mouse.h>
 #include <ctype.h>
 #include <errno.h>
@@ -36,13 +38,13 @@
 #include <surface_primitives.h>
 #include <client_socket.h>
 #include <client.h>
+#include <config.h>
 #include <commands.h>
 #include <effects.h>
 #include <event.h>
 #include <gpu_map_renderer.h>
 #include <gpu_renderer.h>
 #include <image.h>
-#include <keybind.h>
 #include <main.h>
 #include <misc.h>
 #include <map.h>
@@ -1725,7 +1727,11 @@ static bool tiles_debug = false;
 static bool map_interaction_test_active;
 static int map_interaction_test_moves;
 static int map_interaction_test_targets;
+static packet_struct *map_interaction_test_target_packet;
 static int map_interaction_test_talks;
+static bool map_interaction_test_target_available;
+static map_target_struct map_interaction_test_mouse_target;
+static packet_struct *map_interaction_test_talk_packet;
 static bool map_ui_test_active;
 static int map_ui_test_names;
 static int map_ui_test_targets;
@@ -4431,7 +4437,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
         context->tiles_num++;
     }
 
-    if (data->primary_level && data->layer == LAYER_LIVING && !data->cell->fow &&
+    if (data->layer == LAYER_LIVING && !data->cell->fow &&
         (!transient || map_visibility_fade_interactive(fade)) &&
         map_cell_actor_record_read(data->cell, data->sub_layer)->probe != 0) {
         map_render_context_t *context = data->render_context;
@@ -8245,20 +8251,14 @@ static void send_move_path(int tx, int ty) {
  * @param count
  * NPC's UID.
  */
-static void send_target(int x, int y, uint32_t count) {
+static void send_target(int x, int y, int8_t depth, uint32_t count) {
     packet_struct *packet;
 
     if ((x < 0 || y < 0 || x >= map_width || y >= map_height) && !(x == -1 && y == -1)) {
         return;
     }
 
-#ifdef ATRINIK_WIDGET_TESTS
-    if (map_interaction_test_active) {
-        map_interaction_test_targets++;
-    }
-#endif
-
-    packet = packet_new(SERVER_CMD_TARGET, 16, 0);
+    packet = packet_new(SERVER_CMD_TARGET, TARGET_SELECT_PAYLOAD_SIZE, 0);
 
     if (x == -1 && y == -1) {
         packet_writer_write_uint8(packet, CMD_TARGET_CLEAR);
@@ -8266,9 +8266,20 @@ static void send_target(int x, int y, uint32_t count) {
         packet_writer_write_uint8(packet, CMD_TARGET_MAPXY);
         packet_writer_write_uint8(packet, x);
         packet_writer_write_uint8(packet, y);
+        packet_writer_write_int8(packet, depth);
         packet_writer_write_uint32(packet, count);
     }
 
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_interaction_test_active) {
+        map_interaction_test_targets++;
+        if (map_interaction_test_target_packet != NULL) {
+            packet_free(map_interaction_test_target_packet);
+        }
+        map_interaction_test_target_packet = packet;
+        return;
+    }
+#endif
     socket_send_packet(packet);
 }
 
@@ -8299,82 +8310,121 @@ static int map_target_cmp(const void *a, const void *b) {
     } else if (dist1 > dist2) {
         return 1;
     } else {
-        return 0;
+        const map_target_struct *left = a, *right = b;
+        if (left->depth != right->depth) {
+            return left->depth < right->depth ? -1 : 1;
+        }
+        return left->count < right->count ? -1 : left->count > right->count;
     }
 }
 
-/**
- * Target something on the map.
- * @param is_friend
- * 1 if targeting friendlies only.
- */
-void map_target_handle(uint8_t is_friend) {
+typedef struct map_target_seen {
+    uint64_t key;
+    UT_hash_handle hh;
+} map_target_seen_t;
+
+/** Collect exact identities from all current MAP2 levels without changing selection. */
+static UT_array *map_target_collect(uint8_t is_friend) {
+    /* UT_array retains this descriptor after the collected array is returned. */
+    static const UT_icd icd = {sizeof(map_target_struct), NULL, NULL, NULL};
+    UT_array *targets;
+    utarray_new(targets, &icd);
+    if (map_state_transaction_active()) {
+        return targets;
+    }
     int x, y, layer;
     map_cell_t *cell;
-    UT_array *targets;
-    UT_icd icd = {sizeof(map_target_struct), NULL, NULL, NULL};
-    map_target_struct *p;
-    uint32_t curr_target;
+    map_target_seen_t *seen = NULL;
+    size_t saved_level = current_level_index;
 
-    if (cpl.target_is_friend != is_friend) {
-        cpl.target_object_index = 0;
-    }
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        if (!(map_level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) ||
+            !map_select_level(depth, false)) {
+            continue;
+        }
 
-    utarray_new(targets, &icd);
-    curr_target = 0;
+        for (x = 0; x < map_width; x++) {
+            for (y = 0; y < map_height; y++) {
+                cell = MAP_CELL_GET_MIDDLE(x, y);
 
-    for (x = 0; x < map_width; x++) {
-        for (y = 0; y < map_height; y++) {
-            cell = MAP_CELL_GET_MIDDLE(x, y);
+                if (cell->fow) {
+                    continue;
+                }
 
-            if (cell->fow) {
-                continue;
-            }
+                for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    layer = GET_MAP_LAYER(LAYER_LIVING, sub_layer);
+                    if (map_cell_layer_record_read(cell, layer)->face &&
+                        map_visibility_fade_interactive(
+                            &map_cell_layer_record_read(cell, layer)->visibility) &&
+                        map_cell_actor_record_read(cell, sub_layer)->target_object_count &&
+                        map_cell_actor_record_read(cell, sub_layer)->target_is_friend == is_friend) {
+                        map_target_struct target;
 
-            for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                layer = GET_MAP_LAYER(LAYER_LIVING, sub_layer);
-                if (map_cell_layer_record_read(cell, layer)->face &&
-                    map_cell_actor_record_read(cell, sub_layer)->target_object_count &&
-                    map_cell_actor_record_read(cell, sub_layer)->target_is_friend == is_friend) {
-                    map_target_struct target;
-
-                    target.count = map_cell_actor_record_read(cell, sub_layer)->target_object_count;
-                    target.x = x;
-                    target.y = y;
-                    utarray_push_back(targets, &target);
-
-                    if (map_cell_actor_record_read(cell, sub_layer)->probe != 0) {
-                        curr_target = target.count;
+                        target.count =
+                            map_cell_actor_record_read(cell, sub_layer)->target_object_count;
+                        target.x = x;
+                        target.y = y;
+                        target.depth = depth;
+                        uint64_t key = ((uint64_t)target.count << 8U) |
+                                       (uint8_t)(depth + MAP2_MAX_DEPTH);
+                        map_target_seen_t *entry;
+                        HASH_FIND(hh, seen, &key, sizeof(key), entry);
+                        if (entry == NULL) {
+                            entry = xcalloc(1, sizeof(*entry));
+                            entry->key = key;
+                            HASH_ADD(hh, seen, key, sizeof(entry->key), entry);
+                            utarray_push_back(targets, &target);
+                        }
                     }
                 }
             }
         }
     }
+    current_level_index = saved_level;
+    cells = level_cells[saved_level];
 
-    utarray_sort(targets, map_target_cmp);
+    map_target_seen_t *entry, *next;
+    HASH_ITER(hh, seen, entry, next) {
+        HASH_DEL(seen, entry);
+        free(entry);
+    }
+    return targets;
+}
 
-    if (cpl.target_object_index >= utarray_len(targets)) {
-        cpl.target_object_index = 0;
+/** Target the next current actor of the requested friend class. */
+void map_target_handle(uint8_t is_friend) {
+    UT_array *targets = map_target_collect(is_friend);
+    size_t length = utarray_len(targets);
+    /* Fresh empty UT_arrays have a null backing pointer. qsort's base must
+     * remain nonnull even when its element count is zero. */
+    if (length > 1) {
+        utarray_sort(targets, map_target_cmp);
     }
 
-    if (cpl.target_object_index == 0) {
-        p = (map_target_struct *)utarray_front(targets);
-
-        if (p != NULL && p->count == curr_target) {
-            cpl.target_object_index++;
+    /* Only complete TARGET results advance the anchor. A SELECT may be
+     * silently dropped by server pacing; repeated presses before its result
+     * must retry the same next identity, rather than skip an unseen actor.
+     * Manual selections, SELF and reconnect already publish this same state. */
+    size_t next = 0;
+    for (size_t index = 0; index < length; index++) {
+        const map_target_struct *target = (const map_target_struct *)utarray_eltptr(targets, index);
+        if (target->count == cpl.target_actor_count &&
+            target->depth == cpl.target_relative_depth) {
+            next = (index + 1) % length;
+            break;
         }
     }
 
-    p = (map_target_struct *)utarray_eltptr(targets, cpl.target_object_index);
+    const map_target_struct *p = (const map_target_struct *)utarray_eltptr(targets, next);
 
     if (p != NULL) {
-        send_target(p->x, p->y, p->count);
-        cpl.target_object_index++;
-    } else if (cpl.target_is_friend != is_friend) {
-        send_target(-1, -1, 0);
+        send_target(p->x, p->y, p->depth, p->count);
+    } else if (cpl.target_actor_count != 0) {
+        /* No live actor of the requested class remains. Clear the selected
+         * identity even when TARGET's display class differs from MAP2's
+         * candidate class, or the selected actor has left the viewport. */
+        send_target(-1, -1, 0, 0);
     }
-
-    cpl.target_is_friend = is_friend;
 
     utarray_free(targets);
 }
@@ -8526,6 +8576,101 @@ static void menu_map_walk_here(widgetdata *widget, widgetdata *menuitem, SDL_Eve
     }
 }
 
+/** Resolve the frontmost current living sprite at a screen coordinate. */
+static bool map_mouse_target(int mx, int my, map_target_struct *target) {
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_interaction_test_active) {
+        *target = map_interaction_test_mouse_target;
+        return map_interaction_test_target_available;
+    }
+#endif
+    if (map_state_transaction_active() || cur_widget[MAP_ID] == NULL ||
+        cur_widget[MAP_ID]->surface == NULL ||
+        !map_retained_projection_matches(cur_widget[MAP_ID]->surface)) {
+        return false;
+    }
+    map_mouse_to_local_coords(&mx, &my);
+    double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
+    if (zoom <= 0) {
+        return false;
+    }
+    mx /= zoom;
+    my /= zoom;
+    size_t saved_level = current_level_index;
+    const map_render_command_t *owner = NULL;
+    uint32_t count = 0;
+    map_render_context_t *context = &map_retained_primary_context;
+    for (size_t index = 0; index < context->commands_num; index++) {
+        const map_render_command_t *command = &context->commands[index];
+        if (command->object_layer != LAYER_LIVING || command->presentation_stale ||
+            command->fogged || command->local_player || command->bounds_w <= 0 ||
+            mx < command->bounds_x || mx >= command->bounds_x + command->bounds_w ||
+            my < command->bounds_y || my >= command->bounds_y + command->bounds_h ||
+            (owner != NULL && map_render_command_compare(owner, command) >= 0)) {
+            continue;
+        }
+        map_cell_t *cell = NULL;
+        if (!map_retained_cell_matches(command->depth,
+                                        command->tile_x,
+                                        command->tile_y,
+                                        command->record_identity,
+                                        command->cell_generation,
+                                        command->cell_revision,
+                                        &cell) || cell->fow ||
+            !map_visibility_fade_interactive(
+                &map_cell_layer_record_read(cell, command->record_layer)->visibility)) {
+            continue;
+        }
+        uint32_t actor_count =
+            map_cell_actor_record_read(cell, command->sub_layer)->target_object_count;
+        if (actor_count == 0) {
+            continue;
+        }
+        SDL_Surface *geometry = map_render_command_geometry(command);
+        if (geometry == NULL) {
+            continue;
+        }
+        bool locked = SDL_MUSTLOCK(geometry);
+        bool hit = false;
+        if (!locked || SDL_LockSurface(geometry)) {
+            int local_x = mx - command->x, local_y = my - command->y;
+            hit = surface_pixel_visible(geometry, local_x, local_y) ||
+                  (command->draw_double &&
+                   surface_pixel_visible(geometry, local_x, local_y + 22));
+            if (locked) {
+                SDL_UnlockSurface(geometry);
+            }
+        }
+        if (geometry != command->source) {
+            SDL_DestroySurface(geometry);
+        }
+        if (hit) {
+            owner = command;
+            count = actor_count;
+        }
+    }
+    current_level_index = saved_level;
+    cells = level_cells[saved_level];
+    if (owner == NULL) {
+        return false;
+    }
+    *target = (map_target_struct){.x = owner->tile_x - MAP_STARTX,
+                                  .y = owner->tile_y - MAP_STARTY,
+                                  .depth = owner->depth,
+                                  .count = count};
+    return true;
+}
+
+/** Target one exact sprite, or clear if the click has no current actor owner. */
+static void map_send_mouse_target(int mx, int my) {
+    map_target_struct target;
+    if (map_mouse_target(mx, my, &target)) {
+        send_target(target.x, target.y, target.depth, target.count);
+    } else {
+        send_target(-1, -1, 0, 0);
+    }
+}
+
 /**
  * Handle the "Talk To NPC" option in map widget menu.
  * @param widget
@@ -8536,19 +8681,32 @@ static void menu_map_walk_here(widgetdata *widget, widgetdata *menuitem, SDL_Eve
  * Event.
  */
 static void menu_map_talk_to(widgetdata *widget, widgetdata *menuitem, SDL_Event *event) {
-    int tx, ty;
-
-    if (mouse_to_tile_coords(cur_widget[MENU_ID]->x, cur_widget[MENU_ID]->y, &tx, &ty)) {
-        int rx = tx - map_width * (MAP_FOW_SIZE / 2);
-        int ry = ty - map_height * (MAP_FOW_SIZE / 2);
-        send_target(rx, ry, 0);
-#ifdef ATRINIK_WIDGET_TESTS
-        if (map_interaction_test_active) {
-            map_interaction_test_talks++;
-        }
-#endif
-        keybind_process_command("?HELLO");
+    map_target_struct target;
+    if (!map_mouse_target(cur_widget[MENU_ID]->x, cur_widget[MENU_ID]->y, &target) ||
+        target.count == 0) {
+        return;
     }
+    /* Bind the conversation to this exact live part in one server action.
+     * Separate SELECT and generic Talk can be dropped/reordered by target
+     * pacing or fall back to another NPC after the clicked actor moves. */
+    packet_struct *packet = packet_new(SERVER_CMD_TALK, 32, 0);
+    packet_writer_write_uint8(packet, CMD_TALK_NPC_TARGET);
+    packet_writer_write_uint8(packet, target.x);
+    packet_writer_write_uint8(packet, target.y);
+    packet_writer_write_int8(packet, target.depth);
+    packet_writer_write_uint32(packet, target.count);
+    packet_writer_write_cstring(packet, "hello");
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_interaction_test_active) {
+        map_interaction_test_talks++;
+        if (map_interaction_test_talk_packet != NULL) {
+            packet_free(map_interaction_test_talk_packet);
+        }
+        map_interaction_test_talk_packet = packet;
+        return;
+    }
+#endif
+    socket_send_packet(packet);
 }
 
 typedef struct map_menu_action {
@@ -8719,7 +8877,15 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
     /* Check if the mouse is in play field. */
     int tx, ty;
     if (!mouse_to_tile_coords(event_mouse_x(event), event_mouse_y(event), &tx, &ty)) {
-        return 0;
+        map_target_struct target;
+        if ((event->type != SDL_EVENT_MOUSE_BUTTON_UP &&
+             event->type != SDL_EVENT_MOUSE_BUTTON_DOWN) ||
+            event->button.button != SDL_BUTTON_RIGHT ||
+            !map_mouse_target(event_mouse_x(event), event_mouse_y(event), &target)) {
+            return 0;
+        }
+        tx = target.x + MAP_STARTX;
+        ty = target.y + MAP_STARTY;
     }
 
     int rx = tx - map_width * (MAP_FOW_SIZE / 2);
@@ -8730,7 +8896,7 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
          * otherwise the widget menu will be created. */
         if (event->button.button == SDL_BUTTON_RIGHT &&
             client_ui_ticks() - right_click_ticks < 500) {
-            send_target(rx, ry, 0);
+            map_send_mouse_target(event_mouse_x(event), event_mouse_y(event));
         }
 
         right_click_ticks = -1;
@@ -11104,6 +11270,381 @@ bool widget_map_fog_click_test(widgetdata *widget) {
     return success;
 }
 
+/** Decode the actual production SELECT emitted by a cycle-key press. */
+static bool map_target_cycle_test_packet(const map_target_struct *expected) {
+    packet_struct *packet = map_interaction_test_target_packet;
+    if (packet == NULL || packet->type != SERVER_CMD_TARGET) {
+        return false;
+    }
+    packet_reader_t reader;
+    packet_reader_init_at(&reader, packet->data, packet->len, 0);
+    uint8_t subtype = packet_reader_read_uint8(&reader);
+    if (expected == NULL) {
+        return subtype == CMD_TARGET_CLEAR && packet_reader_finish(&reader);
+    }
+    uint8_t x = packet_reader_read_uint8(&reader), y = packet_reader_read_uint8(&reader);
+    int8_t depth = packet_reader_read_int8(&reader);
+    uint32_t count = packet_reader_read_uint32(&reader);
+    return packet_reader_finish(&reader) && subtype == CMD_TARGET_MAPXY &&
+           x == expected->x && y == expected->y && depth == expected->depth &&
+           count == expected->count;
+}
+
+/** Publish an acknowledgement through the complete production TARGET decoder. */
+static void map_target_cycle_test_reply_type(const map_target_struct *target,
+                                             bool truncated,
+                                             uint8_t code) {
+    packet_struct *packet = packet_new(0, 32, 32);
+    packet_writer_write_uint8(packet, code);
+    packet_writer_write_cstring(packet, "ffffff");
+    packet_writer_write_cstring(packet, "Cycle actor");
+    packet_writer_write_uint8(packet, 1);
+    packet_writer_write_uint32(packet, target != NULL ? target->count : 0);
+    packet_writer_write_int8(packet, target != NULL ? target->depth : 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    socket_command_target(packet->data, packet->len - (truncated ? 1 : 0), 0);
+    packet_free(packet);
+}
+
+static void map_target_cycle_test_reply(const map_target_struct *target, bool truncated) {
+    map_target_cycle_test_reply_type(target, truncated,
+                                    target != NULL ? CMD_TARGET_ENEMY : CMD_TARGET_SELF);
+}
+
+/** Every user press remains retryable even when no TARGET reply arrives. */
+static bool map_target_cycle_test_press(uint8_t is_friend, const map_target_struct *expected) {
+    int sent = map_interaction_test_targets;
+    map_target_handle(is_friend);
+    return map_interaction_test_targets == sent + 1 && map_target_cycle_test_packet(expected);
+}
+
+/** A dropped class switch cannot make an empty friend list retain an enemy. */
+static bool map_target_cycle_class_test(const map_target_struct *enemy,
+                                        const map_target_struct *friendly) {
+    size_t saved_level = current_level_index;
+    map_cell_store_t *saved_cells = cells;
+    map_select_level(friendly->depth, false);
+    map_cell_t *cell = MAP_CELL_GET_MUTABLE(MAP_STARTX + friendly->x,
+                                          MAP_STARTY + friendly->y);
+    map_cell_actor_record_t *actor = map_cell_actor_record(cell, 0, false);
+    map_cell_layer_record_t *record = map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_LIVING, 0), false);
+    uint8_t saved_friend = actor->target_is_friend;
+    bool saved_authorized = record->visibility.authorized;
+    actor->target_is_friend = 1;
+
+    map_target_cycle_test_reply(NULL, false);
+    bool success = map_target_cycle_test_press(0, enemy);
+    map_target_cycle_test_reply(enemy, false);
+    success &= cpl.target_code == CMD_TARGET_ENEMY && cpl.target_is_friend == 0;
+    /* No response for this friend SELECT: the same server tick drops it. */
+    success &= map_target_cycle_test_press(1, friendly);
+    success &= cpl.target_code == CMD_TARGET_ENEMY && cpl.target_is_friend == 0;
+    Client_Player before = cpl;
+    map_target_cycle_test_reply_type(friendly, true, CMD_TARGET_FRIEND);
+    success &= memcmp(&cpl, &before, sizeof(cpl)) == 0;
+    record->visibility.authorized = false;
+    success &= map_target_cycle_test_press(1, NULL);
+    /* CLEAR is retryable until the complete SELF result resets selection. */
+    success &= map_target_cycle_test_press(1, NULL);
+    map_target_cycle_test_reply(NULL, false);
+    success &= cpl.target_actor_count == 0 && cpl.target_relative_depth == 0 &&
+               cpl.target_code == CMD_TARGET_SELF && cpl.target_is_friend == 0;
+    int sent = map_interaction_test_targets;
+    map_target_handle(1);
+    success &= map_interaction_test_targets == sent;
+
+    /* Complete acknowledgements for either friendly wire code commit the
+     * friend class. Issuing an enemy SELECT cannot change that class. */
+    record->visibility.authorized = true;
+    const uint8_t codes[] = {CMD_TARGET_NEUTRAL, CMD_TARGET_FRIEND};
+    for (size_t index = 0; index < arraysize(codes); index++) {
+        success &= map_target_cycle_test_press(1, friendly);
+        map_target_cycle_test_reply_type(friendly, false, codes[index]);
+        success &= cpl.target_code == codes[index] && cpl.target_is_friend == 1;
+        success &= map_target_cycle_test_press(0, enemy);
+        success &= cpl.target_is_friend == 1;
+        map_target_cycle_test_reply(NULL, false);
+        success &= cpl.target_is_friend == 0;
+    }
+
+    /* With combat force the wire display can remain NEUTRAL while MAP2
+     * classifies that NPC as an enemy. An empty friend cycle must still clear
+     * the actual selected identity; wire class equality is not an admission. */
+    actor->target_is_friend = 0;
+    map_target_cycle_test_reply_type(friendly, false, CMD_TARGET_NEUTRAL);
+    success &= cpl.target_is_friend == 1;
+    success &= map_target_cycle_test_press(1, NULL);
+    map_target_cycle_test_reply(NULL, false);
+    sent = map_interaction_test_targets;
+    map_target_handle(1);
+    success &= map_interaction_test_targets == sent;
+
+    actor->target_is_friend = saved_friend;
+    record->visibility.authorized = saved_authorized;
+    current_level_index = saved_level;
+    cells = saved_cells;
+    return success;
+}
+
+/** Exercise rapid presses and missing replies without an optimistic cursor. */
+static bool map_target_cycle_test(void) {
+    Client_Player saved_player = cpl;
+    bool saved_active = map_interaction_test_active;
+    int saved_targets = map_interaction_test_targets;
+    packet_struct *saved_packet = map_interaction_test_target_packet;
+    map_interaction_test_target_packet = NULL;
+    map_interaction_test_active = true;
+    map_interaction_test_targets = 0;
+    UT_array *targets = map_target_collect(0);
+    size_t length = utarray_len(targets);
+    if (length > 1) {
+        utarray_sort(targets, map_target_cmp);
+    }
+    bool success = length >= 3;
+    if (success) {
+        const map_target_struct *first = (const map_target_struct *)utarray_eltptr(targets, 0);
+        const map_target_struct *second = (const map_target_struct *)utarray_eltptr(targets, 1);
+        const map_target_struct *third = (const map_target_struct *)utarray_eltptr(targets, 2);
+        const map_target_struct *last = (const map_target_struct *)utarray_eltptr(targets, length - 1);
+        map_target_cycle_test_reply(NULL, false);
+        /* Even a stale optimistic index cannot move the acknowledged anchor. */
+        cpl.target_object_index = length + 3;
+        success &= map_target_cycle_test_press(0, first);
+        success &= map_target_cycle_test_press(0, first);
+        success &= cpl.target_actor_count == 0 && cpl.target_relative_depth == 0;
+
+        map_target_cycle_test_reply(first, false);
+        success &= map_target_cycle_test_press(0, second);
+        /* The second selection is dropped; another press retries it, and a
+         * truncated reply cannot publish an anchor or skip to the third. */
+        success &= map_target_cycle_test_press(0, second);
+        map_target_cycle_test_reply(second, true);
+        success &= cpl.target_actor_count == first->count &&
+                   cpl.target_relative_depth == first->depth;
+        success &= map_target_cycle_test_press(0, second);
+        map_target_cycle_test_reply(second, false);
+        success &= map_target_cycle_test_press(0, third);
+
+        /* Manual selection changes the next actor; end-of-list wraps directly. */
+        map_target_cycle_test_reply(last, false);
+        success &= map_target_cycle_test_press(0, first);
+        map_target_cycle_test_reply(second, false);
+        success &= map_target_cycle_test_press(0, third);
+
+        /* SELF from rejection or CLEAR starts from the first current identity.
+         * No absent reply can wedge subsequent user presses. */
+        send_target(-1, -1, 0, 0);
+        success &= map_target_cycle_test_packet(NULL);
+        map_target_cycle_test_reply(NULL, false);
+        success &= map_target_cycle_test_press(0, first);
+        success &= map_target_cycle_class_test(first, last);
+        map_target_cycle_test_reply(NULL, false);
+        success &= map_target_cycle_test_press(0, first);
+
+        /* Reconnect uses clear_player's connection-local zeroed state. */
+        memset(&cpl, 0, sizeof(cpl));
+        success &= map_target_cycle_test_press(0, first);
+
+        /* Count alone must never match an actor at a different relative depth. */
+        map_target_struct other_depth = *second;
+        other_depth.depth = MAP2_MAX_DEPTH;
+        map_target_cycle_test_reply(&other_depth, false);
+        success &= map_target_cycle_test_press(0, first);
+
+        /* Switching to an empty friend class clears instead of retaining an
+         * enemy; another enemy-cycle press still starts from the live anchor. */
+        success &= map_target_cycle_test_press(1, NULL);
+        map_target_cycle_test_reply(NULL, false);
+        success &= map_target_cycle_test_press(0, first);
+    }
+    if (!success) {
+        fprintf(stderr, "map target cycle test: acknowledgement anchor regression\n");
+    }
+    utarray_free(targets);
+    if (map_interaction_test_target_packet != NULL) {
+        packet_free(map_interaction_test_target_packet);
+    }
+    map_interaction_test_target_packet = saved_packet;
+    map_interaction_test_targets = saved_targets;
+    map_interaction_test_active = saved_active;
+    cpl = saved_player;
+    return success;
+}
+
+/** Verify depth cycling and projected sprite ownership against live MAP2 records. */
+static bool widget_map_target_depth_test(widgetdata *widget) {
+    if (widget == NULL || map_state_transaction_active()) {
+        return false;
+    }
+    /* The widget-priority fixture exercises input before its first draw, so
+     * provide a task-owned projection surface without requiring a renderer. */
+    SDL_Surface *saved_surface = widget->surface;
+    SDL_Surface *test_surface = NULL;
+    if (saved_surface == NULL) {
+        test_surface = SDL_CreateSurface(64, 64, SDL_PIXELFORMAT_RGBA32);
+        if (test_surface == NULL) {
+            return false;
+        }
+        widget->surface = test_surface;
+    }
+    /* This input-only entry point also precedes normal settings startup.
+     * Read authored defaults without touching the user's settings hierarchy. */
+    bool owned_settings = setting_categories == NULL;
+    if (owned_settings && !settings_init_read_only(FILE_SETTINGS_TXT)) {
+        widget->surface = saved_surface;
+        SDL_DestroySurface(test_surface);
+        settings_deinit_read_only();
+        return false;
+    }
+    int64_t saved_zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM);
+    setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, 100);
+    map_cell_store_t *saved_levels[MAP2_LEVELS];
+    memcpy(saved_levels, level_cells, sizeof(saved_levels));
+    map_cell_store_t *saved_cells = cells;
+    size_t saved_level = current_level_index;
+    int saved_width = map_width, saved_height = map_height;
+    int saved_origin_x = map_cache_origin_x, saved_origin_y = map_cache_origin_y;
+    uint16_t saved_mask = map_level_mask;
+    widgetdata *saved_widget = cur_widget[MAP_ID];
+    map_render_context_t saved_context = map_retained_primary_context;
+    map_retained_projection_t saved_projection = map_retained_primary_projection;
+    memset(level_cells, 0, sizeof(level_cells));
+    map_width = map_height = 4;
+    map_cache_origin_x = map_cache_origin_y = 0;
+    map_level_mask = (UINT16_C(1) << MAP2_LEVELS) - 1;
+    cur_widget[MAP_ID] = widget;
+    const int layer = GET_MAP_LAYER(LAYER_LIVING, 0);
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        map_select_level(depth, true);
+        map_cell_t *cell = MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1);
+        map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, true);
+        record->face = 1;
+        record->visibility = (map_visibility_fade_t){.initialized = true,
+                                                    .authorized = true,
+                                                    .alpha = UINT8_MAX};
+        map_cell_actor_record(cell, 0, true)->target_object_count = 100 + depth;
+    }
+    bool success = true;
+    UT_array *targets = map_target_collect(0);
+    success = success && utarray_len(targets) == MAP2_LEVELS;
+    uint16_t found_mask = 0;
+    for (size_t index = 0; index < utarray_len(targets); index++) {
+        const map_target_struct *target = (const map_target_struct *)utarray_eltptr(targets, index);
+        found_mask |= UINT16_C(1) << MAP2_DEPTH_INDEX(target->depth);
+        success = success && target->count == (uint32_t)(100 + target->depth);
+    }
+    success = success && found_mask == map_level_mask;
+    utarray_free(targets);
+    success &= map_target_cycle_test();
+    /* A multipart identity in two physical cells appears only once per depth. */
+    map_select_level(0, false);
+    map_cell_t *duplicate = MAP_CELL_GET_MUTABLE(MAP_STARTX + 2, MAP_STARTY + 1);
+    map_cell_layer_record_t *duplicate_record = map_cell_layer_record(duplicate, layer, true);
+    duplicate_record->face = 1;
+    duplicate_record->visibility = (map_visibility_fade_t){.initialized = true,
+                                                          .authorized = true,
+                                                          .alpha = UINT8_MAX};
+    map_cell_actor_record(duplicate, 0, true)->target_object_count = 100;
+    targets = map_target_collect(0);
+    success = success && utarray_len(targets) == MAP2_LEVELS;
+    utarray_free(targets);
+    /* A fading revoked record and a remembered cell must never remain targets. */
+    map_select_level(-MAP2_MAX_DEPTH, false);
+    map_cell_t *revoked = MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1);
+    map_cell_layer_record(revoked, layer, false)->visibility.authorized = false;
+    map_select_level(MAP2_MAX_DEPTH, false);
+    MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1)->fow = true;
+    targets = map_target_collect(0);
+    success = success && utarray_len(targets) == MAP2_LEVELS - 2;
+    utarray_free(targets);
+
+    SDL_Surface *bitmap = SDL_CreateSurface(4, 4, SDL_PIXELFORMAT_RGBA32);
+    if (bitmap != NULL) {
+        SDL_FillSurfaceRect(bitmap, NULL, UINT32_MAX);
+        map_render_command_t commands[2] = {0};
+        for (size_t index = 0; index < arraysize(commands); index++) {
+            int depth = index == 0 ? -1 : 1;
+            map_select_level(depth, false);
+            map_cell_t *cell = MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1);
+            size_t physical = map_cache_physical_index(MAP_STARTX + 1, MAP_STARTY + 1);
+            commands[index] = (map_render_command_t){
+                .source = bitmap, .x = 10, .y = 20,
+                .bounds_x = 10, .bounds_y = 20, .bounds_w = 4, .bounds_h = 4,
+                .sort_y = (int)index, .tile_x = MAP_STARTX + 1, .tile_y = MAP_STARTY + 1,
+                .record_identity = cell->painter_identity,
+                .cell_generation = cells->headers[physical].generation,
+                .cell_revision = cells->headers[physical].revision,
+                .record_layer = layer, .object_layer = LAYER_LIVING, .depth = depth,
+            };
+        }
+        map_retained_primary_context = (map_render_context_t){.commands = commands,
+                                                              .commands_num = 2};
+        map_retained_projection_commit(widget->surface);
+        double zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM) / 100.0;
+        int mx = widget_x(widget) + (int)(12 * zoom);
+        int my = widget_y(widget) + (int)(22 * zoom);
+        map_target_struct target;
+        success = success && map_mouse_target(mx, my, &target) &&
+                  target.depth == 1 && target.count == 101 && target.x == 1 && target.y == 1;
+        /* The projected top owner's revocation immediately exposes the lower
+         * live owner; its stale sprite can still fade without being selected. */
+        map_select_level(1, false);
+        map_cell_layer_record(MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1),
+                              layer, false)->visibility.authorized = false;
+        success = success && map_mouse_target(mx, my, &target) &&
+                  target.depth == -1 && target.count == 99;
+        map_select_level(-1, false);
+        map_cell_layer_record(MAP_CELL_GET_MUTABLE(MAP_STARTX + 1, MAP_STARTY + 1),
+                              layer, false)->visibility.authorized = false;
+        success = success && !map_mouse_target(mx, my, &target);
+        SDL_DestroySurface(bitmap);
+    } else {
+        success = false;
+    }
+    for (size_t index = 0; index < MAP2_LEVELS; index++) {
+        map_cell_store_destroy(level_cells[index]);
+    }
+    memcpy(level_cells, saved_levels, sizeof(level_cells));
+    cells = saved_cells;
+    current_level_index = saved_level;
+    map_width = saved_width;
+    map_height = saved_height;
+    map_cache_origin_x = saved_origin_x;
+    map_cache_origin_y = saved_origin_y;
+    map_level_mask = saved_mask;
+    cur_widget[MAP_ID] = saved_widget;
+    map_retained_primary_context = saved_context;
+    map_retained_primary_projection = saved_projection;
+    setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, saved_zoom);
+    if (owned_settings) {
+        settings_deinit_read_only();
+    }
+    widget->surface = saved_surface;
+    SDL_DestroySurface(test_surface);
+    return success;
+}
+
+/** Check the production menu packet's complete wire identity and message. */
+static bool map_interaction_talk_packet_matches(const map_target_struct *target) {
+    packet_struct *packet = map_interaction_test_talk_packet;
+    if (packet == NULL || packet->type != SERVER_CMD_TALK) {
+        return false;
+    }
+    packet_reader_t reader;
+    packet_reader_init_at(&reader, packet->data, packet->len, 0);
+    uint8_t subtype = packet_reader_read_uint8(&reader);
+    uint8_t x = packet_reader_read_uint8(&reader);
+    uint8_t y = packet_reader_read_uint8(&reader);
+    int8_t depth = packet_reader_read_int8(&reader);
+    uint32_t count = packet_reader_read_uint32(&reader);
+    char message[32];
+    bool parsed = packet_reader_read_string(&reader, message, sizeof(message));
+    return parsed && packet_reader_finish(&reader) && subtype == CMD_TALK_NPC_TARGET &&
+           x == target->x && y == target->y && depth == target->depth &&
+           count == target->count && strcmp(message, "hello") == 0;
+}
+
 bool widget_map_interaction_test(widgetdata *widget) {
     int old_map_width = map_width;
     int old_map_height = map_height;
@@ -11116,6 +11657,9 @@ bool widget_map_interaction_test(widgetdata *widget) {
     map_interaction_test_moves = 0;
     map_interaction_test_targets = 0;
     map_interaction_test_talks = 0;
+    map_interaction_test_target_available = true;
+    map_interaction_test_mouse_target =
+        (map_target_struct){.x = 2, .y = 3, .depth = 0, .count = 1};
     map_interaction_test_active = true;
     cur_widget[MENU_ID] = &menu;
 
@@ -11130,14 +11674,52 @@ bool widget_map_interaction_test(widgetdata *widget) {
     map_menu_actions[0].handler(widget, NULL, &event);
     map_menu_actions[1].handler(widget, NULL, &event);
     success = success && map_interaction_test_moves == 1;
-    success = success && map_interaction_test_targets == 2;
+    /* Talk emits one identity-bound command, independently of the earlier
+     * right-click SELECT. It never emits SELECT followed by generic HELLO. */
+    success = success && map_interaction_test_targets == 1;
     success = success && map_interaction_test_talks == 1;
+    success = success && map_interaction_talk_packet_matches(&map_interaction_test_mouse_target);
 
+    /* Preserve full actor counts and signed depths from the clicked pose. A
+     * stale authoritative target or TARGET reply cannot redirect this packet. */
+    uint32_t old_count = cpl.target_actor_count;
+    int8_t old_depth = cpl.target_relative_depth;
+    cpl.target_actor_count = 17;
+    cpl.target_relative_depth = -1;
+    map_interaction_test_mouse_target.count = UINT32_MAX;
+    const int8_t depths[] = {-MAP2_MAX_DEPTH, MAP2_MAX_DEPTH};
+    for (size_t index = 0; index < arraysize(depths); index++) {
+        map_interaction_test_mouse_target.depth = depths[index];
+        menu_map_talk_to(widget, NULL, &event);
+        success = success && map_interaction_talk_packet_matches(&map_interaction_test_mouse_target);
+    }
+    success = success && map_interaction_test_targets == 1 && map_interaction_test_talks == 3 &&
+              cpl.target_actor_count == 17 && cpl.target_relative_depth == -1;
+    cpl.target_actor_count = old_count;
+    cpl.target_relative_depth = old_depth;
+
+    /* Missing/remembered geometry and zero-count poses cannot trigger Talk,
+     * clear the current target, or fall back to any nearby NPC. */
+    map_interaction_test_target_available = false;
+    menu_map_talk_to(widget, NULL, &event);
+    map_interaction_test_target_available = true;
+    map_interaction_test_mouse_target.count = 0;
+    menu_map_talk_to(widget, NULL, &event);
+    success = success && map_interaction_test_targets == 1 && map_interaction_test_talks == 3;
+
+    if (map_interaction_test_talk_packet != NULL) {
+        packet_free(map_interaction_test_talk_packet);
+        map_interaction_test_talk_packet = NULL;
+    }
+    if (map_interaction_test_target_packet != NULL) {
+        packet_free(map_interaction_test_target_packet);
+        map_interaction_test_target_packet = NULL;
+    }
     cur_widget[MENU_ID] = old_menu;
     map_interaction_test_active = false;
     map_width = old_map_width;
     map_height = old_map_height;
-    return success;
+    return success && widget_map_target_depth_test(widget);
 }
 
 bool widget_map_mouse_origin_test(int mx, int my, int expected_mx, int expected_my) {

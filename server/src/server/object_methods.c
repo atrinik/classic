@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -29,12 +29,15 @@
 
 #include <global.h>
 #include <server_main.h>
+#include <server.h>
 #include <movement.h>
 #include <plugin.h>
 #include <arch.h>
 #include <player.h>
 #include <object.h>
 #include <object_methods.h>
+#include <perception.h>
+#include <spatial.h>
 
 /**
  * Registered method handlers.
@@ -344,7 +347,13 @@ int object_projectile_hit(object *op, object *victim) {
 object *object_projectile_stop(object *op, int reason) {
     HARD_ASSERT(op != NULL);
 
-    if (trigger_event(EVENT_STOP, NULL, op, NULL, NULL, 0, 0, 0, 0) != 0) {
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t count = op->count;
+    int handled = trigger_event(EVENT_STOP, NULL, op, NULL, NULL, 0, 0, 0, 0);
+    if (!object_reclamation_is_current(reclamation) || !object_reference_matches(op, count)) {
+        return NULL;
+    }
+    if (handled != 0) {
         return op;
     }
 
@@ -363,13 +372,49 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
     HARD_ASSERT(op != NULL);
     HARD_ASSERT(shooter != NULL);
 
-    /* No direction, try to get a direction to the player's target, if any. */
-    if (dir == 0 && op->type == BOW && shooter->type == PLAYER &&
-        OBJECT_VALID(CONTR(shooter)->target_object, CONTR(shooter)->target_object_count)) {
-        dir = object_dir_to_target(shooter, CONTR(shooter)->target_object);
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t op_count = op->count, shooter_count = shooter->count;
+    bool is_player = shooter->type == PLAYER;
+    player *controller = is_player ? CONTR(shooter) : NULL;
+    socket_struct *socket = is_player ? controller->cs : NULL;
+    object *selected = is_player ? controller->target_object : shooter->enemy;
+    tag_t selected_count = is_player ? CONTR(shooter)->target_object_count : shooter->enemy_count;
+    object *target = NULL;
+    if (selected != shooter && object_reference_is_current(selected, selected_count)) {
+        bool authorized = is_player
+            ? target_player_authorized(CONTR(shooter), selected, NULL)
+            : perception_object_visible(shooter, selected);
+        /* Prove connection ownership before touching either the shooter or
+         * its inventory: logout may reclaim both object pool pages. */
+        if (!object_reclamation_is_current(reclamation) ||
+            (is_player && !player_connection_is_current(shooter, shooter_count, controller, socket))) {
+            return OBJECT_METHOD_UNHANDLED;
+        }
+        if (authorized && OBJECT_VALID(shooter, shooter_count) &&
+            (shooter->type == PLAYER) == is_player && object_reference_is_current(selected, selected_count) &&
+            (is_player ? CONTR(shooter)->target_object == selected &&
+                         CONTR(shooter)->target_object_count == selected_count
+                       : shooter->enemy == selected && shooter->enemy_count == selected_count)) {
+            target = selected;
+        }
+    }
+    /* Hidden-object plugins must not leave stale inputs for direction or fire. */
+    if (!OBJECT_VALID(op, op_count) || !OBJECT_VALID(shooter, shooter_count) ||
+        (shooter->type == PLAYER) != is_player) {
+        return OBJECT_METHOD_UNHANDLED;
+    }
+    bool vertical_aim = false;
+    if (dir == 0 && target != NULL) {
+        int dx, dy, dz;
+        if (spatial_offset(shooter->map, target->map, &dx, &dy, &dz)) {
+            dx += target->x - shooter->x;
+            dy += target->y - shooter->y;
+            dir = coords_distance_to_dir(-dx, -dy);
+            vertical_aim = dx == 0 && dy == 0 && dz != 0;
+        }
     }
 
-    if (dir == 0) {
+    if (dir == 0 && !vertical_aim) {
         dir = shooter->direction;
         SOFT_ASSERT_RC(dir != 0,
                        OBJECT_METHOD_UNHANDLED,
@@ -378,7 +423,7 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
                        object_get_str(shooter));
     }
 
-    if (!movement_direction_valid(shooter, dir, false)) {
+    if (!movement_direction_valid(shooter, dir, vertical_aim)) {
         return OBJECT_METHOD_UNHANDLED;
     }
 
@@ -386,7 +431,9 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
         dir = get_randomized_dir(dir);
     }
 
-    shooter->direction = dir;
+    if (dir != 0) {
+        shooter->direction = dir;
+    }
 
     for (object_methods_t *methods = object_methods_get(op->type); methods != NULL;
          methods = methods->fallback) {

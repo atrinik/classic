@@ -598,6 +598,7 @@ static int builder_window(object *op, int x, int y) {
     }
 
     CLEAR_FLAG(window, FLAG_BLOCKSVIEW);
+    object_update(window, UP_OBJ_FLAGS);
     draw_info(COLOR_WHITE, op, "You build a window in the wall.");
     return 1;
 }

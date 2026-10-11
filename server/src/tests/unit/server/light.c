@@ -421,7 +421,7 @@ START_TEST(test_scalar_origin_without_object_rebuilds_and_withdraws_symmetricall
 }
 END_TEST
 
-START_TEST(test_rebuild_preserves_asymmetric_incoming_source) {
+START_TEST(test_asymmetric_light_source_fails_closed_until_reciprocal) {
     mapstruct *west = get_empty_map(9, 9);
     mapstruct *middle = get_empty_map(9, 9);
     mapstruct *east = get_empty_map(9, 9);
@@ -431,7 +431,7 @@ START_TEST(test_rebuild_preserves_asymmetric_incoming_source) {
     add_colored_light(east, 0, 4, 13, UINT32_C(0xff8040));
     test_light_snapshot expected[9 * 9];
     snapshot_local_light(middle, expected);
-    ck_assert_int_gt(GET_MAP_SPACE_PTR(middle, 8, 4)->light_source_positive_value, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(middle, 8, 4)->light_source_positive_value, 0);
     recalculate_light_sources(west);
     assert_local_light_matches(middle, expected);
     object *blocker = add_light_blocker(middle, 7, 4);
@@ -441,6 +441,8 @@ START_TEST(test_rebuild_preserves_asymmetric_incoming_source) {
     assert_local_light_matches(middle, expected);
     /* Restore the fixture's ordinary teardown backlinks. */
     middle->tile_map[TILED_EAST] = east;
+    recalculate_light_sources(middle);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(middle, 8, 4)->light_source_positive_value, 0);
 }
 END_TEST
 
@@ -533,7 +535,7 @@ START_TEST(test_loaded_reverse_link_replacement_clears_former_target) {
 }
 END_TEST
 
-START_TEST(test_component_includes_incoming_only_source_and_excludes_disconnected_maps) {
+START_TEST(test_incoming_only_light_fails_closed_without_touching_disconnected_maps) {
     mapstruct *receiver = get_empty_map(9, 9);
     mapstruct *source = get_empty_map(9, 9);
     link_horizontal_maps(receiver, source);
@@ -548,13 +550,16 @@ START_TEST(test_component_includes_incoming_only_source_and_excludes_disconnecte
     snapshot_local_light(receiver, receiver_expected);
     snapshot_local_light(source, source_expected);
     snapshot_local_light(disconnected, disconnected_expected);
-    ck_assert_int_gt(GET_MAP_SPACE_PTR(receiver, 8, 4)->light_source_positive_value, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(receiver, 8, 4)->light_source_positive_value, 0);
     recalculate_light_sources(receiver);
     assert_local_light_matches(receiver, receiver_expected);
     assert_local_light_matches(source, source_expected);
     assert_local_light_matches(disconnected, disconnected_expected);
     /* Restore backlinks for the ordinary fixture teardown. */
     receiver->tile_map[TILED_EAST] = source;
+    recalculate_light_sources(receiver);
+    ck_assert_int_gt(GET_MAP_SPACE_PTR(receiver, 8, 4)->light_source_positive_value, 0);
+    assert_local_light_matches(disconnected, disconnected_expected);
 }
 END_TEST
 
@@ -602,7 +607,7 @@ START_TEST(test_target_footprint_retains_differing_vertical_dimension_fallback) 
 }
 END_TEST
 
-START_TEST(test_noncommuting_linked_depth_paths_rebuild_every_affected_target) {
+START_TEST(test_intermediate_roof_plane_and_crossed_floor_have_distinct_light_effects) {
     mapstruct *source_map = get_empty_map(9, 9);
     mapstruct *level_one = get_empty_map(9, 9);
     mapstruct *level_two = get_empty_map(9, 9);
@@ -616,17 +621,23 @@ START_TEST(test_noncommuting_linked_depth_paths_rebuild_every_affected_target) {
     test_light_snapshot expected[9 * 9];
     snapshot_local_light(target_map, expected);
     ck_assert_int_gt(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_value, 0);
-    /* The ray resolves its intermediate point through level_one's east link,
-     * and its endpoint through level_two's east link. roof_map itself has no
-     * vertical link to that endpoint, despite every existing edge being equal
-     * size and reciprocal. A geometry-origin footprint alone misses it. */
+    /* The sloped ray enters roof_map above its DOWN plane, then crosses
+     * target_map's DOWN plane. A roof below that ray does not block it. */
     object *roof = arch_get("roof_thatch");
     roof->x = 0;
     roof->y = 4;
     object_insert_map(roof, roof_map, NULL, 0);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_value, expected[36].scalar);
+    object *floor = arch_get("water_still");
+    floor->x = 0;
+    floor->y = 4;
+    object_insert_map(floor, target_map, NULL, 0);
     ck_assert_int_eq(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_value, 0);
     ck_assert_int_eq(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_positive_value, 0);
     ck_assert_int_eq(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_color_weight, 0);
+    object_remove(floor, 0);
+    object_destroy(floor);
+    ck_assert_int_eq(GET_MAP_SPACE_PTR(target_map, 0, 4)->light_source_value, expected[36].scalar);
     object_remove(roof, 0);
     object_destroy(roof);
     assert_local_light_matches(target_map, expected);
@@ -1447,6 +1458,35 @@ START_TEST(test_light_level_interpolation) {
 }
 END_TEST
 
+START_TEST(test_local_glass_floor_attenuates_color_and_neutral_darkness) {
+    mapstruct *lower = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    link_stacked_maps(lower, upper);
+    object *floor = arch_get("water_still");
+    floor->x = floor->y = 4;
+    object_set_value(floor, "celestial_transmission", "glass", 1);
+    ck_assert_ptr_nonnull(object_insert_map(floor, upper, NULL, 0));
+    object *source = add_colored_light(lower, 4, 4, 13, UINT32_C(0xff0000));
+    MapSpace *sample = GET_MAP_SPACE_PTR(upper, 4, 4);
+    /* The unchanged distance-one radial sample is 720, then glass is 3/4. */
+    ck_assert_int_eq(sample->light_source_value, 540);
+    ck_assert_int_eq(sample->light_source_positive_value, 540);
+    ck_assert_int_eq(sample->light_source_color[0], INT64_C(540) * UINT16_MAX);
+    ck_assert_int_eq(sample->light_source_color[1], 0);
+    ck_assert_int_eq(sample->light_source_color[2], 0);
+    object_remove(source, 0);
+    object_destroy(source);
+    ck_assert_int_eq(sample->light_source_value, 0);
+    source = add_colored_light(lower, 4, 4, -13, UINT32_C(0xff0000));
+    ck_assert_int_eq(sample->light_source_value, -540);
+    ck_assert_int_eq(sample->light_source_positive_value, 0);
+    ck_assert_int_eq(sample->light_source_color[0], 0);
+    object_remove(source, 0);
+    object_destroy(source);
+    ck_assert_int_eq(sample->light_source_value, 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("light");
     TCase *tc_core = tcase_create("Core");
@@ -1455,9 +1495,16 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    TCase *tc_oracle = tcase_create("Rebuild oracle");
+    tcase_add_unchecked_fixture(tc_oracle, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_oracle, check_test_setup, check_test_teardown);
+    /* Preserve all resident sources and full-field comparisons under instrumentation. */
+    tcase_set_timeout(tc_oracle, 60);
+    suite_add_tcase(s, tc_oracle);
     tcase_add_test(tc_core, test_light_level_anchors);
+    tcase_add_test(tc_core, test_local_glass_floor_attenuates_color_and_neutral_darkness);
     tcase_add_test(tc_core, test_rebuild_preserves_incoming_light_from_third_horizontal_map);
-    tcase_add_test(tc_core, test_rebuild_matches_incremental_oracle_for_all_resident_sources);
+    tcase_add_test(tc_oracle, test_rebuild_matches_incremental_oracle_for_all_resident_sources);
     tcase_add_test(tc_core, test_unchanged_geometry_updates_do_not_rebuild_or_invalidate);
     tcase_add_test(tc_core, test_geometry_tracks_last_blocker_and_cleared_flag);
     tcase_add_test(tc_core, test_geometry_batches_flush_before_read_and_at_scope_end);
@@ -1466,16 +1513,16 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_batch_geometry_and_source_deltas_preserve_all_accumulators);
     tcase_add_test(tc_core, test_geometry_footprint_crosses_several_narrow_map_seams);
     tcase_add_test(tc_core, test_scalar_origin_without_object_rebuilds_and_withdraws_symmetrically);
-    tcase_add_test(tc_core, test_rebuild_preserves_asymmetric_incoming_source);
+    tcase_add_test(tc_core, test_asymmetric_light_source_fails_closed_until_reciprocal);
     tcase_add_test(tc_core, test_disconnected_irregular_component_does_not_expand_regular_rebuild);
     tcase_add_test(tc_core, test_partial_grid_rebuild_bounds_targets_and_incoming_sources);
     tcase_add_test(tc_core, test_loaded_reverse_link_replacement_clears_former_target);
     tcase_add_test(tc_core,
-                   test_component_includes_incoming_only_source_and_excludes_disconnected_maps);
+                   test_incoming_only_light_fails_closed_without_touching_disconnected_maps);
     tcase_add_test(tc_core, test_rebuild_preserves_incoming_source_with_different_map_dimensions);
     tcase_add_test(tc_core, test_target_footprint_resolves_vertical_link_only_on_horizontal_neighbor);
     tcase_add_test(tc_core, test_target_footprint_retains_differing_vertical_dimension_fallback);
-    tcase_add_test(tc_core, test_noncommuting_linked_depth_paths_rebuild_every_affected_target);
+    tcase_add_test(tc_core, test_intermediate_roof_plane_and_crossed_floor_have_distinct_light_effects);
     tcase_add_test(tc_core, test_different_vertical_dimensions_never_publish_out_of_bounds_spaces);
     tcase_add_test(tc_core, test_unloading_light_relay_rebuilds_surviving_targets_once);
     tcase_add_test(tc_core, test_deferred_unlink_flushes_before_read_and_new_source_delta);

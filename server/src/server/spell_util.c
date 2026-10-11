@@ -28,6 +28,10 @@
  */
 
 #include <global.h>
+#include <propagation.h>
+#include <projectile3d.h>
+#include <perception.h>
+#include <spatial.h>
 #include <server_main.h>
 #include <server_item.h>
 #include <server.h>
@@ -40,6 +44,71 @@
 #include <player.h>
 #include <object.h>
 #include <object_methods.h>
+
+/* Borrowed spell actors survive a visibility callback only with the same
+ * object incarnation and, for players, the same live connection. */
+typedef struct spell_actor_ref {
+    object *ob;
+    tag_t count;
+    player *controller;
+    socket_struct *socket;
+    uint64_t reclamation;
+} spell_actor_ref;
+
+static spell_actor_ref spell_actor_capture(object *ob) {
+    player *controller = ob->type == PLAYER ? CONTR(ob) : NULL;
+    return (spell_actor_ref){ob, ob->count, controller,
+                             controller != NULL ? controller->cs : NULL,
+                             object_reclamation_epoch()};
+}
+
+static bool spell_actor_current(spell_actor_ref ref) {
+    return object_reclamation_is_current(ref.reclamation) &&
+           (ref.controller == NULL ||
+            player_connection_is_current(ref.ob, ref.count, ref.controller, ref.socket)) &&
+           OBJECT_VALID(ref.ob, ref.count);
+}
+
+/* A remembered target is not permission to aim at a hidden creature. */
+static object *spell_aim_target(object *source) {
+    object *target = source->type == PLAYER ? CONTR(source)->target_object : source->enemy;
+    tag_t count = source->type == PLAYER ? CONTR(source)->target_object_count : source->enemy_count;
+    if (target == source || !object_reference_is_current(target, count)) {
+        return NULL;
+    }
+    return (source->type == PLAYER ? target_player_authorized(CONTR(source), target, NULL) :
+            perception_object_visible(source, target)) ? target : NULL;
+}
+
+static bool spell_target_authorized(object *op, object *target, int type) {
+    /* Retained identity and camera authorization are fresh requirements for
+     * targeted spatial spells. Xray can disclose a target but never lets magic
+     * cross solid combat geometry. Self/inventory and party spells stay exempt. */
+    if (target != NULL && target != op && !(spells[type].flags & SPELL_DESC_DIRECTION)) {
+        int dx, dy, dz;
+        if (!object_storage_is_owned(target)) {
+            return false;
+        }
+        tag_t target_count = target->count, source_count = op->count;
+        if (!(op->type == PLAYER ? target_player_authorized(CONTR(op), target, NULL) :
+              perception_object_visible(op, target)) ||
+            !OBJECT_VALID(op, source_count) || !OBJECT_VALID(target, target_count) ||
+            !spatial_offset(op->map, target->map, &dx, &dy, &dz)) {
+            return false;
+        }
+        dx += target->x - op->x;
+        dy += target->y - op->y;
+        if (abs(dz) > 6 || MAX(abs(dx), MAX(abs(dy), abs(dz))) > spells[type].range) {
+            draw_info(COLOR_WHITE, op, "Your target is out of range!");
+            return false;
+        }
+        if (!spatial_ray_clear(op->map, op->x, op->y, dx, dy, dz, SPATIAL_COMBAT, false)) {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 /**
  * Array of pointers to archetypes used by the spells for quick
@@ -340,24 +409,6 @@ int cast_spell(object *op,
             return 0;
         }
 
-        /* If valid target is not in range for selected spell, skip casting. */
-        if (target) {
-            rv_vector rv;
-
-            if (!get_rangevector_from_mapcoords(op->map,
-                                                op->x,
-                                                op->y,
-                                                target->map,
-                                                target->x,
-                                                target->y,
-                                                &rv,
-                                                RV_DIAGONAL_DISTANCE) ||
-                rv.distance > (unsigned int)spells[type].range) {
-                draw_info(COLOR_WHITE, op, "Your target is out of range!");
-                return 0;
-            }
-        }
-
         if (op->type == PLAYER && target == op && CONTR(op)->target_object != op) {
             draw_info(COLOR_WHITE, op, "You auto-target yourself with this spell!");
         }
@@ -388,16 +439,89 @@ int cast_spell(object *op,
         return 0;
     }
 
-    /* Trigger the map-wide spell event. */
-    if (op->map && op->map->events) {
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
+    if (!spell_target_authorized(op, target, type) ||
+        !spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        return 0;
+    }
+
+    /* Reject an over-bound area before map events, combat marking or costs. */
+    int propagation_radius = -1;
+    unsigned propagation_copies = 1;
+    bool propagation_swarm = false;
+    switch ((enum spellnrs)type) {
+        case SP_ICESTORM:
+        case SP_FIRESTORM:
+        case SP_HOLYWORD:
+            propagation_radius = (dir == 0 && spell_aim_target(op) == NULL ? duration / 2 : duration) + 1;
+            break;
+        case SP_DESTRUCTION:
+            propagation_radius = MAX(SP_level_strength_adjust(caster, type), spells[type].bdur);
+            break;
+        case SP_RAIN_HEAL:
+            propagation_radius = 1;
+            break;
+        case SP_BULLET:
+        case SP_CAUSE_LIGHT:
+        case SP_MAGIC_MISSILE:
+        case SP_POISON_FOG:
+        case SP_METEOR:
+        case SP_ASTEROID:
+            if (spellarch[type] != NULL && spellarch[type]->clone.other_arch != NULL) {
+                propagation_radius = spells[type].bdur / 2 + 1;
+            }
+            break;
+        case SP_METEOR_SWARM:
+        case SP_FROST_NOVA:
+        case SP_BULLET_SWARM:
+        case SP_BULLET_STORM: {
+            int child_type = type == SP_METEOR_SWARM ? SP_METEOR :
+                type == SP_FROST_NOVA ? SP_ASTEROID : SP_BULLET;
+            propagation_radius = spells[child_type].bdur / 2 + 1;
+            propagation_copies = type == SP_BULLET_SWARM ? 5 : 3;
+            propagation_swarm = true;
+            break;
+        }
+        default:
+            break;
+    }
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        return 0;
+    }
+    propagation_admission admission;
+    if (!propagation_admission_begin(&admission, propagation_radius, propagation_copies,
+                                      propagation_swarm)) {
+        draw_info(COLOR_WHITE, op, "There is too much magic in motion to cast that spell.");
+        return 0;
+    }
+
+    tag_t admitted_source = op->count, admitted_caster = caster->count;
+    tag_t admitted_target = target != NULL ? target->count : 0;
+    /* Trigger the map-wide spell event only after reserving capacity. */
+    bool triggered_spell_event = op->map != NULL && op->map->events != NULL;
+    if (triggered_spell_event) {
         int retval =
             trigger_map_event(MEVENT_SPELL_CAST, op->map, op, caster, NULL, stringarg, type);
 
         /* So the plugin's return value can affect the returned value. */
         if (retval) {
+            propagation_admission_end(&admission);
             return retval - 1;
         }
     }
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref) ||
+        !OBJECT_VALID(op, admitted_source) || !OBJECT_VALID(caster, admitted_caster) ||
+        (target != NULL && !OBJECT_VALID(target, admitted_target))) {
+        propagation_admission_end(&admission);
+        return 0;
+    }
+    if (triggered_spell_event &&
+        (!spell_target_authorized(op, target, type) || !spell_actor_current(caster_ref))) {
+        propagation_admission_end(&admission);
+        return 0;
+    }
+    propagation_admission_activate(&admission);
 
     if (caster->type == PLAYER &&
         ((spells[type].flags & SPELL_DESC_ENEMY) != 0 ||
@@ -525,28 +649,23 @@ int cast_spell(object *op,
             break;
 
         case SP_METEOR_SWARM:
-            success = 1;
-            fire_swarm(op, caster, dir, spellarch[type], SP_METEOR, 3, 0);
+            success = fire_swarm(op, caster, dir, spellarch[type], SP_METEOR, 3, 0);
             break;
 
         case SP_FROST_NOVA:
-            success = 1;
-            fire_swarm(op, caster, dir, spellarch[type], SP_ASTEROID, 3, 0);
+            success = fire_swarm(op, caster, dir, spellarch[type], SP_ASTEROID, 3, 0);
             break;
 
         case SP_BULLET_SWARM:
-            success = 1;
-            fire_swarm(op, caster, dir, spellarch[type], SP_BULLET, 5, 0);
+            success = fire_swarm(op, caster, dir, spellarch[type], SP_BULLET, 5, 0);
             break;
 
         case SP_BULLET_STORM:
-            success = 1;
-            fire_swarm(op, caster, dir, spellarch[type], SP_BULLET, 3, 0);
+            success = fire_swarm(op, caster, dir, spellarch[type], SP_BULLET, 3, 0);
             break;
 
         case SP_DESTRUCTION:
-            success = 1;
-            cast_destruction(op, caster, 5 + op->stats.Int);
+            success = cast_destruction(op, caster, 5 + op->stats.Int);
             break;
 
         case SP_TRANSFORM_WEALTH:
@@ -571,6 +690,10 @@ int cast_spell(object *op,
             break;
     }
 
+    propagation_admission_end(&admission);
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        return 0;
+    }
     play_sound_map(op->map, CMD_SOUND_EFFECT, spells[type].sound, op->x, op->y, 0, 0);
 
     if (item == CAST_NPC) {
@@ -637,18 +760,19 @@ int cast_create_obj(object *op, object *new_op, int dir) {
  */
 int fire_bolt(object *op, object *caster, int dir, int type) {
     object *tmp;
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
+    object *aim = spell_aim_target(op);
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        return 0;
+    }
 
     if (!spellarch[type]) {
         return 0;
     }
 
-    if (!dir) {
+    if (!dir && aim == NULL) {
         draw_info(COLOR_WHITE, op, "You can't fire that at yourself!");
-        return 0;
-    }
-
-    if (wall(op->map, op->x + freearr_x[dir], op->y + freearr_y[dir])) {
-        draw_info(COLOR_WHITE, op, "There is something in the way.");
         return 0;
     }
 
@@ -663,6 +787,7 @@ int fire_bolt(object *op, object *caster, int dir, int type) {
     tmp->stats.dam = (int16_t)dam;
     tmp->last_sp = spells[type].bdur + SP_level_strength_adjust(caster, type);
 
+    SET_FLAG(tmp, FLAG_NO_SAVE);
     tmp->direction = dir;
     tmp->x = op->x;
     tmp->y = op->y;
@@ -680,6 +805,7 @@ int fire_bolt(object *op, object *caster, int dir, int type) {
         return 0;
     }
 
+    projectile3d_launch(tmp, op, aim, dir);
     object_process(tmp);
 
     return 1;
@@ -724,6 +850,11 @@ int fire_arch_from_position(object *op,
         return 0;
     }
 
+    spatial_cell cell;
+    if (!spatial_resolve(env->map, x, y, 0, &cell)) {
+        return 0;
+    }
+
     tmp = arch_to_object(at);
 
     if (tmp == NULL) {
@@ -735,9 +866,57 @@ int fire_arch_from_position(object *op,
     dam = MIN(dam, INT16_MAX);
     tmp->stats.dam = (int16_t)dam;
     tmp->stats.hp = spells[type].bdur + SP_level_strength_adjust(caster, type);
-    tmp->x = x, tmp->y = y;
+    SET_FLAG(tmp, FLAG_NO_SAVE);
+    tmp->x = cell.x, tmp->y = cell.y;
     tmp->direction = dir;
 
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
+    spell_actor_ref env_ref = spell_actor_capture(env);
+    mapstruct *origin_map = env->map;
+    tag_t origin_map_count = origin_map->count;
+    int16_t origin_x = env->x, origin_y = env->y;
+    object *source_env = op->env;
+    mapstruct *source_map = op->map;
+    int16_t source_x = op->x, source_y = op->y;
+    object *observer = object_owner(op);
+    if (observer == NULL) {
+        observer = env;
+    }
+    spell_actor_ref observer_ref = spell_actor_capture(observer);
+    if (target == NULL) {
+        target = spell_aim_target(op);
+        if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref) ||
+            !spell_actor_current(env_ref) || !spell_actor_current(observer_ref)) {
+            object_destroy(tmp);
+            return 0;
+        }
+    }
+    if (target != NULL && target != observer &&
+        !(observer->type == PLAYER ? target_player_authorized(CONTR(observer), target, NULL) :
+          perception_object_visible(observer, target))) {
+        target = NULL;
+    }
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref) ||
+        !spell_actor_current(env_ref) || !spell_actor_current(observer_ref)) {
+        object_destroy(tmp);
+        return 0;
+    }
+    object *current_env = op;
+    while (current_env->env != NULL) {
+        current_env = current_env->env;
+    }
+    /* x/y belongs to the captured origin. A live actor may have teleported
+     * during authorization, which must not rebase those coordinates silently. */
+    if (current_env != env || env->map != origin_map || env->map->count != origin_map_count ||
+        env->x != origin_x || env->y != origin_y || op->env != source_env ||
+        op->map != source_map || op->x != source_x || op->y != source_y ||
+        !spatial_resolve(env->map, x, y, 0, &cell)) {
+        object_destroy(tmp);
+        return 0;
+    }
+    tmp->x = cell.x;
+    tmp->y = cell.y;
     if (target) {
         tmp->enemy = target;
         tmp->enemy_count = target->count;
@@ -755,10 +934,21 @@ int fire_arch_from_position(object *op,
         SET_ANIMATION(tmp, (NUM_ANIMATIONS(tmp) / NUM_FACINGS(tmp)) * dir);
     }
 
-    if ((tmp = object_insert_map(tmp, op->map, op, 0)) == NULL) {
+    /* Reserve explosion capacity while rejection still precedes casting costs. */
+    tmp->map = cell.map;
+    if ((tmp->other_arch != NULL || (op->type == SWARM_SPELL && op->propagation != NULL)) &&
+        tmp->type != SWARM_SPELL &&
+        !propagation_reserve_explosion_from(tmp, op, spells[type].bdur / 2)) {
+        tmp->map = NULL;
+        object_destroy(tmp);
+        return 0;
+    }
+
+    if ((tmp = object_insert_map(tmp, cell.map, op, 0)) == NULL) {
         return 1;
     }
 
+    projectile3d_launch(tmp, env, target, dir);
     object_process(tmp);
 
     return 1;
@@ -787,87 +977,28 @@ int cast_cone(object *op,
               int strength,
               int spell_type,
               struct archetype *spell_arch) {
-    object *tmp;
-    int i, success = 0, range_min = -1, range_max = 1;
-    uint32_t count_ref;
-
-    if (!dir) {
-        range_min = -3, range_max = 4, strength /= 2;
-    }
-
-    /* Our initial spell object */
-    tmp = arch_to_object(spell_arch);
-
-    if (!tmp) {
-        LOG(BUG, "arch_to_object() failed!? (%s)", spell_arch->name);
+    int dx = 0, dy = 0, dz = 0;
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
+    object *target = (dir != 0 || op->type == PLAYER) ? spell_aim_target(op) : NULL;
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
         return 0;
     }
-
-    count_ref = tmp->count;
-
-    for (i = range_min; i <= range_max; i++) {
-        int x = op->x + freearr_x[absdir(dir + i)], y = op->y + freearr_y[absdir(dir + i)];
-
-        if (wall(op->map, x, y)) {
-            continue;
+    if (dir != 0 || (op->type == PLAYER && target != NULL)) {
+        dx = freearr_x[absdir(dir)];
+        dy = freearr_y[absdir(dir)];
+        int ox, oy, oz;
+        if (target != NULL && spatial_offset(op->map, target->map, &ox, &oy, &oz)) {
+            dx = target->x + ox - op->x;
+            dy = target->y + oy - op->y;
+            dz = oz;
         }
-
-        success = 1;
-
-        if (!tmp) {
-            tmp = arch_to_object(spell_arch);
-        }
-
-        object_owner_set(tmp, op);
-        object_owner_copy(tmp, op);
-        /* *very* important - miss this and the spells go really wild! */
-        tmp->weight_limit = count_ref;
-
-        tmp->level = SK_level(caster);
-        tmp->x = x, tmp->y = y;
-
-        if (dir) {
-            tmp->stats.sp = dir;
-        } else {
-            tmp->stats.sp = i;
-        }
-
-        tmp->stats.hp = strength;
-        int dam = SP_level_dam_adjust(caster, spell_type, false);
-        dam = MIN(dam, INT16_MAX);
-        tmp->stats.dam = (int16_t)dam;
-        tmp->stats.maxhp = tmp->count;
-
-        if (!QUERY_FLAG(tmp, FLAG_FLYING)) {
-            LOG(DEBUG, "arch %s doesn't have flying 1", spell_arch->name);
-        }
-
-        if ((!QUERY_FLAG(tmp, FLAG_WALK_ON) || !QUERY_FLAG(tmp, FLAG_FLY_ON)) && tmp->stats.dam) {
-            LOG(DEBUG, "arch %s doesn't have walk_on 1 and fly_on 1", spell_arch->name);
-        }
-
-        if (!object_insert_map(tmp, op->map, op, 0)) {
-            return 0;
-        }
-
-        if (tmp->other_arch) {
-            cone_drop(tmp);
-        }
-
-        tmp = NULL;
+    } else {
+        strength /= 2;
     }
-
-    /* Can happen when we can't drop anything */
-    if (tmp) {
-        /* Was not inserted */
-        if (!QUERY_FLAG(tmp, FLAG_REMOVED)) {
-            object_remove(tmp, 0);
-        }
-
-        object_destroy(tmp);
-    }
-
-    return success;
+    return propagation_cone(op, caster, spell_arch, strength,
+                            MIN(SP_level_dam_adjust(caster, spell_type, false), INT16_MAX),
+                            dx, dy, dz);
 }
 
 /**
@@ -884,7 +1015,9 @@ void cone_drop(object *op) {
     new_ob->level = op->level;
     object_owner_copy(new_ob, op);
 
-    object_insert_map(new_ob, op->map, op, 0);
+    /* Track before insertion: movement callbacks can save/unload a member map. */
+    propagation_track_drop(op, new_ob);
+    object_insert_map(new_ob, op->map, op, INS_NO_MERGE);
 }
 
 /**
@@ -909,11 +1042,15 @@ void explode_object(object *op) {
         caster = op;
     }
 
+    spell_actor_ref source_ref = spell_actor_capture(op);
     cast_cone(op, caster, 0, spells[op->stats.sp].bdur, op->stats.sp, op->other_arch);
+    if (!spell_actor_current(source_ref)) {
+        return;
+    }
 
     OBJECTS_DESTROYED_BEGIN(op) {
         attack_hit_map(op, 0, false);
-        if (OBJECTS_DESTROYED(op)) {
+        if (!spell_actor_current(source_ref) || OBJECTS_DESTROYED(op)) {
             return;
         }
     }
@@ -956,9 +1093,10 @@ void check_fired_arch(object *op) {
             continue;
         }
 
+        uint64_t reclamation = object_reclamation_epoch();
         OBJECTS_DESTROYED_BEGIN(op) {
             int dam = attack_hit_situational(tmp, op, op->stats.dam);
-            if (OBJECTS_DESTROYED(op)) {
+            if (!object_reclamation_is_current(reclamation) || OBJECTS_DESTROYED(op)) {
                 return;
             }
 
@@ -1056,8 +1194,8 @@ int find_target_for_spell(object *op, object **target, uint32_t flags) {
         if ((flags & SPELL_DESC_SELF) && !(flags & (SPELL_DESC_ENEMY | SPELL_DESC_FRIENDLY))) {
             *target = op;
             return 1;
-        } else if ((flags & SPELL_DESC_ENEMY) && op->enemy && OBJECT_ACTIVE(op->enemy) &&
-                   op->enemy->count == op->enemy_count) {
+        } else if ((flags & SPELL_DESC_ENEMY) &&
+                   object_reference_is_current(op->enemy, op->enemy_count)) {
             *target = op->enemy;
             return 1;
         } else {
@@ -1197,7 +1335,7 @@ int SP_level_spellpoint_cost(object *caster, int spell_type, int caster_level) {
  * @param magic
  * Magic.
  */
-void fire_swarm(object *op,
+int fire_swarm(object *op,
                 object *caster,
                 int dir,
                 struct archetype *swarm_type,
@@ -1222,7 +1360,25 @@ void fire_swarm(object *op,
     tmp->other_arch = swarm_type;
     tmp->direction = dir;
 
-    object_insert_map(tmp, op->map, op, 0);
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
+    object *target = spell_aim_target(op);
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        object_destroy(tmp);
+        return 0;
+    }
+    if (target != NULL) {
+        tmp->enemy = target;
+        tmp->enemy_count = target->count;
+    }
+    SET_FLAG(tmp, FLAG_NO_SAVE);
+    tmp->map = op->map;
+    if (!propagation_reserve_swarm(tmp, spells[spell_type].bdur / 2, (unsigned)n)) {
+        tmp->map = NULL;
+        object_destroy(tmp);
+        return 0;
+    }
+    return object_insert_map(tmp, op->map, op, INS_NO_MERGE) != NULL;
 }
 
 /**

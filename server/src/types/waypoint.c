@@ -176,7 +176,7 @@ void waypoint_compute_path(object *op) {
 
     /* Store final path destination (used by aggro wp) */
     if (QUERY_FLAG(op, FLAG_DAMNED)) {
-        if (OBJECT_VALID(op->enemy, op->enemy_count)) {
+        if (object_reference_is_current(op->enemy, op->enemy_count)) {
             FREE_AND_COPY_HASH(op->slaying, op->enemy->map->path);
             op->x = op->stats.hp = op->enemy->x;
             op->y = op->stats.sp = op->enemy->y;
@@ -285,7 +285,7 @@ void waypoint_move(object *op, object *npc) {
 
     if (QUERY_FLAG(op, FLAG_DAMNED)) {
         if (op->enemy == npc->enemy && op->enemy_count == npc->enemy_count &&
-            OBJECT_VALID(op->enemy, op->enemy_count)) {
+            object_reference_is_current(op->enemy, op->enemy_count)) {
             destmap = op->enemy->map;
             op->stats.hp = op->enemy->x;
             op->stats.sp = op->enemy->y;
@@ -420,7 +420,8 @@ void waypoint_move(object *op, object *npc) {
                 "Path distance = %d for '%s' -> '%s'. Discarding old path.",
                 rv.distance,
                 npc->name,
-                npc->enemy->name);
+                object_reference_is_current(npc->enemy, npc->enemy_count) ?
+                    npc->enemy->name : "(no target)");
 #endif
             FREE_AND_CLEAR_HASH(op->msg);
         }

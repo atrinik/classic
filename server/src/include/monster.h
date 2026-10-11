@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -41,6 +41,12 @@ extern void monster_enemy_signal(object *npc, object *enemy);
 extern object *check_enemy(object *npc, rv_vector *rv);
 
 extern object *find_enemy(object *npc, rv_vector *rv);
+
+/** Revalidate borrowed dialogue identities after scripts; clear only matching
+ * retained player references on rejection. Main-thread only; retains nothing. */
+bool monster_dialogue_is_current(object *observer, tag_t observer_count,
+                                  player *controller, socket_struct *socket,
+                                  object *npc, tag_t npc_count, uint64_t reclamation);
 
 extern int talk_to_npc(object *op, object *npc, char *txt);
 

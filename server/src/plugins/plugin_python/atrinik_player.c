@@ -652,6 +652,9 @@ static PyObject *Atrinik_Player_ExecuteCommand(Atrinik_Player *self, PyObject *a
     /* Make a copy of the command, since commands_handle() modifies the
      * string. */
     char *cp = strdup(command);
+    /* Commands can change visibility or an earlier serialized actor through
+     * native paths that do not emit an object_update notification. */
+    hooks->los_publication_changed();
     hooks->commands_handle(self->pl->ob, cp);
     free(cp);
 
@@ -1364,12 +1367,19 @@ static int set_attribute(Atrinik_Player *pl, PyObject *value, void *context) {
     if (field->offset == offsetof(player, cs)) {
         fields_struct field_tmp = *field;
         resolve_client_socket_field(&field_tmp, field);
-        return generic_field_setter(&field_tmp, pl->pl->cs, value);
+        int result = generic_field_setter(&field_tmp, pl->pl->cs, value);
+        if (result != -1) {
+            hooks->los_publication_changed();
+        }
+        return result;
     }
 
     if (generic_field_setter(field, pl->pl, value) == -1) {
         return -1;
     }
+    /* In particular tli can withdraw dark-cell authorization midway through
+     * a packet even though physical geometry and the player's LOS agree. */
+    hooks->los_publication_changed();
 
     if (field->offset == offsetof(player, target_object)) {
         hooks->send_target_command(pl->pl);

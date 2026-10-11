@@ -33,6 +33,10 @@
  * way, we can use one dispatch table.
  */
 
+#include <atrinik/protocol/target.h>
+#include <perception.h>
+#include <tod.h>
+#include <spatial.h>
 #include <global.h>
 #include <movement.h>
 #include <server_main.h>
@@ -41,6 +45,7 @@
 #include <region.h>
 #include <monster.h>
 #include <los.h>
+#include <spatial.h>
 #include <light.h>
 #include <initialization.h>
 #include <animation.h>
@@ -293,6 +298,10 @@ void esrv_update_stats(player *pl) {
 
     SOFT_ASSERT(pl->ob != NULL, "Player has no object!");
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+
 #define _Add(_old, _new, _type, _bitsize)               \
     if (packet == NULL) {                               \
         packet = packet_new(CLIENT_CMD_STATS, 32, 128); \
@@ -333,14 +342,46 @@ void esrv_update_stats(player *pl) {
         FOR_INV_FINISH();
     }
 
+    /* HP and level metadata retain the same queued-publication authority as
+     * the target reply, even when no level change would trigger a refresh. */
+    object *selected_target = pl->target_object;
+    tag_t selected_count = pl->target_object_count;
+    uint64_t reclamation = object_reclamation_epoch();
+    bool target_rejected = pl->target_object != NULL && pl->target_object != pl->ob &&
+                           (!object_reference_is_current(pl->target_object, pl->target_object_count) ||
+                            !target_player_authorized(pl, pl->target_object, NULL));
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+        return;
+    }
+    target_rejected |= !object_reclamation_is_current(reclamation) ||
+                       pl->target_object != selected_target ||
+                       pl->target_object_count != selected_count;
+    if (target_rejected) {
+        /* Authorization may have reclaimed the selected actor. Do not pass
+         * that rejected borrowed pointer through authorization a second time. */
+        if (pl->target_object == selected_target && pl->target_object_count == selected_count) {
+            pl->target_object = pl->ob;
+            pl->target_object_count = 0;
+        }
+        send_target_command(pl);
+        if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+            observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+            return;
+        }
+    }
     int target_level = pl->ob->level;
     if (pl->target_object != NULL &&
-        (pl->target_object == pl->ob || OBJECT_VALID(pl->target_object, pl->target_object_count))) {
+        (pl->target_object == pl->ob || object_reference_is_current(pl->target_object, pl->target_object_count))) {
         target_level = pl->target_object->level;
     }
 
     if (pl->last_target_level != target_level || pl->last_target_viewer_level != pl->ob->level) {
         send_target_command(pl);
+        if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+            observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+            return;
+        }
     }
 
     if (pl->target_object && pl->target_object != pl->ob) {
@@ -511,6 +552,7 @@ static inline int get_tiled_map_id(player *pl, struct mapdef *map) {
  * Y.
  */
 static inline void copy_lastmap(socket_struct *ns, int dx, int dy, int dz) {
+    ns->target_map_publication_pending = true;
     struct Map newmap = {0};
     int depth, x, y;
 
@@ -578,7 +620,7 @@ void draw_client_map(object *pl) {
     /* IF player is just joining the game, he isn't on a map,
      * If so, don't try to send them a map.  All will
      * be OK once they really log in. */
-    if (!pl->map || pl->map->in_memory != MAP_IN_MEMORY) {
+    if (!OBJECT_ACTIVE(pl) || !pl->map || pl->map->in_memory != MAP_IN_MEMORY) {
         return;
     }
 
@@ -591,6 +633,7 @@ void draw_client_map(object *pl) {
         /* Are we on a new map? */
         if (!CONTR(pl)->last_update || !tile_map) {
             CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_NEW;
+            CONTR(pl)->cs->target_map_publication_pending = true;
             map_client_cache_clear(&CONTR(pl)->cs->lastmap);
             CONTR(pl)->cs->lastmap_light_generation = 0;
             CONTR(pl)->last_update = pl->map;
@@ -684,13 +727,15 @@ void draw_client_map(object *pl) {
         CONTR(pl)->cs->look_position = 0;
     }
 
-    /* Do LOS after calls to update_position */
-    if (CONTR(pl)->update_los) {
-        update_los(pl);
-        CONTR(pl)->update_los = 0;
-    }
-
+    /* Callbacks inside MAP2 may invalidate the observer as well as geometry. */
+    tag_t player_count = pl->count;
+    player *view_player = CONTR(pl);
+    socket_struct *view_socket = view_player->cs;
     draw_client_map2(pl);
+    if (!player_connection_is_current(pl, player_count, view_player, view_socket) ||
+        view_socket->target_map_published_map == NULL) {
+        return;
+    }
 
     /* If we moved on the same map, check for map name/music to update. */
     if (redraw_below && CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_SAME) {
@@ -821,6 +866,9 @@ void packet_writer_write_map_name(struct packet_struct *packet, object *op, obje
     static const char prefix[] = "[b][o=#000000]";
     static const char suffix[] = "[/o][/b]";
     const char *name = map_info && map_info->race ? map_info->race : op->map->name;
+    if (name == NULL) {
+        name = "Unnamed map";
+    }
 
     packet_debug_data(packet, 0, "Map name");
     packet_writer_write_string(packet, prefix);
@@ -909,55 +957,12 @@ static void map_invalidate_light_cache(MapCell *cell) {
     cell->light_next_rgb_explicit = 0;
 }
 
-typedef enum map_level_visibility {
-    MAP_LEVEL_HIDDEN,
-    MAP_LEVEL_WALL_BOUNDARY,
-    MAP_LEVEL_BOUNDARY,
-    MAP_LEVEL_VISIBLE,
-} map_level_visibility;
-
-static bool map_space_blocks_vertical_view(mapstruct *map, int x, int y) {
-    if (GET_MAP_FLAGS(map, x, y) & P_BLOCKSVIEW) {
-        return true;
-    }
-
-    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
-        if (QUERY_FLAG(tmp, FLAG_IS_FLOOR)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/** Whether one map space contains an explicit roof/camera surface. */
-static bool map_space_has_roof(mapstruct *map, int x, int y) {
-    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
-        /* Roof archetypes deliberately use the hidden wall layer rather than
-         * blocksview: they are camera occluders, not gameplay LOS blockers. */
-        if (object_is_roof_surface(tmp)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool map_space_blocks_camera_view(mapstruct *map, int x, int y) {
-    return map_space_blocks_vertical_view(map, x, y) || map_space_has_roof(map, x, y);
-}
-
-static bool map_level_layer_visible(map_level_visibility visibility, int layer) {
-    if (visibility == MAP_LEVEL_WALL_BOUNDARY) {
-        return layer == LAYER_WALL;
-    }
-
-    if (visibility == MAP_LEVEL_BOUNDARY) {
-        return layer == LAYER_FLOOR || layer == LAYER_FMASK || layer == LAYER_WALL;
-    }
-
-    return visibility == MAP_LEVEL_VISIBLE;
-}
+typedef los_camera_visibility map_level_visibility;
+#define MAP_LEVEL_HIDDEN LOS_CAMERA_HIDDEN
+#define MAP_LEVEL_WALL_BOUNDARY LOS_CAMERA_WALL_BOUNDARY
+#define MAP_LEVEL_BOUNDARY LOS_CAMERA_BOUNDARY
+#define MAP_LEVEL_VISIBLE LOS_CAMERA_VISIBLE
+#define map_level_layer_visible los_camera_layer_visible
 
 /** Static MAP2 geometry remains eligible for remembered presentation at zero light. */
 static bool map_layer_is_remembered_geometry(int layer) {
@@ -980,17 +985,6 @@ static bool map_space_has_client_content(MapSpace *msp, map_level_visibility vis
     return false;
 }
 
-/** Whether a map space contains structural wall content. */
-static bool map_space_has_wall(MapSpace *msp) {
-    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-        if (GET_MAP_SPACE_LAYER(msp, LAYER_WALL, sub_layer) != NULL) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 /** Return the nonnegative ground elevation supporting linked upper levels. */
 static int16_t map_space_support_height(MapSpace *msp) {
     int16_t support_height = 0;
@@ -1006,218 +1000,6 @@ static int16_t map_space_support_height(MapSpace *msp) {
     }
 
     return support_height;
-}
-
-/** Resolve one linked map depth without applying camera visibility. */
-static mapstruct *map_resolve_raw_level(mapstruct *base, int depth) {
-    mapstruct *level = base;
-    int direction = depth > 0 ? TILED_UP : TILED_DOWN;
-
-    for (int current_depth = depth > 0 ? 1 : -1; current_depth != depth + (depth > 0 ? 1 : -1);
-         current_depth += depth > 0 ? 1 : -1) {
-        level = get_map_from_tiled(level, direction);
-        if (level == NULL || !MAP_TILE_IS_SAME_LEVEL(base, current_depth)) {
-            return NULL;
-        }
-    }
-
-    return level;
-}
-
-/** Resolve one physical linked level and enforce vertical information occlusion. */
-static map_level_visibility
-map_resolve_level(mapstruct *base, int x, int y, int depth, mapstruct **resolved) {
-    mapstruct *level = base;
-
-    if (depth > 0) {
-        level = map_resolve_raw_level(base, depth);
-        if (level == NULL) {
-            return MAP_LEVEL_HIDDEN;
-        }
-
-        *resolved = level;
-        map_level_visibility visibility =
-            map_space_blocks_camera_view(level, x, y) ? MAP_LEVEL_BOUNDARY : MAP_LEVEL_VISIBLE;
-
-        /* The camera looks down through the stack. A surface above the target
-         * hides the target; a floor or wall below it must never hide a roof or
-         * higher storey. */
-        for (int current_depth = depth + 1; current_depth <= MAP2_MAX_DEPTH; current_depth++) {
-            level = get_map_from_tiled(level, TILED_UP);
-            if (level == NULL || !MAP_TILE_IS_SAME_LEVEL(base, current_depth)) {
-                break;
-            }
-
-            if (map_space_blocks_camera_view(level, x, y)) {
-                /* Keep only the target storey's exterior wall. The covering
-                 * roof hides its floor and floor mask as well as enclosed
-                 * objects; sending those horizontal surfaces makes them cut
-                 * holes through the roof in projected painter order. */
-                return MAP_LEVEL_WALL_BOUNDARY;
-            }
-        }
-
-        return visibility;
-    } else if (depth < 0) {
-        for (int current_depth = -1; current_depth >= depth; current_depth--) {
-            if (map_space_blocks_vertical_view(level, x, y)) {
-                return MAP_LEVEL_HIDDEN;
-            }
-
-            level = get_map_from_tiled(level, TILED_DOWN);
-            if (level == NULL || !MAP_TILE_IS_SAME_LEVEL(base, current_depth)) {
-                return MAP_LEVEL_HIDDEN;
-            }
-        }
-    }
-
-    *resolved = level;
-    return MAP_LEVEL_VISIBLE;
-}
-
-/**
- * Find connected overhead components covering the player.
- *
- * These components are omitted as a camera cutaway while the player is inside
- * them. The relationship comes entirely from solid floors, opaque cells, and
- * roof objects on the linked maps; no authored building flags are required.
- */
-static void map_build_level_cutaway(object *pl,
-                                    bool cutaway[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y]) {
-    bool blockers[MAP_CLIENT_X][MAP_CLIENT_Y];
-    bool walls[MAP_CLIENT_X][MAP_CLIENT_Y];
-    bool boundary[MAP_CLIENT_X][MAP_CLIENT_Y];
-    int queue_x[MAP_CLIENT_X * MAP_CLIENT_Y];
-    int queue_y[MAP_CLIENT_X * MAP_CLIENT_Y];
-
-    memset(cutaway, 0, sizeof(bool) * MAP2_LEVELS * MAP_CLIENT_X * MAP_CLIENT_Y);
-
-    for (int depth = 1; depth <= MAP2_MAX_DEPTH; depth++) {
-        mapstruct *center_level = map_resolve_raw_level(pl->map, depth);
-        if (center_level == NULL || !map_space_blocks_camera_view(center_level, pl->x, pl->y)) {
-            continue;
-        }
-
-        memset(blockers, 0, sizeof(blockers));
-        memset(walls, 0, sizeof(walls));
-
-        for (int ay = CONTR(pl)->cs->mapy - 1, y = (pl->y + (CONTR(pl)->cs->mapy + 1) / 2) - 1;
-             y >= pl->y - CONTR(pl)->cs->mapy_2;
-             y--, ay--) {
-            int ax = CONTR(pl)->cs->mapx - 1;
-
-            for (int x = (pl->x + (CONTR(pl)->cs->mapx + 1) / 2) - 1;
-                 x >= pl->x - CONTR(pl)->cs->mapx_2;
-                 x--, ax--) {
-                int nx = x;
-                int ny = y;
-                mapstruct *base = get_map_from_coord(pl->map, &nx, &ny);
-                if (base == NULL) {
-                    continue;
-                }
-
-                mapstruct *level = map_resolve_raw_level(base, depth);
-                if (level != NULL) {
-                    blockers[ax][ay] = map_space_blocks_camera_view(level, nx, ny);
-                    walls[ax][ay] = map_space_has_wall(GET_MAP_SPACE_PTR(level, nx, ny));
-                }
-            }
-        }
-
-        int center_x = CONTR(pl)->cs->mapx_2;
-        int center_y = CONTR(pl)->cs->mapy_2;
-
-        size_t queue_first = 0;
-        size_t queue_last = 0;
-        size_t depth_index = MAP2_DEPTH_INDEX(depth);
-        queue_x[queue_last] = center_x;
-        queue_y[queue_last++] = center_y;
-        cutaway[depth_index][center_x][center_y] = true;
-
-        static const int neighbors_x[] = {-1, 1, 0, 0};
-        static const int neighbors_y[] = {0, 0, -1, 1};
-        while (queue_first < queue_last) {
-            int current_x = queue_x[queue_first];
-            int current_y = queue_y[queue_first++];
-
-            for (size_t neighbor = 0; neighbor < arraysize(neighbors_x); neighbor++) {
-                int next_x = current_x + neighbors_x[neighbor];
-                int next_y = current_y + neighbors_y[neighbor];
-                if (next_x < 0 || next_x >= CONTR(pl)->cs->mapx || next_y < 0 ||
-                    next_y >= CONTR(pl)->cs->mapy || !blockers[next_x][next_y] ||
-                    cutaway[depth_index][next_x][next_y]) {
-                    continue;
-                }
-
-                cutaway[depth_index][next_x][next_y] = true;
-                queue_x[queue_last] = next_x;
-                queue_y[queue_last++] = next_y;
-            }
-        }
-
-        /* Perimeter walls commonly occupy a neighboring cell without a floor
-         * of their own. Include the one-cell structural boundary around the
-         * connected overhead component; otherwise those upper-storey walls
-         * remain as a floating lattice after the roof is cut away. Keep the
-         * expansion non-recursive so it cannot consume a separate building
-         * through a chain of nearby wall cells. */
-        memset(boundary, 0, sizeof(boundary));
-        for (int ay = 0; ay < CONTR(pl)->cs->mapy; ay++) {
-            for (int ax = 0; ax < CONTR(pl)->cs->mapx; ax++) {
-                if (!walls[ax][ay] || cutaway[depth_index][ax][ay]) {
-                    continue;
-                }
-
-                for (int offset_y = -1; offset_y <= 1 && !boundary[ax][ay]; offset_y++) {
-                    for (int offset_x = -1; offset_x <= 1; offset_x++) {
-                        int neighbor_x = ax + offset_x;
-                        int neighbor_y = ay + offset_y;
-                        if (neighbor_x >= 0 && neighbor_x < CONTR(pl)->cs->mapx &&
-                            neighbor_y >= 0 && neighbor_y < CONTR(pl)->cs->mapy &&
-                            cutaway[depth_index][neighbor_x][neighbor_y]) {
-                            boundary[ax][ay] = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (int ay = 0; ay < CONTR(pl)->cs->mapy; ay++) {
-            for (int ax = 0; ax < CONTR(pl)->cs->mapx; ax++) {
-                cutaway[depth_index][ax][ay] |= boundary[ax][ay];
-            }
-        }
-    }
-}
-
-/**
- * Whether a structural column has a higher roof visible to the camera.
- *
- * Roof components can be disconnected even when their supporting walls and
- * interior floors form one connected component. Cutting the latter as a whole
- * must not leave a retained roof floating without its wall layer.
- */
-static bool
-map_column_has_visible_roof(mapstruct *base,
-                            int x,
-                            int y,
-                            int depth,
-                            int ax,
-                            int ay,
-                            const bool cutaway[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y]) {
-    for (int roof_depth = depth + 1; roof_depth <= MAP2_MAX_DEPTH; roof_depth++) {
-        mapstruct *roof_map = map_resolve_raw_level(base, roof_depth);
-        if (roof_map == NULL) {
-            break;
-        }
-
-        if (!cutaway[MAP2_DEPTH_INDEX(roof_depth)][ax][ay] && map_space_has_roof(roof_map, x, y)) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 /** Clear a map cell, but only if it has not been cleared before. */
@@ -1276,8 +1058,21 @@ static packet_struct *map2_frame_level_chunk(int8_t depth, packet_struct *payloa
 
 /** Draw the client map. */
 void draw_client_map2(object *pl) {
+    player *view_player = CONTR(pl);
+    socket_struct *view_socket = view_player->cs;
+    tag_t view_player_count = pl->count;
+    /* A script-triggered recursive draw must never publish inside this one. */
+    if (view_player->map2_serializing) {
+        view_player->los_view_valid = false;
+        return;
+    }
+    view_player->map2_serializing = true;
+    view_socket->target_map_publication_pending = true;
     light_map_unlink_flush();
     light_batch_flush();
+    /* Reuse only geometry masks with a complete, current dependency key. */
+    update_los(pl);
+    uint64_t publication_epoch = los_publication_epoch();
     static uint32_t map2_count = 0;
     MapCell *mp;
     MapSpace *msp;
@@ -1297,7 +1092,16 @@ void draw_client_map2(object *pl) {
     int num_layers;
     object *tmp, *tmp2;
     uint8_t have_sound_ambient;
-    packet_struct *packet, *packet_header, *packet_layer, *packet_sound;
+    packet_struct *packet = NULL, *packet_header = NULL, *packet_layer = NULL;
+    packet_struct *packet_sound = NULL;
+    packet_struct *continuation_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
+    uint16_t continuation_packet_count = 0;
+    bool target_cleared = false;
+    struct {
+        mapstruct *map;
+        int x, y;
+    } explored[MAP_CLIENT_X * MAP_CLIENT_Y];
+    size_t explored_count = 0;
     packet_struct *level_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
     int8_t level_depths[MAP2_LEVEL_CHUNKS_MAX] = {0};
     int8_t present_depths[MAP2_LEVELS] = {0};
@@ -1311,6 +1115,10 @@ void draw_client_map2(object *pl) {
     uint64_t timed_light_end_seconds = 0;
     uint8_t timed_light_flags = MAP2_LIGHT_KEYFRAME_CONTINUOUS;
     size_t timed_light_flags_pos = 0;
+
+    if (!los_view_is_current(pl)) {
+        goto abort_map;
+    }
 
     /* Any kind of special vision? */
     special_vision =
@@ -1463,8 +1271,6 @@ void draw_client_map2(object *pl) {
 
     packet_header = packet;
     uint8_t present_level_count = 0;
-    bool level_cutaway[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
-    map_build_level_cutaway(pl, level_cutaway);
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         bool level_present = false;
@@ -1481,98 +1287,61 @@ void draw_client_map2(object *pl) {
             for (x = (pl->x + (CONTR(pl)->cs->mapx + 1) / 2) - 1;
                  x >= pl->x - CONTR(pl)->cs->mapx_2;
                  x--, ax--) {
-                d = CONTR(pl)->blocked_los[ax][ay];
+                d = CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(depth)][ax][ay];
                 /* Form the data packet for x and y positions. */
                 mask = (ax & 0x1f) << 11 | (ay & 0x1f) << 6;
                 /* Space is out of map or blocked. Update space and clear values if
                  * needed. */
                 if (d & BLOCKED_LOS_OUT_OF_MAP) {
-                    map_if_clearcell(false);
-                    continue;
-                }
-
-                nx = x;
-                ny = y;
-
-                if (!(m = get_map_from_coord(pl->map, &nx, &ny))) {
-                    map_if_clearcell(false);
-                    continue;
-                }
-
-                mapstruct *base_map = m;
-                mapstruct *level_map = NULL;
-                map_level_visibility level_visibility =
-                    map_resolve_level(m, nx, ny, depth, &level_map);
-                if (level_visibility == MAP_LEVEL_HIDDEN) {
                     map_if_clearcell(depth != 0);
                     continue;
                 }
 
-                /* The client treats the packet's depth list as the
-                 * authoritative set of physical levels to retain. Preserve a
-                 * visible level even when its delta payload is empty; omitting
-                 * an unchanged upper level would discard its cached roofs. */
-                level_present = true;
-
-                m = level_map;
-                msp = GET_MAP_SPACE_PTR(m, nx, ny);
-                bool visible_roof_above =
-                    depth >= 0 &&
-                    map_column_has_visible_roof(base_map, nx, ny, depth, ax, ay, level_cutaway);
-
-                if (depth > 0 && level_cutaway[MAP2_DEPTH_INDEX(depth)][ax][ay]) {
-                    if (visible_roof_above &&
-                        map_space_has_client_content(msp, MAP_LEVEL_BOUNDARY)) {
-                        level_visibility = MAP_LEVEL_BOUNDARY;
-                    } else {
-                        map_if_clearcell(true);
-                        continue;
-                    }
+                spatial_cell resolved;
+                if (!spatial_resolve(pl->map, x, y, depth, &resolved)) {
+                    map_if_clearcell(depth != 0);
+                    continue;
                 }
-
-                blocksview = d & BLOCKED_LOS_BLOCKED;
-                bool tile_fow = false;
-                /* A lower level behind gameplay LOS cannot disclose content.
-                 * It has no structural shell that the top-down camera needs to
-                 * preserve, so discard the complete cached cell. */
-                if (depth < 0 && blocksview) {
+                nx = resolved.x;
+                ny = resolved.y;
+                m = resolved.map;
+                map_level_visibility level_visibility =
+                    CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(depth)][ax][ay];
+                if (level_visibility == MAP_LEVEL_HIDDEN) {
                     map_if_clearcell(true);
                     continue;
                 }
 
-                /* Base-level LOS uses the normal explored-map cache: a cell
-                 * that has never been sent remains empty, while previously
-                 * seen contents are retained and rendered as grayscale FOW. */
-                if (depth == 0 && blocksview) {
-                    if (visible_roof_above) {
-                        level_visibility = MAP_LEVEL_BOUNDARY;
-                        tile_fow = true;
-                    } else {
-                        map_if_clearcell(false);
-                        mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
-                        if (map_append_support_height(packet,
-                                                      mp,
-                                                      mask,
-                                                      map_space_support_height(msp))) {
-                            level_present = true;
-                        }
-                        continue;
-                    }
+                /* Retain every physical level even when its delta is empty. */
+                level_present = true;
+                msp = GET_MAP_SPACE_PTR(m, nx, ny);
+                blocksview = d & BLOCKED_LOS_BLOCKED;
+                bool camera_covered = level_visibility != MAP_LEVEL_VISIBLE;
+                /* An exposed roof/floor receives incident light even when its
+                 * slab blocks sight to occupants. Only covered storeys and
+                 * ordinary base LOS loss enter remembered fog presentation. */
+                bool tile_fow = level_visibility == MAP_LEVEL_WALL_BOUNDARY ||
+                                (depth == 0 && blocksview);
+                if (depth < 0 && blocksview) {
+                    map_if_clearcell(true);
+                    continue;
                 }
-
-                /* Gameplay LOS protects actors, items, and effects at and
-                 * above the player's level. Positive depths retain floors,
-                 * masks, and walls so clearing their complete cells does not
-                 * slice roofs into the base level's LOS silhouette. */
-                if (depth > 0 && blocksview) {
-                    if (level_visibility == MAP_LEVEL_VISIBLE || visible_roof_above) {
-                        level_visibility = MAP_LEVEL_BOUNDARY;
-                    }
-                    tile_fow = true;
+                /* Ordinary base LOS loss preserves only previously authorized
+                 * static fog geometry. Camera cover instead serializes explicit
+                 * layer removals so covered interiors cannot persist as fog. */
+                if (depth == 0 && blocksview && !camera_covered) {
+                    map_if_clearcell(false);
+                    mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
+                    map_append_support_height(packet, mp, mask, map_space_support_height(msp));
+                    continue;
+                }
+                if (depth > 0 && blocksview && level_visibility == MAP_LEVEL_VISIBLE) {
+                    level_visibility = MAP_LEVEL_BOUNDARY;
                 }
 
                 if (!map_space_has_client_content(msp, level_visibility)) {
-                    map_if_clearcell(false);
+                    /* Current empty geometry revokes formerly cached surfaces. */
+                    map_if_clearcell(true);
                     if (depth == 0) {
                         mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                         if (map_append_support_height(packet,
@@ -1678,9 +1447,13 @@ void draw_client_map2(object *pl) {
                         mask |= MAP2_MASK_SUPPORT_HEIGHT;
                     }
                 }
-                if (depth == 0 && !tile_fow && !MAP_UNIQUE(m) && m->region != NULL &&
+                if (depth == 0 && level_visibility == MAP_LEVEL_VISIBLE && !blocksview &&
+                    !MAP_UNIQUE(m) && m->region != NULL &&
                     region_find_with_map(m->region) != NULL) {
-                    exploration_mark(CONTR(pl)->cs, m->path, MAP_WIDTH(m), MAP_HEIGHT(m), nx, ny);
+                    HARD_ASSERT(explored_count < arraysize(explored));
+                    explored[explored_count].map = m;
+                    explored[explored_count].x = nx;
+                    explored[explored_count++].y = ny;
                 }
 
                 if (!mp->fow_known || (mp->fow != 0) != tile_fow) {
@@ -1719,6 +1492,14 @@ void draw_client_map2(object *pl) {
                                     break;
                                 }
                             }
+                        }
+
+                        /* EXIT faces on the wall layer are gameplay content.
+                         * Clearing just their semantic bit still reveals portals
+                         * beneath roofs. Remove the complete cached layer. */
+                        if (tmp != NULL && (camera_covered || blocksview) &&
+                            (tmp->head != NULL ? tmp->head : tmp)->type == EXIT) {
+                            tmp = NULL;
                         }
 
                         if (tmp != NULL && tmp->layer != LAYER_WALL &&
@@ -1807,6 +1588,33 @@ void draw_client_map2(object *pl) {
 
                         /* Found something. */
                         if (tmp) {
+                            bool hidden = false;
+                            object *callback_head = tmp->head != NULL ? tmp->head : tmp;
+                            if (HAS_EVENT(callback_head, EVENT_ASK_SHOW)) {
+                                tag_t part_count = tmp->count, head_count = callback_head->count;
+                                mapstruct *part_map = tmp->map, *head_map = callback_head->map;
+                                int part_x = tmp->x, part_y = tmp->y;
+                                int head_x = callback_head->x, head_y = callback_head->y;
+                                uint64_t reclamation = object_reclamation_epoch();
+                                hidden = OBJECT_IS_HIDDEN(pl, callback_head);
+                                /* Scripts may remove/recycle any borrowed object, move the
+                                 * observer, or mutate cover elsewhere in the viewport. */
+                                if (!object_reclamation_is_current(reclamation) ||
+                                    !player_connection_is_current(pl, view_player_count,
+                                                                  view_player, view_socket) ||
+                                    view_socket->state == ST_DEAD || view_socket->state == ST_ZOMBIE ||
+                                    !los_view_is_current(pl) ||
+                                    publication_epoch != los_publication_epoch() ||
+                                    !OBJECT_VALID(tmp, part_count) || !OBJECT_ACTIVE(tmp) ||
+                                    !OBJECT_VALID(callback_head, head_count) ||
+                                    !OBJECT_ACTIVE(callback_head) || tmp->map != part_map ||
+                                    tmp->x != part_x || tmp->y != part_y ||
+                                    callback_head->map != head_map || callback_head->x != head_x ||
+                                    callback_head->y != head_y ||
+                                    (tmp->head != NULL ? tmp->head : tmp) != callback_head) {
+                                    goto abort_map;
+                                }
+                            }
                             int16_t face;
                             uint8_t quick_pos = tmp->quick_pos;
                             uint8_t flags = 0, probe_val = 0;
@@ -1956,11 +1764,11 @@ void draw_client_map2(object *pl) {
                              * or mutating the delta cache so both hide and
                              * reveal transitions produce the required wire
                              * update. */
-                            if (OBJECT_IS_HIDDEN(pl, head)) {
+                            if (hidden) {
                                 if (flags2 & MAP2_FLAG2_PROBE) {
                                     CONTR(pl)->target_object = NULL;
                                     CONTR(pl)->target_object_count = 0;
-                                    send_target_command(CONTR(pl));
+                                    target_cleared = true;
                                 }
 
                                 bool was_cached = mp->faces[socket_layer] != 0;
@@ -1977,7 +1785,7 @@ void draw_client_map2(object *pl) {
                                     mp->anim_flags[sub_layer] = 0;
                                     mp->client_flags[sub_layer] = 0;
                                     mp->probe = 0;
-                                    mp->target_object_count = 0;
+                                    mp->target_object_count[sub_layer] = 0;
                                     mp->is_friend &= ~(1 << sub_layer);
                                 }
 
@@ -2024,7 +1832,7 @@ void draw_client_map2(object *pl) {
                                 mp->exit[socket_layer] == is_exit &&
                                 (layer != LAYER_LIVING || !IS_LIVE(head) ||
                                  (mp->probe == probe_val &&
-                                  mp->target_object_count == target_object_count)) &&
+                                  mp->target_object_count[sub_layer] == target_object_count)) &&
                                 mp->anim_speed[socket_layer] == anim_speed &&
                                 mp->anim_facing[socket_layer] == anim_facing &&
                                 (layer != LAYER_LIVING ||
@@ -2054,7 +1862,7 @@ void draw_client_map2(object *pl) {
 
                             if (layer == LAYER_LIVING) {
                                 mp->probe = probe_val;
-                                mp->target_object_count = target_object_count;
+                                mp->target_object_count[sub_layer] = target_object_count;
 
                                 if (flags2 & MAP2_FLAG2_TARGET) {
                                     if (is_friend) {
@@ -2203,6 +2011,8 @@ void draw_client_map2(object *pl) {
 
                             if (layer == LAYER_LIVING) {
                                 mp->anim_flags[sub_layer] = 0;
+                                mp->target_object_count[sub_layer] = 0;
+                                mp->client_flags[sub_layer] = 0;
                             }
 
                             packet_debug_data(packet_layer, 1, "Socket layer ID (clear)");
@@ -2380,6 +2190,7 @@ void draw_client_map2(object *pl) {
 
                 packet_writer_write_packet(packet, packet_layer);
                 packet_free(packet_layer);
+                packet_layer = NULL;
 
                 /* Kill animations? */
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
@@ -2540,6 +2351,7 @@ void draw_client_map2(object *pl) {
         }
 
         packet_free(packet);
+        packet = NULL;
     }
 
     /* The first packet declares the complete level mask. Greedily include
@@ -2566,8 +2378,6 @@ void draw_client_map2(object *pl) {
             packet_writer_write_uint32(packet_header, 0);
         }
     }
-    packet_struct *continuation_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
-    uint16_t continuation_packet_count = 0;
     for (;;) {
         packet_struct *continuation = packet_new(CLIENT_CMD_MAP, 0, 512);
         packet_writer_write_uint8(continuation, MAP_UPDATE_CMD_PARTIAL);
@@ -2610,13 +2420,42 @@ void draw_client_map2(object *pl) {
     packet_header->data[continuation_count_pos] = continuation_marker >> 8;
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
-    exploration_flush(CONTR(pl)->cs, false);
+    /* No callback or yield may separate this fence from queue publication. */
+    if (!los_view_is_current(pl) || publication_epoch != los_publication_epoch() ||
+        view_socket->state == ST_DEAD || view_socket->state == ST_ZOMBIE) {
+        goto abort_map;
+    }
+    for (size_t i = 0; i < explored_count; i++) {
+        mapstruct *discovered = explored[i].map;
+        exploration_mark(view_socket, discovered->path, MAP_WIDTH(discovered),
+                         MAP_HEIGHT(discovered), explored[i].x, explored[i].y);
+    }
+    exploration_flush(view_socket, false);
     bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
                             CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     socket_send_packet(CONTR(pl)->cs, packet_header);
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
     }
+    socket_struct *published_cs = CONTR(pl)->cs;
+    published_cs->target_map_published_depths = 0;
+    if (published_cs->state != ST_DEAD && published_cs->state != ST_ZOMBIE) {
+        for (uint8_t i = 0; i < present_level_count; i++) {
+            published_cs->target_map_published_depths |=
+                UINT16_C(1) << MAP2_DEPTH_INDEX(present_depths[i]);
+        }
+        published_cs->target_map_published_map = pl->map;
+        published_cs->target_map_published_count = pl->map->count;
+        published_cs->target_map_published_x = pl->x;
+        published_cs->target_map_published_y = pl->y;
+        published_cs->target_map_published_width = published_cs->mapx;
+        published_cs->target_map_published_height = published_cs->mapy;
+    } else {
+        published_cs->target_map_published_map = NULL;
+        published_cs->target_map_published_count = 0;
+    }
+    published_cs->target_map_publication_pending = false;
+    view_player->map2_serializing = false;
 
     for (uint16_t i = 0; i < level_packet_count; i++) {
         HARD_ASSERT(level_sent[i]);
@@ -2642,6 +2481,46 @@ void draw_client_map2(object *pl) {
         socket_send_packet(CONTR(pl)->cs, packet_sound);
     } else {
         packet_free(packet_sound);
+    }
+    if (target_cleared) {
+        send_target_command(view_player);
+    }
+    return;
+
+abort_map:
+    if (packet_layer != NULL) {
+        packet_free(packet_layer);
+    }
+    if (packet != NULL && packet != packet_header) {
+        packet_free(packet);
+    }
+    if (packet_header != NULL) {
+        packet_free(packet_header);
+    }
+    if (packet_sound != NULL) {
+        packet_free(packet_sound);
+    }
+    for (uint16_t i = 0; i < level_packet_count; i++) {
+        packet_free(level_packets[i]);
+    }
+    for (uint16_t i = 0; i < continuation_packet_count; i++) {
+        packet_free(continuation_packets[i]);
+    }
+    /* Logout may have freed both controller and socket inside ASK_SHOW. Its
+     * teardown already withdraws publication and frees the old delta cache.
+     * Only touch a connection still owned by this exact live observer. */
+    if (player_connection_is_current(pl, view_player_count, view_player, view_socket)) {
+        /* A partially changed delta cache cannot describe a client generation. */
+        map_client_cache_clear(&view_socket->lastmap);
+        view_socket->lastmap_light_generation = 0;
+        view_socket->target_map_published_map = NULL;
+        view_socket->target_map_published_count = 0;
+        view_socket->target_map_published_depths = 0;
+        view_socket->target_map_publication_pending = false;
+        view_player->last_update = NULL;
+        view_player->los_view_valid = false;
+        view_player->update_los = 1;
+        view_player->map2_serializing = false;
     }
 }
 
@@ -2898,7 +2777,15 @@ void socket_command_fire(socket_struct *ns, player *pl, uint8_t *data, size_t le
     skill_time = skills[pl->ob->chosen_skill->stats.sp].time;
     delay = 0;
 
-    object_ranged_fire(tmp, pl->ob, dir, &delay);
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+    uint64_t reclamation = object_reclamation_epoch();
+    object_ranged_fire(tmp, observer, dir, &delay);
+    if (!object_reclamation_is_current(reclamation) ||
+        !player_connection_is_current(observer, observer_count, pl, observer_socket)) {
+        return;
+    }
 
     if (skill_time > 1.0) {
         skill_time -= (SK_level(pl->ob) / 10.0 / 3.0) * 0.1;
@@ -2981,6 +2868,114 @@ void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t le
     }
 }
 
+/** Withdraw a socket's borrowed map identity before map storage is torn down. */
+void target_map_publication_forget_socket(socket_struct *cs, mapstruct *map) {
+    if (cs != NULL && cs->target_map_published_map == map) {
+        cs->target_map_published_map = NULL;
+        cs->target_map_published_count = 0;
+        cs->target_map_published_depths = 0;
+        cs->target_map_publication_pending = false;
+        map_client_cache_clear(&cs->lastmap);
+    }
+}
+
+void target_map_publication_forget(mapstruct *map) {
+    for (player *pl = first_player; pl != NULL; pl = pl->next) {
+        target_map_publication_forget_socket(pl->cs, map);
+    }
+    if (init_sockets != NULL) {
+        for (int i = 0; i < socket_info.allocated_sockets; i++) {
+            target_map_publication_forget_socket(&init_sockets[i], map);
+        }
+    }
+    socket_target_publications_forget(map);
+}
+
+/** Match one exact physical part to its previously queued live MAP2 identity. */
+static bool target_player_part_published(const player *pl, const object *part, int *depth) {
+    if (pl == NULL || pl->cs == NULL || part == NULL || part->map == NULL ||
+        part->layer != LAYER_LIVING || part->sub_layer >= NUM_SUB_LAYERS ||
+        !IS_LIVE(HEAD(part)) ||
+        pl->cs->target_map_publication_pending || pl->cs->target_map_published_map == NULL ||
+        pl->cs->target_map_published_count == 0 ||
+        pl->cs->target_map_published_map->count != pl->cs->target_map_published_count ||
+        pl->cs->target_map_published_map->in_memory != MAP_IN_MEMORY ||
+        pl->cs->target_map_published_map->spaces == NULL ||
+        pl->cs->target_map_published_width != pl->cs->mapx ||
+        pl->cs->target_map_published_height != pl->cs->mapy) {
+        return false;
+    }
+    int dx, dy, dz;
+    socket_struct *cs = pl->cs;
+    if (!spatial_offset(cs->target_map_published_map, part->map, &dx, &dy, &dz) ||
+        dz < -MAP2_MAX_DEPTH || dz > MAP2_MAX_DEPTH ||
+        !(cs->target_map_published_depths & (UINT16_C(1) << MAP2_DEPTH_INDEX(dz)))) {
+        return false;
+    }
+    int x = dx + part->x - cs->target_map_published_x + cs->mapx_2;
+    int y = dy + part->y - cs->target_map_published_y + cs->mapy_2;
+    if (x < 0 || x >= cs->mapx || y < 0 || y >= cs->mapy) {
+        return false;
+    }
+    MapCell *cached = map_client_cache_cell(&cs->lastmap, dz, x, y, false);
+    int layer = NUM_LAYERS * part->sub_layer + LAYER_LIVING - 1;
+    if (cached == NULL || cached->cleared || !cached->fow_known || cached->fow ||
+        cached->faces[layer] == 0 ||
+        cached->target_object_count[part->sub_layer] != HEAD(part)->count) {
+        return false;
+    }
+    spatial_cell physical;
+    if (!spatial_resolve(cs->target_map_published_map,
+                         cs->target_map_published_x + x - cs->mapx_2,
+                         cs->target_map_published_y + y - cs->mapy_2,
+                         dz, &physical) || physical.map != part->map ||
+        physical.x != part->x || physical.y != part->y) {
+        return false;
+    }
+    if (depth != NULL) {
+        *depth = dz;
+    }
+    return true;
+}
+
+/** Server-thread target authority: queued live identity plus fresh exact-part perception. */
+bool target_player_authorized(const player *pl, const object *target, int *depth) {
+    if (pl == NULL || !object_storage_is_owned(pl->ob) || !object_storage_is_owned(target)) {
+        return false;
+    }
+    const object *observer = pl->ob;
+    const socket_struct *observer_socket = pl->cs;
+    const object *head = HEAD(target);
+    if (!object_storage_is_owned(head)) {
+        return false;
+    }
+    tag_t observer_count = observer->count, target_count = target->count, head_count = head->count;
+    const player *target_controller = head->type == PLAYER ? CONTR(head) : NULL;
+    const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
+    bool single_part = target->head != NULL;
+    for (const object *part = target; part != NULL;) {
+        tag_t part_count = part->count;
+        uint64_t reclamation = object_reclamation_epoch();
+        bool authorized = target_player_part_published(pl, part, depth) &&
+                          perception_player_part_authorized(pl, part);
+        /* EVENT_ASK_SHOW may delete, remove or recycle any borrowed actor. */
+        if (!object_reclamation_is_current(reclamation) ||
+            !player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+            (target_controller != NULL &&
+             !player_connection_is_current(head, head_count, target_controller, target_socket)) ||
+            !OBJECT_ACTIVE(observer) || observer_socket->state == ST_DEAD ||
+            observer_socket->state == ST_ZOMBIE || !OBJECT_VALID(target, target_count) || !OBJECT_VALID(head, head_count) ||
+            !OBJECT_VALID(part, part_count)) {
+            return false;
+        }
+        if (authorized && target_player_part_published(pl, part, depth)) {
+            return true;
+        }
+        part = single_part ? NULL : part->more;
+    }
+    return false;
+}
+
 /**
  * Send target command, calculate the target's color level, etc.
  * @param pl
@@ -2994,14 +2989,31 @@ void send_target_command(player *pl) {
         return;
     }
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+    object *selected_target = pl->target_object;
+    tag_t selected_count = pl->target_object_count;
+    int target_depth = 0;
+    uint64_t reclamation = object_reclamation_epoch();
+    bool target_authorized = pl->target_object != NULL && pl->target_object != pl->ob &&
+                             object_reference_is_current(pl->target_object, pl->target_object_count) &&
+                             target_player_authorized(pl, pl->target_object, &target_depth);
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+        return;
+    }
+    /* The live player-list check above freshly owns pl and its observer.
+     * On reclamation, discard the borrowed target and serialize SELF. */
+    target_authorized &= object_reclamation_is_current(reclamation) &&
+                         pl->target_object == selected_target &&
+                         pl->target_object_count == selected_count;
     packet = packet_new(CLIENT_CMD_TARGET, 64, 64);
 
     pl->ob->enemy = NULL;
     pl->ob->enemy_count = 0;
 
-    if (!pl->target_object || pl->target_object == pl->ob ||
-        !OBJECT_VALID(pl->target_object, pl->target_object_count) ||
-        IS_INVISIBLE(pl->target_object, pl->ob)) {
+    if (!target_authorized) {
         packet_debug_data(packet, 0, "Target command type");
         packet_writer_write_uint8(packet, CMD_TARGET_SELF);
         packet_debug_data(packet, 0, "Color");
@@ -3040,6 +3052,10 @@ void send_target_command(player *pl) {
         packet_writer_write_uint8(packet, pl->target_object->level);
     }
 
+    packet_debug_data(packet, 0, "Target actor identity");
+    packet_writer_write_uint32(packet, pl->target_object_count);
+    packet_debug_data(packet, 0, "Target relative depth");
+    packet_writer_write_int8(packet, target_authorized ? target_depth : 0);
     packet_debug_data(packet, 0, "Combat mode");
     packet_writer_write_uint8(packet, pl->combat);
     packet_debug_data(packet, 0, "Combat force mode");
@@ -3136,84 +3152,211 @@ void generate_quick_name(player *pl) {
 }
 
 void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
+    (void)ns;
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
-    uint8_t type;
-
-    type = packet_reader_read_uint8(&reader);
-
+    uint8_t type = packet_reader_read_uint8(&reader);
+    uint8_t x = 0, y = 0;
+    int8_t depth = 0;
+    uint32_t count = 0;
     if (type == CMD_TARGET_MAPXY) {
-        uint8_t x, y;
-        uint32_t count, target_object_count;
-        int i, xt, yt;
-        mapstruct *m;
-        object *tmp;
-
         x = packet_reader_read_uint8(&reader);
         y = packet_reader_read_uint8(&reader);
+        depth = packet_reader_read_int8(&reader);
         count = packet_reader_read_uint32(&reader);
+    } else if (type != CMD_TARGET_CLEAR) {
+        return;
+    }
+    /* Exact framing and semantic validation precede every state mutation. */
+    if (!packet_reader_finish(&reader) || pl == NULL || pl->ob == NULL ||
+        pl->ob->map == NULL ||
+        (type == CMD_TARGET_MAPXY &&
+         (x >= pl->cs->mapx || y >= pl->cs->mapy ||
+          depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH))) {
+        return;
+    }
 
-        /* Validate the passed x/y. */
-        if (x >= pl->cs->mapx || y >= pl->cs->mapy) {
-            LOG(PACKET, "Invalid X/Y: %d, %d", x, y);
+    /* Bound replay work before topology resolution or any visibility callback.
+     * Drops retain the current selection and create no deferred borrowed state.
+     * CLEAR stays immediate but cannot replenish this connection's budget. */
+    if (type == CMD_TARGET_MAPXY) {
+        if (pl->cs->target_select_admitted && pl->cs->target_select_tick == pticks) {
             return;
         }
+        pl->cs->target_select_admitted = true;
+        pl->cs->target_select_tick = pticks;
+    }
 
-        target_object_count = pl->target_object_count;
-        pl->target_object = NULL;
-        pl->target_object_count = 0;
-
-        for (i = 0; i <= SIZEOFFREE1 && !pl->target_object_count; i++) {
-            /* Check whether we are still in range of the player's
-             * viewport, and whether the player can see the square. */
-            if (x + freearr_x[i] < 0 || x + freearr_x[i] >= pl->cs->mapx || y + freearr_y[i] < 0 ||
-                y + freearr_y[i] >= pl->cs->mapy ||
-                pl->blocked_los[x + freearr_x[i]][y + freearr_y[i]] > BLOCKED_LOS_BLOCKSVIEW) {
-                continue;
-            }
-
-            /* The x/y we got above is from the client's map, so 0,0 is
-             * actually topmost (northwest) corner of the map in the client,
-             * and not 0,0 of the actual map, so we need to transform it to
-             * actual map coordinates. */
-            xt = pl->ob->x + (x - pl->cs->mapx_2) + freearr_x[i];
-            yt = pl->ob->y + (y - pl->cs->mapy_2) + freearr_y[i];
-            m = get_map_from_coord(pl->ob->map, &xt, &yt);
-
-            /* Invalid x/y. */
-            if (!m) {
-                continue;
-            }
-
-            /* Nothing alive on this spot. */
-            if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
-                continue;
-            }
-
-            FOR_MAP_LAYER_BEGIN(m, xt, yt, LAYER_LIVING, -1, tmp) {
-                tmp = HEAD(tmp);
-
-                if ((!count || tmp->count == count) && IS_LIVE(tmp) && tmp != pl->ob &&
-                    !IS_INVISIBLE(tmp, pl->ob) && !OBJECT_IS_HIDDEN(pl->ob, tmp)) {
-                    pl->target_object = tmp;
-                    pl->target_object_count = tmp->count;
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+    object *target = NULL;
+    if (type == CMD_TARGET_MAPXY && count != 0 &&
+        !pl->cs->target_map_publication_pending && pl->cs->target_map_published_map != NULL &&
+        pl->cs->target_map_published_count != 0 &&
+        pl->cs->target_map_published_map->count == pl->cs->target_map_published_count &&
+        pl->cs->target_map_published_map->in_memory == MAP_IN_MEMORY &&
+        pl->cs->target_map_published_map->spaces != NULL &&
+        pl->cs->target_map_published_width == pl->cs->mapx &&
+        pl->cs->target_map_published_height == pl->cs->mapy &&
+        (pl->cs->target_map_published_depths & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth)))) {
+        spatial_cell cell;
+        int xt = pl->cs->target_map_published_x + x - pl->cs->mapx_2;
+        int yt = pl->cs->target_map_published_y + y - pl->cs->mapy_2;
+        if (spatial_resolve(pl->cs->target_map_published_map, xt, yt, depth, &cell)) {
+            object *part;
+            FOR_MAP_LAYER_BEGIN(cell.map, cell.x, cell.y, LAYER_LIVING, -1, part) {
+                object *head = HEAD(part);
+                tag_t part_count = part->count, head_count = head->count;
+                const player *target_controller = head->type == PLAYER ? CONTR(head) : NULL;
+                const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
+                int published_depth;
+                uint64_t reclamation = object_reclamation_epoch();
+                bool authorized = head != pl->ob && head->count == count && IS_LIVE(head) &&
+                                  target_player_part_published(pl, part, &published_depth) &&
+                                  published_depth == depth &&
+                                  perception_player_part_authorized(pl, part);
+                /* ASK_SHOW may synchronously remove this player and socket.
+                 * Return before the layer iterator or any controller access. */
+                if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+                    !OBJECT_ACTIVE(observer) || observer_socket->state == ST_DEAD ||
+                    observer_socket->state == ST_ZOMBIE) {
+                    return;
+                }
+                if (!object_reclamation_is_current(reclamation) ||
+                    (target_controller != NULL &&
+                     !player_connection_is_current(head, head_count, target_controller, target_socket)) ||
+                    !OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count)) {
+                    FOR_MAP_LAYER_BREAK;
+                }
+                if (authorized && target_player_part_published(pl, part, &published_depth) &&
+                    published_depth == depth && part->map == cell.map &&
+                    part->x == cell.x && part->y == cell.y) {
+                    target = head;
                     FOR_MAP_LAYER_BREAK;
                 }
             }
             FOR_MAP_LAYER_END
         }
+    }
+    /* A well-formed unauthorized request always resolves to SELF. Reply even
+     * when already SELF, so authorization failures reveal no target metadata. */
+    pl->target_object = target;
+    pl->target_object_count = target != NULL ? target->count : 0;
+    send_target_command(pl);
+}
 
-        if (pl->target_object_count != target_object_count) {
-            send_target_command(pl);
+/** Preserve the explicitly selected NPC's existing, loaded-only planar talk range. */
+static bool talk_target_in_range(const object *observer, const object *npc) {
+    int dx, dy, dz;
+    if (observer->map == NULL || npc->map == NULL ||
+        !spatial_offset(observer->map, npc->map, &dx, &dy, &dz) || dz != 0) {
+        return false;
+    }
+    int64_t offset_x = (int64_t)dx + npc->x - observer->x;
+    int64_t offset_y = (int64_t)dy + npc->y - observer->y;
+    for (int i = 0; i <= SIZEOFFREE2; i++) {
+        if (offset_x == freearr_x[i] && offset_y == freearr_y[i]) {
+            return true;
         }
-    } else if (type == CMD_TARGET_CLEAR) {
-        if (pl->target_object_count) {
-            pl->target_object = NULL;
-            pl->target_object_count = 0;
-            send_target_command(pl);
+    }
+    return false;
+}
+
+/** Resolve only the clicked published part, never a replacement or nearby NPC. */
+static object *talk_target_resolve(player *pl, uint8_t x, uint8_t y, int8_t depth,
+                                   uint32_t count) {
+    socket_struct *cs = pl->cs;
+    if (cs->target_map_publication_pending || cs->target_map_published_map == NULL ||
+        cs->target_map_published_count == 0 ||
+        cs->target_map_published_map->count != cs->target_map_published_count ||
+        cs->target_map_published_map->in_memory != MAP_IN_MEMORY ||
+        cs->target_map_published_map->spaces == NULL ||
+        cs->target_map_published_width != cs->mapx ||
+        cs->target_map_published_height != cs->mapy ||
+        !(cs->target_map_published_depths & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth)))) {
+        return NULL;
+    }
+    spatial_cell cell;
+    if (!spatial_resolve(cs->target_map_published_map,
+                         cs->target_map_published_x + x - cs->mapx_2,
+                         cs->target_map_published_y + y - cs->mapy_2, depth, &cell)) {
+        return NULL;
+    }
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    mapstruct *observer_map = observer->map;
+    tag_t observer_map_count = observer_map->count;
+    int observer_x = observer->x, observer_y = observer->y;
+    object *part;
+    FOR_MAP_LAYER_BEGIN(cell.map, cell.x, cell.y, LAYER_LIVING, -1, part) {
+        object *head = HEAD(part);
+        if (head->count != count || !OBJECT_CAN_TALK(head)) {
+            continue;
         }
-    } else {
-        LOG(PACKET, "Invalid type: %d", type);
+        tag_t part_count = part->count;
+        int published_depth;
+        uint64_t reclamation = object_reclamation_epoch();
+        bool authorized = talk_target_in_range(observer, head) &&
+                          target_player_part_published(pl, part, &published_depth) &&
+                          published_depth == depth &&
+                          perception_player_part_authorized(pl, part);
+        /* ASK_SHOW can reclaim the observer, the NPC or the exact part. Do not
+         * advance the borrowed layer iterator after calling it, even on failure. */
+        if (!monster_dialogue_is_current(observer, observer_count, pl, cs,
+                                          head, count, reclamation) ||
+            !OBJECT_ACTIVE(observer) || cs->state == ST_DEAD || cs->state == ST_ZOMBIE ||
+            observer->map != observer_map || observer_map->count != observer_map_count ||
+            observer->x != observer_x || observer->y != observer_y ||
+            !OBJECT_VALID(head, count) || !OBJECT_VALID(part, part_count)) {
+            return NULL;
+        }
+        if (!authorized || !OBJECT_CAN_TALK(head) ||
+            !target_player_part_published(pl, part, &published_depth) ||
+            published_depth != depth || part->map != cell.map ||
+            part->x != cell.x || part->y != cell.y || !talk_target_in_range(observer, head)) {
+            return NULL;
+        }
+        return head;
+    }
+    FOR_MAP_LAYER_END
+    return NULL;
+}
+
+/** One fully parsed exact NPC interaction, independent of the selection state. */
+static void socket_command_talk_target(socket_struct *ns, player *pl,
+                                        packet_reader_t *reader) {
+    uint8_t x = packet_reader_read_uint8(reader);
+    uint8_t y = packet_reader_read_uint8(reader);
+    int8_t depth = packet_reader_read_int8(reader);
+    uint32_t count = packet_reader_read_uint32(reader);
+    char msg[TALK_NPC_TARGET_MESSAGE_MAX + 1];
+    packet_reader_read_string(reader, msg, sizeof(msg));
+    if (!packet_reader_finish(reader) || pl == NULL || pl->cs != ns || pl->ob == NULL ||
+        pl->ob->map == NULL || count == 0 || x >= ns->mapx || y >= ns->mapy ||
+        depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH) {
+        return;
+    }
+    player_sanitize_input(msg);
+    if (string_isempty(msg)) {
+        return;
+    }
+    /* Right-click SELECT may already have spent that command's allowance. This
+     * separate one-per-tick action budget still fences every expensive lookup,
+     * including stale and unpublished identities; no intent survives the call. */
+    if (ns->talk_target_admitted && ns->talk_target_tick == pticks) {
+        return;
+    }
+    ns->talk_target_admitted = true;
+    ns->talk_target_tick = pticks;
+    pl->ob->speed_left -= 1.0;
+    object *npc = talk_target_resolve(pl, x, y, depth, count);
+    if (npc == NULL) {
+        return;
+    }
+    LOG(CHAT, "[TALKTO] [%s] [%s] %s", pl->ob->name, npc->name, msg);
+    if (!monster_guard_check(npc, pl->ob, msg, 0)) {
+        talk_to_npc(pl->ob, npc, msg);
     }
 }
 
@@ -3223,9 +3366,13 @@ void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t le
     uint8_t type;
     char msg[HUGE_BUF];
 
-    pl->ob->speed_left -= 1.0;
-
     type = packet_reader_read_uint8(&reader);
+    if (type == CMD_TALK_NPC_TARGET) {
+        socket_command_talk_target(ns, pl, &reader);
+        return;
+    }
+
+    pl->ob->speed_left -= 1.0;
 
     if (type == CMD_TALK_NPC || type == CMD_TALK_NPC_NAME) {
         char npc_name[MAX_BUF];
@@ -3252,7 +3399,8 @@ void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t le
 
         npc = NULL;
 
-        if (type == CMD_TALK_NPC && OBJECT_VALID(pl->target_object, pl->target_object_count) &&
+        if (type == CMD_TALK_NPC &&
+            object_reference_is_current(pl->target_object, pl->target_object_count) &&
             OBJECT_CAN_TALK(pl->target_object)) {
             for (i = 0; i <= SIZEOFFREE2; i++) {
                 x = pl->ob->x + freearr_x[i];
@@ -3298,7 +3446,7 @@ void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t le
                 talk_to_npc(pl->ob, npc, msg);
             }
         } else if (type == CMD_TALK_NPC &&
-                   OBJECT_VALID(pl->target_object, pl->target_object_count) &&
+                   object_reference_is_current(pl->target_object, pl->target_object_count) &&
                    OBJECT_CAN_TALK(pl->target_object)) {
             draw_info_format(COLOR_WHITE,
                              pl->ob,
@@ -3337,10 +3485,20 @@ void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t le
             }
         }
     } else if (type == CMD_TALK_CLOSE) {
-        if (OBJECT_VALID(pl->talking_to, pl->talking_to_count)) {
-            monster_data_dialogs_remove(pl->talking_to, pl->ob);
-            pl->talking_to = NULL;
-            pl->talking_to_count = 0;
+        if (object_reference_is_current(pl->talking_to, pl->talking_to_count)) {
+            object *observer = pl->ob;
+            tag_t observer_count = observer->count;
+            socket_struct *socket = pl->cs;
+            object *npc = pl->talking_to;
+            tag_t npc_count = pl->talking_to_count;
+            monster_data_dialogs_remove(npc, observer);
+            if (!player_connection_is_current(observer, observer_count, pl, socket)) {
+                return;
+            }
+            if (pl->talking_to == npc && pl->talking_to_count == npc_count) {
+                pl->talking_to = NULL;
+                pl->talking_to_count = 0;
+            }
         }
     } else {
         LOG(PACKET, "Invalid type: %d", type);

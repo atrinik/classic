@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -168,7 +168,7 @@ static bool monster_data_dialogs_verify(monster_data_t *monster_data,
     HARD_ASSERT(monster_data != NULL);
     HARD_ASSERT(dialog != NULL);
 
-    if (!OBJECT_VALID(dialog->ob, dialog->count)) {
+    if (!object_reference_is_current(dialog->ob, dialog->count)) {
         goto invalid;
     }
 
@@ -250,8 +250,8 @@ void monster_data_dialogs_remove(object *op, object *activator) {
 
         if (dialog->ob == activator && dialog->count == activator->count) {
             DL_DELETE(monster_data->dialogs, dialog);
-            monster_guard_check_close(op, activator);
             monster_data_dialogs_free(dialog);
+            monster_guard_check_close(op, activator);
             break;
         }
     }
@@ -318,6 +318,34 @@ size_t monster_data_dialogs_num(object *op) {
 }
 
 /**
+ * Finish a detached snapshot of dialogs. Guard callbacks may purge or rebuild
+ * the monster's live list, so no live-list cursor survives a callback.
+ */
+static void monster_data_dialogs_finish(object *op,
+                                        monster_data_dialog_t *dialogs,
+                                        bool close) {
+    tag_t count = op->count;
+    uint64_t reclamation = object_reclamation_epoch();
+    bool current = true;
+    monster_data_dialog_t *dialog, *tmp;
+
+    DL_FOREACH_SAFE(dialogs, dialog, tmp) {
+        object *activator = dialog->ob;
+        bool valid = current && object_reference_is_current(activator, dialog->count);
+        if (valid && close) {
+            monster_data_dialogs_close(dialog);
+        }
+        DL_DELETE(dialogs, dialog);
+        monster_data_dialogs_free(dialog);
+        if (valid) {
+            monster_guard_check_close(op, activator);
+            current = object_reclamation_is_current(reclamation) &&
+                object_reference_is_current(op, count);
+        }
+    }
+}
+
+/**
  * Cleanup stale and invalid dialogs for the specified monster. Only executes
  * if @ref MONSTER_DATA_INTERFACE_CLEANUP number of seconds have passed.
  * @param op
@@ -336,6 +364,7 @@ void monster_data_dialogs_cleanup(object *op) {
     monster_data->last_cleanup = pticks;
 
     monster_data_dialog_t *dialog, *tmp;
+    monster_data_dialog_t *closing = NULL;
 
     DL_FOREACH_SAFE(monster_data->dialogs, dialog, tmp) {
         if (!monster_data_dialogs_verify(monster_data, dialog)) {
@@ -350,9 +379,9 @@ void monster_data_dialogs_cleanup(object *op) {
         }
 
         DL_DELETE(monster_data->dialogs, dialog);
-        monster_guard_check_close(op, dialog->ob);
-        monster_data_dialogs_free(dialog);
+        DL_APPEND(closing, dialog);
     }
+    monster_data_dialogs_finish(op, closing, false);
 }
 
 /**
@@ -366,12 +395,7 @@ void monster_data_dialogs_purge(object *op) {
     monster_data_t *monster_data = MONSTER_DATA(op);
     SOFT_ASSERT(monster_data != NULL, "Missing monster data for: %s", object_get_str(op));
 
-    monster_data_dialog_t *dialog, *tmp;
-
-    DL_FOREACH_SAFE(monster_data->dialogs, dialog, tmp) {
-        monster_data_dialogs_close(dialog);
-        DL_DELETE(monster_data->dialogs, dialog);
-        monster_guard_check_close(op, dialog->ob);
-        monster_data_dialogs_free(dialog);
-    }
+    monster_data_dialog_t *dialogs = monster_data->dialogs;
+    monster_data->dialogs = NULL;
+    monster_data_dialogs_finish(op, dialogs, true);
 }

@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -59,38 +59,33 @@ static void lightning_fork(object *op, object *tmp) {
 
     int dir = absdir(tmp->direction + dir_adjust);
 
-    int x = tmp->x + freearr_x[dir];
-    int y = tmp->y + freearr_y[dir];
-    mapstruct *m = get_map_from_coord(tmp->map, &x, &y);
-    if (m == NULL || wall(m, x, y)) {
-        return;
-    }
-
     object *bolt = object_get();
     object_copy(bolt, tmp, false);
 
+    projectile3d_turn(bolt, dir);
+    bolt->map = tmp->map;
+    if (!projectile3d_can_move(bolt)) {
+        bolt->map = NULL;
+        object_destroy(bolt);
+        return;
+    }
+    bolt->map = NULL;
     bolt->stats.food = 0;
-    /* Reduce chances of subsequent forking. */
+    /* Retain the existing random decisions and damage split after a valid
+     * fork path has been established. Each copy owns its fractional state. */
     bolt->stats.Dex -= 10;
-    /* Less forks from main bolt too. */
     tmp->stats.Dex -= 10;
-    /* Adjust the left bias. */
     bolt->stats.Con += 25 * dir;
     bolt->speed_left = -0.1f;
-    bolt->direction = dir;
-    SET_ANIMATION_STATE(bolt);
     bolt->stats.hp++;
-    bolt->x = x;
-    bolt->y = y;
-    /* Reduce daughter bolt damage. */
     bolt->stats.dam /= 2;
     bolt->stats.dam++;
-    /* Reduce father bolt damage. */
     tmp->stats.dam /= 2;
     tmp->stats.dam++;
-
-    bolt = object_insert_map(bolt, m, op, 0);
-    SOFT_ASSERT(bolt != NULL, "Failed to insert bolt from %s", object_get_str(op));
+    bolt = object_insert_map(bolt, tmp->map, op, INS_NO_MERGE | INS_NO_WALK_ON);
+    if (bolt != NULL) {
+        common_object_projectile_move(bolt);
+    }
 }
 
 /** @copydoc object_methods_t::projectile_move_func */
@@ -110,16 +105,24 @@ static object *projectile_move_func(object *op) {
         tmp->speed_left = -0.1f;
         tmp->x = op->x;
         tmp->y = op->y;
-        tmp = object_insert_map(tmp, op->map, op, 0);
+        tmp = object_insert_map(tmp, op->map, op, INS_NO_MERGE | INS_NO_WALK_ON);
         if (tmp == NULL) {
             return NULL;
         }
 
         tmp->stats.food = 0;
         tmp->last_sp++;
+        tag_t tmp_count = tmp->count;
         object_process(tmp);
-        lightning_fork(op, tmp);
+        if (OBJECT_VALID(tmp, tmp_count) && tmp->map != NULL) {
+            lightning_fork(op, tmp);
+        }
         op->stats.food = 2;
+        if (!projectile3d_hit_current(op)) {
+            return NULL;
+        }
+    } else if (!projectile3d_hit_current(op)) {
+        return NULL;
     }
 
     return op;

@@ -60,7 +60,7 @@
 
 ## Access admission and administration
 
-- Protocol 1083 retains mandatory authenticated access policy before setup/account
+- Protocol 1084 retains mandatory authenticated access policy before setup/account
   traffic. Retired SETUP subtype 3 stays reserved; no join-password fallback.
 - `access_tokens.c` owns checked snapshot/audit/receipt/outbox transactions;
   `access_admin.c` owns strict bounded management JSON; `access_server.c` owns
@@ -89,6 +89,10 @@
   at `protocol/schema/game-commands.json`; never copy or renumber them locally.
 - Edit Flex/CMake definition inputs rather than generated lexer/configured
   headers, and update `src/cmake.txt` for source additions/removals.
+- For physical geometry, fresh perception, target identity, projectiles or
+  propagating effects, follow [`doc/SPATIAL_3D.md`](doc/SPATIAL_3D.md). Preserve
+  loaded-only resolution, policy separation, bounded numeric state and cast
+  lifecycle; camera disclosure never grants interaction authority.
 - For lighting, linked depths, MAP2 caches, cutaways, fog, or structural
   disclosure, read and preserve [`doc/MAP_RENDERING.md`](doc/MAP_RENDERING.md).
   The same document freezes the remembered/live client contract, player-field
