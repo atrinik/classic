@@ -213,8 +213,11 @@ jobs:
           python3 -m coverage run --branch --source=tools \
             tools/verify_import_history.py \
             --release-history-ref "${release_history_ref}"
-          python3 -m coverage run --append --branch --source=tools \
+          # Real native package acceptance runs separately in the pinned image.
+          CI= python3 -m coverage run --append --branch --source=tools \
             -m unittest discover -s tools/tests -p 'test_*.py'
+          python3 -m coverage run --append --branch --source=tools \
+            -m unittest discover -s tools/ci/appimage -p 'test_*.py'
           python3 -m coverage xml --omit='tools/tests/*' \
             -o tools/coverage.xml
       - name: Validate first-parent release analysis
@@ -293,7 +296,12 @@ jobs:
             --volume "${RUNNER_TEMP}/classic-ccache/core:/cache/ccache" \
             --workdir /workspace \
             "${CLASSIC_LINUX_IMAGE}" \
-            tools/ci/run_linux_check.sh core /workspace
+            bash -c '
+              set -euo pipefail
+              CI=1 python3 -m unittest -v \
+                tools.tests.test_version_metadata.VersionMetadataTests.test_pathfinding_physical_tag_untagged_and_installed_package
+              tools/ci/run_linux_check.sh core /workspace
+            '
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:

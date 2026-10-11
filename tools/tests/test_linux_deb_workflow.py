@@ -53,6 +53,7 @@ class LinuxDebWorkflowTests(unittest.TestCase):
         self.assertNotIn('github.token', job)
         preparation = job.split('name: Prepare pinned Debian', 1)[1].split('      - name:', 1)[0]
         self.assertNotIn('candidate-source', preparation)
+        self.assertEqual(preparation.count('--build-arg "ATRINIK_COMPILER_IMAGE=${CLASSIC_LINUX_IMAGE}"'), 2)
         self.assertIn('--file tools/ci/debian-client/Dockerfile tools/ci/debian-client', preparation)
         smoke = job.split('name: Install through APT', 1)[1].split('      - uses:', 1)[0]
         self.assertNotIn('candidate-source', smoke)

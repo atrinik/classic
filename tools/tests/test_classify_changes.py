@@ -103,6 +103,7 @@ class ClassifyChangesTests(unittest.TestCase):
         for path in ("cmake/toolchains/llvm.cmake", "tools/ci/llvm_coverage.py",
                      "tools/tests/test_llvm_coverage.py",
                      "tools/tests/test_llvm_toolchain.py",
+                     "tools/tests/test_llvm_runtime_notices.py",
                      "tools/tests/test_gpu_qualification_runtime.py"):
             with self.subTest(path=path):
                 result = classify_changes.classify([path])
@@ -127,6 +128,12 @@ class ClassifyChangesTests(unittest.TestCase):
     def test_libatrinik_and_ci_contract_changes_select_windows_tests(self) -> None:
         for path in (
             "CMakeLists.txt",
+            "cmake/AtrinikLLVM.cmake",
+            "cmake/InstallLLVMRuntime.cmake",
+            "cmake/InstallWindowsRuntime.cmake",
+            "cmake/toolchains/llvm.cmake",
+            "tools/tests/test_llvm_toolchain.py",
+            "tools/tests/test_llvm_runtime_notices.py",
             "client/src/client/main.c",
             "libatrinik/path.c",
             "protocol/generated/c/commands.c",

@@ -24,6 +24,9 @@ permissions:
   contents: read
   packages: read
 
+env:
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
+
 concurrency:
   group: classic-release-publication
   queue: max
@@ -263,10 +266,14 @@ jobs:
             --tag "${RELEASE_VERSION}" \
             --github-output "${GITHUB_OUTPUT}"
       - name: Recheck the revision-specific candidate before publication
-        run: >-
-          python3 build/release-automation/tools/release/release_artifacts.py
-          --directory build/release --tag "${RELEASE_TAG}"
-          --revision "${RELEASE_COMMIT}" --source-root "${GITHUB_WORKSPACE}"
+        run: |
+          expected_compiler_image=$(python3 build/release-automation/tools/release/resolve_compiler_image.py \
+            --source-root "${GITHUB_WORKSPACE}" --revision "${RELEASE_COMMIT}" \
+            --current-image "${CLASSIC_LINUX_IMAGE}")
+          python3 build/release-automation/tools/release/release_artifacts.py \
+            --directory build/release --tag "${RELEASE_TAG}" \
+            --revision "${RELEASE_COMMIT}" --source-root "${GITHUB_WORKSPACE}" \
+            --compiler-image "${expected_compiler_image}"
       - name: Attest downloadable artifact provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:

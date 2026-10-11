@@ -25,6 +25,7 @@ NATIVE_SHARED_PATHS = {
     "codecov.yml",
     "tools/tests/test_llvm_coverage.py",
     "tools/tests/test_llvm_toolchain.py",
+    "tools/tests/test_llvm_runtime_notices.py",
     "tools/tests/test_gpu_qualification_runtime.py",
     "LICENSE.md",
     "docs/history/component-release-map.json",
@@ -44,7 +45,11 @@ WINDOWS_TEST_PREFIXES = (
     "server/",
     "tools/ci/",
 )
-WINDOWS_TEST_PATHS = {"CMakeLists.txt", "cmake/InstallWindowsRuntime.cmake"}
+WINDOWS_TEST_PATHS = {
+    "CMakeLists.txt", "cmake/AtrinikLLVM.cmake", "cmake/InstallLLVMRuntime.cmake",
+    "cmake/InstallWindowsRuntime.cmake", "cmake/toolchains/llvm.cmake",
+    "tools/tests/test_llvm_toolchain.py", "tools/tests/test_llvm_runtime_notices.py",
+}
 BENCHMARK_CONTRACT_PATHS = {
     ".github/workflows/pr-benchmarks.yml",
     "tools/ci/classify_changes.py",

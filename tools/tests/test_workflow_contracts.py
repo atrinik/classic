@@ -104,6 +104,16 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", comparison)
         self.assertIn("if: always()", comparison)
 
+    def test_native_version_package_acceptance_runs_in_pinned_core_container(self) -> None:
+        core = self.text("check.yml").split("  core:\n", 1)[1].split("  windows-test-build:\n", 1)[0]
+        self.assertIn("CI= python3 -m coverage run --append", core)
+        native = core.split("      - name: Build and test core packages in the pinned environment", 1)[1].split("      - uses:", 1)[0]
+        self.assertIn('"${CLASSIC_LINUX_IMAGE}"', native)
+        self.assertIn("CI=1 python3 -m unittest -v", native)
+        self.assertIn("tools.tests.test_version_metadata.VersionMetadataTests.test_pathfinding_physical_tag_untagged_and_installed_package", native)
+        self.assertIn("set -euo pipefail", native)
+        self.assertNotIn("continue-on-error", native)
+
     def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
         workflow = self.text("check.yml")
         jobs = dict(
