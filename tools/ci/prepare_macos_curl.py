@@ -18,7 +18,10 @@ import subprocess
 import tarfile
 import threading
 
-from collect_macos_curl import clean_environment, digest, validate_headers
+from collect_macos_curl import (SYSTEM_CURL, canonical_image, clean_environment, digest,
+                               platform_dependency_chain, platform_image, qualification_identity,
+                               validate_headers, validate_inventory, validate_provider,
+                               validate_symbol_providers)
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = Path(__file__).with_name("macos-curl-toolchain.json")
@@ -53,6 +56,7 @@ def load_manifest():
 
 def validate_baseline(data, manifest):
     runtime = data["runtime"]
+    validate_inventory(runtime)
     expected = manifest["baseline"]
     for key in ("features", "protocols"):
         if set(runtime[key]) != set(expected[key]) or len(runtime[key]) != len(set(runtime[key])):
@@ -142,13 +146,20 @@ def validate_runtime(data, manifest):
             raise ValueError("native curl default trust paths changed")
 
 
-def validate_loaded(data, prefix, dependency_files, probe, required_platform_images=()):
+def validate_loaded(data, prefix, dependency_files, probe, required_platform_images=(),
+                    baseline=None, platform_roots=()):
     prefix = Path(prefix).resolve(strict=True)
     own = {name: (prefix / "lib" / f"lib{name}.dylib").resolve(strict=True)
            for name in ("curl", "cares")}
     for name, key in (("curl", "loaded_library"), ("cares", "loaded_cares_library")):
         if not own[name].is_relative_to(prefix) or Path(data[key]).resolve(strict=True) != own[name]:
             raise ValueError(f"loaded {name} provider is outside the owned cohort")
+    validate_inventory(data)
+    validate_symbol_providers(data, own["curl"], own["cares"])
+    resolver_edges = data["dependency_install_names"][str(own["curl"])]
+    if not any(canonical_image(name) and not platform_image(name)
+               and Path(name).resolve(strict=True) == own["cares"] for name in resolver_edges):
+        raise ValueError("owned curl lacks its owned c-ares dependency edge")
     images = data["loaded_images"]
     if not images or len(set(images)) != len(images):
         raise ValueError("invalid native loaded-image inventory")
@@ -156,11 +167,24 @@ def validate_loaded(data, prefix, dependency_files, probe, required_platform_ima
     if missing_platform:
         raise ValueError("baseline SDK providers absent: " + ", ".join(sorted(missing_platform)))
     observed = set()
+    allowed_system_curl = False
+    if SYSTEM_CURL in images:
+        if baseline is None:
+            raise ValueError("system curl coexistence requires the same-run native baseline")
+        chain = platform_dependency_chain(baseline, platform_roots)
+        platform_dependency_chain(data, platform_roots)
+        edges = data["dependency_install_names"]
+        if (chain[0] not in edges[data["loaded_library"]]
+                or any(parent not in edges or child not in edges[parent] for parent, child in zip(chain, chain[1:]))):
+            raise ValueError("candidate did not preserve the baseline platform curl dependency chain")
+        allowed_system_curl = True
     for name in images:
         path = Path(name)
         if not path.is_absolute() or ".." in path.parts:
             raise ValueError("invalid native loaded-image path")
         if path.name.startswith(("libcurl", "libcares")):
+            if name == SYSTEM_CURL and allowed_system_curl:
+                continue
             if (name.startswith(("/usr/lib/", "/System/Library/", "/Library/Apple/System/Library/"))
                     or path.resolve(strict=True) not in own.values()):
                 raise ValueError("additional curl/c-ares provider loaded outside the owned cohort")
@@ -175,6 +199,15 @@ def validate_loaded(data, prefix, dependency_files, probe, required_platform_ima
             raise ValueError(f"unrecorded native dependency loaded: {name}")
     if not set(own.values()) <= observed:
         raise ValueError("owned curl/c-ares missing from loaded-image inventory")
+
+
+def bind_baseline(record, source_commit, environment):
+    if (record["schema_version"] != 2 or record["source_commit"] != source_commit
+            or record["qualification_identity"] != qualification_identity(environment)):
+        raise ValueError("native baseline belongs to a different source or workflow execution")
+    if digest(record["selected_library"]) != record["selected_library_sha256"]:
+        raise ValueError("baseline selected curl bytes changed since collection")
+    validate_provider(record["runtime"], record["selected_library"], record["prefix"])
 
 
 def cmake_cache(path):
@@ -338,6 +371,9 @@ def _prepare_owned(prefix, llvm_prefix, baseline_path, ca_bundle, jobs, manifest
     evidence.mkdir()
     environment = native_environment(os.environ)
     commands = Commands(evidence, environment)
+    source_commit = commands.run("source", ["git", "-C", ROOT, "rev-parse", "HEAD"]).stdout.strip()
+    baseline = json.loads(baseline_path.read_text())
+    bind_baseline(baseline, source_commit, environment)
     sdk = Path(commands.run("sdk-path", ["xcrun", "--sdk", "macosx", "--show-sdk-path"]).stdout.strip()).resolve(strict=True)
     commands.run("sdk-version", ["xcrun", "--sdk", "macosx", "--show-sdk-version"])
     commands.run("host-version", ["sw_vers"])
@@ -436,7 +472,8 @@ def _prepare_owned(prefix, llvm_prefix, baseline_path, ca_bundle, jobs, manifest
     data = json.loads(result.stdout)
     (evidence / "runtime.json").write_text(json.dumps(data, indent=2) + "\n")
     validate_runtime(data, manifest)
-    validate_loaded(data, prefix, dependency_files, probe, manifest["required_platform_images"])
+    validate_loaded(data, prefix, dependency_files, probe, manifest["required_platform_images"],
+                    baseline["runtime"], manifest["baseline_platform_roots"])
     if result.returncode:
         raise ValueError(f"native curl runtime probe failed ({result.returncode})")
     for name in ("curl", "cares"):
@@ -451,7 +488,10 @@ def _prepare_owned(prefix, llvm_prefix, baseline_path, ca_bundle, jobs, manifest
             raise ValueError(f"{name} dylib architecture differs from the native cohort")
     receipt = {"schema_version": 1, "scope": manifest["scope"], "prefix": str(prefix),
                "sources": manifest["sources"], "baseline_provenance": manifest["baseline"],
-               "source_commit": commands.run("source", ["git", "-C", ROOT, "rev-parse", "HEAD"]).stdout.strip(),
+               "source_commit": source_commit, "qualification_identity": qualification_identity(environment),
+               "baseline_sha256": digest(baseline_path),
+               "platform_curl_chain": (platform_dependency_chain(baseline["runtime"], manifest["baseline_platform_roots"])
+                                       if SYSTEM_CURL in data["loaded_images"] else None),
                "tools": tools, "sdk": str(sdk), "architecture": "arm64", "deployment_target": deployment,
                "release_flags": release_flags, "dependency_prefixes": {key: str(value) for key, value in dependencies.items()},
                "dependency_files": dependency_files, "runtime": data,

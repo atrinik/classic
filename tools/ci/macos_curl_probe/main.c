@@ -3,10 +3,12 @@
  */
 #include <curl/curl.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #include <stdio.h>
+#include <string.h>
 #ifdef ATRINIK_CURL_COHORT
 #include <ares.h>
-#include <mach-o/dyld.h>
 #endif
 
 static void json_string(const char *text)
@@ -50,6 +52,69 @@ static size_t discard(char *data, size_t size, size_t count, void *context)
     (void) data;
     (void) context;
     return size * count;
+}
+
+static int symbol_provider(const char *name, const void *symbol, int *first)
+{
+    Dl_info provider = {0};
+    if (symbol == NULL || dladdr(symbol, &provider) == 0 || provider.dli_fname == NULL) {
+        return 0;
+    }
+    if (!*first) putchar(',');
+    *first = 0;
+    json_string(name);
+    putchar(':');
+    json_string(provider.dli_fname);
+    return 1;
+}
+
+/* Read loaded headers, including OS images resident only in dyld's cache. */
+static int image_inventory(void)
+{
+    uint32_t count = _dyld_image_count();
+    if (count == 0 || count > 4096) return 0;
+    printf(",\"loaded_images\":[");
+    for (uint32_t i = 0; i < count; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (name == NULL) return 0;
+        if (i != 0) putchar(',');
+        json_string(name);
+    }
+    printf("],\"dependency_install_names\":{");
+    for (uint32_t i = 0; i < count; i++) {
+        const struct mach_header *header = _dyld_get_image_header(i);
+        if (header == NULL || header->magic != MH_MAGIC_64) return 0;
+        const struct mach_header_64 *native = (const struct mach_header_64 *) header;
+        if (native->ncmds > 16384 || native->sizeofcmds > 16U * 1024U * 1024U) return 0;
+        const unsigned char *cursor = (const unsigned char *) (native + 1);
+        size_t remaining = native->sizeofcmds;
+        if (i != 0) putchar(',');
+        json_string(_dyld_get_image_name(i));
+        printf(":[");
+        int first = 1;
+        for (uint32_t command = 0; command < native->ncmds; command++) {
+            if (remaining < sizeof(struct load_command)) return 0;
+            const struct load_command *load = (const struct load_command *) cursor;
+            if (load->cmdsize < sizeof(*load) || load->cmdsize > remaining || load->cmdsize % 8 != 0) return 0;
+            if (load->cmd == LC_LOAD_DYLIB || load->cmd == LC_LOAD_WEAK_DYLIB ||
+                load->cmd == LC_REEXPORT_DYLIB || load->cmd == LC_LOAD_UPWARD_DYLIB) {
+                if (load->cmdsize < sizeof(struct dylib_command)) return 0;
+                const struct dylib_command *dylib = (const struct dylib_command *) load;
+                uint32_t offset = dylib->dylib.name.offset;
+                if (offset < sizeof(*dylib) || offset >= load->cmdsize ||
+                    memchr(cursor + offset, '\0', load->cmdsize - offset) == NULL) return 0;
+                if (!first) putchar(',');
+                first = 0;
+                json_string((const char *) cursor + offset);
+            }
+            remaining -= load->cmdsize;
+            cursor += load->cmdsize;
+        }
+        if (remaining != 0) return 0;
+        putchar(']');
+    }
+    putchar('}');
+    return 1;
 }
 
 /* No curlrc, proxy, netrc, credentials, redirects, or weakened TLS checks. */
@@ -133,7 +198,7 @@ int main(int argc, char **argv)
     }
     curl_version_info_data *info = curl_version_info(CURLVERSION_NOW);
     Dl_info provider = {0};
-    void *symbol = dlsym(RTLD_DEFAULT, "curl_version_info");
+    const void *symbol = (const void *) curl_version_info;
     if (info == NULL || symbol == NULL || dladdr(symbol, &provider) == 0 ||
         info->age < CURLVERSION_ELEVENTH) {
         curl_global_cleanup();
@@ -175,7 +240,7 @@ int main(int argc, char **argv)
     int bundle_ok = tls_request("https://curl.se/", argv[1], NULL);
 #ifdef ATRINIK_CURL_COHORT
     Dl_info cares_provider = {0};
-    void *cares_symbol = dlsym(RTLD_DEFAULT, "ares_version");
+    const void *cares_symbol = (const void *) ares_version;
     if (cares_symbol == NULL || dladdr(cares_symbol, &cares_provider) == 0) {
         curl_global_cleanup();
         return 2;
@@ -204,17 +269,30 @@ int main(int argc, char **argv)
     tls_request(trusted_url, NULL, NULL);
     printf(",\"private_tls_wrong_hostname\":");
     tls_request(wrong_url, argv[3], wrong_resolve);
-    printf(",\"loaded_images\":[");
-    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
-        if (i != 0) {
-            putchar(',');
-        }
-        json_string(_dyld_get_image_name(i));
-    }
-    printf("]");
 #else
     int private_ok = 1;
 #endif
+    printf(",\"symbol_providers\":{");
+    int first = 1;
+#define PROVIDER(name) do { \
+    if (!symbol_provider(#name, (const void *) name, &first)) return 2; \
+} while (0)
+    PROVIDER(curl_global_init);
+    PROVIDER(curl_global_cleanup);
+    PROVIDER(curl_version_info);
+    PROVIDER(curl_easy_init);
+    PROVIDER(curl_easy_setopt);
+    PROVIDER(curl_easy_getinfo);
+    PROVIDER(curl_easy_perform);
+    PROVIDER(curl_easy_cleanup);
+    PROVIDER(curl_slist_append);
+    PROVIDER(curl_slist_free_all);
+#ifdef ATRINIK_CURL_COHORT
+    PROVIDER(ares_version);
+#endif
+#undef PROVIDER
+    putchar('}');
+    if (!image_inventory()) return 2;
     printf("}\n");
     curl_global_cleanup();
     return default_ok && bundle_ok && private_ok ? 0 : 1;

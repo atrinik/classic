@@ -124,6 +124,19 @@
     "HAVE_GSSAPPLE"
   ],
   "scope": "Native ARM64 CI dependency cohort; no packaging or Intel Mac acceptance",
+  "baseline_platform_roots": [
+    "/System/Library/Frameworks/Kerberos.framework/Versions/A/Kerberos",
+    "/System/Library/Frameworks/LDAP.framework/Versions/A/LDAP",
+    "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+    "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+    "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+    "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+    "/usr/lib/libresolv.9.dylib",
+    "/usr/lib/libSystem.B.dylib",
+    "/usr/lib/libz.1.dylib",
+    "/usr/lib/libicucore.A.dylib",
+    "/usr/lib/libiconv.2.dylib"
+  ],
   "required_platform_images": [
     "/System/Library/Frameworks/Kerberos.framework/Versions/A/Kerberos",
     "/System/Library/Frameworks/LDAP.framework/Versions/A/LDAP",

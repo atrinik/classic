@@ -142,7 +142,17 @@ python3 tools/ci/prepare_macos_curl.py \
 The helper binds selected headers and loaded curl/c-ares images to the owned
 prefix, captures native dependency keg paths/hashes, and records system image
 names plus SDK/OS identity. Many system dylibs reside only in the dyld shared
-cache and cannot be hashed as filesystem files. It requires ordinary public
+cache and cannot be hashed as filesystem files. Both baseline and candidate
+probes record loaded images and bounded Mach-O dependency commands from memory.
+The schema-2 baseline is bound to the same source, repository, workflow run,
+attempt and job as the candidate. Each directly linked curl API and
+`ares_version` must belong to the selected provider. The only permitted extra
+curl image is the exact OS install name `/usr/lib/libcurl.4.dylib`, when both
+snapshots prove the same loaded OS dependency chain from the recorded platform
+roots. Other extra curl or c-ares providers fail qualification. An unresolved
+weak dependency or `@rpath` name cannot establish that chain.
+
+The helper requires ordinary public
 HTTPS with default trust and the locked Classic bundle, rejects that endpoint
 with a fresh unrelated CA, and checks a private loopback TLS chain with trusted,
 untrusted and wrong-hostname cases. Peer and hostname checks stay enabled;

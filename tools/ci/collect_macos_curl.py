@@ -9,11 +9,84 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 CA_SHA256 = "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505"
+CURL_APIS = ("curl_global_init", "curl_global_cleanup", "curl_version_info", "curl_easy_init",
+             "curl_easy_setopt", "curl_easy_getinfo", "curl_easy_perform", "curl_easy_cleanup",
+             "curl_slist_append", "curl_slist_free_all")
+SYSTEM_CURL = "/usr/lib/libcurl.4.dylib"
+
+
+def qualification_identity(environment):
+    keys = {"run_id": "GITHUB_RUN_ID", "run_attempt": "GITHUB_RUN_ATTEMPT",
+            "job": "GITHUB_JOB", "repository": "GITHUB_REPOSITORY"}
+    identity = {key: environment[value] for key, value in keys.items()}
+    if (not re.fullmatch(r"[1-9][0-9]*", identity["run_id"])
+            or not re.fullmatch(r"[1-9][0-9]*", identity["run_attempt"])
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", identity["job"])
+            or identity["repository"] != "atrinik/classic"):
+        raise ValueError("invalid native qualification identity")
+    return identity
+
+
+def canonical_image(name):
+    return (isinstance(name, str) and Path(name).is_absolute()
+            and str(Path(name)) == name and ".." not in Path(name).parts)
+
+
+def platform_image(name):
+    return canonical_image(name) and name.startswith(
+        ("/usr/lib/", "/System/Library/", "/Library/Apple/System/Library/"))
+
+
+def validate_inventory(data):
+    images, edges = data["loaded_images"], data["dependency_install_names"]
+    if (not isinstance(images, list) or not 0 < len(images) <= 4096
+            or any(not canonical_image(name) for name in images) or len(set(images)) != len(images)
+            or not isinstance(edges, dict) or set(edges) != set(images)):
+        raise ValueError("invalid native loaded-image dependency inventory")
+    for dependencies in edges.values():
+        if (not isinstance(dependencies, list) or len(dependencies) > 16384
+                or any(not isinstance(name, str) or not name or "\0" in name for name in dependencies)):
+            raise ValueError("invalid Mach-O dependency install names")
+
+
+def validate_symbol_providers(data, curl, cares=None):
+    providers = data["symbol_providers"]
+    expected = {name: Path(curl).resolve(strict=True) for name in CURL_APIS}
+    if cares is not None:
+        expected["ares_version"] = Path(cares).resolve(strict=True)
+    if not isinstance(providers, dict) or set(providers) != set(expected):
+        raise ValueError("incomplete directly linked curl/c-ares API provider inventory")
+    for name, library in expected.items():
+        if not canonical_image(providers[name]) or Path(providers[name]).resolve(strict=True) != library:
+            raise ValueError(f"directly linked API belongs to a foreign provider: {name}")
+
+
+def platform_dependency_chain(data, roots, target=SYSTEM_CURL):
+    """A loaded OS edge is evidence; an unresolved weak/@rpath name is not."""
+    validate_inventory(data)
+    loaded, edges = set(data["loaded_images"]), data["dependency_install_names"]
+    curl = data["loaded_library"]
+    if curl not in loaded:
+        raise ValueError("selected curl absent from its platform dependency inventory")
+    direct_roots = set(roots) & loaded & set(edges[curl])
+    pending = [[name] for name in sorted(direct_roots) if platform_image(name) and name != target]
+    visited = set()
+    for chain in pending:
+        name = chain[-1]
+        if name in visited:
+            continue
+        visited.add(name)
+        if name == target:
+            return chain
+        pending.extend([*chain, dependency] for dependency in sorted(set(edges[name]))
+                       if dependency in loaded and platform_image(dependency) and dependency not in visited)
+    raise ValueError("loaded system curl lacks a recorded platform dependency chain")
 
 
 def digest(path):
@@ -45,6 +118,17 @@ def validate_provider(data, selected, prefix):
         raise ValueError("CMake selected a curl library outside the requested prefix")
     if Path(data["loaded_library"]).resolve(strict=True) != selected:
         raise ValueError("runtime curl provider differs from the CMake selected library")
+    validate_inventory(data)
+    validate_symbol_providers(data, selected)
+    for name in data["loaded_images"]:
+        if Path(name).name.startswith("libcares"):
+            raise ValueError("unexpected c-ares provider in the threaded-resolver baseline")
+        if Path(name).name.startswith("libcurl") and name != SYSTEM_CURL:
+            if platform_image(name) or Path(name).resolve(strict=True) != selected:
+                raise ValueError("additional curl provider in the native baseline")
+    if str(selected) not in {str(Path(name).resolve(strict=True)) for name in data["loaded_images"]
+                             if not platform_image(name)}:
+        raise ValueError("selected curl absent from the loaded-image inventory")
     if data["header_version_num"] != data["version_num"]:
         raise ValueError("curl headers and loaded library versions differ")
     for key in ("features", "protocols"):
@@ -103,7 +187,8 @@ def collect(prefix, llvm_prefix, output, ca_bundle):
     data = json.loads(result.stdout)
     selected = (build / "selected-library.txt").read_text().strip()
     record = {
-        "schema_version": 1, "source_commit": run("source", ["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip(),
+        "schema_version": 2, "source_commit": run("source", ["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip(),
+        "qualification_identity": qualification_identity(env),
         "purpose": "baseline collection; not source-built curl acceptance",
         "prefix": str(prefix), "selected_library": selected,
         "selected_library_sha256": digest(selected),
