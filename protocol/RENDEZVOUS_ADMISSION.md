@@ -78,10 +78,13 @@ Existing CMake install of generated headers and Python package discovery include
 the new bindings; protocol source packaging includes schema, docs and fixtures.
 
 `fixtures/rendezvous-admission-v1.json` is copied byte-for-byte from MIT
-`atrinik/protocol` revision `bbe1d53abb4a506893af2275f58c67468e454676`, path
+`atrinik/protocol` PR49 branch `fix/rendezvous-admission-173-20261011`, path
 `fixtures/rendezvous-admission-v1.json`, SHA256
-`2e1a32d058dd35455e8560ef7637d6ba95d1ff94d6cd9afd167817ad720744f1`.
-Its MIT license and copyright are retained in
+`6c98dd74b612c67af7b2692367a7c4cab3c55769859110256b4a67dbb874ca74`.
+The immutable digest identifies the frozen reviewed bytes while the companion
+source commit is being prepared; no future commit or release pin is asserted.
+Its solved proof retains the original vector from revision
+`bbe1d53abb4a506893af2275f58c67468e454676`. Its MIT license and copyright are retained in
 `fixtures/rendezvous-admission-LICENSE.txt`. This is compatible inbound MIT fixture
 reuse into GPL Classic, not outbound Classic relicensing and not reliance on a
 historical sole-author grant. It contains only synthetic keys, `.invalid`
@@ -89,4 +92,5 @@ authority and repeated-byte identities. No Classic implementation was copied
 into the MIT source. The schema, generator extension, local specification and
 independent Python checks are new Classic GPL-2.0-or-later work under root license.
 The fixture has a solved24bit proof; tests recompute exact HMAC/work inputs and
-all positive/negative vectors without brute-force mining.
+all positive/negative vectors and shared request/response grammar cases without
+brute-force mining.

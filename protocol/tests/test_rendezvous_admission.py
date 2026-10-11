@@ -92,9 +92,53 @@ class AdmissionContractTests(unittest.TestCase):
             with self.subTest(case=case['name']):
                 self.assertEqual(self.verify({**f, **case.get('override', {})}, case['now'], case.get('keyRole', 'current')), case['accepted'])
 
+    def test_shared_request_and_response_grammar(self):
+        c = self.constants
+        for group, fields, limit in [
+                ('requestCases', ['schema', 'ticketHash'], c['REQUEST_MAX']),
+                ('responseCases', ['schema', 'challenge', 'difficulty', 'expiresAt'], c['RESPONSE_MAX'])]:
+            for case in self.fixture[group]:
+                with self.subTest(group=group, case=case['name']):
+                    accepted = False
+                    try:
+                        raw = case['raw']
+                        if len(raw.encode('utf-8')) > limit:
+                            raise ValueError('bound')
+                        def pairs(items):
+                            if [name for name, _ in items] != fields:
+                                raise ValueError('keys')
+                            return dict(items)
+                        value = json.loads(raw, object_pairs_hook=pairs)
+                        if not isinstance(value, dict) or json.dumps(value, separators=(',', ':')) != raw:
+                            raise ValueError('canonical')
+                        if value['schema'] != c['SCHEMA']:
+                            raise ValueError('schema')
+                        if group == 'requestCases':
+                            if not isinstance(value['ticketHash'], str) or not re.fullmatch('[0-9a-f]{64}', value['ticketHash']):
+                                raise ValueError('hash')
+                        else:
+                            token = value['challenge']
+                            expiry = value['expiresAt']
+                            if not isinstance(token, str) or len(token) > c['TOKEN_MAX']:
+                                raise ValueError('token')
+                            matched = re.fullmatch(r'v1\.([A-Za-z0-9_-]{1,32})\.([1-9][0-9]{0,11})\.([0-9a-f]{64})\.([0-9a-f]{32})\.([0-9a-f]{64})', token)
+                            if matched is None:
+                                raise ValueError('token grammar')
+                            if type(value['difficulty']) is not int or value['difficulty'] != c['DIFFICULTY']:
+                                raise ValueError('difficulty')
+                            if not isinstance(expiry, str) or not re.fullmatch('[1-9][0-9]{0,11}', expiry):
+                                raise ValueError('expiry')
+                            expected = int(matched[2]) + c['LIFETIME_SECONDS']
+                            if expected > c['UTC_SECONDS_MAX'] or str(expected) != expiry:
+                                raise ValueError('expiry bound or mismatch')
+                        accepted = True
+                    except ValueError:
+                        pass
+                    self.assertEqual(accepted, case['accepted'])
+
     def test_shared_fixture_license_and_immutable_digest(self):
         path = ROOT / 'fixtures/rendezvous-admission-v1.json'
-        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), '2e1a32d058dd35455e8560ef7637d6ba95d1ff94d6cd9afd167817ad720744f1')
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), '6c98dd74b612c67af7b2692367a7c4cab3c55769859110256b4a67dbb874ca74')
         self.assertIn('MIT License', (ROOT / 'fixtures/rendezvous-admission-LICENSE.txt').read_text())
 
 
