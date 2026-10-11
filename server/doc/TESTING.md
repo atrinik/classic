@@ -47,7 +47,16 @@ python3 ../tools/ci/llvm_coverage.py export --build-dir build/llvm-coverage \
 
 The `llvm-coverage` preset selects a separate `build/llvm-coverage` cache so
 existing compiler selections in `linux-coverage` trees remain intact. The
-coverage test preset sets `LLVM_PROFILE_FILE` to the build's isolated
+server coverage preset disables precompiled headers, matching native CI.
+LLVM 23.1.3 emits different coverage mapping descriptors when shared sources
+are compiled through the server precompiled header and directly into standalone
+tools. Compiling coverage targets without precompiled headers keeps those maps
+consistent for strict export, including zero-hit sources in unexecuted tools.
+Normal builds, including the Release preset, retain their precompiled-header
+default. Coverage instrumentation, test selection and export validation remain
+the same.
+
+The coverage test preset sets `LLVM_PROFILE_FILE` to the build's isolated
 `llvm-profiles/%m-%p.profraw` path. The binary signature and process ID separate
 parallel processes and instrumented plugins. `prepare` clears only that build's
 previous profiles before a fresh pass; additional runtime probes retain the

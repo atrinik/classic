@@ -36,6 +36,15 @@ def preset(section, name):
 
 
 class CoveragePresetTests(unittest.TestCase):
+    def test_server_coverage_disables_pch_without_changing_normal_presets(self):
+        data = json.loads((ROOT / "server/CMakePresets.json").read_text())
+        coverage = preset(data["configurePresets"], "llvm-coverage")
+        self.assertIs(coverage["cacheVariables"]["ENABLE_PRECOMPILED_HEADERS"], False)
+        for name in ("linux-debug", "linux-release", "linux-sanitizers"):
+            with self.subTest(preset=name):
+                self.assertNotIn("ENABLE_PRECOMPILED_HEADERS",
+                                 preset(data["configurePresets"], name)["cacheVariables"])
+
     def test_opt_in_has_matching_configure_build_and_test_presets(self):
         for module in MODULES:
             with self.subTest(module=module):

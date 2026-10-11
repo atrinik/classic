@@ -36,7 +36,10 @@
     {
       "name": "llvm-coverage",
       "inherits": "linux-coverage",
-      "binaryDir": "${sourceDir}/build/llvm-coverage"
+      "binaryDir": "${sourceDir}/build/llvm-coverage",
+      "cacheVariables": {
+        "ENABLE_PRECOMPILED_HEADERS": false
+      }
     },
     {
       "name": "linux-sanitizers",
