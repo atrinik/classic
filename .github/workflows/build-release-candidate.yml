@@ -239,8 +239,6 @@ jobs:
 
   client-linux:
     name: Build and install Debian client package
-    env:
-      CLASSIC_LINUX_IMAGE: ${{ needs.metadata.outputs.compiler_image }}
     needs: [metadata, dependencies, gpu-shaders]
     if: needs.metadata.outputs.artifact_schema == '2'
     permissions:
@@ -275,13 +273,15 @@ jobs:
           name: discord-application-id-${{ inputs.tag }}
           path: build/discord-config
       - name: Prepare pinned Debian testing build and clean runtime
+        env:
+          RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
         run: |
+          debian_producer=$(python3 tools/ci/debian-client/historical_producer.py \
+            --source-root "${GITHUB_WORKSPACE}/candidate-source" --revision "${RELEASE_REVISION}")
           docker build --platform linux/amd64 --target build --tag classic-deb-build \
-            --build-arg "ATRINIK_COMPILER_IMAGE=${CLASSIC_LINUX_IMAGE}" \
-            --file tools/ci/debian-client/Dockerfile tools/ci/debian-client
+            --file "${debian_producer}" tools/ci/debian-client
           docker build --platform linux/amd64 --target runtime --tag classic-deb-runtime \
-            --build-arg "ATRINIK_COMPILER_IMAGE=${CLASSIC_LINUX_IMAGE}" \
-            --file tools/ci/debian-client/Dockerfile tools/ci/debian-client
+            --file "${debian_producer}" tools/ci/debian-client
           mkdir -p build/linux-package-evidence build/linux-packages build/discord-config
           docker image inspect classic-deb-build classic-deb-runtime \
             --format '{{.Id}}' > build/linux-package-evidence/images.txt

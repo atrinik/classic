@@ -52,9 +52,10 @@ class LinuxDebWorkflowTests(unittest.TestCase):
         self.assertNotIn('actions/cache@', job)
         self.assertNotIn('github.token', job)
         preparation = job.split('name: Prepare pinned Debian', 1)[1].split('      - name:', 1)[0]
-        self.assertNotIn('candidate-source', preparation)
-        self.assertEqual(preparation.count('--build-arg "ATRINIK_COMPILER_IMAGE=${CLASSIC_LINUX_IMAGE}"'), 2)
-        self.assertIn('--file tools/ci/debian-client/Dockerfile tools/ci/debian-client', preparation)
+        self.assertIn('historical_producer.py', preparation)
+        self.assertIn('--source-root "${GITHUB_WORKSPACE}/candidate-source" --revision "${RELEASE_REVISION}"', preparation)
+        self.assertNotIn('ATRINIK_COMPILER_IMAGE', preparation)
+        self.assertEqual(preparation.count('--file "${debian_producer}" tools/ci/debian-client'), 2)
         smoke = job.split('name: Install through APT', 1)[1].split('      - uses:', 1)[0]
         self.assertNotIn('candidate-source', smoke)
         self.assertIn('$GITHUB_WORKSPACE/tools/ci/smoke_linux_client_package.sh,target=/smoke.sh,readonly', smoke)

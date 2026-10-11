@@ -648,6 +648,14 @@ place of the Debian package. Historical schema 2 retains its 13 files including
 12 files. Publication and recovery select the schema of the original source
 revision, validate the manifest, locked inputs and every artifact hash, and
 never append or replace a platform artifact in an already published release.
+Schema-2 Debian rebuilds use the original GCC producer retained in trusted
+automation as `tools/ci/debian-client/Dockerfile.historical`. Its Debian image
+digest and APT snapshot remain pinned. Before building, trusted automation
+requires the exact candidate's committed producer and the retained copy to match
+the approved SHA-256; an unknown contract fails instead of selecting another
+compiler. Candidate sources and dependency locks remain unchanged. The current
+LLVM producer and source-locked AppImage compiler selection retain their own
+contracts.
 Automatic main releases use the complete schema-3 contract; the checked-batch
 queue, immutable publication and recovery safeguards remain unchanged.
 
