@@ -158,6 +158,100 @@ START_TEST(test_light_virtual_cover_and_aperture) {
 }
 END_TEST
 
+START_TEST(test_offset_stays_in_nearest_frontier) {
+    mapstruct a, b, remote, far, target;
+    MapSpace as[16], bs[16], rs[16], fs[16], ts[16];
+    fixture(&a, as); fixture(&b, bs); fixture(&remote, rs);
+    fixture(&far, fs); fixture(&target, ts);
+    link_maps(&a, &b, TILED_EAST);
+    link_maps(&a, &remote, TILED_WEST);
+    link_maps(&remote, &far, TILED_WEST);
+    far.tile_map[TILED_UP] = &far;
+    far.tile_map[TILED_DOWN] = &far;
+    int dx, dy, dz;
+    ck_assert(spatial_offset(&a, &b, &dx, &dy, &dz));
+    ck_assert_int_eq(dx, 4);
+    link_maps(&b, &target, TILED_EAST);
+    ck_assert(spatial_offset(&a, &target, &dx, &dy, &dz));
+    ck_assert_int_eq(dx, 8);
+    ck_assert_int_eq(dy, 0);
+    ck_assert_int_eq(dz, 0);
+}
+END_TEST
+
+START_TEST(test_offset_shortest_paths_detect_ambiguity) {
+    mapstruct a, east, north, target;
+    MapSpace as[16], es[16], ns[16], ts[16];
+    fixture(&a, as); fixture(&east, es); fixture(&north, ns); fixture(&target, ts);
+    link_maps(&a, &east, TILED_EAST);
+    link_maps(&a, &north, TILED_NORTH);
+    link_maps(&east, &target, TILED_NORTH);
+    link_maps(&north, &target, TILED_EAST);
+    int dx, dy, dz;
+    ck_assert(spatial_offset(&a, &target, &dx, &dy, &dz));
+    ck_assert_int_eq(dx, 4);
+    ck_assert_int_eq(dy, -4);
+    north.width = 3;
+    ck_assert(!spatial_offset(&a, &target, &dx, &dy, &dz));
+}
+END_TEST
+
+typedef struct observation {
+    const mapstruct *maps[16];
+    size_t count;
+} observation;
+
+static void observe_map(const mapstruct *map, void *context) {
+    observation *seen = context;
+    for (size_t i = 0; i < seen->count; i++) {
+        if (seen->maps[i] == map) {
+            return;
+        }
+    }
+    ck_assert_uint_lt(seen->count, arraysize(seen->maps));
+    seen->maps[seen->count++] = map;
+}
+
+static bool observed(const observation *seen, const mapstruct *map) {
+    for (size_t i = 0; i < seen->count; i++) {
+        if (seen->maps[i] == map) {
+            return true;
+        }
+    }
+    return false;
+}
+
+START_TEST(test_observer_scope_and_failed_dependencies) {
+    mapstruct a, east, upper;
+    MapSpace as[16], es[16], us[16];
+    fixture(&a, as); fixture(&east, es); fixture(&upper, us);
+    link_maps(&a, &east, TILED_EAST);
+    link_maps(&a, &upper, TILED_UP);
+    east.in_memory = 0;
+    observation first = {0}, second = {0};
+    spatial_observer previous = spatial_observer_exchange(
+        (spatial_observer){.visit = observe_map, .context = &first});
+    spatial_cell cell;
+    ck_assert(!spatial_resolve(&a, 4, 0, 1, &cell));
+    ck_assert(observed(&first, &a));
+    ck_assert(observed(&first, &upper));
+    ck_assert(observed(&first, &east));
+    spatial_observer outer = spatial_observer_exchange(
+        (spatial_observer){.visit = observe_map, .context = &second});
+    ck_assert(spatial_resolve(&upper, 1, 1, 0, &cell));
+    ck_assert(observed(&second, &upper));
+    spatial_observer_exchange(outer);
+    first.count = 0;
+    ck_assert(spatial_resolve(&a, 1, 1, 0, &cell));
+    ck_assert(observed(&first, &a));
+    spatial_observer_exchange(previous);
+    first.count = second.count = 0;
+    ck_assert(spatial_resolve(&a, 1, 1, 0, &cell));
+    ck_assert_uint_eq(first.count, 0);
+    ck_assert_uint_eq(second.count, 0);
+}
+END_TEST
+
 void check_server_spatial(void) {
     Suite *suite = suite_create("spatial");
     TCase *tc = tcase_create("geometry");
@@ -167,6 +261,9 @@ void check_server_spatial(void) {
     tcase_add_test(tc, test_canonical_stack_limit);
     tcase_add_test(tc, test_light_tie_and_sequential_rounding);
     tcase_add_test(tc, test_light_virtual_cover_and_aperture);
+    tcase_add_test(tc, test_offset_stays_in_nearest_frontier);
+    tcase_add_test(tc, test_offset_shortest_paths_detect_ambiguity);
+    tcase_add_test(tc, test_observer_scope_and_failed_dependencies);
     suite_add_tcase(suite, tc);
     check_run_suite(suite, __FILE__);
 }

@@ -40,9 +40,21 @@ typedef struct spatial_cursor {
     bool segment, failed;
 } spatial_cursor;
 
+/* Optional server-thread observation scope. Every consulted non-NULL map,
+ * including an unavailable dependency, is reported before dereferencing it.
+ * The callback must be read-only and must not call spatial APIs. Restore the
+ * returned previous observer before returning or yielding a resumable job. */
+typedef struct spatial_observer {
+    void (*visit)(const mapstruct *map, void *context);
+    void *context;
+} spatial_observer;
+spatial_observer spatial_observer_exchange(spatial_observer observer);
+
 typedef enum spatial_policy { SPATIAL_SIGHT, SPATIAL_COMBAT } spatial_policy;
 
-/* Server-thread only: borrowed map/object pointers; no loads or mutations; bounded temporary lookup storage. Cursors may only survive while the caller retains map lifetime.
+/* Server-thread only: borrowed map/object pointers; no loads or mutations;
+ * bounded temporary lookup storage. Cursors may only survive while the caller
+ * retains map lifetime.
  * Invalid, ambiguous, over-bound or unavailable topology fails closed. */
 bool spatial_resolve(mapstruct *origin, int x, int y, int z, spatial_cell *cell);
 bool spatial_offset(mapstruct *origin, mapstruct *target, int *dx, int *dy, int *dz);

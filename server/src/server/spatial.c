@@ -11,9 +11,21 @@
 typedef struct spatial_node {
     mapstruct *map;
     int offset[3];
+    unsigned depth;
 } spatial_node;
 
+static spatial_observer active_observer;
+
+spatial_observer spatial_observer_exchange(spatial_observer observer) {
+    spatial_observer previous = active_observer;
+    active_observer = observer;
+    return previous;
+}
+
 static bool resident(const mapstruct *map) {
+    if (map != NULL && active_observer.visit != NULL) {
+        active_observer.visit(map, active_observer.context);
+    }
     return map != NULL && map->in_memory == MAP_IN_MEMORY &&
            map->spaces != NULL && MAP_WIDTH(map) > 0 && MAP_HEIGHT(map) > 0;
 }
@@ -54,6 +66,7 @@ static bool neighbor(const spatial_node *node, int direction, spatial_node *next
     }
     *next = *node;
     next->map = other;
+    next->depth++;
     static const int sx[TILED_NUM] = {0,1,0,-1,1,1,-1,-1,0,0};
     static const int sy[TILED_NUM] = {-1,0,1,0,-1,1,1,-1,0,0};
     next->offset[0] += sx[direction] < 0 ? -MAP_WIDTH(other) :
@@ -75,7 +88,8 @@ static bool neighbor(const spatial_node *node, int direction, spatial_node *next
  * lookup this bounds cycles and does not load a map. */
 static bool resolve_search(mapstruct *origin, int x, int y, int z,
                            mapstruct *target, spatial_node *result) {
-    if (!resident(origin) || !stack_valid(origin) || (z <= -SPATIAL_STACK_LEVELS || z >= SPATIAL_STACK_LEVELS) ||
+    if (!resident(origin) || !stack_valid(origin) ||
+        z <= -SPATIAL_STACK_LEVELS || z >= SPATIAL_STACK_LEVELS ||
         x < -SPATIAL_COORD_LIMIT || x > SPATIAL_COORD_LIMIT ||
         y < -SPATIAL_COORD_LIMIT || y > SPATIAL_COORD_LIMIT) {
         return false;
@@ -89,8 +103,12 @@ static bool resolve_search(mapstruct *origin, int x, int y, int z,
     index[origin_slot] = 1;
     nodes[0] = (spatial_node){.map = origin};
     bool found = false, valid = true;
+    unsigned target_depth = SPATIAL_GRAPH_LIMIT;
     for (size_t cursor = 0; cursor < count && valid; cursor++) {
         spatial_node node = nodes[cursor];
+        if (target != NULL && node.depth >= target_depth) {
+            continue;
+        }
         int rx = x - node.offset[0], ry = y - node.offset[1];
         bool contains = rx >= 0 && ry >= 0 && rx < MAP_WIDTH(node.map) &&
                         ry < MAP_HEIGHT(node.map) && z == node.offset[2];
@@ -128,6 +146,16 @@ static bool resolve_search(mapstruct *origin, int x, int y, int z,
                 }
                 continue;
             }
+            if (target != NULL && next.map == target) {
+                if (!stack_valid(next.map) ||
+                    (found && memcmp(result->offset, next.offset, sizeof(next.offset)) != 0)) {
+                    valid = false;
+                    break;
+                }
+                *result = next;
+                found = true;
+                target_depth = next.depth;
+            }
             size_t slot = ((uintptr_t)next.map >> 4) & (index_capacity - 1);
             while (index[slot] != 0 && nodes[index[slot] - 1].map != next.map) {
                 slot = (slot + 1) & (index_capacity - 1);
@@ -139,9 +167,16 @@ static bool resolve_search(mapstruct *origin, int x, int y, int z,
                 }
                 continue;
             }
-            if (count == SPATIAL_GRAPH_LIMIT || !stack_valid(next.map)) {
+            if (count == SPATIAL_GRAPH_LIMIT) {
                 valid = false;
                 break;
+            }
+            if (!stack_valid(next.map)) {
+                if (target == NULL) {
+                    valid = false;
+                    break;
+                }
+                continue;
             }
             if (count == capacity) {
                 capacity *= 2;
@@ -216,6 +251,30 @@ bool spatial_offset(mapstruct *origin, mapstruct *target, int *dx, int *dy, int 
     }
     if (target != NULL && dx != NULL && dy != NULL && dz != NULL &&
         resident(origin) && stack_valid(origin)) {
+        /* Immediate reciprocal seams are independent of remote branches. Check
+         * every direct alias of the target, so conflicting direct transforms
+         * still fail closed without inspecting the rest of the component. */
+        spatial_node source = {.map = origin}, direct;
+        bool direct_found = false;
+        for (int direction = 0; direction < TILED_UP; direction++) {
+            if (origin->tile_map[direction] != target) {
+                continue;
+            }
+            spatial_node candidate;
+            if (!neighbor(&source, direction, &candidate) || !stack_valid(target) ||
+                (direct_found && memcmp(direct.offset, candidate.offset,
+                                        sizeof(candidate.offset)) != 0)) {
+                return false;
+            }
+            direct = candidate;
+            direct_found = true;
+        }
+        if (direct_found) {
+            *dx = direct.offset[0];
+            *dy = direct.offset[1];
+            *dz = direct.offset[2];
+            return true;
+        }
         for (int direction = TILED_UP; direction <= TILED_DOWN; direction++) {
             mapstruct *map = origin->tile_map[direction];
             for (int depth = 1; map != NULL; depth++, map = map->tile_map[direction]) {
