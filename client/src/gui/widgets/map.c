@@ -1727,6 +1727,7 @@ static bool tiles_debug = false;
 static bool map_interaction_test_active;
 static int map_interaction_test_moves;
 static int map_interaction_test_targets;
+static packet_struct *map_interaction_test_target_packet;
 static int map_interaction_test_talks;
 static bool map_interaction_test_target_available;
 static map_target_struct map_interaction_test_mouse_target;
@@ -8257,12 +8258,6 @@ static void send_target(int x, int y, int8_t depth, uint32_t count) {
         return;
     }
 
-#ifdef ATRINIK_WIDGET_TESTS
-    if (map_interaction_test_active) {
-        map_interaction_test_targets++;
-    }
-#endif
-
     packet = packet_new(SERVER_CMD_TARGET, TARGET_SELECT_PAYLOAD_SIZE, 0);
 
     if (x == -1 && y == -1) {
@@ -8275,6 +8270,16 @@ static void send_target(int x, int y, int8_t depth, uint32_t count) {
         packet_writer_write_uint32(packet, count);
     }
 
+#ifdef ATRINIK_WIDGET_TESTS
+    if (map_interaction_test_active) {
+        map_interaction_test_targets++;
+        if (map_interaction_test_target_packet != NULL) {
+            packet_free(map_interaction_test_target_packet);
+        }
+        map_interaction_test_target_packet = packet;
+        return;
+    }
+#endif
     socket_send_packet(packet);
 }
 
@@ -8388,32 +8393,27 @@ static UT_array *map_target_collect(uint8_t is_friend) {
 
 /** Target the next current actor of the requested friend class. */
 void map_target_handle(uint8_t is_friend) {
-    if (cpl.target_is_friend != is_friend) {
-        cpl.target_object_index = 0;
-    }
     UT_array *targets = map_target_collect(is_friend);
-    map_target_struct *p;
-    uint32_t curr_target = cpl.target_actor_count;
-
     utarray_sort(targets, map_target_cmp);
 
-    if (cpl.target_object_index >= utarray_len(targets)) {
-        cpl.target_object_index = 0;
-    }
-
-    if (cpl.target_object_index == 0) {
-        p = (map_target_struct *)utarray_front(targets);
-
-        if (p != NULL && p->count == curr_target && p->depth == cpl.target_relative_depth) {
-            cpl.target_object_index++;
+    /* Only complete TARGET results advance the anchor. A SELECT may be
+     * silently dropped by server pacing; repeated presses before its result
+     * must retry the same next identity, rather than skip an unseen actor.
+     * Manual selections, SELF and reconnect already publish this same state. */
+    size_t next = 0, length = utarray_len(targets);
+    for (size_t index = 0; index < length; index++) {
+        const map_target_struct *target = (const map_target_struct *)utarray_eltptr(targets, index);
+        if (target->count == cpl.target_actor_count &&
+            target->depth == cpl.target_relative_depth) {
+            next = (index + 1) % length;
+            break;
         }
     }
 
-    p = (map_target_struct *)utarray_eltptr(targets, cpl.target_object_index);
+    const map_target_struct *p = (const map_target_struct *)utarray_eltptr(targets, next);
 
     if (p != NULL) {
         send_target(p->x, p->y, p->depth, p->count);
-        cpl.target_object_index++;
     } else if (cpl.target_is_friend != is_friend) {
         send_target(-1, -1, 0, 0);
     }
@@ -11264,6 +11264,130 @@ bool widget_map_fog_click_test(widgetdata *widget) {
     return success;
 }
 
+/** Decode the actual production SELECT emitted by a cycle-key press. */
+static bool map_target_cycle_test_packet(const map_target_struct *expected) {
+    packet_struct *packet = map_interaction_test_target_packet;
+    if (packet == NULL || packet->type != SERVER_CMD_TARGET) {
+        return false;
+    }
+    packet_reader_t reader;
+    packet_reader_init_at(&reader, packet->data, packet->len, 0);
+    uint8_t subtype = packet_reader_read_uint8(&reader);
+    if (expected == NULL) {
+        return subtype == CMD_TARGET_CLEAR && packet_reader_finish(&reader);
+    }
+    uint8_t x = packet_reader_read_uint8(&reader), y = packet_reader_read_uint8(&reader);
+    int8_t depth = packet_reader_read_int8(&reader);
+    uint32_t count = packet_reader_read_uint32(&reader);
+    return packet_reader_finish(&reader) && subtype == CMD_TARGET_MAPXY &&
+           x == expected->x && y == expected->y && depth == expected->depth &&
+           count == expected->count;
+}
+
+/** Publish an acknowledgement through the complete production TARGET decoder. */
+static void map_target_cycle_test_reply(const map_target_struct *target, bool truncated) {
+    packet_struct *packet = packet_new(0, 32, 32);
+    packet_writer_write_uint8(packet, target != NULL ? CMD_TARGET_ENEMY : CMD_TARGET_SELF);
+    packet_writer_write_cstring(packet, "ffffff");
+    packet_writer_write_cstring(packet, "Cycle actor");
+    packet_writer_write_uint8(packet, 1);
+    packet_writer_write_uint32(packet, target != NULL ? target->count : 0);
+    packet_writer_write_int8(packet, target != NULL ? target->depth : 0);
+    packet_writer_write_uint8(packet, 0);
+    packet_writer_write_uint8(packet, 0);
+    socket_command_target(packet->data, packet->len - (truncated ? 1 : 0), 0);
+    packet_free(packet);
+}
+
+/** Every user press remains retryable even when no TARGET reply arrives. */
+static bool map_target_cycle_test_press(uint8_t is_friend, const map_target_struct *expected) {
+    int sent = map_interaction_test_targets;
+    map_target_handle(is_friend);
+    return map_interaction_test_targets == sent + 1 && map_target_cycle_test_packet(expected);
+}
+
+/** Exercise rapid presses and missing replies without an optimistic cursor. */
+static bool map_target_cycle_test(void) {
+    Client_Player saved_player = cpl;
+    bool saved_active = map_interaction_test_active;
+    int saved_targets = map_interaction_test_targets;
+    packet_struct *saved_packet = map_interaction_test_target_packet;
+    map_interaction_test_target_packet = NULL;
+    map_interaction_test_active = true;
+    map_interaction_test_targets = 0;
+    UT_array *targets = map_target_collect(0);
+    utarray_sort(targets, map_target_cmp);
+    size_t length = utarray_len(targets);
+    bool success = length >= 3;
+    if (success) {
+        const map_target_struct *first = (const map_target_struct *)utarray_eltptr(targets, 0);
+        const map_target_struct *second = (const map_target_struct *)utarray_eltptr(targets, 1);
+        const map_target_struct *third = (const map_target_struct *)utarray_eltptr(targets, 2);
+        const map_target_struct *last = (const map_target_struct *)utarray_eltptr(targets, length - 1);
+        map_target_cycle_test_reply(NULL, false);
+        /* Even a stale optimistic index cannot move the acknowledged anchor. */
+        cpl.target_object_index = length + 3;
+        success &= map_target_cycle_test_press(0, first);
+        success &= map_target_cycle_test_press(0, first);
+        success &= cpl.target_actor_count == 0 && cpl.target_relative_depth == 0;
+
+        map_target_cycle_test_reply(first, false);
+        success &= map_target_cycle_test_press(0, second);
+        /* The second selection is dropped; another press retries it, and a
+         * truncated reply cannot publish an anchor or skip to the third. */
+        success &= map_target_cycle_test_press(0, second);
+        map_target_cycle_test_reply(second, true);
+        success &= cpl.target_actor_count == first->count &&
+                   cpl.target_relative_depth == first->depth;
+        success &= map_target_cycle_test_press(0, second);
+        map_target_cycle_test_reply(second, false);
+        success &= map_target_cycle_test_press(0, third);
+
+        /* Manual selection changes the next actor; end-of-list wraps directly. */
+        map_target_cycle_test_reply(last, false);
+        success &= map_target_cycle_test_press(0, first);
+        map_target_cycle_test_reply(second, false);
+        success &= map_target_cycle_test_press(0, third);
+
+        /* SELF from rejection or CLEAR starts from the first current identity.
+         * No absent reply can wedge subsequent user presses. */
+        send_target(-1, -1, 0, 0);
+        success &= map_target_cycle_test_packet(NULL);
+        map_target_cycle_test_reply(NULL, false);
+        success &= map_target_cycle_test_press(0, first);
+        map_target_cycle_test_reply(NULL, false);
+        success &= map_target_cycle_test_press(0, first);
+
+        /* Reconnect uses clear_player's connection-local zeroed state. */
+        memset(&cpl, 0, sizeof(cpl));
+        success &= map_target_cycle_test_press(0, first);
+
+        /* Count alone must never match an actor at a different relative depth. */
+        map_target_struct other_depth = *second;
+        other_depth.depth = MAP2_MAX_DEPTH;
+        map_target_cycle_test_reply(&other_depth, false);
+        success &= map_target_cycle_test_press(0, first);
+
+        /* Switching to an empty friend class clears instead of retaining an
+         * enemy; another enemy-cycle press still starts from the live anchor. */
+        success &= map_target_cycle_test_press(1, NULL);
+        map_target_cycle_test_reply(NULL, false);
+        success &= map_target_cycle_test_press(0, first);
+    }
+    if (!success) {
+        fprintf(stderr, "map target cycle test: acknowledgement anchor regression\n");
+    }
+    utarray_free(targets);
+    if (map_interaction_test_target_packet != NULL) {
+        packet_free(map_interaction_test_target_packet);
+    }
+    map_interaction_test_target_packet = saved_packet;
+    map_interaction_test_targets = saved_targets;
+    map_interaction_test_active = saved_active;
+    cpl = saved_player;
+    return success;
+}
+
 /** Verify depth cycling and projected sprite ownership against live MAP2 records. */
 static bool widget_map_target_depth_test(widgetdata *widget) {
     if (widget == NULL || map_state_transaction_active()) {
@@ -11328,6 +11452,7 @@ static bool widget_map_target_depth_test(widgetdata *widget) {
     }
     success = success && found_mask == map_level_mask;
     utarray_free(targets);
+    success &= map_target_cycle_test();
     /* A multipart identity in two physical cells appears only once per depth. */
     map_select_level(0, false);
     map_cell_t *duplicate = MAP_CELL_GET_MUTABLE(MAP_STARTX + 2, MAP_STARTY + 1);
@@ -11501,6 +11626,10 @@ bool widget_map_interaction_test(widgetdata *widget) {
     if (map_interaction_test_talk_packet != NULL) {
         packet_free(map_interaction_test_talk_packet);
         map_interaction_test_talk_packet = NULL;
+    }
+    if (map_interaction_test_target_packet != NULL) {
+        packet_free(map_interaction_test_target_packet);
+        map_interaction_test_target_packet = NULL;
     }
     cur_widget[MENU_ID] = old_menu;
     map_interaction_test_active = false;
