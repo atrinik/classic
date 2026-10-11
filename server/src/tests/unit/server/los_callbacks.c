@@ -10,6 +10,7 @@
 #include <check.h>
 #include <checkstd.h>
 #include <check_utils.h>
+#include <atrinik/protocol/target.h>
 #include <arch.h>
 #include <initialization.h>
 #include <los.h>
