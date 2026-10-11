@@ -52,7 +52,10 @@ typedef struct los_camera_view {
     bool cutaway[LOS_OVERHEAD_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
     uint16_t cover[MAP_CLIENT_X][MAP_CLIENT_Y];
     object *pl;
+    bool cache_enabled;
     los_column *columns;
+    spatial_cell local_levels[LOS_QUERY_LEVELS];
+    uint32_t local_checked;
     size_t resolves;
 } los_camera_view;
 
@@ -112,12 +115,17 @@ static bool camera_wall(mapstruct *map, int x, int y) {
 
 /** One synchronous update owns this borrowed-pointer cache. No callbacks or
  * yields can mutate topology while it lives; fresh actions create their own.
- * Each column retains at most the thirteen maps in its validated stack. */
+ * Each column retains at most thirteen resolved cells; unusual projected
+ * columns crossing different canonical stacks use the exact default fallback. */
 static bool view_cell(los_camera_view *view, int ax, int ay, int depth, spatial_cell *cell) {
     object *pl = view->pl;
     socket_struct *cs = CONTR(pl)->cs;
     int x = pl->x + ax - cs->mapx_2, y = pl->y + ay - cs->mapy_2;
     *cell = (spatial_cell){.x = x, .y = y, .z = depth};
+    if (!view->cache_enabled) {
+        view->resolves++;
+        return spatial_resolve(pl->map, x, y, depth, cell);
+    }
     if (ax < 0 || ay < 0 || ax >= cs->mapx || ay >= cs->mapy ||
         depth < -MAP2_MAX_DEPTH || depth > LOS_OVERHEAD_LEVELS) {
         return spatial_resolve(pl->map, x, y, depth, cell);
@@ -127,10 +135,36 @@ static bool view_cell(los_camera_view *view, int ax, int ay, int depth, spatial_
     uint32_t bit = UINT32_C(1) << index;
     if ((column->checked & bit) == 0) {
         column->checked |= bit;
-        view->resolves++;
         spatial_cell resolved;
-        if (spatial_resolve(pl->map, x, y, depth, &resolved) &&
-            column->count < SPATIAL_STACK_LEVELS) {
+        bool valid;
+        if (pl->x >= 0 && pl->y >= 0 && pl->x < MAP_WIDTH(pl->map) &&
+            pl->y < MAP_HEIGHT(pl->map) && x >= 0 && y >= 0 &&
+            x < MAP_WIDTH(pl->map) && y < MAP_HEIGHT(pl->map)) {
+            /* The default resolver's in-origin fast path uses the same
+             * validated equal-size vertical chain for every local coordinate.
+             * Its missing-link failure is likewise independent of x/y. */
+            if ((view->local_checked & bit) == 0) {
+                view->local_checked |= bit;
+                view->resolves++;
+                spatial_resolve(pl->map, pl->x, pl->y, depth, &view->local_levels[index]);
+            }
+            resolved = view->local_levels[index];
+            resolved.x = x;
+            resolved.y = y;
+            valid = resolved.map != NULL;
+        } else {
+            view->resolves++;
+            valid = spatial_resolve(pl->map, x, y, depth, &resolved);
+        }
+        if (valid) {
+            if (column->count >= SPATIAL_STACK_LEVELS) {
+                /* Sparse seams can project different canonical stacks into
+                 * one column. Keep the memory bound without turning a valid
+                 * default result into a cached failure. */
+                column->checked &= ~bit;
+                *cell = resolved;
+                return true;
+            }
             column->cells[column->count] = resolved;
             column->index[index] = ++column->count;
         }
@@ -158,7 +192,7 @@ static void camera_destroy(los_camera_view *view) {
 }
 
 /** Classify connected camera cutaways before casting any player sight rays. */
-static void camera_build(object *pl, los_camera_view *view) {
+static void camera_build(object *pl, los_camera_view *view, bool cache_cells) {
     socket_struct *cs = CONTR(pl)->cs;
     bool blockers[MAP_CLIENT_X][MAP_CLIENT_Y];
     bool walls[MAP_CLIENT_X][MAP_CLIENT_Y];
@@ -167,7 +201,10 @@ static void camera_build(object *pl, los_camera_view *view) {
     int queue_y[MAP_CLIENT_X * MAP_CLIENT_Y];
     memset(view, 0, sizeof(*view));
     view->pl = pl;
-    view->columns = xcalloc((size_t)cs->mapx * cs->mapy, sizeof(*view->columns));
+    view->cache_enabled = cache_cells;
+    if (cache_cells) {
+        view->columns = xcalloc((size_t)cs->mapx * cs->mapy, sizeof(*view->columns));
+    }
 
     for (int depth = 1; depth <= LOS_OVERHEAD_LEVELS; depth++) {
         spatial_cell center;
@@ -242,6 +279,44 @@ static void camera_build(object *pl, los_camera_view *view) {
     }
 }
 
+#ifdef ATRINIK_TESTING
+bool los_view_matches_default_for_test(object *pl) {
+    los_camera_view view;
+    camera_build(pl, &view, true);
+    socket_struct *cs = CONTR(pl)->cs;
+    bool matches = true;
+    for (int pass = 0; pass < 2 && matches; pass++) {
+        if (pass != 0) {
+            /* Exercise the rare capacity fallback without inventing a second
+             * topology or changing its authoritative resolution result. */
+            for (size_t i = 0; i < (size_t)cs->mapx * cs->mapy; i++) {
+                memset(view.columns[i].index, 0, sizeof(view.columns[i].index));
+                view.columns[i].checked = 0;
+                view.columns[i].count = SPATIAL_STACK_LEVELS;
+            }
+        }
+        for (int ax = 0; ax < cs->mapx && matches; ax++) {
+            for (int ay = 0; ay < cs->mapy && matches; ay++) {
+                for (int depth = -MAP2_MAX_DEPTH; depth <= LOS_OVERHEAD_LEVELS; depth++) {
+                    spatial_cell cached, actual;
+                    bool found_cached = view_cell(&view, ax, ay, depth, &cached);
+                    bool found_actual = spatial_resolve(pl->map, pl->x + ax - cs->mapx_2,
+                                                        pl->y + ay - cs->mapy_2, depth, &actual);
+                    if (found_cached != found_actual ||
+                        (found_actual && (cached.map != actual.map || cached.x != actual.x ||
+                                          cached.y != actual.y || cached.z != actual.z))) {
+                        matches = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    camera_destroy(&view);
+    return matches;
+}
+#endif
+
 static bool camera_cutaway(const los_camera_view *view, int depth, int ax, int ay) {
     return depth > 0 && depth <= LOS_OVERHEAD_LEVELS && view->cutaway[depth - 1][ax][ay];
 }
@@ -314,7 +389,7 @@ static bool player_ray(object *pl, int dx, int dy, int dz, los_camera_view *view
     if (dz == 0 && abs(dx) <= 3 && abs(dy) <= 3 && QUERY_FLAG(pl, FLAG_XRAYS)) {
         return true; /* Same-story wall bypass; camera/slabs remain authoritative. */
     }
-    if (view == NULL) {
+    if (view == NULL || !view->cache_enabled) {
         return spatial_ray_clear(pl->map, pl->x, pl->y, dx, dy, dz, SPATIAL_SIGHT, true);
     }
     spatial_cursor cursor;
@@ -346,7 +421,7 @@ los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, 
         return LOS_CAMERA_VISIBLE;
     }
     los_camera_view view;
-    camera_build(pl, &view);
+    camera_build(pl, &view, true);
     los_camera_visibility visibility = camera_classify(&view, dx + CONTR(pl)->cs->mapx_2,
                                                         dy + CONTR(pl)->cs->mapy_2, dz);
     camera_destroy(&view);
@@ -369,7 +444,7 @@ void clear_los(object *pl) {
     memset(CONTR(pl)->camera_visibility, LOS_CAMERA_HIDDEN, sizeof(CONTR(pl)->camera_visibility));
 }
 
-void update_los(object *pl) {
+static void update_los_impl(object *pl, bool cache_cells) {
 #ifdef ATRINIK_TESTING
     memset(view_sight_checks, 0, sizeof(view_sight_checks));
     memset(view_camera_pruned, 0, sizeof(view_camera_pruned));
@@ -381,7 +456,7 @@ void update_los(object *pl) {
     }
     socket_struct *cs = CONTR(pl)->cs;
     los_camera_view view;
-    camera_build(pl, &view);
+    camera_build(pl, &view, cache_cells);
     /* All camera classifications precede rays; covered gameplay never gets
      * discovered while iterating positive levels in packet order. */
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
@@ -431,6 +506,16 @@ void update_los(object *pl) {
 #endif
     camera_destroy(&view);
 }
+
+void update_los(object *pl) {
+    update_los_impl(pl, true);
+}
+
+#ifdef ATRINIK_TESTING
+void los_update_uncached_for_test(object *pl) {
+    update_los_impl(pl, false);
+}
+#endif
 
 /** Physical object sight is independent of player camera presentation. */
 int obj_in_line_of_sight(object *obj, rv_vector *rv) {

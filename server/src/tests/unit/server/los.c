@@ -76,6 +76,7 @@ START_TEST(test_full_stack_cover_is_not_clipped_to_displayed_depths) {
         top = add_level(top, z, 12);
     }
     place(top, "roof_thatch", 13, 12);
+    ck_assert(los_view_matches_default_for_test(pl));
     ck_assert(!los_player_can_see_cell(pl, map, 13, 12));
     update_los(pl);
     ck_assert_int_eq(CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(0)]
@@ -240,6 +241,115 @@ START_TEST(test_camera_hidden_depths_are_pruned_before_sight_checks) {
 }
 END_TEST
 
+START_TEST(test_scoped_cell_cache_matches_default_across_seams_and_invalid_stacks) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->mapx = cs->mapy = 5;
+    cs->mapx_2 = cs->mapy_2 = 2;
+    object_remove(pl, 0);
+    pl->x = 22;
+    pl = object_insert_map(pl, map, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+    map->level_min = 0;
+    map->level_max = 1;
+    mapstruct *upper = add_level(map, 1, 1);
+    mapstruct *east = get_empty_map(24, 24);
+    east->level_min = 0;
+    east->level_max = 1;
+    mapstruct *east_upper = add_level(east, 1, 1);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    upper->tile_map[TILED_EAST] = east_upper;
+    east_upper->tile_map[TILED_WEST] = upper;
+    ck_assert(los_view_matches_default_for_test(pl));
+    upper->tile_map[TILED_DOWN] = NULL;
+    ck_assert(los_view_matches_default_for_test(pl));
+    upper->tile_map[TILED_DOWN] = map;
+    upper->width = 23;
+    ck_assert(los_view_matches_default_for_test(pl));
+    upper->width = 24;
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_UP], "/missing-typed-upper");
+    ck_assert(los_view_matches_default_for_test(pl));
+    /* Every in-origin column shares nineteen default lookups. The five seam
+     * columns retain their own exact resolution, once per queried depth. */
+    update_los(pl);
+    ck_assert_uint_le(los_view_cell_resolves_for_test(),
+                      (SPATIAL_STACK_LEVELS - 1 + MAP2_MAX_DEPTH + 1) * (1 + cs->mapy));
+}
+END_TEST
+
+static void assert_cached_masks_match_default(object *pl) {
+    uint8_t camera[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+    uint8_t sight[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+    int base[MAP_CLIENT_X][MAP_CLIENT_Y];
+    update_los(pl);
+    memcpy(camera, CONTR(pl)->camera_visibility, sizeof(camera));
+    memcpy(sight, CONTR(pl)->blocked_los_depth, sizeof(sight));
+    memcpy(base, CONTR(pl)->blocked_los, sizeof(base));
+    los_update_uncached_for_test(pl);
+    ck_assert_mem_eq(camera, CONTR(pl)->camera_visibility, sizeof(camera));
+    ck_assert_mem_eq(sight, CONTR(pl)->blocked_los_depth, sizeof(sight));
+    ck_assert_mem_eq(base, CONTR(pl)->blocked_los, sizeof(base));
+}
+
+START_TEST(test_cached_and_default_whole_masks_match_across_mixed_topology) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->mapx = cs->mapy = 5;
+    cs->mapx_2 = cs->mapy_2 = 2;
+    object_remove(pl, 0);
+    pl->x = 22;
+    pl = object_insert_map(pl, map, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+    map->level_min = -1;
+    map->level_max = 1;
+    mapstruct *upper = add_level(map, 1, 1);
+    mapstruct *east = get_empty_map(24, 24);
+    mapstruct *east_upper = add_level(east, 1, 1);
+    mapstruct *lower = get_empty_map(24, 24);
+    mapstruct *east_lower = get_empty_map(24, 24);
+    map->tile_map[TILED_DOWN] = lower;
+    lower->tile_map[TILED_UP] = map;
+    east->tile_map[TILED_DOWN] = east_lower;
+    east_lower->tile_map[TILED_UP] = east;
+    lower->coords[2] = east_lower->coords[2] = -1;
+    mapstruct *west_levels[] = {lower, map, upper};
+    mapstruct *east_levels[] = {east_lower, east, east_upper};
+    for (size_t i = 0; i < arraysize(west_levels); i++) {
+        west_levels[i]->level_min = east_levels[i]->level_min = -1;
+        west_levels[i]->level_max = east_levels[i]->level_max = 1;
+        west_levels[i]->tile_map[TILED_EAST] = east_levels[i];
+        east_levels[i]->tile_map[TILED_WEST] = west_levels[i];
+    }
+    place(map, "water_still", 21, 12);
+    place(upper, "roof_thatch", 23, 13);
+    place(east, "wall_wood_1", 0, 11);
+    place(east_upper, "roof_thatch", 0, 12);
+    assert_cached_masks_match_default(pl);
+    /* A vertical/horizontal diamond whose reverse edge names another storey
+     * fails in precisely the same cells for the cached/default traversals. */
+    east_upper->tile_map[TILED_WEST] = map;
+    assert_cached_masks_match_default(pl);
+    east_upper->tile_map[TILED_WEST] = upper;
+    /* Local upper absence cannot be extrapolated to the neighboring column,
+     * whose complete reciprocal upper stack remains loaded and queryable. */
+    map->tile_map[TILED_UP] = NULL;
+    upper->tile_map[TILED_DOWN] = NULL;
+    FREE_AND_COPY_HASH(map->tile_path[TILED_UP], "/unavailable-upper");
+    assert_cached_masks_match_default(pl);
+    map->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = map;
+    /* An invalid local stack must retain default fail-closed behavior. */
+    lower->tile_map[TILED_UP] = NULL;
+    assert_cached_masks_match_default(pl);
+    lower->tile_map[TILED_UP] = map;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("los");
     TCase *tc = tcase_create("Core");
@@ -255,6 +365,8 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_floor_top_does_not_hide_occupants_from_camera);
     tcase_add_test(tc, test_unavailable_link_and_tls_exception_fail_deliberately);
     tcase_add_test(tc, test_camera_hidden_depths_are_pruned_before_sight_checks);
+    tcase_add_test(tc, test_scoped_cell_cache_matches_default_across_seams_and_invalid_stacks);
+    tcase_add_test(tc, test_cached_and_default_whole_masks_match_across_mixed_topology);
     return s;
 }
 

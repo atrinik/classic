@@ -62,6 +62,10 @@ size_t los_view_sight_checks_for_test(int depth);
 size_t los_view_camera_pruned_for_test(int depth);
 /** Default cell resolution calls in the last transient viewport cache. */
 size_t los_view_cell_resolves_for_test(void);
+/** Compare every query in one fresh viewport scope against the default resolver. */
+bool los_view_matches_default_for_test(object *pl);
+/** Reference update using default resolution for every cell and ray step. */
+void los_update_uncached_for_test(object *pl);
 #endif
 
 extern int obj_in_line_of_sight(object *obj, rv_vector *rv);
