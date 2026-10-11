@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "architecture": "x86_64",
+  "glibc_max": "2.39",
+  "base_image": {
+    "reference": "ubuntu:24.04",
+    "digest": "sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b",
+    "apt_snapshot": "20261010T000000Z"
+  },
+  "sources": [
+    {
+      "name": "SDL3",
+      "version": "3.4.2",
+      "url": "https://github.com/libsdl-org/SDL/releases/download/release-3.4.2/SDL3-3.4.2.tar.gz",
+      "sha256": "ef39a2e3f9a8a78296c40da701967dd1b0d0d6e267e483863ce70f8a03b4050c",
+      "source_directory": "SDL3-3.4.2",
+      "license_file": "LICENSE.txt",
+      "license": "Zlib"
+    },
+    {
+      "name": "SDL3_image",
+      "version": "3.4.0",
+      "url": "https://github.com/libsdl-org/SDL_image/releases/download/release-3.4.0/SDL3_image-3.4.0.tar.gz",
+      "sha256": "2ceb75eab4235c2c7e93dafc3ef3268ad368ca5de40892bf8cffdd510f29d9d8",
+      "source_directory": "SDL3_image-3.4.0",
+      "license_file": "LICENSE.txt",
+      "license": "Zlib"
+    },
+    {
+      "name": "SDL3_ttf",
+      "version": "3.2.2",
+      "url": "https://github.com/libsdl-org/SDL_ttf/releases/download/release-3.2.2/SDL3_ttf-3.2.2.tar.gz",
+      "sha256": "63547d58d0185c833213885b635a2c0548201cc8f301e6587c0be1a67e1e045d",
+      "source_directory": "SDL3_ttf-3.2.2",
+      "license_file": "LICENSE.txt",
+      "license": "Zlib"
+    },
+    {
+      "name": "SDL3_mixer",
+      "version": "3.2.4",
+      "url": "https://github.com/libsdl-org/SDL_mixer/releases/download/release-3.2.4/SDL3_mixer-3.2.4.tar.gz",
+      "sha256": "182a07c745375e113dc740d43964ff21b0be29f29f59876c4dbc4db3d32f6901",
+      "source_directory": "SDL3_mixer-3.2.4",
+      "license_file": "LICENSE.txt",
+      "license": "Zlib"
+    },
+    {
+      "name": "openssl",
+      "version": "3.5.5",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.5/openssl-3.5.5.tar.gz",
+      "sha256": "b28c91532a8b65a1f983b4c28b7488174e4a01008e29ce8e69bd789f28bc2a89",
+      "source_directory": "openssl-3.5.5",
+      "license_file": "LICENSE.txt",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "curl",
+      "version": "8.18.0",
+      "url": "https://curl.se/download/curl-8.18.0.tar.gz",
+      "sha256": "e9274a5f8ab5271c0e0e6762d2fce194d5f98acc568e4ce816845b2dcc0cf88f",
+      "source_directory": "curl-8.18.0",
+      "license_file": "COPYING",
+      "license": "curl"
+    },
+    {
+      "name": "c-ares",
+      "version": "1.34.6",
+      "url": "https://github.com/c-ares/c-ares/releases/download/v1.34.6/c-ares-1.34.6.tar.gz",
+      "sha256": "912dd7cc3b3e8a79c52fd7fb9c0f4ecf0aaa73e45efda880266a2d6e26b84ef5",
+      "source_directory": "c-ares-1.34.6",
+      "license_file": "LICENSE.md",
+      "license": "MIT"
+    }
+  ],
+  "tools": [
+    {
+      "name": "linuxdeploy",
+      "version": "1-alpha-20251107-1",
+      "url": "https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage",
+      "sha256": "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d",
+      "license_file": "usr/share/doc/linuxdeploy/copyright",
+      "license": "MIT"
+    },
+    {
+      "name": "appimagetool",
+      "version": "1.9.1",
+      "url": "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage",
+      "sha256": "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0",
+      "license_file": "usr/share/doc/appimagetool/copyright",
+      "license": "MIT"
+    }
+  ],
+  "runtime": {
+    "version": "20251108",
+    "url": "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64",
+    "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+    "size": 944632,
+    "license": "MIT",
+    "license_file": "LICENSE"
+  },
+  "host_libraries": [
+    "ld-linux-x86-64.so.2",
+    "libc.so.6",
+    "libm.so.6",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libresolv.so.2",
+    "libvulkan.so.1",
+    "libGL.so.1",
+    "libEGL.so.1",
+    "libGLX.so.0",
+    "libGLdispatch.so.0"
+  ],
+  "required_libraries": [
+    "libSDL3.so.0",
+    "libSDL3_image.so.0",
+    "libSDL3_ttf.so.0",
+    "libSDL3_mixer.so.0",
+    "libssl.so.3",
+    "libcrypto.so.3",
+    "libcurl.so.4",
+    "libcares.so.2"
+  ],
+  "dlopen_libraries": [
+    "libX11.so.6",
+    "libXext.so.6",
+    "libXcursor.so.1",
+    "libXi.so.6",
+    "libXfixes.so.3",
+    "libXrandr.so.2",
+    "libXss.so.1",
+    "libXtst.so.6",
+    "libwayland-client.so.0",
+    "libwayland-cursor.so.0",
+    "libwayland-egl.so.1",
+    "libxkbcommon.so.0",
+    "libasound.so.2",
+    "libpulse.so.0",
+    "libdbus-1.so.3",
+    "libudev.so.1"
+  ],
+  "notices": [
+    "usr/share/doc/atrinik/licenses/SDL3/LICENSE",
+    "usr/share/doc/atrinik/licenses/SDL3_image/LICENSE",
+    "usr/share/doc/atrinik/licenses/SDL3_ttf/LICENSE",
+    "usr/share/doc/atrinik/licenses/SDL3_mixer/LICENSE",
+    "usr/share/doc/atrinik/licenses/openssl/LICENSE",
+    "usr/share/doc/atrinik/licenses/curl/LICENSE",
+    "usr/share/doc/atrinik/licenses/c-ares/LICENSE",
+    "usr/share/doc/atrinik/licenses/appimage-runtime/LICENSE"
+  ],
+  "bootstrap": [
+    {
+      "name": "ca-certificates.deb",
+      "version": "20240203",
+      "url": "https://snapshot.ubuntu.com/ubuntu/20261010T000000Z/pool/main/c/ca-certificates/ca-certificates_20240203_all.deb",
+      "sha256": "641de77d8f142cfd62a1a6f964ba67b20754d3337c480efb529d086075a06c9a",
+      "license": "MPL-2.0"
+    }
+  ],
+  "license_inputs": [
+    {
+      "name": "runtime-LICENSE",
+      "url": "https://raw.githubusercontent.com/AppImage/type2-runtime/20251108/LICENSE",
+      "sha256": "aa154fc9070614bbe7921f89db11efd1dba7a1f3a41685958110e2230f9c0ca1"
+    },
+    {
+      "name": "appimagetool-LICENSE",
+      "url": "https://raw.githubusercontent.com/AppImage/appimagetool/1.9.1/LICENSE",
+      "sha256": "d726eb47bb96b7e7f8971a1431575ab4fd8780b5d2efde3552c70ef71469015f"
+    },
+    {
+      "name": "linuxdeploy-LICENSE",
+      "url": "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy/1-alpha-20251107-1/LICENSE.txt",
+      "sha256": "1edb41ae7601854ae15d113c3700beebd0ea3ed05b85e3786a94a72bb9916091"
+    }
+  ]
+}
