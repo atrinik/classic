@@ -57,6 +57,56 @@ class DependencyTests(unittest.TestCase):
             "strip_components": 1,
         }
 
+    def runtime_dependency(self, archive: Path, **changes: object) -> dict[str, object]:
+        dependency = {
+            "name": "sound",
+            "repository": "atrinik/sound",
+            "tag": "v1.2.3",
+            "commit": "a" * 40,
+            "url": "https://github.com/atrinik/sound/releases/download/v1.2.3/"
+                   "atrinik-sound-classic-runtime-1.2.3.tar.gz",
+            "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+            "destination": "sound",
+            "strip_components": 1,
+            "runtime_manifest_sha256": "",
+            "runtime_checksums_sha256": "",
+        }
+        dependency.update(changes)
+        return dependency
+
+    def make_runtime_archive(self) -> tuple[Path, dict[str, object]]:
+        tree = self.root / "runtime"
+        payload = b"OggS\x00\x02" + b"\x00" * 8 + b"\x01\x00\x00\x00" + b"\x00" * 8 + b"\x01\x08\x01vorbis\x00"
+        sound = tree / "effects/test.mid"
+        sound.parent.mkdir(parents=True)
+        sound.write_bytes(payload)
+        manifest = {
+            "source_commit": "a" * 40, "release_tag": "v1.2.3",
+            "publishable": True, "playtest_only": False,
+            "assets": [{"logical_path": "effects/test.mid", "output": {
+                "codec": "vorbis", "container": "ogg",
+                "sha256": hashlib.sha256(payload).hexdigest(), "size_bytes": len(payload),
+            }}],
+            "logical_path_count": 1, "copied_vorbis_count": 1, "converted_opus_count": 0,
+        }
+        manifest_path = tree / "classic-runtime-manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        checksums = "".join(
+            f"{hashlib.sha256((tree / name).read_bytes()).hexdigest()}  {name}\n"
+            for name in ("classic-runtime-manifest.json", "effects/test.mid")
+        )
+        checksum_path = tree / "SHA256SUMS"
+        checksum_path.write_text(checksums, encoding="utf-8")
+        archive = self.root / "runtime.tar.gz"
+        with tarfile.open(archive, "w:gz") as output:
+            for path in tree.rglob("*"):
+                output.add(path, arcname=f"sound-v1.2.3/{path.relative_to(tree)}", recursive=False)
+        return archive, self.runtime_dependency(
+            archive,
+            runtime_manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            runtime_checksums_sha256=hashlib.sha256(checksum_path.read_bytes()).hexdigest(),
+        )
+
     def test_installs_and_verifies_pinned_archive(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/effects/test.ogg", b"sound", "file")])
         dependency = self.dependency(archive)
@@ -72,6 +122,36 @@ class DependencyTests(unittest.TestCase):
             dependencies.install_dependency(self.root, self.root / "build/cache", dependency),
             "current",
         )
+
+    def test_runtime_lock_requires_a_complete_canonical_pair_and_keeps_generic_records_valid(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        valid = self.runtime_dependency(archive, runtime_manifest_sha256="a" * 64,
+                                        runtime_checksums_sha256="b" * 64)
+        lock = self.root / "lock.json"
+        lock.write_text(json.dumps({"schema_version": 1, "dependencies": [valid]}), encoding="utf-8")
+        self.assertEqual(dependencies.load_lock(lock)[0]["name"], "sound")
+        for changed in (
+            {key: value for key, value in valid.items() if key != "runtime_checksums_sha256"},
+            {**valid, "name": "resources"},
+            {**valid, "runtime_manifest_sha256": "A" * 64},
+        ):
+            lock.write_text(json.dumps({"schema_version": 1, "dependencies": [changed]}), encoding="utf-8")
+            with self.assertRaisesRegex(dependencies.DependencyError, "runtime sound|metadata pins|SHA-256"):
+                dependencies.load_lock(lock)
+        generic = self.dependency(archive)
+        lock.write_text(json.dumps({"schema_version": 1, "dependencies": [generic]}), encoding="utf-8")
+        self.assertEqual(dependencies.load_lock(lock, allow_file_urls=True)[0]["name"], "sound")
+
+    def test_runtime_matching_marker_rechecks_the_closed_tree(self) -> None:
+        archive, dependency = self.make_runtime_archive()
+        cache = self.root / "cache"
+        downloads = cache / "downloads"
+        downloads.mkdir(parents=True)
+        (downloads / f"sound-{dependency['sha256']}.tar.gz").write_bytes(archive.read_bytes())
+        self.assertEqual(dependencies.install_dependency(self.root, cache, dependency, offline=True), "installed")
+        (self.root / "sound/effects/test.mid").write_bytes(b"tampered")
+        with self.assertRaisesRegex(dependencies.DependencyError, "Classic sound verification failed"):
+            dependencies.install_dependency(self.root, cache, dependency, offline=True)
 
     def test_refresh_repairs_payload_behind_a_valid_marker_offline(self) -> None:
         archive = self.make_archive(
