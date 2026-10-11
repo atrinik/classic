@@ -566,11 +566,14 @@ current checkout's trusted inputs. LLVM packages require the approved compiler
 image from the trusted caller or an exact image pin in the source lock;
 inspection rejects a different well-formed digest. Candidate code cannot replace that caller's
 validator or redefine the supported host-library boundary.
-SDK assembly uses the matching `llvm-readelf`. The trusted host inspector
-uses distribution `readelf` only for read-only ELF inspection, preserving
-historical release recovery on hosts without the SDK; it accepts the verified
-LLVM output formats too. Host inspection tools never compile, link or strip
-new application or dependency binaries.
+SDK assembly uses the matching LLVM 23 `llvm-readelf`. The trusted host
+inspector uses `/usr/bin/llvm-readelf` from the distribution's `llvm` package
+only for read-only artifact inspection, preserving historical release recovery
+on hosts without the SDK. This platform inspector can be an older LLVM version
+(Ubuntu 24 supplies LLVM 18); it is separate from the pinned LLVM 23 compiler,
+linker and binary utilities used to build application and dependency binaries.
+Both inspector output formats retain the same ELF compatibility and safety
+guards. Candidate `PATH` and `READELF` cannot select the host inspector.
 The trusted caller supplies `tools/ci/appimage/prepare.py` with required
 `--compiler-image ghcr.io/atrinik/classic-build:VERSION@sha256:DIGEST`, its Dockerfile
 and `smoke.sh`. The exact candidate checkout and staged inputs are read-only

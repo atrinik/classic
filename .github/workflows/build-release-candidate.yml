@@ -484,6 +484,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends squashfs-tools llvm
+          test -x /usr/bin/llvm-readelf
           python3 tools/release/appimage.py \
             "build/appimage-packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage" \
             "${RELEASE_VERSION}" \
@@ -799,6 +800,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends squashfs-tools llvm
+          test -x /usr/bin/llvm-readelf
       - name: Check out the trusted compiler-image resolver
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

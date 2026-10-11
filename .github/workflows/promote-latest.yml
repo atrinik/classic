@@ -36,6 +36,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends squashfs-tools llvm
+          test -x /usr/bin/llvm-readelf
       - id: latest
         name: Resolve the highest immutable release
         env:

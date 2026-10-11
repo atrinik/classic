@@ -135,6 +135,8 @@ class AppImageWorkflowTests(unittest.TestCase):
                                      ('promote-latest.yml', 'check_latest_release.py')):
             workflow = (ROOT / '.github/workflows' / name).read_text()
             self.assertLess(workflow.index('squashfs-tools llvm'), workflow.index(first_consumer))
+            self.assertLess(workflow.index('test -x /usr/bin/llvm-readelf'), workflow.index(first_consumer))
+        self.assertEqual(self.workflow().count('test -x /usr/bin/llvm-readelf'), 2)
         check = (ROOT / '.github/workflows/check.yml').read_text()
         core = check.split('  core:\n', 1)[1].split('  windows-test-build:\n', 1)[0]
         self.assertIn('squashfs-tools llvm libzstd1', core)
@@ -156,8 +158,18 @@ class AppImageWorkflowTests(unittest.TestCase):
         validation = job.split('      - name: Validate AppImage payload with trusted host tools', 1)[1].split('      - name:', 1)[0]
         self.assertIn('RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}', validation)
         script = textwrap.dedent(validation.split('        run: |\n', 1)[1])
-        for fail_validation in ('0', '1'):
-            with self.subTest(fail_validation=fail_validation), tempfile.TemporaryDirectory() as temporary:
+        # The apt fixture cannot install a host inspector. Stub only its
+        # presence check, retaining the workflow's actual failure propagation.
+        fixture_check = '''test() {
+  if [[ $# == 2 && $1 == -x && $2 == /usr/bin/llvm-readelf ]]; then
+    [[ ${INSPECTOR_AVAILABLE} == 1 ]]
+  else
+    builtin test "$@"
+  fi
+}
+'''
+        for fail_validation, inspector_available in (('0', '1'), ('1', '1'), ('0', '0')):
+            with self.subTest(fail_validation=fail_validation, inspector_available=inspector_available), tempfile.TemporaryDirectory() as temporary:
                 workspace = Path(temporary)
                 (workspace / 'bin').mkdir()
                 (workspace / 'build/appimage-evidence').mkdir(parents=True)
@@ -170,13 +182,18 @@ pathlib.Path('validator-args.json').write_text(json.dumps(sys.argv[1:]))
 sys.exit(7 if os.environ['FAIL_VALIDATION'] == '1' else 0)
 """)
                 python.chmod(0o755)
-                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', fixture_check + script],
                     cwd=workspace, capture_output=True, text=True,
                     env=dict(os.environ, GITHUB_WORKSPACE=str(workspace),
                              RELEASE_VERSION='5.17.0', RELEASE_REVISION='a' * 40,
                              CLASSIC_LINUX_IMAGE="ghcr.io/atrinik/classic-build:1.16.0@sha256:" + "a" * 64,
                              FAIL_VALIDATION=fail_validation,
+                             INSPECTOR_AVAILABLE=inspector_available,
                              PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+                if inspector_available == '0':
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((workspace / 'validator-args.json').exists())
+                    continue
                 self.assertEqual(result.returncode, 7 if fail_validation == '1' else 0, result.stderr)
                 args = json.loads((workspace / 'validator-args.json').read_text())
                 self.assertEqual(args, ['tools/release/appimage.py',

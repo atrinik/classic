@@ -21,7 +21,11 @@ RUN printf '%s\n' 'path-include=/usr/share/doc/atrinik' \
 
 FROM runtime AS build
 COPY --from=compiler /opt/llvm-23.1.3 /opt/llvm-23.1.3
-ENV PATH="/opt/llvm-23.1.3/bin:${PATH}" CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm STRIP=llvm-strip
+COPY objdump /opt/atrinik-packaging/bin/objdump
+RUN chmod 755 /opt/atrinik-packaging/bin/objdump
+# dpkg-shlibdeps resolves the literal name objdump through PATH; OBJDUMP alone
+# does not select its inspector. Keep that package helper on the same LLVM SDK.
+ENV PATH="/opt/atrinik-packaging/bin:/opt/llvm-23.1.3/bin:${PATH}" CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf
 RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
     && apt-get install -y --no-install-recommends \
        binutils build-essential cmake dpkg-dev file libcurl4-openssl-dev \
