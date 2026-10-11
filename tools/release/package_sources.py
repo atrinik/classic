@@ -27,6 +27,9 @@ SHARED_PATHS = (
     "LICENSE.md",
     "ATTRIBUTIONS.md",
     "cmake/AtrinikVersion.cmake",
+    "cmake/AtrinikLLVMOptIn.cmake",
+    "cmake/toolchains/llvm.cmake",
+    "tools/ci/llvm_coverage.py",
 )
 PROVENANCE_PREFIX = "docs/history/"
 

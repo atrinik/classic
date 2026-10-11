@@ -1,9 +1,16 @@
 cmake_minimum_required(VERSION 3.21)
 
 include(cmake/AtrinikVersion.cmake)
+if (ATRINIK_LLVM_TOOLCHAIN)
+    include(cmake/AtrinikLLVMOptIn.cmake)
+    atrinik_initialize_optional_llvm_toolchain()
+endif ()
 atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
 
 project(atrinik-classic VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
+if (ATRINIK_LLVM_TOOLCHAIN)
+    atrinik_require_optional_llvm()
+endif ()
 atrinik_initialize_version_metadata()
 
 include(CTest)

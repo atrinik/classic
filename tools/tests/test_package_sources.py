@@ -32,6 +32,9 @@ class PackageSourcesTests(unittest.TestCase):
             "LICENSE.md": "license\n",
             "ATTRIBUTIONS.md": "notices\n",
             "cmake/AtrinikVersion.cmake": "# version contract\n",
+            "cmake/AtrinikLLVMOptIn.cmake": "# optional LLVM selection\n",
+            "cmake/toolchains/llvm.cmake": "# pinned LLVM toolchain\n",
+            "tools/ci/llvm_coverage.py": "# native LLVM coverage export\n",
             "docs/history/imports.json": "{}\n",
             "client/.releaserc.json": "{}\n",
             "client/main.c": "int main(void) { return 0; }\n",
@@ -74,6 +77,9 @@ class PackageSourcesTests(unittest.TestCase):
         )
         with tarfile.open(output, "r:gz") as archive:
             names = set(archive.getnames())
+            for helper in ("cmake/AtrinikLLVMOptIn.cmake",
+                           "cmake/toolchains/llvm.cmake", "tools/ci/llvm_coverage.py"):
+                self.assertIn("atrinik-classic-client-5.6.0/" + helper, names)
             for relative in ("", "dependencies/protocol/", "dependencies/libatrinik/"):
                 revision = archive.extractfile(
                     f"atrinik-classic-client-5.6.0/{relative}SOURCE_REVISION"
