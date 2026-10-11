@@ -231,9 +231,27 @@ bool propagation_reserve_explosion(object *effect, int strength) {
     return propagation_reserve_explosion_from(effect, NULL, strength);
 }
 
+static bool in_cone(const propagation_cast *cast, int dx, int dy, int dz);
+
 bool propagation_cone(object *source, object *caster, archetype_t *arch,
                       int strength, int damage, int dx, int dy, int dz) {
     if (arch == NULL || strength < 0 || strength >= 35) {
+        return false;
+    }
+    propagation_cast direction = {.axis = {dx, dy, dz}};
+    bool reachable = false;
+    for (int z = -1; z <= 1 && !reachable; z++) {
+        for (int y = -1; y <= 1 && !reachable; y++) {
+            for (int x = -1; x <= 1 && !reachable; x++) {
+                if ((x != 0 || y != 0 || z != 0) && in_cone(&direction, x, y, z) &&
+                    spatial_ray_clear(source->map, source->x, source->y, x, y, z,
+                                       SPATIAL_COMBAT, false)) {
+                    reachable = true;
+                }
+            }
+        }
+    }
+    if (!reachable) {
         return false;
     }
     propagation_cast *cast = source->propagation != NULL ? source->propagation->cast : NULL;
