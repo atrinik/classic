@@ -28,6 +28,8 @@ SHARED_PATHS = (
     "ATTRIBUTIONS.md",
     "cmake/AtrinikVersion.cmake",
     "cmake/InstallWindowsRuntime.cmake",
+    "cmake/toolchains/llvm.cmake",
+    "tools/ci/llvm_coverage.py",
     "tools/ci/stage_windows_runtime.py",
 )
 PROVENANCE_PREFIX = "docs/history/"
