@@ -98,7 +98,8 @@
     "license": "MIT AND LGPL-2.1-or-later AND BSD-2-Clause AND BSD-3-Clause AND Zlib",
     "license_file": "LICENSE",
     "digest_md5_offset": 932096,
-    "digest_md5_size": 16
+    "digest_md5_size": 16,
+    "digest_policy": "zero-field-md5-v1"
   },
   "host_libraries": [
     "ld-linux-x86-64.so.2",
