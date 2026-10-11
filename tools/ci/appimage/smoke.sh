@@ -51,10 +51,10 @@ env -u ATRINIK_CONFIG_DIR HOME="$work/home" \
 [[ -d "$work/home/.atrinik/${major}.x" ]]
 # The trusted helper loads the bundled multimedia/network libraries; no helper
 # or test-only entrypoint is distributed inside the production client.
-export LD_LIBRARY_PATH="$appdir/usr/lib"
-export OPENSSL_MODULES="$appdir/usr/lib/ossl-modules"
-export OPENSSL_CONF="$appdir/usr/share/atrinik/openssl.cnf"
-"$probe" --assets "$appdir" > "$work/assets.log" 2>&1
+bundle_env=(env LD_LIBRARY_PATH="$appdir/usr/lib"
+  OPENSSL_MODULES="$appdir/usr/lib/ossl-modules"
+  OPENSSL_CONF="$appdir/usr/share/atrinik/openssl.cnf")
+"${bundle_env[@]}" "$probe" --assets "$appdir" > "$work/assets.log" 2>&1
 cat "$work/assets.log"
 # Provider activation and CA parsing exercise the exact bundled OpenSSL binary.
 env LD_LIBRARY_PATH="$appdir/usr/lib" OPENSSL_MODULES="$appdir/usr/lib/ossl-modules" \
@@ -68,15 +68,15 @@ env LD_LIBRARY_PATH="$appdir/usr/lib" OPENSSL_MODULES="$appdir/usr/lib/ossl-modu
   -certfile "$appdir/usr/share/atrinik/ca-bundle.crt" -out /dev/null
 # Local, private HTTPS proves cURL actually accepts configured OpenSSL trust and
 # rejects an untrusted certificate. Network-none containers retain loopback only.
-"$appdir/usr/bin/openssl" req -x509 -newkey rsa:2048 -nodes -days 1 \
+"${bundle_env[@]}" "$appdir/usr/bin/openssl" req -x509 -newkey rsa:2048 -nodes -days 1 \
   -subj /CN=localhost -addext subjectAltName=DNS:localhost \
   -keyout "$work/server.key" -out "$work/server.crt" > "$work/certificate.log" 2>&1
-"$appdir/usr/bin/openssl" s_server -accept 127.0.0.1:44330 -www -quiet \
+"${bundle_env[@]}" "$appdir/usr/bin/openssl" s_server -accept 127.0.0.1:44330 -www -quiet \
   -cert "$work/server.crt" -key "$work/server.key" > "$work/tls-server.log" 2>&1 &
 tls_pid=$!
 tls_ready=0
 for _ in {1..20}; do
-  if SSL_CERT_FILE="$work/server.crt" "$probe" --curl https://localhost:44330/ > "$work/tls-trusted.log" 2>&1; then
+  if SSL_CERT_FILE="$work/server.crt" "${bundle_env[@]}" "$probe" --curl https://localhost:44330/ > "$work/tls-trusted.log" 2>&1; then
     tls_ready=1
     break
   fi
@@ -84,7 +84,7 @@ for _ in {1..20}; do
 done
 [[ $tls_ready == 1 ]]
 if SSL_CERT_FILE="$appdir/usr/share/atrinik/ca-bundle.crt" \
-    "$probe" --curl https://localhost:44330/ > "$work/tls-untrusted.log" 2>&1; then
+    "${bundle_env[@]}" "$probe" --curl https://localhost:44330/ > "$work/tls-untrusted.log" 2>&1; then
   echo 'cURL accepted a certificate absent from the trust bundle' >&2
   exit 1
 fi
