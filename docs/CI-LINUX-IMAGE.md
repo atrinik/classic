@@ -236,3 +236,21 @@ against host compiler or SDL libraries. Linux qualification builds in the
 pinned Linux producer; macOS uses the explicit exact LLVM toolchain. Actual
 hardware qualification remains acceptance evidence separate from hosted
 cross-build and smoke tests.
+
+Linux hardware qualification runs each fresh client/harness process in the
+qualified immutable `linux-build` runtime from the same LLVM release cohort
+as the `classic-build` producer. The broad runtime includes the Vulkan loader
+and Mesa drivers omitted by the slim producer. `tools/ci/run_gpu_qualification.py`
+obtains the active X11 and audio session plus assigned GPU additions from
+`atrinik_workspace.linux_platform` and passes its successful JSON argument
+array directly to Docker. The runner supplies an assigned, verified wrapper
+checkout as `ATRINIK_QUALIFICATION_WORKSPACE_ROOT`,
+`ATRINIK_QUALIFICATION_GPU_KIND` (`mesa` or `nvidia`), and, for Mesa, its actual
+`ATRINIK_QUALIFICATION_RENDER_DEVICE`. `DISPLAY`, private `XAUTHORITY` and
+`XDG_RUNTIME_DIR` identify the assigned live desktop/audio session. The helper
+requires those inputs and checks them again for every process; it never selects
+a default render node or changes X-server access. Source fixtures and artifacts
+retain their `/workspace` build paths, while each container gets temporary
+private client configuration. Runner provisioning, current resource admission
+and the bounded hardware reservation remain coordinator prerequisites. A
+capability report supplies no authority and no passing hardware evidence.

@@ -101,7 +101,8 @@ class ClassifyChangesTests(unittest.TestCase):
 
     def test_llvm_contract_changes_select_both_native_consumers(self) -> None:
         for path in ("cmake/toolchains/llvm.cmake", "tools/ci/llvm_coverage.py",
-                     "tools/tests/test_llvm_coverage.py"):
+                     "tools/tests/test_llvm_coverage.py",
+                     "tools/tests/test_gpu_qualification_runtime.py"):
             with self.subTest(path=path):
                 result = classify_changes.classify([path])
                 self.assertTrue(result["client"])

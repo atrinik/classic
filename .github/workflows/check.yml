@@ -855,6 +855,7 @@ jobs:
               --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/include/admin_shutdown.h,target=/workspace/server/src/include/admin_shutdown.h,readonly" \
               --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/tests/admin_shutdown_socket.py,target=/workspace/server/src/tests/admin_shutdown_socket.py,readonly" \
               --mount "type=bind,source=${GITHUB_WORKSPACE}/server/tools/admin_shutdown_coverage.sh,target=/workspace/server/tools/admin_shutdown_coverage.sh,readonly" \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/tools/ci/llvm_coverage.py,target=/workspace/tools/ci/llvm_coverage.py,readonly" \
               "${CLASSIC_LINUX_IMAGE}" \
               bash /workspace/server/tools/admin_shutdown_coverage.sh \
               > "server/coverage-admin-${fixture_name}.lcov"

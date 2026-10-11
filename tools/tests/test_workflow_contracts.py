@@ -73,6 +73,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("windows-gpu-qualification-${{ github.sha }}", qualify)
         self.assertIn("if: runner.os == 'macOS'", qualify)
         self.assertNotIn("matching native LLVM-MinGW toolchain required", qualify)
+        self.assertIn("--source-root \"${GITHUB_WORKSPACE}\" --check-runtime", qualify)
+        self.assertEqual(qualify.count("python3 ../tools/ci/run_gpu_qualification.py"), 4)
+        self.assertIn("tools/ci/llvm_coverage.py,target=/workspace/tools/ci/llvm_coverage.py,readonly", check)
 
     def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
         workflow = self.text("check.yml")

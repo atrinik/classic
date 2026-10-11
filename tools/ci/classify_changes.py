@@ -24,6 +24,7 @@ NATIVE_SHARED_PATHS = {
     "CMakePresets.json",
     "codecov.yml",
     "tools/tests/test_llvm_coverage.py",
+    "tools/tests/test_gpu_qualification_runtime.py",
     "LICENSE.md",
     "docs/history/component-release-map.json",
     "docs/history/release-tags.json",
