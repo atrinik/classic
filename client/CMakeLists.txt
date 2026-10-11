@@ -409,14 +409,23 @@ if (MINGW)
 endif ()
 
 if (MINGW)
-    if (NOT CMAKE_OBJDUMP)
+    find_program(ATRINIK_LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+    if (NOT ATRINIK_LLVM_READOBJ)
         message(FATAL_ERROR
-            "CMAKE_OBJDUMP is required to validate Windows client sound support")
+            "llvm-readobj is required to validate Windows client sound support")
+    endif ()
+
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/stage_windows_runtime.py")
+        set(ATRINIK_RUNTIME_HELPER "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/stage_windows_runtime.py")
+    else ()
+        set(ATRINIK_RUNTIME_HELPER "${CMAKE_CURRENT_SOURCE_DIR}/../tools/ci/stage_windows_runtime.py")
     endif ()
 
     add_custom_command(TARGET ${EXECUTABLE} POST_BUILD
         COMMAND ${CMAKE_COMMAND}
-            "-DATRINIK_OBJDUMP=${CMAKE_OBJDUMP}"
+            "-DATRINIK_READOBJ=${ATRINIK_LLVM_READOBJ}"
+            "-DATRINIK_PYTHON=${Python3_EXECUTABLE}"
+            "-DATRINIK_RUNTIME_HELPER=${ATRINIK_RUNTIME_HELPER}"
             "-DATRINIK_CLIENT_EXECUTABLE=$<TARGET_FILE:${EXECUTABLE}>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_windows_client_sound.cmake"
         COMMENT "Verifying that the Windows client imports SDL3_mixer"
@@ -1360,8 +1369,14 @@ if (WIN32 AND NOT UNIX)
     set(INSTALL_SUBDIR_SHARE ".")
     set(INSTALL_SUBDIR_DOC ".")
 
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallWindowsRuntime.cmake")
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallWindowsRuntime.cmake")
+    else ()
+        include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/InstallWindowsRuntime.cmake")
+    endif ()
+
     set(ATRINIK_WINDOWS_RUNTIME_DIR "" CACHE PATH
-        "Directory containing MinGW runtime DLLs for portable packages")
+        "Directory containing LLVM-MinGW runtime DLLs for portable packages")
     set(ATRINIK_CA_BUNDLE "${CMAKE_CURRENT_SOURCE_DIR}/ca-bundle.crt" CACHE FILEPATH
         "CA certificate bundle to install with the client")
 
@@ -1373,8 +1388,8 @@ if (WIN32 AND NOT UNIX)
             "${ATRINIK_WINDOWS_RUNTIME_DIR}/*.dll")
 
         if (ATRINIK_WINDOWS_RUNTIME_DLLS)
-            install(FILES ${ATRINIK_WINDOWS_RUNTIME_DLLS}
-                DESTINATION ${INSTALL_SUBDIR_BIN})
+            atrinik_install_windows_runtime("${INSTALL_SUBDIR_BIN}"
+                "$<TARGET_FILE:atrinik>")
 
             # A c-ares runtime must carry the complete notice from its toolchain.
             set(ATRINIK_WINDOWS_CARES_LICENSE

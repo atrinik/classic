@@ -1,28 +1,19 @@
-if (NOT DEFINED ATRINIK_OBJDUMP OR ATRINIK_OBJDUMP STREQUAL "")
-    message(FATAL_ERROR "ATRINIK_OBJDUMP is required")
-endif ()
-
-if (NOT DEFINED ATRINIK_CLIENT_EXECUTABLE OR
-        NOT EXISTS "${ATRINIK_CLIENT_EXECUTABLE}")
-    message(FATAL_ERROR
-        "Windows client executable does not exist: ${ATRINIK_CLIENT_EXECUTABLE}")
-endif ()
+foreach (required ATRINIK_READOBJ ATRINIK_PYTHON ATRINIK_RUNTIME_HELPER
+        ATRINIK_CLIENT_EXECUTABLE)
+    if (NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
+        message(FATAL_ERROR "${required} is required")
+    endif ()
+endforeach ()
 
 execute_process(
-    COMMAND "${ATRINIK_OBJDUMP}" -p "${ATRINIK_CLIENT_EXECUTABLE}"
-    RESULT_VARIABLE objdump_result
-    OUTPUT_VARIABLE objdump_output
-    ERROR_VARIABLE objdump_error)
-
-if (NOT "${objdump_result}" STREQUAL "0")
+    COMMAND "${ATRINIK_PYTHON}" "${ATRINIK_RUNTIME_HELPER}"
+        --readobj "${ATRINIK_READOBJ}" --inspect-only
+        --require-import SDL3_mixer.dll "${ATRINIK_CLIENT_EXECUTABLE}"
+    RESULT_VARIABLE inspector_result
+    OUTPUT_VARIABLE inspector_output
+    ERROR_VARIABLE inspector_error)
+if (NOT "${inspector_result}" STREQUAL "0")
     message(FATAL_ERROR
-        "Could not inspect Windows client imports: ${objdump_error}")
+        "Could not verify Windows client sound imports: ${inspector_error}")
 endif ()
-
-if (NOT objdump_output MATCHES
-        "DLL Name:[ \t]+[Ss][Dd][Ll]3_[Mm][Ii][Xx][Ee][Rr]\\.[Dd][Ll][Ll]")
-    message(FATAL_ERROR
-        "Windows client was built without an SDL3_mixer runtime import")
-endif ()
-
 message(STATUS "Windows client sound import verified")

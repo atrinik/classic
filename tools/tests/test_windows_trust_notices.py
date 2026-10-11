@@ -1,8 +1,10 @@
 """Execute the production CMake runtime install rules without native builds."""
 
 import os
+import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -18,12 +20,28 @@ class WindowsTrustNoticesTests(unittest.TestCase):
         runtime = root / "toolchain/bin"
         runtime.mkdir(parents=True)
         (runtime / "libcurl-4.dll").write_bytes(b"fixture curl")
+        (runtime / "unused.dll").write_bytes(b"unused dependency")
         if cares:
             (runtime / "libcares-2.dll").write_bytes(b"fixture c-ares")
         license_path = root / "toolchain/share/licenses/c-ares/LICENSE.md"
         license_path.parent.mkdir(parents=True)
         if notice:
             license_path.write_bytes(b"fixture complete MIT notice\n")
+        llvm_notices = root / "toolchain/share/licenses/llvm-mingw"
+        llvm_notices.mkdir(parents=True)
+        for name in ("LICENSE.TXT", "COPYING", "COPYING.MinGW-w64-runtime.txt",
+                     "COPYING.MinGW-w64.txt", "COPYING.winpthreads.txt", "COPYING.winstorecompat.txt"):
+            (llvm_notices / name).write_bytes(b"fixture complete LLVM-MinGW notice\n")
+        inventories = root / "toolchain/share/atrinik/windows-dependencies"
+        inventories.mkdir(parents=True)
+        (inventories / "dependencies.json").write_text(json.dumps({
+            "schema_version": 1, "dependencies": [{"name": "fixture-curl", "version": "1",
+                                                       "licenses": ["COPYING", "docs/NOTICE"]}]}))
+        (inventories / "pe-closure.json").write_text('{"libcurl-4.dll": []}')
+        notices = root / "toolchain/share/licenses/fixture-curl"
+        notices.mkdir()
+        for name in ("COPYING", "docs_NOTICE"):
+            (notices / name).write_bytes(b"fixture dependency notice\n")
         source = (ROOT / module / "CMakeLists.txt").read_text()
         if module == "client":
             start = source.index("    if (ATRINIK_WINDOWS_RUNTIME_DIR)", source.index("# Installer."))
@@ -49,8 +67,26 @@ class WindowsTrustNoticesTests(unittest.TestCase):
         (root / "ca-bundle.crt").write_bytes(ca.read_bytes())
         system_ca = root / "system-ca.crt"
         system_ca.write_bytes(b"different system CA fixture")
+        inspector = root / "llvm-readobj"
+        inspector.write_text('#!/usr/bin/env python3\nimport pathlib, sys\n'
+                             'binary = pathlib.Path(sys.argv[-1])\n'
+                             'print("Format: COFF-x86-64")\n'
+                             'if binary.suffix == ".exe":\n'
+                             '    print("Import {\\n  Name: libcurl-4.dll\\n}")\n'
+                             'elif binary.name == "libcurl-4.dll" and '
+                             '(binary.parent / "libcares-2.dll").exists():\n'
+                             '    print("Import {\\n  Name: libcares-2.dll\\n}")\n')
+        inspector.chmod(0o755)
+        (root / "fixture.exe").write_bytes(b"fixture executable")
         cmake = ('cmake_minimum_required(VERSION 3.21)\nproject(trust_fixture NONE)\n'
                  'set(INSTALL_SUBDIR_BIN ".")\nset(PACKAGE_TYPE zip)\n'
+                 f'include("{ROOT}/cmake/InstallWindowsRuntime.cmake")\n'
+                 f'set(ATRINIK_LLVM_READOBJ "{inspector}")\n'
+                 'set(EXECUTABLE fixture-server)\n'
+                 'foreach(target atrinik fixture-server plugin_arena plugin_python)\n'
+                 '  add_executable(${target} IMPORTED)\n'
+                 f'  set_target_properties(${{target}} PROPERTIES IMPORTED_LOCATION "{root}/fixture.exe")\n'
+                 'endforeach()\n'
                  f'set(ATRINIK_LICENSE_FILE "{root}/LICENSE.md")\n'
                  f'set(ATRINIK_ATTRIBUTIONS_FILE "{root}/ATTRIBUTIONS.md")\n'
                  f'set(ATRINIK_WINDOWS_RUNTIME_DIR "{runtime}")\n' + rules +
@@ -83,6 +119,12 @@ class WindowsTrustNoticesTests(unittest.TestCase):
                     self.assertNotEqual(archive.read(bundles[0]), system_ca.read_bytes())
                     cares_dlls = [n for n in names if n.endswith("/libcares-2.dll")]
                     self.assertEqual(len(cares_dlls), 1)
+                    self.assertFalse(any(n.endswith("/unused.dll") for n in names))
+                    llvm_license = next(n for n in names if n.endswith("/licenses/llvm-mingw/LICENSE.TXT"))
+                    self.assertEqual(archive.read(llvm_license), b"fixture complete LLVM-MinGW notice\n")
+                    dependency_notice = next(n for n in names if n.endswith("/licenses/fixture-curl/docs_NOTICE"))
+                    self.assertEqual(archive.read(dependency_notice), b"fixture dependency notice\n")
+                    self.assertTrue(any(n.endswith("/licenses/windows-dependencies.json") for n in names))
                     self.assertEqual(Path(notices[0]).parent, Path(cares_dlls[0]).parent)
 
     def test_cares_missing_or_directory_notice_fails_closed(self):
@@ -131,12 +173,12 @@ class WindowsTrustNoticesTests(unittest.TestCase):
             (client / "tools/dependencies.py").write_text("")
             bin_path = root / "bin"
             bin_path.mkdir()
-            for command in ("python3", "git"):
+            for command in ("python3", "git", "llvm-readobj"):
                 script = bin_path / command
                 script.write_text("#!/bin/sh\nexit 0\n")
                 script.chmod(0o755)
             capture = root / "configure-args"
-            script = bin_path / "fixture-cmake"
+            script = bin_path / "cmake"
             script.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\nexit 23\n')
             script.chmod(0o755)
             toolchain = root / "toolchain.cmake"
@@ -146,8 +188,8 @@ class WindowsTrustNoticesTests(unittest.TestCase):
             shader = root / "shaders"
             shader.mkdir()
             env = dict(os.environ, PATH=f"{bin_path}:{os.environ['PATH']}", CAPTURE=str(capture),
-                       ATRINIK_PACKAGE_VERSION="5.1.0", MXE_TARGET="fixture", MXE_TOOLCHAIN_FILE=str(toolchain),
-                       MXE_RUNTIME_DIR=str(runtime), ATRINIK_GPU_SHADER_DIRECTORY=str(shader))
+                       ATRINIK_PACKAGE_VERSION="5.1.0", ATRINIK_WINDOWS_TARGET="x86_64-w64-mingw32", ATRINIK_WINDOWS_TOOLCHAIN_FILE=str(toolchain),
+                       ATRINIK_WINDOWS_RUNTIME_DIR=str(runtime), ATRINIK_GPU_SHADER_DIRECTORY=str(shader))
             result = subprocess.run(["bash", str(helper)], cwd=client, env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
             arguments = capture.read_text().splitlines()
@@ -162,6 +204,62 @@ class WindowsTrustNoticesTests(unittest.TestCase):
         with self.package(root, "client") as archive:
             name = next(n for n in archive.namelist() if n.endswith("/ca-bundle.crt"))
             self.assertEqual(archive.read(name), system_ca.read_bytes())
+
+    def test_unused_gcc_runtime_prefix_fails_package_install(self):
+        for module in ("client", "server"):
+            with self.subTest(module=module):
+                root, result, _, _ = self.fixture(module, cares=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                (root / "toolchain/bin/libgcc_s_seh-1.dll").write_bytes(b"stale GCC")
+                result = subprocess.run(
+                    ["cmake", "--install", str(root / "build"), "--prefix", str(root / "installed")],
+                    capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("GCC runtime DLL", " ".join((result.stdout + result.stderr).split()))
+
+    def test_client_sound_verifier_uses_the_same_llvm_parser(self):
+        root, result, _, _ = self.fixture("client", cares=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        inspector = root / "llvm-readobj"
+        arguments = ["cmake", f"-DATRINIK_READOBJ={inspector}",
+                     f"-DATRINIK_PYTHON={sys.executable}",
+                     f"-DATRINIK_RUNTIME_HELPER={ROOT}/tools/ci/stage_windows_runtime.py",
+                     f"-DATRINIK_CLIENT_EXECUTABLE={root}/fixture.exe", "-P",
+                     str(ROOT / "client/cmake/verify_windows_client_sound.cmake")]
+        result = subprocess.run(arguments, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not import required DLL", result.stdout + result.stderr)
+        inspector.write_text('#!/usr/bin/env python3\n'
+                             'print("Format: COFF-x86-64\\nImport {\\n  Name: SDL3_mixer.dll\\n}")\n')
+        result = subprocess.run(arguments, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Windows client sound import verified", result.stdout + result.stderr)
+
+    def test_missing_llvm_crt_notice_fails_configuration(self):
+        root, result, _, _ = self.fixture("client", cares=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (root / "toolchain/share/licenses/llvm-mingw/COPYING.MinGW-w64-runtime.txt").unlink()
+        result = subprocess.run(["cmake", "-S", str(root), "-B", str(root / "build")],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("LLVM-MinGW package notice is missing", result.stdout + result.stderr)
+
+    def test_dependency_inventory_rejects_missing_notices_and_unsafe_paths(self):
+        cases = [
+            {"schema_version": 2, "dependencies": [{"name": "fixture-curl", "licenses": ["COPYING"]}]},
+            {"schema_version": 1, "dependencies": []},
+            {"schema_version": 1, "dependencies": [{"name": "../escape", "licenses": ["COPYING"]}]},
+            {"schema_version": 1, "dependencies": [{"name": "fixture-curl", "licenses": ["../COPYING"]}]},
+            {"schema_version": 1, "dependencies": [{"name": "fixture-curl", "licenses": ["missing"]}]},
+        ]
+        for manifest in cases:
+            with self.subTest(manifest=manifest):
+                root, result, _, _ = self.fixture("client", cares=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                (root / "toolchain/share/atrinik/windows-dependencies/dependencies.json").write_text(json.dumps(manifest))
+                result = subprocess.run(["cmake", "-S", str(root), "-B", str(root / "build")],
+                                        capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

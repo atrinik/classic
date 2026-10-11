@@ -17,7 +17,7 @@ if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
     exit 1
   fi
 fi
-for variable in MXE_TOOLCHAIN_FILE MXE_RUNTIME_DIR \
+for variable in ATRINIK_WINDOWS_TOOLCHAIN_FILE ATRINIK_WINDOWS_RUNTIME_DIR \
     ATRINIK_WINDOWS_PYTHON_INCLUDE_DIR ATRINIK_WINDOWS_PYTHON_LIBRARY \
     ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR; do
   if [[ -z ${!variable:-} || ! -e ${!variable} ]]; then
@@ -26,8 +26,12 @@ for variable in MXE_TOOLCHAIN_FILE MXE_RUNTIME_DIR \
   fi
 done
 
-mxe_cmake=${MXE_TARGET:-x86_64-w64-mingw32.shared}-cmake
-command -v "${mxe_cmake}" >/dev/null
+if [[ ${ATRINIK_WINDOWS_TARGET:-} != x86_64-w64-mingw32 ]]; then
+  echo "ATRINIK_WINDOWS_TARGET must be x86_64-w64-mingw32" >&2
+  exit 1
+fi
+command -v cmake >/dev/null
+command -v llvm-readobj >/dev/null
 dependency_downloads=${ATRINIK_DEPENDENCY_DOWNLOADS:-}
 dependency_sync_arguments=()
 profile_content=${ATRINIK_PROFILE_CONTENT_DIR:-}
@@ -168,13 +172,13 @@ cmake -E copy_directory "${region_assets}/client-maps" \
 cmake -E remove_directory "${region_runtime}"
 cmake -E remove_directory "${region_assets}"
 
-"${mxe_cmake}" -S . -B build/windows-release -G Ninja \
+cmake -S . -B build/windows-release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE="${MXE_TOOLCHAIN_FILE}" \
+  -DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}" \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=zip \
   -DATRINIK_PACKAGE_VERSION="${version}" \
-  -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \
+  -DATRINIK_WINDOWS_RUNTIME_DIR="${ATRINIK_WINDOWS_RUNTIME_DIR}" \
   -DATRINIK_WINDOWS_PYTHON_INCLUDE_DIR="${ATRINIK_WINDOWS_PYTHON_INCLUDE_DIR}" \
   -DATRINIK_WINDOWS_PYTHON_LIBRARY="${ATRINIK_WINDOWS_PYTHON_LIBRARY}" \
   -DATRINIK_WINDOWS_PYTHON_RUNTIME_DIR="${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}" \

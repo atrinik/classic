@@ -8,15 +8,19 @@ if [[ ! ${version} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "ATRINIK_PACKAGE_VERSION must be MAJOR.MINOR.PATCH" >&2
   exit 1
 fi
-for variable in MXE_TOOLCHAIN_FILE MXE_RUNTIME_DIR; do
+for variable in ATRINIK_WINDOWS_TOOLCHAIN_FILE ATRINIK_WINDOWS_RUNTIME_DIR; do
   if [[ -z ${!variable:-} || ! -e ${!variable} ]]; then
-    echo "${variable} does not identify an installed MXE dependency" >&2
+    echo "${variable} does not identify an installed Windows dependency" >&2
     exit 1
   fi
 done
 
-mxe_cmake=${MXE_TARGET:-x86_64-w64-mingw32.shared}-cmake
-command -v "${mxe_cmake}" >/dev/null
+if [[ ${ATRINIK_WINDOWS_TARGET:-} != x86_64-w64-mingw32 ]]; then
+  echo "ATRINIK_WINDOWS_TARGET must be x86_64-w64-mingw32" >&2
+  exit 1
+fi
+command -v cmake >/dev/null
+command -v llvm-readobj >/dev/null
 dependency_downloads=${ATRINIK_DEPENDENCY_DOWNLOADS:-}
 dependency_sync_arguments=()
 profile_sound=${ATRINIK_PROFILE_SOUND_DIR:-}
@@ -80,13 +84,13 @@ if [[ -n ${repository_root} && -f ${repository_root}/protocol/CMakeLists.txt &&
   )
 fi
 
-"${mxe_cmake}" -S . -B build/windows-release -G Ninja \
+cmake -S . -B build/windows-release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE="${MXE_TOOLCHAIN_FILE}" \
+  -DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}" \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=zip \
   -DATRINIK_PACKAGE_VERSION="${version}" \
-  -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \
+  -DATRINIK_WINDOWS_RUNTIME_DIR="${ATRINIK_WINDOWS_RUNTIME_DIR}" \
   "-DATRINIK_CA_BUNDLE=${PWD}/ca-bundle.crt" \
   "-DATRINIK_DISCORD_APPLICATION_ID_FILE=${discord_config_file}" \
   "${dependency_arguments[@]}"

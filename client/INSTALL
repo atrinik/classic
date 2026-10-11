@@ -86,3 +86,8 @@ runtime DLLs include c-ares, packaging also requires its complete license at
 `ATRINIK_WINDOWS_RUNTIME_DIR/../share/licenses/c-ares/LICENSE.md`, or the explicit
 `ATRINIK_WINDOWS_CARES_LICENSE` override, and installs it as `c-ares-LICENSE.md`
 beside the DLLs. Toolchains without a c-ares DLL do not require that notice.
+
+Windows toolchain and recursive runtime packaging requirements are documented
+in `../docs/WINDOWS_TOOLCHAIN.md`. Use the required neutral
+`ATRINIK_WINDOWS_TOOLCHAIN_FILE`, `ATRINIK_WINDOWS_TARGET` and
+`ATRINIK_WINDOWS_RUNTIME_DIR` producer variables with plain CMake.

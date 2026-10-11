@@ -707,8 +707,14 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
             "The portable Windows server package requires the Python plugin.")
     endif ()
 
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallWindowsRuntime.cmake")
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallWindowsRuntime.cmake")
+    else ()
+        include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/InstallWindowsRuntime.cmake")
+    endif ()
+
     set(ATRINIK_WINDOWS_RUNTIME_DIR "" CACHE PATH
-        "Directory containing MinGW runtime DLLs")
+        "Directory containing LLVM-MinGW runtime DLLs")
     set(ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR "" CACHE PATH
         "Directory containing the embedded Windows Python runtime")
     set(ATRINIK_SERVER_PACKAGE_ROOT "" CACHE PATH
@@ -743,13 +749,13 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
 
     file(GLOB ATRINIK_WINDOWS_RUNTIME_DLLS
         "${ATRINIK_WINDOWS_RUNTIME_DIR}/*.dll")
-    list(FILTER ATRINIK_WINDOWS_RUNTIME_DLLS EXCLUDE REGEX
-        "/libffi-8\\.dll$")
     if (NOT ATRINIK_WINDOWS_RUNTIME_DLLS)
         message(FATAL_ERROR
             "No DLLs found in ATRINIK_WINDOWS_RUNTIME_DIR: ${ATRINIK_WINDOWS_RUNTIME_DIR}")
     endif ()
-    install(FILES ${ATRINIK_WINDOWS_RUNTIME_DLLS} DESTINATION server)
+    atrinik_install_windows_runtime(server
+        "$<TARGET_FILE:${EXECUTABLE}>"
+        "$<TARGET_FILE:plugin_arena>" "$<TARGET_FILE:plugin_python>")
 
     # A c-ares runtime must carry the complete notice from its toolchain.
     set(ATRINIK_WINDOWS_CARES_LICENSE

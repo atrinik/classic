@@ -27,6 +27,8 @@ SHARED_PATHS = (
     "LICENSE.md",
     "ATTRIBUTIONS.md",
     "cmake/AtrinikVersion.cmake",
+    "cmake/InstallWindowsRuntime.cmake",
+    "tools/ci/stage_windows_runtime.py",
 )
 PROVENANCE_PREFIX = "docs/history/"
 
