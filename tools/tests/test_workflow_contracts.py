@@ -2404,10 +2404,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("--network none", gpu_coverage)
         self.assertIn("tools/ci/run_gpu_coverage.sh", client)
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage_job)
+        broad_image = (
+            "ghcr.io/atrinik/linux-build:1.17.0@sha256:"
+            "4ca8e921b616d20b18fcef901bd554488b4d5a68a7c4304268dedef23723a3bf"
+        )
+        self.assertIn(f"CLASSIC_GPU_COVERAGE_IMAGE: {broad_image}", workflow)
         self.assertIn(
-            "ghcr.io/atrinik/linux-build:1.16.0@sha256:"
-            "89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e",
-            workflow,
+            f"CLASSIC_LINUX_RUNTIME_IMAGE: {broad_image}",
+            self.text("gpu-qualification.yml"),
         )
 
         measurement = (ROOT / "tools" / "ci" / "measure_linux_image.sh").read_text(
