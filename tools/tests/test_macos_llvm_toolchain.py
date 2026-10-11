@@ -75,6 +75,40 @@ endif ()
 ''')
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_nested_try_compile_retains_caller_llvm_program_path(self):
+        version_output = subprocess.run([shutil.which("cmake"), "--version"],
+                                        capture_output=True, text=True, check=True)
+        version = tuple(int(part) for part in version_output.stdout.split()[2].split(".")[:2])
+        if version < (3, 25):
+            self.skipTest("modern whole-project try_compile fixture requires CMake 3.25")
+        # A real nested CMake configure exercises propagation independently of
+        # native SDK compilation with CMP0137 enabled. LLVM fixtures live
+        # outside the process PATH; older CMake retains the policy fixtures.
+        wrapper = self.root / "fixture-toolchain.cmake"
+        wrapper.write_text(f'''set(CMAKE_HOST_SYSTEM_NAME Darwin)
+include("{TOOLCHAIN}")
+''')
+        nested = self.root / "nested"
+        nested.mkdir()
+        (nested / "CMakeLists.txt").write_text('''cmake_minimum_required(VERSION 3.25)
+project(NestedLLVMDiscovery LANGUAGES NONE)
+''')
+        outer = self.root / "outer"
+        outer.mkdir()
+        (outer / "CMakeLists.txt").write_text(f'''cmake_minimum_required(VERSION 3.25)
+project(LLVMDiscovery LANGUAGES NONE)
+try_compile(nested_ok PROJECT NestedLLVMDiscovery SOURCE_DIR "{nested}"
+    OUTPUT_VARIABLE nested_output)
+if (NOT nested_ok)
+    message(FATAL_ERROR "nested LLVM discovery failed: ${{nested_output}}")
+endif ()
+''')
+        result = subprocess.run([
+            shutil.which("cmake"), "-S", str(outer), "-B", str(self.root / "build"),
+            f"-DCMAKE_TOOLCHAIN_FILE={wrapper}", f"-DCMAKE_PROGRAM_PATH={self.bin}",
+        ], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_explicit_darwin_cross_toolchain_is_preserved(self):
         result = self.script('''
 set(CMAKE_HOST_SYSTEM_NAME Darwin)

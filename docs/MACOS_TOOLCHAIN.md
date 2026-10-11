@@ -45,6 +45,8 @@ fallback for older Xcode layouts. Named SDKs resolve through `xcrun` without
 overwriting the caller's SDK selection. The downloaded LLVM cohort's libc++
 headers are not used with the system libc++ runtime. Mach-O LLD is selected by its
 absolute path, following [LLD's native macOS interface](https://lld.llvm.org/MachO/index.html).
+The caller's LLVM `CMAKE_PROGRAM_PATH` is propagated into CMake's nested compiler
+checks, so those checks select the same pinned LLVM utilities.
 
 Linux CMake-script fixtures verify selection, version rejection, platform-header
 selection and missing-runtime failures. They do not prove that a release archive

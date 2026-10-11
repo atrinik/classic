@@ -6,6 +6,9 @@ if (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     message(FATAL_ERROR "This LLVM toolchain requires a native macOS host")
 endif ()
 
+# Keep caller-selected LLVM tool discovery available in compiler ABI checks.
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES CMAKE_PROGRAM_PATH)
+
 find_program(CMAKE_C_COMPILER NAMES clang REQUIRED)
 find_program(CMAKE_CXX_COMPILER NAMES clang++ REQUIRED)
 find_program(CMAKE_AR NAMES llvm-ar REQUIRED)
