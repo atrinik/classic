@@ -21,6 +21,7 @@
 #include <perception.h>
 #include <propagation.h>
 #include <server.h>
+#include <server_main.h>
 #include <spells.h>
 #include <skills.h>
 #include <toolkit/math.h>
