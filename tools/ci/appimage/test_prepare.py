@@ -16,28 +16,28 @@ spec.loader.exec_module(prepare)
 
 
 class IntegrityTests(unittest.TestCase):
-    def trusted_lock(self):
+    def approved_lock_fixture(self):
         lock = json.loads((Path(__file__).with_name('packaging.lock.json')).read_text())
         lock['compiler']['image'] = 'ghcr.io/atrinik/classic-build:1.2.3@sha256:' + 'a' * 64
         return lock
 
     def test_historical_lock_changes_only_approved_image_and_retains_exact_bytes(self):
-        trusted = self.trusted_lock()
+        approved_lock = self.approved_lock_fixture()
         image = 'ghcr.io/atrinik/classic-build:1.1.0@sha256:' + 'b' * 64
-        historical = copy.deepcopy(trusted)
+        historical = copy.deepcopy(approved_lock)
         historical['compiler']['image'] = image
         raw = (json.dumps(historical, indent=7) + '\n\n').encode()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'release-lock.json'
             path.write_bytes(raw)
-            selected, selected_bytes = prepare.select_packaging_lock(trusted, image, path)
+            selected, selected_bytes = prepare.select_packaging_lock(approved_lock, image, path)
             self.assertEqual(selected, historical)
             self.assertEqual(selected_bytes, raw)
-            self.assertNotEqual(trusted['compiler']['image'], image)
+            self.assertNotEqual(approved_lock['compiler']['image'], image)
             with self.assertRaisesRegex(ValueError, 'trusted packaging lock'):
-                prepare.select_packaging_lock(trusted, image)
+                prepare.select_packaging_lock(approved_lock, image)
             with self.assertRaisesRegex(ValueError, 'differs from --compiler-image'):
-                prepare.select_packaging_lock(trusted, trusted['compiler']['image'], path)
+                prepare.select_packaging_lock(approved_lock, approved_lock['compiler']['image'], path)
             for section, key, value in (('source', 'url', 'https://example.invalid/other'),
                                         ('defaults', 'runtime', 'libgcc'),
                                         ('notices', 'compiler-rt-LICENSE.TXT', '0' * 64)):
@@ -45,69 +45,69 @@ class IntegrityTests(unittest.TestCase):
                 changed['compiler'][section][key] = value
                 path.write_text(json.dumps(changed))
                 with self.subTest(section=section), self.assertRaisesRegex(ValueError, 'SDK recipe or LLVM cohort'):
-                    prepare.select_packaging_lock(trusted, image, path)
+                    prepare.select_packaging_lock(approved_lock, image, path)
             changed = copy.deepcopy(historical)
             changed['sources'][0]['url'] = 'https://example.invalid/private-source'
             path.write_text(json.dumps(changed))
             with self.assertRaisesRegex(ValueError, 'SDK recipe or LLVM cohort'):
-                prepare.select_packaging_lock(trusted, image, path)
+                prepare.select_packaging_lock(approved_lock, image, path)
             changed = copy.deepcopy(historical)
             changed['schema_version'] = float(changed['schema_version'])
             path.write_text(json.dumps(changed))
             with self.assertRaisesRegex(ValueError, 'SDK recipe or LLVM cohort'):
-                prepare.select_packaging_lock(trusted, image, path)
+                prepare.select_packaging_lock(approved_lock, image, path)
 
     def test_historical_default_argv_and_present_missing_image_fail_closed(self):
-        trusted = self.trusted_lock()
-        image = trusted['compiler']['image']
-        self.assertEqual(prepare.select_packaging_lock(trusted, image), (trusted, None))
+        approved_lock = self.approved_lock_fixture()
+        image = approved_lock['compiler']['image']
+        self.assertEqual(prepare.select_packaging_lock(approved_lock, image), (approved_lock, None))
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'release-lock.json'
-            historical = copy.deepcopy(trusted)
+            historical = copy.deepcopy(approved_lock)
             del historical['compiler']['image']
             path.write_text(json.dumps(historical))
             with self.assertRaisesRegex(ValueError, 'differs from --compiler-image'):
-                prepare.select_packaging_lock(trusted, image, path)
+                prepare.select_packaging_lock(approved_lock, image, path)
             del historical['compiler']
             path.write_text(json.dumps(historical))
             with self.assertRaisesRegex(ValueError, 'supported pre-LLVM recipe'):
-                prepare.select_packaging_lock(trusted, image, path)
+                prepare.select_packaging_lock(approved_lock, image, path)
 
     def test_pre_llvm_projection_preserves_source_bytes_and_current_approved_image(self):
-        trusted = self.trusted_lock()
-        image = trusted['compiler']['image']
-        legacy = {key: value for key, value in trusted.items() if key != 'compiler'}
-        legacy['notices'] = [path for path in trusted['notices'] if path not in prepare.LLVM_NOTICE_PATHS]
+        approved_lock = self.approved_lock_fixture()
+        image = approved_lock['compiler']['image']
+        legacy = {key: value for key, value in approved_lock.items() if key != 'compiler'}
+        legacy['notices'] = [path for path in approved_lock['notices'] if path not in prepare.LLVM_NOTICE_PATHS]
         raw = (json.dumps(legacy, indent=7) + '\n\n').encode()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'legacy-lock.json'
             path.write_bytes(raw)
-            self.assertEqual(prepare.select_packaging_lock(trusted, image, path), (legacy, raw))
+            self.assertEqual(prepare.select_packaging_lock(approved_lock, image, path), (legacy, raw))
             with self.assertRaisesRegex(ValueError, 'trusted packaging lock'):
-                prepare.select_packaging_lock(trusted, image.replace('a' * 64, 'b' * 64), path)
+                prepare.select_packaging_lock(approved_lock, image.replace('a' * 64, 'b' * 64), path)
             changed = copy.deepcopy(legacy)
             changed['sources'][0]['url'] = 'https://example.invalid/private-source'
             path.write_text(json.dumps(changed))
             with self.assertRaisesRegex(ValueError, 'supported pre-LLVM recipe'):
-                prepare.select_packaging_lock(trusted, image, path)
+                prepare.select_packaging_lock(approved_lock, image, path)
             changed = copy.deepcopy(legacy)
             changed['compiler'] = None
             path.write_text(json.dumps(changed))
             with self.assertRaisesRegex(ValueError, 'requires a compiler descriptor'):
-                prepare.select_packaging_lock(trusted, image, path)
+                prepare.select_packaging_lock(approved_lock, image, path)
             changed = copy.deepcopy(legacy)
             changed['notices'].pop()
             path.write_text(json.dumps(changed))
             with self.assertRaisesRegex(ValueError, 'supported pre-LLVM recipe'):
-                prepare.select_packaging_lock(trusted, image, path)
+                prepare.select_packaging_lock(approved_lock, image, path)
 
     def test_pre_llvm_context_keeps_execution_compiler_and_all_notice_installation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            trusted = json.loads((Path(__file__).with_name('packaging.lock.json')).read_text())
-            image = trusted['compiler'].get('image') or 'ghcr.io/atrinik/classic-build:1.2.3@sha256:' + 'a' * 64
-            legacy = {key: value for key, value in trusted.items() if key != 'compiler'}
-            legacy['notices'] = [path for path in trusted['notices'] if path not in prepare.LLVM_NOTICE_PATHS]
+            approved_lock = json.loads((Path(__file__).with_name('packaging.lock.json')).read_text())
+            image = approved_lock['compiler'].get('image') or 'ghcr.io/atrinik/classic-build:1.2.3@sha256:' + 'a' * 64
+            legacy = {key: value for key, value in approved_lock.items() if key != 'compiler'}
+            legacy['notices'] = [path for path in approved_lock['notices'] if path not in prepare.LLVM_NOTICE_PATHS]
             raw = (json.dumps(legacy, sort_keys=True, indent=7) + '\n\n').encode()
             path = root / 'legacy-lock.json'
             path.write_bytes(raw)
@@ -121,26 +121,26 @@ class IntegrityTests(unittest.TestCase):
                 prepare.main()
             self.assertEqual((output / 'packaging.lock.json').read_bytes(), raw)
             inputs = json.loads((output / 'dependency-inputs.lock.json').read_text())
-            self.assertEqual(inputs['compiler'], trusted['compiler'])
+            self.assertEqual(inputs['compiler'], approved_lock['compiler'])
 
     def test_source_lock_paths_shapes_and_duplicate_keys_fail_before_materialization(self):
-        trusted = self.trusted_lock()
-        image = trusted['compiler']['image']
+        approved_lock = self.approved_lock_fixture()
+        image = approved_lock['compiler']['image']
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / 'source-lock'
             for data in ('[]', '{', 'null', '{"compiler":{},"compiler":{}}', ' ' * (4 * 1024 * 1024 + 1)):
                 path.write_text(data)
                 with self.subTest(data_length=len(data)), self.assertRaises(ValueError):
-                    prepare.select_packaging_lock(trusted, image, path)
+                    prepare.select_packaging_lock(approved_lock, image, path)
             alias = root / 'alias'
             alias.symlink_to(path)
             with self.assertRaises(OSError):
-                prepare.select_packaging_lock(trusted, image, alias)
+                prepare.select_packaging_lock(approved_lock, image, alias)
             fifo = root / 'fifo'
             os.mkfifo(fifo)
             with self.assertRaisesRegex(ValueError, 'bounded regular file'):
-                prepare.select_packaging_lock(trusted, image, fifo)
+                prepare.select_packaging_lock(approved_lock, image, fifo)
 
     def test_recovery_context_retains_exact_source_lock_bytes_and_current_recipe(self):
         with tempfile.TemporaryDirectory() as directory:
