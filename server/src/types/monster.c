@@ -1813,6 +1813,38 @@ static char *find_matching_message(const char *msg, const char *match) {
     }
 }
 
+/* Validate borrowed dialogue actors before any post-script pointer read. If
+ * storage was reclaimed, only the live player list may re-establish observer
+ * ownership. Drop matching retained dialogue/selection references as well. */
+bool monster_dialogue_is_current(object *observer, tag_t observer_count,
+                                  player *controller, socket_struct *socket,
+                                  object *npc, tag_t npc_count, uint64_t reclamation) {
+    bool storage = object_reclamation_is_current(reclamation);
+    bool connection = controller != NULL &&
+                      player_connection_is_current(observer, observer_count, controller, socket);
+    if (controller != NULL && !connection) {
+        return false;
+    }
+    if (!storage || !OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(npc, npc_count)) {
+        if (connection && !object_reference_is_current(npc, npc_count)) {
+            if (controller->talking_to == npc && controller->talking_to_count == npc_count) {
+                controller->talking_to = NULL;
+                controller->talking_to_count = 0;
+            }
+            if (controller->target_object == npc && controller->target_object_count == npc_count) {
+                controller->target_object = observer;
+                controller->target_object_count = 0;
+            }
+            if (observer->enemy == npc && observer->enemy_count == npc_count) {
+                observer->enemy = NULL;
+                observer->enemy_count = 0;
+            }
+        }
+        return false;
+    }
+    return true;
+}
+
 /**
  * Give an object the chance to handle something being said.
  *
@@ -1828,6 +1860,10 @@ static char *find_matching_message(const char *msg, const char *match) {
  */
 int talk_to_npc(object *op, object *npc, char *txt) {
     size_t ret = 0;
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t observer_count = op->count, npc_count = npc->count;
+    player *controller = op->type == PLAYER ? CONTR(op) : NULL;
+    socket_struct *socket = controller != NULL ? controller->cs : NULL;
 
     if (HAS_EVENT(npc, EVENT_SAY)) {
         /* Trigger the SAY event */
@@ -1883,8 +1919,17 @@ int talk_to_npc(object *op, object *npc, char *txt) {
         }
     }
 
-    if (op->type == PLAYER) {
-        player_set_talking_to(CONTR(op), npc);
+    /* SAY and the target notification can synchronously reclaim the player. */
+    if (!monster_dialogue_is_current(op, observer_count, controller, socket,
+                                     npc, npc_count, reclamation)) {
+        return 0;
+    }
+    if (controller != NULL) {
+        player_set_talking_to(controller, npc);
+    }
+    if (!monster_dialogue_is_current(op, observer_count, controller, socket,
+                                     npc, npc_count, reclamation)) {
+        return 0;
     }
 
     uint32_t secs = INTERFACE_TIMEOUT(ret);

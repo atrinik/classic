@@ -9,10 +9,24 @@ mode = Atrinik.GetOptions()
 calls = int(actor.ReadKey("actor_callback_calls") or "0") + 1
 actor.WriteKey("actor_callback_calls", str(calls))
 trigger_call = 3 if mode == "recycle_observer_third" else (
-    2 if mode in ("destroy_spell_second", "destroy_target_second", "kick_observer_second") else 1)
+    2 if mode in ("destroy_spell_second", "destroy_target_second", "kick_observer_second",
+                  "destroy_target_reclaim_second") else 1)
 if calls == trigger_call and actor.ReadKey("actor_callback_done") != "1":
     actor.WriteKey("actor_callback_done", "1")
-    if mode in ("kick_observer", "kick_observer_second"):
+    if mode in ("gate_destroy_guard_reclaim", "gate_kick_observer", "gate_visible"):
+        players = [obj for obj in actor.map.Objects(actor.x - 1, actor.y)
+                   if obj.name == "actor-callback-player"]
+        assert len(players) == 1
+        player = players[0]
+        if mode == "gate_destroy_guard_reclaim":
+            guards = [obj for obj in actor.map.Objects(actor.x, actor.y)
+                      if obj.name == "callback gate guard"]
+            assert len(guards) == 1
+            guards[0].Destroy()
+            player.Controller().ExecuteCommand("/memfree objects")
+        elif mode == "gate_kick_observer":
+            player.Controller().ExecuteCommand("/kick " + player.name)
+    elif mode in ("kick_observer", "kick_observer_second"):
         observer.Controller().ExecuteCommand("/kick " + observer.name)
     elif mode == "teleport_observer":
         observer.TeleportTo(actor.ReadKey("callback_destination"), 17, 17)
@@ -37,6 +51,9 @@ if calls == trigger_call and actor.ReadKey("actor_callback_done") != "1":
         spells = [obj for obj in observer.inv if obj.name == "callback ability"]
         assert len(spells) == 1
         spells[0].Destroy()
+    elif mode in ("destroy_target_reclaim", "destroy_target_reclaim_second"):
+        actor.Destroy()
+        observer.Controller().ExecuteCommand("/memfree objects")
     elif mode == "destroy_target_second":
         actor.Destroy()
     elif mode == "destroy_caster":

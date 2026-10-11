@@ -5,6 +5,9 @@ from enum import IntEnum
 PROTOCOL_VERSION = 1084
 
 
+TALK_NPC_TARGET_MESSAGE_MAX = 4095
+
+
 ITEM_NAME_SIZE = 128
 
 
@@ -21,6 +24,16 @@ class PlayerStatusOperation(IntEnum):
     SNAPSHOT = 0
     UPSERT = 1
     REMOVE = 2
+
+
+class TalkMode(IntEnum):
+    NPC = 1
+    INV = 2
+    BELOW = 3
+    CONTAINER = 4
+    NPC_NAME = 5
+    CLOSE = 6
+    NPC_TARGET = 7
 
 
 class ClientToServerCommand(IntEnum):

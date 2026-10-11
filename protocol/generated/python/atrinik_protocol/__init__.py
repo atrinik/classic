@@ -13,6 +13,8 @@ from .game import (
     PROTOCOL_VERSION,
     PlayerStatusOperation,
     ServerToClientCommand,
+    TalkMode,
+    TALK_NPC_TARGET_MESSAGE_MAX,
 )
 
 __all__ = [
@@ -26,4 +28,6 @@ __all__ = [
     "PROTOCOL_VERSION",
     "PlayerStatusOperation",
     "ServerToClientCommand",
+    "TalkMode",
+    "TALK_NPC_TARGET_MESSAGE_MAX",
 ]

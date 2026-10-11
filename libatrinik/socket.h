@@ -34,6 +34,7 @@
 #include "socket_dec.h"
 #include "rendezvous.h"
 #include <atrinik/protocol/game_commands.h>
+#include <atrinik/protocol/talk.h>
 
 struct metaserver_publisher_identity;
 
@@ -806,12 +807,6 @@ typedef struct socket_face_batch_response {
 #define CHAT_TYPE_OPERATOR 8 ///< Operator-only chat.
 /*@}*/
 
-#define CMD_TALK_NPC 1
-#define CMD_TALK_INV 2
-#define CMD_TALK_BELOW 3
-#define CMD_TALK_CONTAINER 4
-#define CMD_TALK_NPC_NAME 5
-#define CMD_TALK_CLOSE 6
 
 /**
  * @defgroup CMD_CONTROL_xxx Control command types

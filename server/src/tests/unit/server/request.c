@@ -19,6 +19,7 @@
 #include <light.h>
 #include <los.h>
 #include <movement.h>
+#include <monster_data.h>
 #include <object.h>
 #include <player.h>
 #include <tod.h>
@@ -1277,14 +1278,230 @@ START_TEST(test_target_replays_are_bounded_per_connection_tick) {
 }
 END_TEST
 
+static object *request_talk_npc(mapstruct *map, int x, int y) {
+    object *npc = arch_get("kobold");
+    npc->x = x;
+    npc->y = y;
+    FREE_AND_COPY_HASH(npc->msg, "Talk fixture");
+    monster_data_init(npc);
+    npc = object_insert_map(npc, map, NULL, 0);
+    ck_assert_ptr_nonnull(npc);
+    return npc;
+}
+
+static packet_struct *request_talk_packet(socket_struct *cs, uint32_t count) {
+    packet_struct *packet = packet_new(SERVER_CMD_TALK, 32, 32);
+    packet_writer_write_uint8(packet, CMD_TALK_NPC_TARGET);
+    packet_writer_write_uint8(packet, cs->mapx_2 + 1);
+    packet_writer_write_uint8(packet, cs->mapy_2);
+    packet_writer_write_int8(packet, 0);
+    packet_writer_write_uint32(packet, count);
+    packet_writer_write_cstring(packet, "hello");
+    return packet;
+}
+
+START_TEST(test_talk_target_binds_actor_without_selection_acknowledgement) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    pl->tli = 1;
+    object *old = request_talk_npc(map, 12, 13);
+    object *npc = request_talk_npc(map, 13, 12);
+    draw_client_map(op);
+    pl->target_object = old;
+    pl->target_object_count = old->count;
+    cs->target_select_admitted = true;
+    cs->target_select_tick = pticks;
+    packet_struct *packet = request_talk_packet(cs, npc->count);
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert_ptr_eq(pl->talking_to, npc);
+    ck_assert_uint_eq(pl->talking_to_count, npc->count);
+    ck_assert_ptr_eq(pl->target_object, npc);
+    /* Typed talk keeps its existing selected-NPC behavior and old layout. */
+    pl->target_object = old;
+    pl->target_object_count = old->count;
+    uint8_t legacy[] = {CMD_TALK_NPC, 'h', 'e', 'l', 'l', 'o', 0};
+    socket_command_talk(cs, pl, legacy, sizeof(legacy), 0);
+    ck_assert_ptr_eq(pl->talking_to, old);
+    packet_free(packet);
+}
+END_TEST
+
+START_TEST(test_talk_target_rejects_stale_identity_without_nearby_fallback) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    pl->tli = 1;
+    object *nearby = request_talk_npc(map, 12, 13);
+    object *npc = request_talk_npc(map, 13, 12);
+    draw_client_map(op);
+    pl->target_object = nearby;
+    pl->target_object_count = nearby->count;
+    packet_struct *packet = request_talk_packet(cs, npc->count);
+    /* Even if the same actor remains nearby, its stale clicked cell is rejected. */
+    object_remove(npc, 0);
+    npc->y = 13;
+    npc = object_insert_map(npc, map, NULL, 0);
+    ck_assert_ptr_nonnull(npc);
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert_ptr_null(pl->talking_to);
+    ck_assert_ptr_eq(pl->target_object, nearby);
+    object_remove(npc, 0);
+    object_destroy(npc);
+    /* A replacement at the old clicked coordinate must not inherit its count. */
+    request_talk_npc(map, 13, 12);
+    draw_client_map(op);
+    pticks++;
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert_ptr_null(pl->talking_to);
+    ck_assert_ptr_eq(pl->target_object, nearby);
+    packet_free(packet);
+}
+END_TEST
+
+START_TEST(test_talk_target_requires_complete_frame_before_admission) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    packet_struct *packet = request_talk_packet(cs, UINT32_MAX);
+    float speed = op->speed_left;
+    uint64_t queries = los_action_camera_queries_for_test();
+    for (size_t len = 1; len < packet->len; len++) {
+        socket_command_talk(cs, pl, packet->data, len, 0);
+        ck_assert(!cs->talk_target_admitted);
+        ck_assert(op->speed_left == speed);
+    }
+    packet_writer_write_uint8(packet, 0);
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert(!cs->talk_target_admitted);
+    packet->len--;
+    const uint8_t invalid[][8] = {
+        {CMD_TALK_NPC_TARGET, 255, 0, 0, 0, 0, 0, 1},
+        {CMD_TALK_NPC_TARGET, 0, 255, 0, 0, 0, 0, 1},
+        {CMD_TALK_NPC_TARGET, 0, 0, MAP2_MAX_DEPTH + 1, 0, 0, 0, 1},
+        {CMD_TALK_NPC_TARGET, 0, 0, (uint8_t)(-MAP2_MAX_DEPTH - 1), 0, 0, 0, 1},
+        {CMD_TALK_NPC_TARGET, 0, 0, 0, 0, 0, 0, 0},
+    };
+    for (size_t i = 0; i < arraysize(invalid); i++) {
+        memcpy(packet->data, invalid[i], sizeof(invalid[i]));
+        socket_command_talk(cs, pl, packet->data, packet->len, 0);
+        ck_assert(!cs->talk_target_admitted);
+    }
+    ck_assert(op->speed_left == speed);
+    ck_assert_uint_eq(los_action_camera_queries_for_test(), queries);
+    packet_free(packet);
+}
+END_TEST
+
+START_TEST(test_talk_target_message_bounds_are_transactional) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    packet_struct *packet = request_talk_packet(cs, UINT32_MAX);
+    packet->len = TALK_NPC_TARGET_FIXED_SIZE;
+    packet_writer_write_uint8(packet, 0);
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert(!cs->talk_target_admitted);
+    packet->len = TALK_NPC_TARGET_FIXED_SIZE;
+    packet_writer_write_cstring(packet, " \t ");
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert(!cs->talk_target_admitted);
+    packet->len = TALK_NPC_TARGET_FIXED_SIZE;
+    for (size_t i = 0; i <= TALK_NPC_TARGET_MESSAGE_MAX; i++) {
+        packet_writer_write_uint8(packet, 'a');
+    }
+    packet_writer_write_uint8(packet, 0);
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert(!cs->talk_target_admitted);
+    packet->len--;
+    packet->data[packet->len - 1] = 0;
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert(cs->talk_target_admitted);
+    ck_assert_ptr_null(pl->talking_to);
+    packet_free(packet);
+}
+END_TEST
+
+START_TEST(test_talk_target_publication_range_and_replay_budget) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    socket_struct *cs = pl->cs;
+    pl->tli = 1;
+    object *npc = request_talk_npc(map, 13, 12);
+    packet_struct *packet = request_talk_packet(cs, npc->count);
+    /* A valid unpublished request consumes admission without acquiring an actor. */
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert(cs->talk_target_admitted);
+    ck_assert_ptr_null(pl->talking_to);
+    draw_client_map(op);
+    uint64_t queries = los_action_camera_queries_for_test();
+    float speed = op->speed_left;
+    for (int i = 0; i < 1000; i++) {
+        socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    }
+    ck_assert_uint_eq(los_action_camera_queries_for_test(), queries);
+    ck_assert(op->speed_left == speed);
+    ck_assert_ptr_null(pl->talking_to);
+    pticks++;
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert_ptr_eq(pl->talking_to, npc);
+    ck_assert_uint_gt(los_action_camera_queries_for_test(), queries);
+    pl->talking_to = NULL;
+    pl->talking_to_count = 0;
+    /* A published actor must still pass fresh visibility when the action runs. */
+    SET_FLAG(npc, FLAG_HIDDEN);
+    pticks++;
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert_ptr_null(pl->talking_to);
+    CLEAR_FLAG(npc, FLAG_HIDDEN);
+    /* A valid count cannot authorize another depth or a withdrawn publication. */
+    pticks++;
+    packet->data[3] = 1;
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert_ptr_null(pl->talking_to);
+    packet->data[3] = 0;
+    target_map_publication_forget_socket(cs, map);
+    pticks++;
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert_ptr_null(pl->talking_to);
+    /* Publication of a distant same-level NPC grants visibility, not talk range. */
+    object_remove(npc, 0);
+    npc->x = 20;
+    npc = object_insert_map(npc, map, NULL, 0);
+    ck_assert_ptr_nonnull(npc);
+    draw_client_map(op);
+    packet->data[1] = cs->mapx_2 + 8;
+    pticks++;
+    socket_command_talk(cs, pl, packet->data, packet->len, 0);
+    ck_assert_ptr_null(pl->talking_to);
+    packet_free(packet);
+}
+END_TEST
+
 START_TEST(test_target_admission_is_reset_on_connection_initialization) {
     socket_struct *cs = xcalloc(1, sizeof(*cs));
     cs->sc = socket_create("127.0.0.1", 13327, SOCKET_ROLE_SERVER, false);
     ck_assert_ptr_nonnull(cs->sc);
     cs->target_select_admitted = true;
     cs->target_select_tick = pticks;
+    cs->talk_target_admitted = true;
+    cs->talk_target_tick = pticks;
     ck_assert(init_connection(cs));
     ck_assert(!cs->target_select_admitted);
+    ck_assert(!cs->talk_target_admitted);
     ck_assert_ptr_null(cs->target_map_published_map);
     free_newsocket(cs);
 }
@@ -3227,6 +3444,11 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_core);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
+    tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);
+    tcase_add_test(tc_core, test_talk_target_rejects_stale_identity_without_nearby_fallback);
+    tcase_add_test(tc_core, test_talk_target_requires_complete_frame_before_admission);
+    tcase_add_test(tc_core, test_talk_target_publication_range_and_replay_budget);
+    tcase_add_test(tc_core, test_talk_target_message_bounds_are_transactional);
     tcase_add_test(tc_core, test_target_admission_is_reset_on_connection_initialization);
     tcase_add_test(tc_core, test_target_replays_are_bounded_per_connection_tick);
     tcase_add_test(tc_core, test_target_packet_includes_current_level_and_plain_name);

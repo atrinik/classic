@@ -3246,15 +3246,133 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
     send_target_command(pl);
 }
 
+/** Preserve the explicitly selected NPC's existing, loaded-only planar talk range. */
+static bool talk_target_in_range(const object *observer, const object *npc) {
+    int dx, dy, dz;
+    if (observer->map == NULL || npc->map == NULL ||
+        !spatial_offset(observer->map, npc->map, &dx, &dy, &dz) || dz != 0) {
+        return false;
+    }
+    int64_t offset_x = (int64_t)dx + npc->x - observer->x;
+    int64_t offset_y = (int64_t)dy + npc->y - observer->y;
+    for (int i = 0; i <= SIZEOFFREE2; i++) {
+        if (offset_x == freearr_x[i] && offset_y == freearr_y[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Resolve only the clicked published part, never a replacement or nearby NPC. */
+static object *talk_target_resolve(player *pl, uint8_t x, uint8_t y, int8_t depth,
+                                   uint32_t count) {
+    socket_struct *cs = pl->cs;
+    if (cs->target_map_publication_pending || cs->target_map_published_map == NULL ||
+        cs->target_map_published_count == 0 ||
+        cs->target_map_published_map->count != cs->target_map_published_count ||
+        cs->target_map_published_map->in_memory != MAP_IN_MEMORY ||
+        cs->target_map_published_map->spaces == NULL ||
+        cs->target_map_published_width != cs->mapx ||
+        cs->target_map_published_height != cs->mapy ||
+        !(cs->target_map_published_depths & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth)))) {
+        return NULL;
+    }
+    spatial_cell cell;
+    if (!spatial_resolve(cs->target_map_published_map,
+                         cs->target_map_published_x + x - cs->mapx_2,
+                         cs->target_map_published_y + y - cs->mapy_2, depth, &cell)) {
+        return NULL;
+    }
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    mapstruct *observer_map = observer->map;
+    tag_t observer_map_count = observer_map->count;
+    int observer_x = observer->x, observer_y = observer->y;
+    object *part;
+    FOR_MAP_LAYER_BEGIN(cell.map, cell.x, cell.y, LAYER_LIVING, -1, part) {
+        object *head = HEAD(part);
+        if (head->count != count || !OBJECT_CAN_TALK(head)) {
+            continue;
+        }
+        tag_t part_count = part->count;
+        int published_depth;
+        uint64_t reclamation = object_reclamation_epoch();
+        bool authorized = talk_target_in_range(observer, head) &&
+                          target_player_part_published(pl, part, &published_depth) &&
+                          published_depth == depth &&
+                          perception_player_part_authorized(pl, part);
+        /* ASK_SHOW can reclaim the observer, the NPC or the exact part. Do not
+         * advance the borrowed layer iterator after calling it, even on failure. */
+        if (!monster_dialogue_is_current(observer, observer_count, pl, cs,
+                                          head, count, reclamation) ||
+            !OBJECT_ACTIVE(observer) || cs->state == ST_DEAD || cs->state == ST_ZOMBIE ||
+            observer->map != observer_map || observer_map->count != observer_map_count ||
+            observer->x != observer_x || observer->y != observer_y ||
+            !OBJECT_VALID(head, count) || !OBJECT_VALID(part, part_count)) {
+            return NULL;
+        }
+        if (!authorized || !OBJECT_CAN_TALK(head) ||
+            !target_player_part_published(pl, part, &published_depth) ||
+            published_depth != depth || part->map != cell.map ||
+            part->x != cell.x || part->y != cell.y || !talk_target_in_range(observer, head)) {
+            return NULL;
+        }
+        return head;
+    }
+    FOR_MAP_LAYER_END
+    return NULL;
+}
+
+/** One fully parsed exact NPC interaction, independent of the selection state. */
+static void socket_command_talk_target(socket_struct *ns, player *pl,
+                                        packet_reader_t *reader) {
+    uint8_t x = packet_reader_read_uint8(reader);
+    uint8_t y = packet_reader_read_uint8(reader);
+    int8_t depth = packet_reader_read_int8(reader);
+    uint32_t count = packet_reader_read_uint32(reader);
+    char msg[TALK_NPC_TARGET_MESSAGE_MAX + 1];
+    packet_reader_read_string(reader, msg, sizeof(msg));
+    if (!packet_reader_finish(reader) || pl == NULL || pl->cs != ns || pl->ob == NULL ||
+        pl->ob->map == NULL || count == 0 || x >= ns->mapx || y >= ns->mapy ||
+        depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH) {
+        return;
+    }
+    player_sanitize_input(msg);
+    if (string_isempty(msg)) {
+        return;
+    }
+    /* Right-click SELECT may already have spent that command's allowance. This
+     * separate one-per-tick action budget still fences every expensive lookup,
+     * including stale and unpublished identities; no intent survives the call. */
+    if (ns->talk_target_admitted && ns->talk_target_tick == pticks) {
+        return;
+    }
+    ns->talk_target_admitted = true;
+    ns->talk_target_tick = pticks;
+    pl->ob->speed_left -= 1.0;
+    object *npc = talk_target_resolve(pl, x, y, depth, count);
+    if (npc == NULL) {
+        return;
+    }
+    LOG(CHAT, "[TALKTO] [%s] [%s] %s", pl->ob->name, npc->name, msg);
+    if (!monster_guard_check(npc, pl->ob, msg, 0)) {
+        talk_to_npc(pl->ob, npc, msg);
+    }
+}
+
 void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos) {
     packet_reader_t reader;
     packet_reader_init_cursor(&reader, data, len, &pos);
     uint8_t type;
     char msg[HUGE_BUF];
 
-    pl->ob->speed_left -= 1.0;
-
     type = packet_reader_read_uint8(&reader);
+    if (type == CMD_TALK_NPC_TARGET) {
+        socket_command_talk_target(ns, pl, &reader);
+        return;
+    }
+
+    pl->ob->speed_left -= 1.0;
 
     if (type == CMD_TALK_NPC || type == CMD_TALK_NPC_NAME) {
         char npc_name[MAX_BUF];
@@ -3281,7 +3399,8 @@ void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t le
 
         npc = NULL;
 
-        if (type == CMD_TALK_NPC && OBJECT_VALID(pl->target_object, pl->target_object_count) &&
+        if (type == CMD_TALK_NPC &&
+            object_reference_is_current(pl->target_object, pl->target_object_count) &&
             OBJECT_CAN_TALK(pl->target_object)) {
             for (i = 0; i <= SIZEOFFREE2; i++) {
                 x = pl->ob->x + freearr_x[i];
@@ -3327,7 +3446,7 @@ void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t le
                 talk_to_npc(pl->ob, npc, msg);
             }
         } else if (type == CMD_TALK_NPC &&
-                   OBJECT_VALID(pl->target_object, pl->target_object_count) &&
+                   object_reference_is_current(pl->target_object, pl->target_object_count) &&
                    OBJECT_CAN_TALK(pl->target_object)) {
             draw_info_format(COLOR_WHITE,
                              pl->ob,
@@ -3366,10 +3485,20 @@ void socket_command_talk(socket_struct *ns, player *pl, uint8_t *data, size_t le
             }
         }
     } else if (type == CMD_TALK_CLOSE) {
-        if (OBJECT_VALID(pl->talking_to, pl->talking_to_count)) {
-            monster_data_dialogs_remove(pl->talking_to, pl->ob);
-            pl->talking_to = NULL;
-            pl->talking_to_count = 0;
+        if (object_reference_is_current(pl->talking_to, pl->talking_to_count)) {
+            object *observer = pl->ob;
+            tag_t observer_count = observer->count;
+            socket_struct *socket = pl->cs;
+            object *npc = pl->talking_to;
+            tag_t npc_count = pl->talking_to_count;
+            monster_data_dialogs_remove(npc, observer);
+            if (!player_connection_is_current(observer, observer_count, pl, socket)) {
+                return;
+            }
+            if (pl->talking_to == npc && pl->talking_to_count == npc_count) {
+                pl->talking_to = NULL;
+                pl->talking_to_count = 0;
+            }
         }
     } else {
         LOG(PACKET, "Invalid type: %d", type);

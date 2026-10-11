@@ -14,6 +14,16 @@
       {"id": 2, "symbol": "REMOVE"}
     ]
   },
+  "talk_npc_target_message_max": 4095,
+  "talk_modes": [
+    {"id": 1, "symbol": "NPC"},
+    {"id": 2, "symbol": "INV"},
+    {"id": 3, "symbol": "BELOW"},
+    {"id": 4, "symbol": "CONTAINER"},
+    {"id": 5, "symbol": "NPC_NAME"},
+    {"id": 6, "symbol": "CLOSE"},
+    {"id": 7, "symbol": "NPC_TARGET"}
+  ],
   "client_to_server": [
     {"id": 0, "symbol": "CONTROL", "wire_name": "control"},
     {"id": 1, "symbol": "ASK_FACE", "wire_name": "ask_face"},

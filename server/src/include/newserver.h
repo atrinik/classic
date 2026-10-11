@@ -304,6 +304,9 @@ typedef struct socket_struct {
     /** SELECT admission is per connection and simulation tick; CLEAR cannot reset it. */
     long target_select_tick;
     bool target_select_admitted;
+    /** Exact NPC interaction has its own bounded allowance after right-click SELECT. */
+    long talk_target_tick;
+    bool talk_target_admitted;
 
     /** Player level used to calculate cached non-player name colors. */
     uint8_t lastmap_player_level;

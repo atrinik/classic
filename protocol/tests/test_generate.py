@@ -38,6 +38,27 @@ class GenerateTests(unittest.TestCase):
         s2c = {entry["symbol"]: entry["id"] for entry in schema["server_to_client"]}
         self.assertEqual((c2s["TARGET"], s2c["TARGET"]), (22, 5))
 
+    def test_bound_talk_preserves_legacy_modes_and_exports_identity_mode(self) -> None:
+        schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
+        self.assertEqual({mode["symbol"]: mode["id"] for mode in schema["talk_modes"]},
+                         {"NPC": 1, "INV": 2, "BELOW": 3, "CONTAINER": 4,
+                          "NPC_NAME": 5, "CLOSE": 6, "NPC_TARGET": 7})
+        namespace: dict[str, object] = {}
+        exec(GENERATE.render_python(schema), namespace)
+        self.assertEqual(namespace["TalkMode"].NPC_TARGET, 7)
+        self.assertEqual(namespace["TALK_NPC_TARGET_MESSAGE_MAX"], 4095)
+        self.assertIn("CMD_TALK_NPC_TARGET = 7", GENERATE.render_header(schema))
+
+    def test_invalid_talk_mode_identity_is_rejected(self) -> None:
+        for field, value in (("id", 0), ("id", True), ("symbol", "NPC")):
+            data = json.loads((ROOT / "schema/game-commands.json").read_text(encoding="utf-8"))
+            data["talk_modes"][-1][field] = value
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "schema.json"
+                path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "talk_modes"):
+                    GENERATE.load_schema(path)
+
     def test_combined_access_and_exploration_command_ids(self) -> None:
         schema = GENERATE.load_schema(ROOT / "schema/game-commands.json")
         expected = {

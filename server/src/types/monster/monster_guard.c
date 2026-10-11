@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -69,7 +69,13 @@ void monster_guard_activate_gate(object *op, int state) {
             continue;
         }
 
+        uint64_t reclamation = object_reclamation_epoch();
+        tag_t guard_count = op->count;
         object_apply(tmp, op, 0);
+        if (!object_reclamation_is_current(reclamation) ||
+            !OBJECT_VALID(op, guard_count)) {
+            return;
+        }
 
         char buf[HUGE_BUF];
 
@@ -171,10 +177,13 @@ bool monster_guard_check(object *op, object *target, const char *msg, uint32_t d
         return false;
     }
 
+    uint64_t reclamation = object_reclamation_epoch();
     player *pl = CONTR(target);
+    socket_struct *socket = pl->cs;
+    tag_t observer_count = target->count, guard_count = op->count;
 
     /* Player is talking to someone, don't disturb them... yet. */
-    if (OBJECT_VALID(pl->talking_to, pl->talking_to_count) && pl->talking_to != op) {
+    if (object_reference_is_current(pl->talking_to, pl->talking_to_count) && pl->talking_to != op) {
         return false;
     }
 
@@ -195,6 +204,11 @@ bool monster_guard_check(object *op, object *target, const char *msg, uint32_t d
     player_path_clear(pl);
     socket_server_command_queue_reset(pl->cs);
     player_set_talking_to(pl, op);
+    if (!monster_dialogue_is_current(target, observer_count, pl, socket,
+                                     op, guard_count, reclamation)) {
+        return true;
+    }
+
 
     int ret = trigger_event(EVENT_AI,
                             target,
@@ -205,6 +219,10 @@ bool monster_guard_check(object *op, object *target, const char *msg, uint32_t d
                             0,
                             0,
                             0);
+    if (!monster_dialogue_is_current(target, observer_count, pl, socket,
+                                     op, guard_count, reclamation)) {
+        return true;
+    }
     uint32_t secs = INTERFACE_TIMEOUT(ret);
     monster_data_dialogs_add(op, target, MIN(secs, INTERFACE_TIMEOUT_MAX));
 
@@ -230,7 +248,7 @@ void monster_guard_check_close(object *op, object *target) {
     }
 
     /* Already have an enemy. */
-    if (OBJECT_VALID(op->enemy, op->enemy_count)) {
+    if (object_reference_is_current(op->enemy, op->enemy_count)) {
         return;
     }
 
@@ -245,6 +263,13 @@ void monster_guard_check_close(object *op, object *target) {
         return;
     }
 
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t observer_count = target->count, guard_count = op->count;
+    socket_struct *socket = pl->cs;
     set_npc_enemy(op, target, NULL);
+    if (!monster_dialogue_is_current(target, observer_count, pl, socket,
+                                     op, guard_count, reclamation)) {
+        return;
+    }
     draw_info_format(COLOR_NAVY, target, "%s says:\nThen pay with your blood!", op->name);
 }

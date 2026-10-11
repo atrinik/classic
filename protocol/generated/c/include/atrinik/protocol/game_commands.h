@@ -5,6 +5,7 @@
 
 #define ATRINIK_PROTOCOL_VERSION 1084U
 #define SOCKET_VERSION ATRINIK_PROTOCOL_VERSION
+#define TALK_NPC_TARGET_MESSAGE_MAX 4095U
 #define ATRINIK_PROTOCOL_ITEM_NAME_SIZE 128U
 
 #define ATRINIK_PROTOCOL_ITEM_EXTRA_MESSAGE_SIZE 256U
@@ -20,6 +21,16 @@ typedef enum atrinik_player_status_operation {
     PLAYER_STATUS_REMOVE = 2,
     PLAYER_STATUS_OPERATION_NROF = 3
 } atrinik_player_status_operation_t;
+
+typedef enum atrinik_talk_mode {
+    CMD_TALK_NPC = 1,
+    CMD_TALK_INV = 2,
+    CMD_TALK_BELOW = 3,
+    CMD_TALK_CONTAINER = 4,
+    CMD_TALK_NPC_NAME = 5,
+    CMD_TALK_CLOSE = 6,
+    CMD_TALK_NPC_TARGET = 7,
+} atrinik_talk_mode_t;
 
 typedef enum atrinik_client_to_server_command {
     SERVER_CMD_CONTROL = 0,

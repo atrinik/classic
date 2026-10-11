@@ -141,9 +141,10 @@ because perception and ranged combat can cross stories.
 
 ## Target protocol 1084
 
-Authored `protocol/include/atrinik/protocol/target.h` owns the layout. Command
-and subtype identities remain unchanged. The version handshake rejects older
-peers; update native and Python consumers together.
+Authored `protocol/include/atrinik/protocol/target.h` owns the layout. Existing
+command and subtype identities remain unchanged; TALK appends the NPC_TARGET
+mode. The version handshake rejects older peers; update native and Python
+consumers together.
 
 | Direction/action | Payload in field order |
 | --- | --- |
@@ -187,6 +188,39 @@ actor, so a pre-callback authorization result cannot be retained as authority.
 Reconnect clears target identity. Client clicks and cycling use current live
 MAP2 records and resolved sprite ownership; remembered structural records do
 not become candidates. Combat revalidates retained identity and authorization.
+
+### Exact NPC conversation
+
+TALK mode `NPC_TARGET` (7) carries viewport x/y `u8`, relative depth `i8`,
+nonzero actor count `u32`, and a nonempty NUL-terminated message of at most 4095
+bytes. The mode byte precedes these fields; trailing bytes are rejected.
+`protocol/include/atrinik/protocol/talk.h` owns the layout, and the schema owns
+shared C/Python mode identities and the message limit. Existing TALK modes
+retain their layouts and ordinary typed-talk behavior.
+
+The map-menu action sends one identity-bound TALK. It needs no TARGET reply,
+keepalive fence, client retry queue or previously selected actor. The server
+parses the complete packet before mutation, then admits at most one such
+request per connection and simulation tick, separately from SELECT. Thus a
+right-click SELECT cannot suppress its subsequent conversation, while added
+interaction work is bounded to one exact TALK action per tick. Stale/unpublished
+identities consume the allowance and normal talk action cost; malformed fields,
+zero count and empty messages do not. Neither publication withdrawal nor avatar
+changes replenish admission; a new connection resets it.
+
+Execution requires the exact live published physical part and head count,
+fresh perception, and the existing explicitly selected NPC interaction range:
+the bounded `SIZEOFFREE2` horizontal offsets on the same physical level,
+including loaded horizontal neighbor maps. Vertical visibility alone does not
+grant conversation range. Moving, deleted, replaced, hidden, unauthorized or
+out-of-range actors cause rejection without a nearby-NPC fallback or selecting
+the requested actor. Malformed input preserves state; callback invalidation may
+clear an existing stale target or conversation. Success invokes the ordinary
+conversation and selection update. The
+server retains no deferred lookup or conversation request. Callback boundaries
+revalidate connection and storage identity before further dialogue bookkeeping;
+retained conversation references require current allocation ownership before
+any pointer/count read.
 
 ## Projectiles
 
