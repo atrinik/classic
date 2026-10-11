@@ -15,7 +15,7 @@
 #include <plugin.h>
 #include <propagation.h>
 #include <server.h>
-#include <spellist.h>
+#include <spells.h>
 #include <toolkit/packet.h>
 
 static bool plugins_initialized;
