@@ -10,7 +10,11 @@
 static void *watched;
 static size_t watched_size;
 static bool observed;
+#ifdef ATRINIK_TEST_SOURCE_WRAP
+#define __real_free free
+#else
 void __real_free(void *ptr);
+#endif
 void __wrap_free(void *ptr) {
     if (ptr != NULL && ptr == watched) {
         const unsigned char *p = ptr;

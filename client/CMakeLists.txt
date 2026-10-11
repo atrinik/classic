@@ -431,6 +431,12 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING)
+    # Focused tests discard unrelated production handlers on each object format.
+    if (APPLE)
+        set(ATRINIK_TEST_DEAD_STRIP_OPTION "-Wl,-dead_strip")
+    else ()
+        set(ATRINIK_TEST_DEAD_STRIP_OPTION "-Wl,--gc-sections")
+    endif ()
     set(ATRINIK_PYTHON3_EXECUTABLE "${Python3_EXECUTABLE}")
 
     # Headless dependency equivalence probe, also built independently by the
@@ -982,7 +988,7 @@ if (BUILD_TESTING)
         $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>
         $<$<COMPILE_LANG_AND_ID:C,Clang>:-fdata-sections>)
     target_link_options(client-compound-packet-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_compile_definitions(client-compound-packet-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-compound-packet-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -1003,7 +1009,7 @@ if (BUILD_TESTING)
         $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>
         $<$<COMPILE_LANG_AND_ID:C,Clang>:-fdata-sections>)
     target_link_options(client-book-edit-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_compile_definitions(client-book-edit-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-book-edit-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -1183,7 +1189,7 @@ if (BUILD_TESTING)
     target_compile_options(client-item-drag-tests PRIVATE
         $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-item-drag-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_include_directories(client-item-drag-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -1199,7 +1205,7 @@ if (BUILD_TESTING)
     target_compile_options(client-notification-tests PRIVATE
         $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-notification-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_include_directories(client-notification-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -1232,7 +1238,7 @@ if (BUILD_TESTING)
     target_compile_options(client-render-profiler-tests PRIVATE
         $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-render-profiler-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_include_directories(client-render-profiler-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include

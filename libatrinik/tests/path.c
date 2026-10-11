@@ -31,8 +31,13 @@ static bool fail_parent_directory_close;
 static bool fail_next_parent_close;
 static unsigned int fsync_call_count;
 
+#ifdef ATRINIK_TEST_SOURCE_WRAP
+#define __real_fsync fsync
+#define __real_close close
+#else
 int __real_fsync(int fd);
 int __real_close(int fd);
+#endif
 
 int __wrap_fsync(int fd) {
     if (fail_parent_directory_close && ++fsync_call_count == 2) {

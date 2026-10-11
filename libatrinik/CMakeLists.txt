@@ -521,12 +521,21 @@ endif ()
 
 if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         ATRINIK_INTEGRATED_BUILD) AND BUILD_TESTING)
+    # Mach-O has no GNU --wrap. These test-only translation units compile the
+    # original implementation with selected calls redirected after system headers
+    # are loaded. Their definitions satisfy references before the normal static
+    # library is searched, so the original archive member is not extracted.
     add_executable(libatrinik-access-code tests/access_code.c)
     atrinik_configure_target(libatrinik-access-code)
     target_link_libraries(libatrinik-access-code PRIVATE Atrinik::Core)
     if (UNIX AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_compile_definitions(libatrinik-access-code PRIVATE ACCESS_CODE_TEST_ENTROPY)
-        target_link_options(libatrinik-access-code PRIVATE "-Wl,--wrap=RAND_priv_bytes")
+        if (APPLE)
+            target_sources(libatrinik-access-code PRIVATE tests/wrapped/access_code.c)
+            target_link_libraries(libatrinik-access-code PRIVATE OpenSSL::Crypto)
+        else ()
+            target_link_options(libatrinik-access-code PRIVATE "-Wl,--wrap=RAND_priv_bytes")
+        endif ()
     endif ()
     add_test(NAME libatrinik-access-code COMMAND libatrinik-access-code)
 
@@ -540,7 +549,13 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-sensitive-packet PRIVATE Atrinik::Core)
     if (UNIX AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_compile_definitions(libatrinik-sensitive-packet PRIVATE PACKET_TEST_FREE)
-        target_link_options(libatrinik-sensitive-packet PRIVATE "-Wl,--wrap=free")
+        if (APPLE)
+            target_sources(libatrinik-sensitive-packet PRIVATE tests/wrapped/packet.c)
+            target_compile_definitions(libatrinik-sensitive-packet PRIVATE ATRINIK_TEST_SOURCE_WRAP)
+            target_link_libraries(libatrinik-sensitive-packet PRIVATE OpenSSL::Crypto ZLIB::ZLIB)
+        else ()
+            target_link_options(libatrinik-sensitive-packet PRIVATE "-Wl,--wrap=free")
+        endif ()
     endif ()
     add_test(NAME libatrinik-sensitive-packet COMMAND libatrinik-sensitive-packet)
 
@@ -583,6 +598,10 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-path PRIVATE Atrinik::Core)
     if (MINGW)
         target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=path_windows_token_user")
+    elseif (APPLE)
+        target_sources(libatrinik-path PRIVATE tests/wrapped/path.c)
+        target_compile_definitions(libatrinik-path PRIVATE ATRINIK_TEST_SOURCE_WRAP)
+        target_link_libraries(libatrinik-path PRIVATE OpenSSL::Crypto)
     elseif (UNIX AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=fsync" "-Wl,--wrap=close")
     endif ()
@@ -614,8 +633,13 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     if (UNIX AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         add_executable(libatrinik-socket-websocket tests/socket_websocket.c)
         atrinik_configure_target(libatrinik-socket-websocket)
-        target_link_options(libatrinik-socket-websocket PRIVATE
-            "-Wl,--wrap=curl_ws_recv")
+        if (APPLE)
+            target_sources(libatrinik-socket-websocket PRIVATE tests/wrapped/socket_direct.c)
+            target_link_libraries(libatrinik-socket-websocket PRIVATE OpenSSL::Crypto)
+        else ()
+            target_link_options(libatrinik-socket-websocket PRIVATE
+                "-Wl,--wrap=curl_ws_recv")
+        endif ()
         target_link_libraries(libatrinik-socket-websocket PRIVATE Atrinik::Core)
         add_test(NAME libatrinik-socket-websocket COMMAND libatrinik-socket-websocket)
     endif ()
