@@ -8419,7 +8419,10 @@ void map_target_handle(uint8_t is_friend) {
 
     if (p != NULL) {
         send_target(p->x, p->y, p->depth, p->count);
-    } else if (cpl.target_is_friend != is_friend) {
+    } else if (cpl.target_actor_count != 0) {
+        /* No live actor of the requested class remains. Clear the selected
+         * identity even when TARGET's display class differs from MAP2's
+         * candidate class, or the selected actor has left the viewport. */
         send_target(-1, -1, 0, 0);
     }
 
@@ -11347,6 +11350,9 @@ static bool map_target_cycle_class_test(const map_target_struct *enemy,
     map_target_cycle_test_reply(NULL, false);
     success &= cpl.target_actor_count == 0 && cpl.target_relative_depth == 0 &&
                cpl.target_code == CMD_TARGET_SELF && cpl.target_is_friend == 0;
+    int sent = map_interaction_test_targets;
+    map_target_handle(1);
+    success &= map_interaction_test_targets == sent;
 
     /* Complete acknowledgements for either friendly wire code commit the
      * friend class. Issuing an enemy SELECT cannot change that class. */
@@ -11361,6 +11367,18 @@ static bool map_target_cycle_class_test(const map_target_struct *enemy,
         map_target_cycle_test_reply(NULL, false);
         success &= cpl.target_is_friend == 0;
     }
+
+    /* With combat force the wire display can remain NEUTRAL while MAP2
+     * classifies that NPC as an enemy. An empty friend cycle must still clear
+     * the actual selected identity; wire class equality is not an admission. */
+    actor->target_is_friend = 0;
+    map_target_cycle_test_reply_type(friendly, false, CMD_TARGET_NEUTRAL);
+    success &= cpl.target_is_friend == 1;
+    success &= map_target_cycle_test_press(1, NULL);
+    map_target_cycle_test_reply(NULL, false);
+    sent = map_interaction_test_targets;
+    map_target_handle(1);
+    success &= map_interaction_test_targets == sent;
 
     actor->target_is_friend = saved_friend;
     record->visibility.authorized = saved_authorized;
