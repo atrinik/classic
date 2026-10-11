@@ -180,9 +180,9 @@ class CompleteReportTests(unittest.TestCase):
 
     def complete(self, baseline=None, associated=None, measured=None, zero=None):
         responses = [measured if measured is not None else self.measured,
+                     zero if zero is not None else lcov(self.shared) + lcov(self.unique),
                      baseline if baseline is not None else self.baseline,
-                     associated if associated is not None else self.associated,
-                     zero if zero is not None else lcov(self.shared) + lcov(self.unique)]
+                     associated if associated is not None else self.associated]
         with patch.object(cov, "run", side_effect=responses):
             return cov.complete_report("cov", [Path("test"), Path("unrun")], [Path("test")], Path("merged"), self.root, "client")
 
@@ -191,6 +191,16 @@ class CompleteReportTests(unittest.TestCase):
         self.assertIn(self.measured, result)
         self.assertIn(lcov(self.unique), result)
         self.assertEqual(result.count("SF:"), 2)
+
+    def test_json_selectors_follow_complete_unfiltered_production_inventory(self):
+        with patch.object(cov, "run", side_effect=[self.measured, lcov(self.shared) + lcov(self.unique),
+                                                   self.baseline, self.associated]) as run:
+            cov.complete_report("cov", [Path("test"), Path("unrun")], [Path("test")], Path("merged"), self.root, "client")
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertNotIn(self.shared, commands[0])
+        self.assertNotIn(self.shared, commands[1])
+        self.assertEqual(commands[2][-2:], sorted([self.shared, self.unique]))
+        self.assertEqual(commands[3][-2:], sorted([self.shared, self.unique]))
 
     def test_normalized_filename_tables_match(self):
         relative = document([mapping("client/src/shared.c")], [function("client/src/shared.c")])
@@ -338,6 +348,19 @@ class NativeLLVM23Tests(unittest.TestCase):
             self.assertIn(str(source), records)
             self.assertIn("FNH:0", records[str(source)])
             self.assertIn("LH:0", records[str(source)])
+
+    def test_native_source_selectors_preserve_complete_production_zero_maps(self):
+        objects = cov.coverage_objects(self.build)
+        unfiltered = cov.run(cov.object_arguments(self.llvmcov, objects, "-empty-profile"))
+        sources = sorted(cov.lcov_records(cov.run(cov.object_arguments(self.llvmcov, objects,
+                             "-empty-profile", "-format=lcov")), self.root, "client", zero=True))
+        filtered = cov.run(cov.object_arguments(self.llvmcov, objects, "-empty-profile") + sources)
+        self.assertEqual(cov.zero_maps(unfiltered, self.root, "client"),
+                         cov.zero_maps(filtered, self.root, "client"))
+        # Source selection reduces file rendering, never the global functions
+        # used to compare shared inline, branch and expansion mappings.
+        self.assertEqual(json.loads(unfiltered)["data"][0]["functions"],
+                         json.loads(filtered)["data"][0]["functions"])
 
     def test_native_unexecuted_additional_same_source_mapping_rejected(self):
         self.common.write_text(self.common.read_text() +

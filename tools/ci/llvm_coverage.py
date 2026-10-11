@@ -383,9 +383,16 @@ def lcov_records(report, source_root, component, zero=False):
 
 def complete_report(cov, objects, executed, merged, source_root, component):
     measured = lcov_records(run(object_arguments(cov, executed, "-format=lcov", f"-instr-profile={merged}")), source_root, component)
-    baseline = zero_maps(run(object_arguments(cov, objects, "-empty-profile")), source_root, component)
-    associated = zero_maps(run(object_arguments(cov, executed, "-empty-profile")), source_root, component)
     zero_records = lcov_records(run(object_arguments(cov, objects, "-empty-profile", "-format=lcov")), source_root, component, zero=True)
+    if not measured or not zero_records:
+        raise ValueError("coverage export contains no intended production C sources")
+    # Discover the complete production inventory from the unfiltered native
+    # export first. LLVM's source selectors avoid rendering excluded test/header
+    # expansions while retaining its global function descriptors. Both mapping
+    # checks use this same inventory; their complete production maps still match.
+    sources = sorted(zero_records)
+    baseline = zero_maps(run(object_arguments(cov, objects, "-empty-profile") + sources), source_root, component)
+    associated = zero_maps(run(object_arguments(cov, executed, "-empty-profile") + sources), source_root, component)
     if not measured or set(measured) != set(associated) or set(zero_records) != set(baseline):
         raise ValueError("coverage export contains no intended production C sources or inconsistent file sets")
     # LCOV branch IDs are ordinal within a line, including macro expansions.
