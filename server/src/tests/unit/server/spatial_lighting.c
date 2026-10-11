@@ -156,6 +156,9 @@ START_TEST(test_closed_upper_roof_shadows_but_open_floorhole_lights_both_levels)
     celestial_light_invalidate(lower);
     ck_assert(celestial_light_rebuild(lower, 5 * HOURS_PER_MONTH + 12));
     int32_t roof_shadow = GET_MAP_SPACE_PTR(lower, 1, 1)->celestial_light_value;
+    /* The roof closes the direct sky ray.  Only its 192/256 diffuse
+     * transmission remains: noon's fixed 320 diffuse contribution is 240. */
+    ck_assert_int_eq(roof_shadow, 240);
     ck_assert_int_lt(roof_shadow, open_lower);
     ck_assert_int_gt(GET_MAP_SPACE_PTR(upper, 1, 1)->celestial_light_value, roof_shadow);
 }
