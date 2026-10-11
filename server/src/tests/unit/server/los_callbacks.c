@@ -15,6 +15,7 @@
 #include <los.h>
 #include <map.h>
 #include <object.h>
+#include <object_methods.h>
 #include <player.h>
 #include <plugin.h>
 #include <server.h>
@@ -195,6 +196,67 @@ START_TEST(test_ask_show_moving_earlier_actor_aborts_whole_map2_transaction) {
 }
 END_TEST
 
+/* These cases cross the real Python flag setter.  They warm the view first so
+ * a passing case proves both immediate physical authority and invalidation of
+ * the retained LOS masks, rather than only the native object-update hook. */
+static void assert_python_roof_flag_transaction(const char *mode,
+                                                bool initial_floor,
+                                                bool initial_hidden,
+                                                bool initially_visible,
+                                                bool finally_visible) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    mapstruct *upper = upper_level(map);
+    object *actor = place(map, "raas", 13, 12);
+    object *roof = place(upper, "roof_thatch", 13, 12);
+    if (initial_floor) {
+        SET_FLAG(roof, FLAG_IS_FLOOR);
+    } else {
+        CLEAR_FLAG(roof, FLAG_IS_FLOOR);
+    }
+    if (initial_hidden) {
+        SET_FLAG(roof, FLAG_HIDDEN);
+    } else {
+        CLEAR_FLAG(roof, FLAG_HIDDEN);
+    }
+    object_update(roof, UP_OBJ_FLAGS);
+    ck_assert(object_set_value(actor, "los_ask_show_upper_path", upper->path, true));
+    ask_show(actor, mode);
+
+    update_los(pl);
+    ck_assert(los_view_is_current(pl));
+    ck_assert_int_eq(los_player_can_see_cell(pl, map, actor->x, actor->y), initially_visible);
+    uint64_t geometry_before = los_geometry_epoch();
+    uint64_t publication_before = los_publication_epoch();
+    socket_buffer_clear(CONTR(pl)->cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(los_geometry_epoch(), geometry_before);
+    ck_assert_uint_gt(los_publication_epoch(), publication_before);
+    assert_aborted(pl);
+
+    /* Fresh physical queries must observe the Python-set flag before a second
+     * MAP2 publication has a chance to rebuild the cached view. */
+    ck_assert_int_eq(los_player_can_see_cell(pl, map, actor->x, actor->y), finally_visible);
+    ck_assert_int_eq(los_player_cell_camera(pl, map, actor->x, actor->y),
+                     finally_visible ? LOS_CAMERA_VISIBLE : LOS_CAMERA_WALL_BOUNDARY);
+    update_los(pl);
+    ck_assert(los_view_is_current(pl));
+    ck_assert_int_eq(los_player_can_see_cell(pl, map, actor->x, actor->y), finally_visible);
+}
+
+START_TEST(test_ask_show_python_floor_setter_invalidates_warmed_los) {
+    assert_python_roof_flag_transaction("floor_on", false, false, true, false);
+    assert_python_roof_flag_transaction("floor_off", true, false, false, true);
+}
+END_TEST
+
+START_TEST(test_ask_show_python_hidden_setter_invalidates_warmed_los) {
+    assert_python_roof_flag_transaction("hidden_on", false, false, true, false);
+    assert_python_roof_flag_transaction("hidden_off", false, true, false, true);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("server.los_callbacks");
     TCase *tc = tcase_create("callbacks");
@@ -202,6 +264,8 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_ask_show_upper_roof_aborts_stale_map2_and_hides_actor);
     tcase_add_test(tc, test_ask_show_mutating_earlier_actor_aborts_whole_map2_transaction);
     tcase_add_test(tc, test_ask_show_moving_earlier_actor_aborts_whole_map2_transaction);
+    tcase_add_test(tc, test_ask_show_python_floor_setter_invalidates_warmed_los);
+    tcase_add_test(tc, test_ask_show_python_hidden_setter_invalidates_warmed_los);
     suite_add_tcase(s, tc);
     return s;
 }
