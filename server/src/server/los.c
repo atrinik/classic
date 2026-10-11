@@ -48,6 +48,13 @@ typedef struct los_column {
     uint8_t count;
 } los_column;
 
+typedef struct los_obstacle_sum {
+    uint16_t opaque;
+    uint16_t slab;
+} los_obstacle_sum;
+_Static_assert(MAP_CLIENT_X * MAP_CLIENT_Y <= UINT16_MAX,
+               "LOS rectangle sums must fit uint16_t");
+
 typedef struct los_camera_view {
     bool cutaway[LOS_OVERHEAD_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
     uint16_t cover[MAP_CLIENT_X][MAP_CLIENT_Y];
@@ -56,6 +63,7 @@ typedef struct los_camera_view {
     los_column *columns;
     spatial_cell local_levels[LOS_QUERY_LEVELS];
     uint32_t local_checked;
+    los_obstacle_sum *proof;
     size_t resolves;
 } los_camera_view;
 
@@ -63,6 +71,8 @@ typedef struct los_camera_view {
 static size_t view_sight_checks[MAP2_LEVELS];
 static size_t view_camera_pruned[MAP2_LEVELS];
 static size_t view_cell_resolves;
+static size_t view_clear_proofs[MAP2_LEVELS];
+static size_t view_ray_traces[MAP2_LEVELS];
 
 size_t los_view_sight_checks_for_test(int depth) {
     return depth >= -MAP2_MAX_DEPTH && depth <= MAP2_MAX_DEPTH
@@ -76,6 +86,16 @@ size_t los_view_camera_pruned_for_test(int depth) {
 
 size_t los_view_cell_resolves_for_test(void) {
     return view_cell_resolves;
+}
+
+size_t los_view_clear_proofs_for_test(int depth) {
+    return depth >= -MAP2_MAX_DEPTH && depth <= MAP2_MAX_DEPTH
+               ? view_clear_proofs[MAP2_DEPTH_INDEX(depth)] : 0;
+}
+
+size_t los_view_ray_traces_for_test(int depth) {
+    return depth >= -MAP2_MAX_DEPTH && depth <= MAP2_MAX_DEPTH
+               ? view_ray_traces[MAP2_DEPTH_INDEX(depth)] : 0;
 }
 #endif
 
@@ -189,6 +209,7 @@ static bool view_resolve(mapstruct *origin, int x, int y, int z,
 
 static void camera_destroy(los_camera_view *view) {
     free(view->columns);
+    free(view->proof);
 }
 
 /** Classify connected camera cutaways before casting any player sight rays. */
@@ -379,6 +400,82 @@ static bool player_offset(object *pl, mapstruct *map, int x, int y,
            *dz >= -MAP2_MAX_DEPTH && *dz <= MAP2_MAX_DEPTH;
 }
 
+static bool sight_slab(const spatial_cell *cell) {
+    for (const object *op = GET_MAP_OB(cell->map, cell->x, cell->y);
+         op != NULL; op = op->above) {
+        if (QUERY_FLAG(op, FLAG_IS_FLOOR) || object_is_roof_surface(op)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Snapshot obstacle sums only inside the synchronous read-only update. Every
+ * unresolved cell is unsafe. The uncached reference and fresh physical action
+ * queries continue to traverse the complete default supercover. */
+static void view_build_proof(los_camera_view *view) {
+    socket_struct *cs = CONTR(view->pl)->cs;
+    size_t stride = (size_t)cs->mapy + 1;
+    size_t plane = ((size_t)cs->mapx + 1) * stride;
+    view->proof = xcalloc(MAP2_LEVELS * plane, sizeof(*view->proof));
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        size_t base = MAP2_DEPTH_INDEX(depth) * plane;
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                spatial_cell cell;
+                bool found = view_cell(view, ax, ay, depth, &cell);
+                bool opaque = !found || (GET_MAP_FLAGS(cell.map, cell.x, cell.y) & P_BLOCKSVIEW);
+                bool slab = !found || sight_slab(&cell);
+                size_t at = base + ((size_t)ax + 1) * stride + ay + 1;
+                const los_obstacle_sum *x = &view->proof[at - stride];
+                const los_obstacle_sum *y = &view->proof[at - 1];
+                const los_obstacle_sum *xy = &view->proof[at - stride - 1];
+                view->proof[at].opaque = (uint16_t)(opaque + x->opaque + y->opaque - xy->opaque);
+                view->proof[at].slab = (uint16_t)(slab + x->slab + y->slab - xy->slab);
+            }
+        }
+    }
+}
+
+static unsigned view_rectangle_sum(const los_camera_view *view, int depth,
+                                    int min_x, int min_y, int max_x, int max_y, bool slab) {
+    socket_struct *cs = CONTR(view->pl)->cs;
+    size_t stride = (size_t)cs->mapy + 1;
+    size_t plane = ((size_t)cs->mapx + 1) * stride;
+    size_t base = MAP2_DEPTH_INDEX(depth) * plane;
+    const los_obstacle_sum *a = &view->proof[base + ((size_t)max_x + 1) * stride + max_y + 1];
+    const los_obstacle_sum *b = &view->proof[base + (size_t)min_x * stride + max_y + 1];
+    const los_obstacle_sum *c = &view->proof[base + ((size_t)max_x + 1) * stride + min_y];
+    const los_obstacle_sum *d = &view->proof[base + (size_t)min_x * stride + min_y];
+    return (unsigned)(slab ? a->slab - b->slab - c->slab + d->slab
+                          : a->opaque - b->opaque - c->opaque + d->opaque);
+}
+
+/** All tied-axis supercover cells lie inside the closed monotone endpoint
+ * box. A zero obstacle sum proves every cell and crossed slab in that larger
+ * volume clear; a nonzero sum merely selects the unchanged exact traversal. */
+static bool view_ray_proven_clear(const los_camera_view *view, int dx, int dy, int dz) {
+    if (view->proof == NULL || dz < -MAP2_MAX_DEPTH || dz > MAP2_MAX_DEPTH) {
+        return false;
+    }
+    socket_struct *cs = CONTR(view->pl)->cs;
+    int ax = cs->mapx_2 + dx, ay = cs->mapy_2 + dy;
+    if (cs->mapx_2 < 0 || cs->mapy_2 < 0 || cs->mapx_2 >= cs->mapx ||
+        cs->mapy_2 >= cs->mapy || ax < 0 || ay < 0 || ax >= cs->mapx || ay >= cs->mapy) {
+        return false;
+    }
+    int min_x = MIN(cs->mapx_2, ax), max_x = MAX(cs->mapx_2, ax);
+    int min_y = MIN(cs->mapy_2, ay), max_y = MAX(cs->mapy_2, ay);
+    int min_z = MIN(0, dz), max_z = MAX(0, dz);
+    for (int z = min_z; z <= max_z; z++) {
+        if (view_rectangle_sum(view, z, min_x, min_y, max_x, max_y, false) != 0 ||
+            (z > min_z && view_rectangle_sum(view, z, min_x, min_y, max_x, max_y, true) != 0)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool player_ray(object *pl, int dx, int dy, int dz, los_camera_view *view) {
     if (CONTR(pl)->tls) {
         return true; /* Explicit administrator true-line-of-sight exception. */
@@ -389,6 +486,17 @@ static bool player_ray(object *pl, int dx, int dy, int dz, los_camera_view *view
     if (dz == 0 && abs(dx) <= 3 && abs(dy) <= 3 && QUERY_FLAG(pl, FLAG_XRAYS)) {
         return true; /* Same-story wall bypass; camera/slabs remain authoritative. */
     }
+    if (view != NULL && view_ray_proven_clear(view, dx, dy, dz)) {
+#ifdef ATRINIK_TESTING
+        view_clear_proofs[MAP2_DEPTH_INDEX(dz)]++;
+#endif
+        return true;
+    }
+#ifdef ATRINIK_TESTING
+    if (view != NULL) {
+        view_ray_traces[MAP2_DEPTH_INDEX(dz)]++;
+    }
+#endif
     if (view == NULL || !view->cache_enabled) {
         return spatial_ray_clear(pl->map, pl->x, pl->y, dx, dy, dz, SPATIAL_SIGHT, true);
     }
@@ -449,6 +557,8 @@ static void update_los_impl(object *pl, bool cache_cells) {
     memset(view_sight_checks, 0, sizeof(view_sight_checks));
     memset(view_camera_pruned, 0, sizeof(view_camera_pruned));
     view_cell_resolves = 0;
+    memset(view_clear_proofs, 0, sizeof(view_clear_proofs));
+    memset(view_ray_traces, 0, sizeof(view_ray_traces));
 #endif
     clear_los(pl);
     if (QUERY_FLAG(pl, FLAG_REMOVED) || pl->map == NULL) {
@@ -466,6 +576,9 @@ static void update_los_impl(object *pl, bool cache_cells) {
                     CONTR(pl)->tls ? LOS_CAMERA_VISIBLE : camera_classify(&view, ax, ay, depth);
             }
         }
+    }
+    if (cache_cells) {
+        view_build_proof(&view);
     }
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         for (int ax = 0; ax < cs->mapx; ax++) {

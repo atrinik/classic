@@ -350,6 +350,87 @@ START_TEST(test_cached_and_default_whole_masks_match_across_mixed_topology) {
 }
 END_TEST
 
+START_TEST(test_zero_volume_proofs_skip_empty_rays_and_respect_current_slabs) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->mapx = cs->mapy = 5;
+    cs->mapx_2 = cs->mapy_2 = 2;
+    map->level_min = 0;
+    map->level_max = 1;
+    mapstruct *upper = add_level(map, 1, 1);
+    size_t cells = (size_t)cs->mapx * cs->mapy;
+    update_los(pl);
+    ck_assert_uint_eq(los_view_clear_proofs_for_test(0), cells);
+    ck_assert_uint_eq(los_view_clear_proofs_for_test(1), cells);
+    ck_assert_uint_eq(los_view_ray_traces_for_test(0), 0);
+    ck_assert_uint_eq(los_view_ray_traces_for_test(1), 0);
+    assert_cached_masks_match_default(pl);
+
+    /* Current-level floors do not block same-story or upward rays. */
+    object *floor = place(map, "water_still", 12, 12);
+    update_los(pl);
+    ck_assert_uint_eq(los_view_clear_proofs_for_test(0), cells);
+    ck_assert_uint_eq(los_view_clear_proofs_for_test(1), cells);
+    ck_assert_uint_eq(los_view_ray_traces_for_test(1), 0);
+    assert_cached_masks_match_default(pl);
+    object_remove(floor, 0);
+
+    /* An upper floor owns the crossed DOWN boundary. Its presence in every
+     * endpoint box forbids the zero proof, even for rays that avoid the slab. */
+    floor = place(upper, "water_still", 12, 12);
+    update_los(pl);
+    ck_assert_uint_eq(los_view_clear_proofs_for_test(1), 0);
+    ck_assert_uint_gt(los_view_ray_traces_for_test(1), 0);
+    ck_assert(!los_player_has_geometric_sight(pl, upper, 12, 12));
+    assert_cached_masks_match_default(pl);
+    object_remove(floor, 0);
+    update_los(pl);
+    ck_assert_uint_eq(los_view_clear_proofs_for_test(1), cells);
+    ck_assert_uint_eq(los_view_ray_traces_for_test(1), 0);
+}
+END_TEST
+
+START_TEST(test_zero_volume_proof_matches_supercover_in_varied_blocked_scenes) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    cs->mapx = cs->mapy = 7;
+    cs->mapx_2 = cs->mapy_2 = 3;
+    map->level_min = -1;
+    map->level_max = 1;
+    mapstruct *upper = add_level(map, 1, 1);
+    upper->level_min = -1;
+    mapstruct *lower = get_empty_map(24, 24);
+    map->tile_map[TILED_DOWN] = lower;
+    lower->tile_map[TILED_UP] = map;
+    lower->coords[2] = -1;
+    lower->level_min = -1;
+    lower->level_max = 1;
+    place(map, "wall_wood_1", 13, 12);
+    place(map, "wall_wood_1", 12, 13);
+    place(upper, "roof_thatch", 14, 13);
+    place(upper, "water_still", 11, 12);
+    place(map, "water_still", 10, 11);
+    place(lower, "wall_wood_1", 11, 11);
+    update_los(pl);
+    ck_assert_uint_gt(los_view_clear_proofs_for_test(0), 0);
+    ck_assert_uint_gt(los_view_ray_traces_for_test(0), 0);
+    ck_assert(!los_player_has_geometric_sight(pl, map, 13, 13));
+    assert_cached_masks_match_default(pl);
+    /* Add obstacles in all quadrants, including a hidden wall roof and floors
+     * on either side of the current story; the exact traversal remains the
+     * reference for every cell and depth, including conservative corner ties. */
+    place(map, "wall_wood_1", 11, 12);
+    place(map, "wall_wood_1", 12, 11);
+    place(upper, "roof_thatch", 10, 10);
+    place(lower, "water_still", 14, 14);
+    assert_cached_masks_match_default(pl);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("los");
     TCase *tc = tcase_create("Core");
@@ -367,6 +448,8 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_camera_hidden_depths_are_pruned_before_sight_checks);
     tcase_add_test(tc, test_scoped_cell_cache_matches_default_across_seams_and_invalid_stacks);
     tcase_add_test(tc, test_cached_and_default_whole_masks_match_across_mixed_topology);
+    tcase_add_test(tc, test_zero_volume_proofs_skip_empty_rays_and_respect_current_slabs);
+    tcase_add_test(tc, test_zero_volume_proof_matches_supercover_in_varied_blocked_scenes);
     return s;
 }
 

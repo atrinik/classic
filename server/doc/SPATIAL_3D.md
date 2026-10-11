@@ -58,6 +58,32 @@ suppresses `MAP2_FLAG2_EXIT` even if the underlying wall-layer object is an exit
 Roof-only upper cells count as cover; they do not require `FLAG_IS_FLOOR` or
 `P_BLOCKSVIEW`. Remembered geometry grants no target or combat authority.
 
+The player viewport update owns an operation-local coordinate cache: at most
+thirteen retained cells per projected column and nineteen checked relative
+queries (-6 through +12). A valid result beyond the storage bound uses exact
+resolution without retaining it. Equal-sized validated local vertical chains
+share transforms inside the origin map; seam coordinates retain full resolution.
+The cache is freed before returning and grants no later action authority.
+
+After camera classification, the same synchronous read-only operation may build
+per-depth prefix sums for opaque/unresolved cells and floor/roof slabs. Every
+integer supercover cell lies inside the closed box between the two endpoints.
+A ray is proven clear only when every plane in that box has zero opaque and
+unresolved cells, and every upper plane of a crossed vertical boundary has zero
+slabs. Same-story rays cross no slab; upward rays do not cross their origin's
+floor. Any nonzero sum selects the unchanged exact traversal, including its
+corner and terminal-slab rules. Prefix storage is bounded by two `uint16_t`
+fields per prefix coordinate on each advertised depth (56,628 bytes at the
+32-by-32 compile-time limit). No mutation, plugin call or yield may separate
+the snapshot from its use. Fresh physical action checks use current default
+traversal and fresh camera checks construct their own scope.
+
+Test-only counters distinguish sight candidates, camera-pruned cells, coordinate
+resolution calls, successful clear-volume proofs and actual ray traversals.
+The uncached reference bypasses coordinate caching and clear-volume proofs;
+regressions compare complete camera and sight masks across seams, negative
+depths, slabs, corner blockers, conflicting links and unavailable dependencies.
+
 Monster acquisition scans loaded cells in three dimensions with a horizontal
 radius capped at 35 cells and relative vertical range capped at six. This is
 an explicit acquisition work limit, not unlimited world search. Existing
