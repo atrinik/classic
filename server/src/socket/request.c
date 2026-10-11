@@ -697,9 +697,14 @@ void draw_client_map(object *pl) {
         CONTR(pl)->cs->look_position = 0;
     }
 
-    /* MAP2 rebuilds camera classification and sight after position changes. */
+    /* Callbacks inside MAP2 may invalidate the observer as well as geometry. */
+    tag_t player_count = pl->count;
+    player *view_player = CONTR(pl);
     draw_client_map2(pl);
-    CONTR(pl)->update_los = 0;
+    if (!OBJECT_VALID(pl, player_count) || CONTR(pl) != view_player ||
+        view_player->cs->target_map_published_map == NULL) {
+        return;
+    }
 
     /* If we moved on the same map, check for map name/music to update. */
     if (redraw_below && CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_SAME) {
@@ -1022,11 +1027,21 @@ static packet_struct *map2_frame_level_chunk(int8_t depth, packet_struct *payloa
 
 /** Draw the client map. */
 void draw_client_map2(object *pl) {
-    CONTR(pl)->cs->target_map_publication_pending = true;
+    player *view_player = CONTR(pl);
+    socket_struct *view_socket = view_player->cs;
+    tag_t view_player_count = pl->count;
+    /* A script-triggered recursive draw must never publish inside this one. */
+    if (view_player->map2_serializing) {
+        view_player->los_view_valid = false;
+        return;
+    }
+    view_player->map2_serializing = true;
+    view_socket->target_map_publication_pending = true;
     light_map_unlink_flush();
     light_batch_flush();
-    /* Visibility is rebuilt from live geometry before each serialization. */
+    /* Reuse only geometry masks with a complete, current dependency key. */
     update_los(pl);
+    uint64_t publication_epoch = los_publication_epoch();
     static uint32_t map2_count = 0;
     MapCell *mp;
     MapSpace *msp;
@@ -1046,7 +1061,16 @@ void draw_client_map2(object *pl) {
     int num_layers;
     object *tmp, *tmp2;
     uint8_t have_sound_ambient;
-    packet_struct *packet, *packet_header, *packet_layer, *packet_sound;
+    packet_struct *packet = NULL, *packet_header = NULL, *packet_layer = NULL;
+    packet_struct *packet_sound = NULL;
+    packet_struct *continuation_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
+    uint16_t continuation_packet_count = 0;
+    bool target_cleared = false;
+    struct {
+        mapstruct *map;
+        int x, y;
+    } explored[MAP_CLIENT_X * MAP_CLIENT_Y];
+    size_t explored_count = 0;
     packet_struct *level_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
     int8_t level_depths[MAP2_LEVEL_CHUNKS_MAX] = {0};
     int8_t present_depths[MAP2_LEVELS] = {0};
@@ -1060,6 +1084,10 @@ void draw_client_map2(object *pl) {
     uint64_t timed_light_end_seconds = 0;
     uint8_t timed_light_flags = MAP2_LIGHT_KEYFRAME_CONTINUOUS;
     size_t timed_light_flags_pos = 0;
+
+    if (!los_view_is_current(pl)) {
+        goto abort_map;
+    }
 
     /* Any kind of special vision? */
     special_vision =
@@ -1391,7 +1419,10 @@ void draw_client_map2(object *pl) {
                 if (depth == 0 && level_visibility == MAP_LEVEL_VISIBLE && !blocksview &&
                     !MAP_UNIQUE(m) && m->region != NULL &&
                     region_find_with_map(m->region) != NULL) {
-                    exploration_mark(CONTR(pl)->cs, m->path, MAP_WIDTH(m), MAP_HEIGHT(m), nx, ny);
+                    HARD_ASSERT(explored_count < arraysize(explored));
+                    explored[explored_count].map = m;
+                    explored[explored_count].x = nx;
+                    explored[explored_count++].y = ny;
                 }
 
                 if (!mp->fow_known || (mp->fow != 0) != tile_fow) {
@@ -1526,6 +1557,29 @@ void draw_client_map2(object *pl) {
 
                         /* Found something. */
                         if (tmp) {
+                            bool hidden = false;
+                            object *callback_head = tmp->head != NULL ? tmp->head : tmp;
+                            if (HAS_EVENT(callback_head, EVENT_ASK_SHOW)) {
+                                tag_t part_count = tmp->count, head_count = callback_head->count;
+                                mapstruct *part_map = tmp->map, *head_map = callback_head->map;
+                                int part_x = tmp->x, part_y = tmp->y;
+                                int head_x = callback_head->x, head_y = callback_head->y;
+                                hidden = OBJECT_IS_HIDDEN(pl, callback_head);
+                                /* Scripts may remove/recycle any borrowed object, move the
+                                 * observer, or mutate cover elsewhere in the viewport. */
+                                if (!OBJECT_VALID(pl, view_player_count) || CONTR(pl) != view_player ||
+                                    view_player->cs != view_socket || !los_view_is_current(pl) ||
+                                    publication_epoch != los_publication_epoch() ||
+                                    !OBJECT_VALID(tmp, part_count) || !OBJECT_ACTIVE(tmp) ||
+                                    !OBJECT_VALID(callback_head, head_count) ||
+                                    !OBJECT_ACTIVE(callback_head) || tmp->map != part_map ||
+                                    tmp->x != part_x || tmp->y != part_y ||
+                                    callback_head->map != head_map || callback_head->x != head_x ||
+                                    callback_head->y != head_y ||
+                                    (tmp->head != NULL ? tmp->head : tmp) != callback_head) {
+                                    goto abort_map;
+                                }
+                            }
                             int16_t face;
                             uint8_t quick_pos = tmp->quick_pos;
                             uint8_t flags = 0, probe_val = 0;
@@ -1675,11 +1729,11 @@ void draw_client_map2(object *pl) {
                              * or mutating the delta cache so both hide and
                              * reveal transitions produce the required wire
                              * update. */
-                            if (OBJECT_IS_HIDDEN(pl, head)) {
+                            if (hidden) {
                                 if (flags2 & MAP2_FLAG2_PROBE) {
                                     CONTR(pl)->target_object = NULL;
                                     CONTR(pl)->target_object_count = 0;
-                                    send_target_command(CONTR(pl));
+                                    target_cleared = true;
                                 }
 
                                 bool was_cached = mp->faces[socket_layer] != 0;
@@ -2101,6 +2155,7 @@ void draw_client_map2(object *pl) {
 
                 packet_writer_write_packet(packet, packet_layer);
                 packet_free(packet_layer);
+                packet_layer = NULL;
 
                 /* Kill animations? */
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
@@ -2261,6 +2316,7 @@ void draw_client_map2(object *pl) {
         }
 
         packet_free(packet);
+        packet = NULL;
     }
 
     /* The first packet declares the complete level mask. Greedily include
@@ -2287,8 +2343,6 @@ void draw_client_map2(object *pl) {
             packet_writer_write_uint32(packet_header, 0);
         }
     }
-    packet_struct *continuation_packets[MAP2_LEVEL_CHUNKS_MAX] = {0};
-    uint16_t continuation_packet_count = 0;
     for (;;) {
         packet_struct *continuation = packet_new(CLIENT_CMD_MAP, 0, 512);
         packet_writer_write_uint8(continuation, MAP_UPDATE_CMD_PARTIAL);
@@ -2331,7 +2385,16 @@ void draw_client_map2(object *pl) {
     packet_header->data[continuation_count_pos] = continuation_marker >> 8;
     packet_header->data[continuation_count_pos + 1] = continuation_marker & UINT8_MAX;
     HARD_ASSERT(packet_writer_finish(packet_header));
-    exploration_flush(CONTR(pl)->cs, false);
+    /* No callback or yield may separate this fence from queue publication. */
+    if (!los_view_is_current(pl) || publication_epoch != los_publication_epoch()) {
+        goto abort_map;
+    }
+    for (size_t i = 0; i < explored_count; i++) {
+        mapstruct *discovered = explored[i].map;
+        exploration_mark(view_socket, discovered->path, MAP_WIDTH(discovered),
+                         MAP_HEIGHT(discovered), explored[i].x, explored[i].y);
+    }
+    exploration_flush(view_socket, false);
     bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
                             CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     socket_send_packet(CONTR(pl)->cs, packet_header);
@@ -2356,6 +2419,7 @@ void draw_client_map2(object *pl) {
         published_cs->target_map_published_count = 0;
     }
     published_cs->target_map_publication_pending = false;
+    view_player->map2_serializing = false;
 
     for (uint16_t i = 0; i < level_packet_count; i++) {
         HARD_ASSERT(level_sent[i]);
@@ -2381,6 +2445,43 @@ void draw_client_map2(object *pl) {
         socket_send_packet(CONTR(pl)->cs, packet_sound);
     } else {
         packet_free(packet_sound);
+    }
+    if (target_cleared) {
+        send_target_command(view_player);
+    }
+    return;
+
+abort_map:
+    if (packet_layer != NULL) {
+        packet_free(packet_layer);
+    }
+    if (packet != NULL && packet != packet_header) {
+        packet_free(packet);
+    }
+    if (packet_header != NULL) {
+        packet_free(packet_header);
+    }
+    if (packet_sound != NULL) {
+        packet_free(packet_sound);
+    }
+    for (uint16_t i = 0; i < level_packet_count; i++) {
+        packet_free(level_packets[i]);
+    }
+    for (uint16_t i = 0; i < continuation_packet_count; i++) {
+        packet_free(continuation_packets[i]);
+    }
+    /* A partially changed delta cache cannot describe any client generation. */
+    map_client_cache_clear(&view_socket->lastmap);
+    view_socket->lastmap_light_generation = 0;
+    view_socket->target_map_published_map = NULL;
+    view_socket->target_map_published_count = 0;
+    view_socket->target_map_published_depths = 0;
+    view_socket->target_map_publication_pending = false;
+    if (OBJECT_VALID(pl, view_player_count) && CONTR(pl) == view_player) {
+        view_player->last_update = NULL;
+        view_player->los_view_valid = false;
+        view_player->update_los = 1;
+        view_player->map2_serializing = false;
     }
 }
 

@@ -431,12 +431,81 @@ START_TEST(test_zero_volume_proof_matches_supercover_in_varied_blocked_scenes) {
 }
 END_TEST
 
+START_TEST(test_idle_masks_reuse_and_player_inputs_rebuild) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    update_los(pl);
+    uint64_t builds = los_view_builds_for_test();
+    uint64_t hits = los_view_cache_hits_for_test();
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), builds);
+    ck_assert_uint_eq(los_view_cache_hits_for_test(), hits + 1);
+    ck_assert(los_view_is_current(pl));
+    CONTR(pl)->update_los = 1;
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), ++builds);
+    SET_FLAG(pl, FLAG_BLIND);
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), ++builds);
+    CLEAR_FLAG(pl, FLAG_BLIND);
+    SET_FLAG(pl, FLAG_XRAYS);
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), ++builds);
+    CONTR(pl)->tls = 1;
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), ++builds);
+    CONTR(pl)->cs->mapx -= 2;
+    CONTR(pl)->cs->mapx_2--;
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), ++builds);
+    pl->x++;
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), ++builds);
+    pl->x--;
+    clear_los(pl);
+    ck_assert(!los_view_is_current(pl));
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), ++builds);
+}
+END_TEST
+
+START_TEST(test_nonblocking_actor_reuses_masks_but_cover_invalidates) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    update_los(pl);
+    uint64_t builds = los_view_builds_for_test();
+    uint64_t epoch = los_geometry_epoch();
+    object *actor = place(map, "kobold", 14, 12);
+    object_remove(actor, 0);
+    actor->x++;
+    ck_assert_ptr_nonnull(object_insert_map(actor, map, NULL, 0));
+    ck_assert_uint_eq(los_geometry_epoch(), epoch);
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), builds);
+    object *wall = place(map, "wall_wood_1", 13, 12);
+    ck_assert_uint_gt(los_geometry_epoch(), epoch);
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), builds + 1);
+    ck_assert(CONTR(pl)->blocked_los[CONTR(pl)->cs->mapx_2 + 2]
+                                         [CONTR(pl)->cs->mapy_2] & BLOCKED_LOS_BLOCKED);
+    object_remove(wall, 0);
+    update_los(pl);
+    ck_assert_uint_eq(los_view_builds_for_test(), builds + 2);
+    ck_assert(!(CONTR(pl)->blocked_los[CONTR(pl)->cs->mapx_2 + 2]
+                                          [CONTR(pl)->cs->mapy_2] & BLOCKED_LOS_BLOCKED));
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("los");
     TCase *tc = tcase_create("Core");
     tcase_add_unchecked_fixture(tc, check_setup, check_teardown);
     tcase_add_checked_fixture(tc, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc);
+    tcase_add_test(tc, test_idle_masks_reuse_and_player_inputs_rebuild);
+    tcase_add_test(tc, test_nonblocking_actor_reuses_masks_but_cover_invalidates);
     tcase_add_test(tc, test_roof_only_cover_prevents_fresh_gameplay_visibility);
     tcase_add_test(tc, test_full_stack_cover_is_not_clipped_to_displayed_depths);
     tcase_add_test(tc, test_depth_masks_use_each_ray_instead_of_base_silhouette);

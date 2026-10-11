@@ -78,8 +78,34 @@ fields per prefix coordinate on each advertised depth (56,628 bytes at the
 the snapshot from its use. Fresh physical action checks use current default
 traversal and fresh camera checks construct their own scope.
 
+Completed camera classifications and sight masks may be retained across idle
+socket posts. Their key includes a process-wide nonwrapping LOS geometry epoch,
+origin map incarnation, player position, viewport dimensions and center offsets,
+true-line-of-sight mode, blindness and xray state; the existing dirty flag also
+forces recomputation. No actor identity, light sample or action authorization is
+retained by this cache. Geometry changes in every map schema invalidate it;
+ordinary nonblocking actor movement does not. Cell signatures distinguish sight
+opacity, any floor, hidden wall-layer roofs, and any wall-layer object. Map
+lifecycle and topology changes invalidate absent and conflicting dependencies as
+well as existing links. A build whose epoch changes cannot become cache-valid.
+
+MAP2 buffers every level and continuation until serialization finishes. Script
+visibility callbacks revalidate observer and actor lifetimes, location and the
+view generation before another borrowed value is used. A separate nonwrapping
+publication mutation epoch covers mapped-object mutations, including ordinary
+actor insertion/removal and Python field/flag assignments. It cannot invalidate
+idle geometry masks, but detects a callback changing an already serialized actor.
+Native plugins must publish mapped-object mutations through the normal object
+mutation/update APIs; raw unsignaled writes are unsupported. Changed geometry or
+publication state aborts
+the whole pending MAP2 publication, clears its delta cache and target publication
+references, and requests a complete map on the next socket post. Exploration
+grants are deferred until the same publication fence passes. The final fence and
+queue append run synchronously without callbacks or yields.
+
 Test-only counters distinguish sight candidates, camera-pruned cells, coordinate
-resolution calls, successful clear-volume proofs and actual ray traversals.
+resolution calls, successful clear-volume proofs and actual ray traversals, plus
+cumulative viewport builds and idle cache hits.
 The uncached reference bypasses coordinate caching and clear-volume proofs;
 regressions compare complete camera and sight masks across seams, negative
 depths, slabs, corner blockers, conflicting links and unavailable dependencies.

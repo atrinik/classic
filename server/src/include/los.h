@@ -28,6 +28,7 @@
 #include <decls.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /**
  * @file
@@ -52,11 +53,22 @@ bool los_player_has_geometric_sight(object *pl, mapstruct *map, int x, int y);
 los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, int y);
 bool los_camera_layer_visible(los_camera_visibility visibility, int layer);
 
+/** Server-thread geometry generation. Never wraps or grants action authority. */
+uint64_t los_geometry_epoch(void);
+void los_geometry_changed(void);
+/** Draw-transaction mutation generation, independent of reusable LOS masks. */
+uint64_t los_publication_epoch(void);
+void los_publication_changed(void);
+/** Checks retained masks against current geometry and all observer inputs. */
+bool los_view_is_current(object *pl);
+
 extern void update_los(object *op);
 
 extern void clear_los(object *op);
 
 #ifdef ATRINIK_TESTING
+uint64_t los_view_builds_for_test(void);
+uint64_t los_view_cache_hits_for_test(void);
 /** Counts for the last viewport update; fresh physical queries are excluded. */
 size_t los_view_sight_checks_for_test(int depth);
 size_t los_view_camera_pruned_for_test(int depth);

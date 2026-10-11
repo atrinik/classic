@@ -360,6 +360,15 @@ struct pl_player {
     /** Last weight limit sent to client. */
     uint32_t last_weight_limit;
 
+    /** Cached viewport masks only; never actor, light or action authority. */
+    mapstruct *los_view_map;
+    uint64_t los_view_epoch;
+    uint32_t los_view_map_count;
+    int los_view_x, los_view_y;
+    int los_view_width, los_view_height, los_view_half_x, los_view_half_y;
+    bool los_view_tls, los_view_blind, los_view_xrays, los_view_valid;
+    bool map2_serializing;
+
     /** If true, update line of sight with update_los(). */
     uint32_t update_los : 1;
 

@@ -34,6 +34,29 @@
 #include <object.h>
 #include <spatial.h>
 
+/* All geometry mutation and viewport work executes on the server thread. */
+static uint64_t geometry_epoch = 1;
+static uint64_t publication_epoch = 1;
+
+uint64_t los_publication_epoch(void) {
+    return publication_epoch;
+}
+
+void los_publication_changed(void) {
+    HARD_ASSERT(publication_epoch != UINT64_MAX);
+    publication_epoch++;
+}
+
+uint64_t los_geometry_epoch(void) {
+    return geometry_epoch;
+}
+
+void los_geometry_changed(void) {
+    HARD_ASSERT(geometry_epoch != UINT64_MAX);
+    geometry_epoch++;
+    los_publication_changed();
+}
+
 /* A canonical stack has thirteen maps even when its top lies beyond the
  * viewer-relative six levels serialized by MAP2. */
 #define LOS_OVERHEAD_LEVELS (SPATIAL_STACK_LEVELS - 1)
@@ -68,6 +91,15 @@ typedef struct los_camera_view {
 } los_camera_view;
 
 #ifdef ATRINIK_TESTING
+static uint64_t view_builds, view_cache_hits;
+
+uint64_t los_view_builds_for_test(void) {
+    return view_builds;
+}
+uint64_t los_view_cache_hits_for_test(void) {
+    return view_cache_hits;
+}
+
 static size_t view_sight_checks[MAP2_LEVELS];
 static size_t view_camera_pruned[MAP2_LEVELS];
 static size_t view_cell_resolves;
@@ -542,6 +574,7 @@ bool los_player_can_see_cell(object *pl, mapstruct *map, int x, int y) {
 }
 
 void clear_los(object *pl) {
+    CONTR(pl)->los_view_valid = false;
     for (int ax = 0; ax < MAP_CLIENT_X; ax++) {
         for (int ay = 0; ay < MAP_CLIENT_Y; ay++) {
             CONTR(pl)->blocked_los[ax][ay] = BLOCKED_LOS_OUT_OF_MAP;
@@ -620,8 +653,53 @@ static void update_los_impl(object *pl, bool cache_cells) {
     camera_destroy(&view);
 }
 
+bool los_view_is_current(object *pl) {
+    player *ctrl = CONTR(pl);
+    socket_struct *cs = ctrl->cs;
+    return ctrl->los_view_valid && !QUERY_FLAG(pl, FLAG_REMOVED) && pl->map != NULL &&
+           pl->map->in_memory == MAP_IN_MEMORY && ctrl->los_view_epoch == geometry_epoch &&
+           ctrl->los_view_map == pl->map && ctrl->los_view_map_count == pl->map->count &&
+           ctrl->los_view_x == pl->x && ctrl->los_view_y == pl->y &&
+           ctrl->los_view_width == cs->mapx && ctrl->los_view_height == cs->mapy &&
+           ctrl->los_view_half_x == cs->mapx_2 && ctrl->los_view_half_y == cs->mapy_2 &&
+           ctrl->los_view_tls == (bool)ctrl->tls &&
+           ctrl->los_view_blind == (bool)QUERY_FLAG(pl, FLAG_BLIND) &&
+           ctrl->los_view_xrays == (bool)QUERY_FLAG(pl, FLAG_XRAYS);
+}
+
 void update_los(object *pl) {
+    player *ctrl = CONTR(pl);
+    if (!ctrl->update_los && los_view_is_current(pl)) {
+#ifdef ATRINIK_TESTING
+        view_cache_hits++;
+#endif
+        return;
+    }
+    uint64_t epoch = geometry_epoch;
     update_los_impl(pl, true);
+#ifdef ATRINIK_TESTING
+    view_builds++;
+#endif
+    ctrl->los_view_valid = false;
+    if (epoch != geometry_epoch || QUERY_FLAG(pl, FLAG_REMOVED) || pl->map == NULL ||
+        pl->map->in_memory != MAP_IN_MEMORY) {
+        ctrl->update_los = 1;
+        return;
+    }
+    ctrl->los_view_epoch = epoch;
+    ctrl->los_view_map = pl->map;
+    ctrl->los_view_map_count = pl->map->count;
+    ctrl->los_view_x = pl->x;
+    ctrl->los_view_y = pl->y;
+    ctrl->los_view_width = ctrl->cs->mapx;
+    ctrl->los_view_height = ctrl->cs->mapy;
+    ctrl->los_view_half_x = ctrl->cs->mapx_2;
+    ctrl->los_view_half_y = ctrl->cs->mapy_2;
+    ctrl->los_view_tls = ctrl->tls;
+    ctrl->los_view_blind = QUERY_FLAG(pl, FLAG_BLIND);
+    ctrl->los_view_xrays = QUERY_FLAG(pl, FLAG_XRAYS);
+    ctrl->los_view_valid = true;
+    ctrl->update_los = 0;
 }
 
 #ifdef ATRINIK_TESTING
