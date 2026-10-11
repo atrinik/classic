@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -322,11 +322,11 @@ object *path_get_next_request(void) {
         }
 
         /* Verify the waypoint and its monster. */
-        if (!OBJECT_VALID(waypoint, count) ||
-            !OBJECT_VALID(waypoint->owner, waypoint->ownercount) ||
+        if (!object_reference_is_current(waypoint, count) ||
+            !object_reference_is_current(waypoint->owner, waypoint->ownercount) ||
             !(QUERY_FLAG(waypoint, FLAG_CURSED) || QUERY_FLAG(waypoint, FLAG_DAMNED)) ||
             (QUERY_FLAG(waypoint, FLAG_DAMNED) &&
-             !OBJECT_VALID(waypoint->enemy, waypoint->enemy_count))) {
+             !object_reference_is_current(waypoint->enemy, waypoint->enemy_count))) {
             waypoint = NULL;
         }
     } while (waypoint == NULL);
@@ -397,7 +397,7 @@ int path_tile_blocked(object *op, mapstruct *map, int x, int y) {
 
     if ((GET_MAP_FLAGS(map, x, y) & P_DOOR_CLOSED) == 0 &&
         (op->type != PLAYER || !CONTR(op)->tcl) && (op->behavior & BEHAVIOR_SECRET_PASSAGES) == 0 &&
-        (op->type == PLAYER || !OBJECT_VALID(op->enemy, op->enemy_count)) &&
+        (op->type == PLAYER || !object_reference_is_current(op->enemy, op->enemy_count)) &&
         blocks_view(map, x, y)) {
         return P_BLOCKSVIEW;
     }

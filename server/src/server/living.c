@@ -1868,7 +1868,7 @@ void set_mobile_speed(object *op, int idx) {
         }
 
         /* Valid enemy - monster is fighting! */
-        if (OBJECT_VALID(op->enemy, op->enemy_count)) {
+        if (object_reference_is_current(op->enemy, op->enemy_count)) {
             speed += base->speed_left * 2;
         }
 

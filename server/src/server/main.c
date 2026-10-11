@@ -284,7 +284,7 @@ void process_events(void) {
 
             object_process(op);
 
-            if (OBJECT_DESTROYED(op, tag)) {
+            if (!object_reference_matches(op, tag)) {
                 continue;
             }
         }
@@ -294,7 +294,8 @@ void process_events(void) {
         }
 
         if (op->anim_flags & ANIM_FLAG_STOP_ATTACKING) {
-            if (op->enemy == NULL || !attack_is_melee_range(op, op->enemy)) {
+            if (!object_reference_is_current(op->enemy, op->enemy_count) ||
+                !attack_is_melee_range(op, op->enemy)) {
                 op->anim_flags &= ~ANIM_FLAG_ATTACKING;
             }
 
@@ -316,7 +317,7 @@ void process_events(void) {
                 if (op->anim_flags & ANIM_FLAG_MOVING) {
                     if ((op->anim_flags & ANIM_FLAG_ATTACKING &&
                          !(op->anim_flags & ANIM_FLAG_STOP_ATTACKING)) ||
-                        op->type == PLAYER || !OBJECT_VALID(op->enemy, op->enemy_count)) {
+                        op->type == PLAYER || !object_reference_is_current(op->enemy, op->enemy_count)) {
                         op->anim_flags |= ANIM_FLAG_STOP_MOVING;
                     }
                 }

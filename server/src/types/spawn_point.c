@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -183,7 +183,7 @@ static void process_func(object *op) {
     /* If the spawn point already has a generated monster, check whether
      * the generated monster is still allowed to be spawned. If not,
      * remove it and proceed normally. */
-    if (OBJECT_VALID(op->enemy, op->enemy_count)) {
+    if (object_reference_is_current(op->enemy, op->enemy_count)) {
         if (spawn_point_can_generate(op, op->enemy)) {
             return;
         }
