@@ -103,20 +103,35 @@ def parse_imports(output: str) -> set[str]:
         raise StageError("LLVM inspector did not identify an x86-64 COFF image")
     imports: set[str] = set()
     block = None
+    outer_kind = None
+    depth = 0
     for line in output.splitlines():
         stripped = line.strip()
         if stripped in {"Import {", "DelayImport {"}:
-            if block is not None:
+            if block is None:
+                block = []
+                outer_kind = stripped
+                depth = 1
+            elif outer_kind == "DelayImport {" and stripped == "Import {" and depth == 1:
+                # LLVM nests delayed symbols inside their DLL's DelayImport.
+                depth = 2
+            else:
                 raise StageError("nested LLVM COFF import block")
-            block = []
         elif block is not None:
             if stripped == "}":
-                if len(block) != 1 or IMPORT_NAME.fullmatch(block[0]) is None:
-                    raise StageError("LLVM COFF import block has an invalid DLL name")
-                imports.add(block[0])
-                block = None
+                depth -= 1
+                if depth == 0:
+                    if len(block) != 1 or IMPORT_NAME.fullmatch(block[0]) is None:
+                        raise StageError("LLVM COFF import block has an invalid DLL name")
+                    imports.add(block[0])
+                    block = None
+                    outer_kind = None
             elif stripped.startswith("Name:"):
+                if depth != 1:
+                    raise StageError("LLVM delayed symbol has an unexpected DLL name")
                 block.append(stripped.removeprefix("Name:").strip())
+            elif stripped.endswith("{"):
+                raise StageError("unknown nested LLVM COFF import block")
     if block is not None:
         raise StageError("unterminated LLVM COFF import block")
     return imports
@@ -143,8 +158,7 @@ def is_system_dll(name: str, *, external_python: bool = False) -> bool:
     return (
         normalized in SYSTEM_DLLS
         or external_python and normalized == "msvcrt.dll"
-        or normalized.startswith("api-ms-win-")
-        or normalized.startswith("ext-ms-win-")
+        or normalized.endswith(".dll") and normalized.startswith(("api-ms-win-", "ext-ms-win-"))
     )
 
 
@@ -440,7 +454,10 @@ def stage_runtime(
                     # Python's sealed files. A full SDK's unused duplicate is
                     # harmless; a target import needing it cannot share the
                     # package filename with Python's independently built DLL.
-                    if not external and normalized in sources and normalized in python_sources:
+                    expected_target = normalized in sources or (
+                        producer_records is not None and normalized in producer_records
+                    )
+                    if not external and expected_target and normalized in python_sources:
                         raise StageError(f"reachable DLL provider conflict: {dependency}")
                     python_source = python_sources.get(normalized)
                     source = python_source if external and python_source is not None else sources.get(normalized)

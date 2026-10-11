@@ -344,8 +344,8 @@ class WindowsTrustNoticesTests(unittest.TestCase):
                 self.assertFalse((root / "installed/server/nested/libgcc_s_seh-1.dll").exists())
 
     def test_python_sealed_libffi_ignores_only_unreachable_sdk_duplicate(self):
-        for reachable in (False, True):
-            with self.subTest(reachable=reachable):
+        for reachable, missing_sdk in ((False, False), (True, False), (True, True)):
+            with self.subTest(reachable=reachable, missing_sdk=missing_sdk):
                 root, result, _, _ = self.fixture("server", cares=False, python=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 inventories = root / "toolchain/share/atrinik/windows-dependencies"
@@ -369,6 +369,8 @@ class WindowsTrustNoticesTests(unittest.TestCase):
                     script += ('\nif binary.name == "libcurl-4.dll":\n'
                                '    print("Import {\\nName: libffi-8.dll\\n}")\n')
                 inspector.write_text(script)
+                if missing_sdk:
+                    (root / "toolchain/bin/libffi-8.dll").unlink()
                 if reachable:
                     result = self.install_result(root)
                     self.assertNotEqual(result.returncode, 0)

@@ -89,7 +89,14 @@ Import {
 DelayImport {
   Name: libcrypto-4-x64.dll
   Attributes: 0x1
-  Symbol: SSL_connect (0)
+  Import {
+    Symbol: SSL_connect (0)
+    Address: 0x180001AF7
+  }
+  Import {
+    Symbol: SSL_read (1)
+    Address: 0x180001AD3
+  }
 }
 """
         self.assertEqual(
@@ -102,7 +109,11 @@ DelayImport {
                        "Format: COFF-i386\n", "Format: COFF-x86-64\nImport {\n",
                        "Format: COFF-x86-64\nImport {\nName: ../bad.dll\n}\n",
                        "Format: COFF-x86-64\nImport {\n}\n",
-                       "Format: COFF-x86-64\nImport {\nName: a.dll\nName: b.dll\n}\n"):
+                       "Format: COFF-x86-64\nImport {\nName: a.dll\nName: b.dll\n}\n",
+                       "Format: COFF-x86-64\nImport {\nName: a.dll\nImport {\n}\n}\n",
+                       "Format: COFF-x86-64\nDelayImport {\nName: a.dll\nImport {\nName: b.dll\n}\n}\n",
+                       "Format: COFF-x86-64\nDelayImport {\nName: a.dll\nImport {\nSymbol: foo\n}\n",
+                       "Format: COFF-x86-64\nDelayImport {\nName: a.dll\nUnknown {\n}\n}\n"):
             with self.subTest(output=output), self.assertRaises(stage_windows_runtime.StageError):
                 stage_windows_runtime.parse_imports(output)
 
@@ -130,6 +141,8 @@ DelayImport {
         self.assertEqual(imports, {"WINSPOOL.DRV"})
         self.assertTrue(stage_windows_runtime.is_system_dll("WINSPOOL.DRV"))
         self.assertFalse(stage_windows_runtime.is_system_dll("unknown.drv"))
+        self.assertFalse(stage_windows_runtime.is_system_dll("api-ms-win-private.drv"))
+        self.assertFalse(stage_windows_runtime.is_system_dll("ext-ms-win-private.pyd"))
         for name in ("dwrite.dll", "d3d11.dll", "netapi32.dll", "userenv.dll", "usp10.dll", "avrt.dll"):
             self.assertTrue(stage_windows_runtime.is_system_dll(name))
 
