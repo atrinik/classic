@@ -148,6 +148,9 @@ int main(int argc, char **argv) {
             printf("graphical-ready backend=vulkan device=%s audio=pulseaudio frame=800x600\n", device);
             fflush(stdout);
             announced = true;
+            /* Keep the observable window alive for five seconds even when
+             * the first software shader compilation was slow. */
+            started = SDL_GetTicks();
         }
         SDL_Delay(40);
     }
