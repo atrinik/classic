@@ -688,11 +688,18 @@ socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_
         pl = socket_server_player_find(cs);
     }
 
+    object *observer = pl != NULL ? pl->ob : NULL;
+    tag_t observer_count = observer != NULL ? observer->count : 0;
     packet_reader_scope_t scope;
     packet_reader_scope_begin(&scope);
     packet_reader_init_at(&reader, data + pos, len - pos, 0);
     socket_commands[type].handle_func(cs, pl, data + pos, len - pos, 0);
     packet_error_t error = packet_reader_scope_finish(&scope);
+    /* Playing commands can invoke scripts that synchronously log out their
+     * observer. Finishing the reader scope needs no borrowed packet bytes. */
+    if (observer != NULL && !player_connection_is_current(observer, observer_count, pl, cs)) {
+        return SOCKET_COMMAND_HANDLED;
+    }
     if (error != PACKET_ERROR_NONE) {
         LOG(DEVEL,
             "Rejected malformed %s command: %s",
@@ -1067,6 +1074,10 @@ void socket_server_command_queue_reset(socket_struct *cs) {
 void socket_server_handle_client(player *pl) {
     HARD_ASSERT(pl != NULL);
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer != NULL ? observer->count : 0;
+    socket_struct *observer_socket = pl->cs;
+
     if (!socket_server_command_queue_compact(pl->cs)) {
         LOG(ERROR, "Discarding an inconsistent buffered player-command queue");
         socket_server_command_queue_reset(pl->cs);
@@ -1096,8 +1107,12 @@ void socket_server_handle_client(player *pl) {
             pl->cs->keepalive = 0;
         }
 
-        if (socket_server_handle_command(pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2) ==
-            SOCKET_COMMAND_DEFER)
+        socket_command_result_t result = socket_server_handle_command(
+            pl->cs, pl, pl->cs->packet_recv_cmd->data + 2, len - 2);
+        if (!player_connection_is_current(observer, observer_count, pl, observer_socket)) {
+            return;
+        }
+        if (result == SOCKET_COMMAND_DEFER)
             break;
         packet_delete(pl->cs->packet_recv_cmd, 0, len);
         pl->cs->packet_recv_cmd_base += len;

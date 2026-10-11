@@ -3144,6 +3144,9 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
         return;
     }
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
     object *target = NULL;
     if (type == CMD_TARGET_MAPXY && count != 0 &&
         !pl->cs->target_map_publication_pending && pl->cs->target_map_published_map != NULL &&
@@ -3167,6 +3170,13 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
                                   target_player_part_published(pl, part, &published_depth) &&
                                   published_depth == depth &&
                                   perception_player_part_authorized(pl, part);
+                /* ASK_SHOW may synchronously remove this player and socket.
+                 * Return before the layer iterator or any controller access. */
+                if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+                    !OBJECT_ACTIVE(observer) || observer_socket->state == ST_DEAD ||
+                    observer_socket->state == ST_ZOMBIE) {
+                    return;
+                }
                 if (!OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count)) {
                     FOR_MAP_LAYER_BREAK;
                 }

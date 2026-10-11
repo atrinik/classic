@@ -110,6 +110,11 @@ entries after callbacks, including target-stat authorization before map drawing.
 New connections wait until the next post pass. A linked connection remains live
 while its avatar is removed or unmapped; spatial activity checks belong to map
 and action callers, so connection keepalives and queued output continue.
+The incoming target command applies the same post-callback identity fence.
+Command dispatch, queued-frame removal and the player action loop revalidate the
+connection before resuming after target authorization; destroyed observers leave
+no borrowed queue or controller access. Active-tick retained-target refreshes
+also fence their callbacks before updating selection or continuing combat.
 
 Test-only counters distinguish sight candidates, camera-pruned cells, coordinate
 resolution calls, successful clear-volume proofs and actual ray traversals, plus

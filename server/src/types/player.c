@@ -577,9 +577,14 @@ int handle_newcs_player(player *pl) {
         player_status_update_paralysis(pl->ob);
     }
 
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
     socket_server_handle_client(pl);
 
-    if (!pl->ob || !OBJECT_ACTIVE(pl->ob) || pl->cs->state == ST_DEAD) {
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        !OBJECT_ACTIVE(observer) || observer_socket->state == ST_DEAD ||
+        observer_socket->state == ST_ZOMBIE) {
         return -1;
     }
 
@@ -4475,9 +4480,25 @@ static bool player_target_needs_update(const player *pl) {
            !target_player_authorized(pl, target, NULL);
 }
 
-static void player_update_target(player *pl) {
-    if (!pl->ob->map || !player_target_needs_update(pl)) {
-        return;
+static bool player_update_target(player *pl) {
+    object *observer = pl->ob;
+    tag_t observer_count = observer->count;
+    socket_struct *observer_socket = pl->cs;
+    if (!OBJECT_ACTIVE(observer) || observer->map == NULL) {
+        return false;
+    }
+    object *selected_target = pl->target_object;
+    tag_t selected_count = pl->target_object_count;
+    bool needs_update = player_target_needs_update(pl);
+    if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
+        !OBJECT_ACTIVE(observer) || observer->map == NULL ||
+        observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
+        return false;
+    }
+    needs_update |= pl->target_object != selected_target ||
+                    pl->target_object_count != selected_count;
+    if (!needs_update) {
+        return true;
     }
 
     /* send_target_command() validates object lifetime and visibility, but a
@@ -4488,6 +4509,9 @@ static void player_update_target(player *pl) {
     }
 
     send_target_command(pl);
+    return player_connection_is_current(observer, observer_count, pl, observer_socket) &&
+           OBJECT_ACTIVE(observer) && observer->map != NULL &&
+           observer_socket->state != ST_DEAD && observer_socket->state != ST_ZOMBIE;
 }
 
 /** @copydoc object_methods_t::process_func */
@@ -4495,13 +4519,20 @@ static void process_func(object *op) {
     HARD_ASSERT(op != NULL);
 
     player *pl = CONTR(op);
+    tag_t observer_count = op->count;
+    socket_struct *observer_socket = pl->cs;
     int retval;
 
     /* Packet actions may aim at a retained selection, so refresh before the
      * first action and between queued actions that can change visibility. */
-    player_update_target(pl);
+    if (!player_update_target(pl)) {
+        return;
+    }
     while ((retval = handle_newcs_player(pl)) == 1) {
-        player_update_target(pl);
+        if (!player_connection_is_current(op, observer_count, pl, observer_socket) ||
+            !player_update_target(pl)) {
+            return;
+        }
     }
 
     if (retval == -1) {
@@ -4541,7 +4572,10 @@ static void process_func(object *op) {
     }
 
     /* Refresh again after following/transfers and before automatic attacks. */
-    player_update_target(pl);
+    if (!player_connection_is_current(op, observer_count, pl, observer_socket) ||
+        !player_update_target(pl)) {
+        return;
+    }
 
     /* Use the target system to hit our target - don't hit friendly
      * objects, ourselves or when we are not in combat mode. */
@@ -4604,7 +4638,9 @@ static void process_func(object *op) {
 #endif
 
     /* Check if our target is still valid - if not, update client. */
-    player_update_target(pl);
+    if (player_connection_is_current(op, observer_count, pl, observer_socket)) {
+        (void)player_update_target(pl);
+    }
 }
 
 /**
