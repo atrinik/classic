@@ -121,5 +121,5 @@ wait "$probe_pid"
 probe_pid=
 grep -F 'graphical-complete:' "$evidence/probe.log"
 cp /graphical-host-packages.tsv "$evidence/host-packages.tsv"
-printf '{"version":"%s","software_vulkan_dependency_presentation":true,"gpu_readback":true,"bundled_png_font":true,"virtual_audio_device":true,"launcher_relocation":true,"configuration_marker_persistence":true,"production_graphical_startup":false,"hardware_gameplay":false,"audible_playback":false}\n' \
+printf '{"version":"%s","software_vulkan_dependency_presentation":true,"gpu_readback":true,"bundled_png_font":true,"bundled_ogg_decode":true,"virtual_audio_device":true,"launcher_relocation":true,"configuration_marker_persistence":true,"production_graphical_startup":false,"hardware_gameplay":false,"audible_playback":false}\n' \
   "$version" | tee "$evidence/result.json"

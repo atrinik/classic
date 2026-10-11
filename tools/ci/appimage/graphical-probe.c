@@ -31,7 +31,6 @@ int main(int argc, char **argv) {
     MIX_Audio *audio = NULL;
     MIX_Track *track = NULL;
     char path[4096];
-    static float samples[480000];
     SDL_PropertiesID properties = 0;
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) || !TTF_Init() || !MIX_Init()) {
         goto finish;
@@ -69,12 +68,10 @@ int main(int argc, char **argv) {
         goto finish;
     }
     mixer = MIX_CreateMixerDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
-    SDL_AudioSpec spec = {.format = SDL_AUDIO_F32, .channels = 1, .freq = 48000};
-    for (size_t i = 0; i < SDL_arraysize(samples); i++) {
-        samples[i] = ((float)(i % 240) / 240.0f - 0.5f) * 0.02f;
-    }
     if (mixer == NULL ||
-        (audio = MIX_LoadRawAudio(mixer, samples, sizeof(samples), &spec)) == NULL ||
+        !asset_path(path, sizeof(path), argv[1],
+                    "usr/share/games/atrinik/sound/background/intro.ogg") ||
+        (audio = MIX_LoadAudio(mixer, path, true)) == NULL ||
         (track = MIX_CreateTrack(mixer)) == NULL || !MIX_SetTrackAudio(track, audio) ||
         !MIX_PlayTrack(track, 0) ||
         strcmp(SDL_GetCurrentAudioDriver(), "pulseaudio") != 0) {
@@ -176,7 +173,7 @@ finish:
     TTF_Quit();
     SDL_Quit();
     if (status == 0) {
-        puts("graphical-complete: software Vulkan presentation, GPU readback, bundled PNG/font, virtual audio");
+        puts("graphical-complete: software Vulkan presentation, GPU readback, bundled PNG/font/OGG, virtual audio");
     }
     return status;
 }
