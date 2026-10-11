@@ -6,10 +6,12 @@
       "repository": "atrinik/sound",
       "tag": "v1.0.0",
       "commit": "d0561bf9ff8dc88836818dbe602a5a256c6c0e3f",
-      "url": "https://github.com/atrinik/sound/releases/download/v1.0.0/atrinik-sound-1.0.0.tar.gz",
-      "sha256": "df76ee33dba206bceb74a2a3b56a2aba328620867478d4906ac2f160ada24d7e",
+      "url": "https://github.com/atrinik/sound/releases/download/v1.0.0/atrinik-sound-classic-runtime-1.0.0.tar.gz",
+      "sha256": "e3f17d314b3933db9c6af3f9290c5df79375a6cc3d570ea29f225b53de362784",
       "destination": "sound",
-      "strip_components": 1
+      "strip_components": 1,
+      "runtime_manifest_sha256": "2d7a1ba78e4f484aa0554809f72b14345c40d37cc2d46daf0416de69627f2cbb",
+      "runtime_checksums_sha256": "479a9548e770781bebf6f45bd04c76b0aa11c3be6c9e21bd6f22dafd9a147212"
     }
   ]
 }

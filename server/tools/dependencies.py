@@ -8,6 +8,7 @@ import datetime
 import email.utils
 import hashlib
 import http.client
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -35,6 +36,7 @@ COPY_CHUNK_BYTES = 1024 * 1024
 DOWNLOAD_ATTEMPTS = 4
 RETRY_BASE_SECONDS = 0.5
 RETRY_MAX_SECONDS = 30.0
+RUNTIME_SOUND_PINS = {"runtime_manifest_sha256", "runtime_checksums_sha256"}
 
 
 class DependencyError(RuntimeError):
@@ -104,8 +106,12 @@ def load_lock(path: Path, *, allow_file_urls: bool = False) -> list[dict[str, ob
         context = f"dependency {index}"
         if not isinstance(item, dict):
             raise DependencyError(f"{context} must be an object")
-        _require_keys(item, expected, context)
-        values = {key: _validate_text(item[key], f"{context}.{key}") for key in expected - {"strip_components"}}
+        runtime_pins = set(item) & RUNTIME_SOUND_PINS
+        _require_keys(item, expected | runtime_pins, context)
+        if runtime_pins and runtime_pins != RUNTIME_SOUND_PINS:
+            raise DependencyError("Classic runtime sound requires both metadata pins")
+        values = {key: _validate_text(item[key], f"{context}.{key}")
+                  for key in (expected | runtime_pins) - {"strip_components"}}
 
         name = values["name"]
         if not all(char.islower() or char.isdigit() or char == "-" for char in name):
@@ -150,6 +156,18 @@ def load_lock(path: Path, *, allow_file_urls: bool = False) -> list[dict[str, ob
         strip_components = item["strip_components"]
         if not isinstance(strip_components, int) or not 1 <= strip_components <= 8:
             raise DependencyError(f"{context}.strip_components must be between 1 and 8")
+
+        runtime_asset = "atrinik-sound-classic-runtime-" in values["url"]
+        if runtime_pins or runtime_asset:
+            canonical = (f"https://github.com/atrinik/sound/releases/download/{tag}/"
+                         f"atrinik-sound-classic-runtime-{tag[1:]}.tar.gz")
+            if (runtime_pins != RUNTIME_SOUND_PINS or name != "sound"
+                    or repository != "atrinik/sound" or values["url"] != canonical
+                    or values["destination"] != "sound" or strip_components != 1):
+                raise DependencyError("Classic runtime sound coordinates or metadata pins are invalid")
+            for key in RUNTIME_SOUND_PINS:
+                if len(values[key]) != 64 or any(char not in "0123456789abcdef" for char in values[key]):
+                    raise DependencyError(f"{context}.{key} must be a lowercase SHA-256")
 
         validated.append({**values, "strip_components": strip_components})
     return validated
@@ -426,7 +444,7 @@ def fetch_source(
 
 
 def marker_for(dependency: dict[str, object]) -> dict[str, object]:
-    return {
+    marker = {
         "schema_version": LOCK_SCHEMA_VERSION,
         "name": dependency["name"],
         "repository": dependency["repository"],
@@ -434,6 +452,26 @@ def marker_for(dependency: dict[str, object]) -> dict[str, object]:
         "commit": dependency["commit"],
         "sha256": dependency["sha256"],
     }
+    marker.update({key: dependency[key] for key in RUNTIME_SOUND_PINS if key in dependency})
+    return marker
+
+
+def verify_runtime_sound(destination: Path, dependency: dict[str, object]) -> None:
+    if not RUNTIME_SOUND_PINS.intersection(dependency):
+        return
+    # Generic server inputs remain standalone. Restoration consumers carry the
+    # shared release verifier in the full source tree, including bundle staging.
+    specification = importlib.util.spec_from_file_location(
+        "classic_sound", Path(__file__).resolve().parents[2] / "tools/release/classic_sound.py"
+    )
+    if specification is None or specification.loader is None:
+        raise DependencyError("Classic sound verifier is unavailable")
+    verifier = importlib.util.module_from_spec(specification)
+    try:
+        specification.loader.exec_module(verifier)
+        verifier.verify_tree(destination, dependency)
+    except (OSError, ValueError) as error:
+        raise DependencyError(f"Classic sound verification failed: {error}") from error
 
 
 def read_marker(destination: Path) -> dict[str, object] | None:
@@ -465,6 +503,7 @@ def install_dependency(
     expected_marker = marker_for(dependency)
     existing_marker = read_marker(destination) if destination.exists() else None
     if destination.exists() and existing_marker == expected_marker and not refresh:
+        verify_runtime_sound(destination, dependency)
         return "current"
     if destination.exists() and existing_marker is None:
         raise DependencyError(f"refusing to replace unmanaged destination: {destination}")
@@ -475,6 +514,7 @@ def install_dependency(
     backup: Path | None = None
     try:
         extract_archive(archive, staging, int(dependency["strip_components"]))
+        verify_runtime_sound(staging, dependency)
         marker = staging / MARKER_NAME
         marker.write_text(json.dumps(expected_marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         if destination.exists():
@@ -498,6 +538,7 @@ def verify_dependency(root: Path, dependency: dict[str, object]) -> None:
         raise DependencyError(f"missing dependency {dependency['name']} at {destination}")
     if read_marker(destination) != marker_for(dependency):
         raise DependencyError(f"dependency {dependency['name']} does not match the lock")
+    verify_runtime_sound(destination, dependency)
 
 
 def bundle_materials(

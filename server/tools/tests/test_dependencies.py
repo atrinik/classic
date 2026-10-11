@@ -145,9 +145,8 @@ class DependencyTests(unittest.TestCase):
     def test_runtime_matching_marker_rechecks_the_closed_tree(self) -> None:
         archive, dependency = self.make_runtime_archive()
         cache = self.root / "cache"
-        downloads = cache / "downloads"
-        downloads.mkdir(parents=True)
-        (downloads / f"sound-{dependency['sha256']}.tar.gz").write_bytes(archive.read_bytes())
+        cache.mkdir()
+        (cache / f"sound-{dependency['sha256']}.tar.gz").write_bytes(archive.read_bytes())
         self.assertEqual(dependencies.install_dependency(self.root, cache, dependency, offline=True), "installed")
         (self.root / "sound/effects/test.mid").write_bytes(b"tampered")
         with self.assertRaisesRegex(dependencies.DependencyError, "Classic sound verification failed"):

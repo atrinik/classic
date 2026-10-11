@@ -62,6 +62,8 @@ class DependencyBundleTests(unittest.TestCase):
             self.root / "server/tools/dependencies.py",
         )
         shutil.copyfile(MODULE_PATH, self.root / "tools/release/dependency_bundle.py")
+        shutil.copyfile(MODULE_PATH.with_name("classic_sound.py"),
+                        self.root / "tools/release/classic_sound.py")
         records = {}
         for name in ("content", "libpcpnatpmp", "resources", "sound"):
             archive = Path(self.temporary.name) / f"{name}.tar.gz"

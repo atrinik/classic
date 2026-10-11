@@ -6,6 +6,7 @@ import argparse
 from collections.abc import Iterable
 from dataclasses import dataclass
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -16,11 +17,16 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+SOUND_SPEC = importlib.util.spec_from_file_location("classic_sound", Path(__file__).with_name("classic_sound.py"))
+assert SOUND_SPEC is not None and SOUND_SPEC.loader is not None
+classic_sound = importlib.util.module_from_spec(SOUND_SPEC)
+SOUND_SPEC.loader.exec_module(classic_sound)
 TRUSTED_SOURCE_FILES = (
     "tools/ci/appimage/packaging.lock.json",
     "tools/ci/appimage/AppRun",
     "tools/ci/appimage/openssl.cnf",
     "client/ca-bundle.crt",
+    "client/dependencies.lock.json",
 )
 MAX_IMAGE = 2 * 1024**3
 MAX_PAYLOAD = 4 * 1024**3
@@ -481,6 +487,8 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
         prefix = f"usr/share/games/atrinik/{directory}/"
         if not any(name.startswith(prefix) and entry.kind == "-" and entry.size for name, entry in entries.items()):
             raise ValueError(f"AppImage missing game data: {directory}")
+    classic_sound.verify_tree(root / "usr/share/games/atrinik/sound",
+                              classic_sound.load_dependency(source_root))
     metadata = _json(required("usr/share/atrinik/appimage-manifest.json"))
     if (type(metadata.get("schema")) is not int or metadata.get("schema") != 1 or metadata.get("version") != version
             or metadata.get("lock_sha256") != lock_digest
