@@ -51,7 +51,7 @@ permissions:
 
 env:
   CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
-  WINDOWS_BUILD_CACHE_EPOCH: llvm-23.1.3-1.16.0-4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
+  WINDOWS_BUILD_CACHE_EPOCH: llvm-23.1.3-1d82af6036b831d97cc470e2230357047e4c78f8-914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325
 
 concurrency:
   group: >-
@@ -616,7 +616,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: docker pull ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
+      - run: docker pull ghcr.io/atrinik/windows-build:candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325
       - name: Build portable package from monorepo siblings
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -638,7 +638,7 @@ jobs:
             --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/client \
-            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
+            ghcr.io/atrinik/windows-build:candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325 \
             bash -c \
               'set -euo pipefail
                ccache --zero-stats
@@ -684,7 +684,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - run: docker pull ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
+      - run: docker pull ghcr.io/atrinik/windows-build:candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325
       - name: Build portable package from monorepo siblings
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -704,7 +704,7 @@ jobs:
             --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/server \
-            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
+            ghcr.io/atrinik/windows-build:candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325 \
             bash -c \
               'set -euo pipefail
                ccache --zero-stats

@@ -12,6 +12,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+WINDOWS_PRODUCER_REVISION = "1d82af6036b831d97cc470e2230357047e4c78f8"
+WINDOWS_GENERAL_DIGEST = "914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325"
+WINDOWS_FOCUSED_DIGEST = "eb1fbbfbfbe0b784cdc705f3a1a01b8d69b84338adcb6eb9d8e418a743c8ec09"
+WINDOWS_GENERAL_IMAGE = f"ghcr.io/atrinik/windows-build:candidate-sha-{WINDOWS_PRODUCER_REVISION}@sha256:{WINDOWS_GENERAL_DIGEST}"
+WINDOWS_FOCUSED_IMAGE = f"ghcr.io/atrinik/windows-build:classic-check-candidate-sha-{WINDOWS_PRODUCER_REVISION}@sha256:{WINDOWS_FOCUSED_DIGEST}"
 
 
 class WorkflowContractTests(unittest.TestCase):
@@ -38,6 +43,34 @@ class WorkflowContractTests(unittest.TestCase):
         for forbidden in ("apt-get", "pip install", "docker/login-action", "GH_TOKEN"):
             self.assertNotIn(forbidden, lane)
         self.assertNotIn("apt-get", sources)
+
+    def test_windows_sdk_roles_preserve_python_worldmaker_and_historical_baseline(self) -> None:
+        check = self.text("check.yml")
+        baseline = check[check.index("      - name: Build the original pinned Windows font baseline"):
+                         check.index("      - name: Cross-build and stage standalone tests")]
+        target = check[check.index("      - name: Cross-build and stage standalone tests"):
+                       check.index("      - name: Build portable Windows server package")]
+        package = check[check.index("      - name: Build portable Windows server package"):
+                        check.index("  windows-test:")]
+        self.assertEqual(target.count(WINDOWS_FOCUSED_IMAGE), 2)
+        self.assertEqual(target.count("-DENABLE_PYTHON_PLUGIN=OFF"), 2)
+        self.assertNotIn("worldmaker", target)
+        self.assertNotIn("WINDOWS_PYTHON", target)
+        self.assertIn(WINDOWS_GENERAL_IMAGE, package)
+        self.assertNotIn(WINDOWS_FOCUSED_IMAGE, package)
+        self.assertIn("bash tools/build-windows-package.sh", package)
+        server_helper = (ROOT / "server/tools/build-windows-package.sh").read_text()
+        self.assertIn("--worldmaker", server_helper)
+        self.assertIn("ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR", server_helper)
+        self.assertIn("/opt/llvm-23.1.3/bin", server_helper)
+        self.assertIn("CLASSIC_WINDOWS_FONT_BASELINE_IMAGE: ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69", check)
+        self.assertNotIn("candidate-sha-", baseline)
+        self.assertIn("fd4943252ac872fce2995c286b10a0c6d249aba3", baseline)
+        gpu = self.text("gpu-qualification.yml")
+        self.assertIn(f"CLASSIC_WINDOWS_IMAGE: {WINDOWS_GENERAL_IMAGE}", gpu)
+        self.assertNotIn(WINDOWS_FOCUSED_IMAGE, gpu)
+        for digest in (WINDOWS_GENERAL_DIGEST, WINDOWS_FOCUSED_DIGEST):
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
 
     def test_native_consumers_require_llvm_and_native_lcov(self) -> None:
         for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml"):
@@ -1396,10 +1429,10 @@ class WorkflowContractTests(unittest.TestCase):
         server_job = candidate[
             candidate.index("  server-windows:") : candidate.index("  server-image:")
         ]
-        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
-        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
+        digest = WINDOWS_GENERAL_DIGEST
+        image = WINDOWS_GENERAL_IMAGE
         self.assertEqual(
-            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: llvm-23.1.3-1.16.0-{digest}"), 1
+            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: llvm-23.1.3-{WINDOWS_PRODUCER_REVISION}-{digest}"), 1
         )
         self.assertEqual(candidate.count(image), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", candidate)
@@ -1529,12 +1562,11 @@ class WorkflowContractTests(unittest.TestCase):
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
-        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
-        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
-        self.assertEqual(build.count(image), 4)
-        self.assertEqual(build.count(digest), 4)
+        self.assertEqual(build.count(WINDOWS_FOCUSED_IMAGE), 3)
+        self.assertEqual(build.count(WINDOWS_GENERAL_IMAGE), 2)
+        self.assertNotIn("windows-build:1.16.0", build)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
         self.assertEqual(build.count("--network none"), 4)
         self.assertIn("persist-credentials: false", build)

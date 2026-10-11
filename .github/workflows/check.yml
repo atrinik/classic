@@ -396,7 +396,9 @@ jobs:
           printf '%s\n' '123456789012345678' > \
             build/discord-test-application-id
       - name: Pull pinned Windows build environment
-        run: docker pull ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
+        run: |
+          docker pull ghcr.io/atrinik/windows-build:classic-check-candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:eb1fbbfbfbe0b784cdc705f3a1a01b8d69b84338adcb6eb9d8e418a743c8ec09
+          docker pull ghcr.io/atrinik/windows-build:candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325
       - name: Check out the immutable historical baseline staging helper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -454,7 +456,7 @@ jobs:
             --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace \
-            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
+            ghcr.io/atrinik/windows-build:classic-check-candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:eb1fbbfbfbe0b784cdc705f3a1a01b8d69b84338adcb6eb9d8e418a743c8ec09 \
             bash -c '
               set -euo pipefail
               pcpnatpmp_source="$(cat build/libpcpnatpmp-source-path)"
@@ -574,7 +576,7 @@ jobs:
             --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace \
-            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
+            ghcr.io/atrinik/windows-build:classic-check-candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:eb1fbbfbfbe0b784cdc705f3a1a01b8d69b84338adcb6eb9d8e418a743c8ec09 \
             bash -c '
               set -euo pipefail
               cmake \
@@ -614,7 +616,7 @@ jobs:
             --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/server \
-            ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
+            ghcr.io/atrinik/windows-build:candidate-sha-1d82af6036b831d97cc470e2230357047e4c78f8@sha256:914acf5c3c05546ca4fb45e47362d754ec717a9062f6ebcc1b81b3ab7d0ad325 \
             bash tools/build-windows-package.sh build/windows-pr-package
           cp server/build/windows-pr-package/*.zip \
             libatrinik/build/windows-test-bundle/
