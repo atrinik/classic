@@ -47,7 +47,7 @@ export DISPLAY=:99 SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=pulseaudio
 export PULSE_SERVER="unix:$work/runtime/pulse-native" PULSE_SINK=appimage_smoke
 export LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=2
 # No host GPU device is exposed and only this CPU ICD is selectable.
-export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
 [[ -f $VK_ICD_FILENAMES ]]
 Xvfb "$DISPLAY" -screen 0 1024x768x24 -nolisten tcp -noreset > "$evidence/xvfb.log" 2>&1 &
 x_pid=$!
