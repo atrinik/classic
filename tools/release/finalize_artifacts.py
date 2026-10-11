@@ -19,7 +19,7 @@ from locked_inputs import load_locked_inputs
 from dependency_bundle import load_descriptor, verify_descriptor
 
 
-RELEASE_ARTIFACT_SCHEMA = 2
+RELEASE_ARTIFACT_SCHEMA = 3
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 MODULES = ("client", "server", "editor", "libatrinik", "protocol")
 EMBEDDED_PYTHON_STDLIB_RE = re.compile(
@@ -427,7 +427,7 @@ def expected_names(version: str) -> set[str]:
     names.update(
         {
             f"atrinik-classic-client-{version}-windows-x86_64.zip",
-            f"atrinik-classic-client-{version}-linux-amd64.deb",
+            f"atrinik-classic-client-{version}-linux-x86_64.AppImage",
             f"atrinik-classic-server-{version}-windows-x86_64.zip",
         }
     )
@@ -440,6 +440,7 @@ def build_spdx(
     revision: str,
     source_epoch: int,
     locked_inputs: list[dict[str, object]],
+    appimage_inventory: dict[str, object] | None = None,
 ) -> dict[str, object]:
     created = datetime.fromtimestamp(source_epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     packages = []
@@ -459,7 +460,7 @@ def build_spdx(
                 "filesAnalyzed": False,
                 "checksums": [{"algorithm": "SHA256", "checksumValue": sha256(path)}],
                 "licenseConcluded": "NOASSERTION",
-                "licenseDeclared": "NOASSERTION",
+                "licenseDeclared": "GPL-2.0-or-later" if path.name.endswith(".AppImage") else "NOASSERTION",
                 "copyrightText": "NOASSERTION",
                 "sourceInfo": f"Built from atrinik/classic commit {revision}",
             }
@@ -509,6 +510,42 @@ def build_spdx(
                         "relatedSpdxElement": identifier,
                     }
                 )
+    if appimage_inventory is not None:
+        image_id = artifact_ids.get(f"atrinik-classic-client-{version}-linux-x86_64.AppImage")
+        if image_id is None:
+            raise RuntimeError("AppImage inventory has no downloadable artifact")
+        native_inputs = appimage_inventory["native_inputs"]
+        for record in [*native_inputs["sources"], *native_inputs["tools"],
+                       {"name": "appimage-runtime", **native_inputs["runtime"]}]:
+            name = str(record["name"])
+            identifier = f"SPDXRef-AppImageInput-{re.sub(r'[^A-Za-z0-9.-]', '-', name)}"
+            packages.append({
+                "SPDXID": identifier, "name": name, "versionInfo": record["version"],
+                "downloadLocation": record["url"], "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": record["sha256"]}],
+                "licenseConcluded": "NOASSERTION", "licenseDeclared": record["license"],
+                "copyrightText": "NOASSERTION",
+                "sourceInfo": f"Locked by tools/ci/appimage/packaging.lock.json ({appimage_inventory['lock_sha256']})",
+            })
+            relationships.append({"spdxElementId": image_id, "relationshipType": "DEPENDS_ON",
+                                  "relatedSpdxElement": identifier})
+        for index, record in enumerate(appimage_inventory["bundled_library_records"], start=1):
+            identifier = f"SPDXRef-AppImageLibrary-{index}"
+            packages.append({
+                "SPDXID": identifier, "name": record["name"], "versionInfo": record["version"],
+                "downloadLocation": "NOASSERTION", "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": record["sha256"]}],
+                "licenseConcluded": "NOASSERTION", "licenseDeclared": record["license"],
+                "copyrightText": "NOASSERTION",
+                "sourceInfo": f"Bundled as {record['path']}; built from locked input {record['source']}",
+            })
+            relationships.append({"spdxElementId": image_id, "relationshipType": "CONTAINS",
+                                  "relatedSpdxElement": identifier})
+            if not record["source"].startswith("deb:"):
+                relationships.append({
+                    "spdxElementId": identifier, "relationshipType": "GENERATED_FROM",
+                    "relatedSpdxElement": f"SPDXRef-AppImageInput-{re.sub(r'[^A-Za-z0-9.-]', '-', record['source'])}",
+                })
     return {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
@@ -531,6 +568,8 @@ def build_release_manifest(
     source_epoch: int,
     dependency_bundle: dict[str, object],
     locked_inputs: list[dict[str, object]],
+    appimage_packaging_lock: dict[str, object],
+    appimage_inventory: dict[str, object],
 ) -> dict[str, object]:
     return {
         "schema_version": RELEASE_ARTIFACT_SCHEMA,
@@ -540,6 +579,8 @@ def build_release_manifest(
         "source_epoch": source_epoch,
         "dependency_bundle": dependency_bundle,
         "locked_inputs": locked_inputs,
+        "appimage_packaging_lock": appimage_packaging_lock,
+        "appimage_inventory": appimage_inventory,
         "artifacts": [
             {"name": path.name, "sha256": sha256(path), "size": path.stat().st_size}
             for path in paths
@@ -561,6 +602,15 @@ def main() -> int:
     if arguments.source_epoch < 0:
         parser.error("--source-epoch must not be negative")
 
+    from release_artifacts import git_value, source_schema
+    root = Path.cwd()
+    if git_value(root, "rev-parse", "HEAD") != arguments.revision:
+        raise RuntimeError("release finalizer checkout differs from source revision")
+    if source_schema(root, arguments.revision) != RELEASE_ARTIFACT_SCHEMA:
+        raise RuntimeError("release finalizer differs from immutable source schema")
+    if int(git_value(root, "show", "-s", "--format=%ct", arguments.revision)) != arguments.source_epoch:
+        raise RuntimeError("release finalizer source epoch differs")
+
     directory = arguments.directory.resolve(strict=True)
     generated = {
         "SHA256SUMS",
@@ -571,8 +621,11 @@ def main() -> int:
         if (directory / name).exists():
             raise RuntimeError(f"refusing to overwrite release metadata: {name}")
 
-    paths = sorted(path for path in directory.iterdir() if path.is_file())
-    locked_inputs = load_locked_inputs(arguments.version)
+    entries = list(directory.iterdir())
+    if any(not path.is_file() or path.is_symlink() for path in entries):
+        raise RuntimeError("release directory contains a non-regular artifact")
+    paths = sorted(entries)
+    locked_inputs = load_locked_inputs(arguments.version, Path.cwd(), RELEASE_ARTIFACT_SCHEMA)
     dependency_bundle = load_descriptor(Path("dependencies.bundle.json"))
     verify_descriptor(Path.cwd(), dependency_bundle)
     names = {path.name for path in paths}
@@ -630,8 +683,15 @@ def main() -> int:
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
     )
     validate_wheel(wheel_path, arguments.version)
-    from release_artifacts import validate_deb
-    validate_deb(directory / f"atrinik-classic-client-{arguments.version}-linux-amd64.deb", arguments.version)
+    from appimage import read_appimage_inventory
+    for relative in ("tools/ci/appimage/packaging.lock.json", "tools/ci/appimage/AppRun"):
+        if (root / relative).read_text() != git_value(root, "show", f"{arguments.revision}:{relative}", preserve_whitespace=True):
+            raise RuntimeError(f"release finalizer source file differs: {relative}")
+    inventory = read_appimage_inventory(
+        directory / f"atrinik-classic-client-{arguments.version}-linux-x86_64.AppImage",
+        arguments.version, revision=arguments.revision, source_root=Path.cwd(),
+    )
+    packaging_lock = json.loads(git_value(root, "show", f"{arguments.revision}:tools/ci/appimage/packaging.lock.json"))
 
     sbom_path = directory / f"atrinik-classic-{arguments.version}.spdx.json"
     sbom_path.write_text(
@@ -642,6 +702,7 @@ def main() -> int:
                 arguments.revision,
                 arguments.source_epoch,
                 locked_inputs,
+                inventory,
             ),
             indent=2,
         )
@@ -659,6 +720,8 @@ def main() -> int:
                 arguments.source_epoch,
                 dependency_bundle,
                 locked_inputs,
+                packaging_lock,
+                inventory,
             ),
             indent=2,
         )

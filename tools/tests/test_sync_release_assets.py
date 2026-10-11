@@ -12,6 +12,8 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / "release" / "sync_release_as
 sys.path.insert(0, str(MODULE_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("sync_release_assets", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
+from release_artifacts import expected_names as contract_names
+
 sync_release_assets = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sync_release_assets)
 
@@ -43,6 +45,16 @@ class SyncReleaseAssetsTests(unittest.TestCase):
             with self.subTest(assets=assets):
                 with self.assertRaises(sync_release_assets.AssetSyncError):
                     sync_release_assets.compare_assets(expected, assets)
+
+    def test_schema_three_sync_rejects_extra_historical_debian_asset(self) -> None:
+        expected = {name: (1, "sha256:" + "a" * 64) for name in contract_names("5.37.0", 3)}
+        assets = [{"name": name, "size": size, "digest": digest, "state": "uploaded"}
+                  for name, (size, digest) in expected.items()]
+        self.assertEqual(sync_release_assets.compare_assets(expected, assets), [])
+        assets.append({"name": "atrinik-classic-client-5.37.0-linux-amd64.deb",
+                       "size": 1, "digest": "sha256:" + "b" * 64, "state": "uploaded"})
+        with self.assertRaisesRegex(sync_release_assets.AssetSyncError, "unexpected assets"):
+            sync_release_assets.compare_assets(expected, assets)
 
     def test_published_release_must_be_immutable(self) -> None:
         release = {
@@ -90,8 +102,8 @@ class SyncReleaseAssetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             assets_directory = Path(directory) / "assets"
             assets_directory.mkdir()
-            for index in range(12):
-                (assets_directory / f"asset-{index}.bin").write_bytes(bytes([index]))
+            for index, name in enumerate(sorted(contract_names("5.37.0", 3))):
+                (assets_directory / name).write_bytes(bytes([index]))
             expected = sync_release_assets.expected_assets(assets_directory)
             release = {
                 "tag_name": "v5.37.0",
@@ -119,15 +131,18 @@ class SyncReleaseAssetsTests(unittest.TestCase):
                 "v5.37.0",
                 "--revision",
                 "c" * 40,
+                "--source-root",
+                directory,
                 "--verify-only",
                 "--github-output",
                 str(output),
             ]
             with mock.patch.object(
                 sync_release_assets, "lookup_release", return_value=release
-            ), mock.patch.object(sync_release_assets, "validate_candidate", return_value=expected):
+            ), mock.patch.object(sync_release_assets, "validate_candidate", return_value=expected) as validator:
                 with mock.patch.object(sys, "argv", arguments):
                     self.assertEqual(sync_release_assets.main(), 0)
+            validator.assert_called_once_with(assets_directory, "v5.37.0", "c" * 40, Path(directory))
             self.assertEqual(
                 output.read_text(encoding="utf-8"),
                 "state=draft\nrelease_id=371791046\n",
