@@ -94,6 +94,8 @@ void check_setup_env_pl(mapstruct **map, object **pl) {
 
     *map = get_empty_map(24, 24);
     ck_assert(*map != NULL);
+    /* Normal MAP2 publication includes the map's display metadata. */
+    FREE_AND_COPY_HASH((*map)->name, "Unit fixture map");
 
     *pl = player_get_dummy(NULL, NULL);
     ck_assert(*pl != NULL);
