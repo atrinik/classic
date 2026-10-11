@@ -128,7 +128,7 @@ static void disease_infection_visit(object *disease, mapstruct *map, int x, int 
     (void)unused;
     object *source = disease->env != NULL ? disease->env : disease;
     FOR_MAP_PREPARE(map, x, y, target) {
-        if (IS_LIVE(target) && perception_object_visible(source, target)) {
+        if (IS_LIVE(target) && perception_identity_visible(source, target)) {
             disease_infect(disease, target, 0);
         }
     }

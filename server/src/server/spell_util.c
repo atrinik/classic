@@ -355,24 +355,6 @@ int cast_spell(object *op,
             return 0;
         }
 
-        /* If valid target is not in range for selected spell, skip casting. */
-        if (target) {
-            rv_vector rv;
-
-            if (!get_rangevector_from_mapcoords(op->map,
-                                                op->x,
-                                                op->y,
-                                                target->map,
-                                                target->x,
-                                                target->y,
-                                                &rv,
-                                                RV_DIAGONAL_DISTANCE | RV_NO_LOAD) ||
-                rv.distance > (unsigned int)spells[type].range) {
-                draw_info(COLOR_WHITE, op, "Your target is out of range!");
-                return 0;
-            }
-        }
-
         if (op->type == PLAYER && target == op && CONTR(op)->target_object != op) {
             draw_info(COLOR_WHITE, op, "You auto-target yourself with this spell!");
         }
@@ -401,6 +383,29 @@ int cast_spell(object *op,
     /* A last sanity check: are caster and target *really* valid? */
     if (!OBJECT_ACTIVE(caster) || (target && !OBJECT_ACTIVE(target))) {
         return 0;
+    }
+
+    /* Retained identity and camera authorization are fresh requirements for
+     * targeted spatial spells. Xray can disclose a target but never lets magic
+     * cross solid combat geometry. Self/inventory and party spells stay exempt. */
+    if (target != NULL && target != op && !(spells[type].flags & SPELL_DESC_DIRECTION)) {
+        int dx, dy, dz;
+        tag_t target_count = target->count, source_count = op->count;
+        if (!(op->type == PLAYER ? perception_player_authorized(CONTR(op), target) :
+              perception_object_visible(op, target)) ||
+            !OBJECT_VALID(op, source_count) || !OBJECT_VALID(target, target_count) ||
+            !spatial_offset(op->map, target->map, &dx, &dy, &dz)) {
+            return 0;
+        }
+        dx += target->x - op->x;
+        dy += target->y - op->y;
+        if (abs(dz) > 6 || MAX(abs(dx), MAX(abs(dy), abs(dz))) > spells[type].range) {
+            draw_info(COLOR_WHITE, op, "Your target is out of range!");
+            return 0;
+        }
+        if (!spatial_ray_clear(op->map, op->x, op->y, dx, dy, dz, SPATIAL_COMBAT, false)) {
+            return 0;
+        }
     }
 
     /* Reject an over-bound area before map events, combat marking or costs. */

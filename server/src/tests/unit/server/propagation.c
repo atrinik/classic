@@ -7,6 +7,10 @@
 #include <check_utils.h>
 #include <propagation.h>
 #include <object_methods.h>
+#include <player.h>
+#include <monster_data.h>
+#include <perception.h>
+#include <spatial.h>
 
 static unsigned visits[3], cells[24][24];
 static void visit(object *source, mapstruct *map, int x, int y, int argument) {
@@ -207,6 +211,130 @@ START_TEST(test_rain_heal_no_target_fails_without_reservation) {
 }
 END_TEST
 
+static object *test_creature(mapstruct *map, int x, int y) {
+    object *target = arch_get("kobold");
+    target->x = x; target->y = y;
+    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+    monster_data_init(target);
+    target->stats.hp = 1;
+    target->stats.maxhp = 1000;
+    return target;
+}
+
+static bool has_disease(object *target) {
+    FOR_INV_PREPARE(target, item) {
+        if (item->type == DISEASE) {
+            return true;
+        }
+    }
+    FOR_INV_FINISH();
+    return false;
+}
+
+START_TEST(test_disease_open_route_around_cover_retains_identity_and_slabs) {
+    mapstruct *lower = get_empty_map(5, 5), *upper = get_empty_map(5, 5);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    object *disease = source_on(lower, 1, 2);
+    disease->type = DISEASE;
+    disease->magic = 4;
+    disease->stats.wc = 127;
+    disease->value = 10;
+    FREE_AND_COPY_HASH(disease->race, "*");
+    object *target = test_creature(lower, 3, 2);
+    object *hidden = test_creature(lower, 1, 3);
+    SET_FLAG(hidden, FLAG_IS_INVISIBLE);
+    object *above = test_creature(upper, 1, 2);
+    object *wall = source_on(lower, 2, 2);
+    SET_FLAG(wall, FLAG_NO_PASS);
+    SET_FLAG(wall, FLAG_BLOCKSVIEW);
+    object_update(wall, UP_OBJ_FLAGS);
+    for (int y = 0; y < 5; y++) {
+        for (int x = 0; x < 5; x++) {
+            object *floor = arch_get("floor_stone1a");
+            floor->x = x; floor->y = y;
+            object_insert_map(floor, upper, NULL, INS_NO_MERGE);
+        }
+    }
+    ck_assert(!spatial_ray_clear(lower, 1, 2, 2, 0, 0, SPATIAL_COMBAT, false));
+    object_process(disease);
+    propagation_tick();
+    ck_assert(has_disease(target));
+    ck_assert(!has_disease(hidden));
+    ck_assert(!has_disease(above));
+    delete_map(lower);
+    delete_map(upper);
+}
+END_TEST
+
+START_TEST(test_targeted_spell_rejects_stale_identity_xray_and_glass) {
+    mapstruct *map;
+    object *source;
+    check_setup_env_pl(&map, &source);
+    object_remove(source, 0);
+    source->x = source->y = 8;
+    source = object_insert_map(source, map, NULL, INS_NO_MERGE);
+    CONTR(source)->cs->state = ST_PLAYING;
+    CONTR(source)->tls = CONTR(source)->tsi = 0;
+    CONTR(source)->tli = 1;
+    object *target = test_creature(map, 10, 8);
+    CONTR(source)->target_object = target;
+    CONTR(source)->target_object_count = target->count;
+    SET_FLAG(target, FLAG_IS_INVISIBLE);
+    ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    ck_assert_int_eq(target->stats.hp, 1);
+    CLEAR_FLAG(target, FLAG_IS_INVISIBLE);
+    SET_FLAG(source, FLAG_XRAYS);
+    object *wall = source_on(map, 9, 8);
+    SET_FLAG(wall, FLAG_NO_PASS);
+    SET_FLAG(wall, FLAG_BLOCKSVIEW);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(perception_player_authorized(CONTR(source), target));
+    ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    ck_assert_int_eq(target->stats.hp, 1);
+    CLEAR_FLAG(source, FLAG_XRAYS);
+    CLEAR_FLAG(wall, FLAG_BLOCKSVIEW);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(perception_player_authorized(CONTR(source), target));
+    ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    ck_assert_int_eq(target->stats.hp, 1);
+    object_destruct(wall);
+    ck_assert_int_ne(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    ck_assert_int_gt(target->stats.hp, 1);
+}
+END_TEST
+
+START_TEST(test_targeted_spell_vertical_range_and_open_floor_hole) {
+    mapstruct *maps[5];
+    for (unsigned i = 0; i < arraysize(maps); i++) {
+        maps[i] = get_empty_map(5, 5);
+        if (i != 0) {
+            maps[i - 1]->tile_map[TILED_UP] = maps[i];
+            maps[i]->tile_map[TILED_DOWN] = maps[i - 1];
+        }
+    }
+    object *source = source_on(maps[0], 2, 2);
+    object *target = test_creature(maps[4], 2, 2);
+    ck_assert_int_eq(spells[SP_MINOR_HEAL].range, 3);
+    ck_assert(perception_object_visible(source, target));
+    ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    ck_assert_int_eq(target->stats.hp, 1);
+    object_remove(target, 0);
+    target = object_insert_map(target, maps[1], NULL, INS_NO_MERGE);
+    ck_assert_int_ne(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    ck_assert_int_gt(target->stats.hp, 1);
+    target->stats.hp = 1;
+    object *floor = arch_get("floor_stone1a");
+    floor->x = floor->y = 2;
+    object_insert_map(floor, maps[1], NULL, INS_NO_MERGE);
+    ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
+    ck_assert_int_eq(target->stats.hp, 1);
+    for (unsigned i = 0; i < arraysize(maps); i++) {
+        delete_map(maps[i]);
+    }
+}
+END_TEST
+
 void check_server_propagation(void) {
     Suite *suite = suite_create("propagation");
     TCase *core = tcase_create("Core");
@@ -220,6 +348,9 @@ void check_server_propagation(void) {
     tcase_add_test(core, test_cone_children_expire_together_across_stories);
     tcase_add_test(core, test_swarm_reservation_transfer_and_group_expiry);
     tcase_add_test(core, test_rain_heal_no_target_fails_without_reservation);
+    tcase_add_test(core, test_disease_open_route_around_cover_retains_identity_and_slabs);
+    tcase_add_test(core, test_targeted_spell_rejects_stale_identity_xray_and_glass);
+    tcase_add_test(core, test_targeted_spell_vertical_range_and_open_floor_hole);
     suite_add_tcase(suite, core);
     check_run_suite(suite, __FILE__);
 }
