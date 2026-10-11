@@ -2343,12 +2343,14 @@ void draw_client_map2(object *pl) {
                 UINT16_C(1) << MAP2_DEPTH_INDEX(present_depths[i]);
         }
         published_cs->target_map_published_map = pl->map;
+        published_cs->target_map_published_count = pl->map->count;
         published_cs->target_map_published_x = pl->x;
         published_cs->target_map_published_y = pl->y;
         published_cs->target_map_published_width = published_cs->mapx;
         published_cs->target_map_published_height = published_cs->mapy;
     } else {
         published_cs->target_map_published_map = NULL;
+        published_cs->target_map_published_count = 0;
     }
     published_cs->target_map_publication_pending = false;
 
@@ -2715,12 +2717,39 @@ void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t le
     }
 }
 
+/** Withdraw a socket's borrowed map identity before map storage is torn down. */
+void target_map_publication_forget_socket(socket_struct *cs, mapstruct *map) {
+    if (cs != NULL && cs->target_map_published_map == map) {
+        cs->target_map_published_map = NULL;
+        cs->target_map_published_count = 0;
+        cs->target_map_published_depths = 0;
+        cs->target_map_publication_pending = false;
+        map_client_cache_clear(&cs->lastmap);
+    }
+}
+
+void target_map_publication_forget(mapstruct *map) {
+    for (player *pl = first_player; pl != NULL; pl = pl->next) {
+        target_map_publication_forget_socket(pl->cs, map);
+    }
+    if (init_sockets != NULL) {
+        for (int i = 0; i < socket_info.allocated_sockets; i++) {
+            target_map_publication_forget_socket(&init_sockets[i], map);
+        }
+    }
+    socket_target_publications_forget(map);
+}
+
 /** Match one exact physical part to its previously queued live MAP2 identity. */
 static bool target_player_part_published(const player *pl, const object *part, int *depth) {
     if (pl == NULL || pl->cs == NULL || part == NULL || part->map == NULL ||
         part->layer != LAYER_LIVING || part->sub_layer >= NUM_SUB_LAYERS ||
         !IS_LIVE(HEAD(part)) ||
         pl->cs->target_map_publication_pending || pl->cs->target_map_published_map == NULL ||
+        pl->cs->target_map_published_count == 0 ||
+        pl->cs->target_map_published_map->count != pl->cs->target_map_published_count ||
+        pl->cs->target_map_published_map->in_memory != MAP_IN_MEMORY ||
+        pl->cs->target_map_published_map->spaces == NULL ||
         pl->cs->target_map_published_width != pl->cs->mapx ||
         pl->cs->target_map_published_height != pl->cs->mapy) {
         return false;
@@ -2760,14 +2789,27 @@ static bool target_player_part_published(const player *pl, const object *part, i
 
 /** Server-thread target authority: queued live identity plus fresh exact-part perception. */
 bool target_player_authorized(const player *pl, const object *target, int *depth) {
-    if (target == NULL) {
+    if (pl == NULL || pl->ob == NULL || target == NULL) {
         return false;
     }
-    for (const object *part = target; part != NULL; part = target->head ? NULL : part->more) {
-        if (target_player_part_published(pl, part, depth) &&
-            perception_player_part_authorized(pl, part)) {
+    const object *observer = pl->ob;
+    const object *head = HEAD(target);
+    tag_t observer_count = observer->count, target_count = target->count, head_count = head->count;
+    bool single_part = target->head != NULL;
+    for (const object *part = target; part != NULL;) {
+        tag_t part_count = part->count;
+        bool authorized = target_player_part_published(pl, part, depth) &&
+                          perception_player_part_authorized(pl, part);
+        /* EVENT_ASK_SHOW may delete, remove or recycle any borrowed actor. */
+        if (pl->ob != observer || !OBJECT_VALID(observer, observer_count) ||
+            !OBJECT_VALID(target, target_count) || !OBJECT_VALID(head, head_count) ||
+            !OBJECT_VALID(part, part_count)) {
+            return false;
+        }
+        if (authorized && target_player_part_published(pl, part, depth)) {
             return true;
         }
+        part = single_part ? NULL : part->more;
     }
     return false;
 }
@@ -2960,6 +3002,10 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
     object *target = NULL;
     if (type == CMD_TARGET_MAPXY && count != 0 &&
         !pl->cs->target_map_publication_pending && pl->cs->target_map_published_map != NULL &&
+        pl->cs->target_map_published_count != 0 &&
+        pl->cs->target_map_published_map->count == pl->cs->target_map_published_count &&
+        pl->cs->target_map_published_map->in_memory == MAP_IN_MEMORY &&
+        pl->cs->target_map_published_map->spaces != NULL &&
         pl->cs->target_map_published_width == pl->cs->mapx &&
         pl->cs->target_map_published_height == pl->cs->mapy &&
         (pl->cs->target_map_published_depths & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth)))) {
@@ -2970,10 +3016,18 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
             object *part;
             FOR_MAP_LAYER_BEGIN(cell.map, cell.x, cell.y, LAYER_LIVING, -1, part) {
                 object *head = HEAD(part);
+                tag_t part_count = part->count, head_count = head->count;
                 int published_depth;
-                if (head != pl->ob && head->count == count && IS_LIVE(head) &&
-                    target_player_part_published(pl, part, &published_depth) &&
-                    published_depth == depth && perception_player_part_authorized(pl, part)) {
+                bool authorized = head != pl->ob && head->count == count && IS_LIVE(head) &&
+                                  target_player_part_published(pl, part, &published_depth) &&
+                                  published_depth == depth &&
+                                  perception_player_part_authorized(pl, part);
+                if (!OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count)) {
+                    FOR_MAP_LAYER_BREAK;
+                }
+                if (authorized && target_player_part_published(pl, part, &published_depth) &&
+                    published_depth == depth && part->map == cell.map &&
+                    part->x == cell.x && part->y == cell.y) {
                     target = head;
                     FOR_MAP_LAYER_BREAK;
                 }

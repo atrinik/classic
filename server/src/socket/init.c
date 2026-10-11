@@ -101,6 +101,7 @@ bool init_connection(socket_struct *ns) {
 
     memset(&ns->lastmap, 0, sizeof(struct Map));
     ns->target_map_published_map = NULL;
+    ns->target_map_published_count = 0;
     ns->target_map_published_depths = 0;
     ns->target_map_publication_pending = false;
     ns->packets = NULL;
@@ -160,6 +161,7 @@ static void free_newsocket_internal(socket_struct *ns, bool connected) {
 
     map_client_cache_free(&ns->lastmap);
     ns->target_map_published_map = NULL;
+    ns->target_map_published_count = 0;
     ns->target_map_published_depths = 0;
     ns->target_map_publication_pending = false;
 

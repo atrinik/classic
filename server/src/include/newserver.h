@@ -294,6 +294,7 @@ typedef struct socket_struct {
 
     /** Center and level set of the last completely queued MAP2 publication. */
     mapstruct *target_map_published_map;
+    tag_t target_map_published_count;
     int target_map_published_x;
     int target_map_published_y;
     uint16_t target_map_published_depths;

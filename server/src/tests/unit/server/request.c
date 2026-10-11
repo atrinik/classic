@@ -1143,6 +1143,14 @@ START_TEST(test_target_publication_tracks_each_living_sub_layer) {
     ck_assert_uint_eq(cell->target_object_count[0], 0);
     ck_assert_uint_eq(cell->target_object_count[1], actors[1]->count);
     ck_assert(target_player_authorized(pl, actors[1], NULL));
+    tag_t published_count = pl->cs->target_map_published_count;
+    pl->cs->target_map_published_count++;
+    ck_assert(!target_player_authorized(pl, actors[1], NULL));
+    pl->cs->target_map_published_count = published_count;
+    int resident_state = map->in_memory;
+    map->in_memory = MAP_SWAPPED;
+    ck_assert(!target_player_authorized(pl, actors[1], NULL));
+    map->in_memory = resident_state;
     /* A soft-cleared or remembered cell cannot authorize a retained target. */
     cell->cleared = 1;
     ck_assert(!target_player_authorized(pl, actors[1], NULL));
@@ -1151,6 +1159,11 @@ START_TEST(test_target_publication_tracks_each_living_sub_layer) {
     ck_assert(!target_player_authorized(pl, actors[1], NULL));
     cell->fow = 0;
     cell->target_object_count[1] = 0;
+    ck_assert(!target_player_authorized(pl, actors[1], NULL));
+    target_map_publication_forget(map);
+    ck_assert_ptr_null(pl->cs->target_map_published_map);
+    ck_assert_uint_eq(pl->cs->target_map_published_count, 0);
+    ck_assert_uint_eq(pl->cs->target_map_published_depths, 0);
     ck_assert(!target_player_authorized(pl, actors[1], NULL));
     object_remove(actors[1], 0);
     object_destroy(actors[1]);

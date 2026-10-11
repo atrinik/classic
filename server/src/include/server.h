@@ -343,6 +343,10 @@ socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t len, si
 
 /** Caller validates target lifetime/count first; no mutation, server-thread only. */
 extern bool target_player_authorized(const player *pl, const object *target, int *depth);
+/** Revoke borrowed publication map references before unload, deletion or reuse. */
+extern void target_map_publication_forget_socket(socket_struct *cs, mapstruct *map);
+extern void target_map_publication_forget(mapstruct *map);
+extern void socket_target_publications_forget(mapstruct *map);
 extern void send_target_command(player *pl);
 
 extern void
