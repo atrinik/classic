@@ -50,6 +50,21 @@ def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
         shutil.rmtree(libdir)
     libdir.mkdir(parents=True)
     docdir = appdir / 'usr/share/doc/atrinik'
+    # linuxdeploy's generic layout duplicates system notices and creates icon
+    # aliases. Rebuild these in our single, inventoried notice/desktop layout.
+    for path in docdir.parent.iterdir():
+        if path != docdir:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            else:
+                shutil.rmtree(path)
+    for name in ('atrinik.desktop', 'atrinik.png'):
+        path = appdir / name
+        if path.is_symlink() or path.exists():
+            path.unlink()
+    icons = appdir / 'usr/share/icons'
+    if icons.exists():
+        shutil.rmtree(icons)
     metadir = appdir / 'usr/share/atrinik'
     metadir.mkdir(parents=True, exist_ok=True)
     if (appdir / 'AppRun').is_symlink():
