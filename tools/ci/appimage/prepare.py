@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Materialize hash-locked, public AppImage build inputs (no Docker required)."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -45,14 +46,17 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     cache = args.cache or args.output / '.cache'
     cache.mkdir(parents=True, exist_ok=True)
+    jobs = []
     for entry in lock['runtime_recipes']:
-        download(entry, args.output / 'runtime-recipes' / entry['filename'], cache)
+        jobs.append((entry, args.output / 'runtime-recipes' / entry['filename']))
     for entry in lock['runtime_sources']:
-        download(entry, args.output / 'runtime-sources' / entry['filename'], cache)
+        jobs.append((entry, args.output / 'runtime-sources' / entry['filename']))
     for entry in lock['sources']:
-        download(entry, args.output / 'sources' / (entry['name'] + '.tar.gz'), cache)
+        jobs.append((entry, args.output / 'sources' / (entry['name'] + '.tar.gz')))
     for entry in lock['tools'] + [dict(lock['runtime'], name='runtime')] + lock['bootstrap'] + lock['license_inputs']:
-        download(entry, args.output / 'tools' / entry['name'], cache)
+        jobs.append((entry, args.output / 'tools' / entry['name']))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda job: download(job[0], job[1], cache), jobs))
     (args.output / 'dependency-inputs.lock.json').write_text(json.dumps({k: lock[k] for k in ('sources', 'tools', 'runtime', 'license_inputs', 'runtime_sources')}, sort_keys=True) + '\n')
     probe = root / 'runtime-probe.c'
     if probe.is_file() and probe.resolve() != (args.output / probe.name).resolve():

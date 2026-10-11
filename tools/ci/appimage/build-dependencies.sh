@@ -20,7 +20,7 @@ build() {
  cmake --build "/build/${source}-build" --parallel 4
  cmake --install "/build/${source}-build"
 }
-(cd /build/openssl-3.5.5; ./Configure linux-x86_64 shared --prefix=/usr --libdir=lib --openssldir=/etc/ssl; make -j4; make DESTDIR=/build/openssl-install install_sw; cp -a /build/openssl-install/usr/. "${prefix}/")
+(cd /build/openssl-3.5.5; ./Configure linux-x86_64 shared --prefix=/usr --libdir=lib --openssldir=/etc/ssl; make -j4; make DESTDIR=/build/openssl-install install_sw; cp -a /build/openssl-install/usr/. "${prefix}/"; sed -i "s@^prefix=/usr$@prefix=${prefix}@" "${prefix}"/lib/pkgconfig/{openssl,libssl,libcrypto}.pc)
 build c-ares-1.34.6 -DCARES_SHARED=ON -DCARES_STATIC=OFF -DCARES_BUILD_TESTS=OFF
 build curl-8.18.0 -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DBUILD_TESTING=OFF \
  -DCURL_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR="${prefix}" -DENABLE_ARES=ON \
@@ -48,8 +48,8 @@ for e in lock['sources']:
 PY
 for tool in linuxdeploy appimagetool; do
  chmod +x "/inputs/tools/${tool}"
- mkdir -p "${prefix}/tools/${tool}.AppDir"
- (cd "${prefix}/tools/${tool}.AppDir"; "/inputs/tools/${tool}" --appimage-extract >/dev/null; mv squashfs-root/* .; rmdir squashfs-root)
+ mkdir -p "/build/tool-${tool}"
+ (cd "/build/tool-${tool}"; "/inputs/tools/${tool}" --appimage-extract >/dev/null; mv squashfs-root "${prefix}/tools/${tool}.AppDir")
  printf '#!/bin/sh\nexec /opt/atrinik-appimage/tools/%s.AppDir/AppRun "$@"\n' "${tool}" > "${prefix}/tools/${tool}"
  chmod +x "${prefix}/tools/${tool}"
 done
