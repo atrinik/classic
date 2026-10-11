@@ -256,7 +256,7 @@ void socket_command_target(uint8_t *data, size_t len, size_t pos) {
     uint8_t combat = packet_reader_read_uint8(&reader);
     uint8_t combat_force = packet_reader_read_uint8(&reader);
     if (!packet_reader_finish(&reader) || code > CMD_TARGET_FRIEND ||
-        depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || combat > 1 || combat_force > 1 ||
+        depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH ||
         (code == CMD_TARGET_SELF ? count != 0 || depth != 0 : count == 0)) {
         return;
     }

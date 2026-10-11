@@ -79,6 +79,16 @@ static void test_target_packet_is_transactional(void) {
     socket_command_target(packet->data, packet->len, 0);
     TEST_CHECK(cpl.target_actor_count == 0 && cpl.target_relative_depth == 0 &&
                cpl.target_code == CMD_TARGET_SELF && target_redraws == 2);
+    /* Revision 1084 preserves the complete u8 range at both endpoints. */
+    const uint8_t values[] = {0, 1, 2, UINT8_MAX};
+    for (size_t combat = 0; combat < sizeof(values); combat++) {
+        for (size_t force = 0; force < sizeof(values); force++) {
+            packet->data[packet->len - 2] = values[combat];
+            packet->data[packet->len - 1] = values[force];
+            socket_command_target(packet->data, packet->len, 0);
+            TEST_CHECK(cpl.combat == values[combat] && cpl.combat_force == values[force]);
+        }
+    }
     packet_free(packet);
 }
 

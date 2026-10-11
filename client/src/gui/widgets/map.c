@@ -30,6 +30,7 @@
  */
 
 #include <atrinik/protocol/target.h>
+#include <atrinik/protocol/talk.h>
 #include <mouse.h>
 #include <ctype.h>
 #include <errno.h>
@@ -44,7 +45,6 @@
 #include <gpu_map_renderer.h>
 #include <gpu_renderer.h>
 #include <image.h>
-#include <keybind.h>
 #include <main.h>
 #include <misc.h>
 #include <map.h>
@@ -1728,6 +1728,9 @@ static bool map_interaction_test_active;
 static int map_interaction_test_moves;
 static int map_interaction_test_targets;
 static int map_interaction_test_talks;
+static bool map_interaction_test_target_available;
+static map_target_struct map_interaction_test_mouse_target;
+static packet_struct *map_interaction_test_talk_packet;
 static bool map_ui_test_active;
 static int map_ui_test_names;
 static int map_ui_test_targets;
@@ -8571,8 +8574,8 @@ static void menu_map_walk_here(widgetdata *widget, widgetdata *menuitem, SDL_Eve
 static bool map_mouse_target(int mx, int my, map_target_struct *target) {
 #ifdef ATRINIK_WIDGET_TESTS
     if (map_interaction_test_active) {
-        *target = (map_target_struct){.x = 2, .y = 3, .depth = 0, .count = 1};
-        return true;
+        *target = map_interaction_test_mouse_target;
+        return map_interaction_test_target_available;
     }
 #endif
     if (map_state_transaction_active() || cur_widget[MAP_ID] == NULL ||
@@ -8672,13 +8675,32 @@ static void map_send_mouse_target(int mx, int my) {
  * Event.
  */
 static void menu_map_talk_to(widgetdata *widget, widgetdata *menuitem, SDL_Event *event) {
-    map_send_mouse_target(cur_widget[MENU_ID]->x, cur_widget[MENU_ID]->y);
+    map_target_struct target;
+    if (!map_mouse_target(cur_widget[MENU_ID]->x, cur_widget[MENU_ID]->y, &target) ||
+        target.count == 0) {
+        return;
+    }
+    /* Bind the conversation to this exact live part in one server action.
+     * Separate SELECT and generic Talk can be dropped/reordered by target
+     * pacing or fall back to another NPC after the clicked actor moves. */
+    packet_struct *packet = packet_new(SERVER_CMD_TALK, 32, 0);
+    packet_writer_write_uint8(packet, CMD_TALK_NPC_TARGET);
+    packet_writer_write_uint8(packet, target.x);
+    packet_writer_write_uint8(packet, target.y);
+    packet_writer_write_int8(packet, target.depth);
+    packet_writer_write_uint32(packet, target.count);
+    packet_writer_write_cstring(packet, "hello");
 #ifdef ATRINIK_WIDGET_TESTS
     if (map_interaction_test_active) {
         map_interaction_test_talks++;
+        if (map_interaction_test_talk_packet != NULL) {
+            packet_free(map_interaction_test_talk_packet);
+        }
+        map_interaction_test_talk_packet = packet;
+        return;
     }
 #endif
-    keybind_process_command("?HELLO");
+    socket_send_packet(packet);
 }
 
 typedef struct map_menu_action {
@@ -11394,6 +11416,26 @@ static bool widget_map_target_depth_test(widgetdata *widget) {
     return success;
 }
 
+/** Check the production menu packet's complete wire identity and message. */
+static bool map_interaction_talk_packet_matches(const map_target_struct *target) {
+    packet_struct *packet = map_interaction_test_talk_packet;
+    if (packet == NULL || packet->type != SERVER_CMD_TALK) {
+        return false;
+    }
+    packet_reader_t reader;
+    packet_reader_init_at(&reader, packet->data, packet->len, 0);
+    uint8_t subtype = packet_reader_read_uint8(&reader);
+    uint8_t x = packet_reader_read_uint8(&reader);
+    uint8_t y = packet_reader_read_uint8(&reader);
+    int8_t depth = packet_reader_read_int8(&reader);
+    uint32_t count = packet_reader_read_uint32(&reader);
+    char message[32];
+    bool parsed = packet_reader_read_string(&reader, message, sizeof(message));
+    return parsed && packet_reader_finish(&reader) && subtype == CMD_TALK_NPC_TARGET &&
+           x == target->x && y == target->y && depth == target->depth &&
+           count == target->count && strcmp(message, "hello") == 0;
+}
+
 bool widget_map_interaction_test(widgetdata *widget) {
     int old_map_width = map_width;
     int old_map_height = map_height;
@@ -11406,6 +11448,9 @@ bool widget_map_interaction_test(widgetdata *widget) {
     map_interaction_test_moves = 0;
     map_interaction_test_targets = 0;
     map_interaction_test_talks = 0;
+    map_interaction_test_target_available = true;
+    map_interaction_test_mouse_target =
+        (map_target_struct){.x = 2, .y = 3, .depth = 0, .count = 1};
     map_interaction_test_active = true;
     cur_widget[MENU_ID] = &menu;
 
@@ -11420,9 +11465,43 @@ bool widget_map_interaction_test(widgetdata *widget) {
     map_menu_actions[0].handler(widget, NULL, &event);
     map_menu_actions[1].handler(widget, NULL, &event);
     success = success && map_interaction_test_moves == 1;
-    success = success && map_interaction_test_targets == 2;
+    /* Talk emits one identity-bound command, independently of the earlier
+     * right-click SELECT. It never emits SELECT followed by generic HELLO. */
+    success = success && map_interaction_test_targets == 1;
     success = success && map_interaction_test_talks == 1;
+    success = success && map_interaction_talk_packet_matches(&map_interaction_test_mouse_target);
 
+    /* Preserve full actor counts and signed depths from the clicked pose. A
+     * stale authoritative target or TARGET reply cannot redirect this packet. */
+    uint32_t old_count = cpl.target_actor_count;
+    int8_t old_depth = cpl.target_relative_depth;
+    cpl.target_actor_count = 17;
+    cpl.target_relative_depth = -1;
+    map_interaction_test_mouse_target.count = UINT32_MAX;
+    const int8_t depths[] = {-MAP2_MAX_DEPTH, MAP2_MAX_DEPTH};
+    for (size_t index = 0; index < arraysize(depths); index++) {
+        map_interaction_test_mouse_target.depth = depths[index];
+        menu_map_talk_to(widget, NULL, &event);
+        success = success && map_interaction_talk_packet_matches(&map_interaction_test_mouse_target);
+    }
+    success = success && map_interaction_test_targets == 1 && map_interaction_test_talks == 3 &&
+              cpl.target_actor_count == 17 && cpl.target_relative_depth == -1;
+    cpl.target_actor_count = old_count;
+    cpl.target_relative_depth = old_depth;
+
+    /* Missing/remembered geometry and zero-count poses cannot trigger Talk,
+     * clear the current target, or fall back to any nearby NPC. */
+    map_interaction_test_target_available = false;
+    menu_map_talk_to(widget, NULL, &event);
+    map_interaction_test_target_available = true;
+    map_interaction_test_mouse_target.count = 0;
+    menu_map_talk_to(widget, NULL, &event);
+    success = success && map_interaction_test_targets == 1 && map_interaction_test_talks == 3;
+
+    if (map_interaction_test_talk_packet != NULL) {
+        packet_free(map_interaction_test_talk_packet);
+        map_interaction_test_talk_packet = NULL;
+    }
     cur_widget[MENU_ID] = old_menu;
     map_interaction_test_active = false;
     map_width = old_map_width;
