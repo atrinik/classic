@@ -8,7 +8,7 @@ for cross-repository transport semantics:
 Classic library implements the native HTTPS client/parser/solver and Classic
 client consumes it. Worker implements challenge, upgrade verification and replay.
 Game rendezvous is disabled. This handshake does not allocate a game command ID
-or change game revision 1083.
+or change game revision 1084.
 
 ## Exact transport contract
 
