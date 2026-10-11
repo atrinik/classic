@@ -33,6 +33,7 @@
 #include <client.h>
 #include <event.h>
 #include <gpu_renderer.h>
+#include <item.h>
 #include <keybind.h>
 #include <live_movement.h>
 #include <live_movement_input.h>
@@ -59,6 +60,12 @@ int event_dragging_check(void) {
     int mx, my;
 
     if (!cpl.dragging_tag) {
+        return 0;
+    }
+
+    /* Server updates can remove the item even before the drag becomes visible. */
+    if (object_find(cpl.dragging_tag) == NULL) {
+        event_dragging_stop();
         return 0;
     }
 
@@ -107,6 +114,7 @@ void event_dragging_set_callback(event_drag_cb_fnc fnc) {
 
 void event_dragging_stop(void) {
     cpl.dragging_tag = 0;
+    event_dragging_set_callback(NULL);
 }
 
 static void event_dragging_stop_internal(void) {
