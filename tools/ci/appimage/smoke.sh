@@ -75,7 +75,7 @@ env LD_LIBRARY_PATH="$appdir/usr/lib" OPENSSL_MODULES="$appdir/usr/lib/ossl-modu
   -cert "$work/server.crt" -key "$work/server.key" > "$work/tls-server.log" 2>&1 &
 tls_pid=$!
 tls_ready=0
-for attempt in {1..20}; do
+for _ in {1..20}; do
   if SSL_CERT_FILE="$work/server.crt" "$probe" --curl https://localhost:44330/ > "$work/tls-trusted.log" 2>&1; then
     tls_ready=1
     break
