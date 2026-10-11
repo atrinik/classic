@@ -145,9 +145,11 @@ static int test_solver(void) {
     memcpy(input + prefix, solution, 16);
     unsigned char digest[32];
     REQUIRE(admission_digest(input, prefix + 16, digest) && digest[0] == 0);
+    clock_calls = 0;
     REQUIRE(admission_solve(&challenge, 1000, NULL, proof, 256, 10000, test_clock, test_wall) ==
             RENDEZVOUS_ADMISSION_TIMEOUT);
-    REQUIRE(zeroed(proof, sizeof(proof)));
+    /* Read the starting clock and reject at the first pre-work deadline poll. */
+    REQUIRE(clock_calls == 2 && zeroed(proof, sizeof(proof)));
     unsigned int cancel_limit = 1;
     curl_cancel_t cancel = {.cancelled = cancelled, .context = &cancel_limit};
     cancel_calls = 0;
@@ -161,9 +163,12 @@ static int test_solver(void) {
         RENDEZVOUS_ADMISSION_CANCELLED);
     REQUIRE(cancel_calls == 2 && zeroed(proof, sizeof(proof)));
     fake_now = 0;
+    clock_calls = 0;
     REQUIRE(
         admission_solve(&challenge, 999999, NULL, proof, 256, 100000, advancing_clock, test_wall) ==
         RENDEZVOUS_ADMISSION_TIMEOUT);
+    /* The solver's own ten-second cap wins over a much later caller deadline. */
+    REQUIRE(clock_calls == 2 && fake_now == 20000 && zeroed(proof, sizeof(proof)));
     fake_now = 1000;
     REQUIRE(admission_solve(&challenge, 20000, NULL, proof, 256, 1, test_clock, test_wall) ==
             RENDEZVOUS_ADMISSION_UNAVAILABLE);
