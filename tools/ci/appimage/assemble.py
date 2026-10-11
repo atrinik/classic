@@ -64,6 +64,9 @@ def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
         raise ValueError('OpenSSL legacy provider is missing')
     shutil.copytree(modules, libdir / 'ossl-modules', dirs_exist_ok=True)
     shutil.copytree(prefix / 'share/licenses', docdir / 'licenses', dirs_exist_ok=True)
+    # Debian copyright stanzas can refer to these complete standard texts.
+    shutil.copytree('/usr/share/common-licenses', docdir / 'licenses/system/common-licenses',
+                    dirs_exist_ok=True)
     shutil.copyfile('/build-packages.tsv', metadir / 'build-packages.tsv')
     shutil.copyfile(lock_path, metadir / 'packaging.lock.json')
     shutil.copytree('/usr/share/alsa', appdir / 'usr/share/alsa', dirs_exist_ok=True)
@@ -178,7 +181,10 @@ def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
             library_version = run('dpkg-query', '-W', '-f=${Version}', package).strip()
             if library_version != lock['system_package_versions'].get(package):
                 raise ValueError(f'unlocked system package version: {package}')
-            source_name, license_id = f'deb:{package}', 'NOASSERTION'
+            source_name = f'deb:{package}'
+            license_id = lock['system_package_licenses'][package]
+            if sha256(Path('/usr/share/doc') / package / 'copyright') != lock['system_package_copyright_sha256'][package]:
+                raise ValueError(f'system package notice differs from lock: {package}')
         library_records.append({
             'name': name, 'path': f'usr/lib/{name}', 'version': library_version,
             'sha256': sha256(libdir / name), 'license': license_id, 'source': source_name,
