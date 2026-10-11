@@ -32,6 +32,7 @@
 #include <arch.h>
 #include <loader.h>
 #include <living.h>
+#include <los.h>
 #include <monster.h>
 #include <monster_data.h>
 #include <movement.h>
@@ -1615,6 +1616,156 @@ START_TEST(test_underground_city_map_reloads_preserve_active_list) {
 }
 END_TEST
 
+/* These mutation tests use schema-0 maps deliberately: celestial revision
+ * changes cannot substitute for gameplay/camera geometry invalidation. */
+START_TEST(test_los_geometry_tracks_stack_semantics_only) {
+    mapstruct *map = get_empty_map(24, 24);
+    uint64_t epoch = los_geometry_epoch();
+    object *actor = arch_get("kobold");
+    actor->x = 10;
+    actor->y = 10;
+    actor = object_insert_map(actor, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(actor);
+    ck_assert(los_geometry_epoch() == epoch);
+    object_remove(actor, 0);
+    actor->x++;
+    actor = object_insert_map(actor, map, NULL, INS_NO_MERGE);
+    ck_assert(los_geometry_epoch() == epoch);
+
+    object *wall = arch_get("wall_wood_1");
+    wall->x = 10;
+    wall->y = 10;
+    wall = object_insert_map(wall, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(wall);
+    ck_assert(los_geometry_epoch() > epoch);
+    ck_assert(GET_MAP_FLAGS(map, 10, 10) & P_BLOCKSVIEW);
+    epoch = los_geometry_epoch();
+    object_update(wall, UP_OBJ_ALL);
+    ck_assert(los_geometry_epoch() == epoch);
+
+    object *duplicate = arch_get("wall_wood_1");
+    duplicate->x = 10;
+    duplicate->y = 10;
+    duplicate = object_insert_map(duplicate, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(duplicate);
+    ck_assert(los_geometry_epoch() == epoch);
+    object_remove(duplicate, 0);
+    object_destroy(duplicate);
+    ck_assert(los_geometry_epoch() == epoch);
+
+    CLEAR_FLAG(wall, FLAG_BLOCKSVIEW);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    ck_assert(!(GET_MAP_FLAGS(map, 10, 10) & P_BLOCKSVIEW));
+    epoch = los_geometry_epoch();
+    SET_FLAG(wall, FLAG_HIDDEN);
+    object_update(wall, UP_OBJ_FLAGFACE);
+    ck_assert(los_geometry_epoch() > epoch);
+    epoch = los_geometry_epoch();
+    SET_FLAG(wall, FLAG_IS_FLOOR);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    epoch = los_geometry_epoch();
+    CLEAR_FLAG(wall, FLAG_IS_FLOOR);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    epoch = los_geometry_epoch();
+    CLEAR_FLAG(wall, FLAG_HIDDEN);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    epoch = los_geometry_epoch();
+    /* A transparent, visible wall still affects camera boundary retention. */
+    object_remove(wall, 0);
+    ck_assert(los_geometry_epoch() > epoch);
+    object_destroy(wall);
+    object_remove(actor, 0);
+    object_destroy(actor);
+    delete_map(map);
+}
+END_TEST
+
+START_TEST(test_los_geometry_direct_position_refresh) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object_remove(pl, 0);
+    pl->x = 12;
+    pl->y = 12;
+    pl = object_insert_map(pl, map, NULL, 0);
+    object *wall = arch_get("wall_wood_1");
+    wall->x = 13;
+    wall->y = 12;
+    wall = object_insert_map(wall, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(wall);
+    update_los(pl);
+    ck_assert(!los_player_has_geometric_sight(pl, map, 14, 12));
+    uint64_t epoch = los_geometry_epoch();
+    CLEAR_FLAG(wall, FLAG_BLOCKSVIEW);
+    SET_MAP_FLAGS(map, 13, 12, GET_MAP_FLAGS(map, 13, 12) | P_NEED_UPDATE);
+    update_position(map, 13, 12);
+    ck_assert(los_geometry_epoch() > epoch);
+    ck_assert(los_player_has_geometric_sight(pl, map, 14, 12));
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    epoch = los_geometry_epoch();
+    SET_FLAG(wall, FLAG_BLOCKSVIEW);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert(los_geometry_epoch() > epoch);
+    ck_assert(!los_player_has_geometric_sight(pl, map, 14, 12));
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    object_remove(pl, 0);
+    object_destroy(pl);
+    delete_map(map);
+}
+END_TEST
+
+START_TEST(test_los_geometry_map_arrival_unlink_and_reincarnation) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_COPY_HASH(map->path, "/tests/los-epoch-lower");
+    map->level_min = 0;
+    map->level_max = 1;
+    map_set_tile(map, TILED_UP, "/tests/los-epoch-upper");
+    update_los(pl);
+    uint64_t epoch = los_geometry_epoch();
+    mapstruct *upper = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(upper->path, "/tests/los-epoch-upper");
+    upper->level_min = 0;
+    upper->level_max = 1;
+    upper->coords[2] = 1;
+    map_set_tile(upper, TILED_DOWN, map->path);
+    ck_assert_ptr_eq(map->tile_map[TILED_UP], upper);
+    ck_assert_ptr_eq(upper->tile_map[TILED_DOWN], map);
+    ck_assert(los_geometry_epoch() > epoch);
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    epoch = los_geometry_epoch();
+    tag_t old_count = upper->count;
+    delete_map(upper);
+    ck_assert_ptr_null(map->tile_map[TILED_UP]);
+    ck_assert(los_geometry_epoch() > epoch);
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    epoch = los_geometry_epoch();
+    upper = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(upper->path, "/tests/los-epoch-upper");
+    upper->level_min = 0;
+    upper->level_max = 1;
+    upper->coords[2] = 1;
+    ck_assert(upper->count != old_count);
+    map_set_tile(upper, TILED_DOWN, map->path);
+    ck_assert(los_geometry_epoch() > epoch);
+    update_los(pl);
+    ck_assert(los_view_matches_default_for_test(pl));
+    delete_map(upper);
+    object_remove(pl, 0);
+    object_destroy(pl);
+    delete_map(map);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("object");
     TCase *tc_core = tcase_create("Core");
@@ -1626,6 +1777,9 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_movement, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_los_geometry_tracks_stack_semantics_only);
+    tcase_add_test(tc_core, test_los_geometry_direct_position_refresh);
+    tcase_add_test(tc_core, test_los_geometry_map_arrival_unlink_and_reincarnation);
     tcase_add_test(tc_core, test_return_home_waypoint_reactivation_resets_retry_progress);
     suite_add_tcase(s, tc_movement);
     tcase_add_test(tc_movement, test_move_ob_rejects_invalid_directions);

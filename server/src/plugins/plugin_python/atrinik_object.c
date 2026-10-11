@@ -48,6 +48,16 @@
 #include <object.h>
 #include <book_edit.h>
 
+/* Explicit script mutations can affect an actor already serialized by an
+ * outer ASK_SHOW invocation. Inventory effects also belong to their mapped
+ * owner; this publication fence does not invalidate the LOS geometry cache. */
+static void python_object_publication_changed(object *op) {
+    object *root = hooks->object_get_env(op);
+    if (root->map != NULL && !QUERY_FLAG(root, FLAG_REMOVED)) {
+        hooks->los_publication_changed();
+    }
+}
+
 /**
  * All the possible fields of an object.
  */
@@ -770,6 +780,7 @@ static PyObject *Atrinik_Object_ActivateRune(Atrinik_Object *self, PyObject *arg
         return NULL;
     }
 
+    python_object_publication_changed(who->obj);
     hooks->rune_spring(self->obj, who->obj);
 
     Py_INCREF(Py_None);
@@ -989,6 +1000,7 @@ static PyObject *Atrinik_Object_Apply(Atrinik_Object *self, PyObject *args) {
     OBJEXISTCHECK(self);
     OBJEXISTCHECK(what);
 
+    python_object_publication_changed(self->obj);
     return Py_BuildValue("i", hooks->manual_apply(self->obj, what->obj, flags));
 }
 
@@ -1133,6 +1145,8 @@ static PyObject *Atrinik_Object_SetGender(Atrinik_Object *self, PyObject *args) 
 
     OBJEXISTCHECK(self);
 
+    python_object_publication_changed(self->obj);
+
     /* Set object to neuter */
     CLEAR_FLAG(self->obj, FLAG_IS_MALE);
     CLEAR_FLAG(self->obj, FLAG_IS_FEMALE);
@@ -1167,6 +1181,7 @@ static const char doc_Atrinik_Object_Update[] =
 static PyObject *Atrinik_Object_Update(Atrinik_Object *self, PyObject *ignored) {
     OBJEXISTCHECK(self);
 
+    python_object_publication_changed(self->obj);
     hooks->living_update(self->obj);
 
     Py_INCREF(Py_None);
@@ -1205,6 +1220,8 @@ static PyObject *Atrinik_Object_Hit(Atrinik_Object *self, PyObject *args) {
         PyErr_SetString(PyExc_ValueError, "Invalid object to hit/kill.");
         return NULL;
     }
+
+    python_object_publication_changed(target->obj);
 
     /* Kill the target. */
     if (damage == -1) {
@@ -1278,6 +1295,7 @@ static PyObject *Atrinik_Object_Cast(Atrinik_Object *self, PyObject *args, PyObj
         mode = CAST_NPC;
     }
 
+    python_object_publication_changed(self->obj);
     hooks->cast_spell(target != NULL ? target->obj : self->obj,
                       self->obj,
                       direction,
@@ -1833,6 +1851,7 @@ static PyObject *Atrinik_Object_CastIdentify(Atrinik_Object *self, PyObject *arg
         return NULL;
     }
 
+    python_object_publication_changed(target->obj);
     hooks->cast_identify(target->obj, self->obj->level, ob, mode);
     hooks->play_sound_map(self->obj->map,
                           CMD_SOUND_EFFECT,
@@ -3310,6 +3329,9 @@ static int Object_SetAttribute(Atrinik_Object *obj, PyObject *value, void *conte
         hooks->light_source_prepare_change();
     }
     ret = generic_field_setter(field, obj->obj, value);
+    if (ret != -1) {
+        python_object_publication_changed(obj->obj);
+    }
 
     if (field->offset == offsetof(object, layer) || field->offset == offsetof(object, sub_layer)) {
         obj->obj->layer = MIN(NUM_LAYERS, obj->obj->layer);
@@ -3448,6 +3470,7 @@ static int Object_SetFlag(Atrinik_Object *obj, PyObject *val, void *context) {
 
     OBJEXISTCHECK_INT(obj);
 
+    bool was_set = QUERY_FLAG(obj->obj, flagno) != 0;
     if (val == Py_True) {
         SET_FLAG(obj->obj, flagno);
     } else if (val == Py_False) {
@@ -3457,6 +3480,15 @@ static int Object_SetFlag(Atrinik_Object *obj, PyObject *val, void *context) {
                         "Flag value must be either True or "
                         "False.");
         return -1;
+    }
+
+    if (was_set != (QUERY_FLAG(obj->obj, flagno) != 0)) {
+        python_object_publication_changed(obj->obj);
+    }
+
+    if (was_set != (QUERY_FLAG(obj->obj, flagno) != 0) &&
+        (flagno == FLAG_BLOCKSVIEW || flagno == FLAG_IS_FLOOR || flagno == FLAG_HIDDEN)) {
+        hooks->object_update(obj->obj, UP_OBJ_FLAGS);
     }
 
     hooks->esrv_send_item(obj->obj);

@@ -1814,6 +1814,10 @@ void object_update(object *op, int action) {
         return;
     }
 
+    /* Object updates are mutation notifications. A later ASK_SHOW callback
+     * must not publish a packet containing an earlier actor's old state. */
+    los_publication_changed();
+
     /* No need to change anything except the map update counter. */
     if (action == UP_OBJ_FACE) {
         INC_MAP_UPDATE_COUNTER(op->map, op->x, op->y);
@@ -1823,6 +1827,9 @@ void object_update(object *op, int action) {
     MapSpace *msp = GET_MAP_SPACE_PTR(op->map, op->x, op->y);
     int newflags = msp->flags;
     int flags = newflags;
+
+    los_geometry_refresh(op->map, op->x, op->y);
+    newflags = msp->flags;
 
     if (action == UP_OBJ_INSERT) {
         msp->update_tile++;
@@ -1961,8 +1968,8 @@ void object_update(object *op, int action) {
             geometry |= 4U;
         }
     }
-    bool local_changed = msp->light_geometry != geometry;
-    msp->light_geometry = geometry;
+    bool local_changed = (msp->light_geometry & 0x07U) != geometry;
+    msp->light_geometry = (msp->light_geometry & 0xf0U) | geometry;
     bool celestial_changed = celestial_light_geometry_update(op->map, op->x, op->y);
     if (op->map->in_memory == MAP_IN_MEMORY) {
         light_geometry_changed(op->map, local_changed, celestial_changed);
@@ -2651,6 +2658,10 @@ object *object_insert_map(object *op, mapstruct *m, object *originator, int flag
 
         SET_MAP_SPACE_FIRST(msp, op);
     }
+
+    /* Publish mutations before object callbacks can perform sight queries. */
+    los_publication_changed();
+    los_geometry_refresh(op->map, op->x, op->y);
 
     /* Some object-type-specific adjustments/initialization. */
     if (op->type == PLAYER) {

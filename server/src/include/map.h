@@ -429,7 +429,7 @@ typedef struct MapSpace_s {
     /** Extra flags from @ref MSP_EXTRA_xxx. */
     uint8_t extra_flags;
 
-    /** Published aggregate local-ray blockers, floors and roof surfaces. */
+    /** Low 3 bits: local-ray geometry. High 4 bits: published LOS geometry. */
     uint8_t light_geometry;
 
     /** Exact five-face transport signature, occupying existing tail padding. */
@@ -1052,6 +1052,7 @@ void set_map_darkness(mapstruct *m, int value);
 mapstruct *get_linked_map(void);
 mapstruct *get_empty_map(int sizex, int sizey);
 void map_set_tile(mapstruct *m, int tile, const char *pathname);
+void los_geometry_refresh(mapstruct *map, int x, int y);
 mapstruct *load_original_map(const char *filename, mapstruct *originator, int flags);
 int new_save_map(mapstruct *m, int flag);
 void free_map(mapstruct *m, int flag);
