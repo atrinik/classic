@@ -310,6 +310,8 @@ jobs:
             "${CLASSIC_LINUX_IMAGE}" \
             bash -c '
               set -euo pipefail
+              ATRINIK_LLVM_COVERAGE_NATIVE_TEST=1 python3 -m unittest -v \
+                tools.tests.test_llvm_coverage_identity.NativeLLVM23Tests
               CI=1 python3 -m unittest -v \
                 tools.tests.test_version_metadata.VersionMetadataTests.test_pathfinding_physical_tag_untagged_and_installed_package
               tools/ci/run_linux_check.sh core /workspace
