@@ -12,7 +12,8 @@ probe=${ATRINIK_APPIMAGE_RUNTIME_PROBE:?trusted runtime probe is required}
 package=$(realpath -e "$1")
 version=$2
 # A fresh runtime must not accidentally satisfy missing application libraries.
-if ldconfig -p | grep -E 'libSDL3|libcares|libcurl|libssl.so.3'; then
+# Base apt can require OpenSSL; the probe verifies our exact bundled version.
+if ldconfig -p | grep -E 'libSDL3|libcares|libcurl'; then
   echo 'clean runtime unexpectedly contains application libraries' >&2
   exit 1
 fi
