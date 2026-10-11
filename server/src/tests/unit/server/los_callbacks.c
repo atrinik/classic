@@ -29,6 +29,10 @@ static void fixture(mapstruct **map, object **pl) {
      * request's wider setup, it must claim the packet toolkit explicitly. */
     toolkit_import(packet);
     check_setup_env_pl(map, pl);
+    /* Relative event scripts resolve from the fixture map's logical
+     * directory. Keep that namespace under maps/python, where the authored
+     * callback fixture lives, without escaping the map root. */
+    FREE_AND_COPY_HASH((*map)->path, "/python/los-callback-fixture");
     object_remove(*pl, 0);
     (*pl)->x = 12;
     (*pl)->y = 12;
@@ -72,7 +76,7 @@ static void ask_show(object *actor, const char *options) {
     event->type = EVENT_OBJECT;
     event->sub_type = EVENT_ASK_SHOW;
     FREE_AND_COPY_HASH(event->name, "Python");
-    FREE_AND_COPY_HASH(event->race, "python/tests/unit/los_ask_show.py");
+    FREE_AND_COPY_HASH(event->race, "tests/unit/los_ask_show.py");
     FREE_AND_COPY_HASH(event->slaying, options);
     object_insert_into(event, actor, INS_NO_MERGE);
     ck_assert(actor->event_flags & EVENT_FLAG(EVENT_ASK_SHOW));
