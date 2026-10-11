@@ -1136,10 +1136,10 @@ bool socket_wait(socket_t *sc, bool readable, bool writable, unsigned int timeou
     FD_ZERO(&read_fds);
     FD_ZERO(&write_fds);
     if (readable) {
-        FD_SET(sc->handle, &read_fds);
+        socket_fd_set(sc->handle, &read_fds);
     }
     if (writable) {
-        FD_SET(sc->handle, &write_fds);
+        socket_fd_set(sc->handle, &write_fds);
     }
     struct timeval timeout = {
         .tv_sec = (long)(timeout_ms / 1000),

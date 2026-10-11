@@ -1068,7 +1068,7 @@ bool socket_stun_discover_until(socket_t *sc,
         uint64_t timeout_ms = MIN(deadline_ms - now_ms, 3000U);
         fd_set readfds;
         FD_ZERO(&readfds);
-        FD_SET(sc->handle, &readfds);
+        socket_fd_set(sc->handle, &readfds);
         struct timeval timeout = {.tv_sec = (long)(timeout_ms / 1000U),
                                   .tv_usec = (long)((timeout_ms % 1000U) * 1000U)};
         if (select(sc->handle + 1, &readfds, NULL, NULL, &timeout) != 1) {

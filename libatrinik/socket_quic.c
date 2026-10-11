@@ -220,10 +220,10 @@ static bool socket_quic_wait(SSL *ssl) {
     FD_ZERO(&read_fds);
     FD_ZERO(&write_fds);
     if (SSL_net_read_desired(ssl)) {
-        FD_SET(fd, &read_fds);
+        socket_fd_set(fd, &read_fds);
     }
     if (SSL_net_write_desired(ssl)) {
-        FD_SET(fd, &write_fds);
+        socket_fd_set(fd, &write_fds);
     }
 
     /* Keep candidate cancellation and first-success handoff responsive. */
