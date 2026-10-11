@@ -3,6 +3,7 @@
 /* The private prepare seam preserves the production HTTPS/parser path while
  * selecting eight-bit work solely in this independently linked test. */
 #include "../rendezvous_admission.c"
+#include <toolkit/logger.h>
 
 #define REQUIRE(x)                                                               \
     do {                                                                         \
@@ -59,6 +60,7 @@ static bool zeroed(const void *data, size_t size) {
 
 int main(int argc, char **argv) {
     REQUIRE(argc == 3);
+    toolkit_import(logger);
     toolkit_import(datetime);
     toolkit_import(curl);
     const char *mode = argv[2];
