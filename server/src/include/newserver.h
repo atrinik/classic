@@ -141,9 +141,9 @@ typedef struct MapCell_struct {
     uint8_t probe;
 
     /**
-     * Possible target object UID cache.
+     * Last queued target UID for each living sub-layer.
      */
-    tag_t target_object_count;
+    tag_t target_object_count[NUM_SUB_LAYERS];
 
     uint8_t ext_flags; ///< Last ext flags.
 
@@ -291,6 +291,15 @@ typedef struct socket_struct {
 
     /** Last map. */
     struct Map lastmap;
+
+    /** Center and level set of the last completely queued MAP2 publication. */
+    mapstruct *target_map_published_map;
+    int target_map_published_x;
+    int target_map_published_y;
+    uint16_t target_map_published_depths;
+    uint8_t target_map_published_width;
+    uint8_t target_map_published_height;
+    bool target_map_publication_pending;
 
     /** Player level used to calculate cached non-player name colors. */
     uint8_t lastmap_player_level;

@@ -11276,7 +11276,7 @@ static bool widget_map_target_depth_test(widgetdata *widget) {
     success = success && utarray_len(targets) == MAP2_LEVELS;
     uint16_t found_mask = 0;
     for (size_t index = 0; index < utarray_len(targets); index++) {
-        const map_target_struct *target = utarray_eltptr(targets, index);
+        const map_target_struct *target = (const map_target_struct *)utarray_eltptr(targets, index);
         found_mask |= UINT16_C(1) << MAP2_DEPTH_INDEX(target->depth);
         success = success && target->count == (uint32_t)(100 + target->depth);
     }

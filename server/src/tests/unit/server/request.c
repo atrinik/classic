@@ -1033,6 +1033,21 @@ START_TEST(test_target_exact_depth_and_count_authorize_upper_actor) {
     packet_writer_write_uint8(select, pl->cs->mapy_2);
     packet_writer_write_int8(select, 1);
     packet_writer_write_uint32(select, actor->count);
+    map_client_cache_clear(&pl->cs->lastmap);
+    pl->cs->target_map_published_map = NULL;
+    socket_buffer_clear(pl->cs);
+    socket_command_target(pl->cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_uint_eq(pl->target_object_count, 0);
+    /* Fresh geometry alone cannot disclose an actor before MAP2 publication. */
+    pl->target_object = actor;
+    pl->target_object_count = actor->count;
+    send_target_command(pl);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_uint_eq(pl->target_object_count, 0);
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
     socket_buffer_clear(pl->cs);
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, actor);
@@ -1062,11 +1077,83 @@ START_TEST(test_target_exact_depth_and_count_authorize_upper_actor) {
     ck_assert_ptr_eq(pl->target_object, op);
     ck_assert_uint_eq(pl->target_object_count, 0);
     select->data[select->len - 1] ^= 1;
+    /* A movement before the next draw does not reinterpret the last queued
+     * viewport's coordinates around the unpublished new player center. */
+    request_move_player(&op, base, 13, 12);
+    socket_command_target(pl->cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, actor);
+    ck_assert_uint_eq(pl->target_object_count, actor->count);
+    pl->cs->target_map_publication_pending = true;
+    socket_command_target(pl->cs, pl, select->data, select->len, 0);
+    ck_assert_ptr_eq(pl->target_object, op);
+    ck_assert_uint_eq(pl->target_object_count, 0);
+    pl->cs->target_map_publication_pending = false;
+    object_remove(actor, 0);
     object_destroy(actor);
     socket_command_target(pl->cs, pl, select->data, select->len, 0);
     ck_assert_ptr_eq(pl->target_object, op);
     ck_assert_uint_eq(pl->target_object_count, 0);
     packet_free(select);
+}
+END_TEST
+
+START_TEST(test_target_publication_tracks_each_living_sub_layer) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    pl->tli = 1;
+    object *actors[2];
+    for (size_t i = 0; i < arraysize(actors); i++) {
+        actors[i] = arch_get("kobold");
+        actors[i]->x = op->x + 1;
+        actors[i]->y = op->y;
+        actors[i]->sub_layer = i;
+        actors[i] = object_insert_map(actors[i], map, NULL, INS_NO_MERGE);
+        ck_assert_ptr_nonnull(actors[i]);
+    }
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0,
+                                         pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    for (size_t i = 0; i < arraysize(actors); i++) {
+        ck_assert_uint_eq(cell->target_object_count[i], actors[i]->count);
+        packet_struct *select = packet_new(SERVER_CMD_TARGET, 8, 0);
+        packet_writer_write_uint8(select, CMD_TARGET_MAPXY);
+        packet_writer_write_uint8(select, pl->cs->mapx_2 + 1);
+        packet_writer_write_uint8(select, pl->cs->mapy_2);
+        packet_writer_write_int8(select, 0);
+        packet_writer_write_uint32(select, actors[i]->count);
+        socket_command_target(pl->cs, pl, select->data, select->len, 0);
+        ck_assert_ptr_eq(pl->target_object, actors[i]);
+        ck_assert_uint_eq(pl->target_object_count, actors[i]->count);
+        packet_free(select);
+    }
+    /* Clearing one live layer revokes only that layer's publication identity. */
+    object_remove(actors[0], 0);
+    object_destroy(actors[0]);
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0,
+                                 pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->target_object_count[0], 0);
+    ck_assert_uint_eq(cell->target_object_count[1], actors[1]->count);
+    ck_assert(target_player_authorized(pl, actors[1], NULL));
+    /* A soft-cleared or remembered cell cannot authorize a retained target. */
+    cell->cleared = 1;
+    ck_assert(!target_player_authorized(pl, actors[1], NULL));
+    cell->cleared = 0;
+    cell->fow = 1;
+    ck_assert(!target_player_authorized(pl, actors[1], NULL));
+    cell->fow = 0;
+    cell->target_object_count[1] = 0;
+    ck_assert(!target_player_authorized(pl, actors[1], NULL));
+    object_remove(actors[1], 0);
+    object_destroy(actors[1]);
 }
 END_TEST
 
@@ -2012,7 +2099,9 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     MapCell *interior_roof = map_client_cache_cell(&cs->lastmap, 1, cs->mapx_2, cs->mapy_2, false);
     ck_assert_ptr_nonnull(interior_roof);
     ck_assert_uint_eq(interior_roof->cleared, 1);
-    ck_assert(map_cache_has_roof(cs, 1));
+    /* Every authored Incuna roof cell belongs to this connected cutaway.
+     * Unloaded neighboring maps cannot contribute retained roof identities. */
+    ck_assert(!map_cache_has_roof(cs, 1));
 
     request_move_player(&pl, map, 7, 6);
     socket_buffer_clear(cs);
@@ -2919,6 +3008,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_target_select_requires_exact_packet_before_mutation);
     tcase_add_test(tc_core, test_target_stale_forged_and_unavailable_depth_resolve_self);
     tcase_add_test(tc_core, test_target_exact_depth_and_count_authorize_upper_actor);
+    tcase_add_test(tc_core, test_target_publication_tracks_each_living_sub_layer);
     tcase_add_test(tc_core, test_wizardry_level_change_refreshes_spell_cost_once);
     tcase_add_test(tc_core, test_setup_round_trip_uses_current_option_ids);
     tcase_add_test(tc_core, test_setup_rejects_unknown_option);

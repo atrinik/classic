@@ -337,6 +337,13 @@ void esrv_update_stats(player *pl) {
         FOR_INV_FINISH();
     }
 
+    /* HP and level metadata retain the same queued-publication authority as
+     * the target reply, even when no level change would trigger a refresh. */
+    if (pl->target_object != NULL && pl->target_object != pl->ob &&
+        (!OBJECT_VALID(pl->target_object, pl->target_object_count) ||
+         !target_player_authorized(pl, pl->target_object, NULL))) {
+        send_target_command(pl);
+    }
     int target_level = pl->ob->level;
     if (pl->target_object != NULL &&
         (pl->target_object == pl->ob || OBJECT_VALID(pl->target_object, pl->target_object_count))) {
@@ -515,6 +522,7 @@ static inline int get_tiled_map_id(player *pl, struct mapdef *map) {
  * Y.
  */
 static inline void copy_lastmap(socket_struct *ns, int dx, int dy, int dz) {
+    ns->target_map_publication_pending = true;
     struct Map newmap = {0};
     int depth, x, y;
 
@@ -595,6 +603,7 @@ void draw_client_map(object *pl) {
         /* Are we on a new map? */
         if (!CONTR(pl)->last_update || !tile_map) {
             CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_NEW;
+            CONTR(pl)->cs->target_map_publication_pending = true;
             map_client_cache_clear(&CONTR(pl)->cs->lastmap);
             CONTR(pl)->cs->lastmap_light_generation = 0;
             CONTR(pl)->last_update = pl->map;
@@ -1010,6 +1019,7 @@ static packet_struct *map2_frame_level_chunk(int8_t depth, packet_struct *payloa
 
 /** Draw the client map. */
 void draw_client_map2(object *pl) {
+    CONTR(pl)->cs->target_map_publication_pending = true;
     light_map_unlink_flush();
     light_batch_flush();
     /* Visibility is rebuilt from live geometry before each serialization. */
@@ -1683,7 +1693,7 @@ void draw_client_map2(object *pl) {
                                     mp->anim_flags[sub_layer] = 0;
                                     mp->client_flags[sub_layer] = 0;
                                     mp->probe = 0;
-                                    mp->target_object_count = 0;
+                                    mp->target_object_count[sub_layer] = 0;
                                     mp->is_friend &= ~(1 << sub_layer);
                                 }
 
@@ -1730,7 +1740,7 @@ void draw_client_map2(object *pl) {
                                 mp->exit[socket_layer] == is_exit &&
                                 (layer != LAYER_LIVING || !IS_LIVE(head) ||
                                  (mp->probe == probe_val &&
-                                  mp->target_object_count == target_object_count)) &&
+                                  mp->target_object_count[sub_layer] == target_object_count)) &&
                                 mp->anim_speed[socket_layer] == anim_speed &&
                                 mp->anim_facing[socket_layer] == anim_facing &&
                                 (layer != LAYER_LIVING ||
@@ -1760,7 +1770,7 @@ void draw_client_map2(object *pl) {
 
                             if (layer == LAYER_LIVING) {
                                 mp->probe = probe_val;
-                                mp->target_object_count = target_object_count;
+                                mp->target_object_count[sub_layer] = target_object_count;
 
                                 if (flags2 & MAP2_FLAG2_TARGET) {
                                     if (is_friend) {
@@ -1909,6 +1919,8 @@ void draw_client_map2(object *pl) {
 
                             if (layer == LAYER_LIVING) {
                                 mp->anim_flags[sub_layer] = 0;
+                                mp->target_object_count[sub_layer] = 0;
+                                mp->client_flags[sub_layer] = 0;
                             }
 
                             packet_debug_data(packet_layer, 1, "Socket layer ID (clear)");
@@ -2323,6 +2335,22 @@ void draw_client_map2(object *pl) {
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
     }
+    socket_struct *published_cs = CONTR(pl)->cs;
+    published_cs->target_map_published_depths = 0;
+    if (published_cs->state != ST_DEAD && published_cs->state != ST_ZOMBIE) {
+        for (uint8_t i = 0; i < present_level_count; i++) {
+            published_cs->target_map_published_depths |=
+                UINT16_C(1) << MAP2_DEPTH_INDEX(present_depths[i]);
+        }
+        published_cs->target_map_published_map = pl->map;
+        published_cs->target_map_published_x = pl->x;
+        published_cs->target_map_published_y = pl->y;
+        published_cs->target_map_published_width = published_cs->mapx;
+        published_cs->target_map_published_height = published_cs->mapy;
+    } else {
+        published_cs->target_map_published_map = NULL;
+    }
+    published_cs->target_map_publication_pending = false;
 
     for (uint16_t i = 0; i < level_packet_count; i++) {
         HARD_ASSERT(level_sent[i]);
@@ -2687,6 +2715,63 @@ void socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t le
     }
 }
 
+/** Match one exact physical part to its previously queued live MAP2 identity. */
+static bool target_player_part_published(const player *pl, const object *part, int *depth) {
+    if (pl == NULL || pl->cs == NULL || part == NULL || part->map == NULL ||
+        part->layer != LAYER_LIVING || part->sub_layer >= NUM_SUB_LAYERS ||
+        !IS_LIVE(HEAD(part)) ||
+        pl->cs->target_map_publication_pending || pl->cs->target_map_published_map == NULL ||
+        pl->cs->target_map_published_width != pl->cs->mapx ||
+        pl->cs->target_map_published_height != pl->cs->mapy) {
+        return false;
+    }
+    int dx, dy, dz;
+    socket_struct *cs = pl->cs;
+    if (!spatial_offset(cs->target_map_published_map, part->map, &dx, &dy, &dz) ||
+        dz < -MAP2_MAX_DEPTH || dz > MAP2_MAX_DEPTH ||
+        !(cs->target_map_published_depths & (UINT16_C(1) << MAP2_DEPTH_INDEX(dz)))) {
+        return false;
+    }
+    int x = dx + part->x - cs->target_map_published_x + cs->mapx_2;
+    int y = dy + part->y - cs->target_map_published_y + cs->mapy_2;
+    if (x < 0 || x >= cs->mapx || y < 0 || y >= cs->mapy) {
+        return false;
+    }
+    MapCell *cached = map_client_cache_cell(&cs->lastmap, dz, x, y, false);
+    int layer = NUM_LAYERS * part->sub_layer + LAYER_LIVING - 1;
+    if (cached == NULL || cached->cleared || !cached->fow_known || cached->fow ||
+        cached->faces[layer] == 0 ||
+        cached->target_object_count[part->sub_layer] != HEAD(part)->count) {
+        return false;
+    }
+    spatial_cell physical;
+    if (!spatial_resolve(cs->target_map_published_map,
+                         cs->target_map_published_x + x - cs->mapx_2,
+                         cs->target_map_published_y + y - cs->mapy_2,
+                         dz, &physical) || physical.map != part->map ||
+        physical.x != part->x || physical.y != part->y) {
+        return false;
+    }
+    if (depth != NULL) {
+        *depth = dz;
+    }
+    return true;
+}
+
+/** Server-thread target authority: queued live identity plus fresh exact-part perception. */
+bool target_player_authorized(const player *pl, const object *target, int *depth) {
+    if (target == NULL) {
+        return false;
+    }
+    for (const object *part = target; part != NULL; part = target->head ? NULL : part->more) {
+        if (target_player_part_published(pl, part, depth) &&
+            perception_player_part_authorized(pl, part)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /**
  * Send target command, calculate the target's color level, etc.
  * @param pl
@@ -2700,13 +2785,10 @@ void send_target_command(player *pl) {
         return;
     }
 
-    int target_depth = 0, dx, dy;
+    int target_depth = 0;
     bool target_authorized = pl->target_object != NULL && pl->target_object != pl->ob &&
                              OBJECT_VALID(pl->target_object, pl->target_object_count) &&
-                             perception_player_authorized(pl, pl->target_object) &&
-                             spatial_offset(pl->ob->map, pl->target_object->map,
-                                            &dx, &dy, &target_depth) &&
-                             target_depth >= -MAP2_MAX_DEPTH && target_depth <= MAP2_MAX_DEPTH;
+                             target_player_authorized(pl, pl->target_object, &target_depth);
     packet = packet_new(CLIENT_CMD_TARGET, 64, 64);
 
     pl->ob->enemy = NULL;
@@ -2876,16 +2958,22 @@ void socket_command_target(socket_struct *ns, player *pl, uint8_t *data, size_t 
     }
 
     object *target = NULL;
-    if (type == CMD_TARGET_MAPXY && count != 0) {
+    if (type == CMD_TARGET_MAPXY && count != 0 &&
+        !pl->cs->target_map_publication_pending && pl->cs->target_map_published_map != NULL &&
+        pl->cs->target_map_published_width == pl->cs->mapx &&
+        pl->cs->target_map_published_height == pl->cs->mapy &&
+        (pl->cs->target_map_published_depths & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth)))) {
         spatial_cell cell;
-        int xt = pl->ob->x + x - pl->cs->mapx_2;
-        int yt = pl->ob->y + y - pl->cs->mapy_2;
-        if (spatial_resolve(pl->ob->map, xt, yt, depth, &cell)) {
+        int xt = pl->cs->target_map_published_x + x - pl->cs->mapx_2;
+        int yt = pl->cs->target_map_published_y + y - pl->cs->mapy_2;
+        if (spatial_resolve(pl->cs->target_map_published_map, xt, yt, depth, &cell)) {
             object *part;
             FOR_MAP_LAYER_BEGIN(cell.map, cell.x, cell.y, LAYER_LIVING, -1, part) {
                 object *head = HEAD(part);
+                int published_depth;
                 if (head != pl->ob && head->count == count && IS_LIVE(head) &&
-                    perception_player_part_authorized(pl, part)) {
+                    target_player_part_published(pl, part, &published_depth) &&
+                    published_depth == depth && perception_player_part_authorized(pl, part)) {
                     target = head;
                     FOR_MAP_LAYER_BREAK;
                 }

@@ -100,6 +100,9 @@ bool init_connection(socket_struct *ns) {
     packet_writer_set_limit(ns->packet_recv_cmd, SOCKET_COMMAND_QUEUE_STORAGE_MAX);
 
     memset(&ns->lastmap, 0, sizeof(struct Map));
+    ns->target_map_published_map = NULL;
+    ns->target_map_published_depths = 0;
+    ns->target_map_publication_pending = false;
     ns->packets = NULL;
 
     return true;
@@ -156,6 +159,9 @@ static void free_newsocket_internal(socket_struct *ns, bool connected) {
     }
 
     map_client_cache_free(&ns->lastmap);
+    ns->target_map_published_map = NULL;
+    ns->target_map_published_depths = 0;
+    ns->target_map_publication_pending = false;
 
     free(ns->account);
 

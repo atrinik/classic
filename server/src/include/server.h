@@ -341,6 +341,8 @@ socket_command_keepalive(socket_struct *ns, player *pl, uint8_t *data, size_t le
 extern void
 socket_command_move(socket_struct *ns, player *pl, uint8_t *data, size_t len, size_t pos);
 
+/** Caller validates target lifetime/count first; no mutation, server-thread only. */
+extern bool target_player_authorized(const player *pl, const object *target, int *depth);
 extern void send_target_command(player *pl);
 
 extern void
