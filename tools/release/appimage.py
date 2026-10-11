@@ -277,22 +277,25 @@ def _identity(data: bytes, version: str, revision: str) -> None:
         raise ValueError("AppImage identity must belong to an x86_64 ELF")
     section_offset = struct.unpack_from("<Q", data, 40)[0]
     section_size, section_count, strings_index = struct.unpack_from("<HHH", data, 58)
-    if (section_size != 64 or not 0 < strings_index < section_count or section_offset < 64
+    if (section_size != 64 or not 0 < strings_index < section_count <= 4096 or section_offset < 64
             or section_offset + section_size * section_count > len(data)):
         raise ValueError("AppImage identity has a malformed ELF section table")
     sections = [struct.unpack_from("<IIQQQQIIQQ", data, section_offset + index * section_size)
                 for index in range(section_count)]
     strings_section = sections[strings_index]
     start, size = strings_section[4:6]
-    if strings_section[1] != 3 or start < 64 or size == 0 or start + size > len(data):
+    if strings_section[1] != 3 or start < 64 or not 0 < size <= 1024**2 or start + size > len(data):
         raise ValueError("AppImage identity has a malformed section-name table")
     strings = data[start:start + size]
     matches = []
     for section in sections:
         name_offset = section[0]
-        if name_offset >= len(strings) or b"\0" not in strings[name_offset:]:
+        if name_offset >= len(strings):
             raise ValueError("AppImage identity has a malformed ELF section name")
-        if strings[name_offset:].split(b"\0", 1)[0] == b".atrinik.identity":
+        end = strings.find(b"\0", name_offset, min(len(strings), name_offset + 512))
+        if end == -1:
+            raise ValueError("AppImage identity has an unbounded ELF section name")
+        if strings[name_offset:end] == b".atrinik.identity":
             matches.append(section)
     if len(matches) != 1:
         raise ValueError("AppImage client must have exactly one .atrinik.identity section")

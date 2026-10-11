@@ -401,6 +401,39 @@ class AppImageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identity"):
             self.validate()
 
+    def test_identity_section_inventory_and_name_scans_are_bounded(self):
+        data = bytearray(self.client_elf())
+        table = struct.unpack_from("<Q", data, 40)[0]
+        # Supply enough bytes for an excessive table, so rejection specifically
+        # exercises the count bound rather than ordinary truncated-file checks.
+        struct.pack_into("<H", data, 60, 4097)
+        data.extend(bytes(max(0, table + 4097 * 64 - len(data))))
+        with self.assertRaisesRegex(ValueError, "section table"):
+            appimage._identity(data, self.version, self.revision)
+        data = bytearray(self.client_elf())
+        table = struct.unpack_from("<Q", data, 40)[0]
+        strings_index = struct.unpack_from("<H", data, 62)[0]
+        strings_header = table + strings_index * 64
+        # A bounded but oversized table must fail before creating its slice.
+        start = len(data)
+        data.extend(bytes(1024**2 + 1))
+        struct.pack_into("<QQ", data, strings_header + 24, start, 1024**2 + 1)
+        with self.assertRaisesRegex(ValueError, "section-name table"):
+            appimage._identity(data, self.version, self.revision)
+        for suffix in (b"x" * 512 + b"\0", b"unterminated"):
+            data = bytearray(self.client_elf())
+            table = struct.unpack_from("<Q", data, 40)[0]
+            strings_index = struct.unpack_from("<H", data, 62)[0]
+            strings_header = table + strings_index * 64
+            start, size = struct.unpack_from("<QQ", data, strings_header + 24)
+            strings = bytes(data[start:start + size])
+            replacement = len(data)
+            data.extend(strings + suffix)
+            struct.pack_into("<QQ", data, strings_header + 24, replacement, len(strings) + len(suffix))
+            struct.pack_into("<I", data, table + 64, len(strings))
+            with self.subTest(suffix_length=len(suffix)), self.assertRaisesRegex(ValueError, "unbounded.*name"):
+                appimage._identity(data, self.version, self.revision)
+
     def test_missing_library_closure_and_dlopen_requirement(self):
         original = self.lock["host_libraries"]
         self.lock["host_libraries"] = []
