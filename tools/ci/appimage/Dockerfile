@@ -21,6 +21,7 @@ COPY dependency-inputs.lock.json /inputs/packaging.lock.json
 COPY build-dependencies.sh /inputs/
 RUN bash /inputs/build-dependencies.sh && rm -rf /inputs/sources /build
 COPY packaging.lock.json /opt/atrinik-appimage/packaging.lock.json
+RUN chmod -R a+rX /opt/atrinik-appimage && chmod a+r /build-packages.tsv
 COPY runtime-probe.c /inputs/runtime-probe.c
 RUN PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig cc -Wall -Wextra -Werror -O2 /inputs/runtime-probe.c $(PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig pkg-config --cflags --libs sdl3 sdl3-image sdl3-ttf sdl3-mixer libcurl) -o /appimage-runtime-probe
 COPY graphical-probe.c /inputs/graphical-probe.c
