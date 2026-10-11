@@ -99,6 +99,44 @@ class TrustedToolTests(unittest.TestCase):
             self.assertEqual(run.call_count, 1)
 
 
+class RecordedLLVMTests(unittest.TestCase):
+    def test_real_llvm_readelf_output_formats(self):
+        fixtures = Path(__file__).parent / "fixtures/llvm-readelf-23.1.3"
+        outputs = [(fixtures / (name + ".txt")).read_text()
+                   for name in ("dynamic", "versions", "symbols", "program")]
+        with mock.patch.object(appimage, "_run", side_effect=outputs) as run:
+            needed, _ = appimage._elf(Path("/usr/bin/true"), executable=True)
+        self.assertIn("libc.so.6", needed)
+        self.assertEqual([call.args[0] for call in run.call_args_list], ["llvm-readelf"] * 4)
+        # Mutate the recorded LLVM output itself: changing inspectors must
+        # preserve every security/compatibility field consumed by the parser.
+        mutations = (
+            (0, outputs[0] + "\n  0x000000000000000e (SONAME) Library soname: [../unsafe.so]", "library identity"),
+            (0, outputs[0] + "\n  0x000000000000000e (SONAME) Library soname: [libone.so]\n  0x000000000000000e (SONAME) Library soname: [libtwo.so]", "library identity"),
+            (0, outputs[0] + "\n  0x000000000000001d (RUNPATH) Library runpath: [/tmp/unsafe]", "search path"),
+            (1, outputs[1].replace("GLIBC_2.34", "GLIBC_2.40"), "glibc newer"),
+            (1, outputs[1].replace("GLIBC_2.34", "GLIBC_PRIVATE"), "private glibc"),
+            (2, outputs[2] + "\n   50: 0000000000000000 0 NOTYPE GLOBAL DEFAULT UND __asan_init", "instrumentation"),
+            (3, outputs[3].replace("/lib64/ld-linux-x86-64.so.2", "/unsafe/ld.so"), "interpreter"),
+            (3, outputs[3] + "\n      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]", "interpreter"),
+        )
+        for index, output, expected in mutations:
+            changed = outputs.copy()
+            changed[index] = output
+            with self.subTest(expected=expected, index=index), \
+                    mock.patch.object(appimage, "_run", side_effect=changed), \
+                    self.assertRaisesRegex(ValueError, expected):
+                appimage._elf(Path("/usr/bin/true"), executable=True)
+        # Real LLVM SONAME/dynamic output drives the SDK closure parser too.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("appimage_assemble", Path(__file__).parents[1] / "ci/appimage/assemble.py")
+        assemble = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(assemble)
+        with mock.patch.object(assemble, "run", return_value=outputs[0]) as run:
+            self.assertEqual(assemble.dynamic(Path("fixture")), (["libc.so.6"], None))
+            self.assertEqual(run.call_args.args[0], "llvm-readelf")
+
+
 @unittest.skipUnless(all(Path("/usr/bin", tool).is_file() for tool in ("llvm-readelf", "unsquashfs", "mksquashfs"))
                      and Path("/usr/bin/true").is_file()
                      and Path("/usr/lib/x86_64-linux-gnu/libzstd.so.1").is_file()
@@ -650,42 +688,6 @@ class AppImageTests(unittest.TestCase):
         self.metadata["compiler_image"] = "classic-build:latest"
         with self.assertRaisesRegex(ValueError, "producer identity"):
             self.validate()
-
-    def test_real_llvm_readelf_output_formats(self):
-        fixtures = Path(__file__).parent / "fixtures/llvm-readelf-23.1.3"
-        outputs = [(fixtures / (name + ".txt")).read_text()
-                   for name in ("dynamic", "versions", "symbols", "program")]
-        with mock.patch.object(appimage, "_run", side_effect=outputs) as run:
-            needed, _ = appimage._elf(Path("/usr/bin/true"), executable=True)
-        self.assertIn("libc.so.6", needed)
-        self.assertEqual([call.args[0] for call in run.call_args_list], ["llvm-readelf"] * 4)
-        # Mutate the recorded LLVM output itself: changing inspectors must
-        # preserve every security/compatibility field consumed by the parser.
-        mutations = (
-            (0, outputs[0] + "\n  0x000000000000000e (SONAME) Library soname: [../unsafe.so]", "library identity"),
-            (0, outputs[0] + "\n  0x000000000000000e (SONAME) Library soname: [libone.so]\n  0x000000000000000e (SONAME) Library soname: [libtwo.so]", "library identity"),
-            (0, outputs[0] + "\n  0x000000000000001d (RUNPATH) Library runpath: [/tmp/unsafe]", "search path"),
-            (1, outputs[1].replace("GLIBC_2.34", "GLIBC_2.40"), "glibc newer"),
-            (1, outputs[1].replace("GLIBC_2.34", "GLIBC_PRIVATE"), "private glibc"),
-            (2, outputs[2] + "\n   50: 0000000000000000 0 NOTYPE GLOBAL DEFAULT UND __asan_init", "instrumentation"),
-            (3, outputs[3].replace("/lib64/ld-linux-x86-64.so.2", "/unsafe/ld.so"), "interpreter"),
-            (3, outputs[3] + "\n      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]", "interpreter"),
-        )
-        for index, output, expected in mutations:
-            changed = outputs.copy()
-            changed[index] = output
-            with self.subTest(expected=expected, index=index), \
-                    mock.patch.object(appimage, "_run", side_effect=changed), \
-                    self.assertRaisesRegex(ValueError, expected):
-                appimage._elf(Path("/usr/bin/true"), executable=True)
-        # Real LLVM SONAME/dynamic output drives the SDK closure parser too.
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("appimage_assemble", Path(__file__).parents[1] / "ci/appimage/assemble.py")
-        assemble = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(assemble)
-        with mock.patch.object(assemble, "run", return_value=outputs[0]) as run:
-            self.assertEqual(assemble.dynamic(Path("fixture")), (["libc.so.6"], None))
-            self.assertEqual(run.call_args.args[0], "llvm-readelf")
 
     def test_pre_llvm_inventory_preserves_all_llvm_notices_without_new_metadata(self):
         self.assertNotIn("compiler", self.lock)
