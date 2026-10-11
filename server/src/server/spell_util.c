@@ -45,6 +45,27 @@
 #include <object.h>
 #include <object_methods.h>
 
+/* Borrowed spell actors survive a visibility callback only with the same
+ * object incarnation and, for players, the same live connection. */
+typedef struct spell_actor_ref {
+    object *ob;
+    tag_t count;
+    player *controller;
+    socket_struct *socket;
+} spell_actor_ref;
+
+static spell_actor_ref spell_actor_capture(object *ob) {
+    player *controller = ob->type == PLAYER ? CONTR(ob) : NULL;
+    return (spell_actor_ref){ob, ob->count, controller,
+                             controller != NULL ? controller->cs : NULL};
+}
+
+static bool spell_actor_current(spell_actor_ref ref) {
+    return (ref.controller == NULL ||
+            player_connection_is_current(ref.ob, ref.count, ref.controller, ref.socket)) &&
+           OBJECT_VALID(ref.ob, ref.count);
+}
+
 /* A remembered target is not permission to aim at a hidden creature. */
 static object *spell_aim_target(object *source) {
     object *target = source->type == PLAYER ? CONTR(source)->target_object : source->enemy;
@@ -412,7 +433,10 @@ int cast_spell(object *op,
         return 0;
     }
 
-    if (!spell_target_authorized(op, target, type)) {
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
+    if (!spell_target_authorized(op, target, type) ||
+        !spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
         return 0;
     }
 
@@ -455,6 +479,9 @@ int cast_spell(object *op,
         }
         default:
             break;
+    }
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        return 0;
     }
     propagation_admission admission;
     if (!propagation_admission_begin(&admission, propagation_radius, propagation_copies,
@@ -657,6 +684,9 @@ int cast_spell(object *op,
     }
 
     propagation_admission_end(&admission);
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        return 0;
+    }
     play_sound_map(op->map, CMD_SOUND_EFFECT, spells[type].sound, op->x, op->y, 0, 0);
 
     if (item == CAST_NPC) {
@@ -723,7 +753,12 @@ int cast_create_obj(object *op, object *new_op, int dir) {
  */
 int fire_bolt(object *op, object *caster, int dir, int type) {
     object *tmp;
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
     object *aim = spell_aim_target(op);
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        return 0;
+    }
 
     if (!spellarch[type]) {
         return 0;
@@ -828,19 +863,39 @@ int fire_arch_from_position(object *op,
     tmp->x = cell.x, tmp->y = cell.y;
     tmp->direction = dir;
 
-    if (target == NULL) {
-        target = spell_aim_target(op);
-    }
-
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
+    spell_actor_ref env_ref = spell_actor_capture(env);
     object *observer = object_owner(op);
     if (observer == NULL) {
         observer = env;
+    }
+    spell_actor_ref observer_ref = spell_actor_capture(observer);
+    if (target == NULL) {
+        target = spell_aim_target(op);
+        if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref) ||
+            !spell_actor_current(env_ref) || !spell_actor_current(observer_ref)) {
+            object_destroy(tmp);
+            return 0;
+        }
     }
     if (target != NULL && target != observer &&
         !(observer->type == PLAYER ? target_player_authorized(CONTR(observer), target, NULL) :
           perception_object_visible(observer, target))) {
         target = NULL;
     }
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref) ||
+        !spell_actor_current(env_ref) || !spell_actor_current(observer_ref)) {
+        object_destroy(tmp);
+        return 0;
+    }
+    /* Resolve again: callbacks may have relocated the source or its map. */
+    if (env->map == NULL || !spatial_resolve(env->map, x, y, 0, &cell)) {
+        object_destroy(tmp);
+        return 0;
+    }
+    tmp->x = cell.x;
+    tmp->y = cell.y;
     if (target) {
         tmp->enemy = target;
         tmp->enemy_count = target->count;
@@ -902,10 +957,15 @@ int cast_cone(object *op,
               int spell_type,
               struct archetype *spell_arch) {
     int dx = 0, dy = 0, dz = 0;
-    if (dir != 0 || (op->type == PLAYER && spell_aim_target(op) != NULL)) {
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
+    object *target = (dir != 0 || op->type == PLAYER) ? spell_aim_target(op) : NULL;
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        return 0;
+    }
+    if (dir != 0 || (op->type == PLAYER && target != NULL)) {
         dx = freearr_x[absdir(dir)];
         dy = freearr_y[absdir(dir)];
-        object *target = spell_aim_target(op);
         int ox, oy, oz;
         if (target != NULL && spatial_offset(op->map, target->map, &ox, &oy, &oz)) {
             dx = target->x + ox - op->x;
@@ -1274,7 +1334,13 @@ int fire_swarm(object *op,
     tmp->other_arch = swarm_type;
     tmp->direction = dir;
 
+    spell_actor_ref source_ref = spell_actor_capture(op);
+    spell_actor_ref caster_ref = spell_actor_capture(caster);
     object *target = spell_aim_target(op);
+    if (!spell_actor_current(source_ref) || !spell_actor_current(caster_ref)) {
+        object_destroy(tmp);
+        return 0;
+    }
     if (target != NULL) {
         tmp->enemy = target;
         tmp->enemy_count = target->count;

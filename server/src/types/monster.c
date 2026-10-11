@@ -393,6 +393,8 @@ object *check_enemy(object *npc, rv_vector *rv) {
  */
 object *find_enemy(object *npc, rv_vector *rv) {
     object *tmp = NULL;
+    tag_t npc_count = npc->count;
+    uint64_t publication = los_publication_epoch();
 
     /* If we are berserk, we don't care about others - we attack all we can
      * find. */
@@ -400,6 +402,9 @@ object *find_enemy(object *npc, rv_vector *rv) {
         /* Always clear the attacker entry */
         npc->attacked_by = NULL;
         tmp = find_nearest_enemy(npc);
+        if (!OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+            return NULL;
+        }
 
         if (tmp) {
             monster_rangevector(npc, tmp, rv);
@@ -425,8 +430,12 @@ object *find_enemy(object *npc, rv_vector *rv) {
                 /* Always clear the attacker entry */
                 npc->attacked_by = NULL;
 
-                if (monster_rangevector(npc, attacker, rv) &&
-                    perception_object_visible(npc, attacker)) {
+                bool visible = monster_rangevector(npc, attacker, rv) &&
+                               perception_object_visible(npc, attacker);
+                if (!OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+                    return NULL;
+                }
+                if (visible) {
                     /* The only thing we must know... */
 
                     CLEAR_FLAG(npc, FLAG_SLEEP);
@@ -442,6 +451,9 @@ object *find_enemy(object *npc, rv_vector *rv) {
          * one. */
         if (!QUERY_FLAG(npc, FLAG_UNAGGRESSIVE)) {
             tmp = find_nearest_enemy(npc);
+            if (!OBJECT_VALID(npc, npc_count) || publication != los_publication_epoch()) {
+                return NULL;
+            }
 
             if (tmp != npc->enemy) {
                 set_npc_enemy(npc, tmp, rv);
@@ -533,6 +545,8 @@ static void process_func(object *op) {
      * find_enemy() checks the old enemy or gets us a new one. */
 
     object *enemy;
+    tag_t op_count = op->count;
+    uint64_t publication = los_publication_epoch();
     bool enemy_visible = false;
     rv_vector rv;
     /* We never ever attack */
@@ -542,8 +556,21 @@ static void process_func(object *op) {
         }
 
         enemy = NULL;
-    } else if ((enemy = find_enemy(op, &rv)) != NULL) {
-        enemy_visible = perception_object_visible(op, enemy);
+    } else {
+        enemy = find_enemy(op, &rv);
+        if (!OBJECT_VALID(op, op_count) || publication != los_publication_epoch()) {
+            return;
+        }
+        if (enemy != NULL) {
+            enemy_visible = perception_object_visible(op, enemy);
+            /* False can mean destruction/recycling. The range vector also
+             * borrows multipart/map state invalidated by callback mutations. */
+            if (!OBJECT_VALID(op, op_count) || publication != los_publication_epoch()) {
+                return;
+            }
+        }
+    }
+    if (enemy != NULL) {
         CLEAR_FLAG(op, FLAG_SLEEP);
         op->direction = rv.direction;
 
@@ -604,9 +631,17 @@ static void process_func(object *op) {
 
         if (op->stats.Dex && rndm_chance(op->stats.Dex)) {
             if (QUERY_FLAG(op, FLAG_CAST_SPELL) && !op->last_grace) {
-                if (monster_cast_spell(op, op, 0, NULL, SPELL_DESC_FRIENDLY)) {
+                publication = los_publication_epoch();
+                bool cast = monster_cast_spell(op, op, 0, NULL, SPELL_DESC_FRIENDLY);
+                if (!OBJECT_VALID(op, op_count)) {
+                    return;
+                }
+                if (cast) {
                     /* Add monster casting delay */
                     op->last_grace += op->magic;
+                }
+                if (publication != los_publication_epoch()) {
+                    return;
                 }
             }
         }
@@ -701,21 +736,33 @@ static void process_func(object *op) {
 
         if (op->stats.Dex && rndm_chance(op->stats.Dex)) {
             if (QUERY_FLAG(op, FLAG_CAST_SPELL) && !op->last_grace) {
-                if (monster_cast_spell(op,
-                                       part,
-                                       dir,
-                                       &rv,
-                                       SPELL_DESC_DIRECTION | SPELL_DESC_ENEMY | SPELL_DESC_SELF)) {
+                publication = los_publication_epoch();
+                bool cast = monster_cast_spell(op,
+                                               part,
+                                               dir,
+                                               &rv,
+                                               SPELL_DESC_DIRECTION | SPELL_DESC_ENEMY | SPELL_DESC_SELF);
+                if (!OBJECT_VALID(op, op_count)) {
+                    return;
+                }
+                if (cast) {
                     /* Add monster casting delay */
                     op->last_grace += op->magic;
+                    return;
+                }
+                if (publication != los_publication_epoch()) {
                     return;
                 }
             }
 
             if (enemy_visible && QUERY_FLAG(op, FLAG_READY_BOW) &&
-                OBJECT_VALID(op->enemy, op->enemy_count) &&
-                perception_object_visible(op, op->enemy) && rndm_chance(4)) {
-                if (monster_use_bow(op, part, dir) && rndm_chance(2)) {
+                OBJECT_VALID(op->enemy, op->enemy_count)) {
+                publication = los_publication_epoch();
+                bool visible = perception_object_visible(op, op->enemy);
+                if (!OBJECT_VALID(op, op_count) || publication != los_publication_epoch()) {
+                    return;
+                }
+                if (visible && rndm_chance(4) && monster_use_bow(op, part, dir) && rndm_chance(2)) {
                     return;
                 }
             }
@@ -949,6 +996,7 @@ static object *find_nearest_enemy(object *ob) {
         aggro_stealth = MIN_MON_RADIUS;
     }
 
+    tag_t observer_count = ob->count;
     aggro_range = MIN(aggro_range, MONSTER_PERCEPTION_RADIUS);
     for (int z = -MIN(aggro_range, MAP2_MAX_DEPTH); z <= MIN(aggro_range, MAP2_MAX_DEPTH); z++) {
         for (i = -aggro_range; i <= aggro_range; i++) {
@@ -966,8 +1014,17 @@ static object *find_nearest_enemy(object *ob) {
                 /* Never replace the stack iterator with a multipart head. */
                 for (object *stack = GET_MAP_OB(m, xt, yt); stack != NULL; stack = stack->above) {
                     tmp = HEAD(stack);
-                    if (tmp == ob || !IS_LIVE(tmp) ||
-                        !can_detect_target(ob, tmp, aggro_range, aggro_stealth, &rv)) {
+                    if (tmp == ob || !IS_LIVE(tmp)) {
+                        continue;
+                    }
+                    uint64_t publication = los_publication_epoch();
+                    bool detected = can_detect_target(ob, tmp, aggro_range, aggro_stealth, &rv);
+                    /* Do not advance a borrowed stack/map iterator after a
+                     * callback mutates it, even when detection returns false. */
+                    if (!OBJECT_VALID(ob, observer_count) || publication != los_publication_epoch()) {
+                        return NULL;
+                    }
+                    if (!detected) {
                         continue;
                     }
                     if (!is_friend_of(ob, tmp)) {
@@ -1188,10 +1245,17 @@ static int monster_cast_spell(object *head, object *part, int dir, rv_vector *rv
 
     /* Recheck the selected spell, including its long-range alternate. Self
      * recovery remains possible during pursuit; every aimed cast needs sight. */
-    if (rv != NULL && !(sp->flags & SPELL_DESC_SELF) &&
-        (!OBJECT_VALID(head->enemy, head->enemy_count) ||
-         !perception_object_visible(head, head->enemy))) {
-        return 0;
+    if (rv != NULL && !(sp->flags & SPELL_DESC_SELF)) {
+        tag_t head_count = head->count, part_count = part->count;
+        tag_t spell_count = spell_item->count;
+        uint64_t publication = los_publication_epoch();
+        bool visible = OBJECT_VALID(head->enemy, head->enemy_count) &&
+                       perception_object_visible(head, head->enemy);
+        if (!OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count) ||
+            !OBJECT_VALID(spell_item, spell_count) || publication != los_publication_epoch() ||
+            !visible) {
+            return 0;
+        }
     }
 
     /* Monster doesn't have enough spellpoints */

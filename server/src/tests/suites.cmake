@@ -8,6 +8,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.auth_worker|check_server_auth_worker|src/tests/unit/server/auth_worker.c"
     "server.arch|check_server_arch|src/tests/unit/server/arch.c"
     "server.assets|check_server_assets|src/tests/unit/server/assets.c"
+    "server.actor_callbacks|check_server_actor_callbacks|src/tests/unit/server/actor_callbacks.c"
     "server.attack|check_server_attack|src/tests/unit/server/attack.c"
     "server.ban|check_server_ban|src/tests/unit/server/ban.c"
     "server.book_edit|check_server_book_edit|src/tests/unit/server/book_edit.c"

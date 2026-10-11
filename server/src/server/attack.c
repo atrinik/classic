@@ -379,16 +379,28 @@ static void attack_player_retarget(object *player_obj, object *attacker, int dam
         return;
     }
 
+    player *pl = CONTR(player_obj);
+    socket_struct *socket = pl->cs;
+    tag_t player_count = player_obj->count;
     attacker = HEAD(attacker);
+    tag_t attacker_count = attacker->count;
     if (attacker == player_obj || !OBJECT_ACTIVE(attacker) || !IS_LIVE(attacker) ||
         attacker->stats.hp <= 0 || QUERY_FLAG(attacker, FLAG_SYS_OBJECT) ||
         attacker->env != NULL || player_obj->map == NULL || attacker->map == NULL ||
         !target_player_authorized(CONTR(player_obj), attacker, NULL) ||
-        is_friend_of(attacker, player_obj) || attack_player_target_is_active(player_obj)) {
+        is_friend_of(attacker, player_obj)) {
         return;
     }
 
-    player *pl = CONTR(player_obj);
+    bool active_target = attack_player_target_is_active(player_obj);
+    /* A false authorization result can mean that ASK_SHOW logged the player
+     * out or recycled the attacker, rather than merely hiding a target. */
+    if (!player_connection_is_current(player_obj, player_count, pl, socket) ||
+        !OBJECT_VALID(player_obj, player_count) || !OBJECT_VALID(attacker, attacker_count) ||
+        active_target) {
+        return;
+    }
+
     pl->target_object = attacker;
     pl->target_object_count = attacker->count;
     pl->combat = 1;
@@ -1070,7 +1082,17 @@ static int attack_hit_internal(object *op,
         return 0;
     }
 
+    tag_t victim_count = op->count, hitter_count = hitter->count;
+    tag_t owner_count = hitter_owner->count;
+    player *victim_controller = op->type == PLAYER ? CONTR(op) : NULL;
+    socket_struct *victim_socket = victim_controller != NULL ? victim_controller->cs : NULL;
     attack_player_retarget(op, hitter_owner, dam);
+    if ((victim_controller != NULL &&
+         !player_connection_is_current(op, victim_count, victim_controller, victim_socket)) ||
+        !OBJECT_VALID(op, victim_count) || !OBJECT_VALID(hitter, hitter_count) ||
+        !OBJECT_VALID(hitter_owner, owner_count) || !attack_check_sanity(op, hitter, NULL)) {
+        return 0;
+    }
 
     attack_bonus_t bonus = {.damage = dam};
     if (situational) {

@@ -468,6 +468,7 @@ if (BUILD_TESTING AND NOT MINGW)
             ${CMAKE_CURRENT_SOURCE_DIR}/server.cfg
             ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.lock.json
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/content_benchmark
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_actor_callbacks.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_books.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_calendar.py
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/data/plugin_python/python_unit_fail.py
