@@ -1619,7 +1619,13 @@ class WorkflowContractTests(unittest.TestCase):
     def test_candidate_windows_jobs_execute_the_authenticated_producer_environment(self) -> None:
         from tools.release.windows_producer import select_producer
         workflow = self.text("build-release-candidate.yml")
-        for revision in ("5dc27699ccabea180d932265654c3d7a03b8a943",
+        # Current recipe authentication follows the exact committed source,
+        # while the historical cases remain fixed to their reviewed commits.
+        current_revision = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        for revision in (current_revision,
                          "fd4943252ac872fce2995c286b10a0c6d249aba3",
                          "34bbad5c3f4d9b303c17aec5e2c75b3550ec8983",
                          "994e6fdc20da962be9c11055bda28ef5561a1dea",
@@ -1631,6 +1637,11 @@ class WorkflowContractTests(unittest.TestCase):
                 subprocess.run(["git", "clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(workspace)], check=True)
                 subprocess.run(["git", "-C", str(workspace), "checkout", "--quiet", "--detach", revision], check=True)
                 expected = select_producer(workspace, revision)
+                self.assertEqual(expected["windows_mode"], "llvm" if revision == current_revision else "mxe")
+                self.assertEqual(subprocess.run(
+                    ["git", "-C", str(workspace), "status", "--porcelain"],
+                    check=True, capture_output=True, text=True,
+                ).stdout, "")
                 trusted = workspace / "build/windows-automation/tools/release"
                 trusted.mkdir(parents=True)
                 shutil.copyfile(ROOT / "tools/release/windows_producer.py", trusted / "windows_producer.py")
