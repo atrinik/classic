@@ -8,6 +8,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef WIN32
+#include <signal.h>
+#endif
 
 #include <live_movement_capture.h>
 
@@ -568,13 +571,22 @@ static int test_deadline_and_report_failure(void) {
     CHECK(fixture_create(&paths, route_xml));
     CHECK(fixture_ready(&paths));
     CHECK(fclose(report) == 0);
-    report = fopen("/dev/full", "w");
+    /* A pipe without readers rejects writes on every supported POSIX host. */
+    int report_pipe[2];
+    CHECK(pipe(report_pipe) == 0);
+    CHECK(close(report_pipe[0]) == 0);
+    struct sigaction ignore_pipe = {.sa_handler = SIG_IGN}, previous_pipe;
+    CHECK(sigemptyset(&ignore_pipe.sa_mask) == 0);
+    CHECK(sigaction(SIGPIPE, &ignore_pipe, &previous_pipe) == 0);
+    report = fdopen(report_pipe[1], "w");
     CHECK(report != NULL && setvbuf(report, NULL, _IONBF, 0) == 0);
     publication_generation = 1;
     profile_statistics.frames = 1;
     live_movement_frame_finished(true, true, &(client_keepalive_statistics_t){0});
     CHECK(live_movement_finished() && live_movement_exit_status() == 8);
+    CHECK(ferror(report));
     live_movement_close();
+    CHECK(sigaction(SIGPIPE, &previous_pipe, NULL) == 0);
     fixture_destroy(&paths);
 #endif
     return 0;
