@@ -70,13 +70,12 @@ provides CMake, Ninja, Homebrew and Xcode; the lane records the actual image,
 OS, selected SDK and disk space instead of inferring them from the label.
 
 The native job installs ARM64 Homebrew bottles for the current application
-prerequisites: SDL3, SDL3_image, SDL3_ttf, SDL3_mixer, OpenSSL 3, libxml2,
+prerequisites: SDL3, SDL3_image, SDL3_ttf, Opusfile, OpenSSL 3, libxml2,
 libidn2, curl, zlib, Readline and Python 3.12. Python supplies the protocol,
 client and validation tooling interpreter. Readline retains the toolkit's
 interactive console feature. Flex, MiniUPnPc, libgd, Check and libpcpnatpmp
 belong to the server build and are not acquired by this Mac lane.
-The official [SDL3](https://formulae.brew.sh/formula/sdl3),
-[SDL3_mixer](https://formulae.brew.sh/formula/sdl3_mixer) and
+The official [SDL3](https://formulae.brew.sh/formula/sdl3) and
 [OpenSSL 3](https://formulae.brew.sh/formula/openssl@3) formulae currently supply
 bottles meeting Classic's required versions. CMake remains the authority for
 required versions at execution. Homebrew dependencies and hosted SDK images
@@ -101,6 +100,16 @@ prove Apple SecTrust solely from the SSL version, or establish source-built
 dependency acceptance. The exact feature, protocol and trust baseline must be
 preserved when the resolver provider changes. Linux and Windows curl policies
 do not establish the native Mac baseline.
+
+`tools/ci/prepare_macos_mixer.sh` builds the SHA-verified SDL3_mixer source
+from the existing packaging lock with native LLVM and the same decoder options
+as the Linux and Windows producers. Homebrew's mixer enables additional
+decoders and does not satisfy Classic's exact supported set: WAV, STBVORBIS,
+OPUS, VOC, AIFF, AU, DRMP3, SINEWAVE and RAW. The preparation probe checks that
+set, decodes the verified Opus fixture at its legacy `.mid` path into nonzero
+PCM and starts playback on SDL's dummy audio device. The application selects
+that qualified prefix explicitly. These checks retain sound features and
+headless test coverage; audible output still requires separate native proof.
 
 The integrated root selects `ATRINIK_BUILD_CLIENT=ON` and
 `ATRINIK_BUILD_SERVER=OFF`, building the supported macOS protocol, libatrinik,

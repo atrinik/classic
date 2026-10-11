@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           brew install --force-bottle \
             pkgconf libidn2 curl openssl@3 zlib \
-            libxml2 readline python@3.12 sdl3 sdl3_image sdl3_ttf sdl3_mixer \
+            libxml2 readline python@3.12 sdl3 sdl3_image sdl3_ttf opusfile \
             2>&1 | tee build/macos-qualification-evidence/dependency-install.log
           brew list --versions > build/macos-qualification-evidence/dependency-versions.txt
           brew info --json=v2 --installed > build/macos-qualification-evidence/dependencies.json
@@ -111,6 +111,16 @@ jobs:
             --output "${GITHUB_WORKSPACE}/build/macos-qualification-evidence/curl-baseline" \
             --ca-bundle "${GITHUB_WORKSPACE}/client/ca-bundle.crt" \
             2>&1 | tee build/macos-qualification-evidence/curl-baseline.log
+      - name: Build and qualify the supported mixer decoder contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/ci/prepare_macos_mixer.sh "${RUNNER_TEMP}/classic-mixer-macos" \
+            2>&1 | tee build/macos-qualification-evidence/mixer-probe.log
+          cp "${RUNNER_TEMP}/classic-mixer-macos/stage/build/CMakeCache.txt" \
+            build/macos-qualification-evidence/mixer-CMakeCache.txt
+          cp "${RUNNER_TEMP}/classic-mixer-macos/stage/source.txt" \
+            build/macos-qualification-evidence/mixer-source.txt
       - name: Acquire and verify the existing locked runtime and source inputs
         shell: bash
         run: |
@@ -135,7 +145,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DPACKAGE_TYPE=none \
             -DATRINIK_BUILD_CLIENT=ON -DATRINIK_BUILD_SERVER=OFF \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            "-DCMAKE_PREFIX_PATH=${prefix};$(brew --prefix openssl@3);$(brew --prefix curl);$(brew --prefix libxml2);$(brew --prefix zlib);$(brew --prefix readline);${python_prefix}" \
+            "-DCMAKE_PREFIX_PATH=${RUNNER_TEMP}/classic-mixer-macos;${prefix};$(brew --prefix openssl@3);$(brew --prefix curl);$(brew --prefix libxml2);$(brew --prefix zlib);$(brew --prefix readline);${python_prefix}" \
+            "-DSDL3_mixer_DIR=${RUNNER_TEMP}/classic-mixer-macos/lib/cmake/SDL3_mixer" \
             "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" \
             "-DCURL_ROOT=$(brew --prefix curl)" \
             "-DPython3_EXECUTABLE=${python_prefix}/bin/python3.12" \

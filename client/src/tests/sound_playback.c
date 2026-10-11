@@ -14,6 +14,7 @@
 #include <player.h>
 #include <settings.h>
 #include <sound.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +53,11 @@ int64_t setting_get_int(int category, int setting) {
 
 void draw_info_format(const char *color, const char *format, ...) {
     (void)color;
-    (void)format;
+    va_list arguments;
+    va_start(arguments, format);
+    vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    fputc('\n', stderr);
 }
 
 static void capture_print(const char *text) {
@@ -171,7 +176,8 @@ static void test_server_and_ambient_sources(void) {
         socket_command_sound(packet->data, packet->len, 0);
         TEST_CHECK(strstr(captured, "source=server-positional") != NULL);
         char expected[MAX_BUF];
-        snprintf((expected), sizeof((expected)),
+        snprintf((expected),
+                 sizeof((expected)),
                  "requested=\"%s\" effective=\"%s\"",
                  hurt_effects[i],
                  hurt_effects[i]);

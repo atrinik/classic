@@ -23,6 +23,17 @@ def embedded_python_script(index):
 
 
 class MacOSQualificationWorkflowTests(unittest.TestCase):
+    def test_audio_uses_the_qualified_decoder_prefix(self):
+        text = WORKFLOW.read_text()
+        self.assertIn('prepare_macos_mixer.sh "${RUNNER_TEMP}/classic-mixer-macos"', text)
+        self.assertIn('"-DSDL3_mixer_DIR=${RUNNER_TEMP}/classic-mixer-macos/lib/cmake/SDL3_mixer"', text)
+        self.assertIn('"-DCMAKE_PREFIX_PATH=${RUNNER_TEMP}/classic-mixer-macos;', text)
+        self.assertIn('sdl3 sdl3_image sdl3_ttf opusfile', text)
+        self.assertNotIn('sdl3 sdl3_image sdl3_ttf sdl3_mixer', text)
+        self.assertIn('mixer-CMakeCache.txt', text)
+        self.assertIn('mixer-source.txt', text)
+        self.assertIn('mixer-probe.log', text)
+
     def test_discovery_requires_each_supported_native_component(self):
         names = [
             "protocol-generate-check", "libatrinik-smoke", "atrinik-pathfinding",
