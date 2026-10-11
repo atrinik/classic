@@ -30,6 +30,7 @@
 #include <global.h>
 #include <propagation.h>
 #include <celestial_structure.h>
+#include <celestial_dependencies.h>
 #include <gameplay_journal.h>
 #include <swap.h>
 #include <server_main.h>
@@ -173,6 +174,8 @@ static void map_constructor(void *ptr) {
 /** @copydoc chunk_constructor */
 static void map_destructor(void *ptr) {
     mapstruct *map = ptr;
+    celestial_dependencies_forget(map);
+    celestial_dependencies_field_forget(map);
     if (!map->global_removed) {
         DL_DELETE(first_map, map);
     }
@@ -1820,6 +1823,8 @@ void free_map(mapstruct *m, int flag) {
     int i;
 
     swap_cancel_pending(m);
+    celestial_dependencies_forget(m);
+    celestial_dependencies_field_forget(m);
     celestial_light_forget(m);
 
     if (!m->in_memory) {
@@ -1901,6 +1906,8 @@ void delete_map(mapstruct *m) {
     HARD_ASSERT(m != NULL);
 
     swap_cancel_pending(m);
+    celestial_dependencies_forget(m);
+    celestial_dependencies_field_forget(m);
     celestial_light_forget(m);
 
     if (m->in_memory == MAP_IN_MEMORY) {

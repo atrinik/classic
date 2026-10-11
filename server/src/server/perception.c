@@ -22,7 +22,7 @@ static bool perception_flags_visible(const object *observer, const object *targe
     return true;
 }
 
-static bool perception_identity_visible(const object *observer, const object *target) {
+bool perception_identity_visible(const object *observer, const object *target) {
     if (observer == NULL || target == NULL || !OBJECT_ACTIVE(observer) ||
         !OBJECT_ACTIVE(target) || observer->map == NULL || target->map == NULL ||
         observer->env != NULL || target->env != NULL) {

@@ -8,6 +8,8 @@
 
 /* Server-thread only, borrowed objects/maps. Callers must validate retained
  * object counts before calling. No map loads or retained visibility cache. */
+/* Identity/invisibility/plugin policy only; caller supplies geometry policy. */
+bool perception_identity_visible(const object *observer, const object *target);
 bool perception_object_visible(const object *observer, const object *target);
 bool perception_player_authorized(const player *pl, const object *target);
 /* Exact clicked/serialized part: no other part can authorize this cell. */

@@ -14,6 +14,7 @@ set(ATRINIK_SERVER_TEST_SUITES
     "server.bank|check_server_bank|src/tests/unit/server/bank.c"
     "server.cache|check_server_cache|src/tests/unit/server/cache.c"
     "server.celestial_lunar|check_server_celestial_lunar|src/tests/unit/server/celestial_lunar.c"
+    "server.celestial_dependencies|check_server_celestial_dependencies|src/tests/unit/server/celestial_dependencies.c"
     "server.celestial_light|check_server_celestial_light|src/tests/unit/server/celestial_light.c"
     "server.celestial_structure|check_server_celestial_structure|src/tests/unit/server/celestial_structure.c"
     "server.content_benchmark|check_server_content_benchmark|src/tests/unit/server/content_benchmark.c"

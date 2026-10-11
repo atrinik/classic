@@ -17,6 +17,7 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <light.h>
+#include <initialization.h>
 #include <map.h>
 #include <object.h>
 #include <region.h>
