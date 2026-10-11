@@ -122,6 +122,34 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertTrue(result["client"])
         self.assertTrue(result["server"])
 
+    def test_shared_windows_runtime_tests_select_both_native_consumers_and_windows(self) -> None:
+        for path in (
+            "tools/tests/test_stage_windows_runtime.py",
+            "tools/tests/test_windows_runtime_cmake_arguments.py",
+            "tools/tests/test_windows_trust_notices.py",
+        ):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+                self.assertTrue(result["windows"])
+                self.assertEqual(result["codeql_languages"], "python")
+                self.assertFalse(result["benchmark_client"])
+                self.assertFalse(result["benchmark_server"])
+
+    def test_unrelated_tools_tests_keep_native_builds_skipped(self) -> None:
+        for path in (
+            "tools/tests/test_select_release_batch.py",
+            "tools/tests/test_verify_next_version.py",
+            "tools/tests/test_sync_release_assets.py",
+        ):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertFalse(result["client"])
+                self.assertFalse(result["server"])
+                self.assertFalse(result["windows"])
+                self.assertEqual(result["codeql_languages"], "python")
+
     def test_release_configuration_selects_both_native_components(self) -> None:
         result = classify_changes.classify([".releaserc.cjs"])
         self.assertTrue(result["client"])

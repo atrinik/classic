@@ -29,6 +29,9 @@ NATIVE_SHARED_PATHS = {
     "tools/tests/test_llvm_runtime_notices.py",
     "tools/tests/test_macos_llvm_toolchain.py",
     "tools/tests/test_gpu_qualification_runtime.py",
+    "tools/tests/test_stage_windows_runtime.py",
+    "tools/tests/test_windows_runtime_cmake_arguments.py",
+    "tools/tests/test_windows_trust_notices.py",
     "LICENSE.md",
     "docs/history/component-release-map.json",
     "docs/history/release-tags.json",
@@ -52,6 +55,9 @@ WINDOWS_TEST_PATHS = {
     "cmake/InstallWindowsRuntime.cmake", "cmake/toolchains/llvm.cmake",
     "cmake/toolchains/llvm-macos.cmake", "tools/tests/test_macos_llvm_toolchain.py",
     "tools/tests/test_llvm_toolchain.py", "tools/tests/test_llvm_runtime_notices.py",
+    "tools/tests/test_stage_windows_runtime.py",
+    "tools/tests/test_windows_runtime_cmake_arguments.py",
+    "tools/tests/test_windows_trust_notices.py",
 }
 BENCHMARK_CONTRACT_PATHS = {
     ".github/workflows/pr-benchmarks.yml",
