@@ -566,6 +566,17 @@ rather than relying on the producer's newer host libraries. The AppImage
 replaces the Debian package in new candidates and remains covered by the hash manifest, SPDX and attestation
 checks of the closed candidate/publication pipeline.
 
+Validation rejects candidate and private SDK build paths and production test or
+sanitizer instrumentation. Reviewed upstream providers can retain only narrowly
+source-bound exceptions in the trusted packaging lock: the exact provider,
+version, SONAME and full post-patchelf SHA-256 must match before any exception
+applies. For the fixed Ubuntu PulseAudio provider, this covers one exact
+`PA_BUILDDIR` prefix used for runtime build-tree detection; for the fixed GLib
+provider, it covers only the two reviewed weak undefined LeakSanitizer hooks.
+The prefix participates in upstream runtime behavior. These allowances do not
+permit other build paths, hooks, providers or modified library bytes, and do not
+waive the rest of the dependency-closure audit.
+
 The client and server source archives include the matching protocol and
 libatrinik trees under `dependencies/`; the libatrinik archive includes the
 matching protocol tree. Their CMake configuration selects those packaged
