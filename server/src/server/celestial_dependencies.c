@@ -256,9 +256,13 @@ static field_binding *find_binding(const mapstruct *map) {
     return NULL;
 }
 
-static bool fits_binding(const field_binding *binding, size_t share, bool next) {
+static bool fits_binding(const field_binding *binding, size_t share, bool next,
+                         const celestial_dependencies *ctx) {
     size_t other = binding != NULL && binding->fields[!next] != NULL ?
                        binding->fields[!next]->share : 0;
+    if (binding != NULL && binding->fields[!next] == ctx) {
+        other = 0;
+    }
     return share <= FIELD_METADATA_LIMIT - sizeof(field_binding) &&
            other <= FIELD_METADATA_LIMIT - sizeof(field_binding) - share;
 }
@@ -283,7 +287,7 @@ bool celestial_dependencies_finish(celestial_dependencies *ctx,
             }
         }
         selected[i] = find_binding(maps[i]);
-        if (!fits_binding(selected[i], share, next)) {
+        if (!fits_binding(selected[i], share, next, ctx)) {
             goto fail;
         }
         if (selected[i] == NULL) {
@@ -352,7 +356,7 @@ bool celestial_dependencies_field_bind(celestial_dependencies *ctx,
     field_binding *binding = find_binding(map);
     if (ctx == NULL || !ctx->completed || map == NULL ||
         !celestial_dependencies_references_map(ctx, map) ||
-        !fits_binding(binding, ctx->share, next)) {
+        !fits_binding(binding, ctx->share, next, ctx)) {
         return false;
     }
     if (binding == NULL) {
