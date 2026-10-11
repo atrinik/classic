@@ -284,6 +284,12 @@ class MacOSCurlCohortTests(unittest.TestCase):
                 changed[key] = value
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     COHORT.validate_loaded(changed, prefix, files, probe)
+            captured_foreign_files = dict(files, **{str(foreign): COHORT.digest(foreign)})
+            for additional in ("/usr/lib/libcurl.4.dylib", "/usr/lib/libcares.2.dylib", str(foreign)):
+                changed = copy.deepcopy(data)
+                changed["loaded_images"].append(additional)
+                with self.subTest(extra_provider=additional), self.assertRaises(ValueError):
+                    COHORT.validate_loaded(changed, prefix, captured_foreign_files, probe)
             with self.assertRaises(ValueError):
                 COHORT.validate_loaded(data, prefix, {}, probe)
             dep.write_bytes(b"changed dependency bytes")
@@ -370,6 +376,73 @@ class MacOSCurlCohortTests(unittest.TestCase):
                         COHORT.verify_consumer_cache(prefix, cache_path)
                     path.write_bytes(original)
                 COHORT.verify_consumer_cache(prefix, cache_path)
+
+    def test_diagnostics_retains_failed_configuration_without_private_keys_or_unknown_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "cohort"
+            diagnostics = ("CMakeCache.txt", "compile_commands.json", "config.log", "config.status",
+                           "lib/curl_config.h", "CMakeFiles/CMakeConfigureLog.yaml")
+            for build in ("llvm-probe", "cares-build", "curl-build", "curl-probe"):
+                for relative in diagnostics:
+                    path = prefix / "stage" / build / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(f"retained failure diagnostic: {build}/{relative}\n")
+                (prefix / "stage" / build / "unknown-source-file").write_text("exclude unknown source")
+            private = prefix / "stage/private-tls/private.key"
+            private.parent.mkdir()
+            private.write_text("private fixture key must remain excluded")
+            (prefix / "stage/curl-build/unknown.key").write_text("exclude key")
+            COHORT.retain_diagnostics(prefix)
+            evidence = prefix / "evidence/configuration"
+            expected = {f"{build}/{relative}" for build in ("llvm-probe", "cares-build", "curl-build", "curl-probe")
+                        for relative in diagnostics}
+            actual = {str(path.relative_to(evidence)) for path in evidence.rglob("*") if path.is_file()}
+            self.assertEqual(actual, expected)
+            self.assertEqual((evidence / "curl-build/config.log").read_text(),
+                             "retained failure diagnostic: curl-build/config.log\n")
+            self.assertFalse(any(path.suffix == ".key" for path in (prefix / "evidence").rglob("*")))
+            # A failed early configure may produce only config.log; missing optional
+            # diagnostics must not conceal the original command failure.
+            sparse = Path(directory) / "sparse"
+            log = sparse / "stage/curl-build/config.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("configure exited before creating its cache\n")
+            COHORT.retain_diagnostics(sparse)
+            self.assertEqual((sparse / "evidence/configuration/curl-build/config.log").read_text(), log.read_text())
+
+    def test_prepare_preserves_command_failure_and_retains_early_configure_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix, llvm = root / "absent-cohort", root / "llvm"
+            llvm.mkdir()
+            bundle = root / "ca.pem"
+            bundle.write_text("fixture CA input")
+            manifest = copy.deepcopy(self.manifest)
+            manifest["ca_bundle_sha256"] = COHORT.digest(bundle)
+            baseline = self.baseline()
+            baseline["ca_bundle_sha256"] = manifest["ca_bundle_sha256"]
+            baseline_path = root / "baseline.json"
+            baseline_path.write_text(json.dumps(baseline))
+
+            def failed_build(owned_prefix, *arguments):
+                build = owned_prefix / "stage/curl-build"
+                build.mkdir(parents=True)
+                (build / "config.log").write_text("early configure failure\n")
+                evidence = owned_prefix / "evidence"
+                evidence.mkdir()
+                COHORT.Commands(evidence, {}).run("curl-configure", ["fixture-configure"])
+
+            result = subprocess.CompletedProcess(["fixture-configure"], 17, "partial", "configure failed")
+            with patch.object(COHORT, "load_manifest", return_value=manifest), \
+                    patch.object(COHORT.platform, "system", return_value="Darwin"), \
+                    patch.object(COHORT.platform, "machine", return_value="arm64"), \
+                    patch.object(COHORT, "_prepare_owned", side_effect=failed_build), \
+                    patch.object(COHORT.subprocess, "run", return_value=result), \
+                    self.assertRaisesRegex(ValueError, r"curl-configure \(17\)"):
+                COHORT.prepare(prefix, llvm, baseline_path, bundle)
+            self.assertEqual((prefix / "evidence/configuration/curl-build/config.log").read_text(),
+                             "early configure failure\n")
+            self.assertEqual(json.loads((prefix / "evidence/commands.json").read_text())[0]["returncode"], 17)
 
     def test_failed_command_retains_output_status_and_arguments(self):
         with tempfile.TemporaryDirectory() as directory:
