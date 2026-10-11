@@ -80,6 +80,26 @@ static void ask_show_other(object *actor, const char *options, object *other) {
     ask_show(actor, options);
 }
 
+static void name_player(object *pl, const char *name) {
+    FREE_AND_COPY_HASH(pl->name, name);
+    player *controller = CONTR(pl);
+    controller->cmd_permissions = xcalloc(1, sizeof(*controller->cmd_permissions));
+    controller->cmd_permissions[0] = xstrdup("kick");
+    controller->num_cmd_permissions = 1;
+}
+
+static object *additional_player(mapstruct *map, const char *name, int x, int y) {
+    object *pl = player_get_dummy(name, NULL);
+    ck_assert_ptr_nonnull(pl);
+    object_remove(pl, 0);
+    pl->x = x;
+    pl->y = y;
+    pl = object_insert_map(pl, map, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+    name_player(pl, name);
+    return pl;
+}
+
 static size_t queued_map_packets(const socket_struct *cs) {
     size_t count = 0;
     for (const packet_struct *packet = cs->packets; packet != NULL; packet = packet->next) {
@@ -135,6 +155,76 @@ START_TEST(test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh) {
     assert_aborted(pl);
 
     assert_fresh_publication(pl);
+}
+END_TEST
+
+/* ExecuteCommand('/kick') synchronously calls player_logout(), which frees
+ * both controller and socket. Retained-target authorization invokes ASK_SHOW
+ * before MAP2, and post-process must skip the freed snapshot while continuing
+ * to the next live player. */
+START_TEST(test_ask_show_kicking_observer_withdraws_snapshot_and_continues_postprocess) {
+    mapstruct *map;
+    object *observer;
+    fixture(&map, &observer);
+    name_player(observer, "los-kick-observer");
+    object *survivor = additional_player(map, "los-kick-survivor", 10, 12);
+    object *actor = place(map, "raas", 13, 12);
+    player *observer_controller = CONTR(observer);
+    socket_struct *observer_socket = observer_controller->cs;
+    /* Publish the retained target before attaching its callback: post-process
+     * must run ASK_SHOW through target authorization, before map drawing. */
+    draw_client_map(observer);
+    socket_buffer_clear(observer_socket);
+    ask_show(actor, "kick_observer");
+    tag_t observer_count = observer->count;
+    player *survivor_controller = CONTR(survivor);
+    socket_struct *survivor_socket = survivor_controller->cs;
+    tag_t survivor_count = survivor->count;
+    observer_controller->target_object = actor;
+    observer_controller->target_object_count = actor->count;
+
+    socket_server_post_process();
+
+    ck_assert(!player_connection_is_current(observer, observer_count,
+                                             observer_controller, observer_socket));
+    ck_assert(player_connection_is_current(survivor, survivor_count,
+                                            survivor_controller, survivor_socket));
+    ck_assert_ptr_eq(survivor_socket->target_map_published_map, map);
+    ck_assert_uint_eq(survivor_socket->target_map_published_count, survivor->count);
+    player_logout(survivor_controller);
+}
+END_TEST
+
+/* The callback deletes a later player already captured by post-process. Its
+ * stale snapshot must be rejected without touching the freed socket. */
+START_TEST(test_ask_show_kicking_next_player_rejects_postprocess_snapshot) {
+    mapstruct *map;
+    object *observer;
+    fixture(&map, &observer);
+    name_player(observer, "los-kick-current");
+    object *next = additional_player(map, "los-kick-next", 10, 12);
+    object *actor = place(map, "raas", 13, 12);
+    player *observer_controller = CONTR(observer);
+    socket_struct *observer_socket = observer_controller->cs;
+    draw_client_map(observer);
+    socket_buffer_clear(observer_socket);
+    ck_assert(object_set_value(actor, "los_ask_show_kick_name", next->name, true));
+    ask_show(actor, "kick_other");
+    tag_t observer_count = observer->count;
+    player *next_controller = CONTR(next);
+    socket_struct *next_socket = next_controller->cs;
+    tag_t next_count = next->count;
+    observer_controller->target_object = actor;
+    observer_controller->target_object_count = actor->count;
+
+    socket_server_post_process();
+
+    ck_assert(player_connection_is_current(observer, observer_count,
+                                            observer_controller, observer_socket));
+    ck_assert(!player_connection_is_current(next, next_count, next_controller, next_socket));
+    ck_assert_ptr_eq(observer_socket->target_map_published_map, map);
+    ck_assert_uint_eq(observer_socket->target_map_published_count, observer->count);
+    player_logout(observer_controller);
 }
 END_TEST
 
@@ -298,6 +388,8 @@ static Suite *suite(void) {
     TCase *tc = tcase_create("callbacks");
     tcase_add_test(tc, test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh);
     tcase_add_test(tc, test_ask_show_viewstate_change_withdraws_earlier_dark_actor);
+    tcase_add_test(tc, test_ask_show_kicking_observer_withdraws_snapshot_and_continues_postprocess);
+    tcase_add_test(tc, test_ask_show_kicking_next_player_rejects_postprocess_snapshot);
     tcase_add_test(tc, test_ask_show_upper_roof_aborts_stale_map2_and_hides_actor);
     tcase_add_test(tc, test_ask_show_mutating_earlier_actor_aborts_whole_map2_transaction);
     tcase_add_test(tc, test_ask_show_moving_earlier_actor_aborts_whole_map2_transaction);
