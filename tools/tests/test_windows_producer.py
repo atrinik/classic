@@ -171,10 +171,11 @@ class WindowsProducerTests(unittest.TestCase):
         self.assertEqual(selected['environment']['ATRINIK_WINDOWS_HOST_PYTHON'], '/usr/bin/python3')
         self.assertFalse(subprocess.run(['git', '-C', str(source), 'status', '--porcelain'],
                                         check=True, capture_output=True).stdout)
-        # Authenticate both package helpers and their configure entrypoints;
+        # Authenticate package helpers, configure entrypoints and shared protocol checks;
         # committed drift must not silently admit a newer source recipe.
         for path in ('client/tools/build-windows-package.sh', 'server/tools/build-windows-package.sh',
-                     'client/CMakeLists.txt', 'server/CMakeLists.txt'):
+                     'client/CMakeLists.txt', 'server/CMakeLists.txt',
+                     'libatrinik/CMakeLists.txt', 'libatrinik/cmake/RequireClassicProtocol.cmake'):
             with self.subTest(path=path):
                 subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', revision],
                                check=True, capture_output=True)

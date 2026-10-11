@@ -58,6 +58,8 @@ LLVM_RECIPE = {
     "server/tools/build-windows-package.sh": "14b93dc0f22ad945225712833d044d48704134f1b3ce768b10451998dd6916c2",
     "client/CMakeLists.txt": "f13c97b203a198cdf5848a48bcbc218641d2787422eb6c194a2eeb37b3474e83",
     "server/CMakeLists.txt": "ecdfbfd98d6864d7f43541409a21e63e5db024ac0c65ba8b161c5dc22e8a941a",
+    "libatrinik/CMakeLists.txt": "a6bc61acf194bd33b43e86f77dd6068e1ee6be17005390a7f17ddde585efb6a9",
+    "libatrinik/cmake/RequireClassicProtocol.cmake": "774325cab773ea8277eb3936238e4708141838169b4384d914a83fd7ee888734",
     "tools/ci/stage_windows_runtime.py": "2640baf4187bce4afca95da560cff08e4bdf8802840245c3cbf26eff372691e9",
     "cmake/toolchains/llvm.cmake": "b1eb85208a5f44a5b28956c33b92d86c4f056da1cac9355b483a84b46d55a513",
 }
