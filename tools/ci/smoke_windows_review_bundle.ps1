@@ -372,6 +372,313 @@ public static class AtrinikReviewCloseTimeoutProbe {
     }
 }
 
+# Timeout-only x64 diagnostic. Snapshot the owned thread's registers and a bounded
+# stack, resume it, then unwind. Never retain raw memory, register values or paths.
+function Get-ClientCloseStackSnapshot($Client) {
+    try {
+        if (-not ("AtrinikReviewCloseStackProbe" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
+using System.Threading;
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+public static class AtrinikReviewCloseStackProbe {
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenThread(uint access, bool inherit, uint threadId);
+    [DllImport("kernel32.dll")]
+    private static extern uint GetProcessIdOfThread(IntPtr thread);
+    [DllImport("kernel32.dll")]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll")]
+    private static extern bool IsWow64Process2(IntPtr process, out ushort machine, out ushort native);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint SuspendThread(IntPtr thread);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(IntPtr thread);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetThreadContext(IntPtr thread, IntPtr context);
+    [DllImport("kernel32.dll")]
+    private static extern UIntPtr VirtualQueryEx(IntPtr process, IntPtr address,
+        IntPtr information, UIntPtr length);
+    [DllImport("kernel32.dll")]
+    private static extern bool ReadProcessMemory(IntPtr process, IntPtr address,
+        byte[] bytes, UIntPtr size, out UIntPtr read);
+    private delegate bool ReadMemory(IntPtr process, ulong address, IntPtr buffer,
+        uint size, out uint read);
+    private delegate IntPtr FunctionTable(IntPtr process, ulong address);
+    private delegate ulong ModuleBase(IntPtr process, ulong address);
+    [DllImport("dbghelp.dll")]
+    private static extern bool StackWalk64(uint machine, IntPtr process, IntPtr thread,
+        IntPtr frame, IntPtr context, ReadMemory read, FunctionTable functions,
+        ModuleBase modules, IntPtr translate);
+
+    // Windows x64 ABI: winnt.h CONTEXT is 1232 bytes, aligned to 16; dbghelp.h
+    // STACKFRAME64 is 264 bytes (five ADDRESS64s, fields, 112-byte KDHELP64).
+    // https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-context
+    // https://learn.microsoft.com/windows/win32/api/dbghelp/ns-dbghelp-stackframe64
+    // https://learn.microsoft.com/windows/win32/api/dbghelp/nf-dbghelp-stackwalk64
+    private const int ContextSize = 1232, FrameSize = 264, StackLimit = 65536;
+    private static int active; // DbgHelp is single-threaded, including late observers.
+    // Timeout fencing covers capture as well as unwind: the caller can remove
+    // our suspend count, and cancellation prevents a late observer suspending.
+    private sealed class Suspension {
+        private readonly object gate = new object();
+        private IntPtr thread;
+        private bool held, cancelled;
+        public bool Begin(IntPtr value) {
+            lock (gate) {
+                if (cancelled) return false;
+                thread = value;
+                held = SuspendThread(thread) != UInt32.MaxValue;
+                return held;
+            }
+        }
+        public bool Resume() {
+            lock (gate) {
+                if (!held) return true;
+                if (ResumeThread(thread) == UInt32.MaxValue) return false;
+                held = false;
+                return true;
+            }
+        }
+        public void Cancel() {
+            lock (gate) { cancelled = true; Resume(); }
+        }
+        public void Close(IntPtr value) {
+            lock (gate) {
+                Resume();
+                thread = IntPtr.Zero;
+                if (value != IntPtr.Zero) CloseHandle(value);
+            }
+        }
+    }
+    private sealed class Module {
+        public ulong Address, Size;
+        public string Name;
+        public byte[] Functions;
+    }
+    private static bool Contains(ulong start, ulong length, ulong address, ulong size) {
+        return address >= start && size <= length && address - start <= length - size;
+    }
+    private static string FormatAddress(string name, ulong start, ulong length, ulong address) {
+        if (!Contains(start, length, address, 1)) return "unknown_module";
+        // Basenames only, even if the caller accidentally supplies a full path.
+        string basename = name.Replace('\\', '/');
+        basename = basename.Substring(basename.LastIndexOf('/') + 1);
+        basename = Regex.Replace(basename, "[^A-Za-z0-9_.-]", "?");
+        if (basename.Length > 128) basename = basename.Substring(0, 128);
+        return basename + "+0x" + (address - start).ToString("x");
+    }
+    private static Module Find(List<Module> modules, ulong address, ulong size) {
+        foreach (var module in modules)
+            if (Contains(module.Address, module.Size, address, size)) return module;
+        return null;
+    }
+    private static byte[] Read(IntPtr process, ulong address, int count) {
+        var bytes = new byte[count];
+        UIntPtr read;
+        if (!ReadProcessMemory(process, new IntPtr(unchecked((long)address)), bytes,
+            new UIntPtr((uint)count), out read) || read.ToUInt64() != (ulong)count) return null;
+        return bytes;
+    }
+    private static string Collect(Process client, IntPtr process, IntPtr window, uint threadId,
+                                  Suspension suspension) {
+        IntPtr thread = IntPtr.Zero, contextAllocation = IntPtr.Zero;
+        IntPtr frame = IntPtr.Zero, information = IntPtr.Zero, functionEntry = IntPtr.Zero;
+        try {
+            ushort machine, native;
+            if (IntPtr.Size != 8 || !IsWow64Process2(process, out machine, out native) ||
+                machine != 0 || native != 0x8664) return "stack_unsupported_architecture";
+            var modules = new List<Module>();
+            foreach (ProcessModule module in client.Modules) {
+                if (modules.Count >= 256) return "stack_module_limit";
+                modules.Add(new Module { Address = unchecked((ulong)module.BaseAddress.ToInt64()),
+                    Size = (ulong)module.ModuleMemorySize, Name = module.ModuleName });
+            }
+            // GET_CONTEXT | SUSPEND_RESUME | QUERY_LIMITED_INFORMATION | SYNCHRONIZE.
+            thread = OpenThread(0x0010080a, false, threadId);
+            if (thread == IntPtr.Zero) return "stack_thread_unavailable";
+            contextAllocation = Marshal.AllocHGlobal(ContextSize + 15);
+            IntPtr context = new IntPtr((contextAllocation.ToInt64() + 15) & ~15L);
+            Marshal.Copy(new byte[ContextSize], 0, context, ContextSize);
+            Marshal.WriteInt32(context, 48, 0x10000b); // AMD64 CONTROL | INTEGER | FLOATING_POINT
+            information = Marshal.AllocHGlobal(48);
+            frame = Marshal.AllocHGlobal(FrameSize);
+            Marshal.Copy(new byte[FrameSize], 0, frame, FrameSize);
+            functionEntry = Marshal.AllocHGlobal(12);
+            uint owner;
+            // The original Process SafeHandle remains pinned throughout: a reused
+            // PID/TID cannot pass both held-handle liveness and HWND ownership.
+            if (GetWindowThreadProcessId(window, out owner) != threadId ||
+                owner != (uint)client.Id || GetProcessIdOfThread(thread) != owner ||
+                WaitForSingleObject(process, 0) != 258 ||
+                WaitForSingleObject(thread, 0) != 258) return "stack_owned_thread_changed";
+            byte[] stack;
+            ulong stackAddress;
+            if (!suspension.Begin(thread)) return "stack_suspend_failed_or_cancelled";
+            try {
+                if (!GetThreadContext(thread, context)) return "stack_context_failed";
+                stackAddress = unchecked((ulong)Marshal.ReadInt64(context, 152)); // Rsp
+                if (VirtualQueryEx(process, new IntPtr(unchecked((long)stackAddress)), information,
+                    new UIntPtr(48)).ToUInt64() != 48) return "stack_region_unavailable";
+                ulong region = unchecked((ulong)Marshal.ReadInt64(information, 0));
+                ulong size = unchecked((ulong)Marshal.ReadInt64(information, 24));
+                if (!Contains(region, size, stackAddress, 1)) return "stack_region_invalid";
+                int count = (int)Math.Min((ulong)StackLimit, size - (stackAddress - region));
+                stack = Read(process, stackAddress, count);
+                if (stack == null) return "stack_capture_failed";
+            } finally {
+                // No DbgHelp, symbol lookup, output or callbacks while suspended.
+                // Remove exactly our one suspend count, never another observer's.
+                if (!suspension.Resume())
+                    throw new InvalidOperationException("stack_resume_failed");
+            }
+            ulong instruction = unchecked((ulong)Marshal.ReadInt64(context, 248)); // Rip
+            Marshal.WriteInt64(frame, 0, unchecked((long)instruction));
+            Marshal.WriteInt32(frame, 12, 3); // AddrModeFlat
+            Marshal.WriteInt64(frame, 32, Marshal.ReadInt64(context, 160)); // Rbp
+            Marshal.WriteInt32(frame, 44, 3);
+            Marshal.WriteInt64(frame, 48, unchecked((long)stackAddress));
+            Marshal.WriteInt32(frame, 60, 3);
+            var timer = Stopwatch.StartNew();
+            int budget = 1048576;
+            Func<ulong, int, byte[]> readModule = delegate(ulong address, int count) {
+                if (count <= 0 || count > budget || timer.ElapsedMilliseconds >= 1500 ||
+                    Find(modules, address, (ulong)count) == null) return null;
+                budget -= count;
+                return Read(process, address, count);
+            };
+            ReadMemory readMemory = delegate(IntPtr unused, ulong address, IntPtr buffer,
+                                             uint count, out uint read) {
+                read = 0;
+                try {
+                    if (count > StackLimit || timer.ElapsedMilliseconds >= 1500) return false;
+                    if (Contains(stackAddress, (ulong)stack.Length, address, count)) {
+                        Marshal.Copy(stack, (int)(address - stackAddress), buffer, (int)count);
+                    } else {
+                        var bytes = readModule(address, (int)count);
+                        if (bytes == null) return false;
+                        Marshal.Copy(bytes, 0, buffer, bytes.Length);
+                    }
+                    read = count;
+                    return true;
+                } catch { return false; }
+            };
+            ModuleBase moduleBase = delegate(IntPtr unused, ulong address) {
+                var module = Find(modules, address, 1);
+                return module == null ? 0 : module.Address;
+            };
+            FunctionTable functions = delegate(IntPtr unused, ulong address) {
+                try {
+                    var module = Find(modules, address, 1);
+                    if (module == null) return IntPtr.Zero;
+                    if (module.Functions == null) {
+                        module.Functions = new byte[0]; // Attempt each module once.
+                        var dos = readModule(module.Address, 64);
+                        if (dos == null || BitConverter.ToUInt16(dos, 0) != 0x5a4d) return IntPtr.Zero;
+                        uint offset = BitConverter.ToUInt32(dos, 60);
+                        if (offset > module.Size || module.Size - offset < 264) return IntPtr.Zero;
+                        var pe = readModule(module.Address + offset, 264);
+                        if (pe == null || BitConverter.ToUInt32(pe, 0) != 0x4550 ||
+                            BitConverter.ToUInt16(pe, 4) != 0x8664 ||
+                            BitConverter.ToUInt16(pe, 24) != 0x20b ||
+                            BitConverter.ToUInt32(pe, 132) < 4) return IntPtr.Zero;
+                        uint rva = BitConverter.ToUInt32(pe, 160), length = BitConverter.ToUInt32(pe, 164);
+                        if (length == 0 || length % 12 != 0 || length > 524288 ||
+                            rva > module.Size || length > module.Size - rva) return IntPtr.Zero;
+                        var table = readModule(module.Address + rva, (int)length);
+                        if (table != null) module.Functions = table;
+                    }
+                    byte[] entries = module.Functions;
+                    ulong relative = address - module.Address;
+                    int low = 0, high = entries.Length / 12;
+                    while (low < high) {
+                        int index = low + (high - low) / 2;
+                        uint begin = BitConverter.ToUInt32(entries, index * 12);
+                        uint end = BitConverter.ToUInt32(entries, index * 12 + 4);
+                        if (relative < begin) high = index;
+                        else if (relative >= end) low = index + 1;
+                        else {
+                            Marshal.Copy(entries, index * 12, functionEntry, 12);
+                            return functionEntry;
+                        }
+                    }
+                } catch { }
+                return IntPtr.Zero;
+            };
+            var rows = new List<string>();
+            ulong previous = 0;
+            for (int index = 0; index < 32 && timer.ElapsedMilliseconds < 1500; ++index) {
+                if (instruction == 0 || instruction == previous) break;
+                var module = Find(modules, instruction, 1);
+                if (module == null) { rows.Add("unknown_module"); break; }
+                rows.Add(FormatAddress(module.Name, module.Address, module.Size, instruction));
+                previous = instruction;
+                if (!StackWalk64(0x8664, process, thread, frame, context, readMemory,
+                    functions, moduleBase, IntPtr.Zero)) break;
+                instruction = unchecked((ulong)Marshal.ReadInt64(frame, 0));
+                // StackWalk64's first result can be the initial frame.
+                if (instruction == previous && index == 0 &&
+                    StackWalk64(0x8664, process, thread, frame, context, readMemory,
+                        functions, moduleBase, IntPtr.Zero))
+                    instruction = unchecked((ulong)Marshal.ReadInt64(frame, 0));
+            }
+            GC.KeepAlive(readMemory); GC.KeepAlive(functions); GC.KeepAlive(moduleBase);
+            Array.Clear(stack, 0, stack.Length);
+            return "stack_frames=" + rows.Count + "; " + String.Join("; ", rows);
+        } catch { return "stack_unavailable"; }
+        finally {
+            suspension.Resume();
+            if (functionEntry != IntPtr.Zero) Marshal.FreeHGlobal(functionEntry);
+            if (information != IntPtr.Zero) Marshal.FreeHGlobal(information);
+            if (frame != IntPtr.Zero) Marshal.FreeHGlobal(frame);
+            if (contextAllocation != IntPtr.Zero) {
+                Marshal.Copy(new byte[ContextSize + 15], 0, contextAllocation, ContextSize + 15);
+                Marshal.FreeHGlobal(contextAllocation);
+            }
+            suspension.Close(thread);
+        }
+    }
+    public static string Snapshot(Process client, IntPtr window) {
+        uint owner;
+        uint thread = GetWindowThreadProcessId(window, out owner);
+        if (window == IntPtr.Zero || thread == 0 || owner != (uint)client.Id ||
+            client.Id == Process.GetCurrentProcess().Id) return "stack_owned_window_unavailable";
+        if (Interlocked.CompareExchange(ref active, 1, 0) != 0) return "stack_observer_busy";
+        var handle = client.SafeHandle;
+        bool retained = false;
+        string result = "stack_unavailable";
+        var suspension = new Suspension();
+        var observer = new Thread(delegate() {
+            try { result = Collect(client, handle.DangerousGetHandle(), window, thread, suspension); }
+            finally { handle.DangerousRelease(); Interlocked.Exchange(ref active, 0); }
+        });
+        observer.IsBackground = true;
+        try { handle.DangerousAddRef(ref retained); observer.Start(); }
+        catch {
+            if (retained) handle.DangerousRelease();
+            Interlocked.Exchange(ref active, 0);
+            return "stack_observer_unavailable";
+        }
+        if (observer.Join(2000)) return result;
+        suspension.Cancel();
+        return "stack_observer_timeout";
+    }
+}
+'@ -ErrorAction Stop
+        }
+        if ($Client.HasExited) { return "client_exited=True" }
+        return [AtrinikReviewCloseStackProbe]::Snapshot($Client, $Client.MainWindowHandle)
+    } catch { return "<client close stack unavailable>" }
+}
+
 function Write-CloseFailureDiagnostics {
     try {
         try {
@@ -730,6 +1037,8 @@ try {
     if (-not $launcherClient.WaitForExit(30000)) {
         Write-Host ("Client close timeout thread: " +
             (Get-ClientCloseTimeoutSnapshot $launcherClient))
+        Write-Host ("Client close timeout stack: " +
+            (Get-ClientCloseStackSnapshot $launcherClient))
         throw "One-click client did not exit after the normal close request"
     }
     $launcherClient.Refresh()

@@ -2,7 +2,37 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Compile the actual smoke observer and exercise its formatter without invoking
 # any native Windows API. Run with PowerShell 7 on Linux or Windows.
+param([switch]$Native, [switch]$NativeChild)
 $ErrorActionPreference = "Stop"
+if ($NativeChild) {
+    if (-not $IsWindows) { throw "Native child requires Windows" }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+public static class AtrinikStackFixtureWindow {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr CreateWindowExW(uint style, string className, string title,
+        uint windowStyle, int x, int y, int width, int height, IntPtr parent,
+        IntPtr menu, IntPtr instance, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern bool DestroyWindow(IntPtr window);
+    public static void Run() {
+        IntPtr window = CreateWindowExW(0, "STATIC", "", 0, 0, 0, 1, 1,
+            IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        if (window == IntPtr.Zero) throw new InvalidOperationException("fixture_window_failed");
+        try {
+            Console.WriteLine(window.ToInt64());
+            Console.Out.Flush();
+            Thread.Sleep(5000); // A deterministic blocked HWND thread, without a GPU.
+        } finally { DestroyWindow(window); }
+    }
+}
+'@
+    [AtrinikStackFixtureWindow]::Run()
+    exit 0
+}
 $smoke = Join-Path $PSScriptRoot "../ci/smoke_windows_review_bundle.ps1"
 $tokens = $null
 $errors = $null
@@ -87,4 +117,75 @@ try {
     [System.Runtime.InteropServices.Marshal]::FreeHGlobal($nodes)
     [System.Runtime.InteropServices.Marshal]::FreeHGlobal($cycle)
     [System.Runtime.InteropServices.Marshal]::FreeHGlobal($count)
+}
+
+# Compile the actual stack observer too. Pure formatting/range fixtures require
+# no Windows API, and never manufacture acceptance for native stack unwinding.
+$stackBlocks = @([regex]::Matches($source, "(?s)Add-Type -TypeDefinition @'\r?\n(.*?)\r?\n'@") |
+    Where-Object { $_.Groups[1].Value.Contains("class AtrinikReviewCloseStackProbe") })
+if ($stackBlocks.Count -ne 1) { throw "Expected one stack observer" }
+Add-Type -TypeDefinition $stackBlocks[0].Groups[1].Value
+$stackFormatter = [AtrinikReviewCloseStackProbe].GetMethod("FormatAddress",
+    [System.Reflection.BindingFlags]"NonPublic,Static")
+foreach ($case in @(
+    @("atrinik.exe", 4096, 8192, 4112, "atrinik.exe+0x10"),
+    @("C:\private\SDL3.dll", 4096, 8192, 4112, "SDL3.dll+0x10"),
+    @("/private/name`n.dll", 4096, 8192, 4112, "name?.dll+0x10"),
+    @("private.dll", 4096, 8192, 4095, "unknown_module"),
+    @("private.dll", 4096, 8192, 12288, "unknown_module")
+)) {
+    $actual = $stackFormatter.Invoke($null, @([string]$case[0], [uint64]$case[1],
+        [uint64]$case[2], [uint64]$case[3]))
+    if ($actual -cne $case[4]) { throw "Stack address privacy/boundary fixture mismatch" }
+}
+$contains = [AtrinikReviewCloseStackProbe].GetMethod("Contains",
+    [System.Reflection.BindingFlags]"NonPublic,Static")
+foreach ($case in @(
+    @(([uint64]::MaxValue - 16), 16, ([uint64]::MaxValue - 8), 8, $true),
+    @(([uint64]::MaxValue - 16), 16, ([uint64]::MaxValue - 8), 9, $false),
+    @(4096, 32, 4096, 33, $false), @(4096, 32, 4095, 1, $false)
+)) {
+    $actual = $contains.Invoke($null, @([uint64]$case[0], [uint64]$case[1],
+        [uint64]$case[2], [uint64]$case[3]))
+    if ($actual -ne $case[4]) { throw "Stack range overflow fixture mismatch" }
+}
+Write-Host "Actual stack observer C# compilation, privacy and overflow fixtures passed."
+
+if ($Native) {
+    if (-not $IsWindows -or [IntPtr]::Size -ne 8) { throw "Native stack fixture requires Windows x64" }
+    $start = [System.Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = (Get-Process -Id $PID).Path
+    foreach ($argument in @("-NoProfile", "-File", $PSCommandPath, "-NativeChild")) {
+        $start.ArgumentList.Add($argument)
+    }
+    $start.UseShellExecute = $false
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $child = [System.Diagnostics.Process]::new()
+    $child.StartInfo = $start
+    try {
+        if (-not $child.Start()) { throw "Native stack fixture child failed to start" }
+        $line = $child.StandardOutput.ReadLineAsync()
+        if (-not $line.Wait(10000) -or $line.Result -notmatch "^[1-9][0-9]{0,18}$") {
+            throw "Native stack fixture did not create an owned window"
+        }
+        $window = [IntPtr]::new([long]$line.Result)
+        $invalid = [AtrinikReviewCloseStackProbe]::Snapshot($child, [IntPtr]::Zero)
+        if ($invalid -cne "stack_owned_window_unavailable") { throw "Invalid window was accepted" }
+        $observed = [AtrinikReviewCloseStackProbe]::Snapshot($child, $window)
+        if ($observed -notmatch "^stack_frames=(?:[2-9]|[12][0-9]|3[0-2]); [A-Za-z0-9_.?-]+\+0x[0-9a-f]+(?:; (?:[A-Za-z0-9_.?-]+\+0x[0-9a-f]+|unknown_module))+$") {
+            throw "Native stack fixture did not yield bounded module-relative frames: $observed"
+        }
+        # Natural completion proves the one owned suspend count was removed.
+        if (-not $child.WaitForExit(10000) -or $child.ExitCode -ne 0) {
+            throw "Native stack fixture child did not resume and exit normally"
+        }
+        Write-Host "Native owned-window stack capture and natural child exit passed: $observed"
+    } finally {
+        if ($child.Id -and -not $child.HasExited) {
+            $child.Kill($true)
+            $null = $child.WaitForExit(5000)
+        }
+        $child.Dispose()
+    }
 }

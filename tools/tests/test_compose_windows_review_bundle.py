@@ -303,7 +303,9 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
             acceptance,
             r'if \(-not \$launcherClient.WaitForExit\(30000\)\) \{\s*'
             r'Write-Host \("Client close timeout thread: " \+\s*'
-            r'\(Get-ClientCloseTimeoutSnapshot \$launcherClient\)\)\s*throw ',
+            r'\(Get-ClientCloseTimeoutSnapshot \$launcherClient\)\)\s*'
+            r'Write-Host \("Client close timeout stack: " \+\s*'
+            r'\(Get-ClientCloseStackSnapshot \$launcherClient\)\)\s*throw ',
         )
         self.assertIn("$launcherClientExitCode -ne 0", acceptance)
         self.assertIn('Client shutdown complete', acceptance)
@@ -358,7 +360,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
 
     def test_close_timeout_probe_is_owned_bounded_and_observational(self) -> None:
         smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
-        probe = smoke.split("function Get-ClientCloseTimeoutSnapshot", 1)[1].split("function Write-CloseFailureDiagnostics", 1)[0]
+        probe = smoke.split("function Get-ClientCloseTimeoutSnapshot", 1)[1].split("function Get-ClientCloseStackSnapshot", 1)[0]
         self.assertIn("mainWindow == IntPtr.Zero || mainThread == 0 || owner != (uint)processId", probe)
         self.assertIn("process.Id == Process.GetCurrentProcess().Id", probe)
         self.assertIn("index < threads.Count && index < 4096", probe)
@@ -396,7 +398,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         self.assertIn("GetThreadWaitChain(session, UIntPtr.Zero, 0x1 | 0x4,", probe)
         for forbidden in ("AdjustTokenPrivileges", "DebugActiveProcess", "ReadProcessMemory",
                           "GetThreadContext", "SuspendThread", "CreateRemoteThread"):
-            self.assertNotIn(forbidden, smoke)
+            self.assertNotIn(forbidden, probe)
 
     def test_wait_chain_callback_lifetime_and_observer_are_bounded(self) -> None:
         smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
@@ -431,6 +433,33 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
             self.assertNotIn(forbidden, formatter)
         self.assertIn('type < types.Length ? types[type] : "Unknown"', formatter)
         self.assertIn('state < statuses.Length ? statuses[state] : "Unknown"', formatter)
+
+    def test_stack_probe_retains_only_bounded_addresses_after_resuming(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("function Get-ClientCloseStackSnapshot", 1)[1].split("function Write-CloseFailureDiagnostics", 1)[0]
+        self.assertIn("DefaultDllImportSearchPaths(DllImportSearchPath.System32)", probe)
+        self.assertIn("ContextSize = 1232, FrameSize = 264, StackLimit = 65536", probe)
+        self.assertIn("int budget = 1048576", probe)
+        self.assertIn("index < 32 && timer.ElapsedMilliseconds < 1500", probe)
+        self.assertIn("if (observer.Join(2000)) return result;", probe)
+        self.assertIn("suspension.Cancel();", probe)
+        self.assertIn("if (cancelled) return false;", probe)
+        self.assertIn("handle.DangerousAddRef(ref retained)", probe)
+        self.assertIn("Interlocked.CompareExchange(ref active, 1, 0)", probe)
+        capture = probe.split("private static string Collect(", 1)[1]
+        self.assertLess(capture.index("suspension.Resume()"), capture.index("StackWalk64("))
+        for check in ("GetWindowThreadProcessId(window, out owner) != threadId",
+                      "GetProcessIdOfThread(thread) != owner",
+                      "WaitForSingleObject(process, 0) != 258",
+                      "WaitForSingleObject(thread, 0) != 258"):
+            self.assertLess(capture.index(check), capture.index("suspension.Begin(thread)"))
+        self.assertIn("suspension.Close(thread)", capture)
+        self.assertIn('rows.Add("unknown_module")', probe)
+        self.assertIn('FormatAddress(module.Name, module.Address, module.Size, instruction)', probe)
+        self.assertEqual(smoke.count("(Get-ClientCloseStackSnapshot $launcherClient)"), 1)
+        for forbidden in ("SymInitialize", "SymFromAddr", "MiniDump", "FileName", "AdjustTokenPrivileges",
+                          "DebugActiveProcess", "SetThreadContext", "WriteProcessMemory", "CreateRemoteThread"):
+            self.assertNotIn(forbidden, probe)
 
     def test_lifecycle_evidence_is_bounded_and_uploaded_before_cleanup(self) -> None:
         root = MODULE_PATH.parents[2]
