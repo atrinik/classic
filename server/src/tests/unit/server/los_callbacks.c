@@ -453,6 +453,8 @@ END_TEST
 static Suite *suite(void) {
     Suite *s = suite_create("server.los_callbacks");
     TCase *tc = tcase_create("callbacks");
+    tcase_add_unchecked_fixture(tc, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc, check_test_setup, check_test_teardown);
     tcase_add_test(tc, test_ask_show_blocker_aborts_stale_map2_and_recovers_fresh);
     tcase_add_test(tc, test_ask_show_viewstate_change_withdraws_earlier_dark_actor);
     tcase_add_test(tc, test_ask_show_kicking_observer_withdraws_snapshot_and_continues_postprocess);
