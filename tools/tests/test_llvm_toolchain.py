@@ -39,6 +39,11 @@ set(CMAKE_SYSTEM_NAME "{platform}")
 set(CMAKE_AR "{self.tool}")
 set(CMAKE_RANLIB "{self.tool}")
 set(CMAKE_LINKER "{self.tool}")
+set(CMAKE_NM "{self.tool}")
+set(CMAKE_STRIP "{self.tool}")
+set(CMAKE_OBJCOPY "{self.tool}")
+set(CMAKE_OBJDUMP "{self.tool}")
+set(CMAKE_READELF "{self.tool}")
 function(add_link_options)
     file(WRITE "{self.capture}" "${{ARGV}}")
 endfunction()
@@ -91,6 +96,39 @@ endif ()
         result = self.script(self.settings() + "atrinik_require_llvm()\n")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("CMAKE_AR must be LLVM 23.1.3", result.stderr)
+
+    def test_native_toolchain_binds_all_llvm_inspection_tools(self):
+        names = {
+            "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++",
+            "CMAKE_AR": "llvm-ar", "CMAKE_RANLIB": "llvm-ranlib", "CMAKE_LINKER": "ld.lld",
+            "CMAKE_NM": "llvm-nm", "CMAKE_STRIP": "llvm-strip", "CMAKE_OBJCOPY": "llvm-objcopy",
+            "CMAKE_OBJDUMP": "llvm-objdump", "CMAKE_READELF": "llvm-readelf",
+        }
+        for name in names.values():
+            (self.root / name).symlink_to(self.tool)
+        body = f'''
+set(CMAKE_HOST_SYSTEM_NAME Linux)
+set(CMAKE_PROGRAM_PATH "{self.root}")
+include("{TOOLCHAIN}")
+'''
+        for variable, name in names.items():
+            body += f'''
+if (NOT {variable} STREQUAL "{self.root / name}")
+    message(FATAL_ERROR "Unexpected {variable}: ${{{variable}}}")
+endif ()
+'''
+        result = self.script(body)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_wrong_inspection_utility_version_is_rejected(self):
+        wrong = self.root / "old-llvm-tool"
+        wrong.write_text("#!/bin/sh\nprintf 'LLVM version 23.1.2\\n'\n")
+        wrong.chmod(0o755)
+        for variable in ("CMAKE_NM", "CMAKE_STRIP", "CMAKE_OBJCOPY", "CMAKE_OBJDUMP", "CMAKE_READELF"):
+            with self.subTest(variable=variable):
+                result = self.script(self.settings() + f'set({variable} "{wrong}")\natrinik_require_llvm()\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"{variable} must be LLVM 23.1.3", result.stderr)
 
     def test_missing_llvm_fails_toolchain_selection(self):
         empty = self.root / "empty"

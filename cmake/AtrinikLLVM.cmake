@@ -27,7 +27,8 @@ function(atrinik_require_llvm)
              NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "23.1.3"))
         message(FATAL_ERROR "Classic C++ build dependencies require Clang 23.1.3")
     endif ()
-    foreach (tool CMAKE_AR CMAKE_RANLIB CMAKE_LINKER)
+    foreach (tool CMAKE_AR CMAKE_RANLIB CMAKE_LINKER CMAKE_NM CMAKE_STRIP
+            CMAKE_OBJCOPY CMAKE_OBJDUMP CMAKE_READELF)
         execute_process(COMMAND "${${tool}}" --version
             OUTPUT_VARIABLE tool_version ERROR_VARIABLE tool_error
             RESULT_VARIABLE tool_result)
