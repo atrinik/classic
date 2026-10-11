@@ -887,6 +887,52 @@ START_TEST(test_continuous_seam_matches_single_map_spill) {
 }
 END_TEST
 
+START_TEST(test_remote_two_seam_geometry_fences_current_and_pending_fields) {
+    mapstruct *maps[] = {open_fixture(2, 5), open_fixture(2, 5), open_fixture(2, 5)};
+    mapstruct *unrelated = open_fixture(2, 5);
+    const char *paths[] = {"/dependencies/a", "/dependencies/b", "/dependencies/c"};
+    for (size_t i = 0; i < 3; i++) FREE_AND_COPY_HASH(maps[i]->path, paths[i]);
+    for (size_t i = 0; i < 2; i++) {
+        FREE_AND_COPY_HASH(maps[i]->tile_path[TILED_EAST], maps[i + 1]->path);
+        FREE_AND_COPY_HASH(maps[i + 1]->tile_path[TILED_WEST], maps[i]->path);
+        maps[i]->tile_map[TILED_EAST] = maps[i + 1];
+        maps[i + 1]->tile_map[TILED_WEST] = maps[i];
+        maps[i]->celestial_tile_path_seen[TILED_EAST] = true;
+        maps[i + 1]->celestial_tile_path_seen[TILED_WEST] = true;
+        maps[i]->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+        maps[i + 1]->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+        maps[i]->celestial_rectangles = xcalloc(1, sizeof(celestial_rectangle_t));
+        maps[i]->celestial_rectangle_count = 1;
+        maps[i]->celestial_rectangles[0] = (celestial_rectangle_t){
+            .type = CELESTIAL_RECT_SKY_COVERED, .width = 2, .height = 5};
+    }
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    celestial_light_ensure(maps[0]);
+    celestial_light_ensure(unrelated);
+    ck_assert_int_gt(maps[0]->spaces[5].celestial_light_value, 0);
+    uint64_t generation = celestial_light_generation(maps[0]);
+    uint64_t other_generation = celestial_light_generation(unrelated);
+    ck_assert(!celestial_light_keyframe_request(maps[0], (uint64_t)todtick));
+    celestial_light_process_steps_for_test(200);
+    maps[2]->celestial_rectangles = xcalloc(1, sizeof(celestial_rectangle_t));
+    maps[2]->celestial_rectangle_count = 1;
+    maps[2]->celestial_rectangles[0] = (celestial_rectangle_t){
+        .type = CELESTIAL_RECT_SKY_COVERED, .width = 2, .height = 5};
+    celestial_light_invalidate(maps[2]);
+    celestial_light_process_steps_for_test(100000);
+    ck_assert(!maps[0]->celestial_light_keyframe_valid);
+    celestial_light_ensure(maps[0]);
+    ck_assert_uint_gt(celestial_light_generation(maps[0]), generation);
+    for (size_t cell = 0; cell < 10; cell++) {
+        ck_assert_int_eq(maps[0]->spaces[cell].celestial_light_value, 0);
+    }
+    celestial_light_ensure(unrelated);
+    ck_assert_uint_eq(celestial_light_generation(unrelated), other_generation);
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_light");
     TCase *tc_core = tcase_create("Core");
@@ -900,6 +946,7 @@ static Suite *suite(void) {
     suite_add_tcase(s, tc_real_maps);
     tcase_add_test(tc_core, test_celestial_open_field_matches_daylight_anchor);
     tcase_add_test(tc_core, test_continuous_seam_matches_single_map_spill);
+    tcase_add_test(tc_core, test_remote_two_seam_geometry_fences_current_and_pending_fields);
     tcase_add_test(tc_core, test_discontinuous_horizontal_neighbor_is_not_a_local_light_dependency);
     tcase_add_test(tc_real_maps, test_brynknot_and_outside_fields_follow_settime);
     tcase_add_test(tc_core, test_unloaded_lower_map_does_not_gate_upper_light);
