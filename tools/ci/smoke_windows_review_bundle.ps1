@@ -120,6 +120,68 @@ public static class AtrinikReviewWindowProbe {
     }
 }
 
+# Timeout-only observation of the owned main window thread. WM_NULL requests no
+# application action; its single bounded probe never changes close acceptance.
+function Get-ClientCloseTimeoutSnapshot($Client) {
+    try {
+        if (-not ("AtrinikReviewCloseTimeoutProbe" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+public static class AtrinikReviewCloseTimeoutProbe {
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern IntPtr SendMessageTimeoutW(IntPtr window, uint message,
+        UIntPtr wParam, IntPtr lParam, uint flags, uint timeout, out UIntPtr result);
+
+    public static string Snapshot(int processId, IntPtr mainWindow) {
+        uint owner;
+        uint mainThread = GetWindowThreadProcessId(mainWindow, out owner);
+        if (mainWindow == IntPtr.Zero || mainThread == 0 || owner != (uint)processId)
+            return "owned_main_window_unavailable";
+        string state = "unavailable", wait = "unavailable";
+        using (Process process = Process.GetProcessById(processId)) {
+            // A cross-process window cannot share this observer's message queue.
+            if (process.Id == Process.GetCurrentProcess().Id) return "invalid_observer_pid";
+            ProcessThreadCollection threads = process.Threads;
+            for (int index = 0; index < threads.Count && index < 4096; ++index) {
+                using (ProcessThread thread = threads[index]) {
+                    if ((uint)thread.Id != mainThread) continue;
+                    try {
+                        System.Diagnostics.ThreadState observed = thread.ThreadState;
+                        state = observed.ToString();
+                        wait = observed == System.Diagnostics.ThreadState.Wait
+                            ? thread.WaitReason.ToString() : "not_waiting";
+                    } catch { /* A thread may exit between observations. */ }
+                    break;
+                }
+            }
+        }
+        // Recheck ownership immediately before the only message probe.
+        uint currentThread = GetWindowThreadProcessId(mainWindow, out owner);
+        if (owner != (uint)processId || currentThread != mainThread)
+            return "owned_main_window_changed";
+        UIntPtr result;
+        // WM_NULL, SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, hard 250 ms timeout.
+        bool acknowledged = SendMessageTimeoutW(mainWindow, 0, UIntPtr.Zero,
+            IntPtr.Zero, 0x0002 | 0x0020, 250, out result) != IntPtr.Zero;
+        return String.Format("pid={0} main_hwnd={1} thread={2} state={3} wait={4} wm_null_ack={5}",
+            processId, mainWindow.ToInt64(), mainThread, state, wait, acknowledged);
+    }
+}
+'@ -ErrorAction Stop
+        }
+        if ($Client.HasExited) {
+            return "client_exited=True"
+        }
+        return [AtrinikReviewCloseTimeoutProbe]::Snapshot($Client.Id, $Client.MainWindowHandle)
+    } catch {
+        return "<client close timeout snapshot unavailable>"
+    }
+}
+
 function Write-CloseFailureDiagnostics {
     try {
         try {
@@ -476,6 +538,8 @@ try {
     }
     Write-Host "Client normal close request accepted; waiting up to 30 seconds."
     if (-not $launcherClient.WaitForExit(30000)) {
+        Write-Host ("Client close timeout thread: " +
+            (Get-ClientCloseTimeoutSnapshot $launcherClient))
         throw "One-click client did not exit after the normal close request"
     }
     $launcherClient.Refresh()

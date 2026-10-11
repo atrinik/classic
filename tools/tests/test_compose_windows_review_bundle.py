@@ -299,7 +299,12 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         acceptance, containment = close.split("} finally {", 1)
         self.assertEqual(smoke.count("$launcherClient.CloseMainWindow()"), 1)
         self.assertRegex(acceptance, r"if \(-not \$launcherClient.CloseMainWindow\(\)\) \{\s*throw ")
-        self.assertRegex(acceptance, r"if \(-not \$launcherClient.WaitForExit\(30000\)\) \{\s*throw ")
+        self.assertRegex(
+            acceptance,
+            r'if \(-not \$launcherClient.WaitForExit\(30000\)\) \{\s*'
+            r'Write-Host \("Client close timeout thread: " \+\s*'
+            r'\(Get-ClientCloseTimeoutSnapshot \$launcherClient\)\)\s*throw ',
+        )
         self.assertIn("$launcherClientExitCode -ne 0", acceptance)
         self.assertIn('Client shutdown complete', acceptance)
         self.assertRegex(acceptance, r"} catch \{\s*if \(\$clientCloseStarted\)")
@@ -341,7 +346,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
 
     def test_window_diagnostics_are_bounded_read_only_and_process_scoped(self) -> None:
         smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
-        probe = smoke.split("function Get-ClientWindowSnapshot", 1)[1].split("function Write-CloseFailureDiagnostics", 1)[0]
+        probe = smoke.split("function Get-ClientWindowSnapshot", 1)[1].split("function Get-ClientCloseTimeoutSnapshot", 1)[0]
         self.assertIn("if (++visited > 4096 || rows.Count >= 32) return false;", probe)
         self.assertLess(probe.index("if (owner != (uint)processId) return true;"), probe.index("GetClassNameW(window"))
         self.assertIn("new StringBuilder(256)", probe)
@@ -349,6 +354,27 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         self.assertIn("Snapshot($Client.Id, $Client.MainWindowHandle)", probe)
         self.assertIn("<client window snapshot unavailable>", probe)
         for forbidden in ("GetWindowText", "MainWindowTitle", "SendMessage", "PostMessage", "CloseMainWindow()", "Get-Process", ".Kill("):
+            self.assertNotIn(forbidden, probe)
+
+    def test_close_timeout_probe_is_owned_bounded_and_observational(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("function Get-ClientCloseTimeoutSnapshot", 1)[1].split("function Write-CloseFailureDiagnostics", 1)[0]
+        self.assertIn("mainWindow == IntPtr.Zero || mainThread == 0 || owner != (uint)processId", probe)
+        self.assertIn("process.Id == Process.GetCurrentProcess().Id", probe)
+        self.assertIn("index < threads.Count && index < 4096", probe)
+        self.assertIn("if ((uint)thread.Id != mainThread) continue;", probe)
+        self.assertIn("observed == System.Diagnostics.ThreadState.Wait", probe)
+        self.assertIn('thread.WaitReason.ToString() : "not_waiting"', probe)
+        ownership = probe.index("owner != (uint)processId || currentThread != mainThread")
+        message = probe.index("bool acknowledged = SendMessageTimeoutW")
+        self.assertLess(ownership, message)
+        self.assertIn("SendMessageTimeoutW(mainWindow, 0, UIntPtr.Zero,\n            IntPtr.Zero, 0x0002 | 0x0020, 250, out result)", probe)
+        self.assertEqual(probe.count("SendMessageTimeoutW("), 2)  # declaration and one call
+        self.assertIn("Snapshot($Client.Id, $Client.MainWindowHandle)", probe)
+        self.assertIn("<client close timeout snapshot unavailable>", probe)
+        self.assertEqual(smoke.count("(Get-ClientCloseTimeoutSnapshot $launcherClient)"), 1)
+        for forbidden in ("PostMessage", "CloseMainWindow()", "GetWindowText", "MainWindowTitle",
+                          "Suspend", "Resume", "Terminate", "Dump", "ReadProcessMemory", ".Kill("):
             self.assertNotIn(forbidden, probe)
 
     def test_rejects_path_traversal(self) -> None:

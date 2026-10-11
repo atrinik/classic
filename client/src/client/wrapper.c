@@ -84,6 +84,7 @@ void system_start(void) {
  * End the system.
  */
 void system_end(void) {
+    LOG(INFO, "Client shutdown stage: UI cleanup.");
     screen_completed_frame_deinit();
     rich_presence_deinit();
     tooltip_dismiss();
@@ -94,12 +95,16 @@ void system_end(void) {
     popup_destroy_all();
     resources_deinit();
     toolkit_widget_deinit();
+    LOG(INFO, "Client shutdown stage: network connection.");
     client_socket_deinitialize();
+    LOG(INFO, "Client shutdown stage: directory workers.");
     metaserver_deinit();
     effects_deinit();
     sound_ambient_clear();
     interface_deinit();
+    LOG(INFO, "Client shutdown stage: audio.");
     sound_deinit();
+    LOG(INFO, "Client shutdown stage: settings and assets.");
     intro_deinit();
     cmd_aliases_deinit();
     server_settings_deinit();
@@ -108,6 +113,7 @@ void system_end(void) {
     hfiles_deinit();
     settings_deinit();
     keybind_deinit();
+    LOG(INFO, "Client shutdown stage: image workers.");
     image_bmaps_deinit();
     anims_deinit();
     skills_deinit();
@@ -115,9 +121,12 @@ void system_end(void) {
     connection_preferences_deinit();
     clioption_settings_deinit();
     server_files_deinit();
+    LOG(INFO, "Client shutdown stage: image packs.");
     image_deinit();
+    LOG(INFO, "Client shutdown stage: asset requests.");
     asset_requests_deinit();
     LOG(INFO, "Client shutdown complete.");
+    LOG(INFO, "Client shutdown stage: toolkit, GPU, window and SDL.");
     toolkit_deinit();
     gpu_renderer_destroy();
     SDL_DestroyWindow(ScreenWindow);

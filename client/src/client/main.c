@@ -1064,6 +1064,7 @@ int main(int argc, char *argv[]) {
     int done = 0, update, frames;
     int old_cursor_x = -1, old_cursor_y = -1;
     unsigned int gpu_recovery_attempts = 0;
+    bool gameplay_frame_presented_logged = false;
     uint32_t anim_tick, frame_start_time, elapsed_time, fps_limit, last_frame_ticks;
     presentation_clock_t presentation_clock;
     int fps_limits[] = {30, 60, 120, 0};
@@ -1327,6 +1328,9 @@ int main(int argc, char *argv[]) {
 
         uint64_t profile_events_started = render_profiler_begin();
         done = Event_PollInputDevice();
+        if (done) {
+            LOG(INFO, "Client quit event polling completed.");
+        }
         render_profiler_end(RENDER_PROFILE_EVENTS, profile_events_started);
         if (done && live_movement_enabled()) {
             live_movement_abort("window close requested");
@@ -1534,6 +1538,10 @@ int main(int argc, char *argv[]) {
                 }
             } else {
                 gpu_recovery_attempts = 0;
+                if (cpl.state == ST_PLAY && !gameplay_frame_presented_logged) {
+                    LOG(INFO, "First gameplay frame presented.");
+                    gameplay_frame_presented_logged = true;
+                }
             }
         }
         render_profiler_end(RENDER_PROFILE_PRESENT, profile_present_started);
@@ -1595,6 +1603,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    LOG(INFO, "Client main loop exited.");
     video_recording_shutdown();
     char recording_notice[4352];
     bool recording_failed;
