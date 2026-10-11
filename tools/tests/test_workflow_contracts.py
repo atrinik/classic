@@ -77,6 +77,33 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(qualify.count("python3 ../tools/ci/run_gpu_qualification.py"), 4)
         self.assertIn("tools/ci/llvm_coverage.py,target=/workspace/tools/ci/llvm_coverage.py,readonly", check)
 
+    def test_windows_font_baseline_is_separate_and_native_comparison_is_required(self) -> None:
+        workflow = self.text("check.yml")
+        build = workflow[workflow.index("  windows-test-build:"):workflow.index("  windows-test:")]
+        native = workflow[workflow.index("  windows-test:"):workflow.index("  server:\n    name: Server validation")]
+        baseline = build[build.index("      - name: Build the original pinned Windows font baseline"):
+                         build.index("      - name: Cross-build and stage standalone tests")]
+        self.assertIn("CLASSIC_WINDOWS_FONT_BASELINE_IMAGE", baseline)
+        self.assertIn("x86_64-w64-mingw32.shared-cmake -S tools/ci/font-render-probe", baseline)
+        self.assertIn("client-rich-presence-tests client-font-render-probe", build)
+        self.assertIn('cmake -E copy_directory build/font-baseline-bundle "${stage}/font-baseline"', build)
+        self.assertIn("ref: fd4943252ac872fce2995c286b10a0c6d249aba3", build)
+        self.assertIn("python3 build/font-baseline-source/tools/ci/stage_windows_runtime.py", baseline)
+        self.assertIn("--objdump x86_64-w64-mingw32.shared-objdump", baseline)
+        self.assertIn("staging-helper.sha256", baseline)
+        self.assertIn('--output-dir "${stage}/font-candidate"', build)
+        self.assertIn('cmake -E copy_directory client/fonts "${stage}/font-inputs"', build)
+        self.assertIn("font-baseline/client-font-render-probe.exe", native)
+        self.assertIn("font-candidate/client-font-render-probe.exe", native)
+        self.assertIn("compare_font_render.py", native)
+        self.assertIn('throw "LLVM font rendering differs:', native)
+        self.assertIn("$process.WaitForExit(120000)", native)
+        self.assertIn("$process.Kill($true)", native)
+        self.assertIn("name: native-windows-font-comparison-", native)
+        comparison = native[native.index("      - name: Require identical baseline and LLVM font rendering"):]
+        self.assertNotIn("continue-on-error", comparison)
+        self.assertIn("if: always()", comparison)
+
     def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
         workflow = self.text("check.yml")
         jobs = dict(
@@ -1313,7 +1340,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(build.count(image), 4)
         self.assertEqual(build.count(digest), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
-        self.assertEqual(build.count("--network none"), 3)
+        self.assertEqual(build.count("--network none"), 4)
         self.assertIn("persist-credentials: false", build)
         self.assertIn("ref: ${{ env.COVERAGE_SHA }}", build)
         self.assertIn('test "$(git rev-parse HEAD)" = "${COVERAGE_SHA}"', build)
@@ -1346,8 +1373,11 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("--env CCACHE_MAXSIZE=250M", build)
         self.assertNotIn("--env CCACHE_DIR=/opt/mxe", build)
-        self.assertNotIn("/opt/mxe", build)
-        self.assertNotIn("x86_64-w64-mingw32.shared-cmake", build)
+        baseline_start = build.index("      - name: Build the original pinned Windows font baseline")
+        baseline_end = build.index("      - name: Cross-build and stage standalone tests", baseline_start)
+        candidate_build = build[:baseline_start] + build[baseline_end:]
+        self.assertNotIn("/opt/mxe", candidate_build)
+        self.assertNotIn("x86_64-w64-mingw32.shared-cmake", candidate_build)
         self.assertEqual(build.count("--env ATRINIK_WINDOWS_TARGET=x86_64-w64-mingw32"), 3)
         self.assertEqual(build.count('-DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}"'), 4)
         self.assertEqual(build.count("-DCMAKE_C_COMPILER_LAUNCHER=ccache"), 4)

@@ -184,6 +184,7 @@ jobs:
             --material .github/workflows/pr-benchmarks.yml \
             --material tools/ci/run_linux_check.sh \
             --material cmake/toolchains/llvm.cmake \
+            --material cmake/AtrinikLLVM.cmake \
             --material tools/ci/llvm_coverage.py \
             --material client/tools/benchmark_lighting_regression.py \
             --material client/tools/benchmark_movement_regression.py \
@@ -277,6 +278,7 @@ jobs:
             --material .github/workflows/pr-benchmarks.yml \
             --material tools/ci/run_linux_check.sh \
             --material cmake/toolchains/llvm.cmake \
+            --material cmake/AtrinikLLVM.cmake \
             --material tools/ci/llvm_coverage.py \
             --material server/CMakeLists.txt \
             --material server/CMakePresets.json \

@@ -29,6 +29,8 @@ env:
   CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
   CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
   CLASSIC_GPU_COVERAGE_IMAGE: ghcr.io/atrinik/linux-build:1.16.0@sha256:89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e
+  # Historical baseline for the paired native Windows font comparison.
+  CLASSIC_WINDOWS_FONT_BASELINE_IMAGE: ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
   CLASSIC_LINUX_CCACHE_COMPILER: clang-23.1.3-lld-compiler-rt
   CLASSIC_LINUX_CCACHE_EPOCH: "2"
 
@@ -261,6 +263,7 @@ jobs:
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
             --material cmake/toolchains/llvm.cmake \
+            --material cmake/AtrinikLLVM.cmake \
             --material tools/ci/llvm_coverage.py \
             --material protocol/CMakeLists.txt \
             --material libatrinik/CMakeLists.txt \
@@ -372,6 +375,37 @@ jobs:
             build/discord-test-application-id
       - name: Pull pinned Windows build environment
         run: docker pull ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
+      - name: Check out the immutable historical baseline staging helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fd4943252ac872fce2995c286b10a0c6d249aba3
+          path: build/font-baseline-source
+          persist-credentials: false
+          sparse-checkout: tools/ci/stage_windows_runtime.py
+      - name: Build the original pinned Windows font baseline
+        run: |
+          docker pull "${CLASSIC_WINDOWS_FONT_BASELINE_IMAGE}"
+          docker run --rm --network none --cpus 2 --memory 4g \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/classic-home \
+            --env BASELINE_IMAGE="${CLASSIC_WINDOWS_FONT_BASELINE_IMAGE}" \
+            --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
+            "${CLASSIC_WINDOWS_FONT_BASELINE_IMAGE}" bash -c '
+              set -euo pipefail
+              x86_64-w64-mingw32.shared-cmake -S tools/ci/font-render-probe \
+                -B build/font-baseline -G Ninja -DCMAKE_BUILD_TYPE=Release
+              cmake --build build/font-baseline --target client-font-render-probe --parallel 2
+              test "$(git -C build/font-baseline-source rev-parse HEAD)" = fd4943252ac872fce2995c286b10a0c6d249aba3
+              python3 build/font-baseline-source/tools/ci/stage_windows_runtime.py \
+                --objdump x86_64-w64-mingw32.shared-objdump --runtime-dir "${MXE_RUNTIME_DIR}" \
+                --output-dir build/font-baseline-bundle \
+                build/font-baseline/client-font-render-probe.exe
+              sha256sum build/font-baseline-source/tools/ci/stage_windows_runtime.py \
+                > build/font-baseline-bundle/staging-helper.sha256
+              printf "%s\n" "${BASELINE_IMAGE}" > build/font-baseline-bundle/producer-image.txt
+              x86_64-w64-mingw32.shared-gcc --version > build/font-baseline-bundle/compiler.txt
+            '
       - name: Cross-build and stage standalone tests
         run: |
           docker run --rm \
@@ -468,7 +502,7 @@ jobs:
                 -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
                 -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik
               cmake --build client/build/windows-tests \
-                --target client-rich-presence-tests --parallel "$(nproc)"
+                --target client-rich-presence-tests client-font-render-probe --parallel "$(nproc)"
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
               python3 tools/ci/stage_windows_runtime.py \
@@ -484,6 +518,13 @@ jobs:
                 libatrinik/build/windows-tests/libatrinik-socket-quic.exe \
                 libatrinik/build/windows-tests/libatrinik-stun.exe \
                 client/build/windows-tests/client-rich-presence-tests.exe
+              cmake -E copy_directory build/font-baseline-bundle "${stage}/font-baseline"
+              python3 tools/ci/stage_windows_runtime.py \
+                --readobj llvm-readobj --runtime-dir "${ATRINIK_WINDOWS_RUNTIME_DIR}" \
+                --output-dir "${stage}/font-candidate" \
+                client/build/windows-tests/client-font-render-probe.exe
+              cmake -E copy_directory client/fonts "${stage}/font-inputs"
+              cmake -E copy tools/ci/compare_font_render.py "${stage}"
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
               cmake -E copy tools/ci/smoke_windows_server_package.ps1 "${stage}"
               cmake -E copy tools/ci/smoke_windows_review_bundle.ps1 "${stage}"
@@ -774,6 +815,42 @@ jobs:
           & (Join-Path $bundle "smoke_windows_server_package.ps1") `
             -Package $packages[0].FullName
 
+      - name: Require identical baseline and LLVM font rendering
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = (Resolve-Path "build/native-windows-tests").Path
+          $fonts = Join-Path $bundle "font-inputs"
+          $baseline = Join-Path $bundle "font-baseline-result"
+          $candidate = Join-Path $bundle "font-candidate-result"
+          New-Item -ItemType Directory -Path $baseline, $candidate | Out-Null
+          function Invoke-FontProbe($executable, $output) {
+            $process = Start-Process -FilePath $executable -PassThru -NoNewWindow `
+              -ArgumentList @("`"$fonts`"", "`"$output`"")
+            if (-not $process.WaitForExit(120000)) {
+              $process.Kill($true)
+              $process.WaitForExit()
+              throw "Font probe exceeded its 120-second deadline"
+            }
+            if ($process.ExitCode -ne 0) { throw "Font probe failed: $($process.ExitCode)" }
+          }
+          Invoke-FontProbe (Join-Path $bundle "font-baseline/client-font-render-probe.exe") $baseline
+          Invoke-FontProbe (Join-Path $bundle "font-candidate/client-font-render-probe.exe") $candidate
+          python (Join-Path $bundle "compare_font_render.py") $baseline $candidate
+          if ($LASTEXITCODE -ne 0) { throw "LLVM font rendering differs: $LASTEXITCODE" }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: native-windows-font-comparison-${{ env.COVERAGE_SHA }}-${{ github.run_attempt }}
+          path: |
+            build/native-windows-tests/font-baseline-result
+            build/native-windows-tests/font-candidate-result
+            build/native-windows-tests/font-baseline/staging-helper.sha256
+            build/native-windows-tests/font-baseline/producer-image.txt
+            build/native-windows-tests/font-baseline/compiler.txt
+          if-no-files-found: error
+          retention-days: 14
+
   server:
     name: Server validation
     needs: [changes, dependency-inputs]
@@ -808,6 +885,7 @@ jobs:
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
             --material cmake/toolchains/llvm.cmake \
+            --material cmake/AtrinikLLVM.cmake \
             --material tools/ci/llvm_coverage.py \
             --material server/CMakeLists.txt \
             --material server/CMakePresets.json \
@@ -917,6 +995,7 @@ jobs:
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
             --material cmake/toolchains/llvm.cmake \
+            --material cmake/AtrinikLLVM.cmake \
             --material tools/ci/llvm_coverage.py \
             --material tools/ci/run_gpu_coverage.sh \
             --material client/CMakeLists.txt \
@@ -1086,6 +1165,7 @@ jobs:
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
             --material cmake/toolchains/llvm.cmake \
+            --material cmake/AtrinikLLVM.cmake \
             --material tools/ci/llvm_coverage.py \
             --material CMakeLists.txt \
             --material CMakePresets.json \

@@ -254,3 +254,15 @@ retain their `/workspace` build paths, while each container gets temporary
 private client configuration. Runner provisioning, current resource admission
 and the bounded hardware reservation remain coordinator prerequisites. A
 capability report supplies no authority and no passing hardware evidence.
+
+The required native Windows font comparison builds the same headless SDL_ttf
+probe with the historical immutable MXE producer and the new LLVM producer.
+The historical lane uses `stage_windows_runtime.py` from Classic revision
+`fd4943252ac872fce2995c286b10a0c6d249aba3` with that producer's original objdump
+and runtime inventory. Its image coordinate, compiler output and staging-helper
+SHA are retained alongside comparison artifacts. The production LLVM stager
+keeps its strict producer-inventory and GCC-runtime exclusions. Baseline and
+candidate DLL closures occupy separate directories and render the same eight
+committed fonts on one Windows runner; `compare_font_render.py` rejects any
+metadata or pixel mismatch. Keep `CLASSIC_WINDOWS_FONT_BASELINE_IMAGE` at its
+original immutable coordinate when replacing the candidate image pins.
