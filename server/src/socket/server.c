@@ -1539,7 +1539,12 @@ bool socket_server_process(void) {
         if (nfds < fd) {
             nfds = fd;
         }
+#ifdef WIN32
+        /* Match Winsock's assignment conversion before its SOCKET comparison. */
+        FD_SET((SOCKET)fd, &fds_read);
+#else
         FD_SET(fd, &fds_read);
+#endif
     }
 
     csocket_entry_t *entry, *entry_tmp;
