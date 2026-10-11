@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -1093,6 +1094,88 @@ class WorkflowContractTests(unittest.TestCase):
             'cmake --build "${integrated_release_directory}"',
         ):
             self.assertIn(operation, runner)
+
+    @unittest.skipUnless(shutil.which("cmake") and shutil.which("ctest") and shutil.which("cc") and shutil.which("ninja"), "CMake, CTest, Ninja and a C compiler required")
+    def test_linux_validation_preserves_old_compiler_caches_in_both_orders(self) -> None:
+        runner = (ROOT / "tools/ci/run_linux_check.sh").read_text()
+        selection = runner[runner.index("release_directory="):runner.index("\nlauncher=(")]
+        names = (
+            "release_directory", "integrated_release_directory", "sanitizer_directory",
+            "protocol_directory", "library_release_directory", "install_directory",
+            "consumer_directory",
+        )
+        previous = ("build/linux-release", "build/integrated-linux-release", "build/linux-sanitizers",
+                    "build/check", "build/release", "build/install", "build/consumer")
+        expected = ("build/llvm-release", "build/integrated-llvm-release", "build/llvm-sanitizers",
+                    "build/llvm-check", "build/llvm-release", "build/llvm-install", "build/llvm-consumer")
+        result = subprocess.run(
+            ["bash", "-euc", selection + '\nprintf "%s\\n" ' +
+             " ".join(f'"${{{name}}}"' for name in names)],
+            capture_output=True, text=True, check=True)
+        selected = tuple(result.stdout.splitlines())
+        self.assertEqual(selected, expected)
+        self.assertTrue(all(old != native for old, native in zip(previous, selected)))
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            # Distinct fixture paths use the available host compiler to exercise
+            # CMake's persistent compiler cache; this is not a Classic build or
+            # a simulated LLVM identity used to bypass production validation.
+            drivers = {}
+            for name in ("previous", "selected"):
+                driver = fixture / (name + "-compiler-driver")
+                driver.symlink_to(shutil.which("cc"))
+                drivers[name] = driver
+            for order in (("previous", "selected", "previous"),
+                          ("selected", "previous", "selected")):
+                source = fixture / (order[0] + "-first")
+                source.mkdir()
+                (source / "CMakeLists.txt").write_text(
+                    "cmake_minimum_required(VERSION 3.20)\nproject(cache_fixture C)\n"
+                    "enable_testing()\nadd_test(NAME cache_fixture COMMAND ${CMAKE_COMMAND} -E true)\n")
+                (source / "CMakePresets.json").write_text(
+                    (ROOT / "client/CMakePresets.json").read_text())
+                visited = set()
+                for mode in order:
+                    visited.add(mode)
+                    directories = previous if mode == "previous" else selected
+                    for name, directory in zip(names, directories):
+                        if name == "install_directory":
+                            continue
+                        build = source / name / directory
+                        preset = (
+                            "linux-release" if name in ("release_directory", "integrated_release_directory")
+                            else "linux-sanitizers" if name == "sanitizer_directory" else None)
+                        configure = (
+                            ["cmake", "--preset", preset, "-B", str(build)] if preset
+                            else ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja"])
+                        result = subprocess.run(
+                            configure, cwd=source, env={**os.environ, "CC": str(drivers[mode])},
+                            capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        cache = (build / "CMakeCache.txt").read_text()
+                        self.assertIn(f"CMAKE_C_COMPILER:FILEPATH={drivers[mode]}\n", cache)
+                        if preset:
+                            build_type = "Debug" if preset == "linux-sanitizers" else "Release"
+                            self.assertIn(f"CMAKE_BUILD_TYPE:STRING={build_type}\n", cache)
+                            result = subprocess.run(
+                                ["cmake", "--build", str(build)], capture_output=True, text=True)
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            result = subprocess.run(
+                                ["ctest", "--preset", preset, "--test-dir", str(build), "--no-tests=error"],
+                                cwd=source, capture_output=True, text=True)
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            self.assertIn("cache_fixture", result.stdout)
+                    # Check every cache after each switch to prove both coordinates
+                    # retain the compiler selected by their own first configure.
+                    for configured in visited:
+                        cached = previous if configured == "previous" else selected
+                        for name, directory in zip(names, cached):
+                            if name == "install_directory":
+                                continue
+                            cache = source / name / directory / "CMakeCache.txt"
+                            if cache.exists():
+                                self.assertIn(f"CMAKE_C_COMPILER:FILEPATH={drivers[configured]}\n",
+                                              cache.read_text())
 
     def test_movement_regression_compares_immutable_baselines_across_contracts(self) -> None:
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(

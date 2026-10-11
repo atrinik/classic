@@ -115,8 +115,8 @@ void client_metaserver_options_deinit(client_metaserver_options_t *options) {
 }
 
 static const char *const provider_directory[] = {
-    "https://classic.metaserver.atrinik.org/index.xml",
-    "https://classic.dev.metaserver.atrinik.org/index.xml",
+    "https://classic.meta.atrinik.org/index.xml",
+    "https://classic.dev.meta.atrinik.org/index.xml",
 };
 
 static const char *const provider_rendezvous[] = {

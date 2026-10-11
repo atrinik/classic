@@ -56,7 +56,7 @@ class CoveragePresetTests(unittest.TestCase):
                                  configured["binaryDir"] + "/llvm-profiles/%m-%p.profraw")
 
 
-    def assert_configure_selects_toolchain(self, source, build, toolchain):
+    def assert_configure_selects_toolchain(self, source, build, toolchain, arguments=()):
         # Run actual preset configuration and the actual authored CMake prefix.
         # Abort at project() before language detection: this verifies selection
         # without inventing compiler identity or permitting a product policy bypass.
@@ -76,7 +76,7 @@ message(FATAL_ERROR "ATRINIK_TOOLCHAIN_SELECTION_PROBE_COMPLETED")
         result = subprocess.run(
             ["cmake", "--preset", "llvm-coverage", "-B", str(build),
              "-DATRINIK_PACKAGE_VERSION=9.8.7",
-             "-DCMAKE_PROJECT_INCLUDE_BEFORE=" + str(probe)],
+             "-DCMAKE_PROJECT_INCLUDE_BEFORE=" + str(probe), *arguments],
             cwd=source, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ATRINIK_TOOLCHAIN_SELECTION_PROBE_COMPLETED",
@@ -124,6 +124,17 @@ message(FATAL_ERROR "ATRINIK_TOOLCHAIN_SELECTION_PROBE_COMPLETED")
                                             "dependencies/libatrinik/pathfinding")
                     self.assert_configure_selects_toolchain(
                         pathfinding, root / (scope + "-pathfinding-build"), toolchain)
+
+    @unittest.skipUnless(shutil.which("cmake") and platform.system() == "Linux",
+                         "Native Linux CMake selection probe unavailable")
+    def test_coverage_preset_preserves_an_explicit_toolchain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            toolchain = root / "explicit.cmake"
+            toolchain.write_text("# explicit target settings\n")
+            self.assert_configure_selects_toolchain(
+                ROOT / "client", root / "build", toolchain,
+                arguments=("-DCMAKE_TOOLCHAIN_FILE=" + str(toolchain),))
 
     def test_native_profile_preparation_leaves_existing_gcc_cache_untouched(self):
         for module in MODULES[:-1]:

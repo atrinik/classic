@@ -206,10 +206,10 @@ environment variables never synthesize a selected-adapter identity.
 
  The packaged directory configuration is an explicit trusted endpoint set:
 
-     metaserver = https://classic.metaserver.atrinik.org/index.xml https://rendezvous.meta.atrinik.org/v1/classic https://rendezvous.meta.atrinik.org
+     metaserver = https://classic.meta.atrinik.org/index.xml https://rendezvous.meta.atrinik.org/v1/classic https://rendezvous.meta.atrinik.org
 
  The intro screen always includes a provider button. `Dev` switches to
- `https://classic.dev.metaserver.atrinik.org/index.xml` with
+ `https://classic.dev.meta.atrinik.org/index.xml` with
  `https://rendezvous.dev.meta.atrinik.org/v1/classic` and the trusted access
  origin `https://rendezvous.dev.meta.atrinik.org`; `Default` switches back
  to the packaged endpoint set above. Its label names the destination. Clicking

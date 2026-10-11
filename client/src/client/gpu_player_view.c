@@ -2108,7 +2108,7 @@ static server_struct *gpu_player_view_provider_access_transport(
         released && curl_cancelled(cancel) && options->count == 1 &&
         strcmp(code, "0123456789ABCDEF") == 0 &&
         strcmp(options->endpoints[0].directory_url,
-               "https://classic.metaserver.atrinik.org/index.xml") == 0 &&
+               "https://classic.meta.atrinik.org/index.xml") == 0 &&
         strcmp(options->endpoints[0].rendezvous_origin,
                "https://rendezvous.meta.atrinik.org/v1/classic") == 0 &&
         strcmp(options->endpoints[0].access_origin,
