@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -2509,7 +2509,7 @@ mapstruct *get_map_from_coord2(mapstruct *m, int *x, int *y) {
  * @return
  * Direction.
  */
-static int coords_distance_to_dir(int x, int y) {
+int coords_distance_to_dir(int x, int y) {
     int q;
     if (!y) {
         q = -300 * x;

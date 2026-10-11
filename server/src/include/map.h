@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
+ *   Copyright 2009-2026 The Atrinik Project      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -1064,6 +1064,8 @@ void set_map_reset_time(mapstruct *map);
 mapstruct *get_map_from_tiled(mapstruct *m, int tiled);
 mapstruct *get_map_from_coord(mapstruct *m, int *x, int *y);
 mapstruct *get_map_from_coord2(mapstruct *m, int *x, int *y);
+/** Convert a planar displacement to the established eight-direction facing. */
+int coords_distance_to_dir(int x, int y);
 int get_rangevector(object *op1, object *op2, rv_vector *retval, int flags);
 int get_rangevector_from_mapcoords(mapstruct *map1,
                                    int x,
