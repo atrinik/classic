@@ -271,6 +271,54 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _identity(data: bytes, version: str, revision: str) -> None:
+    """Require the retained client record in one mapped read-only ELF section."""
+    if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != b"\x3e\0":
+        raise ValueError("AppImage identity must belong to an x86_64 ELF")
+    section_offset = struct.unpack_from("<Q", data, 40)[0]
+    section_size, section_count, strings_index = struct.unpack_from("<HHH", data, 58)
+    if (section_size != 64 or not 0 < strings_index < section_count or section_offset < 64
+            or section_offset + section_size * section_count > len(data)):
+        raise ValueError("AppImage identity has a malformed ELF section table")
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, section_offset + index * section_size)
+                for index in range(section_count)]
+    strings_section = sections[strings_index]
+    start, size = strings_section[4:6]
+    if strings_section[1] != 3 or start < 64 or size == 0 or start + size > len(data):
+        raise ValueError("AppImage identity has a malformed section-name table")
+    strings = data[start:start + size]
+    matches = []
+    for section in sections:
+        name_offset = section[0]
+        if name_offset >= len(strings) or b"\0" not in strings[name_offset:]:
+            raise ValueError("AppImage identity has a malformed ELF section name")
+        if strings[name_offset:].split(b"\0", 1)[0] == b".atrinik.identity":
+            matches.append(section)
+    if len(matches) != 1:
+        raise ValueError("AppImage client must have exactly one .atrinik.identity section")
+    section = matches[0]
+    start, size = section[4:6]
+    expected = b"ATRINIK_APPIMAGE_IDENTITY_V1\0version=" + version.encode("ascii") + b"\0revision=" + revision.encode("ascii") + b"\0"
+    if (section[1] != 1 or section[2] != 2 or start < 64 or start + size > len(data)
+            or data[start:start + size] != expected):
+        raise ValueError("AppImage client identity record differs from trusted source version or revision")
+    program_offset = struct.unpack_from("<Q", data, 32)[0]
+    program_size, program_count = struct.unpack_from("<HH", data, 54)
+    if program_size != 56 or program_count == 0 or program_offset + program_size * program_count > len(data):
+        raise ValueError("AppImage identity has a malformed ELF program table")
+    mapped = False
+    for index in range(program_count):
+        segment = struct.unpack_from("<IIQQQQQQ", data, program_offset + index * program_size)
+        kind, flags, offset, address, _, file_size, memory_size, _ = segment
+        if (kind == 1 and offset <= start and start + size <= offset + file_size
+                and section[3] == address + start - offset):
+            if not flags & 4 or flags & 2 or file_size > memory_size or offset + file_size > len(data):
+                raise ValueError("AppImage client identity is not mapped read-only")
+            mapped = True
+    if not mapped:
+        raise ValueError("AppImage client identity is not allocated in a read-only load segment")
+
+
 def system_license_notices(root: Path | str, lock: dict, packages: Iterable[str]) -> list[dict]:
     """Inventory locked notice texts without inferring their legal scope."""
     root = Path(root)
@@ -415,8 +463,9 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
     if client.stat().st_size > 256 * 1024**2:
         raise ValueError("AppImage client exceeds inspection limits")
     data = client.read_bytes()
-    if b"\0" + version.encode() + b"\0" not in data or b"Welcome to Atrinik version %s" not in data:
-        raise ValueError("AppImage client has wrong Atrinik identity or version")
+    _identity(data, version, metadata["revision"])
+    if b"Welcome to Atrinik version %s" not in data:
+        raise ValueError("AppImage client has wrong Atrinik application identity")
     dependencies: dict[str, set[str]] = {}
     providers: dict[str, str] = {}
     client_needed, _ = _elf(client, executable=True)

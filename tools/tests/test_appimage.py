@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -111,8 +112,8 @@ class AppImageTests(unittest.TestCase):
         self.write("AppRun", self.launcher, executable=True)
         self.write("atrinik.desktop", "[Desktop Entry]\nType=Application\nExec=atrinik\nIcon=atrinik\nName=Atrinik\n")
         self.write("atrinik.png", b"\x89PNG\r\n\x1a\nfixture")
-        client = Path("/usr/bin/true").read_bytes() + b"\0Welcome to Atrinik version %s\0" + self.version.encode() + b"\0"
-        self.write("usr/bin/atrinik", client, executable=True)
+        self.client_revision = self.revision
+        self.write("usr/bin/atrinik", self.client_elf(), executable=True)
         library = Path("/usr/lib/x86_64-linux-gnu/libzstd.so.1").resolve()
         self.library_name = "usr/lib/" + library.name
         self.write(self.library_name, library.read_bytes(), executable=True)
@@ -160,7 +161,60 @@ class AppImageTests(unittest.TestCase):
         data[offset:offset + 16] = hashlib.md5(data, usedforsecurity=False).digest()
         return bytes(data)
 
+    def client_elf(self, *, version=None, revision=None, flags=2, section_type=1,
+                   duplicate=False, mapped=True, load_flags=4):
+        """Append the producer's retained section to a host ELF, no compiler."""
+        data = bytearray(Path("/usr/bin/true").read_bytes())
+        section_offset = struct.unpack_from("<Q", data, 40)[0]
+        section_count, strings_index = struct.unpack_from("<HH", data, 60)
+        sections = [list(struct.unpack_from("<IIQQQQIIQQ", data, section_offset + index * 64))
+                    for index in range(section_count)]
+        strings_section = sections[strings_index]
+        strings = bytes(data[strings_section[4]:strings_section[4] + strings_section[5]])
+        program_offset = struct.unpack_from("<Q", data, 32)[0]
+        program_count = struct.unpack_from("<H", data, 56)[0]
+        programs = [list(struct.unpack_from("<IIQQQQQQ", data, program_offset + index * 56))
+                    for index in range(program_count)]
+        data.extend(b"\0Welcome to Atrinik version %s\0")
+        start = (len(data) + 4095) // 4096 * 4096
+        data.extend(bytes(start - len(data)))
+        record = (b"ATRINIK_APPIMAGE_IDENTITY_V1\0version=" + (version or self.version).encode()
+                  + b"\0revision=" + (revision or self.revision).encode() + b"\0")
+        data.extend(record)
+        address = 0x10000000
+        section = [len(strings), section_type, flags, address if mapped else address + 1,
+                   start, len(record), 0, 0, 1, 0]
+        sections.append(section)
+        if duplicate:
+            sections.append(list(section))
+        strings_section[4] = len(data)
+        strings += b".atrinik.identity\0"
+        strings_section[5] = len(strings)
+        data.extend(strings)
+        data.extend(bytes((-len(data)) % 8))
+        section_offset = len(data)
+        for entry in sections:
+            data.extend(struct.pack("<IIQQQQIIQQ", *entry))
+        program_offset = len(data)
+        count = len(programs) + 1
+        file_size = program_offset + count * 56 - start
+        for entry in programs:
+            if entry[0] == 6:  # Keep PT_PHDR consistent with the relocated table.
+                entry[:] = [6, 4, program_offset, address + program_offset - start,
+                            address + program_offset - start, count * 56, count * 56, 8]
+        programs.append([1, load_flags, start, address, address, file_size, file_size, 4096])
+        for entry in programs:
+            data.extend(struct.pack("<IIQQQQQQ", *entry))
+        struct.pack_into("<Q", data, 32, program_offset)
+        struct.pack_into("<Q", data, 40, section_offset)
+        struct.pack_into("<H", data, 56, count)
+        struct.pack_into("<H", data, 60, len(sections))
+        return bytes(data)
+
     def image(self, *, update_files=True, update_lock=True, padding=b"", filesystem_epoch=None):
+        if self.metadata["revision"] != self.client_revision:
+            self.write("usr/bin/atrinik", self.client_elf(revision=self.metadata["revision"]), executable=True)
+            self.client_revision = self.metadata["revision"]
         if update_lock:
             self.write("usr/share/atrinik/packaging.lock.json", self.lock_path.read_bytes())
         if update_files:
@@ -308,8 +362,7 @@ class AppImageTests(unittest.TestCase):
         client = self.payload / "usr/bin/atrinik"
         original = client.read_bytes()
         cases = (original[:18] + b"\xb7\0" + original[20:],
-                 original.replace(b"\0" + self.version.encode() + b"\0", b"\0" + b"9.99.0" + b"\0"),
-                 original.replace(b"\0" + self.version.encode() + b"\0", b"\0" + b"0.0.0" + b"\0"),
+                 self.client_elf(version="9.99.0"), self.client_elf(version="0.0.0"),
                  original + b"\0/home/builder/atrinik/source.c\0", original + b"\0__gcov_init\0")
         for data in cases:
             self.write("usr/bin/atrinik", data, executable=True)
@@ -326,6 +379,27 @@ class AppImageTests(unittest.TestCase):
                 self.validate()
         client.write_bytes(original + b"\0--live-movement-route\0")
         self.validate()
+
+    def test_identity_uses_one_exact_mapped_readonly_section(self):
+        client = self.payload / "usr/bin/atrinik"
+        self.assertNotIn(b"\0" + self.version.encode() + b"\0", client.read_bytes())
+        self.validate()
+        cases = (Path("/usr/bin/true").read_bytes(), self.client_elf(duplicate=True),
+                 self.client_elf(version="0.0.0"), self.client_elf(revision="b" * 40),
+                 self.client_elf(flags=3), self.client_elf(flags=0),
+                 self.client_elf(section_type=8), self.client_elf(mapped=False),
+                 self.client_elf(load_flags=6))
+        for data in cases:
+            client.write_bytes(data)
+            with self.subTest(size=len(data)), self.assertRaisesRegex(ValueError, "identity"):
+                self.validate()
+        data = bytearray(self.client_elf())
+        section_offset = struct.unpack_from("<Q", data, 40)[0]
+        count = struct.unpack_from("<H", data, 60)[0]
+        struct.pack_into("<Q", data, section_offset + (count - 1) * 64 + 24, len(data) + 1)
+        client.write_bytes(data)
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.validate()
 
     def test_missing_library_closure_and_dlopen_requirement(self):
         original = self.lock["host_libraries"]
