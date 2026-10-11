@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -34,6 +34,8 @@
  */
 
 #include <global.h>
+#include <propagation.h>
+#include <perception.h>
 #include <server_main.h>
 #include <server.h>
 #include <monster.h>
@@ -122,55 +124,20 @@ static void disease_remove_symptoms(object *op) {
  * @param op
  * Disease infecting.
  */
-static void disease_check_infection(object *op) {
-    HARD_ASSERT(op != NULL);
-
-    int x, y;
-    mapstruct *map;
-    if (op->env != NULL) {
-        x = op->env->x;
-        y = op->env->y;
-        map = op->env->map;
-    } else {
-        x = op->x;
-        y = op->y;
-        map = op->map;
-    }
-
-    if (map == NULL) {
-        return;
-    }
-
-    int range = abs(op->magic);
-    for (int i = -range; i <= range; i++) {
-        for (int j = -range; j <= range; j++) {
-            int xt = x + i;
-            int yt = y + j;
-            mapstruct *m = get_map_from_coord(map, &xt, &yt);
-            if (m == NULL) {
-                continue;
-            }
-
-            if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
-                continue;
-            }
-
-            FOR_MAP_PREPARE(m, xt, yt, tmp) {
-                if (!IS_LIVE(tmp)) {
-                    continue;
-                }
-
-                rv_vector rv;
-                if (!get_rangevector(op->env ? op->env : op, tmp, &rv, 0) ||
-                    !obj_in_line_of_sight(tmp, &rv)) {
-                    continue;
-                }
-
-                disease_infect(op, tmp, 0);
-            }
-            FOR_MAP_FINISH();
+static void disease_infection_visit(object *disease, mapstruct *map, int x, int y, int unused) {
+    (void)unused;
+    object *source = disease->env != NULL ? disease->env : disease;
+    FOR_MAP_PREPARE(map, x, y, target) {
+        if (IS_LIVE(target) && perception_object_visible(source, target)) {
+            disease_infect(disease, target, 0);
         }
     }
+    FOR_MAP_FINISH();
+}
+
+static void disease_check_infection(object *op) {
+    HARD_ASSERT(op != NULL);
+    propagation_area(op, abs(op->magic), disease_infection_visit, 0);
 }
 
 /**

@@ -28,6 +28,10 @@
  */
 
 #include <global.h>
+#include <propagation.h>
+#include <projectile3d.h>
+#include <perception.h>
+#include <spatial.h>
 #include <server_main.h>
 #include <server_item.h>
 #include <server.h>
@@ -40,6 +44,17 @@
 #include <player.h>
 #include <object.h>
 #include <object_methods.h>
+
+/* A remembered target is not permission to aim at a hidden creature. */
+static object *spell_aim_target(object *source) {
+    object *target = source->type == PLAYER ? CONTR(source)->target_object : source->enemy;
+    tag_t count = source->type == PLAYER ? CONTR(source)->target_object_count : source->enemy_count;
+    if (target == source || !OBJECT_VALID(target, count)) {
+        return NULL;
+    }
+    return (source->type == PLAYER ? perception_player_authorized(CONTR(source), target) :
+            perception_object_visible(source, target)) ? target : NULL;
+}
 
 /**
  * Array of pointers to archetypes used by the spells for quick
@@ -351,7 +366,7 @@ int cast_spell(object *op,
                                                 target->x,
                                                 target->y,
                                                 &rv,
-                                                RV_DIAGONAL_DISTANCE) ||
+                                                RV_DIAGONAL_DISTANCE | RV_NO_LOAD) ||
                 rv.distance > (unsigned int)spells[type].range) {
                 draw_info(COLOR_WHITE, op, "Your target is out of range!");
                 return 0;
@@ -385,6 +400,28 @@ int cast_spell(object *op,
 
     /* A last sanity check: are caster and target *really* valid? */
     if (!OBJECT_ACTIVE(caster) || (target && !OBJECT_ACTIVE(target))) {
+        return 0;
+    }
+
+    /* Reject an over-bound area before map events, combat marking or costs. */
+    int propagation_radius = -1;
+    switch ((enum spellnrs)type) {
+        case SP_ICESTORM:
+        case SP_FIRESTORM:
+        case SP_HOLYWORD:
+            propagation_radius = (dir == 0 && spell_aim_target(op) == NULL ? duration / 2 : duration) + 1;
+            break;
+        case SP_DESTRUCTION:
+            propagation_radius = MAX(SP_level_strength_adjust(caster, type), spells[type].bdur);
+            break;
+        case SP_RAIN_HEAL:
+            propagation_radius = 1;
+            break;
+        default:
+            break;
+    }
+    if (propagation_radius >= 0 && !propagation_can_admit(propagation_radius)) {
+        draw_info(COLOR_WHITE, op, "There is too much magic in motion to cast that spell.");
         return 0;
     }
 
@@ -637,18 +674,14 @@ int cast_create_obj(object *op, object *new_op, int dir) {
  */
 int fire_bolt(object *op, object *caster, int dir, int type) {
     object *tmp;
+    object *aim = spell_aim_target(op);
 
     if (!spellarch[type]) {
         return 0;
     }
 
-    if (!dir) {
+    if (!dir && aim == NULL) {
         draw_info(COLOR_WHITE, op, "You can't fire that at yourself!");
-        return 0;
-    }
-
-    if (wall(op->map, op->x + freearr_x[dir], op->y + freearr_y[dir])) {
-        draw_info(COLOR_WHITE, op, "There is something in the way.");
         return 0;
     }
 
@@ -663,6 +696,7 @@ int fire_bolt(object *op, object *caster, int dir, int type) {
     tmp->stats.dam = (int16_t)dam;
     tmp->last_sp = spells[type].bdur + SP_level_strength_adjust(caster, type);
 
+    SET_FLAG(tmp, FLAG_NO_SAVE);
     tmp->direction = dir;
     tmp->x = op->x;
     tmp->y = op->y;
@@ -680,6 +714,7 @@ int fire_bolt(object *op, object *caster, int dir, int type) {
         return 0;
     }
 
+    projectile3d_launch(tmp, op, aim, dir);
     object_process(tmp);
 
     return 1;
@@ -724,6 +759,11 @@ int fire_arch_from_position(object *op,
         return 0;
     }
 
+    spatial_cell cell;
+    if (!spatial_resolve(env->map, x, y, 0, &cell)) {
+        return 0;
+    }
+
     tmp = arch_to_object(at);
 
     if (tmp == NULL) {
@@ -735,8 +775,13 @@ int fire_arch_from_position(object *op,
     dam = MIN(dam, INT16_MAX);
     tmp->stats.dam = (int16_t)dam;
     tmp->stats.hp = spells[type].bdur + SP_level_strength_adjust(caster, type);
-    tmp->x = x, tmp->y = y;
+    SET_FLAG(tmp, FLAG_NO_SAVE);
+    tmp->x = cell.x, tmp->y = cell.y;
     tmp->direction = dir;
+
+    if (target == NULL) {
+        target = spell_aim_target(op);
+    }
 
     if (target) {
         tmp->enemy = target;
@@ -755,10 +800,20 @@ int fire_arch_from_position(object *op,
         SET_ANIMATION(tmp, (NUM_ANIMATIONS(tmp) / NUM_FACINGS(tmp)) * dir);
     }
 
-    if ((tmp = object_insert_map(tmp, op->map, op, 0)) == NULL) {
+    /* Reserve explosion capacity while rejection still precedes casting costs. */
+    tmp->map = cell.map;
+    if (tmp->other_arch != NULL && tmp->type != SWARM_SPELL &&
+        !propagation_reserve_explosion(tmp, spells[type].bdur / 2)) {
+        tmp->map = NULL;
+        object_destroy(tmp);
+        return 0;
+    }
+
+    if ((tmp = object_insert_map(tmp, cell.map, op, 0)) == NULL) {
         return 1;
     }
 
+    projectile3d_launch(tmp, env, target, dir);
     object_process(tmp);
 
     return 1;
@@ -787,87 +842,23 @@ int cast_cone(object *op,
               int strength,
               int spell_type,
               struct archetype *spell_arch) {
-    object *tmp;
-    int i, success = 0, range_min = -1, range_max = 1;
-    uint32_t count_ref;
-
-    if (!dir) {
-        range_min = -3, range_max = 4, strength /= 2;
+    int dx = 0, dy = 0, dz = 0;
+    if (dir != 0 || (op->type == PLAYER && spell_aim_target(op) != NULL)) {
+        dx = freearr_x[absdir(dir)];
+        dy = freearr_y[absdir(dir)];
+        object *target = spell_aim_target(op);
+        int ox, oy, oz;
+        if (target != NULL && spatial_offset(op->map, target->map, &ox, &oy, &oz)) {
+            dx = target->x + ox - op->x;
+            dy = target->y + oy - op->y;
+            dz = oz;
+        }
+    } else {
+        strength /= 2;
     }
-
-    /* Our initial spell object */
-    tmp = arch_to_object(spell_arch);
-
-    if (!tmp) {
-        LOG(BUG, "arch_to_object() failed!? (%s)", spell_arch->name);
-        return 0;
-    }
-
-    count_ref = tmp->count;
-
-    for (i = range_min; i <= range_max; i++) {
-        int x = op->x + freearr_x[absdir(dir + i)], y = op->y + freearr_y[absdir(dir + i)];
-
-        if (wall(op->map, x, y)) {
-            continue;
-        }
-
-        success = 1;
-
-        if (!tmp) {
-            tmp = arch_to_object(spell_arch);
-        }
-
-        object_owner_set(tmp, op);
-        object_owner_copy(tmp, op);
-        /* *very* important - miss this and the spells go really wild! */
-        tmp->weight_limit = count_ref;
-
-        tmp->level = SK_level(caster);
-        tmp->x = x, tmp->y = y;
-
-        if (dir) {
-            tmp->stats.sp = dir;
-        } else {
-            tmp->stats.sp = i;
-        }
-
-        tmp->stats.hp = strength;
-        int dam = SP_level_dam_adjust(caster, spell_type, false);
-        dam = MIN(dam, INT16_MAX);
-        tmp->stats.dam = (int16_t)dam;
-        tmp->stats.maxhp = tmp->count;
-
-        if (!QUERY_FLAG(tmp, FLAG_FLYING)) {
-            LOG(DEBUG, "arch %s doesn't have flying 1", spell_arch->name);
-        }
-
-        if ((!QUERY_FLAG(tmp, FLAG_WALK_ON) || !QUERY_FLAG(tmp, FLAG_FLY_ON)) && tmp->stats.dam) {
-            LOG(DEBUG, "arch %s doesn't have walk_on 1 and fly_on 1", spell_arch->name);
-        }
-
-        if (!object_insert_map(tmp, op->map, op, 0)) {
-            return 0;
-        }
-
-        if (tmp->other_arch) {
-            cone_drop(tmp);
-        }
-
-        tmp = NULL;
-    }
-
-    /* Can happen when we can't drop anything */
-    if (tmp) {
-        /* Was not inserted */
-        if (!QUERY_FLAG(tmp, FLAG_REMOVED)) {
-            object_remove(tmp, 0);
-        }
-
-        object_destroy(tmp);
-    }
-
-    return success;
+    return propagation_cone(op, caster, spell_arch, strength,
+                            MIN(SP_level_dam_adjust(caster, spell_type, false), INT16_MAX),
+                            dx, dy, dz);
 }
 
 /**
@@ -884,7 +875,8 @@ void cone_drop(object *op) {
     new_ob->level = op->level;
     object_owner_copy(new_ob, op);
 
-    object_insert_map(new_ob, op->map, op, 0);
+    new_ob = object_insert_map(new_ob, op->map, op, INS_NO_MERGE);
+    propagation_track_drop(op, new_ob);
 }
 
 /**

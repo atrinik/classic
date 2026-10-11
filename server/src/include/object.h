@@ -184,6 +184,9 @@ struct obj {
     /** Per-player, per-skill damage participation for kill experience. */
     combat_contribution_t *combat_contributions;
 
+    /** Transient propagation membership; never copied or serialized. */
+    struct propagation_entry *propagation;
+
     /* These get an extra add_refcount(), after having been copied by memcpy().
      * All fields below this point are automatically copied by memcpy. If
      * adding something that needs a refcount updated, make sure you modify

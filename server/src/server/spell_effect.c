@@ -28,6 +28,9 @@
  */
 
 #include <global.h>
+#include <propagation.h>
+#include <spatial.h>
+#include <perception.h>
 #include <shop.h>
 #include <server_main.h>
 #include <server_item.h>
@@ -275,59 +278,42 @@ int cast_wor(object *op, object *caster) {
  * @param attacktype
  * Attacktype.
  */
+static void destruction_visit(object *source, mapstruct *map, int x, int y, int argument) {
+    object *hitter = arch_to_object(spellarch[SP_DESTRUCTION]);
+    object_owner_set(hitter, source);
+    hitter->level = (unsigned)argument >> 16;
+    int dam = (unsigned)argument & UINT16_MAX;
+    FOR_MAP_PREPARE(map, x, y, part) {
+        object *target = HEAD(part);
+        if (target == source || !IS_LIVE(target) || is_friend_of(source, target)) {
+            continue;
+        }
+        int damage = dam;
+        if (target->quick_pos != 0) {
+            damage /= (target->quick_pos >> 4) + 1;
+        }
+        attack_hit_situational(target, hitter, damage);
+        break;
+    }
+    FOR_MAP_FINISH();
+    object_destroy(hitter);
+}
+
 void cast_destruction(object *op, object *caster, int dam) {
-    int i, j, range, xt, yt;
-    object *tmp, *hitter;
-    mapstruct *m;
+    int range = MAX(SP_level_strength_adjust(caster, SP_DESTRUCTION), spells[SP_DESTRUCTION].bdur);
+    dam = MIN(INT16_MAX, dam + SP_level_dam_adjust(caster, SP_DESTRUCTION, false));
+    unsigned argument = ((unsigned)SK_level(caster) << 16) | (unsigned)MAX(0, dam);
+    propagation_area(op, range, destruction_visit, (int)argument);
+}
 
-    /* The hitter object. */
-    hitter = arch_to_object(spellarch[SP_DESTRUCTION]);
-    object_owner_set(hitter, op);
-    hitter->level = SK_level(caster);
-
-    /* Calculate maximum range of the spell */
-    range = MAX(SP_level_strength_adjust(caster, SP_DESTRUCTION), spells[SP_DESTRUCTION].bdur);
-    dam += SP_level_dam_adjust(caster, SP_DESTRUCTION, false);
-
-    for (i = -range; i < range + 1; i++) {
-        for (j = -range; j < range + 1; j++) {
-            xt = op->x + i;
-            yt = op->y + j;
-
-            if (!(m = get_map_from_coord(op->map, &xt, &yt))) {
-                continue;
-            }
-
-            /* Nothing alive here? Move on... */
-            if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
-                continue;
-            }
-
-            /* Try to get an object to hit */
-            for (tmp = GET_MAP_OB(m, xt, yt); tmp; tmp = tmp->above) {
-                /* Get head. */
-                if (tmp->head) {
-                    tmp = tmp->head;
-                }
-
-                /* Skip the caster and not alive objects. */
-                if (tmp == caster || !IS_LIVE(tmp)) {
-                    continue;
-                }
-
-                if (!is_friend_of(op, tmp)) {
-                    int16_t damage = dam;
-
-                    if (tmp->quick_pos) {
-                        damage /= (tmp->quick_pos >> 4) + 1;
-                    }
-
-                    attack_hit_situational(tmp, hitter, damage);
-                    break;
-                }
-            }
+static void rain_heal_visit(object *source, mapstruct *map, int x, int y, int level) {
+    FOR_MAP_PREPARE(map, x, y, part) {
+        object *target = HEAD(part);
+        if (target != source && IS_LIVE(target) && is_friend_of(source, target)) {
+            cast_heal(source, source, level, target, SP_MINOR_HEAL);
         }
     }
+    FOR_MAP_FINISH();
 }
 
 /**
@@ -345,39 +331,9 @@ int cast_heal_around(object *op, int level, int type) {
     int success = 0;
 
     switch (type) {
-        case SP_RAIN_HEAL: {
-            int i, x, y;
-            mapstruct *m;
-            object *tmp;
-
-            for (i = 0; i <= SIZEOFFREE1; i++) {
-                x = op->x + freearr_x[i];
-                y = op->y + freearr_y[i];
-
-                if (!(m = get_map_from_coord(op->map, &x, &y))) {
-                    continue;
-                }
-
-                if (!(GET_MAP_FLAGS(m, x, y) & (P_IS_MONSTER | P_IS_PLAYER))) {
-                    continue;
-                }
-
-                for (tmp = GET_MAP_OB_LAYER(m, x, y, LAYER_LIVING, 0);
-                     tmp && tmp->layer == LAYER_LIVING;
-                     tmp = tmp->above) {
-                    tmp = HEAD(tmp);
-
-                    if (tmp == op || !IS_LIVE(tmp) || !is_friend_of(op, tmp)) {
-                        continue;
-                    }
-
-                    cast_heal(op, op, level, tmp, SP_MINOR_HEAL);
-                    success = 1;
-                }
-            }
-
+        case SP_RAIN_HEAL:
+            success = propagation_area(op, 1, rain_heal_visit, level);
             break;
-        }
 
         case SP_PARTY_HEAL: {
             objectlink *ol;
@@ -1274,23 +1230,32 @@ int cast_cause_disease(object *op,
                        int dir,
                        struct archetype *disease_arch,
                        int type) {
-    int x = op->x, y = op->y, i, xt, yt;
-    object *walk;
-    mapstruct *m;
-
-    /* Search in a line for a victim */
-    for (i = 0; i < 5; i++) {
-        x += freearr_x[dir];
-        y += freearr_y[dir];
-        xt = x;
-        yt = y;
-
-        if (!(m = get_map_from_coord(op->map, &xt, &yt))) {
-            continue;
+    int dx = freearr_x[absdir(dir)], dy = freearr_y[absdir(dir)], dz = 0;
+    object *target = op->type == PLAYER ? CONTR(op)->target_object : op->enemy;
+    tag_t target_count = op->type == PLAYER ? CONTR(op)->target_object_count : op->enemy_count;
+    if (target != op && OBJECT_VALID(target, target_count) &&
+        (op->type == PLAYER ? perception_player_authorized(CONTR(op), target) :
+         perception_object_visible(op, target))) {
+        int ox, oy, oz;
+        if (spatial_offset(op->map, target->map, &ox, &oy, &oz)) {
+            dx = target->x + ox - op->x;
+            dy = target->y + oy - op->y;
+            dz = oz;
         }
-
-        /* Check map flags for alive object */
-        if (!(GET_MAP_FLAGS(m, xt, yt) & P_IS_MONSTER)) {
+    }
+    spatial_cursor cursor;
+    spatial_event event;
+    if (!spatial_direction_init(&cursor, op->map, op->x, op->y, dx, dy, dz, 5)) {
+        return 0;
+    }
+    object *walk;
+    while (spatial_ray_next(&cursor, &event) == 1) {
+        if (!spatial_event_clear(&event, SPATIAL_COMBAT, false)) {
+            break;
+        }
+        mapstruct *m = event.destination.map;
+        int xt = event.destination.x, yt = event.destination.y;
+        if (!(GET_MAP_FLAGS(m, xt, yt) & (P_IS_MONSTER | P_IS_PLAYER))) {
             continue;
         }
 

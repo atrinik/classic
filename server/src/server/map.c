@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <propagation.h>
 #include <celestial_structure.h>
 #include <gameplay_journal.h>
 #include <swap.h>
@@ -1609,6 +1610,7 @@ static void map_atomic_cancel(map_atomic_file_t *file) {
  *
  */
 int new_save_map(mapstruct *m, int flag) {
+    propagation_expire_map(m);
     FILE *fp, *fp2;
     char filename[HUGE_BUF], buf[MAX_BUF];
     map_atomic_file_t primary, unique;
@@ -1813,6 +1815,7 @@ static void free_all_objects(mapstruct *m) {
  * If set, free all objects on the map.
  */
 void free_map(mapstruct *m, int flag) {
+    propagation_expire_map(m);
     light_batch_flush();
     int i;
 

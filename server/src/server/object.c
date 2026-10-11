@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <propagation.h>
 #include <server_main.h>
 #include <swap.h>
 #include <server_item.h>
@@ -1583,6 +1584,7 @@ void object_copy(object *op, const object *src, bool no_speed) {
 
     bool is_removed = QUERY_FLAG(op, FLAG_REMOVED);
 
+    propagation_object_destroyed(op);
     object_combat_contributions_free(op);
 
     FREE_ONLY_HASH(op->name);
@@ -2151,6 +2153,7 @@ void object_destroy(object *op) {
     }
 
     object_free_key_values(op);
+    propagation_object_destroyed(op);
     object_combat_contributions_free(op);
 
     if (QUERY_FLAG(op, FLAG_IS_LINKED)) {

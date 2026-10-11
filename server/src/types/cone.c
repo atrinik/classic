@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -30,35 +30,10 @@
  */
 
 #include <global.h>
+#include <propagation.h>
 #include <server_main.h>
 #include <arch.h>
 #include <object_methods.h>
-
-/**
- * Check whether a part of the cone already exists on the specified
- * position.
- *
- * @param op
- * The cone.
- * @param m
- * Map.
- * @param x
- * X position.
- * @param y
- * Y position.
- * @return
- * Whether the cone exists.
- */
-static bool cone_exists(object *op, mapstruct *m, int x, int y) {
-    FOR_MAP_PREPARE(m, x, y, tmp) {
-        if (op->type == tmp->type && op->weight_limit == tmp->weight_limit) {
-            return true;
-        }
-    }
-    FOR_MAP_FINISH();
-
-    return false;
-}
 
 /** @copydoc object_methods_t::process_func */
 static void process_func(object *op) {
@@ -88,35 +63,7 @@ static void process_func(object *op) {
 
     op->stats.food = 1;
 
-    for (int i = -1; i < 2; i++) {
-        int x = op->x + freearr_x[absdir(op->stats.sp + i)];
-        int y = op->y + freearr_y[absdir(op->stats.sp + i)];
-        mapstruct *m = get_map_from_coord(op->map, &x, &y);
-        if (m == NULL) {
-            continue;
-        }
-
-        if (wall(m, x, y) || cone_exists(op, m, x, y)) {
-            continue;
-        }
-
-        /* Create the next part of the cone. */
-        object *tmp = arch_to_object(op->arch);
-        object_owner_copy(tmp, op);
-        tmp->weight_limit = op->weight_limit;
-        tmp->x = x;
-        tmp->y = y;
-        tmp->level = op->level;
-        tmp->stats.sp = op->stats.sp;
-        tmp->stats.hp = op->stats.hp + 1;
-        tmp->stats.maxhp = op->stats.maxhp;
-        tmp->stats.dam = op->stats.dam;
-
-        tmp = object_insert_map(tmp, m, op, 0);
-        if (tmp == NULL) {
-            continue;
-        }
-    }
+    propagation_expand(op);
 }
 
 /** @copydoc object_methods_t::move_on_func */
