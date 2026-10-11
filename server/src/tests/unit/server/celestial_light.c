@@ -1166,6 +1166,12 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_real_maps, check_test_setup, check_test_teardown);
     tcase_set_timeout(tc_real_maps, 30);
     suite_add_tcase(s, tc_real_maps);
+    TCase *tc_oracle = tcase_create("Pending oracle");
+    tcase_add_unchecked_fixture(tc_oracle, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_oracle, check_test_setup, check_test_teardown);
+    /* Keep all 24 full-field comparisons under combined coverage/sanitizers. */
+    tcase_set_timeout(tc_oracle, 60);
+    suite_add_tcase(s, tc_oracle);
     tcase_add_test(tc_core, test_celestial_open_field_matches_daylight_anchor);
     tcase_add_test(tc_core, test_continuous_seam_matches_single_map_spill);
     tcase_add_test(tc_core, test_remote_two_seam_geometry_fences_current_and_pending_fields);
@@ -1187,7 +1193,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_celestial_override_invalidates_loaded_keyframes);
     tcase_add_test(tc_core, test_celestial_command_lifecycle_and_permission_gate);
     tcase_add_test(tc_core, test_celestial_64x64_build_is_bounded);
-    tcase_add_test(tc_core, test_celestial_pending_matches_synchronous_oracle);
+    tcase_add_test(tc_oracle, test_celestial_pending_matches_synchronous_oracle);
     tcase_add_test(tc_core, test_celestial_geometry_signature_is_exact_and_uses_existing_padding);
     tcase_add_test(tc_core, test_celestial_pending_memory_is_bounded_and_released);
     tcase_add_test(tc_core, test_current_reservation_failure_clears_both_published_endpoints);
