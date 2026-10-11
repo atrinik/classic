@@ -35,7 +35,8 @@ The `llvm-coverage` preset selects the pinned toolchain and its own
 `build/llvm-coverage` cache and profiles. Existing `linux-coverage` build trees
 remain available for the previously released producer.
 
-The helper requires matching Clang, llvm-profdata and llvm-cov 23.1.3.
+The helper requires matching Clang, llvm-profdata, llvm-cov and llvm-readobj
+23.1.3.
 CTest writes separate `%m-%p.profraw` files for processes and shared libraries;
 LCOV includes production C sources and excludes tests, build output and upstream
 dependency trees. Missing or empty profiles fail the export. Run `prepare` only
