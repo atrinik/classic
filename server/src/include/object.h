@@ -746,7 +746,7 @@ typedef struct magic_mirror_struct {
  */
 #define OBJECT_CAN_TALK(ob)                                                \
     ((ob)->type == MONSTER && ((ob)->msg || HAS_EVENT((ob), EVENT_SAY)) && \
-     !OBJECT_VALID((ob)->enemy, (ob)->enemy_count))
+     !object_reference_is_current((ob)->enemy, (ob)->enemy_count))
 
 /**
  * Check whether an object is cursed/damned.
@@ -943,6 +943,13 @@ void object_init(void);
 uint64_t object_reclamation_epoch(void);
 /** False after any object storage was freed, or once the epoch saturates. */
 bool object_reclamation_is_current(uint64_t epoch);
+/** Prove a pointer names an allocated, aligned slot in the live object pool.
+ * Does not establish incarnation or active-map policy. Server-thread only. */
+bool object_storage_is_owned(const object *op);
+/** Allocation-safe incarnation check, including removed/inventory objects. */
+bool object_reference_matches(const object *op, tag_t count);
+/** Allocation-safe equivalent of OBJECT_VALID for retained references. */
+bool object_reference_is_current(const object *op, tag_t count);
 void object_deinit(void);
 object *object_get(void);
 void object_update_turnable(object *op);

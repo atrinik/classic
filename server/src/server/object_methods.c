@@ -374,7 +374,7 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
     object *selected = is_player ? controller->target_object : shooter->enemy;
     tag_t selected_count = is_player ? CONTR(shooter)->target_object_count : shooter->enemy_count;
     object *target = NULL;
-    if (selected != shooter && OBJECT_VALID(selected, selected_count)) {
+    if (selected != shooter && object_reference_is_current(selected, selected_count)) {
         bool authorized = is_player
             ? target_player_authorized(CONTR(shooter), selected, NULL)
             : perception_object_visible(shooter, selected);
@@ -385,7 +385,7 @@ int object_ranged_fire(object *op, object *shooter, int dir, double *delay) {
             return OBJECT_METHOD_UNHANDLED;
         }
         if (authorized && OBJECT_VALID(shooter, shooter_count) &&
-            (shooter->type == PLAYER) == is_player && OBJECT_VALID(selected, selected_count) &&
+            (shooter->type == PLAYER) == is_player && object_reference_is_current(selected, selected_count) &&
             (is_player ? CONTR(shooter)->target_object == selected &&
                          CONTR(shooter)->target_object_count == selected_count
                        : shooter->enemy == selected && shooter->enemy_count == selected_count)) {

@@ -73,7 +73,7 @@ static bool spell_actor_current(spell_actor_ref ref) {
 static object *spell_aim_target(object *source) {
     object *target = source->type == PLAYER ? CONTR(source)->target_object : source->enemy;
     tag_t count = source->type == PLAYER ? CONTR(source)->target_object_count : source->enemy_count;
-    if (target == source || !OBJECT_VALID(target, count)) {
+    if (target == source || !object_reference_is_current(target, count)) {
         return NULL;
     }
     return (source->type == PLAYER ? target_player_authorized(CONTR(source), target, NULL) :
@@ -86,6 +86,9 @@ static bool spell_target_authorized(object *op, object *target, int type) {
      * cross solid combat geometry. Self/inventory and party spells stay exempt. */
     if (target != NULL && target != op && !(spells[type].flags & SPELL_DESC_DIRECTION)) {
         int dx, dy, dz;
+        if (!object_storage_is_owned(target)) {
+            return false;
+        }
         tag_t target_count = target->count, source_count = op->count;
         if (!(op->type == PLAYER ? target_player_authorized(CONTR(op), target, NULL) :
               perception_object_visible(op, target)) ||
@@ -1191,8 +1194,8 @@ int find_target_for_spell(object *op, object **target, uint32_t flags) {
         if ((flags & SPELL_DESC_SELF) && !(flags & (SPELL_DESC_ENEMY | SPELL_DESC_FRIENDLY))) {
             *target = op;
             return 1;
-        } else if ((flags & SPELL_DESC_ENEMY) && op->enemy && OBJECT_ACTIVE(op->enemy) &&
-                   op->enemy->count == op->enemy_count) {
+        } else if ((flags & SPELL_DESC_ENEMY) &&
+                   object_reference_is_current(op->enemy, op->enemy_count)) {
             *target = op->enemy;
             return 1;
         } else {

@@ -487,6 +487,37 @@ static bool object_validator(void *ptr) {
     return op->count != 0 && !QUERY_FLAG(op, FLAG_REMOVED);
 }
 
+bool object_storage_is_owned(const object *op) {
+    /* Object storage uses exponent-zero pooled allocations. Unlike callback
+     * epochs, this admission check also covers references saved before a
+     * reclamation. Inspect only owned metadata until the slot is established.
+     * The server never enables bypass mode for this pool; reject it closed. */
+    if (op == NULL || pool_object == NULL || (pool_object->flags & MEMPOOL_BYPASS_POOLS)) {
+        return false;
+    }
+    uintptr_t address = (uintptr_t)op;
+    size_t stride = sizeof(mempool_chunk_struct) + pool_object->chunksize;
+    for (const mempool_puddle_struct *puddle = pool_object->puddlelist[0];
+         puddle != NULL; puddle = puddle->next) {
+        uintptr_t first = (uintptr_t)MEM_USERDATA(puddle->first_chunk);
+        if (address >= first) {
+            uintptr_t offset = address - first;
+            if (offset % stride == 0 && offset / stride < pool_object->expand_size) {
+                return !CHUNK_FREE(op);
+            }
+        }
+    }
+    return false;
+}
+
+bool object_reference_matches(const object *op, tag_t count) {
+    return count != 0 && object_storage_is_owned(op) && op->count == count;
+}
+
+bool object_reference_is_current(const object *op, tag_t count) {
+    return object_reference_matches(op, count) && !QUERY_FLAG(op, FLAG_REMOVED);
+}
+
 uint64_t object_reclamation_epoch(void) {
     return mempool_reclamation_epoch(pool_object);
 }
@@ -1458,7 +1489,7 @@ static void object_owner_set_internal(object *op, object *owner) {
     HARD_ASSERT(owner != NULL);
 
     while (owner->owner != NULL && owner != owner->owner &&
-           owner->ownercount == owner->owner->count) {
+           object_reference_matches(owner->owner, owner->ownercount)) {
         owner = owner->owner;
     }
 
@@ -1554,7 +1585,7 @@ object *object_owner(object *op) {
         return NULL;
     }
 
-    if (OBJECT_FREE(op) || op->owner->count != op->ownercount) {
+    if (OBJECT_FREE(op) || !object_reference_matches(op->owner, op->ownercount)) {
         op->owner = NULL;
         return NULL;
     }

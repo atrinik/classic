@@ -141,8 +141,8 @@ static attack_bonus_t attack_bonus_calculate(object *victim,
         return bonus;
     }
 
-    if ((target_was_unaware || (!OBJECT_VALID(victim->enemy, victim->enemy_count) &&
-                                !OBJECT_VALID(victim->attacked_by, victim->attacked_by_count))) &&
+    if ((target_was_unaware || (!object_reference_is_current(victim->enemy, victim->enemy_count) &&
+                                !object_reference_is_current(victim->attacked_by, victim->attacked_by_count))) &&
         !IS_INVISIBLE(owner, victim)) {
         bonus.reasons |= ATTACK_BONUS_UNAWARE;
     }
@@ -347,10 +347,10 @@ static bool attack_player_target_is_active(object *player_obj) {
     object *target = pl->target_object;
 
     if (!pl->combat || target == NULL || target == player_obj ||
-        !OBJECT_VALID(target, pl->target_object_count) || !IS_LIVE(target) ||
+        !object_reference_is_current(target, pl->target_object_count) || !IS_LIVE(target) ||
         target->stats.hp <= 0 || QUERY_FLAG(target, FLAG_SYS_OBJECT) ||
         !target_player_authorized(pl, target, NULL) || is_friend_of(player_obj, target) ||
-        !OBJECT_VALID(target->enemy, target->enemy_count) || target->enemy != player_obj) {
+        !object_reference_is_current(target->enemy, target->enemy_count) || target->enemy != player_obj) {
         return false;
     }
 
@@ -1152,7 +1152,7 @@ static int attack_hit_internal(object *op,
     }
 
     /* If one gets attacked, the attacker will become the enemy */
-    if (!OBJECT_VALID(op->enemy, op->enemy_count) && !IS_INVISIBLE(hitter_owner, op) &&
+    if (!object_reference_is_current(op->enemy, op->enemy_count) && !IS_INVISIBLE(hitter_owner, op) &&
         !QUERY_FLAG(op, FLAG_INVULNERABLE)) {
         set_npc_enemy(op, hitter_owner, NULL);
     }

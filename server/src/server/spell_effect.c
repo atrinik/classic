@@ -1214,7 +1214,7 @@ int finger_of_death(object *op, object *target) {
                          name);
         free(name);
 
-        if (!OBJECT_VALID(target->enemy, target->enemy_count)) {
+        if (!object_reference_is_current(target->enemy, target->enemy_count)) {
             set_npc_enemy(target, op, NULL);
         }
 
@@ -1264,7 +1264,7 @@ int cast_cause_disease(object *op,
     int dx = freearr_x[absdir(dir)], dy = freearr_y[absdir(dir)], dz = 0;
     object *target = op->type == PLAYER ? CONTR(op)->target_object : op->enemy;
     tag_t target_count = op->type == PLAYER ? CONTR(op)->target_object_count : op->enemy_count;
-    if (target != op && OBJECT_VALID(target, target_count)) {
+    if (target != op && object_reference_is_current(target, target_count)) {
         player *target_controller = target->type == PLAYER ? CONTR(target) : NULL;
         socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
         uint64_t reclamation = object_reclamation_epoch();

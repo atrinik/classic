@@ -348,7 +348,7 @@ void esrv_update_stats(player *pl) {
     tag_t selected_count = pl->target_object_count;
     uint64_t reclamation = object_reclamation_epoch();
     bool target_rejected = pl->target_object != NULL && pl->target_object != pl->ob &&
-                           (!OBJECT_VALID(pl->target_object, pl->target_object_count) ||
+                           (!object_reference_is_current(pl->target_object, pl->target_object_count) ||
                             !target_player_authorized(pl, pl->target_object, NULL));
     if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
         observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {
@@ -372,7 +372,7 @@ void esrv_update_stats(player *pl) {
     }
     int target_level = pl->ob->level;
     if (pl->target_object != NULL &&
-        (pl->target_object == pl->ob || OBJECT_VALID(pl->target_object, pl->target_object_count))) {
+        (pl->target_object == pl->ob || object_reference_is_current(pl->target_object, pl->target_object_count))) {
         target_level = pl->target_object->level;
     }
 
@@ -2940,12 +2940,15 @@ static bool target_player_part_published(const player *pl, const object *part, i
 
 /** Server-thread target authority: queued live identity plus fresh exact-part perception. */
 bool target_player_authorized(const player *pl, const object *target, int *depth) {
-    if (pl == NULL || pl->ob == NULL || target == NULL) {
+    if (pl == NULL || !object_storage_is_owned(pl->ob) || !object_storage_is_owned(target)) {
         return false;
     }
     const object *observer = pl->ob;
     const socket_struct *observer_socket = pl->cs;
     const object *head = HEAD(target);
+    if (!object_storage_is_owned(head)) {
+        return false;
+    }
     tag_t observer_count = observer->count, target_count = target->count, head_count = head->count;
     const player *target_controller = head->type == PLAYER ? CONTR(head) : NULL;
     const socket_struct *target_socket = target_controller != NULL ? target_controller->cs : NULL;
@@ -2994,7 +2997,7 @@ void send_target_command(player *pl) {
     int target_depth = 0;
     uint64_t reclamation = object_reclamation_epoch();
     bool target_authorized = pl->target_object != NULL && pl->target_object != pl->ob &&
-                             OBJECT_VALID(pl->target_object, pl->target_object_count) &&
+                             object_reference_is_current(pl->target_object, pl->target_object_count) &&
                              target_player_authorized(pl, pl->target_object, &target_depth);
     if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
         observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE) {

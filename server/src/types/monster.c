@@ -283,12 +283,12 @@ monster_enemy_signal_map(object *npc, mapstruct *map, object *spawn_point, uint3
         }
 
         /* Ensure the spawn point has a spawned monster. */
-        if (!OBJECT_VALID(ol->objlink.ob->enemy, ol->objlink.ob->enemy_count)) {
+        if (!object_reference_is_current(ol->objlink.ob->enemy, ol->objlink.ob->enemy_count)) {
             continue;
         }
 
         /* Ensure the spawned monster doesn't yet have an enemy. */
-        if (OBJECT_VALID(ol->objlink.ob->enemy->enemy, ol->objlink.ob->enemy->enemy_count)) {
+        if (object_reference_is_current(ol->objlink.ob->enemy->enemy, ol->objlink.ob->enemy->enemy_count)) {
             continue;
         }
 
@@ -372,7 +372,7 @@ object *check_enemy(object *npc, rv_vector *rv) {
         return NULL;
     }
 
-    if (!OBJECT_VALID(npc->enemy, npc->enemy_count) || npc == npc->enemy || !IS_LIVE(npc->enemy) ||
+    if (!object_reference_is_current(npc->enemy, npc->enemy_count) || npc == npc->enemy || !IS_LIVE(npc->enemy) ||
         is_friend_of(npc, npc->enemy)) {
         set_npc_enemy(npc, NULL, NULL);
         return NULL;
@@ -419,7 +419,7 @@ object *find_enemy(object *npc, rv_vector *rv) {
 
     if (!tmp) {
         /* If we have an attacker, check him */
-        if (OBJECT_VALID(npc->attacked_by, npc->attacked_by_count) &&
+        if (object_reference_is_current(npc->attacked_by, npc->attacked_by_count) &&
             !IS_INVISIBLE(npc->attacked_by, npc) &&
             !QUERY_FLAG(npc->attacked_by, FLAG_INVULNERABLE)) {
             /* We don't want a fight evil vs evil or good against non evil. */
@@ -763,7 +763,7 @@ static void process_func(object *op) {
             }
 
             if (enemy_visible && QUERY_FLAG(op, FLAG_READY_BOW) &&
-                OBJECT_VALID(op->enemy, op->enemy_count)) {
+                object_reference_is_current(op->enemy, op->enemy_count)) {
                 publication = los_publication_epoch();
                 bool visible = perception_object_visible(op, op->enemy);
                 if (!object_reclamation_is_current(reclamation) || !OBJECT_VALID(op, op_count) ||
@@ -1290,7 +1290,7 @@ static int monster_cast_spell(object *head, object *part, int dir, rv_vector *rv
         tag_t spell_count = spell_item->count;
         uint64_t publication = los_publication_epoch();
         uint64_t reclamation = object_reclamation_epoch();
-        bool visible = OBJECT_VALID(head->enemy, head->enemy_count) &&
+        bool visible = object_reference_is_current(head->enemy, head->enemy_count) &&
                        perception_object_visible(head, head->enemy);
         if (!object_reclamation_is_current(reclamation) ||
             !OBJECT_VALID(head, head_count) || !OBJECT_VALID(part, part_count) ||
@@ -1859,11 +1859,11 @@ int is_friend_of(object *op, object *obj) {
         return 1;
     }
 
-    if (op->type == MONSTER && OBJECT_VALID(op->enemy, op->enemy_count) && obj == op->enemy) {
+    if (op->type == MONSTER && object_reference_is_current(op->enemy, op->enemy_count) && obj == op->enemy) {
         return 0;
     }
 
-    if (obj->type == MONSTER && OBJECT_VALID(obj->enemy, obj->enemy_count) && op == obj->enemy) {
+    if (obj->type == MONSTER && object_reference_is_current(obj->enemy, obj->enemy_count) && op == obj->enemy) {
         return 0;
     }
 

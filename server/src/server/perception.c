@@ -23,7 +23,8 @@ static bool perception_flags_visible(const object *observer, const object *targe
 }
 
 bool perception_identity_visible(const object *observer, const object *target) {
-    if (observer == NULL || target == NULL || !OBJECT_ACTIVE(observer) ||
+    if (!object_storage_is_owned(observer) || !object_storage_is_owned(target) ||
+        !OBJECT_ACTIVE(observer) ||
         !OBJECT_ACTIVE(target) || observer->map == NULL || target->map == NULL ||
         observer->env != NULL || target->env != NULL) {
         return false;
@@ -75,10 +76,13 @@ static bool perception_part_visible(const object *observer, const object *part) 
 }
 
 bool perception_object_visible(const object *observer, const object *target) {
-    if (observer == NULL || target == NULL) {
+    if (!object_storage_is_owned(observer) || !object_storage_is_owned(target)) {
         return false;
     }
     const object *head = HEAD(target);
+    if (!object_storage_is_owned(head)) {
+        return false;
+    }
     tag_t observer_count = observer->count, target_count = target->count;
     tag_t head_count = head->count;
     bool single_part = target->head != NULL;
@@ -96,11 +100,14 @@ bool perception_object_visible(const object *observer, const object *target) {
 }
 
 bool perception_player_part_authorized(const player *pl, const object *part) {
-    if (pl == NULL || pl->ob == NULL || part == NULL) {
+    if (pl == NULL || !object_storage_is_owned(pl->ob) || !object_storage_is_owned(part)) {
         return false;
     }
     object *observer = pl->ob;
     const object *head = HEAD(part);
+    if (!object_storage_is_owned(head)) {
+        return false;
+    }
     tag_t observer_count = observer->count, head_count = head->count, part_count = part->count;
     if (!perception_identity_visible(observer, head) ||
         !OBJECT_VALID(observer, observer_count) || !OBJECT_VALID(head, head_count) ||
@@ -117,10 +124,13 @@ bool perception_player_part_authorized(const player *pl, const object *part) {
 }
 
 bool perception_player_authorized(const player *pl, const object *target) {
-    if (pl == NULL || pl->ob == NULL || target == NULL) {
+    if (pl == NULL || !object_storage_is_owned(pl->ob) || !object_storage_is_owned(target)) {
         return false;
     }
     const object *observer = pl->ob, *head = HEAD(target);
+    if (!object_storage_is_owned(head)) {
+        return false;
+    }
     tag_t observer_count = observer->count, head_count = head->count;
     tag_t target_count = target->count;
     const socket_struct *observer_socket = pl->cs;

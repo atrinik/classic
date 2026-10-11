@@ -287,7 +287,7 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
     if (shooter_current && OBJECT_VALID(shooter, shooter_count)) {
         object *selected = is_player ? CONTR(shooter)->target_object : shooter->enemy;
         tag_t selected_count = is_player ? CONTR(shooter)->target_object_count : shooter->enemy_count;
-        if (OBJECT_VALID(selected, selected_count)) {
+        if (object_reference_is_current(selected, selected_count)) {
             bool authorized = is_player
                 ? target_player_authorized(CONTR(shooter), selected, NULL)
                 : perception_object_visible(shooter, selected);
@@ -299,7 +299,7 @@ object *common_object_projectile_fire_missile(object *op, object *shooter, int d
                 player_connection_is_current(shooter, shooter_count, controller, socket);
             if (shooter_current && authorized && OBJECT_VALID(shooter, shooter_count) &&
                 (shooter->type == PLAYER) == is_player &&
-                OBJECT_VALID(selected, selected_count) &&
+                object_reference_is_current(selected, selected_count) &&
                 (is_player ? CONTR(shooter)->target_object == selected &&
                              CONTR(shooter)->target_object_count == selected_count
                            : shooter->enemy == selected && shooter->enemy_count == selected_count)) {

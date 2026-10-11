@@ -23,6 +23,7 @@
  ************************************************************************/
 
 #include <global.h>
+#include <toolkit/mempool.h>
 #include <server_main.h>
 #include <check.h>
 #include <checkstd.h>
@@ -1766,6 +1767,64 @@ START_TEST(test_los_geometry_map_arrival_unlink_and_reincarnation) {
 }
 END_TEST
 
+START_TEST(test_retained_object_references_validate_storage_before_identity) {
+    mapstruct *map = get_empty_map(8, 8);
+    object *owner = object_get();
+    mempool_struct *pool = mempool_find("objects");
+    ck_assert_ptr_nonnull(pool);
+    size_t num_held = pool->nrof_free[0];
+    object **held = xcalloc(MAX(num_held, 1), sizeof(*held));
+    for (size_t i = 0; i < num_held; i++) {
+        held[i] = object_get();
+    }
+    object *target = object_get();
+    tag_t count = target->count;
+    mempool_chunk_struct *storage = pool->puddlelist[0]->first_chunk;
+    ck_assert_ptr_eq(MEM_POOLDATA(target), storage);
+    ck_assert(object_storage_is_owned(target));
+    ck_assert(object_reference_matches(target, count));
+    ck_assert(!object_reference_is_current(target, count));
+    ck_assert(!object_reference_matches(target, 0));
+    ck_assert(!object_reference_matches(target, count + 1));
+    object foreign = {0};
+    ck_assert(!object_storage_is_owned(&foreign));
+    ck_assert(!object_storage_is_owned((const object *)((uintptr_t)target + 1)));
+    ck_assert(!object_storage_is_owned(NULL));
+
+    target->x = target->y = 3;
+    target = object_insert_map(target, map, NULL, INS_NO_MERGE);
+    ck_assert(object_reference_is_current(target, count));
+    object_owner_set(owner, target);
+    object_remove(target, REMOVE_NO_WALK_OFF);
+    ck_assert(object_reference_matches(target, count));
+    ck_assert(!object_reference_is_current(target, count));
+    ck_assert_ptr_eq(object_owner(owner), target);
+    object_destroy(target);
+    ck_assert(!object_storage_is_owned(target));
+    object *replacement = object_get();
+    ck_assert_ptr_eq(replacement, target);
+    ck_assert(!object_reference_matches(target, count));
+    ck_assert(object_reference_matches(replacement, replacement->count));
+    object_destroy(replacement);
+    for (size_t i = 0; i < num_held; i++) {
+        object_destroy(held[i]);
+    }
+    efree(held);
+    uint64_t epoch = object_reclamation_epoch();
+    ck_assert_uint_gt(mempool_reclaim(pool), 0);
+    ck_assert(!object_reclamation_is_current(epoch));
+    for (mempool_puddle_struct *puddle = pool->puddlelist[0]; puddle != NULL; puddle = puddle->next) {
+        ck_assert_ptr_ne(puddle->first_chunk, storage);
+    }
+    ck_assert(!object_storage_is_owned(target));
+    ck_assert(!object_reference_matches(target, count));
+    ck_assert(!object_reference_is_current(target, count));
+    ck_assert_ptr_null(object_owner(owner));
+    object_destroy(owner);
+    delete_map(map);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("object");
     TCase *tc_core = tcase_create("Core");
@@ -1777,6 +1836,7 @@ static Suite *suite(void) {
     tcase_add_checked_fixture(tc_movement, check_test_setup, check_test_teardown);
 
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_retained_object_references_validate_storage_before_identity);
     tcase_add_test(tc_core, test_los_geometry_tracks_stack_semantics_only);
     tcase_add_test(tc_core, test_los_geometry_direct_position_refresh);
     tcase_add_test(tc_core, test_los_geometry_map_arrival_unlink_and_reincarnation);
