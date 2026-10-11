@@ -11,6 +11,7 @@
 #include <los.h>
 #include <spatial.h>
 #include <arch.h>
+#include <signal.h>
 
 static void fixture(mapstruct **map, object **pl) {
     check_setup_env_pl(map, pl);
@@ -498,12 +499,46 @@ START_TEST(test_nonblocking_actor_reuses_masks_but_cover_invalidates) {
 }
 END_TEST
 
+START_TEST(test_los_epochs_reach_max_without_wrapping) {
+    uint64_t saved_geometry = los_geometry_epoch();
+    uint64_t saved_publication = los_publication_epoch();
+    los_epochs_set_for_test(UINT64_MAX - 1, UINT64_MAX - 1);
+    los_geometry_changed();
+    uint64_t geometry = los_geometry_epoch(), publication = los_publication_epoch();
+    los_epochs_set_for_test(saved_geometry, saved_publication);
+    ck_assert_uint_eq(geometry, UINT64_MAX);
+    ck_assert_uint_eq(publication, UINT64_MAX);
+}
+END_TEST
+
+START_TEST(test_los_geometry_epoch_overflow_is_fatal) {
+    los_epochs_set_for_test(UINT64_MAX, 1);
+    los_geometry_changed();
+    exit(EXIT_SUCCESS); /* A returning/wrapped update must fail the death test. */
+}
+END_TEST
+
+START_TEST(test_los_publication_epoch_overflow_is_fatal) {
+    los_epochs_set_for_test(1, UINT64_MAX);
+    los_publication_changed();
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("los");
     TCase *tc = tcase_create("Core");
     tcase_add_unchecked_fixture(tc, check_setup, check_teardown);
     tcase_add_checked_fixture(tc, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc);
+    tcase_add_test(tc, test_los_epochs_reach_max_without_wrapping);
+#ifdef NDEBUG
+    tcase_add_exit_test(tc, test_los_geometry_epoch_overflow_is_fatal, EXIT_FAILURE);
+    tcase_add_exit_test(tc, test_los_publication_epoch_overflow_is_fatal, EXIT_FAILURE);
+#else
+    tcase_add_test_raise_signal(tc, test_los_geometry_epoch_overflow_is_fatal, SIGABRT);
+    tcase_add_test_raise_signal(tc, test_los_publication_epoch_overflow_is_fatal, SIGABRT);
+#endif
     tcase_add_test(tc, test_idle_masks_reuse_and_player_inputs_rebuild);
     tcase_add_test(tc, test_nonblocking_actor_reuses_masks_but_cover_invalidates);
     tcase_add_test(tc, test_roof_only_cover_prevents_fresh_gameplay_visibility);

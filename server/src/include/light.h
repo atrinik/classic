@@ -80,6 +80,8 @@ extern void celestial_light_forget(mapstruct *map);
 extern bool celestial_light_geometry_update(mapstruct *map, int x, int y);
 
 #ifdef ATRINIK_TESTING
+/** Swap the batch counter for isolated overflow tests with no pending jobs. */
+extern uint64_t celestial_light_pending_batch_exchange_for_test(uint64_t batch);
 extern void celestial_light_process_steps_for_test(size_t steps);
 extern size_t celestial_light_pending_steps_for_test(const mapstruct *map);
 extern void celestial_light_current_reservation_fail_for_test(bool fail);

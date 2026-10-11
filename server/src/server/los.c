@@ -43,7 +43,9 @@ uint64_t los_publication_epoch(void) {
 }
 
 void los_publication_changed(void) {
-    HARD_ASSERT(publication_epoch != UINT64_MAX);
+    if (publication_epoch == UINT64_MAX) {
+        IMPOSSIBLE();
+    }
     publication_epoch++;
 }
 
@@ -52,7 +54,9 @@ uint64_t los_geometry_epoch(void) {
 }
 
 void los_geometry_changed(void) {
-    HARD_ASSERT(geometry_epoch != UINT64_MAX);
+    if (geometry_epoch == UINT64_MAX) {
+        IMPOSSIBLE();
+    }
     geometry_epoch++;
     los_publication_changed();
 }
@@ -91,6 +95,11 @@ typedef struct los_camera_view {
 } los_camera_view;
 
 #ifdef ATRINIK_TESTING
+void los_epochs_set_for_test(uint64_t geometry, uint64_t publication) {
+    geometry_epoch = geometry;
+    publication_epoch = publication;
+}
+
 static uint64_t view_builds, view_cache_hits;
 
 uint64_t los_view_builds_for_test(void) {

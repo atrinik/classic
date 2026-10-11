@@ -24,6 +24,7 @@
 #include <object.h>
 #include <region.h>
 #include <time.h>
+#include <signal.h>
 
 static mapstruct *open_fixture(int width, int height) {
     mapstruct *map = get_empty_map(width, height);
@@ -967,12 +968,199 @@ START_TEST(test_current_reservation_failure_clears_both_published_endpoints) {
 }
 END_TEST
 
+enum generation_path {
+    GENERATION_CURRENT,
+    GENERATION_FAILED_RESERVATION,
+    GENERATION_INVALID_STACK,
+    GENERATION_PENDING_COMMIT,
+    GENERATION_PENDING_REPLACEMENT,
+    GENERATION_PROMOTION,
+    GENERATION_PATHS,
+};
+
+/* Exercise the production increments, including the exceptional clear path
+ * and both asynchronous endpoint publications. The same preparation is checked
+ * by the successful MAX-1 tests before the corresponding death tests. */
+static mapstruct *generation_fixture(enum generation_path path) {
+    mapstruct *map = open_fixture(1, 1);
+    todtick = 5 * HOURS_PER_MONTH + 7;
+    if (path >= GENERATION_PENDING_COMMIT) {
+        ck_assert(!celestial_light_keyframe_request(map, (uint64_t)todtick));
+        if (path != GENERATION_PENDING_COMMIT) {
+            celestial_light_process_steps_for_test(100000);
+            ck_assert(map->celestial_light_keyframe_valid);
+        }
+        if (path == GENERATION_PENDING_REPLACEMENT) {
+            map->celestial_light_next_hour = 0;
+        } else if (path == GENERATION_PROMOTION) {
+            todtick++;
+        }
+    } else if (path == GENERATION_FAILED_RESERVATION) {
+        celestial_light_current_reservation_fail_for_test(true);
+    } else if (path == GENERATION_INVALID_STACK) {
+        map->celestial_sky_above = CELESTIAL_SKY_LINKED;
+        FREE_AND_COPY_HASH(map->tile_path[TILED_UP], "/tests/missing-upper");
+    }
+    return map;
+}
+
+static void generation_advance(mapstruct *map, enum generation_path path) {
+    switch (path) {
+        case GENERATION_PENDING_COMMIT:
+            celestial_light_process_steps_for_test(100000);
+            break;
+        case GENERATION_PENDING_REPLACEMENT:
+            (void)celestial_light_keyframe_request(map, (uint64_t)todtick);
+            break;
+        case GENERATION_PROMOTION:
+            celestial_light_ensure(map);
+            break;
+        default:
+            (void)celestial_light_rebuild(map, (uint64_t)todtick);
+            break;
+    }
+}
+
+START_TEST(test_celestial_generation_reaches_max_without_wrapping) {
+    unsigned long saved_hour = todtick;
+    mapstruct *map = generation_fixture(_i);
+    map->celestial_light_generation_id = UINT64_MAX - 1;
+    uint64_t rebuilds = celestial_light_rebuilds_for_test();
+    generation_advance(map, _i);
+    uint64_t generation = map->celestial_light_generation_id;
+    map->celestial_light_generation_id = 1;
+    celestial_light_current_reservation_fail_for_test(false);
+    celestial_light_forget(map);
+    todtick = saved_hour;
+    ck_assert_uint_eq(generation, UINT64_MAX);
+    if (_i >= GENERATION_PENDING_COMMIT) {
+        ck_assert_uint_eq(celestial_light_rebuilds_for_test(), rebuilds);
+    }
+}
+END_TEST
+
+START_TEST(test_celestial_current_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_CURRENT);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_CURRENT);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_failed_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_FAILED_RESERVATION);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_FAILED_RESERVATION);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_invalid_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_INVALID_STACK);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_INVALID_STACK);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_pending_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_PENDING_COMMIT);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_PENDING_COMMIT);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_replacement_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_PENDING_REPLACEMENT);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_PENDING_REPLACEMENT);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_promoted_generation_overflow_is_fatal) {
+    mapstruct *map = generation_fixture(GENERATION_PROMOTION);
+    map->celestial_light_generation_id = UINT64_MAX;
+    generation_advance(map, GENERATION_PROMOTION);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_structure_revision_reaches_max_without_wrapping) {
+    mapstruct *map = open_fixture(1, 1), *target = map;
+    if (_i == 1) {
+        target = open_fixture(1, 1);
+        map->tile_map[TILED_DOWN] = target;
+        target->tile_map[TILED_UP] = map;
+    }
+    target->celestial_structure_revision = UINT64_MAX - 1;
+    celestial_light_invalidate(map);
+    uint64_t revision = target->celestial_structure_revision;
+    target->celestial_structure_revision = 0;
+    ck_assert_uint_eq(revision, UINT64_MAX);
+}
+END_TEST
+
+START_TEST(test_celestial_upper_revision_overflow_is_fatal) {
+    mapstruct *map = open_fixture(1, 1);
+    map->celestial_structure_revision = UINT64_MAX;
+    celestial_light_invalidate(map);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_lower_revision_overflow_is_fatal) {
+    mapstruct *map = open_fixture(1, 1), *lower = open_fixture(1, 1);
+    map->tile_map[TILED_DOWN] = lower;
+    lower->tile_map[TILED_UP] = map;
+    lower->celestial_structure_revision = UINT64_MAX;
+    celestial_light_invalidate(map);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
+START_TEST(test_celestial_pending_batch_reaches_max_without_wrapping) {
+    uint64_t saved = celestial_light_pending_batch_exchange_for_test(UINT64_MAX - 1);
+    celestial_light_process_pending(1);
+    uint64_t batch = celestial_light_pending_batch_exchange_for_test(saved);
+    ck_assert_uint_eq(batch, UINT64_MAX);
+}
+END_TEST
+
+START_TEST(test_celestial_pending_batch_overflow_is_fatal) {
+    (void)celestial_light_pending_batch_exchange_for_test(UINT64_MAX);
+    celestial_light_process_pending(1);
+    exit(EXIT_SUCCESS);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_light");
     TCase *tc_core = tcase_create("Core");
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_loop_test(tc_core, test_celestial_generation_reaches_max_without_wrapping,
+                       0, GENERATION_PATHS);
+    tcase_add_loop_test(tc_core, test_celestial_structure_revision_reaches_max_without_wrapping,
+                       0, 2);
+    tcase_add_test(tc_core, test_celestial_pending_batch_reaches_max_without_wrapping);
+#ifdef NDEBUG
+#define ADD_OVERFLOW_TEST(name) tcase_add_exit_test(tc_core, name, EXIT_FAILURE)
+#else
+#define ADD_OVERFLOW_TEST(name) tcase_add_test_raise_signal(tc_core, name, SIGABRT)
+#endif
+    ADD_OVERFLOW_TEST(test_celestial_current_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_failed_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_invalid_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_pending_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_replacement_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_promoted_generation_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_upper_revision_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_lower_revision_overflow_is_fatal);
+    ADD_OVERFLOW_TEST(test_celestial_pending_batch_overflow_is_fatal);
+#undef ADD_OVERFLOW_TEST
     TCase *tc_real_maps = tcase_create("Real maps");
     tcase_add_unchecked_fixture(tc_real_maps, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_real_maps, check_test_setup, check_test_teardown);
