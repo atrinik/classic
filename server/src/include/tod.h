@@ -30,6 +30,8 @@
 #ifndef TOD_H
 #define TOD_H
 
+#include <stdint.h>
+
 /** Ticks per clock. */
 #define PTICKS_PER_CLOCK 1500
 
