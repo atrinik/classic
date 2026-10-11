@@ -1686,7 +1686,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("/data/discord-application-id", build)
         self.assertIn("not in archive.read(executable)", build)
         self.assertIn(
-            "--target libatrinik-path libatrinik-rendezvous "
+            "--target libatrinik-console libatrinik-path libatrinik-rendezvous "
             "libatrinik-signals \\",
             build,
         )
@@ -1697,6 +1697,12 @@ class WorkflowContractTests(unittest.TestCase):
             build,
         )
         self.assertIn("libatrinik-stun \\", build)
+        staged_tests = build.split("stage=libatrinik/build/windows-test-bundle", 1)[1]
+        staged_tests = staged_tests.split("cmake -E copy_directory", 1)[0]
+        self.assertIn("python3 tools/ci/stage_windows_runtime.py", staged_tests)
+        self.assertIn(
+            "libatrinik/build/windows-tests/libatrinik-console.exe", staged_tests
+        )
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-socket-address.exe", build
         )
@@ -1755,6 +1761,13 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn('"atrinik-classic-issue-477-windows-one-click-*.zip"', run)
         self.assertRegex(run, r"actions/download-artifact@[0-9a-f]{40}\b")
+        self.assertRegex(
+            run,
+            r'& \(Join-Path \$bundle "libatrinik-console\.exe"\)\s+'
+            r'if \(\$LASTEXITCODE -ne 0\) \{\s+'
+            r'throw "libatrinik-console\.exe failed with exit code '
+            r'\$\{LASTEXITCODE\}"\s+\}',
+        )
         self.assertIn('"libatrinik-path.exe"', run)
         self.assertIn("New-Item -ItemType Junction", run)
         self.assertIn('"libatrinik-path.exe") $junction', run)
