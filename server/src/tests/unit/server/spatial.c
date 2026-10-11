@@ -333,6 +333,87 @@ START_TEST(test_observer_records_conflicting_seam_alternative) {
 }
 END_TEST
 
+typedef struct test_resolver_context {
+    unsigned calls;
+    bool fail_side;
+} test_resolver_context;
+
+static bool test_resolver(mapstruct *origin, int x, int y, int z,
+                           spatial_cell *cell, void *context) {
+    test_resolver_context *state = context;
+    state->calls++;
+    if (state->fail_side && x == 1 && y == 0 && z == 0) {
+        return false; /* Deliberately leave output untouched. */
+    }
+    return spatial_resolve(origin, x, y, z, cell);
+}
+
+static void assert_same_cell(const spatial_cell *a, const spatial_cell *b) {
+    ck_assert_ptr_eq(a->map, b->map);
+    ck_assert_int_eq(a->x, b->x);
+    ck_assert_int_eq(a->y, b->y);
+    ck_assert_int_eq(a->z, b->z);
+}
+
+START_TEST(test_resolved_ray_matches_default_and_observes_ties) {
+    mapstruct lower, upper;
+    MapSpace ls[16], us[16];
+    fixture(&lower, ls); fixture(&upper, us);
+    link_maps(&lower, &upper, TILED_UP);
+    spatial_cursor normal, cached;
+    ck_assert(spatial_ray_init(&normal, &lower, 0, 0, 1, 1, 1));
+    ck_assert(spatial_ray_init(&cached, &lower, 0, 0, 1, 1, 1));
+    spatial_event expected, actual;
+    ck_assert_int_eq(spatial_ray_next(&normal, &expected), 1);
+    test_resolver_context state = {0};
+    observation seen = {0};
+    spatial_observer previous = spatial_observer_exchange(
+        (spatial_observer){.visit = observe_map, .context = &seen});
+    ck_assert_int_eq(spatial_ray_next_resolved(&cached, &actual, test_resolver, &state), 1);
+    spatial_observer_exchange(previous);
+    ck_assert_uint_eq(state.calls, 8);
+    ck_assert(observed(&seen, &lower));
+    ck_assert(observed(&seen, &upper));
+    ck_assert_uint_eq(actual.axes, expected.axes);
+    ck_assert_int_eq(actual.valid, expected.valid);
+    ck_assert_int_eq(actual.terminal, expected.terminal);
+    ck_assert_uint_eq(actual.cell_count, expected.cell_count);
+    ck_assert_uint_eq(actual.face_count, expected.face_count);
+    assert_same_cell(&actual.destination, &expected.destination);
+    for (size_t i = 0; i < actual.cell_count; i++) {
+        assert_same_cell(&actual.cells[i], &expected.cells[i]);
+    }
+    for (size_t i = 0; i < actual.face_count; i++) {
+        assert_same_cell(&actual.faces[i].from, &expected.faces[i].from);
+        assert_same_cell(&actual.faces[i].to, &expected.faces[i].to);
+        for (size_t axis = 0; axis < 3; axis++) {
+            ck_assert_int_eq(actual.faces[i].normal[axis], expected.faces[i].normal[axis]);
+        }
+    }
+    ck_assert_int_eq(spatial_ray_next_resolved(&cached, &actual, NULL, NULL), 0);
+}
+END_TEST
+
+START_TEST(test_resolved_ray_failure_closes_entire_corner) {
+    mapstruct lower, upper;
+    MapSpace ls[16], us[16];
+    fixture(&lower, ls); fixture(&upper, us);
+    link_maps(&lower, &upper, TILED_UP);
+    spatial_cursor cursor;
+    spatial_event event;
+    test_resolver_context state = {.fail_side = true};
+    ck_assert(spatial_ray_init(&cursor, &lower, 0, 0, 1, 1, 1));
+    ck_assert_int_eq(spatial_ray_next_resolved(&cursor, &event, test_resolver, &state), 1);
+    ck_assert_uint_eq(state.calls, 8);
+    ck_assert(!event.valid);
+    ck_assert_ptr_eq(event.cells[0].map, NULL);
+    ck_assert(!spatial_event_clear(&event, SPATIAL_SIGHT, true));
+    ck_assert(!spatial_event_clear(&event, SPATIAL_COMBAT, true));
+    ck_assert_uint_eq(spatial_event_light(&event), 0);
+    ck_assert_int_eq(spatial_ray_next_resolved(&cursor, &event, test_resolver, &state), -1);
+}
+END_TEST
+
 void check_server_spatial(void) {
     toolkit_import(shstr);
     Suite *suite = suite_create("spatial");
@@ -349,6 +430,8 @@ void check_server_spatial(void) {
     tcase_add_test(tc, test_offset_nearest_route_checks_nested_local_diamond);
     tcase_add_test(tc, test_observer_scope_and_failed_dependencies);
     tcase_add_test(tc, test_observer_records_conflicting_seam_alternative);
+    tcase_add_test(tc, test_resolved_ray_matches_default_and_observes_ties);
+    tcase_add_test(tc, test_resolved_ray_failure_closes_entire_corner);
     suite_add_tcase(suite, tc);
     check_run_suite(suite, __FILE__);
 }

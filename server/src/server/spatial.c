@@ -426,7 +426,8 @@ bool spatial_ray_init(spatial_cursor *cursor, mapstruct *origin, int x, int y,
     return true;
 }
 
-int spatial_ray_next(spatial_cursor *cursor, spatial_event *event) {
+int spatial_ray_next_resolved(spatial_cursor *cursor, spatial_event *event,
+                              spatial_resolver_fn resolver, void *context) {
     if (cursor == NULL || event == NULL || cursor->failed) {
         return -1;
     }
@@ -473,7 +474,26 @@ int spatial_ray_next(spatial_cursor *cursor, spatial_event *event) {
             point[axis] = cursor->position[axis] +
                 ((mask & (1U << axis)) != 0 ? (cursor->direction[axis] > 0 ? 1 : -1) : 0);
         }
-        if (!spatial_resolve(cursor->origin, point[0], point[1], point[2], &cells[mask])) {
+        cells[mask] = (spatial_cell){.x = point[0], .y = point[1], .z = point[2]};
+        bool resolved;
+        if (resolver == NULL) {
+            resolved = spatial_resolve(cursor->origin, point[0], point[1], point[2],
+                                       &cells[mask]);
+        } else {
+            resolved = resolver(cursor->origin, point[0], point[1], point[2],
+                                &cells[mask], context);
+            /* Keep an erroneous/missing cache entry from exposing an invalid
+             * cell to geometry predicates. This checks live residency only;
+             * the operation-local cache owns its already validated topology. */
+            if (resolved) {
+                resolved = resident(cells[mask].map) && cells[mask].x >= 0 &&
+                           cells[mask].y >= 0 && cells[mask].z == point[2] &&
+                           cells[mask].x < MAP_WIDTH(cells[mask].map) &&
+                           cells[mask].y < MAP_HEIGHT(cells[mask].map);
+            }
+        }
+        if (!resolved) {
+            cells[mask].map = NULL;
             event->valid = false;
         }
         if (mask != 0) {
@@ -509,6 +529,10 @@ int spatial_ray_next(spatial_cursor *cursor, spatial_event *event) {
         cursor->failed = true;
     }
     return 1;
+}
+
+int spatial_ray_next(spatial_cursor *cursor, spatial_event *event) {
+    return spatial_ray_next_resolved(cursor, event, NULL, NULL);
 }
 
 static bool slab(const spatial_cell *cell) {

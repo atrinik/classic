@@ -17,6 +17,13 @@ typedef struct spatial_cell {
     int x, y, z; /* x/y map-local; z relative to the operation's origin. */
 } spatial_cell;
 
+/* A resolver may reuse coordinates validated by spatial_resolve within the
+ * same synchronous, read-only server-thread operation. Its borrowed context
+ * must outlive the call; no map/object mutation, plugin call or yield may
+ * separate validation from use. Failure need not initialize the output cell. */
+typedef bool (*spatial_resolver_fn)(mapstruct *origin, int x, int y, int z,
+                                    spatial_cell *cell, void *context);
+
 typedef struct spatial_face {
     spatial_cell from, to;
     int8_t normal[3]; /* Unit normal from 'from' to 'to'. */
@@ -65,6 +72,10 @@ bool spatial_direction_init(spatial_cursor *cursor, mapstruct *origin, int x, in
 /* 1=one boundary event (even unresolved), 0=finished, -1=invalid/bound exceeded.
  * Direction components are integer ratios; Q15 vectors need no conversion. */
 int spatial_ray_next(spatial_cursor *cursor, spatial_event *event);
+/* Same exact traversal, with a caller-owned operation-local resolver. NULL
+ * selects spatial_resolve. Every touched tie cell passes through the resolver. */
+int spatial_ray_next_resolved(spatial_cursor *cursor, spatial_event *event,
+                              spatial_resolver_fn resolver, void *context);
 bool spatial_event_clear(const spatial_event *event, spatial_policy policy,
                          bool allow_terminal);
 unsigned spatial_event_blocked_axes(const spatial_event *event, spatial_policy policy);
