@@ -446,6 +446,18 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-font-render-probe)
     target_link_libraries(client-font-render-probe PRIVATE
         SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+    add_test(NAME client-font-output
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_font_output.py"
+            "$<TARGET_FILE:client-font-render-probe>")
+    set_tests_properties(client-font-output PROPERTIES TIMEOUT 60)
+    add_executable(client-font-output-cleanup-tests src/tests/font_output_cleanup.c)
+    atrinik_configure_target(client-font-output-cleanup-tests)
+    add_test(NAME client-font-output-cleanup
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_font_output.py" --cleanup
+            "$<TARGET_FILE:client-font-output-cleanup-tests>")
+    set_tests_properties(client-font-output-cleanup PROPERTIES TIMEOUT 30)
 
     set(ATRINIK_GPU_FIXTURE_PROVENANCE_COMMAND
         "${ATRINIK_PYTHON3_EXECUTABLE}"

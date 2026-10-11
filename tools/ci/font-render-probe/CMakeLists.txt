@@ -10,3 +10,7 @@ add_executable(client-font-render-probe
 set_target_properties(client-font-render-probe PROPERTIES
     C_STANDARD 17 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 target_link_libraries(client-font-render-probe PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+add_executable(client-font-output-cleanup-tests
+    ../../../client/src/tests/font_output_cleanup.c)
+set_target_properties(client-font-output-cleanup-tests PROPERTIES
+    C_STANDARD 17 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)

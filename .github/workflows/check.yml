@@ -556,6 +556,7 @@ jobs:
                 client/build/windows-tests/client-font-render-probe.exe
               cmake -E copy_directory client/fonts "${stage}/font-inputs"
               cmake -E copy tools/ci/compare_font_render.py "${stage}"
+              cmake -E copy client/tools/tests/test_font_output.py "${stage}"
               cmake -E copy_directory libatrinik/tests/fixtures "${stage}/fixtures"
               cmake -E copy tools/ci/smoke_windows_server_package.ps1 "${stage}"
               cmake -E copy tools/ci/smoke_windows_review_bundle.ps1 "${stage}"
@@ -857,6 +858,11 @@ jobs:
           $ErrorActionPreference = "Stop"
           $bundle = (Resolve-Path "build/native-windows-tests").Path
           $fonts = Join-Path $bundle "font-inputs"
+          foreach ($producer in @("font-baseline", "font-candidate")) {
+            python (Join-Path $bundle "test_font_output.py") `
+              (Join-Path $bundle "$producer/client-font-render-probe.exe")
+            if ($LASTEXITCODE -ne 0) { throw "Font output regression failed: $producer" }
+          }
           $baseline = Join-Path $bundle "font-baseline-result"
           $candidate = Join-Path $bundle "font-candidate-result"
           New-Item -ItemType Directory -Path $baseline, $candidate | Out-Null

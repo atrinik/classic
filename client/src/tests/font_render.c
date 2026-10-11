@@ -2,10 +2,15 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  * Headless, bounded SDL_ttf equivalence evidence; no window or GPU is created.
  */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include "font_output.h"
 
 static const char *fonts[] = {
     "arial.ttf", "courier.otf", "fanwood.otf", "logisoso.ttf",
@@ -25,15 +30,10 @@ static void fail(const char *message) {
 }
 
 static FILE *output(const char *directory, const char *name) {
-    char path[4096];
-    int length = snprintf(path, sizeof(path), "%s/%s", directory, name);
-    if (length < 0 || (size_t)length >= sizeof(path)) {
-        fail("output path too long");
-    }
-    /* Exclusive creation preserves earlier evidence on failed/repeated runs. */
-    FILE *file = fopen(path, "wbx");
+    FILE *file = font_output(directory, name);
     if (file == NULL) {
-        fail("cannot exclusively create output");
+        fprintf(stderr, "font probe: cannot exclusively create output: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
     }
     return file;
 }
@@ -103,6 +103,15 @@ static void write_pixels(SDL_Surface *surface, const char *directory, int id) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 3 && strcmp(argv[1], "--test-output") == 0) {
+        const unsigned char bytes[] = {0, '\n', '\r', 0x1a, 0xff};
+        FILE *file = output(argv[2], "font-output-test.bin");
+        if (fwrite(bytes, 1, sizeof(bytes), file) != sizeof(bytes)) {
+            fclose(file);
+            return EXIT_FAILURE;
+        }
+        return fclose(file) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc != 3) {
         fprintf(stderr, "usage: %s FONT_DIR OUTPUT_DIR\n", argv[0]);
         return EXIT_FAILURE;
@@ -152,11 +161,11 @@ int main(int argc, char **argv) {
                         write_pixels(surface, argv[2], id);
                         fprintf(manifest,
                             "%s{\"id\":%d,\"font\":\"%s\",\"point\":%d,"
-                            "\"style\":\"%s\",\"mode\":\"%s\",\"sample\":%zu,"
+                            "\"style\":\"%s\",\"mode\":\"%s\",\"sample\":%u,"
                             "\"text_size\":[%d,%d],\"surface_size\":[%d,%d],"
                             "\"font_metrics\":[%d,%d,%d,%d],\"glyphs\":[",
                             id == 0 ? "" : ",\n", id, fonts[f], points[p], style_names[s],
-                            mode == 0 ? "solid" : "blended", t, width, height,
+                            mode == 0 ? "solid" : "blended", (unsigned)t, width, height,
                             surface->w, surface->h, TTF_GetFontHeight(font),
                             TTF_GetFontAscent(font), TTF_GetFontDescent(font), TTF_GetFontLineSkip(font));
                         for (size_t g = 0; g < SDL_arraysize(glyphs); g++) {
