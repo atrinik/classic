@@ -15,6 +15,12 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+TRUSTED_SOURCE_FILES = (
+    "tools/ci/appimage/packaging.lock.json",
+    "tools/ci/appimage/AppRun",
+    "tools/ci/appimage/openssl.cnf",
+    "client/ca-bundle.crt",
+)
 MAX_IMAGE = 2 * 1024**3
 MAX_PAYLOAD = 4 * 1024**3
 BUILD_PATHS = re.compile(rb"/(?:home|root|workspace|build|__w|work)/|/tmp/(?:source/|build[-/]|atrinik-appimage[^/]*?/)|/opt/atrinik-appimage/")
@@ -500,8 +506,7 @@ def main() -> int:
                 raise ValueError("trusted source root is not the checkout root")
             with tempfile.TemporaryDirectory(prefix="atrinik-appimage-source-") as temporary:
                 immutable = Path(temporary)
-                for name in ("tools/ci/appimage/packaging.lock.json", "tools/ci/appimage/AppRun",
-                             "tools/ci/appimage/openssl.cnf", "client/ca-bundle.crt"):
+                for name in TRUSTED_SOURCE_FILES:
                     destination = immutable / name
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(_run_bytes("git", "-C", str(source), "show", f"{args.revision}:{name}"))

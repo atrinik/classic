@@ -434,6 +434,7 @@ class AppImageTests(unittest.TestCase):
             return subprocess.run(["/usr/bin/git", "-C", str(self.source), *args],
                                   capture_output=True, check=True, text=True).stdout.strip()
         git("init", "--quiet")
+        (self.source / "fixture-extra.txt").write_text("shared resource contract\n")
         git("add", ".")
         git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
             "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
@@ -444,7 +445,14 @@ class AppImageTests(unittest.TestCase):
         self.lock_path.write_text("{}\n")
         args = ["appimage.py", str(candidate), self.version, "--revision", self.revision,
                 "--source-root", str(self.source)]
-        with mock.patch.object(sys, "argv", args), contextlib.redirect_stdout(io.StringIO()):
+        validate = appimage.validate_appimage
+        def verify_shared_resources(path, version, *, revision, source_root):
+            self.assertEqual((source_root / "fixture-extra.txt").read_text(), "shared resource contract\n")
+            validate(path, version, revision=revision, source_root=source_root)
+        resources = appimage.TRUSTED_SOURCE_FILES + ("fixture-extra.txt",)
+        with (mock.patch.object(sys, "argv", args), contextlib.redirect_stdout(io.StringIO()),
+              mock.patch.object(appimage, "TRUSTED_SOURCE_FILES", resources),
+              mock.patch.object(appimage, "validate_appimage", side_effect=verify_shared_resources)):
             self.assertEqual(appimage.main(), 0)
         args[4] = "f" * 40
         with mock.patch.object(sys, "argv", args), contextlib.redirect_stderr(io.StringIO()) as error:
