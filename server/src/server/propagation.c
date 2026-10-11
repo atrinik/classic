@@ -32,7 +32,7 @@ struct propagation_cast {
     object *source, *owner;
     tag_t source_count, owner_count;
     propagation_visit visit;
-    bool cancelled, reserved_projectile, scheduled;
+    bool cancelled, reserved_projectile, dormant, scheduled;
 };
 
 static propagation_cast *casts, *last_cast, *ready_first, *ready_last;
@@ -222,6 +222,7 @@ bool propagation_reserve_swarm(object *effect, int strength, unsigned count) {
         return false;
     }
     cast->first = cast->last = NO_ENTRY;
+    cast->dormant = true;
     cast->entries[0].queued = false;
     cast->entries[0].effect = effect;
     cast->entries[0].effect_count = effect->count;
@@ -254,6 +255,7 @@ bool propagation_reserve_explosion_from(object *effect, object *parent, int stre
     }
     cast->reserved_projectile = true;
     cast->first = cast->last = NO_ENTRY;
+    cast->dormant = true;
     cast->entries[0].queued = false;
     cast->entries[0].effect = effect;
     cast->entries[0].effect_count = effect->count;
@@ -297,6 +299,7 @@ bool propagation_cone(object *source, object *caster, archetype_t *arch,
         cast->used = 0;
         cast->first = cast->last = NO_ENTRY;
         cast->reserved_projectile = false;
+        cast->dormant = false;
         cast->radius = strength + 1;
         spatial_cell origin = {source->map, source->x, source->y, 0};
         enqueue(admit(cast, &origin, 0));
@@ -432,7 +435,9 @@ void propagation_expire_map(mapstruct *map) {
     processing = true;
     for (propagation_cast *cast = casts; cast != NULL; cast = cast->next) {
         for (size_t i = 0; i < cast->used; i++) {
-            if (cast->entries[i].cell.map == map ||
+            /* Dormant entry zero is capacity escrow, not a visited launch
+             * cell. Its moving effect/drop owns the current map dependency. */
+            if ((!cast->dormant && cast->entries[i].cell.map == map) ||
                 (cast->entries[i].effect != NULL && cast->entries[i].effect->map == map) ||
                 (cast->entries[i].drop != NULL && cast->entries[i].drop->map == map)) {
                 uint64_t group = cast->group;

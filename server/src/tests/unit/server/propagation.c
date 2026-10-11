@@ -6,6 +6,7 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <propagation.h>
+#include <projectile3d.h>
 #include <object_methods.h>
 #include <object.h>
 #include <sys/stat.h>
@@ -202,6 +203,118 @@ START_TEST(test_swarm_reservation_transfer_and_group_expiry) {
     ck_assert_uint_eq(propagation_reserved_cells(), 0);
     delete_map(lower);
     delete_map(upper);
+}
+END_TEST
+
+static object *seam_projectile(mapstruct *map, int y) {
+    object *projectile = arch_get("arrow");
+    projectile->x = 4;
+    projectile->y = y;
+    projectile->last_sp = 8;
+    projectile->direction = 3;
+    SET_FLAG(projectile, FLAG_IS_MISSILE);
+    projectile = object_insert_map(projectile, map, NULL, INS_NO_MERGE | INS_NO_WALK_ON);
+    ck_assert_ptr_nonnull(projectile);
+    projectile3d_launch(projectile, projectile, NULL, 3);
+    return projectile;
+}
+
+/* Dormant entries are reservation placeholders. Real seam movement, followed
+ * by launch-map teardown, must not spend or cancel their prepaid capacity. */
+START_TEST(test_dormant_reservations_follow_projectiles_across_map_seam) {
+    mapstruct *launch = get_empty_map(5, 5), *destination = get_empty_map(5, 5);
+    launch->tile_map[TILED_EAST] = destination;
+    destination->tile_map[TILED_WEST] = launch;
+    bool swarm = (_i % 2) != 0;
+    object *projectile = seam_projectile(launch, 2);
+    object *parent = swarm ? seam_projectile(launch, 1) : NULL;
+    propagation_admission admission;
+    ck_assert(propagation_admission_begin(&admission, 2, swarm ? 2 : 1, swarm));
+    size_t escrow = propagation_reserved_cells();
+    propagation_admission_activate(&admission);
+    if (swarm) {
+        parent->type = SWARM_SPELL;
+        ck_assert(propagation_reserve_swarm(parent, 1, 2));
+    }
+    ck_assert(propagation_reserve_explosion_from(projectile, parent, 1));
+    ck_assert_uint_eq(admission.remaining, 0);
+    propagation_admission_end(&admission);
+    ck_assert_uint_eq(propagation_reserved_cells(), escrow);
+    tag_t projectile_count = projectile->count;
+    tag_t parent_count = swarm ? parent->count : 0;
+    if (swarm) {
+        ck_assert_ptr_eq(projectile3d_move(parent), parent);
+        ck_assert_ptr_eq(parent->map, destination);
+    }
+    ck_assert_ptr_eq(projectile3d_move(projectile), projectile);
+    ck_assert_ptr_eq(projectile->map, destination);
+    ck_assert_int_eq(projectile->x, 0);
+    free_map(launch, 1);
+    ck_assert(object_reference_is_current(projectile, projectile_count));
+    ck_assert_ptr_nonnull(projectile->propagation);
+    if (swarm) {
+        ck_assert(object_reference_is_current(parent, parent_count));
+        ck_assert_ptr_nonnull(parent->propagation);
+    }
+    ck_assert_uint_eq(propagation_reserved_cells(), escrow);
+    propagation_tick();
+    ck_assert_uint_eq(propagation_last_expansions(), 0);
+    ck_assert_uint_eq(propagation_reserved_cells(), escrow);
+
+    if (_i < 2) {
+        /* Activation restages the origin at the projectile's current position
+         * without a second admission; new effects must appear on that map. */
+        ck_assert(propagation_cone(projectile, projectile, arch_find("firebreath"), 1, 0, 0, 0, 0));
+        ck_assert_uint_eq(propagation_reserved_cells(), escrow);
+        propagation_tick();
+        object *effect = NULL;
+        FOR_MAP_PREPARE(destination, 1, 2, candidate) {
+            if (candidate->type == CONE) {
+                effect = candidate;
+                break;
+            }
+        }
+        FOR_MAP_FINISH();
+        ck_assert_ptr_nonnull(effect);
+        ck_assert_ptr_nonnull(effect->propagation);
+        ck_assert_uint_eq(propagation_reserved_cells(), escrow);
+    }
+    free_map(destination, 1);
+    ck_assert(!object_reference_is_current(projectile, projectile_count));
+    if (swarm) {
+        ck_assert(!object_reference_is_current(parent, parent_count));
+    }
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+    delete_map(launch);
+    delete_map(destination);
+}
+END_TEST
+
+/* A genuine pending cell still owns its map after reservation activation,
+ * even when every live member of the group subsequently moves elsewhere. */
+START_TEST(test_activated_reservation_retains_pending_map_dependency) {
+    mapstruct *launch = get_empty_map(5, 5), *destination = get_empty_map(5, 5);
+    launch->tile_map[TILED_EAST] = destination;
+    destination->tile_map[TILED_WEST] = launch;
+    object *parent = source_on(destination, 2, 1);
+    parent->type = SWARM_SPELL;
+    ck_assert(propagation_reserve_swarm(parent, 1, 2));
+    object *projectile = seam_projectile(launch, 2);
+    ck_assert(propagation_reserve_explosion_from(projectile, parent, 1));
+    size_t reserved = propagation_reserved_cells();
+    tag_t parent_count = parent->count, projectile_count = projectile->count;
+    ck_assert(propagation_cone(projectile, projectile, arch_find("firebreath"), 1, 0, 0, 0, 0));
+    ck_assert_uint_eq(propagation_reserved_cells(), reserved);
+    ck_assert_ptr_eq(projectile3d_move(projectile), projectile);
+    ck_assert_ptr_eq(projectile->map, destination);
+    free_map(launch, 1);
+    ck_assert(!object_reference_is_current(parent, parent_count));
+    ck_assert(object_reference_is_current(projectile, projectile_count));
+    ck_assert_uint_eq(propagation_reserved_cells(), 0);
+    propagation_tick();
+    ck_assert_uint_eq(propagation_last_expansions(), 0);
+    delete_map(launch);
+    delete_map(destination);
 }
 END_TEST
 
@@ -502,6 +615,8 @@ void check_server_propagation(void) {
     tcase_add_test(core, test_spread_around_cover_but_not_closed_story_slabs);
     tcase_add_test(core, test_cone_children_expire_together_across_stories);
     tcase_add_test(core, test_swarm_reservation_transfer_and_group_expiry);
+    tcase_add_loop_test(core, test_dormant_reservations_follow_projectiles_across_map_seam, 0, 4);
+    tcase_add_test(core, test_activated_reservation_retains_pending_map_dependency);
     tcase_add_loop_test(core, test_resident_save_preserves_pending_propagation_until_teardown, 0, 3);
     tcase_add_test(core, test_rain_heal_no_target_fails_without_reservation);
     tcase_add_test(core, test_disease_open_route_around_cover_retains_identity_and_slabs);
