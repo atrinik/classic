@@ -99,3 +99,10 @@ Unified releases publish the Python distribution as
 package. Its wheel and scoped source archive use the repository-wide classic
 version. Both include the root GPL license; the scoped source archive also
 includes attributions and provenance evidence.
+
+## Rendezvous admission
+
+[Classic admission contract](RENDEZVOUS_ADMISSION.md) owns the mandatory pre-upgrade
+challenge/work identities in `schema/rendezvous-admission.json`, their generated
+C/Python bindings and shared synthetic fixture. Run the existing generator and
+protocol tests after transport schema edits; game command revision stays1083.

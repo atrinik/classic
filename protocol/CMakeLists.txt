@@ -34,6 +34,8 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(ATRINIK_PROTOCOL_GENERATED_OUTPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.def"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/c/include/atrinik/protocol/game_commands.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/c/include/atrinik/protocol/rendezvous_admission.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/python/atrinik_protocol/rendezvous_admission.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/python/atrinik_protocol/__init__.py"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/python/atrinik_protocol/game.py")
 set(ATRINIK_PROTOCOL_GENERATE_STAMP
@@ -44,6 +46,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E touch "${ATRINIK_PROTOCOL_GENERATE_STAMP}"
     DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/schema/game-commands.json"
+        "${CMAKE_CURRENT_SOURCE_DIR}/schema/rendezvous-admission.json"
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate.py"
         ${ATRINIK_PROTOCOL_GENERATED_OUTPUTS}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
