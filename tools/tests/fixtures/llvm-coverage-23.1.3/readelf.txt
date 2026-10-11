@@ -1,0 +1,40 @@
+There are 18 section headers, starting at offset 0x6b8:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .dynsym           DYNSYM          0000000000000200 000200 000030 18   A  4   1  8
+  [ 2] .gnu.hash         GNU_HASH        0000000000000230 000230 000020 00   A  1   0  8
+  [ 3] .hash             HASH            0000000000000250 000250 000018 04   A  1   0  4
+  [ 4] .dynstr           STRTAB          0000000000000268 000268 000026 00   A  0   0  1
+  [ 5] __llvm_prf_names  PROGBITS        000000000000028e 00028e 000017 00  AR  0   0  1
+  [ 6] .eh_frame         PROGBITS        00000000000002a8 0002a8 000034 00   A  0   0  8
+  [ 7] .text             PROGBITS        00000000000012e0 0002e0 000024 00  AX  0   0 16
+  [ 8] .dynamic          DYNAMIC         0000000000002308 000308 000080 10  WA  4   0  8
+  [ 9] .relro_padding    NOBITS          0000000000002388 000388 000c78 00  WA  0   0  1
+  [10] __llvm_prf_cnts   PROGBITS        0000000000003388 000388 000010 00  WA  0   0  8
+  [11] __llvm_prf_data   PROGBITS        0000000000003398 000398 000048 00  WA  0   0  8
+  [12] __llvm_covfun     PROGBITS        0000000000000000 0003e0 000046 00   R  0   0  8
+  [13] __llvm_covmap     PROGBITS        0000000000000000 000428 00004c 00   R  0   0  8
+  [14] .comment          PROGBITS        0000000000000000 000474 0000d1 01  MS  0   0  1
+  [15] .symtab           SYMTAB          0000000000000000 000548 000078 18     17   4  8
+  [16] .shstrtab         STRTAB          0000000000000000 0005c0 0000b9 00      0   0  1
+  [17] .strtab           STRTAB          0000000000000000 000679 00003d 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  R (retain), l (large), p (processor specific)
+
+Symbol table '.dynsym' contains 2 entries:
+   Num:    Value          Size Type    Bind   Vis       Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   UND
+     1: 00000000000012e0    36 FUNC    GLOBAL DEFAULT     7 fixture_count
+
+Symbol table '.symtab' contains 5 entries:
+   Num:    Value          Size Type    Bind   Vis       Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   UND
+     1: 0000000000000000     0 FILE    LOCAL  DEFAULT   ABS fixture.c
+     2: 0000000000000000    70 OBJECT  LOCAL  HIDDEN     12 __covrec_6F566FFA7D830C7Cu
+     3: 0000000000002308     0 NOTYPE  LOCAL  HIDDEN      8 _DYNAMIC
+     4: 00000000000012e0    36 FUNC    GLOBAL DEFAULT     7 fixture_count

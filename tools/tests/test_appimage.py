@@ -465,10 +465,28 @@ class AppImageTests(unittest.TestCase):
             ("(RUNPATH) Library runpath: [/tmp/build/lib]", "", "", "search path"),
             ("(NEEDED) Shared library: [../liboutside.so]", "", "", "library identity"),
             ("", "", "__asan_init", "test instrumentation"),
+            ("", "", "__llvm_profile_runtime", "test instrumentation"),
         ):
             with self.subTest(expected=expected), mock.patch.object(appimage, "_run", side_effect=[dynamic, versions, symbols]):
                 with self.assertRaisesRegex(ValueError, expected):
                     appimage._elf(elf, executable=True)
+
+    def test_real_llvm_coverage_sections_rejected_before_and_after_stripping(self):
+        fixtures = Path(__file__).parent / "fixtures/llvm-coverage-23.1.3"
+        for name in ("readelf.txt", "readelf-stripped.txt"):
+            output = (fixtures / name).read_text()
+            # These section names come from a Clang 23.1.3 coverage build;
+            # llvm-strip removes symbols/mapping but retains profile counters.
+            sections = [line.split('] ', 1)[1].split()[0] for line in output.splitlines()
+                        if " __llvm_" in line and "PROGBITS" in line]
+            self.assertTrue(any(section.startswith("__llvm_prf") for section in sections))
+            if name == "readelf.txt":
+                self.assertTrue(any(section.startswith("__llvm_cov") for section in sections))
+            for section in sections:
+                elf = self.write("usr/lib/coverage-fixture.so", Path("/usr/bin/true").read_bytes() + section.encode() + b"\0")
+                with self.subTest(output=name, section=section), mock.patch.object(appimage, "_run", return_value=""):
+                    with self.assertRaisesRegex(ValueError, "test instrumentation"):
+                        appimage._elf(elf)
 
     def test_libcap_interpreter_exception_requires_exact_locked_identity(self):
         cap = self.write("usr/lib/libcap.so.2", Path("/usr/bin/true").read_bytes())
