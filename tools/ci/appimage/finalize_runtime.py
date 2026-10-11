@@ -21,7 +21,7 @@ def finalize(path: Path, runtime: dict) -> None:
             or type(offset) is not int or not 64 <= offset <= size - 16
             or runtime.get('digest_md5_size') != 16):
         raise ValueError('unsupported locked runtime checksum contract')
-    descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, 'r+b') as stream:
         identity = os.fstat(stream.fileno())
         if not stat.S_ISREG(identity.st_mode) or not size < identity.st_size <= 2 * 1024**3:

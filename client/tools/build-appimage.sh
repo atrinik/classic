@@ -81,7 +81,9 @@ export NO_STRIP=1
 python3 ../tools/ci/appimage/assemble.py "${appdir}" "${prefix}" "${version}" "${revision}"
 # Always use the locked, already-verified runtime: appimagetool must not fetch it.
 export ARCH=x86_64
-env -u VERSION "${prefix}/tools/appimagetool" --mksquashfs-opt -no-xattrs \
+# Explicit inode/mkfs times cannot coexist with mksquashfs SOURCE_DATE_EPOCH.
+# Our later -mkfs-time overrides appimagetool's default zero timestamp.
+env -u VERSION -u SOURCE_DATE_EPOCH "${prefix}/tools/appimagetool" --mksquashfs-opt -no-xattrs \
   --mksquashfs-opt -processors --mksquashfs-opt "${build_parallelism}" \
   --mksquashfs-opt -all-time --mksquashfs-opt "${source_date_epoch}" \
   --mksquashfs-opt -mkfs-time --mksquashfs-opt "${source_date_epoch}" --runtime-file "${prefix}/tools/runtime" \
