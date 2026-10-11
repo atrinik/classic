@@ -19,15 +19,23 @@ ctest --test-dir build --output-on-failure
 cmake --install build --prefix /path/to/prefix
 ```
 
-To collect line, function, and branch coverage from the native tests:
+To collect line, function, and branch coverage from core and standalone
+pathfinding tests in a full Classic checkout, use the pinned LLVM 23.1.3 tools:
 
 ```sh
-cmake --preset linux-coverage
+cmake --preset linux-coverage -DCMAKE_TOOLCHAIN_FILE="$PWD/../cmake/toolchains/llvm.cmake"
 cmake --build --preset linux-coverage
+python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/linux-coverage
 ctest --preset linux-coverage
-gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
-  --exclude '.*/build/.*' --print-summary
+python3 ../tools/ci/llvm_coverage.py export --build-dir build/linux-coverage \
+  --source-root .. --component libatrinik --output coverage.lcov
 ```
+
+The helper requires matching Clang, llvm-profdata and llvm-cov 23.1.3.
+CTest writes separate `%m-%p.profraw` files for processes and shared libraries;
+LCOV includes production C sources and excludes tests, build output and upstream
+dependency trees. Missing or empty profiles fail the export. Run `prepare` only
+before a fresh test pass; retain those profiles when adding runtime coverage.
 
 To run the standalone suite with address and undefined-behavior sanitizers:
 

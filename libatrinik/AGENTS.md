@@ -35,7 +35,7 @@
   install/package consumption, and downstream client/server builds through the
   workspace when a public API changes.
 - For substantial native logic changes, also run the `linux-coverage` preset
-  and gcovr summary documented in `README.md`; include both core and standalone
+  and native LLVM LCOV export documented in `README.md`; include both core and standalone
   pathfinding coverage without counting test or build output as source.
 - Commits and pull-request titles use Conventional Commits. Classic uses one
   repository-wide release line.

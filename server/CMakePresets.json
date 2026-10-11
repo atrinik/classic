@@ -64,6 +64,7 @@
     {
       "name": "linux-coverage",
       "configurePreset": "linux-coverage",
+      "environment": {"LLVM_PROFILE_FILE": "${sourceDir}/build/linux-coverage/llvm-profiles/%m-%p.profraw"},
       "output": {"outputOnFailure": true},
       "execution": {"jobs": 4}
     },

@@ -33,11 +33,14 @@
  `build/PRESET/server-test-runtimes/` for failure diagnosis. The complete
  resource and cleanup contract is documented in `doc/TESTING.md`.
 
- To collect line, function, and branch coverage from the native tests:
-  $ cmake --preset linux-coverage
+ To collect line, function, and branch coverage from the native tests in a full
+ Classic checkout, use the pinned LLVM 23.1.3 toolchain and native profiles:
+  $ cmake --preset linux-coverage -DCMAKE_TOOLCHAIN_FILE="$PWD/../cmake/toolchains/llvm.cmake"
   $ cmake --build --preset linux-coverage
+  $ python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/linux-coverage
   $ ctest --preset linux-coverage
-  $ gcovr --root . --filter 'src/' --exclude 'src/tests/' --print-summary
+  $ python3 ../tools/ci/llvm_coverage.py export --build-dir build/linux-coverage \
+      --source-root .. --component server --output coverage.lcov
 
  The server's simulation, monotonic, UTC wall, round-generation, and authored
  world-time domains are documented in doc/SERVER_CLOCKS.md. New deadlines must

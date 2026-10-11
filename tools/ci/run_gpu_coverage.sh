@@ -39,6 +39,7 @@ docker run --rm \
   --network none \
   --env ATRINIK_BENCHMARK_REVISION="${expected_revision}" \
   --env ATRINIK_BENCHMARK_DIRTY=false \
+  --env ATRINIK_LLVM_TOOLCHAIN="${ATRINIK_LLVM_TOOLCHAIN:-0}" \
   --volume "${source_root}:/workspace" \
   --workdir /workspace \
   "${build_image}" \
@@ -54,11 +55,20 @@ docker run --rm \
       python3 client/tools/dependencies.py verify
       python3 client/tools/verify_gpu_fixture_provenance.py
       cd client
+      if [ "${ATRINIK_LLVM_TOOLCHAIN}" = 1 ]; then
+        set -- -DCMAKE_TOOLCHAIN_FILE=/workspace/cmake/toolchains/llvm.cmake
+      else
+        set --
+      fi
       cmake --preset linux-coverage \
+        "$@" \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=/workspace/protocol \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=/workspace/libatrinik \
         -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders
       cmake --build --preset linux-coverage --parallel "$(nproc)"
+      if [ "${ATRINIK_LLVM_TOOLCHAIN}" = 1 ]; then
+        python3 /workspace/tools/ci/llvm_coverage.py prepare --build-dir build/linux-coverage
+      fi
       ctest --preset linux-coverage --output-on-failure --no-tests=error -LE performance
     '
 
@@ -91,6 +101,7 @@ docker run --rm \
   --env SDL_VIDEODRIVER=x11 \
   --env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
   --env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  --env LLVM_PROFILE_FILE="${compiled_home}/build/linux-coverage/llvm-profiles/%m-%p.profraw" \
   --volume "${source_root}:${compiled_root}" \
   --workdir "${compiled_home}" \
   "${gpu_image}" \
@@ -116,7 +127,15 @@ docker run --rm \
   --network none \
   --volume "${source_root}:${compiled_root}" \
   --workdir "${compiled_root}/client" \
+  --env ATRINIK_LLVM_TOOLCHAIN="${ATRINIK_LLVM_TOOLCHAIN:-0}" \
   "${build_image}" \
-  gcovr --root . --filter src/ --exclude src/tests/ \
-    --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-    --print-summary --xml coverage.xml
+  sh -c '
+    if [ "${ATRINIK_LLVM_TOOLCHAIN}" = 1 ]; then
+      python3 ../tools/ci/llvm_coverage.py export \
+        --build-dir build/linux-coverage --source-root .. \
+        --component client --output coverage.lcov
+    else
+      gcovr --root . --filter src/ --exclude src/tests/ \
+        --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
+        --print-summary --xml coverage.xml
+    fi'

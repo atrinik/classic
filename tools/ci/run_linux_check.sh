@@ -33,12 +33,48 @@ test -w "${CCACHE_DIR}"
 test "$(stat --format='%a' "${CCACHE_DIR}")" = 1777
 test "$(jq -r '.target' /usr/local/share/atrinik/classic-toolchain.json)" = classic-final
 test "$(jq -r '.platform' /usr/local/share/atrinik/classic-toolchain.json)" = linux/amd64
-test "$(jq -r '.tools.gcc' /usr/local/share/atrinik/classic-toolchain.json)" = 15.2.0
+llvm_toolchain=${ATRINIK_LLVM_TOOLCHAIN:-0}
+if [[ ${llvm_toolchain} == 1 ]]; then
+  test "$(jq -r '.tools.clang' /usr/local/share/atrinik/classic-toolchain.json)" = 23.1.3
+  export CC=clang CXX=clang++
+else
+  # Transitional validation for the previously released immutable image.
+  test "$(jq -r '.tools.gcc' /usr/local/share/atrinik/classic-toolchain.json)" = 15.2.0
+fi
 
 launcher=(
   -DCMAKE_C_COMPILER_LAUNCHER=ccache
   -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 )
+if [[ ${llvm_toolchain} == 1 ]]; then
+  launcher+=("-DCMAKE_TOOLCHAIN_FILE=${source_root}/cmake/toolchains/llvm.cmake")
+fi
+
+# These functions run in the owning module directory. CTest's coverage preset
+# supplies %m-%p profile names, separating parallel processes and shared plugins.
+prepare_coverage() {
+  if [[ ${llvm_toolchain} == 1 ]]; then
+    python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir build/linux-coverage
+  fi
+}
+export_coverage() {
+  local module=$1
+  if [[ ${llvm_toolchain} == 1 ]]; then
+    python3 "${source_root}/tools/ci/llvm_coverage.py" export \
+      --build-dir build/linux-coverage --source-root "${source_root}" \
+      --component "${module}" --output coverage.lcov
+  elif [[ ${module} == libatrinik ]]; then
+    gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
+      --exclude '.*/build/.*' \
+      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
+      --print-summary --xml coverage.xml
+  else
+    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
+      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
+      --print-summary --xml coverage.xml
+  fi
+}
+
 sibling_sources=(
   -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${source_root}/protocol"
   -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${source_root}/libatrinik"
@@ -93,11 +129,9 @@ case "${component}" in
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
+    prepare_coverage
     ctest --preset linux-coverage
-    gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
-      --exclude '.*/build/.*' \
-      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-      --print-summary --xml coverage.xml
+    export_coverage libatrinik
     cmake --preset linux-sanitizers \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
@@ -126,10 +160,9 @@ case "${component}" in
       -DENABLE_PRECOMPILED_HEADERS=OFF \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
+    prepare_coverage
     ctest --preset linux-coverage --parallel 4 -LE performance
-    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
-      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-      --print-summary --xml coverage.xml
+    export_coverage server
     cmake --preset linux-release \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
@@ -150,10 +183,9 @@ case "${component}" in
     cmake --preset linux-coverage \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-coverage --parallel "${jobs}"
+    prepare_coverage
     ctest --preset linux-coverage -LE performance
-    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
-      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-      --print-summary --xml coverage.xml
+    export_coverage client
     cmake --preset linux-release \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
     cmake --build --preset linux-release --parallel "${jobs}"
