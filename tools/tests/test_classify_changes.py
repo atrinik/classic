@@ -122,6 +122,17 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertTrue(result["client"])
         self.assertTrue(result["server"])
 
+    def test_coverage_presets_test_selects_both_native_consumers(self) -> None:
+        path = "tools/tests/test_coverage_presets.py"
+        self.assertTrue(classify_changes.is_native_shared(path))
+        result = classify_changes.classify([path])
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertFalse(result["windows"])
+        self.assertEqual(result["codeql_languages"], "python")
+        self.assertFalse(result["benchmark_client"])
+        self.assertFalse(result["benchmark_server"])
+
     def test_shared_windows_runtime_tests_select_both_native_consumers_and_windows(self) -> None:
         for path in (
             "tools/tests/test_stage_windows_runtime.py",

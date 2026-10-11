@@ -23,6 +23,7 @@ NATIVE_SHARED_PATHS = {
     "CMakeLists.txt",
     "CMakePresets.json",
     "codecov.yml",
+    "tools/tests/test_coverage_presets.py",
     "tools/tests/test_llvm_coverage.py",
     "tools/tests/test_llvm_coverage_identity.py",
     "tools/tests/test_llvm_toolchain.py",
