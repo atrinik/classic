@@ -59,8 +59,16 @@ class Fixture(http.server.ThreadingHTTPServer):
     block_on_close = False
 
     def handle_error(self, request, client_address):
-        # Do not print addresses or HTTP bodies, even on fixture failure.
-        self.errors.append("fixture handler failed")
+        # libcurl may finish TLS before rejecting the certificate hostname,
+        # then reset the stream before sending any HTTP bytes. This is expected
+        # only in certificate rejection cases that received no HTTP request.
+        error = sys.exc_info()[1]
+        if (self.mode in ("wrong-host", "untrusted") and self.requests == 0
+                and isinstance(error, (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError))):
+            return
+        # Exception classes give bounded diagnostics without addresses, request
+        # bodies, certificate details or secrets.
+        self.errors.append(type(error).__name__)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -139,7 +147,8 @@ def run_case(binary, mode, ca, other_ca, cert, key):
             if result.returncode:
                 raise RuntimeError(f"native HTTPS admission case failed: {mode}")
             if server.errors:
-                raise RuntimeError(f"HTTPS fixture request check failed: {mode}")
+                raise RuntimeError(f"HTTPS fixture request check failed: {mode}: "
+                                   + ",".join(server.errors[:3]))
             expected_requests = 0 if mode in ("wrong-host", "untrusted") else 1
             if server.requests != expected_requests:
                 raise RuntimeError(f"HTTPS fixture request count failed: {mode}")
