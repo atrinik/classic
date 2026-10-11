@@ -10,6 +10,8 @@ for e in lock['sources']+lock['tools']+[dict(lock['runtime'],name='runtime')]+lo
  assert hashlib.sha256(f.read_bytes()).hexdigest()==e['sha256'],f
 PY
 for archive in /inputs/sources/*.tar.gz; do tar -xzf "${archive}" -C /build; done
+export CFLAGS="-ffile-prefix-map=/build=. -fdebug-prefix-map=/build=. -ffile-prefix-map=/opt/atrinik-appimage=/usr"
+export CXXFLAGS="${CFLAGS}"
 export CMAKE_PREFIX_PATH=${prefix} LD_LIBRARY_PATH=${prefix}/lib PKG_CONFIG_PATH=${prefix}/lib/pkgconfig
 build() {
  local source=$1; shift
@@ -18,7 +20,7 @@ build() {
  cmake --build "/build/${source}-build" --parallel 4
  cmake --install "/build/${source}-build"
 }
-(cd /build/openssl-3.5.5; ./Configure linux-x86_64 shared --prefix="${prefix}" --libdir=lib --openssldir=/etc/ssl; make -j4; make install_sw)
+(cd /build/openssl-3.5.5; ./Configure linux-x86_64 shared --prefix=/usr --libdir=lib --openssldir=/etc/ssl; make -j4; make DESTDIR=/build/openssl-install install_sw; cp -a /build/openssl-install/usr/. "${prefix}/")
 build c-ares-1.34.6 -DCARES_SHARED=ON -DCARES_STATIC=OFF -DCARES_BUILD_TESTS=OFF
 build curl-8.18.0 -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DBUILD_TESTING=OFF \
  -DCURL_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR="${prefix}" -DENABLE_ARES=ON \
