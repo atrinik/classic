@@ -25,11 +25,9 @@ if (not deferred or calls == 2) and actor.ReadKey("actor_callback_done") != "1":
         replacement.Con = 10
         replacement.last_heal = 5
     elif mode == "destroy_spell_second":
-        spell = observer.inv
-        while spell is not None and spell.name != "callback ability":
-            spell = spell.below
-        assert spell is not None
-        spell.Destroy()
+        spells = [obj for obj in observer.inv if obj.name == "callback ability"]
+        assert len(spells) == 1
+        spells[0].Destroy()
     elif mode == "destroy_target_second":
         actor.Destroy()
     elif mode == "destroy_caster":

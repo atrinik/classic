@@ -148,9 +148,15 @@ START_TEST(test_attack_retarget_aborts_when_visibility_logs_out_victim) {
     object *pl;
     fixture(&map, &pl);
     object *attacker = place(map, 13, 12);
-    object *retained = place(map, 14, 12);
+    object *retained = place(map, 12, 13);
+    /* An active fight needs positive HP and a published visible identity for
+     * both actors before the destructive callback is installed. */
+    attacker->stats.hp = attacker->stats.maxhp = 100;
+    retained->stats.hp = retained->stats.maxhp = 100;
     draw_client_map(pl);
     player *controller = CONTR(pl);
+    ck_assert(target_player_authorized(controller, attacker, NULL));
+    ck_assert(target_player_authorized(controller, retained, NULL));
     socket_struct *socket = controller->cs;
     tag_t count = pl->count;
     controller->combat = 1;
