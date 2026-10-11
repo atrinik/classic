@@ -87,7 +87,7 @@ static size_t replacement_credit(field_binding *const *selected, size_t count, b
  * before teardown, and fresh checks invalid before accessing any map. */
 static void signature(const mapstruct *map, unsigned char output[SHA256_DIGEST_LENGTH]) {
     struct {
-        uintptr_t spaces, path, region;
+        uintptr_t spaces, path;
         uint64_t count, revision;
         int width, height;
         uint32_t residency;
@@ -103,7 +103,6 @@ static void signature(const mapstruct *map, unsigned char output[SHA256_DIGEST_L
     memset(&raw, 0, sizeof(raw));
     raw.spaces = (uintptr_t)map->spaces;
     raw.path = (uintptr_t)map->path;
-    raw.region = (uintptr_t)map->region;
     raw.count = map->count;
     raw.revision = map->celestial_structure_revision;
     raw.width = map->width;
@@ -112,6 +111,9 @@ static void signature(const mapstruct *map, unsigned char output[SHA256_DIGEST_L
     raw.schema = map->celestial_schema;
     raw.sky = map->celestial_sky_above;
     const region_celestial_profile_t *profile = region_celestial_for_map(map);
+    /* Header validation may materialize the implicit world region. The
+     * effective profile is unchanged by that normalization; its digest, not
+     * the nullable region storage pointer, identifies lighting inputs. */
     if (profile != NULL) {
         memcpy(raw.profile, profile->digest, sizeof(raw.profile));
     }

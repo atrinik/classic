@@ -7,6 +7,7 @@
 #include <checkstd.h>
 #include <check_utils.h>
 #include <map.h>
+#include <region.h>
 
 #define RESERVATION_LIMIT ((size_t)1923584)
 
@@ -260,6 +261,24 @@ START_TEST(test_discontinuous_and_travel_targets_are_independent) {
 }
 END_TEST
 
+START_TEST(test_implicit_world_region_normalization_preserves_freshness) {
+    mapstruct map = {0};
+    size_t reserved = 0;
+    celestial_dependencies *ctx = celestial_dependencies_begin(&reserved, RESERVATION_LIMIT, 4);
+    ck_assert_ptr_nonnull(region_world());
+    ck_assert(celestial_dependencies_observe(ctx, &map));
+    map.region = region_world();
+    ck_assert(celestial_dependencies_fresh(ctx));
+    region_struct changed = {0};
+    changed.celestial = map.region->celestial;
+    changed.celestial.digest[0] ^= 1;
+    map.region = &changed;
+    ck_assert(!celestial_dependencies_fresh(ctx));
+    celestial_dependencies_release(ctx);
+    ck_assert_uint_eq(reserved, 0);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("celestial_dependencies");
     TCase *tc = tcase_create("Core");
@@ -276,6 +295,7 @@ static Suite *suite(void) {
     tcase_add_test(tc, test_large_endpoint_promotion_charges_shared_context_once);
     tcase_add_test(tc, test_atomic_replacement_credits_only_released_contexts);
     tcase_add_test(tc, test_discontinuous_and_travel_targets_are_independent);
+    tcase_add_test(tc, test_implicit_world_region_normalization_preserves_freshness);
     return s;
 }
 
