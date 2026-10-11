@@ -107,7 +107,7 @@ jobs:
           fi
           artifact_schema=$(python3 build/release-automation/tools/release/release_artifacts.py \
             --print-source-schema --revision "${commit}" --source-root "${GITHUB_WORKSPACE}")
-          [[ ${artifact_schema} == 1 || ${artifact_schema} == 2 ]]
+          [[ ${artifact_schema} == 1 || ${artifact_schema} == 2 || ${artifact_schema} == 3 ]]
           {
             echo "artifact_schema=${artifact_schema}"
             echo "tag=${RELEASE_TAG}"
@@ -337,6 +337,138 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  client-appimage:
+    name: Build and smoke Ubuntu-baseline AppImage
+    needs: [metadata, dependencies, gpu-shaders]
+    if: needs.metadata.outputs.artifact_schema == '3'
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Image preparation and runtime smoke belong to the trusted caller.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            tools/ci/appimage
+            tools/release
+      - name: Check out candidate source as container input only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          path: candidate-source
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: candidate-dependencies-${{ needs.metadata.outputs.tag }}
+          path: build/linux-inputs
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: candidate-gpu-shaders-${{ needs.metadata.outputs.tag }}
+          path: build/gpu-shaders
+      - name: Retrieve release-only Discord configuration
+        if: inputs.rehearsal != true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: discord-application-id-${{ inputs.tag }}
+          path: build/discord-config
+      - name: Prepare pinned Ubuntu builder and clean runtime images
+        run: |
+          mkdir -p build/appimage-evidence build/appimage-packages build/discord-config
+          python3 tools/ci/appimage/prepare.py --output build/appimage-context \
+            > build/appimage-evidence/prepare.log 2>&1
+          cp build/appimage-context/packaging.lock.json build/appimage-evidence/
+          docker build --platform linux/amd64 --target build --tag classic-appimage-build \
+            --file build/appimage-context/Dockerfile build/appimage-context \
+            > build/appimage-evidence/image-build.log 2>&1
+          for runtime in ubuntu24 ubuntu26 debian13; do
+            docker build --platform linux/amd64 --target "smoke-${runtime}" \
+              --tag "classic-appimage-${runtime}" \
+              --file build/appimage-context/Dockerfile build/appimage-context \
+              > "build/appimage-evidence/image-${runtime}.log" 2>&1
+          done
+          docker image inspect classic-appimage-build classic-appimage-ubuntu24 \
+            classic-appimage-ubuntu26 classic-appimage-debian13 \
+            --format '{{.Id}}' > build/appimage-evidence/images.txt
+          docker run --rm --network none classic-appimage-build cat /build-packages.tsv \
+            > build/appimage-evidence/build-packages.tsv
+      - name: Build AppImage with offline release inputs
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_epoch }}
+          DISCORD_CONFIG_FILE: ${{ inputs.rehearsal != true && '/input/discord-config/discord-application-id' || '' }}
+        run: |
+          docker run --rm --platform linux/amd64 --network none \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" --cpus 2 --memory 4g \
+            --env ATRINIK_PACKAGE_VERSION="${RELEASE_VERSION}" \
+            --env ATRINIK_SOURCE_REVISION="${RELEASE_REVISION}" \
+            --env SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+            --env CMAKE_BUILD_PARALLEL_LEVEL=2 \
+            --env ATRINIK_GPU_SHADER_DIRECTORY=/input/gpu-shaders \
+            --env ATRINIK_DEPENDENCY_DOWNLOADS=/input/dependencies/client/build/dependencies/downloads \
+            --env ATRINIK_DISCORD_APPLICATION_ID_FILE="${DISCORD_CONFIG_FILE}" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/candidate-source,target=/input/source,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/linux-inputs,target=/input/dependencies,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/gpu-shaders,target=/input/gpu-shaders,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/discord-config,target=/input/discord-config,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/appimage-packages,target=/output" \
+            classic-appimage-build bash -c \
+              'set -euo pipefail
+               mkdir /tmp/source
+               cp -a --no-preserve=ownership /input/source/. /tmp/source/
+               cd /tmp/source/client
+               test -f tools/tests/test_appimage_package_contract.py
+               python3 -m unittest discover -s tools/tests -p test_appimage_package_contract.py
+               bash tools/build-appimage.sh /output' \
+            > build/appimage-evidence/build.log 2>&1
+          # Candidate code cannot modify the runner checkout, automation, or
+          # evidence. Reject symlink outputs before any host consumer opens one.
+          package="build/appimage-packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage"
+          test -f "${package}" && test ! -L "${package}"
+      - name: Validate AppImage payload with trusted host tools
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends squashfs-tools binutils
+          python3 tools/release/appimage.py \
+            "build/appimage-packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage" \
+            "${RELEASE_VERSION}" > build/appimage-evidence/payload-validation.log 2>&1
+      - name: Smoke in clean Ubuntu 24, Ubuntu 26, and Debian 13 runtimes
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          for runtime in ubuntu24 ubuntu26 debian13; do
+            docker run --rm --platform linux/amd64 --network none \
+              --cap-drop ALL --security-opt no-new-privileges \
+              --user "$(id -u):$(id -g)" --cpus 2 --memory 4g \
+              --env ATRINIK_APPIMAGE_SMOKE_CONTAINER=1 \
+              --mount "type=bind,source=$GITHUB_WORKSPACE/build/appimage-packages,target=/packages,readonly" \
+              --mount "type=bind,source=$GITHUB_WORKSPACE/tools/ci/appimage/smoke.sh,target=/smoke.sh,readonly" \
+              "classic-appimage-${runtime}" bash /smoke.sh \
+              "/packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage" \
+              "${RELEASE_VERSION}" > "build/appimage-evidence/smoke-${runtime}.log" 2>&1
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-client-appimage-${{ needs.metadata.outputs.tag }}
+          path: build/appimage-packages/atrinik-classic-client-${{ needs.metadata.outputs.version }}-linux-x86_64.AppImage
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain AppImage build, payload, and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: client-appimage-evidence-${{ needs.metadata.outputs.tag }}
+          path: build/appimage-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
   client-windows:
     name: Build Windows client package
     needs: [metadata, dependencies, gpu-shaders]
@@ -526,13 +658,15 @@ jobs:
       needs.client-windows.result == 'success' &&
       needs.server-windows.result == 'success' &&
       needs.server-image.result == 'success' &&
-      ((needs.metadata.outputs.artifact_schema == '2' && needs.client-linux.result == 'success') ||
-      (needs.metadata.outputs.artifact_schema == '1' && needs.client-linux.result == 'skipped'))
+      ((needs.metadata.outputs.artifact_schema == '3' && needs.client-appimage.result == 'success' && needs.client-linux.result == 'skipped') ||
+      (needs.metadata.outputs.artifact_schema == '2' && needs.client-linux.result == 'success' && needs.client-appimage.result == 'skipped') ||
+      (needs.metadata.outputs.artifact_schema == '1' && needs.client-linux.result == 'skipped' && needs.client-appimage.result == 'skipped'))
     needs:
       - metadata
       - sources
       - gpu-shaders
       - client-linux
+      - client-appimage
       - client-windows
       - server-windows
       - server-image
@@ -547,6 +681,11 @@ jobs:
           pattern: release-*-${{ needs.metadata.outputs.tag }}
           path: build/release
           merge-multiple: true
+      - name: Install trusted AppImage inspection tools
+        if: needs.metadata.outputs.artifact_schema == '3'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends squashfs-tools binutils
       - name: Validate and index the complete candidate
         run: >-
           python3 tools/release/finalize_artifacts.py

@@ -190,6 +190,15 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
+      - name: Install trusted AppImage fixture inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends squashfs-tools binutils libzstd1
+          test -x /usr/bin/readelf
+          test -x /usr/bin/unsquashfs
+          test -x /usr/bin/mksquashfs
+          test -x /usr/bin/true
+          test -f /usr/lib/x86_64-linux-gnu/libzstd.so.1
       - name: Install Python test coverage tooling
         run: python3 -m pip install coverage==7.15.3
       - name: Validate imported history and release helpers

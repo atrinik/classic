@@ -13,6 +13,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[2]
 FULL_EVENTS = {"merge_group", "push", "schedule", "workflow_dispatch"}
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+NATIVE_CLIENT_TOOL_PREFIXES = ("tools/ci/appimage/",)
 NATIVE_SHARED_PREFIXES = ("libatrinik/", "protocol/")
 NATIVE_SHARED_PATHS = {
     ".clang-format",
@@ -123,7 +124,7 @@ def changed_paths(base: str, head: str, root: Path = ROOT) -> list[str]:
 
 
 def is_native_shared(path: str) -> bool:
-    return (
+    return not path.startswith(NATIVE_CLIENT_TOOL_PREFIXES) and (
         path in NATIVE_SHARED_PATHS
         or path.startswith(NATIVE_SHARED_PREFIXES)
         or path.startswith(NATIVE_SHARED_TOOL_PREFIXES)
@@ -135,7 +136,10 @@ def classify(
 ) -> dict[str, object]:
     checked = [safe_path(path) for path in paths]
     client = full or any(
-        path.startswith("client/") or is_native_shared(path) for path in checked
+        path.startswith("client/")
+        or path.startswith(NATIVE_CLIENT_TOOL_PREFIXES)
+        or is_native_shared(path)
+        for path in checked
     )
     server = full or any(
         path.startswith("server/") or is_native_shared(path) for path in checked

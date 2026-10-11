@@ -1,0 +1,237 @@
+from pathlib import Path
+import json
+import os
+import re
+import subprocess
+import tempfile
+import textwrap
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class AppImageWorkflowTests(unittest.TestCase):
+    def workflow(self) -> str:
+        return (ROOT / '.github/workflows/build-release-candidate.yml').read_text()
+
+    def job(self) -> str:
+        return self.workflow().split('  client-appimage:\n', 1)[1].split('  client-windows:\n', 1)[0]
+
+    def test_schema_specific_jobs_fail_closed(self) -> None:
+        workflow = self.workflow()
+        job = self.job()
+        self.assertIn("if: needs.metadata.outputs.artifact_schema == '3'", job)
+        self.assertIn('needs: [metadata, dependencies, gpu-shaders]', job)
+        finalizer = workflow.split('  candidate:\n', 1)[1]
+        self.assertIn('      - client-appimage\n', finalizer)
+        for schema, deb, app in ((1, 'skipped', 'skipped'), (2, 'success', 'skipped'),
+                                 (3, 'skipped', 'success')):
+            with self.subTest(schema=schema):
+                condition = next(line for line in finalizer.splitlines()
+                                 if f"artifact_schema == '{schema}'" in line)
+                self.assertIn(f"needs.client-linux.result == '{deb}'", condition)
+                self.assertIn(f"needs.client-appimage.result == '{app}'", condition)
+        self.assertIn('${artifact_schema} == 3', workflow)
+
+    def test_trusted_preparation_and_smoke_do_not_mount_candidate_or_secrets(self) -> None:
+        job = self.job()
+        checkouts = re.findall(r'uses: actions/checkout@.*?\n(.*?)(?=      -)', job, re.DOTALL)
+        self.assertEqual(len(checkouts), 2)
+        self.assertIn('ref: ${{ github.sha }}', checkouts[0])
+        self.assertIn('tools/ci/appimage', checkouts[0])
+        self.assertIn('tools/release', checkouts[0])
+        self.assertIn('path: candidate-source', checkouts[1])
+        self.assertIn('ref: ${{ needs.metadata.outputs.commit }}', checkouts[1])
+        for checkout in checkouts:
+            self.assertIn('persist-credentials: false', checkout)
+        for forbidden in ('actions/cache@', 'github.token', '--privileged', '--device',
+                          '--env-file', 'secrets.'):
+            self.assertNotIn(forbidden, job)
+        preparation = job.split('      - name: Prepare pinned Ubuntu', 1)[1].split('      - name:', 1)[0]
+        self.assertNotIn('candidate-source', preparation)
+        self.assertIn('prepare.py --output build/appimage-context', preparation)
+        self.assertIn('--file build/appimage-context/Dockerfile build/appimage-context', preparation)
+        self.assertIn('cp build/appimage-context/packaging.lock.json build/appimage-evidence/', preparation)
+        self.assertIn('cat /build-packages.tsv', preparation)
+        self.assertLess(job.index('cat /build-packages.tsv'), job.index('Build AppImage with offline'))
+        smoke = job.split('      - name: Smoke in clean', 1)[1].split('      - uses:', 1)[0]
+        self.assertIn('for runtime in ubuntu24 ubuntu26 debian13', smoke)
+        self.assertIn('--network none', smoke)
+        self.assertIn('--env ATRINIK_APPIMAGE_SMOKE_CONTAINER=1', smoke)
+        self.assertIn('--cap-drop ALL --security-opt no-new-privileges', smoke)
+        self.assertNotIn('candidate-source', smoke)
+        self.assertNotIn('target=/output', smoke)
+        self.assertNotIn('apt-get', smoke)
+        self.assertIn('tools/ci/appimage/smoke.sh,target=/smoke.sh,readonly', smoke)
+        self.assertLess(job.index('bash /smoke.sh'), job.index('name: release-client-appimage-'))
+
+    def test_required_trusted_validator_tools_and_attestation_cover_appimage(self) -> None:
+        job = self.job()
+        self.assertIn('python3 tools/release/appimage.py', job)
+        self.assertLess(job.index('payload-validation.log'), job.index('bash /smoke.sh'))
+        finalizer = self.workflow().split('  candidate:\n', 1)[1]
+        self.assertLess(finalizer.index('squashfs-tools binutils'), finalizer.index('finalize_artifacts.py'))
+        for name, first_consumer in (('package-release.yml', 'release_artifacts.py'),
+                                     ('promote-latest.yml', 'check_latest_release.py')):
+            workflow = (ROOT / '.github/workflows' / name).read_text()
+            self.assertLess(workflow.index('squashfs-tools binutils'), workflow.index(first_consumer))
+        check = (ROOT / '.github/workflows/check.yml').read_text()
+        core = check.split('  core:\n', 1)[1].split('  windows-test-build:\n', 1)[0]
+        self.assertIn('squashfs-tools binutils libzstd1', core)
+        self.assertLess(core.index('squashfs-tools binutils libzstd1'), core.index('-m unittest discover -s tools/tests'))
+        for prerequisite in ('readelf', 'unsquashfs', 'mksquashfs', 'true'):
+            self.assertIn(f'test -x /usr/bin/{prerequisite}', core)
+        self.assertIn('test -f /usr/lib/x86_64-linux-gnu/libzstd.so.1', core)
+        package = (ROOT / '.github/workflows/package-release.yml').read_text()
+        self.assertIn('            build/release/*.AppImage\n', package)
+        for invocation in re.findall(r'sync_release_assets.py(.*?)(?=\n      -|\Z)',
+                                     package, re.DOTALL):
+            self.assertIn('--revision "${RELEASE_COMMIT}"', invocation)
+            self.assertIn('--source-root "${GITHUB_WORKSPACE}"', invocation)
+
+    def test_preparation_captures_actual_builder_inventory_and_lock(self) -> None:
+        preparation = self.job().split('      - name: Prepare pinned Ubuntu', 1)[1].split('      - name:', 1)[0]
+        script = textwrap.dedent(preparation.split('        run: |\n', 1)[1])
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / 'bin').mkdir()
+            trusted = workspace / 'tools/ci/appimage'
+            trusted.mkdir(parents=True)
+            (trusted / 'prepare.py').write_text("""import argparse, pathlib
+parser = argparse.ArgumentParser()
+parser.add_argument('--output', type=pathlib.Path, required=True)
+out = parser.parse_args().output
+out.mkdir(parents=True)
+(out / 'packaging.lock.json').write_text('{"fixture": "locked inputs"}\\n')
+(out / 'Dockerfile').write_text('fixture trusted Dockerfile\\n')
+""")
+            docker = workspace / 'bin/docker'
+            docker.write_text("""#!/usr/bin/env python3
+import json, pathlib, sys
+with pathlib.Path('docker-calls.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\\n')
+if sys.argv[1] == 'run':
+    print('fixture-package\\t1.2.3')
+elif sys.argv[1:3] == ['image', 'inspect']:
+    print('sha256:' + 'a' * 64)
+""")
+            docker.chmod(0o755)
+            # Preparation must not touch candidate input, even if it contains
+            # names that resemble the trusted preparation assets.
+            candidate = workspace / 'candidate-source/tools/ci/appimage'
+            candidate.mkdir(parents=True)
+            (candidate / 'prepare.py').write_text('raise RuntimeError("candidate executed")')
+            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                cwd=workspace, capture_output=True, text=True,
+                env=dict(os.environ, PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, '')
+            self.assertEqual((workspace / 'build/appimage-evidence/packaging.lock.json').read_text(),
+                             '{"fixture": "locked inputs"}\n')
+            self.assertEqual((workspace / 'build/appimage-evidence/build-packages.tsv').read_text(),
+                             'fixture-package\t1.2.3\n')
+            calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
+            targets = [call[call.index('--target') + 1] for call in calls if call[0] == 'build']
+            self.assertEqual(targets, ['build', 'smoke-ubuntu24', 'smoke-ubuntu26', 'smoke-debian13'])
+            for call in calls:
+                self.assertNotIn('candidate-source', ' '.join(call))
+            self.assertEqual(calls[-1], ['run', '--rm', '--network', 'none',
+                                        'classic-appimage-build', 'cat', '/build-packages.tsv'])
+
+    def test_smoke_loop_requires_each_clean_runtime_success(self) -> None:
+        smoke = self.job().split('      - name: Smoke in clean', 1)[1].split('      - uses:', 1)[0]
+        script = textwrap.dedent(smoke.split('        run: |\n', 1)[1])
+        for fail_runtime in ('', 'ubuntu24', 'ubuntu26', 'debian13'):
+            with self.subTest(fail_runtime=fail_runtime), tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                (workspace / 'bin').mkdir()
+                (workspace / 'build/appimage-evidence').mkdir(parents=True)
+                docker = workspace / 'bin/docker'
+                docker.write_text("""#!/usr/bin/env python3
+import json, os, pathlib, sys
+with pathlib.Path('docker-calls.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\\n')
+failed = os.environ['FAIL_RUNTIME']
+sys.exit(7 if failed and 'classic-appimage-' + failed in sys.argv else 0)
+""")
+                docker.chmod(0o755)
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                    cwd=workspace, capture_output=True, text=True,
+                    env=dict(os.environ, GITHUB_WORKSPACE=str(workspace),
+                             RELEASE_VERSION='0.0.0', FAIL_RUNTIME=fail_runtime,
+                             PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+                self.assertEqual(result.returncode == 0, not fail_runtime, result.stderr)
+                calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
+                self.assertEqual(len(calls), {'': 3, 'ubuntu24': 1, 'ubuntu26': 2, 'debian13': 3}[fail_runtime])
+                for call in calls:
+                    self.assertEqual(call[call.index('--network') + 1], 'none')
+                    mounts = [call[i + 1] for i, arg in enumerate(call) if arg == '--mount']
+                    self.assertEqual(len(mounts), 2)
+                    self.assertTrue(all(mount.endswith(',readonly') for mount in mounts))
+                    self.assertFalse(any('candidate-source' in mount for mount in mounts))
+                    self.assertEqual(call[-2:], ['/packages/atrinik-classic-client-0.0.0-linux-x86_64.AppImage', '0.0.0'])
+
+    def test_container_boundary_and_host_output_validation(self) -> None:
+        workflow = (ROOT / '.github/workflows/build-release-candidate.yml').read_text()
+        step = workflow.split('      - name: Build AppImage with offline release inputs', 1)[1]
+        step = step.split('      - name:', 1)[0]
+        script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+        # Exercise the actual workflow shell with an inert Docker fixture. The
+        # fixture emits candidate-controlled filesystem types into its one
+        # writable mount; host consumers must reject everything except a file.
+        for output_type in ('file', 'symlink', 'directory', 'missing'):
+            with self.subTest(output_type=output_type), tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                (workspace / 'build/appimage-evidence').mkdir(parents=True)
+                (workspace / 'build/appimage-packages').mkdir()
+                (workspace / 'bin').mkdir()
+                docker = workspace / 'bin/docker'
+                docker.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+(root / 'docker-args.json').write_text(json.dumps(sys.argv[1:]))
+package = root / 'build/appimage-packages/atrinik-classic-client-0.0.0-linux-x86_64.AppImage'
+kind = os.environ['OUTPUT_TYPE']
+if kind == 'file':
+    package.write_bytes(b'fixture')
+elif kind == 'symlink':
+    package.symlink_to(root / 'host-private')
+elif kind == 'directory':
+    package.mkdir()
+print('::warning::candidate output stays in evidence')
+''')
+                docker.chmod(0o755)
+                (workspace / 'host-private').write_text('do not upload')
+                environment = dict(os.environ, GITHUB_WORKSPACE=str(workspace),
+                                   RELEASE_VERSION='0.0.0', RELEASE_REVISION='a' * 40, SOURCE_DATE_EPOCH='1',
+                                   DISCORD_CONFIG_FILE='', OUTPUT_TYPE=output_type,
+                                   PATH=f"{workspace / 'bin'}:{os.environ['PATH']}")
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                                        cwd=workspace, env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, output_type == 'file', result.stderr)
+                self.assertEqual(result.stdout, '')
+                args = json.loads((workspace / 'docker-args.json').read_text())
+                self.assertEqual(args[args.index('--network') + 1], 'none')
+                self.assertEqual(args[args.index('--cap-drop') + 1], 'ALL')
+                self.assertEqual(args[args.index('--security-opt') + 1], 'no-new-privileges')
+                self.assertIn('--user', args)
+                mounts = [args[i + 1] for i, arg in enumerate(args) if arg == '--mount']
+                self.assertEqual(len(mounts), 5)
+                self.assertEqual([mount for mount in mounts if not mount.endswith(',readonly')],
+                                 [f'type=bind,source={workspace}/build/appimage-packages,target=/output'])
+                self.assertIn(f'type=bind,source={workspace}/candidate-source,target=/input/source,readonly', mounts)
+                for forbidden in ('--privileged', '--pid', '--env-file', '--volume'):
+                    self.assertNotIn(forbidden, args)
+                passed_env = [args[i + 1].split('=', 1)[0] for i, arg in enumerate(args) if arg == '--env']
+                self.assertEqual(set(passed_env), {'ATRINIK_PACKAGE_VERSION', 'ATRINIK_SOURCE_REVISION', 'SOURCE_DATE_EPOCH',
+                    'CMAKE_BUILD_PARALLEL_LEVEL', 'ATRINIK_GPU_SHADER_DIRECTORY',
+                    'ATRINIK_DEPENDENCY_DOWNLOADS', 'ATRINIK_DISCORD_APPLICATION_ID_FILE'})
+                self.assertIn('cp -a --no-preserve=ownership /input/source/. /tmp/source/', args[-1])
+                self.assertIn('cd /tmp/source/client', args[-1])
+                self.assertIn('test -f tools/tests/test_appimage_package_contract.py', args[-1])
+                self.assertIn('python3 -m unittest discover -s tools/tests -p test_appimage_package_contract.py', args[-1])
+                self.assertIn('bash tools/build-appimage.sh /output', args[-1])
+
+
+if __name__ == '__main__':
+    unittest.main()

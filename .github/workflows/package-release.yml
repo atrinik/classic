@@ -229,6 +229,10 @@ jobs:
           path: build/release-automation
           ref: ${{ github.sha }}
           sparse-checkout: tools/release
+      - name: Install trusted AppImage inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends squashfs-tools binutils
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           github-token: ${{ github.token }}
@@ -275,6 +279,7 @@ jobs:
             build/release/*.whl
             build/release/*.zip
             build/release/*.deb
+            build/release/*.AppImage
           sbom-path: build/release/atrinik-classic-${{ env.RELEASE_VERSION }}.spdx.json
       - id: assets
         name: Resume draft assets or verify the immutable release

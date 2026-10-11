@@ -26,7 +26,7 @@ class WorkflowContractTests(unittest.TestCase):
                 if name != "build-release-candidate.yml":
                     self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2", workflow)
         candidate = self.text("build-release-candidate.yml")
-        sources = candidate[candidate.index("  sources:"):candidate.index("  client-windows:")]
+        sources = candidate[candidate.index("  sources:"):candidate.index("  client-linux:")]
         lane = sources[sources.index("      - name: Pull the immutable installed-library"):]
         self.assertIn('docker pull "${CLASSIC_LINUX_IMAGE}"', lane)
         self.assertIn("bash tools/ci/check_installed_library.sh", lane)
@@ -377,11 +377,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertRegex(descriptor["digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(descriptor["material_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertIn("Verify durable dependency bundle", candidate)
-        self.assertEqual(candidate.count("candidate-dependencies-${{"), 5)
+        self.assertEqual(candidate.count("candidate-dependencies-${{"), 6)
         self.assertNotIn("name: release-dependencies-", candidate)
-        # Three package builds plus the trusted Debian image inventory reader.
-        self.assertEqual(candidate.count("--network none"), 4)
-        self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_DOWNLOADS="), 3)
+        # Four package builds, two trusted image inventory readers, and AppImage smoke loop.
+        self.assertEqual(candidate.count("--network none"), 7)
+        self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_DOWNLOADS="), 4)
         self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_CACHE_DIR="), 1)
         self.assertIn("tools/release/install_dependency_bundle.sh", candidate)
         self.assertIn("tools/release/install_dependency_bundle.sh", package)
@@ -1940,7 +1940,14 @@ class WorkflowContractTests(unittest.TestCase):
                 for material in expected_materials[component]:
                     self.assertEqual(job.count(f"--material {material}"), 1)
                 self.assertIn("restore-keys:", job)
-                self.assertNotIn("apt-get", job)
+                if component == "core":
+                    # Host-only payload fixtures need SquashFS inspection.
+                    # Native compilation still uses only the pinned image.
+                    preparation, native = job.split("      - name: Install Python test coverage tooling", 1)
+                    self.assertIn("squashfs-tools binutils libzstd1", preparation)
+                    self.assertNotIn("apt-get", native)
+                else:
+                    self.assertNotIn("apt-get", job)
                 self.assertNotIn("ubuntu@sha256:", job)
 
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
