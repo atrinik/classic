@@ -1235,7 +1235,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("files: tools/coverage.xml", tools_upload)
         self.assertIn("flags: release-tools", tools_upload)
         self.assertNotIn("libatrinik/coverage.xml", tools_upload)
-        self.assertIn("files: libatrinik/coverage.xml", libatrinik_upload)
+        self.assertIn(
+            "files: libatrinik/coverage.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }}",
+            libatrinik_upload,
+        )
         self.assertIn("flags: libatrinik", libatrinik_upload)
         self.assertNotIn("tools/coverage.xml", libatrinik_upload)
 
@@ -2034,7 +2037,10 @@ class WorkflowContractTests(unittest.TestCase):
             workflow.index("  integrated:\n    name: Integrated client/server graph")
         ]
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage)
-        self.assertIn("files: client/coverage.xml", gpu_coverage)
+        self.assertIn(
+            "files: client/coverage.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }}",
+            gpu_coverage,
+        )
         self.assertIn("flags: client-gpu", gpu_coverage)
         native_coverage = gpu_coverage.split(
             "      - name: Upload GPU-complete client coverage", 1
