@@ -582,8 +582,17 @@ static uint64_t celestial_key(const mapstruct *map,
     MIX_CELESTIAL(map->celestial_structure_revision);
     MIX_CELESTIAL(map->celestial_schema);
     for (size_t i = 0; i < TILED_NUM; i++) {
-        MIX_CELESTIAL((uintptr_t)map->tile_map[i]);
-        MIX_CELESTIAL(map->tile_map[i] != NULL ? map->tile_map[i]->in_memory : 0);
+        MIX_CELESTIAL(map->celestial_boundary[i]);
+        MIX_CELESTIAL(map->celestial_tile_path_seen[i]);
+        MIX_CELESTIAL((uintptr_t)map->tile_path[i]);
+        bool relevant = i >= TILED_UP ||
+            (map->celestial_boundary[i] != CELESTIAL_BOUNDARY_DISCONTINUOUS &&
+             (map->celestial_tile_path_seen[i] ||
+              map->celestial_boundary[i] != CELESTIAL_BOUNDARY_UNSET));
+        if (relevant) {
+            MIX_CELESTIAL((uintptr_t)map->tile_map[i]);
+            MIX_CELESTIAL(map->tile_map[i] != NULL ? map->tile_map[i]->in_memory : 0);
+        }
     }
 #undef MIX_CELESTIAL
     return hash;

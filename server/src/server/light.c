@@ -33,6 +33,7 @@
 #include <light.h>
 #include <object.h>
 #include <spatial.h>
+#include <region.h>
 
 #define NR_LIGHT_MASK 10
 #define MAX_LIGHT_SOURCE 13
@@ -633,6 +634,30 @@ static void light_reach_collect(light_map_set *result, const light_map_set *seed
     free(horizontal.maps);
 }
 
+/** Authored v1 seams share the celestial transport policy. Legacy maps
+ * retain their physical linked-map lighting without requiring v1 metadata. */
+static bool light_face_continuous(const spatial_face *face) {
+    const mapstruct *from = face->from.map, *to = face->to.map;
+    if (from == NULL || to == NULL) {
+        return false;
+    }
+    if (from == to || (from->celestial_schema == 0 && to->celestial_schema == 0)) {
+        return true;
+    }
+    if (from->celestial_schema != 1 || to->celestial_schema != 1) {
+        return false;
+    }
+    int tile = face->normal[2] > 0 ? TILED_UP : face->normal[2] < 0 ? TILED_DOWN :
+               face->normal[0] > 0 ? TILED_EAST : face->normal[0] < 0 ? TILED_WEST :
+               face->normal[1] > 0 ? TILED_SOUTH : TILED_NORTH;
+    int reverse = map_tiled_reverse[tile];
+    return from->tile_map[tile] == to && to->tile_map[reverse] == from &&
+           from->celestial_boundary[tile] == CELESTIAL_BOUNDARY_CONTINUOUS &&
+           to->celestial_boundary[reverse] == CELESTIAL_BOUNDARY_CONTINUOUS &&
+           memcmp(region_celestial_for_map(from)->digest,
+                  region_celestial_for_map(to)->digest, 32) == 0;
+}
+
 /** The radial mask stays authoritative; physical crossings attenuate it in
  * travel order before signed scalar and normalized color aggregation. */
 static int light_path_value(mapstruct *map, int x, int y, int dx, int dy, int dz,
@@ -645,6 +670,9 @@ static int light_path_value(mapstruct *map, int x, int y, int dx, int dy, int dz
     int status;
     while ((status = spatial_ray_next(&ray, &event)) == 1) {
         if (!event.valid) return 0;
+        for (size_t i = 0; i < event.face_count; i++) {
+            if (!light_face_continuous(&event.faces[i])) return 0;
+        }
         transmitted = spatial_light_attenuate(transmitted, spatial_event_light(&event));
         if (transmitted == 0) return 0;
     }
