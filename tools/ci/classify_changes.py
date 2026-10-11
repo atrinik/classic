@@ -23,6 +23,7 @@ NATIVE_SHARED_PATHS = {
     "CMakeLists.txt",
     "CMakePresets.json",
     "codecov.yml",
+    "tools/tests/test_llvm_coverage.py",
     "LICENSE.md",
     "docs/history/component-release-map.json",
     "docs/history/release-tags.json",
@@ -41,7 +42,7 @@ WINDOWS_TEST_PREFIXES = (
     "server/",
     "tools/ci/",
 )
-WINDOWS_TEST_PATHS = {"CMakeLists.txt"}
+WINDOWS_TEST_PATHS = {"CMakeLists.txt", "cmake/InstallWindowsRuntime.cmake"}
 BENCHMARK_CONTRACT_PATHS = {
     ".github/workflows/pr-benchmarks.yml",
     "tools/ci/classify_changes.py",

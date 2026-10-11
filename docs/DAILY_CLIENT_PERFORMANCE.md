@@ -177,3 +177,8 @@ python3 -m unittest discover -s tools/tests -p 'test_*.py'
 actionlint .github/workflows/daily-client-performance.yml
 git diff --check
 ```
+
+Native benchmark builds use the same explicit Clang 23.1.3, LLD and
+compiler-rt toolchain as Check and retain their existing Release optimization.
+LLVM and historical GCC observations belong to distinct environment cohorts;
+compare timings only within the compatible compiler and image cohort.

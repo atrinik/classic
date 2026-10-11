@@ -11,6 +11,10 @@ concurrency:
   group: classic-gpu-qualification-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
+  CLASSIC_WINDOWS_IMAGE: ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69
+
 jobs:
   shaders:
     name: Build qualification shader cohort
@@ -39,9 +43,69 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  windows-bundle:
+    name: Build matching Windows qualification bundle
+    needs: shaders
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bind clean source and acquire locked client inputs
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test -z "$(git status --short)"
+          python3 client/tools/dependencies.py sync --root client --refresh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: qualification-gpu-shaders
+          path: build/gpu-shaders
+      - name: Pull pinned LLVM Windows producer anonymously
+        run: docker pull "${CLASSIC_WINDOWS_IMAGE}"
+      - name: Cross-build and stage the exact qualification runtime
+        run: |
+          docker run --rm --network none \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp/classic-home \
+            --env ATRINIK_WINDOWS_TOOLCHAIN_FILE=/opt/atrinik-windows/share/cmake/llvm-mingw.cmake \
+            --env ATRINIK_WINDOWS_TARGET=x86_64-w64-mingw32 \
+            --env ATRINIK_WINDOWS_RUNTIME_DIR=/opt/atrinik-windows/bin \
+            --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --env ATRINIK_BENCHMARK_REVISION="${GITHUB_SHA}" \
+            --env ATRINIK_BENCHMARK_DIRTY=false \
+            --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
+            "${CLASSIC_WINDOWS_IMAGE}" bash -c '
+              set -euo pipefail
+              cmake -S client -B client/build/gpu-qualification -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}" \
+                -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+                -DATRINIK_GPU_CONFORMANCE_REQUIRED=ON -DPACKAGE_TYPE=none \
+                -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders
+              cmake --build client/build/gpu-qualification --config Release \
+                --target atrinik client-gpu-renderer-integration-tests --parallel "$(nproc)"
+              python3 tools/ci/stage_windows_runtime.py \
+                --readobj llvm-readobj --runtime-dir "${ATRINIK_WINDOWS_RUNTIME_DIR}" \
+                --output-dir build/windows-gpu-qualification \
+                client/build/gpu-qualification/atrinik.exe \
+                client/build/gpu-qualification/client-gpu-renderer-integration-tests.exe
+              cmake -E copy_directory client/sound build/windows-gpu-qualification/sound
+              printf "%s\n" "${ATRINIK_BENCHMARK_REVISION}" \
+                > build/windows-gpu-qualification/source-revision
+              clang --version > build/windows-gpu-qualification/compiler.txt
+              sha256sum build/gpu-shaders/SHA256SUMS \
+                > build/windows-gpu-qualification/shader-manifest.sha256
+            '
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-gpu-qualification-${{ github.sha }}
+          path: build/windows-gpu-qualification
+          if-no-files-found: error
+          retention-days: 1
+
   qualify:
     name: ${{ matrix.backend }} / ${{ matrix.hardware }}
-    needs: shaders
+    needs: [shaders, windows-bundle]
     strategy:
       fail-fast: false
       matrix:
@@ -83,16 +147,52 @@ jobs:
           test -z "$(git status --porcelain=v1 --untracked-files=normal)"
           echo "ATRINIK_BENCHMARK_REVISION=${revision}" >>"${GITHUB_ENV}"
           echo "ATRINIK_BENCHMARK_DIRTY=false" >>"${GITHUB_ENV}"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: runner.os == 'Windows'
+        with:
+          name: windows-gpu-qualification-${{ github.sha }}
+          path: client/build/gpu-qualification
+      - name: Verify exact Windows qualification bundle
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          test "$(cat client/build/gpu-qualification/source-revision)" = "${GITHUB_SHA}"
+          grep -F 'clang version 23.1.3' client/build/gpu-qualification/compiler.txt
+          sha256sum --check client/build/gpu-qualification/shader-manifest.sha256
+          cmake -E copy_directory client/build/gpu-qualification/sound client/sound
       - name: Configure clean Release qualification build
+        if: runner.os != 'Windows'
         shell: bash
         env:
           ATRINIK_QUALIFICATION_SHADER_DIRECTORY: ${{ github.workspace }}/build/gpu-shaders
-        run: >-
-          cmake -S client -B client/build/gpu-qualification -G Ninja
-          -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          -DATRINIK_GPU_CONFORMANCE_REQUIRED=ON -DPACKAGE_TYPE=none
-          "-DATRINIK_GPU_SHADER_DIRECTORY=${ATRINIK_QUALIFICATION_SHADER_DIRECTORY}"
+        run: |
+          set -euo pipefail
+          if test "${RUNNER_OS}" = Linux; then
+            python3 client/tools/dependencies.py sync --root client --refresh
+            docker pull "${CLASSIC_LINUX_IMAGE}"
+            docker run --rm --network none --user "$(id -u):$(id -g)" \
+              --env HOME=/tmp/classic-home \
+              --env ATRINIK_BENCHMARK_REVISION --env ATRINIK_BENCHMARK_DIRTY \
+              --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
+              "${CLASSIC_LINUX_IMAGE}" bash -c '
+                set -euo pipefail
+                cmake -S client -B client/build/gpu-qualification -G Ninja \
+                  -DCMAKE_TOOLCHAIN_FILE=/workspace/cmake/toolchains/llvm.cmake \
+                  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+                  -DATRINIK_GPU_CONFORMANCE_REQUIRED=ON -DPACKAGE_TYPE=none \
+                  -DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders
+                cmake --build client/build/gpu-qualification --config Release \
+                  --target atrinik client-gpu-renderer-integration-tests --parallel "$(nproc)"
+              '
+          else
+            cmake -S client -B client/build/gpu-qualification -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/cmake/toolchains/llvm.cmake" \
+              -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+              -DATRINIK_GPU_CONFORMANCE_REQUIRED=ON -DPACKAGE_TYPE=none \
+              "-DATRINIK_GPU_SHADER_DIRECTORY=${ATRINIK_QUALIFICATION_SHADER_DIRECTORY}"
+          fi
       - name: Build production client and GPU harness
+        if: runner.os == 'macOS'
         shell: bash
         run: >-
           cmake --build client/build/gpu-qualification --config Release

@@ -99,6 +99,18 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertFalse(result["codeql_server"])
         self.assertTrue(result["codeql_core_cpp"])
 
+    def test_llvm_contract_changes_select_both_native_consumers(self) -> None:
+        for path in ("cmake/toolchains/llvm.cmake", "tools/ci/llvm_coverage.py",
+                     "tools/tests/test_llvm_coverage.py"):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+        result = classify_changes.classify(["cmake/InstallWindowsRuntime.cmake"])
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertTrue(result["windows"])
+
     def test_codecov_configuration_selects_both_coverage_components(self) -> None:
         result = classify_changes.classify(["codecov.yml"])
         self.assertTrue(result["client"])

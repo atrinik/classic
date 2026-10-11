@@ -38,6 +38,42 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, lane)
         self.assertNotIn("apt-get", sources)
 
+    def test_native_consumers_require_llvm_and_native_lcov(self) -> None:
+        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml"):
+            workflow = self.text(name)
+            with self.subTest(workflow=name):
+                self.assertIn("CLASSIC_LINUX_CCACHE_COMPILER: clang-23.1.3-lld-compiler-rt", workflow)
+                self.assertIn('CLASSIC_LINUX_CCACHE_EPOCH: "2"', workflow)
+                # Every cached native workload selects LLVM inside its container.
+                self.assertEqual(workflow.count("--env ATRINIK_LLVM_TOOLCHAIN=1"),
+                                 workflow.count("--env CCACHE_DIR=/cache/ccache") +
+                                 (1 if name == "check.yml" else 0))
+                self.assertNotIn("gcc-15.2.0", workflow)
+                if name != "daily-client-performance.yml":
+                    self.assertEqual(workflow.count("--material cmake/toolchains/llvm.cmake"),
+                                     workflow.count("--material tools/ci/run_linux_check.sh"))
+                    self.assertEqual(workflow.count("--material tools/ci/llvm_coverage.py"),
+                                     workflow.count("--material tools/ci/run_linux_check.sh"))
+        check = self.text("check.yml")
+        for report in ("libatrinik/coverage.lcov", "client/coverage.lcov",
+                       "server/coverage.lcov", "server/coverage-admin-root.lcov",
+                       "server/coverage-admin-nonroot.lcov"):
+            self.assertIn(report, check)
+        self.assertIn("files: tools/coverage.xml", check)
+        self.assertEqual(check.count('ATRINIK_LLVM_TOOLCHAIN: "1"'), 2)
+        qualify = self.text("gpu-qualification.yml")
+        self.assertIn('-DCMAKE_TOOLCHAIN_FILE=/workspace/cmake/toolchains/llvm.cmake', qualify)
+        self.assertIn("-DCMAKE_BUILD_TYPE=Release", qualify)
+        self.assertIn("name: Build matching Windows qualification bundle", qualify)
+        self.assertIn("needs: [shaders, windows-bundle]", qualify)
+        self.assertIn("--readobj llvm-readobj", qualify)
+        self.assertIn("--runtime-dir \"${ATRINIK_WINDOWS_RUNTIME_DIR}\"", qualify)
+        self.assertIn('test "$(cat client/build/gpu-qualification/source-revision)" = "${GITHUB_SHA}"', qualify)
+        self.assertIn("sha256sum --check client/build/gpu-qualification/shader-manifest.sha256", qualify)
+        self.assertIn("windows-gpu-qualification-${{ github.sha }}", qualify)
+        self.assertIn("if: runner.os == 'macOS'", qualify)
+        self.assertNotIn("matching native LLVM-MinGW toolchain required", qualify)
+
     def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
         workflow = self.text("check.yml")
         jobs = dict(
@@ -1137,7 +1173,7 @@ class WorkflowContractTests(unittest.TestCase):
         digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
         image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
         self.assertEqual(
-            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.16.0-{digest}"), 1
+            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: llvm-23.1.3-1.16.0-{digest}"), 1
         )
         self.assertEqual(candidate.count(image), 4)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", candidate)
@@ -1158,12 +1194,12 @@ class WorkflowContractTests(unittest.TestCase):
                     f"--env CCACHE_TEMPDIR=/tmp/atrinik-{component}-ccache", job
                 )
                 self.assertIn(
-                    "--env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:", job
+                    "--env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:", job
                 )
         self.assertEqual(candidate.count("ccache --zero-stats"), 2)
         self.assertEqual(candidate.count("ccache --show-stats"), 2)
         self.assertEqual(candidate.count("--env CCACHE_MAXSIZE=500M"), 2)
-        self.assertEqual(candidate.count("--env PATH=/opt/mxe/.ccache/bin:"), 2)
+        self.assertEqual(candidate.count("--env PATH=/opt/llvm-mingw/bin:"), 2)
 
     def test_discord_application_id_is_release_only_package_data(self) -> None:
         package = self.text("package-release.yml")
@@ -1234,8 +1270,8 @@ class WorkflowContractTests(unittest.TestCase):
         libatrinik_upload = core[core.index("- name: Upload libatrinik coverage") :]
         self.assertIn("files: tools/coverage.xml", tools_upload)
         self.assertIn("flags: release-tools", tools_upload)
-        self.assertNotIn("libatrinik/coverage.xml", tools_upload)
-        self.assertIn("files: libatrinik/coverage.xml", libatrinik_upload)
+        self.assertNotIn("libatrinik/coverage.lcov", tools_upload)
+        self.assertIn("files: libatrinik/coverage.lcov", libatrinik_upload)
         self.assertIn("flags: libatrinik", libatrinik_upload)
         self.assertNotIn("tools/coverage.xml", libatrinik_upload)
 
@@ -1299,7 +1335,7 @@ class WorkflowContractTests(unittest.TestCase):
             server_build,
         )
         self.assertLess(
-            server_build.index("x86_64-w64-mingw32.shared-cmake"),
+            server_build.index("-DCMAKE_TOOLCHAIN_FILE="),
             server_build.index("cmake --build server/build/windows-pr-server"),
         )
         self.assertIn(
@@ -1307,6 +1343,13 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("--env CCACHE_MAXSIZE=250M", build)
         self.assertNotIn("--env CCACHE_DIR=/opt/mxe", build)
+        self.assertNotIn("/opt/mxe", build)
+        self.assertNotIn("x86_64-w64-mingw32.shared-cmake", build)
+        self.assertEqual(build.count("--env ATRINIK_WINDOWS_TARGET=x86_64-w64-mingw32"), 3)
+        self.assertEqual(build.count('-DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}"'), 4)
+        self.assertEqual(build.count("-DCMAKE_C_COMPILER_LAUNCHER=ccache"), 4)
+        self.assertIn("--readobj llvm-readobj", build)
+        self.assertIn('--runtime-dir "${ATRINIK_WINDOWS_RUNTIME_DIR}"', build)
         self.assertIn("-DBUILD_TESTING=ON", build)
         self.assertIn("python3 client/tools/dependencies.py sync --root client", build)
         self.assertIn("python3 server/tools/dependencies.py sync --root server", build)
@@ -2034,7 +2077,7 @@ class WorkflowContractTests(unittest.TestCase):
             workflow.index("  integrated:\n    name: Integrated client/server graph")
         ]
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage)
-        self.assertIn("files: client/coverage.xml", gpu_coverage)
+        self.assertIn("files: client/coverage.lcov", gpu_coverage)
         self.assertIn("flags: client-gpu", gpu_coverage)
         native_coverage = gpu_coverage.split(
             "      - name: Upload GPU-complete client coverage", 1

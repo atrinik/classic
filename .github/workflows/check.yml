@@ -29,8 +29,8 @@ env:
   CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
   CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
   CLASSIC_GPU_COVERAGE_IMAGE: ghcr.io/atrinik/linux-build:1.16.0@sha256:89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e
-  CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
-  CLASSIC_LINUX_CCACHE_EPOCH: "1"
+  CLASSIC_LINUX_CCACHE_COMPILER: clang-23.1.3-lld-compiler-rt
+  CLASSIC_LINUX_CCACHE_EPOCH: "2"
 
 jobs:
   gpu-shaders:
@@ -260,6 +260,8 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material cmake/toolchains/llvm.cmake \
+            --material tools/ci/llvm_coverage.py \
             --material protocol/CMakeLists.txt \
             --material libatrinik/CMakeLists.txt \
             --material libatrinik/CMakePresets.json \
@@ -280,6 +282,7 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --network none \
+            --env ATRINIK_LLVM_TOOLCHAIN=1 \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
@@ -312,7 +315,7 @@ jobs:
         with:
           disable_search: true
           fail_ci_if_error: false
-          files: libatrinik/coverage.xml
+          files: libatrinik/coverage.lcov
           flags: libatrinik
           use_oidc: true
       - name: Validate editor packaging helper
@@ -382,7 +385,10 @@ jobs:
             --env ATRINIK_BENCHMARK_DIRTY=false \
             --env ATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders \
             --env ATRINIK_DISCORD_APPLICATION_ID_FILE=/workspace/build/discord-test-application-id \
-            --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --env ATRINIK_WINDOWS_TOOLCHAIN_FILE=/opt/atrinik-windows/share/cmake/llvm-mingw.cmake \
+            --env ATRINIK_WINDOWS_TARGET=x86_64-w64-mingw32 \
+            --env ATRINIK_WINDOWS_RUNTIME_DIR=/opt/atrinik-windows/bin \
+            --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace \
             ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
@@ -392,7 +398,10 @@ jobs:
               pcpnatpmp_mingw_source=build/libpcpnatpmp-mingw-source
               test ! -e "${pcpnatpmp_mingw_source}"
               cmake -E copy_directory "${pcpnatpmp_source}" "${pcpnatpmp_mingw_source}"
-              x86_64-w64-mingw32.shared-cmake \
+              cmake \
+                -DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}" \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 -S libatrinik \
                 -B libatrinik/build/windows-tests \
                 -G Ninja \
@@ -428,7 +437,10 @@ jobs:
                 -DSOURCE_DIR=/workspace/build/libpcpnatpmp-mingw-source \
                 -DPATCH_FILE=/workspace/server/cmake/patches/libpcpnatpmp-mingw.patch \
                 -P /workspace/server/cmake/apply_patch_idempotent.cmake
-              x86_64-w64-mingw32.shared-cmake \
+              cmake \
+                -DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}" \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 -S . \
                 -B build/windows-integrated \
                 -G Ninja \
@@ -441,7 +453,10 @@ jobs:
                 -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source
               cmake --build build/windows-integrated \
                 --target atrinik atrinik-server --parallel "$(nproc)"
-              x86_64-w64-mingw32.shared-cmake \
+              cmake \
+                -DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}" \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 -S client \
                 -B client/build/windows-tests \
                 -G Ninja \
@@ -457,8 +472,8 @@ jobs:
               stage=libatrinik/build/windows-test-bundle
               cmake -E remove_directory "${stage}"
               python3 tools/ci/stage_windows_runtime.py \
-                --objdump x86_64-w64-mingw32.shared-objdump \
-                --runtime-dir "${MXE_RUNTIME_DIR}" \
+                --readobj llvm-readobj \
+                --runtime-dir "${ATRINIK_WINDOWS_RUNTIME_DIR}" \
                 --output-dir "${stage}" \
                 libatrinik/build/windows-tests/libatrinik-path.exe \
                 libatrinik/build/windows-tests/libatrinik-rendezvous.exe \
@@ -483,13 +498,19 @@ jobs:
             --env CCACHE_MAXSIZE=250M \
             --env GH_TOKEN= \
             --env GITHUB_TOKEN= \
-            --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --env ATRINIK_WINDOWS_TOOLCHAIN_FILE=/opt/atrinik-windows/share/cmake/llvm-mingw.cmake \
+            --env ATRINIK_WINDOWS_TARGET=x86_64-w64-mingw32 \
+            --env ATRINIK_WINDOWS_RUNTIME_DIR=/opt/atrinik-windows/bin \
+            --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace \
             ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
             bash -c '
               set -euo pipefail
-              x86_64-w64-mingw32.shared-cmake \
+              cmake \
+                -DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}" \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
                 -S server \
                 -B server/build/windows-pr-server \
                 -G Ninja \
@@ -517,7 +538,10 @@ jobs:
             --env CCACHE_DIR=/workspace/server/build/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env CCACHE_TEMPDIR=/tmp/atrinik-server-package-ccache \
-            --env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            --env ATRINIK_WINDOWS_TOOLCHAIN_FILE=/opt/atrinik-windows/share/cmake/llvm-mingw.cmake \
+            --env ATRINIK_WINDOWS_TARGET=x86_64-w64-mingw32 \
+            --env ATRINIK_WINDOWS_RUNTIME_DIR=/opt/atrinik-windows/bin \
+            --env PATH=/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir /workspace/server \
             ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69 \
@@ -783,6 +807,8 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material cmake/toolchains/llvm.cmake \
+            --material tools/ci/llvm_coverage.py \
             --material server/CMakeLists.txt \
             --material server/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -802,6 +828,7 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --network none \
+            --env ATRINIK_LLVM_TOOLCHAIN=1 \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
@@ -818,6 +845,7 @@ jobs:
             if [[ ${fixture_uid} -ne 0 ]]; then fixture_name=nonroot; fi
             docker run --rm \
               --user "${fixture_uid}:${fixture_uid}" \
+              --env ATRINIK_LLVM_TOOLCHAIN=1 \
               --network none --read-only --cap-drop ALL \
               --security-opt no-new-privileges \
               --cpus 1 --memory 512m --memory-swap 512m \
@@ -829,7 +857,7 @@ jobs:
               --mount "type=bind,source=${GITHUB_WORKSPACE}/server/tools/admin_shutdown_coverage.sh,target=/workspace/server/tools/admin_shutdown_coverage.sh,readonly" \
               "${CLASSIC_LINUX_IMAGE}" \
               bash /workspace/server/tools/admin_shutdown_coverage.sh \
-              > "server/coverage-admin-${fixture_name}.xml"
+              > "server/coverage-admin-${fixture_name}.lcov"
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -845,7 +873,7 @@ jobs:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
-          files: server/coverage.xml,server/coverage-admin-root.xml,server/coverage-admin-nonroot.xml
+          files: server/coverage.lcov,server/coverage-admin-root.lcov,server/coverage-admin-nonroot.lcov
           flags: server
           use_oidc: true
 
@@ -887,6 +915,8 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material cmake/toolchains/llvm.cmake \
+            --material tools/ci/llvm_coverage.py \
             --material tools/ci/run_gpu_coverage.sh \
             --material client/CMakeLists.txt \
             --material client/CMakePresets.json \
@@ -907,6 +937,7 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --network none \
+            --env ATRINIK_LLVM_TOOLCHAIN=1 \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
@@ -933,6 +964,8 @@ jobs:
             echo "::notice::GPU coverage image is not publicly pullable; hardware qualification remains required"
           fi
       - name: Exercise GPU renderer coverage
+        env:
+          ATRINIK_LLVM_TOOLCHAIN: "1"
         if: steps.gpu-coverage-image-public.outputs.available == 'true'
         run: |
           tools/ci/run_gpu_coverage.sh \
@@ -947,7 +980,7 @@ jobs:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
-          files: client/coverage.xml
+          files: client/coverage.lcov
           flags: client-unit
           use_oidc: true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -994,6 +1027,8 @@ jobs:
           docker pull "${CLASSIC_LINUX_IMAGE}"
           docker pull "${CLASSIC_GPU_COVERAGE_IMAGE}"
       - name: Build and exercise complete GPU coverage
+        env:
+          ATRINIK_LLVM_TOOLCHAIN: "1"
         run: |
           tools/ci/run_gpu_coverage.sh \
             "${GITHUB_WORKSPACE}" \
@@ -1007,7 +1042,7 @@ jobs:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
-          files: client/coverage.xml
+          files: client/coverage.lcov
           flags: client-gpu
           use_oidc: true
 
@@ -1049,6 +1084,8 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/check.yml \
             --material tools/ci/run_linux_check.sh \
+            --material cmake/toolchains/llvm.cmake \
+            --material tools/ci/llvm_coverage.py \
             --material CMakeLists.txt \
             --material CMakePresets.json \
             --material protocol/CMakeLists.txt \
@@ -1072,6 +1109,7 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --network none \
+            --env ATRINIK_LLVM_TOOLCHAIN=1 \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
