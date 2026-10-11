@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "build_image": "ghcr.io/atrinik/classic-build:1.17.0@sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1",
-  "platform_digest": "sha256:67a0b1243b0cf860f72e39623a6ea92414c2531677bc55a01b3f2f62c57de93d",
-  "producer_source": "0571f500ede75e7661b508d8bb40354256113223",
+  "build_image": "ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449",
+  "platform_digest": "sha256:434f7d083cd2fec2344a3a8547c50bf8b4e37e8124f755a144f1259b76d150fb",
+  "producer_source": "4af130578df18a1944880cd279c7f23afe9cc668",
   "snapshot": "20260810T000000Z",
   "openssl_version": "3.5.5",
   "evidence_sha256": {
@@ -11,7 +11,11 @@
     "runtime_closure": "4ff80feae2bd437a77444436eca419b4f2b21f12276e150fa63d86a047c996f2",
     "source_9136_server_python_closure": "b70a977a3ffaf4c2d3d3fefd9a6e4a1cff4ee63692024a68418c5d6c22dfcd3b",
     "source_4be36_base_family_closure": "7c6d141dd048015fd4a07c68adbb78e30d057305ff40a5c6c0acc5b6cd814d51",
-    "source_0571_package_dependency_fields": "01b93feedb60e771ad8350535514abd267ad4d2b9c6488e40d5777599373d4c6"
+    "source_0571_package_dependency_fields": "01b93feedb60e771ad8350535514abd267ad4d2b9c6488e40d5777599373d4c6",
+    "source_4af130_payload": "6ba5d89f9c0246683f173c41e17255712ab3591aa3c97bcf764ddb319e885aa6",
+    "source_4af130_packages": "37763a219bc25c8b263d5e49a1732627ea615b3f6bebea30c67abc38cc3cef73",
+    "source_4af130_package_dependency_fields": "35914491c7ee1978f988cfe397336bfda08227076bf06153add256cc29993626",
+    "source_4af130_no_start_measurement": "2965fbddcf71790d05549890a86accbf5b0efc927ba2ef6e6bfef85c8aa49cea"
   },
   "files": [
     {

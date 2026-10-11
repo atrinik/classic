@@ -1,15 +1,24 @@
 # Qualified c-ares providers
 
-The standalone server compiler stage uses the released LLVM 23.1.3 SDK
-`ghcr.io/atrinik/classic-build:1.17.0` index
-`sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1`,
+The standalone server compiler stage selects the released LLVM 23.1.3 SDK
+`ghcr.io/atrinik/classic-build:1.18.0` index
+`sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449`,
 Linux amd64 platform
-`sha256:67a0b1243b0cf860f72e39623a6ea92414c2531677bc55a01b3f2f62c57de93d`,
-from producer source `0571f500ede75e7661b508d8bb40354256113223`.
-Its measured curl/c-ares payload and actual consumer loader paths match the
-current runtime provider lock. All 86 locked distro package versions and their
-recorded dependency expressions match this SDK; the runtime base and snapshot
-retain their existing qualification.
+`sha256:434f7d083cd2fec2344a3a8547c50bf8b4e37e8124f755a144f1259b76d150fb`,
+config `sha256:eaca6c3e72c873208bb4da6c6989d40f359de417b716567d03630ea77e09f3fc`,
+from producer source `4af130578df18a1944880cd279c7f23afe9cc668`.
+Fresh anonymous registry/image inspection and copies from a never-started,
+mount-free container measured all eleven locked provider paths, including their
+bytes, modes and symlinks, plus the installed dpkg database. The payload is
+identical to the previous 1.17 SDK lock. All 86 locked distro package versions
+and their `Depends`/`Pre-Depends` expressions also match. The lock retains the
+historical evidence keys and adds the `source_4af130_*` measurement receipts.
+This measurement did not execute SDK binaries or requalify destination loader
+resolution or server behavior; those remain separate assembly/runtime gates.
+
+The full SDK also contains distro `libcurl4t64` for its build-tool environment.
+That package is outside the selected runtime closure and is not copied into the
+server image. The final-image verifier continues to reject its installation.
 
 Historical qualification used `ghcr.io/atrinik/classic-build:1.16.0` index
 `sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2`.
@@ -53,8 +62,9 @@ from the same published producer. Its recorded package inventory receipt is
 `source_4be36_base_family_closure` in the lock. Every selected package version must
 satisfy its recorded dependency expression, including util-linux's exact
 `libuuid1`, `libblkid1`, `libmount1`, and `libsmartcols1` relations. The current LLVM SDK retains these qualified application package versions.
-Its rebuilt curl/c-ares payload hashes and build records are measured separately
-in the current lock; the named historical closure receipts remain preserved.
+Its curl/c-ares payload hashes and build records were measured again from the
+released 1.18 image and match the 1.17 lock; the named historical closure receipts
+remain preserved.
 The application closure includes indirect GD image/X11 libraries, Python FFI
 and compression libraries, and `openssl-provider-legacy` because the actual
 `libssl3t64` package declares that dependency. This is package dependency closure,
