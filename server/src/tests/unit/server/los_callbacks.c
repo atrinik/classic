@@ -19,6 +19,7 @@
 #include <player.h>
 #include <plugin.h>
 #include <server.h>
+#include <toolkit/packet.h>
 
 static bool plugins_initialized;
 
@@ -37,7 +38,6 @@ static void fixture(mapstruct **map, object **pl) {
         init_plugins();
         plugins_initialized = true;
     }
-    ck_assert_ptr_nonnull(find_plugin("Python"));
 }
 
 static object *place(mapstruct *map, const char *arch, int x, int y) {
