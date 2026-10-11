@@ -21,7 +21,7 @@ struct propagation_entry {
 };
 
 struct propagation_cast {
-    propagation_cast *next;
+    propagation_cast *next, *ready_next;
     struct propagation_entry *entries;
     uint32_t *hash;
     size_t capacity, hash_size, used, active, reservation;
@@ -32,10 +32,10 @@ struct propagation_cast {
     object *source, *owner;
     tag_t source_count, owner_count;
     propagation_visit visit;
-    bool cancelled, reserved_projectile;
+    bool cancelled, reserved_projectile, scheduled;
 };
 
-static propagation_cast *casts, *last_cast, *cursor;
+static propagation_cast *casts, *last_cast, *ready_first, *ready_last;
 static size_t reserved, last_expansions;
 static bool processing;
 static uint64_t next_group;
@@ -87,6 +87,20 @@ static struct propagation_entry *admit(propagation_cast *cast,
     return entry;
 }
 
+static void schedule(propagation_cast *cast) {
+    if (cast->scheduled || cast->first == NO_ENTRY || cast->cancelled) {
+        return;
+    }
+    cast->scheduled = true;
+    cast->ready_next = NULL;
+    if (ready_last != NULL) {
+        ready_last->ready_next = cast;
+    } else {
+        ready_first = cast;
+    }
+    ready_last = cast;
+}
+
 static void enqueue(struct propagation_entry *entry) {
     propagation_cast *cast = entry->cast;
     if (entry->queued || entry->expanded || cast->cancelled) {
@@ -100,6 +114,7 @@ static void enqueue(struct propagation_entry *entry) {
         cast->entries[cast->last].next = index;
     }
     cast->last = index;
+    schedule(cast);
 }
 
 static propagation_cast *create_reserved(object *source, int radius, size_t capacity,
@@ -143,7 +158,7 @@ static propagation_cast *create_reserved(object *source, int radius, size_t capa
     }
     cast->owner_count = cast->owner->count;
     spatial_cell origin = {location->map, location->x, location->y, 0};
-    enqueue(admit(cast, &origin, 0));
+    (void)admit(cast, &origin, 0);
     if (last_cast != NULL) {
         last_cast->next = cast;
     } else {
@@ -187,6 +202,7 @@ bool propagation_area(object *source, int radius, propagation_visit visit, int a
     }
     cast->visit = visit;
     cast->argument = argument;
+    enqueue(&cast->entries[0]);
     return true;
 }
 
@@ -244,6 +260,7 @@ bool propagation_cone(object *source, object *caster, archetype_t *arch,
     cast->axis[1] = dy;
     cast->axis[2] = dz;
     cast->entries[0].hp = strength;
+    enqueue(&cast->entries[0]);
     return true;
 }
 
@@ -326,15 +343,26 @@ static void cancel(propagation_cast *cast) {
 }
 
 static void collect(void) {
+    /* Dormant projectile reservations never participate in scheduling. */
+    propagation_cast **ready = &ready_first;
+    ready_last = NULL;
+    while (*ready != NULL) {
+        propagation_cast *cast = *ready;
+        if (cast->first == NO_ENTRY) {
+            *ready = cast->ready_next;
+            cast->ready_next = NULL;
+            cast->scheduled = false;
+        } else {
+            ready_last = cast;
+            ready = &cast->ready_next;
+        }
+    }
     propagation_cast **link = &casts;
     last_cast = NULL;
     while (*link != NULL) {
         propagation_cast *cast = *link;
         if (cast->first == NO_ENTRY && cast->active == 0) {
             *link = cast->next;
-            if (cursor == cast) {
-                cursor = cast->next;
-            }
             reserved -= cast->reservation;
             free(cast->entries);
             free(cast->hash);
@@ -442,19 +470,17 @@ static void expand(propagation_cast *cast, struct propagation_entry *entry) {
 void propagation_tick(void) {
     last_expansions = 0;
     processing = true;
-    while (last_expansions < PROPAGATION_TICK_EXPANSIONS && casts != NULL) {
-        if (cursor == NULL) {
-            cursor = casts;
+    while (last_expansions < PROPAGATION_TICK_EXPANSIONS && ready_first != NULL) {
+        propagation_cast *cast = ready_first;
+        ready_first = cast->ready_next;
+        if (ready_first == NULL) {
+            ready_last = NULL;
         }
-        propagation_cast *start = cursor;
-        while (cursor->first == NO_ENTRY) {
-            cursor = cursor->next != NULL ? cursor->next : casts;
-            if (cursor == start) {
-                goto done;
-            }
+        cast->scheduled = false;
+        cast->ready_next = NULL;
+        if (cast->first == NO_ENTRY) {
+            continue;
         }
-        propagation_cast *cast = cursor;
-        cursor = cast->next != NULL ? cast->next : casts;
         struct propagation_entry *entry = &cast->entries[cast->first];
         cast->first = entry->next;
         if (cast->first == NO_ENTRY) {
@@ -465,8 +491,8 @@ void propagation_tick(void) {
         entry->next = NO_ENTRY;
         last_expansions++;
         expand(cast, entry);
+        schedule(cast);
     }
-done:
     processing = false;
     collect();
 }

@@ -779,6 +779,15 @@ int fire_arch_from_position(object *op,
         target = spell_aim_target(op);
     }
 
+    object *observer = object_owner(op);
+    if (observer == NULL) {
+        observer = env;
+    }
+    if (target != NULL && target != observer &&
+        !(observer->type == PLAYER ? perception_player_authorized(CONTR(observer), target) :
+          perception_object_visible(observer, target))) {
+        target = NULL;
+    }
     if (target) {
         tmp->enemy = target;
         tmp->enemy_count = target->count;
