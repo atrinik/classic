@@ -22,7 +22,10 @@ dependency prefix. From the owning module directory, run
 `tools/build-windows-package.sh OUTPUT_DIRECTORY`. Server packaging additionally
 requires `ATRINIK_WINDOWS_PYTHON_INCLUDE_DIR`,
 `ATRINIK_WINDOWS_PYTHON_LIBRARY` and `ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR`, and
-builds the host worldmaker separately before cross-compiling the server.
+builds the host worldmaker separately with `/opt/llvm-23.1.3/bin` native tools
+and Linux compiler-rt/libunwind before cross-compiling the server. The package
+helper selects these native tools for that phase even when the caller's PATH
+selects LLVM-MinGW; the cross phase uses `ATRINIK_WINDOWS_TOOLCHAIN_FILE`.
 Dependency, shader, sound and source-profile qualification inputs keep their
 existing verification contracts.
 

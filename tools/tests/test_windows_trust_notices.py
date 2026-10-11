@@ -284,6 +284,22 @@ class WindowsTrustNoticesTests(unittest.TestCase):
         return subprocess.run(["cmake", "--install", str(root / "build"), "--prefix", str(root / "installed")],
                               capture_output=True, text=True)
 
+    def test_dependency_notice_missing_from_hashed_registry_fails_install(self):
+        for module in ("client", "server"):
+            with self.subTest(module=module):
+                root, result, _, _ = self.fixture(module, cares=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                inventory = root / "toolchain/share/atrinik/windows-dependencies/pe-closure.json"
+                manifest = json.loads(inventory.read_text())
+                del manifest["notices"]["fixture-curl"]["fixture-curl/docs_NOTICE"]
+                inventory.write_text(json.dumps(manifest))
+                # Mere existence cannot qualify a notice that staging will omit.
+                self.assertTrue((root / "toolchain/share/licenses/fixture-curl/docs_NOTICE").is_file())
+                result = self.install_result(root)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("dependency notice has no producer hash: fixture-curl/docs_NOTICE",
+                              " ".join((result.stdout + result.stderr).split()))
+
     def test_pe_inventory_rejects_malformed_unowned_or_changed_dlls(self):
         for damage in ("malformed", "unowned", "bytes", "imports", "owner", "notice"):
             with self.subTest(damage=damage):

@@ -89,6 +89,33 @@ python3 ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runti
 
 dependency_arguments=()
 native_compiler_arguments=()
+native_llvm_bin=/opt/llvm-23.1.3/bin
+script_source_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+native_toolchain=${script_source_root}/cmake/toolchains/llvm.cmake
+if [[ ! -f ${native_toolchain} ]]; then
+  native_toolchain=${script_source_root}/../cmake/toolchains/llvm.cmake
+fi
+if [[ ! -f ${native_toolchain} ]]; then
+  echo "The native LLVM worldmaker toolchain is missing" >&2
+  exit 1
+fi
+native_compiler_arguments+=("-DCMAKE_TOOLCHAIN_FILE=${native_toolchain}")
+# The inherited PATH selects LLVM-MinGW for the later cross build. Its clang
+# cannot link the Linux compiler-rt/libunwind used by the host worldmaker.
+native_llvm() {
+  env PATH="${native_llvm_bin}:${PATH}" \
+    CMAKE_TOOLCHAIN_FILE="${native_toolchain}" \
+    CC="${native_llvm_bin}/clang" CXX="${native_llvm_bin}/clang++" \
+    AR="${native_llvm_bin}/llvm-ar" RANLIB="${native_llvm_bin}/llvm-ranlib" \
+    LD="${native_llvm_bin}/ld.lld" "$@"
+}
+for native_tool in C_COMPILER:clang CXX_COMPILER:clang++ AR:llvm-ar \
+    RANLIB:llvm-ranlib LINKER:ld.lld NM:llvm-nm STRIP:llvm-strip \
+    OBJCOPY:llvm-objcopy OBJDUMP:llvm-objdump READELF:llvm-readelf; do
+  native_compiler_arguments+=(
+    "-DCMAKE_${native_tool%%:*}=${native_llvm_bin}/${native_tool#*:}"
+  )
+done
 monorepo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [[ -n ${monorepo_root} && -f ${monorepo_root}/protocol/CMakeLists.txt &&
     -f ${monorepo_root}/libatrinik/CMakeLists.txt ]]; then
@@ -137,14 +164,14 @@ cmake -E copy runtime/content/compatibility.json \
   "${package_root}/compatibility.json"
 cmake -E copy runtime/content/manifest.json "${package_root}/manifest.json"
 
-cmake -S . -B "${region_build}" -G Ninja \
+native_llvm cmake -S . -B "${region_build}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=none \
   -DATRINIK_PACKAGE_VERSION="${version}" \
   "${native_compiler_arguments[@]}" \
   "${dependency_arguments[@]}"
-cmake --build "${region_build}" \
+native_llvm cmake --build "${region_build}" \
   --target atrinik-server plugin_arena plugin_python --parallel "$(nproc)"
 
 region_assets=${package_root}/region-assets
@@ -158,7 +185,7 @@ cmake -E copy_directory install_data "${region_data}"
 repository_root=$(pwd)
 (
   cd "${region_runtime}"
-  PYTHONDONTWRITEBYTECODE=1 ./atrinik-server \
+  PYTHONDONTWRITEBYTECODE=1 native_llvm ./atrinik-server \
     --worldmaker \
     --libpath="${repository_root}/${package_root}/lib" \
     --mapspath="${repository_root}/${package_root}/maps" \

@@ -280,7 +280,10 @@ def producer_inventory(path: Path, runtime_dir: Path,
         safe_relative_path(dependency["name"])
         for notice in notices:
             safe_relative_path(notice)
-            notice_file = runtime_dir.parent / "share/licenses" / dependency["name"] / notice.replace("/", "_")
+            installed_notice = dependency["name"] + "/" + notice.replace("/", "_")
+            if installed_notice not in notice_files:
+                raise StageError(f"dependency notice has no producer hash: {installed_notice}")
+            notice_file = runtime_dir.parent / "share/licenses" / installed_notice
             if notice_file.is_symlink() or not notice_file.is_file():
                 raise StageError(f"producer owner notice is missing: {dependency['name']}/{notice}")
     records = {}
