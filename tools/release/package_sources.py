@@ -31,6 +31,7 @@ SHARED_PATHS = (
     "cmake/InstallWindowsRuntime.cmake",
     "cmake/InstallLLVMRuntime.cmake",
     "cmake/toolchains/llvm.cmake",
+    "cmake/toolchains/llvm-macos.cmake",
     "tools/ci/llvm_coverage.py",
     "tools/ci/stage_windows_runtime.py",
 )

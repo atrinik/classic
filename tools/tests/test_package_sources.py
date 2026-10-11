@@ -36,6 +36,7 @@ class PackageSourcesTests(unittest.TestCase):
             "cmake/InstallWindowsRuntime.cmake": "# Windows runtime closure\n",
             "cmake/InstallLLVMRuntime.cmake": "# Native LLVM runtime notices\n",
             "cmake/toolchains/llvm.cmake": "# LLVM toolchain\n",
+            "cmake/toolchains/llvm-macos.cmake": "# macOS LLVM toolchain\n",
             "tools/ci/llvm_coverage.py": "# LLVM coverage conversion\n",
             "tools/ci/stage_windows_runtime.py": "# LLVM inspector\n",
             "docs/history/imports.json": "{}\n",
@@ -108,6 +109,7 @@ class PackageSourcesTests(unittest.TestCase):
         self.assertIn("atrinik-classic-client-5.6.0/cmake/InstallLLVMRuntime.cmake", names)
         self.assertIn("atrinik-classic-client-5.6.0/tools/ci/stage_windows_runtime.py", names)
         self.assertIn("atrinik-classic-client-5.6.0/cmake/toolchains/llvm.cmake", names)
+        self.assertIn("atrinik-classic-client-5.6.0/cmake/toolchains/llvm-macos.cmake", names)
         self.assertIn("atrinik-classic-client-5.6.0/cmake/AtrinikLLVM.cmake", names)
         self.assertIn("atrinik-classic-client-5.6.0/tools/ci/llvm_coverage.py", names)
         self.assertIn(
@@ -140,7 +142,8 @@ class PackageSourcesTests(unittest.TestCase):
     def test_standalone_native_packages_retain_windows_closure_tools(self) -> None:
         for scope in ("client", "server"):
             for path in ("cmake/InstallWindowsRuntime.cmake", "tools/ci/stage_windows_runtime.py",
-                         "cmake/toolchains/llvm.cmake", "tools/ci/llvm_coverage.py", "cmake/AtrinikLLVM.cmake",
+                         "cmake/toolchains/llvm.cmake", "cmake/toolchains/llvm-macos.cmake",
+                         "tools/ci/llvm_coverage.py", "cmake/AtrinikLLVM.cmake",
                          "cmake/InstallLLVMRuntime.cmake"):
                 with self.subTest(scope=scope, path=path):
                     self.assertEqual(package_sources.selected_name(scope, path, "package"),

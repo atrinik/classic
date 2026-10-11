@@ -12,6 +12,11 @@ function(atrinik_initialize_llvm_toolchain)
         set(CMAKE_TOOLCHAIN_FILE
             "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/toolchains/llvm.cmake" CACHE FILEPATH
             "Pinned native LLVM toolchain")
+    elseif (NOT CMAKE_TOOLCHAIN_FILE AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND
+            NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        set(CMAKE_TOOLCHAIN_FILE
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/toolchains/llvm-macos.cmake" CACHE FILEPATH
+            "Pinned native macOS LLVM toolchain")
     endif ()
 endfunction()
 
@@ -40,5 +45,7 @@ function(atrinik_require_llvm)
     endforeach ()
     if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_link_options(--rtlib=compiler-rt --unwindlib=libunwind -fuse-ld=lld)
+    elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        add_link_options(--rtlib=compiler-rt "-fuse-ld=${CMAKE_LINKER}")
     endif ()
 endfunction()
