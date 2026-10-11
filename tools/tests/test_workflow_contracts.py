@@ -247,7 +247,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_native_version_package_acceptance_runs_in_pinned_core_container(self) -> None:
         core = self.text("check.yml").split("  core:\n", 1)[1].split("  windows-test-build:\n", 1)[0]
-        self.assertIn("CI= python3 -m coverage run --append", core)
+        self.assertIn("CI='' python3 -m coverage run --append", core)
         native = core.split("      - name: Build and test core packages in the pinned environment", 1)[1].split("      - uses:", 1)[0]
         self.assertIn('"${CLASSIC_LINUX_IMAGE}"', native)
         self.assertIn("CI=1 python3 -m unittest -v", native)

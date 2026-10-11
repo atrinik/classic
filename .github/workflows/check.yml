@@ -226,7 +226,7 @@ jobs:
             tools/verify_import_history.py \
             --release-history-ref "${release_history_ref}"
           # Real native package acceptance runs separately in the pinned image.
-          CI= python3 -m coverage run --append --branch --source=tools \
+          CI='' python3 -m coverage run --append --branch --source=tools \
             -m unittest discover -s tools/tests -p 'test_*.py'
           python3 -m coverage run --append --branch --source=tools \
             -m unittest discover -s tools/ci/appimage -p 'test_*.py'
