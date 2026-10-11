@@ -33,8 +33,11 @@ NATIVE_SHARED_PATHS = {
     "tools/tests/test_rendezvous_admission_https_fixture.py",
     "tools/tests/test_rendezvous_admission_platform.py",
     "tools/tests/test_stage_windows_runtime.py",
+    "tools/tests/test_compose_windows_review_bundle.py",
+    "tools/tests/test_windows_host_python_contract.py",
     "tools/tests/test_windows_runtime_cmake_arguments.py",
     "tools/tests/test_windows_trust_notices.py",
+    "tools/tests/windows_wait_chain_fixture.ps1",
     "LICENSE.md",
     "docs/history/component-release-map.json",
     "docs/history/release-tags.json",
@@ -59,8 +62,11 @@ WINDOWS_TEST_PATHS = {
     "cmake/toolchains/llvm-macos.cmake", "tools/tests/test_macos_llvm_toolchain.py",
     "tools/tests/test_llvm_toolchain.py", "tools/tests/test_llvm_runtime_notices.py",
     "tools/tests/test_stage_windows_runtime.py",
+    "tools/tests/test_compose_windows_review_bundle.py",
+    "tools/tests/test_windows_host_python_contract.py",
     "tools/tests/test_windows_runtime_cmake_arguments.py",
     "tools/tests/test_windows_trust_notices.py",
+    "tools/tests/windows_wait_chain_fixture.ps1",
 }
 BENCHMARK_CONTRACT_PATHS = {
     ".github/workflows/pr-benchmarks.yml",

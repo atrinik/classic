@@ -148,6 +148,23 @@ class ClassifyChangesTests(unittest.TestCase):
                 self.assertFalse(result["benchmark_client"])
                 self.assertFalse(result["benchmark_server"])
 
+    def test_windows_lifecycle_contract_fixtures_select_native_and_windows_jobs(self) -> None:
+        for path in (
+            "tools/tests/test_compose_windows_review_bundle.py",
+            "tools/tests/test_windows_host_python_contract.py",
+            "tools/tests/windows_wait_chain_fixture.ps1",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify_changes.is_native_shared(path))
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+                self.assertTrue(result["windows"])
+                self.assertEqual(result["codeql_languages"],
+                                 "python" if path.endswith(".py") else "")
+                self.assertFalse(result["benchmark_client"])
+                self.assertFalse(result["benchmark_server"])
+
     def test_unrelated_tools_tests_keep_native_builds_skipped(self) -> None:
         for path in (
             "tools/tests/test_select_release_batch.py",
