@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
@@ -189,6 +190,11 @@ def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
             'name': name, 'path': f'usr/lib/{name}', 'version': library_version,
             'sha256': sha256(libdir / name), 'license': license_id, 'source': source_name,
         })
+    sys.path.insert(0, str(ROOT / 'tools/release'))
+    from appimage import system_license_notices
+    packages = {item['source'][4:] for item in library_records
+                if item['source'].startswith('deb:')}
+    packages.add('libasound2-data')
     manifest = {
         'schema': 1, 'version': version, 'revision': revision,
         'source_date_epoch': int(os.environ['SOURCE_DATE_EPOCH']),
@@ -196,6 +202,7 @@ def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
         'build_features': {'testing': False, 'coverage': False, 'sanitizers': False},
         'bundled_libraries': bundled,
         'bundled_library_records': library_records,
+        'system_license_notices': system_license_notices(appdir, lock, packages),
         'native_inputs': {name: lock[name] for name in ('sources', 'tools', 'runtime')},
         'files': {},
     }
