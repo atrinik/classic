@@ -108,6 +108,17 @@ class ReleaseAppImageIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "certificate trust differs from trusted source"):
             self.validate()
 
+    def test_llvm_static_runtime_source_is_preserved_in_spdx(self):
+        source = {"url": "https://example.invalid/llvm-project-23.1.3.src.tar.xz",
+                  "sha256": "a" * 64, "license": "Apache-2.0 WITH LLVM-exception"}
+        self.package.metadata["native_inputs"]["compiler"] = {"version": "23.1.3", "source": source}
+        self.candidate()
+        sbom = json.loads((self.assets / f"atrinik-classic-{self.version}.spdx.json").read_text())
+        runtime = next(package for package in sbom["packages"] if package["name"] == "llvm-static-runtimes")
+        self.assertEqual(runtime["versionInfo"], "23.1.3")
+        self.assertEqual(runtime["licenseDeclared"], source["license"])
+        self.assertEqual(runtime["checksums"], [{"algorithm": "SHA256", "checksumValue": source["sha256"]}])
+
     def test_resealed_source_epoch_tampering_is_rejected_before_spdx(self):
         self.package.metadata["source_date_epoch"] = self.epoch + 1
         self.candidate(invalid_spdx=True)

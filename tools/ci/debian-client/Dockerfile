@@ -1,3 +1,6 @@
+ARG ATRINIK_COMPILER_IMAGE
+FROM ${ATRINIK_COMPILER_IMAGE} AS compiler
+
 # Debian testing supplies the SDL 3.4 and SDL3_mixer APIs used by Classic.
 # Freeze build and install inputs together; runtime dependencies remain ranges.
 FROM debian:forky-slim@sha256:3c80e257eff6274d593eb33a94bda5174ccd619836e6a728a73e11c97f2213e3 AS runtime
@@ -17,6 +20,8 @@ RUN printf '%s\n' 'path-include=/usr/share/doc/atrinik' \
     'path-include=/usr/share/doc/atrinik/*' > /etc/dpkg/dpkg.cfg.d/zz-atrinik-notices
 
 FROM runtime AS build
+COPY --from=compiler /opt/llvm-23.1.3 /opt/llvm-23.1.3
+ENV PATH="/opt/llvm-23.1.3/bin:${PATH}" CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm STRIP=llvm-strip
 RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
     && apt-get install -y --no-install-recommends \
        binutils build-essential cmake dpkg-dev file libcurl4-openssl-dev \

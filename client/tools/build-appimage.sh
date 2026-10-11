@@ -52,6 +52,9 @@ package=${output_directory}/atrinik-classic-client-${version}-linux-x86_64.AppIm
 [[ ! -e ${package} && ! -L ${package} ]]
 staging_directory=$(mktemp -d "${output_directory}/.atrinik-appimage.XXXXXX")
 trap 'rm -rf -- "${staging_directory}"' EXIT
+python3 ../tools/ci/appimage/compiler.py "${prefix}/packaging.lock.json"
+export PATH="/opt/llvm-23.1.3/bin:${PATH}"
+export CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm STRIP=llvm-strip
 export CMAKE_PREFIX_PATH=${prefix}
 export PKG_CONFIG_PATH=${prefix}/lib/pkgconfig
 # Host build tools use the host loader; only dependency discovery/deployment
@@ -62,6 +65,7 @@ python3 tools/dependencies.py verify
 python3 tools/verify_gpu_fixture_provenance.py
 build_directory=${ATRINIK_APPIMAGE_BUILD_DIRECTORY:-build/appimage-release}
 cmake -S . -B "${build_directory}" -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$(realpath ../cmake/toolchains/llvm.cmake)" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
   -DBUILD_TESTING=OFF -DPACKAGE_TYPE=appimage \
   -DATRINIK_PACKAGE_VERSION="${version}" -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
@@ -92,7 +96,8 @@ env -u VERSION -u SOURCE_DATE_EPOCH "${prefix}/tools/appimagetool" --mksquashfs-
   --mksquashfs-opt -mkfs-time --mksquashfs-opt "${source_date_epoch}" --runtime-file "${prefix}/tools/runtime" \
   "${appdir}" "${staging_directory}/package.AppImage"
 python3 ../tools/ci/appimage/finalize_runtime.py "${staging_directory}/package.AppImage"
-python3 ../tools/release/appimage.py "${staging_directory}/package.AppImage" "${version}"
+python3 ../tools/release/appimage.py "${staging_directory}/package.AppImage" "${version}" \
+  --compiler-image "$(cat "${prefix}/compiler-image.txt")"
 chmod 0755 "${staging_directory}/package.AppImage"
 mv -n -- "${staging_directory}/package.AppImage" "${package}"
 [[ ! -e ${staging_directory}/package.AppImage ]]

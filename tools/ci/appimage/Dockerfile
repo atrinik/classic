@@ -1,3 +1,6 @@
+ARG ATRINIK_COMPILER_IMAGE
+FROM ${ATRINIK_COMPILER_IMAGE} AS compiler
+
 FROM ubuntu:24.04@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b AS builder
 COPY tools/ca-certificates.deb /tmp/ca-certificates.deb
 RUN echo "641de77d8f142cfd62a1a6f964ba67b20754d3337c480efb529d086075a06c9a  /tmp/ca-certificates.deb" | sha256sum -c - && dpkg-deb -x /tmp/ca-certificates.deb /tmp/ca-bootstrap && mkdir -p /etc/ssl/certs && cat /tmp/ca-bootstrap/usr/share/ca-certificates/mozilla/*.crt > /etc/ssl/certs/ca-certificates.crt && rm -rf /tmp/ca-bootstrap /tmp/ca-certificates.deb
@@ -14,19 +17,23 @@ RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && printf '%s\n' \
     libasound2-dev libpulse-dev libdbus-1-dev libudev-dev libdecor-0-dev libdrm-dev \
     libgbm-dev libegl-dev libgl-dev && dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /build-packages.tsv && rm -rf /var/lib/apt/lists/*
 RUN sed -i 's/ main universe$/ main/' /etc/apt/sources.list && apt-get -o APT::Update::Error-Mode=any update && apt-get install -y --no-install-recommends libvulkan-dev desktop-file-utils && dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /build-packages.tsv && rm -rf /var/lib/apt/lists/*
+COPY --from=compiler /opt/llvm-23.1.3 /opt/llvm-23.1.3
+ENV PATH="/opt/llvm-23.1.3/bin:${PATH}" CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf
+COPY compiler.py /inputs/compiler.py
+COPY compiler-image.txt /opt/atrinik-appimage/compiler-image.txt
 COPY sources /inputs/sources
 COPY tools /inputs/tools
 COPY runtime-sources /inputs/runtime-sources
 COPY dependency-inputs.lock.json /inputs/packaging.lock.json
 COPY build-dependencies.sh /inputs/
-RUN bash /inputs/build-dependencies.sh && rm -rf /inputs/sources /build
+RUN python3 /inputs/compiler.py /inputs/packaging.lock.json && bash /inputs/build-dependencies.sh && rm -rf /inputs/sources /build
 COPY packaging.lock.json /opt/atrinik-appimage/packaging.lock.json
 RUN chmod -R a+rX /opt/atrinik-appimage && chmod a+r /build-packages.tsv
 COPY runtime-probe.c /inputs/runtime-probe.c
-RUN PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig cc -Wall -Wextra -Werror -O2 /inputs/runtime-probe.c $(PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig pkg-config --cflags --libs sdl3 sdl3-image sdl3-ttf sdl3-mixer libcurl) -o /appimage-runtime-probe
+RUN PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig clang -Wall -Wextra -Werror -O2 /inputs/runtime-probe.c $(PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig pkg-config --cflags --libs sdl3 sdl3-image sdl3-ttf sdl3-mixer libcurl) -o /appimage-runtime-probe
 COPY graphical-probe.c /inputs/graphical-probe.c
-RUN PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig cc -Wall -Wextra -Werror -O2 /inputs/graphical-probe.c $(PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig pkg-config --cflags --libs sdl3 sdl3-image sdl3-ttf sdl3-mixer) -o /appimage-graphical-probe
-ENV PATH="/opt/atrinik-appimage/bin:/opt/atrinik-appimage/tools:${PATH}" \
+RUN PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig clang -Wall -Wextra -Werror -O2 /inputs/graphical-probe.c $(PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig pkg-config --cflags --libs sdl3 sdl3-image sdl3-ttf sdl3-mixer) -o /appimage-graphical-probe
+ENV PATH="/opt/llvm-23.1.3/bin:/opt/atrinik-appimage/bin:/opt/atrinik-appimage/tools:${PATH}" \
     CMAKE_PREFIX_PATH=/opt/atrinik-appimage \
     PKG_CONFIG_PATH=/opt/atrinik-appimage/lib/pkgconfig \
     LD_LIBRARY_PATH=/opt/atrinik-appimage/lib

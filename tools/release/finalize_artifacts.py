@@ -549,8 +549,13 @@ def build_spdx(
                            + "; ".join(f"{file['path']} sha256:{file['sha256']}" for file in notice["files"]),
             })
         native_inputs = appimage_inventory["native_inputs"]
-        for record in [*native_inputs["sources"], *native_inputs["tools"],
-                       {"name": "appimage-runtime", **native_inputs["runtime"]}]:
+        records = [*native_inputs["sources"], *native_inputs["tools"],
+                   {"name": "appimage-runtime", **native_inputs["runtime"]}]
+        compiler = native_inputs.get("compiler")
+        if compiler is not None:
+            records.append({"name": "llvm-static-runtimes", "version": compiler["version"],
+                            **compiler["source"]})
+        for record in records:
             name = str(record["name"])
             identifier = f"SPDXRef-AppImageInput-{re.sub(r'[^A-Za-z0-9.-]', '-', name)}"
             packages.append({
@@ -653,6 +658,7 @@ def main() -> int:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--source-epoch", type=int, required=True)
     parser.add_argument("--directory", type=Path, required=True)
+    parser.add_argument("--compiler-image", help="trusted expected immutable compiler image")
     arguments = parser.parse_args()
     if not VERSION_RE.fullmatch(arguments.version):
         parser.error("--version must be MAJOR.MINOR.PATCH")
@@ -749,7 +755,7 @@ def main() -> int:
     inventory = read_appimage_inventory(
         directory / f"atrinik-classic-client-{arguments.version}-linux-x86_64.AppImage",
         arguments.version, revision=arguments.revision, source_root=Path.cwd(),
-        source_date_epoch=arguments.source_epoch,
+        source_date_epoch=arguments.source_epoch, compiler_image=arguments.compiler_image,
     )
     packaging_lock = json.loads(git_value(root, "show", f"{arguments.revision}:tools/ci/appimage/packaging.lock.json"))
 

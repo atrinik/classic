@@ -537,7 +537,14 @@ verified immutable upstream revision and dependency contract. The editor has no
 Linux binary bundle.
 
 The Linux client AppImage producer uses pinned Ubuntu 24.04 x86_64 inputs and
-rebuilds the qualified native dependency versions for the glibc 2.39 baseline.
+rebuilds the qualified native dependency versions for the glibc 2.39 baseline. The
+producer copies `/opt/llvm-23.1.3` from the digest-pinned Classic compiler
+image, verifies its locked LLVM source, tool versions and complete notices,
+and builds dependencies, probes and the application with Clang 23.1.3,
+LLD, compiler-rt and static libunwind. Ubuntu 24.04 development libraries and
+the exact APT package inventory remain the target ABI; no LTO or PGO is enabled.
+The AppImage and Debian client carry the LLVM and static-runtime notices;
+server images preserve the same notices under their application license directory.
 The packaging tools are linuxdeploy `1-alpha-20251107-1`, appimagetool `1.9.1`,
 and the static-FUSE type-2 runtime `20251108`. Application dependencies include
 SDL >= 3.4, image/ttf/mixer, libcurl built with c-ares and OpenSSL, and their
@@ -552,11 +559,20 @@ static runtime, including its musl, FUSE and squashfuse components.
 `ATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH` and emits the exact versioned
 AppImage. The trusted caller validates it using
 `python3 tools/release/appimage.py PATH VERSION --revision FULL_SHA
---source-root TRUSTED_CHECKOUT`. Release callers bind both the exact source
+--source-root TRUSTED_CHECKOUT --compiler-image IMMUTABLE_COMPILER_IMAGE`.
+Release callers bind both the exact source
 commit and its checkout; standalone inspection may omit these flags and use the
-current checkout's trusted inputs. Candidate code cannot replace that caller's
+current checkout's trusted inputs. LLVM packages require the approved compiler
+image from the trusted caller or an exact image pin in the source lock;
+inspection rejects a different well-formed digest. Candidate code cannot replace that caller's
 validator or redefine the supported host-library boundary.
-The trusted caller supplies `tools/ci/appimage/prepare.py`, its Dockerfile
+SDK assembly uses the matching `llvm-readelf`. The trusted host inspector
+uses distribution `readelf` only for read-only ELF inspection, preserving
+historical release recovery on hosts without the SDK; it accepts the verified
+LLVM output formats too. Host inspection tools never compile, link or strip
+new application or dependency binaries.
+The trusted caller supplies `tools/ci/appimage/prepare.py` with required
+`--compiler-image ghcr.io/atrinik/classic-build:VERSION@sha256:DIGEST`, its Dockerfile
 and `smoke.sh`. The exact candidate checkout and staged inputs are read-only
 container inputs; candidate code runs from a private copy as a non-root user,
 with networking disabled, dropped capabilities and no-new-privileges. Only the

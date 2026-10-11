@@ -567,6 +567,56 @@ class AppImageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "symbols|instrumentation"):
                     appimage._elf(elf, lock=lock)
 
+    def test_llvm_runtime_notices_and_producer_are_bound_to_lock(self):
+        compiler = {"family": "Clang", "version": "23.1.3",
+                    "image": "ghcr.io/atrinik/classic-build:1.2.3@sha256:" + "a" * 64,
+                    "defaults": {"runtime": "compiler-rt", "unwind": "libunwind", "linker": "lld", "unwind_linkage": "static"},
+                    "notices": {"compiler-rt-LICENSE.TXT": hashlib.sha256(b"notice").hexdigest()}}
+        self.lock["compiler"] = compiler
+        self.lock_path.write_text(json.dumps(self.lock, sort_keys=True) + "\n")
+        self.metadata["lock_sha256"] = hashlib.sha256(self.lock_path.read_bytes()).hexdigest()
+        self.metadata["native_inputs"]["compiler"] = compiler
+        self.metadata["compiler_image"] = "ghcr.io/atrinik/classic-build:1.2.3@sha256:" + "a" * 64
+        notice = self.write("usr/share/doc/atrinik/licenses/llvm/compiler-rt-LICENSE.TXT", b"notice")
+        self.validate()
+        with self.assertRaisesRegex(ValueError, "differs from trusted source lock"):
+            self.validate(compiler_image="ghcr.io/atrinik/classic-build:1.2.3@sha256:" + "b" * 64)
+        expected_image = compiler.pop("image")
+        self.lock_path.write_text(json.dumps(self.lock, sort_keys=True) + "\n")
+        self.metadata["lock_sha256"] = hashlib.sha256(self.lock_path.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "requires a trusted expected compiler image"):
+            self.validate()
+        self.validate(compiler_image=expected_image)
+        compiler["image"] = expected_image
+        self.lock_path.write_text(json.dumps(self.lock, sort_keys=True) + "\n")
+        self.metadata["lock_sha256"] = hashlib.sha256(self.lock_path.read_bytes()).hexdigest()
+        notice.write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "LLVM runtime notice"):
+            self.validate()
+        notice.unlink()
+        with self.assertRaisesRegex(ValueError, "required file"):
+            self.validate()
+        self.write("usr/share/doc/atrinik/licenses/llvm/compiler-rt-LICENSE.TXT", b"notice")
+        self.metadata["compiler_image"] = "classic-build:latest"
+        with self.assertRaisesRegex(ValueError, "producer identity"):
+            self.validate()
+
+    def test_real_llvm_readelf_output_formats(self):
+        fixtures = Path(__file__).parent / "fixtures/llvm-readelf-23.1.3"
+        outputs = [(fixtures / (name + ".txt")).read_text()
+                   for name in ("dynamic", "versions", "symbols", "program")]
+        with mock.patch.object(appimage, "_run", side_effect=outputs):
+            needed, _ = appimage._elf(Path("/usr/bin/true"), executable=True)
+        self.assertIn("libc.so.6", needed)
+        # Real LLVM SONAME/dynamic output drives the SDK closure parser too.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("appimage_assemble", Path(__file__).parents[1] / "ci/appimage/assemble.py")
+        assemble = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(assemble)
+        with mock.patch.object(assemble, "run", return_value=outputs[0]) as run:
+            self.assertEqual(assemble.dynamic(Path("fixture")), (["libc.so.6"], None))
+            self.assertEqual(run.call_args.args[0], "llvm-readelf")
+
     def test_extended_attributes_and_trailing_payload_rejected(self):
         for mutation in ("xattrs", "trailing"):
             image = self.image()
@@ -691,7 +741,8 @@ class AppImageTests(unittest.TestCase):
         args = ["appimage.py", str(candidate), self.version, "--revision", self.revision,
                 "--source-root", str(self.source)]
         validate = appimage.validate_appimage
-        def verify_shared_resources(path, version, *, revision, source_root, source_date_epoch):
+        def verify_shared_resources(path, version, *, revision, source_root, source_date_epoch, compiler_image):
+            self.assertIsNone(compiler_image)
             self.assertEqual((source_root / "fixture-extra.txt").read_text(), "shared resource contract\n")
             self.assertEqual(source_date_epoch, self.metadata["source_date_epoch"])
             validate(path, version, revision=revision, source_root=source_root, source_date_epoch=source_date_epoch)

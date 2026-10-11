@@ -105,6 +105,7 @@ COPY --from=build /src/server/build/release/atrinik-server-capabilities.json ./s
 COPY --from=build /src/server/build/release/atrinik-access-status ./server/atrinik-access-status
 COPY --from=build /src/server/build/release/libplugin_arena.so ./server/libplugin_arena.so
 COPY --from=build /src/server/build/release/libplugin_python.so ./server/libplugin_python.so
+COPY --from=build /opt/llvm-23.1.3/share/licenses/llvm /usr/share/licenses/atrinik-classic/llvm
 COPY --from=build /src/LICENSE.md /usr/share/licenses/atrinik-classic/LICENSE.md
 COPY --from=build /src/ATTRIBUTIONS.md /usr/share/doc/atrinik-classic/ATTRIBUTIONS.md
 COPY --chmod=0755 server/docker/server-entrypoint.sh /usr/local/bin/atrinik-server-entrypoint

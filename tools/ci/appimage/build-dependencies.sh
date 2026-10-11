@@ -14,10 +14,16 @@ PY
 for archive in /inputs/sources/*.tar.gz; do tar -xzf "${archive}" -C /build; done
 export CFLAGS="-ffile-prefix-map=/build=. -fdebug-prefix-map=/build=. -ffile-prefix-map=/opt/atrinik-appimage=/usr"
 export CXXFLAGS="${CFLAGS}"
+export CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm STRIP=llvm-strip
+export LDFLAGS="--rtlib=compiler-rt --unwindlib=libunwind -fuse-ld=lld"
 export CMAKE_PREFIX_PATH=${prefix} LD_LIBRARY_PATH=${prefix}/lib PKG_CONFIG_PATH=${prefix}/lib/pkgconfig
 build() {
  local source=$1; shift
  cmake -S "/build/${source}" -B "/build/${source}-build" -G Ninja \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_AR=llvm-ar -DCMAKE_RANLIB=llvm-ranlib \
+  -DCMAKE_NM=llvm-nm -DCMAKE_STRIP=llvm-strip -DCMAKE_OBJCOPY=llvm-objcopy \
+  -DCMAKE_OBJDUMP=llvm-objdump -DCMAKE_READELF=llvm-readelf \
+  "-DCMAKE_EXE_LINKER_FLAGS=${LDFLAGS}" "-DCMAKE_SHARED_LINKER_FLAGS=${LDFLAGS}" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib "$@"
  cmake --build "/build/${source}-build" --parallel 4
  cmake --install "/build/${source}-build"
@@ -96,3 +102,6 @@ with notice.open('ab') as out:
    for m in files:
     out.write(('\n===== '+e['name']+' '+m.name+' =====\n').encode());out.write(source.extractfile(m).read());out.write(b'\n')
 PYLICENSE
+
+mkdir -p "${prefix}/share/licenses/llvm"
+cp /opt/llvm-23.1.3/share/licenses/llvm/*-LICENSE.TXT "${prefix}/share/licenses/llvm/"

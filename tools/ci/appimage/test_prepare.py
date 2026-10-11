@@ -2,6 +2,8 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import json
+import sys
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('prepare', Path(__file__).with_name('prepare.py'))
@@ -10,6 +12,22 @@ spec.loader.exec_module(prepare)
 
 
 class IntegrityTests(unittest.TestCase):
+    def test_context_embeds_the_exact_immutable_compiler_cohort(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_lock = json.loads((Path(__file__).with_name('packaging.lock.json')).read_text())
+            image = source_lock['compiler'].get('image') or 'ghcr.io/atrinik/classic-build:1.2.3@sha256:' + 'a' * 64
+            def materialize(entry, destination, cache):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b'fixture')
+            with patch.object(sys, 'argv', ['prepare.py', '--output', directory, '--compiler-image', image]), patch.object(prepare, 'download', side_effect=materialize):
+                prepare.main()
+            staged_lock = json.loads((root / 'dependency-inputs.lock.json').read_text())
+            self.assertEqual(staged_lock['compiler'], source_lock['compiler'])
+            self.assertIn(f'FROM {image} AS compiler', (root / 'Dockerfile').read_text())
+            self.assertEqual((root / 'compiler-image.txt').read_text(), image + '\n')
+            self.assertEqual((root / 'compiler.py').read_bytes(), (Path(__file__).with_name('compiler.py')).read_bytes())
+
     def test_corrupt_cache_fails_without_network_or_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

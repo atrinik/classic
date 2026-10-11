@@ -285,7 +285,7 @@ def _elf(path: Path, *, executable: bool = False, lock: dict | None = None) -> t
     symbols = _run("readelf", "--wide", "--symbols", str(path))
     if accepted is not None:
         for symbol in accepted.get("weak_undefined_symbols", []):
-            row = r"^[ \t]*[0-9]+:[ \t]+0+[ \t]+0[ \t]+NOTYPE[ \t]+WEAK[ \t]+DEFAULT[ \t]+UND[ \t]+" + re.escape(symbol) + r"[ \t]*$"
+            row = r"^[ \t]*[0-9]+:[ \t]+0+[ \t]+(?:0|0x0)[ \t]+NOTYPE[ \t]+WEAK[ \t]+DEFAULT[ \t]+UND[ \t]+" + re.escape(symbol) + r"[ \t]*$"
             symbols, count = re.subn(row, "", symbols, flags=re.MULTILINE)
             if count != 1:
                 raise ValueError(f"AppImage ELF inspection exception has unexpected symbols: {path.name}")
@@ -418,7 +418,7 @@ def system_license_notices(root: Path | str, lock: dict, packages: Iterable[str]
 
 def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
              lock_digest: str, source_root: Path, revision: str | None,
-             source_date_epoch: int | None, squashfs_epoch: int) -> dict:
+             source_date_epoch: int | None, squashfs_epoch: int, compiler_image: str | None = None) -> dict:
     allowed = ("usr/bin", "usr/lib", "usr/share/games/atrinik", "usr/share/doc/atrinik",
                "usr/share/atrinik", "usr/share/alsa", "usr/share/applications", "usr/share/pixmaps")
     top_files = {"AppRun", "atrinik.desktop", "atrinik.png", ".DirIcon"}
@@ -465,6 +465,15 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
         if not isinstance(notice, str) or not _safe_name(notice) or not notice.startswith("usr/share/doc/atrinik/"):
             raise ValueError("invalid notice in trusted AppImage lock")
         required(notice)
+    compiler = lock.get("compiler")
+    if compiler is not None:
+        if compiler.get("family") != "Clang" or compiler.get("version") != "23.1.3" or compiler.get("defaults") != {"runtime": "compiler-rt", "unwind": "libunwind", "linker": "lld", "unwind_linkage": "static"}:
+            raise ValueError("invalid LLVM cohort in trusted AppImage lock")
+        for name, expected in compiler["notices"].items():
+            if not _safe_name(name) or "/" in name or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                raise ValueError("invalid LLVM notice in trusted AppImage lock")
+            if _sha256(required("usr/share/doc/atrinik/licenses/llvm/" + name)) != expected:
+                raise ValueError("AppImage LLVM runtime notice differs from trusted source")
     required("usr/share/doc/atrinik/LICENSE.md")
     config_path = required("usr/share/atrinik/openssl.cnf")
     config = config_path.read_text().splitlines()
@@ -497,6 +506,18 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
             or epoch != squashfs_epoch):
         raise ValueError("AppImage source epoch differs from trusted source or SquashFS")
     native_inputs = {key: lock.get(key, {}) for key in ("sources", "tools", "runtime")}
+    if compiler is not None:
+        native_inputs["compiler"] = compiler
+        locked_compiler_image = compiler.get("image")
+        if locked_compiler_image is not None and compiler_image is not None and locked_compiler_image != compiler_image:
+            raise ValueError("expected compiler image differs from trusted source lock")
+        expected_compiler_image = locked_compiler_image or compiler_image
+        if expected_compiler_image is None:
+            raise ValueError("AppImage inspection requires a trusted expected compiler image")
+        if metadata.get("compiler_image") != expected_compiler_image:
+            raise ValueError("AppImage compiler producer identity differs from trusted reference")
+        if not re.fullmatch(r"ghcr\.io/atrinik/classic-build:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}", str(metadata.get("compiler_image", ""))):
+            raise ValueError("AppImage compiler producer identity must be immutable")
     if metadata.get("native_inputs") != native_inputs:
         raise ValueError("AppImage native inputs differ from trusted lock")
     file_inventory = {name: _sha256(root / name)
@@ -604,7 +625,7 @@ def _payload(root: Path, entries: dict[str, Entry], version: str, lock: dict,
 
 def read_appimage_inventory(path: Path | str, version: str, *, revision: str | None = None,
                             source_root: Path | str | None = None,
-                            source_date_epoch: int | None = None) -> dict:
+                            source_date_epoch: int | None = None, compiler_image: str | None = None) -> dict:
     """Validate once and return metadata bound to the trusted source checkout."""
     if VERSION.fullmatch(version) is None:
         raise ValueError("AppImage version must be MAJOR.MINOR.PATCH")
@@ -612,6 +633,8 @@ def read_appimage_inventory(path: Path | str, version: str, *, revision: str | N
         raise ValueError("AppImage revision must be a full lowercase commit ID")
     if source_date_epoch is not None and (type(source_date_epoch) is not int or not 0 <= source_date_epoch <= 0xffffffff):
         raise ValueError("AppImage expected source epoch must be a uint32 integer")
+    if compiler_image is not None and not re.fullmatch(r"ghcr\.io/atrinik/classic-build:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}", compiler_image):
+        raise ValueError("expected compiler image must be an immutable published reference")
     source = Path(source_root) if source_root is not None else ROOT
     lock_path = source / "tools/ci/appimage/packaging.lock.json"
     lock = _json(lock_path)
@@ -643,16 +666,16 @@ def read_appimage_inventory(path: Path | str, version: str, *, revision: str | N
         _run("unsquashfs", "-no-xattrs", "-processors", "1", "-o", offset,
              "-d", str(destination), str(snapshot))
         return _payload(destination, entries, version, lock, lock_digest, source, revision,
-                        source_date_epoch, squashfs_epoch)
+                        source_date_epoch, squashfs_epoch, compiler_image)
 
 
 def validate_appimage(path: Path | str, version: str, *, revision: str | None = None,
                      source_root: Path | str | None = None,
-                     source_date_epoch: int | None = None) -> None:
+                     source_date_epoch: int | None = None, compiler_image: str | None = None) -> None:
     """Raise ValueError unless PATH satisfies the trusted source build contract."""
     try:
         read_appimage_inventory(path, version, revision=revision, source_root=source_root,
-                               source_date_epoch=source_date_epoch)
+                               source_date_epoch=source_date_epoch, compiler_image=compiler_image)
     except (OSError, UnicodeError) as exc:
         raise ValueError(f"cannot inspect AppImage: {exc}") from exc
 
@@ -663,6 +686,7 @@ def main() -> int:
     parser.add_argument("version")
     parser.add_argument("--revision", help="full expected source commit")
     parser.add_argument("--source-root", type=Path, help="trusted source checkout at the expected commit")
+    parser.add_argument("--compiler-image", help="trusted expected immutable compiler image")
     parser.add_argument("--source-date-epoch", type=int, help="expected source commit timestamp")
     args = parser.parse_args()
     try:
@@ -684,9 +708,9 @@ def main() -> int:
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(_run_bytes("git", "-C", str(source), "show", f"{args.revision}:{name}"))
                 validate_appimage(args.path, args.version, revision=args.revision, source_root=immutable,
-                                 source_date_epoch=epoch)
+                                 source_date_epoch=epoch, compiler_image=args.compiler_image)
         else:
-            validate_appimage(args.path, args.version, source_date_epoch=args.source_date_epoch)
+            validate_appimage(args.path, args.version, source_date_epoch=args.source_date_epoch, compiler_image=args.compiler_image)
     except (ValueError, OSError, UnicodeError) as exc:
         parser.exit(1, f"invalid AppImage: {exc}\n")
     print(f"validated AppImage: {args.path.name}")

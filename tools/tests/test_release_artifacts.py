@@ -109,6 +109,7 @@ class ReleaseArtifactsTests(unittest.TestCase):
                 artifacts.validate_candidate(self.directory, "v" + self.version, self.revision)
         self.assertEqual(validator.call_args.args[0], self.directory)
         self.assertEqual(validator.call_args.args[3:], (self.revision, self.version))
+        self.assertEqual(validator.call_args.kwargs, {"compiler_image": None})
 
     def test_manifest_cannot_select_different_source_contract(self):
         self.candidate(1)
@@ -219,7 +220,8 @@ class ReleaseArtifactsTests(unittest.TestCase):
         sbom = artifacts.build_spdx([image], self.version, self.revision, 123, [], inventory)
         sbom_path = self.directory / f"atrinik-classic-{self.version}.spdx.json"
         sbom_path.write_text(json.dumps(sbom))
-        def reader(path, version, *, revision, source_root, source_date_epoch):
+        def reader(path, version, *, revision, source_root, source_date_epoch, compiler_image):
+            self.assertIsNone(compiler_image)
             self.assertEqual(source_date_epoch, manifest["source_epoch"])
             self.assertEqual(path, image)
             self.assertEqual((version, revision), (self.version, self.revision))
