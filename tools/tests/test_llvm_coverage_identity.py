@@ -54,6 +54,15 @@ def lcov(filename, count=0):
 
 
 class IdentityTests(unittest.TestCase):
+    def test_every_native_coverage_entrypoint_separates_internal_names(self):
+        root = Path(__file__).resolve().parents[2]
+        for name in ("CMakeLists.txt", "client/CMakeLists.txt", "server/CMakeLists.txt",
+                     "libatrinik/CMakeLists.txt", "libatrinik/pathfinding/CMakeLists.txt"):
+            with self.subTest(entrypoint=name):
+                cmake = (root / name).read_text()
+                self.assertEqual(cmake.count("-funique-internal-linkage-names"), 1)
+                self.assertRegex(cmake, r"-fprofile-update=atomic\s+-funique-internal-linkage-names")
+
     def test_complete_profile_includes_zero_functions_and_zero_counters(self):
         report = text_record() + "\n\n" + text_record("unused", 123, (0, 0, 0)) + "\n"
         self.assertEqual(cov.profile_identity(report), tuple(sorted([
@@ -62,11 +71,18 @@ class IdentityTests(unittest.TestCase):
     def test_malformed_text_profiles_fail_closed(self):
         good = text_record()
         bad = ["", good.rsplit("\n", 1)[0], good + "\n2", good.replace("# Num Counters:\n2", "# Num Counters:\n0"),
-               good + "\n\n" + good, good.replace("# Func Hash:", "# Function hash:"),
+               good.replace("# Func Hash:", "# Function hash:"),
                good.replace("91", "0x5b"), good.replace("\n1\n0", "\n-1\n0")]
         for report in bad:
             with self.subTest(report=report), self.assertRaises(ValueError):
                 cov.profile_identity(report)
+
+    def test_profile_record_multiplicity_is_part_of_identity(self):
+        record = text_record()
+        identity = (name_hash("f"), 91, 2)
+        self.assertEqual(cov.profile_identity(record + "\n\n" + record), (identity, identity))
+        with patch.object(cov, "binary_identity", return_value=(identity, identity)), patch.object(cov, "run", return_value=record), self.assertRaises(ValueError):
+            cov.executed_objects([Path("a")], [Path("raw")], "profdata", "readobj")
 
     def test_complete_unique_association_and_repeated_process_profiles(self):
         a, b = Path("a"), Path("b")
@@ -116,6 +132,13 @@ class BinaryIdentityTests(unittest.TestCase):
 
     def test_real_record_bytes_with_relative_counters(self):
         self.assertEqual(self.identity(), tuple(sorted([(name_hash("f"), 91, 2), (name_hash("unused"), 123, 1)])))
+
+    def test_duplicate_identity_preserves_distinct_ranges_and_section_padding(self):
+        struct.pack_into("<QQ", self.bytes, 200, name_hash("f"), 91)
+        struct.pack_into("<I", self.bytes, 256, 2)
+        self.metadata[0]["Sections"][2]["Section"]["Size"] = 40
+        identity = (name_hash("f"), 91, 2)
+        self.assertEqual(self.identity(), (identity, identity))
 
     def test_bad_format_version_record_and_counter_bounds(self):
         mutations = [lambda: self.bytes.__setitem__(4, 1),
@@ -213,6 +236,24 @@ class CompleteReportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.complete(zero=lcov(self.shared))
 
+    def test_nonzero_or_truncated_empty_profile_mapping_rejected(self):
+        for field in ("segments", "branches", "summary", "regions"):
+            baseline = json.loads(self.baseline)
+            data = baseline["data"][0]
+            if field == "regions":
+                data["functions"][0][field][0][4] = 1
+            elif field == "summary":
+                data["files"][0][field]["lines"]["covered"] = 1
+            else:
+                index = 2 if field == "segments" else 4
+                data["files"][0][field][0][index] = 1
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.complete(baseline=json.dumps(baseline))
+        baseline = json.loads(self.baseline)
+        baseline["data"][0]["files"][0]["segments"][0].pop()
+        with self.assertRaises(ValueError):
+            self.complete(baseline=json.dumps(baseline))
+
 
 @unittest.skipUnless(os.environ.get("ATRINIK_LLVM_COVERAGE_NATIVE_TEST") == "1", "explicit LLVM 23 SDK fixture opt-in required")
 class NativeLLVM23Tests(unittest.TestCase):
@@ -244,17 +285,23 @@ class NativeLLVM23Tests(unittest.TestCase):
         self.unrun_main.write_text("int main(void) { volatile int x = 0; return x ? 1 : 0; }\n")
         self.plugin_src = self.src / "plugin.c"
         self.plugin_src.write_text("int plugin(int x) { return x > 0 ? 1 : 0; }\n")
+        self.zero_src = self.src / "zero.c"
+        self.zero_src.write_text("int never_called(int x) { return x ? 1 : 0; }\n")
+        self.zero_main = self.tests / "zero.c"
+        self.zero_main.write_text("int main(void) { return 0; }\n")
         self.test = self.compile("test", [self.test_main, self.common])
+        self.zero_test = self.compile("zero-test", [self.zero_main, self.zero_src])
         self.compile("benchmark", [self.bench_main, self.common])
         self.compile("application", [self.unrun_main])
         self.compile("plugin.so", [self.plugin_src], ["-shared", "-fPIC"])
         pattern = cov.prepare(self.build)
         subprocess.run([str(self.test)], check=True, env={**os.environ, "LLVM_PROFILE_FILE": pattern})
+        subprocess.run([str(self.zero_test)], check=True, env={**os.environ, "LLVM_PROFILE_FILE": pattern})
         self.profiles = sorted((self.build / cov.PROFILE_DIRECTORY).glob("*.profraw"))
 
     def compile(self, name, sources, extra=()):
         output = self.build / name
-        command = [self.clang, "-std=c17", "-Werror", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping", "-fprofile-update=atomic",
+        command = [self.clang, "-std=c17", "-Werror", "-O0", "-fprofile-instr-generate", "-fcoverage-mapping", "-fprofile-update=atomic", "-funique-internal-linkage-names",
                    "--rtlib=compiler-rt", "--unwindlib=libunwind", "-fuse-ld=lld", *extra, *map(str, sources), "-o", str(output)]
         subprocess.run(command, check=True, capture_output=True, text=True)
         return output
@@ -262,7 +309,7 @@ class NativeLLVM23Tests(unittest.TestCase):
     def test_native_complete_graph_preserves_measured_macro_and_branch_counts(self):
         objects = cov.coverage_objects(self.build)
         executed = cov.executed_objects(objects, self.profiles, self.profdata, self.readobj)
-        self.assertEqual(executed, [self.test])
+        self.assertEqual(executed, [self.test, self.zero_test])
         merged = self.build / "merged.profdata"
         cov.run([self.profdata, "merge", "-o", str(merged), *map(str, self.profiles)])
         measured = cov.lcov_records(cov.run(cov.object_arguments(self.llvmcov, executed, "-format=lcov", f"-instr-profile={merged}")), self.root, "client")
@@ -270,6 +317,8 @@ class NativeLLVM23Tests(unittest.TestCase):
         records = cov.lcov_records(result, self.root, "client")
         self.assertEqual(records[str(self.common)], measured[str(self.common)])
         self.assertIn("BRDA:", measured[str(self.common)])
+        self.assertEqual(records[str(self.zero_src)], measured[str(self.zero_src)])
+        self.assertIn("FNH:0", records[str(self.zero_src)])
         for source in (self.unrun_main, self.plugin_src):
             self.assertIn(str(source), records)
             self.assertIn("FNH:0", records[str(source)])
@@ -291,6 +340,42 @@ class NativeLLVM23Tests(unittest.TestCase):
         self.compile("test", [self.test_main, self.common])
         with self.assertRaises(ValueError):
             cov.executed_objects(cov.coverage_objects(self.build), self.profiles, self.profdata, self.readobj)
+
+    def test_native_unique_internal_names_preserve_unused_inline_mapping(self):
+        header = self.tests / "shared.h"
+        header.write_text("static inline int shared(int x) { return x ? 1 : 0; }\n")
+        sources = []
+        for unit, body in (("a", "return 0;"), ("b", "return shared(0);")):
+            folder = self.tests / unit
+            folder.mkdir()
+            source = folder / "same.c"
+            source.write_text('#include "../shared.h"\nint main(void) { ' + body + ' }\n')
+            sources.append(source)
+        for unique in (False, True):
+            directory = self.root / ("unique" if unique else "original")
+            directory.mkdir()
+            binaries = [self.compile(f"{directory.name}-{index}", [source],
+                        [] if unique else ["-fno-unique-internal-linkage-names"])
+                        for index, source in enumerate(sources)]
+            for binary in binaries:
+                subprocess.run([str(binary)], check=True, env={**os.environ,
+                               "LLVM_PROFILE_FILE": str(directory / "%m-%p.profraw")})
+            merged = directory / "coverage.profdata"
+            cov.run([self.profdata, "merge", "-o", str(merged), *map(str, directory.glob("*.profraw"))])
+            command = cov.object_arguments(self.llvmcov, binaries, "-format=lcov", f"-instr-profile={merged}")
+            if not unique:
+                with self.assertRaisesRegex(ValueError, "mismatched data"):
+                    cov.run(command)
+                continue
+            report = cov.run(command)
+            self.assertRegex(report, r"FNDA:0,.*shared.*__uniq")
+            self.assertRegex(report, r"FNDA:1,.*shared.*__uniq")
+            profiles = cov.run([self.profdata, "show", "--all-functions", "--counts", "--text", str(merged)])
+            self.assertIn("# Counter Values:\n1\n0", profiles)
+            baseline = json.loads(cov.run(cov.object_arguments(self.llvmcov, binaries, "-empty-profile")))
+            shared = [f for f in baseline["data"][0]["functions"] if "shared" in f["name"]]
+            self.assertEqual(len(shared), 2)
+            self.assertEqual(len({f["name"] for f in shared}), 2)
 
 
 if __name__ == "__main__":

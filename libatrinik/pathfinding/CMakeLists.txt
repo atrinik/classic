@@ -27,7 +27,8 @@ endif ()
 
 if (ENABLE_COVERAGE)
     if (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT MINGW)
-        add_compile_options(-fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic -O0 -g)
+        add_compile_options(-fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic
+            -funique-internal-linkage-names -O0 -g)
         add_link_options(-fprofile-instr-generate)
     else ()
         message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang")

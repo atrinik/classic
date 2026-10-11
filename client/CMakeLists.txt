@@ -241,7 +241,8 @@ function(atrinik_configure_target target)
         get_target_property(target_type ${target} TYPE)
         if (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT MINGW)
             target_compile_options(${target} PRIVATE
-                -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic -O0 -g)
+                -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic
+                -funique-internal-linkage-names -O0 -g)
             if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
                 target_link_options(${target} PRIVATE -fprofile-instr-generate)
             endif ()
