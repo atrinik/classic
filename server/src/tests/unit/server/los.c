@@ -89,16 +89,20 @@ START_TEST(test_depth_masks_use_each_ray_instead_of_base_silhouette) {
     object *pl;
     fixture(&map, &pl);
     map->level_min = 0;
-    map->level_max = 2;
-    mapstruct *middle = add_level(map, 1, 2);
-    mapstruct *upper = add_level(middle, 2, 2);
+    map->level_max = 3;
+    mapstruct *middle = add_level(map, 1, 3);
+    mapstruct *second = add_level(middle, 2, 3);
+    mapstruct *upper = add_level(second, 3, 3);
     place(map, "wall_wood_1", 13, 12);
     ck_assert(!los_player_has_geometric_sight(pl, map, 14, 12));
+    /* dz=3 crosses UP before EAST; dz=2 would graze the base wall
+     * at an X/Z tie and must remain blocked by conservative supercover. */
+    ck_assert(!los_player_has_geometric_sight(pl, second, 14, 12));
     ck_assert(los_player_has_geometric_sight(pl, upper, 14, 12));
     update_los(pl);
     int ax = CONTR(pl)->cs->mapx_2 + 2, ay = CONTR(pl)->cs->mapy_2;
     ck_assert(CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(0)][ax][ay] & BLOCKED_LOS_BLOCKED);
-    ck_assert(!(CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(2)][ax][ay] & BLOCKED_LOS_BLOCKED));
+    ck_assert(!(CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(3)][ax][ay] & BLOCKED_LOS_BLOCKED));
     ck_assert_int_eq(CONTR(pl)->blocked_los[ax][ay],
                      CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(0)][ax][ay]);
 }
