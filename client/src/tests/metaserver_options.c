@@ -65,7 +65,7 @@ int main(void) {
     TEST_CHECK(client_metaserver_options_enabled(&options));
     TEST_CHECK(options.count == 1);
     TEST_CHECK(strcmp(options.endpoints[0].directory_url,
-                      "https://classic.metaserver.atrinik.org/index.xml") == 0);
+                      "https://classic.meta.atrinik.org/index.xml") == 0);
     TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin,
                       "https://rendezvous.meta.atrinik.org/v1/classic") == 0);
     TEST_CHECK(strcmp(options.endpoints[0].access_origin,
@@ -75,7 +75,7 @@ int main(void) {
     client_metaserver_options_replace_provider(&options, METASERVER_PROVIDER_DEV);
     TEST_CHECK(options.count == 1);
     TEST_CHECK(strcmp(options.endpoints[0].directory_url,
-                      "https://classic.dev.metaserver.atrinik.org/index.xml") == 0);
+                      "https://classic.dev.meta.atrinik.org/index.xml") == 0);
     TEST_CHECK(strcmp(options.endpoints[0].rendezvous_origin,
                       "https://rendezvous.dev.meta.atrinik.org/v1/classic") == 0);
     TEST_CHECK(strcmp(options.endpoints[0].access_origin,
@@ -93,7 +93,7 @@ int main(void) {
     options.endpoints[0].directory_url[8] = 'X';
     options.endpoints[0].rendezvous_origin[8] = 'X';
     TEST_CHECK(strcmp(copied.endpoints[0].directory_url,
-                      "https://classic.dev.metaserver.atrinik.org/index.xml") == 0);
+                      "https://classic.dev.meta.atrinik.org/index.xml") == 0);
     TEST_CHECK(strcmp(copied.endpoints[0].rendezvous_origin,
                       "https://rendezvous.dev.meta.atrinik.org/v1/classic") == 0);
     TEST_CHECK(strcmp(copied.endpoints[0].access_origin,

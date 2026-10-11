@@ -566,8 +566,8 @@ int intro_event(SDL_Event *event) {
     }
     if (BUTTON_CHECK_TOOLTIP(&button_metaserver)) {
         const char *tooltip = metaserver_get_provider() == METASERVER_PROVIDER_DEV
-                                  ? "Switch to default metaserver: classic.metaserver.atrinik.org"
-                                  : "Switch to dev metaserver: classic.dev.metaserver.atrinik.org";
+                                  ? "Switch to default metaserver: classic.meta.atrinik.org"
+                                  : "Switch to dev metaserver: classic.dev.meta.atrinik.org";
         tooltip_create(event_mouse_x(event), event_mouse_y(event), FONT_ARIAL11, tooltip);
         tooltip_enable_delay(300);
     }
