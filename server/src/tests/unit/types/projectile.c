@@ -687,7 +687,7 @@ START_TEST(test_trajectory_value_copy_and_save_roundtrip) {
     ck_assert_int_eq(copy->projectile.heading[2], -16384);
     projectile3d_reset(copy);
     ck_assert(projectile3d_valid(&arrow->projectile));
-    stringbuffer *sb = stringbuffer_new();
+    StringBuffer *sb = stringbuffer_new();
     object_dump_rec(arrow, sb);
     char *dump = stringbuffer_finish(sb);
     object *loaded = object_load_str(dump);
