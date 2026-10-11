@@ -27,6 +27,7 @@ SHARED_PATHS = (
     "LICENSE.md",
     "ATTRIBUTIONS.md",
     "cmake/AtrinikVersion.cmake",
+    "cmake/AtrinikLLVM.cmake",
     "cmake/InstallWindowsRuntime.cmake",
     "cmake/toolchains/llvm.cmake",
     "tools/ci/llvm_coverage.py",

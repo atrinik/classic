@@ -12,8 +12,6 @@ function(atrinik_install_windows_runtime destination)
                 IS_SYMLINK "${ATRINIK_WINDOWS_LLVM_LICENSE_DIR}/${notice}")
             message(FATAL_ERROR "LLVM-MinGW package notice is missing: ${notice}")
         endif ()
-        install(FILES "${ATRINIK_WINDOWS_LLVM_LICENSE_DIR}/${notice}"
-            DESTINATION "${destination}/licenses/llvm-mingw")
     endforeach ()
     set(ATRINIK_WINDOWS_DEPENDENCY_INVENTORY_DIR
         "${ATRINIK_WINDOWS_RUNTIME_DIR}/../share/atrinik/windows-dependencies"
@@ -58,13 +56,8 @@ function(atrinik_install_windows_runtime destination)
             if (NOT EXISTS "${notice_file}" OR IS_DIRECTORY "${notice_file}" OR IS_SYMLINK "${notice_file}")
                 message(FATAL_ERROR "Windows dependency notice is missing: ${name}/${notice}")
             endif ()
-            install(FILES "${notice_file}" DESTINATION "${destination}/licenses/${name}")
         endforeach ()
     endforeach ()
-    install(FILES "${dependency_inventory}" DESTINATION "${destination}/licenses"
-        RENAME windows-dependencies.json)
-    install(FILES "${pe_inventory}" DESTINATION "${destination}/licenses"
-        RENAME windows-pe-closure.json)
     if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/stage_windows_runtime.py")
         set(runtime_helper "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/stage_windows_runtime.py")
     else ()
@@ -73,15 +66,10 @@ function(atrinik_install_windows_runtime destination)
     if (NOT EXISTS "${runtime_helper}")
         message(FATAL_ERROR "Windows runtime closure helper is missing: ${runtime_helper}")
     endif ()
-    set(runtime_arguments "--runtime-dir \"${ATRINIK_WINDOWS_RUNTIME_DIR}\"")
+    set(runtime_arguments "--runtime-dir \"${ATRINIK_WINDOWS_RUNTIME_DIR}\" --producer-inventory \"${pe_inventory}\"")
     if (ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR)
         string(APPEND runtime_arguments
-            " --runtime-dir \"${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}\"")
-        # Preserve the externally built Python extension modules, and inspect
-        # their dependencies without replacing their runtime ownership.
-        file(GLOB python_modules "${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}/*.pyd"
-            "${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}/*.dll")
-        list(APPEND ARGN ${python_modules})
+            " --python-runtime \"${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}\" --python-inventory \"${ATRINIK_WINDOWS_DEPENDENCY_INVENTORY_DIR}/python-runtime.json\"")
     endif ()
     foreach (binary IN LISTS ARGN)
         string(APPEND runtime_arguments " \"${binary}\"")

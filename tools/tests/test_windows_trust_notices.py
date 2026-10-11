@@ -2,6 +2,7 @@
 
 import os
 import json
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
@@ -13,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class WindowsTrustNoticesTests(unittest.TestCase):
-    def fixture(self, module, cares=True, notice=True):
+    def fixture(self, module, cares=True, notice=True, python=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -37,11 +38,29 @@ class WindowsTrustNoticesTests(unittest.TestCase):
         (inventories / "dependencies.json").write_text(json.dumps({
             "schema_version": 1, "dependencies": [{"name": "fixture-curl", "version": "1",
                                                        "licenses": ["COPYING", "docs/NOTICE"]}]}))
-        (inventories / "pe-closure.json").write_text('{"libcurl-4.dll": []}')
+        dlls = {"libcurl-4.dll": {"sha256": hashlib.sha256(b"fixture curl").hexdigest(),
+                                     "owner": "fixture-curl", "source_sha256": "1" * 64, "imports": ["libcares-2.dll"] if cares else []}}
+        if cares:
+            dlls["libcares-2.dll"] = {"sha256": hashlib.sha256(b"fixture c-ares").hexdigest(),
+                                      "owner": "fixture-curl", "source_sha256": "1" * 64, "imports": []}
+        (inventories / "pe-closure.json").write_text(json.dumps({"schema_version": 2, "dlls": dlls,
+            "notices": {"llvm-mingw": {"llvm-mingw/" + path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in llvm_notices.iterdir()},
+                        "fixture-curl": {"fixture-curl/COPYING": hashlib.sha256(b"fixture dependency notice\n").hexdigest(),
+                                          "fixture-curl/docs_NOTICE": hashlib.sha256(b"fixture dependency notice\n").hexdigest()}}}))
         notices = root / "toolchain/share/licenses/fixture-curl"
         notices.mkdir()
         for name in ("COPYING", "docs_NOTICE"):
             (notices / name).write_bytes(b"fixture dependency notice\n")
+        python_runtime = root / "python"
+        if python:
+            python_runtime.mkdir()
+            python_files = {"python314.dll": b"fixture Python", "_ssl.pyd": b"fixture extension",
+                            "python314.zip": b"fixture stdlib", "LICENSE.txt": b"Python notice"}
+            for name, data in python_files.items():
+                (python_runtime / name).write_bytes(data)
+            (inventories / "python-runtime.json").write_text(json.dumps({"schema_version": 1,
+                "files": {name: {"sha256": hashlib.sha256(data).hexdigest()}
+                          for name, data in python_files.items()}}))
         source = (ROOT / module / "CMakeLists.txt").read_text()
         if module == "client":
             start = source.index("    if (ATRINIK_WINDOWS_RUNTIME_DIR)", source.index("# Installer."))
@@ -53,7 +72,7 @@ class WindowsTrustNoticesTests(unittest.TestCase):
             rules = source[start:end] + "\n" + rules
         else:
             start = source.index("    file(GLOB ATRINIK_WINDOWS_RUNTIME_DLLS", source.index("set(ATRINIK_WINDOWS_RUNTIME_DIR"))
-            end = source.index('    install(DIRECTORY "${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}/"', start)
+            end = source.index('    install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/maps"', start)
             rules = source[start:end]
             # Server always installs its authored bundle directly.
             start = source.index("    install(FILES\n        README.md", end)
@@ -73,8 +92,7 @@ class WindowsTrustNoticesTests(unittest.TestCase):
                              'print("Format: COFF-x86-64")\n'
                              'if binary.suffix == ".exe":\n'
                              '    print("Import {\\n  Name: libcurl-4.dll\\n}")\n'
-                             'elif binary.name == "libcurl-4.dll" and '
-                             '(binary.parent / "libcares-2.dll").exists():\n'
+                             f'elif binary.name == "libcurl-4.dll" and {cares!r}:\n'
                              '    print("Import {\\n  Name: libcares-2.dll\\n}")\n')
         inspector.chmod(0o755)
         (root / "fixture.exe").write_bytes(b"fixture executable")
@@ -89,7 +107,8 @@ class WindowsTrustNoticesTests(unittest.TestCase):
                  'endforeach()\n'
                  f'set(ATRINIK_LICENSE_FILE "{root}/LICENSE.md")\n'
                  f'set(ATRINIK_ATTRIBUTIONS_FILE "{root}/ATTRIBUTIONS.md")\n'
-                 f'set(ATRINIK_WINDOWS_RUNTIME_DIR "{runtime}")\n' + rules +
+                 f'set(ATRINIK_WINDOWS_RUNTIME_DIR "{runtime}")\n' +
+                 (f'set(ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR "{python_runtime}")\n' if python else "") + rules +
                  '\nset(CPACK_GENERATOR ZIP)\nset(CPACK_PACKAGE_FILE_NAME fixture)\ninclude(CPack)\n')
         (root / "CMakeLists.txt").write_text(cmake)
         arguments = ["cmake", "-S", str(root), "-B", str(root / "build")]
@@ -260,6 +279,69 @@ class WindowsTrustNoticesTests(unittest.TestCase):
                 result = subprocess.run(["cmake", "-S", str(root), "-B", str(root / "build")],
                                         capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def install_result(self, root):
+        return subprocess.run(["cmake", "--install", str(root / "build"), "--prefix", str(root / "installed")],
+                              capture_output=True, text=True)
+
+    def test_pe_inventory_rejects_malformed_unowned_or_changed_dlls(self):
+        for damage in ("malformed", "unowned", "bytes", "imports", "owner", "notice"):
+            with self.subTest(damage=damage):
+                root, result, _, _ = self.fixture("client", cares=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                inventory = root / "toolchain/share/atrinik/windows-dependencies/pe-closure.json"
+                if damage == "malformed":
+                    inventory.write_text("not JSON")
+                elif damage == "unowned":
+                    (root / "toolchain/bin/unowned.dll").write_bytes(b"unowned")
+                    (root / "llvm-readobj").write_text('#!/usr/bin/env python3\nimport pathlib,sys\n'
+                        'print("Format: COFF-x86-64")\n'
+                        'if pathlib.Path(sys.argv[-1]).suffix == ".exe":\n'
+                        '    print("Import {\\nName: unowned.dll\\n}")\n')
+                elif damage == "bytes":
+                    (root / "toolchain/bin/libcurl-4.dll").write_bytes(b"changed bytes")
+                elif damage == "notice":
+                    (root / "toolchain/share/licenses/fixture-curl/COPYING").write_bytes(b"changed notice")
+                else:
+                    manifest = json.loads(inventory.read_text())
+                    if damage == "imports":
+                        manifest["dlls"]["libcurl-4.dll"]["imports"] = ["kernel32.dll"]
+                    else:
+                        manifest["dlls"]["libcurl-4.dll"]["owner"] = "unowned"
+                    inventory.write_text(json.dumps(manifest))
+                result = self.install_result(root)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((root / "installed/unowned.dll").exists())
+
+    def test_python_snapshot_ships_only_receipt_checked_files(self):
+        root, result, _, _ = self.fixture("server", cares=False, python=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with self.package(root, "server") as archive:
+            for filename in ("python314.dll", "_ssl.pyd", "python314.zip", "LICENSE.txt"):
+                name = next(n for n in archive.namelist() if n.endswith("/server/" + filename))
+                self.assertEqual(archive.read(name), (root / "python" / filename).read_bytes())
+            self.assertTrue(any(n.endswith("/licenses/windows-python-runtime.json") for n in archive.namelist()))
+
+    def test_python_late_additions_nested_gcc_and_changed_bytes_cannot_ship(self):
+        for damage in ("late-pyd", "nested-gcc", "changed", "symlink"):
+            with self.subTest(damage=damage):
+                root, result, _, _ = self.fixture("server", cares=False, python=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                runtime = root / "python"
+                if damage == "late-pyd":
+                    (runtime / "late.pyd").write_bytes(b"invalid PE")
+                elif damage == "nested-gcc":
+                    (runtime / "nested").mkdir()
+                    (runtime / "nested/libgcc_s_seh-1.dll").write_bytes(b"GCC")
+                elif damage == "changed":
+                    (runtime / "_ssl.pyd").write_bytes(b"changed bytes")
+                else:
+                    (runtime / "_ssl.pyd").unlink()
+                    (runtime / "_ssl.pyd").symlink_to(runtime / "python314.dll")
+                result = self.install_result(root)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((root / "installed/server/late.pyd").exists())
+                self.assertFalse((root / "installed/server/nested/libgcc_s_seh-1.dll").exists())
 
 
 if __name__ == "__main__":

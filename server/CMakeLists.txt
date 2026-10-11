@@ -775,8 +775,7 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
         endif ()
     endforeach ()
 
-    install(DIRECTORY "${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}/"
-        DESTINATION server)
+    # The runtime helper snapshots and verifies every Python file at install.
     install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/maps"
         DESTINATION server
         PATTERN ".git" EXCLUDE)

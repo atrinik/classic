@@ -37,6 +37,18 @@ own files and Microsoft runtime dependencies; every bundled Python DLL and
 extension module is also inspected. Python API calls must retain the existing
 allocation and CRT-resource ownership boundaries.
 
+The stage helper requires the producer's schema-2 `pe-closure.json`, containing
+each DLL's SHA-256, source SHA-256, owner and import list, plus hashed notices
+for every owner. Its default location is the selected runtime prefix's
+`share/atrinik/windows-dependencies/` directory. Every staged DLL must match
+that receipt and its complete notice ownership. Inspection runs against the
+copied package bytes. `--producer-inventory` can select an explicit receipt.
+Server staging additionally uses `--python-runtime` and the producer's
+schema-1 `python-runtime.json` receipt of every relative file and its SHA-256.
+At install time it snapshots the entire recursive Python tree, rejects file
+additions, removals, changed bytes and symlinks, and inspects every copied DLL,
+extension and executable. The installer ships this validated snapshot.
+
 Both packages retain the producer's `windows-dependencies.json` and
 `windows-pe-closure.json` below `licenses/`, every dependency notice listed by
 that source inventory, and the complete LLVM-MinGW notices below

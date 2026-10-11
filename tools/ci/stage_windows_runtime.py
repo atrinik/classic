@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
 import re
-import shutil
 import subprocess
+import stat
+import tempfile
 from typing import Callable, Iterable
 
 
@@ -131,6 +134,165 @@ def runtime_index(runtime_dir: Path) -> dict[str, Path]:
     return index
 
 
+
+def read_inventory(path: Path) -> dict:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
+        raise StageError(f"invalid Windows inventory file: {path}")
+
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise StageError(f"duplicate Windows inventory key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        result = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_keys)
+    except (ValueError, UnicodeError) as error:
+        raise StageError(f"invalid Windows inventory JSON: {path}: {error}") from error
+    if not isinstance(result, dict):
+        raise StageError(f"Windows inventory must be an object: {path}")
+    return result
+
+
+def safe_relative_path(name: str) -> Path:
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_+./-]+", name):
+        raise StageError(f"unsafe Windows inventory path: {name}")
+    path = PurePosixPath(name)
+    if path.is_absolute() or any(part in {".", ".."} for part in name.split("/")):
+        raise StageError(f"unsafe Windows inventory path: {name}")
+    return Path(*path.parts)
+
+
+def copy_snapshot(source: Path, destination: Path, expected: str | None = None,
+                  *, max_bytes: int | None = None) -> str:
+    """Copy one opened regular file, then bind inspection to those copied bytes."""
+    descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    digest = hashlib.sha256()
+    copied_bytes = 0
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise StageError(f"runtime input is not a normal file: {source}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with os.fdopen(descriptor, "rb", closefd=False) as source_file, destination.open("xb") as output:
+            for chunk in iter(lambda: source_file.read(1024 * 1024), b""):
+                copied_bytes += len(chunk)
+                if max_bytes is not None and copied_bytes > max_bytes:
+                    raise StageError(f"Windows inventory is unexpectedly large: {source.name}")
+                output.write(chunk)
+                digest.update(chunk)
+    finally:
+        os.close(descriptor)
+    value = digest.hexdigest()
+    if expected is not None and value != expected:
+        raise StageError(f"runtime bytes differ from producer inventory: {source.name}")
+    return value
+
+
+def hash_record(value, name: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise StageError(f"invalid producer SHA-256 for {name}")
+    return value
+
+
+def producer_inventory(path: Path, runtime_dir: Path) -> tuple[dict[str, dict], dict[str, tuple[Path, str]]]:
+    manifest = read_inventory(path)
+    if manifest.get("schema_version") != 2 or not isinstance(manifest.get("dlls"), dict):
+        raise StageError("unsupported producer PE inventory schema")
+    dependencies = read_inventory(path.parent / "dependencies.json")
+    if dependencies.get("schema_version") != 1 or not isinstance(dependencies.get("dependencies"), list):
+        raise StageError("unsupported producer dependency inventory schema")
+    notices = manifest.get("notices")
+    if not isinstance(notices, dict) or not notices:
+        raise StageError("producer PE inventory has no notice ownership registry")
+    notice_files = {}
+    for owner, owner_notices in notices.items():
+        if not isinstance(owner, str) or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", owner) is None:
+            raise StageError(f"invalid producer notice owner: {owner}")
+        if not isinstance(owner_notices, dict) or not owner_notices:
+            raise StageError(f"producer owner has no notices: {owner}")
+        for name, digest in owner_notices.items():
+            relative = safe_relative_path(name)
+            if relative.parts[0] != owner or len(relative.parts) < 2 or name in notice_files:
+                raise StageError(f"producer notice has incorrect ownership: {name}")
+            source = runtime_dir.parent / "share/licenses" / relative
+            if source.is_symlink() or not source.is_file():
+                raise StageError(f"producer owner notice is missing: {name}")
+            notice_files[name] = (source, hash_record(digest, name))
+    llvm_notices = {"llvm-mingw/" + name for name in ("LICENSE.TXT", "COPYING", "COPYING.MinGW-w64-runtime.txt",
+                                                       "COPYING.MinGW-w64.txt", "COPYING.winpthreads.txt", "COPYING.winstorecompat.txt")}
+    if not llvm_notices.issubset(notice_files):
+        raise StageError("producer inventory omits required LLVM-MinGW notices")
+    owners = set(notices)
+    for dependency in dependencies["dependencies"]:
+        if not isinstance(dependency, dict) or not isinstance(dependency.get("name"), str):
+            raise StageError("invalid producer dependency owner")
+        notices = dependency.get("licenses")
+        if not isinstance(notices, list) or not notices:
+            raise StageError(f"producer owner has no notices: {dependency['name']}")
+        safe_relative_path(dependency["name"])
+        for notice in notices:
+            safe_relative_path(notice)
+            notice_file = runtime_dir.parent / "share/licenses" / dependency["name"] / notice.replace("/", "_")
+            if notice_file.is_symlink() or not notice_file.is_file():
+                raise StageError(f"producer owner notice is missing: {dependency['name']}/{notice}")
+    records = {}
+    if len(manifest["dlls"]) > MAX_RUNTIME_DLLS:
+        raise StageError("producer PE inventory is unexpectedly large")
+    for name, record in manifest["dlls"].items():
+        if DLL_NAME.fullmatch(name) is None or name.lower() in records or not isinstance(record, dict):
+            raise StageError(f"invalid producer DLL record: {name}")
+        if record.get("owner") not in owners:
+            raise StageError(f"producer DLL has no notice owner: {name}")
+        hash_record(record.get("sha256"), name)
+        hash_record(record.get("source_sha256"), f"{name} source")
+        imports = record.get("imports")
+        if not isinstance(imports, list) or any(not isinstance(item, str) or DLL_NAME.fullmatch(item) is None for item in imports):
+            raise StageError(f"invalid producer imports: {name}")
+        records[name.lower()] = {**record, "imports": [item.lower() for item in imports]}
+    return records, notice_files
+
+
+def snapshot_python(runtime_dir: Path, inventory_path: Path, output_dir: Path) -> list[Path]:
+    if runtime_dir.is_symlink() or not runtime_dir.is_dir():
+        raise StageError(f"Python runtime is not a normal directory: {runtime_dir}")
+    manifest = read_inventory(inventory_path)
+    files = manifest.get("files")
+    if manifest.get("schema_version") != 1 or not isinstance(files, dict) or not 1 <= len(files) <= 10000:
+        raise StageError("invalid Python runtime inventory")
+    actual = {}
+    windows_paths = set()
+    for source in runtime_dir.rglob("*"):
+        relative = source.relative_to(runtime_dir).as_posix()
+        if source.is_symlink() or not (source.is_file() or source.is_dir()):
+            raise StageError(f"invalid Python runtime entry: {relative}")
+        if source.is_file():
+            if relative.lower() in windows_paths:
+                raise StageError(f"duplicate case-insensitive Python runtime path: {relative}")
+            windows_paths.add(relative.lower())
+            actual[relative] = source
+    if set(actual) != set(files):
+        raise StageError("Python runtime files differ from producer inventory")
+    binaries = []
+    names = set()
+    for name, source in sorted(actual.items()):
+        relative = safe_relative_path(name)
+        record = files[name]
+        expected = hash_record(record.get("sha256") if isinstance(record, dict) else record, name)
+        destination = output_dir / relative
+        if GCC_RUNTIME.fullmatch(source.name):
+            raise StageError(f"GCC runtime DLL in Python runtime: {name}")
+        copy_snapshot(source, destination, expected)
+        if source.suffix.lower() in {".dll", ".pyd", ".exe"}:
+            normalized = source.name.lower()
+            if normalized in names:
+                raise StageError(f"duplicate Python PE filename: {source.name}")
+            names.add(normalized)
+            binaries.append(destination)
+    return binaries
+
+
 def stage_runtime(
     binaries: Iterable[Path],
     runtime_dir: Path | Iterable[Path],
@@ -138,9 +300,13 @@ def stage_runtime(
     inspector: Callable[[Path], set[str]],
     *,
     dlls_only: bool = False,
+    producer_records: dict[str, dict] | None = None,
+    python_runtime: Path | None = None,
+    python_inventory_path: Path | None = None,
+    producer_notices: dict[str, tuple[Path, str]] | None = None,
 ) -> list[str]:
     sources: dict[str, Path] = {}
-    runtime_dirs = [runtime_dir] if isinstance(runtime_dir, Path) else runtime_dir
+    runtime_dirs = [runtime_dir] if isinstance(runtime_dir, Path) else list(runtime_dir)
     for directory in runtime_dirs:
         for name, source in runtime_index(directory).items():
             if name in sources and sources[name] != source:
@@ -153,51 +319,81 @@ def stage_runtime(
             raise StageError(f"output directory is not empty: {output_dir}")
     else:
         output_dir.mkdir(parents=True)
-    queue: list[Path] = []
+    if producer_notices is not None:
+        for name, (source, digest) in producer_notices.items():
+            copy_snapshot(source, output_dir / "licenses" / safe_relative_path(name), digest)
+    python_binaries = []
+    if python_runtime is not None:
+        if python_inventory_path is None:
+            raise StageError("Python runtime requires a producer file inventory")
+        python_binaries = snapshot_python(python_runtime, python_inventory_path, output_dir)
+        for binary in python_binaries:
+            if binary.suffix.lower() == ".dll":
+                name = binary.name.lower()
+                if name in sources:
+                    raise StageError(f"duplicate case-insensitive runtime DLL: {binary.name}")
+                sources[name] = binary
+    queue: list[tuple[Path, Path, dict | None]] = []
     staged: dict[str, Path] = {}
 
-    def stage(source: Path, copy: bool = True) -> None:
-        if source.is_symlink() or not source.is_file():
-            raise StageError(f"runtime input is not a normal file: {source}")
-        normalized = source.name.lower()
-        if GCC_RUNTIME.fullmatch(normalized):
-            raise StageError(f"GCC runtime DLL in LLVM closure: {source.name}")
-        previous = staged.get(normalized)
-        if previous is not None:
-            if previous != source:
-                raise StageError(f"duplicate staged filename: {source.name}")
-            return
-        if copy:
-            destination = output_dir / source.name
-            shutil.copyfile(source, destination)
-        staged[normalized] = source
-        queue.append(source)
+    with tempfile.TemporaryDirectory(prefix="atrinik-pe-inspection-") as temporary:
+        inspection_dir = Path(temporary)
 
-    for binary in binaries:
-        stage(binary, copy=not dlls_only)
-
-    position = 0
-    runtime_count = 0
-    while position < len(queue):
-        binary = queue[position]
-        position += 1
-        for dependency in sorted(inspector(binary), key=str.lower):
-            if DLL_NAME.fullmatch(dependency) is None:
-                raise StageError(f"invalid imported DLL name for {binary.name}: {dependency}")
-            normalized = dependency.lower()
+        def stage(source: Path, copy: bool = True, external: bool = False) -> None:
+            if source.is_symlink() or not source.is_file():
+                raise StageError(f"runtime input is not a normal file: {source}")
+            normalized = source.name.lower()
             if GCC_RUNTIME.fullmatch(normalized):
-                raise StageError(f"GCC runtime DLL in LLVM closure: {dependency}")
-            if is_system_dll(dependency) or normalized in staged:
-                continue
-            source = sources.get(normalized)
-            if source is None:
-                raise StageError(f"unresolved runtime DLL for {binary.name}: {dependency}")
-            runtime_count += 1
-            if runtime_count > MAX_RUNTIME_DLLS:
-                raise StageError("Windows runtime dependency closure is unexpectedly large")
-            stage(source)
+                raise StageError(f"GCC runtime DLL in LLVM closure: {source.name}")
+            previous = staged.get(normalized)
+            if previous is not None:
+                if previous != source:
+                    raise StageError(f"duplicate staged filename: {source.name}")
+                return
+            record = None
+            if producer_records is not None and source in sources.values() and not external:
+                record = producer_records.get(normalized)
+                if record is None:
+                    raise StageError(f"runtime DLL has no producer ownership record: {source.name}")
+            if external:
+                inspection = source
+            else:
+                inspection = output_dir / source.name if copy else inspection_dir / source.name
+                copy_snapshot(source, inspection, record["sha256"] if record else None)
+            staged[normalized] = source
+            queue.append((source, inspection, record))
 
-    return sorted((path.name for path in output_dir.iterdir()), key=str.lower)
+        for binary in binaries:
+            stage(binary, copy=not dlls_only)
+        for binary in python_binaries:
+            stage(binary, copy=False, external=True)
+
+        position = 0
+        runtime_count = 0
+        while position < len(queue):
+            original, binary, record = queue[position]
+            position += 1
+            imports = inspector(binary)
+            if record is not None and {name.lower() for name in imports} != set(record["imports"]):
+                raise StageError(f"runtime imports differ from producer inventory: {original.name}")
+            for dependency in sorted(imports, key=str.lower):
+                if DLL_NAME.fullmatch(dependency) is None:
+                    raise StageError(f"invalid imported DLL name for {binary.name}: {dependency}")
+                normalized = dependency.lower()
+                if GCC_RUNTIME.fullmatch(normalized):
+                    raise StageError(f"GCC runtime DLL in LLVM closure: {dependency}")
+                if is_system_dll(dependency) or normalized in staged:
+                    continue
+                source = sources.get(normalized)
+                if source is None:
+                    raise StageError(f"unresolved runtime DLL for {binary.name}: {dependency}")
+                runtime_count += 1
+                if runtime_count > MAX_RUNTIME_DLLS:
+                    raise StageError("Windows runtime dependency closure is unexpectedly large")
+                stage(source)
+
+    return sorted((path.relative_to(output_dir).as_posix() for path in output_dir.rglob("*")
+                   if path.is_file()), key=str.lower)
 
 
 def main() -> int:
@@ -205,6 +401,9 @@ def main() -> int:
     parser.add_argument("--readobj", required=True)
     parser.add_argument("--runtime-dir", type=Path, action="append", default=[])
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--producer-inventory", type=Path)
+    parser.add_argument("--python-runtime", type=Path)
+    parser.add_argument("--python-inventory", type=Path)
     parser.add_argument("--dlls-only", action="store_true")
     parser.add_argument("--inspect-only", action="store_true")
     parser.add_argument("--require-import", action="append", default=[])
@@ -221,13 +420,38 @@ def main() -> int:
             return 0
         if not arguments.runtime_dir or arguments.output_dir is None:
             raise StageError("staging requires --runtime-dir and --output-dir")
-        staged = stage_runtime(
-            arguments.binaries,
-            arguments.runtime_dir,
-            arguments.output_dir,
-            lambda binary: imported_dlls(arguments.readobj, binary),
-            dlls_only=arguments.dlls_only,
-        )
+        inventory_path = arguments.producer_inventory or (
+            arguments.runtime_dir[0].parent / "share/atrinik/windows-dependencies/pe-closure.json")
+        with tempfile.TemporaryDirectory(prefix="atrinik-pe-inventory-") as temporary:
+            snapshot_dir = Path(temporary)
+            frozen_inventory = snapshot_dir / "pe-closure.json"
+            frozen_dependencies = snapshot_dir / "dependencies.json"
+            copy_snapshot(inventory_path, frozen_inventory, max_bytes=4 * 1024 * 1024)
+            copy_snapshot(inventory_path.parent / "dependencies.json", frozen_dependencies, max_bytes=4 * 1024 * 1024)
+            frozen_python = None
+            if arguments.python_runtime is not None:
+                frozen_python = snapshot_dir / "python-runtime.json"
+                copy_snapshot(arguments.python_inventory or inventory_path.parent / "python-runtime.json", frozen_python,
+                              max_bytes=4 * 1024 * 1024)
+            records, notices = producer_inventory(frozen_inventory, arguments.runtime_dir[0])
+            staged = stage_runtime(
+                arguments.binaries,
+                arguments.runtime_dir,
+                arguments.output_dir,
+                lambda binary: imported_dlls(arguments.readobj, binary),
+                dlls_only=arguments.dlls_only,
+                producer_records=records,
+                python_runtime=arguments.python_runtime,
+                python_inventory_path=frozen_python,
+                producer_notices=notices,
+            )
+            metadata = {"windows-pe-closure.json": frozen_inventory,
+                        "windows-dependencies.json": frozen_dependencies}
+            if frozen_python is not None:
+                metadata["windows-python-runtime.json"] = frozen_python
+            for name, source in metadata.items():
+                copy_snapshot(source, arguments.output_dir / "licenses" / name)
+                staged.append("licenses/" + name)
     except (OSError, StageError, subprocess.SubprocessError) as error:
         parser.exit(1, f"Windows runtime staging failed: {error}\n")
     print(json.dumps({"staged": staged}, indent=2))
