@@ -30,429 +30,294 @@
 #include <global.h>
 #include <server_main.h>
 #include <los.h>
-#include <initialization.h>
-#include <toolkit/bresenham.h>
 #include <player.h>
 #include <object.h>
+#include <spatial.h>
 
-/**
- * Distance must be less than this for the object to be blocked.
- * An object is 1.0 wide, so if set to 0.5, it means the object
- * that blocks half the view (0.0 is complete block) will
- * block view in our tables.
- * .4 or less lets you see through walls.  .5 is about right.
- */
-#define SPACE_BLOCK 0.5
-#define BLOCK_LINKS_MAX 5
+/* A canonical stack has thirteen maps even when its top lies beyond the
+ * viewer-relative six levels serialized by MAP2. */
+#define LOS_OVERHEAD_LEVELS (SPATIAL_STACK_LEVELS - 1)
 
-typedef struct blstr {
-    int x[BLOCK_LINKS_MAX], y[BLOCK_LINKS_MAX];
-    int index;
-} blocks;
+typedef struct los_camera_view {
+    bool cutaway[LOS_OVERHEAD_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+    uint16_t cover[MAP_CLIENT_X][MAP_CLIENT_Y];
+} los_camera_view;
 
-static blocks block[MAP_CLIENT_X][MAP_CLIENT_Y];
+/* Kept for startup compatibility: sight has no precomputed 2D block table. */
+void init_block(void) {}
 
-static void expand_sight(object *op);
-
-/**
- * Initializes the array used by the LOS routines.
- * This is NOT called for every LOS - only at server start to
- * init the base block structure.
- *
- * Since we are only doing the upper left quadrant, only
- * these spaces could possibly get blocked, since these
- * are the only ones further out that are still possibly in the
- * sightline.
- */
-void init_block(void) {
-    int x, y, dx, dy, i;
-    static const int block_x[3] = {-1, -1, 0}, block_y[3] = {-1, 0, -1};
-
-    for (x = 0; x < MAP_CLIENT_X; x++) {
-        for (y = 0; y < MAP_CLIENT_Y; y++) {
-            block[x][y].index = 0;
+static bool camera_surface(mapstruct *map, int x, int y) {
+    if (GET_MAP_FLAGS(map, x, y) & P_BLOCKSVIEW) {
+        return true;
+    }
+    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
+        if (QUERY_FLAG(tmp, FLAG_IS_FLOOR) || object_is_roof_surface(tmp)) {
+            return true;
         }
     }
+    return false;
+}
 
-    /* The table should be symmetric, so only do the upper left
-     * quadrant - makes the processing easier. */
-    for (x = 1; x <= MAP_CLIENT_X / 2; x++) {
-        for (y = 1; y <= MAP_CLIENT_Y / 2; y++) {
-            for (i = 0; i < 3; i++) {
-                dx = x + block_x[i];
-                dy = y + block_y[i];
+static bool camera_roof(mapstruct *map, int x, int y) {
+    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
+        if (object_is_roof_surface(tmp)) {
+            return true;
+        }
+    }
+    return false;
+}
 
-                /* Center space never blocks */
-                if (x == MAP_CLIENT_X / 2 && y == MAP_CLIENT_Y / 2) {
-                    continue;
-                }
+static bool camera_wall(mapstruct *map, int x, int y) {
+    MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        if (GET_MAP_SPACE_LAYER(space, LAYER_WALL, sub_layer) != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
 
-                /* If its a straight line, it's blocked */
-                if ((dx == x && x == MAP_CLIENT_X / 2) || (dy == y && y == MAP_CLIENT_Y / 2)) {
-                    /* For simplicity, we mirror the coordinates to block the
-                     * other
-                     * quadrants. */
-                    set_block(x, y, dx, dy);
+/** Classify connected camera cutaways before casting any player sight rays. */
+static void camera_build(object *pl, los_camera_view *view) {
+    socket_struct *cs = CONTR(pl)->cs;
+    bool blockers[MAP_CLIENT_X][MAP_CLIENT_Y];
+    bool walls[MAP_CLIENT_X][MAP_CLIENT_Y];
+    bool boundary[MAP_CLIENT_X][MAP_CLIENT_Y];
+    int queue_x[MAP_CLIENT_X * MAP_CLIENT_Y];
+    int queue_y[MAP_CLIENT_X * MAP_CLIENT_Y];
+    memset(view, 0, sizeof(*view));
 
-                    if (x == MAP_CLIENT_X / 2) {
-                        set_block(x, MAP_CLIENT_Y - y - 1, dx, MAP_CLIENT_Y - dy - 1);
-                    } else if (y == MAP_CLIENT_Y / 2) {
-                        set_block(MAP_CLIENT_X - x - 1, y, MAP_CLIENT_X - dx - 1, dy);
+    for (int depth = 1; depth <= LOS_OVERHEAD_LEVELS; depth++) {
+        spatial_cell center;
+        bool cut_center = spatial_resolve(pl->map, pl->x, pl->y, depth, &center) &&
+                          camera_surface(center.map, center.x, center.y);
+        memset(blockers, 0, sizeof(blockers));
+        memset(walls, 0, sizeof(walls));
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                spatial_cell cell;
+                if (spatial_resolve(pl->map, pl->x + ax - cs->mapx_2,
+                                    pl->y + ay - cs->mapy_2, depth, &cell)) {
+                    blockers[ax][ay] = camera_surface(cell.map, cell.x, cell.y);
+                    walls[ax][ay] = camera_wall(cell.map, cell.x, cell.y);
+                    if (blockers[ax][ay]) {
+                        view->cover[ax][ay] |= UINT16_C(1) << (depth - 1);
                     }
                 } else {
-                    float d1, s, l;
-
-                    /* We use the algorithm that found out how close the point
-                     * (x, y) is to the line from dx, dy to the center of the
-                     * viewable
-                     * area.  l is the distance from x, y to the line.
-                     * r is more a curiosity - it lets us know what direction
-                     * (left/right)
-                     * the line is off */
-                    d1 = (float)(pow(MAP_CLIENT_X / 2 - dx, 2) + pow(MAP_CLIENT_Y / 2 - dy, 2));
-                    s = (float)((dy - y) * (MAP_CLIENT_X / 2 - dx) -
-                                (dx - x) * (MAP_CLIENT_Y / 2 - dy)) /
-                        d1;
-                    l = (float)FABS(sqrt(d1) * s);
-
-                    if (l <= SPACE_BLOCK) {
-                        /* For simplicity, we mirror the coordinates to block
-                         * the other
-                         * quadrants. */
-                        set_block(x, y, dx, dy);
-                        set_block(MAP_CLIENT_X - x - 1, y, MAP_CLIENT_X - dx - 1, dy);
-                        set_block(x, MAP_CLIENT_Y - y - 1, dx, MAP_CLIENT_Y - dy - 1);
-                        set_block(MAP_CLIENT_X - x - 1,
-                                  MAP_CLIENT_Y - y - 1,
-                                  MAP_CLIENT_X - dx - 1,
-                                  MAP_CLIENT_Y - dy - 1);
+                    spatial_cell previous;
+                    if (spatial_resolve(pl->map, pl->x + ax - cs->mapx_2,
+                                        pl->y + ay - cs->mapy_2, depth - 1, &previous) &&
+                        (previous.map->tile_path[TILED_UP] != NULL ||
+                         previous.map->tile_map[TILED_UP] != NULL)) {
+                        /* Advertised unresolved cover cannot prove exposure. */
+                        view->cover[ax][ay] |= UINT16_C(1) << (depth - 1);
                     }
                 }
             }
         }
-    }
-}
-
-/**
- * Used to initialize the array used by the LOS routines.
- * What this sets if that x, y blocks the view of bx, by
- * This then sets up a relation - for example, something
- * at 5, 4 blocks view at 5, 3 which blocks view at 5, 2
- * etc. So when we check 5, 4 and find it block, we have
- * the data to know that 5, 3 and 5, 2 and 5, 1 should
- * also be blocked.
- * @param x
- * X position
- * @param y
- * Y position
- * @param bx
- * Blocked X position
- * @param by
- * Blocked Y position
- */
-void set_block(int x, int y, int bx, int by) {
-    int idx = block[x][y].index, i;
-
-    /* Due to flipping, we may get duplicates - better safe than sorry. */
-    for (i = 0; i < idx; i++) {
-        if (block[x][y].x[i] == bx && block[x][y].y[i] == by) {
-            return;
-        }
-    }
-
-    HARD_ASSERT(idx < BLOCK_LINKS_MAX);
-    block[x][y].x[idx] = bx;
-    block[x][y].y[idx] = by;
-    block[x][y].index++;
-}
-
-/**
- * Used to initialize the array used by the LOS routines.
- * x, y are indexes into the blocked[][] array.
- * This recursively sets the blocked line of sight view.
- * From the blocked[][] array, we know for example
- * that if some particular space is blocked, it blocks
- * the view of the spaces 'behind' it, and those blocked
- * spaces behind it may block other spaces, etc.
- * In this way, the chain of visibility is set.
- * @param op
- * Player object
- * @param x
- * X position
- * @param y
- * Y position
- */
-static void set_wall(object *op, int x, int y) {
-    int i, xt, yt;
-
-    xt = MAP_CLIENT_X / 2 - CONTR(op)->cs->mapx_2;
-    yt = MAP_CLIENT_Y / 2 - CONTR(op)->cs->mapy_2;
-
-    for (i = 0; i < block[x][y].index; i++) {
-        int dx = block[x][y].x[i], dy = block[x][y].y[i], ax, ay;
-
-        /* ax, ay are the values as adjusted to be in the
-         * socket look structure. */
-        ax = dx - xt;
-        ay = dy - yt;
-
-        if (ax < 0 || ax >= CONTR(op)->cs->mapx || ay < 0 || ay >= CONTR(op)->cs->mapy) {
+        if (!cut_center) {
             continue;
         }
-
-        /* We need to adjust to the fact that the socket
-         * code wants the los to start from the 0, 0
-         * and not be relative to middle of los array. */
-
-        /* This tile can't be seen */
-        if (!(CONTR(op)->blocked_los[ax][ay] & BLOCKED_LOS_OUT_OF_MAP)) {
-            CONTR(op)->blocked_los[ax][ay] |= BLOCKED_LOS_BLOCKED;
-        }
-
-        set_wall(op, dx, dy);
-    }
-}
-
-/**
- * Used to initialize the array used by the LOS routines.
- * Instead of light values, blocked_los[][] now tells the client
- * update function what kind of tile we have: visible, sight
- * blocked, blocksview trigger or out of map.
- * @param op
- * The player object
- * @param x
- * X position based on MAP_CLIENT_X
- * @param y
- * Y position based on MAP_CLIENT_Y
- */
-static void check_wall(object *op, int x, int y) {
-    int ax, ay, flags;
-
-    /* ax, ay are coordinates as indexed into the look window */
-    ax = x - (MAP_CLIENT_X / 2 - CONTR(op)->cs->mapx_2);
-    ay = y - (MAP_CLIENT_Y / 2 - CONTR(op)->cs->mapy_2);
-
-    /* this skips the "edges" of view area, the border tiles.
-     * Naturally, this tiles can't block any view - there is
-     * nothing behind them. */
-    if (!block[x][y].index) {
-        /* to handle the "blocksview update" right, we give this special
-         * tiles a "never use it to trigger a los_update()" flag.
-         * blockview changes to this tiles will have no effect. */
-
-        /* mark the space as OUT_OF_MAP. */
-        if (blocks_view(op->map, op->x + x - MAP_CLIENT_X / 2, op->y + y - MAP_CLIENT_Y / 2) &
-            P_OUT_OF_MAP) {
-            CONTR(op)->blocked_los[ax][ay] = BLOCKED_LOS_OUT_OF_MAP;
-        } else {
-            /* ignore means ignore for LOS */
-            CONTR(op)->blocked_los[ax][ay] |= BLOCKED_LOS_IGNORE;
-        }
-
-        return;
-    }
-
-    /* If the converted coordinates are outside the viewable
-     * area for the client, return now. */
-    if (ax < 0 || ay < 0 || ax >= CONTR(op)->cs->mapx || ay >= CONTR(op)->cs->mapy) {
-        return;
-    }
-
-    /* If this space is already blocked, prune the processing - presumably
-     * whatever has set this space to be blocked has done the work and already
-     * done the dependency chain.
-     * but check for get_map_from_coord to speedup our client map draw function.
-     * */
-    if (CONTR(op)->blocked_los[ax][ay] & (BLOCKED_LOS_BLOCKED | BLOCKED_LOS_OUT_OF_MAP)) {
-        if (CONTR(op)->blocked_los[ax][ay] & BLOCKED_LOS_BLOCKED) {
-            if ((flags = blocks_view(op->map,
-                                     op->x + x - MAP_CLIENT_X / 2,
-                                     op->y + y - MAP_CLIENT_Y / 2))) {
-                /* mark the space as OUT_OF_MAP. */
-                if (flags & P_OUT_OF_MAP) {
-                    CONTR(op)->blocked_los[ax][ay] = BLOCKED_LOS_OUT_OF_MAP;
-                } else {
-                    CONTR(op)->blocked_los[ax][ay] |= BLOCKED_LOS_BLOCKSVIEW;
+        bool (*cutaway)[MAP_CLIENT_Y] = view->cutaway[depth - 1];
+        size_t first = 0, last = 0;
+        cutaway[cs->mapx_2][cs->mapy_2] = true;
+        queue_x[last] = cs->mapx_2;
+        queue_y[last++] = cs->mapy_2;
+        static const int nx[] = {-1, 1, 0, 0}, ny[] = {0, 0, -1, 1};
+        while (first < last) {
+            int x = queue_x[first], y = queue_y[first++];
+            for (size_t n = 0; n < arraysize(nx); n++) {
+                int ax = x + nx[n], ay = y + ny[n];
+                if (ax < 0 || ay < 0 || ax >= cs->mapx || ay >= cs->mapy ||
+                    !blockers[ax][ay] || cutaway[ax][ay]) {
+                    continue;
                 }
+                cutaway[ax][ay] = true;
+                queue_x[last] = ax;
+                queue_y[last++] = ay;
             }
         }
-        return;
-    }
-
-    if ((flags =
-             blocks_view(op->map, op->x + x - MAP_CLIENT_X / 2, op->y + y - MAP_CLIENT_Y / 2))) {
-        set_wall(op, x, y);
-
-        /* out of map clears all other flags! */
-
-        /* Mark the space as OUT_OF_MAP. */
-        if (flags & P_OUT_OF_MAP) {
-            CONTR(op)->blocked_los[ax][ay] = BLOCKED_LOS_OUT_OF_MAP;
-        } else {
-            CONTR(op)->blocked_los[ax][ay] |= BLOCKED_LOS_BLOCKSVIEW;
-        }
-    }
-}
-
-/**
- * Sets all viewable squares to blocked except for the central one that
- * the player occupies. A little odd that you can see yourself (and what
- * you're standing on), but really need for any reasonable game play.
- * @param op
- * Player's object for which to reset los.
- */
-static void blinded_sight(object *op) {
-    int x, y;
-
-    for (x = 0; x < CONTR(op)->cs->mapx; x++) {
-        for (y = 0; y < CONTR(op)->cs->mapy; y++) {
-            CONTR(op)->blocked_los[x][y] |= BLOCKED_LOS_BLOCKED;
-        }
-    }
-
-    CONTR(op)->blocked_los[CONTR(op)->cs->mapx / 2][CONTR(op)->cs->mapy / 2] &=
-        ~BLOCKED_LOS_BLOCKED;
-}
-
-/**
- * Recalculates the array which specifies what is visible
- * for the given player object.
- * @param op
- * The player object
- */
-void update_los(object *op) {
-    int dx = CONTR(op)->cs->mapx_2, dy = CONTR(op)->cs->mapy_2, x, y;
-
-    if (QUERY_FLAG(op, FLAG_REMOVED)) {
-        return;
-    }
-
-    clear_los(op);
-
-    if (CONTR(op)->tls) {
-        return;
-    }
-
-    /* For larger maps, this is more efficient than the old way which
-     * used the chaining of the block array.  Since many space views could
-     * be blocked by different spaces in front, this mean that a lot of spaces
-     * could be examined multile times, as each path would be looked at. */
-    int x_offset = MAP_CLIENT_X / 2 - dx;
-    int y_offset = MAP_CLIENT_Y / 2 - dy;
-    for (x = x_offset; x < x_offset + CONTR(op)->cs->mapx; x++) {
-        for (y = y_offset; y < y_offset + CONTR(op)->cs->mapy; y++) {
-            check_wall(op, x, y);
-        }
-    }
-
-    if (QUERY_FLAG(op, FLAG_BLIND)) {
-        blinded_sight(op);
-    } else {
-        expand_sight(op);
-
-        /* Give us an area we can look through when we have xray - this
-         * stacks to normal LOS. */
-        if (QUERY_FLAG(op, FLAG_XRAYS)) {
-            for (x = -3; x <= 3; x++) {
-                for (y = -3; y <= 3; y++) {
-                    if (CONTR(op)->blocked_los[dx + x][dy + y] & BLOCKED_LOS_BLOCKED) {
-                        CONTR(op)->blocked_los[dx + x][dy + y] &= ~BLOCKED_LOS_BLOCKED;
+        /* Include only the one-cell wall perimeter, never a recursive chain. */
+        memset(boundary, 0, sizeof(boundary));
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                if (!walls[ax][ay] || cutaway[ax][ay]) {
+                    continue;
+                }
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        int x = ax + dx, y = ay + dy;
+                        if (x >= 0 && y >= 0 && x < cs->mapx && y < cs->mapy && cutaway[x][y]) {
+                            boundary[ax][ay] = true;
+                        }
                     }
                 }
             }
         }
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                cutaway[ax][ay] |= boundary[ax][ay];
+            }
+        }
     }
 }
 
-/**
- * Clears/initializes the LOS array associated to the player
- * controlling the object.
- * @param op
- * The player object.
- */
-void clear_los(object *op) {
-    (void)memset(CONTR(op)->blocked_los, BLOCKED_LOS_VISIBLE, sizeof(CONTR(op)->blocked_los));
+static bool camera_cutaway(const los_camera_view *view, int depth, int ax, int ay) {
+    return depth > 0 && depth <= LOS_OVERHEAD_LEVELS && view->cutaway[depth - 1][ax][ay];
 }
 
-#define BLOCKED_LOS_EXPAND 0x20
+static los_camera_visibility camera_classify(object *pl, const los_camera_view *view,
+                                             int ax, int ay, int depth) {
+    socket_struct *cs = CONTR(pl)->cs;
+    int x = pl->x + ax - cs->mapx_2, y = pl->y + ay - cs->mapy_2;
+    spatial_cell target;
+    if (!spatial_resolve(pl->map, x, y, depth, &target) ||
+        camera_cutaway(view, depth, ax, ay)) {
+        return LOS_CAMERA_HIDDEN;
+    }
+    /* A current/lower slab remains a physical downward camera boundary. */
+    for (int z = 0; depth < 0 && z > depth; z--) {
+        spatial_cell cell;
+        if (!spatial_resolve(pl->map, x, y, z, &cell) ||
+            camera_surface(cell.map, cell.x, cell.y)) {
+            return LOS_CAMERA_HIDDEN;
+        }
+    }
+    /* Full-stack classification was built once before rays. Cutaway is a
+     * presentation subtraction from cover, never a physical ray exception. */
+    uint16_t cover = view->cover[ax][ay];
+    for (int z = 1; z <= LOS_OVERHEAD_LEVELS; z++) {
+        if (camera_cutaway(view, z, ax, ay)) {
+            cover &= ~(UINT16_C(1) << (z - 1));
+        }
+    }
+    if ((cover >> MAX(depth, 0)) != 0) {
+        return LOS_CAMERA_WALL_BOUNDARY;
+    }
+    /* A floor supports occupants on its top face; it does not hide them.
+     * A roof itself is camera structure and never authorizes its contents. */
+    return camera_roof(target.map, target.x, target.y) ? LOS_CAMERA_BOUNDARY : LOS_CAMERA_VISIBLE;
+}
 
-/**
- * This goes through the array of what the given player is able to
- * see, and expands the visible area a bit, so the player will, to
- * a certain degree, be able to see into corners.
- * This is somewhat suboptimal, would be better to improve the
- * formula.
- * @param op
- * The player object.
- * @todo Improve the formula.
- */
-static void expand_sight(object *op) {
-    int i, x, y, dx, dy;
+bool los_camera_layer_visible(los_camera_visibility visibility, int layer) {
+    if (visibility == LOS_CAMERA_WALL_BOUNDARY) {
+        return layer == LAYER_WALL;
+    }
+    if (visibility == LOS_CAMERA_BOUNDARY) {
+        return layer == LAYER_FLOOR || layer == LAYER_FMASK || layer == LAYER_WALL;
+    }
+    return visibility == LOS_CAMERA_VISIBLE;
+}
 
-    /* loop over inner squares */
-    for (x = 1; x < CONTR(op)->cs->mapx - 1; x++) {
-        for (y = 1; y < CONTR(op)->cs->mapy - 1; y++) {
-            /* if visible and not blocksview */
-            if (CONTR(op)->blocked_los[x][y] <= BLOCKED_LOS_BLOCKSVIEW &&
-                !(CONTR(op)->blocked_los[x][y] & BLOCKED_LOS_BLOCKSVIEW)) {
-                /* mark all directions */
-                for (i = 1; i <= 8; i += 1) {
-                    dx = x + freearr_x[i];
-                    dy = y + freearr_y[i];
+static bool player_offset(object *pl, mapstruct *map, int x, int y,
+                          int *dx, int *dy, int *dz) {
+    int mx, my;
+    if (pl == NULL || CONTR(pl) == NULL || CONTR(pl)->cs == NULL || pl->map == NULL ||
+        map == NULL || !spatial_offset(pl->map, map, &mx, &my, dz)) {
+        return false;
+    }
+    *dx = mx + x - pl->x;
+    *dy = my + y - pl->y;
+    socket_struct *cs = CONTR(pl)->cs;
+    return *dx >= -cs->mapx_2 && *dx < cs->mapx - cs->mapx_2 &&
+           *dy >= -cs->mapy_2 && *dy < cs->mapy - cs->mapy_2 &&
+           *dz >= -MAP2_MAX_DEPTH && *dz <= MAP2_MAX_DEPTH;
+}
 
-                    if (dx < 0 || dy < 0 || dx > CONTR(op)->cs->mapx || dy > CONTR(op)->cs->mapy) {
-                        continue;
+static bool player_ray(object *pl, int dx, int dy, int dz) {
+    if (CONTR(pl)->tls) {
+        return true; /* Explicit administrator true-line-of-sight exception. */
+    }
+    if (QUERY_FLAG(pl, FLAG_BLIND)) {
+        return dx == 0 && dy == 0 && dz == 0;
+    }
+    if (dz == 0 && abs(dx) <= 3 && abs(dy) <= 3 && QUERY_FLAG(pl, FLAG_XRAYS)) {
+        return true; /* Same-story wall bypass; camera/slabs remain authoritative. */
+    }
+    return spatial_ray_clear(pl->map, pl->x, pl->y, dx, dy, dz, SPATIAL_SIGHT, true);
+}
+
+bool los_player_has_geometric_sight(object *pl, mapstruct *map, int x, int y) {
+    int dx, dy, dz;
+    return player_offset(pl, map, x, y, &dx, &dy, &dz) && player_ray(pl, dx, dy, dz);
+}
+
+los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, int y) {
+    int dx, dy, dz;
+    if (!player_offset(pl, map, x, y, &dx, &dy, &dz)) {
+        return LOS_CAMERA_HIDDEN;
+    }
+    if (CONTR(pl)->tls) {
+        return LOS_CAMERA_VISIBLE;
+    }
+    los_camera_view view;
+    camera_build(pl, &view);
+    return camera_classify(pl, &view, dx + CONTR(pl)->cs->mapx_2,
+                           dy + CONTR(pl)->cs->mapy_2, dz);
+}
+
+bool los_player_can_see_cell(object *pl, mapstruct *map, int x, int y) {
+    return los_player_has_geometric_sight(pl, map, x, y) &&
+           los_player_cell_camera(pl, map, x, y) == LOS_CAMERA_VISIBLE;
+}
+
+void clear_los(object *pl) {
+    memset(CONTR(pl)->blocked_los, BLOCKED_LOS_OUT_OF_MAP, sizeof(CONTR(pl)->blocked_los));
+    memset(CONTR(pl)->blocked_los_depth, BLOCKED_LOS_OUT_OF_MAP,
+           sizeof(CONTR(pl)->blocked_los_depth));
+    memset(CONTR(pl)->camera_visibility, LOS_CAMERA_HIDDEN, sizeof(CONTR(pl)->camera_visibility));
+}
+
+void update_los(object *pl) {
+    clear_los(pl);
+    if (QUERY_FLAG(pl, FLAG_REMOVED) || pl->map == NULL) {
+        return;
+    }
+    socket_struct *cs = CONTR(pl)->cs;
+    los_camera_view view;
+    camera_build(pl, &view);
+    /* All camera classifications precede rays; covered gameplay never gets
+     * discovered while iterating positive levels in packet order. */
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(depth)][ax][ay] =
+                    CONTR(pl)->tls ? LOS_CAMERA_VISIBLE : camera_classify(pl, &view, ax, ay, depth);
+            }
+        }
+    }
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        for (int ax = 0; ax < cs->mapx; ax++) {
+            for (int ay = 0; ay < cs->mapy; ay++) {
+                int dx = ax - cs->mapx_2, dy = ay - cs->mapy_2;
+                spatial_cell cell;
+                uint8_t flags = BLOCKED_LOS_OUT_OF_MAP;
+                if (spatial_resolve(pl->map, pl->x + dx, pl->y + dy, depth, &cell)) {
+                    flags = GET_MAP_FLAGS(cell.map, cell.x, cell.y) & P_BLOCKSVIEW
+                                ? BLOCKED_LOS_BLOCKSVIEW : BLOCKED_LOS_VISIBLE;
+                    if (!player_ray(pl, dx, dy, depth)) {
+                        flags |= BLOCKED_LOS_BLOCKED;
                     }
-
-                    if (CONTR(op)->blocked_los[dx][dy] & BLOCKED_LOS_BLOCKED) {
-                        CONTR(op)->blocked_los[dx][dy] |= BLOCKED_LOS_EXPAND;
-                    }
+                }
+                CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(depth)][ax][ay] = flags;
+                if (depth == 0) {
+                    CONTR(pl)->blocked_los[ax][ay] = flags;
                 }
             }
         }
     }
-
-    for (x = 0; x < CONTR(op)->cs->mapx; x++) {
-        for (y = 0; y < CONTR(op)->cs->mapy; y++) {
-            if (CONTR(op)->blocked_los[x][y] & BLOCKED_LOS_EXPAND) {
-                CONTR(op)->blocked_los[x][y] &= ~(BLOCKED_LOS_BLOCKED | BLOCKED_LOS_EXPAND);
-            }
-        }
-    }
 }
 
-/**
- * Check if object is in line of sight, based on rv_vector.
- * This will check also check for blocksview 1 objects.
- *
- * Uses the Bresenham line algorithm.
- * @param obj
- * The object to check
- * @param rv
- * rv_vector to get distances, map, etc from
- * @return
- * 1 if in line of sight, 0 otherwise
- */
+/** Physical object sight is independent of player camera presentation. */
 int obj_in_line_of_sight(object *obj, rv_vector *rv) {
-    /* Bresenham variables */
-    int fraction, dx2, dy2, stepx, stepy;
-    /* Stepping variables */
-    mapstruct *m = rv->part->map;
-    int x = rv->part->x, y = rv->part->y;
-
-    BRESENHAM_INIT(rv->distance_x, rv->distance_y, fraction, stepx, stepy, dx2, dy2);
-
-    while (1) {
-        if (x == obj->x && y == obj->y && m == obj->map) {
-            return 1;
-        }
-
-        if (m == NULL || GET_MAP_FLAGS(m, x, y) & P_BLOCKSVIEW) {
-            return 0;
-        }
-
-        BRESENHAM_STEP(x, y, fraction, stepx, stepy, dx2, dy2);
-
-        m = get_map_from_coord(m, &x, &y);
+    if (obj == NULL || rv == NULL || rv->part == NULL || rv->part->map == NULL) {
+        return 0;
     }
+    int dx, dy, dz;
+    if (!spatial_offset(rv->part->map, obj->map, &dx, &dy, &dz)) {
+        return 0;
+    }
+    return spatial_ray_clear(rv->part->map, rv->part->x, rv->part->y,
+                             dx + obj->x - rv->part->x, dy + obj->y - rv->part->y,
+                             dz, SPATIAL_SIGHT, true);
 }

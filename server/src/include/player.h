@@ -225,6 +225,11 @@ struct pl_player {
      */
     int blocked_los[MAP_CLIENT_X][MAP_CLIENT_Y];
 
+    /** Physical sight for each transmitted depth; depth zero is mirrored above. */
+    uint8_t blocked_los_depth[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+    /** Camera eligibility built before any physical rays, never action authority. */
+    uint8_t camera_visibility[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+
     /** This is initialized from init_player_exp(). */
     int last_skill_index;
 

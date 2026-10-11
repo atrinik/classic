@@ -41,6 +41,7 @@
 #include <region.h>
 #include <monster.h>
 #include <los.h>
+#include <spatial.h>
 #include <light.h>
 #include <initialization.h>
 #include <animation.h>
@@ -684,13 +685,9 @@ void draw_client_map(object *pl) {
         CONTR(pl)->cs->look_position = 0;
     }
 
-    /* Do LOS after calls to update_position */
-    if (CONTR(pl)->update_los) {
-        update_los(pl);
-        CONTR(pl)->update_los = 0;
-    }
-
+    /* MAP2 rebuilds camera classification and sight after position changes. */
     draw_client_map2(pl);
+    CONTR(pl)->update_los = 0;
 
     /* If we moved on the same map, check for map name/music to update. */
     if (redraw_below && CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_SAME) {
@@ -909,55 +906,12 @@ static void map_invalidate_light_cache(MapCell *cell) {
     cell->light_next_rgb_explicit = 0;
 }
 
-typedef enum map_level_visibility {
-    MAP_LEVEL_HIDDEN,
-    MAP_LEVEL_WALL_BOUNDARY,
-    MAP_LEVEL_BOUNDARY,
-    MAP_LEVEL_VISIBLE,
-} map_level_visibility;
-
-static bool map_space_blocks_vertical_view(mapstruct *map, int x, int y) {
-    if (GET_MAP_FLAGS(map, x, y) & P_BLOCKSVIEW) {
-        return true;
-    }
-
-    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
-        if (QUERY_FLAG(tmp, FLAG_IS_FLOOR)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/** Whether one map space contains an explicit roof/camera surface. */
-static bool map_space_has_roof(mapstruct *map, int x, int y) {
-    for (object *tmp = GET_MAP_OB(map, x, y); tmp != NULL; tmp = tmp->above) {
-        /* Roof archetypes deliberately use the hidden wall layer rather than
-         * blocksview: they are camera occluders, not gameplay LOS blockers. */
-        if (object_is_roof_surface(tmp)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool map_space_blocks_camera_view(mapstruct *map, int x, int y) {
-    return map_space_blocks_vertical_view(map, x, y) || map_space_has_roof(map, x, y);
-}
-
-static bool map_level_layer_visible(map_level_visibility visibility, int layer) {
-    if (visibility == MAP_LEVEL_WALL_BOUNDARY) {
-        return layer == LAYER_WALL;
-    }
-
-    if (visibility == MAP_LEVEL_BOUNDARY) {
-        return layer == LAYER_FLOOR || layer == LAYER_FMASK || layer == LAYER_WALL;
-    }
-
-    return visibility == MAP_LEVEL_VISIBLE;
-}
+typedef los_camera_visibility map_level_visibility;
+#define MAP_LEVEL_HIDDEN LOS_CAMERA_HIDDEN
+#define MAP_LEVEL_WALL_BOUNDARY LOS_CAMERA_WALL_BOUNDARY
+#define MAP_LEVEL_BOUNDARY LOS_CAMERA_BOUNDARY
+#define MAP_LEVEL_VISIBLE LOS_CAMERA_VISIBLE
+#define map_level_layer_visible los_camera_layer_visible
 
 /** Static MAP2 geometry remains eligible for remembered presentation at zero light. */
 static bool map_layer_is_remembered_geometry(int layer) {
@@ -980,17 +934,6 @@ static bool map_space_has_client_content(MapSpace *msp, map_level_visibility vis
     return false;
 }
 
-/** Whether a map space contains structural wall content. */
-static bool map_space_has_wall(MapSpace *msp) {
-    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-        if (GET_MAP_SPACE_LAYER(msp, LAYER_WALL, sub_layer) != NULL) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 /** Return the nonnegative ground elevation supporting linked upper levels. */
 static int16_t map_space_support_height(MapSpace *msp) {
     int16_t support_height = 0;
@@ -1006,218 +949,6 @@ static int16_t map_space_support_height(MapSpace *msp) {
     }
 
     return support_height;
-}
-
-/** Resolve one linked map depth without applying camera visibility. */
-static mapstruct *map_resolve_raw_level(mapstruct *base, int depth) {
-    mapstruct *level = base;
-    int direction = depth > 0 ? TILED_UP : TILED_DOWN;
-
-    for (int current_depth = depth > 0 ? 1 : -1; current_depth != depth + (depth > 0 ? 1 : -1);
-         current_depth += depth > 0 ? 1 : -1) {
-        level = get_map_from_tiled(level, direction);
-        if (level == NULL || !MAP_TILE_IS_SAME_LEVEL(base, current_depth)) {
-            return NULL;
-        }
-    }
-
-    return level;
-}
-
-/** Resolve one physical linked level and enforce vertical information occlusion. */
-static map_level_visibility
-map_resolve_level(mapstruct *base, int x, int y, int depth, mapstruct **resolved) {
-    mapstruct *level = base;
-
-    if (depth > 0) {
-        level = map_resolve_raw_level(base, depth);
-        if (level == NULL) {
-            return MAP_LEVEL_HIDDEN;
-        }
-
-        *resolved = level;
-        map_level_visibility visibility =
-            map_space_blocks_camera_view(level, x, y) ? MAP_LEVEL_BOUNDARY : MAP_LEVEL_VISIBLE;
-
-        /* The camera looks down through the stack. A surface above the target
-         * hides the target; a floor or wall below it must never hide a roof or
-         * higher storey. */
-        for (int current_depth = depth + 1; current_depth <= MAP2_MAX_DEPTH; current_depth++) {
-            level = get_map_from_tiled(level, TILED_UP);
-            if (level == NULL || !MAP_TILE_IS_SAME_LEVEL(base, current_depth)) {
-                break;
-            }
-
-            if (map_space_blocks_camera_view(level, x, y)) {
-                /* Keep only the target storey's exterior wall. The covering
-                 * roof hides its floor and floor mask as well as enclosed
-                 * objects; sending those horizontal surfaces makes them cut
-                 * holes through the roof in projected painter order. */
-                return MAP_LEVEL_WALL_BOUNDARY;
-            }
-        }
-
-        return visibility;
-    } else if (depth < 0) {
-        for (int current_depth = -1; current_depth >= depth; current_depth--) {
-            if (map_space_blocks_vertical_view(level, x, y)) {
-                return MAP_LEVEL_HIDDEN;
-            }
-
-            level = get_map_from_tiled(level, TILED_DOWN);
-            if (level == NULL || !MAP_TILE_IS_SAME_LEVEL(base, current_depth)) {
-                return MAP_LEVEL_HIDDEN;
-            }
-        }
-    }
-
-    *resolved = level;
-    return MAP_LEVEL_VISIBLE;
-}
-
-/**
- * Find connected overhead components covering the player.
- *
- * These components are omitted as a camera cutaway while the player is inside
- * them. The relationship comes entirely from solid floors, opaque cells, and
- * roof objects on the linked maps; no authored building flags are required.
- */
-static void map_build_level_cutaway(object *pl,
-                                    bool cutaway[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y]) {
-    bool blockers[MAP_CLIENT_X][MAP_CLIENT_Y];
-    bool walls[MAP_CLIENT_X][MAP_CLIENT_Y];
-    bool boundary[MAP_CLIENT_X][MAP_CLIENT_Y];
-    int queue_x[MAP_CLIENT_X * MAP_CLIENT_Y];
-    int queue_y[MAP_CLIENT_X * MAP_CLIENT_Y];
-
-    memset(cutaway, 0, sizeof(bool) * MAP2_LEVELS * MAP_CLIENT_X * MAP_CLIENT_Y);
-
-    for (int depth = 1; depth <= MAP2_MAX_DEPTH; depth++) {
-        mapstruct *center_level = map_resolve_raw_level(pl->map, depth);
-        if (center_level == NULL || !map_space_blocks_camera_view(center_level, pl->x, pl->y)) {
-            continue;
-        }
-
-        memset(blockers, 0, sizeof(blockers));
-        memset(walls, 0, sizeof(walls));
-
-        for (int ay = CONTR(pl)->cs->mapy - 1, y = (pl->y + (CONTR(pl)->cs->mapy + 1) / 2) - 1;
-             y >= pl->y - CONTR(pl)->cs->mapy_2;
-             y--, ay--) {
-            int ax = CONTR(pl)->cs->mapx - 1;
-
-            for (int x = (pl->x + (CONTR(pl)->cs->mapx + 1) / 2) - 1;
-                 x >= pl->x - CONTR(pl)->cs->mapx_2;
-                 x--, ax--) {
-                int nx = x;
-                int ny = y;
-                mapstruct *base = get_map_from_coord(pl->map, &nx, &ny);
-                if (base == NULL) {
-                    continue;
-                }
-
-                mapstruct *level = map_resolve_raw_level(base, depth);
-                if (level != NULL) {
-                    blockers[ax][ay] = map_space_blocks_camera_view(level, nx, ny);
-                    walls[ax][ay] = map_space_has_wall(GET_MAP_SPACE_PTR(level, nx, ny));
-                }
-            }
-        }
-
-        int center_x = CONTR(pl)->cs->mapx_2;
-        int center_y = CONTR(pl)->cs->mapy_2;
-
-        size_t queue_first = 0;
-        size_t queue_last = 0;
-        size_t depth_index = MAP2_DEPTH_INDEX(depth);
-        queue_x[queue_last] = center_x;
-        queue_y[queue_last++] = center_y;
-        cutaway[depth_index][center_x][center_y] = true;
-
-        static const int neighbors_x[] = {-1, 1, 0, 0};
-        static const int neighbors_y[] = {0, 0, -1, 1};
-        while (queue_first < queue_last) {
-            int current_x = queue_x[queue_first];
-            int current_y = queue_y[queue_first++];
-
-            for (size_t neighbor = 0; neighbor < arraysize(neighbors_x); neighbor++) {
-                int next_x = current_x + neighbors_x[neighbor];
-                int next_y = current_y + neighbors_y[neighbor];
-                if (next_x < 0 || next_x >= CONTR(pl)->cs->mapx || next_y < 0 ||
-                    next_y >= CONTR(pl)->cs->mapy || !blockers[next_x][next_y] ||
-                    cutaway[depth_index][next_x][next_y]) {
-                    continue;
-                }
-
-                cutaway[depth_index][next_x][next_y] = true;
-                queue_x[queue_last] = next_x;
-                queue_y[queue_last++] = next_y;
-            }
-        }
-
-        /* Perimeter walls commonly occupy a neighboring cell without a floor
-         * of their own. Include the one-cell structural boundary around the
-         * connected overhead component; otherwise those upper-storey walls
-         * remain as a floating lattice after the roof is cut away. Keep the
-         * expansion non-recursive so it cannot consume a separate building
-         * through a chain of nearby wall cells. */
-        memset(boundary, 0, sizeof(boundary));
-        for (int ay = 0; ay < CONTR(pl)->cs->mapy; ay++) {
-            for (int ax = 0; ax < CONTR(pl)->cs->mapx; ax++) {
-                if (!walls[ax][ay] || cutaway[depth_index][ax][ay]) {
-                    continue;
-                }
-
-                for (int offset_y = -1; offset_y <= 1 && !boundary[ax][ay]; offset_y++) {
-                    for (int offset_x = -1; offset_x <= 1; offset_x++) {
-                        int neighbor_x = ax + offset_x;
-                        int neighbor_y = ay + offset_y;
-                        if (neighbor_x >= 0 && neighbor_x < CONTR(pl)->cs->mapx &&
-                            neighbor_y >= 0 && neighbor_y < CONTR(pl)->cs->mapy &&
-                            cutaway[depth_index][neighbor_x][neighbor_y]) {
-                            boundary[ax][ay] = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (int ay = 0; ay < CONTR(pl)->cs->mapy; ay++) {
-            for (int ax = 0; ax < CONTR(pl)->cs->mapx; ax++) {
-                cutaway[depth_index][ax][ay] |= boundary[ax][ay];
-            }
-        }
-    }
-}
-
-/**
- * Whether a structural column has a higher roof visible to the camera.
- *
- * Roof components can be disconnected even when their supporting walls and
- * interior floors form one connected component. Cutting the latter as a whole
- * must not leave a retained roof floating without its wall layer.
- */
-static bool
-map_column_has_visible_roof(mapstruct *base,
-                            int x,
-                            int y,
-                            int depth,
-                            int ax,
-                            int ay,
-                            const bool cutaway[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y]) {
-    for (int roof_depth = depth + 1; roof_depth <= MAP2_MAX_DEPTH; roof_depth++) {
-        mapstruct *roof_map = map_resolve_raw_level(base, roof_depth);
-        if (roof_map == NULL) {
-            break;
-        }
-
-        if (!cutaway[MAP2_DEPTH_INDEX(roof_depth)][ax][ay] && map_space_has_roof(roof_map, x, y)) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 /** Clear a map cell, but only if it has not been cleared before. */
@@ -1278,6 +1009,8 @@ static packet_struct *map2_frame_level_chunk(int8_t depth, packet_struct *payloa
 void draw_client_map2(object *pl) {
     light_map_unlink_flush();
     light_batch_flush();
+    /* Visibility is rebuilt from live geometry before each serialization. */
+    update_los(pl);
     static uint32_t map2_count = 0;
     MapCell *mp;
     MapSpace *msp;
@@ -1463,8 +1196,6 @@ void draw_client_map2(object *pl) {
 
     packet_header = packet;
     uint8_t present_level_count = 0;
-    bool level_cutaway[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
-    map_build_level_cutaway(pl, level_cutaway);
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         bool level_present = false;
@@ -1481,7 +1212,7 @@ void draw_client_map2(object *pl) {
             for (x = (pl->x + (CONTR(pl)->cs->mapx + 1) / 2) - 1;
                  x >= pl->x - CONTR(pl)->cs->mapx_2;
                  x--, ax--) {
-                d = CONTR(pl)->blocked_los[ax][ay];
+                d = CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(depth)][ax][ay];
                 /* Form the data packet for x and y positions. */
                 mask = (ax & 0x1f) << 11 | (ay & 0x1f) << 6;
                 /* Space is out of map or blocked. Update space and clear values if
@@ -1491,88 +1222,47 @@ void draw_client_map2(object *pl) {
                     continue;
                 }
 
-                nx = x;
-                ny = y;
-
-                if (!(m = get_map_from_coord(pl->map, &nx, &ny))) {
-                    map_if_clearcell(false);
-                    continue;
-                }
-
-                mapstruct *base_map = m;
-                mapstruct *level_map = NULL;
-                map_level_visibility level_visibility =
-                    map_resolve_level(m, nx, ny, depth, &level_map);
-                if (level_visibility == MAP_LEVEL_HIDDEN) {
+                spatial_cell resolved;
+                if (!spatial_resolve(pl->map, x, y, depth, &resolved)) {
                     map_if_clearcell(depth != 0);
                     continue;
                 }
-
-                /* The client treats the packet's depth list as the
-                 * authoritative set of physical levels to retain. Preserve a
-                 * visible level even when its delta payload is empty; omitting
-                 * an unchanged upper level would discard its cached roofs. */
-                level_present = true;
-
-                m = level_map;
-                msp = GET_MAP_SPACE_PTR(m, nx, ny);
-                bool visible_roof_above =
-                    depth >= 0 &&
-                    map_column_has_visible_roof(base_map, nx, ny, depth, ax, ay, level_cutaway);
-
-                if (depth > 0 && level_cutaway[MAP2_DEPTH_INDEX(depth)][ax][ay]) {
-                    if (visible_roof_above &&
-                        map_space_has_client_content(msp, MAP_LEVEL_BOUNDARY)) {
-                        level_visibility = MAP_LEVEL_BOUNDARY;
-                    } else {
-                        map_if_clearcell(true);
-                        continue;
-                    }
-                }
-
-                blocksview = d & BLOCKED_LOS_BLOCKED;
-                bool tile_fow = false;
-                /* A lower level behind gameplay LOS cannot disclose content.
-                 * It has no structural shell that the top-down camera needs to
-                 * preserve, so discard the complete cached cell. */
-                if (depth < 0 && blocksview) {
+                nx = resolved.x;
+                ny = resolved.y;
+                m = resolved.map;
+                map_level_visibility level_visibility =
+                    CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(depth)][ax][ay];
+                if (level_visibility == MAP_LEVEL_HIDDEN) {
                     map_if_clearcell(true);
                     continue;
                 }
 
-                /* Base-level LOS uses the normal explored-map cache: a cell
-                 * that has never been sent remains empty, while previously
-                 * seen contents are retained and rendered as grayscale FOW. */
-                if (depth == 0 && blocksview) {
-                    if (visible_roof_above) {
-                        level_visibility = MAP_LEVEL_BOUNDARY;
-                        tile_fow = true;
-                    } else {
-                        map_if_clearcell(false);
-                        mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
-                        if (map_append_support_height(packet,
-                                                      mp,
-                                                      mask,
-                                                      map_space_support_height(msp))) {
-                            level_present = true;
-                        }
-                        continue;
-                    }
+                /* Retain every physical level even when its delta is empty. */
+                level_present = true;
+                msp = GET_MAP_SPACE_PTR(m, nx, ny);
+                blocksview = d & BLOCKED_LOS_BLOCKED;
+                bool camera_covered = level_visibility != MAP_LEVEL_VISIBLE;
+                bool tile_fow = camera_covered || blocksview;
+                if (depth < 0 && blocksview) {
+                    map_if_clearcell(true);
+                    continue;
                 }
-
-                /* Gameplay LOS protects actors, items, and effects at and
-                 * above the player's level. Positive depths retain floors,
-                 * masks, and walls so clearing their complete cells does not
-                 * slice roofs into the base level's LOS silhouette. */
-                if (depth > 0 && blocksview) {
-                    if (level_visibility == MAP_LEVEL_VISIBLE || visible_roof_above) {
-                        level_visibility = MAP_LEVEL_BOUNDARY;
-                    }
-                    tile_fow = true;
+                /* Ordinary base LOS loss preserves only previously authorized
+                 * static fog geometry. Camera cover instead serializes explicit
+                 * layer removals so covered interiors cannot persist as fog. */
+                if (depth == 0 && blocksview && !camera_covered) {
+                    map_if_clearcell(false);
+                    mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
+                    map_append_support_height(packet, mp, mask, map_space_support_height(msp));
+                    continue;
+                }
+                if (depth > 0 && blocksview && level_visibility == MAP_LEVEL_VISIBLE) {
+                    level_visibility = MAP_LEVEL_BOUNDARY;
                 }
 
                 if (!map_space_has_client_content(msp, level_visibility)) {
-                    map_if_clearcell(false);
+                    /* Current empty geometry revokes formerly cached surfaces. */
+                    map_if_clearcell(true);
                     if (depth == 0) {
                         mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                         if (map_append_support_height(packet,
@@ -1694,6 +1384,14 @@ void draw_client_map2(object *pl) {
                         tmp = GET_MAP_SPACE_LAYER(msp, layer, sub_layer);
 
                         if (!map_level_layer_visible(level_visibility, layer)) {
+                            tmp = NULL;
+                        }
+
+                        /* EXIT faces on the wall layer are gameplay content.
+                         * Clearing just their semantic bit still reveals portals
+                         * beneath roofs. Remove the complete cached layer. */
+                        if (tmp != NULL && (camera_covered || blocksview) &&
+                            tmp->type == EXIT) {
                             tmp = NULL;
                         }
 

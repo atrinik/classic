@@ -26,6 +26,7 @@
 #define LOS_H
 
 #include <decls.h>
+#include <stdbool.h>
 
 /**
  * @file
@@ -36,7 +37,19 @@
 
 extern void init_block(void);
 
-extern void set_block(int x, int y, int bx, int by);
+/** Camera presentation is independent of physical sight. */
+typedef enum los_camera_visibility {
+    LOS_CAMERA_HIDDEN,
+    LOS_CAMERA_WALL_BOUNDARY,
+    LOS_CAMERA_BOUNDARY,
+    LOS_CAMERA_VISIBLE,
+} los_camera_visibility;
+
+/** Fresh checks; do not use mutable viewport masks to authorize actions. */
+bool los_player_can_see_cell(object *pl, mapstruct *map, int x, int y);
+bool los_player_has_geometric_sight(object *pl, mapstruct *map, int x, int y);
+los_camera_visibility los_player_cell_camera(object *pl, mapstruct *map, int x, int y);
+bool los_camera_layer_visible(los_camera_visibility visibility, int layer);
 
 extern void update_los(object *op);
 

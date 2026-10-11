@@ -2051,7 +2051,6 @@ START_TEST(test_retained_fow_reentry_resends_zero_light_state) {
     object *pl;
     check_setup_env_pl(&base, &pl);
     request_move_player(&pl, base, 12, 12);
-
     mapstruct *upper = get_empty_map(24, 24);
     base->tile_map[TILED_UP] = upper;
     upper->tile_map[TILED_DOWN] = base;
@@ -2059,72 +2058,48 @@ START_TEST(test_retained_fow_reentry_resends_zero_light_state) {
     upper->coords[2] = 1;
     base->level_min = upper->level_min = 0;
     base->level_max = upper->level_max = 1;
-
-    int target_x = pl->x + 1;
-    int target_y = pl->y;
-    object *exit = arch_get("stairs_down");
-    ck_assert_ptr_nonnull(exit);
-    exit->x = target_x;
-    exit->y = target_y;
-    exit = object_insert_map(exit, base, NULL, 0);
-    ck_assert_ptr_nonnull(exit);
-
-    object *roof = arch_get("roof_thatch");
-    ck_assert_ptr_nonnull(roof);
-    roof->x = target_x;
-    roof->y = target_y;
-    roof = object_insert_map(roof, upper, NULL, 0);
-    ck_assert_ptr_nonnull(roof);
-
+    object *portal = arch_get("stairs_down");
+    portal->x = 13;
+    portal->y = 12;
+    portal = object_insert_map(portal, base, NULL, 0);
+    ck_assert_ptr_nonnull(portal);
     socket_struct *cs = CONTR(pl)->cs;
-    int ax = cs->mapx_2 + 1;
-    int ay = cs->mapy_2;
-
-    update_los(pl);
-    map_client_cache_clear(&cs->lastmap);
-    socket_buffer_clear(cs);
+    int ax = cs->mapx_2 + 1, ay = cs->mapy_2;
+    size_t layer = NUM_LAYERS * portal->sub_layer + portal->layer - 1;
     CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
     draw_client_map2(pl);
-
-    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
     MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
     ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_eq(cell->fow, 0);
-    ck_assert_uint_eq(cell->light_known[exit->sub_layer], 1);
-    ck_assert_uint_eq(cell->light_radiance[exit->sub_layer], 0);
-    ck_assert_uint_eq(cell->light_rgb_known[exit->sub_layer], 1);
+    ck_assert_uint_ne(cell->faces[layer], 0);
+    ck_assert_uint_eq(cell->light_radiance[portal->sub_layer], 0);
 
-    /* A retained roof boundary turns the tile into soft FOW. The client
-     * clears all light knowledge after applying this FOW=true record. */
-    CONTR(pl)->blocked_los[ax][ay] |= BLOCKED_LOS_BLOCKED;
+    /* Cover is a new geometry fact, independent of mutable cached LOS. A
+     * wall-layer portal must be explicitly removed, including its face. */
+    object *roof = arch_get("roof_thatch");
+    roof->x = 13;
+    roof->y = 12;
+    roof = object_insert_map(roof, upper, NULL, 0);
+    ck_assert_ptr_nonnull(roof);
     socket_buffer_clear(cs);
     draw_client_map2(pl);
-
     ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
     cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
-    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->faces[layer], 0);
+    ck_assert_uint_eq(cell->exit[layer], 0);
     ck_assert_uint_eq(cell->fow, 1);
-    ck_assert_uint_eq(cell->light_known[exit->sub_layer], 0);
-    ck_assert_uint_eq(cell->light_rgb_known[exit->sub_layer], 0);
-    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
-    ck_assert_uint_eq(cell->light_next_known[exit->sub_layer], 0);
-    ck_assert_uint_eq(cell->light_next_generation, 0);
-    ck_assert_uint_eq(cell->light_next_rgb_explicit, 0);
+    ck_assert_uint_eq(cell->light_known[portal->sub_layer], 0);
+    ck_assert_uint_eq(cell->light_rgb_known[portal->sub_layer], 0);
 
-    /* Re-entry must establish the authoritative zero sample again instead of
-     * leaving the client to synthesize it from a neighboring tile. */
-    CONTR(pl)->blocked_los[ax][ay] &= ~BLOCKED_LOS_BLOCKED;
+    object_remove(roof, 0);
     socket_buffer_clear(cs);
     draw_client_map2(pl);
-
     ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
     cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
-    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->faces[layer], 0);
     ck_assert_uint_eq(cell->fow, 0);
-    ck_assert_uint_eq(cell->light_known[exit->sub_layer], 1);
-    ck_assert_uint_eq(cell->light_radiance[exit->sub_layer], 0);
-    ck_assert_uint_eq(cell->light_rgb_known[exit->sub_layer], 1);
-    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
+    ck_assert_uint_eq(cell->light_known[portal->sub_layer], 1);
+    ck_assert_uint_eq(cell->light_radiance[portal->sub_layer], 0);
+    ck_assert_uint_eq(cell->light_rgb_known[portal->sub_layer], 1);
 }
 END_TEST
 
@@ -2164,7 +2139,6 @@ START_TEST(test_map_exit_semantic_not_disclosed_by_boundary_geometry) {
     int ay = cs->mapy_2;
 
     update_los(pl);
-    CONTR(pl)->blocked_los[ax][ay] |= BLOCKED_LOS_BLOCKED;
     map_client_cache_clear(&cs->lastmap);
     socket_buffer_clear(cs);
     CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
@@ -2180,6 +2154,41 @@ START_TEST(test_map_exit_semantic_not_disclosed_by_boundary_geometry) {
 
     size_t socket_layer = NUM_LAYERS * exit->sub_layer + LAYER_WALL - 1;
     ck_assert_uint_eq(cell->exit[socket_layer], 0);
+    ck_assert_uint_eq(cell->faces[socket_layer], 0);
+}
+END_TEST
+
+START_TEST(test_greyton_roof_only_cover_hides_city_portal_face) {
+    mapstruct *base = ready_map_name("/shattered_islands/world_10_69", NULL, MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(base);
+    mapstruct *upper = get_map_from_tiled(base, TILED_UP);
+    ck_assert_ptr_nonnull(upper);
+    /* Resolve the canonical stack before the loaded-only visibility check. */
+    (void)get_map_from_tiled(upper, TILED_UP);
+    object *portal = NULL;
+    for (object *tmp = GET_MAP_OB(base, 12, 15); tmp != NULL; tmp = tmp->above) {
+        if (tmp->type == EXIT && tmp->layer == LAYER_WALL) {
+            portal = tmp;
+            break;
+        }
+    }
+    ck_assert_ptr_nonnull(portal);
+    object *pl = player_get_dummy(NULL, NULL);
+    request_move_player(&pl, base, 6, 15);
+    CONTR(pl)->tls = 0;
+    socket_struct *cs = CONTR(pl)->cs;
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    int ax = cs->mapx_2 + 6, ay = cs->mapy_2;
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    if (cell != NULL) {
+        size_t layer = NUM_LAYERS * portal->sub_layer + portal->layer - 1;
+        ck_assert_uint_eq(cell->faces[layer], 0);
+        ck_assert_uint_eq(cell->exit[layer], 0);
+    }
+    ck_assert_int_eq(los_player_cell_camera(pl, base, 12, 15), LOS_CAMERA_WALL_BOUNDARY);
+    ck_assert(!los_player_can_see_cell(pl, base, 12, 15));
+    ck_assert(map_cache_cell_has_roof(cs, 1, ax, ay));
 }
 END_TEST
 
@@ -2734,11 +2743,10 @@ START_TEST(test_region_exploration_grants_only_visible_public_base_cells) {
     object *roof = arch_get("roof_thatch");
     roof->x = 13;
     roof->y = 12;
-    ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+    roof = object_insert_map(roof, upper, NULL, 0);
+    ck_assert_ptr_nonnull(roof);
 
     update_los(pl);
-    int ax = cs->mapx_2 + 1, ay = cs->mapy_2;
-    CONTR(pl)->blocked_los[ax][ay] |= BLOCKED_LOS_BLOCKED;
     map_client_cache_clear(&cs->lastmap);
     socket_buffer_clear(cs);
     CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
@@ -2747,7 +2755,7 @@ START_TEST(test_region_exploration_grants_only_visible_public_base_cells) {
     ck_assert(!exploration_visited(cs, "/world/upper", 13, 12));
     ck_assert(!exploration_visited(cs, "/world/grant", 0, 0));
 
-    CONTR(pl)->blocked_los[ax][ay] &= ~BLOCKED_LOS_BLOCKED;
+    object_remove(roof, 0);
     socket_buffer_clear(cs);
     draw_client_map2(pl);
     ck_assert(exploration_visited(cs, "/world/grant", 13, 12));
@@ -2833,6 +2841,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
+    tcase_add_test(tc_core, test_greyton_roof_only_cover_hides_city_portal_face);
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
     tcase_add_test(tc_core, test_pending_neighbor_endpoint_resends_without_player_generation_change);
