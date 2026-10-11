@@ -33,11 +33,11 @@ def version(tag: str) -> tuple[int, int, int]:
     return parsed  # type: ignore[return-value]
 
 
-def expected_names(release_version: str, schema: int = 1) -> set[str]:
+def expected_names(release_version: str, schema: int) -> set[str]:
     return contract_names(release_version, schema)
 
 
-def validate_latest(release: object, schema: int = 1) -> tuple[str, str]:
+def validate_latest(release: object, schema: int) -> tuple[str, str]:
     if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
         raise LatestTagError("selected release has malformed metadata")
     tag = str(release["tag_name"])
@@ -79,7 +79,7 @@ def validate_latest(release: object, schema: int = 1) -> tuple[str, str]:
     return tag, release_version
 
 
-def select_latest(releases: object, schema_resolver=None) -> dict[str, object]:
+def select_latest(releases: object, schema_resolver) -> dict[str, object]:
     if not isinstance(releases, list):
         raise LatestTagError("GitHub releases API returned malformed metadata")
     candidates: list[tuple[tuple[int, int, int], dict[str, object]]] = []
@@ -101,7 +101,9 @@ def select_latest(releases: object, schema_resolver=None) -> dict[str, object]:
     if not candidates:
         raise LatestTagError("no published unified Classic release exists")
     selected = max(candidates, key=lambda candidate: candidate[0])[1]
-    schema = schema_resolver(str(selected["tag_name"])) if schema_resolver else 1
+    if not callable(schema_resolver):
+        raise LatestTagError("immutable source schema resolver is required")
+    schema = schema_resolver(str(selected["tag_name"]))
     validate_latest(selected, schema)
     release_id = selected.get("id")
     if not isinstance(release_id, int) or release_id <= 0:

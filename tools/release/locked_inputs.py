@@ -24,12 +24,16 @@ class LockedInputError(RuntimeError):
     """Raised when runtime dependency evidence is incomplete or malformed."""
 
 
-def affected_artifacts(component: str, version: str) -> list[str]:
+def affected_artifacts(component: str, version: str, schema: int = 3) -> list[str]:
+    if type(schema) is not int or schema not in (1, 2, 3):
+        raise LockedInputError("unsupported release artifact schema")
     if component == "client":
-        return [
-            f"atrinik-classic-client-{version}-windows-x86_64.zip",
-            f"atrinik-classic-client-{version}-linux-amd64.deb",
-        ]
+        artifacts = [f"atrinik-classic-client-{version}-windows-x86_64.zip"]
+        if schema == 2:
+            artifacts.append(f"atrinik-classic-client-{version}-linux-amd64.deb")
+        elif schema == 3:
+            artifacts.append(f"atrinik-classic-client-{version}-linux-x86_64.AppImage")
+        return artifacts
     if component == "server":
         return [
             f"atrinik-classic-server-{version}-windows-x86_64.zip",
@@ -38,9 +42,11 @@ def affected_artifacts(component: str, version: str) -> list[str]:
     raise LockedInputError(f"unsupported runtime-input component: {component}")
 
 
-def load_locked_inputs(version: str, root: Path = ROOT) -> list[dict[str, object]]:
+def load_locked_inputs(version: str, root: Path = ROOT, schema: int = 3) -> list[dict[str, object]]:
     if VERSION_RE.fullmatch(version) is None:
         raise LockedInputError("release input version must be MAJOR.MINOR.PATCH")
+    if type(schema) is not int or schema not in (1, 2, 3):
+        raise LockedInputError("unsupported release artifact schema")
     records: list[dict[str, object]] = []
     names: set[str] = set()
     for component, relative_path in LOCKS:
@@ -89,7 +95,7 @@ def load_locked_inputs(version: str, root: Path = ROOT) -> list[dict[str, object
                     **required,
                     "component": component,
                     "lock": relative_path.as_posix(),
-                    "affects": affected_artifacts(component, version),
+                    "affects": affected_artifacts(component, version, schema),
                 }
             )
     return sorted(records, key=lambda record: str(record["name"]))

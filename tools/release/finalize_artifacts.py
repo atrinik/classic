@@ -19,7 +19,7 @@ from locked_inputs import load_locked_inputs
 from dependency_bundle import load_descriptor, verify_descriptor
 
 
-RELEASE_ARTIFACT_SCHEMA = 2
+RELEASE_ARTIFACT_SCHEMA = 3
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 MODULES = ("client", "server", "editor", "libatrinik", "protocol")
 EMBEDDED_PYTHON_STDLIB_RE = re.compile(
@@ -427,7 +427,7 @@ def expected_names(version: str) -> set[str]:
     names.update(
         {
             f"atrinik-classic-client-{version}-windows-x86_64.zip",
-            f"atrinik-classic-client-{version}-linux-amd64.deb",
+            f"atrinik-classic-client-{version}-linux-x86_64.AppImage",
             f"atrinik-classic-server-{version}-windows-x86_64.zip",
         }
     )
@@ -440,11 +440,14 @@ def build_spdx(
     revision: str,
     source_epoch: int,
     locked_inputs: list[dict[str, object]],
+    appimage_inventory: dict[str, object] | None = None,
+    appimage_packaging_lock: dict[str, object] | None = None,
 ) -> dict[str, object]:
     created = datetime.fromtimestamp(source_epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     packages = []
     relationships = []
     artifact_ids: dict[str, str] = {}
+    extracted_licenses = []
     for index, path in enumerate(paths, start=1):
         identifier = f"SPDXRef-Artifact-{index}"
         artifact_ids[path.name] = identifier
@@ -459,7 +462,7 @@ def build_spdx(
                 "filesAnalyzed": False,
                 "checksums": [{"algorithm": "SHA256", "checksumValue": sha256(path)}],
                 "licenseConcluded": "NOASSERTION",
-                "licenseDeclared": "NOASSERTION",
+                "licenseDeclared": "GPL-2.0-or-later" if path.name.endswith(".AppImage") else "NOASSERTION",
                 "copyrightText": "NOASSERTION",
                 "sourceInfo": f"Built from atrinik/classic commit {revision}",
             }
@@ -509,7 +512,97 @@ def build_spdx(
                         "relatedSpdxElement": identifier,
                     }
                 )
-    return {
+    if appimage_inventory is not None:
+        image_id = artifact_ids.get(f"atrinik-classic-client-{version}-linux-x86_64.AppImage")
+        if image_id is None:
+            raise RuntimeError("AppImage inventory has no downloadable artifact")
+        system_notices = {}
+        notice_ids = set()
+        for notice in appimage_inventory.get("system_license_notices", []):
+            package, license_id = notice["package"], notice["license_id"]
+            if (package in system_notices or license_id in notice_ids
+                    or re.fullmatch(r"LicenseRef-[A-Za-z0-9.-]+", license_id) is None):
+                raise RuntimeError("duplicate or invalid AppImage source package notice")
+            if appimage_packaging_lock is None or appimage_packaging_lock.get("system_package_licenses", {}).get(package) != license_id:
+                raise RuntimeError("AppImage source package notice differs from locked license identifier")
+            if hashlib.sha256(notice["text"].encode("utf-8")).hexdigest() != notice["sha256"]:
+                raise RuntimeError("AppImage source package notice text hash differs")
+            expected_files = [{
+                "path": f"usr/share/doc/atrinik/licenses/system/{package}/copyright",
+                "sha256": appimage_packaging_lock.get("system_package_copyright_sha256", {}).get(package),
+            }]
+            for name in appimage_packaging_lock.get("system_package_notice_files", {}).get(package, []):
+                expected_files.append({
+                    "path": f"usr/share/doc/atrinik/licenses/system/common-licenses/{name}",
+                    "sha256": appimage_packaging_lock.get("system_common_license_sha256", {}).get(name),
+                })
+            if notice["files"] != expected_files:
+                raise RuntimeError("AppImage source package notice files differ from immutable lock")
+            if any(appimage_inventory["files"].get(file["path"]) != file["sha256"] for file in notice["files"]):
+                raise RuntimeError("AppImage source package notice file hash differs")
+            system_notices[package] = notice
+            notice_ids.add(license_id)
+            extracted_licenses.append({
+                "licenseId": license_id, "extractedText": notice["text"],
+                "name": f"Debian package notice: {package}",
+                "comment": f"Full package copyright and referenced license texts; scope follows the supplied package notice, not a conclusion for each bundled binary. UTF-8 notice SHA256: {notice['sha256']}; files: "
+                           + "; ".join(f"{file['path']} sha256:{file['sha256']}" for file in notice["files"]),
+            })
+        native_inputs = appimage_inventory["native_inputs"]
+        for record in [*native_inputs["sources"], *native_inputs["tools"],
+                       {"name": "appimage-runtime", **native_inputs["runtime"]}]:
+            name = str(record["name"])
+            identifier = f"SPDXRef-AppImageInput-{re.sub(r'[^A-Za-z0-9.-]', '-', name)}"
+            packages.append({
+                "SPDXID": identifier, "name": name, "versionInfo": record["version"],
+                "downloadLocation": record["url"], "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": record["sha256"]}],
+                "licenseConcluded": "NOASSERTION", "licenseDeclared": record["license"],
+                "copyrightText": "NOASSERTION",
+                "sourceInfo": f"Locked by tools/ci/appimage/packaging.lock.json ({appimage_inventory['lock_sha256']})",
+            })
+            relationships.append({"spdxElementId": image_id, "relationshipType": "DEPENDS_ON",
+                                  "relatedSpdxElement": identifier})
+        for record in (appimage_packaging_lock or {}).get("runtime_sources", []):
+            identifier = f"SPDXRef-AppImageRuntimeSource-{re.sub(r'[^A-Za-z0-9.-]', '-', record['name'])}"
+            packages.append({
+                "SPDXID": identifier, "name": record["name"], "versionInfo": record["version"],
+                "downloadLocation": record["url"], "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": record["sha256"]}],
+                "licenseConcluded": "NOASSERTION", "licenseDeclared": record["license"],
+                "copyrightText": "NOASSERTION",
+                "sourceInfo": f"Static runtime input locked by tools/ci/appimage/packaging.lock.json ({appimage_inventory['lock_sha256']})",
+            })
+            for relation in ("DEPENDS_ON", "GENERATED_FROM"):
+                relationships.append({"spdxElementId": "SPDXRef-AppImageInput-appimage-runtime",
+                                      "relationshipType": relation, "relatedSpdxElement": identifier})
+        for index, record in enumerate(appimage_inventory["bundled_library_records"], start=1):
+            identifier = f"SPDXRef-AppImageLibrary-{index}"
+            package_record = {
+                "SPDXID": identifier, "name": record["name"], "versionInfo": record["version"],
+                "downloadLocation": "NOASSERTION", "filesAnalyzed": False,
+                "checksums": [{"algorithm": "SHA256", "checksumValue": record["sha256"]}],
+                "licenseConcluded": "NOASSERTION", "licenseDeclared": record["license"],
+                "copyrightText": "NOASSERTION",
+                "sourceInfo": f"Bundled as {record['path']}; built from locked input {record['source']}",
+            }
+            if record["source"].startswith("deb:"):
+                package = record["source"][4:]
+                notice = system_notices.get(package)
+                if notice is None or notice["license_id"] != record["license"]:
+                    raise RuntimeError("bundled AppImage library has no exact source package notice")
+                package_record["licenseDeclared"] = "NOASSERTION"
+                package_record["licenseComments"] = "The supplied Debian package notice covers source files beyond this compiled library; applicable binary file licenses have not been concluded."
+                package_record["comment"] = f"Notice supplied by Debian package {package}: {notice['license_id']}; full text is retained in hasExtractedLicensingInfos."
+            packages.append(package_record)
+            relationships.append({"spdxElementId": image_id, "relationshipType": "CONTAINS",
+                                  "relatedSpdxElement": identifier})
+            if not record["source"].startswith("deb:"):
+                relationships.append({
+                    "spdxElementId": identifier, "relationshipType": "GENERATED_FROM",
+                    "relatedSpdxElement": f"SPDXRef-AppImageInput-{re.sub(r'[^A-Za-z0-9.-]', '-', record['source'])}",
+                })
+    document = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
@@ -522,6 +615,9 @@ def build_spdx(
         "packages": packages,
         "relationships": relationships,
     }
+    if extracted_licenses:
+        document["hasExtractedLicensingInfos"] = extracted_licenses
+    return document
 
 
 def build_release_manifest(
@@ -531,6 +627,8 @@ def build_release_manifest(
     source_epoch: int,
     dependency_bundle: dict[str, object],
     locked_inputs: list[dict[str, object]],
+    appimage_packaging_lock: dict[str, object],
+    appimage_inventory: dict[str, object],
 ) -> dict[str, object]:
     return {
         "schema_version": RELEASE_ARTIFACT_SCHEMA,
@@ -540,6 +638,8 @@ def build_release_manifest(
         "source_epoch": source_epoch,
         "dependency_bundle": dependency_bundle,
         "locked_inputs": locked_inputs,
+        "appimage_packaging_lock": appimage_packaging_lock,
+        "appimage_inventory": appimage_inventory,
         "artifacts": [
             {"name": path.name, "sha256": sha256(path), "size": path.stat().st_size}
             for path in paths
@@ -561,6 +661,15 @@ def main() -> int:
     if arguments.source_epoch < 0:
         parser.error("--source-epoch must not be negative")
 
+    from release_artifacts import git_value, source_schema
+    root = Path.cwd()
+    if git_value(root, "rev-parse", "HEAD") != arguments.revision:
+        raise RuntimeError("release finalizer checkout differs from source revision")
+    if source_schema(root, arguments.revision) != RELEASE_ARTIFACT_SCHEMA:
+        raise RuntimeError("release finalizer differs from immutable source schema")
+    if int(git_value(root, "show", "-s", "--format=%ct", arguments.revision)) != arguments.source_epoch:
+        raise RuntimeError("release finalizer source epoch differs")
+
     directory = arguments.directory.resolve(strict=True)
     generated = {
         "SHA256SUMS",
@@ -571,8 +680,11 @@ def main() -> int:
         if (directory / name).exists():
             raise RuntimeError(f"refusing to overwrite release metadata: {name}")
 
-    paths = sorted(path for path in directory.iterdir() if path.is_file())
-    locked_inputs = load_locked_inputs(arguments.version)
+    entries = list(directory.iterdir())
+    if any(not path.is_file() or path.is_symlink() for path in entries):
+        raise RuntimeError("release directory contains a non-regular artifact")
+    paths = sorted(entries)
+    locked_inputs = load_locked_inputs(arguments.version, Path.cwd(), RELEASE_ARTIFACT_SCHEMA)
     dependency_bundle = load_descriptor(Path("dependencies.bundle.json"))
     verify_descriptor(Path.cwd(), dependency_bundle)
     names = {path.name for path in paths}
@@ -630,8 +742,16 @@ def main() -> int:
         f"atrinik-classic-server-{arguments.version}-windows-x86_64",
     )
     validate_wheel(wheel_path, arguments.version)
-    from release_artifacts import validate_deb
-    validate_deb(directory / f"atrinik-classic-client-{arguments.version}-linux-amd64.deb", arguments.version)
+    from appimage import TRUSTED_SOURCE_FILES, read_appimage_inventory
+    for relative in TRUSTED_SOURCE_FILES:
+        if (root / relative).read_text() != git_value(root, "show", f"{arguments.revision}:{relative}", preserve_whitespace=True):
+            raise RuntimeError(f"release finalizer source file differs: {relative}")
+    inventory = read_appimage_inventory(
+        directory / f"atrinik-classic-client-{arguments.version}-linux-x86_64.AppImage",
+        arguments.version, revision=arguments.revision, source_root=Path.cwd(),
+        source_date_epoch=arguments.source_epoch,
+    )
+    packaging_lock = json.loads(git_value(root, "show", f"{arguments.revision}:tools/ci/appimage/packaging.lock.json"))
 
     sbom_path = directory / f"atrinik-classic-{arguments.version}.spdx.json"
     sbom_path.write_text(
@@ -642,6 +762,8 @@ def main() -> int:
                 arguments.revision,
                 arguments.source_epoch,
                 locked_inputs,
+                inventory,
+                packaging_lock,
             ),
             indent=2,
         )
@@ -659,6 +781,8 @@ def main() -> int:
                 arguments.source_epoch,
                 dependency_bundle,
                 locked_inputs,
+                packaging_lock,
+                inventory,
             ),
             indent=2,
         )

@@ -32,6 +32,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "${PROMOTION_WORKFLOW_SHA}"
           test "$(git rev-parse refs/remotes/origin/main)" = \
             "${PROMOTION_WORKFLOW_SHA}"
+      - name: Install trusted AppImage inspection tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends squashfs-tools binutils
       - id: latest
         name: Resolve the highest immutable release
         env:

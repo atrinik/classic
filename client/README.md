@@ -46,13 +46,14 @@ records that adapter's DXGI LUID, and queries the driver description by that
 LUID. Ambiguous matches or unavailable native attestation remain unqualified;
 environment variables never synthesize a selected-adapter identity.
 
- Releases are produced from every squash merge to main. semantic-release
- parses the Conventional Commits pull-request title. Classic stays on the
- 5.x.x line: a breaking marker, BREAKING CHANGE, or feat produces a minor
- release, and every other conventional type produces at least a patch release.
- Each unified release contains an atrinik-classic-client-VERSION source
- archive, a portable atrinik-classic-client-VERSION-windows-x86_64 ZIP, and
- SHA-256 checksums. The repository tag is the authoritative build version.
+ Successful trusted main-push validation releases checked batches through the
+ shared publication queue. semantic-release parses Conventional Commit titles
+ and advances main batches to the next minor version on the 5.x.x line; numeric
+ maintenance branches publish only patches. Each unified release contains an
+ atrinik-classic-client-VERSION source archive, a portable
+ atrinik-classic-client-VERSION-windows-x86_64 ZIP, a Linux
+ atrinik-classic-client-VERSION-linux-x86_64.AppImage, and SHA-256 checksums.
+ The repository tag is the authoritative build version.
  The scoped source archive embeds the matching protocol and libatrinik source
  under dependencies/ and selects it automatically outside the monorepo.
 
@@ -63,6 +64,20 @@ environment variables never synthesize a selected-adapter identity.
  Run the executable with the repository root as the working directory so it can find its
  configuration, graphics, fonts, sounds, and other data files:
   $ build/linux-debug/atrinik
+
+ On Ubuntu 24.04 or newer x86_64 (glibc >= 2.39), the released AppImage runs
+ independently of the source tree:
+  $ chmod +x atrinik-classic-client-VERSION-linux-x86_64.AppImage
+  $ ./atrinik-classic-client-VERSION-linux-x86_64.AppImage
+
+ Verify SHA256SUMS before running it. SDL and application libraries are bundled;
+ the host supplies hardware GPU drivers, the Vulkan loader and desktop/audio
+ services. No APT SDL installation is needed. When FUSE mounting is unavailable,
+ append --appimage-extract-and-run; host libfuse2 is unnecessary. Upgrade by
+ replacing the download, preserving the user-data directory described below.
+ There is no automatic updater or store integration. See ../docs/RELEASING.md
+ for the support boundary and desktop qualification; Alpine/musl and ARM are
+ outside the AppImage contract.
 
  Set `ATRINIK_CONFIG_DIR` to give a process an isolated configuration base.
  The client creates its normal `.atrinik/<major>.x/` hierarchy below that

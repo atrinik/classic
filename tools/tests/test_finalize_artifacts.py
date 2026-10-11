@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import io
 from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 import sys
 import stat
@@ -549,6 +551,118 @@ class FinalizeArtifactsTests(unittest.TestCase):
             )
         )
 
+    def test_spdx_records_runtime_and_bundled_library_provenance(self) -> None:
+        image = self.root / "atrinik-classic-client-5.6.0-linux-x86_64.AppImage"
+        image.write_bytes(b"image")
+        source = {"name": "SDL3", "version": "3.4.0", "url": "https://example.invalid/SDL3.tar.gz",
+                  "sha256": "a" * 64, "license": "Zlib"}
+        runtime = {"version": "2026-01", "url": "https://example.invalid/runtime",
+                   "sha256": "b" * 64, "license": "MIT"}
+        library = {"name": "libSDL3.so.0", "path": "usr/lib/libSDL3.so.0.4.0",
+                   "version": "3.4.0", "sha256": "d" * 64, "license": "Zlib", "source": "SDL3"}
+        inventory = {"lock_sha256": "e" * 64,
+                     "native_inputs": {"sources": [source], "tools": [], "runtime": runtime},
+                     "bundled_library_records": [library]}
+        spdx = finalize_artifacts.build_spdx([image], "5.6.0", "c" * 40, 123, [], inventory)
+        packages = {record["name"]: record for record in spdx["packages"]}
+        for name, version, digest, license in (("SDL3", "3.4.0", "a" * 64, "Zlib"),
+                                              ("appimage-runtime", "2026-01", "b" * 64, "MIT"),
+                                              ("libSDL3.so.0", "3.4.0", "d" * 64, "Zlib")):
+            self.assertEqual(packages[name]["versionInfo"], version)
+            self.assertEqual(packages[name]["checksums"], [{"algorithm": "SHA256", "checksumValue": digest}])
+            self.assertEqual(packages[name]["licenseDeclared"], license)
+        self.assertIn({"spdxElementId": "SPDXRef-Artifact-1", "relationshipType": "CONTAINS",
+                       "relatedSpdxElement": "SPDXRef-AppImageLibrary-1"}, spdx["relationships"])
+        self.assertIn({"spdxElementId": "SPDXRef-AppImageLibrary-1", "relationshipType": "GENERATED_FROM",
+                       "relatedSpdxElement": "SPDXRef-AppImageInput-SDL3"}, spdx["relationships"])
+
+    def test_spdx_preserves_exact_package_scoped_notices_without_binary_license_inference(self) -> None:
+        import copy
+        image = self.root / "atrinik-classic-client-5.6.0-linux-x86_64.AppImage"
+        image.write_bytes(b"image")
+        notice_path = "usr/share/doc/atrinik/licenses/system/libexample/copyright"
+        common_path = "usr/share/doc/atrinik/licenses/system/common-licenses/MIT"
+        text = f"===== {notice_path} =====\nFull package notice with per-file scopes.\n\n===== {common_path} =====\nFull referenced license text.\n\n"
+        notice = {"package": "libexample", "license_id": "LicenseRef-System-libexample",
+                  "text": text, "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                  "files": [{"path": notice_path, "sha256": "a" * 64},
+                            {"path": common_path, "sha256": "b" * 64}]}
+        inventory = {"lock_sha256": "c" * 64, "native_inputs": {"sources": [], "tools": [],
+                     "runtime": {"version": "1", "url": "https://example.invalid/runtime",
+                                 "sha256": "d" * 64, "license": "MIT"}},
+                     "bundled_library_records": [{"name": "libexample.so.1", "path": "usr/lib/libexample.so.1.0",
+                         "version": "1.0", "sha256": "e" * 64, "license": notice["license_id"],
+                         "source": "deb:libexample"}], "system_license_notices": [notice],
+                     "files": {notice_path: "a" * 64, common_path: "b" * 64}}
+        lock = {"system_package_licenses": {"libexample": notice["license_id"]},
+                "system_package_copyright_sha256": {"libexample": "a" * 64},
+                "system_package_notice_files": {"libexample": ["MIT"]},
+                "system_common_license_sha256": {"MIT": "b" * 64}}
+        document = finalize_artifacts.build_spdx([image], "5.6.0", "f" * 40, 123, [], inventory, lock)
+        self.assertEqual(len(document["hasExtractedLicensingInfos"]), 1)
+        extracted = document["hasExtractedLicensingInfos"][0]
+        self.assertEqual(extracted["licenseId"], notice["license_id"])
+        self.assertEqual(extracted["extractedText"], text)
+        self.assertIn(notice["sha256"], extracted["comment"])
+        binary = next(package for package in document["packages"] if package["name"] == "libexample.so.1")
+        self.assertEqual(binary["licenseDeclared"], "NOASSERTION")
+        self.assertEqual(binary["licenseConcluded"], "NOASSERTION")
+        self.assertFalse(binary["filesAnalyzed"])
+        self.assertNotIn("licenseInfoFromFiles", binary)
+        self.assertIn(notice["license_id"], binary["comment"])
+        self.assertIn("beyond this compiled library", binary["licenseComments"])
+        for mutation, message in (("missing", "no exact source package notice"),
+                                  ("duplicate", "duplicate"), ("text", "text hash"),
+                                  ("file", "file hash"), ("source_file", "immutable lock"),
+                                  ("identifier", "locked license identifier")):
+            damaged = copy.deepcopy(inventory)
+            if mutation == "missing":
+                damaged["system_license_notices"] = []
+            elif mutation == "duplicate":
+                damaged["system_license_notices"].append(copy.deepcopy(notice))
+            elif mutation == "text":
+                damaged["system_license_notices"][0]["text"] += "forged"
+            elif mutation == "file":
+                damaged["files"][notice_path] = "0" * 64
+            elif mutation == "source_file":
+                damaged["system_license_notices"][0]["files"][0]["sha256"] = "0" * 64
+                damaged["files"][notice_path] = "0" * 64
+            else:
+                damaged["system_license_notices"][0]["license_id"] = "LicenseRef-Forged"
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(RuntimeError, message):
+                finalize_artifacts.build_spdx([image], "5.6.0", "f" * 40, 123, [], damaged, lock)
+
+    def test_spdx_records_each_immutable_static_runtime_source(self) -> None:
+        image = self.root / "atrinik-classic-client-5.6.0-linux-x86_64.AppImage"
+        image.write_bytes(b"image")
+        runtime = {"version": "20251108", "url": "https://example.invalid/runtime",
+                   "sha256": "a" * 64, "license": "MIT AND LGPL-2.1-or-later"}
+        inventory = {"lock_sha256": "b" * 64, "native_inputs": {
+            "sources": [], "tools": [], "runtime": runtime}, "bundled_library_records": []}
+        source = {"name": "libfuse", "version": "3.15.0", "url": "https://example.invalid/libfuse.tar.gz",
+                  "sha256": "c" * 64, "license": "LGPL-2.1-or-later"}
+        spdx = finalize_artifacts.build_spdx([image], "5.6.0", "d" * 40, 123, [], inventory,
+                                            {"runtime_sources": [source]})
+        package = next(package for package in spdx["packages"] if package["name"] == "libfuse")
+        self.assertEqual(package["versionInfo"], "3.15.0")
+        self.assertEqual(package["checksums"], [{"algorithm": "SHA256", "checksumValue": "c" * 64}])
+        self.assertEqual(package["licenseDeclared"], "LGPL-2.1-or-later")
+        for relation in ("DEPENDS_ON", "GENERATED_FROM"):
+            self.assertIn({"spdxElementId": "SPDXRef-AppImageInput-appimage-runtime",
+                           "relationshipType": relation,
+                           "relatedSpdxElement": "SPDXRef-AppImageRuntimeSource-libfuse"}, spdx["relationships"])
+
+    def test_finalizer_rejects_wrong_checkout_schema_or_epoch_before_writes(self) -> None:
+        arguments = ["finalize_artifacts.py", "--version", "5.6.0", "--revision", "c" * 40,
+                     "--source-epoch", "123", "--directory", str(self.root)]
+        for head, schema, epoch, error in (("d" * 40, 3, "123", "checkout"),
+                                           ("c" * 40, 2, "123", "schema"),
+                                           ("c" * 40, 3, "124", "epoch")):
+            with self.subTest(error=error), mock.patch.object(sys, "argv", arguments), mock.patch("release_artifacts.git_value", side_effect=[head, epoch]), mock.patch("release_artifacts.source_schema", return_value=schema):
+                with self.assertRaisesRegex(RuntimeError, error):
+                    finalize_artifacts.main()
+                self.assertEqual(list(self.root.iterdir()), [])
+
     def test_release_manifest_records_exact_dependency_bundle(self) -> None:
         artifact = self.root / "artifact.zip"
         artifact.write_bytes(b"artifact")
@@ -558,10 +672,12 @@ class FinalizeArtifactsTests(unittest.TestCase):
             "material_digest": "sha256:" + "b" * 64,
         }
         manifest = finalize_artifacts.build_release_manifest(
-            [artifact], "5.6.0", "c" * 40, 123, descriptor, []
+            [artifact], "5.6.0", "c" * 40, 123, descriptor, [], {"schema_version": 1}, {"schema": 1}
         )
-        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["schema_version"], 3)
         self.assertIs(manifest["dependency_bundle"], descriptor)
+        self.assertEqual(manifest["appimage_packaging_lock"], {"schema_version": 1})
+        self.assertEqual(manifest["appimage_inventory"], {"schema": 1})
         self.assertEqual(manifest["artifacts"][0]["name"], artifact.name)
         self.assertEqual(manifest["artifacts"][0]["size"], len(b"artifact"))
 
@@ -569,7 +685,7 @@ class FinalizeArtifactsTests(unittest.TestCase):
         names = finalize_artifacts.expected_names("5.6.0")
         self.assertIn("atrinik-classic-5.6.0.tar.gz", names)
         self.assertIn("atrinik-classic-editor-5.6.0.tar.gz", names)
-        self.assertIn("atrinik-classic-client-5.6.0-linux-amd64.deb", names)
+        self.assertIn("atrinik-classic-client-5.6.0-linux-x86_64.AppImage", names)
         self.assertIn(
             "atrinik-classic-server-5.6.0-windows-x86_64.zip", names
         )
