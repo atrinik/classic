@@ -234,12 +234,12 @@ static void signal_handler(int sig, siginfo_t *siginfo, void *context)
     strftime(VS(date), "%Y_%m_%d_%H-%M-%S", tm);
     fp = NULL;
     if (homedir != NULL && homedir[0] != '\0') {
-        snprintf(VS(path), "%s/.atrinik/%s-traceback-%s.txt", homedir, traceback_prefix, date);
+        snprintf((path), sizeof((path)), "%s/.atrinik/%s-traceback-%s.txt", homedir, traceback_prefix, date);
         fp = fopen(path, "a");
     }
 
     if (fp == NULL) {
-        snprintf(VS(path), "%s-traceback-%s.txt", traceback_prefix, date);
+        snprintf((path), sizeof((path)), "%s-traceback-%s.txt", traceback_prefix, date);
         fp = fopen(path, "a");
 
         if (fp == NULL) {
@@ -609,7 +609,7 @@ TOOLKIT_DEINIT_FUNC(signals) {
 TOOLKIT_DEINIT_FUNC_FINISH
 
 void signals_set_traceback_prefix(const char *prefix) {
-    snprintf(VS(traceback_prefix), "%s", prefix);
+    snprintf((traceback_prefix), sizeof((traceback_prefix)), "%s", prefix);
 }
 
 void signals_enable_graceful_termination(void) {

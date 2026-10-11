@@ -1078,7 +1078,7 @@ static PyObject *Atrinik_Object_Say(Atrinik_Object *self, PyObject *args) {
     OBJEXISTCHECK(self);
 
     char *name = hooks->stringbuffer_finish(hooks->object_get_name(self->obj, NULL, NULL));
-    snprintf(VS(buf), "%s says: %s", name, message);
+    snprintf((buf), sizeof((buf)), "%s says: %s", name, message);
     xfree(name);
     hooks->draw_info_map(CHAT_TYPE_GAME,
                          NULL,
@@ -3827,7 +3827,7 @@ int Atrinik_Object_init(PyObject *module) {
         PyGetSetDef *def = &getseters[i++];
 
         char buf[MAX_BUF];
-        snprintf(VS(buf), "f_%s", hooks->object_flag_names[flagno]);
+        snprintf((buf), sizeof((buf)), "f_%s", hooks->object_flag_names[flagno]);
         def->name = strdup(buf);
 
         def->get = (getter)Object_GetFlag;

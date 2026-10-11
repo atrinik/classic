@@ -50,7 +50,7 @@ static void *scheduler_client_main(void *data) {
 
 static bool first_regular_file(const char *root, const char *relative, char *output, size_t size) {
     char directory[HUGE_BUF];
-    snprintf(VS(directory), "%s%s%s", root, *relative != '\0' ? "/" : "", relative);
+    snprintf((directory), sizeof((directory)), "%s%s%s", root, *relative != '\0' ? "/" : "", relative);
     DIR *dir = opendir(directory);
     if (dir == NULL) {
         return false;
@@ -62,7 +62,7 @@ static bool first_regular_file(const char *root, const char *relative, char *out
             continue;
         }
         char child[HUGE_BUF];
-        snprintf(VS(child), "%s%s%s", relative, *relative != '\0' ? "/" : "", entry->d_name);
+        snprintf((child), sizeof((child)), "%s%s%s", relative, *relative != '\0' ? "/" : "", entry->d_name);
         size_t path_size = strlen(root) + strlen(child) + 2;
         char *path = xmalloc(path_size);
         snprintf(path, path_size, "%s/%s", root, child);
@@ -88,7 +88,7 @@ static bool first_regular_file(const char *root, const char *relative, char *out
 
 static bool first_compressed_data(char *output, size_t size) {
     char root[HUGE_BUF];
-    snprintf(VS(root), "%s/data", settings.assetspath);
+    snprintf((root), sizeof((root)), "%s/data", settings.assetspath);
     DIR *dir = opendir(root);
     if (dir == NULL) {
         return false;
@@ -109,7 +109,7 @@ static bool first_compressed_data(char *output, size_t size) {
 
 START_TEST(test_transport_neutral_asset_cache) {
     char map_path[HUGE_BUF];
-    snprintf(VS(map_path), "%s/client-maps/cache-test.png", settings.assetspath);
+    snprintf((map_path), sizeof((map_path)), "%s/client-maps/cache-test.png", settings.assetspath);
     FILE *map = fopen(map_path, "wb");
     ck_assert_ptr_ne(map, NULL);
     ck_assert_uint_eq(fwrite("map", 1, 3, map), 3);
@@ -149,7 +149,7 @@ START_TEST(test_transport_scheduler_services_initialized_quic_listener) {
     toolkit_import(socket_server);
     ck_assert(socket_server_quic_info(VS(client.host), &client.port, client.fingerprint));
     if (client.host[0] == '\0') {
-        snprintf(VS(client.host), "%s", "127.0.0.1");
+        snprintf((client.host), sizeof((client.host)), "%s", "127.0.0.1");
     }
 
     pthread_t thread;

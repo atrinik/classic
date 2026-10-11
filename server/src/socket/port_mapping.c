@@ -153,7 +153,7 @@ static bool socket_port_mapping_upnp(void *data,
         return false;
     }
 
-    snprintf(VS(mapping_upnp_port), "%" PRIu16, port);
+    snprintf((mapping_upnp_port), sizeof((mapping_upnp_port)), "%" PRIu16, port);
     char external_address[65];
     int address_result = UPNP_GetExternalIPAddress(mapping_upnp_urls.controlURL,
                                                    mapping_upnp_data.first.servicetype,
@@ -184,7 +184,7 @@ static bool socket_port_mapping_upnp(void *data,
 
     snprintf(host, host_size, "%s", external_address);
     *external_port = port;
-    snprintf(VS(mapping_upnp_lan_address), "%s", lan_address);
+    snprintf((mapping_upnp_lan_address), sizeof((mapping_upnp_lan_address)), "%s", lan_address);
     mapping_upnp_renew_at_ms = datetime_monotonic_ms() + (uint64_t)PORT_MAPPING_LIFETIME * 500;
     mapping_upnp_active = true;
     return true;

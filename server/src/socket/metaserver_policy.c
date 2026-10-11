@@ -210,7 +210,7 @@ static bool metaserver_publish_error_code_parse(const char *body,
         return false;
     }
     char canonical_sequence[24];
-    return snprintf(VS(canonical_sequence), "%" PRIu64, minimum_next_sequence) ==
+    return snprintf((canonical_sequence), sizeof((canonical_sequence)), "%" PRIu64, minimum_next_sequence) ==
                (int)strlen(sequence) &&
            strcmp(canonical_sequence, sequence) == 0;
 }
@@ -740,7 +740,7 @@ metaserver_rendezvous_auth_claim(metaserver_rendezvous_auth_job_t *jobs,
     }
 
     memset(available, 0, sizeof(*available));
-    snprintf(VS(available->ticket), "%s", ticket);
+    snprintf((available->ticket), sizeof((available->ticket)), "%s", ticket);
     available->deadline_ms = deadline_ms;
     available->state = RENDEZVOUS_SERVER_AUTH_NEW;
     available->active = true;
@@ -818,7 +818,7 @@ access_outcome_t metaserver_access_response_parse(const char *input,
         consumed < 0 || (size_t)consumed != body_size || strcmp(reply_id, request_id) != 0)
         return ACCESS_PENDING;
     char expected_revision[21];
-    snprintf(VS(expected_revision), "%" PRIu64, token_revision);
+    snprintf((expected_revision), sizeof((expected_revision)), "%" PRIu64, token_revision);
     if (strcmp(revision, expected_revision) != 0)
         return ACCESS_PENDING;
     bool null_handle = strcmp(reply_handle, "null") == 0;

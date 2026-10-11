@@ -283,7 +283,7 @@ void game_news_open(const char *title) {
     CURL *curl = curl_easy_init();
     char *news_id = curl_easy_escape(curl, title, 0);
     char url[HUGE_BUF];
-    snprintf(VS(url), "%s?news=%s", clioption_settings.game_news_url, news_id);
+    snprintf((url), sizeof((url)), "%s?news=%s", clioption_settings.game_news_url, news_id);
     curl_free(news_id);
     curl_easy_cleanup(curl);
 

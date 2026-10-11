@@ -2689,7 +2689,7 @@ static bool private_map_roster_owner(const char *directory,
                 continue;
             }
             char canonical_character[MAX_BUF];
-            snprintf(VS(canonical_character), "%s", parts[1]);
+            snprintf((canonical_character), sizeof((canonical_character)), "%s", parts[1]);
             string_title(canonical_character);
             if (strcmp(canonical_character, character) != 0) {
                 continue;
@@ -2758,7 +2758,7 @@ static bool preflight_private_map_file(const char *path, char *error, size_t err
     char reason[HUGE_BUF] = "";
     char source_path[HUGE_BUF];
     if (!celestial_private_source_from_path(path, source_path)) {
-        snprintf(VS(reason), "invalid $-demangled authored source");
+        snprintf((reason), sizeof((reason)), "invalid $-demangled authored source");
     }
 
     if (reason[0] == '\0') {
@@ -2775,11 +2775,11 @@ static bool preflight_private_map_file(const char *path, char *error, size_t err
         FREE_AND_COPY_HASH(map->path, path);
         map->map_flags |= MAP_FLAG_UNIQUE;
         if (fp == NULL || !load_map_header(map, fp)) {
-            snprintf(VS(reason), "malformed private map header");
+            snprintf((reason), sizeof((reason)), "malformed private map header");
         } else if (map->celestial_schema != 1 ||
                    !celestial_structure_validate_header(map, VS(reason))) {
             if (reason[0] == '\0') {
-                snprintf(VS(reason), "private map is not a valid celestial-v1 map");
+                snprintf((reason), sizeof((reason)), "private map is not a valid celestial-v1 map");
             }
         }
     }

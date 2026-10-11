@@ -2,7 +2,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -58,13 +58,13 @@ WS  [ \ t]*
 rmap_lex_error = 0;
 %}
 
-^wallstyle{S}               snprintf(VS(RP->wallstyle), "%s", rmap_yval());
-^floorstyle{S}              snprintf(VS(RP->floorstyle), "%s", rmap_yval());
-^monsterstyle{S}            snprintf(VS(RP->monsterstyle), "%s", rmap_yval());
-^layoutstyle{S}             snprintf(VS(RP->layoutstyle), "%s", rmap_yval());
-^doorstyle{S}               snprintf(VS(RP->doorstyle), "%s", rmap_yval());
-^decorstyle{S}              snprintf(VS(RP->decorstyle), "%s", rmap_yval());
-^dungeon_name{S}            snprintf(VS(RP->dungeon_name), "%s", rmap_yval());
+^wallstyle{S}               snprintf((RP->wallstyle), sizeof((RP->wallstyle)), "%s", rmap_yval());
+^floorstyle{S}              snprintf((RP->floorstyle), sizeof((RP->floorstyle)), "%s", rmap_yval());
+^monsterstyle{S}            snprintf((RP->monsterstyle), sizeof((RP->monsterstyle)), "%s", rmap_yval());
+^layoutstyle{S}             snprintf((RP->layoutstyle), sizeof((RP->layoutstyle)), "%s", rmap_yval());
+^doorstyle{S}               snprintf((RP->doorstyle), sizeof((RP->doorstyle)), "%s", rmap_yval());
+^decorstyle{S}              snprintf((RP->decorstyle), sizeof((RP->decorstyle)), "%s", rmap_yval());
+^dungeon_name{S}            snprintf((RP->dungeon_name), sizeof((RP->dungeon_name)), "%s", rmap_yval());
 ^xsize{S}                   RP->Xsize = IVAL;
 ^ysize{S}                   RP->Ysize = IVAL;
 ^expand2x{S}                RP->expand2x = IVAL;
@@ -74,19 +74,19 @@ rmap_lex_error = 0;
 ^symmetry{S}                RP->symmetry = IVAL;
 ^difficulty{S}              RP->difficulty = IVAL;
 ^decorchance{S}             RP->decorchance = IVAL;
-^exitstyle{S}               snprintf(VS(RP->exitstyle), "%s", rmap_yval());
+^exitstyle{S}               snprintf((RP->exitstyle), sizeof((RP->exitstyle)), "%s", rmap_yval());
 ^dungeon_level{S}           RP->dungeon_level = IVAL;
 ^dungeon_depth{S}           RP->dungeon_depth = IVAL;
-^final_map{S}               snprintf(VS(RP->final_map), "%s", rmap_yval());
+^final_map{S}               snprintf((RP->final_map), sizeof((RP->final_map)), "%s", rmap_yval());
 ^orientation{S}             RP->orientation = IVAL;
 ^origin_x{S}                RP->origin_x = IVAL;
 ^origin_y{S}                RP->origin_y = IVAL;
-^origin_map{S}              snprintf(VS(RP->origin_map), "%s", rmap_yval());
+^origin_map{S}              snprintf((RP->origin_map), sizeof((RP->origin_map)), "%s", rmap_yval());
 ^random_seed{S}             RP->random_seed = IVAL;
 ^num_monsters{S}            RP->num_monsters = IVAL;
 ^darkness{S}                RP->darkness = IVAL;
 ^level_increment{S}         RP->level_increment = IVAL;
-^bg_music{S}                snprintf(VS(RP->bg_music), "%s", rmap_yval());
+^bg_music{S}                snprintf((RP->bg_music), sizeof((RP->bg_music)), "%s", rmap_yval());
 
 
 <*>(^{WS}$)|\n              {}

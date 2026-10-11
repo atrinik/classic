@@ -118,7 +118,7 @@ WS  [ \t]*
 ^journal_run{S}      {
     const char *run_id = yval();
     if (string_is_hex_fixed(run_id, 32, true)) {
-        snprintf(VS(m->journal_run_id), "%s", run_id);
+        snprintf((m->journal_run_id), sizeof((m->journal_run_id)), "%s", run_id);
     }
 }
 ^journal_sequence{S} {

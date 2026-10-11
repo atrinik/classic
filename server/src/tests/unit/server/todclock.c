@@ -57,9 +57,9 @@ static void assert_time_lunar_output(object *pl,
     command_time(pl, "time", NULL);
 
     char expected[HUGE_BUF];
-    snprintf(VS(expected), "The current moon phase is %s.", phase);
+    snprintf((expected), sizeof((expected)), "The current moon phase is %s.", phase);
     ck_assert(queued_drawinfo_has(CONTR(pl)->cs, expected));
-    snprintf(VS(expected),
+    snprintf((expected), sizeof((expected)),
              "Moon visibility: %s; moonlight contribution: %s.",
              visibility,
              contribution);
@@ -236,7 +236,7 @@ END_TEST
 START_TEST(test_parse_rejects_overflow) {
     char overflow[64];
     unsigned long value = 17;
-    snprintf(VS(overflow), "%lu0", ULONG_MAX);
+    snprintf((overflow), sizeof((overflow)), "%lu0", ULONG_MAX);
 
     ck_assert(!todclock_parse(overflow, &value));
     ck_assert_uint_eq(value, 17);
@@ -245,7 +245,7 @@ END_TEST
 
 START_TEST(test_write_replaces_clockdata_with_complete_value) {
     char filename[HUGE_BUF];
-    snprintf(VS(filename), "%s/clockdata", settings.datapath);
+    snprintf((filename), sizeof((filename)), "%s/clockdata", settings.datapath);
     const char previous[] = "18446744073709551615 trailing evidence";
     ck_assert(path_write_atomic(filename, previous, sizeof(previous) - 1, SAVE_MODE));
 
@@ -261,7 +261,7 @@ END_TEST
 
 START_TEST(test_set_persists_clockdata) {
     char filename[HUGE_BUF];
-    snprintf(VS(filename), "%s/clockdata", settings.datapath);
+    snprintf((filename), sizeof((filename)), "%s/clockdata", settings.datapath);
 
     todtick = 17;
     ck_assert(todclock_set(23));
@@ -276,7 +276,7 @@ END_TEST
 
 START_TEST(test_persisted_tick_reconstructs_without_rewrite) {
     char filename[HUGE_BUF];
-    snprintf(VS(filename), "%s/clockdata", settings.datapath);
+    snprintf((filename), sizeof((filename)), "%s/clockdata", settings.datapath);
     const unsigned long original =
         (12345UL * HOURS_PER_YEAR) + (7 * HOURS_PER_MONTH) + (19 * HOURS_PER_DAY) + 13;
 
@@ -378,11 +378,11 @@ START_TEST(test_checked_shutdown_clock_and_maplog_failures) {
     char directory[] = "/tmp/atrinik-shutdown-metadata-XXXXXX";
     ck_assert_ptr_nonnull(mkdtemp(directory));
     char previous_datapath[MAX_BUF];
-    snprintf(VS(previous_datapath), "%s", settings.datapath);
-    snprintf(VS(settings.datapath), "%s", directory);
+    snprintf((previous_datapath), sizeof((previous_datapath)), "%s", settings.datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%s", directory);
     char clock_path[HUGE_BUF], maplog_path[HUGE_BUF];
-    snprintf(VS(clock_path), "%s/clockdata", directory);
-    snprintf(VS(maplog_path), "%s/temp.maps", directory);
+    snprintf((clock_path), sizeof((clock_path)), "%s/clockdata", directory);
+    snprintf((maplog_path), sizeof((maplog_path)), "%s/temp.maps", directory);
     ck_assert(write_todclock_checked());
     ck_assert(write_map_log_checked());
     ck_assert_int_eq(unlink(clock_path), 0);
@@ -394,7 +394,7 @@ START_TEST(test_checked_shutdown_clock_and_maplog_failures) {
     ck_assert(!write_map_log_checked());
     ck_assert_int_eq(rmdir(clock_path), 0);
     ck_assert_int_eq(rmdir(maplog_path), 0);
-    snprintf(VS(settings.datapath), "%s", previous_datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%s", previous_datapath);
     ck_assert_int_eq(rmdir(directory), 0);
 }
 END_TEST

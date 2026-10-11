@@ -119,16 +119,16 @@ TOOLKIT_INIT_FUNC(logger) {
     logger_set_filter_logfile("all,-dumptx,-dumprx");
 
     if (logger_term_has_ansi_colors()) {
-        snprintf(VS(LOGGER_ESC_SEQ(BOLD)), "%s", "\033[1m");
-        snprintf(VS(LOGGER_ESC_SEQ(BLACK)), "%s", "\033[30m");
-        snprintf(VS(LOGGER_ESC_SEQ(RED)), "%s", "\033[31m");
-        snprintf(VS(LOGGER_ESC_SEQ(GREEN)), "%s", "\033[32m");
-        snprintf(VS(LOGGER_ESC_SEQ(YELLOW)), "%s", "\033[33m");
-        snprintf(VS(LOGGER_ESC_SEQ(BLUE)), "%s", "\033[34m");
-        snprintf(VS(LOGGER_ESC_SEQ(MAGENTA)), "%s", "\033[35m");
-        snprintf(VS(LOGGER_ESC_SEQ(CYAN)), "%s", "\033[36m");
-        snprintf(VS(LOGGER_ESC_SEQ(WHITE)), "%s", "\033[37m");
-        snprintf(VS(LOGGER_ESC_SEQ(END)), "%s", "\033[0m");
+        snprintf((LOGGER_ESC_SEQ(BOLD)), sizeof((LOGGER_ESC_SEQ(BOLD))), "%s", "\033[1m");
+        snprintf((LOGGER_ESC_SEQ(BLACK)), sizeof((LOGGER_ESC_SEQ(BLACK))), "%s", "\033[30m");
+        snprintf((LOGGER_ESC_SEQ(RED)), sizeof((LOGGER_ESC_SEQ(RED))), "%s", "\033[31m");
+        snprintf((LOGGER_ESC_SEQ(GREEN)), sizeof((LOGGER_ESC_SEQ(GREEN))), "%s", "\033[32m");
+        snprintf((LOGGER_ESC_SEQ(YELLOW)), sizeof((LOGGER_ESC_SEQ(YELLOW))), "%s", "\033[33m");
+        snprintf((LOGGER_ESC_SEQ(BLUE)), sizeof((LOGGER_ESC_SEQ(BLUE))), "%s", "\033[34m");
+        snprintf((LOGGER_ESC_SEQ(MAGENTA)), sizeof((LOGGER_ESC_SEQ(MAGENTA))), "%s", "\033[35m");
+        snprintf((LOGGER_ESC_SEQ(CYAN)), sizeof((LOGGER_ESC_SEQ(CYAN))), "%s", "\033[36m");
+        snprintf((LOGGER_ESC_SEQ(WHITE)), sizeof((LOGGER_ESC_SEQ(WHITE))), "%s", "\033[37m");
+        snprintf((LOGGER_ESC_SEQ(END)), sizeof((LOGGER_ESC_SEQ(END))), "%s", "\033[0m");
     }
 }
 TOOLKIT_INIT_FUNC_FINISH
@@ -326,13 +326,13 @@ void logger_print(logger_level level,
         char timebuf2[MAX_BUF];
 
         strftime(VS(timebuf2), "%Y/%m/%d %H:%M:%S", tm);
-        snprintf(VS(timebuf), "[%s.%06" PRIu64 "] ", timebuf2, (uint64_t)tv.tv_usec);
+        snprintf((timebuf), sizeof((timebuf)), "[%s.%06" PRIu64 "] ", timebuf2, (uint64_t)tv.tv_usec);
     } else {
         timebuf[0] = '\0';
     }
 
     if ((1U << level) & logger_filter_stdout) {
-        snprintf(VS(buf),
+        snprintf((buf), sizeof((buf)),
                  "%s%s%s"
                  "%s%-6s%s "
                  "%s[%s:%" PRIu64 "]%s "

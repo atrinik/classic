@@ -189,36 +189,36 @@ int main(int argc, char **argv) {
     char temporary_root[HUGE_BUF];
     DWORD length = GetTempPathA(sizeof(temporary_root), temporary_root);
     require(length > 0 && length < sizeof(temporary_root));
-    require(snprintf(VS(directory),
+    require(snprintf((directory), sizeof((directory)),
                      "%satrinik-path-%lu",
                      temporary_root,
                      (unsigned long)GetCurrentProcessId()) < (int)sizeof(directory));
     require(CreateDirectoryA(directory, NULL));
 #else
-    snprintf(VS(directory), "/tmp/atrinik-path-XXXXXX");
+    snprintf((directory), sizeof((directory)), "/tmp/atrinik-path-XXXXXX");
     require(mkdtemp(directory) != NULL);
 #endif
 
     char prepared[HUGE_BUF];
-    require(snprintf(VS(prepared), "%s/prepared", directory) < (int)sizeof(prepared));
+    require(snprintf((prepared), sizeof((prepared)), "%s/prepared", directory) < (int)sizeof(prepared));
     require(path_ensure_real_directory(prepared, 0700) == PATH_DIRECTORY_OK);
     require(path_ensure_real_directory(prepared, 0700) == PATH_DIRECTORY_OK);
     struct stat prepared_metadata;
     require(stat(prepared, &prepared_metadata) == 0 && S_ISDIR(prepared_metadata.st_mode));
 
     char not_directory[HUGE_BUF];
-    require(snprintf(VS(not_directory), "%s/not-directory", directory) <
+    require(snprintf((not_directory), sizeof((not_directory)), "%s/not-directory", directory) <
             (int)sizeof(not_directory));
     setup_file(not_directory, "not a directory\n");
     require(path_ensure_real_directory(not_directory, 0700) == PATH_DIRECTORY_UNSAFE);
 
     char missing_directory_parent[HUGE_BUF];
-    require(snprintf(VS(missing_directory_parent), "%s/missing-parent/child", directory) <
+    require(snprintf((missing_directory_parent), sizeof((missing_directory_parent)), "%s/missing-parent/child", directory) <
             (int)sizeof(missing_directory_parent));
     require(path_ensure_real_directory(missing_directory_parent, 0700) == PATH_DIRECTORY_ERROR);
 
     char directory_link[HUGE_BUF];
-    require(snprintf(VS(directory_link), "%s/directory-link", directory) <
+    require(snprintf((directory_link), sizeof((directory_link)), "%s/directory-link", directory) <
             (int)sizeof(directory_link));
 #ifdef WIN32
     wchar_t *prepared_wide = path_to_wide(prepared);
@@ -242,7 +242,7 @@ int main(int argc, char **argv) {
     if (directory_link_created) {
         require(path_ensure_real_directory(directory_link, 0700) == PATH_DIRECTORY_UNSAFE);
         char linked_secret[HUGE_BUF];
-        require(snprintf(VS(linked_secret), "%s/linked-secret", directory_link) <
+        require(snprintf((linked_secret), sizeof((linked_secret)), "%s/linked-secret", directory_link) <
                 (int)sizeof(linked_secret));
         static const char linked_secret_data[] = "must-not-follow\n";
         require(path_secret_create_atomic(linked_secret,
@@ -251,13 +251,13 @@ int main(int argc, char **argv) {
                 PATH_SECRET_CREATE_ERROR);
 
         char nested_directory[HUGE_BUF];
-        require(snprintf(VS(nested_directory), "%s/nested", prepared) <
+        require(snprintf((nested_directory), sizeof((nested_directory)), "%s/nested", prepared) <
                 (int)sizeof(nested_directory));
         wchar_t *nested_directory_wide = path_to_wide(nested_directory);
         require(CreateDirectoryW(nested_directory_wide, NULL));
 
         char ancestor_link[HUGE_BUF];
-        require(snprintf(VS(ancestor_link), "%s/ancestor-link", directory) <
+        require(snprintf((ancestor_link), sizeof((ancestor_link)), "%s/ancestor-link", directory) <
                 (int)sizeof(ancestor_link));
         wchar_t *ancestor_link_wide = path_to_wide(ancestor_link);
         bool ancestor_link_created =
@@ -276,7 +276,7 @@ int main(int argc, char **argv) {
         require(ancestor_link_created || ancestor_link_error == ERROR_PRIVILEGE_NOT_HELD);
         if (ancestor_link_created) {
             char ancestor_secret[HUGE_BUF];
-            require(snprintf(VS(ancestor_secret),
+            require(snprintf((ancestor_secret), sizeof((ancestor_secret)),
                              "%s/nested/ancestor-secret",
                              ancestor_link) < (int)sizeof(ancestor_secret));
             static const char ancestor_secret_data[] = "must-not-follow\n";
@@ -286,7 +286,7 @@ int main(int argc, char **argv) {
                     PATH_SECRET_CREATE_ERROR);
 
             char real_secret[HUGE_BUF];
-            require(snprintf(VS(real_secret),
+            require(snprintf((real_secret), sizeof((real_secret)),
                              "%s/ancestor-secret",
                              nested_directory) < (int)sizeof(real_secret));
             require(path_exists(real_secret) == 0);
@@ -329,7 +329,7 @@ int main(int argc, char **argv) {
     require(unlink(directory_link) == 0);
 
     char dangling_link[HUGE_BUF];
-    require(snprintf(VS(dangling_link), "%s/dangling-link", directory) <
+    require(snprintf((dangling_link), sizeof((dangling_link)), "%s/dangling-link", directory) <
             (int)sizeof(dangling_link));
     require(symlink("missing-target", dangling_link) == 0);
     require(path_ensure_real_directory(dangling_link, 0700) == PATH_DIRECTORY_UNSAFE);
@@ -337,7 +337,7 @@ int main(int argc, char **argv) {
 #endif
 
     char path[HUGE_BUF];
-    require(snprintf(VS(path), "%s/invite", directory) < (int)sizeof(path));
+    require(snprintf((path), sizeof((path)), "%s/invite", directory) < (int)sizeof(path));
     static const char secret_data[] = "secret-value\n";
     require(path_secret_create_atomic(path, secret_data, sizeof(secret_data) - 1U) ==
             PATH_SECRET_CREATE_OK);
@@ -348,7 +348,7 @@ int main(int argc, char **argv) {
     require(strcmp(secret, "secret-value") == 0 && !permissive);
 #ifdef WIN32
     char backslash_path[HUGE_BUF];
-    require(snprintf(VS(backslash_path), "%s\\backslash-invite", directory) <
+    require(snprintf((backslash_path), sizeof((backslash_path)), "%s\\backslash-invite", directory) <
             (int)sizeof(backslash_path));
     static const char backslash_secret[] = "backslash-secret\n";
     require(path_secret_create_atomic(backslash_path,
@@ -386,7 +386,7 @@ int main(int argc, char **argv) {
     memset(long_name, 'x', sizeof(long_name) - 1U);
     long_name[sizeof(long_name) - 1U] = 0;
     char long_path[HUGE_BUF];
-    require(snprintf(VS(long_path), "%s/%s", directory, long_name) < (int)sizeof(long_path));
+    require(snprintf((long_path), sizeof((long_path)), "%s/%s", directory, long_name) < (int)sizeof(long_path));
     static const char long_secret[] = "long-secret";
     require(path_secret_create_atomic(long_path, long_secret, sizeof(long_secret) - 1U) ==
             PATH_SECRET_CREATE_OK);
@@ -394,7 +394,7 @@ int main(int argc, char **argv) {
     require(path_read_secret(long_path, VS(secret), &permissive) == PATH_SECRET_OK);
     require(strcmp(secret, "long-secret") == 0 && !permissive);
     char extended_path[HUGE_BUF];
-    require(snprintf(VS(extended_path), "%s", long_path) < (int)sizeof(extended_path));
+    require(snprintf((extended_path), sizeof((extended_path)), "%s", long_path) < (int)sizeof(extended_path));
     for (char *cp = extended_path; *cp != 0; cp++) {
         if (*cp == '/') {
             *cp = '\\';
@@ -412,7 +412,7 @@ int main(int argc, char **argv) {
     free(long_path_wide);
 
     char broad[HUGE_BUF];
-    require(snprintf(VS(broad), "%s/broad", directory) < (int)sizeof(broad));
+    require(snprintf((broad), sizeof((broad)), "%s/broad", directory) < (int)sizeof(broad));
     static const char broad_secret[] = "broad-secret\n";
     require(path_secret_create_atomic(broad, broad_secret, sizeof(broad_secret) - 1U) ==
             PATH_SECRET_CREATE_OK);
@@ -422,7 +422,7 @@ int main(int argc, char **argv) {
     require(strcmp(secret, "broad-secret") == 0 && permissive);
 
     char link_path[HUGE_BUF];
-    require(snprintf(VS(link_path), "%s/link", directory) < (int)sizeof(link_path));
+    require(snprintf((link_path), sizeof((link_path)), "%s/link", directory) < (int)sizeof(link_path));
     wchar_t *target_wide = path_to_wide(path);
     wchar_t *link_wide = path_to_wide(link_path);
 #ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
@@ -449,14 +449,14 @@ int main(int argc, char **argv) {
 #endif
 
     char missing[HUGE_BUF];
-    require(snprintf(VS(missing), "%s/missing", directory) < (int)sizeof(missing));
+    require(snprintf((missing), sizeof((missing)), "%s/missing", directory) < (int)sizeof(missing));
     memset(secret, 'x', sizeof(secret));
     require(path_read_secret(missing, VS(secret), NULL) == PATH_SECRET_NOT_FOUND);
     static const char cleared[sizeof(secret)];
     require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
 
     char too_long[HUGE_BUF];
-    require(snprintf(VS(too_long), "%s/too-long", directory) < (int)sizeof(too_long));
+    require(snprintf((too_long), sizeof((too_long)), "%s/too-long", directory) < (int)sizeof(too_long));
     static const char too_long_secret[] = "12345678";
     require(path_secret_create_atomic(too_long, too_long_secret, sizeof(too_long_secret) - 1U) ==
             PATH_SECRET_CREATE_OK);
@@ -470,7 +470,7 @@ int main(int argc, char **argv) {
     require(CRYPTO_memcmp(small, small_cleared, sizeof(small)) == 0);
 
     char trailing[HUGE_BUF];
-    require(snprintf(VS(trailing), "%s/trailing", directory) < (int)sizeof(trailing));
+    require(snprintf((trailing), sizeof((trailing)), "%s/trailing", directory) < (int)sizeof(trailing));
     static const char trailing_secret[] = "secret\nother\n";
     require(path_secret_create_atomic(trailing, trailing_secret, sizeof(trailing_secret) - 1U) ==
             PATH_SECRET_CREATE_OK);
@@ -482,7 +482,7 @@ int main(int argc, char **argv) {
     require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
 
     char embedded_nul[HUGE_BUF];
-    require(snprintf(VS(embedded_nul), "%s/embedded-nul", directory) <
+    require(snprintf((embedded_nul), sizeof((embedded_nul)), "%s/embedded-nul", directory) <
             (int)sizeof(embedded_nul));
     static const char embedded_nul_data[] = "secret\0wrong\n";
     require(path_secret_create_atomic(embedded_nul,
@@ -504,7 +504,7 @@ int main(int argc, char **argv) {
     require(strcmp(path_secret_error_string(PATH_SECRET_READ_ERROR), "cannot read the file") == 0);
 
     char boundary_trailing[HUGE_BUF];
-    require(snprintf(VS(boundary_trailing), "%s/boundary-trailing", directory) <
+    require(snprintf((boundary_trailing), sizeof((boundary_trailing)), "%s/boundary-trailing", directory) <
             (int)sizeof(boundary_trailing));
     char boundary_data[MAX_BUF + 1];
     memset(boundary_data, 'a', MAX_BUF);
@@ -524,7 +524,7 @@ int main(int argc, char **argv) {
                           sizeof(boundary_secret)) == 0);
 
     char atomic[HUGE_BUF];
-    require(snprintf(VS(atomic), "%s/atomic", directory) < (int)sizeof(atomic));
+    require(snprintf((atomic), sizeof((atomic)), "%s/atomic", directory) < (int)sizeof(atomic));
     static const char atomic_data[] = "atomic-data";
     require(path_write_atomic_existing(atomic, atomic_data, sizeof(atomic_data) - 1U, 0600));
     char *atomic_contents = path_file_contents(atomic);
@@ -533,7 +533,7 @@ int main(int argc, char **argv) {
 
 #ifndef WIN32
     char unsynced[HUGE_BUF];
-    require(snprintf(VS(unsynced), "%s/unsynced", directory) < (int)sizeof(unsynced));
+    require(snprintf((unsynced), sizeof((unsynced)), "%s/unsynced", directory) < (int)sizeof(unsynced));
     fail_parent_directory_fsync = true;
     fsync_call_count = 0;
     require(!path_write_atomic_existing(unsynced, atomic_data, sizeof(atomic_data) - 1U, 0600));
@@ -542,7 +542,7 @@ int main(int argc, char **argv) {
     unlink(unsynced);
 
     char unclosed[HUGE_BUF];
-    require(snprintf(VS(unclosed), "%s/unclosed", directory) < (int)sizeof(unclosed));
+    require(snprintf((unclosed), sizeof((unclosed)), "%s/unclosed", directory) < (int)sizeof(unclosed));
     fail_parent_directory_close = true;
     fsync_call_count = 0;
     require(!path_write_atomic_existing(unclosed, atomic_data, sizeof(atomic_data) - 1U, 0600));
@@ -552,7 +552,7 @@ int main(int argc, char **argv) {
 #endif
 
     char missing_parent[HUGE_BUF];
-    require(snprintf(VS(missing_parent), "%s/missing/atomic", directory) <
+    require(snprintf((missing_parent), sizeof((missing_parent)), "%s/missing/atomic", directory) <
             (int)sizeof(missing_parent));
     require(
         !path_write_atomic_existing(missing_parent, atomic_data, sizeof(atomic_data) - 1U, 0600));
@@ -565,19 +565,19 @@ int main(int argc, char **argv) {
     require(chmod(path, 0600) == 0);
 
     char link_path[HUGE_BUF];
-    require(snprintf(VS(link_path), "%s/link", directory) < (int)sizeof(link_path));
+    require(snprintf((link_path), sizeof((link_path)), "%s/link", directory) < (int)sizeof(link_path));
     require(symlink(path, link_path) == 0);
     memset(secret, 'x', sizeof(secret));
     require(path_read_secret(link_path, VS(secret), NULL) == PATH_SECRET_UNSAFE_LINK);
     require(CRYPTO_memcmp(secret, cleared, sizeof(secret)) == 0);
 
     char fifo_path[HUGE_BUF];
-    require(snprintf(VS(fifo_path), "%s/fifo", directory) < (int)sizeof(fifo_path));
+    require(snprintf((fifo_path), sizeof((fifo_path)), "%s/fifo", directory) < (int)sizeof(fifo_path));
     require(mkfifo(fifo_path, 0600) == 0);
     require(path_read_secret(fifo_path, VS(secret), NULL) == PATH_SECRET_NOT_REGULAR);
 
     char wrong_owner[HUGE_BUF];
-    require(snprintf(VS(wrong_owner), "%s/wrong-owner", directory) < (int)sizeof(wrong_owner));
+    require(snprintf((wrong_owner), sizeof((wrong_owner)), "%s/wrong-owner", directory) < (int)sizeof(wrong_owner));
     setup_file(wrong_owner, "secret\n");
     require(chmod(wrong_owner, 0600) == 0);
     bool changed_owner = geteuid() == 0 && chown(wrong_owner, 1, (gid_t)-1) == 0;
@@ -586,10 +586,10 @@ int main(int argc, char **argv) {
     }
 
     char orphan[HUGE_BUF];
-    require(snprintf(VS(orphan), "%s/.atrinik-secret-orphan", directory) < (int)sizeof(orphan));
+    require(snprintf((orphan), sizeof((orphan)), "%s/.atrinik-secret-orphan", directory) < (int)sizeof(orphan));
     setup_file(orphan, "orphan");
     char independent[HUGE_BUF];
-    require(snprintf(VS(independent), "%s/independent", directory) < (int)sizeof(independent));
+    require(snprintf((independent), sizeof((independent)), "%s/independent", directory) < (int)sizeof(independent));
     require(path_secret_create_atomic(independent, secret_data, sizeof(secret_data) - 1U) ==
             PATH_SECRET_CREATE_OK);
 

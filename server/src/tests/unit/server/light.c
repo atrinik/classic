@@ -1261,7 +1261,7 @@ START_TEST(test_saved_dense_map_teardown_does_not_rebuild_light_per_object) {
         mapstruct *map = get_empty_map(WIDTH, HEIGHT);
         maps[map_index] = map;
         char label[32];
-        snprintf(VS(label), "dense-%d", map_index);
+        snprintf((label), sizeof((label)), "dense-%d", map_index);
         assign_temporary_unique_path(map, paths[map_index], sizeof(paths[map_index]), label);
 
         map->in_memory = MAP_LOADING;
@@ -1394,7 +1394,7 @@ START_TEST(test_failed_map_save_preserves_live_objects_state_and_light) {
     mapstruct *map = get_empty_map(9, 9);
     FREE_AND_COPY_HASH(map->path, "/tests/light-save-failure");
     char invalid_path[HUGE_BUF];
-    int written = snprintf(VS(invalid_path), "%s/missing/runtime.map", directory);
+    int written = snprintf((invalid_path), sizeof((invalid_path)), "%s/missing/runtime.map", directory);
     ck_assert_int_ge(written, 0);
     ck_assert_uint_lt((size_t)written, sizeof(invalid_path));
     map->tmpname = xstrdup(invalid_path);

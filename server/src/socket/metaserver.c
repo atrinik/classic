@@ -270,8 +270,8 @@ static bool metaserver_rendezvous_punch_schedule(rendezvous_punch_job_t *jobs,
         return false;
     }
 
-    snprintf(VS(available->host), "%s", host);
-    snprintf(VS(available->ticket), "%s", ticket);
+    snprintf((available->host), sizeof((available->host)), "%s", host);
+    snprintf((available->ticket), sizeof((available->ticket)), "%s", ticket);
     available->port = port;
     available->punches_sent = 0;
     socket_punch_pacer_start(&available->pacer, datetime_monotonic_ms(), RENDEZVOUS_PUNCH_GRACE_MS);
@@ -338,7 +338,7 @@ static bool metaserver_rendezvous_retry(const rendezvous_args_t *args,
 
 static bool metaserver_rendezvous_message_type(const char *message, const char *type) {
     char prefix[64];
-    int length = snprintf(VS(prefix), "{\"type\":\"%s\"", type);
+    int length = snprintf((prefix), sizeof((prefix)), "{\"type\":\"%s\"", type);
     return length > 0 && (size_t)length < sizeof(prefix) &&
            strncmp(message, prefix, (size_t)length) == 0;
 }
@@ -380,7 +380,7 @@ static void *metaserver_rendezvous_thread(void *data) {
         if (curl == NULL) {
             LOG(ERROR, "Cannot allocate a rendezvous connection");
         } else {
-            snprintf(VS(authorization), "Authorization: Bearer %s", args->token);
+            snprintf((authorization), sizeof((authorization)), "Authorization: Bearer %s", args->token);
             headers = curl_slist_append(NULL, authorization);
             if (headers == NULL) {
                 LOG(ERROR, "Cannot allocate rendezvous request headers");
@@ -690,7 +690,7 @@ static bool metaserver_rendezvous_url(char *url, size_t url_size) {
 
 static void metaserver_rendezvous_start(const char *token) {
     rendezvous_args_t *args = xcalloc(1, sizeof(*args));
-    snprintf(VS(args->token), "%s", token);
+    snprintf((args->token), sizeof((args->token)), "%s", token);
     args->authorization_required = settings.access_required;
     if (!metaserver_rendezvous_url(VS(args->url))) {
         OPENSSL_cleanse(args->token, sizeof(args->token));
@@ -786,10 +786,10 @@ void metaserver_public_snapshot(metaserver_public_snapshot_t *snapshot) {
     HARD_ASSERT(snapshot != NULL);
 
     memset(snapshot, 0, sizeof(*snapshot));
-    snprintf(VS(snapshot->name), "%s", settings.server_name);
-    snprintf(VS(snapshot->description), "%s", settings.server_desc);
+    snprintf((snapshot->name), sizeof((snapshot->name)), "%s", settings.server_name);
+    snprintf((snapshot->description), sizeof((snapshot->description)), "%s", settings.server_desc);
     if (settings.server_public && *settings.metaserver_hostname != '\0') {
-        snprintf(VS(snapshot->hostname), "%s", settings.metaserver_hostname);
+        snprintf((snapshot->hostname), sizeof((snapshot->hostname)), "%s", settings.metaserver_hostname);
         snapshot->port = settings.port_quic;
     }
     snapshot->is_public = settings.server_public;
@@ -1158,7 +1158,7 @@ static curl_request_t *metaserver_publish_request_create(
         !metaserver_publisher_identity_sign(identity,
                                             components.signature_base,
                                             signature_header) ||
-        snprintf(VS(sequence_header), "%" PRIu64, sequence) >= (int)sizeof(sequence_header) ||
+        snprintf((sequence_header), sizeof((sequence_header)), "%" PRIu64, sequence) >= (int)sizeof(sequence_header) ||
         !metaserver_url_publish(settings.metaserver_publish_origin,
                                 components.path,
                                 VS(url),
@@ -1386,18 +1386,18 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
     if (route->has_expiry) {
         if (route->expires_at <= 0)
             goto out;
-        snprintf(VS(expiry), "\"%" PRId64 "\"", route->expires_at);
+        snprintf((expiry), sizeof((expiry)), "\"%" PRId64 "\"", route->expires_at);
     }
     if (reservation[0] != 0) {
         if (!string_is_hex_fixed(reservation, 32, true))
             goto out;
-        snprintf(VS(handle), "\"%s\"", reservation);
+        snprintf((handle), sizeof((handle)), "\"%s\"", reservation);
     }
     identity = socket_server_quic_publisher_identity();
     if (identity == NULL)
         goto out;
     int n = snprintf(
-        VS(body),
+        (body), sizeof((body)),
         "{\"schema\":\"atrinik-access-route-v1\",\"profile\":\"classic\",\"serverId\":\"%s\","
         "\"certificate\":\"%s\",\"operation\":\"%s\",\"requestId\":\"%s\",\"tokenId\":\"%s\","
         "\"tokenRevision\":\"%" PRIu64 "\",\"index\":\"%s\",\"reservationId\":%s,\"expiresAt\":%s}",
@@ -1441,7 +1441,7 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
                            "Atrinik-Server-ID",
                            "Atrinik-Publish-Sequence"};
     char sequence_text[21];
-    snprintf(VS(sequence_text), "%" PRIu64, sequence);
+    snprintf((sequence_text), sizeof((sequence_text)), "%" PRIu64, sequence);
     const char *values[] = {"application/json",
                             components.content_digest,
                             components.signature_input,
@@ -1450,7 +1450,7 @@ static access_outcome_t metaserver_access_operation(const access_route_t *route,
                             sequence_text};
     for (size_t i = 0; i < arraysize(names); i++) {
         char line[1200];
-        int length = snprintf(VS(line), "%s: %s", names[i], values[i]);
+        int length = snprintf((line), sizeof((line)), "%s: %s", names[i], values[i]);
         if (length <= 0 || (size_t)length >= sizeof(line))
             goto out;
         struct curl_slist *next = curl_slist_append(headers, line);

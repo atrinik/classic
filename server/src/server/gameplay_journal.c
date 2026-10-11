@@ -239,7 +239,7 @@ static bool journal_item_snapshot_valid(const gameplay_journal_change_t *change)
         return false;
     }
     char prefix[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    int prefix_length = snprintf(VS(prefix),
+    int prefix_length = snprintf((prefix), sizeof((prefix)),
                                  "arch=%s;type=%" PRId32 ";nrof=",
                                  change->archetype,
                                  change->object_type);
@@ -271,7 +271,7 @@ static bool journal_item_snapshot_valid(const gameplay_journal_change_t *change)
         return false;
     }
     char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    int expected_length = snprintf(VS(expected),
+    int expected_length = snprintf((expected), sizeof((expected)),
                                    "%s%" PRIuMAX ";value=%" PRIdMAX ";weight=%" PRIuMAX,
                                    prefix,
                                    nrof,
@@ -430,7 +430,7 @@ static bool journal_sync_directory(void) {
 
 static bool journal_lock(void) {
     char path[HUGE_BUF];
-    if (snprintf(VS(path), "%s/journal.lock", journal.directory) >= (int)sizeof(path)) {
+    if (snprintf((path), sizeof((path)), "%s/journal.lock", journal.directory) >= (int)sizeof(path)) {
         return false;
     }
 #ifdef WIN32
@@ -511,7 +511,7 @@ static bool journal_counter_bootstrap(uint64_t *sequence) {
             continue;
         }
         char path[HUGE_BUF];
-        if (snprintf(VS(path), "%s/%s", journal.directory, entry->d_name) >= (int)sizeof(path)) {
+        if (snprintf((path), sizeof((path)), "%s/%s", journal.directory, entry->d_name) >= (int)sizeof(path)) {
             ok = false;
             break;
         }
@@ -611,7 +611,7 @@ static bool journal_counter_reserve(void) {
     }
     uint64_t sequence = journal.sequence + 1;
     char value[32];
-    int length = snprintf(VS(value), "%" PRIu64 "\n", sequence);
+    int length = snprintf((value), sizeof((value)), "%" PRIu64 "\n", sequence);
     if (length <= 0 || length >= (int)sizeof(value) || !journal_counter_seek_start()) {
         return false;
     }
@@ -642,7 +642,7 @@ static bool journal_enforce_retention(void) {
             continue;
         }
         retained_file_t file;
-        if (snprintf(VS(file.path), "%s/%s", journal.directory, entry->d_name) >=
+        if (snprintf((file.path), sizeof((file.path)), "%s/%s", journal.directory, entry->d_name) >=
             (int)sizeof(file.path)) {
             ok = false;
             break;
@@ -743,7 +743,7 @@ static bool journal_open_file(void) {
         return false;
     }
     char path[HUGE_BUF];
-    if (snprintf(VS(path),
+    if (snprintf((path), sizeof((path)),
                  "%s/journal-%s-%04" PRIu32 ".jsonl",
                  journal.directory,
                  journal.run_id,
@@ -891,9 +891,9 @@ static bool journal_profile_copy(const gameplay_journal_profile_t *profile) {
         !journal_token_valid(profile->effective_axes, false)) {
         return false;
     }
-    snprintf(VS(journal.profile_id), "%s", profile->id);
-    snprintf(VS(journal.profile_digest), "%s", profile->digest);
-    snprintf(VS(journal.profile_axes), "%s", profile->effective_axes);
+    snprintf((journal.profile_id), sizeof((journal.profile_id)), "%s", profile->id);
+    snprintf((journal.profile_digest), sizeof((journal.profile_digest)), "%s", profile->digest);
+    snprintf((journal.profile_axes), sizeof((journal.profile_axes)), "%s", profile->effective_axes);
     journal.profile = (gameplay_journal_profile_t){.id = journal.profile_id,
                                                    .schema = profile->schema,
                                                    .digest = journal.profile_digest,
@@ -908,7 +908,7 @@ bool gameplay_journal_init(const char *datapath,
     journal.required = true;
     if (datapath == NULL || !journal_token_valid(server_id, false) ||
         !journal_profile_copy(profile) ||
-        snprintf(VS(journal.directory), "%s/%s", datapath, JOURNAL_DIRECTORY) >=
+        snprintf((journal.directory), sizeof((journal.directory)), "%s/%s", datapath, JOURNAL_DIRECTORY) >=
             (int)sizeof(journal.directory) ||
         path_ensure_real_directory(journal.directory, SAVE_MODE_DIR) != PATH_DIRECTORY_OK) {
         journal.failed = true;
@@ -925,7 +925,7 @@ bool gameplay_journal_init(const char *datapath,
         journal.failed = true;
         return false;
     }
-    snprintf(VS(journal.server_id), "%s", server_id);
+    snprintf((journal.server_id), sizeof((journal.server_id)), "%s", server_id);
     if (!journal_open_file()) {
         journal.failed = true;
         return false;
@@ -1072,7 +1072,7 @@ bool gameplay_journal_track_player(const char *transaction_id, object *player_ob
     if (!journal_append_domain(transaction_id, "player", id)) {
         return false;
     }
-    snprintf(VS(pending->player_ids[pending->player_count]), "%s", id);
+    snprintf((pending->player_ids[pending->player_count]), sizeof((pending->player_ids[pending->player_count])), "%s", id);
     pending->players[pending->player_count] = player_ob;
     pending->player_counts[pending->player_count] = player_ob->count;
     pending->player_count++;
@@ -1107,7 +1107,7 @@ static bool journal_track_map(const char *transaction_id, mapstruct *map, bool u
                                id)) {
         return false;
     }
-    snprintf(VS(pending->map_ids[pending->map_count]), "%s", id);
+    snprintf((pending->map_ids[pending->map_count]), sizeof((pending->map_ids[pending->map_count])), "%s", id);
     pending->maps[pending->map_count] = map;
     pending->map_counts[pending->map_count] = map->count;
     pending->map_unique[pending->map_count] = unique_component;
@@ -1260,9 +1260,9 @@ bool gameplay_journal_begin(const gameplay_journal_subject_t *subject,
     }
     pending_transaction_t *pending = &journal.pending[journal.pending_count];
     memset(pending, 0, sizeof(*pending));
-    snprintf(VS(pending->id), "%s", transaction_id);
-    snprintf(VS(pending->reason), "%s", reason);
-    snprintf(VS(pending->player_ids[0]), "%s", player_domain);
+    snprintf((pending->id), sizeof((pending->id)), "%s", transaction_id);
+    snprintf((pending->reason), sizeof((pending->reason)), "%s", reason);
+    snprintf((pending->player_ids[0]), sizeof((pending->player_ids[0])), "%s", player_domain);
     pending->player_count = 1;
     journal.pending_count++;
     return true;
@@ -1329,7 +1329,7 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
             if (player_ob != NULL && OBJECT_VALID(player_ob, pending->player_counts[i]) &&
                 player_ob->type == PLAYER && CONTR(player_ob) != NULL) {
                 player *pl = CONTR(player_ob);
-                snprintf(VS(pl->journal_run_id), "%s", journal.run_id);
+                snprintf((pl->journal_run_id), sizeof((pl->journal_run_id)), "%s", journal.run_id);
                 pl->journal_sequence = journal.sequence;
             }
         }
@@ -1350,7 +1350,7 @@ static bool journal_finish(const char *transaction_id, const char *phase, const 
         for (size_t i = 0; i < JOURNAL_PENDING_LIMIT; i++) {
             if (journal_test_counts[i].reason[0] == '\0' ||
                 strcmp(journal_test_counts[i].reason, pending->reason) == 0) {
-                snprintf(VS(journal_test_counts[i].reason), "%s", pending->reason);
+                snprintf((journal_test_counts[i].reason), sizeof((journal_test_counts[i].reason)), "%s", pending->reason);
                 journal_test_counts[i].count++;
                 break;
             }

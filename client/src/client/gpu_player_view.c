@@ -883,42 +883,42 @@ static bool player_view_manifest_parse(const char *manifest_path,
                   (mono_font == NULL || manifest->mono_font_path != NULL);
     }
     if (success) {
-        snprintf(VS(manifest->settings_digest), "%s", settings_digest);
-        snprintf(VS(manifest->archdef_digest), "%s", archdef_digest);
-        snprintf(VS(manifest->snapshot_digest), "%s", snapshot_digest);
+        snprintf((manifest->settings_digest), sizeof((manifest->settings_digest)), "%s", settings_digest);
+        snprintf((manifest->archdef_digest), sizeof((manifest->archdef_digest)), "%s", archdef_digest);
+        snprintf((manifest->snapshot_digest), sizeof((manifest->snapshot_digest)), "%s", snapshot_digest);
         if (next_snapshot != NULL) {
-            snprintf(VS(manifest->next_snapshot_digest), "%s", next_snapshot_digest);
+            snprintf((manifest->next_snapshot_digest), sizeof((manifest->next_snapshot_digest)), "%s", next_snapshot_digest);
         }
         if (transition_snapshot != NULL) {
-            snprintf(VS(manifest->transition_snapshot_digest), "%s", transition_snapshot_digest);
+            snprintf((manifest->transition_snapshot_digest), sizeof((manifest->transition_snapshot_digest)), "%s", transition_snapshot_digest);
         }
         if (interface_file != NULL) {
-            snprintf(VS(manifest->interface_digest), "%s", interface_digest);
+            snprintf((manifest->interface_digest), sizeof((manifest->interface_digest)), "%s", interface_digest);
         }
         if (layout != NULL) {
-            snprintf(VS(manifest->layout_digest), "%s", layout_digest);
+            snprintf((manifest->layout_digest), sizeof((manifest->layout_digest)), "%s", layout_digest);
         }
         if (font != NULL) {
-            snprintf(VS(manifest->font_digest), "%s", font_digest);
+            snprintf((manifest->font_digest), sizeof((manifest->font_digest)), "%s", font_digest);
         }
         if (mono_font != NULL) {
-            snprintf(VS(manifest->mono_font_digest), "%s", mono_font_digest);
+            snprintf((manifest->mono_font_digest), sizeof((manifest->mono_font_digest)), "%s", mono_font_digest);
         }
         if (expected_ui != NULL) {
-            snprintf(VS(manifest->expected_ui_pixels_digest), "%s", expected_ui);
+            snprintf((manifest->expected_ui_pixels_digest), sizeof((manifest->expected_ui_pixels_digest)), "%s", expected_ui);
         }
         if (archived_software_ui != NULL) {
-            snprintf(VS(manifest->archived_software_ui_pixels_digest), "%s", archived_software_ui);
+            snprintf((manifest->archived_software_ui_pixels_digest), sizeof((manifest->archived_software_ui_pixels_digest)), "%s", archived_software_ui);
         }
         if (archived_software != NULL) {
-            snprintf(VS(manifest->archived_software_pixels_digest), "%s", archived_software);
+            snprintf((manifest->archived_software_pixels_digest), sizeof((manifest->archived_software_pixels_digest)), "%s", archived_software);
         }
         if (expected_standard_checkpoint != NULL) {
-            snprintf(VS(manifest->expected_standard_checkpoint_digest),
+            snprintf((manifest->expected_standard_checkpoint_digest), sizeof((manifest->expected_standard_checkpoint_digest)),
                      "%s",
                      expected_standard_checkpoint);
         }
-        snprintf(VS(manifest->expected_pixels_digest), "%s", expected);
+        snprintf((manifest->expected_pixels_digest), sizeof((manifest->expected_pixels_digest)), "%s", expected);
     }
 
     for (xmlNode *node = success ? root->children : NULL; node != NULL; node = node->next) {
@@ -960,7 +960,7 @@ static bool player_view_manifest_parse(const char *manifest_path,
                 success = asset->path != NULL;
             }
             if (success) {
-                snprintf(VS(asset->digest), "%s", digest);
+                snprintf((asset->digest), sizeof((asset->digest)), "%s", digest);
                 manifest->assets_num++;
             }
             free(face);
@@ -1959,9 +1959,9 @@ static bool gpu_player_view_ui_region_map_prepare(void) {
     region->def->maps = xcalloc(1, sizeof(*region->def->maps));
     region->def->maps[0].path = xstrdup("/gpu-ui-closure");
     region->fow->bitmap = xcalloc(1, RM_MAP_FOW_BITMAP_SIZE(region));
-    snprintf(VS(MapData.map_path), "%s", region->def->maps[0].path);
-    snprintf(VS(MapData.region_name), "%s", "gpu-ui-closure");
-    snprintf(VS(MapData.region_longname), "%s", "GPU UI Closure Region");
+    snprintf((MapData.map_path), sizeof((MapData.map_path)), "%s", region->def->maps[0].path);
+    snprintf((MapData.region_name), sizeof((MapData.region_name)), "%s", "gpu-ui-closure");
+    snprintf((MapData.region_longname), sizeof((MapData.region_longname)), "%s", "GPU UI Closure Region");
     MapData.posx = 75;
     MapData.posy = 50;
     region_map_fow_update(region);
@@ -1983,7 +1983,7 @@ static bool gpu_player_view_ui_models_prepare(void) {
     item->face = 3;
     item->itype = TYPE_MISC_OBJECT;
     item->nrof = 12;
-    snprintf(VS(item->s_name), "%s", "Retained GPU qualification tokens");
+    snprintf((item->s_name), sizeof((item->s_name)), "%s", "Retained GPU qualification tokens");
     draw_info(COLOR_GREEN, "The complete retained GPU interface is active.");
     draw_info(COLOR_GREEN, "Root object markup: [obj=477 32 32 0]");
 
@@ -4790,7 +4790,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
             return 3;
         }
     }
-    snprintf(VS(gpu_player_view_review_prefix), "%s", fixture_id);
+    snprintf((gpu_player_view_review_prefix), sizeof((gpu_player_view_review_prefix)), "%s", fixture_id);
 
     uint8_t *snapshot = NULL;
     size_t snapshot_size = 0;
@@ -4855,8 +4855,8 @@ int gpu_player_view_main(int argc, char *argv[]) {
     wrapper_test_user_data_isolated_set(true);
     widget_mplayer_test_isolated_set(true);
     widget_render_profiler_test_isolated_set(true);
-    snprintf(VS(cpl.account), "%s", "renderer-fixture");
-    snprintf(VS(cpl.name), "%s", "Renderer Maintainer");
+    snprintf((cpl.account), sizeof((cpl.account)), "%s", "renderer-fixture");
+    snprintf((cpl.name), sizeof((cpl.name)), "%s", "Renderer Maintainer");
 #endif
     bool settings_ready = settings_init_read_only(manifest.settings_path);
     bool sdl_ready = false;
@@ -4975,8 +4975,8 @@ int gpu_player_view_main(int argc, char *argv[]) {
     if (manifest.target_ui) {
         cpl.target_code = CMD_TARGET_ENEMY;
         cpl.target_hp = 64;
-        snprintf(VS(cpl.target_color), "%s", "ffffff");
-        snprintf(VS(cpl.target_name), "%s", "Local Player");
+        snprintf((cpl.target_color), sizeof((cpl.target_color)), "%s", "ffffff");
+        snprintf((cpl.target_name), sizeof((cpl.target_name)), "%s", "Local Player");
     }
     memset(&MapData, 0, sizeof(MapData));
     memset(FaceList, 0, sizeof(FaceList));

@@ -905,7 +905,7 @@ static void command_custom_python(object *op, const char *command, char *params)
     context->returnvalue = 0;
 
     char path[MAX_BUF];
-    snprintf(VS(path), "/python/commands/%s.py", command);
+    snprintf((path), sizeof((path)), "/python/commands/%s.py", command);
     if (!do_script(context, path, NULL)) {
         freeContext(context);
         return;
@@ -2401,7 +2401,7 @@ static PyObject *PyInit_Atrinik(void) {
  */
 static PyObject *module_create(PyObject *parent, const char *name) {
     char tmp[MAX_BUF];
-    snprintf(VS(tmp), "Atrinik_%s", name);
+    snprintf((tmp), sizeof((tmp)), "Atrinik_%s", name);
     PyObject *module = PyModule_New(tmp);
     PyDict_SetItemString(PyModule_GetDict(parent), name, module);
     return module;

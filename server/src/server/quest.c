@@ -240,10 +240,10 @@ static void quest_check_item_drop(object *op, object *quest, object *quest_pl, o
 
         metrics_character_quest_status(CONTR(op), quest->name, QUEST_STATUS_COMPLETED);
 
-        snprintf(VS(buf), "You solved the one drop quest %s!\n", QUEST_NAME(quest_pl));
+        snprintf((buf), sizeof((buf)), "You solved the one drop quest %s!\n", QUEST_NAME(quest_pl));
     } else {
         char *name = object_get_short_name_s(clone, op);
-        snprintf(VS(buf), "You found the special drop %s!\n", name);
+        snprintf((buf), sizeof((buf)), "You found the special drop %s!\n", name);
         free(name);
     }
 
@@ -300,7 +300,7 @@ static void quest_check_kill(object *op, object *quest, object *quest_pl, object
     if (quest_pl->last_sp <= quest_pl->last_grace) {
         char buf[MAX_BUF];
 
-        snprintf(VS(buf), "Quest [b]%s[/b]", QUEST_NAME(quest_pl));
+        snprintf((buf), sizeof((buf)), "Quest [b]%s[/b]", QUEST_NAME(quest_pl));
 
         if (quest_pl->last_sp == quest_pl->last_grace) {
             play_sound_player_only(CONTR(op), CMD_SOUND_EFFECT, "event01.ogg", 0, 0, 0, 0);
@@ -362,7 +362,7 @@ static void quest_check_item(object *op, object *quest, object *quest_pl, object
     CLEAR_FLAG(clone, FLAG_SYS_OBJECT);
 
     char *name = object_get_base_name_s(clone, op);
-    snprintf(VS(buf), "Quest [b]%s[/b]: You found the quest item %s", QUEST_NAME(quest_pl), name);
+    snprintf((buf), sizeof((buf)), "Quest [b]%s[/b]: You found the quest item %s", QUEST_NAME(quest_pl), name);
     free(name);
 
     if (quest_pl->last_grace > 1) {
@@ -377,7 +377,7 @@ static void quest_check_item(object *op, object *quest, object *quest_pl, object
     char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE] = "";
     if (before == 0 || after >= quest_pl->last_grace) {
         char objective[GAMEPLAY_JOURNAL_ID_MAX + 1];
-        int written = snprintf(VS(objective), "objective:item:%s", clone->arch->name);
+        int written = snprintf((objective), sizeof((objective)), "objective:item:%s", clone->arch->name);
         if (written < 0 || (size_t)written >= sizeof(objective) ||
             !quest_milestone_begin(op,
                                    quest,

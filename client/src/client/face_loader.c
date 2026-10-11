@@ -348,7 +348,7 @@ static face_loader_result_t *face_loader_process_local(face_loader_job_t *job,
             result->sprite = face_loader_decode(data, size, checksum);
             if (result->sprite != NULL) {
                 char override[MAX_BUF];
-                int length = snprintf(VS(override), DIRECTORY_GFX_USER "/%s", job->name);
+                int length = snprintf((override), sizeof((override)), DIRECTORY_GFX_USER "/%s", job->name);
                 if (length > 0 && (size_t)length < sizeof(override)) {
                     result->override_name = xstrdup(override);
                     result->override_checksum = checksum;

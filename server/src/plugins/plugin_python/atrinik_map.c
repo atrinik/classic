@@ -1175,7 +1175,7 @@ static void Atrinik_Map_dealloc(Atrinik_Map *self) {
  */
 static PyObject *Atrinik_Map_str(Atrinik_Map *self) {
     char buf[HUGE_BUF];
-    snprintf(VS(buf), "[%s \"%s\"]", self->map->path, self->map->name);
+    snprintf((buf), sizeof((buf)), "[%s \"%s\"]", self->map->path, self->map->name);
     return Py_BuildValue("s", buf);
 }
 

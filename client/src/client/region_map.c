@@ -197,29 +197,29 @@ void region_map_update(region_map_t *region_map, const char *region_name) {
                        region_name[i] == '-';
     }
     if (!valid_region) {
-        snprintf(VS(region_map->error), "The server sent an invalid region.");
+        snprintf((region_map->error), sizeof((region_map->error)), "The server sent an invalid region.");
         LOG(ERROR, "Refusing unsafe region map name");
         return;
     }
-    snprintf(VS(region_map->download_name), "%s", region_name);
+    snprintf((region_map->download_name), sizeof((region_map->download_name)), "%s", region_name);
 
-    if (snprintf(VS(buf), "client-maps/%s.png", region_name) >= (int)sizeof(buf)) {
-        snprintf(VS(region_map->error), "The server sent an invalid region.");
+    if (snprintf((buf), sizeof((buf)), "client-maps/%s.png", region_name) >= (int)sizeof(buf)) {
+        snprintf((region_map->error), sizeof((region_map->error)), "The server sent an invalid region.");
         return;
     }
     path = file_path_server(buf);
     if (path == NULL) {
-        snprintf(VS(region_map->error), "The server sent an invalid region.");
+        snprintf((region_map->error), sizeof((region_map->error)), "The server sent an invalid region.");
         return;
     }
     region_map->source_png = asset_source_start(buf, path);
     free(path);
-    snprintf(VS(buf), "client-maps/%s.def", region_name);
+    snprintf((buf), sizeof((buf)), "client-maps/%s.def", region_name);
     path = file_path_server(buf);
     if (path == NULL) {
         asset_source_free(region_map->source_png);
         region_map->source_png = NULL;
-        snprintf(VS(region_map->error), "The server sent an invalid region.");
+        snprintf((region_map->error), sizeof((region_map->error)), "The server sent an invalid region.");
         return;
     }
     region_map->source_def = asset_source_start(buf, path);
@@ -265,7 +265,7 @@ bool region_map_ready(region_map_t *region_map) {
         body_png = asset_source_get_data(region_map->source_png, &body_png_size);
         body_def = asset_source_get_data(region_map->source_def, NULL);
     } else {
-        snprintf(VS(region_map->error),
+        snprintf((region_map->error), sizeof((region_map->error)),
                  "The server does not provide region map '%s'.",
                  region_map->download_name);
         LOG(ERROR, "%s", region_map->error);
@@ -277,7 +277,7 @@ bool region_map_ready(region_map_t *region_map) {
     }
 
     if (body_png_size > INT_MAX) {
-        snprintf(VS(region_map->error), "Region map '%s' is too large.", region_map->download_name);
+        snprintf((region_map->error), sizeof((region_map->error)), "Region map '%s' is too large.", region_map->download_name);
         LOG(ERROR, "%s", region_map->error);
         return false;
     }
@@ -286,7 +286,7 @@ bool region_map_ready(region_map_t *region_map) {
     SDL_IOStream *rw = SDL_IOFromConstMem(body_png, (int)body_png_size);
     img = rw != NULL ? image_codec_load_io(rw, true) : NULL;
     if (img == NULL) {
-        snprintf(VS(region_map->error),
+        snprintf((region_map->error), sizeof((region_map->error)),
                  "Could not decode region map '%s': %s",
                  region_map->download_name,
                  SDL_GetError());
@@ -297,7 +297,7 @@ bool region_map_ready(region_map_t *region_map) {
     region_map->surface = surface_to_display(img);
     SDL_DestroySurface(img);
     if (region_map->surface == NULL) {
-        snprintf(VS(region_map->error),
+        snprintf((region_map->error), sizeof((region_map->error)),
                  "Could not prepare region map '%s': %s",
                  region_map->download_name,
                  SDL_GetError());

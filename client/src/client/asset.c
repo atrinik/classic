@@ -272,7 +272,7 @@ static asset_request_t *asset_request_start_internal(const char *path,
     }
 
     char key[MAX_BUF + 32];
-    snprintf(VS(key), "%c:%" PRIu64 ":%s", metadata_only ? 'M' : 'D', (uint64_t)max_size, path);
+    snprintf((key), sizeof((key)), "%c:%" PRIu64 ":%s", metadata_only ? 'M' : 'D', (uint64_t)max_size, path);
     if (!asset_lock()) {
         return NULL;
     }

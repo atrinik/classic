@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -274,7 +274,7 @@ static void mempool_leak_info(mempool_struct *pool, StringBuffer *sb) {
 #else
     {
 #endif
-        snprintf(VS(buf), "no debug information available");
+        snprintf((buf), sizeof((buf)), "no debug information available");
     }
 
     for (i = 0; i < MEMPOOL_NROF_FREELISTS; i++) {

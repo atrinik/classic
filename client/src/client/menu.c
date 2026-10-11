@@ -161,7 +161,7 @@ int client_command_check(const char *cmd) {
         if (cpl.partyjoin[0] != '\0') {
             char buf[HUGE_BUF];
 
-            snprintf(VS(buf), "/party join %s\t%s", cpl.partyjoin, cmd);
+            snprintf((buf), sizeof((buf)), "/party join %s\t%s", cpl.partyjoin, cmd);
             send_command(buf);
         }
 

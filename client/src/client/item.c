@@ -695,7 +695,7 @@ void object_show_centered(SDL_Surface *surface, object *tmp, int x, int y, int w
 
     sprite_effects_t effects;
     memset(&effects, 0, sizeof(effects));
-    snprintf(VS(effects.glow), "%s", tmp->glow);
+    snprintf((effects.glow), sizeof((effects.glow)), "%s", tmp->glow);
     effects.glow_speed = tmp->glow_speed;
     effects.glow_state = tmp->glow_state;
     effects.zoom_x = zoom_x * 100.0;

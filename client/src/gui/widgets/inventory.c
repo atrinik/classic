@@ -280,7 +280,7 @@ inventory_render_object(widgetdata *widget, object *ob, uint32_t i, uint32_t *r,
     if (cpl.inventory_focus != widget) {
         alpha /= 2;
     }
-    snprintf(VS(buf), "[alpha=%d][center]", alpha);
+    snprintf((buf), sizeof((buf)), "[alpha=%d][center]", alpha);
 
     /* Construct the name */
     if (ob->nrof > 1) {
@@ -311,10 +311,10 @@ inventory_render_object(widgetdata *widget, object *ob, uint32_t i, uint32_t *r,
                 if (ob->item_skill_tag && (skill = object_find(ob->item_skill_tag)) &&
                     skill_find_object(skill, &skill_id)) {
                     level = skill_get(skill_id)->level;
-                    snprintf(VS(buf2), "level %d %s", ob->item_level, skill->s_name);
+                    snprintf((buf2), sizeof((buf2)), "level %d %s", ob->item_level, skill->s_name);
                 } else {
                     level = cpl.stats.level;
-                    snprintf(VS(buf2), "level %d", ob->item_level);
+                    snprintf((buf2), sizeof((buf2)), "level %d", ob->item_level);
                 }
 
                 /* If the player or the player's skill level is too low,
@@ -975,7 +975,7 @@ void menu_inventory_drop(widgetdata *widget, widgetdata *menuitem, SDL_Event *ev
                  "/droptag %" PRIu32 " %" PRIu32 " ",
                  loc,
                  ob->tag);
-        snprintf(VS(buf), "%" PRIu32, nrof);
+        snprintf((buf), sizeof((buf)), "%" PRIu32, nrof);
         text_input_set(&input->text_input, buf);
         input->text_input.character_check_func = text_input_number_character_check;
         text_input_set_history(&input->text_input, NULL);
@@ -1075,7 +1075,7 @@ void menu_inventory_get(widgetdata *widget, widgetdata *menuitem, SDL_Event *eve
                  "/gettag %" PRIu32 " %" PRIu32 " ",
                  loc,
                  ob->tag);
-        snprintf(VS(buf), "%" PRIu32, nrof);
+        snprintf((buf), sizeof((buf)), "%" PRIu32, nrof);
         text_input_set(&input->text_input, buf);
         input->text_input.character_check_func = text_input_number_character_check;
         text_input_set_history(&input->text_input, NULL);

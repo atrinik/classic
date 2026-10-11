@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -507,7 +507,7 @@ void world_maker(void) {
         /* Initialize the region. */
         wm_r = xcalloc(1, sizeof(wm_region));
         /* Open the definitions file. */
-        snprintf(VS(buf), "%s/client-maps/%s.def", settings.assetspath, r->name);
+        snprintf((buf), sizeof((buf)), "%s/client-maps/%s.def", settings.assetspath, r->name);
         path_ensure_directories(buf);
 
         def_fp = fopen(buf, "w");
@@ -522,7 +522,7 @@ void world_maker(void) {
         /* Parse the maps recursively. */
         region_add_rec(wm_r, m, r->name);
 
-        snprintf(VS(buf), "%s/client-maps/%s.png", settings.assetspath, r->name);
+        snprintf((buf), sizeof((buf)), "%s/client-maps/%s.png", settings.assetspath, r->name);
         path_ensure_directories(buf);
 
         /* Store defaults in the definitions file. */

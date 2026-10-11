@@ -81,7 +81,7 @@ static void write_u32(FILE *fp, uint32_t value) {
 }
 
 static void write_test_wav(void) {
-    snprintf(VS(audio_path), "%s/audio-playback.wav", ATRINIK_TEST_BINARY_DIR);
+    snprintf((audio_path), sizeof((audio_path)), "%s/audio-playback.wav", ATRINIK_TEST_BINARY_DIR);
     FILE *fp = fopen(audio_path, "wb");
     TEST_CHECK(fp != NULL);
     const uint32_t samples = 80000;
@@ -171,7 +171,7 @@ static void test_server_and_ambient_sources(void) {
         socket_command_sound(packet->data, packet->len, 0);
         TEST_CHECK(strstr(captured, "source=server-positional") != NULL);
         char expected[MAX_BUF];
-        snprintf(VS(expected),
+        snprintf((expected), sizeof((expected)),
                  "requested=\"%s\" effective=\"%s\"",
                  hurt_effects[i],
                  hurt_effects[i]);

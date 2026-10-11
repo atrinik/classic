@@ -265,8 +265,8 @@ TOOLKIT_INIT_FUNC(socket_server) {
         bool v6_seen;
     } stack_setting;
     memset(&stack_setting, 0, sizeof(stack_setting));
-    snprintf(VS(stack_setting.v4_host), "%s", "0.0.0.0");
-    snprintf(VS(stack_setting.v6_host), "%s", "::");
+    snprintf((stack_setting.v4_host), sizeof((stack_setting.v4_host)), "%s", "0.0.0.0");
+    snprintf((stack_setting.v6_host), sizeof((stack_setting.v6_host)), "%s", "::");
 
     char word[MAX_BUF];
     size_t pos = 0;
@@ -372,7 +372,7 @@ TOOLKIT_INIT_FUNC(socket_server) {
             exit(1);
         }
         char identity_path[HUGE_BUF];
-        snprintf(VS(identity_path), "%s/quic-identity.pem", settings.datapath);
+        snprintf((identity_path), sizeof((identity_path)), "%s/quic-identity.pem", settings.datapath);
         bool dual = BIT_QUERY(stack_setting.type, STACK_DUAL);
         bool bind_v4 = dual || BIT_QUERY(stack_setting.type, STACK_IPV4);
         if (bind_v4) {
@@ -438,7 +438,7 @@ TOOLKIT_INIT_FUNC(socket_server) {
                     "Router mapping is not globally routable; retaining it as an intermediate "
                     "candidate");
             }
-            snprintf(VS(quic_candidates[quic_candidate_count].host), "%s", mapped_host);
+            snprintf((quic_candidates[quic_candidate_count].host), sizeof((quic_candidates[quic_candidate_count].host)), "%s", mapped_host);
             quic_candidates[quic_candidate_count].port = mapped_port;
             quic_candidates[quic_candidate_count].kind = SOCKET_CANDIDATE_MAPPED;
             quic_candidate_count++;
@@ -457,7 +457,7 @@ TOOLKIT_INIT_FUNC(socket_server) {
             bool duplicate = quic_candidate_count != 0 && quic_candidates[0].port == stun_port &&
                              strcmp(quic_candidates[0].host, stun_host) == 0;
             if (!duplicate && quic_candidate_count < arraysize(quic_candidates)) {
-                snprintf(VS(quic_candidates[quic_candidate_count].host), "%s", stun_host);
+                snprintf((quic_candidates[quic_candidate_count].host), sizeof((quic_candidates[quic_candidate_count].host)), "%s", stun_host);
                 quic_candidates[quic_candidate_count].port = stun_port;
                 quic_candidates[quic_candidate_count].kind = SOCKET_CANDIDATE_SRFLX;
                 quic_candidate_count++;
@@ -468,7 +468,7 @@ TOOLKIT_INIT_FUNC(socket_server) {
                                         settings.stun_server,
                                         VS(stun_host),
                                         &stun_port)) {
-            snprintf(VS(quic_candidates[quic_candidate_count].host), "%s", stun_host);
+            snprintf((quic_candidates[quic_candidate_count].host), sizeof((quic_candidates[quic_candidate_count].host)), "%s", stun_host);
             quic_candidates[quic_candidate_count].port = stun_port;
             quic_candidates[quic_candidate_count].kind = SOCKET_CANDIDATE_IPV6;
             quic_candidate_count++;
@@ -1519,8 +1519,8 @@ bool socket_server_process(void) {
     if (heartbeat_last == 0 || now - heartbeat_last >= 5) {
         char path[HUGE_BUF];
         char heartbeat[64];
-        snprintf(VS(path), "%s/tmp/server-heartbeat", settings.datapath);
-        int length = snprintf(VS(heartbeat), "%" PRIu64 "\n", (uint64_t)now);
+        snprintf((path), sizeof((path)), "%s/tmp/server-heartbeat", settings.datapath);
+        int length = snprintf((heartbeat), sizeof((heartbeat)), "%" PRIu64 "\n", (uint64_t)now);
         if (length > 0 && (size_t)length < sizeof(heartbeat) &&
             path_write_atomic(path, heartbeat, (size_t)length, 0600)) {
             heartbeat_last = now;

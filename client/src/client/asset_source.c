@@ -54,7 +54,7 @@ static bool asset_source_url(const char *asset_path, char *url, size_t size) {
     char path[HUGE_BUF];
     if (ok) {
         int length = snprintf(
-            VS(path),
+            (path), sizeof((path)),
             "%s%s%s",
             base_path != NULL ? base_path : "",
             base_path != NULL && *base_path != '\0' && base_path[strlen(base_path) - 1] != '/' ? "/"
@@ -120,7 +120,7 @@ asset_source_t *asset_source_start(const char *asset_path, const char *cache_pat
     }
     if (!asset_source_start_inband(source)) {
         source->state = ASSET_SOURCE_ERROR;
-        snprintf(VS(source->error), "No available asset transport");
+        snprintf((source->error), sizeof((source->error)), "No available asset transport");
     }
     return source;
 }
@@ -154,7 +154,7 @@ asset_source_state_t asset_source_get_state(asset_source_t *source) {
             return source->state;
         }
         source->state = ASSET_SOURCE_ERROR;
-        snprintf(VS(source->error), "Authenticated asset metadata is unavailable");
+        snprintf((source->error), sizeof((source->error)), "Authenticated asset metadata is unavailable");
         return source->state;
     }
 
@@ -208,7 +208,7 @@ asset_source_state_t asset_source_get_state(asset_source_t *source) {
             return source->state;
         }
         source->state = ASSET_SOURCE_ERROR;
-        snprintf(VS(source->error), "HTTP failed and QUIC fallback is unavailable");
+        snprintf((source->error), sizeof((source->error)), "HTTP failed and QUIC fallback is unavailable");
         return source->state;
     }
 
@@ -218,7 +218,7 @@ asset_source_state_t asset_source_get_state(asset_source_t *source) {
             source->state = ASSET_SOURCE_COMPLETE;
         } else if (state == ASSET_REQUEST_ERROR) {
             source->state = ASSET_SOURCE_ERROR;
-            snprintf(VS(source->error), "In-band asset transfer failed");
+            snprintf((source->error), sizeof((source->error)), "In-band asset transfer failed");
         }
     }
     return source->state;

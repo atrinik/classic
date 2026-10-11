@@ -279,7 +279,7 @@ static bool asset_staging_inherited_directory(const char *path, bool *recognized
     errno = 0;
     descriptor = strtoul(value, &end, 10);
     if (errno != 0 || *end != '\0' || descriptor > INT_MAX ||
-        snprintf(VS(canonical), "%lu", descriptor) < 0 || strcmp(value, canonical) != 0) {
+        snprintf((canonical), sizeof((canonical)), "%lu", descriptor) < 0 || strcmp(value, canonical) != 0) {
         return false;
     }
 
@@ -354,7 +354,7 @@ static void create_server_settings(void) {
  */
 static void create_server_animations(void) {
     char buf[HUGE_BUF];
-    snprintf(VS(buf), "%s/anims", settings.datapath);
+    snprintf((buf), sizeof((buf)), "%s/anims", settings.datapath);
 
     FILE *fp = fopen(buf, "wb");
     if (fp == NULL) {
@@ -362,7 +362,7 @@ static void create_server_animations(void) {
         exit(1);
     }
 
-    snprintf(VS(buf), "%s/animations", settings.libpath);
+    snprintf((buf), sizeof((buf)), "%s/animations", settings.libpath);
     FILE *fp2 = fopen(buf, "rb");
     if (fp2 == NULL) {
         LOG(ERROR, "Couldn't open %s.", buf);

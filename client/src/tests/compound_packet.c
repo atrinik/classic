@@ -295,7 +295,7 @@ static void test_name_count_update(void) {
     base.prev = &prev;
     base.env = &env;
     base.inv = &inv;
-    snprintf(VS(base.s_name), "torch");
+    snprintf((base.s_name), sizeof((base.s_name)), "torch");
 
     packet_struct *packet = make_name_count_update("torches", 2);
     packet_reader_t reader;

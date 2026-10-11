@@ -399,7 +399,7 @@ static StringBuffer *file_path_server_internal(void) {
     }
 
     if (identity != NULL) {
-        snprintf(VS(scope), "%s", identity);
+        snprintf((scope), sizeof((scope)), "%s", identity);
         string_tolower(scope);
     } else {
         SOFT_ASSERT_RC(!string_isempty(selected_server->hostname),

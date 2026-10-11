@@ -382,7 +382,7 @@ void widget_redraw_all(int widget_type_id) {
 
 static void test_png_load(void) {
     char source[HUGE_BUF];
-    int length = snprintf(VS(source), "%s/textures/loading_off.png", ATRINIK_TEST_SOURCE_DIR);
+    int length = snprintf((source), sizeof((source)), "%s/textures/loading_off.png", ATRINIK_TEST_SOURCE_DIR);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(source));
 
@@ -457,34 +457,34 @@ static void test_png_write(const char *path) {
 
 static void test_cache_prepare(void) {
     TEST_CHECK(getcwd(VS(test_original_directory)) != NULL);
-    snprintf(VS(test_directory), "/tmp/atrinik-face-request-XXXXXX");
+    snprintf((test_directory), sizeof((test_directory)), "/tmp/atrinik-face-request-XXXXXX");
     TEST_CHECK(mkdtemp(test_directory) != NULL);
 
-    int length = snprintf(VS(test_cache_directory), "%s/%s", test_directory, DIRECTORY_CACHE);
+    int length = snprintf((test_cache_directory), sizeof((test_cache_directory)), "%s/%s", test_directory, DIRECTORY_CACHE);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(test_cache_directory));
     TEST_CHECK(mkdir(test_cache_directory, 0700) == 0);
 
-    length = snprintf(VS(test_data_directory), "%s/data", test_directory);
+    length = snprintf((test_data_directory), sizeof((test_data_directory)), "%s/data", test_directory);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(test_data_directory));
     TEST_CHECK(mkdir(test_data_directory, 0700) == 0);
 
-    length = snprintf(VS(test_user_gfx_directory), "%s/user-gfx", test_directory);
+    length = snprintf((test_user_gfx_directory), sizeof((test_user_gfx_directory)), "%s/user-gfx", test_directory);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(test_user_gfx_directory));
     TEST_CHECK(mkdir(test_user_gfx_directory, 0700) == 0);
 
-    length = snprintf(VS(test_current_gfx_directory), "%s/%s", test_directory, DIRECTORY_GFX_USER);
+    length = snprintf((test_current_gfx_directory), sizeof((test_current_gfx_directory)), "%s/%s", test_directory, DIRECTORY_GFX_USER);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(test_current_gfx_directory));
     TEST_CHECK(mkdir(test_current_gfx_directory, 0700) == 0);
 
-    length = snprintf(VS(test_installed_directory), "%s/installed", test_directory);
+    length = snprintf((test_installed_directory), sizeof((test_installed_directory)), "%s/installed", test_directory);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(test_installed_directory));
     TEST_CHECK(mkdir(test_installed_directory, 0700) == 0);
-    length = snprintf(VS(test_installed_gfx_directory),
+    length = snprintf((test_installed_gfx_directory), sizeof((test_installed_gfx_directory)),
                       "%s/%s",
                       test_installed_directory,
                       DIRECTORY_GFX_USER);
@@ -492,7 +492,7 @@ static void test_cache_prepare(void) {
     TEST_CHECK((size_t)length < sizeof(test_installed_gfx_directory));
     TEST_CHECK(mkdir(test_installed_gfx_directory, 0700) == 0);
 
-    length = snprintf(VS(test_pack_path), "%s/atrinik.p0", test_data_directory);
+    length = snprintf((test_pack_path), sizeof((test_pack_path)), "%s/atrinik.p0", test_data_directory);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(test_pack_path));
     FILE *fp = fopen(test_pack_path, "wb");
@@ -506,12 +506,12 @@ static void test_cache_prepare(void) {
     TEST_CHECK(fclose(fp) == 0);
 
     length =
-        snprintf(VS(test_warm_cache), "%s/face-%03u.png", test_cache_directory, TEST_WARM_FACE);
+        snprintf((test_warm_cache), sizeof((test_warm_cache)), "%s/face-%03u.png", test_cache_directory, TEST_WARM_FACE);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(test_warm_cache));
     test_png_write(test_warm_cache);
 
-    length = snprintf(VS(test_occupied_warm_cache),
+    length = snprintf((test_occupied_warm_cache), sizeof((test_occupied_warm_cache)),
                       "%s/face-%03u.png",
                       test_cache_directory,
                       TEST_OCCUPIED_LOCAL_FACE);
@@ -519,7 +519,7 @@ static void test_cache_prepare(void) {
     TEST_CHECK((size_t)length < sizeof(test_occupied_warm_cache));
     test_png_write(test_occupied_warm_cache);
 
-    length = snprintf(VS(test_offline_warm_cache),
+    length = snprintf((test_offline_warm_cache), sizeof((test_offline_warm_cache)),
                       "%s/face-%03u.png",
                       test_cache_directory,
                       TEST_OFFLINE_BACKGROUND_FACE);
@@ -527,7 +527,7 @@ static void test_cache_prepare(void) {
     TEST_CHECK((size_t)length < sizeof(test_offline_warm_cache));
     test_png_write(test_offline_warm_cache);
 
-    length = snprintf(VS(test_current_gfx_face),
+    length = snprintf((test_current_gfx_face), sizeof((test_current_gfx_face)),
                       "%s/face-%03u.png",
                       test_current_gfx_directory,
                       TEST_CURRENT_GFX_FACE);
@@ -535,7 +535,7 @@ static void test_cache_prepare(void) {
     TEST_CHECK((size_t)length < sizeof(test_current_gfx_face));
     test_png_write(test_current_gfx_face);
 
-    length = snprintf(VS(test_installed_gfx_face),
+    length = snprintf((test_installed_gfx_face), sizeof((test_installed_gfx_face)),
                       "%s/face-%03u.png",
                       test_installed_gfx_directory,
                       TEST_INSTALLED_GFX_FACE);
@@ -549,7 +549,7 @@ static void test_cache_prepare(void) {
         test_installed_gfx_directory,
     };
     for (size_t i = 0; i < arraysize(precedence_directories); i++) {
-        length = snprintf(VS(test_user_precedence_faces[i]),
+        length = snprintf((test_user_precedence_faces[i]), sizeof((test_user_precedence_faces[i])),
                           "%s/face-%03u.png",
                           precedence_directories[i],
                           TEST_USER_GFX_FACE);
@@ -746,7 +746,7 @@ static void test_loader_restart_and_gfx_roots(void) {
     test_wait_for_face(TEST_USER_GFX_FACE);
     TEST_CHECK(FaceList[TEST_USER_GFX_FACE].checksum == test_user_png_crc);
     char expected[MAX_BUF];
-    int length = snprintf(VS(expected), DIRECTORY_GFX_USER "/face-%03u.png", TEST_USER_GFX_FACE);
+    int length = snprintf((expected), sizeof((expected)), DIRECTORY_GFX_USER "/face-%03u.png", TEST_USER_GFX_FACE);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(expected));
     TEST_CHECK(strcmp(FaceList[TEST_USER_GFX_FACE].name, expected) == 0);
@@ -1284,7 +1284,7 @@ static void test_production_completion_budget(void) {
 
 static void test_malformed_network_png_is_rejected(void) {
     char name[MAX_BUF];
-    int length = snprintf(VS(name), "face-%03u", TEST_MALFORMED_FACE);
+    int length = snprintf((name), sizeof((name)), "face-%03u", TEST_MALFORMED_FACE);
     TEST_CHECK(length > 0);
     TEST_CHECK((size_t)length < sizeof(name));
     finish_face_cmd(TEST_MALFORMED_FACE, test_malformed_png_crc, name);

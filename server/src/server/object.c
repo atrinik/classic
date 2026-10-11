@@ -3928,20 +3928,20 @@ bool object_custody_begin_parties(const object *op,
     if (op->arch == NULL || !object_custody_actor(actor_ob)) {
         return false;
     }
-    snprintf(VS(transaction->actor), "%s", actor_ob->custody_actor);
+    snprintf((transaction->actor), sizeof((transaction->actor)), "%s", actor_ob->custody_actor);
     if (op->custody_lineage != NULL) {
-        snprintf(VS(transaction->lineage), "%s", op->custody_lineage);
+        snprintf((transaction->lineage), sizeof((transaction->lineage)), "%s", op->custody_lineage);
     } else {
         char id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
         if (!object_custody_random_id(id)) {
             return false;
         }
-        snprintf(VS(transaction->lineage), "item:%s", id);
+        snprintf((transaction->lineage), sizeof((transaction->lineage)), "item:%s", id);
     }
-    snprintf(VS(transaction->first_after),
+    snprintf((transaction->first_after), sizeof((transaction->first_after)),
              "%s",
              op->custody_first != NULL ? op->custody_first : acquirer);
-    snprintf(VS(transaction->last_after),
+    snprintf((transaction->last_after), sizeof((transaction->last_after)),
              "%s",
              relinquisher[0] != '\0' ? relinquisher
                                      : (op->custody_last != NULL ? op->custody_last : ""));
@@ -3949,7 +3949,7 @@ bool object_custody_begin_parties(const object *op,
     transaction->relinquish = relinquisher[0] != '\0';
 
     char snapshot[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    snprintf(VS(snapshot),
+    snprintf((snapshot), sizeof((snapshot)),
              "arch=%s;type=%u;nrof=%" PRIu32 ";value=%" PRId64 ";weight=%" PRIu32,
              op->arch != NULL ? op->arch->name : "unknown",
              op->type,
@@ -3958,11 +3958,11 @@ bool object_custody_begin_parties(const object *op,
              op->weight);
     char provenance_before[GAMEPLAY_JOURNAL_ID_MAX + 1];
     char provenance_after[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    snprintf(VS(provenance_before),
+    snprintf((provenance_before), sizeof((provenance_before)),
              "first=%.112s;last=%.112s",
              op->custody_first != NULL ? op->custody_first : "",
              op->custody_last != NULL ? op->custody_last : "");
-    snprintf(VS(provenance_after),
+    snprintf((provenance_after), sizeof((provenance_after)),
              "first=%.112s;last=%.112s",
              transaction->first_after,
              transaction->last_after);
@@ -4510,14 +4510,14 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
 
             rp.origin_x = exit->x;
             rp.origin_y = exit->y;
-            snprintf(VS(rp.origin_map), "%s", op->map->path);
+            snprintf((rp.origin_map), sizeof((rp.origin_map)), "%s", op->map->path);
             rp.origin_map_ptr = op->map;
 
             /* Pick a new pathname for the new map. Currently, we just use a
              * static variable and increment the counter by one each time. */
             static uint64_t reference_number = 0;
             char newmap_name[HUGE_BUF];
-            snprintf(VS(newmap_name), "/random/%" PRIu64, reference_number++);
+            snprintf((newmap_name), sizeof((newmap_name)), "/random/%" PRIu64, reference_number++);
 
             /* Now to generate the actual map. */
             m = generate_random_map(newmap_name, &rp);
@@ -4553,7 +4553,7 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
 
         /* If exit is damned, update player's savebed position. */
         if (QUERY_FLAG(exit, FLAG_DAMNED) && op->type == PLAYER) {
-            snprintf(VS(CONTR(op)->savebed_map), "%s", m->path);
+            snprintf((CONTR(op)->savebed_map), sizeof((CONTR(op)->savebed_map)), "%s", m->path);
             CONTR(op)->bed_x = x;
             CONTR(op)->bed_y = y;
             player_save(op);
@@ -4633,7 +4633,7 @@ bool object_enter_map(object *op, object *exit, mapstruct *m, int x, int y, bool
     /* Do some action special for players after we have inserted them. */
     if (op->type == PLAYER) {
         if (CONTR(op) != NULL) {
-            snprintf(VS(CONTR(op)->maplevel), "%s", m->path);
+            snprintf((CONTR(op)->maplevel), sizeof((CONTR(op)->maplevel)), "%s", m->path);
             CONTR(op)->count = 0;
             metrics_character_visit(CONTR(op), m, oldmap != NULL && oldmap != m);
         }
@@ -4835,7 +4835,7 @@ int object_blocked(object *op, mapstruct *m, int x, int y) {
  */
 object *object_create_singularity(const char *name) {
     char buf[MAX_BUF];
-    snprintf(VS(buf), "singularity");
+    snprintf((buf), sizeof((buf)), "singularity");
     if (name != NULL) {
         snprintfcat(VS(buf), " (%s)", name);
     }

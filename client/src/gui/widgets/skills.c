@@ -126,7 +126,7 @@ static void list_post_column(list_struct *list, uint32_t row, uint32_t col) {
     border_create_color(list->surface, &box, 1, "ff0000");
 
     char buf[MAX_BUF];
-    snprintf(VS(buf), "%s", skill_list[skill_id]->skill->s_name);
+    snprintf((buf), sizeof((buf)), "%s", skill_list[skill_id]->skill->s_name);
     string_title(buf);
 
     box.w = 160;
@@ -285,7 +285,7 @@ void skills_update(object *op, uint8_t level, int64_t xp, const char *msg) {
 
     skill->level = level;
     skill->exp = xp;
-    snprintf(VS(skill->msg), "%s", msg);
+    snprintf((skill->msg), sizeof((skill->msg)), "%s", msg);
 
     skill_list_reload();
 }

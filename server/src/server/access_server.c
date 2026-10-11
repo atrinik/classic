@@ -216,8 +216,8 @@ bool access_server_init(const char identity_hex[65]) {
     char path[HUGE_BUF];
     bool relative_store = settings.access_store[0] == '\0' && initialization_data_descriptor() >= 0;
     if (settings.access_store[0] != '\0')
-        snprintf(VS(path), "%s", settings.access_store);
-    else if (snprintf(VS(path), "%s/access-tokens", settings.datapath) >= (int)sizeof(path))
+        snprintf((path), sizeof((path)), "%s", settings.access_store);
+    else if (snprintf((path), sizeof((path)), "%s/access-tokens", settings.datapath) >= (int)sizeof(path))
         return false;
     int data = initialization_data_descriptor();
     bool absent =

@@ -117,7 +117,7 @@ static void shutdown_signal_handler(int signum) {
 void version(object *op) {
     char buf[HUGE_BUF];
 
-    snprintf(VS(buf), "This is Atrinik v%s", PACKAGE_VERSION);
+    snprintf((buf), sizeof((buf)), "This is Atrinik v%s", PACKAGE_VERSION);
 
     if (op != NULL) {
         draw_info(COLOR_WHITE, op, buf);

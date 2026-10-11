@@ -818,7 +818,7 @@ bool widget_map_sparse_state_test(void) {
                 map_cell_layer_record(record, GET_MAP_LAYER(LAYER_LIVING, 0), true)->face = 4;
                 map_cell_actor_record_t *actor = map_cell_actor_record(record, 0, true);
                 actor->target_object_count = (uint32_t)tile + 1U;
-                snprintf(VS(actor->name), "actor-%" PRIu64, (uint64_t)tile);
+                snprintf((actor->name), sizeof((actor->name)), "actor-%" PRIu64, (uint64_t)tile);
                 layer_records++;
                 actor_records++;
             }
@@ -2219,7 +2219,7 @@ void update_map_region_name(const char *region_name) {
         return;
     }
 
-    snprintf(VS(MapData.region_name), "%s", region_name);
+    snprintf((MapData.region_name), sizeof((MapData.region_name)), "%s", region_name);
     if (!map_state_transaction.active) {
         region_map_update(MapData.region_map, region_name);
     }
@@ -2231,7 +2231,7 @@ void update_map_region_name(const char *region_name) {
  * New region long name.
  */
 void update_map_region_longname(const char *region_longname) {
-    snprintf(VS(MapData.region_longname), "%s", region_longname);
+    snprintf((MapData.region_longname), sizeof((MapData.region_longname)), "%s", region_longname);
 }
 
 /**
@@ -2240,7 +2240,7 @@ void update_map_region_longname(const char *region_longname) {
  * New map path.
  */
 void update_map_path(const char *map_path) {
-    snprintf(VS(MapData.map_path), "%s", map_path);
+    snprintf((MapData.map_path), sizeof((MapData.map_path)), "%s", map_path);
 }
 
 /**
@@ -2941,7 +2941,7 @@ void map_set_data(int x,
     }
 
     layer_record->quick_pos = quick_pos;
-    snprintf(VS(layer_record->glow), "%s", glow);
+    snprintf((layer_record->glow), sizeof((layer_record->glow)), "%s", glow);
     layer_record->height = height;
     layer_record->zoom_x = zoom_x;
     layer_record->zoom_y = zoom_y;
@@ -2981,8 +2981,8 @@ void map_set_data(int x,
         actor_record->probe = probe;
         actor_record->target_object_count = target_object_count;
         actor_record->target_is_friend = target_is_friend;
-        snprintf(VS(actor_record->color), "%s", name_color);
-        snprintf(VS(actor_record->name), "%s", name);
+        snprintf((actor_record->color), sizeof((actor_record->color)), "%s", name_color);
+        snprintf((actor_record->name), sizeof((actor_record->name)), "%s", name);
 
         if (anim_flags & ANIM_FLAG_ATTACKING && !(actor_record->anim_flags & ANIM_FLAG_ATTACKING)) {
             layer_record->anim_state = 0;
@@ -4175,7 +4175,7 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     xl += map_cell_layer_record_read(data->cell, map_layer)->align;
 
-    snprintf(VS(effects.glow), "%s", map_cell_layer_record_read(data->cell, map_layer)->glow);
+    snprintf((effects.glow), sizeof((effects.glow)), "%s", map_cell_layer_record_read(data->cell, map_layer)->glow);
     effects.glow_speed = map_cell_layer_record_read(data->cell, map_layer)->glow_speed;
     effects.glow_state = map_cell_layer_record_read(data->cell, map_layer)->glow_state;
 
@@ -7308,7 +7308,7 @@ static void map_render_command_draw_exit(SDL_Surface *surface,
     effects.zoom_x = command->effects.zoom_x;
     effects.zoom_y = command->effects.zoom_y;
     effects.rotate = command->effects.rotate;
-    snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
+    snprintf((effects.outline), sizeof((effects.outline)), "%s", MAP_OUTLINE_COLOR);
     surface_show_effects(surface, command->x, command->y, NULL, command->source, &effects);
     if (command->draw_double) {
         surface_show_effects(surface, command->x, command->y - 22, NULL, command->source, &effects);
@@ -7433,7 +7433,7 @@ static void map_render_commands(SDL_Surface *surface,
                 effects.zoom_x = command->effects.zoom_x;
                 effects.zoom_y = command->effects.zoom_y;
                 effects.rotate = command->effects.rotate;
-                snprintf(VS(effects.outline), "%s", MAP_OUTLINE_COLOR);
+                snprintf((effects.outline), sizeof((effects.outline)), "%s", MAP_OUTLINE_COLOR);
                 gpu_renderer_map_set_instance_identity(command->record_identity,
                                                        ((uint32_t)command->record_layer << 2U) |
                                                            2U);
@@ -11410,7 +11410,7 @@ void map_anims_play(void) {
                     map_animation_test_damage_draws++;
                 }
 #endif
-                snprintf(VS(buf), "%d", abs(anim->value));
+                snprintf((buf), sizeof((buf)), "%d", abs(anim->value));
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 const char *color = anim->value < 0 ? COLOR_GREEN : COLOR_ORANGE;
 
@@ -11430,7 +11430,7 @@ void map_anims_play(void) {
                     map_animation_test_kill_draws++;
                 }
 #endif
-                snprintf(VS(buf), "%d", anim->value);
+                snprintf((buf), sizeof((buf)), "%d", anim->value);
                 int wd = text_get_width(FONT_MONO10, buf, TEXT_OUTLINE);
                 int ht = text_get_height(FONT_MONO10, buf, 0);
 #ifdef ATRINIK_WIDGET_TESTS

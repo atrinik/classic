@@ -207,7 +207,7 @@ bool metaserver_publisher_classic_body(const metaserver_publisher_classic_payloa
     }
     char endpoint[320] = {0};
     if (has_hostname) {
-        int endpoint_length = snprintf(VS(endpoint),
+        int endpoint_length = snprintf((endpoint), sizeof((endpoint)),
                                        ",\"hostname\":\"%s\",\"port\":%" PRIu16,
                                        payload->hostname,
                                        payload->port);
@@ -358,14 +358,14 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
     metaserver_publisher_hex_lower(nonce_hex);
 
     int path_length =
-        snprintf(VS(components->path),
+        snprintf((components->path), sizeof((components->path)),
                  "%s/%s/%s",
                  prefix,
                  server_id,
                  profile == METASERVER_PUBLISHER_ACCESS_CLASSIC_V1 ? "routes" : "publish");
-    int digest_length = snprintf(VS(components->content_digest), "sha-256=:%s:", digest_base64);
+    int digest_length = snprintf((components->content_digest), sizeof((components->content_digest)), "sha-256=:%s:", digest_base64);
     int input_length =
-        snprintf(VS(components->signature_input),
+        snprintf((components->signature_input), sizeof((components->signature_input)),
                  "atrinik=" METASERVER_PUBLISH_COMPONENTS ";created=%" PRIu64 ";expires=%" PRIu64
                  ";nonce=\"%s\";alg=\"ecdsa-p256-sha256\";keyid=\"%s\""
                  ";tag=\"%s\"",
@@ -374,7 +374,7 @@ bool metaserver_publisher_build(metaserver_publisher_profile_t profile,
                  nonce_hex,
                  server_id,
                  tag);
-    int base_length = snprintf(VS(components->signature_base),
+    int base_length = snprintf((components->signature_base), sizeof((components->signature_base)),
                                "\"@method\": POST\n"
                                "\"@authority\": %s\n"
                                "\"@path\": %s\n"

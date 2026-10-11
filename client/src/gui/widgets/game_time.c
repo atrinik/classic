@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Atrinik Development Team                    *
+ *   Copyright 2009-2026 The Atrinik Project                    *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -32,7 +32,7 @@ static void widget_draw(widgetdata *widget) {
     if (telemetry_game_time_get(&game_minutes, &millis_per_game_minute)) {
         unsigned hour = game_minutes / 60 % 24;
         unsigned minute = game_minutes % 60;
-        snprintf(VS(text), "Game time: %02u:%02u", hour, minute);
+        snprintf((text), sizeof((text)), "Game time: %02u:%02u", hour, minute);
     }
 
     text_show(widget->surface,
@@ -62,7 +62,7 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
         uint32_t millis_per_game_minute;
         if (telemetry_game_time_get(&game_minutes, &millis_per_game_minute)) {
             char buf[160];
-            snprintf(VS(buf),
+            snprintf((buf), sizeof((buf)),
                      "Day %" PRIu64 ", %02" PRIu64 ":%02" PRIu64
                      "\nOne game minute passes every %.2f real seconds.",
                      game_minutes / (UINT64_C(24) * 60) + 1,

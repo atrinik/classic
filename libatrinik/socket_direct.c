@@ -167,8 +167,8 @@ static struct addrinfo *socket_stun_resolve_until(const char *host,
         return NULL;
     }
     context->hints = *hints;
-    snprintf(VS(context->host), "%s", host);
-    snprintf(VS(context->service), "%s", service);
+    snprintf((context->host), sizeof((context->host)), "%s", host);
+    snprintf((context->service), sizeof((context->service)), "%s", service);
     if (pthread_mutex_init(&context->mutex, NULL) != 0) {
         socket_stun_resolver_release();
         free(context);
@@ -333,7 +333,7 @@ static bool socket_rendezvous_client_candidate_parse_raw(const char *message,
         !string_parse_uint64(port_text, 10, 1, UINT16_MAX, &parsed_port) ||
         !socket_rendezvous_host_valid(parsed_host) ||
         !socket_rendezvous_ticket_valid(parsed_ticket) || strlen(parsed_host) >= host_size ||
-        snprintf(VS(canonical),
+        snprintf((canonical), sizeof((canonical)),
                  "{\"type\":\"client_candidate\",\"host\":\"%s\","
                  "\"port\":%u,\"ticket\":\"%s\"}",
                  parsed_host,
@@ -371,7 +371,7 @@ static bool socket_rendezvous_server_candidate_parse_raw(const char *message,
         message[consumed] != '\0' || !string_parse_uint64(port_text, 10, 1, UINT16_MAX, &port) ||
         strcmp(ticket, expected_ticket) != 0 || !socket_rendezvous_host_valid(host) ||
         !socket_candidate_kind_parse(kind, &parsed_kind) ||
-        snprintf(VS(canonical),
+        snprintf((canonical), sizeof((canonical)),
                  "{\"type\":\"server_candidate\",\"host\":\"%s\","
                  "\"port\":%u,\"kind\":\"%s\",\"ticket\":\"%s\"}",
                  host,
@@ -381,7 +381,7 @@ static bool socket_rendezvous_server_candidate_parse_raw(const char *message,
         strcmp(message, canonical) != 0) {
         return false;
     }
-    snprintf(VS(candidate->host), "%s", host);
+    snprintf((candidate->host), sizeof((candidate->host)), "%s", host);
     candidate->port = (uint16_t)port;
     candidate->kind = parsed_kind;
     return true;
@@ -797,7 +797,7 @@ static bool socket_candidate_add(socket_direct_candidate_t *candidates,
         return false;
     }
 
-    snprintf(VS(candidates[*count].host), "%s", host);
+    snprintf((candidates[*count].host), sizeof((candidates[*count].host)), "%s", host);
     candidates[*count].port = port;
     candidates[*count].kind = kind;
     (*count)++;
@@ -984,7 +984,7 @@ bool socket_stun_discover_until(socket_t *sc,
     }
     memcpy(stun_host, endpoint, stun_host_length);
     stun_host[stun_host_length] = '\0';
-    snprintf(VS(stun_port), "%s", separator + 1);
+    snprintf((stun_port), sizeof((stun_port)), "%s", separator + 1);
 
     struct addrinfo hints, *addresses = NULL;
     memset(&hints, 0, sizeof(hints));
@@ -1167,7 +1167,7 @@ bool socket_udp_punch(socket_t *sc, const char *host, uint16_t port) {
     HARD_ASSERT(host != NULL);
 
     char port_string[6];
-    snprintf(VS(port_string), "%" PRIu16, port);
+    snprintf((port_string), sizeof((port_string)), "%" PRIu16, port);
     struct addrinfo hints, *addresses = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = ((struct sockaddr *)&sc->addr)->sa_family;

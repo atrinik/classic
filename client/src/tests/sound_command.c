@@ -35,7 +35,7 @@ static int8_t played_y;
 static uint8_t played_type;
 
 void sound_command_play_effect(const char *filename, int volume, int loop, int8_t x, int8_t y) {
-    snprintf(VS(played_filename), "%s", filename);
+    snprintf((played_filename), sizeof((played_filename)), "%s", filename);
     played_volume = volume;
     played_loop = loop;
     played_x = x;
@@ -44,14 +44,14 @@ void sound_command_play_effect(const char *filename, int volume, int loop, int8_
 }
 
 void sound_command_play_background(const char *filename, int volume, int loop) {
-    snprintf(VS(played_filename), "%s", filename);
+    snprintf((played_filename), sizeof((played_filename)), "%s", filename);
     played_volume = volume;
     played_loop = loop;
     played_type = CMD_SOUND_BACKGROUND;
 }
 
 void sound_command_play_absolute(const char *filename, int volume, int loop) {
-    snprintf(VS(played_filename), "%s", filename);
+    snprintf((played_filename), sizeof((played_filename)), "%s", filename);
     played_volume = volume;
     played_loop = loop;
     played_type = CMD_SOUND_ABSOLUTE;

@@ -167,7 +167,7 @@ void server_metrics_asset_stream(int active_delta, size_t bytes, bool rejected) 
 void server_metrics_mapping(const char *method, bool open_failed, bool renewal_failed) {
     pthread_mutex_lock(&metrics_lock);
     if (method != NULL) {
-        snprintf(VS(metrics.mapping_method), "%s", method);
+        snprintf((metrics.mapping_method), sizeof((metrics.mapping_method)), "%s", method);
     }
     if (open_failed) {
         metrics.mapping_open_failures++;

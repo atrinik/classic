@@ -28,7 +28,7 @@ static bool metaserver_publish_sequence_read(const char *data_path,
     }
     *highwater = 0;
     for (size_t i = 0; i < 2; i++) {
-        if (snprintf(VS(slots[i].path),
+        if (snprintf((slots[i].path), sizeof((slots[i].path)),
                      "%s/%s-%s.%u",
                      data_path,
                      METASERVER_PUBLISH_SEQUENCE_FILE,
@@ -45,7 +45,7 @@ static bool metaserver_publish_sequence_read(const char *data_path,
         char canonical[21];
         if (error != PATH_SECRET_OK || permissive ||
             !string_parse_uint64(value, 10, 1, UINT64_MAX, &slots[i].value) ||
-            snprintf(VS(canonical), "%" PRIu64, slots[i].value) >= (int)sizeof(canonical) ||
+            snprintf((canonical), sizeof((canonical)), "%" PRIu64, slots[i].value) >= (int)sizeof(canonical) ||
             strcmp(value, canonical) != 0) {
             return false;
         }
@@ -85,7 +85,7 @@ metaserver_publish_sequence_persist(const char *data_path,
     }
 
     char value[22];
-    int length = snprintf(VS(value), "%" PRIu64 "\n", desired);
+    int length = snprintf((value), sizeof((value)), "%" PRIu64 "\n", desired);
     if (length <= 0 || (size_t)length >= sizeof(value)) {
         return METASERVER_PUBLISH_SEQUENCE_ERROR;
     }
@@ -184,7 +184,7 @@ bool metaserver_publish_replay_parse(const char *body,
         return false;
     }
     char canonical[21];
-    if (snprintf(VS(canonical), "%" PRIu64, parsed) != (int)digits_size ||
+    if (snprintf((canonical), sizeof((canonical)), "%" PRIu64, parsed) != (int)digits_size ||
         memcmp(canonical, digits, digits_size) != 0) {
         return false;
     }

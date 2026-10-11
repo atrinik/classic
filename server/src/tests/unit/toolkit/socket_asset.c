@@ -1261,7 +1261,7 @@ END_TEST
 START_TEST(test_metaserver_rendezvous_token_bounds) {
     static const char token[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     char response[128];
-    int length = snprintf(VS(response), "{\"status\":\"ok\",\"rendezvousToken\":\"%s\"}", token);
+    int length = snprintf((response), sizeof((response)), "{\"status\":\"ok\",\"rendezvousToken\":\"%s\"}", token);
     ck_assert_int_gt(length, 0);
     ck_assert_int_lt(length, (int)sizeof(response));
 
@@ -1340,7 +1340,7 @@ START_TEST(test_metaserver_access_route_acknowledgments) {
                                                       100),
                      ACCESS_CONFLICT);
     char changed[1025];
-    snprintf(VS(changed), "%s ", reply);
+    snprintf((changed), sizeof((changed)), "%s ", reply);
     ck_assert_int_eq(metaserver_access_response_parse(changed,
                                                       strlen(changed),
                                                       request,
@@ -1688,7 +1688,7 @@ START_TEST(test_access_maintenance_rotates_and_services_queued_jobs) {
     char previous_store[sizeof(settings.access_store)];
     memcpy(previous_store, settings.access_store, sizeof(previous_store));
     bool previous_required = settings.access_required, previous_initialize = settings.access_initialize;
-    snprintf(VS(settings.access_store), "%s", directory);
+    snprintf((settings.access_store), sizeof((settings.access_store)), "%s", directory);
     settings.access_required = true;
     settings.access_initialize = false;
     atomic_store(&maintenance_calls, 0);
@@ -1732,7 +1732,7 @@ START_TEST(test_access_maintenance_rotates_and_services_queued_jobs) {
                      ACCESS_COMMITTED);
     access_store_close(store);
     char snapshot[256];
-    snprintf(VS(snapshot), "%s/access-tokens.snapshot", directory);
+    snprintf((snapshot), sizeof((snapshot)), "%s/access-tokens.snapshot", directory);
     ck_assert_int_eq(unlink(snapshot), 0);
     ck_assert_int_eq(rmdir(directory), 0);
 }
@@ -1767,7 +1767,7 @@ START_TEST(test_access_worker_shutdown_preserves_pending_route) {
     memcpy(previous_store, settings.access_store, sizeof(previous_store));
     bool previous_required = settings.access_required;
     bool previous_initialize = settings.access_initialize;
-    snprintf(VS(settings.access_store), "%s", directory);
+    snprintf((settings.access_store), sizeof((settings.access_store)), "%s", directory);
     settings.access_required = true;
     settings.access_initialize = false;
     access_server_route_for_test(access_shutdown_route);
@@ -1819,7 +1819,7 @@ START_TEST(test_access_worker_shutdown_preserves_pending_route) {
     access_result_cleanse(&receipt);
     access_store_close(store);
     char snapshot[256];
-    snprintf(VS(snapshot), "%s/access-tokens.snapshot", directory);
+    snprintf((snapshot), sizeof((snapshot)), "%s/access-tokens.snapshot", directory);
     ck_assert_int_eq(unlink(snapshot), 0);
     ck_assert_int_eq(rmdir(directory), 0);
 }
@@ -1852,10 +1852,10 @@ START_TEST(test_metaserver_private_presence_renews_without_activity) {
     player joined = {0};
     char previous_name[sizeof(settings.server_name)];
     memcpy(previous_name, settings.server_name, sizeof(previous_name));
-    snprintf(VS(settings.server_name), "%s", "Private presence test");
+    snprintf((settings.server_name), sizeof((settings.server_name)), "%s", "Private presence test");
     settings.server_public = false;
     settings.access_required = true;
-    snprintf(VS(settings.metaserver_hostname), "%s", "private.example.invalid");
+    snprintf((settings.metaserver_hostname), sizeof((settings.metaserver_hostname)), "%s", "private.example.invalid");
     settings.port_quic = 13327;
     first_player = NULL;
 
@@ -2207,7 +2207,7 @@ START_TEST(test_metaserver_rendezvous_ticket_isolation) {
     metaserver_rendezvous_auth_job_t full_jobs[METASERVER_RENDEZVOUS_AUTH_JOBS_MAX] = {0};
     char generated_ticket[RENDEZVOUS_TICKET_HEX_SIZE + 1U];
     for (size_t i = 0; i < arraysize(full_jobs); i++) {
-        ck_assert_int_eq(snprintf(VS(generated_ticket), "%064zx", i), RENDEZVOUS_TICKET_HEX_SIZE);
+        ck_assert_int_eq(snprintf((generated_ticket), sizeof((generated_ticket)), "%064zx", i), RENDEZVOUS_TICKET_HEX_SIZE);
         ck_assert_int_eq(metaserver_rendezvous_auth_claim(full_jobs,
                                                           arraysize(full_jobs),
                                                           generated_ticket,
@@ -2215,7 +2215,7 @@ START_TEST(test_metaserver_rendezvous_ticket_isolation) {
                                                           &claimed),
                          METASERVER_RENDEZVOUS_AUTH_CLAIM_OK);
     }
-    ck_assert_int_eq(snprintf(VS(generated_ticket), "%064x", METASERVER_RENDEZVOUS_AUTH_JOBS_MAX),
+    ck_assert_int_eq(snprintf((generated_ticket), sizeof((generated_ticket)), "%064x", METASERVER_RENDEZVOUS_AUTH_JOBS_MAX),
                      RENDEZVOUS_TICKET_HEX_SIZE);
     ck_assert_int_eq(metaserver_rendezvous_auth_claim(full_jobs,
                                                       arraysize(full_jobs),
@@ -2313,7 +2313,7 @@ START_TEST(test_path_secret_reader) {
 
 #if !defined(WIN32) && defined(O_NOFOLLOW)
     char link_path[sizeof(path) + 8];
-    snprintf(VS(link_path), "%s.link", path);
+    snprintf((link_path), sizeof((link_path)), "%s.link", path);
     ck_assert_int_eq(symlink(path, link_path), 0);
     ck_assert_int_eq(path_read_secret(link_path, VS(secret), NULL), PATH_SECRET_UNSAFE_LINK);
     ck_assert_int_eq(unlink(link_path), 0);
@@ -2413,7 +2413,7 @@ START_TEST(test_socket_rendezvous_messages) {
     char parsed_ticket[65];
     ck_assert(socket_rendezvous_attempt_auth_init(attempt, VS(message)));
     ck_assert_ptr_nonnull(strstr(message, "access_init"));
-    snprintf(VS(message), "{\"type\":\"access_ready\",\"version\":1}");
+    snprintf((message), sizeof((message)), "{\"type\":\"access_ready\",\"version\":1}");
     rendezvous_server_auth_state_t server_auth = RENDEZVOUS_SERVER_AUTH_AUTHORIZED;
     ck_assert_int_eq(socket_rendezvous_attempt_auth_result(attempt, message, strlen(message)),
                      SOCKET_RENDEZVOUS_FRAME_AUTHORIZED);

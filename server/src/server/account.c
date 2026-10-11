@@ -492,8 +492,8 @@ bool account_provision(const char *name,
     memset(&account, 0, sizeof(account));
     metrics_store_init(&account.metrics, METRIC_SCOPE_ACCOUNT, 0);
     account.metrics_valid = true;
-    snprintf(VS(account_name), "%s", name);
-    snprintf(VS(character_name), "%s", character);
+    snprintf((account_name), sizeof((account_name)), "%s", name);
+    snprintf((character_name), sizeof((character_name)), "%s", character);
 
     size_t account_length = strlen(account_name);
     size_t password_length = strlen(password);
@@ -647,8 +647,8 @@ bool account_provision_from_file(const char *name,
     HARD_ASSERT(error != NULL);
     HARD_ASSERT(error_size > 0);
     error[0] = '\0';
-    snprintf(VS(account_name), "%s", name);
-    snprintf(VS(character_name), "%s", character);
+    snprintf((account_name), sizeof((account_name)), "%s", name);
+    snprintf((character_name), sizeof((character_name)), "%s", character);
     string_tolower(account_name);
     string_title(character_name);
 

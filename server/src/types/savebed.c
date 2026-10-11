@@ -58,9 +58,9 @@ static int apply_func(object *op, object *applier, int aflags) {
         int lineage_length;
         if (!gameplay_journal_map_identity(applier->map, map_identity) ||
             !gameplay_journal_map_path_identity(CONTR(applier)->savebed_map, previous_identity) ||
-            (subject_length = snprintf(VS(subject), "map:%s", map_identity)) < 0 ||
+            (subject_length = snprintf((subject), sizeof((subject)), "map:%s", map_identity)) < 0 ||
             (size_t)subject_length >= sizeof(subject) ||
-            (lineage_length = snprintf(VS(lineage),
+            (lineage_length = snprintf((lineage), sizeof((lineage)),
                                        "previous-map:%s@%d+%d",
                                        previous_identity[0] != '\0' ? previous_identity : "unset",
                                        CONTR(applier)->bed_x,
@@ -79,7 +79,7 @@ static int apply_func(object *op, object *applier, int aflags) {
     }
 
     /* Update respawn position. */
-    snprintf(VS(CONTR(applier)->savebed_map), "%s", applier->map->path);
+    snprintf((CONTR(applier)->savebed_map), sizeof((CONTR(applier)->savebed_map)), "%s", applier->map->path);
     CONTR(applier)->bed_x = applier->x;
     CONTR(applier)->bed_y = applier->y;
     metrics_add(&CONTR(applier)->metrics, METRIC_CHARACTER_SAVEBEDS_BOUND, 1);

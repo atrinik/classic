@@ -124,7 +124,7 @@ static bool directory_parse_server(xmlNodePtr node, metaserver_directory_entry_t
              metaserver_hostname_valid(hostname) &&
              directory_decimal(port, 1, UINT16_MAX, &port_number);
         if (ok) {
-            snprintf(VS(entry->hostname), "%s", hostname);
+            snprintf((entry->hostname), sizeof((entry->hostname)), "%s", hostname);
             entry->port = (uint16_t)port_number;
             entry->has_endpoint = true;
         }

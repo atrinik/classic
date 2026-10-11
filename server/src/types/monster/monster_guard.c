@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -74,12 +74,12 @@ void monster_guard_activate_gate(object *op, int state) {
         char buf[HUGE_BUF];
 
         if (state == 1) {
-            snprintf(VS(buf),
+            snprintf((buf), sizeof((buf)),
                      "%s shouts:\nThe gate, get the gate! Let no one "
                      "leave or enter until this matter is resolved!",
                      op->name);
         } else {
-            snprintf(VS(buf), "%s shouts:\nAll clear, open the gate!", op->name);
+            snprintf((buf), sizeof((buf)), "%s shouts:\nAll clear, open the gate!", op->name);
         }
 
         draw_info_map(CHAT_TYPE_GAME,

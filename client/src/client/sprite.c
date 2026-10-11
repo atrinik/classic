@@ -1112,7 +1112,7 @@ void surface_show_effects(SDL_Surface *surface,
 
         /* Construct a cache entry string. */
         char name[HUGE_BUF];
-        snprintf(VS(name),
+        snprintf((name), sizeof((name)),
                  "%p;%u;%u;%s;%u;%u;%d;%d;%d;%s;%s;%u;%u",
                  src,
                  effects->flags,

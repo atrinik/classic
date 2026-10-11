@@ -157,7 +157,7 @@ socket_t *socket_create(const char *host, uint16_t port, socket_role_t role, boo
 
 #ifdef HAVE_GETADDRINFO
     char port_str[6];
-    snprintf(VS(port_str), "%" PRIu16, port);
+    snprintf((port_str), sizeof((port_str)), "%" PRIu16, port);
 
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
@@ -282,7 +282,7 @@ error:
 char *socket_get_addr(socket_t *sc) {
     static char buf[MAX_BUF];
     if (socket_addr2host(&sc->addr, VS(buf)) == NULL) {
-        snprintf(VS(buf), "<no address>");
+        snprintf((buf), sizeof((buf)), "<no address>");
     }
     return buf;
 }

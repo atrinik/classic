@@ -940,7 +940,7 @@ static void player_death_deplete_stats(object *op, const char *correlation) {
         }
 
         char subject[GAMEPLAY_JOURNAL_ID_MAX + 1];
-        snprintf(VS(subject), "stat:%d", stat);
+        snprintf((subject), sizeof((subject)), "stat:%d", stat);
         char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
         if (!gameplay_journal_milestone_begin(op,
                                               GAMEPLAY_JOURNAL_PROGRESSION,
@@ -1036,7 +1036,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
         if (deaths >= INT64_MAX) {
             return;
         }
-        snprintf(VS(correlation), "survival-death:%" PRIu64, deaths + 1);
+        snprintf((correlation), sizeof((correlation)), "survival-death:%" PRIu64, deaths + 1);
         char death_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
         if (!survival_metric_milestone_begin(op,
                                              "survival.defeat-pvp",
@@ -1121,7 +1121,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
         if (lifesaves >= INT64_MAX) {
             return;
         }
-        snprintf(VS(correlation), "survival-lifesave:%" PRIu64, lifesaves + 1);
+        snprintf((correlation), sizeof((correlation)), "survival-lifesave:%" PRIu64, lifesaves + 1);
         char lifesave_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
         if (!survival_metric_milestone_begin(op,
                                              "survival.lifesave",
@@ -1149,7 +1149,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
     if (deaths >= INT64_MAX) {
         return;
     }
-    snprintf(VS(correlation), "survival-death:%" PRIu64, deaths + 1);
+    snprintf((correlation), sizeof((correlation)), "survival-death:%" PRIu64, deaths + 1);
     char death_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
     const char *death_reason = pvp             ? "survival.death-pvp"
                                : environmental ? "survival.death-environment"
@@ -1173,7 +1173,7 @@ void kill_player(object *op, bool pvp, bool environmental) {
 
     /* Put a gravestone up where the character 'almost' died. */
     tmp = arch_to_object(arch_find("gravestone"));
-    snprintf(VS(buf), "%s's gravestone", op->name);
+    snprintf((buf), sizeof((buf)), "%s's gravestone", op->name);
     FREE_AND_COPY_HASH(tmp->name, buf);
     StringBuffer *sb = stringbuffer_new();
     const char *killer = player_get_killer(CONTR(op));
@@ -3727,7 +3727,7 @@ static void player_create(player *pl, archetype_t *at, const char *name) {
     trigger_global_event(GEVENT_BORN, pl->ob, NULL);
     CLEAR_FLAG(pl->ob, FLAG_NO_FIX_PLAYER);
 
-    snprintf(VS(pl->maplevel), "%s", first_map_path);
+    snprintf((pl->maplevel), sizeof((pl->maplevel)), "%s", first_map_path);
     pl->ob->x = first_map_x;
     pl->ob->y = first_map_y;
 }
@@ -3796,7 +3796,7 @@ bool player_provision_scenario(const char *name,
         return false;
     }
 
-    snprintf(VS(pl->savebed_map), "%s", map_path);
+    snprintf((pl->savebed_map), sizeof((pl->savebed_map)), "%s", map_path);
     pl->bed_x = x;
     pl->bed_y = y;
     if (item != NULL) {
@@ -3890,7 +3890,7 @@ object *player_get_dummy(const char *name, const char *host) {
         FREE_AND_COPY_HASH(pl->ob->name, name);
     }
 
-    snprintf(VS(pl->savebed_map), "%s", EMERGENCY_MAPPATH);
+    snprintf((pl->savebed_map), sizeof((pl->savebed_map)), "%s", EMERGENCY_MAPPATH);
     pl->bed_x = EMERGENCY_X;
     pl->bed_y = EMERGENCY_Y;
 
@@ -4160,7 +4160,7 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
                 "Player %s has no usable map or savebed; rewriting fallback to %s.",
                 name,
                 EMERGENCY_MAPPATH);
-            snprintf(VS(pl->savebed_map), "%s", EMERGENCY_MAPPATH);
+            snprintf((pl->savebed_map), sizeof((pl->savebed_map)), "%s", EMERGENCY_MAPPATH);
             pl->bed_x = EMERGENCY_X;
             pl->bed_y = EMERGENCY_Y;
             object_enter_map(pl->ob, NULL, NULL, EMERGENCY_X, EMERGENCY_Y, true);
@@ -4168,7 +4168,7 @@ void player_login(socket_struct *ns, const char *name, struct archetype *at) {
             char bed_token[MAX_BUF];
             if (MAP_UNIQUE(bed) &&
                 player_unique_token_from_path(pl, bed->path, bed_token)) {
-                snprintf(VS(pl->savebed_map), "%s", bed_token);
+                snprintf((pl->savebed_map), sizeof((pl->savebed_map)), "%s", bed_token);
             }
             object_enter_map(pl->ob, NULL, bed, pl->bed_x, pl->bed_y, true);
         }

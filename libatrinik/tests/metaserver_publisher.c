@@ -54,7 +54,7 @@ static char *fixture_read(const char *path) {
 
 static bool fixture_string(const char *json, const char *key, char *value, size_t size) {
     char marker[96];
-    if (snprintf(VS(marker), "\n  \"%s\": \"", key) >= (int)sizeof(marker)) {
+    if (snprintf((marker), sizeof((marker)), "\n  \"%s\": \"", key) >= (int)sizeof(marker)) {
         return false;
     }
     const char *cursor = strstr(json, marker);
@@ -89,7 +89,7 @@ static bool fixture_string(const char *json, const char *key, char *value, size_
 
 static bool fixture_uint64(const char *json, const char *key, uint64_t *value) {
     char marker[96];
-    if (snprintf(VS(marker), "\n  \"%s\": ", key) >= (int)sizeof(marker)) {
+    if (snprintf((marker), sizeof((marker)), "\n  \"%s\": ", key) >= (int)sizeof(marker)) {
         return false;
     }
     const char *cursor = strstr(json, marker);
@@ -143,8 +143,8 @@ static bool fixture_nested_string(const char *json,
                                   char *value,
                                   size_t size) {
     char object_marker[96], field_marker[96];
-    if (snprintf(VS(object_marker), "\n  \"%s\": {", object) >= (int)sizeof(object_marker) ||
-        snprintf(VS(field_marker), "\n    \"%s\": \"", key) >= (int)sizeof(field_marker)) {
+    if (snprintf((object_marker), sizeof((object_marker)), "\n  \"%s\": {", object) >= (int)sizeof(object_marker) ||
+        snprintf((field_marker), sizeof((field_marker)), "\n    \"%s\": \"", key) >= (int)sizeof(field_marker)) {
         return false;
     }
     const char *object_start = strstr(json, object_marker);
@@ -270,13 +270,13 @@ static void sequence_persistence_test(const char *server_id) {
     char temporary_root[HUGE_BUF];
     DWORD length = GetTempPathA(sizeof(temporary_root), temporary_root);
     require(length > 0 && length < sizeof(temporary_root));
-    require(snprintf(VS(directory),
+    require(snprintf((directory), sizeof((directory)),
                      "%satrinik-publisher-%lu",
                      temporary_root,
                      (unsigned long)GetCurrentProcessId()) < (int)sizeof(directory));
     require(CreateDirectoryA(directory, NULL));
 #else
-    snprintf(VS(directory), "/tmp/atrinik-publisher-XXXXXX");
+    snprintf((directory), sizeof((directory)), "/tmp/atrinik-publisher-XXXXXX");
     require(mkdtemp(directory) != NULL);
 #endif
 
@@ -291,7 +291,7 @@ static void sequence_persistence_test(const char *server_id) {
         for (unsigned int i = 0; i < 2; i++) {
             char slot[HUGE_BUF], value[22];
             bool permissive = false;
-            require(snprintf(VS(slot),
+            require(snprintf((slot), sizeof((slot)),
                              "%s/metaserver-publish-sequence-%s.%u",
                              directory,
                              server_id,
@@ -323,18 +323,18 @@ static void sequence_persistence_test(const char *server_id) {
     require(sequence == 101);
 
     char alternate_id[65];
-    snprintf(VS(alternate_id), "%s", server_id);
+    snprintf((alternate_id), sizeof((alternate_id)), "%s", server_id);
     alternate_id[0] = alternate_id[0] == '0' ? '1' : '0';
     require(metaserver_publish_sequence_reserve(directory, alternate_id, 1, &sequence) ==
             METASERVER_PUBLISH_SEQUENCE_OK);
     require(sequence == 1);
 
     char slot0[HUGE_BUF], slot1[HUGE_BUF], alternate_slot0[HUGE_BUF];
-    require(snprintf(VS(slot0), "%s/metaserver-publish-sequence-%s.0", directory, server_id) <
+    require(snprintf((slot0), sizeof((slot0)), "%s/metaserver-publish-sequence-%s.0", directory, server_id) <
             (int)sizeof(slot0));
-    require(snprintf(VS(slot1), "%s/metaserver-publish-sequence-%s.1", directory, server_id) <
+    require(snprintf((slot1), sizeof((slot1)), "%s/metaserver-publish-sequence-%s.1", directory, server_id) <
             (int)sizeof(slot1));
-    require(snprintf(VS(alternate_slot0),
+    require(snprintf((alternate_slot0), sizeof((alternate_slot0)),
                      "%s/metaserver-publish-sequence-%s.0",
                      directory,
                      alternate_id) < (int)sizeof(alternate_slot0));
@@ -554,7 +554,7 @@ int main(int argc, char **argv) {
                                          signature));
 
     char mutated[METASERVER_PUBLISH_SIGNATURE_BASE_MAX];
-    snprintf(VS(mutated), "%s", classic.signature_base);
+    snprintf((mutated), sizeof((mutated)), "%s", classic.signature_base);
     mutated[0] ^= 1;
     require(!metaserver_publisher_verify(certificate,
                                          certificate_size,

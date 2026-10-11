@@ -76,7 +76,7 @@ static object *route_fixture(mapstruct *maps[WALKING_ROUTE_MAPS]) {
         ck_assert_ptr_nonnull(maps[i]);
         /* Normal spawned-monster base info retains its home map identity. */
         char path[MAX_BUF];
-        snprintf(VS(path), "/tests/walking-route/world_%d_%d", i % 4, i / 4 + 66);
+        snprintf((path), sizeof((path)), "/tests/walking-route/world_%d_%d", i % 4, i / 4 + 66);
         maps[i]->path = add_string(path);
         for (int y = 0; y < 24; y++) {
             for (int x = 0; x < 24; x++) {

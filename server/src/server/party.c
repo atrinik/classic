@@ -399,7 +399,7 @@ static void party_loot_random(object *pl, object *corpse) {
                             }
                             if (transaction[0] != '\0') {
                                 char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                                snprintf(VS(lineage), "currency:%s", transaction);
+                                snprintf((lineage), sizeof((lineage)), "currency:%s", transaction);
                                 FREE_AND_COPY_HASH(tmp->custody_lineage, lineage);
                             }
                             object_remove(tmp, 0);

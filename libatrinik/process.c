@@ -241,9 +241,9 @@ const char *process_get_str(process_t *process) {
 
     static char buf[HUGE_BUF];
 #ifndef WIN32
-    snprintf(VS(buf), "PID %d", process->pid);
+    snprintf((buf), sizeof((buf)), "PID %d", process->pid);
 #else
-    snprintf(VS(buf),
+    snprintf((buf), sizeof((buf)),
              "PID %" PRIu64 " (handle: %p)",
              (uint64_t)process->pi.dwProcessId,
              process->pi.hProcess);
@@ -416,7 +416,7 @@ bool process_start(process_t *process) {
         sa.lpSecurityDescriptor = NULL;
 
         char pipe_name[MAX_BUF];
-        snprintf(VS(pipe_name), "\\\\.\\pipe\\%u\\%d", process->uid, i);
+        snprintf((pipe_name), sizeof((pipe_name)), "\\\\.\\pipe\\%u\\%d", process->uid, i);
 
         process_pipe_t *pipe_rx_tmp =
             CreateNamedPipe(pipe_name,

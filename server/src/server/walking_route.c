@@ -280,7 +280,7 @@ int walking_route_export(void) {
     }
     for (int m = 0; m < WALKING_ROUTE_MAPS; m++) {
         char path[MAX_BUF];
-        snprintf(VS(path), "/shattered_islands/world_%d_%d", m % 4, m / 4 + 66);
+        snprintf((path), sizeof((path)), "/shattered_islands/world_%d_%d", m % 4, m / 4 + 66);
         maps[m] = ready_map_name(path, NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
         if (maps[m] == NULL) {
             LOG(ERROR, "Walking route could not load %s.", path);

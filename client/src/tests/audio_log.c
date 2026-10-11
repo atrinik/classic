@@ -26,7 +26,7 @@
 static char captured[HUGE_BUF];
 
 static void capture_print(const char *text) {
-    snprintf(VS(captured), "%s", text);
+    snprintf((captured), sizeof((captured)), "%s", text);
 }
 
 static char *read_file(const char *path) {
@@ -60,7 +60,7 @@ int main(void) {
     audio_log_asset_escape("ignored", escaped, 0);
 
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s/audio-observability.log", ATRINIK_TEST_BINARY_DIR);
+    snprintf((path), sizeof((path)), "%s/audio-observability.log", ATRINIK_TEST_BINARY_DIR);
     logger_open_log(path);
 
     audio_log_effect_started("server-positional",

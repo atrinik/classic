@@ -307,7 +307,7 @@ static int server_file_process(server_files_struct *tmp) {
 
     if (tmp->update == 1) {
         char asset[MAX_BUF];
-        snprintf(VS(asset), "data/%s.zz", tmp->name);
+        snprintf((asset), sizeof((asset)), "data/%s.zz", tmp->name);
         tmp->source = asset_source_start(asset, NULL);
         tmp->update = -1;
         return 1;

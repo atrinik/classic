@@ -345,7 +345,7 @@ static int game_status_chain(void) {
                                 connection_preference_get(selected_server))) {
             char failure_message[160];
             if (!client_connection_failure_format(&csocket.failure, VS(failure_message))) {
-                snprintf(VS(failure_message), "Connection failed; please try again.");
+                snprintf((failure_message), sizeof((failure_message)), "Connection failed; please try again.");
             }
             draw_info(COLOR_RED, failure_message);
             client_access_attempt_clear(&selected_server->access_attempt);
@@ -1302,7 +1302,7 @@ int main(int argc, char *argv[]) {
     resources_init();
 
     char buf[HUGE_BUF];
-    snprintf(VS(buf), "Welcome to Atrinik version %s", version);
+    snprintf((buf), sizeof((buf)), "Welcome to Atrinik version %s", version);
     draw_info(COLOR_HGOLD, buf);
 
     settings_apply();

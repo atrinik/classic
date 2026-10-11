@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -364,12 +364,12 @@ void hiscore_check(object *op, int quiet) {
         return;
     }
 
-    snprintf(VS(new_score.name), "%s", op->name);
-    snprintf(VS(new_score.title), "%s", op->race);
+    snprintf((new_score.name), sizeof((new_score.name)), "%s", op->name);
+    snprintf((new_score.title), sizeof((new_score.title)), "%s", op->race);
 
     const char *killer = player_get_killer(CONTR(op));
     if (killer != NULL) {
-        snprintf(VS(new_score.killer), "%s", killer);
+        snprintf((new_score.killer), sizeof((new_score.killer)), "%s", killer);
     } else {
         *new_score.killer = '\0';
     }
@@ -379,7 +379,7 @@ void hiscore_check(object *op, int quiet) {
     if (op->map == NULL) {
         *new_score.maplevel = '\0';
     } else {
-        snprintf(VS(new_score.maplevel),
+        snprintf((new_score.maplevel), sizeof((new_score.maplevel)),
                  "%s",
                  op->map->name != NULL ? op->map->name : op->map->path);
 

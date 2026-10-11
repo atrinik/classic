@@ -50,7 +50,7 @@ static size_t count_substring(const char *contents, const char *needle) {
 
 static void remove_fixture(const char *directory) {
     char journal_directory[MAX_BUF];
-    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    snprintf((journal_directory), sizeof((journal_directory)), "%s/gameplay-journal", directory);
     DIR *dir = opendir(journal_directory);
     ck_assert_ptr_ne(dir, NULL);
     struct dirent *entry;
@@ -58,7 +58,7 @@ static void remove_fixture(const char *directory) {
         if (strncmp(entry->d_name, "journal-", 8) == 0 ||
             strcmp(entry->d_name, "journal.lock") == 0) {
             char path[HUGE_BUF];
-            snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+            snprintf((path), sizeof((path)), "%s/%s", journal_directory, entry->d_name);
             ck_assert_int_eq(unlink(path), 0);
         }
     }
@@ -69,14 +69,14 @@ static void remove_fixture(const char *directory) {
 
 static char *read_fixture(const char *directory) {
     char journal_directory[MAX_BUF];
-    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    snprintf((journal_directory), sizeof((journal_directory)), "%s/gameplay-journal", directory);
     DIR *dir = opendir(journal_directory);
     ck_assert_ptr_ne(dir, NULL);
     char path[HUGE_BUF] = "";
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "journal-", 8) == 0) {
-            snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+            snprintf((path), sizeof((path)), "%s/%s", journal_directory, entry->d_name);
             break;
         }
     }
@@ -208,7 +208,7 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
     ck_assert(!gameplay_journal_available());
 
     char journal_directory[MAX_BUF];
-    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    snprintf((journal_directory), sizeof((journal_directory)), "%s/gameplay-journal", directory);
     struct stat metadata;
     ck_assert_int_eq(stat(journal_directory, &metadata), 0);
     ck_assert_uint_eq(metadata.st_mode & 0777, 0700);
@@ -222,7 +222,7 @@ START_TEST(test_intent_commit_abort_and_private_storage) {
         }
         files++;
         char path[HUGE_BUF];
-        snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+        snprintf((path), sizeof((path)), "%s/%s", journal_directory, entry->d_name);
         ck_assert_int_eq(stat(path, &metadata), 0);
         ck_assert_uint_eq(metadata.st_mode & 0777, 0600);
         FILE *fp = fopen(path, "rb");
@@ -510,10 +510,10 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
                                  "transaction_id",
                                  VS(source_transaction)));
     char funding[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE + 32];
-    snprintf(VS(funding), "\"funding\":\"%s\"", source_transaction);
+    snprintf((funding), sizeof((funding)), "\"funding\":\"%s\"", source_transaction);
     ck_assert_uint_eq(count_substring(split_contents, funding), 2);
     char source_terminal[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE + 64];
-    snprintf(VS(source_terminal), "\"transaction_id\":\"%s\",\"sequence\"", source_transaction);
+    snprintf((source_terminal), sizeof((source_terminal)), "\"transaction_id\":\"%s\",\"sequence\"", source_transaction);
     ck_assert_uint_ge(count_substring(split_contents, source_terminal), 2);
     char grant_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
     ck_assert(crash_intent_field(split_contents,
@@ -522,8 +522,8 @@ START_TEST(test_party_random_currency_retirement_preserves_message_lifetime) {
                                  VS(grant_transaction)));
     char source_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE + 32];
     char grant_id[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE + 32];
-    snprintf(VS(source_id), "\"transaction_id\":\"%s\"", source_transaction);
-    snprintf(VS(grant_id), "\"transaction_id\":\"%s\"", grant_transaction);
+    snprintf((source_id), sizeof((source_id)), "\"transaction_id\":\"%s\"", source_transaction);
+    snprintf((grant_id), sizeof((grant_id)), "\"transaction_id\":\"%s\"", grant_transaction);
     const char *source_commit_pos = strstr(split_contents, source_id);
     while (source_commit_pos != NULL) {
         const char *line_end = strchr(source_commit_pos, '\n');
@@ -742,7 +742,7 @@ START_TEST(test_progression_adjustments_and_level_boundaries_are_journaled) {
     gameplay_journal_deinit();
     char *contents = read_fixture(directory);
     char subject_pattern[GAMEPLAY_JOURNAL_ID_MAX + 32];
-    snprintf(VS(subject_pattern), "\"subject_id\":\"skill:%s\"", skill_id_from_index(SK_UNARMED));
+    snprintf((subject_pattern), sizeof((subject_pattern)), "\"subject_id\":\"skill:%s\"", skill_id_from_index(SK_UNARMED));
     ck_assert_ptr_ne(strstr(contents, subject_pattern), NULL);
     ck_assert_ptr_ne(strstr(contents, "\"lineage_id\":\"actor:trusted-content\""), NULL);
     free(contents);
@@ -783,7 +783,7 @@ START_TEST(test_spell_learning_commits_stable_progression_milestone) {
     gameplay_journal_deinit();
     char *contents = read_fixture(directory);
     char subject_pattern[GAMEPLAY_JOURNAL_ID_MAX + 32];
-    snprintf(VS(subject_pattern),
+    snprintf((subject_pattern), sizeof((subject_pattern)),
              "\"subject_id\":\"spell:%s\"",
              spell_id_from_index(SP_MAGIC_MISSILE));
     ck_assert_ptr_ne(strstr(contents, subject_pattern), NULL);
@@ -859,7 +859,7 @@ START_TEST(test_survival_outcomes_preserve_exclusive_attribution) {
 
     check_setup_env_pl(&map, &pl);
     map->map_flags &= ~MAP_FLAG_PVP;
-    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    snprintf((CONTR(pl)->savebed_map), sizeof((CONTR(pl)->savebed_map)), "%s", "/emergency");
     kill_player(pl, true, false);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.death-pvp"), 1);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.respawn"), 1);
@@ -867,7 +867,7 @@ START_TEST(test_survival_outcomes_preserve_exclusive_attribution) {
 
     check_setup_env_pl(&map, &pl);
     map->map_flags &= ~MAP_FLAG_PVP;
-    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    snprintf((CONTR(pl)->savebed_map), sizeof((CONTR(pl)->savebed_map)), "%s", "/emergency");
     kill_player(pl, false, false);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.death-pve"), 1);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.respawn"), 2);
@@ -875,7 +875,7 @@ START_TEST(test_survival_outcomes_preserve_exclusive_attribution) {
 
     check_setup_env_pl(&map, &pl);
     map->map_flags &= ~MAP_FLAG_PVP;
-    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    snprintf((CONTR(pl)->savebed_map), sizeof((CONTR(pl)->savebed_map)), "%s", "/emergency");
     kill_player(pl, false, true);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.death-environment"), 1);
     ck_assert_uint_eq(gameplay_journal_committed_count_for_test("survival.respawn"), 3);
@@ -883,7 +883,7 @@ START_TEST(test_survival_outcomes_preserve_exclusive_attribution) {
 
     check_setup_env_pl(&map, &pl);
     map->map_flags &= ~MAP_FLAG_PVP;
-    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    snprintf((CONTR(pl)->savebed_map), sizeof((CONTR(pl)->savebed_map)), "%s", "/emergency");
     object *lifesave = object_insert_into(arch_get("sword"), pl, INS_NO_MERGE);
     SET_FLAG(lifesave, FLAG_APPLIED);
     SET_FLAG(lifesave, FLAG_LIFESAVE);
@@ -1013,8 +1013,8 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     char directory[] = "/tmp/atrinik-journal-production-checkpoint-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
     char old_datapath[MAX_BUF];
-    snprintf(VS(old_datapath), "%s", settings.datapath);
-    snprintf(VS(settings.datapath), "%s", directory);
+    snprintf((old_datapath), sizeof((old_datapath)), "%s", settings.datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%s", directory);
 
     const gameplay_journal_profile_t profile = {
         .id = "legacy-unknown",
@@ -1066,7 +1066,7 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     ck_assert_ptr_ne(ambiguous_coin->custody_lineage, NULL);
     ck_assert_int_eq(strncmp(ambiguous_coin->custody_lineage, "currency:", 9), 0);
     char ambiguous_transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
-    snprintf(VS(ambiguous_transaction), "%s", ambiguous_coin->custody_lineage + 9);
+    snprintf((ambiguous_transaction), sizeof((ambiguous_transaction)), "%s", ambiguous_coin->custody_lineage + 9);
     ck_assert(gameplay_journal_player_checkpoint_allowed(pl));
     ck_assert(gameplay_journal_map_checkpoint_allowed(map));
     gameplay_journal_fail_after_writes_for_test(SIZE_MAX);
@@ -1112,7 +1112,7 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     ck_assert_ptr_ne(loaded_coin, NULL);
     ck_assert_ptr_ne(loaded_coin->custody_lineage, NULL);
     char expected_lineage[9 + GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE];
-    snprintf(VS(expected_lineage), "currency:%s", ambiguous_transaction);
+    snprintf((expected_lineage), sizeof((expected_lineage)), "currency:%s", ambiguous_transaction);
     ck_assert_str_eq(loaded_coin->custody_lineage, expected_lineage);
     int64_t loaded_value;
     ck_assert(shop_money_object_value(loaded_coin, &loaded_value));
@@ -1120,9 +1120,9 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     ck_assert_int_eq(shop_get_money(loaded_player), 3);
     object_destroy(loaded_player);
     char runtime_path[HUGE_BUF];
-    snprintf(VS(runtime_path), "%s/runtime.map", directory);
+    snprintf((runtime_path), sizeof((runtime_path)), "%s/runtime.map", directory);
     char unique_directory[HUGE_BUF];
-    snprintf(VS(unique_directory), "%s/unique-items", directory);
+    snprintf((unique_directory), sizeof((unique_directory)), "%s/unique-items", directory);
     if (mkdir(unique_directory, 0700) != 0) {
         ck_assert_int_eq(errno, EEXIST);
     }
@@ -1143,7 +1143,7 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     ck_assert_uint_eq(loaded_map.journal_sequence, runtime_sequence);
 
     char unique_path[HUGE_BUF];
-    snprintf(VS(unique_path), "%s/unique-items/", directory);
+    snprintf((unique_path), sizeof((unique_path)), "%s/unique-items/", directory);
     size_t offset = strlen(unique_path);
     const char *map_path = map->path + 1;
     for (; *map_path != '\0' && offset + 5 < sizeof(unique_path); map_path++) {
@@ -1186,12 +1186,12 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
     gameplay_journal_deinit();
 #ifndef WIN32
     char source_root[HUGE_BUF];
-    snprintf(VS(source_root), "%s", ATRINIK_TEST_DATA_DIR);
+    snprintf((source_root), sizeof((source_root)), "%s", ATRINIK_TEST_DATA_DIR);
     char *source_suffix = strstr(source_root, "/src/tests/data");
     ck_assert_ptr_ne(source_suffix, NULL);
     *source_suffix = '\0';
     char reconcile_path[HUGE_BUF];
-    snprintf(VS(reconcile_path), "%s/reconcile.json", directory);
+    snprintf((reconcile_path), sizeof((reconcile_path)), "%s/reconcile.json", directory);
     StringBuffer *command_buffer = stringbuffer_new();
     stringbuffer_append_printf(command_buffer,
                                "python3 '%s/tools/gameplay_journal.py' "
@@ -1229,7 +1229,7 @@ START_TEST(test_production_player_and_map_checkpoints_persist_component_watermar
 #endif
     free(map->tmpname);
     map->tmpname = old_tmpname;
-    snprintf(VS(settings.datapath), "%s", old_datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%s", old_datapath);
     object_remove(runtime_probe, 0);
     object_destroy(runtime_probe);
     object_remove(unique_probe, 0);
@@ -1262,7 +1262,7 @@ START_TEST(test_checkpoint_watermarks_persist_player_and_map) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
-    snprintf(VS(CONTR(pl)->journal_run_id), "%s", run_id);
+    snprintf((CONTR(pl)->journal_run_id), sizeof((CONTR(pl)->journal_run_id)), "%s", run_id);
     CONTR(pl)->journal_sequence = 42;
 
     FILE *fp = tmpfile();
@@ -1280,7 +1280,7 @@ START_TEST(test_checkpoint_watermarks_persist_player_and_map) {
     object_destroy(loaded_player);
 
     mapstruct saved = {0};
-    snprintf(VS(saved.journal_run_id), "%s", run_id);
+    snprintf((saved.journal_run_id), sizeof((saved.journal_run_id)), "%s", run_id);
     saved.journal_sequence = 84;
     fp = tmpfile();
     ck_assert_ptr_ne(fp, NULL);
@@ -1338,7 +1338,7 @@ START_TEST(test_checkpoint_sequence_remains_ordered_across_runs) {
     ck_assert_int_eq(shop_insert_coins_reason(pl, 3, "test.run-a"), OBJECT_SEMANTIC_COMMITTED);
     uint64_t first = CONTR(pl)->journal_sequence;
     char first_run[33];
-    snprintf(VS(first_run), "%s", CONTR(pl)->journal_run_id);
+    snprintf((first_run), sizeof((first_run)), "%s", CONTR(pl)->journal_run_id);
     gameplay_journal_deinit();
 
     ck_assert(gameplay_journal_init(directory, "server", &profile));
@@ -1930,7 +1930,7 @@ START_TEST(test_long_lived_intent_fails_before_hard_file_limit) {
     gameplay_journal_deinit();
 
     char journal_directory[MAX_BUF];
-    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    snprintf((journal_directory), sizeof((journal_directory)), "%s/gameplay-journal", directory);
     DIR *dir = opendir(journal_directory);
     ck_assert_ptr_ne(dir, NULL);
     struct dirent *entry;
@@ -1939,7 +1939,7 @@ START_TEST(test_long_lived_intent_fails_before_hard_file_limit) {
             continue;
         }
         char path[HUGE_BUF];
-        snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+        snprintf((path), sizeof((path)), "%s/%s", journal_directory, entry->d_name);
         struct stat metadata;
         ck_assert_int_eq(stat(path, &metadata), 0);
         ck_assert_int_le(metadata.st_size, 4096);
@@ -1973,7 +1973,7 @@ START_TEST(test_init_fails_closed_for_unsafe_directory_or_profile) {
     char directory[] = "/tmp/atrinik-gameplay-journal-unsafe-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
     char path[MAX_BUF];
-    snprintf(VS(path), "%s/gameplay-journal", directory);
+    snprintf((path), sizeof((path)), "%s/gameplay-journal", directory);
     FILE *fp = fopen(path, "wb");
     ck_assert_ptr_ne(fp, NULL);
     ck_assert_int_eq(fclose(fp), 0);
@@ -1994,7 +1994,7 @@ START_TEST(test_init_rejects_insecure_directory_permissions) {
     char directory[] = "/tmp/atrinik-gameplay-journal-mode-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
     char path[MAX_BUF];
-    snprintf(VS(path), "%s/gameplay-journal", directory);
+    snprintf((path), sizeof((path)), "%s/gameplay-journal", directory);
     ck_assert_int_eq(mkdir(path, 0755), 0);
     const gameplay_journal_profile_t profile = {
         .id = "legacy-unknown",
@@ -2015,16 +2015,16 @@ START_TEST(test_retention_stays_bounded_when_opening_a_file) {
     char directory[] = "/tmp/atrinik-gameplay-journal-retention-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
     char journal_directory[MAX_BUF];
-    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    snprintf((journal_directory), sizeof((journal_directory)), "%s/gameplay-journal", directory);
     ck_assert_int_eq(mkdir(journal_directory, 0700), 0);
     char sentinel[HUGE_BUF];
-    snprintf(VS(sentinel), "%s/journal-investigation.jsonl", journal_directory);
+    snprintf((sentinel), sizeof((sentinel)), "%s/journal-investigation.jsonl", journal_directory);
     int sentinel_fd = open(sentinel, O_WRONLY | O_CREAT | O_EXCL, 0600);
     ck_assert_int_ge(sentinel_fd, 0);
     ck_assert_int_eq(close(sentinel_fd), 0);
     for (size_t i = 0; i < 16; i++) {
         char path[HUGE_BUF];
-        snprintf(VS(path),
+        snprintf((path), sizeof((path)),
                  "%s/journal-00000000000000000000000000000000-%04zu.jsonl",
                  journal_directory,
                  i);
@@ -2097,7 +2097,7 @@ START_TEST(test_real_rotation_and_retention_keep_complete_transactions) {
     gameplay_journal_deinit();
 
     char journal_directory[MAX_BUF];
-    snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+    snprintf((journal_directory), sizeof((journal_directory)), "%s/gameplay-journal", directory);
     DIR *dir = opendir(journal_directory);
     ck_assert_ptr_ne(dir, NULL);
     size_t files = 0;
@@ -2106,7 +2106,7 @@ START_TEST(test_real_rotation_and_retention_keep_complete_transactions) {
         if (strncmp(entry->d_name, "journal-", 8) == 0) {
             files++;
             char path[HUGE_BUF];
-            snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+            snprintf((path), sizeof((path)), "%s/%s", journal_directory, entry->d_name);
             struct stat metadata;
             ck_assert_int_eq(stat(path, &metadata), 0);
             ck_assert_int_gt(metadata.st_size, 0);
@@ -2170,7 +2170,7 @@ START_TEST(test_abrupt_process_crash_preserves_synced_phases) {
         ck_assert_int_eq(WEXITSTATUS(status), EXIT_SUCCESS);
 
         char journal_directory[MAX_BUF];
-        snprintf(VS(journal_directory), "%s/gameplay-journal", directory);
+        snprintf((journal_directory), sizeof((journal_directory)), "%s/gameplay-journal", directory);
         DIR *dir = opendir(journal_directory);
         ck_assert_ptr_ne(dir, NULL);
         struct dirent *entry;
@@ -2180,7 +2180,7 @@ START_TEST(test_abrupt_process_crash_preserves_synced_phases) {
                 continue;
             }
             char path[HUGE_BUF];
-            snprintf(VS(path), "%s/%s", journal_directory, entry->d_name);
+            snprintf((path), sizeof((path)), "%s/%s", journal_directory, entry->d_name);
             FILE *fp = fopen(path, "rb");
             ck_assert_ptr_ne(fp, NULL);
             char contents[HUGE_BUF];
@@ -2200,7 +2200,7 @@ END_TEST
 
 static void write_crash_file(const char *directory, const char *name, const char *state) {
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s/%s", directory, name);
+    snprintf((path), sizeof((path)), "%s/%s", directory, name);
     FILE *fp = fopen(path, "wb");
     ck_assert_ptr_ne(fp, NULL);
     ck_assert_uint_eq(fwrite(state, 1, strlen(state), fp), strlen(state));
@@ -2231,7 +2231,7 @@ static bool crash_intent_field(const char *contents,
                                char *value,
                                size_t value_size) {
     char reason_token[GAMEPLAY_JOURNAL_ID_MAX + 32];
-    snprintf(VS(reason_token), "\"reason\":\"%s\"", reason);
+    snprintf((reason_token), sizeof((reason_token)), "\"reason\":\"%s\"", reason);
     const char *reason_pos = strstr(contents, reason_token);
     if (reason_pos == NULL) {
         return false;
@@ -2245,7 +2245,7 @@ static bool crash_intent_field(const char *contents,
         line_end = contents + strlen(contents);
     }
     char field_token[128];
-    snprintf(VS(field_token), "\"%s\":\"", field);
+    snprintf((field_token), sizeof((field_token)), "\"%s\":\"", field);
     const char *start = strstr(line, field_token);
     if (start == NULL || start >= line_end) {
         return false;
@@ -2468,7 +2468,7 @@ static void check_abrupt_semantic_operation_recovery(crash_operation_t operation
             ck_assert_ptr_ne(strstr(contents, "\"phase\":\"intent\""), NULL);
             ck_assert_int_eq(strstr(contents, "\"phase\":\"commit\"") != NULL, !fail_terminal);
             char reason[GAMEPLAY_JOURNAL_ID_MAX + 32];
-            snprintf(VS(reason),
+            snprintf((reason), sizeof((reason)),
                      "\"reason\":\"%s\"",
                      crash_operation_reason(operation));
             ck_assert_ptr_ne(strstr(contents, reason), NULL);
@@ -2483,7 +2483,7 @@ static void check_abrupt_semantic_operation_recovery(crash_operation_t operation
                                          "lineage_id",
                                          VS(intent_lineage)));
             char arithmetic[160];
-            snprintf(VS(arithmetic),
+            snprintf((arithmetic), sizeof((arithmetic)),
                      "\"before\":%" PRId64 ",\"delta\":%" PRId64 ",\"after\":%" PRId64,
                      expected_arithmetic[operation][0],
                      expected_arithmetic[operation][1],
@@ -2492,7 +2492,7 @@ static void check_abrupt_semantic_operation_recovery(crash_operation_t operation
             free(contents);
 
             char state_path[HUGE_BUF];
-            snprintf(VS(state_path), "%s/authoritative.state", directory);
+            snprintf((state_path), sizeof((state_path)), "%s/authoritative.state", directory);
             struct stat metadata;
             ck_assert_int_eq(stat(state_path, &metadata), 0);
             char *state_text = malloc((size_t)metadata.st_size + 1);
@@ -2519,7 +2519,7 @@ static void check_abrupt_semantic_operation_recovery(crash_operation_t operation
                 ck_assert_int_eq(shop_get_money(reloaded), checkpoint_after ? 103 : 100);
                 if (checkpoint_after && fail_terminal) {
                     char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                    snprintf(VS(expected), "currency:%s", intent_transaction);
+                    snprintf((expected), sizeof((expected)), "currency:%s", intent_transaction);
                     bool found = false;
                     FOR_INV_PREPARE(reloaded, coin) {
                         if (coin->type == MONEY && coin->custody_lineage != NULL &&
@@ -2541,7 +2541,7 @@ static void check_abrupt_semantic_operation_recovery(crash_operation_t operation
                 if (coins != NULL && fail_terminal) {
                     ck_assert_ptr_ne(coins->custody_lineage, NULL);
                     char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                    snprintf(VS(expected), "currency:%s", intent_transaction);
+                    snprintf((expected), sizeof((expected)), "currency:%s", intent_transaction);
                     ck_assert_str_eq(coins->custody_lineage, expected);
                 } else if (coins != NULL) {
                     ck_assert_ptr_eq(coins->custody_lineage, NULL);
@@ -2558,7 +2558,7 @@ static void check_abrupt_semantic_operation_recovery(crash_operation_t operation
                 if (coins != NULL && fail_terminal) {
                     ck_assert_ptr_ne(coins->custody_lineage, NULL);
                     char expected[GAMEPLAY_JOURNAL_ID_MAX + 1];
-                    snprintf(VS(expected), "currency:%s", intent_transaction);
+                    snprintf((expected), sizeof((expected)), "currency:%s", intent_transaction);
                     ck_assert_str_eq(coins->custody_lineage, expected);
                 } else if (coins != NULL) {
                     ck_assert_ptr_eq(coins->custody_lineage, NULL);
@@ -2570,7 +2570,7 @@ static void check_abrupt_semantic_operation_recovery(crash_operation_t operation
             free(state_text);
             ck_assert_int_eq(unlink(state_path), 0);
             if (operation == CRASH_ITEM_ACQUIRE || operation == CRASH_ITEM_DROP) {
-                snprintf(VS(state_path), "%s/ground.state", directory);
+                snprintf((state_path), sizeof((state_path)), "%s/ground.state", directory);
                 ck_assert_int_eq(stat(state_path, &metadata), 0);
                 bool ground_expected =
                     operation == CRASH_ITEM_ACQUIRE ? !checkpoint_after : checkpoint_after;

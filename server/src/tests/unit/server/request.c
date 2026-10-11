@@ -152,7 +152,7 @@ START_TEST(test_invalid_access_attempts_do_not_lock_out_valid_codes) {
     memcpy(previous_store, settings.access_store, sizeof(previous_store));
     bool previous_required = settings.access_required;
     bool previous_initialize = settings.access_initialize;
-    snprintf(VS(settings.access_store), "%s", directory);
+    snprintf((settings.access_store), sizeof((settings.access_store)), "%s", directory);
     settings.access_required = true;
     settings.access_initialize = false;
     access_server_route_for_test(request_access_route);
@@ -172,7 +172,7 @@ START_TEST(test_invalid_access_attempts_do_not_lock_out_valid_codes) {
     settings.access_required = previous_required;
     settings.access_initialize = previous_initialize;
     char snapshot[256];
-    snprintf(VS(snapshot), "%s/%s", directory, ACCESS_STORE_FILENAME);
+    snprintf((snapshot), sizeof((snapshot)), "%s/%s", directory, ACCESS_STORE_FILENAME);
     ck_assert_int_eq(unlink(snapshot), 0);
     ck_assert_int_eq(rmdir(directory), 0);
 }
@@ -366,7 +366,7 @@ START_TEST(test_access_completed_auth_reservations_cancel_and_shutdown) {
     memcpy(previous_store, settings.access_store, sizeof(previous_store));
     bool previous_required = settings.access_required;
     bool previous_initialize = settings.access_initialize;
-    snprintf(VS(settings.access_store), "%s", directory);
+    snprintf((settings.access_store), sizeof((settings.access_store)), "%s", directory);
     settings.access_required = true;
     settings.access_initialize = false;
     ck_assert(access_server_init(identity_hex));
@@ -384,7 +384,7 @@ START_TEST(test_access_completed_auth_reservations_cancel_and_shutdown) {
     settings.access_required = previous_required;
     settings.access_initialize = previous_initialize;
     char snapshot[256];
-    snprintf(VS(snapshot), "%s/%s", directory, ACCESS_STORE_FILENAME);
+    snprintf((snapshot), sizeof((snapshot)), "%s/%s", directory, ACCESS_STORE_FILENAME);
     ck_assert_int_eq(unlink(snapshot), 0);
     ck_assert_int_eq(rmdir(directory), 0);
 }
@@ -2709,7 +2709,7 @@ START_TEST(test_region_exploration_grants_only_visible_public_base_cells) {
     cs->account = xstrdup("exploregrant");
     char *account_path = account_make_path(cs->account);
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s.exploration", account_path);
+    snprintf((path), sizeof((path)), "%s.exploration", account_path);
     free(account_path);
     unlink(path);
     exploration_begin(cs);

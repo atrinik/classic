@@ -876,8 +876,8 @@ static void map_pending_effects_commit(void) {
     bool footstep = map_pending_effects.footstep;
     char bg_music[HUGE_BUF];
     char weather_name[MAX_BUF];
-    snprintf(VS(bg_music), "%s", map_pending_effects.bg_music);
-    snprintf(VS(weather_name), "%s", map_pending_effects.weather_name);
+    snprintf((bg_music), sizeof((bg_music)), "%s", map_pending_effects.bg_music);
+    snprintf((weather_name), sizeof((weather_name)), "%s", map_pending_effects.weather_name);
     map_pending_effects_abort();
 
     if (rich_presence) {
@@ -1037,9 +1037,9 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
 
         snprintf(MapData.name_new, sizeof(MapData.name_new), "%s", mapname);
         map_pending_effects.rich_presence = true;
-        snprintf(VS(map_pending_effects.bg_music), "%s", bg_music);
+        snprintf((map_pending_effects.bg_music), sizeof((map_pending_effects.bg_music)), "%s", bg_music);
         map_pending_effects.music = true;
-        snprintf(VS(map_pending_effects.weather_name), "%s", weather);
+        snprintf((map_pending_effects.weather_name), sizeof((map_pending_effects.weather_name)), "%s", weather);
         map_pending_effects.weather = true;
         update_map_height_diff(height_diff);
         update_map_region_name(region_name);

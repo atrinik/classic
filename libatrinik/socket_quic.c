@@ -281,7 +281,7 @@ socket_t *socket_quic_server_create(const char *host,
     }
 
     char port_str[6];
-    snprintf(VS(port_str), "%" PRIu16, port);
+    snprintf((port_str), sizeof((port_str)), "%" PRIu16, port);
     struct addrinfo hints, *addresses = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -420,7 +420,7 @@ static socket_t *socket_quic_client_socket(const char *host,
                                            struct sockaddr_storage *address,
                                            socklen_t *address_length) {
     char port_str[6];
-    snprintf(VS(port_str), "%" PRIu16, port);
+    snprintf((port_str), sizeof((port_str)), "%" PRIu16, port);
     struct addrinfo hints, *addresses = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -767,7 +767,7 @@ static bool socket_quic_candidate_address(const socket_direct_candidate_t *candi
     }
 
     char service[6];
-    snprintf(VS(service), "%" PRIu16, candidate->port);
+    snprintf((service), sizeof((service)), "%" PRIu16, candidate->port);
     struct addrinfo hints, *addresses = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -894,7 +894,7 @@ socket_t *socket_quic_client_create(const char *host,
         }
     }
     if (has_directory_address) {
-        snprintf(VS(candidates[count].host), "%s", host);
+        snprintf((candidates[count].host), sizeof((candidates[count].host)), "%s", host);
         candidates[count].port = port;
         candidates[count].kind = SOCKET_CANDIDATE_DIRECTORY;
         count++;

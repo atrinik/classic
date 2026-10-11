@@ -556,7 +556,7 @@ void widget_menu_standard_items(widgetdata *widget, widgetdata *menu) {
 
 static void widget_texture_create(widgetdata *widget) {
     char buf[HUGE_BUF];
-    snprintf(VS(buf), "rectangle:%d,%d;", widget->w, widget->h);
+    snprintf((buf), sizeof((buf)), "rectangle:%d,%d;", widget->w, widget->h);
 
     if (widget->texture_type == WIDGET_TEXTURE_TYPE_NORMAL) {
         snprintfcat(VS(buf), "[bar=%s]", widget->bg[0] != '\0' ? widget->bg : "widget_bg");
