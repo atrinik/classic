@@ -137,6 +137,8 @@ void free_all_newserver(void) {
 
     socket_destroy(init_sockets[0].sc);
     free(init_sockets);
+    init_sockets = NULL;
+    socket_info.allocated_sockets = 0;
 }
 
 /**
