@@ -22,6 +22,8 @@
 #include <monster_data.h>
 #include <object.h>
 #include <player.h>
+#include <plugin.h>
+#include <toolkit/mempool.h>
 #include <tod.h>
 #include <commands.h>
 #include <exit.h>
@@ -1178,6 +1180,96 @@ START_TEST(test_target_publication_tracks_each_living_sub_layer) {
     ck_assert(!target_player_authorized(pl, actors[1], NULL));
     object_remove(actors[1], 0);
     object_destroy(actors[1]);
+}
+END_TEST
+
+/* A layer iterator caches its successor before ASK_SHOW. Destroying a
+ * same-cell multipart actor invalidates both that successor and the current
+ * part, then releases their actual backing allocation before SELECT resumes. */
+START_TEST(test_target_reclamation_skips_borrowed_layer_iterator_epilogue) {
+    mapstruct *map;
+    object *observer;
+    check_setup_env_pl(&map, &observer);
+    request_move_player(&observer, map, 12, 12);
+    FREE_AND_COPY_HASH(map->path, "/python/target-iterator-fixture");
+    player *pl = CONTR(observer);
+    socket_struct *cs = pl->cs;
+    pl->tli = 1;
+    pl->tls = 0;
+    pl->cmd_permissions = xcalloc(1, sizeof(char *));
+    pl->cmd_permissions[0] = xstrdup("memfree");
+    pl->num_cmd_permissions = 1;
+    init_plugins();
+
+    mempool_struct *pool = mempool_find("objects");
+    ck_assert_ptr_nonnull(pool);
+    size_t num_held = pool->nrof_free[0];
+    object **held = xcalloc(MAX(num_held, 1), sizeof(*held));
+    for (size_t i = 0; i < num_held; i++) {
+        held[i] = object_get();
+    }
+    ck_assert_uint_eq(pool->nrof_free[0], 0);
+    object *head = arch_get("raas");
+    object *tail = arch_get("raas");
+    mempool_chunk_struct *storage = pool->puddlelist[0]->first_chunk;
+    uintptr_t first = (uintptr_t)storage;
+    uintptr_t end = first + pool->expand_size * (sizeof(mempool_chunk_struct) + pool->chunksize);
+    ck_assert((uintptr_t)MEM_POOLDATA(head) >= first && (uintptr_t)MEM_POOLDATA(head) < end);
+    ck_assert((uintptr_t)MEM_POOLDATA(tail) >= first && (uintptr_t)MEM_POOLDATA(tail) < end);
+    head->more = tail;
+    tail->head = head;
+    head->x = 13;
+    head->y = 12;
+    head = object_insert_map(head, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(head);
+    ck_assert_int_eq(tail->x, head->x);
+    ck_assert_int_eq(tail->y, head->y);
+    object *current = GET_MAP_OB_LAYER(map, 13, 12, LAYER_LIVING, head->sub_layer);
+    ck_assert(current == head || current == tail);
+    ck_assert(current->above == head || current->above == tail);
+    ck_assert_ptr_ne(current, current->above);
+    tag_t head_count = head->count;
+    for (size_t i = 0; i < num_held; i++) {
+        object_destroy(held[i]);
+    }
+    efree(held);
+    draw_client_map(observer);
+    ck_assert(target_player_authorized(pl, head, NULL));
+    object *event = object_get();
+    event->type = EVENT_OBJECT;
+    event->sub_type = EVENT_ASK_SHOW;
+    FREE_AND_COPY_HASH(event->name, "Python");
+    FREE_AND_COPY_HASH(event->race, "events/python_unit_actor_callbacks.py");
+    FREE_AND_COPY_HASH(event->slaying, "destroy_target_reclaim");
+    object_insert_into(event, head, INS_NO_MERGE);
+    packet_struct *select = packet_new(SERVER_CMD_TARGET, 8, 0);
+    packet_writer_write_uint8(select, CMD_TARGET_MAPXY);
+    packet_writer_write_uint8(select, cs->mapx_2 + 1);
+    packet_writer_write_uint8(select, cs->mapy_2);
+    packet_writer_write_int8(select, 0);
+    packet_writer_write_uint32(select, head_count);
+    socket_buffer_clear(cs);
+    uint64_t reclamation = object_reclamation_epoch();
+    socket_command_target(cs, pl, select->data, select->len, 0);
+    ck_assert(!object_reclamation_is_current(reclamation));
+    for (mempool_puddle_struct *puddle = pool->puddlelist[0]; puddle != NULL; puddle = puddle->next) {
+        ck_assert_ptr_ne(puddle->first_chunk, storage);
+    }
+    ck_assert_ptr_eq(pl->target_object, observer);
+    ck_assert_uint_eq(pl->target_object_count, 0);
+    ck_assert(cs->target_select_admitted);
+    ck_assert_int_eq(cs->target_select_tick, pticks);
+    packet_struct *reply = queued_command_find(cs, CLIENT_CMD_TARGET);
+    ck_assert_ptr_nonnull(reply);
+    packet_reader_t reader;
+    packet_reader_init(&reader, reply->data, reply->len);
+    ck_assert_uint_eq(packet_reader_read_uint8(&reader), CMD_TARGET_SELF);
+    socket_buffer_clear(cs);
+    uint64_t queries = los_action_camera_queries_for_test();
+    socket_command_target(cs, pl, select->data, select->len, 0);
+    ck_assert_uint_eq(los_action_camera_queries_for_test(), queries);
+    ck_assert_ptr_null(queued_command_find(cs, CLIENT_CMD_TARGET));
+    packet_free(select);
 }
 END_TEST
 
@@ -3451,6 +3543,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_talk_target_message_bounds_are_transactional);
     tcase_add_test(tc_core, test_target_admission_is_reset_on_connection_initialization);
     tcase_add_test(tc_core, test_target_replays_are_bounded_per_connection_tick);
+    tcase_add_test(tc_core, test_target_reclamation_skips_borrowed_layer_iterator_epilogue);
     tcase_add_test(tc_core, test_target_packet_includes_current_level_and_plain_name);
     tcase_add_test(tc_core, test_target_select_requires_exact_packet_before_mutation);
     tcase_add_test(tc_core, test_target_stale_forged_and_unavailable_depth_resolve_self);
