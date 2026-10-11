@@ -132,6 +132,36 @@ START_TEST(test_light_tie_and_sequential_rounding) {
 }
 END_TEST
 
+START_TEST(test_light_material_ties_and_sequential_events) {
+    mapstruct map;
+    MapSpace spaces[16];
+    fixture(&map, spaces);
+    object glass = {0}, grate = {0};
+    ck_assert(object_set_value(&glass, "celestial_transmission", "glass", true));
+    ck_assert(object_set_value(&grate, "celestial_transmission", "grate", true));
+    spaces[1].first = &glass;
+    spaces[4].first = &grate;
+    spatial_cursor cursor;
+    spatial_event event;
+    ck_assert(spatial_ray_init(&cursor, &map, 0, 0, 1, 1, 0));
+    ck_assert_int_eq(spatial_ray_next(&cursor, &event), 1);
+    ck_assert_uint_eq(spatial_event_light(&event), 192);
+    ck_assert_int_eq(spatial_light_attenuate(101, spatial_event_light(&event)), 76);
+    spaces[4].first = NULL;
+    spaces[2].first = &grate;
+    ck_assert(spatial_ray_init(&cursor, &map, 0, 0, 3, 0, 0));
+    int32_t value = 101;
+    int result;
+    while ((result = spatial_ray_next(&cursor, &event)) == 1) {
+        value = spatial_light_attenuate(value, spatial_event_light(&event));
+    }
+    ck_assert_int_eq(result, 0);
+    ck_assert_int_eq(value, 67);
+    object_free_key_values(&glass);
+    object_free_key_values(&grate);
+}
+END_TEST
+
 START_TEST(test_light_virtual_cover_and_aperture) {
     mapstruct lower, upper;
     MapSpace ls[16], us[16];
@@ -253,6 +283,7 @@ START_TEST(test_observer_scope_and_failed_dependencies) {
 END_TEST
 
 void check_server_spatial(void) {
+    toolkit_import(shstr);
     Suite *suite = suite_create("spatial");
     TCase *tc = tcase_create("geometry");
     tcase_add_test(tc, test_supercover_corner_symmetry);
@@ -261,6 +292,7 @@ void check_server_spatial(void) {
     tcase_add_test(tc, test_canonical_stack_limit);
     tcase_add_test(tc, test_light_tie_and_sequential_rounding);
     tcase_add_test(tc, test_light_virtual_cover_and_aperture);
+    tcase_add_test(tc, test_light_material_ties_and_sequential_events);
     tcase_add_test(tc, test_offset_stays_in_nearest_frontier);
     tcase_add_test(tc, test_offset_shortest_paths_detect_ambiguity);
     tcase_add_test(tc, test_observer_scope_and_failed_dependencies);
