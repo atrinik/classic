@@ -84,6 +84,24 @@ can change; the exact installed versions and formula metadata are retained
 with each qualification run. This lane does not create a released dependency
 producer or qualify different dependency versions by inference.
 
+Before configuring Classic, `tools/ci/collect_macos_curl.py` compiles a small
+native probe with the same LLVM toolchain against the explicitly selected
+Homebrew curl headers and library. It records the runtime provider via
+`dladdr`, header/runtime versions, features, protocols, SSL and resolver identity,
+default CA paths, curl configuration, Mach-O dependencies and retained bottle
+formula/receipt. Normal HTTPS requests to `https://curl.se/` must pass both
+with the provider's default trust and the locked Classic CA bundle. Peer and
+hostname verification stay enabled; the probe uses no proxies, credentials or
+redirects. A provider/header mismatch or failed verified request fails the lane.
+The absent output directory preserves previous runs rather than replacing them.
+
+This evidence is a prerequisite for selecting a source-built Mac curl/c-ares
+cohort. It does not qualify Homebrew's threaded resolver for Classic cancellation,
+prove Apple SecTrust solely from the SSL version, or establish source-built
+dependency acceptance. The exact feature, protocol and trust baseline must be
+preserved when the resolver provider changes. Linux and Windows curl policies
+do not establish the native Mac baseline.
+
 The integrated root selects `ATRINIK_BUILD_CLIENT=ON` and
 `ATRINIK_BUILD_SERVER=OFF`, building the supported macOS protocol, libatrinik,
 pathfinding, client and test targets through LLVM 23.1.3. The server access
