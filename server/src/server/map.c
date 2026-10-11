@@ -153,7 +153,7 @@ static bool map_validator(void *ptr) {
 }
 
 /** Publish residency changes before callbacks can observe the new state. */
-static void map_set_memory_state(mapstruct *map, int state) {
+static void map_set_memory_state(mapstruct *map, uint32_t state) {
     if (map->in_memory != state) {
         los_geometry_changed();
         map->in_memory = state;
