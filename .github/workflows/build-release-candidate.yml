@@ -339,6 +339,11 @@ jobs:
 
   client-appimage:
     name: Build and smoke Ubuntu-baseline AppImage
+    # The runner retains Actions service/cache authority; candidate code must
+    # never inherit it. Trusted caller scripts build/inspect on the host, while
+    # candidate scripts and payloads execute only in offline, unprivileged
+    # containers with explicit environment allowlists and bounded mounts.
+    # No runner home, socket, service token, or cache enters those containers.
     needs: [metadata, dependencies, gpu-shaders]
     if: needs.metadata.outputs.artifact_schema == '3'
     permissions:

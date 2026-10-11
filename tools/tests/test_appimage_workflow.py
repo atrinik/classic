@@ -12,6 +12,42 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class AppImageWorkflowTests(unittest.TestCase):
+    RUNNER_AUTHORITY = {
+        'ACTIONS_RUNTIME_TOKEN': 'fixture-runtime-token-must-stay-on-host',
+        'ACTIONS_CACHE_URL': 'https://fixture-cache.invalid',
+        'ACTIONS_RESULTS_URL': 'https://fixture-results.invalid',
+        'GITHUB_TOKEN': 'fixture-github-token-must-stay-on-host',
+        'GH_TOKEN': 'fixture-gh-token-must-stay-on-host',
+    }
+
+    def assert_isolated_container(self, args: list[str], environment: set[str]) -> None:
+        # Inspect the actual expanded Docker CLI, including when the host has
+        # cache/service credentials. Docker receives only explicit NAME=value
+        # pairs, never bare NAME arguments that inherit host values.
+        passed = [args[index + 1] for index, argument in enumerate(args)
+                  if argument == '--env']
+        self.assertTrue(all('=' in value for value in passed))
+        self.assertEqual({value.split('=', 1)[0] for value in passed}, environment)
+        self.assertEqual(args[args.index('--network') + 1], 'none')
+        self.assertEqual(args[args.index('--cap-drop') + 1], 'ALL')
+        self.assertEqual(args[args.index('--security-opt') + 1], 'no-new-privileges')
+        self.assertEqual(args[args.index('--user') + 1], f'{os.getuid()}:{os.getgid()}')
+        for forbidden in ('--env-file', '--volume', '-v', '--privileged', '--device',
+                          '--pid', '--ipc', '--network=host'):
+            self.assertNotIn(forbidden, args)
+        for credential, value in self.RUNNER_AUTHORITY.items():
+            self.assertNotIn(credential, environment)
+            self.assertNotIn(value, ' '.join(args))
+        mounts = [args[index + 1] for index, argument in enumerate(args)
+                  if argument == '--mount']
+        for mount in mounts:
+            for forbidden in ('docker.sock', '/_work/_temp', '/_actions'):
+                self.assertNotIn(forbidden, mount)
+            source = next(part.removeprefix('source=') for part in mount.split(',')
+                          if part.startswith('source='))
+            self.assertNotIn(Path(source).name, ('.cache', '.config', '.ssh'))
+            self.assertNotEqual(Path(source), Path.home())
+
     def workflow(self) -> str:
         return (ROOT / '.github/workflows/build-release-candidate.yml').read_text()
 
@@ -249,13 +285,15 @@ sys.exit(7 if failed and 'classic-appimage-' + failed in sys.argv else 0)
                 docker.chmod(0o755)
                 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
                     cwd=workspace, capture_output=True, text=True,
-                    env=dict(os.environ, GITHUB_WORKSPACE=str(workspace),
+                    env=dict(os.environ, **self.RUNNER_AUTHORITY, GITHUB_WORKSPACE=str(workspace),
                              RELEASE_VERSION='0.0.0', FAIL_RUNTIME=fail_runtime,
                              PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
                 self.assertEqual(result.returncode == 0, not fail_runtime, result.stderr)
                 calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
                 self.assertEqual(len(calls), {'': 3, 'ubuntu24': 1, 'ubuntu26': 2, 'debian13': 3}[fail_runtime])
                 for call in calls:
+                    self.assert_isolated_container(call, {
+                        'ATRINIK_APPIMAGE_SMOKE_CONTAINER', 'ATRINIK_APPIMAGE_RUNTIME_PROBE'})
                     self.assertEqual(call[call.index('--network') + 1], 'none')
                     mounts = [call[i + 1] for i, arg in enumerate(call) if arg == '--mount']
                     self.assertEqual(len(mounts), 3)
@@ -312,13 +350,15 @@ else:
                 docker.chmod(0o755)
                 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
                     cwd=workspace, capture_output=True, text=True,
-                    env=dict(os.environ, GITHUB_WORKSPACE=str(workspace),
+                    env=dict(os.environ, **self.RUNNER_AUTHORITY, GITHUB_WORKSPACE=str(workspace),
                              GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='2',
                              RELEASE_VERSION='5.17.0', GRAPHICAL_CASE=case,
                              PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
                 self.assertEqual(result.returncode == 0, case == 'success', result.stderr)
                 calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
                 args = calls[0]
+                self.assert_isolated_container(args, {
+                    'ATRINIK_APPIMAGE_SMOKE_CONTAINER', 'ATRINIK_APPIMAGE_GRAPHICAL_PROBE'})
                 self.assertEqual(args[0], 'create')
                 self.assertNotIn('--rm', args)
                 self.assertIn('classic-appimage-graphical-123-2', args)
@@ -392,7 +432,7 @@ print('::warning::candidate output stays in evidence')
 ''')
                 docker.chmod(0o755)
                 (workspace / 'host-private').write_text('do not upload')
-                environment = dict(os.environ, GITHUB_WORKSPACE=str(workspace),
+                environment = dict(os.environ, **self.RUNNER_AUTHORITY, GITHUB_WORKSPACE=str(workspace),
                                    RELEASE_VERSION='0.0.0', RELEASE_REVISION='a' * 40, SOURCE_DATE_EPOCH='1',
                                    DISCORD_CONFIG_FILE='', OUTPUT_TYPE=output_type,
                                    PATH=f"{workspace / 'bin'}:{os.environ['PATH']}")
@@ -401,6 +441,10 @@ print('::warning::candidate output stays in evidence')
                 self.assertEqual(result.returncode == 0, output_type == 'file', result.stderr)
                 self.assertEqual(result.stdout, '')
                 args = json.loads((workspace / 'docker-args.json').read_text())
+                self.assert_isolated_container(args, {
+                    'ATRINIK_PACKAGE_VERSION', 'ATRINIK_SOURCE_REVISION', 'SOURCE_DATE_EPOCH',
+                    'CMAKE_BUILD_PARALLEL_LEVEL', 'ATRINIK_GPU_SHADER_DIRECTORY',
+                    'ATRINIK_DEPENDENCY_DOWNLOADS', 'ATRINIK_DISCORD_APPLICATION_ID_FILE'})
                 self.assertEqual(args[args.index('--network') + 1], 'none')
                 self.assertEqual(args[args.index('--cap-drop') + 1], 'ALL')
                 self.assertEqual(args[args.index('--security-opt') + 1], 'no-new-privileges')
