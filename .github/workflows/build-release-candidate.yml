@@ -394,6 +394,17 @@ jobs:
             --format '{{.Id}}' > build/appimage-evidence/images.txt
           docker run --rm --network none classic-appimage-build cat /build-packages.tsv \
             > build/appimage-evidence/build-packages.tsv
+      - name: Capture trusted runtime acceptance probe
+        run: |
+          docker run --rm --platform linux/amd64 --network none \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" --cpus 2 --memory 4g \
+            classic-appimage-build cat /appimage-runtime-probe \
+            > build/appimage-runtime-probe
+          test -f build/appimage-runtime-probe
+          test ! -L build/appimage-runtime-probe
+          test -s build/appimage-runtime-probe
+          chmod 0755 build/appimage-runtime-probe
       - name: Build AppImage with offline release inputs
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -432,12 +443,16 @@ jobs:
       - name: Validate AppImage payload with trusted host tools
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends squashfs-tools binutils
           python3 tools/release/appimage.py \
             "build/appimage-packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage" \
-            "${RELEASE_VERSION}" > build/appimage-evidence/payload-validation.log 2>&1
+            "${RELEASE_VERSION}" \
+            --revision "${RELEASE_REVISION}" \
+            --source-root "${GITHUB_WORKSPACE}/candidate-source" \
+            > build/appimage-evidence/payload-validation.log 2>&1
       - name: Smoke in clean Ubuntu 24, Ubuntu 26, and Debian 13 runtimes
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -447,8 +462,10 @@ jobs:
               --cap-drop ALL --security-opt no-new-privileges \
               --user "$(id -u):$(id -g)" --cpus 2 --memory 4g \
               --env ATRINIK_APPIMAGE_SMOKE_CONTAINER=1 \
+              --env ATRINIK_APPIMAGE_RUNTIME_PROBE=/input/appimage-runtime-probe \
               --mount "type=bind,source=$GITHUB_WORKSPACE/build/appimage-packages,target=/packages,readonly" \
               --mount "type=bind,source=$GITHUB_WORKSPACE/tools/ci/appimage/smoke.sh,target=/smoke.sh,readonly" \
+              --mount "type=bind,source=$GITHUB_WORKSPACE/build/appimage-runtime-probe,target=/input/appimage-runtime-probe,readonly" \
               "classic-appimage-${runtime}" bash /smoke.sh \
               "/packages/atrinik-classic-client-${RELEASE_VERSION}-linux-x86_64.AppImage" \
               "${RELEASE_VERSION}" > "build/appimage-evidence/smoke-${runtime}.log" 2>&1

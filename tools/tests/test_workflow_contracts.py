@@ -379,8 +379,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("Verify durable dependency bundle", candidate)
         self.assertEqual(candidate.count("candidate-dependencies-${{"), 6)
         self.assertNotIn("name: release-dependencies-", candidate)
-        # Four package builds, two trusted image inventory readers, and AppImage smoke loop.
-        self.assertEqual(candidate.count("--network none"), 7)
+        # Four package builds, two image inventories, a trusted probe reader, and smoke loop.
+        self.assertEqual(candidate.count("--network none"), 8)
         self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_DOWNLOADS="), 4)
         self.assertEqual(candidate.count("ATRINIK_DEPENDENCY_CACHE_DIR="), 1)
         self.assertIn("tools/release/install_dependency_bundle.sh", candidate)

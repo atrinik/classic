@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -58,6 +59,7 @@ class AppImageWorkflowTests(unittest.TestCase):
         self.assertIn('for runtime in ubuntu24 ubuntu26 debian13', smoke)
         self.assertIn('--network none', smoke)
         self.assertIn('--env ATRINIK_APPIMAGE_SMOKE_CONTAINER=1', smoke)
+        self.assertIn('--env ATRINIK_APPIMAGE_RUNTIME_PROBE=/input/appimage-runtime-probe', smoke)
         self.assertIn('--cap-drop ALL --security-opt no-new-privileges', smoke)
         self.assertNotIn('candidate-source', smoke)
         self.assertNotIn('target=/output', smoke)
@@ -82,12 +84,49 @@ class AppImageWorkflowTests(unittest.TestCase):
         for prerequisite in ('readelf', 'unsquashfs', 'mksquashfs', 'true'):
             self.assertIn(f'test -x /usr/bin/{prerequisite}', core)
         self.assertIn('test -f /usr/lib/x86_64-linux-gnu/libzstd.so.1', core)
+        self.assertIn('squashfs-tools binutils libzstd1 libssl3t64', core)
+        self.assertIn('test -f /usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so', core)
         package = (ROOT / '.github/workflows/package-release.yml').read_text()
         self.assertIn('            build/release/*.AppImage\n', package)
         for invocation in re.findall(r'sync_release_assets.py(.*?)(?=\n      -|\Z)',
                                      package, re.DOTALL):
             self.assertIn('--revision "${RELEASE_COMMIT}"', invocation)
             self.assertIn('--source-root "${GITHUB_WORKSPACE}"', invocation)
+
+    def test_host_payload_validation_binds_candidate_git_coordinates_before_smoke(self) -> None:
+        job = self.job()
+        validation = job.split('      - name: Validate AppImage payload with trusted host tools', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}', validation)
+        script = textwrap.dedent(validation.split('        run: |\n', 1)[1])
+        for fail_validation in ('0', '1'):
+            with self.subTest(fail_validation=fail_validation), tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                (workspace / 'bin').mkdir()
+                (workspace / 'build/appimage-evidence').mkdir(parents=True)
+                sudo = workspace / 'bin/sudo'
+                sudo.write_text('#!/usr/bin/env sh\nexit 0\n')
+                sudo.chmod(0o755)
+                python = workspace / 'bin/python3'
+                python.write_text(f'#!{sys.executable}\n' + """import json, os, pathlib, sys
+pathlib.Path('validator-args.json').write_text(json.dumps(sys.argv[1:]))
+sys.exit(7 if os.environ['FAIL_VALIDATION'] == '1' else 0)
+""")
+                python.chmod(0o755)
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                    cwd=workspace, capture_output=True, text=True,
+                    env=dict(os.environ, GITHUB_WORKSPACE=str(workspace),
+                             RELEASE_VERSION='5.17.0', RELEASE_REVISION='a' * 40,
+                             FAIL_VALIDATION=fail_validation,
+                             PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+                self.assertEqual(result.returncode, 7 if fail_validation == '1' else 0, result.stderr)
+                args = json.loads((workspace / 'validator-args.json').read_text())
+                self.assertEqual(args, ['tools/release/appimage.py',
+                    'build/appimage-packages/atrinik-classic-client-5.17.0-linux-x86_64.AppImage',
+                    '5.17.0', '--revision', 'a' * 40,
+                    '--source-root', str(workspace / 'candidate-source')])
+                self.assertNotIn('candidate-source/tools', ' '.join(args))
+        self.assertLess(job.index('--source-root "${GITHUB_WORKSPACE}/candidate-source"'),
+                        job.index('"classic-appimage-${runtime}" bash /smoke.sh'))
 
     def test_preparation_captures_actual_builder_inventory_and_lock(self) -> None:
         preparation = self.job().split('      - name: Prepare pinned Ubuntu', 1)[1].split('      - name:', 1)[0]
@@ -138,6 +177,49 @@ elif sys.argv[1:3] == ['image', 'inspect']:
             self.assertEqual(calls[-1], ['run', '--rm', '--network', 'none',
                                         'classic-appimage-build', 'cat', '/build-packages.tsv'])
 
+    def test_probe_capture_rejects_failures_and_nonregular_host_outputs(self) -> None:
+        job = self.job()
+        step = job.split('      - name: Capture trusted runtime acceptance probe', 1)[1].split('      - name:', 1)[0]
+        script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+        for output_type in ('file', 'empty', 'failure', 'symlink', 'directory'):
+            with self.subTest(output_type=output_type), tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                (workspace / 'bin').mkdir()
+                (workspace / 'build').mkdir()
+                (workspace / 'host-private').write_text('private')
+                docker = workspace / 'bin/docker'
+                docker.write_text(f'#!{sys.executable}\n' + """import json, os, pathlib, sys
+pathlib.Path('docker-args.json').write_text(json.dumps(sys.argv[1:]))
+kind = os.environ['OUTPUT_TYPE']
+probe = pathlib.Path('build/appimage-runtime-probe')
+if kind == 'failure':
+    sys.exit(7)
+elif kind == 'symlink':
+    probe.unlink()
+    probe.symlink_to(pathlib.Path('../host-private'))
+elif kind == 'directory':
+    probe.unlink()
+    probe.mkdir()
+if kind != 'empty':
+    sys.stdout.buffer.write(b'trusted probe fixture')
+""")
+                docker.chmod(0o755)
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                    cwd=workspace, capture_output=True, text=True,
+                    env=dict(os.environ, OUTPUT_TYPE=output_type,
+                             PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+                self.assertEqual(result.returncode == 0, output_type == 'file', result.stderr)
+                args = json.loads((workspace / 'docker-args.json').read_text())
+                self.assertEqual(args[-3:], ['classic-appimage-build', 'cat', '/appimage-runtime-probe'])
+                self.assertEqual(args[args.index('--network') + 1], 'none')
+                self.assertNotIn('--mount', args)
+                self.assertNotIn('candidate-source', ' '.join(args))
+                self.assertEqual((workspace / 'host-private').read_text(), 'private')
+                if output_type == 'file':
+                    self.assertEqual((workspace / 'build/appimage-runtime-probe').read_bytes(), b'trusted probe fixture')
+                    self.assertEqual((workspace / 'build/appimage-runtime-probe').stat().st_mode & 0o777, 0o755)
+        self.assertLess(job.index('Capture trusted runtime acceptance probe'), job.index('Build AppImage with offline'))
+
     def test_smoke_loop_requires_each_clean_runtime_success(self) -> None:
         smoke = self.job().split('      - name: Smoke in clean', 1)[1].split('      - uses:', 1)[0]
         script = textwrap.dedent(smoke.split('        run: |\n', 1)[1])
@@ -166,9 +248,11 @@ sys.exit(7 if failed and 'classic-appimage-' + failed in sys.argv else 0)
                 for call in calls:
                     self.assertEqual(call[call.index('--network') + 1], 'none')
                     mounts = [call[i + 1] for i, arg in enumerate(call) if arg == '--mount']
-                    self.assertEqual(len(mounts), 2)
+                    self.assertEqual(len(mounts), 3)
                     self.assertTrue(all(mount.endswith(',readonly') for mount in mounts))
                     self.assertFalse(any('candidate-source' in mount for mount in mounts))
+                    self.assertIn(f'type=bind,source={workspace}/build/appimage-runtime-probe,target=/input/appimage-runtime-probe,readonly', mounts)
+                    self.assertIn('ATRINIK_APPIMAGE_RUNTIME_PROBE=/input/appimage-runtime-probe', call)
                     self.assertEqual(call[-2:], ['/packages/atrinik-classic-client-0.0.0-linux-x86_64.AppImage', '0.0.0'])
 
     def test_container_boundary_and_host_output_validation(self) -> None:
