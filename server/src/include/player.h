@@ -537,7 +537,8 @@ bool player_disconnect_all_checked(void);
 player *find_player(const char *plname);
 player *find_player_sh(shstr *plname);
 void display_motd(object *op);
-/** Validate a borrowed player connection against the live player list first. */
+/** Validate a borrowed connection against the live list, even while its actor
+ * is temporarily removed/unmapped. Spatial callers separately require activity. */
 bool player_connection_is_current(const object *observer, tag_t count,
                                   const player *controller, const socket_struct *socket);
 

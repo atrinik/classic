@@ -290,13 +290,12 @@ bool player_connection_is_current(const object *observer, tag_t count,
     for (const player *current = first_player; current != NULL; current = current->next) {
         if (current == controller) {
             return current->ob == observer && current->cs == socket && observer != NULL &&
-                   socket != NULL && OBJECT_VALID(current->ob, count) &&
+                   socket != NULL && count != 0 && current->ob->count == count &&
                    current->ob->type == PLAYER && CONTR(current->ob) == current;
         }
     }
     return false;
 }
-
 
 /**
  * Loop through the player list and find player specified by plname.

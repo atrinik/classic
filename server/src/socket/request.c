@@ -611,7 +611,7 @@ void draw_client_map(object *pl) {
     /* IF player is just joining the game, he isn't on a map,
      * If so, don't try to send them a map.  All will
      * be OK once they really log in. */
-    if (!pl->map || pl->map->in_memory != MAP_IN_MEMORY) {
+    if (!OBJECT_ACTIVE(pl) || !pl->map || pl->map->in_memory != MAP_IN_MEMORY) {
         return;
     }
 
@@ -2935,8 +2935,8 @@ bool target_player_authorized(const player *pl, const object *target, int *depth
                           perception_player_part_authorized(pl, part);
         /* EVENT_ASK_SHOW may delete, remove or recycle any borrowed actor. */
         if (!player_connection_is_current(observer, observer_count, pl, observer_socket) ||
-            observer_socket->state == ST_DEAD || observer_socket->state == ST_ZOMBIE ||
-            !OBJECT_VALID(target, target_count) || !OBJECT_VALID(head, head_count) ||
+            !OBJECT_ACTIVE(observer) || observer_socket->state == ST_DEAD ||
+            observer_socket->state == ST_ZOMBIE || !OBJECT_VALID(target, target_count) || !OBJECT_VALID(head, head_count) ||
             !OBJECT_VALID(part, part_count)) {
             return false;
         }

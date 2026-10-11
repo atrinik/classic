@@ -107,7 +107,9 @@ Packet-local buffers are released independently; connection cleanup first checks
 live-list membership, controller/socket identity and observer incarnation. The
 socket post pass snapshots connection identities and skips deleted or replaced
 entries after callbacks, including target-stat authorization before map drawing.
-New connections wait until the next post pass.
+New connections wait until the next post pass. A linked connection remains live
+while its avatar is removed or unmapped; spatial activity checks belong to map
+and action callers, so connection keepalives and queued output continue.
 
 Test-only counters distinguish sight candidates, camera-pruned cells, coordinate
 resolution calls, successful clear-volume proofs and actual ray traversals, plus

@@ -3041,6 +3041,62 @@ START_TEST(test_map_name_metadata_handles_transient_unnamed_maps) {
 }
 END_TEST
 
+START_TEST(test_removed_player_connection_keeps_servicing_queued_output) {
+    mapstruct *map;
+    object *observer;
+    check_setup_env_pl(&map, &observer);
+    player *controller = CONTR(observer);
+    socket_struct *cs = controller->cs;
+    tag_t count = observer->count;
+    object_remove(observer, 0);
+    ck_assert(QUERY_FLAG(observer, FLAG_REMOVED));
+    ck_assert(player_connection_is_current(observer, count, controller, cs));
+    ck_assert(!player_connection_is_current(observer, 0, controller, cs));
+    ck_assert(!player_connection_is_current(observer, count + 1, controller, cs));
+
+    /* A real loopback pair proves that a linked, unmapped connection still
+     * flushes queued authorization output during its zombie grace period. */
+    socket_t *listener = socket_create("127.0.0.1", 0, SOCKET_ROLE_SERVER, false);
+    ck_assert_ptr_nonnull(listener);
+    ck_assert(socket_bind(listener));
+    uint16_t port = 0;
+    ck_assert(socket_local_port(listener, &port));
+    socket_t *peer = socket_create("127.0.0.1", port, SOCKET_ROLE_CLIENT, false);
+    ck_assert_ptr_nonnull(peer);
+    ck_assert(socket_connect(peer));
+    socket_t *connection = socket_accept(listener);
+    ck_assert_ptr_nonnull(connection);
+    socket_destroy(listener);
+    socket_destroy(cs->sc);
+    cs->sc = connection;
+    socket_buffer_clear(cs);
+    packet_struct *packet = packet_new(CLIENT_CMD_ACCESS_RESULT, 2, 0);
+    packet_writer_write_uint8(packet, 1);
+    packet_writer_write_uint8(packet, 0);
+    socket_send_packet(cs, packet);
+    ck_assert_uint_gt(cs->packet_queue_count, 0);
+    cs->state = ST_ZOMBIE;
+    cs->login_count = 0;
+    socket_server_post_process();
+    ck_assert_uint_eq(cs->login_count, 1);
+    ck_assert_uint_eq(cs->packet_queue_count, 0);
+    ck_assert_uint_eq(cs->packet_queue_bytes, 0);
+    ck_assert(socket_wait(peer, true, false, 1000));
+    uint8_t received[32];
+    size_t amount = 0;
+    ck_assert(socket_read(peer, received, sizeof(received), &amount));
+    ck_assert_uint_gt(amount, 0);
+
+    cs->state = ST_PLAYING;
+    cs->keepalive = 0;
+    socket_server_post_process();
+    ck_assert_uint_eq(cs->keepalive, 1);
+    ck_assert_ptr_null(cs->target_map_published_map);
+    ck_assert(player_connection_is_current(observer, count, controller, cs));
+    socket_destroy(peer);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -3049,6 +3105,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_target_packet_includes_current_level_and_plain_name);
     tcase_add_test(tc_core, test_target_select_requires_exact_packet_before_mutation);

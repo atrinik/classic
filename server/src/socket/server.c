@@ -1774,13 +1774,13 @@ void socket_server_post_process(void) {
         }
         party_update_who(pl);
 
-        if (pl->ob->map != NULL) {
+        if (OBJECT_ACTIVE(observer) && observer->map != NULL) {
             draw_client_map(observer);
             if (!player_connection_is_current(observer, snapshot->count, pl, snapshot->socket) ||
                 pl->cs->state == ST_DEAD) {
                 continue;
             }
-            if (pl->cs->state == ST_ZOMBIE || observer->map == NULL ||
+            if (pl->cs->state == ST_ZOMBIE || !OBJECT_ACTIVE(observer) || observer->map == NULL ||
                 observer->map->in_memory != MAP_IN_MEMORY) {
                 socket_buffer_write(pl->cs);
                 continue;
