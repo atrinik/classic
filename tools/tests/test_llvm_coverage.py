@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import contextlib
+import hashlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import tarfile
@@ -16,13 +19,50 @@ from unittest.mock import patch
 from tools.release import package_sources
 
 spec = importlib.util.spec_from_file_location(
-    "llvm_coverage", Path(__file__).resolve().parents[1] / "ci" / "llvm_coverage.py")
+    "llvm_coverage", Path(os.environ.get("ATRINIK_LLVM_COVERAGE_HELPER",
+        Path(__file__).resolve().parents[1] / "ci" / "llvm_coverage.py")))
 coverage = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(coverage)
 
 
-def record(path):
-    return f"SF:{path}\nFN:1,example\nFNDA:1,example\nDA:1,1\nBRDA:1,0,0,1\nend_of_record\n"
+def record(path, count=1):
+    return (f"SF:{path}\nFN:1,example\nFNDA:{count},example\nFNF:1\nFNH:{int(count > 0)}\n"
+            f"DA:1,{count}\nLF:1\nLH:{int(count > 0)}\nBRDA:1,0,0,{count}\nBRDA:1,0,1,0\n"
+            f"BRF:2\nBRH:{int(count > 0)}\nend_of_record\n")
+
+
+def zero_json(paths):
+    summary = {key: {"count": 2 if key == "branches" else 1, "covered": 0, "percent": 0}
+               for key in ("branches", "functions", "instantiations", "lines", "regions")}
+    files = [{"filename": str(path), "branches": [[1, 1, 1, 8, 0, 0, 0, 0, 4]],
+              "expansions": [], "mcdc_records": [],
+              "segments": [[1, 1, 0, True, True, False], [1, 8, 0, False, False, False]],
+              "summary": summary} for path in paths]
+    functions = [{"branches": [[1, 1, 1, 8, 0, 0, 0, 0, 4]], "count": 0,
+                  "filenames": [str(path)], "mcdc_records": [], "name": "example",
+                  "regions": [[1, 1, 1, 8, 0, 0, 0, 0]]} for path in paths]
+    return json.dumps({"type": "llvm.coverage.json.export", "version": "3.1.0",
+                       "data": [{"files": files, "functions": functions, "totals": summary}]})
+
+
+def elf_fixture(path):
+    """An actual supported record in disposable ELF bytes, with readobj metadata."""
+    content = bytearray(512)
+    content[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into("<H", content, 18, 62)
+    struct.pack_into("<Q", content, 64, 11)
+    name_hash = int.from_bytes(hashlib.md5(b"main").digest()[:8], "little")
+    struct.pack_into("<QQq", content, 128, name_hash, 91, 0x1000)
+    struct.pack_into("<I", content, 184, 1)
+    content[400:413] = b"__llvm_covmap"
+    path.write_bytes(content)
+    sections = [{"Name": {"Name": name}, "Offset": offset, "Size": size, "Address": address}
+                for name, offset, size, address in ((".data", 64, 8, 0x3000),
+                    ("__llvm_prf_data", 128, 72, 0x1000), ("__llvm_prf_cnts", 320, 8, 0x2000))]
+    return json.dumps([{"FileSummary": {"Format": "elf64-x86-64"},
+                        "Sections": [{"Section": section} for section in sections],
+                        "Symbols": [{"Symbol": {"Name": {"Name": "__llvm_profile_raw_version"},
+                            "Size": 8, "Value": 0x3000, "Section": {"Name": ".data"}}}]}])
 
 
 class NativeCoverageTests(unittest.TestCase):
@@ -154,7 +194,9 @@ class NativeCoverageTests(unittest.TestCase):
                     "libatrinik/socket.c", "libatrinik/pathfinding/pathfinding.c"]
         with tarfile.open(source_tar, "w") as archive:
             for name in authored:
-                archive.add(owner / name, arcname=name)
+                archive.add(Path(os.environ["ATRINIK_LLVM_COVERAGE_HELPER"])
+                            if name == "tools/ci/llvm_coverage.py" and "ATRINIK_LLVM_COVERAGE_HELPER" in os.environ
+                            else owner / name, arcname=name)
         tool = self.root / "llvm-tool-fixture"
         tool.write_text(f'''#!{sys.executable}
 import os
@@ -162,8 +204,14 @@ from pathlib import Path
 import sys
 if sys.argv[1] == "--version":
     print("LLVM version 23.1.3")
+elif "--elf-output-style=JSON" in sys.argv:
+    sys.stdout.write(Path(os.environ["COVERAGE_FIXTURE_ELF"]).read_text())
+elif sys.argv[1] == "show":
+    assert all(option in sys.argv for option in ("--all-functions", "--counts", "--text"))
+    print("main\\n# Func Hash:\\n91\\n# Num Counters:\\n1\\n# Counter Values:\\n1")
 elif sys.argv[1] == "export":
-    sys.stdout.write(Path(os.environ["COVERAGE_FIXTURE_REPORT"]).read_text())
+    key = ("COVERAGE_FIXTURE_ZERO_LCOV" if "-format=lcov" in sys.argv else "COVERAGE_FIXTURE_ZERO_JSON") if "-empty-profile" in sys.argv else "COVERAGE_FIXTURE_REPORT"
+    sys.stdout.write(Path(os.environ[key]).read_text())
 ''')
         tool.chmod(0o755)
         for scope in ("root", "client", "server", "libatrinik"):
@@ -179,15 +227,21 @@ elif sys.argv[1] == "export":
                 coverage.prepare(build)
                 (build / "llvm-profiles/module-123.profraw").write_bytes(b"profile fixture")
                 (build / "CMakeCache.txt").write_text("CMAKE_C_COMPILER:FILEPATH=" + str(tool) + "\n")
-                (build / "native-test").write_bytes(b"\x7fELFnative fixture__llvm_covmap")
+                metadata = self.root / (scope + "-elf.json")
+                metadata.write_text(elf_fixture(build / "native-test"))
                 production = (["client/src/client/main.c", "server/src/server/main.c",
                                "libatrinik/socket.c", "libatrinik/pathfinding/pathfinding.c"]
                               if scope == "root" else
                               ["socket.c", "pathfinding/pathfinding.c"] if scope == "libatrinik"
                               else [f"src/{scope}/main.c"])
-                positive = "".join(record(package / name) for name in production)
-                # Relative source paths are also valid in LLVM LCOV output.
-                positive += record(production[0])
+                # Mix relative and absolute names without repeating a canonical SF.
+                positive_records = {name: record(name if index == 0 else package / name)
+                                    for index, name in enumerate(production)}
+                positive = "".join(positive_records[name] for name in sorted(production))
+                baseline_json = self.root / (scope + "-zero.json")
+                baseline_json.write_text(zero_json([package / name for name in production]))
+                baseline_lcov = self.root / (scope + "-zero.lcov")
+                baseline_lcov.write_text("".join(record(package / name, 0) for name in production))
                 negative = "".join(record(package / name) for name in (
                     "src/tests/unit.c", "tests/unit.c", "build/generated.c",
                     "dependencies/libatrinik/socket.c", "_deps/upstream.c",
@@ -201,7 +255,10 @@ elif sys.argv[1] == "export":
                            "--build-dir", str(build), "--source-root", str(package),
                            "--component", "all" if scope == "root" else scope, "--output", str(output)]
                 environment = {**os.environ, "LLVM_COV": str(tool), "LLVM_PROFDATA": str(tool),
-                               "COVERAGE_FIXTURE_REPORT": str(report)}
+                               "LLVM_READOBJ": str(tool), "COVERAGE_FIXTURE_REPORT": str(report),
+                               "COVERAGE_FIXTURE_ELF": str(metadata),
+                               "COVERAGE_FIXTURE_ZERO_JSON": str(baseline_json),
+                               "COVERAGE_FIXTURE_ZERO_LCOV": str(baseline_lcov)}
                 result = subprocess.run(command, env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(output.read_text(), positive)
@@ -211,6 +268,14 @@ elif sys.argv[1] == "export":
                 result = subprocess.run(command, env=environment, capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("no intended production", result.stderr)
+                self.assertFalse(output.exists())
+                # Aliases of one canonical source are duplicate records, even
+                # when one spelling is absolute and another is relative.
+                report.write_text(positive + record(package / production[0]))
+                output.write_text("stale")
+                result = subprocess.run(command, env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("duplicate", result.stderr)
                 self.assertFalse(output.exists())
                 report.write_text(positive)
                 output.write_text("stale")
@@ -264,22 +329,29 @@ elif sys.argv[1] == "export":
             if "--version" in command:
                 return "LLVM version 23.1.3\n"
             if command[1] == "export":
+                if "-empty-profile" in command:
+                    source = self.root / "server/src/server/main.c"
+                    return record(source, 0) if "-format=lcov" in command else zero_json([source])
                 return report
             return ""
 
         output = io.StringIO()
-        with patch.object(coverage, "run", side_effect=execute), contextlib.redirect_stdout(output):
+        with patch.object(coverage, "run", side_effect=execute), patch.object(
+                coverage, "executed_objects", return_value=[self.build / "atrinik-server"]), contextlib.redirect_stdout(output):
             coverage.export(self.build, self.root, "server", "-")
         self.assertEqual(output.getvalue(), report)
-        self.assertEqual(len([call for call in calls if "--version" in call]), 3)
-        self.assertIn("-sparse", calls[3])
-        self.assertIn("-object", calls[4])
-        self.assertIn(str(self.build / "plugins/python.so"), calls[4])
+        self.assertEqual(len([call for call in calls if "--version" in call]), 4)
+        merge = next(call for call in calls if call[1] == "merge")
+        self.assertNotIn("-sparse", merge)
+        baseline = next(call for call in calls if "-empty-profile" in call)
+        self.assertIn("-object", baseline)
+        self.assertIn(str(self.build / "plugins/python.so"), baseline)
 
     def test_failed_merge_does_not_write_report(self):
         self.fixture()
         output = self.root / "coverage.lcov"
         with patch.object(coverage, "verify_tool"), patch.object(
+                coverage, "executed_objects", return_value=[self.build / "atrinik-server"]), patch.object(
                 coverage, "run", side_effect=subprocess.CalledProcessError(1, "llvm-profdata")):
             with self.assertRaises(subprocess.CalledProcessError):
                 coverage.export(self.build, self.root, "server", str(output))
