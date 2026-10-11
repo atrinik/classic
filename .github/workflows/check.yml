@@ -410,11 +410,15 @@ jobs:
           docker run --rm --network none --cpus 2 --memory 4g \
             --user "$(id -u):$(id -g)" \
             --env HOME=/tmp/classic-home \
+            --env CCACHE_DIR=/tmp/atrinik-font-baseline-ccache \
+            --env CCACHE_TEMPDIR=/tmp/atrinik-font-baseline-ccache-tmp \
+            --env CCACHE_MAXSIZE=250M \
             --env BASELINE_IMAGE="${CLASSIC_WINDOWS_FONT_BASELINE_IMAGE}" \
             --env PATH=/opt/mxe/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             --volume "${GITHUB_WORKSPACE}:/workspace" --workdir /workspace \
             "${CLASSIC_WINDOWS_FONT_BASELINE_IMAGE}" bash -c '
               set -euo pipefail
+              mkdir -p "${CCACHE_DIR}" "${CCACHE_TEMPDIR}"
               x86_64-w64-mingw32.shared-cmake -S tools/ci/font-render-probe \
                 -B build/font-baseline -G Ninja -DCMAKE_BUILD_TYPE=Release
               cmake --build build/font-baseline --target client-font-render-probe --parallel 2
