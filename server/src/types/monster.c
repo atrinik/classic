@@ -699,7 +699,7 @@ static void process_func(object *op) {
             op->last_grace--;
         }
 
-        if (enemy_visible && op->stats.Dex && rndm_chance(op->stats.Dex)) {
+        if (op->stats.Dex && rndm_chance(op->stats.Dex)) {
             if (QUERY_FLAG(op, FLAG_CAST_SPELL) && !op->last_grace) {
                 if (monster_cast_spell(op,
                                        part,
@@ -712,7 +712,9 @@ static void process_func(object *op) {
                 }
             }
 
-            if (QUERY_FLAG(op, FLAG_READY_BOW) && rndm_chance(4)) {
+            if (enemy_visible && QUERY_FLAG(op, FLAG_READY_BOW) &&
+                OBJECT_VALID(op->enemy, op->enemy_count) &&
+                perception_object_visible(op, op->enemy) && rndm_chance(4)) {
                 if (monster_use_bow(op, part, dir) && rndm_chance(2)) {
                     return;
                 }
@@ -1181,6 +1183,14 @@ static int monster_cast_spell(object *head, object *part, int dir, rv_vector *rv
     }
 
     if (sp_typ == -1 || (sp = find_spell(sp_typ)) == NULL) {
+        return 0;
+    }
+
+    /* Recheck the selected spell, including its long-range alternate. Self
+     * recovery remains possible during pursuit; every aimed cast needs sight. */
+    if (rv != NULL && !(sp->flags & SPELL_DESC_SELF) &&
+        (!OBJECT_VALID(head->enemy, head->enemy_count) ||
+         !perception_object_visible(head, head->enemy))) {
         return 0;
     }
 
