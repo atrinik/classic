@@ -894,13 +894,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(coverage, release)
         self.assertLess(release, sanitizers)
         self.assertIn('cmake --build "${release_directory}" --parallel', server)
-        for preset, directory in (
-            ('"${coverage_preset}"', ""),
-            ("linux-release", ' --test-dir "${release_directory}"'),
-            ("linux-sanitizers", ' --test-dir "${sanitizer_directory}"'),
-        ):
+        self.assertIn('ctest --preset "${coverage_preset}" --parallel 4 -LE performance', server)
+        for directory in ("release_directory", "sanitizer_directory"):
             self.assertIn(
-                f"ctest --preset {preset}{directory} --parallel 4 -LE performance", server
+                f'ctest --test-dir "${{{directory}}}" --output-on-failure --parallel 4 -LE performance',
+                server,
             )
 
         presets = json.loads((ROOT / "server/CMakePresets.json").read_text())
@@ -938,7 +936,7 @@ class WorkflowContractTests(unittest.TestCase):
         core = runner[runner.index("  core)") : runner.index("  server)")]
         self.assertIn("cmake --preset linux-sanitizers", core)
         self.assertIn('cmake --build "${sanitizer_directory}" --parallel', core)
-        self.assertIn("ctest --preset linux-sanitizers", core)
+        self.assertIn('ctest --test-dir "${sanitizer_directory}" --output-on-failure', core)
         self.assertIn("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1", core)
         self.assertIn("UBSAN_OPTIONS=halt_on_error=1", core)
 
@@ -971,22 +969,20 @@ class WorkflowContractTests(unittest.TestCase):
                 else:
                     self.assertNotIn("-DENABLE_PRECOMPILED_HEADERS=OFF", component)
                 self.assertIn('ctest --preset "${coverage_preset}"', component)
-                self.assertIn("ctest --preset linux-release", component)
-                self.assertIn("ctest --preset linux-sanitizers", component)
+                self.assertIn('ctest --test-dir "${release_directory}" --output-on-failure', component)
+                self.assertIn('ctest --test-dir "${sanitizer_directory}" --output-on-failure', component)
 
     def test_linux_validation_routes_every_noncoverage_operation_to_selected_tree(self) -> None:
         runner = (ROOT / "tools/ci/run_linux_check.sh").read_text()
         self.assertNotIn("cmake --build --preset linux-release", runner)
         self.assertNotIn("cmake --build --preset linux-sanitizers", runner)
+        self.assertNotIn("ctest --preset linux-release", runner)
+        self.assertNotIn("ctest --preset linux-sanitizers", runner)
         for line in runner.splitlines():
             if "cmake --preset linux-release" in line:
                 self.assertRegex(line, r'-B "\$\{(?:integrated_)?release_directory\}"')
             elif "cmake --preset linux-sanitizers" in line:
                 self.assertIn('-B "${sanitizer_directory}"', line)
-            elif "ctest --preset linux-release" in line:
-                self.assertIn('--test-dir "${release_directory}"', line)
-            elif "ctest --preset linux-sanitizers" in line:
-                self.assertIn('--test-dir "${sanitizer_directory}"', line)
         for root in ("source_root", "baseline_root"):
             self.assertIn(f'${{{root}}}/client/${{release_directory}}/atrinik', runner)
             self.assertIn(f'${{{root}}}/server/${{release_directory}}', runner)
@@ -1005,6 +1001,58 @@ class WorkflowContractTests(unittest.TestCase):
             'cmake --build "${integrated_release_directory}"',
         ):
             self.assertIn(operation, runner)
+
+    @unittest.skipUnless(shutil.which("cmake") and shutil.which("ctest"), "CMake and CTest required")
+    def test_noncoverage_ctest_executes_selected_tree_with_stale_preset_tree_present(self) -> None:
+        runner = (ROOT / "tools/ci/run_linux_check.sh").read_text()
+        ctest = os.environ.get("ATRINIK_CTEST_COMPAT_EXECUTABLE", shutil.which("ctest"))
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            binaries = fixture / "bin"
+            binaries.mkdir()
+            (binaries / "ctest").symlink_to(ctest)
+            for component, module in (("core", "libatrinik"), ("server", "server"), ("client", "client")):
+                block = runner[runner.index(f"  {component})"):]
+                block = block[:block.index("\n    ;;")]
+                commands = [line.strip() for line in block.splitlines()
+                            if 'ctest --test-dir "${release_directory}"' in line
+                            or 'ctest --test-dir "${sanitizer_directory}"' in line]
+                self.assertEqual(len(commands), 1 if component == "core" else 2)
+                source = fixture / component
+                source.mkdir()
+                (source / "CMakePresets.json").write_text((ROOT / module / "CMakePresets.json").read_text())
+                (source / "CMakeLists.txt").write_text(
+                    "cmake_minimum_required(VERSION 3.21)\nproject(ctest_directory NONE)\n"
+                    "enable_testing()\n"
+                    "if(WRONG_TREE)\n"
+                    "  add_test(NAME wrong_preset_tree COMMAND ${CMAKE_COMMAND} -E false)\n"
+                    "else()\n"
+                    "  add_test(NAME selected_tree COMMAND ${CMAKE_COMMAND} -E echo selected-tree-executed)\n"
+                    "  if(PERFORMANCE_FIXTURE)\n"
+                    "    add_test(NAME excluded_performance COMMAND ${CMAKE_COMMAND} -E false)\n"
+                    "    set_tests_properties(excluded_performance PROPERTIES LABELS performance)\n"
+                    "  endif()\nendif()\n"
+                )
+                for command in commands:
+                    variant = "release" if "release_directory" in command else "sanitizers"
+                    for cohort in ("linux", "llvm"):
+                        directory = source / "build" / f"{cohort}-{variant}"
+                        configure = subprocess.run(
+                            ["cmake", "-S", str(source), "-B", str(directory),
+                             "-DWRONG_TREE=ON" if cohort == "linux" else "-DWRONG_TREE=OFF",
+                             "-DPERFORMANCE_FIXTURE=OFF" if component == "core" else "-DPERFORMANCE_FIXTURE=ON"],
+                            capture_output=True, text=True,
+                        )
+                        self.assertEqual(configure.returncode, 0, configure.stdout + configure.stderr)
+                    result = subprocess.run(
+                        ["bash", "-euc", command], cwd=source, capture_output=True, text=True,
+                        env={**os.environ, "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
+                             "release_directory": "build/llvm-release", "sanitizer_directory": "build/llvm-sanitizers"},
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("selected_tree", result.stdout)
+                    self.assertNotIn("wrong_preset_tree", result.stdout)
+                    self.assertNotIn("excluded_performance", result.stdout)
 
     @unittest.skipUnless(shutil.which("cmake") and shutil.which("ctest") and shutil.which("cc") and shutil.which("ninja"), "CMake, CTest, Ninja and a C compiler required")
     def test_linux_validation_isolates_actual_compiler_caches_in_both_directions(self) -> None:
@@ -1081,7 +1129,7 @@ class WorkflowContractTests(unittest.TestCase):
                             )
                             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                             result = subprocess.run(
-                                ["ctest", "--preset", preset, "--test-dir", str(build), "--no-tests=error"],
+                                ["ctest", "--test-dir", str(build), "--output-on-failure", "--no-tests=error"],
                                 cwd=source, capture_output=True, text=True,
                             )
                             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
