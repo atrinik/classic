@@ -132,6 +132,32 @@ START_TEST(test_light_tie_and_sequential_rounding) {
 }
 END_TEST
 
+START_TEST(test_light_virtual_cover_and_aperture) {
+    mapstruct lower, upper;
+    MapSpace ls[16], us[16];
+    fixture(&lower, ls); fixture(&upper, us);
+    link_maps(&lower, &upper, TILED_UP);
+    celestial_rectangle_t rectangle = {
+        .type = CELESTIAL_RECT_SKY_COVERED, .width = 4, .height = 4,
+    };
+    lower.celestial_rectangles = &rectangle;
+    lower.celestial_rectangle_count = 1;
+    spatial_face face = {
+        .from = {.map = &lower, .x = 1, .y = 1},
+        .to = {.map = &upper, .x = 1, .y = 1, .z = 1},
+        .normal = {0, 0, 1},
+    };
+    ck_assert_uint_eq(spatial_face_light(&face, NULL), 0);
+    rectangle.type = CELESTIAL_RECT_SKY_OPEN;
+    ck_assert_uint_eq(spatial_face_light(&face, NULL), 256);
+    object floor = {0};
+    SET_FLAG(&floor, FLAG_IS_FLOOR);
+    us[5].first = &floor;
+    ck_assert_uint_eq(spatial_face_light(&face, NULL), 0);
+    ck_assert_uint_eq(spatial_cell_light_face(&face.from, 1, 0, 0, NULL), 256);
+}
+END_TEST
+
 void check_server_spatial(void) {
     Suite *suite = suite_create("spatial");
     TCase *tc = tcase_create("geometry");
@@ -140,6 +166,7 @@ void check_server_spatial(void) {
     tcase_add_test(tc, test_loaded_seams_and_cycle_bounds);
     tcase_add_test(tc, test_canonical_stack_limit);
     tcase_add_test(tc, test_light_tie_and_sequential_rounding);
+    tcase_add_test(tc, test_light_virtual_cover_and_aperture);
     suite_add_tcase(suite, tc);
     check_run_suite(suite, __FILE__);
 }

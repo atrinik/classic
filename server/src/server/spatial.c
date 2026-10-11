@@ -123,6 +123,9 @@ static bool resolve_search(mapstruct *origin, int x, int y, int z,
             }
             spatial_node next;
             if (!neighbor(&node, direction, &next)) {
+                if (target == NULL && node.map->tile_map[direction] != NULL) {
+                    valid = false;
+                }
                 continue;
             }
             size_t slot = ((uintptr_t)next.map >> 4) & (index_capacity - 1);
@@ -210,6 +213,19 @@ bool spatial_offset(mapstruct *origin, mapstruct *target, int *dx, int *dy, int 
         dx != NULL && dy != NULL && dz != NULL) {
         *dx = *dy = *dz = 0;
         return true;
+    }
+    if (target != NULL && dx != NULL && dy != NULL && dz != NULL &&
+        resident(origin) && stack_valid(origin)) {
+        for (int direction = TILED_UP; direction <= TILED_DOWN; direction++) {
+            mapstruct *map = origin->tile_map[direction];
+            for (int depth = 1; map != NULL; depth++, map = map->tile_map[direction]) {
+                if (map == target) {
+                    *dx = *dy = 0;
+                    *dz = direction == TILED_UP ? depth : -depth;
+                    return true;
+                }
+            }
+        }
     }
     spatial_node node;
     if (target == NULL || dx == NULL || dy == NULL || dz == NULL ||
@@ -443,6 +459,28 @@ uint16_t spatial_cell_light_face(const spatial_cell *cell, int nx, int ny, int n
         cell->x >= MAP_WIDTH(cell->map) || cell->y >= MAP_HEIGHT(cell->map)) {
         return 0;
     }
+    /* Typed virtual covers belong to the plane immediately above this cell.
+     * An OPEN rectangle can remove only the sealed virtual cap, never an
+     * actual upper floor (which spatial_face_light tests independently). */
+    if (nz > 0) {
+        for (size_t i = 0; i < cell->map->celestial_rectangle_count; i++) {
+            const celestial_rectangle_t *rectangle = &cell->map->celestial_rectangles[i];
+            if (cell->x < rectangle->x || cell->y < rectangle->y ||
+                cell->x >= rectangle->x + rectangle->width ||
+                cell->y >= rectangle->y + rectangle->height) {
+                continue;
+            }
+            if (rectangle->type == CELESTIAL_RECT_SKY_COVERED) {
+                return 0;
+            }
+            if (rectangle->type == CELESTIAL_RECT_SKY_OPEN) {
+                return SPATIAL_LIGHT_SCALE;
+            }
+        }
+        return cell->map->celestial_schema == 1 &&
+               cell->map->celestial_sky_above == CELESTIAL_SKY_SEALED ?
+               0 : SPATIAL_LIGHT_SCALE;
+    }
     uint8_t face = nz < 0 ? CELESTIAL_FACE_DOWN : nz > 0 ? 0 :
                    nx < 0 ? CELESTIAL_FACE_WEST : nx > 0 ? CELESTIAL_FACE_EAST :
                    ny < 0 ? CELESTIAL_FACE_NORTH : ny > 0 ? CELESTIAL_FACE_SOUTH : 0;
@@ -486,8 +524,11 @@ uint16_t spatial_cell_light_face(const spatial_cell *cell, int nx, int ny, int n
 
 uint16_t spatial_face_light(const spatial_face *face, bool *aperture) {
     if (face->normal[2] != 0) {
-        return spatial_cell_light_face(face->normal[2] > 0 ? &face->to : &face->from,
-                                       0, 0, -1, aperture);
+        uint16_t physical = spatial_cell_light_face(
+            face->normal[2] > 0 ? &face->to : &face->from, 0, 0, -1, aperture);
+        uint16_t virtual_cover = spatial_cell_light_face(
+            face->normal[2] > 0 ? &face->from : &face->to, 0, 0, 1, NULL);
+        return MIN(physical, virtual_cover);
     }
     return spatial_cell_light_face(&face->from, face->normal[0], face->normal[1], 0,
                                    aperture);
