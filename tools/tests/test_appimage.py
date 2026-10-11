@@ -88,6 +88,7 @@ class AppImageTests(unittest.TestCase):
             "schema": 1,
             "runtime": {"version": "fixture", "size": len(runtime),
                         "digest_md5_offset": 80, "digest_md5_size": 16,
+                        "digest_policy": "zero-field-md5-v1",
                         "sha256": hashlib.sha256(runtime).hexdigest()},
             "sources": [], "tools": {},
             "system_library_packages": {"libzstd.so.1": "libzstd1"},
@@ -146,6 +147,13 @@ class AppImageTests(unittest.TestCase):
             parent.chmod(0o755)
         return path
 
+    def seal(self, data):
+        data = bytearray(data)
+        offset = self.lock["runtime"]["digest_md5_offset"]
+        data[offset:offset + 16] = bytes(16)
+        data[offset:offset + 16] = hashlib.md5(data, usedforsecurity=False).digest()
+        return bytes(data)
+
     def image(self, *, update_files=True, update_lock=True, padding=b""):
         if update_lock:
             self.write("usr/share/atrinik/packaging.lock.json", self.lock_path.read_bytes())
@@ -163,7 +171,7 @@ class AppImageTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         candidate = self.root / "fixture.AppImage"
-        candidate.write_bytes(self.runtime + padding + filesystem.read_bytes())
+        candidate.write_bytes(self.seal(self.runtime + padding + filesystem.read_bytes()))
         return candidate
 
     def validate(self, path=None, **kwargs):
@@ -189,24 +197,32 @@ class AppImageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SquashFS"):
             self.validate(self.image(padding=b"untrusted-prefix"))
 
-    def test_only_trusted_runtime_md5_field_may_change(self):
+    def test_trusted_runtime_md5_field_requires_canonical_fullimage_digest(self):
         image = self.image()
         data = bytearray(image.read_bytes())
+        self.assertNotEqual(data[80:96], bytes(16))
+        self.validate(image)
         data[80:96] = bytes(range(16))
         image.write_bytes(data)
-        self.validate(image)
+        with self.assertRaisesRegex(ValueError, "checksum differs"):
+            self.validate(image)
         for offset in (79, 96):
             changed = bytearray(data)
             changed[offset] ^= 1
             image.write_bytes(changed)
             with self.subTest(offset=offset), self.assertRaisesRegex(ValueError, "runtime"):
                 self.validate(image)
+        changed = bytearray(self.image().read_bytes())
+        changed[-1] ^= 1
+        image.write_bytes(changed)
+        with self.assertRaisesRegex(ValueError, "checksum differs"):
+            self.validate(image)
 
     def test_runtime_mutable_field_bounds_come_only_from_trusted_lock(self):
         image = self.image()
         for field, value in (("digest_md5_offset", 8), ("digest_md5_offset", 127),
                              ("digest_md5_offset", True), ("digest_md5_size", 17),
-                             ("digest_md5_size", "16")):
+                             ("digest_md5_size", "16"), ("digest_policy", "upstream")):
             lock = dict(self.lock, runtime=dict(self.lock["runtime"]))
             lock["runtime"][field] = value
             with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, "runtime lock"):
@@ -218,7 +234,7 @@ class AppImageTests(unittest.TestCase):
         link.symlink_to(candidate)
         with self.assertRaisesRegex(ValueError, "safely read"):
             self.validate(link)
-        candidate.write_bytes(self.runtime + b"hsqsbroken")
+        candidate.write_bytes(self.seal(self.runtime + b"hsqsbroken"))
         with self.assertRaisesRegex(ValueError, "SquashFS"):
             self.validate(candidate)
 
@@ -348,7 +364,7 @@ class AppImageTests(unittest.TestCase):
                 data[len(self.runtime) + 56:len(self.runtime) + 64] = b"\0" * 8
             else:
                 data += b"unexpected tail"
-            image.write_bytes(data)
+            image.write_bytes(self.seal(data))
             with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, "attributes|outside"):
                 self.validate(image)
 

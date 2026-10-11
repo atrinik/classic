@@ -149,7 +149,8 @@ def _runtime_offset(path: Path, lock: dict) -> int:
     if (type(size) is not int or not 64 <= size <= 16 * 1024**2
             or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
             or type(md5_offset) is not int or type(md5_size) is not int or md5_size != 16
-            or not 64 <= md5_offset <= size - md5_size):
+            or not 64 <= md5_offset <= size - md5_size
+            or runtime.get("digest_policy") != "zero-field-md5-v1"):
         raise ValueError("trusted AppImage runtime lock is incomplete")
     with path.open("rb") as stream:
         prefix = stream.read(size)
@@ -162,6 +163,19 @@ def _runtime_offset(path: Path, lock: dict) -> int:
         if (len(prefix) != size or prefix[:6] != b"\x7fELF\x02\x01" or prefix[8:11] != b"AI\x02"
                 or prefix[18:20] != b"\x3e\x00" or hashlib.sha256(normalized).hexdigest() != digest):
             raise ValueError("AppImage runtime differs from trusted x86_64 type-2 runtime")
+        # This is format consistency, not an authenticity mechanism: the
+        # normalized SHA-256 above authenticates the runtime, while the release
+        # contract authenticates the entire artifact with SHA-256. The producer
+        # replaces appimagetool 1.9.1's undefined skipped-buffer MD5 with this
+        # deterministic full-file digest, treating only the locked field as
+        # sixteen zero bytes. Other signature/key fields remain runtime-pinned.
+        checksum = hashlib.md5(usedforsecurity=False)
+        checksum.update(normalized)
+        while chunk := stream.read(1024 * 1024):
+            checksum.update(chunk)
+        if prefix[md5_offset:md5_offset + md5_size] != checksum.digest():
+            raise ValueError("AppImage runtime checksum differs from canonical full-file digest")
+        stream.seek(size)
         # AppImage producers may align the SquashFS after the exact runtime.
         # Only zero padding is permitted; searching arbitrary payload bytes for
         # a magic value would let a forged prefix choose its own interpretation.
