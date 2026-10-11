@@ -54,6 +54,10 @@ static object *attack_test_target(mapstruct *map, object *pl) {
     target->block = 0;
     target->absorb = 0;
     memset(target->protection, 0, sizeof(target->protection));
+    /* Combat selection uses the same lit, queued MAP2 identity as gameplay. */
+    GET_MAP_SPACE_PTR(map, target->x, target->y)->light_value = 1280;
+    CONTR(pl)->cs->state = ST_PLAYING;
+    draw_client_map(pl);
     return target;
 }
 
@@ -275,6 +279,8 @@ START_TEST(test_player_retaliation_preserves_active_target) {
     target->y = pl->y;
     target = object_insert_map(target, map, NULL, INS_NO_MERGE);
     ck_assert_ptr_nonnull(target);
+    GET_MAP_SPACE_PTR(map, target->x, target->y)->light_value = 1280;
+    draw_client_map(pl);
     ck_assert(!attack_is_melee_range(pl, target));
     target->enemy = pl;
     target->enemy_count = pl->count;
@@ -302,6 +308,8 @@ START_TEST(test_player_retaliation_replaces_non_aggro_target) {
     target->y = pl->y;
     target = object_insert_map(target, map, NULL, INS_NO_MERGE);
     ck_assert_ptr_nonnull(target);
+    GET_MAP_SPACE_PTR(map, target->x, target->y)->light_value = 1280;
+    draw_client_map(pl);
     CONTR(pl)->target_object = target;
     CONTR(pl)->target_object_count = target->count;
     CONTR(pl)->combat = 1;

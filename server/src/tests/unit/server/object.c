@@ -265,7 +265,10 @@ START_TEST(test_player_clears_target_outside_map_neighborhood_before_self_heal) 
     object *pl;
     check_setup_env_pl(&map, &pl);
 
+    FREE_AND_COPY_HASH(map->path, "/tests/target-neighborhood-source");
+
     mapstruct *nearby = get_empty_map(24, 24);
+    FREE_AND_COPY_HASH(nearby->path, "/tests/target-neighborhood-nearby");
     map->tile_map[TILED_EAST] = nearby;
     nearby->tile_map[TILED_WEST] = map;
 
