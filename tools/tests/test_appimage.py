@@ -279,6 +279,17 @@ class AppImageTests(unittest.TestCase):
             with self.subTest(tail=data[-40:]), self.assertRaises(ValueError):
                 self.validate()
 
+    def test_known_testing_markers_are_rejected_and_production_routes_allowed(self):
+        client = self.payload / "usr/bin/atrinik"
+        original = client.read_bytes()
+        for marker in (b"--gpu-player-view", b"injected GPU conformance fault",
+                       b"--help-parser-test", b"--widget-priority-test", b"--sound-test"):
+            client.write_bytes(original + b"\0" + marker + b"\0")
+            with self.subTest(marker=marker), self.assertRaisesRegex(ValueError, "test instrumentation"):
+                self.validate()
+        client.write_bytes(original + b"\0--live-movement-route\0")
+        self.validate()
+
     def test_missing_library_closure_and_dlopen_requirement(self):
         original = self.lock["host_libraries"]
         self.lock["host_libraries"] = []
