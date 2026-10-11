@@ -4,7 +4,7 @@ Classic's sibling protocol module owns the admission identifiers in
 `schema/rendezvous-admission.json`, generated C and Python bindings, and the shared
 synthetic conformance fixture. The MIT shared specification remains authoritative
 for cross-repository transport semantics:
-[protocol rendezvous admission v1](https://github.com/atrinik/protocol/blob/bbe1d53abb4a506893af2275f58c67468e454676/spec/rendezvous-admission.md).
+[protocol rendezvous admission v1](https://github.com/atrinik/protocol/blob/08d843d69909840b414b06cf3ec29fc55b234475/spec/rendezvous-admission.md).
 Classic library implements the native HTTPS client/parser/solver and Classic
 client consumes it. Worker implements challenge, upgrade verification and replay.
 Game rendezvous is disabled. This handshake does not allocate a game command ID
@@ -78,11 +78,11 @@ Existing CMake install of generated headers and Python package discovery include
 the new bindings; protocol source packaging includes schema, docs and fixtures.
 
 `fixtures/rendezvous-admission-v1.json` is copied byte-for-byte from MIT
-`atrinik/protocol` PR49 branch `fix/rendezvous-admission-173-20261011`, path
-`fixtures/rendezvous-admission-v1.json`, SHA256
+`atrinik/protocol` revision `08d843d69909840b414b06cf3ec29fc55b234475`,
+[fixture source](https://github.com/atrinik/protocol/blob/08d843d69909840b414b06cf3ec29fc55b234475/fixtures/rendezvous-admission-v1.json),
+path `fixtures/rendezvous-admission-v1.json`, SHA256
 `6c98dd74b612c67af7b2692367a7c4cab3c55769859110256b4a67dbb874ca74`.
-The immutable digest identifies the frozen reviewed bytes while the companion
-source commit is being prepared; no future commit or release pin is asserted.
+The immutable source commit and digest identify the frozen reviewed bytes.
 Its solved proof retains the original vector from revision
 `bbe1d53abb4a506893af2275f58c67468e454676`. Its MIT license and copyright are retained in
 `fixtures/rendezvous-admission-LICENSE.txt`. This is compatible inbound MIT fixture
