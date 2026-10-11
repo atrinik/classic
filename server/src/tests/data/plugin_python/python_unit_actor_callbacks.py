@@ -11,9 +11,23 @@ actor.WriteKey("actor_callback_calls", str(calls))
 trigger_call = 3 if mode == "recycle_observer_third" else (
     2 if mode in ("destroy_spell_second", "destroy_target_second", "kick_observer_second",
                   "destroy_target_reclaim_second") else 1)
-if calls == trigger_call and actor.ReadKey("actor_callback_done") != "1":
+if mode == "pickup_veto" or (calls == trigger_call and actor.ReadKey("actor_callback_done") != "1"):
     actor.WriteKey("actor_callback_done", "1")
-    if mode in ("gate_destroy_guard_reclaim", "gate_kick_observer", "gate_visible"):
+    if mode.startswith("stop_"):
+        players = [obj for obj in actor.map.Objects(actor.x - 1, actor.y)
+                   if obj.name == "actor-callback-player"]
+        assert len(players) == 1
+        player = players[0]
+        player.WriteKey("stop_callback_ran", "1")
+        if "destroy" in mode:
+            actor.Destroy()
+        if "reclaim" in mode:
+            player.Controller().ExecuteCommand("/memfree objects")
+        if "kick" in mode:
+            player.Controller().ExecuteCommand("/kick " + player.name)
+    elif mode == "pickup_veto":
+        observer.WriteKey("pickup_callback_ran", "1")
+    elif mode in ("gate_destroy_guard_reclaim", "gate_kick_observer", "gate_visible"):
         players = [obj for obj in actor.map.Objects(actor.x - 1, actor.y)
                    if obj.name == "actor-callback-player"]
         assert len(players) == 1
@@ -63,4 +77,4 @@ if calls == trigger_call and actor.ReadKey("actor_callback_done") != "1":
         casters[0].Destroy()
     elif mode != "visible":
         raise ValueError("Unknown callback test mode: " + mode)
-Atrinik.SetReturnValue(0)
+Atrinik.SetReturnValue(1 if mode.endswith("_handled") or mode == "pickup_veto" else 0)

@@ -347,7 +347,13 @@ int object_projectile_hit(object *op, object *victim) {
 object *object_projectile_stop(object *op, int reason) {
     HARD_ASSERT(op != NULL);
 
-    if (trigger_event(EVENT_STOP, NULL, op, NULL, NULL, 0, 0, 0, 0) != 0) {
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t count = op->count;
+    int handled = trigger_event(EVENT_STOP, NULL, op, NULL, NULL, 0, 0, 0, 0);
+    if (!object_reclamation_is_current(reclamation) || !object_reference_matches(op, count)) {
+        return NULL;
+    }
+    if (handled != 0) {
         return op;
     }
 

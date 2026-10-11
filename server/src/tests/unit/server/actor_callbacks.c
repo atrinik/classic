@@ -1002,6 +1002,106 @@ START_TEST(test_device_cast_aborts_after_target_storage_reclamation) {
 }
 END_TEST
 
+/* Exercise EVENT_STOP through 3D hits and pickup, with both plugin return
+ * contracts. The projectile alone occupies a fresh object puddle. */
+START_TEST(test_projectile_stop_rechecks_callback_storage) {
+    mapstruct *map;
+    object *pl;
+    fixture(&map, &pl);
+    player *controller = CONTR(pl);
+    controller->cmd_permissions = xrealloc(controller->cmd_permissions, 2 * sizeof(char *));
+    controller->cmd_permissions[1] = xstrdup("memfree");
+    controller->num_cmd_permissions = 2;
+    object *victim = place(map, 13, 12);
+    CLEAR_FLAG(victim, FLAG_REFL_MISSILE);
+    mempool_struct *pool = mempool_find("objects");
+    ck_assert_ptr_nonnull(pool);
+    size_t num_held = pool->nrof_free[0];
+    object **held = xcalloc(MAX(num_held, 1), sizeof(*held));
+    for (size_t i = 0; i < num_held; i++) {
+        held[i] = object_get();
+    }
+    ck_assert_uint_eq(pool->nrof_free[0], 0);
+    object *arrow = arch_get("arrow");
+    mempool_chunk_struct *storage = pool->puddlelist[0]->first_chunk;
+    uintptr_t address = (uintptr_t)MEM_POOLDATA(arrow);
+    uintptr_t first = (uintptr_t)storage;
+    ck_assert(address >= first &&
+              address < first + pool->expand_size * (sizeof(mempool_chunk_struct) + pool->chunksize));
+    for (size_t i = 0; i < num_held; i++) {
+        object_destroy(held[i]);
+    }
+    xfree(held);
+    arrow->x = 13;
+    arrow->y = 12;
+    arrow->stats.dam = 0;
+    arrow->speed = 0;
+    arrow->last_sp = 8;
+    SET_FLAG(arrow, FLAG_IS_MISSILE);
+    object_owner_set(arrow, pl);
+    arrow = object_insert_map(arrow, map, NULL, INS_NO_MERGE | INS_NO_WALK_ON);
+    ck_assert_ptr_nonnull(arrow);
+    projectile3d_launch(arrow, arrow, NULL, 3);
+    ck_assert(projectile3d_valid(&arrow->projectile));
+    bool pickup = _i >= 6;
+    int mode = pickup ? _i - 6 : _i;
+    static const char *modes[] = {
+        "stop_live", "stop_live_handled", "stop_destroy", "stop_destroy_handled",
+        "stop_destroy_reclaim", "stop_destroy_reclaim_handled", "stop_kick", "stop_kick_handled"
+    };
+    object *event = object_get();
+    event->type = EVENT_OBJECT;
+    event->sub_type = EVENT_STOP;
+    FREE_AND_COPY_HASH(event->name, "Python");
+    FREE_AND_COPY_HASH(event->race, "events/python_unit_actor_callbacks.py");
+    FREE_AND_COPY_HASH(event->slaying, modes[mode]);
+    object_insert_into(event, arrow, INS_NO_MERGE);
+    if (pickup) {
+        event = object_get();
+        event->type = EVENT_OBJECT;
+        event->sub_type = EVENT_PICKUP;
+        FREE_AND_COPY_HASH(event->name, "Python");
+        FREE_AND_COPY_HASH(event->race, "events/python_unit_actor_callbacks.py");
+        FREE_AND_COPY_HASH(event->slaying, "pickup_veto");
+        object_insert_into(event, arrow, INS_NO_MERGE);
+    }
+    tag_t count = arrow->count;
+    tag_t pl_count = pl->count;
+    socket_struct *socket = controller->cs;
+    uint64_t reclamation = object_reclamation_epoch();
+
+    if (pickup) {
+        pick_up(pl, arrow, 1);
+    } else {
+        ck_assert_int_eq(projectile3d_hit_current(arrow), mode == 1);
+    }
+
+    if (mode >= 6) {
+        ck_assert(!player_connection_is_current(pl, pl_count, controller, socket));
+        ck_assert(object_reference_is_current(arrow, count));
+        return;
+    }
+    ck_assert_str_eq(object_get_value(pl, "stop_callback_ran"), "1");
+    if (pickup && mode < 2) {
+        ck_assert_str_eq(object_get_value(pl, "pickup_callback_ran"), "1");
+    } else {
+        ck_assert_ptr_null(object_get_value(pl, "pickup_callback_ran"));
+    }
+    if (mode < 2) {
+        ck_assert(object_reference_is_current(arrow, count));
+        ck_assert_int_eq(projectile3d_valid(&arrow->projectile), mode == 1);
+    } else {
+        ck_assert(!object_reference_matches(arrow, count));
+    }
+    ck_assert_int_eq(object_reclamation_is_current(reclamation), mode < 4);
+    if (mode >= 4) {
+        for (mempool_puddle_struct *puddle = pool->puddlelist[0]; puddle != NULL; puddle = puddle->next) {
+            ck_assert_ptr_ne(puddle->first_chunk, storage);
+        }
+    }
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("server.actor_callbacks");
     TCase *tc = tcase_create("callbacks");
@@ -1026,6 +1126,7 @@ static Suite *suite(void) {
     tcase_add_loop_test(tc, test_guard_close_fences_gate_trigger_callbacks, 0, 3);
     tcase_add_test(tc, test_dialogue_rejects_retained_reclaimed_references_on_later_action);
     tcase_add_loop_test(tc, test_device_cast_aborts_after_target_storage_reclamation, 0, 8);
+    tcase_add_loop_test(tc, test_projectile_stop_rechecks_callback_storage, 0, 14);
     suite_add_tcase(s, tc);
     return s;
 }

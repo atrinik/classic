@@ -2708,7 +2708,18 @@ static void pick_up_object(object *pl, object *op, object *tmp, int nrof, int no
     }
 
     if (tmp->type == ARROW) {
-        object_projectile_stop(tmp, OBJECT_PROJECTILE_PICKUP);
+        uint64_t reclamation = object_reclamation_epoch();
+        tag_t pl_count = pl->count, op_count = op->count, tmp_count = tmp->count;
+        player *controller = pl->type == PLAYER ? CONTR(pl) : NULL;
+        socket_struct *socket = controller != NULL ? controller->cs : NULL;
+        object *stopped = object_projectile_stop(tmp, OBJECT_PROJECTILE_PICKUP);
+        if (!object_reclamation_is_current(reclamation) ||
+            (controller != NULL && !player_connection_is_current(pl, pl_count, controller, socket)) ||
+            !object_reference_is_current(pl, pl_count) ||
+            !object_reference_is_current(op, op_count) ||
+            !object_reference_is_current(tmp, tmp_count) || stopped != tmp) {
+            return;
+        }
     }
 
     /* Trigger the PICKUP event */
@@ -2885,10 +2896,19 @@ void pick_up(object *op, object *alt, int no_mevent) {
         return;
     }
 
+    uint64_t reclamation = object_reclamation_epoch();
+    tag_t op_count = op->count;
+    player *controller = op->type == PLAYER ? CONTR(op) : NULL;
+    socket_struct *socket = controller != NULL ? controller->cs : NULL;
     pick_up_object(op, alt, tmp, count, no_mevent);
 
-    if (op->type == PLAYER) {
-        CONTR(op)->count = 0;
+    if (!object_reclamation_is_current(reclamation) ||
+        (controller != NULL && !player_connection_is_current(op, op_count, controller, socket)) ||
+        !object_reference_is_current(op, op_count)) {
+        return;
+    }
+    if (controller != NULL) {
+        controller->count = 0;
     }
 }
 

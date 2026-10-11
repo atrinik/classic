@@ -209,14 +209,17 @@ static bool hit_victim(object *op, object *victim) {
         projectile3d_reflect(op, 7);
         return false;
     }
+    uint64_t reclamation = object_reclamation_epoch();
     tag_t count = op->count;
     int result = object_projectile_hit(op, victim);
-    if (result == OBJECT_METHOD_ERROR || !OBJECT_VALID(op, count)) {
+    if (!object_reclamation_is_current(reclamation) || result == OBJECT_METHOD_ERROR ||
+        !object_reference_is_current(op, count)) {
         return false;
     }
     if (result == OBJECT_METHOD_OK) {
         object *live = object_projectile_stop(op, OBJECT_PROJECTILE_STOP_HIT);
-        if (!OBJECT_VALID(op, count) || live != op || live->env != NULL ||
+        if (!object_reclamation_is_current(reclamation) ||
+            !object_reference_is_current(op, count) || live != op || live->env != NULL ||
             !projectile3d_valid(&live->projectile)) {
             return false;
         }
