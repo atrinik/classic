@@ -112,7 +112,7 @@ START_TEST(test_retained_enemy_loses_sight_without_losing_pursuit_or_casting) {
     SET_FLAG(npc, FLAG_CAST_SPELL);
     object *ability = object_get();
     ability->type = ABILITY;
-    ability->stats.sp = SP_MAGIC_BULLET;
+    ability->stats.sp = SP_BULLET;
     ability->stats.hp = -1;
     object_insert_into(ability, npc, 0);
     set_npc_enemy(npc, pl, NULL);
@@ -180,7 +180,7 @@ START_TEST(test_acquisition_large_authored_radius_remains_bounded) {
     object *pl;
     perception_fixture(&map, &pl);
     object *npc = perception_monster(map, pl->x, pl->y + 1);
-    npc->item_power = INT16_MAX;
+    npc->item_power = INT8_MAX;
     SET_FLAG(pl, FLAG_IS_INVISIBLE);
     rv_vector rv;
     ck_assert_ptr_null(find_enemy(npc, &rv));
