@@ -132,6 +132,7 @@ class AppImageTests(unittest.TestCase):
         for directory in ("data", "sound", "fonts", "textures"):
             self.write(f"usr/share/games/atrinik/{directory}/fixture", "fixture\n")
         self.metadata = {"schema": 1, "version": self.version, "revision": self.revision,
+                         "source_date_epoch": 1791648000,
                          "lock_sha256": hashlib.sha256(self.lock_path.read_bytes()).hexdigest(),
                          "build_features": {"testing": False, "coverage": False, "sanitizers": False},
                          "bundled_libraries": ["libzstd.so.1"],
@@ -159,7 +160,7 @@ class AppImageTests(unittest.TestCase):
         data[offset:offset + 16] = hashlib.md5(data, usedforsecurity=False).digest()
         return bytes(data)
 
-    def image(self, *, update_files=True, update_lock=True, padding=b""):
+    def image(self, *, update_files=True, update_lock=True, padding=b"", filesystem_epoch=None):
         if update_lock:
             self.write("usr/share/atrinik/packaging.lock.json", self.lock_path.read_bytes())
         if update_files:
@@ -171,8 +172,10 @@ class AppImageTests(unittest.TestCase):
             }
         self.write("usr/share/atrinik/appimage-manifest.json", json.dumps(self.metadata, sort_keys=True))
         filesystem = self.root / "payload.squashfs"
+        epoch = self.metadata["source_date_epoch"] if filesystem_epoch is None else filesystem_epoch
         result = subprocess.run(["/usr/bin/mksquashfs", str(self.payload), str(filesystem),
-                                 "-noappend", "-all-root", "-no-xattrs", "-processors", "1"],
+                                 "-noappend", "-all-root", "-no-xattrs", "-processors", "1",
+                                 "-mkfs-time", str(epoch), "-all-time", str(epoch)],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         candidate = self.root / "fixture.AppImage"
@@ -491,15 +494,17 @@ class AppImageTests(unittest.TestCase):
             "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
         self.revision = git("rev-parse", "HEAD")
         self.metadata["revision"] = self.revision
+        self.metadata["source_date_epoch"] = int(git("show", "-s", "--format=%ct", "HEAD"))
         candidate = self.image()
         # Mutable source bytes cannot replace the trusted revision's contract.
         self.lock_path.write_text("{}\n")
         args = ["appimage.py", str(candidate), self.version, "--revision", self.revision,
                 "--source-root", str(self.source)]
         validate = appimage.validate_appimage
-        def verify_shared_resources(path, version, *, revision, source_root):
+        def verify_shared_resources(path, version, *, revision, source_root, source_date_epoch):
             self.assertEqual((source_root / "fixture-extra.txt").read_text(), "shared resource contract\n")
-            validate(path, version, revision=revision, source_root=source_root)
+            self.assertEqual(source_date_epoch, self.metadata["source_date_epoch"])
+            validate(path, version, revision=revision, source_root=source_root, source_date_epoch=source_date_epoch)
         resources = appimage.TRUSTED_SOURCE_FILES + ("fixture-extra.txt",)
         with (mock.patch.object(sys, "argv", args), contextlib.redirect_stdout(io.StringIO()),
               mock.patch.object(appimage, "TRUSTED_SOURCE_FILES", resources),
@@ -511,6 +516,30 @@ class AppImageTests(unittest.TestCase):
                 appimage.main()
         self.assertEqual(exited.exception.code, 1)
         self.assertIn("HEAD differs", error.getvalue())
+        args[4] = self.revision
+        args.extend(["--source-date-epoch", str(self.metadata["source_date_epoch"] + 1)])
+        with mock.patch.object(sys, "argv", args), contextlib.redirect_stderr(io.StringIO()) as error:
+            with self.assertRaises(SystemExit):
+                appimage.main()
+        self.assertIn("source epoch differs", error.getvalue())
+
+    def test_source_epoch_matches_trusted_commit_and_squashfs(self):
+        epoch = self.metadata["source_date_epoch"]
+        image = self.image()
+        self.validate(image, source_date_epoch=epoch)
+        for expected in (epoch + 1, -1, 2**32, True):
+            with self.subTest(expected=expected), self.assertRaisesRegex(ValueError, "source epoch"):
+                self.validate(image, source_date_epoch=expected)
+        data = bytearray(image.read_bytes())
+        offset = len(self.runtime) + 8
+        data[offset:offset + 4] = (epoch + 1).to_bytes(4, "little")
+        image.write_bytes(self.seal(data))
+        with self.assertRaisesRegex(ValueError, "source epoch"):
+            self.validate(image)
+        for value in (True, -1, 2**32, str(epoch)):
+            self.metadata["source_date_epoch"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "source epoch"):
+                self.validate(self.image(filesystem_epoch=epoch))
 
 
 if __name__ == "__main__":
