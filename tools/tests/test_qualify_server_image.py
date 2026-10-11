@@ -60,11 +60,9 @@ class DockerFixture:
             self.starts += 1
             c["State"].update(Running=not c["benchmark"], Status="exited" if c["benchmark"] else "running",
                 StartedAt=(datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat(), Health={"Status": "healthy"})
-            c["logs"] = BENCHMARK if c["benchmark"] else q.READY + f"\nBuild identity: revision={REVISION} dirty=false"
+            c["logs"] = BENCHMARK if c["benchmark"] else q.READY
             if c["benchmark"] and self.fault == "missing-benchmark":
                 c["logs"] = "startup only"
-            if not c["benchmark"] and self.fault == "source-identity":
-                c["logs"] = q.READY + "\nBuild identity: revision=unknown dirty=unknown"
             if not c["benchmark"] and self.fault == "early-exit":
                 c["State"]["Running"] = False
             if not c["benchmark"] and self.fault == "stale-readiness" and self.starts == 3:
@@ -72,7 +70,10 @@ class DockerFixture:
         elif args[1] == "logs":
             output = self.containers[args[-1]]["logs"]
         elif args[1] == "exec":
-            if args[3] == "cat":
+            if args[3] == "./atrinik-server":
+                revision = "unknown" if self.fault == "source-identity" else REVISION
+                output = f"This is Atrinik v0.0.0\nBuild identity: revision={revision} dirty=false\n"
+            elif args[3] == "cat":
                 output = "1" if self.fault == "stale-heartbeat" else str(int(datetime.now(timezone.utc).timestamp()))
             elif args[3] == "id":
                 output = "0" if self.fault == "root" else "10001"

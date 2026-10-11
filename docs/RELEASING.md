@@ -747,7 +747,8 @@ no published ports, no external network, dropped capabilities, bounded resources
 and disposable container state. It exercises the existing offline benchmark on
 the packaged `/shattered_islands/world_0_70` map for one iteration, requiring the
 server's load/warm-lookup/swap/reload identity checks and exact completion record.
-A separate normal-entrypoint container must pass runtime-provider verification,
+A separate normal-entrypoint container must report the exact clean source revision
+from its packaged `--version` command and pass runtime-provider verification,
 reach readiness and Docker health, produce a fresh heartbeat, exit zero after
 SIGTERM with the checked save-completion message, then repeat startup and shutdown
 using its retained disposable state. Restart log and heartbeat evidence must

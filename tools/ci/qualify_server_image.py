@@ -164,8 +164,6 @@ class Qualification:
                     break
                 require(time.monotonic() < deadline, "Server readiness/health timed out")
                 time.sleep(2)
-            require(f"Build identity: revision={self.revision} dirty=false" in output,
-                    "Packaged executable source identity differs")
             # Require a heartbeat from this start, not a healthy retained file.
             heartbeat = self.exec(container_id, "cat", "data/tmp/server-heartbeat").strip()
             require(heartbeat.isdecimal(), "Invalid heartbeat")
@@ -173,6 +171,10 @@ class Qualification:
                     "Heartbeat predates this server start")
             require(self.exec(container_id, "id", "-u").strip() == "10001", "Runtime UID is not 10001")
             if iteration == 0:
+                version = self.exec(container_id, "./atrinik-server", "--version")
+                (self.output / "server-version.txt").write_text(version)
+                require(f"Build identity: revision={self.revision} dirty=false" in version
+                        and "This is Atrinik v0.0.0" in version, "Packaged executable source identity differs")
                 self.exec(container_id, "python3", "/usr/local/share/atrinik/runtime-provider.py", "verify-runtime",
                           "--server", "/opt/atrinik/server")
                 # Hash only public packaged inputs; never copy generated keys or account state.
