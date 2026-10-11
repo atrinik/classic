@@ -182,8 +182,10 @@ typedef struct map_cell_header {
 
 static map_cell_store_t *cells;
 static map_cell_store_t *level_cells[MAP2_LEVELS];
+#ifdef ATRINIK_WIDGET_TESTS
 static uint64_t map_cell_allocation_count;
 static uint64_t map_cell_allocation_bytes;
+#endif
 static uint64_t map_cell_retained_bytes;
 static uint64_t map_cell_peak_retained_bytes;
 static uint64_t map_cell_next_painter_identity = 1;
@@ -264,8 +266,10 @@ void map_animation_redraw_consume(void) {
 }
 
 void map_benchmark_statistics_reset(void) {
+#ifdef ATRINIK_WIDGET_TESTS
     map_cell_allocation_count = 0;
     map_cell_allocation_bytes = 0;
+#endif
     map_cell_peak_retained_bytes = map_cell_retained_bytes;
     map_benchmark_statistics = (map_benchmark_statistics_t){0};
     map_benchmark_animation_command_digest = 0;
@@ -300,8 +304,10 @@ static void map_clear_expired_visibility_layer(map_cell_t *cell, int sub_layer, 
 
 static void *map_cell_record_allocate(size_t size) {
     void *record = xcalloc(1, size);
+#ifdef ATRINIK_WIDGET_TESTS
     map_cell_allocation_count++;
     map_cell_allocation_bytes += size;
+#endif
     map_cell_retained_bytes += size;
     map_cell_peak_retained_bytes = MAX(map_cell_peak_retained_bytes, map_cell_retained_bytes);
     return record;
@@ -1055,8 +1061,10 @@ static map_cell_store_t *map_cell_store_create(size_t count) {
     store->headers = xcalloc(count, sizeof(*store->headers));
     store->count = count;
     size_t bytes = sizeof(*store) + count * (sizeof(*store->slots) + sizeof(*store->headers));
+#ifdef ATRINIK_WIDGET_TESTS
     map_cell_allocation_count += 3;
     map_cell_allocation_bytes += bytes;
+#endif
     map_cell_retained_bytes += bytes;
     map_cell_peak_retained_bytes = MAX(map_cell_peak_retained_bytes, map_cell_retained_bytes);
     return store;
