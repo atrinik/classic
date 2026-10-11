@@ -58,9 +58,10 @@ def main():
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda job: download(job[0], job[1], cache), jobs))
     (args.output / 'dependency-inputs.lock.json').write_text(json.dumps({k: lock[k] for k in ('sources', 'tools', 'runtime', 'license_inputs', 'runtime_sources')}, sort_keys=True) + '\n')
-    probe = root / 'runtime-probe.c'
-    if probe.is_file() and probe.resolve() != (args.output / probe.name).resolve():
-        shutil.copyfile(probe, args.output / probe.name)
+    for name in ('runtime-probe.c', 'graphical-probe.c'):
+        probe = root / name
+        if probe.is_file() and probe.resolve() != (args.output / probe.name).resolve():
+            shutil.copyfile(probe, args.output / probe.name)
     for name in ('Dockerfile', 'build-dependencies.sh', 'packaging.lock.json'):
         if (root / name).resolve() != (args.output / name).resolve():
             shutil.copyfile(root / name, args.output / name)
