@@ -22,9 +22,9 @@ option enables unity builds.
 
 ## Reproduce the benchmark
 
-Configure one build tree per compiler and mode from the Classic repository
+Configure one build tree per mode from the Classic repository
 root. The client has one conventional build path; the server commands below
-show the GCC Debug pair that can be compared with and without its PCH.
+show the LLVM 23.1.3 Debug pair that can be compared with and without its PCH.
 
 ```sh
 cmake -S client -B client/build/debug-conventional -G Ninja \
@@ -33,30 +33,30 @@ cmake -S client -B client/build/debug-conventional -G Ninja \
   -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="$PWD/libatrinik"
 cmake --build client/build/debug-conventional --target atrinik --parallel 16
 
-cmake -S server -B server/build/benchmark-gcc-debug-conventional -G Ninja \
+cmake -S server -B server/build/benchmark-llvm-debug-conventional -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
   -DENABLE_PRECOMPILED_HEADERS=OFF \
   -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="$PWD/protocol" \
   -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="$PWD/libatrinik"
-cmake -S server -B server/build/benchmark-gcc-debug-pch -G Ninja \
+cmake -S server -B server/build/benchmark-llvm-debug-pch -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
   -DENABLE_PRECOMPILED_HEADERS=ON \
   -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="$PWD/protocol" \
   -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="$PWD/libatrinik"
 python3 tools/benchmark_build_acceleration.py \
-  --build-dir server/build/benchmark-gcc-debug-conventional \
+  --build-dir server/build/benchmark-llvm-debug-conventional \
   --target atrinik-server --source server/src/server/main.c \
   --header server/src/include/global.h --jobs 16 --runs 3 \
-  --output server/build/benchmark-gcc-debug-conventional.json
+  --output server/build/benchmark-llvm-debug-conventional.json
 python3 tools/benchmark_build_acceleration.py \
-  --build-dir server/build/benchmark-gcc-debug-pch \
+  --build-dir server/build/benchmark-llvm-debug-pch \
   --target atrinik-server --source server/src/server/main.c \
   --header server/src/include/global.h --jobs 16 --runs 3 \
-  --output server/build/benchmark-gcc-debug-pch.json
+  --output server/build/benchmark-llvm-debug-pch.json
 ```
 
-For the server's Clang pair, set `CC=clang CXX=clang++` while configuring
-parallel build directories. The script cleans the configured tree before each
+The default native CMake toolchain selects Clang, LLD, compiler-rt and libunwind
+from the pinned LLVM producer. The script cleans the configured tree before each
 run, measures an immediate warm build, advances and restores the representative
 source mtime, then advances and restores the common-header mtime. It records
 elapsed seconds, aggregate process-group peak RSS on Linux, rebuilt object/PCH
