@@ -685,6 +685,21 @@ void main_process(void) {
 
     trigger_global_event(GEVENT_TICK, NULL, NULL);
     server_stage_finished("tick-plugins", stage_started_us);
+
+    /* Atrinik.Process() is the offline plugin-test tick. Its harness exits
+     * before the ordinary server loop and therefore has no socket post-pass.
+     * Queue normal MAP2 snapshots so these tests exercise the same published
+     * target identity as a playing client, without writing to a socket. */
+    if (settings.plugin_unit_tests) {
+        player *pl;
+        DL_FOREACH(first_player, pl) {
+            if (pl->cs != NULL && pl->cs->state == ST_PLAYING && pl->ob != NULL &&
+                OBJECT_ACTIVE(pl->ob) && pl->ob->env == NULL && pl->ob->map != NULL &&
+                pl->ob->map->in_memory == MAP_IN_MEMORY && pl->ob->map->spaces != NULL) {
+                draw_client_map(pl->ob);
+            }
+        }
+    }
 }
 
 /**

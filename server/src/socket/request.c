@@ -830,6 +830,9 @@ void packet_writer_write_map_name(struct packet_struct *packet, object *op, obje
     static const char prefix[] = "[b][o=#000000]";
     static const char suffix[] = "[/o][/b]";
     const char *name = map_info && map_info->race ? map_info->race : op->map->name;
+    if (name == NULL) {
+        name = op->map->path != NULL ? op->map->path : "Unnamed map";
+    }
 
     packet_debug_data(packet, 0, "Map name");
     packet_writer_write_string(packet, prefix);

@@ -3016,6 +3016,31 @@ START_TEST(test_region_exploration_grants_only_visible_public_base_cells) {
 }
 END_TEST
 
+START_TEST(test_map_name_metadata_handles_transient_unnamed_maps) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    FREE_AND_CLEAR_HASH(map->name);
+    FREE_AND_COPY_HASH(map->path, "/tests/unnamed-map");
+    packet_struct *packet = packet_new(0, 0, 64);
+    packet_writer_write_map_name(packet, pl, NULL);
+    packet_reader_t reader;
+    char name[MAX_BUF];
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert(packet_reader_read_string(&reader, VS(name)));
+    ck_assert_str_eq(name, "[b][o=#000000]/tests/unnamed-map[/o][/b]");
+    packet_free(packet);
+
+    FREE_AND_CLEAR_HASH(map->path);
+    packet = packet_new(0, 0, 64);
+    packet_writer_write_map_name(packet, pl, NULL);
+    packet_reader_init(&reader, packet->data, packet->len);
+    ck_assert(packet_reader_read_string(&reader, VS(name)));
+    ck_assert_str_eq(name, "[b][o=#000000]Unnamed map[/o][/b]");
+    packet_free(packet);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -3024,6 +3049,7 @@ static Suite *suite(void) {
     tcase_add_unchecked_fixture(tc_core, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_core, check_test_setup, check_test_teardown);
     suite_add_tcase(s, tc_core);
+    tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_target_packet_includes_current_level_and_plain_name);
     tcase_add_test(tc_core, test_target_select_requires_exact_packet_before_mutation);
     tcase_add_test(tc_core, test_target_stale_forged_and_unavailable_depth_resolve_self);
