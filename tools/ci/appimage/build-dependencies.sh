@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 prefix=/opt/atrinik-appimage
+export SOURCE_DATE_EPOCH
+SOURCE_DATE_EPOCH=$(python3 -c 'import json; print(json.load(open("/inputs/packaging.lock.json"))["base_image"]["build_epoch"])')
 mkdir -p /build "${prefix}/tools"
 python3 - <<'PY'
 import hashlib,json,pathlib
@@ -20,7 +22,23 @@ build() {
  cmake --build "/build/${source}-build" --parallel 4
  cmake --install "/build/${source}-build"
 }
-(cd /build/openssl-3.5.5; ./Configure linux-x86_64 shared --prefix=/usr --libdir=lib --openssldir=/etc/ssl; make -j4; make DESTDIR=/build/openssl-install install_sw; cp -a /build/openssl-install/usr/. "${prefix}/"; sed -i 's@^prefix=/usr$@prefix=/opt/atrinik-appimage@' "${prefix}"/lib/pkgconfig/{openssl,libssl,libcrypto}.pc)
+(
+ cd /build/openssl-3.5.5
+ python3 - <<'PYBUILDINFO'
+from pathlib import Path
+path = Path('util/mkbuildinf.pl')
+text = path.read_text()
+needle = "my $cflags = join(' ', @ARGV);"
+assert text.count(needle) == 1
+text = text.replace(needle, needle + "\n$cflags =~ s{\\s+-f(?:file|debug)-prefix-map=\\S+}{}g;")
+path.write_text(text)
+PYBUILDINFO
+ ./Configure linux-x86_64 shared --prefix=/usr --libdir=lib --openssldir=/etc/ssl
+ make -j4
+ make DESTDIR=/build/openssl-install install_sw
+ cp -a /build/openssl-install/usr/. "${prefix}/"
+ sed -i 's@^prefix=/usr$@prefix=/opt/atrinik-appimage@' "${prefix}"/lib/pkgconfig/{openssl,libssl,libcrypto}.pc
+)
 build c-ares-1.34.6 -DCARES_SHARED=ON -DCARES_STATIC=OFF -DCARES_BUILD_TESTS=OFF
 build curl-8.18.0 -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DBUILD_TESTING=OFF \
  -DCURL_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR="${prefix}" -DENABLE_ARES=ON \
@@ -45,6 +63,8 @@ for e in lock['sources']:
  with target.open('wb') as out:
   for f in files:
    out.write(('\n===== '+str(f.relative_to(root))+' =====\n').encode());out.write(f.read_bytes());out.write(b'\n')
+  if e['name'] == 'openssl':
+   out.write(b'\nAtrinik AppImage build modification: util/mkbuildinf.pl generated compiler description omits reproducibility path-map flags to avoid exposing absolute build paths. Runtime code and compiler flags retain these mappings.\n')
 PY
 for tool in linuxdeploy appimagetool; do
  chmod +x "/inputs/tools/${tool}"

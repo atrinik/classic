@@ -57,7 +57,7 @@ def main():
         jobs.append((entry, args.output / 'tools' / entry['name']))
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda job: download(job[0], job[1], cache), jobs))
-    (args.output / 'dependency-inputs.lock.json').write_text(json.dumps({k: lock[k] for k in ('sources', 'tools', 'runtime', 'license_inputs', 'runtime_sources')}, sort_keys=True) + '\n')
+    (args.output / 'dependency-inputs.lock.json').write_text(json.dumps({k: lock[k] for k in ('sources', 'tools', 'runtime', 'license_inputs', 'runtime_sources', 'base_image')}, sort_keys=True) + '\n')
     for name in ('runtime-probe.c', 'graphical-probe.c'):
         probe = root / name
         if probe.is_file() and probe.resolve() != (args.output / probe.name).resolve():
