@@ -163,6 +163,19 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertFalse(result["benchmark_client"])
         self.assertFalse(result["benchmark_server"])
 
+    def test_admission_platform_fixture_selects_both_unix_native_consumers(self) -> None:
+        result = classify_changes.classify(
+            ["tools/tests/test_rendezvous_admission_platform.py"]
+        )
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertFalse(result["windows"])
+        self.assertTrue(result["codeql_run"])
+        self.assertTrue(result["codeql_python"])
+        self.assertEqual(result["codeql_languages"], "python")
+        self.assertFalse(result["benchmark_client"])
+        self.assertFalse(result["benchmark_server"])
+
     def test_release_configuration_selects_both_native_components(self) -> None:
         result = classify_changes.classify([".releaserc.cjs"])
         self.assertTrue(result["client"])

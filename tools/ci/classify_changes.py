@@ -30,6 +30,7 @@ NATIVE_SHARED_PATHS = {
     "tools/tests/test_macos_llvm_toolchain.py",
     "tools/tests/test_gpu_qualification_runtime.py",
     "tools/tests/test_rendezvous_admission_https_fixture.py",
+    "tools/tests/test_rendezvous_admission_platform.py",
     "tools/tests/test_stage_windows_runtime.py",
     "tools/tests/test_windows_runtime_cmake_arguments.py",
     "tools/tests/test_windows_trust_notices.py",
