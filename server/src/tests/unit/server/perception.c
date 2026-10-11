@@ -159,6 +159,22 @@ START_TEST(test_player_retained_target_revalidates_geometry_and_light) {
 }
 END_TEST
 
+START_TEST(test_camera_cover_does_not_hide_player_from_monster) {
+    mapstruct *map;
+    object *pl;
+    perception_fixture(&map, &pl);
+    mapstruct *upper = perception_upper(map);
+    perception_slab(upper, pl->x + 1, pl->y, true);
+    object *npc = perception_monster(map, pl->x + 1, pl->y);
+    /* Camera cutaway grants no power to alter another actor's physical sight. */
+    ck_assert(perception_object_visible(npc, pl));
+    ck_assert(perception_object_visible(pl, npc));
+    ck_assert(!perception_player_authorized(CONTR(pl), npc));
+    rv_vector rv;
+    ck_assert_ptr_eq(find_enemy(npc, &rv), pl);
+}
+END_TEST
+
 START_TEST(test_acquisition_large_authored_radius_remains_bounded) {
     mapstruct *map;
     object *pl;
@@ -178,6 +194,7 @@ void check_server_perception(void) {
     tcase_add_test(tc, test_monster_acquires_above_and_below_only_through_holes);
     tcase_add_test(tc, test_retained_enemy_loses_sight_without_losing_pursuit_or_casting);
     tcase_add_test(tc, test_player_retained_target_revalidates_geometry_and_light);
+    tcase_add_test(tc, test_camera_cover_does_not_hide_player_from_monster);
     tcase_add_test(tc, test_acquisition_large_authored_radius_remains_bounded);
     suite_add_tcase(s, tc);
     check_run_suite(s, __FILE__);
