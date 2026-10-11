@@ -170,6 +170,13 @@ cache.
   MAP2 clipping does not define light transport. Crossed boundary coefficients
   attenuate the retained radial profile using the shared 3D traversal in
   [SPATIAL_3D.md](SPATIAL_3D.md).
+- Local light crosses an authored schema-1 map seam only through resident
+  reciprocal links marked `continuous` on both sides with equal effective
+  profile digests. Discontinuous and mixed schema-0/schema-1 seams transport
+  no local source contribution. Two legacy schema-0 maps retain their physical
+  linked-map local lighting without requiring authored celestial metadata.
+  Boundary coefficients still apply in the shared 3D geometry; profile and
+  ambient replacement do not turn into transported emitters.
 - `glow_radius` is a bounded strength/profile selector, not a literal map-cell
   radius. Each profile defines center intensity, support radius, and falloff.
   Radial falloff preserves historical center intensity and uses integer
@@ -1855,6 +1862,14 @@ display the complete profile digest used for continuous-link validation.
   Q5.11 triples. A zero bitmap explicitly resets all sub-layers to their scalar
   samples. Scalar and RGB caches are independent, so hue-only changes and
   neutral resets emit.
+- Target authority records the exact living sub-layer actor count and the
+  socket's last completely queued MAP2 origin map/count, center, viewport and
+  depth set. It becomes valid only after all continuations have been queued;
+  partial construction, fog clears and stale origin identities authorize no
+  selection or combat. This record is a server publication fence, not a client
+  acknowledgement. Revoke borrowed origins before map lifetime ends and
+  revalidate exact parts after visibility callbacks. See
+  [SPATIAL_3D.md](SPATIAL_3D.md) for action authority and protocol 1084 framing.
 - The first update declares the complete depth set. If its framed level blocks
   would exceed the 65,534-byte game payload, it reserves zero-length blocks for
   omitted depths and sends their complete payloads in deterministic

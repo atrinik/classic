@@ -83,6 +83,25 @@ physical MAP2 part to its head's nonzero actor count; zero is never a wildcard.
 Malformed packets preserve state. A valid unauthorized request returns SELF
 without disclosing the rejected actor. SELF carries count/depth zero. Parsers
 validate the complete payload and reject trailing bytes before mutation.
+Server action authority also requires a previously completely queued MAP2
+publication, plus fresh perception. Each living sub-layer caches its own head
+actor count; a count from another sub-layer cannot authorize an overlapping
+part. The socket publication binds the origin map and map count, center x/y,
+viewport dimensions and complete depth set. Reject pending publications,
+unloaded/recycled origins, unavailable depths, fog/clear cells, missing living
+faces, mismatched counts and physical coordinates that no longer resolve to
+the cached exact part. Queue the full header and all continuations before
+publishing this authority; queuing is not a client delivery acknowledgement.
+Withdraw borrowed origin references and clear their caches before map unload,
+delete or reuse, including playing, admission and pre-login sockets.
+
+Clicks, retained targets, retaliation, target HP/level metadata, player
+projectile aiming and targeted spells use this same publication authority.
+After a visibility callback, revalidate observer, target, multipart head and
+part counts, identity relationships, location and flags; then check exact-part
+publication again. A callback can remove, hide, move or recycle any borrowed
+actor, so a pre-callback authorization result cannot be retained as authority.
+
 Reconnect clears target identity. Client clicks and cycling use current live
 MAP2 records and resolved sprite ownership; remembered structural records do
 not become candidates. Combat revalidates retained identity and authorization.
@@ -118,6 +137,17 @@ most 65536 entries per cast and 1048576 entries globally. A fair round-robin
 scheduler shares one aggregate 4096-expansion budget per simulation tick and
 retains pending work for later ticks. Failed admission creates no partial cast
 or charged cast costs; it cannot create an unbounded synchronous flood.
+
+Spell admission reserves capacity before `MEVENT_SPELL_CAST` callbacks or cast
+costs. A stack-scoped escrow reserves the complete bounding volume and swarm
+children; callback-triggered nested casts have independent admission scopes
+and cannot consume the outer reservation. Activate the escrow only after
+callbacks return and source/caster/target counts and targeted authorization
+are checked again. Cast creation transfers credits without double reservation;
+every return path releases unused credits. A failed capacity check produces
+no partial cast and cannot run the spell callback before admission. Swarm
+credits transfer to child explosions, share the aggregate bound and whole-group
+map expiry, and release unused child capacity when the parent ends.
 
 Wave/explosion expansion uses 26 neighbours with shared combat boundary tests.
 It may spread around cover through a reachable path; it cannot pass through a
