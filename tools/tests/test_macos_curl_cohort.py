@@ -1,6 +1,7 @@
 # Copyright 2026 The Atrinik Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import contextlib
 import copy
 import importlib.util
 import io
@@ -228,7 +229,16 @@ class MacOSCurlCohortTests(unittest.TestCase):
                     "loaded_images": [str(curl), str(cares), str(probe), str(dep),
                                       "/usr/lib/libSystem.B.dylib", "/System/Library/Frameworks/Security.framework/Security",
                                       "/Library/Apple/System/Library/fixture.dylib"]}
-            COHORT.validate_loaded(data, prefix, files, probe)
+            platform_images = ["/usr/lib/libkrb5.dylib", "/usr/lib/libldap.dylib",
+                               "/usr/lib/libz.1.dylib", "/usr/lib/libicucore.A.dylib"]
+            data["loaded_images"].extend(platform_images)
+            # macOS shared-cache install names need no ordinary filesystem file.
+            COHORT.validate_loaded(data, prefix, files, probe, platform_images)
+            for missing in platform_images:
+                changed = copy.deepcopy(data)
+                changed["loaded_images"].remove(missing)
+                with self.subTest(missing_platform=missing), self.assertRaisesRegex(ValueError, "baseline SDK"):
+                    COHORT.validate_loaded(changed, prefix, files, probe, platform_images)
             mutations = [("loaded_library", str(foreign)), ("loaded_cares_library", str(foreign)),
                          ("loaded_images", []), ("loaded_images", data["loaded_images"] + [str(curl)]),
                          ("loaded_images", data["loaded_images"] + [str(foreign)]),
@@ -263,6 +273,70 @@ class MacOSCurlCohortTests(unittest.TestCase):
             for selected in (str(foreign / "include"), f"{prefix}/include;{foreign}/include"):
                 with self.subTest(selected=selected), self.assertRaises(ValueError):
                     COHORT.validate_headers(selected, prefix)
+
+    def test_consumer_cache_binds_prefix_providers_headers_compiler_and_release_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix, foreign = root / "cohort", root / "same-version-foreign"
+            headers = ("curl/curl.h", "curl/curlver.h", "ares.h", "ares_version.h")
+            owned_files = [prefix / "lib/libcurl.dylib", prefix / "lib/libcares.dylib",
+                           *[prefix / "include" / name for name in headers]]
+            compiler = root / "llvm/bin/clang"
+            for path in [*owned_files, compiler]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"verified same-version fixture")
+            for path in (foreign / "lib/libcurl.dylib", foreign / "include/curl/curl.h", foreign / "bin/clang"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"verified same-version fixture")
+            receipt_path = prefix / "evidence/receipt.json"
+            receipt_path.parent.mkdir()
+            receipt = {"prefix": str(prefix), "curl_sha256": COHORT.digest(owned_files[0]),
+                       "cares_sha256": COHORT.digest(owned_files[1]),
+                       "header_hashes": {name: COHORT.digest(prefix / "include" / name) for name in headers},
+                       "tools": {"clang": {"path": str(compiler), "sha256": COHORT.digest(compiler)}},
+                       "release_flags": ["-O3", "-DNDEBUG"]}
+            receipt_path.write_text(json.dumps(receipt))
+            cache_path = root / "CMakeCache.txt"
+            cache = {"CURL_INCLUDE_DIR": str(prefix / "include"),
+                     "CURL_LIBRARY_RELEASE": str(prefix / "lib/libcurl.dylib"),
+                     "CMAKE_C_COMPILER": str(compiler), "CMAKE_BUILD_TYPE": "Release",
+                     "CMAKE_C_FLAGS_RELEASE": "-O3 -DNDEBUG"}
+
+            def write_cache(values):
+                cache_path.write_text("# fixture CMake cache\n" + "\n".join(
+                    f"{key}:STRING={value}" for key, value in values.items()) + "\n")
+
+            write_cache(cache)
+            with patch.object(COHORT.platform, "system", return_value="Linux"), \
+                    self.assertRaisesRegex(ValueError, "actual native Mac"):
+                COHORT.verify_consumer_cache(prefix, cache_path)
+            with patch.object(COHORT.platform, "system", return_value="Darwin"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                COHORT.verify_consumer_cache(prefix, cache_path)
+                mutations = [("CURL_INCLUDE_DIR", str(foreign / "include")),
+                             ("CURL_LIBRARY_RELEASE", str(foreign / "lib/libcurl.dylib")),
+                             ("CMAKE_C_COMPILER", str(foreign / "bin/clang")),
+                             ("CURL_INCLUDE_DIR", ""), ("CURL_LIBRARY_RELEASE", ""),
+                             ("CMAKE_BUILD_TYPE", "Debug"), ("CMAKE_C_FLAGS_RELEASE", "-O0 -DNDEBUG"),
+                             ("CMAKE_C_FLAGS_RELEASE", "-O3"), ("CMAKE_C_FLAGS_RELEASE", "-O3 -DNDEBUG -g")]
+                for key, value in mutations:
+                    changed = dict(cache, **{key: value})
+                    write_cache(changed)
+                    with self.subTest(cache_key=key, value=value), self.assertRaises(ValueError):
+                        COHORT.verify_consumer_cache(prefix, cache_path)
+                write_cache(cache)
+                changed = dict(receipt, prefix=str(foreign))
+                receipt_path.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError, "another install prefix"):
+                    COHORT.verify_consumer_cache(prefix, cache_path)
+                receipt_path.write_text(json.dumps(receipt))
+                for path in [*owned_files, compiler]:
+                    original = path.read_bytes()
+                    path.write_bytes(b"changed same-version fixture")
+                    with self.subTest(changed_bytes=path), self.assertRaises(ValueError):
+                        COHORT.verify_consumer_cache(prefix, cache_path)
+                    path.write_bytes(original)
+                COHORT.verify_consumer_cache(prefix, cache_path)
 
     def test_failed_command_retains_output_status_and_arguments(self):
         with tempfile.TemporaryDirectory() as directory:
