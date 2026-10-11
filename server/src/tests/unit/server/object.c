@@ -1809,7 +1809,7 @@ START_TEST(test_retained_object_references_validate_storage_before_identity) {
     for (size_t i = 0; i < num_held; i++) {
         object_destroy(held[i]);
     }
-    efree(held);
+    xfree(held);
     uint64_t epoch = object_reclamation_epoch();
     ck_assert_uint_gt(mempool_reclaim(pool), 0);
     ck_assert(!object_reclamation_is_current(epoch));
@@ -1856,7 +1856,7 @@ START_TEST(test_later_actors_reject_a_reclaimed_shared_target) {
     for (size_t i = 0; i < num_held; i++) {
         object_destroy(held[i]);
     }
-    efree(held);
+    xfree(held);
     CONTR(pl)->target_object = CONTR(other)->target_object = target;
     CONTR(pl)->target_object_count = CONTR(other)->target_object_count = count;
     npc->enemy = npc->attacked_by = target;

@@ -307,7 +307,7 @@ monster_enemy_signal_map(object *npc, mapstruct *map, object *spawn_point, uint3
     mapstruct *source_map = npc->map;
     int16_t source_x = npc->x, source_y = npc->y;
     if (!object_reference_is_current(enemy, enemy_count)) {
-        efree(refs);
+        xfree(refs);
         return;
     }
     for (size_t i = 0; i < used; i++) {
@@ -338,7 +338,7 @@ monster_enemy_signal_map(object *npc, mapstruct *map, object *spawn_point, uint3
             break;
         }
     }
-    efree(refs);
+    xfree(refs);
 }
 
 /**

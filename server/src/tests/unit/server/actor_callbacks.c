@@ -556,7 +556,7 @@ static object *reclaimable_target(mapstruct *map, mempool_struct *pool,
     for (size_t i = 0; i < num_held; i++) {
         object_destroy(held[i]);
     }
-    efree(held);
+    xfree(held);
     return target;
 }
 
