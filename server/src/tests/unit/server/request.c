@@ -1232,7 +1232,7 @@ START_TEST(test_target_reclamation_skips_borrowed_layer_iterator_epilogue) {
     for (size_t i = 0; i < num_held; i++) {
         object_destroy(held[i]);
     }
-    efree(held);
+    xfree(held);
     draw_client_map(observer);
     ck_assert(target_player_authorized(pl, head, NULL));
     object *event = object_get();
