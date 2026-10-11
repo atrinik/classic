@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "constants": {
+    "SCHEMA": "atrinik-rendezvous-admission-v1",
+    "HMAC_DOMAIN": "atrinik-rendezvous-admission-v1",
+    "WORK_DOMAIN": "atrinik-rendezvous-work-v1",
+    "HEADER": "X-Atrinik-Rendezvous-Admission",
+    "TICKET_HEADER": "X-Atrinik-Rendezvous-Ticket",
+    "CLIENT_NONCE_HEADER": "X-Atrinik-Access-Client-Nonce",
+    "DIFFICULTY": 24,
+    "TOKEN_MAX": 239,
+    "PROOF_MAX": 256,
+    "REQUEST_MAX": 256,
+    "RESPONSE_MAX": 512,
+    "TRIALS_MAX": 134217728,
+    "BUDGET_MS": 10000,
+    "CHECK_INTERVAL": 4096,
+    "LIFETIME_SECONDS": 60,
+    "UTC_SECONDS_MAX": 253402300799
+  }
+}

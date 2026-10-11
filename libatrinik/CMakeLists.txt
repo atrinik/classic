@@ -172,6 +172,25 @@ option(LIBATRINIK_PACKAGE_LAYOUT
     "Use the namespaced include layout from the standalone source package"
     ${LIBATRINIK_PACKAGE_LAYOUT_DEFAULT})
 
+# Admission wire definitions are owned by the selected protocol package. Older
+# locked releases or installed SDKs must fail at configure, never silently use
+# library-local copies of this mandatory client contract.
+get_target_property(atrinik_protocol_include_dirs Atrinik::Protocol INTERFACE_INCLUDE_DIRECTORIES)
+set(atrinik_protocol_has_admission false)
+foreach (include_dir IN LISTS atrinik_protocol_include_dirs)
+    if (include_dir MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
+        set(include_dir "${CMAKE_MATCH_1}")
+    endif ()
+    if (EXISTS "${include_dir}/atrinik/protocol/rendezvous_admission.h")
+        set(atrinik_protocol_has_admission true)
+    endif ()
+endforeach ()
+if (NOT atrinik_protocol_has_admission)
+    message(FATAL_ERROR
+        "Selected Atrinik::Protocol lacks generated rendezvous admission definitions; "
+        "use matching sibling, embedded, explicit-source, or installed Classic protocol sources.")
+endif ()
+
 set(ATRINIK_TOOLKIT atrinik-core)
 
 # This target is deliberately configured before the toolkit dependencies. It
@@ -359,6 +378,7 @@ set(LIBATRINIK_PUBLIC_HEADER_NAMES
     porting.h
     process.h
     rendezvous.h
+    rendezvous_admission.h
     shstr.h
     signals.h
     socket.h
@@ -425,6 +445,7 @@ set(TOOLKIT_SOURCES
     porting.c
     process.c
     rendezvous.c
+    rendezvous_admission.c
     shstr.c
     signals.c
     socket.c
@@ -604,6 +625,29 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=fsync" "-Wl,--wrap=close")
     endif ()
     add_test(NAME libatrinik-path COMMAND libatrinik-path)
+
+    add_executable(libatrinik-rendezvous-admission tests/rendezvous_admission.c)
+    atrinik_configure_target(libatrinik-rendezvous-admission)
+    target_link_libraries(libatrinik-rendezvous-admission PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-rendezvous-admission COMMAND libatrinik-rendezvous-admission)
+    set_tests_properties(libatrinik-rendezvous-admission PROPERTIES TIMEOUT 15)
+
+    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        find_program(ATRINIK_TEST_OPENSSL openssl REQUIRED)
+        add_executable(libatrinik-rendezvous-admission-https
+            tests/rendezvous_admission_https.c)
+        atrinik_configure_target(libatrinik-rendezvous-admission-https)
+        target_link_options(libatrinik-rendezvous-admission-https PRIVATE
+            "-Wl,--wrap=curl_easy_init")
+        target_link_libraries(libatrinik-rendezvous-admission-https PRIVATE Atrinik::Core)
+        add_test(NAME libatrinik-rendezvous-admission-https
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/rendezvous_admission_https.py"
+                "$<TARGET_FILE:libatrinik-rendezvous-admission-https>"
+                "${ATRINIK_TEST_OPENSSL}")
+        set_tests_properties(libatrinik-rendezvous-admission-https PROPERTIES TIMEOUT 45)
+    endif ()
 
     add_executable(libatrinik-rendezvous tests/rendezvous.c)
     atrinik_configure_target(libatrinik-rendezvous)
