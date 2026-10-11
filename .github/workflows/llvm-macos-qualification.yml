@@ -121,6 +121,16 @@ jobs:
             build/macos-qualification-evidence/mixer-CMakeCache.txt
           cp "${RUNNER_TEMP}/classic-mixer-macos/stage/source.txt" \
             build/macos-qualification-evidence/mixer-source.txt
+      - name: Build and qualify the matching c-ares curl provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/prepare_macos_curl.py \
+            --prefix "${RUNNER_TEMP}/classic-curl-macos" \
+            --llvm-prefix "${RUNNER_TEMP}/classic-llvm-macos/llvm" \
+            --baseline "${GITHUB_WORKSPACE}/build/macos-qualification-evidence/curl-baseline/baseline.json" \
+            --ca-bundle "${GITHUB_WORKSPACE}/client/ca-bundle.crt" --jobs 2 \
+            2>&1 | tee build/macos-qualification-evidence/curl-cohort.log
       - name: Acquire and verify the existing locked runtime and source inputs
         shell: bash
         run: |
@@ -136,24 +146,31 @@ jobs:
           python_prefix=$(brew --prefix python@3.12)
           readline_prefix=$(brew --prefix readline)
           export PKG_CONFIG_PATH="${prefix}/lib/pkgconfig"
-          for formula in openssl@3 curl libxml2 zlib readline; do
+          for formula in openssl@3 libxml2 zlib readline; do
             formula_prefix=$(brew --prefix "${formula}")
             PKG_CONFIG_PATH="${formula_prefix}/lib/pkgconfig:${PKG_CONFIG_PATH}"
           done
+          export PKG_CONFIG_PATH="${RUNNER_TEMP}/classic-curl-macos/lib/pkgconfig:${PKG_CONFIG_PATH}"
           cmake -S . -B build/macos-qualification -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/cmake/toolchains/llvm-macos.cmake" \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DPACKAGE_TYPE=none \
             -DATRINIK_BUILD_CLIENT=ON -DATRINIK_BUILD_SERVER=OFF \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            "-DCMAKE_PREFIX_PATH=${RUNNER_TEMP}/classic-mixer-macos;${prefix};$(brew --prefix openssl@3);$(brew --prefix curl);$(brew --prefix libxml2);$(brew --prefix zlib);$(brew --prefix readline);${python_prefix}" \
+            "-DCMAKE_PREFIX_PATH=${RUNNER_TEMP}/classic-curl-macos;${RUNNER_TEMP}/classic-mixer-macos;${prefix};$(brew --prefix openssl@3);$(brew --prefix libxml2);$(brew --prefix zlib);$(brew --prefix readline);${python_prefix}" \
             "-DSDL3_mixer_DIR=${RUNNER_TEMP}/classic-mixer-macos/lib/cmake/SDL3_mixer" \
             "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" \
-            "-DCURL_ROOT=$(brew --prefix curl)" \
+            -DCURL_NO_CURL_CMAKE=TRUE \
+            "-DCURL_ROOT=${RUNNER_TEMP}/classic-curl-macos" \
+            "-DCURL_INCLUDE_DIR=${RUNNER_TEMP}/classic-curl-macos/include" \
+            "-DCURL_LIBRARY_RELEASE=${RUNNER_TEMP}/classic-curl-macos/lib/libcurl.dylib" \
             "-DPython3_EXECUTABLE=${python_prefix}/bin/python3.12" \
             "-DREADLINE_INCLUDE_DIR=${readline_prefix}/include" \
             "-DREADLINE_LIBRARY=${readline_prefix}/lib/libreadline.dylib" \
             "-DATRINIK_GPU_SHADER_DIRECTORY=${GITHUB_WORKSPACE}/build/macos-qualification-shaders" \
             2>&1 | tee build/macos-qualification-evidence/configure.log
+          python3 tools/ci/prepare_macos_curl.py \
+            --prefix "${RUNNER_TEMP}/classic-curl-macos" \
+            --verify-consumer-cache build/macos-qualification/CMakeCache.txt
       - name: Verify required production features were retained
         shell: bash
         run: |
@@ -215,6 +232,7 @@ jobs:
           name: macos-llvm-cpu-qualification-${{ github.sha }}
           path: |
             build/macos-qualification-evidence
+            ${{ runner.temp }}/classic-curl-macos/evidence
             build/macos-qualification/CMakeCache.txt
             build/macos-qualification/compile_commands.json
             build/macos-qualification/CMakeFiles/CMakeConfigureLog.yaml
