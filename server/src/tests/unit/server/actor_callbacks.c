@@ -112,6 +112,7 @@ START_TEST(test_monster_cast_rechecks_borrowed_spell_and_enemy) {
     fixture(&map, &pl);
     object *monster = place(map, 13, 12);
     object *target = place(map, 15, 12);
+    target->stats.hp = target->stats.maxhp = 100;
     SET_FLAG(target, FLAG_FRIENDLY);
     monster->enemy = target;
     monster->enemy_count = target->count;
@@ -131,6 +132,7 @@ START_TEST(test_monster_cast_rechecks_borrowed_spell_and_enemy) {
     object_insert_into(ability, monster, 0);
     tag_t ability_count = ability->count, target_count = target->count;
     ask_show(target, _i == 0 ? "destroy_spell_second" : "destroy_target_second");
+    size_t reserved = propagation_reserved_cells();
 
     object_process(monster);
 
@@ -138,8 +140,25 @@ START_TEST(test_monster_cast_rechecks_borrowed_spell_and_enemy) {
                         !OBJECT_VALID(target, target_count));
     ck_assert_int_eq(monster->stats.sp, 100);
     ck_assert_int_eq(monster->last_grace, 0);
-    ck_assert_int_eq(monster->x, 13);
-    ck_assert_int_eq(monster->y, 12);
+    ck_assert_uint_eq(propagation_reserved_cells(), reserved);
+    for (int x = 0; x < MAP_WIDTH(map); x++) {
+        for (int y = 0; y < MAP_HEIGHT(map); y++) {
+            for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+                ck_assert_ptr_ne(op->arch, spellarch[SP_BULLET]);
+            }
+        }
+    }
+    if (_i == 0) {
+        /* Losing an inventory ability cancels this cast. The retained enemy
+         * and range vector are still valid, so ordinary pursuit may continue. */
+        ck_assert(OBJECT_VALID(target, target_count));
+        ck_assert_int_eq(target->stats.hp, 100);
+    } else {
+        /* Losing the mapped enemy invalidates the borrowed range vector and
+         * must stop the entire action before movement or melee. */
+        ck_assert_int_eq(monster->x, 13);
+        ck_assert_int_eq(monster->y, 12);
+    }
 }
 END_TEST
 
