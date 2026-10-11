@@ -725,6 +725,50 @@ gh attestation verify \
   --repo atrinik/classic
 ```
 
+### Hosted final server-image qualification
+
+`Qualify Server Image` is a bounded, non-publishing hosted Buildx path for the
+actual root-context `server/Dockerfile`. Maintainers can dispatch it on a reviewed
+branch. The explicit `build/llvm-classic-server-image-qualification` push trigger
+bootstraps pre-merge qualification before the workflow is available for manual
+dispatch on the default branch. The checkout, compiler pin and retained evidence
+bind to the event's exact commit; this job cannot publish an image or update a
+release/development alias.
+
+The job verifies the attested, digest-pinned durable dependency bundle and loads
+the final Linux amd64 image with `push: false` and `load: true`. The Dockerfile
+continues to verify cached source archives and configure offline. Its final-stage
+APT install still needs the signed, locked Ubuntu snapshot; dependency-bundle
+verification does not claim that the entire Docker build is network-free.
+
+`tools/ci/qualify_server_image.py` consumes the build's immutable local image ID.
+It uses UUID-labelled containers, the image's default UID 10001, no host mounts,
+no published ports, no external network, dropped capabilities, bounded resources
+and disposable container state. It exercises the existing offline benchmark on
+the packaged `/shattered_islands/world_0_70` map for one iteration, requiring the
+server's load/warm-lookup/swap/reload identity checks and exact completion record.
+A separate normal-entrypoint container must pass runtime-provider verification,
+reach readiness and Docker health, produce a fresh heartbeat, exit zero after
+SIGTERM with the checked save-completion message, then repeat startup and shutdown
+using its retained disposable state. Restart log and heartbeat evidence must
+belong to the new start. Every cleanup rechecks container ID, image, source labels
+and ownership; missing cleanup or any missing behavioral evidence fails the job.
+
+The 14-day `server-image-qualification-COMMIT-RUN-ATTEMPT` artifact contains source,
+Docker/build identity, SDK and dependency/provider hashes, packaged executable and
+map hashes, bounded runtime logs, behavior results and cleanup receipts. Buildx
+also retains its build record for 14 days. Inspect both the successful job and
+`runtime/qualification.json` for the exact reviewed commit. A failed or timed-out
+run is incomplete acceptance, even when some artifacts were uploaded. No image
+is published or retained as a release artifact; local Docker export intentionally
+does not claim registry attestations or release provenance.
+
+This proves packaged map swap/reload identity and the isolated server lifecycle;
+it does not prove semantic map/player persistence, authenticated client login,
+gameplay, external networking, GPU rendering or audio. Those retain their separate
+acceptance paths. The normal wrapper lifecycle above builds a different artifact
+and cannot substitute for this final-container evidence.
+
 ## Failure, recovery, and rollback
 
 Published release assets and versioned images are write-once. Before a draft is
