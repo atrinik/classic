@@ -971,10 +971,15 @@ class WorkflowContractTests(unittest.TestCase):
         sanitizers = server.index("cmake --preset linux-sanitizers")
         self.assertLess(coverage, release)
         self.assertLess(release, sanitizers)
-        self.assertIn("cmake --build --preset linux-release --parallel", server)
-        for preset in ("llvm-coverage", "linux-release", "linux-sanitizers"):
-            self.assertIn(f"ctest --preset {preset} --parallel 4", server)
-            self.assertIn(f"ctest --preset {preset} --parallel 4 -LE performance", server)
+        self.assertIn('cmake --build "${release_directory}" --parallel', server)
+        for preset, directory in (
+            ("llvm-coverage", ""),
+            ("linux-release", ' --test-dir "${release_directory}"'),
+            ("linux-sanitizers", ' --test-dir "${sanitizer_directory}"'),
+        ):
+            self.assertIn(
+                f"ctest --preset {preset}{directory} --parallel 4 -LE performance", server
+            )
 
         presets = json.loads((ROOT / "server/CMakePresets.json").read_text())
         self.assertEqual(
@@ -1010,7 +1015,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         core = runner[runner.index("  core)") : runner.index("  server)")]
         self.assertIn("cmake --preset linux-sanitizers", core)
-        self.assertIn("cmake --build --preset linux-sanitizers --parallel", core)
+        self.assertIn('cmake --build "${sanitizer_directory}" --parallel', core)
         self.assertIn("ctest --preset linux-sanitizers", core)
         self.assertIn("ASAN_OPTIONS=detect_leaks=0:halt_on_error=1", core)
         self.assertIn("UBSAN_OPTIONS=halt_on_error=1", core)
@@ -1046,6 +1051,48 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("ctest --preset llvm-coverage", component)
                 self.assertIn("ctest --preset linux-release", component)
                 self.assertIn("ctest --preset linux-sanitizers", component)
+
+    def test_linux_validation_routes_every_noncoverage_operation_to_selected_tree(self) -> None:
+        runner = (ROOT / "tools/ci/run_linux_check.sh").read_text()
+        for name, directory in (
+            ("release_directory", "build/llvm-release"),
+            ("integrated_release_directory", "build/integrated-llvm-release"),
+            ("sanitizer_directory", "build/llvm-sanitizers"),
+            ("protocol_directory", "build/llvm-check"),
+            ("library_release_directory", "build/llvm-release"),
+            ("install_directory", "build/llvm-install"),
+            ("consumer_directory", "build/llvm-consumer"),
+        ):
+            self.assertIn(f"{name}={directory}\n", runner)
+        self.assertNotIn("cmake --build --preset linux-release", runner)
+        self.assertNotIn("cmake --build --preset linux-sanitizers", runner)
+        for line in runner.splitlines():
+            if "cmake --preset linux-release" in line:
+                self.assertRegex(line, r'-B "\$\{(?:integrated_)?release_directory\}"')
+            elif "cmake --preset linux-sanitizers" in line:
+                self.assertIn('-B "${sanitizer_directory}"', line)
+            elif "ctest --preset linux-release" in line:
+                self.assertIn('--test-dir "${release_directory}"', line)
+            elif "ctest --preset linux-sanitizers" in line:
+                self.assertIn('--test-dir "${sanitizer_directory}"', line)
+        for root in ("source_root", "baseline_root"):
+            self.assertIn(f'${{{root}}}/client/${{release_directory}}/atrinik', runner)
+            self.assertIn(f'${{{root}}}/server/${{release_directory}}', runner)
+        for operation in (
+            'cmake -S "${source_root}/protocol" -B "${source_root}/protocol/${protocol_directory}"',
+            'cmake --build "${source_root}/protocol/${protocol_directory}"',
+            'ctest --test-dir "${source_root}/protocol/${protocol_directory}"',
+            'cmake -S . -B "${library_release_directory}" -DCMAKE_BUILD_TYPE=Release',
+            'cmake --build "${library_release_directory}"',
+            'cmake --install "${library_release_directory}"',
+            '-DCMAKE_INSTALL_PREFIX="${PWD}/${install_directory}"',
+            'cmake -S tests/consumer -B "${consumer_directory}"',
+            '-DCMAKE_PREFIX_PATH="${PWD}/${install_directory}"',
+            'cmake --build "${consumer_directory}"',
+            '"${consumer_directory}/libatrinik-consumer"',
+            'cmake --build "${integrated_release_directory}"',
+        ):
+            self.assertIn(operation, runner)
 
     def test_movement_regression_compares_immutable_baselines_across_contracts(self) -> None:
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
