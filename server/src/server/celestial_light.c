@@ -477,6 +477,9 @@ static void transport_line(mapstruct *map, const celestial_model *model,
 static void relax_diffuse(mapstruct *map, int32_t *values) {
     int width = celestial_scratch_width(map), height = celestial_scratch_height(map);
     size_t count = (size_t)width * height;
+    bool active = false;
+    for (size_t i = 0; i < count; i++) active |= values[i] != 0;
+    if (!active) return;
     int32_t *next = xcalloc(count, sizeof(*next));
     int32_t *original = values;
     for (int pass = 0; pass < CELESTIAL_SPILL_PASSES; pass++) {
@@ -843,6 +846,7 @@ typedef struct celestial_pending {
     int pass;
     celestial_ray ray;
     bool ray_active;
+    bool diffuse_active, aperture_active, stars_active;
 } celestial_pending_t;
 
 static celestial_pending_t *pending_head, *pending_tail;
@@ -948,6 +952,7 @@ static bool pending_ray_step(celestial_pending_t *job, bool moon) {
         int32_t *apertures = moon ? job->moon_aperture : job->aperture;
         values[job->cell] = celestial_ray_value(&job->ray,
             moon ? job->model.moon : job->model.direct, &apertures[job->cell]);
+        if (!moon) job->aperture_active |= apertures[job->cell] != 0;
         job->ray_active = false;
         if (++job->cell == celestial_scratch_cells(level->map)) return true;
     }
@@ -992,6 +997,7 @@ static bool pending_step(celestial_pending_t *job) {
     job->steps++;
     switch (job->stage) {
     case CELESTIAL_PREPARE:
+        job->diffuse_active = job->aperture_active = job->stars_active = false;
         celestial_model_for_map(level->map, job->source_hour + 1, &job->model);
         job->direct = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->direct));
         job->diffuse = xcalloc(celestial_scratch_cells(level->map), sizeof(*job->diffuse));
@@ -1015,6 +1021,8 @@ static bool pending_step(celestial_pending_t *job) {
         if (job->ray.done) {
             job->diffuse[job->cell] = celestial_ray_value(&job->ray, job->model.diffuse, NULL);
             job->stars[job->cell] = celestial_ray_value(&job->ray, job->model.starlight, NULL);
+            job->diffuse_active |= job->diffuse[job->cell] != 0;
+            job->stars_active |= job->stars[job->cell] != 0;
             job->ray_active = false;
             if (++job->cell == celestial_scratch_cells(level->map)) {
                 job->stage = CELESTIAL_SUN;
@@ -1031,13 +1039,16 @@ static bool pending_step(celestial_pending_t *job) {
         }
         break;
     case CELESTIAL_DIFFUSE:
-        pending_relax_step(job, &job->diffuse);
+        if (job->diffuse_active) pending_relax_step(job, &job->diffuse);
+        else job->stage++;
         break;
     case CELESTIAL_APERTURE:
-        pending_relax_step(job, &job->aperture);
+        if (job->aperture_active) pending_relax_step(job, &job->aperture);
+        else job->stage++;
         break;
     case CELESTIAL_STARS:
-        pending_relax_step(job, &job->stars);
+        if (job->stars_active) pending_relax_step(job, &job->stars);
+        else job->stage++;
         break;
     case CELESTIAL_OUTPUT: {
         size_t cell = job->cell;
