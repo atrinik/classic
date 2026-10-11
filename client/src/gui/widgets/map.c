@@ -37,6 +37,7 @@
 #include <surface_primitives.h>
 #include <client_socket.h>
 #include <client.h>
+#include <config.h>
 #include <commands.h>
 #include <effects.h>
 #include <event.h>
@@ -11256,6 +11257,15 @@ static bool widget_map_target_depth_test(widgetdata *widget) {
         }
         widget->surface = test_surface;
     }
+    /* This input-only entry point also precedes normal settings startup.
+     * Read authored defaults without touching the user's settings hierarchy. */
+    bool owned_settings = setting_categories == NULL;
+    if (owned_settings && !settings_init_read_only(FILE_SETTINGS_TXT)) {
+        widget->surface = saved_surface;
+        SDL_DestroySurface(test_surface);
+        settings_deinit_read_only();
+        return false;
+    }
     int64_t saved_zoom = setting_get_int(OPT_CAT_MAP, OPT_MAP_ZOOM);
     setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, 100);
     map_cell_store_t *saved_levels[MAP2_LEVELS];
@@ -11375,6 +11385,9 @@ static bool widget_map_target_depth_test(widgetdata *widget) {
     map_retained_primary_context = saved_context;
     map_retained_primary_projection = saved_projection;
     setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, saved_zoom);
+    if (owned_settings) {
+        settings_deinit_read_only();
+    }
     widget->surface = saved_surface;
     SDL_DestroySurface(test_surface);
     return success;
