@@ -12,6 +12,7 @@ typedef struct spatial_node {
     mapstruct *map;
     int offset[3];
     unsigned depth;
+    bool relevant;
 } spatial_node;
 
 static spatial_observer active_observer;
@@ -81,6 +82,34 @@ static bool neighbor(const spatial_node *node, int direction, spatial_node *next
     return abs(next->offset[0]) <= SPATIAL_COORD_LIMIT &&
            abs(next->offset[1]) <= SPATIAL_COORD_LIMIT &&
            abs(next->offset[2]) < SPATIAL_STACK_LEVELS;
+}
+
+/* A direct tiled edge must agree with the local two-edge routes between the
+ * same identities. In particular NE cannot override disagreeing N,E geometry.
+ * Only complete alternatives consult stack validity: a malformed unrelated
+ * branch cannot reject a sound edge. All consulted intermediates pass through
+ * resident(), including failed dependencies reported to the observer. */
+static bool local_alternatives_valid(const spatial_node *source,
+                                     const spatial_node *destination) {
+    for (int first = 0; first < TILED_NUM; first++) {
+        mapstruct *middle = source->map->tile_map[first];
+        if (!resident(middle)) {
+            continue;
+        }
+        for (int second = 0; second < TILED_NUM; second++) {
+            if (middle->tile_map[second] != destination->map) {
+                continue;
+            }
+            spatial_node intermediate, alternative;
+            if (!neighbor(source, first, &intermediate) || !stack_valid(middle) ||
+                !neighbor(&intermediate, second, &alternative) ||
+                memcmp(alternative.offset, destination->offset,
+                       sizeof(alternative.offset)) != 0) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 /* Coordinate-directed search considers both orders of a vertical/horizontal
@@ -205,6 +234,49 @@ static bool resolve_search(mapstruct *origin, int x, int y, int z,
             }
         }
     }
+    if (valid && found && target != NULL) {
+        /* Nodes are in breadth-first order. Walk backwards to mark every
+         * shortest predecessor route to the target, validating local diamond
+         * alternatives only on those routes, never remote unrelated branches. */
+        for (size_t cursor = count; cursor-- > 0;) {
+            spatial_node *node = &nodes[cursor];
+            if (node->map == target) {
+                node->relevant = true;
+                continue;
+            }
+            if (node->depth >= target_depth) {
+                continue;
+            }
+            for (int direction = 0; direction < TILED_NUM; direction++) {
+                mapstruct *other = node->map->tile_map[direction];
+                if (other == NULL) {
+                    continue;
+                }
+                size_t slot = ((uintptr_t)other >> 4) & (index_capacity - 1);
+                while (index[slot] != 0 && nodes[index[slot] - 1].map != other) {
+                    slot = (slot + 1) & (index_capacity - 1);
+                }
+                if (index[slot] == 0) {
+                    continue;
+                }
+                spatial_node *child = &nodes[index[slot] - 1];
+                if (!child->relevant || child->depth != node->depth + 1) {
+                    continue;
+                }
+                spatial_node edge;
+                if (!neighbor(node, direction, &edge) ||
+                    memcmp(edge.offset, child->offset, sizeof(edge.offset)) != 0 ||
+                    !local_alternatives_valid(node, child)) {
+                    valid = false;
+                    break;
+                }
+                node->relevant = true;
+            }
+            if (!valid) {
+                break;
+            }
+        }
+    }
     if (nodes != local_nodes) {
         free(nodes);
     }
@@ -262,6 +334,7 @@ bool spatial_offset(mapstruct *origin, mapstruct *target, int *dx, int *dy, int 
             }
             spatial_node candidate;
             if (!neighbor(&source, direction, &candidate) || !stack_valid(target) ||
+                !local_alternatives_valid(&source, &candidate) ||
                 (direct_found && memcmp(direct.offset, candidate.offset,
                                         sizeof(candidate.offset)) != 0)) {
                 return false;
@@ -279,6 +352,15 @@ bool spatial_offset(mapstruct *origin, mapstruct *target, int *dx, int *dy, int 
             mapstruct *map = origin->tile_map[direction];
             for (int depth = 1; map != NULL; depth++, map = map->tile_map[direction]) {
                 if (map == target) {
+                    spatial_node previous = {.map = origin};
+                    for (int step = 0; step < depth; step++) {
+                        spatial_node next;
+                        if (!neighbor(&previous, direction, &next) ||
+                            !local_alternatives_valid(&previous, &next)) {
+                            return false;
+                        }
+                        previous = next;
+                    }
                     *dx = *dy = 0;
                     *dz = direction == TILED_UP ? depth : -depth;
                     return true;

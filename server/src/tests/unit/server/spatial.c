@@ -223,6 +223,31 @@ START_TEST(test_offset_shortest_paths_detect_ambiguity) {
     ck_assert_int_eq(dy, -4);
     north.width = 3;
     ck_assert(!spatial_offset(&a, &target, &dx, &dy, &dz));
+    /* A shortest direct diagonal cannot hide the inconsistent local diamond. */
+    link_maps(&a, &target, TILED_NORTHEAST);
+    ck_assert(!spatial_offset(&a, &target, &dx, &dy, &dz));
+    north.width = 4;
+    ck_assert(spatial_offset(&a, &target, &dx, &dy, &dz));
+}
+END_TEST
+
+START_TEST(test_offset_nearest_route_checks_nested_local_diamond) {
+    mapstruct origin, a, east, north, target;
+    MapSpace os[16], as[16], es[16], ns[16], ts[16];
+    fixture(&origin, os); fixture(&a, as); fixture(&east, es);
+    fixture(&north, ns); fixture(&target, ts);
+    link_maps(&origin, &a, TILED_EAST);
+    link_maps(&a, &east, TILED_EAST);
+    link_maps(&a, &north, TILED_NORTH);
+    link_maps(&east, &target, TILED_NORTH);
+    link_maps(&north, &target, TILED_EAST);
+    link_maps(&a, &target, TILED_NORTHEAST);
+    int dx, dy, dz;
+    ck_assert(spatial_offset(&origin, &target, &dx, &dy, &dz));
+    ck_assert_int_eq(dx, 8);
+    ck_assert_int_eq(dy, -4);
+    north.width = 3;
+    ck_assert(!spatial_offset(&origin, &target, &dx, &dy, &dz));
 }
 END_TEST
 
@@ -295,6 +320,7 @@ void check_server_spatial(void) {
     tcase_add_test(tc, test_light_material_ties_and_sequential_events);
     tcase_add_test(tc, test_offset_stays_in_nearest_frontier);
     tcase_add_test(tc, test_offset_shortest_paths_detect_ambiguity);
+    tcase_add_test(tc, test_offset_nearest_route_checks_nested_local_diamond);
     tcase_add_test(tc, test_observer_scope_and_failed_dependencies);
     suite_add_tcase(suite, tc);
     check_run_suite(suite, __FILE__);
