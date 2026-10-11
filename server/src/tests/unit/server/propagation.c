@@ -289,6 +289,8 @@ START_TEST(test_targeted_spell_rejects_stale_identity_xray_and_glass) {
     ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
     draw_client_map(source);
     ck_assert(target_player_authorized(CONTR(source), target, NULL));
+    CONTR(source)->target_object = target;
+    CONTR(source)->target_object_count = target->count;
     SET_FLAG(target, FLAG_IS_INVISIBLE);
     ck_assert_int_eq(cast_spell(target, source, 0, SP_MINOR_HEAL, 0, CAST_NPC, NULL), 0);
     ck_assert_int_eq(target->stats.hp, 1);
