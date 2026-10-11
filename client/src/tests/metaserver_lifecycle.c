@@ -232,12 +232,12 @@ int main(void) {
     poll_until_fetch(2);
     wait_for_capture(2);
     REQUIRE(get_fetch_peak() == 1);
-    REQUIRE(strcmp(fetched_directory[0], "https://classic.metaserver.atrinik.org/index.xml") ==
+    REQUIRE(strcmp(fetched_directory[0], "https://classic.meta.atrinik.org/index.xml") ==
             0);
     REQUIRE(strcmp(fetched_rendezvous[0], "https://rendezvous.meta.atrinik.org/v1/classic") ==
             0);
     REQUIRE(strcmp(fetched_directory[1],
-                   "https://classic.dev.metaserver.atrinik.org/index.xml") == 0);
+                   "https://classic.dev.meta.atrinik.org/index.xml") == 0);
     REQUIRE(strcmp(fetched_rendezvous[1],
                    "https://rendezvous.dev.meta.atrinik.org/v1/classic") == 0);
 
