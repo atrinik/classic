@@ -169,7 +169,7 @@ atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(ENABLE_COVERAGE "Enable GCC coverage instrumentation" OFF)
-set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, deb, rpm, nsis, or zip)")
+set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, appimage, deb, rpm, nsis, or zip)")
 set(ATRINIK_DISCORD_APPLICATION_ID_FILE "" CACHE FILEPATH
     "Optional file containing the public Discord Application ID")
 
@@ -346,6 +346,25 @@ endif ()
 
 # Compile the sources into an executable.
 add_executable(${EXECUTABLE} WIN32 ${SOURCES})
+if (PACKAGE_TYPE STREQUAL "appimage")
+    set(ATRINIK_APPIMAGE_SOURCE_REVISION "" CACHE STRING
+        "Exact source revision embedded in the AppImage identity")
+    string(LENGTH "${ATRINIK_APPIMAGE_SOURCE_REVISION}" appimage_revision_length)
+    if (NOT appimage_revision_length EQUAL 40 OR
+            NOT ATRINIK_APPIMAGE_SOURCE_REVISION MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR "AppImage source revision must be a full lowercase Git SHA")
+    endif ()
+    # Numeric runtime version formatting need not retain a full version literal.
+    # Keep one dedicated read-only record for static release inspection.
+    set(appimage_identity "${CMAKE_CURRENT_BINARY_DIR}/appimage_identity.c")
+    file(WRITE "${appimage_identity}"
+        "/* Copyright 2026 The Atrinik Project; SPDX-License-Identifier: GPL-2.0-or-later */\n"
+        "__attribute__((section(\".atrinik.identity\"), used))\n"
+        "const char atrinik_appimage_identity[] =\n"
+        "    \"ATRINIK_APPIMAGE_IDENTITY_V1\\0version=${PACKAGE_VERSION}\\0revision=${ATRINIK_APPIMAGE_SOURCE_REVISION}\";\n")
+    target_sources(${EXECUTABLE} PRIVATE "${appimage_identity}")
+    target_link_options(${EXECUTABLE} PRIVATE "LINKER:--undefined=atrinik_appimage_identity")
+endif ()
 add_dependencies(${EXECUTABLE} atrinik-gpu-shaders)
 atrinik_configure_target(${EXECUTABLE})
 target_compile_definitions(${EXECUTABLE} PRIVATE

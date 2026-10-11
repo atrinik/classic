@@ -65,6 +65,7 @@ cmake -S . -B "${build_directory}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
   -DBUILD_TESTING=OFF -DPACKAGE_TYPE=appimage \
   -DATRINIK_PACKAGE_VERSION="${version}" -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+  -DATRINIK_APPIMAGE_SOURCE_REVISION="${revision}" \
   "-DCMAKE_C_FLAGS=-ffile-prefix-map=$(realpath ..)=. -fdebug-prefix-map=$(realpath ..)=." \
   "-DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL=$(realpath ../protocol)" \
   "-DFETCHCONTENT_SOURCE_DIR_LIBATRINIK=$(realpath ../libatrinik)" \
