@@ -222,6 +222,7 @@ typedef struct Player_Struct {
 
     size_t target_object_index;
 
+    /** Acknowledged cycle class: both neutral NPCs and friendly players are friends. */
     uint8_t target_is_friend;
 
     /**

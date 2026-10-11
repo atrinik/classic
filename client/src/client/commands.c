@@ -261,6 +261,7 @@ void socket_command_target(uint8_t *data, size_t len, size_t pos) {
         return;
     }
     cpl.target_code = code;
+    cpl.target_is_friend = code == CMD_TARGET_NEUTRAL || code == CMD_TARGET_FRIEND;
     memcpy(cpl.target_color, color, sizeof(color));
     memcpy(cpl.target_name, name, sizeof(name));
     cpl.target_level = level;

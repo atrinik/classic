@@ -8394,13 +8394,18 @@ static UT_array *map_target_collect(uint8_t is_friend) {
 /** Target the next current actor of the requested friend class. */
 void map_target_handle(uint8_t is_friend) {
     UT_array *targets = map_target_collect(is_friend);
-    utarray_sort(targets, map_target_cmp);
+    size_t length = utarray_len(targets);
+    /* Fresh empty UT_arrays have a null backing pointer. qsort's base must
+     * remain nonnull even when its element count is zero. */
+    if (length > 1) {
+        utarray_sort(targets, map_target_cmp);
+    }
 
     /* Only complete TARGET results advance the anchor. A SELECT may be
      * silently dropped by server pacing; repeated presses before its result
      * must retry the same next identity, rather than skip an unseen actor.
      * Manual selections, SELF and reconnect already publish this same state. */
-    size_t next = 0, length = utarray_len(targets);
+    size_t next = 0;
     for (size_t index = 0; index < length; index++) {
         const map_target_struct *target = (const map_target_struct *)utarray_eltptr(targets, index);
         if (target->count == cpl.target_actor_count &&
@@ -8417,8 +8422,6 @@ void map_target_handle(uint8_t is_friend) {
     } else if (cpl.target_is_friend != is_friend) {
         send_target(-1, -1, 0, 0);
     }
-
-    cpl.target_is_friend = is_friend;
 
     utarray_free(targets);
 }
@@ -11285,9 +11288,11 @@ static bool map_target_cycle_test_packet(const map_target_struct *expected) {
 }
 
 /** Publish an acknowledgement through the complete production TARGET decoder. */
-static void map_target_cycle_test_reply(const map_target_struct *target, bool truncated) {
+static void map_target_cycle_test_reply_type(const map_target_struct *target,
+                                             bool truncated,
+                                             uint8_t code) {
     packet_struct *packet = packet_new(0, 32, 32);
-    packet_writer_write_uint8(packet, target != NULL ? CMD_TARGET_ENEMY : CMD_TARGET_SELF);
+    packet_writer_write_uint8(packet, code);
     packet_writer_write_cstring(packet, "ffffff");
     packet_writer_write_cstring(packet, "Cycle actor");
     packet_writer_write_uint8(packet, 1);
@@ -11299,11 +11304,69 @@ static void map_target_cycle_test_reply(const map_target_struct *target, bool tr
     packet_free(packet);
 }
 
+static void map_target_cycle_test_reply(const map_target_struct *target, bool truncated) {
+    map_target_cycle_test_reply_type(target, truncated,
+                                    target != NULL ? CMD_TARGET_ENEMY : CMD_TARGET_SELF);
+}
+
 /** Every user press remains retryable even when no TARGET reply arrives. */
 static bool map_target_cycle_test_press(uint8_t is_friend, const map_target_struct *expected) {
     int sent = map_interaction_test_targets;
     map_target_handle(is_friend);
     return map_interaction_test_targets == sent + 1 && map_target_cycle_test_packet(expected);
+}
+
+/** A dropped class switch cannot make an empty friend list retain an enemy. */
+static bool map_target_cycle_class_test(const map_target_struct *enemy,
+                                        const map_target_struct *friendly) {
+    size_t saved_level = current_level_index;
+    map_cell_store_t *saved_cells = cells;
+    map_select_level(friendly->depth, false);
+    map_cell_t *cell = MAP_CELL_GET_MUTABLE(MAP_STARTX + friendly->x,
+                                          MAP_STARTY + friendly->y);
+    map_cell_actor_record_t *actor = map_cell_actor_record(cell, 0, false);
+    map_cell_layer_record_t *record = map_cell_layer_record(cell, GET_MAP_LAYER(LAYER_LIVING, 0), false);
+    uint8_t saved_friend = actor->target_is_friend;
+    bool saved_authorized = record->visibility.authorized;
+    actor->target_is_friend = 1;
+
+    map_target_cycle_test_reply(NULL, false);
+    bool success = map_target_cycle_test_press(0, enemy);
+    map_target_cycle_test_reply(enemy, false);
+    success &= cpl.target_code == CMD_TARGET_ENEMY && cpl.target_is_friend == 0;
+    /* No response for this friend SELECT: the same server tick drops it. */
+    success &= map_target_cycle_test_press(1, friendly);
+    success &= cpl.target_code == CMD_TARGET_ENEMY && cpl.target_is_friend == 0;
+    Client_Player before = cpl;
+    map_target_cycle_test_reply_type(friendly, true, CMD_TARGET_FRIEND);
+    success &= memcmp(&cpl, &before, sizeof(cpl)) == 0;
+    record->visibility.authorized = false;
+    success &= map_target_cycle_test_press(1, NULL);
+    /* CLEAR is retryable until the complete SELF result resets selection. */
+    success &= map_target_cycle_test_press(1, NULL);
+    map_target_cycle_test_reply(NULL, false);
+    success &= cpl.target_actor_count == 0 && cpl.target_relative_depth == 0 &&
+               cpl.target_code == CMD_TARGET_SELF && cpl.target_is_friend == 0;
+
+    /* Complete acknowledgements for either friendly wire code commit the
+     * friend class. Issuing an enemy SELECT cannot change that class. */
+    record->visibility.authorized = true;
+    const uint8_t codes[] = {CMD_TARGET_NEUTRAL, CMD_TARGET_FRIEND};
+    for (size_t index = 0; index < arraysize(codes); index++) {
+        success &= map_target_cycle_test_press(1, friendly);
+        map_target_cycle_test_reply_type(friendly, false, codes[index]);
+        success &= cpl.target_code == codes[index] && cpl.target_is_friend == 1;
+        success &= map_target_cycle_test_press(0, enemy);
+        success &= cpl.target_is_friend == 1;
+        map_target_cycle_test_reply(NULL, false);
+        success &= cpl.target_is_friend == 0;
+    }
+
+    actor->target_is_friend = saved_friend;
+    record->visibility.authorized = saved_authorized;
+    current_level_index = saved_level;
+    cells = saved_cells;
+    return success;
 }
 
 /** Exercise rapid presses and missing replies without an optimistic cursor. */
@@ -11316,8 +11379,10 @@ static bool map_target_cycle_test(void) {
     map_interaction_test_active = true;
     map_interaction_test_targets = 0;
     UT_array *targets = map_target_collect(0);
-    utarray_sort(targets, map_target_cmp);
     size_t length = utarray_len(targets);
+    if (length > 1) {
+        utarray_sort(targets, map_target_cmp);
+    }
     bool success = length >= 3;
     if (success) {
         const map_target_struct *first = (const map_target_struct *)utarray_eltptr(targets, 0);
@@ -11355,6 +11420,7 @@ static bool map_target_cycle_test(void) {
         success &= map_target_cycle_test_packet(NULL);
         map_target_cycle_test_reply(NULL, false);
         success &= map_target_cycle_test_press(0, first);
+        success &= map_target_cycle_class_test(first, last);
         map_target_cycle_test_reply(NULL, false);
         success &= map_target_cycle_test_press(0, first);
 
