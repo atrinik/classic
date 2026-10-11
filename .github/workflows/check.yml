@@ -25,6 +25,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Retain the released GCC producer until immutable LLVM images are qualified.
+  ATRINIK_LLVM_TOOLCHAIN: "0"
   COVERAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
   CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
@@ -281,6 +283,7 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \
+            --env ATRINIK_LLVM_TOOLCHAIN \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
@@ -312,7 +315,7 @@ jobs:
         with:
           disable_search: true
           fail_ci_if_error: false
-          files: libatrinik/coverage.xml
+          files: libatrinik/coverage.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }}
           flags: libatrinik
           use_oidc: true
       - name: Validate editor packaging helper
@@ -803,6 +806,7 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \
+            --env ATRINIK_LLVM_TOOLCHAIN \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
@@ -826,10 +830,12 @@ jobs:
               --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/server/admin_shutdown.c,target=/workspace/server/src/server/admin_shutdown.c,readonly" \
               --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/include/admin_shutdown.h,target=/workspace/server/src/include/admin_shutdown.h,readonly" \
               --mount "type=bind,source=${GITHUB_WORKSPACE}/server/src/tests/admin_shutdown_socket.py,target=/workspace/server/src/tests/admin_shutdown_socket.py,readonly" \
+              --env ATRINIK_LLVM_TOOLCHAIN \
+              --mount "type=bind,source=${GITHUB_WORKSPACE}/tools/ci/llvm_coverage.py,target=/workspace/tools/ci/llvm_coverage.py,readonly" \
               --mount "type=bind,source=${GITHUB_WORKSPACE}/server/tools/admin_shutdown_coverage.sh,target=/workspace/server/tools/admin_shutdown_coverage.sh,readonly" \
               "${CLASSIC_LINUX_IMAGE}" \
               bash /workspace/server/tools/admin_shutdown_coverage.sh \
-              > "server/coverage-admin-${fixture_name}.xml"
+              > "server/coverage-admin-${fixture_name}.$([[ ${ATRINIK_LLVM_TOOLCHAIN} == 1 ]] && echo lcov || echo xml)"
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -845,7 +851,7 @@ jobs:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
-          files: server/coverage.xml,server/coverage-admin-root.xml,server/coverage-admin-nonroot.xml
+          files: server/coverage.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }},server/coverage-admin-root.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }},server/coverage-admin-nonroot.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }}
           flags: server
           use_oidc: true
 
@@ -908,6 +914,7 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \
+            --env ATRINIK_LLVM_TOOLCHAIN \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
             --env CI \
@@ -947,7 +954,7 @@ jobs:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
-          files: client/coverage.xml
+          files: client/coverage.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }}
           flags: client-unit
           use_oidc: true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1007,7 +1014,7 @@ jobs:
           override_commit: ${{ env.COVERAGE_SHA }}
           disable_search: true
           fail_ci_if_error: false
-          files: client/coverage.xml
+          files: client/coverage.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }}
           flags: client-gpu
           use_oidc: true
 
@@ -1073,6 +1080,7 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --network none \
             --env CCACHE_DIR=/cache/ccache \
+            --env ATRINIK_LLVM_TOOLCHAIN \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
             --volume "${GITHUB_WORKSPACE}:/workspace" \

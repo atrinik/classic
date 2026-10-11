@@ -32,6 +32,14 @@
       }
     },
     {
+      "name": "llvm-coverage",
+      "inherits": "linux-coverage",
+      "binaryDir": "${sourceDir}/build/llvm-coverage",
+      "cacheVariables": {
+        "ATRINIK_LLVM_TOOLCHAIN": true
+      }
+    },
+    {
       "name": "linux-sanitizers",
       "inherits": "linux-debug",
       "binaryDir": "${sourceDir}/build/linux-sanitizers",
@@ -44,6 +52,7 @@
     {"name": "linux-debug", "configurePreset": "linux-debug"},
     {"name": "linux-sanitizers", "configurePreset": "linux-sanitizers"},
     {"name": "linux-coverage", "configurePreset": "linux-coverage"},
+    {"name": "llvm-coverage", "configurePreset": "llvm-coverage"},
     {"name": "linux-release", "configurePreset": "linux-release"}
   ],
   "testPresets": [
@@ -56,6 +65,12 @@
       "name": "linux-coverage",
       "configurePreset": "linux-coverage",
       "output": {"outputOnFailure": true}
+    },
+    {
+      "name": "llvm-coverage",
+      "inherits": "linux-coverage",
+      "configurePreset": "llvm-coverage",
+      "environment": {"LLVM_PROFILE_FILE": "${sourceDir}/build/llvm-coverage/llvm-profiles/%m-%p.profraw"}
     },
     {
       "name": "linux-sanitizers",

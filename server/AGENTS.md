@@ -105,8 +105,8 @@
 - Follow root formatting and treat warnings/sanitizers as defects. Build/test
   through `./atrinik build server --profile PROFILE --test`; runtime checks use
   exact `topology show`/`up`/`ps`/`logs`/`down` with isolated state/scenario.
-- For substantial native logic, run the documented `linux-coverage` preset and
-  gcovr summary; pull-request CI also runs `linux-sanitizers`.
+- For substantial native logic, run the documented `llvm-coverage` preset and
+  native LLVM LCOV export; pull-request CI also runs `linux-sanitizers`.
 - Classic has one release line. Preserve source, Windows package, checksum, and
   server-image contracts. Scoped source packages embed matching protocol/
   libatrinik under `dependencies/` and select those repository-owned inputs

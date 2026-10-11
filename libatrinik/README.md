@@ -19,15 +19,27 @@ ctest --test-dir build --output-on-failure
 cmake --install build --prefix /path/to/prefix
 ```
 
-To collect line, function, and branch coverage from the native tests:
+To collect line, function, and branch coverage from core and standalone
+pathfinding tests in a full Classic checkout, use the pinned LLVM 23.1.3 tools:
 
 ```sh
-cmake --preset linux-coverage
-cmake --build --preset linux-coverage
-ctest --preset linux-coverage
-gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
-  --exclude '.*/build/.*' --print-summary
+cmake --preset llvm-coverage
+cmake --build --preset llvm-coverage
+python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/llvm-coverage
+ctest --preset llvm-coverage
+python3 ../tools/ci/llvm_coverage.py export --build-dir build/llvm-coverage \
+  --source-root .. --component libatrinik --output coverage.lcov
 ```
+
+The `llvm-coverage` preset selects the pinned toolchain and its own
+`build/llvm-coverage` cache and profiles. Existing `linux-coverage` build trees
+remain available for the previously released producer.
+
+The helper requires matching Clang, llvm-profdata and llvm-cov 23.1.3.
+CTest writes separate `%m-%p.profraw` files for processes and shared libraries;
+LCOV includes production C sources and excludes tests, build output and upstream
+dependency trees. Missing or empty profiles fail the export. Run `prepare` only
+before a fresh test pass; retain those profiles when adding runtime coverage.
 
 To run the standalone suite with address and undefined-behavior sanitizers:
 
@@ -149,6 +161,18 @@ package:
 cmake -S pathfinding -B build/pathfinding -DCMAKE_BUILD_TYPE=Release
 cmake --build build/pathfinding --parallel
 ctest --test-dir build/pathfinding --output-on-failure
+```
+
+Standalone coverage in a full Classic checkout uses the pathfinding module's
+own LLVM preset and profile directory. From `libatrinik/pathfinding/`:
+
+```sh
+cmake --preset llvm-coverage
+cmake --build --preset llvm-coverage
+python3 ../../tools/ci/llvm_coverage.py prepare --build-dir build/llvm-coverage
+ctest --preset llvm-coverage
+python3 ../../tools/ci/llvm_coverage.py export --build-dir build/llvm-coverage \
+  --source-root ../.. --component libatrinik --output coverage.lcov
 ```
 
 Installing that build provides an independent `AtrinikPathfinding` CMake

@@ -28,12 +28,39 @@ the complete process group, escalating to `SIGKILL` after five seconds when
 needed. Re-running a test reconstructs its private runtime from the unchanged
 seed; other tests and their retained artifacts are not touched.
 
-GCC coverage keeps its normal object-adjacent `.gcda` files so gcovr needs no
-relocation or lossy post-processing. GCC locks concurrent profile-file merges
-on supported filesystems; coverage builds additionally use
-`-fprofile-update=atomic`. Validation compares sequential and parallel test
-counts and gcovr totals and stresses randomized four-way scheduling before the
-parallel result is accepted.
+LLVM 23.1.3 coverage instruments production code with
+`-fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic`. Atomic
+counter updates preserve accurate counts when authentication and QUIC workers
+execute instrumented functions concurrently. The same flags apply to shared
+libatrinik code, the integrated build and standalone modules.
+
+From the server directory in a full Classic checkout:
+
+```sh
+cmake --preset llvm-coverage
+cmake --build --preset llvm-coverage
+python3 ../tools/ci/llvm_coverage.py prepare --build-dir build/llvm-coverage
+ctest --preset llvm-coverage --parallel 4 -LE performance
+python3 ../tools/ci/llvm_coverage.py export --build-dir build/llvm-coverage \
+  --source-root .. --component server --output coverage.lcov
+```
+
+The `llvm-coverage` preset selects a separate `build/llvm-coverage` cache so
+existing compiler selections in `linux-coverage` trees remain intact. The
+coverage test preset sets `LLVM_PROFILE_FILE` to the build's isolated
+`llvm-profiles/%m-%p.profraw` path. The binary signature and process ID separate
+parallel processes and instrumented plugins. `prepare` clears only that build's
+previous profiles before a fresh pass; additional runtime probes retain the
+existing profiles. Matching Clang, llvm-profdata and llvm-cov merge those files
+and export LCOV for production server C sources, including plugins, while
+excluding tests and generated dependency/build output. Missing profiles,
+version mismatches and LLVM diagnostics fail collection. Compare sequential and
+parallel LCOV counts and stress randomized four-way scheduling before accepting
+parallel coverage evidence.
+
+During the immutable producer transition only, the previous GCC image retains
+object-adjacent `.gcda` profiles, atomic counters and gcovr export. New LLVM
+coverage does not consume those files.
 
 Use `ctest --preset PRESET --schedule-random --repeat until-fail:COUNT` for a
 stress pass. A failure's working files are attributable at
