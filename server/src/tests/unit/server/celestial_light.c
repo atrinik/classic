@@ -1164,8 +1164,15 @@ static Suite *suite(void) {
     TCase *tc_real_maps = tcase_create("Real maps");
     tcase_add_unchecked_fixture(tc_real_maps, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_real_maps, check_test_setup, check_test_teardown);
-    tcase_set_timeout(tc_real_maps, 30);
+    /* Keep all 13 authored maps and both clock endpoints under instrumentation. */
+    tcase_set_timeout(tc_real_maps, 120);
     suite_add_tcase(s, tc_real_maps);
+    TCase *tc_memory = tcase_create("Pending memory");
+    tcase_add_unchecked_fixture(tc_memory, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_memory, check_test_setup, check_test_teardown);
+    /* Two 64x64 maps complete current and capped pending solves under sanitizers. */
+    tcase_set_timeout(tc_memory, 60);
+    suite_add_tcase(s, tc_memory);
     TCase *tc_oracle = tcase_create("Pending oracle");
     tcase_add_unchecked_fixture(tc_oracle, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_oracle, check_test_setup, check_test_teardown);
@@ -1195,7 +1202,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_celestial_64x64_build_is_bounded);
     tcase_add_test(tc_oracle, test_celestial_pending_matches_synchronous_oracle);
     tcase_add_test(tc_core, test_celestial_geometry_signature_is_exact_and_uses_existing_padding);
-    tcase_add_test(tc_core, test_celestial_pending_memory_is_bounded_and_released);
+    tcase_add_test(tc_memory, test_celestial_pending_memory_is_bounded_and_released);
     tcase_add_test(tc_core, test_current_reservation_failure_clears_both_published_endpoints);
     tcase_add_test(tc_core, test_celestial_pending_promotes_without_rebuild_and_jumps_fall_back);
     tcase_add_test(tc_core, test_celestial_pending_is_fair_and_geometry_cancels);
