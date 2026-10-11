@@ -81,8 +81,8 @@ callers must cleanse every copy after use and never log codes or route
 capabilities. Store consumers persist only the index and verifier. The focused
 `libatrinik-access-code` test includes independently computed hash vectors,
 invalid alphabets/lengths, identity binding, and deterministic entropy failure
-on supported Linux linkers. The helper alone does not provide admission or
-route registration.
+through linker wrappers on Linux and test-only source wrappers on macOS.
+The helper alone does not provide admission or route registration.
 
 ## Direct connection and rendezvous API
 
