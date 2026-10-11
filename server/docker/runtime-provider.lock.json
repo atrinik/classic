@@ -1,16 +1,17 @@
 {
   "schema_version": 1,
-  "build_image": "ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2",
-  "platform_digest": "sha256:66a637c76f07d32ff933886a96bc5bd720fc695cf20a4acb9c1710983fdb7478",
-  "producer_source": "4be36a1f1eebb667aad77c227f7855a4a656d150",
+  "build_image": "ghcr.io/atrinik/classic-build:1.17.0@sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1",
+  "platform_digest": "sha256:67a0b1243b0cf860f72e39623a6ea92414c2531677bc55a01b3f2f62c57de93d",
+  "producer_source": "0571f500ede75e7661b508d8bb40354256113223",
   "snapshot": "20260810T000000Z",
   "openssl_version": "3.5.5",
   "evidence_sha256": {
-    "payload": "c5e71a9bf7e8f80fa80887d36057ad59942c40a85b8b122d18b450964e61e89b",
-    "packages": "e8e8121787389444029abc0e2f9225e7456ce11e74f3908f615f900da3677fd2",
-    "runtime_closure": "6739957d17e0fe6e780c4daaccb1d2d82422833c603d219aace58ed62f59c10f",
+    "payload": "6ba5d89f9c0246683f173c41e17255712ab3591aa3c97bcf764ddb319e885aa6",
+    "packages": "37763a219bc25c8b263d5e49a1732627ea615b3f6bebea30c67abc38cc3cef73",
+    "runtime_closure": "4ff80feae2bd437a77444436eca419b4f2b21f12276e150fa63d86a047c996f2",
     "source_9136_server_python_closure": "b70a977a3ffaf4c2d3d3fefd9a6e4a1cff4ee63692024a68418c5d6c22dfcd3b",
-    "source_4be36_base_family_closure": "7c6d141dd048015fd4a07c68adbb78e30d057305ff40a5c6c0acc5b6cd814d51"
+    "source_4be36_base_family_closure": "7c6d141dd048015fd4a07c68adbb78e30d057305ff40a5c6c0acc5b6cd814d51",
+    "source_0571_package_dependency_fields": "01b93feedb60e771ad8350535514abd267ad4d2b9c6488e40d5777599373d4c6"
   },
   "files": [
     {
@@ -26,8 +27,8 @@
     {
       "path": "/usr/local/lib/libcares.so.2.19.5",
       "mode": "0o644",
-      "bytes": 332496,
-      "sha256": "94663719ed375379fb7a92d3d94d6e46e5775c866c3ee8231cef0cbef625925a"
+      "bytes": 287168,
+      "sha256": "3f4a9602779f197eea06c509136d9da54a3c9bb33527975b493cc94196fa1aaf"
     },
     {
       "path": "/usr/local/lib/libcurl.so",
@@ -42,20 +43,20 @@
     {
       "path": "/usr/local/lib/libcurl.so.4.8.0",
       "mode": "0o755",
-      "bytes": 1011192,
-      "sha256": "e57453fa28bcd39a4fd6b40d98bccecacc27393ff96057d7cdbb75941733247a"
+      "bytes": 935376,
+      "sha256": "dd2852e0a1ccdbdef215b8dce5608b4e01ba440890babef1caeab91b671f126f"
     },
     {
       "path": "/usr/local/share/atrinik/classic-curl-toolchain.json",
       "mode": "0o644",
-      "bytes": 1750,
-      "sha256": "64cdcc72137713828229dd5cc1d2a89cdf96c2a9beeb7738abd2a644216ee3b5"
+      "bytes": 1892,
+      "sha256": "de7c36e5ff2c181984bb934d8194154d80672128126f8af38d8c7ee70a2fa6b8"
     },
     {
       "path": "/usr/local/share/atrinik/curl/config.log",
       "mode": "0o644",
-      "bytes": 280986,
-      "sha256": "2db9c573eb0af9925327d2ce5f6efc53c0a33ac71721ab2bc3640979b3d9bde0"
+      "bytes": 280315,
+      "sha256": "652cdc5cc17586508fdc8ba05f13ad3dffcc08714cf589f1a6cd1a15bd98fdb6"
     },
     {
       "path": "/usr/local/share/atrinik/curl/curl_config.h",

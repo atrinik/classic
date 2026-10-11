@@ -1,9 +1,19 @@
 # Qualified c-ares providers
 
-The standalone server compiler stage uses the published
-`ghcr.io/atrinik/classic-build:1.16.0` index
+The standalone server compiler stage uses the released LLVM 23.1.3 SDK
+`ghcr.io/atrinik/classic-build:1.17.0` index
+`sha256:5ec3669614fde5ac77ce63e89b6adc35cd27b0584451b97928147facb22aaec1`,
+Linux amd64 platform
+`sha256:67a0b1243b0cf860f72e39623a6ea92414c2531677bc55a01b3f2f62c57de93d`,
+from producer source `0571f500ede75e7661b508d8bb40354256113223`.
+Its measured curl/c-ares payload and actual consumer loader paths match the
+current runtime provider lock. All 86 locked distro package versions and their
+recorded dependency expressions match this SDK; the runtime base and snapshot
+retain their existing qualification.
+
+Historical qualification used `ghcr.io/atrinik/classic-build:1.16.0` index
 `sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2`.
-Its qualified Linux amd64 platform is
+That qualified Linux amd64 platform is
 `sha256:66a637c76f07d32ff933886a96bc5bd720fc695cf20a4acb9c1710983fdb7478`,
 from producer source `4be36a1f1eebb667aad77c227f7855a4a656d150`.
 This supplies curl 8.18.0, c-ares 1.34.6 and OpenSSL 3.5.5. The resolver contract
@@ -42,8 +52,9 @@ locked package set. The complete 86-package closure additionally locks the base'
 from the same published producer. Its recorded package inventory receipt is
 `source_4be36_base_family_closure` in the lock. Every selected package version must
 satisfy its recorded dependency expression, including util-linux's exact
-`libuuid1`, `libblkid1`, `libmount1`, and `libsmartcols1` relations. The qualified
-application package versions and copied provider bytes remain unchanged.
+`libuuid1`, `libblkid1`, `libmount1`, and `libsmartcols1` relations. The current LLVM SDK retains these qualified application package versions.
+Its rebuilt curl/c-ares payload hashes and build records are measured separately
+in the current lock; the named historical closure receipts remain preserved.
 The application closure includes indirect GD image/X11 libraries, Python FFI
 and compression libraries, and `openssl-provider-legacy` because the actual
 `libssl3t64` package declares that dependency. This is package dependency closure,
