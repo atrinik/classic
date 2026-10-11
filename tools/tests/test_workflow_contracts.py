@@ -491,7 +491,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("validate_profile_tree ATRINIK_PROFILE_CONTENT_DIR", server_script)
         self.assertIn("validate_profile_tree ATRINIK_PROFILE_RESOURCES_DIR", server_script)
         self.assertIn(
-            "PYTHONDONTWRITEBYTECODE=1 ./atrinik-server", server_script
+            "PYTHONDONTWRITEBYTECODE=1 native_llvm ./atrinik-server", server_script
         )
         self.assertIn('python3 tools/dependencies.py sync', server_script)
         self.assertIn('python3 tools/dependencies.py verify', server_script)
