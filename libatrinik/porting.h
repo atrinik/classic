@@ -34,6 +34,13 @@
 #define _GNU_SOURCE
 #endif
 
+/* Darwin's POSIX-only namespace hides BSD socket/timer flags and newer
+ * descriptor-relative file APIs used by the toolkit. Select its full namespace
+ * before any system header; _GNU_SOURCE only provides this policy on Linux. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+
 #ifdef __GNUC__
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)

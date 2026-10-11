@@ -5,8 +5,10 @@
 #include <arpa/inet.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -22,6 +24,52 @@ typedef struct http_fixture {
     atomic_bool received;
 } http_fixture_t;
 static char captured_log[HUGE_BUF];
+
+static ssize_t http_fixture_send(int client, const char *response, size_t size) {
+#ifdef MSG_NOSIGNAL
+    return send(client, response, size, MSG_NOSIGNAL);
+#elif defined(SO_NOSIGPIPE)
+    const int enabled = 1;
+    if (setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled)) != 0) {
+        return -1;
+    }
+    return send(client, response, size, 0);
+#else
+#error "HTTP fixtures require a socket-local SIGPIPE suppression mechanism"
+#endif
+}
+
+static int test_fixture_closed_peer(void) {
+    /* Run before toolkit initialization or threads: an ignored process-wide
+     * SIGPIPE disposition must not hide a broken fixture safeguard. */
+    pid_t child = fork();
+    if (child < 0) {
+        return 1;
+    }
+    if (child == 0) {
+        sigset_t unblocked;
+        if (sigemptyset(&unblocked) != 0 || sigaddset(&unblocked, SIGPIPE) != 0 ||
+            signal(SIGPIPE, SIG_DFL) == SIG_ERR ||
+            sigprocmask(SIG_UNBLOCK, &unblocked, NULL) != 0) {
+            _exit(1);
+        }
+        int sockets[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
+            _exit(1);
+        }
+        close(sockets[1]);
+        ssize_t sent = http_fixture_send(sockets[0], "x", 1);
+        int failed = sent != -1 || errno != EPIPE;
+        close(sockets[0]);
+        _exit(failed);
+    }
+    int status;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    return waited != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0;
+}
 
 static void capture_curl_log(const char *message) {
     if (strstr(message, "HTTP request origin=") != NULL) {
@@ -68,7 +116,7 @@ static void *http_fixture_run(void *user_data) {
         usleep(fixture->stall_us);
     }
     if (fixture->response != NULL) {
-        (void)send(client, fixture->response, strlen(fixture->response), MSG_NOSIGNAL);
+        (void)http_fixture_send(client, fixture->response, strlen(fixture->response));
     }
     close(client);
     return NULL;
@@ -815,6 +863,9 @@ static int test_endpoint_alias_diagnostics(void) {
 }
 
 int main(void) {
+    if (test_fixture_closed_peer() != 0) {
+        return 1;
+    }
     toolkit_import(path);
     toolkit_import(curl);
     int failed = test_response_code_survives_body_limit() ||
