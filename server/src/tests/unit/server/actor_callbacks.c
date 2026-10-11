@@ -132,6 +132,10 @@ START_TEST(test_monster_cast_rechecks_borrowed_spell_and_enemy) {
     object_insert_into(ability, monster, 0);
     tag_t ability_count = ability->count, target_count = target->count;
     ask_show(target, _i == 0 ? "destroy_spell_second" : "destroy_target_second");
+    /* Installing the event is an inventory mutation: living_update_monster
+     * recalculates and clamps HP. Capture the baseline after that setup. */
+    int target_hp = target->stats.hp;
+    ck_assert_int_gt(target_hp, 0);
     size_t reserved = propagation_reserved_cells();
 
     object_process(monster);
@@ -152,7 +156,7 @@ START_TEST(test_monster_cast_rechecks_borrowed_spell_and_enemy) {
         /* Losing an inventory ability cancels this cast. The retained enemy
          * and range vector are still valid, so ordinary pursuit may continue. */
         ck_assert(OBJECT_VALID(target, target_count));
-        ck_assert_int_eq(target->stats.hp, 100);
+        ck_assert_int_eq(target->stats.hp, target_hp);
     } else {
         /* Losing the mapped enemy invalidates the borrowed range vector and
          * must stop the entire action before movement or melee. */
