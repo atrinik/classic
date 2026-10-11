@@ -109,13 +109,14 @@ class WorkflowContractTests(unittest.TestCase):
             fixture.write_text("\n".join((
                 "set(ENABLE_PYTHON_PLUGIN OFF)",
                 "set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)",
+                "set(CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH FALSE)",
                 "set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH FALSE)",
                 required_flex[0],
                 # Bison belongs to the general producer's host generator cohort;
                 # the current server directly invokes Flex for its three lexers.
                 "find_package(BISON REQUIRED)",
             )) + "\n")
-            for role in ("focused", "general"):
+            for role in ("general", "focused"):
                 sdk = root / role
                 sdk.mkdir()
                 if role == "general":
@@ -123,8 +124,12 @@ class WorkflowContractTests(unittest.TestCase):
                         executable = sdk / tool
                         executable.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
                         executable.chmod(0o755)
+                # Ambient host SDK selectors must not supply missing generators
+                # to the focused fixture. Only its explicit CLI path is eligible.
                 result = subprocess.run([shutil.which("cmake"), f"-DCMAKE_PROGRAM_PATH={sdk}",
-                                         "-P", str(fixture)], capture_output=True, text=True)
+                                         "-P", str(fixture)], capture_output=True, text=True,
+                                        env=dict(os.environ, CMAKE_PROGRAM_PATH=str(root / "general"),
+                                                 CMAKE_PREFIX_PATH=str(root / "general")))
                 with self.subTest(sdk=role):
                     if role == "focused":
                         self.assertNotEqual(result.returncode, 0)
