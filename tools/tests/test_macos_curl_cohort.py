@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import io
 import json
+import ssl
 from pathlib import Path
 import subprocess
 import sys
@@ -28,6 +29,15 @@ finally:
 class MacOSCurlCohortTests(unittest.TestCase):
     def setUp(self):
         self.manifest = COHORT.load_manifest()
+
+    def test_private_fixture_requires_tls12_and_keeps_tls13_available(self):
+        with patch.object(ssl.SSLContext, "load_cert_chain") as load:
+            context = COHORT.private_tls_context("server.pem", "server.key")
+        self.assertEqual(context.protocol, ssl.PROTOCOL_TLS_SERVER)
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+        self.assertEqual(context.maximum_version, ssl.TLSVersion.MAXIMUM_SUPPORTED)
+        self.assertFalse(context.options & ssl.OP_NO_TLSv1_3)
+        load.assert_called_once_with("server.pem", "server.key")
 
     def runtime(self):
         baseline = self.manifest["baseline"]

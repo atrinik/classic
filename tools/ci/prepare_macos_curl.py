@@ -244,6 +244,13 @@ def capture_dependencies(commands, manifest):
     return dependencies, files, inventory
 
 
+def private_tls_context(cert, key):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(cert, key)
+    return context
+
+
 @contextlib.contextmanager
 def private_tls(commands, directory, openssl):
     """Own loopback fixture; private keys never enter the public evidence directory."""
@@ -292,8 +299,7 @@ def private_tls(commands, directory, openssl):
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(server_cert, server_key)
+    context = private_tls_context(server_cert, server_key)
     server.socket = context.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
