@@ -2,15 +2,18 @@
 """Verify the LLVM cohort copied into the distribution packaging producer."""
 # Copyright 2026 The Atrinik Project
 # SPDX-License-Identifier: GPL-2.0-or-later
+import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 
 
 IMAGE_PATTERN = r'ghcr\.io/atrinik/classic-build:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}'
+PINNED_INSPECTOR = Path('/opt/llvm-23.1.3/bin/llvm-readelf')
+VALIDATOR_INSPECTOR = Path('/usr/bin/llvm-readelf')
 
 
 def image_reference(value):
@@ -40,6 +43,39 @@ def verify(prefix, compiler):
             raise ValueError('compiler producer source archive differs from the locked LLVM source')
 
 
-if __name__ == '__main__':
-    lock = json.loads(Path(sys.argv[1]).read_text())
+def provision_inspector():
+    """Provide the validator's fixed coordinate in the trusted root-owned image."""
+    if os.path.lexists(VALIDATOR_INSPECTOR):
+        raise ValueError(f'trusted inspector coordinate already exists: {VALIDATOR_INSPECTOR}')
+    if not PINNED_INSPECTOR.is_file() or not os.access(PINNED_INSPECTOR, os.X_OK):
+        raise ValueError(f'pinned LLVM inspector is not executable: {PINNED_INSPECTOR}')
+    # Exclusive creation also rejects a coordinate claimed since the check.
+    # The image builder owns /usr/bin; candidate containers cannot change it.
+    VALIDATOR_INSPECTOR.symlink_to(PINNED_INSPECTOR)
+    # Exercise exactly the absolute coordinate and environment policy used by
+    # tools/release/appimage.py, rather than relying on the producer's PATH.
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(('LD_', 'GIT_')) and k not in {'PYTHONPATH', 'PYTHONHOME'}}
+    env.update(PATH='/usr/bin:/bin', LC_ALL='C', TZ='UTC', GIT_NO_REPLACE_OBJECTS='1')
+    try:
+        result = subprocess.run([str(VALIDATOR_INSPECTOR), '--version'], capture_output=True,
+                                env=env, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError('trusted LLVM inspector preflight failed') from exc
+    if result.returncode or not re.search(rb'\bLLVM version 23\.1\.3(?:[^0-9.]|$)', result.stdout):
+        raise ValueError('trusted inspector does not execute the pinned LLVM 23.1.3 cohort')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('lock', type=Path)
+    parser.add_argument('--provision-inspector', action='store_true')
+    args = parser.parse_args()
+    lock = json.loads(args.lock.read_text())
     verify(Path(lock['compiler']['prefix']), lock['compiler'])
+    if args.provision_inspector:
+        provision_inspector()
+
+
+if __name__ == '__main__':
+    main()
