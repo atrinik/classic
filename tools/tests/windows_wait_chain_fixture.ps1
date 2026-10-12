@@ -8,6 +8,7 @@ if ($NativeChild) {
     if (-not $IsWindows) { throw "Native child requires Windows" }
     Add-Type -TypeDefinition @'
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 [assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -18,15 +19,37 @@ public static class AtrinikStackFixtureWindow {
         IntPtr menu, IntPtr instance, IntPtr parameter);
     [DllImport("user32.dll")]
     private static extern bool DestroyWindow(IntPtr window);
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
     public static void Run() {
         IntPtr window = CreateWindowExW(0, "STATIC", "", 0, 0, 0, 1, 1,
             IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
         if (window == IntPtr.Zero) throw new InvalidOperationException("fixture_window_failed");
+        uint busyId = 0;
+        int stop = 0;
+        using var ready = new ManualResetEventSlim(false);
+        var busy = new Thread(() => {
+            busyId = GetCurrentThreadId();
+            ready.Set();
+            var timer = Stopwatch.StartNew();
+            while (Volatile.Read(ref stop) == 0 && timer.ElapsedMilliseconds < 25000)
+                Thread.SpinWait(1000);
+        });
+        busy.Start();
+        ready.Wait();
         try {
-            Console.WriteLine(window.ToInt64());
+            Console.WriteLine(window.ToInt64() + ":" + busyId);
             Console.Out.Flush();
-            Thread.Sleep(5000); // A deterministic blocked HWND thread, without a GPU.
-        } finally { DestroyWindow(window); }
+            // Keep both fixture threads alive until all snapshots finish. A
+            // watchdog still bounds a failed/missing parent without a GPU.
+            var release = System.Threading.Tasks.Task.Run(() => Console.ReadLine());
+            if (!release.Wait(20000) || release.Result != "release")
+                throw new InvalidOperationException("fixture_release_failed");
+        } finally {
+            Volatile.Write(ref stop, 1);
+            busy.Join(2000);
+            DestroyWindow(window);
+        }
     }
 }
 '@
@@ -73,6 +96,11 @@ if ($null -ne (Get-ClientCpuSample $cpuClient)) {
 }
 Write-Host "Actual owned-process CPU diagnostics and generation rejection fixtures passed."
 $source = Get-Content -Raw -LiteralPath $smoke
+$fixtureSource = Get-Content -Raw -LiteralPath $PSCommandPath
+$childBlocks = @([regex]::Matches($fixtureSource, "(?s)Add-Type -TypeDefinition @'\r?\n(.*?)\r?\n'@") |
+    Where-Object { $_.Groups[1].Value.Contains("class AtrinikStackFixtureWindow") })
+if ($childBlocks.Count -ne 1) { throw "Expected one native fixture child" }
+Add-Type -TypeDefinition $childBlocks[0].Groups[1].Value
 $blocks = @([regex]::Matches($source, "(?s)Add-Type -TypeDefinition @'\r?\n(.*?)\r?\n'@") |
     Where-Object { $_.Groups[1].Value.Contains("class AtrinikReviewCloseTimeoutProbe") })
 if ($blocks.Count -ne 1) { throw "Expected one actual timeout observer" }
@@ -184,6 +212,46 @@ foreach ($case in @(
 }
 Write-Host "Actual stack observer C# compilation, privacy and overflow fixtures passed."
 
+# Exercise the actual ranking logic without Win32: TID alone must never let a
+# reused thread, changed handle or regressed CPU counter enter the top two.
+$readingType = [AtrinikReviewCloseStackProbe].GetNestedType("CpuReading", "NonPublic")
+$listType = [System.Collections.Generic.List``1].MakeGenericType($readingType)
+$rank = [AtrinikReviewCloseStackProbe].GetMethod("RankCpu", [System.Reflection.BindingFlags]"NonPublic,Static")
+function New-CpuReadings($Rows) {
+    $list = [Activator]::CreateInstance($listType)
+    foreach ($row in $Rows) {
+        $reading = [Activator]::CreateInstance($readingType, $true)
+        $reading.Id = [uint32]$row[0]
+        $reading.Created = [long]$row[1]
+        $reading.Cpu = [long]$row[2]
+        $reading.Handle = [IntPtr]::new([long]$row[3])
+        $list.Add($reading)
+    }
+    return ,$list
+}
+$before = New-CpuReadings @(@(10, 100, 1000, 50), @(20, 200, 1000, 60), @(30, 300, 1000, 70))
+$after = New-CpuReadings @(@(30, 300, 5000, 70), @(10, 100, 2000, 50), @(20, 200, 5000, 60))
+$ranked = $rank.Invoke($null, @($before, $after))
+if ($ranked.Count -ne 2 -or $ranked[0].Id -ne 20 -or $ranked[1].Id -ne 30 -or
+    $ranked[0].Cpu -ne 4000) { throw "CPU delta/top-two/tie ranking mismatch" }
+foreach ($row in @(@(10, 101, 5000, 50), @(10, 100, 5000, 51),
+                    @(10, 100, 999, 50), @(10, 100, 1000, 50), @(99, 100, 5000, 50))) {
+    $rejected = New-CpuReadings @($row)
+    if ($rank.Invoke($null, @($before, $rejected)).Count -ne 0) {
+        throw "CPU rank accepted changed generation/handle/counter or missing baseline"
+    }
+}
+$large = New-CpuReadings @(1..257 | ForEach-Object { ,@($_, 100, 5000, $_) })
+if ($rank.Invoke($null, @($before, $large)).Count -ne 0) { throw "CPU thread limit escaped" }
+if ([AtrinikReviewCloseStackProbe]::CpuProgress($null, $null) -cne "thread_cpu_baseline_unavailable") {
+    throw "Missing CPU baseline was accepted"
+}
+Write-Host "Actual CPU ranking, generation, handle, regression, tie and cap fixtures passed."
+$suspensionType = [AtrinikReviewCloseStackProbe].GetNestedType("Suspension", "NonPublic")
+$cancelled = [Activator]::CreateInstance($suspensionType, $true)
+$cancelled.Cancel()
+if ($cancelled.Begin([IntPtr]::Zero)) { throw "Cancelled observer attempted a late suspension" }
+
 if ($Native) {
     if (-not $IsWindows -or [IntPtr]::Size -ne 8) { throw "Native stack fixture requires Windows x64" }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
@@ -194,15 +262,41 @@ if ($Native) {
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    $start.RedirectStandardInput = $true
     $child = [System.Diagnostics.Process]::new()
     $child.StartInfo = $start
     try {
         if (-not $child.Start()) { throw "Native stack fixture child failed to start" }
         $line = $child.StandardOutput.ReadLineAsync()
-        if (-not $line.Wait(10000) -or $line.Result -notmatch "^[1-9][0-9]{0,18}$") {
+        if (-not $line.Wait(10000) -or $line.Result -notmatch "^([1-9][0-9]{0,18}):([1-9][0-9]{0,9})$") {
             throw "Native stack fixture did not create an owned window"
         }
-        $window = [IntPtr]::new([long]$line.Result)
+        $window = [IntPtr]::new([long]$Matches[1])
+        $busyThread = [uint32]$Matches[2]
+        $threadBaseline = [AtrinikReviewCloseStackProbe]::CaptureCpuBaseline($child)
+        if ($null -eq $threadBaseline) { throw "Native thread CPU baseline unavailable" }
+        try {
+            $readingsField = $threadBaseline.GetType().GetField("readings",
+                [System.Reflection.BindingFlags]"NonPublic,Instance")
+            $busyReading = @($readingsField.GetValue($threadBaseline) |
+                Where-Object { $_.Id -eq $busyThread })
+            if ($busyReading.Count -ne 1) { throw "Native busy thread generation unavailable" }
+            $captureThread = [AtrinikReviewCloseStackProbe].GetMethod("SnapshotThread",
+                [System.Reflection.BindingFlags]"NonPublic,Static")
+            $changed = $captureThread.Invoke($null, @($child, [IntPtr]::Zero,
+                $busyThread, ([long]$busyReading[0].Created + 1)))
+            if ($changed -cne "stack_thread_generation_changed") {
+                throw "Native stack observer accepted a changed thread generation"
+            }
+            Start-Sleep -Milliseconds 500
+            $cpuRanked = [AtrinikReviewCloseStackProbe]::CpuProgress($child, $threadBaseline)
+            if ($cpuRanked -notmatch "^thread_cpu_samples=[1-9][0-9]{0,2} baseline=[1-9][0-9]{0,2} elapsed_ms=[0-9]+ ranked=[12]; thread=$busyThread cpu_ms=[1-9][0-9]*; stack_frames=(?:[1-9]|[12][0-9]|3[0-2]); ") {
+                throw "Native busy thread was not CPU-ranked and captured: $cpuRanked"
+            }
+        } finally { $threadBaseline.Dispose() }
+        if ([AtrinikReviewCloseStackProbe]::CpuProgress($child, $threadBaseline) -cne "thread_cpu_generation_unavailable") {
+            throw "Disposed thread baseline was accepted"
+        }
         $invalid = [AtrinikReviewCloseStackProbe]::Snapshot($child, [IntPtr]::Zero)
         if ($invalid -cne "stack_owned_window_unavailable") { throw "Invalid window was accepted" }
         $observed = [AtrinikReviewCloseStackProbe]::Snapshot($child, $window)
@@ -210,10 +304,13 @@ if ($Native) {
             throw "Native stack fixture did not yield bounded module-relative frames: $observed"
         }
         # Natural completion proves the one owned suspend count was removed.
+        $child.StandardInput.WriteLine("release")
+        $child.StandardInput.Flush()
         if (-not $child.WaitForExit(10000) -or $child.ExitCode -ne 0) {
             throw "Native stack fixture child did not resume and exit normally"
         }
         Write-Host "Native owned-window stack capture and natural child exit passed: $observed"
+        Write-Host "Native owned CPU-busy worker ranking and bounded stack passed: $cpuRanked"
     } finally {
         if ($child.Id -and -not $child.HasExited) {
             $child.Kill($true)

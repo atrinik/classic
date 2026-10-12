@@ -307,7 +307,9 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
             r'Write-Host \("Client close timeout thread: " \+\s*'
             r'\(Get-ClientCloseTimeoutSnapshot \$launcherClient\)\)\s*'
             r'Write-Host \("Client close timeout stack: " \+\s*'
-            r'\(Get-ClientCloseStackSnapshot \$launcherClient\)\)\s*throw ',
+            r'\(Get-ClientCloseStackSnapshot \$launcherClient\)\)\s*'
+            r'Write-Host \("Client close timeout CPU-ranked threads: " \+\s*'
+            r'\(Get-ClientThreadCpuProgress \$launcherClient \$clientThreadCpuBaseline\)\)\s*throw ',
         )
         self.assertIn("$launcherClientExitCode -ne 0", acceptance)
         self.assertIn('Client shutdown complete', acceptance)
@@ -462,6 +464,33 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         for forbidden in ("SymInitialize", "SymFromAddr", "MiniDump", "FileName", "AdjustTokenPrivileges",
                           "DebugActiveProcess", "SetThreadContext", "WriteProcessMemory", "CreateRemoteThread"):
             self.assertNotIn(forbidden, probe)
+
+    def test_thread_cpu_probe_preserves_generation_and_close_boundary(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("public sealed class CpuBaseline", 1)[1].split(
+            "// Timeout fencing covers capture", 1)[0]
+        for guard in ("client.StartTime.ToUniversalTime().Ticks != started",
+                      "client.SafeHandle.DangerousGetHandle() != process.DangerousGetHandle()",
+                      "old.Created != current.Created", "old.Handle != current.Handle",
+                      "current.Cpu <= old.Cpu", "threads.Count > ThreadLimit",
+                      "timer.ElapsedMilliseconds >= 500", "observer.Join(1000)",
+                      "if (cancelled || !captured) baseline.Dispose()",
+                      "foreach (var reading in readings) CloseHandle(reading.Handle)"):
+            self.assertIn(guard, probe)
+        self.assertIn("OpenThread(0x00100800, false", probe)
+        self.assertIn("ranked.RemoveRange(2, ranked.Count - 2)", probe)
+        self.assertNotIn("SuspendThread(", probe)
+        capture = smoke.split("private static string Collect(", 1)[1]
+        self.assertLess(capture.index("created != expectedCreated"),
+                        capture.index("suspension.Begin(thread)"))
+        self.assertLess(smoke.index("$null = Get-ClientCloseStackSnapshot $null -Initialize"),
+                        smoke.index("Expand-Archive -LiteralPath $packagePath"))
+        self.assertLess(smoke.index("$clientThreadCpuBaseline = Get-ClientThreadCpuBaseline"),
+                        smoke.index("$launcherClient.CloseMainWindow()"))
+        self.assertGreater(smoke.index("(Get-ClientThreadCpuProgress $launcherClient"),
+                           smoke.index("$launcherClient.WaitForExit(30000)"))
+        cleanup = smoke.split("} finally {\n    Save-ClientLifecycleEvidence", 1)[1]
+        self.assertIn("$clientThreadCpuBaseline.Dispose()", cleanup)
 
     def test_lifecycle_evidence_is_bounded_and_uploaded_before_cleanup(self) -> None:
         root = MODULE_PATH.parents[2]

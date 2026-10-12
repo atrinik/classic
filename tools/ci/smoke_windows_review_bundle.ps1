@@ -20,6 +20,7 @@ $launcherClient = $null
 $launcherClientLog = $null
 $bodySucceeded = $false
 $clientCloseStarted = $false
+$clientThreadCpuBaseline = $null
 $portProbe = [System.Net.Sockets.UdpClient]::new(0)
 try {
     $serverPort = ([System.Net.IPEndPoint]$portProbe.Client.LocalEndPoint).Port
@@ -420,7 +421,7 @@ public static class AtrinikReviewCloseTimeoutProbe {
 
 # Timeout-only x64 diagnostic. Snapshot the owned thread's registers and a bounded
 # stack, resume it, then unwind. Never retain raw memory, register values or paths.
-function Get-ClientCloseStackSnapshot($Client) {
+function Get-ClientCloseStackSnapshot($Client, [switch]$Initialize) {
     try {
         if (-not ("AtrinikReviewCloseStackProbe" -as [type])) {
             Add-Type -TypeDefinition @'
@@ -438,6 +439,9 @@ public static class AtrinikReviewCloseStackProbe {
     private static extern IntPtr OpenThread(uint access, bool inherit, uint threadId);
     [DllImport("kernel32.dll")]
     private static extern uint GetProcessIdOfThread(IntPtr thread);
+    [DllImport("kernel32.dll")]
+    private static extern bool GetThreadTimes(IntPtr thread, out long created,
+        out long exited, out long kernel, out long user);
     [DllImport("kernel32.dll")]
     private static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
     [DllImport("kernel32.dll")]
@@ -472,6 +476,155 @@ public static class AtrinikReviewCloseStackProbe {
     // https://learn.microsoft.com/windows/win32/api/dbghelp/nf-dbghelp-stackwalk64
     private const int ContextSize = 1232, FrameSize = 264, StackLimit = 65536;
     private static int active; // DbgHelp is single-threaded, including late observers.
+    // Query-only samples use the documented FILETIME (100 ns) counters:
+    // https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-getthreadtimes
+    // Threads born after baseline or already exited are deliberately unavailable.
+    private const int ThreadLimit = 256;
+    private sealed class CpuReading {
+        public uint Id;
+        public long Created, Cpu;
+        public IntPtr Handle;
+    }
+    public sealed class CpuBaseline : IDisposable {
+        internal readonly object Gate = new object();
+        private readonly List<CpuReading> readings = new List<CpuReading>();
+        private readonly Microsoft.Win32.SafeHandles.SafeProcessHandle process;
+        private readonly int processId;
+        private readonly long started, elapsed;
+        private bool retained, disposed;
+        internal CpuBaseline(Process client) {
+            processId = client.Id;
+            started = client.StartTime.ToUniversalTime().Ticks;
+            process = client.SafeHandle;
+            process.DangerousAddRef(ref retained);
+            elapsed = Environment.TickCount64;
+        }
+        public void Dispose() {
+            lock (Gate) {
+                if (disposed) return;
+                disposed = true;
+                foreach (var reading in readings) CloseHandle(reading.Handle);
+                readings.Clear();
+                if (retained) { process.DangerousRelease(); retained = false; }
+            }
+        }
+        internal bool Capture() {
+            if (processId == Process.GetCurrentProcess().Id) return false;
+            var timer = Stopwatch.StartNew();
+            // The original process handle pins the generation while the separate
+            // Process object supplies only a bounded list of thread IDs.
+            using (var client = Process.GetProcessById(processId)) {
+                if (client.StartTime.ToUniversalTime().Ticks != started) return false;
+                var threads = client.Threads;
+                try {
+                    if (threads.Count > ThreadLimit) return false;
+                    foreach (ProcessThread item in threads) {
+                        if (timer.ElapsedMilliseconds >= 500) return false;
+                        IntPtr thread = OpenThread(0x00100800, false, (uint)item.Id);
+                        if (thread == IntPtr.Zero) continue;
+                        bool keep = false;
+                        try {
+                            long created, cpu;
+                            if (ReadCpu(process.DangerousGetHandle(), processId, thread,
+                                        out created, out cpu)) {
+                                readings.Add(new CpuReading { Id = (uint)item.Id,
+                                    Created = created, Cpu = cpu, Handle = thread });
+                                keep = true;
+                            }
+                        } finally { if (!keep) CloseHandle(thread); }
+                    }
+                    return readings.Count != 0;
+                } finally { foreach (ProcessThread item in threads) item.Dispose(); }
+            }
+        }
+        internal string Progress(Process client) {
+            lock (Gate) {
+                if (disposed || client.Id != processId || client.HasExited ||
+                    client.StartTime.ToUniversalTime().Ticks != started ||
+                    client.SafeHandle.DangerousGetHandle() != process.DangerousGetHandle() ||
+                    Environment.TickCount64 < elapsed) return "thread_cpu_generation_unavailable";
+                var current = new List<CpuReading>();
+                long elapsedMilliseconds = Environment.TickCount64 - elapsed;
+                var timer = Stopwatch.StartNew();
+                foreach (var reading in readings) {
+                    if (timer.ElapsedMilliseconds >= 500) return "thread_cpu_sample_timeout";
+                    long created, cpu;
+                    if (ReadCpu(process.DangerousGetHandle(), processId, reading.Handle,
+                                out created, out cpu))
+                        current.Add(new CpuReading { Id = reading.Id, Created = created,
+                            Cpu = cpu, Handle = reading.Handle });
+                }
+                var ranked = RankCpu(readings, current);
+                var rows = new List<string>();
+                foreach (var reading in ranked) {
+                    rows.Add("thread=" + reading.Id + " cpu_ms=" + reading.Cpu / 10000 +
+                        "; " + SnapshotThread(client, IntPtr.Zero, reading.Id, reading.Created));
+                }
+                return "thread_cpu_samples=" + current.Count + " baseline=" + readings.Count +
+                    " elapsed_ms=" + elapsedMilliseconds + " ranked=" + ranked.Count +
+                    "; " + String.Join("; ", rows);
+            }
+        }
+    }
+    private static bool ReadCpu(IntPtr process, int processId, IntPtr thread,
+                                out long created, out long cpu) {
+        created = cpu = 0;
+        long exited, kernel, user;
+        if (WaitForSingleObject(process, 0) != 258 ||
+            GetProcessIdOfThread(thread) != (uint)processId ||
+            WaitForSingleObject(thread, 0) != 258 ||
+            !GetThreadTimes(thread, out created, out exited, out kernel, out user) ||
+            created <= 0 || kernel < 0 || user < 0 || kernel > Int64.MaxValue - user ||
+            WaitForSingleObject(thread, 0) != 258) return false;
+        cpu = kernel + user;
+        return true;
+    }
+    private static List<CpuReading> RankCpu(List<CpuReading> before, List<CpuReading> after) {
+        var ranked = new List<CpuReading>();
+        if (before.Count > ThreadLimit || after.Count > ThreadLimit) return ranked;
+        foreach (var current in after) {
+            foreach (var old in before) {
+                if (old.Id != current.Id || old.Created <= 0 || old.Created != current.Created ||
+                    old.Handle == IntPtr.Zero || old.Handle != current.Handle ||
+                    old.Cpu < 0 || current.Cpu <= old.Cpu) continue;
+                ranked.Add(new CpuReading { Id = current.Id, Created = current.Created,
+                    Handle = current.Handle, Cpu = current.Cpu - old.Cpu });
+                break;
+            }
+        }
+        ranked.Sort((left, right) => {
+            int cpu = right.Cpu.CompareTo(left.Cpu);
+            return cpu != 0 ? cpu : left.Id.CompareTo(right.Id);
+        });
+        if (ranked.Count > 2) ranked.RemoveRange(2, ranked.Count - 2);
+        return ranked;
+    }
+    public static CpuBaseline CaptureCpuBaseline(Process client) {
+        CpuBaseline baseline = null;
+        try {
+            baseline = new CpuBaseline(client);
+            var gate = new object();
+            bool cancelled = false, ready = false;
+            var observer = new Thread(delegate() {
+                bool captured = false;
+                try { captured = baseline.Capture(); } catch { }
+                lock (gate) {
+                    if (cancelled || !captured) baseline.Dispose();
+                    else ready = true;
+                }
+            });
+            observer.IsBackground = true;
+            observer.Start();
+            if (observer.Join(1000)) return ready ? baseline : null;
+            // The worker retains all handles until its late cleanup completes.
+            lock (gate) { cancelled = true; if (ready) baseline.Dispose(); }
+            return null;
+        } catch { if (baseline != null) baseline.Dispose(); return null; }
+    }
+    public static string CpuProgress(Process client, CpuBaseline baseline) {
+        try { return baseline == null ? "thread_cpu_baseline_unavailable" : baseline.Progress(client); }
+        catch { return "thread_cpu_unavailable"; }
+    }
     // Timeout fencing covers capture as well as unwind: the caller can remove
     // our suspend count, and cancellation prevents a late observer suspending.
     private sealed class Suspension {
@@ -535,7 +688,7 @@ public static class AtrinikReviewCloseStackProbe {
         return bytes;
     }
     private static string Collect(Process client, IntPtr process, IntPtr window, uint threadId,
-                                  Suspension suspension) {
+                                  long expectedCreated, Suspension suspension) {
         IntPtr thread = IntPtr.Zero, contextAllocation = IntPtr.Zero;
         IntPtr frame = IntPtr.Zero, information = IntPtr.Zero, functionEntry = IntPtr.Zero;
         try {
@@ -559,13 +712,18 @@ public static class AtrinikReviewCloseStackProbe {
             frame = Marshal.AllocHGlobal(FrameSize);
             Marshal.Copy(new byte[FrameSize], 0, frame, FrameSize);
             functionEntry = Marshal.AllocHGlobal(12);
-            uint owner;
+            uint owner = (uint)client.Id;
             // The original Process SafeHandle remains pinned throughout: a reused
-            // PID/TID cannot pass both held-handle liveness and HWND ownership.
-            if (GetWindowThreadProcessId(window, out owner) != threadId ||
+            // PID/TID must pass held-handle liveness plus HWND ownership or the
+            // CPU baseline's creation time checked against this opened handle.
+            if ((window != IntPtr.Zero && GetWindowThreadProcessId(window, out owner) != threadId) ||
                 owner != (uint)client.Id || GetProcessIdOfThread(thread) != owner ||
                 WaitForSingleObject(process, 0) != 258 ||
                 WaitForSingleObject(thread, 0) != 258) return "stack_owned_thread_changed";
+            long created, exited, kernel, user;
+            if (expectedCreated != 0 &&
+                (!GetThreadTimes(thread, out created, out exited, out kernel, out user) ||
+                 created != expectedCreated)) return "stack_thread_generation_changed";
             byte[] stack;
             ulong stackAddress;
             if (!suspension.Begin(thread)) return "stack_suspend_failed_or_cancelled";
@@ -697,13 +855,17 @@ public static class AtrinikReviewCloseStackProbe {
         uint thread = GetWindowThreadProcessId(window, out owner);
         if (window == IntPtr.Zero || thread == 0 || owner != (uint)client.Id ||
             client.Id == Process.GetCurrentProcess().Id) return "stack_owned_window_unavailable";
+        return SnapshotThread(client, window, thread, 0);
+    }
+    private static string SnapshotThread(Process client, IntPtr window, uint thread, long created) {
+        if (client.Id == Process.GetCurrentProcess().Id) return "stack_invalid_observer_pid";
         if (Interlocked.CompareExchange(ref active, 1, 0) != 0) return "stack_observer_busy";
         var handle = client.SafeHandle;
         bool retained = false;
         string result = "stack_unavailable";
         var suspension = new Suspension();
         var observer = new Thread(delegate() {
-            try { result = Collect(client, handle.DangerousGetHandle(), window, thread, suspension); }
+            try { result = Collect(client, handle.DangerousGetHandle(), window, thread, created, suspension); }
             finally { handle.DangerousRelease(); Interlocked.Exchange(ref active, 0); }
         });
         observer.IsBackground = true;
@@ -720,9 +882,22 @@ public static class AtrinikReviewCloseStackProbe {
 }
 '@ -ErrorAction Stop
         }
+        if ($Initialize) { return }
         if ($Client.HasExited) { return "client_exited=True" }
         return [AtrinikReviewCloseStackProbe]::Snapshot($Client, $Client.MainWindowHandle)
     } catch { return "<client close stack unavailable>" }
+}
+
+function Get-ClientThreadCpuBaseline($Client) {
+    try {
+        $null = Get-ClientCloseStackSnapshot $Client -Initialize
+        return [AtrinikReviewCloseStackProbe]::CaptureCpuBaseline($Client)
+    } catch { return $null }
+}
+
+function Get-ClientThreadCpuProgress($Client, $Baseline) {
+    try { return [AtrinikReviewCloseStackProbe]::CpuProgress($Client, $Baseline) }
+    catch { return "thread_cpu_unavailable" }
 }
 
 function Write-CloseFailureDiagnostics {
@@ -749,6 +924,8 @@ function Write-CloseFailureDiagnostics {
 }
 
 try {
+    # Compile before starting any owned application, never on its close path.
+    $null = Get-ClientCloseStackSnapshot $null -Initialize
     Expand-Archive -LiteralPath $packagePath -DestinationPath $smokeRoot
     $packageRoots = @(Get-ChildItem -LiteralPath $smokeRoot -Directory)
     $rootFiles = @(Get-ChildItem -LiteralPath $smokeRoot -File)
@@ -1078,6 +1255,9 @@ try {
     $clientCloseStarted = $true
     Write-Host ("Client windows before normal close: " +
         (Get-ClientWindowSnapshot $launcherClient))
+    # Retain query-only handles before close. Sampling never
+    # suspends a thread; stacks are collected only after the unchanged failure.
+    $clientThreadCpuBaseline = Get-ClientThreadCpuBaseline $launcherClient
     $clientCpuBaseline = Get-ClientCpuSample $launcherClient
     if (-not $launcherClient.CloseMainWindow()) {
         throw "Could not request a normal close of the one-click client window"
@@ -1090,6 +1270,8 @@ try {
             (Get-ClientCloseTimeoutSnapshot $launcherClient))
         Write-Host ("Client close timeout stack: " +
             (Get-ClientCloseStackSnapshot $launcherClient))
+        Write-Host ("Client close timeout CPU-ranked threads: " +
+            (Get-ClientThreadCpuProgress $launcherClient $clientThreadCpuBaseline))
         throw "One-click client did not exit after the normal close request"
     }
     $launcherClient.Refresh()
@@ -1134,6 +1316,7 @@ try {
     throw
 } finally {
     Save-ClientLifecycleEvidence $launcherClientLog
+    if ($null -ne $clientThreadCpuBaseline) { $clientThreadCpuBaseline.Dispose() }
     $cleanupFailures = [System.Collections.Generic.List[string]]::new()
     if ($null -ne $process) {
         try {
