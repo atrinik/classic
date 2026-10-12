@@ -21,6 +21,7 @@ $launcherClientLog = $null
 $bodySucceeded = $false
 $clientCloseStarted = $false
 $clientThreadCpuBaseline = $null
+$clientWarpIdentityPending = $null
 $portProbe = [System.Net.Sockets.UdpClient]::new(0)
 try {
     $serverPort = ([System.Net.IPEndPoint]$portProbe.Client.LocalEndPoint).Port
@@ -136,7 +137,14 @@ function Save-ClientLifecycleEvidence([string]$Path) {
             }
         }
         $evidence = Join-Path (Split-Path -Parent $packagePath) "review-client-lifecycle.log"
-        @("revision=$Revision") + $lines | Set-Content -LiteralPath $evidence -Encoding utf8 -ErrorAction Stop
+        $identityLines = @()
+        if ($null -ne $clientWarpIdentityPending) {
+            try { $identityLines = @("WARP module identity: " + $clientWarpIdentityPending.Finish()) }
+            catch { $identityLines = @("WARP module identity: warp_identity_unavailable") }
+        }
+        # Private artifact only on success; keep normal stdout lifecycle-only.
+        @("revision=$Revision") + $lines + $identityLines |
+            Set-Content -LiteralPath $evidence -Encoding utf8 -ErrorAction Stop
         Write-Host ("Client lifecycle evidence:" + [System.Environment]::NewLine +
             ($lines -join [System.Environment]::NewLine))
     } catch {
@@ -419,6 +427,267 @@ public static class AtrinikReviewCloseTimeoutProbe {
     }
 }
 
+# Identify only a loaded System32 WARP image in the owned process. Timeout
+# snapshots additionally bind the module coordinate observed in an owned stack.
+# No symbols are fetched, and neither file paths nor file/memory bytes escape.
+function Get-ClientWarpModuleIdentity($Client, [switch]$Initialize, [switch]$Start) {
+    try {
+        if (-not ("AtrinikReviewWarpIdentityProbe" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+public static class AtrinikReviewWarpIdentityProbe {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern uint GetFinalPathNameByHandleW(Microsoft.Win32.SafeHandles.SafeFileHandle file,
+        StringBuilder path, uint capacity, uint flags);
+    [DllImport("kernel32.dll")]
+    private static extern uint GetProcessId(IntPtr process);
+    [DllImport("kernel32.dll")]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
+    [DllImport("kernel32.dll")]
+    private static extern bool ReadProcessMemory(IntPtr process, IntPtr address,
+        byte[] bytes, UIntPtr size, out UIntPtr read);
+    private const int FileLimit = 67108864, MetadataLimit = 65536;
+    private static int active;
+    private sealed class Identity {
+        public uint Timestamp, ImageSize, Age;
+        public string Guid;
+        public string Key { get { return Timestamp.ToString("x8") + ":" +
+            ImageSize.ToString("x8") + ":" + Guid + ":" + Age.ToString("x"); } }
+    }
+    private static bool Range(ulong offset, ulong count, ulong length) {
+        return count <= length && offset <= length - count;
+    }
+    // PE32+ image headers and CodeView RSDS only; all offsets are range-checked.
+    // https://learn.microsoft.com/windows/win32/debug/pe-format
+    private static Identity Parse(Func<ulong, int, byte[]> read, bool mapped, ulong length) {
+        Func<ulong, int, byte[]> at = (offset, count) => {
+            if (count <= 0 || count > MetadataLimit || !Range(offset, (ulong)count, length))
+                throw new InvalidDataException();
+            var bytes = read(offset, count);
+            if (bytes == null || bytes.Length != count) throw new InvalidDataException();
+            return bytes;
+        };
+        var dos = at(0, 64);
+        if (BitConverter.ToUInt16(dos, 0) != 0x5a4d) throw new InvalidDataException();
+        uint peOffset = BitConverter.ToUInt32(dos, 60);
+        if (peOffset > MetadataLimit) throw new InvalidDataException();
+        var pe = at(peOffset, 24);
+        int sections = BitConverter.ToUInt16(pe, 6), optionalSize = BitConverter.ToUInt16(pe, 20);
+        if (BitConverter.ToUInt32(pe, 0) != 0x4550 || BitConverter.ToUInt16(pe, 4) != 0x8664 ||
+            (BitConverter.ToUInt16(pe, 22) & 0x2000) == 0 || sections < 1 || sections > 96 ||
+            optionalSize < 240 || optionalSize > 4096) throw new InvalidDataException();
+        var optional = at((ulong)peOffset + 24, optionalSize);
+        if (BitConverter.ToUInt16(optional, 0) != 0x20b ||
+            BitConverter.ToUInt32(optional, 108) < 7) throw new InvalidDataException();
+        uint imageSize = BitConverter.ToUInt32(optional, 56);
+        if (imageSize == 0 || imageSize > FileLimit || (mapped && imageSize != length))
+            throw new InvalidDataException();
+        var table = at((ulong)peOffset + 24 + (uint)optionalSize, sections * 40);
+        Func<uint, int, ulong> offsetFor = (rva, count) => {
+            if (!Range(rva, (ulong)count, imageSize)) throw new InvalidDataException();
+            if (mapped) return rva;
+            ulong found = UInt64.MaxValue;
+            for (int index = 0; index < sections; ++index) {
+                int entry = index * 40;
+                uint start = BitConverter.ToUInt32(table, entry + 12);
+                uint size = BitConverter.ToUInt32(table, entry + 16);
+                uint raw = BitConverter.ToUInt32(table, entry + 20);
+                if (rva >= start && Range((ulong)rva - start, (ulong)count, size)) {
+                    if (found != UInt64.MaxValue) throw new InvalidDataException();
+                    found = (ulong)raw + rva - start;
+                }
+            }
+            if (found == UInt64.MaxValue) throw new InvalidDataException();
+            return found;
+        };
+        uint debugRva = BitConverter.ToUInt32(optional, 160);
+        uint debugSize = BitConverter.ToUInt32(optional, 164);
+        if (debugSize == 0 || debugSize > 4096 || debugSize % 28 != 0)
+            throw new InvalidDataException();
+        var debug = at(offsetFor(debugRva, (int)debugSize), (int)debugSize);
+        Identity identity = null;
+        for (int index = 0; index < debug.Length; index += 28) {
+            if (BitConverter.ToUInt32(debug, index + 12) != 2) continue;
+            uint size = BitConverter.ToUInt32(debug, index + 16);
+            uint rva = BitConverter.ToUInt32(debug, index + 20);
+            uint raw = BitConverter.ToUInt32(debug, index + 24);
+            if (identity != null || size < 25 || size > 4096) throw new InvalidDataException();
+            ulong offset = offsetFor(rva, (int)size);
+            if (!mapped && offset != raw) throw new InvalidDataException();
+            var cv = at(offset, (int)size);
+            if (BitConverter.ToUInt32(cv, 0) != 0x53445352) throw new InvalidDataException();
+            int end = Array.IndexOf(cv, (byte)0, 24), basename = 24;
+            if (end < 24) throw new InvalidDataException();
+            for (int pos = 24; pos < end; ++pos)
+                if (cv[pos] == 47 || cv[pos] == 92) basename = pos + 1;
+            // Decode only the fixed public basename, never a producer's path.
+            if (end - basename != 13 ||
+                !String.Equals(Encoding.ASCII.GetString(cv, basename, 13), "d3d10warp.pdb",
+                               StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException();
+            var guid = new byte[16]; Array.Copy(cv, 4, guid, 0, 16);
+            var value = new Guid(guid);
+            uint age = BitConverter.ToUInt32(cv, 20);
+            if (value == Guid.Empty || age == 0) throw new InvalidDataException();
+            identity = new Identity { Timestamp = BitConverter.ToUInt32(pe, 8), ImageSize = imageSize,
+                Guid = value.ToString("N"), Age = age };
+        }
+        if (identity == null) throw new InvalidDataException();
+        return identity;
+    }
+    private static bool ModuleMatches(Process client, string path, ulong address, ulong size) {
+        client.Refresh();
+        var modules = client.Modules;
+        if (modules.Count > 256) return false;
+        foreach (ProcessModule module in modules) {
+            if (!String.Equals(module.ModuleName, "d3d10warp.dll", StringComparison.OrdinalIgnoreCase)) continue;
+            return String.Equals(Path.GetFullPath(module.FileName), path, StringComparison.OrdinalIgnoreCase) &&
+                unchecked((ulong)module.BaseAddress.ToInt64()) == address && (ulong)module.ModuleMemorySize == size;
+        }
+        return false;
+    }
+    private static bool FileMatches(FileStream file, string expected) {
+        var path = new StringBuilder(1024);
+        uint length = GetFinalPathNameByHandleW(file.SafeFileHandle, path, 1024, 0);
+        if (length == 0 || length >= 1024) return false;
+        string actual = path.ToString();
+        if (actual.StartsWith(@"\\?\", StringComparison.Ordinal)) actual = actual.Substring(4);
+        return String.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
+    }
+    private static string Collect(Process client, IntPtr process, int processId, long started,
+                                  ulong address, ulong size, Stopwatch timer) {
+        string path = Path.GetFullPath(Path.Combine(Environment.SystemDirectory, "d3d10warp.dll"));
+        if (IntPtr.Size != 8 || address > Int64.MaxValue || size == 0 || size > FileLimit ||
+            address > (ulong)Int64.MaxValue - size ||
+            !ModuleMatches(client, path, address, size) ||
+            (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return "warp_identity_unavailable";
+        using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read)) {
+            if (!FileMatches(file, path) || file.Length < 64 || file.Length > FileLimit)
+                return "warp_identity_unavailable";
+            int budget = MetadataLimit;
+            Func<ulong, int, byte[]> fileRead = (offset, count) => {
+                if (timer.ElapsedMilliseconds >= 1500 || count > budget) throw new InvalidDataException();
+                budget -= count;
+                file.Position = checked((long)offset);
+                var bytes = new byte[count];
+                file.ReadExactly(bytes);
+                return bytes;
+            };
+            Func<ulong, int, byte[]> imageRead = (offset, count) => {
+                if (timer.ElapsedMilliseconds >= 1500 || count > budget || !Range(offset, (ulong)count, size))
+                    throw new InvalidDataException();
+                budget -= count;
+                var bytes = new byte[count]; UIntPtr read;
+                if (!ReadProcessMemory(process, new IntPtr((long)(address + offset)), bytes,
+                    new UIntPtr((uint)count), out read) || read.ToUInt64() != (ulong)count)
+                    throw new InvalidDataException();
+                return bytes;
+            };
+            var disk = Parse(fileRead, false, (ulong)file.Length);
+            var loaded = Parse(imageRead, true, size);
+            if (disk.Key != loaded.Key) return "warp_identity_mismatch";
+            file.Position = 0;
+            string hash;
+            using (var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256)) {
+                var buffer = new byte[65536];
+                long remaining = file.Length;
+                while (remaining != 0) {
+                    if (timer.ElapsedMilliseconds >= 1500) return "warp_identity_timeout";
+                    int count = file.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                    if (count == 0) return "warp_identity_unavailable";
+                    digest.AppendData(buffer, 0, count); remaining -= count;
+                }
+                hash = Convert.ToHexString(digest.GetHashAndReset()).ToLowerInvariant();
+            }
+            if (timer.ElapsedMilliseconds >= 1500 || !FileMatches(file, path) ||
+                !ModuleMatches(client, path, address, size) ||
+                client.Id != processId || client.StartTime.ToUniversalTime().Ticks != started ||
+                GetProcessId(process) != (uint)processId || WaitForSingleObject(process, 0) != 258 ||
+                Parse(imageRead, true, size).Key != disk.Key) return "warp_identity_changed";
+            return "module=d3d10warp.dll sha256=" + hash + " timestamp=" + disk.Timestamp.ToString("x8") +
+                " image_size=" + disk.ImageSize.ToString("x8") + " pdb=d3d10warp.pdb guid=" +
+                disk.Guid + " age=" + disk.Age.ToString("x");
+        }
+    }
+    public sealed class Pending {
+        internal Thread Observer;
+        internal string Result = "warp_identity_unavailable";
+        public string Finish() {
+            return Observer == null || Observer.Join(2000) ? Result : "warp_identity_timeout";
+        }
+    }
+    private static Pending Begin(Process client, int processId, long started,
+                                 ulong address, ulong size, bool findLoaded) {
+        var pending = new Pending();
+        if (client.Id != processId || processId == Environment.ProcessId ||
+            client.StartTime.ToUniversalTime().Ticks != started) {
+            pending.Result = "warp_identity_wrong_process"; return pending;
+        }
+        var handle = client.SafeHandle;
+        if (Interlocked.CompareExchange(ref active, 1, 0) != 0) {
+            pending.Result = "warp_identity_busy"; return pending;
+        }
+        bool retained = false;
+        var timer = Stopwatch.StartNew();
+        var observer = new Thread(() => {
+            try {
+                IntPtr process = handle.DangerousGetHandle();
+                if (GetProcessId(process) != (uint)processId || WaitForSingleObject(process, 0) != 258) return;
+                // Never Refresh or enumerate modules on the caller's Process
+                // while its main thread sends CloseMainWindow/WaitForExit.
+                using (var observed = Process.GetProcessById(processId)) {
+                    if (observed.StartTime.ToUniversalTime().Ticks != started) return;
+                    if (findLoaded) {
+                        var modules = observed.Modules;
+                        if (modules.Count > 256) return;
+                        foreach (ProcessModule module in modules) {
+                            if (!String.Equals(module.ModuleName, "d3d10warp.dll", StringComparison.OrdinalIgnoreCase)) continue;
+                            address = unchecked((ulong)module.BaseAddress.ToInt64());
+                            size = (ulong)module.ModuleMemorySize;
+                            break;
+                        }
+                        if (size == 0) { pending.Result = "warp_identity_not_loaded"; return; }
+                    }
+                    pending.Result = Collect(observed, process, processId, started, address, size, timer);
+                }
+            } catch { }
+            finally { handle.DangerousRelease(); Interlocked.Exchange(ref active, 0); }
+        });
+        observer.IsBackground = true;
+        try { handle.DangerousAddRef(ref retained); observer.Start(); }
+        catch {
+            if (retained) handle.DangerousRelease(); Interlocked.Exchange(ref active, 0);
+            return pending;
+        }
+        pending.Observer = observer;
+        return pending;
+    }
+    public static Pending StartLoaded(Process client) {
+        // No wait on the application's close path. The worker owns its retained
+        // handle until completion, including after caller timeout/process exit.
+        return Begin(client, client.Id, client.StartTime.ToUniversalTime().Ticks, 0, 0, true);
+    }
+    public static string Snapshot(Process client, int processId, long started, ulong address, ulong size) {
+        return Begin(client, processId, started, address, size, false).Finish();
+    }
+}
+'@ -ErrorAction Stop
+        }
+        if ($Initialize) { return }
+        if ($Start) { return [AtrinikReviewWarpIdentityProbe]::StartLoaded($Client) }
+        $observed = [AtrinikReviewCloseStackProbe]::LastWarp
+        if ($null -eq $observed) { return "warp_identity_not_observed" }
+        return [AtrinikReviewWarpIdentityProbe]::Snapshot($Client, $observed.ProcessId,
+            $observed.StartTicks, $observed.Address, $observed.Size)
+    } catch { return "warp_identity_unavailable" }
+}
+
 # Timeout-only x64 diagnostic. Snapshot the owned thread's registers and a bounded
 # stack, resume it, then unwind. Never retain raw memory, register values or paths.
 function Get-ClientCloseStackSnapshot($Client, [switch]$Initialize) {
@@ -476,6 +745,19 @@ public static class AtrinikReviewCloseStackProbe {
     // https://learn.microsoft.com/windows/win32/api/dbghelp/nf-dbghelp-stackwalk64
     private const int ContextSize = 1232, FrameSize = 264, StackLimit = 65536;
     private static int active; // DbgHelp is single-threaded, including late observers.
+    public sealed class WarpObservation {
+        public readonly int ProcessId;
+        public readonly long StartTicks;
+        public readonly ulong Address, Size;
+        internal WarpObservation(Process client, ulong address, ulong size) {
+            ProcessId = client.Id;
+            StartTicks = client.StartTime.ToUniversalTime().Ticks;
+            Address = address; Size = size;
+        }
+    }
+    private static WarpObservation lastWarp;
+    public static WarpObservation LastWarp { get { return Volatile.Read(ref lastWarp); } }
+    public static void ClearWarpObservation() { Volatile.Write(ref lastWarp, null); }
     // Query-only samples use the documented FILETIME (100 ns) counters:
     // https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-getthreadtimes
     // Threads born after baseline or already exited are deliberately unavailable.
@@ -823,6 +1105,8 @@ public static class AtrinikReviewCloseStackProbe {
                 if (instruction == 0 || instruction == previous) break;
                 var module = Find(modules, instruction, 1);
                 if (module == null) { rows.Add("unknown_module"); break; }
+                if (String.Equals(module.Name, "d3d10warp.dll", StringComparison.OrdinalIgnoreCase))
+                    Volatile.Write(ref lastWarp, new WarpObservation(client, module.Address, module.Size));
                 rows.Add(FormatAddress(module.Name, module.Address, module.Size, instruction));
                 previous = instruction;
                 if (!StackWalk64(0x8664, process, thread, frame, context, readMemory,
@@ -891,6 +1175,7 @@ public static class AtrinikReviewCloseStackProbe {
 function Get-ClientThreadCpuBaseline($Client) {
     try {
         $null = Get-ClientCloseStackSnapshot $Client -Initialize
+        [AtrinikReviewCloseStackProbe]::ClearWarpObservation()
         return [AtrinikReviewCloseStackProbe]::CaptureCpuBaseline($Client)
     } catch { return $null }
 }
@@ -926,6 +1211,7 @@ function Write-CloseFailureDiagnostics {
 try {
     # Compile before starting any owned application, never on its close path.
     $null = Get-ClientCloseStackSnapshot $null -Initialize
+    $null = Get-ClientWarpModuleIdentity $null -Initialize
     Expand-Archive -LiteralPath $packagePath -DestinationPath $smokeRoot
     $packageRoots = @(Get-ChildItem -LiteralPath $smokeRoot -Directory)
     $rootFiles = @(Get-ChildItem -LiteralPath $smokeRoot -File)
@@ -1259,6 +1545,7 @@ try {
     # suspends a thread; stacks are collected only after the unchanged failure.
     $clientThreadCpuBaseline = Get-ClientThreadCpuBaseline $launcherClient
     $clientCpuBaseline = Get-ClientCpuSample $launcherClient
+    $clientWarpIdentityPending = Get-ClientWarpModuleIdentity $launcherClient -Start
     if (-not $launcherClient.CloseMainWindow()) {
         throw "Could not request a normal close of the one-click client window"
     }
@@ -1272,6 +1559,8 @@ try {
             (Get-ClientCloseStackSnapshot $launcherClient))
         Write-Host ("Client close timeout CPU-ranked threads: " +
             (Get-ClientThreadCpuProgress $launcherClient $clientThreadCpuBaseline))
+        Write-Host ("Client close timeout WARP identity: " +
+            (Get-ClientWarpModuleIdentity $launcherClient))
         throw "One-click client did not exit after the normal close request"
     }
     $launcherClient.Refresh()

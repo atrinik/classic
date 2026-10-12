@@ -309,7 +309,9 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
             r'Write-Host \("Client close timeout stack: " \+\s*'
             r'\(Get-ClientCloseStackSnapshot \$launcherClient\)\)\s*'
             r'Write-Host \("Client close timeout CPU-ranked threads: " \+\s*'
-            r'\(Get-ClientThreadCpuProgress \$launcherClient \$clientThreadCpuBaseline\)\)\s*throw ',
+            r'\(Get-ClientThreadCpuProgress \$launcherClient \$clientThreadCpuBaseline\)\)\s*'
+            r'Write-Host \("Client close timeout WARP identity: " \+\s*'
+            r'\(Get-ClientWarpModuleIdentity \$launcherClient\)\)\s*throw ',
         )
         self.assertIn("$launcherClientExitCode -ne 0", acceptance)
         self.assertIn('Client shutdown complete', acceptance)
@@ -364,7 +366,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
 
     def test_close_timeout_probe_is_owned_bounded_and_observational(self) -> None:
         smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
-        probe = smoke.split("function Get-ClientCloseTimeoutSnapshot", 1)[1].split("function Get-ClientCloseStackSnapshot", 1)[0]
+        probe = smoke.split("function Get-ClientCloseTimeoutSnapshot", 1)[1].split("function Get-ClientWarpModuleIdentity", 1)[0]
         self.assertIn("mainWindow == IntPtr.Zero || mainThread == 0 || owner != (uint)processId", probe)
         self.assertIn("process.Id == Process.GetCurrentProcess().Id", probe)
         self.assertIn("index < threads.Count && index < 4096", probe)
@@ -491,6 +493,43 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
                            smoke.index("$launcherClient.WaitForExit(30000)"))
         cleanup = smoke.split("} finally {\n    Save-ClientLifecycleEvidence", 1)[1]
         self.assertIn("$clientThreadCpuBaseline.Dispose()", cleanup)
+
+    def test_warp_identity_is_bound_to_observed_system_module(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        helper = smoke.split("function Get-ClientWarpModuleIdentity", 1)[1].split(
+            "# Timeout-only x64 diagnostic", 1)[0]
+        for guard in ('Environment.SystemDirectory, "d3d10warp.dll"',
+                      "FileMode.Open, FileAccess.Read, FileShare.Read", "FileMatches(file, path)",
+                      "GetFinalPathNameByHandleW", "FileAttributes.ReparsePoint",
+                      "ModuleMatches(client, path, address, size)",
+                      "client.StartTime.ToUniversalTime().Ticks != started",
+                      "using (var observed = Process.GetProcessById(processId))",
+                      "observed.StartTime.ToUniversalTime().Ticks != started",
+                      "GetProcessId(process) != (uint)processId",
+                      "WaitForSingleObject(process, 0) != 258",
+                      "disk.Key != loaded.Key", "Parse(imageRead, true, size).Key != disk.Key",
+                      "FileLimit = 67108864, MetadataLimit = 65536", "budget -= count",
+                      "Observer.Join(2000)", "handle.DangerousRelease()",
+                      'return "warp_identity_not_observed"'):
+            self.assertIn(guard, helper)
+        for forbidden in ("HttpClient", "WebClient", "SymInitialize", "SymFromAddr", "WriteAllBytes",
+                          "MiniDump", "SuspendThread", "Console.Write", "Write-Host"):
+            self.assertNotIn(forbidden, helper)
+        self.assertLess(smoke.index("$null = Get-ClientWarpModuleIdentity $null -Initialize"),
+                        smoke.index("Expand-Archive -LiteralPath $packagePath"))
+        self.assertGreater(smoke.index("(Get-ClientWarpModuleIdentity $launcherClient)"),
+                           smoke.index("$launcherClient.WaitForExit(30000)"))
+        self.assertLess(smoke.index("$clientWarpIdentityPending = Get-ClientWarpModuleIdentity $launcherClient -Start"),
+                        smoke.index("$launcherClient.CloseMainWindow()"))
+        start = helper.split("public static Pending StartLoaded", 1)[1].split("public static string Snapshot", 1)[0]
+        self.assertNotIn("Join(", start)
+        self.assertNotIn("Finish(", start)
+        evidence = smoke.split("function Save-ClientLifecycleEvidence", 1)[1].split(
+            "# Read-only HWND evidence", 1)[0]
+        self.assertIn('"WARP module identity: " + $clientWarpIdentityPending.Finish()', evidence)
+        self.assertIn('@("revision=$Revision") + $lines + $identityLines', evidence)
+        output = evidence.split('Write-Host ("Client lifecycle evidence:"', 1)[1]
+        self.assertNotIn("$identityLines", output)
 
     def test_lifecycle_evidence_is_bounded_and_uploaded_before_cleanup(self) -> None:
         root = MODULE_PATH.parents[2]
