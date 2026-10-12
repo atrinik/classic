@@ -3,6 +3,7 @@
 """Pure fixtures: no network, system DLLs, or application execution."""
 
 import importlib.util
+from email.message import Message
 import io
 import json
 from pathlib import Path
@@ -132,10 +133,10 @@ class DownloadTests(unittest.TestCase):
 
     def test_redirect_fails_closed(self):
         with self.assertRaisesRegex(warp.Inconclusive, "redirect_rejected"):
-            warp.NoRedirect().redirect_request(None, None, 302, "", {}, warp.URL)
+            warp.SymbolRedirect().redirect_request(None, None, 302, "", {}, warp.URL)
 
     def test_redirect_evidence_is_hostname_only(self):
-        handler = warp.NoRedirect()
+        handler = warp.SymbolRedirect()
         for url, expected in (("https://user:secret@symbols.example.invalid/private?token=secret#x",
                                "symbols.example.invalid"),
                               ("http://example.invalid/token", None),
@@ -146,12 +147,86 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(error.exception.redirect_host, expected)
             self.assertEqual(str(error.exception), "download_redirect_rejected")
 
+    def test_exact_storage_redirect_once_without_forwarded_credentials(self):
+        handler = warp.SymbolRedirect()
+        destination = "https://" + warp.SYMBOL_BLOB_HOST + "/opaque/pdb?sig=fixture"
+        request = warp.urllib.request.Request(warp.URL, headers={"Authorization": "fixture",
+                                                                 "Cookie": "fixture"})
+        redirected = handler.redirect_request(request, None, 302, "", {}, destination)
+        self.assertEqual(redirected.full_url, destination)
+        self.assertEqual(redirected.header_items(), [("Accept-encoding", "identity")])
+        with self.assertRaises(warp.Inconclusive):
+            handler.redirect_request(redirected, None, 302, "", {}, destination)
+        with self.assertRaises(warp.Inconclusive):
+            handler.redirect_request(request, None, 302, "", {}, destination)
+
+    def test_storage_redirect_negative_controls(self):
+        host = warp.SYMBOL_BLOB_HOST
+        allowed = "https://" + host + "/pdb?sig=fixture"
+        destinations = ["http://" + host + "/pdb", "https://other.blob.core.windows.net/pdb",
+                        "https://" + host + ".evil.invalid/pdb", "https://user:secret@" + host + "/pdb",
+                        "https://" + host + ":443/pdb", "https://" + host + "/pdb#fragment",
+                        "https://" + host + "/pdb#",
+                        "https://" + host + "/pdb\n?sig=secret", "https://" + host + "/\\pdb",
+                        "https://" + host + "/" + "x" * 4096, "https://[invalid/pdb", "/relative"]
+        for destination in destinations:
+            with self.subTest(destination=destination[:80]):
+                with self.assertRaises(warp.Inconclusive):
+                    warp.SymbolRedirect().redirect_request(
+                        warp.urllib.request.Request(warp.URL), None, 302, "", {}, destination)
+        for source, method, status in ((warp.URL + "?x=1", "GET", 302),
+                                       (warp.URL, "POST", 302), (warp.URL, "GET", 300)):
+            with self.assertRaises(warp.Inconclusive):
+                warp.SymbolRedirect().redirect_request(
+                    warp.urllib.request.Request(source, method=method), None, status, "", {}, allowed)
+
+    def test_redirect_body_closed_without_read_and_timeout_preserved(self):
+        handler = warp.SymbolRedirect()
+        handler.parent = mock.Mock()
+        request = warp.urllib.request.Request(warp.URL)
+        request.timeout = 10
+        headers = Message()
+        headers["Location"] = "https://" + warp.SYMBOL_BLOB_HOST + "/pdb?sig=fixture"
+        body = mock.Mock()
+        handler.http_error_302(request, body, 302, "", headers)
+        body.close.assert_called_once()
+        body.read.assert_not_called()
+        self.assertEqual(handler.parent.open.call_args.kwargs, {"timeout": 10})
+        for duplicated in (False, True):
+            headers = Message()
+            if duplicated:
+                headers["Location"] = warp.URL
+                headers["Location"] = warp.URL
+            body = mock.Mock()
+            with self.assertRaises(warp.Inconclusive):
+                handler.http_error_302(request, body, 302, "", headers)
+            body.close.assert_called_once()
+
+    def test_final_storage_response_must_match_admitted_hop(self):
+        destination = "https://" + warp.SYMBOL_BLOB_HOST + "/pdb?sig=fixture"
+        for admitted in (False, True):
+            opener = mock.Mock()
+            opener.symbol_redirect = warp.SymbolRedirect()
+            if admitted:
+                opener.symbol_redirect.redirect_request(
+                    warp.urllib.request.Request(warp.URL), None, 302, "", {}, destination)
+            opener.open.return_value = Response(b"x" * 56, url=destination)
+            with tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "pdb"
+                if admitted:
+                    result = warp.download_pdb(path, opener=opener)
+                    self.assertEqual(result["bytes"], 56)
+                    self.assertNotIn("sig", json.dumps(result))
+                else:
+                    with self.assertRaises(warp.Inconclusive):
+                        warp.download_pdb(path, opener=opener)
+
     def test_opener_has_no_proxy_or_auth_handlers(self):
         opener = warp.make_opener()
         self.assertFalse(any(isinstance(h, warp.urllib.request.ProxyHandler)
                              and h.proxies for h in opener.handlers))
         self.assertFalse(any("Auth" in type(h).__name__ for h in opener.handlers))
-        self.assertTrue(any(isinstance(h, warp.NoRedirect) for h in opener.handlers))
+        self.assertTrue(any(isinstance(h, warp.SymbolRedirect) for h in opener.handlers))
 
 
 class ResultTests(unittest.TestCase):

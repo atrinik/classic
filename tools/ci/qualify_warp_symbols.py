@@ -4,7 +4,7 @@
 """Hosted-only, offline symbol qualification for the fixed 554 Windows trace.
 
 No process is attached, no game/WARP image is executed, and no symbols are fetched
-by DbgHelp. The sole network request is the fixed public Microsoft PDB below.
+by DbgHelp. Only the fixed Microsoft PDB and its one pinned storage hop are read.
 Format: https://llvm.org/docs/PDB/MsfFile.html and PdbStream.html.
 API: https://learn.microsoft.com/windows/win32/api/dbghelp/nf-dbghelp-symloadmoduleex
 """
@@ -34,6 +34,9 @@ RVAS = (0x671EB, 0x66CB5, 0x6A9D7, 0x6B25B, 0xB0526,
         0xA6000, 0x161903, 0x94C08, 0x94938)
 URL = ("https://msdl.microsoft.com/download/symbols/d3d10warp.pdb/"
        + GUID.upper() + "1/d3d10warp.pdb")
+# Observed from the canonical URL in hosted run38248071891/job114806917500.
+# This is an exact host, not an Azure suffix allowlist.
+SYMBOL_BLOB_HOST = "vsblobprodscussu5shard18.blob.core.windows.net"
 MAX_PDB = 256 * 1024 * 1024
 MAX_DIRECTORY = 4 * 1024 * 1024
 MAX_INFO = 1024 * 1024
@@ -124,11 +127,15 @@ def pdb_identity(data):
     return {"guid": guid, "age": age}
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
+class SymbolRedirect(urllib.request.HTTPRedirectHandler):
+    def __init__(self):
+        self.accepted_url = None
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # Retain only a bounded HTTPS DNS hostname for separate endpoint review.
         # Never retain a signed query, path, userinfo, fragment, or headers.
         hostname = None
+        parsed = None
         try:
             parsed = urllib.parse.urlsplit(newurl)
             candidate = parsed.hostname or ""
@@ -137,14 +144,45 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
                 hostname = candidate.lower()
         except ValueError:
             pass
+        if (req is not None and req.full_url == URL and req.get_method() == "GET"
+                and code in (301, 302, 303, 307, 308) and self.accepted_url is None
+                and parsed is not None and len(newurl) <= 4096
+                and re.fullmatch(r"[\x21-\x7e]+", newurl)
+                and "\\" not in newurl and parsed.scheme == "https"
+                and parsed.netloc == SYMBOL_BLOB_HOST and parsed.path.startswith("/")
+                and "#" not in newurl):
+            # The signed storage query is opaque and remains in memory only.
+            # Construct fresh headers: never forward authorization or cookies.
+            self.accepted_url = newurl
+            return urllib.request.Request(newurl, headers={"Accept-Encoding": "identity"},
+                                          method="GET")
         raise Inconclusive("download_redirect_rejected", hostname)
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        # urllib's default handler drains the redirect body without a byte cap.
+        # We need none of that body; close it before the sole permitted hop.
+        try:
+            locations = headers.get_all("Location", [])
+            require(len(locations) == 1, "download_redirect_location")
+            redirected = self.redirect_request(req, fp, code, msg, headers, locations[0])
+        finally:
+            fp.close()
+        return self.parent.open(redirected, timeout=req.timeout)
+
+    http_error_301 = http_error_302
+    http_error_303 = http_error_302
+    http_error_307 = http_error_302
+    http_error_308 = http_error_302
 
 
 def make_opener():
     # Do not inherit proxy credentials or install HTTP authentication handlers.
-    return urllib.request.build_opener(
-        urllib.request.ProxyHandler({}), NoRedirect(),
+    redirect = SymbolRedirect()
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), redirect,
         urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+    opener.symbol_redirect = redirect
+    return opener
 
 
 def download_pdb(destination, *, opener=None, clock=time.monotonic):
@@ -154,7 +192,10 @@ def download_pdb(destination, *, opener=None, clock=time.monotonic):
     digest = hashlib.sha256()
     total = 0
     with opener.open(request, timeout=10) as response:
-        require(response.status == 200 and response.geturl() == URL,
+        redirect = getattr(opener, "symbol_redirect", None)
+        accepted_url = redirect.accepted_url if isinstance(redirect, SymbolRedirect) else None
+        require(response.status == 200 and (response.geturl() == URL
+                or (accepted_url is not None and response.geturl() == accepted_url)),
                 "download_status_or_url")
         require(response.headers.get("Content-Encoding", "identity") == "identity",
                 "download_encoding")

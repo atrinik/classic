@@ -13,11 +13,20 @@ same-operation module SHA256, PE coordinates, PDB GUID/age, and fixed RVAs in
 every report. It does not map earlier captures lacking an authenticated module
 identity.
 
-The sole network request selects this PDB from the canonical HTTPS Microsoft
-public symbol server. Redirects, proxies, authentication, URL overrides, and
-alternate symbol servers are disabled. A redirect or unavailable PDB is an
-inconclusive result; it requires separate review rather than expanding access
-automatically. Only a bounded HTTPS hostname is retained for redirect review.
+Acquisition starts with this PDB's fixed canonical HTTPS Microsoft public symbol
+URL. Exactly one redirect from that URL may reach the exact HTTPS hostname
+`vsblobprodscussu5shard18.blob.core.windows.net`, observed in hosted run
+`38248071891`, job `114806917500`. Microsoft documents its Azure-based symbol
+store; this host admission comes from the actual canonical-server response,
+not a blanket Azure-domain rule. The hop rejects userinfo, explicit ports,
+fragments, control characters, backslashes, and URLs over 4096 characters.
+Redirect bodies are closed without being read. Further hops, other hosts,
+proxies, HTTP authentication, and URL overrides are disabled. The storage
+request carries only fresh fixed headers; its opaque signed query stays in
+memory and is never logged or uploaded. The final response URL must equal the
+admitted hop, and the downloaded PDB must still pass GUID/age validation.
+Rejected redirects or unavailable PDBs remain inconclusive and require separate
+review. Only a bounded HTTPS hostname is retained for rejected-redirect review.
 Acquisition checks a cooperative 90-second monotonic deadline between reads,
 uses a 10-second socket timeout, and accepts at most 256 MiB. The parent kills and
 reaps its Python worker after 120 seconds, covering network reads and native
@@ -53,5 +62,6 @@ Format and API references:
 - [LLVM MSF format](https://llvm.org/docs/PDB/MsfFile.html)
 - [LLVM PDB info stream](https://llvm.org/docs/PDB/PdbStream.html)
 - [Microsoft public symbols](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/microsoft-public-symbols)
+- [Microsoft Azure-based symbol store](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/debugger-download-symbols)
 - [SymLoadModuleEx](https://learn.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symloadmoduleex)
 - [SYMBOL_INFO](https://learn.microsoft.com/en-us/windows/win32/api/dbghelp/ns-dbghelp-symbol_info)
