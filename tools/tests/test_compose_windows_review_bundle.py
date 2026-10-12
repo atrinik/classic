@@ -302,6 +302,8 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         self.assertRegex(
             acceptance,
             r'if \(-not \$launcherClient.WaitForExit\(30000\)\) \{\s*'
+            r'Write-Host \("Client close timeout CPU: " \+\s*'
+            r'\(Get-ClientCpuProgress \$launcherClient \$clientCpuBaseline\)\)\s*'
             r'Write-Host \("Client close timeout thread: " \+\s*'
             r'\(Get-ClientCloseTimeoutSnapshot \$launcherClient\)\)\s*'
             r'Write-Host \("Client close timeout stack: " \+\s*'
@@ -491,6 +493,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         messages = (
             ("socket_command_player", "Gameplay ready."),
             ("main", "First gameplay frame presented."),
+            ("SDL_main", "First gameplay frame presented."),
             ("Event_PollInputDevice", "Client window close event received."),
             ("Event_PollInputDevice", "Client quit event received."),
             ("main", "Client quit event polling completed."),
@@ -518,6 +521,73 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
             self.assertNotIn("private-value", "\n".join(selected))
         repeated = "\n".join(expected * 4)
         self.assertEqual(len(list(re.finditer(pattern, repeated))[:32]), 32)
+
+    def test_gpu_progress_evidence_is_bounded_and_closed(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        pattern = re.search(r'\$gpuPattern = "([^"]+)"', smoke).group(1)
+        stamp = "[2026/10/11 11:36:14.936572] INFO   "
+        identity = stamp + ("[gpu_renderer_create_internal:123] GPU progress identity "
+                            "backend=[direct3d12] device=[Microsoft Basic Render Driver] "
+                            "driver=[D3D12] version=[1.2.3].")
+        before = stamp + ("[gpu_renderer_progress_log:123] GPU progress frame=1 "
+                          "phase=before-present map_submitted=2 map_completed=0.")
+        after = before.replace("before-present", "after-present")
+        rejected = [
+            identity.replace("direct3d12", "https://private.invalid"),
+            identity.replace("D3D12", "C:\\private\\driver"),
+            identity.replace("1.2.3", "a" * 97),
+            before + " token=private-value",
+            before.replace("frame=1", "frame=-1"),
+            before.replace("frame=1", "frame=" + "1" * 21),
+            before.replace("before-present", "private-value"),
+            before.replace("INFO", "\x1bINFO"),
+        ]
+        for newline in ("\n", "\r\n"):
+            text = newline.join(rejected + [identity, before, after]) + newline
+            self.assertEqual([m.group(0).rstrip("\r") for m in re.finditer(pattern, text)],
+                             [identity, before, after])
+        self.assertIn("Select-Object -First 129", smoke)
+        self.assertIn('$launcherStartInfo.Environment["ATRINIK_GPU_PROGRESS"] = "1"', smoke)
+        self.assertNotIn("$env:ATRINIK_GPU_PROGRESS", smoke)
+
+    def test_cpu_evidence_fences_handle_and_generation(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        helper = smoke.split("function Get-ClientCpuSample", 1)[1].split(
+            "# Retain only fixed lifecycle", 1)[0]
+        for proof in ("$Client.SafeHandle", "$Client.StartTime.ToUniversalTime().Ticks",
+                      "$handle.DangerousAddRef([ref]$retained)",
+                      "$handle.DangerousRelease()", "$sample.ProcessId -ne $Baseline.ProcessId",
+                      "$sample.Handle -ne $Baseline.Handle",
+                      "$sample.StartTicks -ne $Baseline.StartTicks",
+                      "$sample.CpuTicks -lt $Baseline.CpuTicks",
+                      "$sample.ElapsedTicks -lt $Baseline.ElapsedTicks"):
+            self.assertIn(proof, helper)
+        self.assertLess(smoke.index("$clientCpuBaseline = Get-ClientCpuSample $launcherClient"),
+                        smoke.index("$launcherClient.CloseMainWindow()"))
+        for forbidden in (".Kill(", "WaitForExit(", "Start-Sleep", "FileName", "Path"):
+            self.assertNotIn(forbidden, helper)
+
+    def test_progress_is_release_observation_with_dual_opt_in(self) -> None:
+        root = MODULE_PATH.parents[2]
+        source = (root / "client/src/client/gpu_renderer.c").read_text()
+        helper = source.split("static bool gpu_renderer_progress_enabled", 1)[1].split(
+            "static char backend", 1)[0]
+        self.assertIn('"ATRINIK_GPU_PROGRESS"', helper)
+        self.assertIn('"ATRINIK_REVIEW_NO_PAUSE"', helper)
+        self.assertNotIn("#ifdef", helper)
+        self.assertNotIn("SDL_QueryGPUFence", helper)
+        self.assertNotIn("SDL_Wait", helper)
+        present = source.split("bool gpu_renderer_present(void)", 1)[1].split(
+            "bool gpu_renderer_frame_valid", 1)[0]
+        self.assertIn("progress_frames_logged < 64", present)
+        self.assertLess(present.index('gpu_renderer_progress_log("before-present")'),
+                        present.index("result = SDL_RenderPresent(renderer)"))
+        self.assertLess(present.index("result = SDL_RenderPresent(renderer)"),
+                        present.index('"after-present"'))
+        self.assertIn("progress_map_submitted != UINT64_MAX", source)
+        self.assertIn("progress_map_completed != UINT64_MAX", source)
+        self.assertNotIn("progress_map_submitted = 0", source)
+        self.assertNotIn("progress_map_completed = 0", source)
 
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

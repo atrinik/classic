@@ -61,6 +61,49 @@ function Get-LauncherLogTail([string]$Path) {
     }
 }
 
+# Observe only the retained owned Process handle. PID reuse, disposal, exit and
+# counters moving backwards make this evidence unavailable, never successful.
+function Get-ClientCpuSample($Client) {
+    try {
+        $Client.Refresh()
+        $handle = $Client.SafeHandle
+        if ($Client.HasExited -or $handle.IsClosed -or $handle.IsInvalid) { return $null }
+        $retained = $false
+        try {
+            $handle.DangerousAddRef([ref]$retained)
+            $sample = [pscustomobject]@{
+                ProcessId = $Client.Id
+                Handle = $handle.DangerousGetHandle()
+                StartTicks = $Client.StartTime.ToUniversalTime().Ticks
+                CpuTicks = $Client.TotalProcessorTime.Ticks
+                ElapsedTicks = [System.Environment]::TickCount64
+            }
+            if ($Client.HasExited) { return $null }
+            return $sample
+        } finally {
+            if ($retained) { $handle.DangerousRelease() }
+        }
+    } catch { return $null }
+}
+
+function Get-ClientCpuProgress($Client, $Baseline) {
+    try {
+        $sample = Get-ClientCpuSample $Client
+        if ($null -eq $Baseline -or $null -eq $sample -or
+            $sample.ProcessId -ne $Baseline.ProcessId -or
+            $sample.Handle -ne $Baseline.Handle -or
+            $sample.StartTicks -ne $Baseline.StartTicks -or
+            $sample.CpuTicks -lt $Baseline.CpuTicks -or
+            $sample.ElapsedTicks -lt $Baseline.ElapsedTicks) {
+            return "<client CPU progress unavailable>"
+        }
+        $cpuMilliseconds = [long][System.Math]::Floor(
+            ($sample.CpuTicks - $Baseline.CpuTicks) / 10000.0)
+        $elapsedMilliseconds = $sample.ElapsedTicks - $Baseline.ElapsedTicks
+        return "pid=$($sample.ProcessId) cpu_ms=$cpuMilliseconds elapsed_ms=$elapsedMilliseconds"
+    } catch { return "<client CPU progress unavailable>" }
+}
+
 # Retain only fixed lifecycle messages from the actual launcher log before its
 # temporary directory is removed. The closed grammar excludes private payloads.
 function Save-ClientLifecycleEvidence([string]$Path) {
@@ -80,8 +123,11 @@ function Save-ClientLifecycleEvidence([string]$Path) {
             }
             if ($count -le 16777216) {
                 $text = [string]::new($buffer, 0, $count)
-                $pattern = "(?m)^\[[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\] INFO[ ]+\[(?:socket_command_player|main|Event_PollInputDevice|system_end):[0-9]{1,10}\] (?:Gameplay ready\.|First gameplay frame presented\.|Client (?:window close event received|quit event received|quit event polling completed|main loop exited|shutdown complete)\.|Client shutdown stage: (?:UI cleanup|network connection|directory workers|audio|settings and assets|image workers|image packs|asset requests|toolkit, GPU, window and SDL)\.)\r?$"
+                $pattern = "(?m)^\[[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\] INFO[ ]+\[(?:socket_command_player|(?:SDL_)?main|Event_PollInputDevice|system_end):[0-9]{1,10}\] (?:Gameplay ready\.|First gameplay frame presented\.|Client (?:window close event received|quit event received|quit event polling completed|main loop exited|shutdown complete)\.|Client shutdown stage: (?:UI cleanup|network connection|directory workers|audio|settings and assets|image workers|image packs|asset requests|toolkit, GPU, window and SDL)\.)\r?$"
                 $lines = @([regex]::Matches($text, $pattern) | Select-Object -First 32 |
+                    ForEach-Object { $_.Value.TrimEnd([char]13) })
+                $gpuPattern = "(?m)^\[[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\] INFO[ ]+\[(?:gpu_renderer_progress_log|gpu_renderer_create_internal):[0-9]{1,10}\] GPU progress (?:frame=[0-9]{1,20} phase=(?:before-present|after-present|present-error) map_submitted=[0-9]{1,20} map_completed=[0-9]{1,20}\.|identity backend=\[[A-Za-z0-9 ._()+,-]{1,96}\] device=\[[A-Za-z0-9 ._()+,-]{1,96}\] driver=\[[A-Za-z0-9 ._()+,-]{1,96}\] version=\[[A-Za-z0-9 ._()+,-]{1,96}\]\.)\r?$"
+                $lines += @([regex]::Matches($text, $gpuPattern) | Select-Object -First 129 |
                     ForEach-Object { $_.Value.TrimEnd([char]13) })
                 if ($lines.Count -eq 0) { $lines = @("<client lifecycle markers unavailable>") }
             } else {
@@ -895,6 +941,8 @@ try {
     $launcherStartInfo.RedirectStandardOutput = $true
     $launcherStartInfo.RedirectStandardError = $true
     $launcherStartInfo.Environment["ATRINIK_REVIEW_NO_PAUSE"] = "1"
+    # Child-only opt-in; the invoking shell's environment is never changed.
+    $launcherStartInfo.Environment["ATRINIK_GPU_PROGRESS"] = "1"
     $launcherStartInfo.ArgumentList.Add("/c")
     $launcherStartInfo.ArgumentList.Add("call")
     $launcherStartInfo.ArgumentList.Add($launchers[0].FullName)
@@ -1030,11 +1078,14 @@ try {
     $clientCloseStarted = $true
     Write-Host ("Client windows before normal close: " +
         (Get-ClientWindowSnapshot $launcherClient))
+    $clientCpuBaseline = Get-ClientCpuSample $launcherClient
     if (-not $launcherClient.CloseMainWindow()) {
         throw "Could not request a normal close of the one-click client window"
     }
     Write-Host "Client normal close request accepted; waiting up to 30 seconds."
     if (-not $launcherClient.WaitForExit(30000)) {
+        Write-Host ("Client close timeout CPU: " +
+            (Get-ClientCpuProgress $launcherClient $clientCpuBaseline))
         Write-Host ("Client close timeout thread: " +
             (Get-ClientCloseTimeoutSnapshot $launcherClient))
         Write-Host ("Client close timeout stack: " +

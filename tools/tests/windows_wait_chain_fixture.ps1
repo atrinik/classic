@@ -36,9 +36,42 @@ public static class AtrinikStackFixtureWindow {
 $smoke = Join-Path $PSScriptRoot "../ci/smoke_windows_review_bundle.ps1"
 $tokens = $null
 $errors = $null
-$null = [System.Management.Automation.Language.Parser]::ParseFile(
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
     $smoke, [ref]$tokens, [ref]$errors)
 if ($errors.Count -ne 0) { throw "Smoke script has PowerShell parse errors" }
+foreach ($name in @("Get-ClientCpuSample", "Get-ClientCpuProgress")) {
+    $definition = $ast.Find({ param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq $name
+    }, $true)
+    if ($null -eq $definition) { throw "Expected actual CPU diagnostic helper" }
+    . ([scriptblock]::Create($definition.Extent.Text))
+}
+$cpuClient = [System.Diagnostics.Process]::GetCurrentProcess()
+try {
+    $baseline = Get-ClientCpuSample $cpuClient
+    if ($null -eq $baseline) { throw "Actual owned-process CPU sample unavailable" }
+    $progress = Get-ClientCpuProgress $cpuClient $baseline
+    if ($progress -notmatch '^pid=[0-9]+ cpu_ms=[0-9]+ elapsed_ms=[0-9]+$') {
+        throw "Owned-process CPU progress grammar mismatch"
+    }
+    foreach ($field in @("ProcessId", "Handle", "StartTicks", "CpuTicks", "ElapsedTicks")) {
+        $changed = $baseline.PSObject.Copy()
+        if ($field -eq "Handle") { $changed.$field = [IntPtr]::Zero }
+        elseif ($field -in @("CpuTicks", "ElapsedTicks")) { $changed.$field = [long]::MaxValue }
+        else { $changed.$field++ }
+        if ((Get-ClientCpuProgress $cpuClient $changed) -cne '<client CPU progress unavailable>') {
+            throw "CPU diagnostic accepted changed identity or regressed clock"
+        }
+    }
+    if ((Get-ClientCpuProgress $cpuClient $null) -cne '<client CPU progress unavailable>') {
+        throw "CPU diagnostic accepted missing baseline"
+    }
+} finally { $cpuClient.Dispose() }
+if ($null -ne (Get-ClientCpuSample $cpuClient)) {
+    throw "CPU diagnostic accepted a disposed owned process"
+}
+Write-Host "Actual owned-process CPU diagnostics and generation rejection fixtures passed."
 $source = Get-Content -Raw -LiteralPath $smoke
 $blocks = @([regex]::Matches($source, "(?s)Add-Type -TypeDefinition @'\r?\n(.*?)\r?\n'@") |
     Where-Object { $_.Groups[1].Value.Contains("class AtrinikReviewCloseTimeoutProbe") })
