@@ -133,14 +133,9 @@ static double spell_dam_bonus[MAX_STAT + 1] = {
  * Initialize spells.
  */
 void init_spells(void) {
-    static int init_spells_done = 0;
     int i;
 
-    if (init_spells_done) {
-        return;
-    }
-
-    init_spells_done = 1;
+    /* Archetypes may have been freed and reloaded since the previous call. */
 
     for (i = 0; i < NROFREALSPELLS; i++) {
         if (spell_index_from_id(spells[i].id) != i) {
@@ -170,6 +165,7 @@ void init_spells(void) {
 
         at->clone.stats.sp = i;
 
+        spells[i].spell_use &= ~SPELL_USE_BOOK;
         if (at->clone.value != 0) {
             spells[i].spell_use |= SPELL_USE_BOOK;
         }
