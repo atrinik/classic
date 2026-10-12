@@ -4,10 +4,10 @@
     {
       "name": "sound",
       "repository": "atrinik/sound",
-      "tag": "v1.0.0",
-      "commit": "d0561bf9ff8dc88836818dbe602a5a256c6c0e3f",
-      "url": "https://github.com/atrinik/sound/releases/download/v1.0.0/atrinik-sound-1.0.0.tar.gz",
-      "sha256": "df76ee33dba206bceb74a2a3b56a2aba328620867478d4906ac2f160ada24d7e",
+      "tag": "v1.2.0",
+      "commit": "642e5a25a476c96b764054b7b57307274b0fabb5",
+      "url": "https://github.com/atrinik/sound/releases/download/v1.2.0/atrinik-sound-1.2.0.tar.gz",
+      "sha256": "5d664a6f0411a90fd7a3ae4445b419f73fc469b26c55977dc92378462f4f75f8",
       "destination": "sound",
       "strip_components": 1
     }
