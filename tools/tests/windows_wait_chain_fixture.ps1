@@ -361,6 +361,32 @@ $cancelled = [Activator]::CreateInstance($suspensionType, $true)
 $cancelled.Cancel()
 if ($cancelled.Begin([IntPtr]::Zero)) { throw "Cancelled observer attempted a late suspension" }
 
+# Build the very same negative inputs in both the portable and native paths.
+# Arithmetic must be grouped before PowerShell's comma-array expression.
+function Get-WarpGenerationChanges([int]$ProcessId, [long]$Started,
+                                   [uint64]$Address, [uint64]$Size) {
+    return @(
+        @(($ProcessId + 1), $Started, $Address, $Size),
+        @($ProcessId, ($Started + 1), $Address, $Size),
+        @($ProcessId, $Started, ($Address + 1), $Size),
+        @($ProcessId, $Started, $Address, ($Size + 1))
+    )
+}
+$generationInputs = @(Get-WarpGenerationChanges 101 638900000000000000 140700000000000 4194304)
+if ($generationInputs.Count -ne 4) { throw "Generation fixture vector count changed" }
+$original = @([int]101, [long]638900000000000000, [uint64]140700000000000, [uint64]4194304)
+for ($row = 0; $row -lt 4; $row++) {
+    if ($generationInputs[$row].Count -ne 4) { throw "Generation fixture vector shape changed" }
+    for ($column = 0; $column -lt 4; $column++) {
+        $expected = $original[$column]
+        if ($row -eq $column) { $expected++ }
+        if ($generationInputs[$row][$column] -ne $expected) {
+            throw "Generation fixture must change exactly one scalar by one"
+        }
+    }
+}
+Write-Host "Actual native generation-vector construction and single-field mutations passed."
+
 if ($Native) {
     if (-not $IsWindows -or [IntPtr]::Size -ne 8) { throw "Native stack fixture requires Windows x64" }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
@@ -397,12 +423,7 @@ if ($Native) {
         if ($pendingIdentity.Finish() -cne $identity) {
             throw "Asynchronous WARP identity/retained handle after caller disposal differed"
         }
-        foreach ($changed in @(
-            @($child.Id + 1, $started, $warpAddress, $warpSize),
-            @($child.Id, $started + 1, $warpAddress, $warpSize),
-            @($child.Id, $started, $warpAddress + 1, $warpSize),
-            @($child.Id, $started, $warpAddress, $warpSize + 1)
-        )) {
+        foreach ($changed in (Get-WarpGenerationChanges $child.Id $started $warpAddress $warpSize)) {
             $invalidIdentity = [AtrinikReviewWarpIdentityProbe]::Snapshot($child, [int]$changed[0],
                 [long]$changed[1], [uint64]$changed[2], [uint64]$changed[3])
             if ($invalidIdentity -notin @("warp_identity_wrong_process", "warp_identity_unavailable")) {
