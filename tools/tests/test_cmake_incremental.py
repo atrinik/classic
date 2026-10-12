@@ -30,7 +30,7 @@ class CMakeIncrementalContractTests(unittest.TestCase):
         self.assertEqual(declared, actual)
         self.assertEqual(
             set(match.group("private").split()),
-            {"signals_private.h", "socket_private.h"},
+            {"signals_private.h", "socket_private.h", "socket_fd_set.h"},
         )
 
     def test_immutable_source_cache_reuses_verified_extraction(self) -> None:

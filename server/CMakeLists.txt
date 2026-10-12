@@ -12,20 +12,16 @@ if (NOT ATRINIK_INTEGRATED_BUILD)
             "${ATRINIK_COMPONENT_SOURCE_DIR}/../cmake/AtrinikVersion.cmake")
     endif ()
     include("${ATRINIK_VERSION_MODULE}")
-    if (ATRINIK_LLVM_TOOLCHAIN)
-        get_filename_component(ATRINIK_CMAKE_MODULE_DIR "${ATRINIK_VERSION_MODULE}" DIRECTORY)
-        include("${ATRINIK_CMAKE_MODULE_DIR}/AtrinikLLVMOptIn.cmake")
-        atrinik_initialize_optional_llvm_toolchain()
-        unset(ATRINIK_CMAKE_MODULE_DIR)
-    endif ()
+    get_filename_component(ATRINIK_CMAKE_MODULE_DIR "${ATRINIK_VERSION_MODULE}" DIRECTORY)
+    include("${ATRINIK_CMAKE_MODULE_DIR}/AtrinikLLVM.cmake")
+    unset(ATRINIK_CMAKE_MODULE_DIR)
     unset(ATRINIK_VERSION_MODULE)
     unset(ATRINIK_COMPONENT_CMAKE_FILE)
     unset(ATRINIK_COMPONENT_SOURCE_DIR)
     atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
+    atrinik_initialize_llvm_toolchain()
     project(atrinik-server VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
-    if (ATRINIK_LLVM_TOOLCHAIN)
-        atrinik_require_optional_llvm()
-    endif ()
+    atrinik_require_llvm()
     atrinik_initialize_version_metadata()
 endif ()
 
@@ -55,7 +51,7 @@ atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
-option(ENABLE_COVERAGE "Enable native compiler coverage instrumentation" OFF)
+option(ENABLE_COVERAGE "Enable native LLVM coverage instrumentation" OFF)
 if (ATRINIK_INTEGRATED_BUILD)
     option(ATRINIK_SERVER_ENABLE_PRECOMPILED_HEADERS
         "Precompile the server global header for the core object library" ON)
@@ -80,7 +76,7 @@ function(atrinik_configure_target target)
     target_compile_features(${target} PRIVATE c_std_17)
     target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
     atrinik_apply_version_metadata(${target})
-    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wno-unused-parameter -fno-common)
         if (ENABLE_WARNING_ERRORS)
@@ -88,8 +84,8 @@ function(atrinik_configure_target target)
         endif ()
     endif ()
     if (ENABLE_SANITIZERS)
-        if (MINGW OR NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-            message(FATAL_ERROR "ENABLE_SANITIZERS requires native GCC or Clang")
+        if (MINGW OR NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+            message(FATAL_ERROR "ENABLE_SANITIZERS requires native Clang")
         endif ()
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -100,19 +96,13 @@ function(atrinik_configure_target target)
         get_target_property(target_type ${target} TYPE)
         if (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT MINGW)
             target_compile_options(${target} PRIVATE
-                -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic -O0 -g)
+                -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic
+                -funique-internal-linkage-names -O0 -g)
             if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
                 target_link_options(${target} PRIVATE -fprofile-instr-generate)
             endif ()
-        elseif (CMAKE_C_COMPILER_ID STREQUAL "GNU")
-            # Transitional support for the previous immutable producer image.
-            target_compile_options(${target} PRIVATE
-                --coverage -fprofile-abs-path -fprofile-update=atomic -O0 -g)
-            if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
-                target_link_options(${target} PRIVATE --coverage)
-            endif ()
         else ()
-            message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang or GCC")
+            message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang")
         endif ()
     endif ()
 endfunction()
@@ -717,8 +707,14 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
             "The portable Windows server package requires the Python plugin.")
     endif ()
 
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallWindowsRuntime.cmake")
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallWindowsRuntime.cmake")
+    else ()
+        include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/InstallWindowsRuntime.cmake")
+    endif ()
+
     set(ATRINIK_WINDOWS_RUNTIME_DIR "" CACHE PATH
-        "Directory containing MinGW runtime DLLs")
+        "Directory containing LLVM-MinGW runtime DLLs")
     set(ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR "" CACHE PATH
         "Directory containing the embedded Windows Python runtime")
     set(ATRINIK_SERVER_PACKAGE_ROOT "" CACHE PATH
@@ -753,13 +749,13 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
 
     file(GLOB ATRINIK_WINDOWS_RUNTIME_DLLS
         "${ATRINIK_WINDOWS_RUNTIME_DIR}/*.dll")
-    list(FILTER ATRINIK_WINDOWS_RUNTIME_DLLS EXCLUDE REGEX
-        "/libffi-8\\.dll$")
     if (NOT ATRINIK_WINDOWS_RUNTIME_DLLS)
         message(FATAL_ERROR
             "No DLLs found in ATRINIK_WINDOWS_RUNTIME_DIR: ${ATRINIK_WINDOWS_RUNTIME_DIR}")
     endif ()
-    install(FILES ${ATRINIK_WINDOWS_RUNTIME_DLLS} DESTINATION server)
+    atrinik_install_windows_runtime(server
+        "$<TARGET_FILE:${EXECUTABLE}>"
+        "$<TARGET_FILE:plugin_arena>" "$<TARGET_FILE:plugin_python>")
 
     # A c-ares runtime must carry the complete notice from its toolchain.
     set(ATRINIK_WINDOWS_CARES_LICENSE
@@ -781,8 +777,7 @@ if (MINGW AND ${PACKAGE_TYPE} STREQUAL "zip")
         endif ()
     endforeach ()
 
-    install(DIRECTORY "${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}/"
-        DESTINATION server)
+    # The runtime helper snapshots and verifies every Python file at install.
     install(DIRECTORY "${ATRINIK_SERVER_PACKAGE_ROOT}/maps"
         DESTINATION server
         PATTERN ".git" EXCLUDE)

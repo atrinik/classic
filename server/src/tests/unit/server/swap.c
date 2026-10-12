@@ -20,7 +20,7 @@
 static mapstruct *expiring_map(const char *directory, const char *name) {
     mapstruct *map = get_empty_map(2, 2);
     char path[HUGE_BUF];
-    int written = snprintf(VS(path), "%s/%s", directory, name);
+    int written = snprintf((path), sizeof((path)), "%s/%s", directory, name);
     ck_assert_int_ge(written, 0);
     ck_assert_uint_lt((size_t)written, sizeof(path));
     FREE_AND_COPY_HASH(map->path, path);
@@ -32,7 +32,7 @@ static mapstruct *expiring_map(const char *directory, const char *name) {
 
 static void discard_map(mapstruct *map) {
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s", map->path);
+    snprintf((path), sizeof((path)), "%s", map->path);
     delete_map(map);
     if (access(path, F_OK) == 0) {
         ck_assert_int_eq(unlink(path), 0);
@@ -45,7 +45,7 @@ START_TEST(test_expiry_is_bounded_and_fifo) {
     mapstruct *maps[4];
     for (size_t i = 0; i < arraysize(maps); i++) {
         char name[32];
-        snprintf(VS(name), "map-%zu", i);
+        snprintf((name), sizeof((name)), "map-%zu", i);
         maps[i] = expiring_map(directory, name);
     }
     /* A negative explicit timeout is already expired, without underflow. */
@@ -226,9 +226,9 @@ START_TEST(test_expiry_pending_delete_unload_and_shutdown_flush) {
     ck_assert_int_eq(rmdir(first->path), 0);
 
     char previous_datapath[MAX_BUF];
-    snprintf(VS(previous_datapath), "%s", settings.datapath);
+    snprintf((previous_datapath), sizeof((previous_datapath)), "%s", settings.datapath);
     bool previous_recycle = settings.recycle_tmp_maps;
-    snprintf(VS(settings.datapath), "%s", directory);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%s", directory);
     settings.recycle_tmp_maps = true;
     clean_tmp_files();
     ck_assert_uint_eq(first->in_memory, MAP_SWAPPED);
@@ -237,11 +237,11 @@ START_TEST(test_expiry_pending_delete_unload_and_shutdown_flush) {
     ck_assert_uint_eq(waiting_second->in_memory, MAP_SWAPPED);
     ck_assert_int_eq(access(waiting->path, F_OK), 0);
     ck_assert_int_eq(access(waiting_second->path, F_OK), 0);
-    snprintf(VS(settings.datapath), "%s", previous_datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%s", previous_datapath);
     settings.recycle_tmp_maps = previous_recycle;
     char clock_path[HUGE_BUF], log_path[HUGE_BUF];
-    snprintf(VS(clock_path), "%s/clockdata", directory);
-    snprintf(VS(log_path), "%s/temp.maps", directory);
+    snprintf((clock_path), sizeof((clock_path)), "%s/clockdata", directory);
+    snprintf((log_path), sizeof((log_path)), "%s/temp.maps", directory);
     ck_assert_int_eq(unlink(clock_path), 0);
     ck_assert_int_eq(unlink(log_path), 0);
 

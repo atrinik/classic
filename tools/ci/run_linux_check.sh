@@ -33,69 +33,36 @@ test -w "${CCACHE_DIR}"
 test "$(stat --format='%a' "${CCACHE_DIR}")" = 1777
 test "$(jq -r '.target' /usr/local/share/atrinik/classic-toolchain.json)" = classic-final
 test "$(jq -r '.platform' /usr/local/share/atrinik/classic-toolchain.json)" = linux/amd64
-llvm_toolchain=${ATRINIK_LLVM_TOOLCHAIN:-0}
-coverage_preset=linux-coverage
-coverage_directory=build/linux-coverage
-release_directory=build/linux-release
-integrated_release_directory=build/integrated-linux-release
-sanitizer_directory=build/linux-sanitizers
-protocol_directory=build/check
-library_release_directory=build/release
-install_directory=build/install
-consumer_directory=build/consumer
-if [[ ${llvm_toolchain} == 1 ]]; then
-  test "$(jq -r '.tools.clang' /usr/local/share/atrinik/classic-toolchain.json)" = 23.1.3
-  export CC=clang CXX=clang++
-  coverage_preset=llvm-coverage
-  coverage_directory=build/llvm-coverage
-  # CMake retains its compiler in the cache even when CC/CXX change. Keep every
-  # compiler-specific validation tree separate from the transitional GCC lane.
-  release_directory=build/llvm-release
-  integrated_release_directory=build/integrated-llvm-release
-  sanitizer_directory=build/llvm-sanitizers
-  protocol_directory=build/llvm-check
-  library_release_directory=build/llvm-release
-  install_directory=build/llvm-install
-  consumer_directory=build/llvm-consumer
-else
-  # Transitional validation for the previously released immutable image.
-  test "$(jq -r '.tools.gcc' /usr/local/share/atrinik/classic-toolchain.json)" = 15.2.0
-fi
+test "$(jq -r '.tools.clang' /usr/local/share/atrinik/classic-toolchain.json)" = 23.1.3
+export CC=clang CXX=clang++
+# CMake retains its compiler in the cache even when CC/CXX change. Keep every
+# compiler-specific validation tree separate from prior GCC configurations.
+release_directory=build/llvm-release
+integrated_release_directory=build/integrated-llvm-release
+sanitizer_directory=build/llvm-sanitizers
+protocol_directory=build/llvm-check
+library_release_directory=build/llvm-release
+install_directory=build/llvm-install
+consumer_directory=build/llvm-consumer
 
 launcher=(
   -DCMAKE_C_COMPILER_LAUNCHER=ccache
   -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+  "-DCMAKE_TOOLCHAIN_FILE=${source_root}/cmake/toolchains/llvm.cmake"
 )
-if [[ ${llvm_toolchain} == 1 ]]; then
-  launcher+=("-DCMAKE_TOOLCHAIN_FILE=${source_root}/cmake/toolchains/llvm.cmake")
-fi
 
 # Noncoverage tests select their build tree directly: before CTest 3.30, a
 # --preset ignores --test-dir. Keep their output/parallel settings explicit.
 
-# These functions run in the owning module directory. CTest's coverage preset
-# supplies %m-%p profile names, separating parallel processes and shared plugins.
+# CTest supplies binary/process-specific profiles for parallel tests and plugins.
 prepare_coverage() {
-  if [[ ${llvm_toolchain} == 1 ]]; then
-    python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir "${coverage_directory}"
-  fi
+  python3 "${source_root}/tools/ci/llvm_coverage.py" prepare --build-dir build/llvm-coverage
 }
 export_coverage() {
   local module=$1
-  if [[ ${llvm_toolchain} == 1 ]]; then
-    python3 "${source_root}/tools/ci/llvm_coverage.py" export \
-      --build-dir "${coverage_directory}" --source-root "${source_root}" \
-      --component "${module}" --output coverage.lcov
-  elif [[ ${module} == libatrinik ]]; then
-    gcovr --root . --filter '.*\.c$' --exclude '.*/tests/.*' \
-      --exclude '.*/build/.*' \
-      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-      --print-summary --xml coverage.xml
-  else
-    gcovr --root . --filter 'src/' --exclude 'src/tests/' \
-      --gcov-ignore-parse-errors negative_hits.warn_once_per_file \
-      --print-summary --xml coverage.xml
-  fi
+  python3 "${source_root}/tools/ci/llvm_coverage.py" export \
+    --build-dir build/llvm-coverage --source-root "${source_root}" \
+    --component "${module}" --output coverage.lcov
 }
 
 sibling_sources=(
@@ -148,12 +115,12 @@ case "${component}" in
     ctest --test-dir "${source_root}/protocol/${protocol_directory}" --output-on-failure
 
     pushd "${source_root}/libatrinik" >/dev/null
-    cmake --preset "${coverage_preset}" \
+    cmake --preset llvm-coverage \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
       "${launcher[@]}"
-    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
+    cmake --build --preset llvm-coverage --parallel "${jobs}"
     prepare_coverage
-    ctest --preset "${coverage_preset}"
+    ctest --preset llvm-coverage
     export_coverage libatrinik
     cmake --preset linux-sanitizers -B "${sanitizer_directory}" \
       -DATRINIK_PROTOCOL_SOURCE_DIR="${source_root}/protocol" \
@@ -179,12 +146,12 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset "${coverage_preset}" \
+    cmake --preset llvm-coverage \
       -DENABLE_PRECOMPILED_HEADERS=OFF \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
+    cmake --build --preset llvm-coverage --parallel "${jobs}"
     prepare_coverage
-    ctest --preset "${coverage_preset}" --parallel 4 -LE performance
+    ctest --preset llvm-coverage --parallel 4 -LE performance
     export_coverage server
     cmake --preset linux-release -B "${release_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
@@ -203,11 +170,11 @@ case "${component}" in
     python3 tools/dependencies.py sync \
       --cache "${dependency_downloads}" --refresh --offline
     python3 tools/dependencies.py verify
-    cmake --preset "${coverage_preset}" \
+    cmake --preset llvm-coverage \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
-    cmake --build --preset "${coverage_preset}" --parallel "${jobs}"
+    cmake --build --preset llvm-coverage --parallel "${jobs}"
     prepare_coverage
-    ctest --preset "${coverage_preset}" -LE performance
+    ctest --preset llvm-coverage -LE performance
     export_coverage client
     cmake --preset linux-release -B "${release_directory}" \
       "${launcher[@]}" "${sibling_sources[@]}" "${shader_arguments[@]}"
@@ -424,7 +391,9 @@ case "${component}" in
       env ATRINIK_BENCHMARK_REVISION="${benchmark_base_sha}" \
         ATRINIK_BENCHMARK_DIRTY=false \
         cmake --preset linux-release -B "${release_directory}" \
-        "${launcher[@]}" \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_TOOLCHAIN_FILE="${baseline_root}/cmake/toolchains/llvm.cmake" \
         -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${baseline_root}/protocol" \
         -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${baseline_root}/libatrinik"
       cmake --build "${release_directory}" --target atrinik --parallel "${jobs}"
@@ -547,60 +516,10 @@ case "${component}" in
     cmake --build "${release_directory}" --parallel "${jobs}"
     popd >/dev/null
 
-    baseline_root="${source_root}/build/ci-server-benchmark-baseline"
-    # Invoked indirectly by the EXIT trap below.
-    # shellcheck disable=SC2329
-    cleanup_server_benchmark_baseline() {
-      git -C "${source_root}" worktree remove --force "${baseline_root}" >/dev/null 2>&1 || true
-    }
-    trap cleanup_server_benchmark_baseline EXIT
-    git -C "${source_root}" worktree add --detach \
-      "${baseline_root}" "${benchmark_base_sha}"
-    python3 "${source_root}/server/tools/dependencies.py" sync \
-      --root "${baseline_root}/server" \
-      --lock "${baseline_root}/server/dependencies.lock.json" \
-      --cache "${dependency_downloads}" --refresh --offline
-    python3 "${source_root}/server/tools/dependencies.py" verify \
-      --root "${baseline_root}/server" \
-      --lock "${baseline_root}/server/dependencies.lock.json"
-    baseline_pcpnatpmp_source=$(python3 "${source_root}/server/tools/dependencies.py" source \
-      --source-lock "${baseline_root}/server/cmake/immutable_sources.lock.json" \
-      --source-name libpcpnatpmp \
-      --cache "${source_root}/build/dependency-source-cache" \
-      --downloads "${dependency_downloads}" \
-      --offline)
-    pushd "${baseline_root}/server" >/dev/null
-    cmake --preset linux-release -B "${release_directory}" \
-      "${launcher[@]}" \
-      -DFETCHCONTENT_SOURCE_DIR_ATRINIK_PROTOCOL="${baseline_root}/protocol" \
-      -DFETCHCONTENT_SOURCE_DIR_LIBATRINIK="${baseline_root}/libatrinik" \
-      -DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP="${baseline_pcpnatpmp_source}"
-    cmake --build "${release_directory}" --parallel "${jobs}"
-    popd >/dev/null
-    if ! git -C "${baseline_root}" diff --quiet HEAD --; then
-      echo "server benchmark build modified its immutable base source" >&2
-      exit 2
-    fi
-
-    ctest --test-dir "${baseline_root}/server/${release_directory}" \
-      --verbose -R '^server-content-benchmark$' 2>&1 | \
-      tee "${source_root}/build/ci-evidence/server-content-benchmark-base.log"
+    # The host orchestrator builds and runs the detached base in its own pinned
+    # compiler/image cohort. This container remains exclusively strict LLVM.
     ctest --test-dir "${source_root}/server/${release_directory}" \
-      --verbose -R '^server-content-benchmark$' 2>&1 | \
-      tee "${source_root}/build/ci-evidence/server-content-benchmark-head.log"
-    # Markdown code spans are intentionally literal.
-    # shellcheck disable=SC2016
-    printf '%s\n' \
-      '## Server content benchmark' \
-      '' \
-      "- Base: \`${benchmark_base_sha}\`" \
-      "- Head: \`${ATRINIK_BENCHMARK_REVISION:-unknown}\`" \
-      '- Result: both isolated content-loader probes completed successfully.' \
-      '- Evidence: `server-content-benchmark-base.log` and `server-content-benchmark-head.log`.' \
-      >"${source_root}/build/ci-evidence/server-content-benchmark-summary.md"
-
-    git -C "${source_root}" worktree remove --force "${baseline_root}"
-    trap - EXIT
+      --verbose --no-tests=error -R '^server-content-benchmark$'
     ;;
   integrated)
     pushd "${source_root}" >/dev/null

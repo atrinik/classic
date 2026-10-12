@@ -672,7 +672,7 @@ void finish_face_cmd(int facenum, uint32_t checksum, const char *face) {
         return;
     }
     char name[MAX_BUF];
-    int name_length = snprintf(VS(name), "%s.png", face);
+    int name_length = snprintf((name), sizeof((name)), "%s.png", face);
     if (name_length < 0 || (size_t)name_length >= sizeof(name)) {
         image_missing_faces = true;
         return;

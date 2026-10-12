@@ -384,9 +384,18 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_poison_encumbrance_regression_uses_recoverable_floor);
     tcase_add_test(tc_core, test_paralysis_timing_remains_in_speed_credit);
     tcase_add_test(tc_core, test_administrative_freeze_keeps_requested_tick_duration);
-    tcase_add_test(tc_core, test_long_administrative_freeze_does_not_gain_roundoff_tick);
     tcase_add_test(tc_core, test_non_player_speed_is_not_clamped);
     tcase_add_test(tc_core, test_monster_living_speed_is_not_player_clamped);
+
+    /* Keep all 13,146 real event ticks: shorter runs do not exercise the
+     * accumulated roundoff regression. Atomic LLVM coverage counters make
+     * this case exceed Check's default five-second per-test budget. */
+    TCase *tc_long_freeze = tcase_create("Long freeze");
+    tcase_set_timeout(tc_long_freeze, 30);
+    tcase_add_unchecked_fixture(tc_long_freeze, check_setup, check_teardown);
+    tcase_add_checked_fixture(tc_long_freeze, check_test_setup, check_test_teardown);
+    suite_add_tcase(s, tc_long_freeze);
+    tcase_add_test(tc_long_freeze, test_long_administrative_freeze_does_not_gain_roundoff_tick);
 
     return s;
 }

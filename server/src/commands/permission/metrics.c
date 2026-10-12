@@ -112,7 +112,7 @@ void command_metrics(object *op, const char *command, char *params) {
     string_get_word(args, &pos, ' ', VS(scope), 0);
     string_get_word(args, &pos, ' ', VS(category), 0);
     if (*scope == '\0') {
-        snprintf(VS(scope), "all");
+        snprintf((scope), sizeof((scope)), "all");
     }
     if (strcasecmp(scope, "character") != 0 && strcasecmp(scope, "account") != 0 &&
         strcasecmp(scope, "all") != 0) {

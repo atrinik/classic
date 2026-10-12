@@ -52,8 +52,10 @@ class LinuxDebWorkflowTests(unittest.TestCase):
         self.assertNotIn('actions/cache@', job)
         self.assertNotIn('github.token', job)
         preparation = job.split('name: Prepare pinned Debian', 1)[1].split('      - name:', 1)[0]
-        self.assertNotIn('candidate-source', preparation)
-        self.assertIn('--file tools/ci/debian-client/Dockerfile tools/ci/debian-client', preparation)
+        self.assertIn('historical_producer.py', preparation)
+        self.assertIn('--source-root "${GITHUB_WORKSPACE}/candidate-source" --revision "${RELEASE_REVISION}"', preparation)
+        self.assertNotIn('ATRINIK_COMPILER_IMAGE', preparation)
+        self.assertEqual(preparation.count('--file "${debian_producer}" tools/ci/debian-client'), 2)
         smoke = job.split('name: Install through APT', 1)[1].split('      - uses:', 1)[0]
         self.assertNotIn('candidate-source', smoke)
         self.assertIn('$GITHUB_WORKSPACE/tools/ci/smoke_linux_client_package.sh,target=/smoke.sh,readonly', smoke)
@@ -131,6 +133,30 @@ print('::warning::candidate output stays in evidence')
         self.assertNotIn('--allow-unauthenticated', dockerfile)
         self.assertNotIn('Verify-Peer=false', dockerfile)
         self.assertIn('/build-packages.tsv', dockerfile)
+
+    def test_dpkg_inspector_uses_exact_sdk_and_has_no_path_fallback(self) -> None:
+        dockerfile = (ROOT / 'tools/ci/debian-client/Dockerfile').read_text()
+        wrapper = ROOT / 'tools/ci/debian-client/objdump'
+        self.assertIn('COPY objdump /opt/atrinik-packaging/bin/objdump', dockerfile)
+        self.assertIn('PATH="/opt/atrinik-packaging/bin:/opt/llvm-23.1.3/bin:', dockerfile)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            # A candidate's generic or LLVM-named binary must not satisfy a
+            # missing SDK. Exercise the actual package helper wrapper.
+            for name in ('objdump', 'llvm-objdump'):
+                tool = directory / name
+                tool.write_text('#!/bin/sh\nprintf "candidate inspector selected\\n"\n')
+                tool.chmod(0o755)
+            result = subprocess.run(['/bin/sh', str(wrapper), '--version'],
+                                    env=dict(os.environ, PATH=str(directory)),
+                                    capture_output=True, text=True, timeout=30)
+        self.assertNotIn('candidate inspector selected', result.stdout)
+        if Path('/opt/llvm-23.1.3/bin/llvm-objdump').is_file():
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('LLVM version 23.1.3', result.stdout)
+        else:
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('/opt/llvm-23.1.3/bin/llvm-objdump', result.stderr)
 
     def test_publication_binds_validation_to_source_and_attests_deb(self) -> None:
         workflow = (ROOT / '.github/workflows/package-release.yml').read_text()

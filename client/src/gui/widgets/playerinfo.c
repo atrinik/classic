@@ -71,7 +71,7 @@ static void widget_draw(widgetdata *widget) {
                      cpl.name);
 
     char buf[32];
-    snprintf(VS(buf), "[b]%d[/b]", cpl.stats.level);
+    snprintf((buf), sizeof((buf)), "[b]%d[/b]", cpl.stats.level);
     int wd = text_get_width(FONT_SERIF14, buf, TEXT_MARKUP);
     const char *color = cpl.stats.level == s_settings->max_level ? COLOR_HGOLD : COLOR_WHITE;
     text_show_format(widget->surface,

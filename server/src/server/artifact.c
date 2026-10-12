@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -122,7 +122,7 @@ static void artifact_list_free(artifact_list_t *al) {
  */
 void artifact_load(void) {
     char filename[HUGE_BUF];
-    snprintf(VS(filename), "%s/artifacts", settings.libpath);
+    snprintf((filename), sizeof((filename)), "%s/artifacts", settings.libpath);
     FILE *fp = fopen(filename, "rb");
     if (fp == NULL) {
         LOG(ERROR, "Can't open %s.", filename);

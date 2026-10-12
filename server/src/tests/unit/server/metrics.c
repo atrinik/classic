@@ -178,7 +178,7 @@ START_TEST(test_unique_collections_validate_deduplicate_and_bound) {
 
     for (size_t i = 1; i < METRICS_UNIQUE_DEFAULT_LIMIT; i++) {
         char id[32];
-        snprintf(VS(id), "map/%" PRIuMAX, (uintmax_t)i);
+        snprintf((id), sizeof((id)), "map/%" PRIuMAX, (uintmax_t)i);
         ck_assert(metrics_mark_unique(&store, METRIC_COLLECTION_CHARACTER_REGIONS_VISITED, id));
     }
     ck_assert_uint_eq(metrics_unique_count(&store, METRIC_COLLECTION_CHARACTER_REGIONS_VISITED),
@@ -221,7 +221,7 @@ START_TEST(test_keyed_metrics_validate_kinds_sort_bound_and_saturate) {
 
     for (size_t i = 2; i < METRICS_KEYED_DEFAULT_LIMIT; i++) {
         char id[32];
-        snprintf(VS(id), "quest/%" PRIuMAX, (uintmax_t)i);
+        snprintf((id), sizeof((id)), "quest/%" PRIuMAX, (uintmax_t)i);
         ck_assert(metrics_keyed_add(&store, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS, id, 1));
     }
     ck_assert_uint_eq(metrics_keyed_count(&store, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS),
@@ -239,7 +239,7 @@ START_TEST(test_keyed_metrics_validate_kinds_sort_bound_and_saturate) {
                       METRICS_CONTENT_ID_LIMIT);
     for (size_t i = 1; i < METRICS_CONTENT_ID_LIMIT; i++) {
         char name[32];
-        snprintf(VS(name), "variant_%" PRIuMAX, (uintmax_t)i);
+        snprintf((name), sizeof((name)), "variant_%" PRIuMAX, (uintmax_t)i);
         ck_assert(metrics_format_named_monster_id(VS(named_id), "lost_soul", name));
         ck_assert(
             metrics_keyed_add(&store, METRIC_KEYED_CHARACTER_MONSTER_KILLS_BY_NAME, named_id, 1));
@@ -260,7 +260,7 @@ START_TEST(test_content_by_name_updates_are_best_effort_at_capacity) {
 
     for (size_t i = 0; i < METRICS_UNIQUE_DEFAULT_LIMIT; i++) {
         char id[32];
-        snprintf(VS(id), "region:test_%" PRIuMAX, (uintmax_t)i);
+        snprintf((id), sizeof((id)), "region:test_%" PRIuMAX, (uintmax_t)i);
         ck_assert(
             metrics_mark_unique(&pl.metrics, METRIC_COLLECTION_CHARACTER_REGIONS_VISITED, id));
     }
@@ -273,7 +273,7 @@ START_TEST(test_content_by_name_updates_are_best_effort_at_capacity) {
 
     for (size_t i = 0; i < METRICS_KEYED_DEFAULT_LIMIT; i++) {
         char id[32];
-        snprintf(VS(id), "quest:test_%" PRIuMAX, (uintmax_t)i);
+        snprintf((id), sizeof((id)), "quest:test_%" PRIuMAX, (uintmax_t)i);
         ck_assert(metrics_keyed_add(&pl.metrics, METRIC_KEYED_CHARACTER_QUEST_COMPLETIONS, id, 1));
     }
     ck_assert(metrics_character_keyed_add_by_name(&pl,
@@ -306,7 +306,7 @@ START_TEST(test_serialization_round_trip_unknown_ids_and_malformed_preservation)
     char directory[] = "/tmp/atrinik-metrics-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
     char path[MAX_BUF];
-    snprintf(VS(path), "%s/metrics.dat", directory);
+    snprintf((path), sizeof((path)), "%s/metrics.dat", directory);
 
     metric_store_t original, loaded;
     metrics_store_init(&original, METRIC_SCOPE_CHARACTER, 1234);

@@ -23,6 +23,23 @@ NATIVE_SHARED_PATHS = {
     "CMakeLists.txt",
     "CMakePresets.json",
     "codecov.yml",
+    "tools/tests/test_coverage_presets.py",
+    "tools/tests/test_server_benchmark.py",
+    "tools/tests/test_toolkit_dependency_interfaces.py",
+    "tools/tests/test_llvm_coverage.py",
+    "tools/tests/test_llvm_coverage_identity.py",
+    "tools/tests/test_llvm_toolchain.py",
+    "tools/tests/test_llvm_runtime_notices.py",
+    "tools/tests/test_macos_llvm_toolchain.py",
+    "tools/tests/test_gpu_qualification_runtime.py",
+    "tools/tests/test_rendezvous_admission_https_fixture.py",
+    "tools/tests/test_rendezvous_admission_platform.py",
+    "tools/tests/test_stage_windows_runtime.py",
+    "tools/tests/test_compose_windows_review_bundle.py",
+    "tools/tests/test_windows_host_python_contract.py",
+    "tools/tests/test_windows_runtime_cmake_arguments.py",
+    "tools/tests/test_windows_trust_notices.py",
+    "tools/tests/windows_wait_chain_fixture.ps1",
     "LICENSE.md",
     "docs/history/component-release-map.json",
     "docs/history/release-tags.json",
@@ -41,7 +58,19 @@ WINDOWS_TEST_PREFIXES = (
     "server/",
     "tools/ci/",
 )
-WINDOWS_TEST_PATHS = {"CMakeLists.txt"}
+WINDOWS_TEST_PATHS = {
+    "tools/tests/test_server_benchmark.py",
+    "CMakeLists.txt", "cmake/AtrinikLLVM.cmake", "cmake/InstallLLVMRuntime.cmake",
+    "cmake/InstallWindowsRuntime.cmake", "cmake/toolchains/llvm.cmake",
+    "cmake/toolchains/llvm-macos.cmake", "tools/tests/test_macos_llvm_toolchain.py",
+    "tools/tests/test_llvm_toolchain.py", "tools/tests/test_llvm_runtime_notices.py",
+    "tools/tests/test_stage_windows_runtime.py",
+    "tools/tests/test_compose_windows_review_bundle.py",
+    "tools/tests/test_windows_host_python_contract.py",
+    "tools/tests/test_windows_runtime_cmake_arguments.py",
+    "tools/tests/test_windows_trust_notices.py",
+    "tools/tests/windows_wait_chain_fixture.ps1",
+}
 BENCHMARK_CONTRACT_PATHS = {
     ".github/workflows/pr-benchmarks.yml",
     "tools/ci/classify_changes.py",
@@ -78,6 +107,8 @@ SERVER_BENCHMARK_PREFIXES = ("server/cmake/", "server/src/")
 SERVER_BENCHMARK_PATHS = {
     "server/CMakeLists.txt",
     "server/CMakePresets.json",
+    "tools/ci/server_benchmark.py",
+    "tools/tests/test_server_benchmark.py",
 }
 
 

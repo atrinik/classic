@@ -42,7 +42,7 @@
  */
 bool write_map_log_checked(void) {
     char path[HUGE_BUF];
-    if (snprintf(VS(path), "%s/temp.maps", settings.datapath) >= (int)sizeof(path)) {
+    if (snprintf((path), sizeof((path)), "%s/temp.maps", settings.datapath) >= (int)sizeof(path)) {
         return false;
     }
     long current_time = time(NULL);

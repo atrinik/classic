@@ -28,7 +28,7 @@ def run(*args: str) -> str:
 
 
 def dynamic(path: Path) -> tuple[list[str], str | None]:
-    result = run('readelf', '-dW', str(path))
+    result = run('llvm-readelf', '-dW', str(path))
     needed = re.findall(r'\(NEEDED\).*?\[(.*?)\]', result)
     soname = re.findall(r'\(SONAME\).*?\[(.*?)\]', result)
     return needed, soname[0] if soname else None
@@ -43,6 +43,10 @@ def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
     prepared_lock = prefix / 'packaging.lock.json'
     if sha256(prepared_lock) != sha256(lock_path):
         raise ValueError('dependency image packaging lock differs from source lock')
+    sys.path.insert(0, str(HERE))
+    from compiler import image_reference, verify
+    verify(Path(lock['compiler']['prefix']), lock['compiler'])
+    compiler_image = image_reference((prefix / 'compiler-image.txt').read_text().strip())
     libdir = appdir / 'usr/lib'
     # linuxdeploy may leave version aliases or intentionally omitted libraries.
     # Materialize one flat, audited SONAME provider set from the pinned builder.
@@ -218,7 +222,8 @@ def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
         'bundled_libraries': bundled,
         'bundled_library_records': library_records,
         'system_license_notices': system_license_notices(appdir, lock, packages),
-        'native_inputs': {name: lock[name] for name in ('sources', 'tools', 'runtime')},
+        'native_inputs': {name: lock[name] for name in ('sources', 'tools', 'runtime', 'compiler')},
+        'compiler_image': compiler_image,
         'files': {},
     }
     for path in sorted(appdir.rglob('*')):

@@ -49,6 +49,36 @@ class ClassifyChangesTests(unittest.TestCase):
         )
         self.assertTrue(benchmark_tool["benchmark_client"])
 
+    def test_server_benchmark_contract_paths_select_server_suite_and_native_jobs(self) -> None:
+        for path in (
+            "tools/ci/server_benchmark.py",
+            "tools/tests/test_server_benchmark.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify_changes.is_native_shared(path))
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+                self.assertTrue(result["windows"])
+                self.assertTrue(result["benchmark_server"])
+                self.assertFalse(result["benchmark_client"])
+                self.assertEqual(result["codeql_languages"], "python")
+
+    def test_server_benchmark_contract_routing_uses_exact_paths(self) -> None:
+        for path in (
+            "tools/ci/server_benchmark.py.bak",
+            "tools/tests/test_server_benchmark.py.bak",
+            "tools/tests/test_other_benchmark.py",
+        ):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertFalse(result["benchmark_server"])
+                self.assertFalse(result["benchmark_client"])
+                if path.startswith("tools/tests/"):
+                    self.assertFalse(result["client"])
+                    self.assertFalse(result["server"])
+                    self.assertFalse(result["windows"])
+
     def test_benchmark_contract_change_selects_both_suites(self) -> None:
         for path in (
             ".github/workflows/pr-benchmarks.yml",
@@ -99,10 +129,135 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertFalse(result["codeql_server"])
         self.assertTrue(result["codeql_core_cpp"])
 
+    def test_toolkit_dependency_interface_contract_selects_both_native_consumers(self) -> None:
+        path = "tools/tests/test_toolkit_dependency_interfaces.py"
+        self.assertTrue(classify_changes.is_native_shared(path))
+        result = classify_changes.classify([path])
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertFalse(result["windows"])
+        self.assertFalse(result["benchmark_client"])
+        self.assertFalse(result["benchmark_server"])
+        self.assertEqual(result["codeql_languages"], "python")
+
+    def test_toolkit_dependency_interface_routing_uses_exact_path(self) -> None:
+        for path in (
+            "tools/tests/test_toolkit_dependency_interfaces.py.bak",
+            "tools/tests/test_other_dependency_interfaces.py",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify_changes.is_native_shared(path))
+                result = classify_changes.classify([path])
+                self.assertFalse(result["client"])
+                self.assertFalse(result["server"])
+                self.assertFalse(result["windows"])
+                self.assertFalse(result["benchmark_client"])
+                self.assertFalse(result["benchmark_server"])
+
+    def test_llvm_contract_changes_select_both_native_consumers(self) -> None:
+        for path in ("cmake/toolchains/llvm.cmake", "cmake/toolchains/llvm-macos.cmake",
+                     "cmake/AtrinikLLVM.cmake", "tools/ci/llvm_coverage.py",
+                     "tools/tests/test_llvm_coverage.py",
+                     "tools/tests/test_llvm_coverage_identity.py",
+                     "tools/tests/test_llvm_toolchain.py",
+                     "tools/tests/test_llvm_runtime_notices.py",
+                     "tools/tests/test_macos_llvm_toolchain.py",
+                     "tools/tests/test_gpu_qualification_runtime.py"):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+        result = classify_changes.classify(["cmake/InstallWindowsRuntime.cmake"])
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertTrue(result["windows"])
+
     def test_codecov_configuration_selects_both_coverage_components(self) -> None:
         result = classify_changes.classify(["codecov.yml"])
         self.assertTrue(result["client"])
         self.assertTrue(result["server"])
+
+    def test_coverage_presets_test_selects_both_native_consumers(self) -> None:
+        path = "tools/tests/test_coverage_presets.py"
+        self.assertTrue(classify_changes.is_native_shared(path))
+        result = classify_changes.classify([path])
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertFalse(result["windows"])
+        self.assertEqual(result["codeql_languages"], "python")
+        self.assertFalse(result["benchmark_client"])
+        self.assertFalse(result["benchmark_server"])
+
+    def test_shared_windows_runtime_tests_select_both_native_consumers_and_windows(self) -> None:
+        for path in (
+            "tools/tests/test_stage_windows_runtime.py",
+            "tools/tests/test_windows_runtime_cmake_arguments.py",
+            "tools/tests/test_windows_trust_notices.py",
+        ):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+                self.assertTrue(result["windows"])
+                self.assertEqual(result["codeql_languages"], "python")
+                self.assertFalse(result["benchmark_client"])
+                self.assertFalse(result["benchmark_server"])
+
+    def test_windows_lifecycle_contract_fixtures_select_native_and_windows_jobs(self) -> None:
+        for path in (
+            "tools/tests/test_compose_windows_review_bundle.py",
+            "tools/tests/test_windows_host_python_contract.py",
+            "tools/tests/windows_wait_chain_fixture.ps1",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify_changes.is_native_shared(path))
+                result = classify_changes.classify([path])
+                self.assertTrue(result["client"])
+                self.assertTrue(result["server"])
+                self.assertTrue(result["windows"])
+                self.assertEqual(result["codeql_languages"],
+                                 "python" if path.endswith(".py") else "")
+                self.assertFalse(result["benchmark_client"])
+                self.assertFalse(result["benchmark_server"])
+
+    def test_unrelated_tools_tests_keep_native_builds_skipped(self) -> None:
+        for path in (
+            "tools/tests/test_select_release_batch.py",
+            "tools/tests/test_verify_next_version.py",
+            "tools/tests/test_sync_release_assets.py",
+        ):
+            with self.subTest(path=path):
+                result = classify_changes.classify([path])
+                self.assertFalse(result["client"])
+                self.assertFalse(result["server"])
+                self.assertFalse(result["windows"])
+                self.assertEqual(result["codeql_languages"], "python")
+
+    def test_admission_https_fixture_selects_both_unix_native_consumers(self) -> None:
+        result = classify_changes.classify(
+            ["tools/tests/test_rendezvous_admission_https_fixture.py"]
+        )
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertFalse(result["windows"])
+        self.assertTrue(result["codeql_run"])
+        self.assertTrue(result["codeql_python"])
+        self.assertEqual(result["codeql_languages"], "python")
+        self.assertFalse(result["benchmark_client"])
+        self.assertFalse(result["benchmark_server"])
+
+    def test_admission_platform_fixture_selects_both_unix_native_consumers(self) -> None:
+        result = classify_changes.classify(
+            ["tools/tests/test_rendezvous_admission_platform.py"]
+        )
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertFalse(result["windows"])
+        self.assertTrue(result["codeql_run"])
+        self.assertTrue(result["codeql_python"])
+        self.assertEqual(result["codeql_languages"], "python")
+        self.assertFalse(result["benchmark_client"])
+        self.assertFalse(result["benchmark_server"])
 
     def test_release_configuration_selects_both_native_components(self) -> None:
         result = classify_changes.classify([".releaserc.cjs"])
@@ -113,6 +268,14 @@ class ClassifyChangesTests(unittest.TestCase):
     def test_libatrinik_and_ci_contract_changes_select_windows_tests(self) -> None:
         for path in (
             "CMakeLists.txt",
+            "cmake/AtrinikLLVM.cmake",
+            "cmake/InstallLLVMRuntime.cmake",
+            "cmake/InstallWindowsRuntime.cmake",
+            "cmake/toolchains/llvm.cmake",
+            "cmake/toolchains/llvm-macos.cmake",
+            "tools/tests/test_llvm_toolchain.py",
+            "tools/tests/test_llvm_runtime_notices.py",
+            "tools/tests/test_macos_llvm_toolchain.py",
             "client/src/client/main.c",
             "libatrinik/path.c",
             "protocol/generated/c/commands.c",

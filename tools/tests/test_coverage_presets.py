@@ -36,6 +36,15 @@ def preset(section, name):
 
 
 class CoveragePresetTests(unittest.TestCase):
+    def test_server_coverage_disables_pch_without_changing_normal_presets(self):
+        data = json.loads((ROOT / "server/CMakePresets.json").read_text())
+        coverage = preset(data["configurePresets"], "llvm-coverage")
+        self.assertIs(coverage["cacheVariables"]["ENABLE_PRECOMPILED_HEADERS"], False)
+        for name in ("linux-debug", "linux-release", "linux-sanitizers"):
+            with self.subTest(preset=name):
+                self.assertNotIn("ENABLE_PRECOMPILED_HEADERS",
+                                 preset(data["configurePresets"], name)["cacheVariables"])
+
     def test_opt_in_has_matching_configure_build_and_test_presets(self):
         for module in MODULES:
             with self.subTest(module=module):
@@ -50,28 +59,22 @@ class CoveragePresetTests(unittest.TestCase):
                 # location; a fixed preset path breaks scoped source archives.
                 self.assertNotIn("CMAKE_TOOLCHAIN_FILE", configured["cacheVariables"])
                 self.assertNotIn("toolchainFile", configured)
-                self.assertTrue(configured["cacheVariables"]["ATRINIK_LLVM_TOOLCHAIN"])
                 self.assertEqual(built["configurePreset"], "llvm-coverage")
                 self.assertEqual(tested["configurePreset"], "llvm-coverage")
                 self.assertEqual(tested["environment"]["LLVM_PROFILE_FILE"],
                                  configured["binaryDir"] + "/llvm-profiles/%m-%p.profraw")
 
 
-    def assert_configure_selects_toolchain(self, source, build, toolchain, preset_name="llvm-coverage", arguments=()):
+    def assert_configure_selects_toolchain(self, source, build, toolchain, arguments=()):
         # Run actual preset configuration and the actual authored CMake prefix.
         # Abort at project() before language detection: this verifies selection
         # without inventing compiler identity or permitting a product policy bypass.
         build.mkdir(parents=True)
         probe = build / "toolchain-selection-probe.cmake"
-        expected = toolchain.as_posix() if toolchain is not None else ""
         probe.write_text(f'''
-if (CMAKE_TOOLCHAIN_FILE)
-    file(REAL_PATH "${{CMAKE_TOOLCHAIN_FILE}}" selected_toolchain)
-else ()
-    set(selected_toolchain "")
-endif ()
-if (NOT selected_toolchain STREQUAL "{expected}" OR
-        (selected_toolchain AND NOT EXISTS "${{selected_toolchain}}"))
+file(REAL_PATH "${{CMAKE_TOOLCHAIN_FILE}}" selected_toolchain)
+if (NOT selected_toolchain STREQUAL "{toolchain.as_posix()}" OR
+        NOT EXISTS "${{selected_toolchain}}")
     message(FATAL_ERROR "Unexpected selected toolchain: ${{CMAKE_TOOLCHAIN_FILE}}")
 endif ()
 if (NOT ENABLE_COVERAGE OR NOT BUILD_TESTING OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -80,7 +83,7 @@ endif ()
 message(FATAL_ERROR "ATRINIK_TOOLCHAIN_SELECTION_PROBE_COMPLETED")
 ''', encoding="utf-8")
         result = subprocess.run(
-            ["cmake", "--preset", preset_name, "-B", str(build),
+            ["cmake", "--preset", "llvm-coverage", "-B", str(build),
              "-DATRINIK_PACKAGE_VERSION=9.8.7",
              "-DCMAKE_PROJECT_INCLUDE_BEFORE=" + str(probe), *arguments],
             cwd=source, capture_output=True, text=True)
@@ -133,17 +136,7 @@ message(FATAL_ERROR "ATRINIK_TOOLCHAIN_SELECTION_PROBE_COMPLETED")
 
     @unittest.skipUnless(shutil.which("cmake") and platform.system() == "Linux",
                          "Native Linux CMake selection probe unavailable")
-    def test_actual_legacy_presets_preserve_previous_producer_defaults(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            for index, module in enumerate(MODULES[:-1]):
-                with self.subTest(module=module):
-                    self.assert_configure_selects_toolchain(
-                        ROOT / module, Path(temporary) / str(index), None,
-                        preset_name="linux-coverage")
-
-    @unittest.skipUnless(shutil.which("cmake") and platform.system() == "Linux",
-                         "Native Linux CMake selection probe unavailable")
-    def test_opt_in_preserves_an_explicit_toolchain(self):
+    def test_coverage_preset_preserves_an_explicit_toolchain(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             toolchain = root / "explicit.cmake"
@@ -151,56 +144,6 @@ message(FATAL_ERROR "ATRINIK_TOOLCHAIN_SELECTION_PROBE_COMPLETED")
             self.assert_configure_selects_toolchain(
                 ROOT / "client", root / "build", toolchain,
                 arguments=("-DCMAKE_TOOLCHAIN_FILE=" + str(toolchain),))
-
-    @unittest.skipUnless(shutil.which("cmake"), "CMake unavailable")
-    def test_opt_in_rejects_nonmatching_compiler_identity(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            for compiler, version in (("GNU", "23.1.3"), ("Clang", "22.1.0")):
-                with self.subTest(compiler=compiler, version=version):
-                    probe = root / "validate.cmake"
-                    probe.write_text(f'''
-include("{(ROOT / "cmake/AtrinikLLVMOptIn.cmake").as_posix()}")
-set(CMAKE_C_COMPILER_ID "{compiler}")
-set(CMAKE_C_COMPILER_VERSION "{version}")
-atrinik_require_optional_llvm()
-''')
-                    # Script-mode fixtures exercise the policy itself; they never
-                    # impersonate a compiler during a product configure/build.
-                    result = subprocess.run(["cmake", "-P", str(probe)],
-                                            capture_output=True, text=True)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("LLVM opt-in requires Clang 23.1.3", result.stderr)
-
-    @unittest.skipUnless(shutil.which("cmake") and platform.system() == "Linux",
-                         "Native Linux CMake policy probe unavailable")
-    def test_opt_in_rejects_missing_or_mismatched_llvm_utilities(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            valid = root / "llvm-tool"
-            valid.write_text("#!/bin/sh\necho 'LLVM version 23.1.3'\n")
-            valid.chmod(0o755)
-            wrong = root / "llvm-tool-old"
-            wrong.write_text("#!/bin/sh\necho 'LLVM version 23.1.2'\n")
-            wrong.chmod(0o755)
-            for variable in ("CMAKE_AR", "CMAKE_RANLIB", "CMAKE_LINKER"):
-                for selected in (wrong, root / "missing"):
-                    with self.subTest(variable=variable, selected=selected.name):
-                        probe = root / "validate.cmake"
-                        settings = "\n".join(
-                            f'set({name} "{selected if name == variable else valid}")'
-                            for name in ("CMAKE_AR", "CMAKE_RANLIB", "CMAKE_LINKER"))
-                        probe.write_text(f'''
-include("{(ROOT / "cmake/AtrinikLLVMOptIn.cmake").as_posix()}")
-set(CMAKE_C_COMPILER_ID Clang)
-set(CMAKE_C_COMPILER_VERSION 23.1.3)
-{settings}
-atrinik_require_optional_llvm()
-''')
-                        result = subprocess.run(["cmake", "-P", str(probe)],
-                                                capture_output=True, text=True)
-                        self.assertNotEqual(result.returncode, 0)
-                        self.assertIn(variable + " must be LLVM 23.1.3", result.stderr)
 
     def test_native_profile_preparation_leaves_existing_gcc_cache_untouched(self):
         for module in MODULES[:-1]:
@@ -223,7 +166,6 @@ atrinik_require_optional_llvm()
                 self.assertEqual(cache.read_text(), "CMAKE_C_COMPILER:FILEPATH=/usr/bin/gcc\n")
                 self.assertEqual(raw.read_bytes(), b"retained GCC data")
                 self.assertNotIn("CMAKE_TOOLCHAIN_FILE", legacy.get("cacheVariables", {}))
-                self.assertNotIn("ATRINIK_LLVM_TOOLCHAIN", legacy.get("cacheVariables", {}))
                 self.assertNotIn("LLVM_PROFILE_FILE", preset(data["testPresets"], "linux-coverage").get("environment", {}))
 
     @unittest.skipUnless(shutil.which("cmake"), "CMake unavailable")

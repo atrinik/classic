@@ -537,7 +537,14 @@ verified immutable upstream revision and dependency contract. The editor has no
 Linux binary bundle.
 
 The Linux client AppImage producer uses pinned Ubuntu 24.04 x86_64 inputs and
-rebuilds the qualified native dependency versions for the glibc 2.39 baseline.
+rebuilds the qualified native dependency versions for the glibc 2.39 baseline. The
+producer copies `/opt/llvm-23.1.3` from the digest-pinned Classic compiler
+image, verifies its locked LLVM source, tool versions and complete notices,
+and builds dependencies, probes and the application with Clang 23.1.3,
+LLD, compiler-rt and static libunwind. Ubuntu 24.04 development libraries and
+the exact APT package inventory remain the target ABI; no LTO or PGO is enabled.
+The AppImage and Debian client carry the LLVM and static-runtime notices;
+server images preserve the same notices under their application license directory.
 The packaging tools are linuxdeploy `1-alpha-20251107-1`, appimagetool `1.9.1`,
 and the static-FUSE type-2 runtime `20251108`. Application dependencies include
 SDL >= 3.4, image/ttf/mixer, libcurl built with c-ares and OpenSSL, and their
@@ -552,11 +559,57 @@ static runtime, including its musl, FUSE and squashfuse components.
 `ATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH` and emits the exact versioned
 AppImage. The trusted caller validates it using
 `python3 tools/release/appimage.py PATH VERSION --revision FULL_SHA
---source-root TRUSTED_CHECKOUT`. Release callers bind both the exact source
+--source-root TRUSTED_CHECKOUT --compiler-image IMMUTABLE_COMPILER_IMAGE`.
+Release callers bind both the exact source
 commit and its checkout; standalone inspection may omit these flags and use the
-current checkout's trusted inputs. Candidate code cannot replace that caller's
+current checkout's trusted inputs. LLVM packages require the approved compiler
+image from the trusted caller or an exact image pin in the source lock;
+inspection rejects a different well-formed digest. Candidate code cannot replace that caller's
 validator or redefine the supported host-library boundary.
-The trusted caller supplies `tools/ci/appimage/prepare.py`, its Dockerfile
+Historical source without a compiler descriptor never inherits the current
+LLVM image. The trusted resolver authenticates the approved pre-LLVM history,
+release schema and original producer inputs before selecting the immutable
+Classic Linux SDK 1.16. Schema-3 source at
+`fd4943252ac872fce2995c286b10a0c6d249aba3` uses the byte-identical retained
+Ubuntu 24.04/GCC AppImage recipe under `tools/ci/appimage/historical/`, its
+original packaging lock and six-key dependency-input manifest. Its source
+finalizer receives no unsupported compiler-image argument. Schema-2 recovery
+retains the authenticated original Debian recipe. Current LLVM source uses
+its exact compiler descriptor and matching LLVM recipe; unrecognized history,
+missing or malformed descriptors and changed producer inputs fail closed.
+Schema-1 source at `34bbad5c3f4d9b303c17aec5e2c75b3550ec8983` retains its
+original twelve assets, authenticated workflow, finalizer and installed-library
+helper, with no Linux client package recipe. The four approved first-parent
+schema-2 revisions from `994e6fdc20da962be9c11055bda28ef5561a1dea` through
+`2349e0e14276fee251250cd451da6da0e68a3148` retain their Debian client. Other
+schema-1 source requires separate producer authentication before rebuilding.
+Windows candidate metadata checks drift in selected producer policy files and
+their routing. The current LLVM recipe authenticates the listed compiler/version,
+runtime/sound staging and dependency-acquisition CMake policy files, and rejects
+component-local alternatives that would shadow their canonical paths. It does
+not authenticate every executable source input or independently attest compiler
+origin. Ordinary C and source-list CMake changes, protocol/pathfinding source
+graphs, generators and the compiled native worldmaker remain trusted reviewed
+inputs at the exact selected source revision. Source review and fresh hosted
+build logs establish LLVM compiler use; package inspectors establish layout and
+runtime identities, not compiler origin. Final build and artifact checks remain
+required.
+Approved historical source uses the original general SDK 1.16 MXE image and
+environment; current source uses the general SDK 1.18 LLVM environment. Both
+Windows package jobs consume that selection and partition compiler caches by
+producer. Historical source and its DLL, Python and license staging remain
+unchanged. Selector and assembler fixtures prove these routing boundaries;
+they do not qualify a complete rebuilt historical release.
+SDK assembly uses the matching LLVM 23 `llvm-readelf`. The trusted host
+inspector uses `/usr/bin/llvm-readelf` from the distribution's `llvm` package
+only for read-only artifact inspection, preserving historical release recovery
+on hosts without the SDK. This platform inspector can be an older LLVM version
+(Ubuntu 24 supplies LLVM 18); it is separate from the pinned LLVM 23 compiler,
+linker and binary utilities used to build application and dependency binaries.
+Both inspector output formats retain the same ELF compatibility and safety
+guards. Candidate `PATH` and `READELF` cannot select the host inspector.
+The trusted caller supplies `tools/ci/appimage/prepare.py` with required
+`--compiler-image ghcr.io/atrinik/classic-build:VERSION@sha256:DIGEST`, its Dockerfile
 and `smoke.sh`. The exact candidate checkout and staged inputs are read-only
 container inputs; candidate code runs from a private copy as a non-root user,
 with networking disabled, dropped capabilities and no-new-privileges. Only the
@@ -629,6 +682,14 @@ place of the Debian package. Historical schema 2 retains its 13 files including
 12 files. Publication and recovery select the schema of the original source
 revision, validate the manifest, locked inputs and every artifact hash, and
 never append or replace a platform artifact in an already published release.
+Schema-2 Debian rebuilds use the original GCC producer retained in trusted
+automation as `tools/ci/debian-client/Dockerfile.historical`. Its Debian image
+digest and APT snapshot remain pinned. Before building, trusted automation
+requires the exact candidate's committed producer and the retained copy to match
+the approved SHA-256; an unknown contract fails instead of selecting another
+compiler. Candidate sources and dependency locks remain unchanged. The current
+LLVM producer and source-locked AppImage compiler selection retain their own
+contracts.
 Automatic main releases use the complete schema-3 contract; the checked-batch
 queue, immutable publication and recovery safeguards remain unchanged.
 
@@ -708,6 +769,58 @@ gh attestation verify \
   oci://ghcr.io/atrinik/classic-dependencies@BUNDLE_DIGEST \
   --repo atrinik/classic
 ```
+
+### Hosted final server-image qualification
+
+`Qualify Server Image` is a bounded, non-publishing hosted Buildx path for the
+actual root-context `server/Dockerfile`. Maintainers can dispatch it on a reviewed
+branch. The explicit `build/llvm-classic-server-image-qualification` push trigger
+bootstraps pre-merge qualification before the workflow is available for manual
+dispatch on the default branch. The checkout, compiler pin and retained evidence
+bind to the event's exact commit; this job cannot publish an image or update a
+release/development alias.
+
+The job verifies the attested, digest-pinned durable dependency bundle and loads
+the final Linux amd64 image with `push: false` and `load: true`. The Dockerfile
+continues to verify cached source archives and configure offline. Its final-stage
+APT install still needs the signed, locked Ubuntu snapshot; dependency-bundle
+verification does not claim that the entire Docker build is network-free.
+
+`tools/ci/qualify_server_image.py` resolves this run's unique local image tag and
+checks it against the action's config and manifest digests plus decoded BuildKit
+metadata. Legacy Docker must report the config digest as its image ID with no
+manifest descriptor; modern Docker must report the manifest digest as its ID and
+a matching typed single-manifest descriptor. Indexes, rewritten digests and
+unknown identity shapes fail closed. Evidence retains expected config and manifest
+digests separately from the observed Docker ID; modern inspect does not independently
+expose the config digest. All later operations use the validated immutable Docker ID.
+It uses UUID-labelled containers, the image's default UID 10001, no host mounts,
+no published ports, no external network, dropped capabilities, bounded resources
+and disposable container state. It exercises the existing offline benchmark on
+the packaged `/shattered_islands/world_0_70` map for one iteration, requiring the
+server's load/warm-lookup/swap/reload identity checks and exact completion record.
+A separate normal-entrypoint container must report the exact clean source revision
+from its packaged `--version` command and pass runtime-provider verification,
+reach readiness and Docker health, produce a fresh heartbeat, exit zero after
+SIGTERM with the checked save-completion message, then repeat startup and shutdown
+using its retained disposable state. Restart log and heartbeat evidence must
+belong to the new start. Every cleanup rechecks container ID, image, source labels
+and ownership; missing cleanup or any missing behavioral evidence fails the job.
+
+The 14-day `server-image-qualification-COMMIT-RUN-ATTEMPT` artifact contains source,
+Docker/build identity, SDK and dependency/provider hashes, packaged executable and
+map hashes, bounded runtime logs, behavior results and cleanup receipts. Buildx
+also retains its build record for 14 days. Inspect both the successful job and
+`runtime/qualification.json` for the exact reviewed commit. A failed or timed-out
+run is incomplete acceptance, even when some artifacts were uploaded. No image
+is published or retained as a release artifact; local Docker export intentionally
+does not claim registry attestations or release provenance.
+
+This proves packaged map swap/reload identity and the isolated server lifecycle;
+it does not prove semantic map/player persistence, authenticated client login,
+gameplay, external networking, GPU rendering or audio. Those retain their separate
+acceptance paths. The normal wrapper lifecycle above builds a different artifact
+and cannot substitute for this final-container evidence.
 
 ## Failure, recovery, and rollback
 

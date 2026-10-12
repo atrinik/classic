@@ -24,6 +24,9 @@ permissions:
   contents: read
   packages: read
 
+env:
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449
+
 concurrency:
   group: classic-release-publication
   queue: max
@@ -232,7 +235,8 @@ jobs:
       - name: Install trusted AppImage inspection tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends squashfs-tools binutils
+          sudo apt-get install --yes --no-install-recommends squashfs-tools llvm
+          test -x /usr/bin/llvm-readelf
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           github-token: ${{ github.token }}
@@ -263,10 +267,14 @@ jobs:
             --tag "${RELEASE_VERSION}" \
             --github-output "${GITHUB_OUTPUT}"
       - name: Recheck the revision-specific candidate before publication
-        run: >-
-          python3 build/release-automation/tools/release/release_artifacts.py
-          --directory build/release --tag "${RELEASE_TAG}"
-          --revision "${RELEASE_COMMIT}" --source-root "${GITHUB_WORKSPACE}"
+        run: |
+          expected_compiler_image=$(python3 build/release-automation/tools/release/resolve_compiler_image.py \
+            --source-root "${GITHUB_WORKSPACE}" --revision "${RELEASE_COMMIT}" \
+            --current-image "${CLASSIC_LINUX_IMAGE}")
+          python3 build/release-automation/tools/release/release_artifacts.py \
+            --directory build/release --tag "${RELEASE_TAG}" \
+            --revision "${RELEASE_COMMIT}" --source-root "${GITHUB_WORKSPACE}" \
+            --compiler-image "${expected_compiler_image}"
       - name: Attest downloadable artifact provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:

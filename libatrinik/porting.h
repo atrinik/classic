@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -34,6 +34,13 @@
 #define _GNU_SOURCE
 #endif
 
+/* Darwin's POSIX-only namespace hides BSD socket/timer flags and newer
+ * descriptor-relative file APIs used by the toolkit. Select its full namespace
+ * before any system header; _GNU_SOURCE only provides this policy on Linux. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+
 #ifdef __GNUC__
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
@@ -59,6 +66,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#ifndef WIN32
+#include <strings.h>
+#endif
 #include <ctype.h>
 #include <errno.h>
 #include <setjmp.h>
