@@ -32,10 +32,7 @@
     {
       "name": "llvm-coverage",
       "inherits": "linux-coverage",
-      "binaryDir": "${sourceDir}/build/integrated-llvm-coverage",
-      "cacheVariables": {
-        "ATRINIK_LLVM_TOOLCHAIN": true
-      }
+      "binaryDir": "${sourceDir}/build/integrated-llvm-coverage"
     },
     {
       "name": "linux-sanitizers",

@@ -295,7 +295,7 @@ bank_insert_coins(object *op, archetype_t *at, uint32_t nrof, const char *transa
     tmp->nrof = nrof;
     if (transaction_id != NULL && transaction_id[0] != '\0') {
         char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
-        snprintf(VS(lineage), "currency:%s", transaction_id);
+        snprintf((lineage), sizeof((lineage)), "currency:%s", transaction_id);
         tmp->custody_lineage = add_string(lineage);
     }
     object_insert_into(tmp, op, 0);

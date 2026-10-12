@@ -303,7 +303,7 @@ int main(void) {
         return 1;
     }
     char identity[HUGE_BUF];
-    snprintf(VS(identity), "%s/identity.pem", directory);
+    snprintf((identity), sizeof((identity)), "%s/identity.pem", directory);
 
     test_server_t server = {0};
     for (size_t i = 0; i < sizeof(server.body); i++) {

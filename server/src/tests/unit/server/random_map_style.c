@@ -19,7 +19,7 @@
 static char captured_log[HUGE_BUF];
 
 static void capture_log(const char *message) {
-    snprintf(VS(captured_log), "%s", message);
+    snprintf((captured_log), sizeof((captured_log)), "%s", message);
 }
 
 static void write_style_map(const char *path) {
@@ -45,9 +45,9 @@ START_TEST(test_directory_only_selection_stays_within_child) {
     char styles_dir[sizeof(directory) + sizeof("/styles")];
     char child[sizeof(styles_dir) + sizeof("/child")];
     char style_map_path[sizeof(child) + sizeof("/style_1")];
-    snprintf(VS(styles_dir), "%s/styles", directory);
-    snprintf(VS(child), "%s/child", styles_dir);
-    snprintf(VS(style_map_path), "%s/style_1", child);
+    snprintf((styles_dir), sizeof((styles_dir)), "%s/styles", directory);
+    snprintf((child), sizeof((child)), "%s/child", styles_dir);
+    snprintf((style_map_path), sizeof((style_map_path)), "%s/style_1", child);
     ck_assert_int_eq(mkdir(styles_dir, 0700), 0);
     ck_assert_int_eq(mkdir(child, 0700), 0);
     write_style_map(style_map_path);
@@ -59,7 +59,7 @@ START_TEST(test_directory_only_selection_stays_within_child) {
     free(namelist[0]);
     free(namelist);
 
-    snprintf(VS(settings.mapspath), "%s", directory);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%s", directory);
 
     for (uint64_t seed = 0; seed < 64; seed++) {
         rng_state_t rng;
@@ -80,7 +80,7 @@ END_TEST
 START_TEST(test_missing_style_fails_closed_with_path_diagnostic) {
     char directory[] = "/tmp/atrinik-random-map-style-XXXXXX";
     ck_assert_ptr_ne(mkdtemp(directory), NULL);
-    snprintf(VS(settings.mapspath), "%s", directory);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%s", directory);
 
     captured_log[0] = '\0';
     logger_set_print_func(capture_log);

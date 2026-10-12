@@ -535,7 +535,7 @@ static char *curl_load_etag(curl_request_t *request) {
     }
 
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s.etag", request->path);
+    snprintf((path), sizeof((path)), "%s.etag", request->path);
     FILE *fp = path_fopen(path, "r");
     char *etag = NULL;
 
@@ -713,7 +713,7 @@ static bool curl_write_cache(curl_request_t *request) {
     }
 
     char etag_path[HUGE_BUF];
-    snprintf(VS(etag_path), "%s.etag", request->path);
+    snprintf((etag_path), sizeof((etag_path)), "%s.etag", request->path);
     if (!path_write_atomic(etag_path, etag, strlen(etag), 0600)) {
         LOG(ERROR, "Failed to open %s for saving: %d (%s)", etag_path, errno, strerror(errno));
         (void)unlink(etag_path);
@@ -1384,7 +1384,7 @@ static bool curl_verify_cert_chain(curl_request_t *request) {
     }
 
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s/certchains/%s", curl_data_dir, digest_ascii);
+    snprintf((path), sizeof((path)), "%s/certchains/%s", curl_data_dir, digest_ascii);
 
     pthread_mutex_lock(&certchains_mutex);
     FILE *fp = path_fopen(path, "rb");
@@ -1763,7 +1763,7 @@ void *curl_request_do_get(void *user_data) {
     char *etag = curl_load_etag(request);
     if (etag != NULL) {
         char header[MAX_BUF];
-        snprintf(VS(header), "If-None-Match: %s", etag);
+        snprintf((header), sizeof((header)), "If-None-Match: %s", etag);
         free(etag);
         chunk = curl_slist_append(chunk, header);
         curl_easy_setopt(request->handle, CURLOPT_HTTPHEADER, chunk);

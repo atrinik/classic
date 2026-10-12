@@ -49,9 +49,7 @@ struct plugin_hooklist *hooks;
 /** A generic exception that we use for error messages. */
 PyObject *AtrinikError;
 
-/** The context stack. */
-static PythonContext *context_stack;
-/** Current context. */
+/** Top of the context stack; each context links to its caller through down. */
 PythonContext *current_context;
 /**
  * The global variables dictionary.
@@ -508,7 +506,6 @@ static void clear_python_cache(void) {
  */
 static void initContextStack(void) {
     current_context = NULL;
-    context_stack = NULL;
 }
 
 /**
@@ -517,13 +514,7 @@ static void initContextStack(void) {
  * The context to push.
  */
 static void pushContext(PythonContext *context) {
-    if (current_context == NULL) {
-        context_stack = context;
-        context->down = NULL;
-    } else {
-        context->down = current_context;
-    }
-
+    context->down = current_context;
     current_context = context;
 }
 
@@ -916,7 +907,7 @@ static void command_custom_python(object *op, const char *command, char *params)
     context->returnvalue = 0;
 
     char path[MAX_BUF];
-    snprintf(VS(path), "/python/commands/%s.py", command);
+    snprintf((path), sizeof((path)), "/python/commands/%s.py", command);
     if (!do_script(context, path, NULL)) {
         freeContext(context);
         return;
@@ -2412,7 +2403,7 @@ static PyObject *PyInit_Atrinik(void) {
  */
 static PyObject *module_create(PyObject *parent, const char *name) {
     char tmp[MAX_BUF];
-    snprintf(VS(tmp), "Atrinik_%s", name);
+    snprintf((tmp), sizeof((tmp)), "Atrinik_%s", name);
     PyObject *module = PyModule_New(tmp);
     PyDict_SetItemString(PyModule_GetDict(parent), name, module);
     return module;

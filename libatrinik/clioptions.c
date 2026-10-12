@@ -597,7 +597,7 @@ bool clioptions_load(const char *path, const char *category) {
         }
 
         if (string_startswith(cp, "[") && string_endswith(cp, "]")) {
-            snprintf(VS(category_cur), "%s", cp);
+            snprintf((category_cur), sizeof((category_cur)), "%s", cp);
         } else if (category == NULL || strcasecmp(category, category_cur) == 0) {
             char *errmsg = NULL;
             if (!clioptions_load_str(cp, &errmsg)) {

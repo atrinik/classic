@@ -328,6 +328,8 @@ class ServerRuntimeProviderTests(unittest.TestCase):
     def test_docker_uses_pinned_images_and_checks_without_tls_bypass(self):
         docker = (ROOT / "server/Dockerfile").read_text()
         self.assertIn("FROM " + LOCK["build_image"] + " AS build", docker)
+        compiler = json.loads((ROOT / "tools/ci/appimage/packaging.lock.json").read_text())["compiler"]
+        self.assertEqual(LOCK["build_image"], compiler["image"])
         # Dependabot owns the runtime image pin in Dockerfile. Validate an
         # immutable Ubuntu reference without duplicating its current digest.
         self.assertRegex(docker, r"(?m)^FROM ubuntu:[^\s@]+@sha256:[0-9a-f]{64}$")

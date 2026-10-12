@@ -498,6 +498,43 @@ static bool recover_and_republish(SDL_Window *window,
                                   uint16_t light_level);
 static bool projected_alpha_recovery_checkpoint(SDL_Window *window, bool qualified);
 
+/** First minimap allocation must not drain a pending primary-map submission. */
+static bool first_auxiliary_allocation_checkpoint(SDL_Surface *source) {
+    SDL_FRect destination = {0.0f, 0.0f, 16.0f, 16.0f};
+    gpu_map_renderer_conformance_defer_completion(true);
+    bool success = gpu_renderer_begin_frame() && gpu_renderer_map_begin(32, 32) &&
+                   gpu_renderer_draw_surface(source, NULL, &destination) &&
+                   gpu_renderer_map_end() && gpu_map_renderer_pending_submission_count() == 1;
+    gpu_renderer_statistics_reset();
+    success = success && gpu_renderer_map_begin_auxiliary(24, 24) &&
+              gpu_renderer_draw_surface(source, NULL, &destination) && gpu_renderer_map_end();
+    gpu_renderer_statistics_t first;
+    gpu_renderer_statistics_get(&first);
+    success = success && gpu_map_renderer_pending_submission_count() == 2 &&
+              first.timings[GPU_RENDERER_TIMING_COMPLETION].calls == 0;
+
+    /* Replacing an existing pair still drains its pending consumers. Holding
+     * query retirement makes both assertions deterministic on a fast GPU. */
+    gpu_renderer_statistics_reset();
+    success = success && gpu_renderer_map_begin_auxiliary(24, 24);
+    for (size_t index = 0; success && index < 1025; index++) {
+        gpu_renderer_map_set_instance_identity(index + 1U, 0);
+        success = gpu_renderer_draw_surface(source, NULL, &destination);
+    }
+    success = success && gpu_renderer_map_end();
+    gpu_renderer_statistics_t replacement;
+    gpu_renderer_statistics_get(&replacement);
+    success = success && replacement.timings[GPU_RENDERER_TIMING_COMPLETION].calls > 0 &&
+              gpu_map_renderer_pending_submission_count() == 1;
+    gpu_map_renderer_conformance_defer_completion(false);
+    bool drained = gpu_renderer_wait_idle();
+    if (!success || !drained) {
+        SDL_SetError("first auxiliary allocation waited or instance replacement lost its drain");
+        return false;
+    }
+    return true;
+}
+
 static bool async_map_submission_checkpoint(SDL_Surface *source) {
     SDL_FRect destination = {0.0f, 0.0f, 32.0f, 32.0f};
     if (!gpu_renderer_wait_idle()) {
@@ -2742,6 +2779,10 @@ int main(void) {
     GPU_REQUIRE(SDL_FillSurfaceRect(sources[3],
                                     NULL,
                                     SDL_MapSurfaceRGBA(sources[3], 32, 192, 64, SDL_ALPHA_OPAQUE)));
+
+    GPU_REQUIRE(first_auxiliary_allocation_checkpoint(source));
+    gpu_renderer_destroy();
+    GPU_REQUIRE(qualified ? gpu_renderer_create(window) : gpu_renderer_create_conformance(window));
 
     /* The production minimap can be the first GPU map target. Keep that path
      * covered before the primary map allocates the shared projected-light

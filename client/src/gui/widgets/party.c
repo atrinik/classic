@@ -52,7 +52,7 @@
 
 /** Macro to create the stat bar markup. */
 #define PARTY_STAT_BAR()                                      \
-    snprintf(VS(bars),                                        \
+    snprintf((bars), sizeof((bars)),                                        \
              "[bar=#000000 %d 6][bar=#cb0202 %d 6]"           \
              "[border=#909090 %d 6][y=6][bar=#000000 %d 6]"   \
              "[bar=#1818a4 %d 6][y=-1][border=#909090 %d 7]", \

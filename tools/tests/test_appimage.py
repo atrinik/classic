@@ -67,7 +67,77 @@ class ListingTests(unittest.TestCase):
                 appimage._listing(row)
 
 
-@unittest.skipUnless(all(Path("/usr/bin", tool).is_file() for tool in ("readelf", "unsquashfs", "mksquashfs"))
+class TrustedToolTests(unittest.TestCase):
+    def test_llvm_inspector_ignores_candidate_tool_and_loader_environment(self):
+        environment = {"PATH": "/candidate/bin", "READELF": "/candidate/readelf",
+                       "LD_LIBRARY_PATH": "/candidate/lib", "LD_PRELOAD": "/candidate/hook.so",
+                       "PYTHONPATH": "/candidate/python", "PYTHONHOME": "/candidate/home",
+                       "LC_ALL": "candidate", "GIT_CONFIG": "/candidate/git"}
+        result = subprocess.CompletedProcess([], 0, stdout=b"LLVM fixture", stderr=b"")
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(Path, "is_file", return_value=True), \
+                mock.patch.object(appimage.subprocess, "run", return_value=result) as run:
+            self.assertEqual(appimage._run("llvm-readelf", "--dynamic", "fixture"), "LLVM fixture")
+        arguments, options = run.call_args
+        self.assertEqual(arguments[0], ["/usr/bin/llvm-readelf", "--dynamic", "fixture"])
+        self.assertEqual(options["env"]["PATH"], "/usr/bin:/bin")
+        self.assertEqual(options["env"]["LC_ALL"], "C")
+        for name in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PYTHONPATH", "PYTHONHOME", "GIT_CONFIG"):
+            self.assertNotIn(name, options["env"])
+
+    def test_missing_or_failed_llvm_inspector_has_no_gnu_fallback(self):
+        with mock.patch.object(Path, "is_file", return_value=False), \
+                mock.patch.object(appimage.subprocess, "run") as run:
+            with self.assertRaisesRegex(ValueError, "/usr/bin/llvm-readelf"):
+                appimage._run("llvm-readelf", "--dynamic", "fixture")
+            run.assert_not_called()
+        result = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"malformed ELF")
+        with mock.patch.object(Path, "is_file", return_value=True), \
+                mock.patch.object(appimage.subprocess, "run", return_value=result) as run:
+            with self.assertRaisesRegex(ValueError, "llvm-readelf inspection failed: malformed ELF"):
+                appimage._run("llvm-readelf", "--dynamic", "fixture")
+            self.assertEqual(run.call_count, 1)
+
+
+class RecordedLLVMTests(unittest.TestCase):
+    def test_real_llvm_readelf_output_formats(self):
+        fixtures = Path(__file__).parent / "fixtures/llvm-readelf-23.1.3"
+        outputs = [(fixtures / (name + ".txt")).read_text()
+                   for name in ("dynamic", "versions", "symbols", "program")]
+        with mock.patch.object(appimage, "_run", side_effect=outputs) as run:
+            needed, _ = appimage._elf(Path("/usr/bin/true"), executable=True)
+        self.assertIn("libc.so.6", needed)
+        self.assertEqual([call.args[0] for call in run.call_args_list], ["llvm-readelf"] * 4)
+        # Mutate the recorded LLVM output itself: changing inspectors must
+        # preserve every security/compatibility field consumed by the parser.
+        mutations = (
+            (0, outputs[0] + "\n  0x000000000000000e (SONAME) Library soname: [../unsafe.so]", "library identity"),
+            (0, outputs[0] + "\n  0x000000000000000e (SONAME) Library soname: [libone.so]\n  0x000000000000000e (SONAME) Library soname: [libtwo.so]", "library identity"),
+            (0, outputs[0] + "\n  0x000000000000001d (RUNPATH) Library runpath: [/tmp/unsafe]", "search path"),
+            (1, outputs[1].replace("GLIBC_2.34", "GLIBC_2.40"), "glibc newer"),
+            (1, outputs[1].replace("GLIBC_2.34", "GLIBC_PRIVATE"), "private glibc"),
+            (2, outputs[2] + "\n   50: 0000000000000000 0 NOTYPE GLOBAL DEFAULT UND __asan_init", "instrumentation"),
+            (3, outputs[3].replace("/lib64/ld-linux-x86-64.so.2", "/unsafe/ld.so"), "interpreter"),
+            (3, outputs[3] + "\n      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]", "interpreter"),
+        )
+        for index, output, expected in mutations:
+            changed = outputs.copy()
+            changed[index] = output
+            with self.subTest(expected=expected, index=index), \
+                    mock.patch.object(appimage, "_run", side_effect=changed), \
+                    self.assertRaisesRegex(ValueError, expected):
+                appimage._elf(Path("/usr/bin/true"), executable=True)
+        # Real LLVM SONAME/dynamic output drives the SDK closure parser too.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("appimage_assemble", Path(__file__).parents[1] / "ci/appimage/assemble.py")
+        assemble = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(assemble)
+        with mock.patch.object(assemble, "run", return_value=outputs[0]) as run:
+            self.assertEqual(assemble.dynamic(Path("fixture")), (["libc.so.6"], None))
+            self.assertEqual(run.call_args.args[0], "llvm-readelf")
+
+
+@unittest.skipUnless(all(Path("/usr/bin", tool).is_file() for tool in ("llvm-readelf", "unsquashfs", "mksquashfs"))
                      and Path("/usr/bin/true").is_file()
                      and Path("/usr/lib/x86_64-linux-gnu/libzstd.so.1").is_file()
                      and Path("/usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so").is_file(),
@@ -244,7 +314,7 @@ class AppImageTests(unittest.TestCase):
         image = self.image(padding=b"\0" * 4096)
         with mock.patch.object(appimage, "_run", wraps=appimage._run) as run:
             self.assertIsNone(self.validate(image))
-            self.assertTrue(all(call.args[0] in {"unsquashfs", "readelf"} for call in run.call_args_list))
+            self.assertTrue(all(call.args[0] in {"unsquashfs", "llvm-readelf"} for call in run.call_args_list))
         inventory = appimage.read_appimage_inventory(image, self.version, revision=self.revision, source_root=self.source)
         self.assertEqual(inventory, self.metadata)
 
@@ -465,10 +535,28 @@ class AppImageTests(unittest.TestCase):
             ("(RUNPATH) Library runpath: [/tmp/build/lib]", "", "", "search path"),
             ("(NEEDED) Shared library: [../liboutside.so]", "", "", "library identity"),
             ("", "", "__asan_init", "test instrumentation"),
+            ("", "", "__llvm_profile_runtime", "test instrumentation"),
         ):
             with self.subTest(expected=expected), mock.patch.object(appimage, "_run", side_effect=[dynamic, versions, symbols]):
                 with self.assertRaisesRegex(ValueError, expected):
                     appimage._elf(elf, executable=True)
+
+    def test_real_llvm_coverage_sections_rejected_before_and_after_stripping(self):
+        fixtures = Path(__file__).parent / "fixtures/llvm-coverage-23.1.3"
+        for name in ("readelf.txt", "readelf-stripped.txt"):
+            output = (fixtures / name).read_text()
+            # These section names come from a Clang 23.1.3 coverage build;
+            # llvm-strip removes symbols/mapping but retains profile counters.
+            sections = [line.split('] ', 1)[1].split()[0] for line in output.splitlines()
+                        if " __llvm_" in line and "PROGBITS" in line]
+            self.assertTrue(any(section.startswith("__llvm_prf") for section in sections))
+            if name == "readelf.txt":
+                self.assertTrue(any(section.startswith("__llvm_cov") for section in sections))
+            for section in sections:
+                elf = self.write("usr/lib/coverage-fixture.so", Path("/usr/bin/true").read_bytes() + section.encode() + b"\0")
+                with self.subTest(output=name, section=section), mock.patch.object(appimage, "_run", return_value=""):
+                    with self.assertRaisesRegex(ValueError, "test instrumentation"):
+                        appimage._elf(elf)
 
     def test_libcap_interpreter_exception_requires_exact_locked_identity(self):
         cap = self.write("usr/lib/libcap.so.2", Path("/usr/bin/true").read_bytes())
@@ -566,6 +654,51 @@ class AppImageTests(unittest.TestCase):
             with self.subTest(rows=mutation), mock.patch.object(appimage, "_run", side_effect=[f"(SONAME) Library soname: [{name}]", "", mutation, ""]):
                 with self.assertRaisesRegex(ValueError, "symbols|instrumentation"):
                     appimage._elf(elf, lock=lock)
+
+    def test_llvm_runtime_notices_and_producer_are_bound_to_lock(self):
+        compiler = {"family": "Clang", "version": "23.1.3",
+                    "image": "ghcr.io/atrinik/classic-build:1.2.3@sha256:" + "a" * 64,
+                    "defaults": {"runtime": "compiler-rt", "unwind": "libunwind", "linker": "lld", "unwind_linkage": "static"},
+                    "notices": {"compiler-rt-LICENSE.TXT": hashlib.sha256(b"notice").hexdigest()}}
+        self.lock["compiler"] = compiler
+        self.lock_path.write_text(json.dumps(self.lock, sort_keys=True) + "\n")
+        self.metadata["lock_sha256"] = hashlib.sha256(self.lock_path.read_bytes()).hexdigest()
+        self.metadata["native_inputs"]["compiler"] = compiler
+        self.metadata["compiler_image"] = "ghcr.io/atrinik/classic-build:1.2.3@sha256:" + "a" * 64
+        notice = self.write("usr/share/doc/atrinik/licenses/llvm/compiler-rt-LICENSE.TXT", b"notice")
+        self.validate()
+        with self.assertRaisesRegex(ValueError, "differs from trusted source lock"):
+            self.validate(compiler_image="ghcr.io/atrinik/classic-build:1.2.3@sha256:" + "b" * 64)
+        expected_image = compiler.pop("image")
+        self.lock_path.write_text(json.dumps(self.lock, sort_keys=True) + "\n")
+        self.metadata["lock_sha256"] = hashlib.sha256(self.lock_path.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, "requires a trusted expected compiler image"):
+            self.validate()
+        self.validate(compiler_image=expected_image)
+        compiler["image"] = expected_image
+        self.lock_path.write_text(json.dumps(self.lock, sort_keys=True) + "\n")
+        self.metadata["lock_sha256"] = hashlib.sha256(self.lock_path.read_bytes()).hexdigest()
+        notice.write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "LLVM runtime notice"):
+            self.validate()
+        notice.unlink()
+        with self.assertRaisesRegex(ValueError, "required file"):
+            self.validate()
+        self.write("usr/share/doc/atrinik/licenses/llvm/compiler-rt-LICENSE.TXT", b"notice")
+        self.metadata["compiler_image"] = "classic-build:latest"
+        with self.assertRaisesRegex(ValueError, "producer identity"):
+            self.validate()
+
+    def test_pre_llvm_inventory_preserves_all_llvm_notices_without_new_metadata(self):
+        self.assertNotIn("compiler", self.lock)
+        native_inputs = json.loads(json.dumps(self.metadata["native_inputs"]))
+        for name in ("llvm", "clang", "clang-tools-extra", "lld", "compiler-rt", "libunwind"):
+            self.write(f"usr/share/doc/atrinik/licenses/llvm/{name}-LICENSE.TXT", f"{name} complete fixture notice\n")
+        self.validate()
+        self.assertEqual(self.metadata["native_inputs"], native_inputs)
+        self.metadata["native_inputs"]["compiler"] = {"version": "23.1.3"}
+        with self.assertRaisesRegex(ValueError, "native inputs differ from trusted lock"):
+            self.validate()
 
     def test_extended_attributes_and_trailing_payload_rejected(self):
         for mutation in ("xattrs", "trailing"):
@@ -691,7 +824,8 @@ class AppImageTests(unittest.TestCase):
         args = ["appimage.py", str(candidate), self.version, "--revision", self.revision,
                 "--source-root", str(self.source)]
         validate = appimage.validate_appimage
-        def verify_shared_resources(path, version, *, revision, source_root, source_date_epoch):
+        def verify_shared_resources(path, version, *, revision, source_root, source_date_epoch, compiler_image):
+            self.assertIsNone(compiler_image)
             self.assertEqual((source_root / "fixture-extra.txt").read_text(), "shared resource contract\n")
             self.assertEqual(source_date_epoch, self.metadata["source_date_epoch"])
             validate(path, version, revision=revision, source_root=source_root, source_date_epoch=source_date_epoch)

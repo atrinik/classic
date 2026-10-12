@@ -185,7 +185,7 @@ def validate_source_metadata(manifest: dict, source_root: Path, revision: str, v
 
 
 def validate_appimage_metadata(directory: Path, manifest: dict, source_root: Path,
-                               revision: str, version: str) -> None:
+                               revision: str, version: str, compiler_image: str | None = None) -> None:
     # The helper's current checkout cannot stand in for a historical source.
     # Give the package validator only the trusted files from this exact commit.
     from appimage import TRUSTED_SOURCE_FILES, read_appimage_inventory
@@ -197,7 +197,7 @@ def validate_appimage_metadata(directory: Path, manifest: dict, source_root: Pat
             path.write_text(git_value(source_root, "show", f"{revision}:{relative}", preserve_whitespace=True))
         inventory = read_appimage_inventory(
             directory / f"atrinik-classic-client-{version}-linux-x86_64.AppImage",
-            version, revision=revision, source_root=root, source_date_epoch=manifest["source_epoch"],
+            version, revision=revision, source_root=root, source_date_epoch=manifest["source_epoch"], compiler_image=compiler_image,
         )
     if manifest.get("appimage_inventory") != inventory:
         raise RuntimeError("candidate AppImage inventory differs from validated package")
@@ -210,7 +210,8 @@ def validate_appimage_metadata(directory: Path, manifest: dict, source_root: Pat
         raise RuntimeError("candidate SPDX differs from AppImage and locked inputs")
 
 
-def validate_candidate(directory: Path, tag: str, revision: str, source_root: Path = ROOT) -> dict[str, tuple[int, str]]:
+def validate_candidate(directory: Path, tag: str, revision: str, source_root: Path = ROOT,
+                       compiler_image: str | None = None) -> dict[str, tuple[int, str]]:
     if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None:
         raise RuntimeError("tag must be vMAJOR.MINOR.PATCH")
     version = tag[1:]
@@ -252,7 +253,8 @@ def validate_candidate(directory: Path, tag: str, revision: str, source_root: Pa
     if schema == 2:
         validate_deb(directory / f"atrinik-classic-client-{version}-linux-amd64.deb", version)
     if schema == 3:
-        validate_appimage_metadata(directory, manifest, source_root, revision, version)
+        validate_appimage_metadata(directory, manifest, source_root, revision, version,
+                                   compiler_image=compiler_image)
     return actual
 
 
@@ -262,6 +264,7 @@ def main() -> int:
     parser.add_argument("--tag")
     parser.add_argument("--revision", required=True)
     parser.add_argument("--source-root", type=Path, default=Path.cwd())
+    parser.add_argument("--compiler-image", help="trusted expected immutable compiler image")
     parser.add_argument("--print-source-schema", action="store_true")
     args = parser.parse_args()
     if args.print_source_schema:
@@ -275,7 +278,8 @@ def main() -> int:
     if args.directory is None or args.tag is None:
         parser.error("candidate validation requires --directory and --tag")
     try:
-        assets = validate_candidate(args.directory, args.tag, args.revision, args.source_root)
+        assets = validate_candidate(args.directory, args.tag, args.revision, args.source_root,
+                                    compiler_image=args.compiler_image)
     except (OSError, ValueError, RuntimeError, tarfile.TarError) as error:
         parser.exit(1, f"release candidate validation failed: {error}\n")
     print(f"verified {len(assets)} release assets")

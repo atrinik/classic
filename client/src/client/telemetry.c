@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Atrinik Development Team                    *
+ *   Copyright 2009-2026 The Atrinik Project                            *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -86,7 +86,9 @@ uint64_t telemetry_exp_per_hour(void) {
     }
 
     long double hourly = (long double)telemetry.exp_gained * 3600000000.0L / elapsed_us;
-    return hourly >= UINT64_MAX ? UINT64_MAX : (uint64_t)hourly;
+    /* 2^64 is exact even when long double has only double precision (Darwin
+     * ARM64). Saturate before conversion outside the uint64_t range. */
+    return hourly >= 0x1p64L ? UINT64_MAX : (uint64_t)hourly;
 }
 
 void telemetry_game_time_sync(uint64_t game_seconds, uint32_t millis_per_game_minute) {

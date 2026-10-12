@@ -278,7 +278,7 @@ static bool clioptions_option_plugin_unit(const char *arg, char **errmsg) {
     settings.plugin_unit_tests = 1;
 
     if (arg != NULL) {
-        snprintf(VS(settings.plugin_unit_test), "%s", arg);
+        snprintf((settings.plugin_unit_test), sizeof((settings.plugin_unit_test)), "%s", arg);
     }
 
     return true;
@@ -306,35 +306,35 @@ static bool clioptions_option_provision_scenario(const char *arg, char **errmsg)
 static const char *clioptions_option_provision_account_desc =
     "Account name for --provision_scenario.";
 static bool clioptions_option_provision_account(const char *arg, char **errmsg) {
-    snprintf(VS(settings.provision_account), "%s", arg);
+    snprintf((settings.provision_account), sizeof((settings.provision_account)), "%s", arg);
     return true;
 }
 
 static const char *clioptions_option_provision_character_desc =
     "Character name for --provision_scenario.";
 static bool clioptions_option_provision_character(const char *arg, char **errmsg) {
-    snprintf(VS(settings.provision_character), "%s", arg);
+    snprintf((settings.provision_character), sizeof((settings.provision_character)), "%s", arg);
     return true;
 }
 
 static const char *clioptions_option_provision_archetype_desc =
     "Player archetype for --provision_scenario.";
 static bool clioptions_option_provision_archetype(const char *arg, char **errmsg) {
-    snprintf(VS(settings.provision_archetype), "%s", arg);
+    snprintf((settings.provision_archetype), sizeof((settings.provision_archetype)), "%s", arg);
     return true;
 }
 
 static const char *clioptions_option_provision_preset_desc =
     "Server-owned deterministic preset for --provision_scenario.";
 static bool clioptions_option_provision_preset(const char *arg, char **errmsg) {
-    snprintf(VS(settings.provision_preset), "%s", arg);
+    snprintf((settings.provision_preset), sizeof((settings.provision_preset)), "%s", arg);
     return true;
 }
 
 static const char *clioptions_option_provision_password_file_desc =
     "Protected password file for --provision_scenario.";
 static bool clioptions_option_provision_password_file(const char *arg, char **errmsg) {
-    snprintf(VS(settings.provision_password_file), "%s", arg);
+    snprintf((settings.provision_password_file), sizeof((settings.provision_password_file)), "%s", arg);
     return true;
 }
 
@@ -354,7 +354,7 @@ static bool clioptions_option_content_benchmark(const char *arg, char **errmsg) 
     }
 
     settings.content_benchmark = true;
-    snprintf(VS(settings.content_benchmark_maps), "%s", arg);
+    snprintf((settings.content_benchmark_maps), sizeof((settings.content_benchmark_maps)), "%s", arg);
     return true;
 }
 
@@ -373,7 +373,7 @@ static bool clioptions_option_content_benchmark_route(const char *arg, char **er
         return false;
     }
     settings.content_benchmark = true;
-    snprintf(VS(settings.content_benchmark_maps), "%s", arg);
+    snprintf((settings.content_benchmark_maps), sizeof((settings.content_benchmark_maps)), "%s", arg);
     logger_set_print_func(content_route_log_stderr);
     return true;
 }
@@ -405,7 +405,7 @@ static bool clioptions_option_celestial_inventory(const char *arg, char **errmsg
         return false;
     }
     settings.celestial_inventory = true;
-    snprintf(VS(settings.celestial_inventory_maps), "%s", arg);
+    snprintf((settings.celestial_inventory_maps), sizeof((settings.celestial_inventory_maps)), "%s", arg);
     return true;
 }
 
@@ -435,7 +435,7 @@ static bool clioptions_option_admin_shutdown_socket(const char *arg, char **errm
     string_fmt(*errmsg, "%s", "Local administrative shutdown is supported only on Linux");
     return false;
 #else
-    snprintf(VS(settings.admin_shutdown_socket), "%s", arg);
+    snprintf((settings.admin_shutdown_socket), sizeof((settings.admin_shutdown_socket)), "%s", arg);
     return true;
 #endif
 }
@@ -487,7 +487,7 @@ static const char *clioptions_option_libpath_desc =
     "archetypes etc reside.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_libpath(const char *arg, char **errmsg) {
-    snprintf(VS(settings.libpath), "%s", arg);
+    snprintf((settings.libpath), sizeof((settings.libpath)), "%s", arg);
     return true;
 }
 
@@ -498,7 +498,7 @@ static const char *clioptions_option_datapath_desc =
     "Where to read and write player data, unique maps, etc.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_datapath(const char *arg, char **errmsg) {
-    snprintf(VS(settings.datapath), "%s", arg);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%s", arg);
     return true;
 }
 
@@ -534,7 +534,7 @@ static bool clioptions_option_datapath_fd(const char *arg, char **errmsg) {
 static const char *clioptions_option_mapspath_desc = "Where the maps, Python scripts, etc reside.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_mapspath(const char *arg, char **errmsg) {
-    snprintf(VS(settings.mapspath), "%s", arg);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%s", arg);
     return true;
 }
 
@@ -553,7 +553,7 @@ static bool clioptions_option_assetspath(const char *arg, char **errmsg) {
         return false;
     }
 
-    snprintf(VS(settings.assetspath), "%s", arg);
+    snprintf((settings.assetspath), sizeof((settings.assetspath)), "%s", arg);
     return true;
 }
 
@@ -575,7 +575,7 @@ static const char *clioptions_option_resourcespath_desc =
     "The server must have read access to this directory.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_resourcespath(const char *arg, char **errmsg) {
-    snprintf(VS(settings.resourcespath), "%s", arg);
+    snprintf((settings.resourcespath), sizeof((settings.resourcespath)), "%s", arg);
     return true;
 }
 
@@ -591,7 +591,7 @@ static bool clioptions_option_metaserver_publish_origin(const char *arg, char **
         string_fmt(*errmsg, "%s", "metaserver publisher origin is not canonical");
         return false;
     }
-    snprintf(VS(settings.metaserver_publish_origin), "%s", arg);
+    snprintf((settings.metaserver_publish_origin), sizeof((settings.metaserver_publish_origin)), "%s", arg);
     return true;
 }
 
@@ -604,7 +604,7 @@ static bool clioptions_option_metaserver_hostname(const char *arg, char **errmsg
         *errmsg = xstrdup("Expected a canonical lowercase DNS hostname");
         return false;
     }
-    snprintf(VS(settings.metaserver_hostname), "%s", arg);
+    snprintf((settings.metaserver_hostname), sizeof((settings.metaserver_hostname)), "%s", arg);
     return true;
 }
 
@@ -620,7 +620,7 @@ static bool clioptions_option_metaserver_rendezvous_origin(const char *arg, char
         string_fmt(*errmsg, "%s", "metaserver rendezvous origin is not canonical");
         return false;
     }
-    snprintf(VS(settings.metaserver_rendezvous_origin), "%s", arg);
+    snprintf((settings.metaserver_rendezvous_origin), sizeof((settings.metaserver_rendezvous_origin)), "%s", arg);
     return true;
 }
 
@@ -656,7 +656,7 @@ static const char *clioptions_option_stun_server_desc =
     "STUN server as hostname:port for public UDP candidate discovery, or off.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_stun_server(const char *arg, char **errmsg) {
-    snprintf(VS(settings.stun_server), "%s", arg);
+    snprintf((settings.stun_server), sizeof((settings.stun_server)), "%s", arg);
     return true;
 }
 
@@ -671,7 +671,7 @@ static bool clioptions_option_port_mapping(const char *arg, char **errmsg) {
         *errmsg = xstrdup("Expected auto or off");
         return false;
     }
-    snprintf(VS(settings.port_mapping), "%s", arg);
+    snprintf((settings.port_mapping), sizeof((settings.port_mapping)), "%s", arg);
     return true;
 }
 
@@ -729,7 +729,7 @@ static bool clioptions_option_access_store(const char *arg, char **errmsg) {
         *errmsg = xstrdup("Expected a bounded absolute directory");
         return false;
     }
-    snprintf(VS(settings.access_store), "%s", arg);
+    snprintf((settings.access_store), sizeof((settings.access_store)), "%s", arg);
     return true;
 }
 /* Recognize removed settings solely to fail startup, never fall back to open. */
@@ -786,7 +786,7 @@ static bool clioptions_option_server_host(const char *arg, char **errmsg) {
         return false;
     }
 
-    snprintf(VS(settings.server_host), "%s", arg);
+    snprintf((settings.server_host), sizeof((settings.server_host)), "%s", arg);
     return true;
 }
 
@@ -798,7 +798,7 @@ static const char *clioptions_option_server_name_desc =
     "servers (the metaserver)";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_server_name(const char *arg, char **errmsg) {
-    snprintf(VS(settings.server_name), "%s", arg);
+    snprintf((settings.server_name), sizeof((settings.server_name)), "%s", arg);
     return true;
 }
 
@@ -809,7 +809,7 @@ static const char *clioptions_option_server_desc_desc =
     "Description of the server. This should describe the server to players.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_server_desc(const char *arg, char **errmsg) {
-    snprintf(VS(settings.server_desc), "%s", arg);
+    snprintf((settings.server_desc), sizeof((settings.server_desc)), "%s", arg);
     return true;
 }
 
@@ -1032,7 +1032,7 @@ static const char *clioptions_option_control_player_desc =
     "The first player is used if this option is not specified.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_control_player(const char *arg, char **errmsg) {
-    snprintf(VS(settings.control_player), "%s", arg);
+    snprintf((settings.control_player), sizeof((settings.control_player)), "%s", arg);
     return true;
 }
 
@@ -1060,7 +1060,7 @@ static const char *clioptions_option_http_url_desc =
     "will fall back to QUIC when available.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_http_url(const char *arg, char **errmsg) {
-    snprintf(VS(settings.http_url), "%s", strcmp(arg, "off") == 0 ? "" : arg);
+    snprintf((settings.http_url), sizeof((settings.http_url)), "%s", strcmp(arg, "off") == 0 ? "" : arg);
     return true;
 }
 
@@ -1104,7 +1104,7 @@ static const char *clioptions_option_network_stack_desc =
     "tunneling (this may not be supported on all systems).";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_network_stack(const char *arg, char **errmsg) {
-    snprintf(VS(settings.network_stack), "%s", arg);
+    snprintf((settings.network_stack), sizeof((settings.network_stack)), "%s", arg);
     return true;
 }
 
@@ -1149,11 +1149,11 @@ static void init_library(int argc, char *argv[]) {
      * the server or a Windows one. */
     char user_agent[MAX_BUF];
 #if defined(WIN32)
-    snprintf(VS(user_agent), "Atrinik Server (Win32)/%s (%d)", PACKAGE_VERSION, SOCKET_VERSION);
+    snprintf((user_agent), sizeof((user_agent)), "Atrinik Server (Win32)/%s (%d)", PACKAGE_VERSION, SOCKET_VERSION);
 #elif defined(__GNUC__)
-    snprintf(VS(user_agent), "Atrinik Server (GNU/Linux)/%s (%d)", PACKAGE_VERSION, SOCKET_VERSION);
+    snprintf((user_agent), sizeof((user_agent)), "Atrinik Server (GNU/Linux)/%s (%d)", PACKAGE_VERSION, SOCKET_VERSION);
 #else
-    snprintf(VS(user_agent), "Atrinik Server (Unknown)/%s (%d)", PACKAGE_VERSION, SOCKET_VERSION);
+    snprintf((user_agent), sizeof((user_agent)), "Atrinik Server (Unknown)/%s (%d)", PACKAGE_VERSION, SOCKET_VERSION);
 #endif
 
     curl_set_user_agent(user_agent);
@@ -1331,7 +1331,7 @@ static void init_library(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
         char expected[MAX_BUF];
-        snprintf(VS(expected), "/proc/self/fd/%d", settings.datapath_fd);
+        snprintf((expected), sizeof((expected)), "/proc/self/fd/%d", settings.datapath_fd);
         struct stat generation;
         access_generation_descriptor = open(".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (access_generation_descriptor < 0 ||
@@ -1522,7 +1522,7 @@ static void init_dynamic(void) {
     archetype_t *at, *tmp;
     HASH_ITER(hh, arch_table, at, tmp) {
         if (at->clone.type == MAP && EXIT_PATH(&at->clone) != NULL) {
-            snprintf(VS(first_map_path), "%s", EXIT_PATH(&at->clone));
+            snprintf((first_map_path), sizeof((first_map_path)), "%s", EXIT_PATH(&at->clone));
             first_map_x = at->clone.stats.hp;
             first_map_y = at->clone.stats.sp;
             return;
@@ -1543,7 +1543,7 @@ static bool write_todclock_atomic(void) {
     char filename[HUGE_BUF];
     char contents[64];
 
-    if (snprintf(VS(filename), "%s/clockdata", settings.datapath) >= (int)sizeof(filename)) {
+    if (snprintf((filename), sizeof((filename)), "%s/clockdata", settings.datapath) >= (int)sizeof(filename)) {
         return false;
     }
 

@@ -8,6 +8,8 @@ import http.server
 import json
 import os
 from pathlib import Path
+import re
+import socketserver
 import ssl
 import subprocess
 import sys
@@ -32,31 +34,51 @@ def openssl(*args):
 
 
 def certificates(root):
+    # req otherwise inherits x509_extensions from the host openssl.cnf, even
+    # with -addext. Own the complete CA/request profile on every platform.
+    config = root / "openssl.cnf"
+    config.write_text(
+        "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ca\n"
+        "[dn]\nCN=Atrinik admission test CA\n"
+        "[ca]\nbasicConstraints=critical,CA:TRUE\n"
+        "keyUsage=critical,keyCertSign,cRLSign\n"
+        "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n",
+        encoding="ascii",
+    )
     ca_key, ca_cert = root / "ca.key", root / "ca.pem"
-    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-            "-subj", "/CN=Atrinik admission test CA", "-keyout", ca_key,
-            "-out", ca_cert, "-addext", "basicConstraints=critical,CA:TRUE")
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1",
+            "-config", config, "-keyout", ca_key, "-out", ca_cert)
     key, csr, cert = root / "server.key", root / "server.csr", root / "server.pem"
-    openssl("req", "-new", "-newkey", "rsa:2048", "-nodes",
+    openssl("req", "-new", "-newkey", "rsa:2048", "-sha256", "-nodes", "-config", config,
             "-subj", "/CN=localhost", "-keyout", key, "-out", csr)
     extensions = root / "extensions.conf"
     extensions.write_text(
-        "subjectAltName=DNS:localhost\n"
+        "[server]\nsubjectAltName=DNS:localhost\n"
         "basicConstraints=critical,CA:FALSE\n"
-        "extendedKeyUsage=serverAuth\n", encoding="ascii",
+        "keyUsage=critical,digitalSignature,keyEncipherment\n"
+        "extendedKeyUsage=serverAuth\n"
+        "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n", encoding="ascii",
     )
     openssl("x509", "-req", "-in", csr, "-CA", ca_cert, "-CAkey", ca_key,
-            "-CAcreateserial", "-days", "1", "-extfile", extensions, "-out", cert)
+            "-CAcreateserial", "-days", "1", "-sha256", "-extfile", extensions,
+            "-extensions", "server", "-out", cert)
     other_ca = root / "other-ca.pem"
-    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-            "-subj", "/CN=Unrelated admission test CA", "-keyout", root / "other.key",
-            "-out", other_ca, "-addext", "basicConstraints=critical,CA:TRUE")
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1",
+            "-config", config, "-subj", "/CN=Unrelated admission test CA",
+            "-keyout", root / "other.key", "-out", other_ca)
     return ca_cert, other_ca, cert, key
 
 
 class Fixture(http.server.ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
+
+    def server_bind(self):
+        # HTTPServer.server_bind reverse-resolves the numeric loopback address.
+        # Host resolver delays must not consume the native admission deadline.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
 
     def handle_error(self, request, client_address):
         # libcurl may finish TLS before rejecting the certificate hostname,
@@ -141,7 +163,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pass
 
 
-def run_case(binary, mode, ca, other_ca, cert, key):
+def native_failure(result, mode, requests, *, diagnostic=False):
+    # Native output can contain URLs or attempt secrets. Retain only these
+    # bounded test-owned numeric diagnostics, never arbitrary stdout/stderr.
+    diagnostics = []
+    for line in result.stderr[:4096].decode("ascii", errors="replace").splitlines():
+        if re.fullmatch(r"HTTPS admission assertion at line [0-9]{1,6}|"
+                        r"HTTPS admission outcome result=[0-9]{1,3} "
+                        r"solver_calls=[0-9]{1,10} elapsed_ms=[0-9]{1,20}|"
+                        r"HTTPS admission transport init_calls=[0-9]{1,10} ca_calls=[0-9]{1,10} "
+                        r"ca_result=-?[0-9]{1,3} curl_code=[0-9]{1,3} "
+                        r"verify=-?[0-9]{1,20} verify_info=[0-9]{1,3} "
+                        r"status=-?[0-9]{1,20} status_info=[0-9]{1,3} "
+                        r"os_errno=-?[0-9]{1,20} os_info=[0-9]{1,3} "
+                        r"version=[0-9]{1,10} async_dns=[01] ares=[01] "
+                        r"ca_seen=[0-9]{1,10} ca_matches=[0-9]{1,10} native_seen=[0-9]{1,10} "
+                        r"debug_result=[0-9]{1,3} verbose_result=[0-9]{1,3} easy=[01]", line):
+            diagnostics.append(line)
+    detail = "; ".join(diagnostics[:3]) or "no numeric native diagnostics"
+    kind = "diagnostic only" if diagnostic else "case failed"
+    return (f"native HTTPS admission {kind}: {mode}; "
+            f"exit={result.returncode}; requests={requests}; {detail}")
+
+
+def run_case(binary, mode, ca, other_ca, cert, key, *, diagnostic=False, deadline=None):
+    if deadline is None:
+        deadline = time.monotonic() + 8
+    if time.monotonic() >= deadline:
+        raise RuntimeError("HTTPS diagnostic deadline exhausted")
     with Fixture(("127.0.0.1", 0), Handler) as server:
         server.mode = mode
         server.errors = []
@@ -161,10 +210,15 @@ def run_case(binary, mode, ca, other_ca, cert, key):
         # Keep localhost evidence independent of machine proxy configuration.
         env["NO_PROXY"] = env["no_proxy"] = "localhost,127.0.0.1"
         try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("HTTPS diagnostic deadline exhausted")
             result = subprocess.run([binary, url, mode], env=env, capture_output=True,
-                                    timeout=8, check=False)
+                                    timeout=remaining, check=False)
+            if diagnostic:
+                return native_failure(result, mode, server.requests, diagnostic=True)
             if result.returncode:
-                raise RuntimeError(f"native HTTPS admission case failed: {mode}")
+                raise RuntimeError(native_failure(result, mode, server.requests))
             if server.errors:
                 raise RuntimeError(f"HTTPS fixture request check failed: {mode}: "
                                    + ",".join(server.errors[:3]))
@@ -181,6 +235,35 @@ def run_case(binary, mode, ca, other_ca, cert, key):
                 raise RuntimeError("TLS fixture did not stop")
 
 
+def verification_errors(stderr):
+    # OpenSSL also prints certificate subjects and paths. Retain only numeric
+    # verification errors/depths, with bounded input and output.
+    errors = []
+    for line in stderr[:4096].decode("ascii", errors="replace").splitlines():
+        match = re.fullmatch(r"error ([0-9]{1,3}) at ([0-9]{1,3}) depth lookup:[^\r\n]*", line)
+        if match:
+            errors.append(f"verify_error={match[1]} depth={match[2]}")
+    return "; ".join(errors[:3]) or "no numeric verification errors"
+
+
+def verify_certificates(ca, other_ca, cert):
+    cases = ((ca, "localhost", 0), (other_ca, "localhost", 2), (ca, "wrong.invalid", 2))
+    for index, (authority, hostname, expected) in enumerate(cases, 1):
+        try:
+            result = subprocess.run(
+                [OPENSSL, "verify", "-x509_strict", "-purpose", "sslserver",
+                 "-verify_hostname", hostname, "-CAfile", str(authority), str(cert)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15, check=False)
+        except (subprocess.TimeoutExpired, OSError) as error:
+            raise RuntimeError(f"HTTPS fixture certificate preflight case={index} "
+                               f"error={type(error).__name__}") from None
+        if result.returncode != expected:
+            raise RuntimeError(f"HTTPS fixture certificate preflight case={index} "
+                               f"exit={result.returncode} expected={expected}; "
+                               + verification_errors(result.stderr))
+    print("HTTPS fixture certificate preflight trusted=0 untrusted=2 wrong_host=2", flush=True)
+
+
 def main():
     global OPENSSL
     if len(sys.argv) != 3:
@@ -188,6 +271,7 @@ def main():
     OPENSSL = sys.argv[2]
     with tempfile.TemporaryDirectory(prefix="atrinik-admission-https-") as directory:
         ca, other_ca, cert, key = certificates(Path(directory))
+        verify_certificates(ca, other_ca, cert)
         modes = ("valid", "malformed", "missing-no-store", "oversized", "redirect",
                  "deadline", "cancel", "wrong-host", "untrusted",
                  "rate-valid", "rate-max", "rate-malformed", "rate-overflow",
@@ -195,7 +279,21 @@ def main():
                  "rate-socket", "media-type-wrong", "media-type-missing", "media-type-duplicate",
                  "media-type-case", "media-type-parameters")
         for mode in modes:
-            run_case(sys.argv[1], mode, ca, other_ca, cert, key)
+            deadline = time.monotonic() + 8
+            try:
+                run_case(sys.argv[1], mode, ca, other_ca, cert, key, deadline=deadline)
+            except RuntimeError as original:
+                if mode != "valid":
+                    raise
+                # Compare the exact generated chain and admission request with
+                # curl_easy_perform only after acceptance already failed. This
+                # never replaces the cancellable case or converts failure to success.
+                try:
+                    diagnostic = run_case(sys.argv[1], "diagnostic-easy", ca, other_ca,
+                                          cert, key, diagnostic=True, deadline=deadline)
+                except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
+                    diagnostic = "HTTPS diagnostic unavailable: " + type(error).__name__
+                raise RuntimeError(str(original) + "; " + diagnostic) from None
     print(f"verified HTTPS admission: {len(modes)} transport cases passed")
 
 

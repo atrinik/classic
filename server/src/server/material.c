@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -70,7 +70,7 @@ void material_init(void) {
     }
 
     char filename[HUGE_BUF];
-    snprintf(VS(filename), "%s/materials", settings.libpath);
+    snprintf((filename), sizeof((filename)), "%s/materials", settings.libpath);
 
     FILE *fp = fopen(filename, "r");
     if (fp == NULL) {
@@ -116,7 +116,7 @@ void material_init(void) {
         }
 
         if (*name != '\0') {
-            snprintf(VS(materials_real[i].name),
+            snprintf((materials_real[i].name), sizeof((materials_real[i].name)),
                      "%.*s ",
                      (int)sizeof(materials_real[i].name) - 2,
                      name);

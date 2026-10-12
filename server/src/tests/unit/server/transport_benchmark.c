@@ -364,12 +364,12 @@ START_TEST(test_deadline_driven_quic_service_benchmark) {
     toolkit_import(socket_server);
     ck_assert(socket_server_quic_info(VS(host), &port, fingerprint));
     if (host[0] == '\0') {
-        snprintf(VS(host), "%s", "127.0.0.1");
+        snprintf((host), sizeof((host)), "%s", "127.0.0.1");
     }
     for (size_t i = 0; i < arraysize(clients); i++) {
-        snprintf(VS(clients[i].host), "%s", host);
+        snprintf((clients[i].host), sizeof((clients[i].host)), "%s", host);
         clients[i].port = port;
-        snprintf(VS(clients[i].fingerprint), "%s", fingerprint);
+        snprintf((clients[i].fingerprint), sizeof((clients[i].fingerprint)), "%s", fingerprint);
     }
 
     bool connected = transport_benchmark_connect_clients(
@@ -778,7 +778,7 @@ static access_outcome_t transport_access_route(void *context, const access_route
 /* Replace only this forked runner's optional access service with an isolated
  * protected store, bound to the real QUIC listener certificate. */
 static access_result_t transport_access_setup(const char fingerprint[65]) {
-    snprintf(VS(transport_access_directory), "/tmp/atrinik-transport-access-XXXXXX");
+    snprintf((transport_access_directory), sizeof((transport_access_directory)), "/tmp/atrinik-transport-access-XXXXXX");
     ck_assert_ptr_nonnull(mkdtemp(transport_access_directory));
     uint8_t identity[32];
     for (size_t i = 0; i < sizeof(identity); i++) {
@@ -797,13 +797,13 @@ static access_result_t transport_access_setup(const char fingerprint[65]) {
     memcpy(transport_access_saved_store, settings.access_store, sizeof(settings.access_store));
     transport_access_saved_required = settings.access_required;
     transport_access_saved_initialize = settings.access_initialize;
-    snprintf(VS(transport_access_identity), "%s", fingerprint);
+    snprintf((transport_access_identity), sizeof((transport_access_identity)), "%s", fingerprint);
     ck_assert(access_server_shutdown());
     access_server_deinit();
     transport_access_owned = true;
     settings.access_required = true;
     settings.access_initialize = false;
-    snprintf(VS(settings.access_store), "%s", transport_access_directory);
+    snprintf((settings.access_store), sizeof((settings.access_store)), "%s", transport_access_directory);
     access_server_route_for_test(transport_access_route);
     ck_assert(access_server_init(fingerprint));
     return issue;
@@ -820,7 +820,7 @@ static void transport_auth_teardown(void) {
         settings.access_required = transport_access_saved_required;
         settings.access_initialize = transport_access_saved_initialize;
         char snapshot[256];
-        snprintf(VS(snapshot), "%s/%s", transport_access_directory, ACCESS_STORE_FILENAME);
+        snprintf((snapshot), sizeof((snapshot)), "%s/%s", transport_access_directory, ACCESS_STORE_FILENAME);
         ck_assert_int_eq(unlink(snapshot), 0);
         ck_assert_int_eq(rmdir(transport_access_directory), 0);
         transport_access_owned = false;
@@ -850,9 +850,9 @@ START_TEST(test_quic_login_and_movement_continue_while_authentication_pending) {
     ck_assert(socket_server_quic_info(VS(host), &port, fingerprint));
     access_result_t admission = transport_access_setup(fingerprint);
     for (size_t i = 0; i < arraysize(clients); i++) {
-        snprintf(VS(clients[i].host), "%s", *host != '\0' ? host : "127.0.0.1");
+        snprintf((clients[i].host), sizeof((clients[i].host)), "%s", *host != '\0' ? host : "127.0.0.1");
         clients[i].port = port;
-        snprintf(VS(clients[i].fingerprint), "%s", fingerprint);
+        snprintf((clients[i].fingerprint), sizeof((clients[i].fingerprint)), "%s", fingerprint);
     }
     ck_assert(transport_benchmark_connect_clients(clients, arraysize(clients), &simulation_passes));
     const uint8_t version[] = {SERVER_CMD_VERSION, (uint8_t)(SOCKET_VERSION >> 24),
@@ -1068,7 +1068,7 @@ START_TEST(test_strakewood_idle_simulation) {
         mapstruct *route_maps[WALKING_ROUTE_MAPS] = {NULL};
         for (int m = 0; m < WALKING_ROUTE_MAPS; m++) {
             char path[MAX_BUF];
-            snprintf(VS(path), "/shattered_islands/world_%d_%d", m % 4, m / 4 + 66);
+            snprintf((path), sizeof((path)), "/shattered_islands/world_%d_%d", m % 4, m / 4 + 66);
             strakewood_progress(0, path);
             uint64_t load_started_us = datetime_monotonic_us();
             route_maps[m] = ready_map_name(path, NULL, 0);
@@ -1192,7 +1192,7 @@ START_TEST(test_strakewood_idle_simulation) {
             ck_assert_uint_lt(point.direction, arraysize(compass));
             ck_assert_uint_gt(compass[point.direction], 0);
             char expected_path[MAX_BUF];
-            snprintf(VS(expected_path), "/shattered_islands/world_%d_%d",
+            snprintf((expected_path), sizeof((expected_path)), "/shattered_islands/world_%d_%d",
                      point.map % 4, point.map / 4 + 66);
             strakewood_progress(tick, "route-movement");
             started_us = datetime_monotonic_us();
@@ -1216,7 +1216,7 @@ START_TEST(test_strakewood_idle_simulation) {
         } else if (actions && tick % 128 == 0) {
             strakewood_progress(tick, "settime");
             char hour[16];
-            snprintf(VS(hour), "%u", (tick / 128) % HOURS_PER_DAY);
+            snprintf((hour), sizeof((hour)), "%u", (tick / 128) % HOURS_PER_DAY);
             command_settime(pl, "settime", hour);
             strakewood_progress(tick, "movement");
             started_us = datetime_monotonic_us();
@@ -1239,7 +1239,7 @@ START_TEST(test_strakewood_idle_simulation) {
         if (route_mode) {
             walking_route_point point = route_points[tick + 1U];
             char expected_path[MAX_BUF];
-            snprintf(VS(expected_path), "/shattered_islands/world_%d_%d",
+            snprintf((expected_path), sizeof((expected_path)), "/shattered_islands/world_%d_%d",
                      point.map % 4, point.map / 4 + 66);
             ck_assert_msg(strcmp(pl->map->path, expected_path) == 0 &&
                               pl->x == point.x && pl->y == point.y,

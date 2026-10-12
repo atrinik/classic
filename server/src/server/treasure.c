@@ -569,7 +569,7 @@ treasure_load_more(treasure_t **treasure, FILE *fp, const char *filename, uint64
  */
 static void treasure_load(void) {
     char filename[HUGE_BUF];
-    snprintf(VS(filename), "%s/treasures", settings.libpath);
+    snprintf((filename), sizeof((filename)), "%s/treasures", settings.libpath);
 
     FILE *fp = fopen(filename, "r");
     if (fp == NULL) {

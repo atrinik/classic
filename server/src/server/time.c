@@ -50,9 +50,7 @@ static long psaveind;
 static long process_max_utime = 0;
 /** Shortest cycle time. */
 static long process_min_utime = 999999999;
-static long process_tot_mtime;
 long pticks;
-static long process_utime_long_count;
 /** Used for main loop timing. */
 struct timeval last_time;
 
@@ -153,7 +151,6 @@ void reset_sleep(void) {
     psaveind = 0;
     process_max_utime = 0;
     process_min_utime = 999999999;
-    process_tot_mtime = 0;
     pticks = 1;
     server_clock_init((uint64_t)max_time, (server_tick_t){(uint64_t)pticks});
 
@@ -177,8 +174,6 @@ static void log_time(long process_utime) {
     if (process_utime < process_min_utime) {
         process_min_utime = process_utime;
     }
-
-    process_tot_mtime += process_utime / 1000;
 }
 
 /** Calculate the remaining time before the next non-transport pass. */
@@ -215,16 +210,9 @@ uint64_t sleep_delta_timeout_us(void) {
 /** Advance the next non-transport pass deadline without sleeping. */
 void sleep_delta_complete(void) {
     struct timeval new_time;
-    long sleep_sec, sleep_usec;
-
     GETTIMEOFDAY(&new_time);
-    sleep_delta_remaining(&new_time, &sleep_sec, &sleep_usec);
 
     log_time((new_time.tv_sec - last_time.tv_sec) * 1000000 + new_time.tv_usec - last_time.tv_usec);
-
-    if (sleep_sec < 0 || sleep_usec <= 0) {
-        process_utime_long_count++;
-    }
 
     /* Set last_time to when we're expected to wake up: */
     last_time.tv_usec += max_time / max_time_multiplier;

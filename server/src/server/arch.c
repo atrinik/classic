@@ -286,7 +286,7 @@ static void arch_pass_second(FILE *fp, const char *filename) {
     }
 
     char filename2[HUGE_BUF];
-    snprintf(VS(filename2), "%s/artifacts", settings.libpath);
+    snprintf((filename2), sizeof((filename2)), "%s/artifacts", settings.libpath);
     fp = fopen(filename2, "rb");
 
     if (fp == NULL) {
@@ -372,7 +372,7 @@ static void arch_load(void) {
     TIMER_START(1);
 
     char filename[HUGE_BUF];
-    snprintf(VS(filename), "%s/archetypes", settings.libpath);
+    snprintf((filename), sizeof((filename)), "%s/archetypes", settings.libpath);
     FILE *fp = fopen(filename, "rb");
 
     if (fp == NULL) {

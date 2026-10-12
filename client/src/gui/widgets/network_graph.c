@@ -292,7 +292,7 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
                 return 0;
             }
 
-            snprintf(VS(buf),
+            snprintf((buf), sizeof((buf)),
                      "Maximum: %.3f ms",
                      (double)(series->max / 1000.0L));
             if (network_graph_series_is_valid(series, (size_t)x)) {
@@ -308,7 +308,7 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
                 return 0;
             }
 
-            snprintf(VS(buf),
+            snprintf((buf), sizeof((buf)),
                      "Maximum: %" PRIu64 " Bytes/s (%" PRIu64 " kB/s)",
                      (uint64_t)data->max,
                      (uint64_t)data->max / 1000);

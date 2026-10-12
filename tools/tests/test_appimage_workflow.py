@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -54,6 +55,25 @@ class AppImageWorkflowTests(unittest.TestCase):
     def job(self) -> str:
         return self.workflow().split('  client-appimage:\n', 1)[1].split('  client-windows:\n', 1)[0]
 
+    def test_compiler_identity_is_bound_through_build_and_validation(self) -> None:
+        workflow = self.workflow()
+        job = self.job()
+        self.assertIn('--compiler-image "${CLASSIC_LINUX_IMAGE}"', job)
+        self.assertIn("CLASSIC_LINUX_IMAGE: ${{ needs.metadata.outputs.compiler_image }}", job)
+        self.assertIn('--build-arg "ATRINIK_COMPILER_IMAGE=${CLASSIC_LINUX_IMAGE}"', job)
+        payload = job.split('      - name: Validate AppImage payload with trusted host tools', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('--compiler-image "${CLASSIC_LINUX_IMAGE}"', payload)
+        candidate = workflow.split('  candidate:\n', 1)[1]
+        self.assertIn("--source-finalizer-arguments", candidate)
+        self.assertIn('"${compiler_arguments[@]}"', candidate)
+        publish = (ROOT / '.github/workflows/package-release.yml').read_text()
+        verifier = publish.split('      - name: Recheck the revision-specific candidate before publication', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('--compiler-image "${expected_compiler_image}"', verifier)
+        self.assertIn("resolve_compiler_image.py", verifier)
+        self.assertIn('--revision "${RELEASE_COMMIT}"', verifier)
+        core = (ROOT / '.github/workflows/check.yml').read_text().split('  core:\n', 1)[1].split('  windows-test-build:\n', 1)[0]
+        self.assertIn("-m unittest discover -s tools/ci/appimage -p 'test_*.py'", core)
+
     def test_schema_specific_jobs_fail_closed(self) -> None:
         workflow = self.workflow()
         job = self.job()
@@ -85,7 +105,9 @@ class AppImageWorkflowTests(unittest.TestCase):
                           '--env-file', 'secrets.'):
             self.assertNotIn(forbidden, job)
         preparation = job.split('      - name: Prepare pinned Ubuntu', 1)[1].split('      - name:', 1)[0]
-        self.assertNotIn('candidate-source', preparation)
+        self.assertIn('tools/release/resolve_compiler_image.py', preparation)
+        self.assertIn('--source-root "${GITHUB_WORKSPACE}/candidate-source"', preparation)
+        self.assertIn('compiler_arguments=(--source-packaging-lock "${source_lock_path}")', preparation)
         self.assertIn('prepare.py --output build/appimage-context', preparation)
         self.assertIn('--file build/appimage-context/Dockerfile build/appimage-context', preparation)
         self.assertIn('cp build/appimage-context/packaging.lock.json build/appimage-evidence/', preparation)
@@ -108,19 +130,21 @@ class AppImageWorkflowTests(unittest.TestCase):
         self.assertIn('python3 tools/release/appimage.py', job)
         self.assertLess(job.index('payload-validation.log'), job.index('bash /smoke.sh'))
         finalizer = self.workflow().split('  candidate:\n', 1)[1]
-        self.assertLess(finalizer.index('squashfs-tools binutils'), finalizer.index('finalize_artifacts.py'))
+        self.assertLess(finalizer.index('squashfs-tools llvm'), finalizer.index('finalize_artifacts.py'))
         for name, first_consumer in (('package-release.yml', 'release_artifacts.py'),
                                      ('promote-latest.yml', 'check_latest_release.py')):
             workflow = (ROOT / '.github/workflows' / name).read_text()
-            self.assertLess(workflow.index('squashfs-tools binutils'), workflow.index(first_consumer))
+            self.assertLess(workflow.index('squashfs-tools llvm'), workflow.index(first_consumer))
+            self.assertLess(workflow.index('test -x /usr/bin/llvm-readelf'), workflow.index(first_consumer))
+        self.assertEqual(self.workflow().count('test -x /usr/bin/llvm-readelf'), 2)
         check = (ROOT / '.github/workflows/check.yml').read_text()
         core = check.split('  core:\n', 1)[1].split('  windows-test-build:\n', 1)[0]
-        self.assertIn('squashfs-tools binutils libzstd1', core)
-        self.assertLess(core.index('squashfs-tools binutils libzstd1'), core.index('-m unittest discover -s tools/tests'))
-        for prerequisite in ('readelf', 'unsquashfs', 'mksquashfs', 'true'):
+        self.assertIn('squashfs-tools llvm libzstd1', core)
+        self.assertLess(core.index('squashfs-tools llvm libzstd1'), core.index('-m unittest discover -s tools/tests'))
+        for prerequisite in ('llvm-readelf', 'unsquashfs', 'mksquashfs', 'true'):
             self.assertIn(f'test -x /usr/bin/{prerequisite}', core)
         self.assertIn('test -f /usr/lib/x86_64-linux-gnu/libzstd.so.1', core)
-        self.assertIn('squashfs-tools binutils libzstd1 libssl3t64', core)
+        self.assertIn('squashfs-tools llvm libzstd1 libssl3t64', core)
         self.assertIn('test -f /usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so', core)
         package = (ROOT / '.github/workflows/package-release.yml').read_text()
         self.assertIn('            build/release/*.AppImage\n', package)
@@ -134,8 +158,18 @@ class AppImageWorkflowTests(unittest.TestCase):
         validation = job.split('      - name: Validate AppImage payload with trusted host tools', 1)[1].split('      - name:', 1)[0]
         self.assertIn('RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}', validation)
         script = textwrap.dedent(validation.split('        run: |\n', 1)[1])
-        for fail_validation in ('0', '1'):
-            with self.subTest(fail_validation=fail_validation), tempfile.TemporaryDirectory() as temporary:
+        # The apt fixture cannot install a host inspector. Stub only its
+        # presence check, retaining the workflow's actual failure propagation.
+        fixture_check = '''test() {
+  if [[ $# == 2 && $1 == -x && $2 == /usr/bin/llvm-readelf ]]; then
+    [[ ${INSPECTOR_AVAILABLE} == 1 ]]
+  else
+    builtin test "$@"
+  fi
+}
+'''
+        for fail_validation, inspector_available in (('0', '1'), ('1', '1'), ('0', '0')):
+            with self.subTest(fail_validation=fail_validation, inspector_available=inspector_available), tempfile.TemporaryDirectory() as temporary:
                 workspace = Path(temporary)
                 (workspace / 'bin').mkdir()
                 (workspace / 'build/appimage-evidence').mkdir(parents=True)
@@ -148,18 +182,25 @@ pathlib.Path('validator-args.json').write_text(json.dumps(sys.argv[1:]))
 sys.exit(7 if os.environ['FAIL_VALIDATION'] == '1' else 0)
 """)
                 python.chmod(0o755)
-                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', fixture_check + script],
                     cwd=workspace, capture_output=True, text=True,
                     env=dict(os.environ, GITHUB_WORKSPACE=str(workspace),
                              RELEASE_VERSION='5.17.0', RELEASE_REVISION='a' * 40,
+                             CLASSIC_LINUX_IMAGE="ghcr.io/atrinik/classic-build:1.16.0@sha256:" + "a" * 64,
                              FAIL_VALIDATION=fail_validation,
+                             INSPECTOR_AVAILABLE=inspector_available,
                              PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+                if inspector_available == '0':
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((workspace / 'validator-args.json').exists())
+                    continue
                 self.assertEqual(result.returncode, 7 if fail_validation == '1' else 0, result.stderr)
                 args = json.loads((workspace / 'validator-args.json').read_text())
                 self.assertEqual(args, ['tools/release/appimage.py',
                     'build/appimage-packages/atrinik-classic-client-5.17.0-linux-x86_64.AppImage',
                     '5.17.0', '--revision', 'a' * 40,
-                    '--source-root', str(workspace / 'candidate-source')])
+                    '--source-root', str(workspace / 'candidate-source'),
+                    '--compiler-image', 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64])
                 self.assertNotIn('candidate-source/tools', ' '.join(args))
         self.assertLess(job.index('--source-root "${GITHUB_WORKSPACE}/candidate-source"'),
                         job.index('"classic-appimage-${runtime}" bash /smoke.sh'))
@@ -172,10 +213,18 @@ sys.exit(7 if os.environ['FAIL_VALIDATION'] == '1' else 0)
             (workspace / 'bin').mkdir()
             trusted = workspace / 'tools/ci/appimage'
             trusted.mkdir(parents=True)
-            (trusted / 'prepare.py').write_text("""import argparse, pathlib
+            resolver = workspace / 'tools/release'
+            resolver.mkdir(parents=True)
+            shutil.copy2(ROOT / 'tools/release/resolve_compiler_image.py', resolver)
+            (trusted / 'prepare.py').write_text("""import argparse, json, pathlib
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', type=pathlib.Path, required=True)
-out = parser.parse_args().output
+parser.add_argument('--compiler-image', required=True)
+parser.add_argument('--source-packaging-lock', type=pathlib.Path)
+args = parser.parse_args()
+assert args.source_packaging_lock is not None
+assert json.loads(args.source_packaging_lock.read_bytes()) == {'compiler': {'image': 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64}}
+out = args.output
 out.mkdir(parents=True)
 (out / 'packaging.lock.json').write_text('{"fixture": "locked inputs"}\\n')
 (out / 'Dockerfile').write_text('fixture trusted Dockerfile\\n')
@@ -191,14 +240,23 @@ elif sys.argv[1:3] == ['image', 'inspect']:
     print('sha256:' + 'a' * 64)
 """)
             docker.chmod(0o755)
-            # Preparation must not touch candidate input, even if it contains
-            # names that resemble the trusted preparation assets.
+            # Only the trusted resolver reads committed candidate lock data;
+            # candidate preparation code never executes on the host.
             candidate = workspace / 'candidate-source/tools/ci/appimage'
             candidate.mkdir(parents=True)
             (candidate / 'prepare.py').write_text('raise RuntimeError("candidate executed")')
+            (candidate / 'packaging.lock.json').write_text(json.dumps({'compiler': {'image': 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64}}))
+            source = workspace / 'candidate-source'
+            for arguments in (['init', '--quiet'], ['add', '.'],
+                              ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                               '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture']):
+                subprocess.run(['git', '-C', str(source), *arguments], check=True)
+            revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
             result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
                 cwd=workspace, capture_output=True, text=True,
-                env=dict(os.environ, PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+                env=dict(os.environ, CLASSIC_LINUX_IMAGE="ghcr.io/atrinik/classic-build:1.16.0@sha256:" + "a" * 64,
+                         GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace), RELEASE_REVISION=revision,
+                         PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, '')
             self.assertEqual((workspace / 'build/appimage-evidence/packaging.lock.json').read_text(),

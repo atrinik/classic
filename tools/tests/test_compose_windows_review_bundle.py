@@ -299,7 +299,18 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         acceptance, containment = close.split("} finally {", 1)
         self.assertEqual(smoke.count("$launcherClient.CloseMainWindow()"), 1)
         self.assertRegex(acceptance, r"if \(-not \$launcherClient.CloseMainWindow\(\)\) \{\s*throw ")
-        self.assertRegex(acceptance, r"if \(-not \$launcherClient.WaitForExit\(30000\)\) \{\s*throw ")
+        self.assertRegex(
+            acceptance,
+            r'if \(-not \$launcherClient.WaitForExit\(30000\)\) \{\s*'
+            r'Write-Host \("Client close timeout CPU: " \+\s*'
+            r'\(Get-ClientCpuProgress \$launcherClient \$clientCpuBaseline\)\)\s*'
+            r'Write-Host \("Client close timeout thread: " \+\s*'
+            r'\(Get-ClientCloseTimeoutSnapshot \$launcherClient\)\)\s*'
+            r'Write-Host \("Client close timeout stack: " \+\s*'
+            r'\(Get-ClientCloseStackSnapshot \$launcherClient\)\)\s*'
+            r'Write-Host \("Client close timeout CPU-ranked threads: " \+\s*'
+            r'\(Get-ClientThreadCpuProgress \$launcherClient \$clientThreadCpuBaseline\)\)\s*throw ',
+        )
         self.assertIn("$launcherClientExitCode -ne 0", acceptance)
         self.assertIn('Client shutdown complete', acceptance)
         self.assertRegex(acceptance, r"} catch \{\s*if \(\$clientCloseStarted\)")
@@ -341,7 +352,7 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
 
     def test_window_diagnostics_are_bounded_read_only_and_process_scoped(self) -> None:
         smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
-        probe = smoke.split("function Get-ClientWindowSnapshot", 1)[1].split("function Write-CloseFailureDiagnostics", 1)[0]
+        probe = smoke.split("function Get-ClientWindowSnapshot", 1)[1].split("function Get-ClientCloseTimeoutSnapshot", 1)[0]
         self.assertIn("if (++visited > 4096 || rows.Count >= 32) return false;", probe)
         self.assertLess(probe.index("if (owner != (uint)processId) return true;"), probe.index("GetClassNameW(window"))
         self.assertIn("new StringBuilder(256)", probe)
@@ -350,6 +361,262 @@ class ComposeWindowsReviewBundleTests(unittest.TestCase):
         self.assertIn("<client window snapshot unavailable>", probe)
         for forbidden in ("GetWindowText", "MainWindowTitle", "SendMessage", "PostMessage", "CloseMainWindow()", "Get-Process", ".Kill("):
             self.assertNotIn(forbidden, probe)
+
+    def test_close_timeout_probe_is_owned_bounded_and_observational(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("function Get-ClientCloseTimeoutSnapshot", 1)[1].split("function Get-ClientCloseStackSnapshot", 1)[0]
+        self.assertIn("mainWindow == IntPtr.Zero || mainThread == 0 || owner != (uint)processId", probe)
+        self.assertIn("process.Id == Process.GetCurrentProcess().Id", probe)
+        self.assertIn("index < threads.Count && index < 4096", probe)
+        self.assertIn("if ((uint)thread.Id != mainThread) continue;", probe)
+        self.assertIn("observed == System.Diagnostics.ThreadState.Wait", probe)
+        self.assertIn('thread.WaitReason.ToString() : "not_waiting"', probe)
+        ownership = probe.index("owner != (uint)processId || currentThread != mainThread")
+        message = probe.index("bool acknowledged = SendMessageTimeoutW")
+        self.assertLess(ownership, message)
+        self.assertIn("SendMessageTimeoutW(mainWindow, 0, UIntPtr.Zero,\n            IntPtr.Zero, 0x0002 | 0x0020, 250, out result)", probe)
+        self.assertEqual(probe.count("SendMessageTimeoutW("), 2)  # declaration and one call
+        self.assertIn("Snapshot($Client, $Client.MainWindowHandle)", probe)
+        self.assertIn("<client close timeout snapshot unavailable>", probe)
+        self.assertEqual(smoke.count("(Get-ClientCloseTimeoutSnapshot $launcherClient)"), 1)
+        for forbidden in ("PostMessage", "CloseMainWindow()", "GetWindowText", "MainWindowTitle",
+                          "Suspend", "Resume", "Terminate", "Dump", "ReadProcessMemory", ".Kill("):
+            self.assertNotIn(forbidden, probe)
+
+    def test_wait_chain_probe_pins_identity_and_does_not_expand_access(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("private static string WaitChain(", 1)[1].split("public static string Snapshot(", 1)[0]
+        self.assertIn("var processHandle = client.SafeHandle;", probe)
+        self.assertIn("processHandle.DangerousAddRef(ref retained)", probe)
+        self.assertIn("OpenThread(0x00100800, false, mainThread)", probe)
+        query = probe.index("bool accepted = GetThreadWaitChain")
+        for identity in (
+            "GetWindowThreadProcessId(mainWindow, out owner) != mainThread",
+            "owner != (uint)processId || GetProcessIdOfThread(thread) != owner",
+            "WaitForSingleObject(processHandle.DangerousGetHandle(), 0) != 258",
+            "WaitForSingleObject(thread, 0) != 258",
+        ):
+            self.assertLess(probe.index(identity), query)
+        # The owned client is external to PowerShell; traversal and critical
+        # section lookup are separate SDK flags. COM expansion stays disabled.
+        self.assertIn("GetThreadWaitChain(session, UIntPtr.Zero, 0x1 | 0x4,", probe)
+        for forbidden in ("AdjustTokenPrivileges", "DebugActiveProcess", "ReadProcessMemory",
+                          "GetThreadContext", "SuspendThread", "CreateRemoteThread"):
+            self.assertNotIn(forbidden, probe)
+
+    def test_wait_chain_callback_lifetime_and_observer_are_bounded(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("private static string WaitChain(", 1)[1].split("public static string Snapshot(", 1)[0]
+        self.assertIn("OpenThreadWaitChainSession(1, callback)", probe)
+        self.assertIn("Marshal.AllocHGlobal(NodeSize * MaxNodes)", probe)
+        self.assertIn("completed.WaitOne(1000) ? callbackResult : \"wct_query_timeout\"", probe)
+        self.assertIn("observer.IsBackground = true", probe)
+        self.assertIn('observer.Join(1500) ? result : "wct_observer_timeout"', probe)
+        cancel = probe.index("CloseThreadWaitChainSession(session)")
+        for release in ("GC.KeepAlive(callback)", "Marshal.FreeHGlobal(nodes)",
+                        "CloseHandle(thread)", "processHandle.DangerousRelease()"):
+            self.assertLess(cancel, probe.index(release))
+        self.assertIn('if (!accepted && error != 997)', probe)
+        self.assertIn('"wct_thread_error=" + Marshal.GetLastWin32Error()', probe)
+        self.assertIn('"wct_session_error=" + Marshal.GetLastWin32Error()', probe)
+        self.assertIn('"wct_query_error=" + error', probe)
+
+    def test_wait_chain_output_excludes_object_names_and_external_identities(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        formatter = smoke.split("private static string FormatWaitChain(", 1)[1].split("private static string WaitChain(", 1)[0]
+        self.assertIn("if (status != 0) return \"wct_error=\" + status", formatter)
+        self.assertIn("if (length < 1 || length > MaxNodes)", formatter)
+        boundary = formatter.index('rows.Add("external_thread_boundary")')
+        thread_output = formatter.index('row += " thread="')
+        self.assertLess(boundary, thread_output)
+        self.assertIn("break;", formatter[boundary:thread_output])
+        self.assertIn('"wct_nodes=" + rows.Count', formatter)
+        self.assertIn('externalBoundary ? "unavailable"', formatter)
+        for forbidden in ("PtrToString", "ObjectName", "WaitTime", "ContextSwitches",
+                          '" process="', '" pid="'):
+            self.assertNotIn(forbidden, formatter)
+        self.assertIn('type < types.Length ? types[type] : "Unknown"', formatter)
+        self.assertIn('state < statuses.Length ? statuses[state] : "Unknown"', formatter)
+
+    def test_stack_probe_retains_only_bounded_addresses_after_resuming(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("function Get-ClientCloseStackSnapshot", 1)[1].split("function Write-CloseFailureDiagnostics", 1)[0]
+        self.assertIn("DefaultDllImportSearchPaths(DllImportSearchPath.System32)", probe)
+        self.assertIn("ContextSize = 1232, FrameSize = 264, StackLimit = 65536", probe)
+        self.assertIn("int budget = 1048576", probe)
+        self.assertIn("index < 32 && timer.ElapsedMilliseconds < 1500", probe)
+        self.assertIn("if (observer.Join(2000)) return result;", probe)
+        self.assertIn("suspension.Cancel();", probe)
+        self.assertIn("if (cancelled) return false;", probe)
+        self.assertIn("handle.DangerousAddRef(ref retained)", probe)
+        self.assertIn("Interlocked.CompareExchange(ref active, 1, 0)", probe)
+        capture = probe.split("private static string Collect(", 1)[1]
+        self.assertLess(capture.index("suspension.Resume()"), capture.index("StackWalk64("))
+        for check in ("GetWindowThreadProcessId(window, out owner) != threadId",
+                      "GetProcessIdOfThread(thread) != owner",
+                      "WaitForSingleObject(process, 0) != 258",
+                      "WaitForSingleObject(thread, 0) != 258"):
+            self.assertLess(capture.index(check), capture.index("suspension.Begin(thread)"))
+        self.assertIn("suspension.Close(thread)", capture)
+        self.assertIn('rows.Add("unknown_module")', probe)
+        self.assertIn('FormatAddress(module.Name, module.Address, module.Size, instruction)', probe)
+        self.assertEqual(smoke.count("(Get-ClientCloseStackSnapshot $launcherClient)"), 1)
+        for forbidden in ("SymInitialize", "SymFromAddr", "MiniDump", "FileName", "AdjustTokenPrivileges",
+                          "DebugActiveProcess", "SetThreadContext", "WriteProcessMemory", "CreateRemoteThread"):
+            self.assertNotIn(forbidden, probe)
+
+    def test_thread_cpu_probe_preserves_generation_and_close_boundary(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        probe = smoke.split("public sealed class CpuBaseline", 1)[1].split(
+            "// Timeout fencing covers capture", 1)[0]
+        for guard in ("client.StartTime.ToUniversalTime().Ticks != started",
+                      "client.SafeHandle.DangerousGetHandle() != process.DangerousGetHandle()",
+                      "old.Created != current.Created", "old.Handle != current.Handle",
+                      "current.Cpu <= old.Cpu", "threads.Count > ThreadLimit",
+                      "timer.ElapsedMilliseconds >= 500", "observer.Join(1000)",
+                      "if (cancelled || !captured) baseline.Dispose()",
+                      "foreach (var reading in readings) CloseHandle(reading.Handle)"):
+            self.assertIn(guard, probe)
+        self.assertIn("OpenThread(0x00100800, false", probe)
+        self.assertIn("ranked.RemoveRange(2, ranked.Count - 2)", probe)
+        self.assertNotIn("SuspendThread(", probe)
+        capture = smoke.split("private static string Collect(", 1)[1]
+        self.assertLess(capture.index("created != expectedCreated"),
+                        capture.index("suspension.Begin(thread)"))
+        self.assertLess(smoke.index("$null = Get-ClientCloseStackSnapshot $null -Initialize"),
+                        smoke.index("Expand-Archive -LiteralPath $packagePath"))
+        self.assertLess(smoke.index("$clientThreadCpuBaseline = Get-ClientThreadCpuBaseline"),
+                        smoke.index("$launcherClient.CloseMainWindow()"))
+        self.assertGreater(smoke.index("(Get-ClientThreadCpuProgress $launcherClient"),
+                           smoke.index("$launcherClient.WaitForExit(30000)"))
+        cleanup = smoke.split("} finally {\n    Save-ClientLifecycleEvidence", 1)[1]
+        self.assertIn("$clientThreadCpuBaseline.Dispose()", cleanup)
+
+    def test_lifecycle_evidence_is_bounded_and_uploaded_before_cleanup(self) -> None:
+        root = MODULE_PATH.parents[2]
+        smoke = (root / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        helper = smoke.split("function Save-ClientLifecycleEvidence", 1)[1].split("# Read-only HWND evidence:", 1)[0]
+        self.assertIn("[System.IO.FileAccess]::Read", helper)
+        self.assertIn("[System.IO.FileShare]::ReadWrite", helper)
+        self.assertIn("[char[]]::new(16777217)", helper)
+        self.assertIn("$reader.ReadBlock($buffer, 0, $buffer.Length)", helper)
+        self.assertIn("if ($count -le 16777216)", helper)
+        self.assertIn("$reader.Dispose()", helper)
+        self.assertIn("Select-Object -First 32", helper)
+        self.assertIn('Join-Path (Split-Path -Parent $packagePath) "review-client-lifecycle.log"', helper)
+        self.assertIn('Write-Warning "Client lifecycle evidence could not be retained"', helper)
+        self.assertNotIn("throw", helper)
+        self.assertIn('$launcherClientLog = Join-Path $reviewRoot "client.log"', smoke)
+        cleanup = smoke.split("} finally {\n    Save-ClientLifecycleEvidence $launcherClientLog", 1)[1]
+        self.assertIn("Remove-Item -LiteralPath $smokeRoot", cleanup)
+        self.assertEqual(smoke.count("Save-ClientLifecycleEvidence $launcherClientLog"), 1)
+        workflow = (root / ".github/workflows/check.yml").read_text()
+        upload = workflow.split("name: native-windows-font-comparison-", 1)[1].split("  server:", 1)[0]
+        self.assertIn("build/native-windows-tests/review-client-lifecycle.log", upload)
+        self.assertIn("if: always()", workflow.split("name: native-windows-font-comparison-", 1)[0].rsplit("- uses:", 1)[1])
+
+    def test_lifecycle_evidence_keeps_only_fixed_raw_stage_lines(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        pattern = re.search(r'\$pattern = "([^"]+)"', smoke).group(1)
+        stamp = "[2026/10/11 11:36:14.936572] INFO   "
+        messages = (
+            ("socket_command_player", "Gameplay ready."),
+            ("main", "First gameplay frame presented."),
+            ("SDL_main", "First gameplay frame presented."),
+            ("Event_PollInputDevice", "Client window close event received."),
+            ("Event_PollInputDevice", "Client quit event received."),
+            ("main", "Client quit event polling completed."),
+            ("main", "Client main loop exited."),
+            ("system_end", "Client shutdown complete."),
+        ) + tuple(("system_end", "Client shutdown stage: " + stage + ".") for stage in (
+            "UI cleanup", "network connection", "directory workers", "audio",
+            "settings and assets", "image workers", "image packs", "asset requests",
+            "toolkit, GPU, window and SDL",
+        ))
+        expected = [stamp + "[" + function + ":123] " + message for function, message in messages]
+        rejected = [
+            stamp + "[main:123] password=private-value",
+            expected[0] + " token=private-value",
+            "private-value " + expected[0],
+            expected[0].replace("INFO", "\x1bINFO"),
+            expected[0].replace("socket_command_player", "private_value"),
+            stamp + "[system_end:123] Client shutdown stage: private-value.",
+            stamp + "[main:123] https://example.invalid/private-value",
+        ]
+        for newline in ("\n", "\r\n"):
+            log = newline.join(rejected + expected) + newline
+            selected = [match.group(0).rstrip("\r") for match in re.finditer(pattern, log)][:32]
+            self.assertEqual(selected, expected)
+            self.assertNotIn("private-value", "\n".join(selected))
+        repeated = "\n".join(expected * 4)
+        self.assertEqual(len(list(re.finditer(pattern, repeated))[:32]), 32)
+
+    def test_gpu_progress_evidence_is_bounded_and_closed(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        pattern = re.search(r'\$gpuPattern = "([^"]+)"', smoke).group(1)
+        stamp = "[2026/10/11 11:36:14.936572] INFO   "
+        identity = stamp + ("[gpu_renderer_create_internal:123] GPU progress identity "
+                            "backend=[direct3d12] device=[Microsoft Basic Render Driver] "
+                            "driver=[D3D12] version=[1.2.3].")
+        before = stamp + ("[gpu_renderer_progress_log:123] GPU progress frame=1 "
+                          "phase=before-present map_submitted=2 map_completed=0.")
+        after = before.replace("before-present", "after-present")
+        rejected = [
+            identity.replace("direct3d12", "https://private.invalid"),
+            identity.replace("D3D12", "C:\\private\\driver"),
+            identity.replace("1.2.3", "a" * 97),
+            before + " token=private-value",
+            before.replace("frame=1", "frame=-1"),
+            before.replace("frame=1", "frame=" + "1" * 21),
+            before.replace("before-present", "private-value"),
+            before.replace("INFO", "\x1bINFO"),
+        ]
+        for newline in ("\n", "\r\n"):
+            text = newline.join(rejected + [identity, before, after]) + newline
+            self.assertEqual([m.group(0).rstrip("\r") for m in re.finditer(pattern, text)],
+                             [identity, before, after])
+        self.assertIn("Select-Object -First 129", smoke)
+        self.assertIn('$launcherStartInfo.Environment["ATRINIK_GPU_PROGRESS"] = "1"', smoke)
+        self.assertNotIn("$env:ATRINIK_GPU_PROGRESS", smoke)
+
+    def test_cpu_evidence_fences_handle_and_generation(self) -> None:
+        smoke = (MODULE_PATH.parents[2] / "tools/ci/smoke_windows_review_bundle.ps1").read_text()
+        helper = smoke.split("function Get-ClientCpuSample", 1)[1].split(
+            "# Retain only fixed lifecycle", 1)[0]
+        for proof in ("$Client.SafeHandle", "$Client.StartTime.ToUniversalTime().Ticks",
+                      "$handle.DangerousAddRef([ref]$retained)",
+                      "$handle.DangerousRelease()", "$sample.ProcessId -ne $Baseline.ProcessId",
+                      "$sample.Handle -ne $Baseline.Handle",
+                      "$sample.StartTicks -ne $Baseline.StartTicks",
+                      "$sample.CpuTicks -lt $Baseline.CpuTicks",
+                      "$sample.ElapsedTicks -lt $Baseline.ElapsedTicks"):
+            self.assertIn(proof, helper)
+        self.assertLess(smoke.index("$clientCpuBaseline = Get-ClientCpuSample $launcherClient"),
+                        smoke.index("$launcherClient.CloseMainWindow()"))
+        for forbidden in (".Kill(", "WaitForExit(", "Start-Sleep", "FileName", "Path"):
+            self.assertNotIn(forbidden, helper)
+
+    def test_progress_is_release_observation_with_dual_opt_in(self) -> None:
+        root = MODULE_PATH.parents[2]
+        source = (root / "client/src/client/gpu_renderer.c").read_text()
+        helper = source.split("static bool gpu_renderer_progress_enabled", 1)[1].split(
+            "static char backend", 1)[0]
+        self.assertIn('"ATRINIK_GPU_PROGRESS"', helper)
+        self.assertIn('"ATRINIK_REVIEW_NO_PAUSE"', helper)
+        self.assertNotIn("#ifdef", helper)
+        self.assertNotIn("SDL_QueryGPUFence", helper)
+        self.assertNotIn("SDL_Wait", helper)
+        present = source.split("bool gpu_renderer_present(void)", 1)[1].split(
+            "bool gpu_renderer_frame_valid", 1)[0]
+        self.assertIn("progress_frames_logged < 64", present)
+        self.assertLess(present.index('gpu_renderer_progress_log("before-present")'),
+                        present.index("result = SDL_RenderPresent(renderer)"))
+        self.assertLess(present.index("result = SDL_RenderPresent(renderer)"),
+                        present.index('"after-present"'))
+        self.assertIn("progress_map_submitted != UINT64_MAX", source)
+        self.assertIn("progress_map_completed != UINT64_MAX", source)
+        self.assertNotIn("progress_map_submitted = 0", source)
+        self.assertNotIn("progress_map_completed = 0", source)
 
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -38,7 +38,7 @@
       "inherits": "linux-coverage",
       "binaryDir": "${sourceDir}/build/llvm-coverage",
       "cacheVariables": {
-        "ATRINIK_LLVM_TOOLCHAIN": true
+        "ENABLE_PRECOMPILED_HEADERS": false
       }
     },
     {

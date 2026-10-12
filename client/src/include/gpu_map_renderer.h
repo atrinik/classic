@@ -107,6 +107,8 @@ size_t gpu_map_renderer_atlas_page_count(void);
 size_t gpu_map_renderer_atlas_allocation_count(void);
 /** Count active retained primary or auxiliary instances with compact-light owners. */
 size_t gpu_map_renderer_lit_instance_count(bool auxiliary);
+/** Hold nonblocking retirement to exercise pending work independently of GPU speed. */
+void gpu_map_renderer_conformance_defer_completion(bool defer);
 /** Return the number of submitted map command buffers not yet retired. */
 size_t gpu_map_renderer_pending_submission_count(void);
 #endif

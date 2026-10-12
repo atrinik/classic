@@ -445,7 +445,7 @@ START_TEST(test_player_status_capacity_resnapshots_membership_changes) {
         SET_FLAG(effect, FLAG_APPLIED);
         if (i % 2U == 0U) {
             char key[ATRINIK_PLAYER_STATUS_KEY_SIZE + 1U];
-            snprintf(VS(key), "capacity:%zu", i);
+            snprintf((key), sizeof((key)), "capacity:%zu", i);
             ck_assert(player_status_set(effect, key, "capacity", "Capacity test.", effect->face));
         }
         effect = object_insert_into(effect, pl, INS_NO_MERGE);
@@ -851,7 +851,7 @@ START_TEST(test_player_status_word_of_recall_cancel) {
     socket_buffer_clear(CONTR(pl)->cs);
 
     ck_assert_ptr_nonnull(spells[SP_WOR].at);
-    snprintf(VS(CONTR(pl)->savebed_map), "%s", "/emergency");
+    snprintf((CONTR(pl)->savebed_map), sizeof((CONTR(pl)->savebed_map)), "%s", "/emergency");
     ck_assert_int_eq(cast_wor(pl, pl), 1);
     object *recall = NULL;
     FOR_INV_PREPARE(pl, tmp) {

@@ -320,9 +320,9 @@ void intro_show(void) {
 
             list_add(list_servers, i, 0, node->name);
             if (node->port > 0) {
-                snprintf(VS(buf), "%d", node->port);
+                snprintf((buf), sizeof((buf)), "%d", node->port);
             } else {
-                snprintf(VS(buf), "-");
+                snprintf((buf), sizeof((buf)), "-");
             }
             list_add(list_servers, i, 1, buf);
 

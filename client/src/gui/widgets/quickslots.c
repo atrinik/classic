@@ -92,7 +92,7 @@ static void quickslots_set(widgetdata *widget, uint32_t row, uint32_t col, tag_t
 
     if (tag != 0) {
         char buf[MAX_BUF];
-        snprintf(VS(buf), "%" PRIu32, tag);
+        snprintf((buf), sizeof((buf)), "%" PRIu32, tag);
         tmp->list->text[row][col] = xstrdup(buf);
     }
 }
@@ -184,7 +184,7 @@ static int quickslots_trigger(widgetdata *widget, uint32_t row, uint32_t col) {
             spell_entry_struct *spell = spell_get(spell_path, spell_id);
             if (spell != NULL && spell->flags & SPELL_DESC_SELF) {
                 char buf[MAX_BUF];
-                snprintf(VS(buf), "/cast %s", ob->s_name);
+                snprintf((buf), sizeof((buf)), "/cast %s", ob->s_name);
                 send_command_check(buf);
                 return 1;
             }
@@ -265,7 +265,7 @@ static void list_post_column(list_struct *list, uint32_t row, uint32_t col) {
     object_show_inventory(list->surface, tmp, x, y);
 
     char buf[MAX_BUF];
-    snprintf(VS(buf), "?QUICKSLOT_%" PRIu32, col + 1);
+    snprintf((buf), sizeof((buf)), "?QUICKSLOT_%" PRIu32, col + 1);
     keybind_struct *keybind = keybind_find_by_command(buf);
 
     if (keybind != NULL) {
@@ -421,7 +421,7 @@ void socket_command_quickslots(uint8_t *data, size_t len, size_t pos) {
         uint8_t slot = packet_reader_read_uint8(&reader);
         tag_t tag = packet_reader_read_uint32(&reader);
         char buf[MAX_BUF];
-        snprintf(VS(buf), "%" PRIu32, tag);
+        snprintf((buf), sizeof((buf)), "%" PRIu32, tag);
 
         for (widgetdata *widget = cur_widget[QUICKSLOT_ID]; widget != NULL;
              widget = widget->type_next) {

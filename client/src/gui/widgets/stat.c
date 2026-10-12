@@ -120,7 +120,7 @@ static void widget_draw(widgetdata *widget) {
     SDL_Rect box;
     if (strcmp(stat_widget->texture, "text") == 0) {
         char buf[MAX_BUF];
-        snprintf(VS(buf), "%s: %" PRId64 "/%" PRId64, widget->id, curr, max);
+        snprintf((buf), sizeof((buf)), "%s: %" PRId64 "/%" PRId64, widget->id, curr, max);
         string_title(buf);
 
         if (regen > 0.0) {
@@ -202,7 +202,7 @@ static void widget_draw(widgetdata *widget) {
         }
 
         char buf[MAX_BUF];
-        snprintf(VS(buf), "stat_bar_%s", widget->id);
+        snprintf((buf), sizeof((buf)), "stat_bar_%s", widget->id);
         surface_show_fill(widget->surface, box.x, box.y, NULL, TEXTURE_CLIENT(buf), &box);
     }
 }
@@ -223,7 +223,7 @@ static int widget_event(widgetdata *widget, SDL_Event *event) {
 
         if (regen > 0.0) {
             char buf[MAX_BUF];
-            snprintf(VS(buf), "%s", widget->id);
+            snprintf((buf), sizeof((buf)), "%s", widget->id);
             string_title(buf);
             snprintfcat(VS(buf), ": %" PRId64 "/%" PRId64 "\nRegen: %2.1f/s", curr, max, regen);
             tooltip_create(event_mouse_x(event), event_mouse_y(event), FONT_ARIAL11, buf);

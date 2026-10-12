@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -66,8 +66,10 @@ typedef struct toolkit_dependency {
 #define DEPENDS(__api_name) {toolkit_##__api_name##_init, true}
 #define IMPORTS(__api_name) {toolkit_##__api_name##_init, false}
 
-#define TOOLKIT_API(...)            \
-    static bool _did_init_ = false; \
+/* Diagnostic state is optional: release builds and APIs without
+ * TOOLKIT_PROTECT() intentionally never read it. Keep its lifecycle unchanged. */
+#define TOOLKIT_API(...)                                    \
+    static bool _did_init_ __attribute__((unused)) = false; \
     static toolkit_dependency_t _dependencies_[] = {{NULL, true}, ##__VA_ARGS__, {NULL, true}}
 
 /**

@@ -106,6 +106,54 @@ static gpu_renderer_statistics_t statistics;
 #ifdef ATRINIK_GPU_CONFORMANCE_TESTS
 static gpu_renderer_conformance_fault_t conformance_fault;
 #endif
+/* Process-lifetime observations, independent of resettable benchmark statistics.
+ * Only the owned smoke fixture opts in; never query or wait on a GPU fence here. */
+static uint64_t progress_map_submitted;
+static uint64_t progress_map_completed;
+static uint64_t progress_frame;
+static unsigned progress_frames_logged;
+static bool progress_identity_logged;
+
+static bool gpu_renderer_progress_enabled(void) {
+    /* Renderer operations and these observations stay on the main thread. */
+    static bool initialized;
+    static bool enabled;
+    if (!initialized) {
+        const char *value =
+            SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "ATRINIK_GPU_PROGRESS");
+        const char *review =
+            SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "ATRINIK_REVIEW_NO_PAUSE");
+        enabled =
+            value != NULL && strcmp(value, "1") == 0 && review != NULL && strcmp(review, "1") == 0;
+        initialized = true;
+    }
+    return enabled;
+}
+
+static const char *gpu_renderer_progress_label(const char *value) {
+    size_t length = strlen(value);
+    if (length == 0 || length > 96) {
+        return "unavailable";
+    }
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)value[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+              strchr(" ._()+,-", c) != NULL)) {
+            return "unavailable";
+        }
+    }
+    return value;
+}
+
+static void gpu_renderer_progress_log(const char *phase) {
+    LOG(INFO,
+        "GPU progress frame=%" PRIu64 " phase=%s map_submitted=%" PRIu64 " map_completed=%" PRIu64
+        ".",
+        progress_frame,
+        phase,
+        progress_map_submitted,
+        progress_map_completed);
+}
 static char backend[32];
 static char device_name[256];
 static char driver_name[256];
@@ -779,6 +827,15 @@ static bool gpu_renderer_create_internal(SDL_Window *window, bool require_hardwa
         device_name,
         driver_name,
         driver_version);
+    if (gpu_renderer_progress_enabled() && !progress_identity_logged) {
+        LOG(INFO,
+            "GPU progress identity backend=[%s] device=[%s] driver=[%s] version=[%s].",
+            gpu_renderer_progress_label(backend),
+            gpu_renderer_progress_label(device_name),
+            gpu_renderer_progress_label(driver_name),
+            gpu_renderer_progress_label(driver_version));
+        progress_identity_logged = true;
+    }
     return true;
 }
 
@@ -1084,11 +1141,26 @@ bool gpu_renderer_present(void) {
     }
 #endif
     uint64_t started = gpu_renderer_timing_begin();
-    bool result =
-        SDL_SetRenderTarget(renderer, NULL) &&
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE) &&
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE) && SDL_RenderClear(renderer) &&
-        SDL_RenderTexture(renderer, frame_target, NULL, NULL) && SDL_RenderPresent(renderer);
+    bool result = SDL_SetRenderTarget(renderer, NULL) &&
+                  SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE) &&
+                  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE) &&
+                  SDL_RenderClear(renderer) &&
+                  SDL_RenderTexture(renderer, frame_target, NULL, NULL);
+    if (result) {
+        bool progress_log = gpu_renderer_progress_enabled() && progress_map_submitted != 0 &&
+                            progress_frames_logged < 64;
+        if (progress_log) {
+            if (progress_frame != UINT64_MAX) {
+                progress_frame++;
+            }
+            progress_frames_logged++;
+            gpu_renderer_progress_log("before-present");
+        }
+        result = SDL_RenderPresent(renderer);
+        if (progress_log) {
+            gpu_renderer_progress_log(result ? "after-present" : "present-error");
+        }
+    }
     statistics.draws++;
     gpu_renderer_timing_end(GPU_RENDERER_TIMING_PRESENT_WAIT, started);
     gpu_map_renderer_presentation_finish(result);
@@ -2194,6 +2266,9 @@ static void gpu_renderer_statistics_add(uint64_t *total, uint64_t value) {
 }
 
 void gpu_renderer_statistics_map_submission(size_t queue_depth) {
+    if (gpu_renderer_progress_enabled() && progress_map_submitted != UINT64_MAX) {
+        progress_map_submitted++;
+    }
     statistics.map_submissions++;
     statistics.map_queue_depth_samples++;
     gpu_renderer_statistics_add(&statistics.map_queue_depth_total, (uint64_t)queue_depth);
@@ -2202,6 +2277,9 @@ void gpu_renderer_statistics_map_submission(size_t queue_depth) {
 }
 
 void gpu_renderer_statistics_map_completion(uint64_t queue_age_ns, uint64_t frame_latency_ns) {
+    if (gpu_renderer_progress_enabled() && progress_map_completed != UINT64_MAX) {
+        progress_map_completed++;
+    }
     statistics.map_completions++;
     gpu_renderer_statistics_add(&statistics.map_queue_age_total_ns, queue_age_ns);
     gpu_renderer_statistics_add(&statistics.map_frame_latency_total_ns, frame_latency_ns);

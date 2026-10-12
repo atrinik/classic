@@ -27,9 +27,13 @@ SHARED_PATHS = (
     "LICENSE.md",
     "ATTRIBUTIONS.md",
     "cmake/AtrinikVersion.cmake",
-    "cmake/AtrinikLLVMOptIn.cmake",
+    "cmake/AtrinikLLVM.cmake",
+    "cmake/InstallWindowsRuntime.cmake",
+    "cmake/InstallLLVMRuntime.cmake",
     "cmake/toolchains/llvm.cmake",
+    "cmake/toolchains/llvm-macos.cmake",
     "tools/ci/llvm_coverage.py",
+    "tools/ci/stage_windows_runtime.py",
 )
 PROVENANCE_PREFIX = "docs/history/"
 
