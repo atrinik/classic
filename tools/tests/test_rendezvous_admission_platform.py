@@ -1,14 +1,30 @@
 # Copyright 2026 The Atrinik Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import importlib.util
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 HTTPS = ROOT / "libatrinik/tests/rendezvous_admission_https.c"
+
+
+class AdmissionHTTPSFixtureTests(unittest.TestCase):
+    def test_numeric_loopback_bind_does_not_use_host_resolver(self):
+        path = ROOT / "libatrinik/tests/rendezvous_admission_https.py"
+        spec = importlib.util.spec_from_file_location("admission_https_fixture", path)
+        fixture = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture)
+        with mock.patch("socket.getfqdn", side_effect=AssertionError("unexpected DNS lookup")):
+            with fixture.Fixture(("127.0.0.1", 0), fixture.Handler) as server:
+                self.assertEqual(server.server_name, "localhost")
+                self.assertEqual(server.server_address[0], "127.0.0.1")
+                self.assertGreater(server.server_port, 0)
+                self.assertEqual(server.server_port, server.socket.getsockname()[1])
 
 
 @unittest.skipUnless(shutil.which("cc"), "A synthetic fixture C compiler is required")

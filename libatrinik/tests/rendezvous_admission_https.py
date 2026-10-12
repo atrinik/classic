@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import socketserver
 import ssl
 import subprocess
 import sys
@@ -71,6 +72,13 @@ def certificates(root):
 class Fixture(http.server.ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
+
+    def server_bind(self):
+        # HTTPServer.server_bind reverse-resolves the numeric loopback address.
+        # Host resolver delays must not consume the native admission deadline.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
 
     def handle_error(self, request, client_address):
         # libcurl may finish TLS before rejecting the certificate hostname,
