@@ -22,15 +22,17 @@ warp = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(warp)
 
 
-def fixture(block=4096, guid=warp.GUID, age=warp.AGE):
-    # Header, two FPMs, blockmap, directory, info stream.
-    data = bytearray(block * 6)
+def fixture(block=4096, guid=warp.GUID, age=warp.AGE, dbi_age=None):
+    # Header, two FPMs, blockmap, directory, info and DBI streams.
+    data = bytearray(block * 7)
     data[:32] = warp.MAGIC
-    struct.pack_into("<6I", data, 32, block, 1, 6, 16, 0, 3)
+    struct.pack_into("<6I", data, 32, block, 1, 7, 28, 0, 3)
     struct.pack_into("<I", data, block * 3, 4)
-    struct.pack_into("<4I", data, block * 4, 2, 0xFFFFFFFF, 28, 5)
+    struct.pack_into("<7I", data, block * 4, 4, 0xFFFFFFFF, 28, 0xFFFFFFFF, 64, 5, 6)
     struct.pack_into("<3I", data, block * 5, 20000404, 0, age)
     data[block * 5 + 12:block * 5 + 28] = uuid.UUID(hex=guid).bytes_le
+    struct.pack_into("<iII", data, block * 6, -1, 19990903,
+                     age if dbi_age is None else dbi_age)
     return bytes(data)
 
 
@@ -51,7 +53,25 @@ class PdbTests(unittest.TestCase):
         for block in (512, 1024, 2048, 4096):
             with self.subTest(block=block):
                 self.assertEqual(warp.pdb_identity(fixture(block)),
-                                 {"guid": warp.GUID, "age": 1})
+                                 {"guid": warp.GUID, "age": 1, "info_age": 1})
+
+    def test_public_pdb_info_age_can_advance_but_dbi_must_match(self):
+        self.assertEqual(warp.pdb_identity(fixture(age=3, dbi_age=1)),
+                         {"guid": warp.GUID, "age": 1, "info_age": 3})
+        for info_age, dbi_age in ((0, 1), (3, 0), (3, 2), (1, 2)):
+            with self.subTest(info_age=info_age, dbi_age=dbi_age):
+                with self.assertRaisesRegex(warp.Inconclusive, "identity_mismatch"):
+                    warp.pdb_identity(fixture(age=info_age, dbi_age=dbi_age))
+
+    def test_missing_truncated_or_unsupported_dbi(self):
+        for offset, value in ((4 * 4096, 3), (4 * 4096 + 16, 0xFFFFFFFF),
+                              (4 * 4096 + 16, 63), (6 * 4096, 0),
+                              (6 * 4096 + 4, 0), (4 * 4096 + 24, 5)):
+            data = bytearray(fixture())
+            struct.pack_into("<I", data, offset, value)
+            with self.subTest(offset=offset, value=value):
+                with self.assertRaises(warp.Inconclusive):
+                    warp.pdb_identity(bytes(data))
 
     def test_identity_mismatch(self):
         for data in (fixture(guid="0" * 32), fixture(age=2)):
@@ -78,8 +98,8 @@ class PdbTests(unittest.TestCase):
 
     def test_duplicate_stream_pages(self):
         data = bytearray(fixture())
-        struct.pack_into("<I", data, 44, 20)
-        struct.pack_into("<5I", data, 4 * 4096, 2, 1, 28, 5, 5)
+        struct.pack_into("<I", data, 44, 32)
+        struct.pack_into("<8I", data, 4 * 4096, 4, 1, 28, 0xFFFFFFFF, 64, 5, 5, 6)
         with self.assertRaisesRegex(warp.Inconclusive, "overlap"):
             warp.pdb_identity(bytes(data))
 
@@ -87,10 +107,10 @@ class PdbTests(unittest.TestCase):
         data = bytearray(fixture())
         # Stream 1 crosses pages; the second page precedes its first on disk.
         data += bytes(4096)
-        struct.pack_into("<I", data, 40, 7)
-        struct.pack_into("<I", data, 44, 20)
-        struct.pack_into("<5I", data, 4 * 4096, 2, 0xFFFFFFFF, 4097, 6, 5)
-        data[6 * 4096:6 * 4096 + 28] = data[5 * 4096:5 * 4096 + 28]
+        struct.pack_into("<I", data, 40, 8)
+        struct.pack_into("<I", data, 44, 32)
+        struct.pack_into("<8I", data, 4 * 4096, 4, 0xFFFFFFFF, 4097, 0xFFFFFFFF, 64, 7, 5, 6)
+        data[7 * 4096:7 * 4096 + 28] = data[5 * 4096:5 * 4096 + 28]
         self.assertEqual(warp.pdb_identity(bytes(data))["guid"], warp.GUID)
 
 

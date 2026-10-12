@@ -102,12 +102,14 @@ def pdb_identity(data):
     directory = b"".join(data[p * block:(p + 1) * block]
                          for p in directory_pages)[:directory_size]
     streams = struct.unpack_from("<I", directory)[0]
-    require(2 <= streams <= 262144 and 4 + streams * 4 <= len(directory),
+    require(4 <= streams <= 262144 and 4 + streams * 4 <= len(directory),
             "pdb_stream_count")
     sizes = struct.unpack_from("<" + "I" * streams, directory, 4)
     require(28 <= sizes[1] <= MAX_INFO, "pdb_info_size")
+    require(64 <= sizes[3] <= MAX_PDB, "pdb_dbi_size")
     cursor = 4 + streams * 4
     info_pages = ()
+    dbi_header = None
     for index, size in enumerate(sizes):
         require(size == 0xFFFFFFFF or size <= MAX_PDB, "pdb_stream_size")
         pages = 0 if size == 0xFFFFFFFF else (size + block - 1) // block
@@ -116,15 +118,26 @@ def pdb_identity(data):
         claim(indices)
         if index == 1:
             info_pages = indices
+        elif index == 3:
+            # Only the fixed DBI header is needed; do not materialize its stream.
+            start = indices[0] * block
+            dbi_header = data[start:start + 64]
         cursor += pages * 4
     require(cursor == len(directory), "pdb_directory_trailing_data")
     info = b"".join(data[p * block:(p + 1) * block]
                     for p in info_pages)[:sizes[1]]
-    version, _signature, age = struct.unpack_from("<3I", info)
+    version, _signature, info_age = struct.unpack_from("<3I", info)
     require(version == 20000404, "pdb_info_version")
     guid = uuid.UUID(bytes_le=info[12:28]).hex
-    require(guid == GUID and age == AGE, "pdb_identity_mismatch")
-    return {"guid": guid, "age": age}
+    signature, dbi_version, dbi_age = struct.unpack_from("<iII", dbi_header)
+    require(signature == -1 and dbi_version == 19990903, "pdb_dbi_version")
+    # Microsoft PDB1::OpenValidate4: Info age may advance without relinking;
+    # DBI age identifies the image. Require the modern exact match, not its
+    # legacy DBI-age-zero exception. Expected PE GUID/age remain unchanged.
+    # https://github.com/microsoft/microsoft-pdb/blob/master/PDB/dbi/pdb.cpp
+    require(guid == GUID and info_age >= AGE and dbi_age == AGE,
+            "pdb_identity_mismatch")
+    return {"guid": guid, "age": dbi_age, "info_age": info_age}
 
 
 class SymbolRedirect(urllib.request.HTTPRedirectHandler):

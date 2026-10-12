@@ -32,7 +32,16 @@ uses a 10-second socket timeout, and accepts at most 256 MiB. The parent kills a
 reaps its Python worker after 120 seconds, covering network reads and native
 DbgHelp calls. MSF directory and info-stream allocations are capped at 4 MiB
 and 1 MiB. All referenced stream blocks are range/overlap checked and the
-embedded GUID/age must match before DbgHelp runs.
+embedded GUID and DBI age must match the captured PE identity before DbgHelp
+runs. The PDB Info-stream age must be at least the captured age; it is reported
+separately. This follows Microsoft's `PDB1::OpenValidate4` matching rule, with
+no legacy zero-DBI-age exception. Missing, truncated, unsupported, or mismatched
+DBI headers fail closed; only their fixed 64-byte header is read.
+
+The exact PDB downloaded in run `38251557757`, job `114818914837`, has the
+captured GUID, Info age 3, and DBI age 1. The captured PE age remains 1. Checking
+Info age for equality incorrectly rejected this file; accepting it requires
+the exact DBI match, not changing the expected identity or ignoring age.
 
 The worker loads OS System32 DbgHelp, uses an isolated local-only symbol path,
 and resolves the fixed RVAs with a synthetic module base and captured image
@@ -61,6 +70,8 @@ Format and API references:
 
 - [LLVM MSF format](https://llvm.org/docs/PDB/MsfFile.html)
 - [LLVM PDB info stream](https://llvm.org/docs/PDB/PdbStream.html)
+- [Microsoft PDB identity matching implementation](https://github.com/microsoft/microsoft-pdb/blob/master/PDB/dbi/pdb.cpp#L745-L817)
+- [Microsoft DbgHelp DBI age](https://learn.microsoft.com/en-us/windows/win32/api/dbghelp/ns-dbghelp-imagehlp_modulew64)
 - [Microsoft public symbols](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/microsoft-public-symbols)
 - [Microsoft Azure-based symbol store](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/debugger-download-symbols)
 - [SymLoadModuleEx](https://learn.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symloadmoduleex)
