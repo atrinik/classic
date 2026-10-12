@@ -6,6 +6,16 @@ Schema 1 is admitted only for its exact authenticated registry entry; unknown
 source fails closed.
 A source recipe change requires reviewing and updating its digest registry; an
 absent compiler descriptor never grants an automatic historical fallback.
+
+The current recipe guards drift in selected compiler/version policy, runtime
+and sound staging, dependency-acquisition CMake policy and their module routing.
+It rejects preferred local modules that would shadow those canonical inputs.
+It does not authenticate the entire executable source graph or independently
+attest compiler origin. Ordinary C, source-list CMake, protocol/pathfinding source
+graphs, generators and the compiled native worldmaker remain trusted reviewed
+inputs at the selected Git commit. Source review and fresh hosted build evidence
+establish compiler use; artifact inspection establishes package layout and runtime
+identities, not compiler origin.
 """
 # Copyright 2026 The Atrinik Project
 # SPDX-License-Identifier: GPL-2.0-or-later
@@ -62,7 +72,28 @@ LLVM_RECIPE = {
     "libatrinik/cmake/RequireClassicProtocol.cmake": "774325cab773ea8277eb3936238e4708141838169b4384d914a83fd7ee888734",
     "tools/ci/stage_windows_runtime.py": "2640baf4187bce4afca95da560cff08e4bdf8802840245c3cbf26eff372691e9",
     "cmake/toolchains/llvm.cmake": "b1eb85208a5f44a5b28956c33b92d86c4f056da1cac9355b483a84b46d55a513",
+    "server/cmake/pcpnatpmp.cmake": "f020a35f4ff28a37465d244fd49b6eb3091ee45836c2ba78346fe0844cf5ac70",
+    "server/cmake/immutable_source_cache.cmake": "0d83c3c2bd4e3d2790a4cf749ee52d5b0de8bcd7ded827386bf6dc2a9b1ba2f3",
+    "server/cmake/apply_patch_idempotent.cmake": "df536def2f9dd910cc1e6b7e96925b0047099c258f7b3b388541371600815fef",
+    "cmake/AtrinikLLVM.cmake": "5a87ecf9c1f5cadc0dcf3391c3d461eac90a6dce06b4238e625f86beed0727bc",
+    "cmake/AtrinikVersion.cmake": "49ba744105d0bdbe8e90d46d19470f4357612ac3019b26bca1c4f25e3a412266",
+    "cmake/InstallWindowsRuntime.cmake": "18efb62084ec7e2324a0a533295b0517f89f642e495659c4001cb5c4168f3c38",
+    "client/cmake/verify_windows_client_sound.cmake": "5b933e4c70315925980f38ec32d59fbc43caead94baf380281052d632f4482d9",
 }
+# Current monorepo entrypoints must keep using the authenticated shared modules.
+# Standalone source-archive overlays are not admitted by this producer recipe.
+LLVM_RECIPE_ALTERNATIVES = (
+    "client/cmake/AtrinikVersion.cmake",
+    "client/cmake/AtrinikLLVM.cmake",
+    "server/cmake/AtrinikVersion.cmake",
+    "server/cmake/AtrinikLLVM.cmake",
+    "protocol/cmake/AtrinikVersion.cmake",
+    "client/cmake/InstallWindowsRuntime.cmake",
+    "server/cmake/InstallWindowsRuntime.cmake",
+    "server/cmake/toolchains/llvm.cmake",
+    "client/tools/ci/stage_windows_runtime.py",
+    "server/tools/ci/stage_windows_runtime.py",
+)
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
@@ -84,6 +115,13 @@ def verify_recipe(root: Path, revision: str, recipe: dict[str, str]) -> None:
         local = root / path
         if local.is_symlink() or not local.is_file() or local.read_bytes() != source:
             raise ValueError(f"Windows checkout differs from selected source: {path}")
+
+
+def verify_llvm_recipe_alternatives(root: Path, revision: str) -> None:
+    for path in LLVM_RECIPE_ALTERNATIVES:
+        local = root / path
+        if git(root, "ls-tree", revision, "--", path) or local.exists() or local.is_symlink():
+            raise ValueError(f"unapproved Windows source recipe alternative: {path}")
 
 
 def verify_llvm_descriptor(root: Path, revision: str) -> None:
@@ -136,6 +174,7 @@ def select_producer(root: Path, revision: str) -> dict[str, object]:
         image, mode, epoch = MXE_IMAGE, "mxe", "mxe-gcc-general-1.16-4266256d"
     else:
         verify_recipe(root, revision, LLVM_RECIPE)
+        verify_llvm_recipe_alternatives(root, revision)
         verify_llvm_descriptor(root, revision)
         environment = {
             "PATH": "/opt/llvm-mingw/bin:/opt/atrinik-windows/bin:" + SYSTEM_PATH,

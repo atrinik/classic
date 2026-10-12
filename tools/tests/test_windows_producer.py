@@ -153,7 +153,7 @@ class WindowsProducerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'LLVM compiler descriptor'):
                 producer.select_producer(self.root, self.revision)
 
-    def test_actual_current_recipe_selects_without_registry_overrides(self) -> None:
+    def actual_current_source(self) -> tuple[Path, str]:
         repository = Path(__file__).resolve().parents[2]
         revision = subprocess.run(['git', '-C', str(repository), 'rev-parse', 'HEAD'],
                                   check=True, capture_output=True, text=True).stdout.strip()
@@ -162,6 +162,19 @@ class WindowsProducerTests(unittest.TestCase):
                         str(repository), str(source)], check=True, capture_output=True)
         subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', revision],
                        check=True, capture_output=True)
+        return source, revision
+
+    def commit_actual_source(self, source: Path) -> str:
+        subprocess.run(['git', '-C', str(source), 'add', '.'], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(source), '-c', 'commit.gpgsign=false',
+                        '-c', 'user.name=Windows producer fixture',
+                        '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet',
+                        '-m', 'source recipe fixture'], check=True, capture_output=True)
+        return subprocess.run(['git', '-C', str(source), 'rev-parse', 'HEAD'],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def test_actual_current_recipe_selects_without_registry_overrides(self) -> None:
+        source, revision = self.actual_current_source()
         result = subprocess.run([sys.executable, str(self.selector), '--source-root', str(source),
                                  '--revision', revision], check=True, capture_output=True, text=True)
         selected = json.loads(result.stdout)
@@ -175,7 +188,11 @@ class WindowsProducerTests(unittest.TestCase):
         # committed drift must not silently admit a newer source recipe.
         for path in ('client/tools/build-windows-package.sh', 'server/tools/build-windows-package.sh',
                      'client/CMakeLists.txt', 'server/CMakeLists.txt',
-                     'libatrinik/CMakeLists.txt', 'libatrinik/cmake/RequireClassicProtocol.cmake'):
+                     'libatrinik/CMakeLists.txt', 'libatrinik/cmake/RequireClassicProtocol.cmake',
+                     'cmake/AtrinikLLVM.cmake', 'cmake/AtrinikVersion.cmake',
+                     'cmake/InstallWindowsRuntime.cmake', 'client/cmake/verify_windows_client_sound.cmake',
+                     'server/cmake/pcpnatpmp.cmake', 'server/cmake/immutable_source_cache.cmake',
+                     'server/cmake/apply_patch_idempotent.cmake'):
             with self.subTest(path=path):
                 subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', revision],
                                check=True, capture_output=True)
@@ -193,6 +210,49 @@ class WindowsProducerTests(unittest.TestCase):
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertEqual(rejected.stdout, '')
                 self.assertIn('unapproved Windows source recipe: ' + path, rejected.stderr)
+
+    def test_actual_current_recipe_rejects_local_and_committed_shadow_alternatives(self) -> None:
+        source, revision = self.actual_current_source()
+        # Keep expectations independent of the selector's own alternatives list.
+        alternatives = (
+            'client/cmake/AtrinikVersion.cmake', 'client/cmake/AtrinikLLVM.cmake',
+            'server/cmake/AtrinikVersion.cmake', 'server/cmake/AtrinikLLVM.cmake',
+            'protocol/cmake/AtrinikVersion.cmake', 'client/cmake/InstallWindowsRuntime.cmake',
+            'server/cmake/InstallWindowsRuntime.cmake', 'server/cmake/toolchains/llvm.cmake',
+            'client/tools/ci/stage_windows_runtime.py', 'server/tools/ci/stage_windows_runtime.py',
+        )
+        for path in alternatives:
+            with self.subTest(path=path):
+                subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', revision],
+                               check=True, capture_output=True)
+                target = source / path
+                self.assertFalse(target.exists())
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('# unreviewed preferred recipe overlay\n')
+                with self.assertRaisesRegex(ValueError, 'unapproved Windows source recipe alternative'):
+                    producer.select_producer(source, revision)
+                target.unlink()
+                target.symlink_to('absent-overlay-target')
+                with self.assertRaisesRegex(ValueError, 'unapproved Windows source recipe alternative'):
+                    producer.select_producer(source, revision)
+                target.unlink()
+                target.write_text('# unreviewed preferred recipe overlay\n')
+                changed = self.commit_actual_source(source)
+                rejected = subprocess.run([sys.executable, str(self.selector), '--source-root',
+                                           str(source), '--revision', changed], capture_output=True, text=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertEqual(rejected.stdout, '')
+                self.assertIn('unapproved Windows source recipe alternative: ' + path, rejected.stderr)
+
+    def test_actual_current_recipe_admits_ordinary_source_revision(self) -> None:
+        source, revision = self.actual_current_source()
+        target = source / 'server/src/server/main.c'
+        target.write_bytes(target.read_bytes() + b'\n/* ordinary source change fixture */\n')
+        changed = self.commit_actual_source(source)
+        self.assertNotEqual(changed, revision)
+        result = subprocess.run([sys.executable, str(self.selector), '--source-root', str(source),
+                                 '--revision', changed], check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(result.stdout)['windows_mode'], 'llvm')
 
     def test_actual_reviewed_source_commits_when_history_is_available(self) -> None:
         repository = Path(__file__).resolve().parents[2]

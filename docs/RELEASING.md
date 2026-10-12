@@ -583,7 +583,17 @@ helper, with no Linux client package recipe. The four approved first-parent
 schema-2 revisions from `994e6fdc20da962be9c11055bda28ef5561a1dea` through
 `2349e0e14276fee251250cd451da6da0e68a3148` retain their Debian client. Other
 schema-1 source requires separate producer authentication before rebuilding.
-Windows candidate metadata independently authenticates its producer recipe.
+Windows candidate metadata checks drift in selected producer policy files and
+their routing. The current LLVM recipe authenticates the listed compiler/version,
+runtime/sound staging and dependency-acquisition CMake policy files, and rejects
+component-local alternatives that would shadow their canonical paths. It does
+not authenticate every executable source input or independently attest compiler
+origin. Ordinary C and source-list CMake changes, protocol/pathfinding source
+graphs, generators and the compiled native worldmaker remain trusted reviewed
+inputs at the exact selected source revision. Source review and fresh hosted
+build logs establish LLVM compiler use; package inspectors establish layout and
+runtime identities, not compiler origin. Final build and artifact checks remain
+required.
 Approved historical source uses the original general SDK 1.16 MXE image and
 environment; current source uses the general SDK 1.18 LLVM environment. Both
 Windows package jobs consume that selection and partition compiler caches by
