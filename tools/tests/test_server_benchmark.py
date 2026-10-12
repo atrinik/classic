@@ -122,18 +122,23 @@ class BenchmarkTests(unittest.TestCase):
     templateDir = {templates}
 """)
         trace = control / "trace.jsonl"
-        case = type(self)("test_exact_original_contract_and_later_source_commits")
-        outcome = unittest.TestResult()
-        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1",
-                                     "GIT_TRACE2_EVENT": str(trace)}):
-            case.run(outcome)
-        if outcome.skipped:
-            self.skipTest(outcome.skipped[0][1])
-        self.assertTrue(outcome.wasSuccessful(), outcome.errors + outcome.failures)
-        self.assertFalse(marker.exists(), "host hooks must not execute in fixture repositories")
-        self.assertFalse(Path(case.temporary.name).exists(), "strict cleanup must remove the complete fixture")
+        for name in ("test_exact_original_contract_and_later_source_commits",
+                     "test_compare_routes_cohorts_and_failure_cannot_publish_success"):
+            with self.subTest(fixture=name):
+                case = type(self)(name)
+                outcome = unittest.TestResult()
+                with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1",
+                                             "GIT_TRACE2_EVENT": str(trace)}):
+                    case.run(outcome)
+                self.assertTrue(outcome.wasSuccessful(), outcome.errors + outcome.failures)
+                if outcome.skipped:
+                    self.skipTest(outcome.skipped[0][1])
+                self.assertFalse(marker.exists(), "host hooks must not execute in fixture repositories")
+                self.assertFalse(Path(case.temporary.name).exists(), "strict cleanup must remove the complete fixture")
         events = [json.loads(line) for line in trace.read_text().splitlines()]
         self.assertTrue(any(event.get("name") == "commit" for event in events))
+        self.assertGreaterEqual(sum(event.get("name") == "worktree" for event in events), 4,
+                                "successful and failing comparisons must both add and remove a worktree")
         self.assertFalse(any(event.get("name") in ("maintenance", "gc") or
                              (event.get("event") == "child_start" and
                               any(word in ("maintenance", "gc") for word in event.get("argv", [])))
@@ -250,6 +255,8 @@ add_test(NAME unrelated-must-not-run COMMAND ${CMAKE_COMMAND} -E false)
         commands = []
 
         def execution(arguments, **kwargs):
+            if arguments[0] == "git":
+                return fixture_git(*arguments[1:], check=True, **kwargs)
             if arguments[0] != "docker":
                 return actual_run(arguments, **kwargs)
             commands.append(arguments)
