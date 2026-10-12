@@ -26,7 +26,7 @@ COPY tools /inputs/tools
 COPY runtime-sources /inputs/runtime-sources
 COPY dependency-inputs.lock.json /inputs/packaging.lock.json
 COPY build-dependencies.sh /inputs/
-RUN python3 /inputs/compiler.py /inputs/packaging.lock.json && bash /inputs/build-dependencies.sh && rm -rf /inputs/sources /build
+RUN python3 /inputs/compiler.py /inputs/packaging.lock.json --provision-inspector && bash /inputs/build-dependencies.sh && rm -rf /inputs/sources /build
 COPY packaging.lock.json /opt/atrinik-appimage/packaging.lock.json
 RUN chmod -R a+rX /opt/atrinik-appimage && chmod a+r /build-packages.tsv
 COPY runtime-probe.c /inputs/runtime-probe.c
