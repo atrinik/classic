@@ -41,3 +41,16 @@ directory. On macOS and other development hosts, install compatible system
 `dxc` and `spirv-cross` tools or pass a validated external cohort. CI and
 packaging generate one validated cohort and pass its absolute directory through
 `ATRINIK_GPU_SHADER_DIRECTORY` to isolated offline builds.
+
+The horizontal lighting selector shares its bilinear sample across edge,
+interior, and gap paths to keep the expanded shader graph small. Preserve exact
+integer interpolation, sample positions, and the one-sample/two-sample budget
+when changing this code. From `client/` in the pinned CPU worker, run the extracted-source
+selector check against its independent linear oracle and mutation controls:
+
+```sh
+python3 tools/tests/check_light_horizontal.py --compiler /path/to/clang++ --sanitize
+```
+
+This CPU check covers selection and sample ordering; it does not replace shader
+cohort regeneration or native GPU conformance and cold-start close checks.

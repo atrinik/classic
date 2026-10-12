@@ -2,6 +2,12 @@ name: Release Rehearsal
 
 on:
   workflow_dispatch:
+    inputs:
+      warp_symbols_only:
+        description: Resolve the fixed Windows WARP sample without running a rehearsal
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   actions: read
@@ -12,6 +18,7 @@ permissions:
 
 jobs:
   preflight:
+    if: ${{ inputs.warp_symbols_only != true }}
     name: Bind rehearsal to current main
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -40,6 +47,7 @@ jobs:
           } >>"${GITHUB_OUTPUT}"
 
   rehearse:
+    if: ${{ inputs.warp_symbols_only != true }}
     needs: preflight
     uses: ./.github/workflows/build-release-candidate.yml
     with:
@@ -48,3 +56,43 @@ jobs:
       source_epoch: ${{ needs.preflight.outputs.source_epoch }}
       tag: ${{ needs.preflight.outputs.tag }}
       version: 0.0.0
+
+  warp-symbols:
+    name: Offline WARP symbol qualification
+    if: ${{ inputs.warp_symbols_only == true }}
+    runs-on: windows-2025
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact diagnostic source
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_SHA) {
+            throw 'Diagnostic checkout identity mismatch'
+          }
+      - name: Validate pure symbol fixtures
+        shell: pwsh
+        run: |
+          python -B -m unittest discover -s tools/tests -p test_qualify_warp_symbols.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Symbol fixtures failed' }
+      - name: Resolve fixed captured RVAs
+        shell: pwsh
+        run: |
+          python -B tools/ci/qualify_warp_symbols.py
+          if ($LASTEXITCODE -ne 0) { throw 'Symbol qualification is inconclusive' }
+      - name: Retain bounded symbol report only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: warp-symbol-qualification-${{ github.sha }}-${{ github.run_attempt }}
+          path: warp-symbol-qualification.json
+          if-no-files-found: error
+          retention-days: 7
