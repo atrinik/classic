@@ -99,3 +99,9 @@
 - Run every affected module's tests, `python3 tools/verify_import_history.py`,
   and `git diff --check` before finishing. Keep generated files in ignored build
   directories and preserve unrelated work.
+- Dependency review is advisory, including operational errors. Before merge, the
+  implementing Codex must read its PR comment or job summary, fix actionable
+  introduced risk, or record explicit maintainer acceptance of existing risk.
+  Fork and Dependabot comment permissions may be restricted; read the job
+  summary when the comment is unavailable. Validate workflow changes with
+  actionlint and `git diff --check`.
