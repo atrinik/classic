@@ -69,7 +69,8 @@ archive, restoration manifest and complete checksum inventory are pinned in
 `dependencies.lock.json`; acquisition revalidates installed bytes even when a
 managed dependency marker matches. The product preserves every original logical
 sound path and attribution, with Vorbis or Opus contents that the packaged mixer
-can decode. A `.mid` or `.flac` logical filename can therefore contain Ogg Opus;
+can decode. A `.mid` logical filename can therefore contain Ogg Opus, while FLAC
+replacement sources are rendered at their existing logical `.ogg` paths;
 do not substitute the original source archive or infer codecs from extensions.
 
 Linux x86_64 releases provide

@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "image": "ghcr.io/atrinik/classic-dependencies",
-  "tag": "materials-4fea6867b643409e63cdbee275923c2867a0e897536e37cd58b891575e0321f4",
-  "digest": "sha256:17117f0c78846e8d9cd2b91011371d050a9027c61663218f7cba0fcb8dccbbc7",
-  "material_digest": "sha256:4fea6867b643409e63cdbee275923c2867a0e897536e37cd58b891575e0321f4",
-  "bundle_manifest_sha256": "sha256:0797867d767709993d6fbb1e2a7dc26ed1fda50fe40c3eae9a8954ab6b769cb9",
+  "tag": "materials-a4b12f1f9a97914a928b9ab63b4fccf34acbb0153d5bff60f429e9aee1458d26",
+  "digest": "sha256:020415068facc0d3218f6ff8938cdddf4f63a06fc26daa603bcc19816474e3d7",
+  "material_digest": "sha256:a4b12f1f9a97914a928b9ab63b4fccf34acbb0153d5bff60f429e9aee1458d26",
+  "bundle_manifest_sha256": "sha256:0ccefb6d1a5aa4cf9a7b5d258c0e73a91518a49b6d9ce15500b964b89b42dbfe",
   "source_locks": {
     "client/dependencies.lock.json": "254e81d8b4ee0b15e50b9da7f67d3440852a5f4366025a84affdcc9065ce1636",
     "server/dependencies.lock.json": "166d95f01ae59c0ac5ff8d96153627be9bc3fd6f926cf6836efbcc3e3b316a63",
@@ -12,7 +12,7 @@
   },
   "acquisition_contracts": {
     "server/tools/dependencies.py": "b50eaccc93c8f09a4ccb55afc909336e225354db5cd6fa24681c746bc7c9f552",
-    "tools/release/classic_sound.py": "fa31a8974b0c9a2a62f44be3bedecfdec572c206ee339e094e48ecc5f4760789",
+    "tools/release/classic_sound.py": "ba443a23b225b07bb0a56da3dd69374deaa49262439bc8f2f0ba41635613e8b2",
     "tools/release/dependency_bundle.py": "0e5f4b333bd90f0700128f45520eafe278b34b34b964163886660074b96e98e9"
   },
   "verified_input_bundle_digest": "sha256:cc3cc550ad4e8f0a3a6664378d88f3d3f6dc02adb067d53cfc026d703815c164"

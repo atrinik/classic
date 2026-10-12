@@ -550,7 +550,7 @@ the source/license appendix for the bundled application libraries and the
 static runtime, including its musl, FUSE and squashfuse components.
 
 Client sound inputs use the released `atrinik-sound-classic-runtime` product,
-whose converted Opus payloads retain the original MIDI/FLAC logical paths.
+whose converted Opus payloads retain the existing logical sound paths.
 The canonical sound lock pins the archive, restoration manifest and complete
 checksum inventory. Acquisition and matching-marker reuse verify every media
 and notice byte. Assembly and trusted AppImage inspection repeat this check

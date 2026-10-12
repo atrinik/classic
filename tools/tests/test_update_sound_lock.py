@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import tarfile
 from pathlib import Path
 import tempfile
 import unittest
@@ -16,6 +17,9 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC is not None and SPEC.loader is not None
 UPDATER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPDATER)
+FIXTURE_SPEC = importlib.util.spec_from_file_location("sound_fixtures", ROOT / "tools/tests/test_classic_sound.py")
+sound_fixtures = importlib.util.module_from_spec(FIXTURE_SPEC)
+FIXTURE_SPEC.loader.exec_module(sound_fixtures)
 
 
 class FakeAPI(UPDATER.GitHubAPI):
@@ -23,6 +27,10 @@ class FakeAPI(UPDATER.GitHubAPI):
         self.release_pages = [releases]
         self.commits: dict[str, str] = {}
         self.comparisons: dict[tuple[str, str], str] = {}
+
+    def commit_tree(self, repository: str, commit: str) -> str:
+        assert repository == "atrinik/sound"
+        return "e" * 40
 
     def get(self, endpoint: str) -> object:
         if "/releases?" in endpoint:
@@ -38,6 +46,60 @@ class FakeAPI(UPDATER.GitHubAPI):
 
 
 class UpdateSoundLockTests(unittest.TestCase):
+    def test_runtime_candidate_archive_requires_supported_linked_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "sound"
+            coordinate = sound_fixtures.make_tree(root)
+            archive = base / "runtime.tar.gz"
+            def pack():
+                with tarfile.open(archive, "w:gz") as output:
+                    output.add(root, arcname="sound-v1.0.0")
+            pack()
+            manifest_path = root / "classic-runtime-manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            tree = manifest["source_tree"]
+            self.assertEqual(UPDATER._runtime_pins(archive, "v1.0.0", "a" * 40, base,
+                                                  expected_tree=tree),
+                             {key: coordinate[key] for key in UPDATER.RUNTIME_PINS})
+            with self.assertRaisesRegex(UPDATER.UpdateError, "source identity"):
+                UPDATER._runtime_pins(archive, "v1.0.0", "a" * 40, base,
+                                       expected_tree="0" * 40)
+            for field, value in (("codec", []), ("duration_seconds", 10**1000)):
+                with self.subTest(field=field):
+                    sound_fixtures.make_tree(root)
+                    malformed = json.loads(manifest_path.read_text())
+                    malformed["assets"][0]["output"][field] = value
+                    manifest_path.write_text(json.dumps(malformed))
+                    checksum_path = root / "SHA256SUMS"
+                    checksum_path.write_text("".join(
+                        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n"
+                        for path in sorted(root.rglob("*")) if path.is_file() and path != checksum_path
+                    ))
+                    pack()
+                    with self.assertRaisesRegex(UPDATER.UpdateError, "identity or format"):
+                        UPDATER._runtime_pins(archive, "v1.0.0", "a" * 40, base, expected_tree=tree)
+            sound_fixtures.make_tree(root)
+            manifest["schema_version"] = 999
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+            checksum_path = root / "SHA256SUMS"
+            checksum_path.write_text("".join(
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n"
+                for path in sorted(root.rglob("*")) if path.is_file() and path != checksum_path
+            ))
+            pack()
+            with self.assertRaisesRegex(UPDATER.UpdateError, "supported v1 schema"):
+                UPDATER._runtime_pins(archive, "v1.0.0", "a" * 40, base, expected_tree=tree)
+
+    def test_source_commit_tree_requires_an_exact_git_object(self) -> None:
+        api = UPDATER.GitHubAPI()
+        with mock.patch.object(api, "get", return_value={"tree": {"sha": "e" * 40}}):
+            self.assertEqual(api.commit_tree("atrinik/sound", "a" * 40), "e" * 40)
+        for value in (None, {}, {"tree": {}}, {"tree": {"sha": "not-a-tree"}}):
+            with mock.patch.object(api, "get", return_value=value):
+                with self.assertRaisesRegex(UPDATER.UpdateError, "source commit tree"):
+                    api.commit_tree("atrinik/sound", "a" * 40)
+
     def coordinate(self, tag: str, commit: str, digest: str) -> dict[str, object]:
         return {
             "name": "sound",

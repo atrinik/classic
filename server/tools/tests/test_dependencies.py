@@ -76,35 +76,22 @@ class DependencyTests(unittest.TestCase):
 
     def make_runtime_archive(self) -> tuple[Path, dict[str, object]]:
         tree = self.root / "runtime"
-        payload = b"OggS\x00\x02" + b"\x00" * 8 + b"\x01\x00\x00\x00" + b"\x00" * 8 + b"\x01\x08\x01vorbis\x00"
-        sound = tree / "effects/test.mid"
-        sound.parent.mkdir(parents=True)
-        sound.write_bytes(payload)
-        manifest = {
-            "source_commit": "a" * 40, "release_tag": "v1.2.3",
-            "publishable": True, "playtest_only": False,
-            "assets": [{"logical_path": "effects/test.mid", "output": {
-                "codec": "vorbis", "container": "ogg",
-                "sha256": hashlib.sha256(payload).hexdigest(), "size_bytes": len(payload),
-            }}],
-            "logical_path_count": 1, "copied_vorbis_count": 1, "converted_opus_count": 0,
-        }
-        manifest_path = tree / "classic-runtime-manifest.json"
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-        checksums = "".join(
-            f"{hashlib.sha256((tree / name).read_bytes()).hexdigest()}  {name}\n"
-            for name in ("classic-runtime-manifest.json", "effects/test.mid")
+        fixture_spec = importlib.util.spec_from_file_location(
+            "classic_sound_fixture",
+            Path(__file__).resolve().parents[3] / "tools/tests/test_classic_sound.py",
         )
-        checksum_path = tree / "SHA256SUMS"
-        checksum_path.write_text(checksums, encoding="utf-8")
+        assert fixture_spec is not None and fixture_spec.loader is not None
+        fixture = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture)
+        pins = fixture.make_tree(tree, commit="a" * 40, tag="v1.2.3")
         archive = self.root / "runtime.tar.gz"
         with tarfile.open(archive, "w:gz") as output:
             for path in tree.rglob("*"):
                 output.add(path, arcname=f"sound-v1.2.3/{path.relative_to(tree)}", recursive=False)
         return archive, self.runtime_dependency(
             archive,
-            runtime_manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
-            runtime_checksums_sha256=hashlib.sha256(checksum_path.read_bytes()).hexdigest(),
+            runtime_manifest_sha256=pins["runtime_manifest_sha256"],
+            runtime_checksums_sha256=pins["runtime_checksums_sha256"],
         )
 
     def test_installs_and_verifies_pinned_archive(self) -> None:

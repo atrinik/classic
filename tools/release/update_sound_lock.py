@@ -132,6 +132,14 @@ class GitHubAPI:
             raise UpdateError("GitHub compare response is malformed")
         return str(value["status"])
 
+    def commit_tree(self, repository: str, commit: str) -> str:
+        value = self.get(f"repos/{repository}/git/commits/{commit}")
+        tree = value.get("tree") if isinstance(value, dict) else None
+        digest = tree.get("sha") if isinstance(tree, dict) else None
+        if not isinstance(digest, str) or COMMIT_RE.fullmatch(digest) is None:
+            raise UpdateError("GitHub source commit tree is malformed")
+        return digest
+
 
 def download_bounded(url: str, output: BinaryIO, maximum: int) -> tuple[str, int]:
     parsed = urllib.parse.urlparse(url)
@@ -253,7 +261,8 @@ def checksum_for_release(
     return expected, archive, archive_url
 
 
-def _runtime_pins(archive: Path, tag: str, commit: str, directory: Path) -> dict[str, str]:
+def _runtime_pins(archive: Path, tag: str, commit: str, directory: Path,
+                  *, expected_tree: str | None = None) -> dict[str, str]:
     """Verify the published restoration tree before accepting its inner pins."""
     root = Path(__file__).resolve().parents[2]
     modules = []
@@ -272,7 +281,7 @@ def _runtime_pins(archive: Path, tag: str, commit: str, directory: Path) -> dict
                 "runtime_manifest_sha256": fetcher.sha256_file(tree / verifier.MANIFEST),
                 "runtime_checksums_sha256": fetcher.sha256_file(tree / verifier.CHECKSUMS),
             }
-            verifier.verify_tree(tree, {"tag": tag, "commit": commit, **pins})
+            verifier.verify_tree(tree, {"tag": tag, "commit": commit, "source_tree": expected_tree, **pins})
         except (OSError, ValueError, fetcher.DependencyError) as error:
             raise UpdateError(f"invalid published Classic restoration product: {error}") from error
     return pins
@@ -300,7 +309,8 @@ def verify_candidate(
         "commit": commit,
         "url": archive_url,
         "sha256": actual_digest,
-        **_runtime_pins(archive_path, tag, commit, directory),
+        **_runtime_pins(archive_path, tag, commit, directory,
+                        expected_tree=api.commit_tree(SOUND_REPOSITORY, commit)),
     }
 
 
@@ -382,7 +392,8 @@ def verify_current_coordinate(
         if actual_url != url:
             raise UpdateError("release asset URL differs from the lock")
         if runtime:
-            pins = _runtime_pins(archive_path, str(tag), commit, directory)
+            pins = _runtime_pins(archive_path, str(tag), commit, directory,
+                                  expected_tree=api.commit_tree(SOUND_REPOSITORY, commit))
             if any(current[key] != pins[key] for key in RUNTIME_PINS):
                 raise UpdateError("restoration metadata pins differ from the lock")
         return version
