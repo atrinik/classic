@@ -21,10 +21,17 @@ public static class AtrinikStackFixtureWindow {
     private static extern bool DestroyWindow(IntPtr window);
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr LoadLibraryExW(string name, IntPtr file, uint flags);
+    [DllImport("kernel32.dll")]
+    private static extern bool FreeLibrary(IntPtr module);
     public static void Run() {
         IntPtr window = CreateWindowExW(0, "STATIC", "", 0, 0, 0, 1, 1,
             IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
         if (window == IntPtr.Zero) throw new InvalidOperationException("fixture_window_failed");
+        // Load only the public system image; do not create a GPU device or draw.
+        IntPtr warp = LoadLibraryExW("d3d10warp.dll", IntPtr.Zero, 0x00000800);
+        if (warp == IntPtr.Zero) throw new InvalidOperationException("fixture_warp_load_failed");
         uint busyId = 0;
         int stop = 0;
         using var ready = new ManualResetEventSlim(false);
@@ -49,6 +56,7 @@ public static class AtrinikStackFixtureWindow {
             Volatile.Write(ref stop, 1);
             busy.Join(2000);
             DestroyWindow(window);
+            FreeLibrary(warp);
         }
     }
 }
@@ -96,6 +104,107 @@ if ($null -ne (Get-ClientCpuSample $cpuClient)) {
 }
 Write-Host "Actual owned-process CPU diagnostics and generation rejection fixtures passed."
 $source = Get-Content -Raw -LiteralPath $smoke
+$warpBlocks = @([regex]::Matches($source, "(?s)Add-Type -TypeDefinition @'\r?\n(.*?)\r?\n'@") |
+    Where-Object { $_.Groups[1].Value.Contains("class AtrinikReviewWarpIdentityProbe") })
+if ($warpBlocks.Count -ne 1) { throw "Expected one WARP identity observer" }
+Add-Type -TypeDefinition $warpBlocks[0].Groups[1].Value
+$peParser = [AtrinikReviewWarpIdentityProbe].GetMethod("Parse",
+    [System.Reflection.BindingFlags]"NonPublic,Static")
+function Invoke-WarpParser([byte[]]$Data, [bool]$Mapped = $false) {
+    $reader = [Func[uint64,int,byte[]]]{
+        param([uint64]$Offset, [int]$Count)
+        $result = [byte[]]::new($Count)
+        [Array]::Copy($Data, [long]$Offset, $result, 0, $Count)
+        return ,$result
+    }.GetNewClosure()
+    return $peParser.Invoke($null, @($reader, $Mapped, [uint64]$Data.Length))
+}
+function Set-U32([byte[]]$Data, [int]$Offset, [uint32]$Value) {
+    [BitConverter]::GetBytes($Value).CopyTo($Data, $Offset)
+}
+function Set-U16([byte[]]$Data, [int]$Offset, [uint16]$Value) {
+    [BitConverter]::GetBytes($Value).CopyTo($Data, $Offset)
+}
+$pe = [byte[]]::new(2048)
+Set-U16 $pe 0 0x5a4d
+Set-U32 $pe 60 128
+Set-U32 $pe 128 0x4550
+Set-U16 $pe 132 0x8664
+Set-U16 $pe 134 1
+Set-U32 $pe 136 0x12345678
+Set-U16 $pe 148 240
+Set-U16 $pe 150 0x2000
+Set-U16 $pe 152 0x20b
+Set-U32 $pe 208 8192
+Set-U32 $pe 260 16
+Set-U32 $pe 312 4096
+Set-U32 $pe 316 28
+Set-U32 $pe 400 1024
+Set-U32 $pe 404 4096
+Set-U32 $pe 408 1024
+Set-U32 $pe 412 512
+$pdbPath = [Text.Encoding]::ASCII.GetBytes("C:\PRIVATE\build\d3d10warp.pdb" + [char]0)
+Set-U32 $pe 524 2
+Set-U32 $pe 528 (24 + $pdbPath.Length)
+Set-U32 $pe 532 4128
+Set-U32 $pe 536 544
+Set-U32 $pe 544 0x53445352
+([Guid]"00112233-4455-6677-8899-aabbccddeeff").ToByteArray().CopyTo($pe, 548)
+Set-U32 $pe 564 1
+$pdbPath.CopyTo($pe, 568)
+$identity = Invoke-WarpParser $pe
+if ($identity.Key -cne "12345678:00002000:00112233445566778899aabbccddeeff:1") {
+    throw "PE identity or little-endian GUID mismatch"
+}
+$mapped = [byte[]]::new(8192)
+[Array]::Copy($pe, 0, $mapped, 0, 512)
+[Array]::Copy($pe, 512, $mapped, 4096, 1024)
+if ((Invoke-WarpParser $mapped $true).Key -cne $identity.Key) {
+    throw "Loaded-image RVA and disk-offset identities disagree"
+}
+foreach ($change in @(
+    @(0, 0), @(60, 65537), @(132, 0), @(134, 97), @(148, 16), @(150, 0),
+    @(152, 0), @(208, 67108865), @(260, 6), @(312, [uint32]::MaxValue),
+    @(316, 4097), @(316, 27), @(524, 0), @(528, 24), @(528, 4097),
+    @(532, [uint32]::MaxValue), @(536, 545), @(544, 0), @(564, 0), @(592, 0)
+)) {
+    $invalidPe = [byte[]]$pe.Clone()
+    Set-U32 $invalidPe ([int]$change[0]) ([uint32]$change[1])
+    $rejected = $false
+    try { $null = Invoke-WarpParser $invalidPe } catch { $rejected = $true }
+    if (-not $rejected) { throw "Malformed PE accepted at offset $($change[0])" }
+}
+foreach ($length in @(0, 63, 151, 391, 539, 570)) {
+    $truncated = [byte[]]::new($length)
+    [Array]::Copy($pe, $truncated, $length)
+    $rejected = $false
+    try { $null = Invoke-WarpParser $truncated } catch { $rejected = $true }
+    if (-not $rejected) { throw "Truncated PE accepted" }
+}
+Write-Host "Actual WARP PE/RSDS parser, mapped/file identity, malformed and private-path fixtures passed."
+# Exercise real artifact plumbing too: the async result must be retained without
+# escaping through normal-success stdout. This fake completed observer has no IO.
+$saveDefinition = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq "Save-ClientLifecycleEvidence"
+}, $true)
+. ([scriptblock]::Create($saveDefinition.Extent.Text))
+$artifactRoot = Join-Path ([IO.Path]::GetTempPath()) ("atrinik-warp-artifact-fixture-" + [Guid]::NewGuid())
+$null = New-Item -ItemType Directory -Path $artifactRoot
+try {
+    $packagePath = Join-Path $artifactRoot "fixture.zip"
+    $Revision = "a" * 40
+    $clientWarpIdentityPending = [AtrinikReviewWarpIdentityProbe+Pending]::new()
+    $resultField = $clientWarpIdentityPending.GetType().GetField("Result",
+        [System.Reflection.BindingFlags]"NonPublic,Instance")
+    $resultField.SetValue($clientWarpIdentityPending, "warp_identity_fixture")
+    $output = & { Save-ClientLifecycleEvidence (Join-Path $artifactRoot "missing.log") } 6>&1 | Out-String
+    $artifact = Get-Content -Raw (Join-Path $artifactRoot "review-client-lifecycle.log")
+    if (-not $artifact.Contains("WARP module identity: warp_identity_fixture") -or
+        $output.Contains("warp_identity_fixture") -or $output.Contains("WARP module identity:")) {
+        throw "Private WARP artifact retention/stdout boundary failed"
+    }
+} finally { Remove-Item -LiteralPath $artifactRoot -Recurse -Force }
 $fixtureSource = Get-Content -Raw -LiteralPath $PSCommandPath
 $childBlocks = @([regex]::Matches($fixtureSource, "(?s)Add-Type -TypeDefinition @'\r?\n(.*?)\r?\n'@") |
     Where-Object { $_.Groups[1].Value.Contains("class AtrinikStackFixtureWindow") })
@@ -252,6 +361,32 @@ $cancelled = [Activator]::CreateInstance($suspensionType, $true)
 $cancelled.Cancel()
 if ($cancelled.Begin([IntPtr]::Zero)) { throw "Cancelled observer attempted a late suspension" }
 
+# Build the very same negative inputs in both the portable and native paths.
+# Arithmetic must be grouped before PowerShell's comma-array expression.
+function Get-WarpGenerationChanges([int]$ProcessId, [long]$Started,
+                                   [uint64]$Address, [uint64]$Size) {
+    return @(
+        @(($ProcessId + 1), $Started, $Address, $Size),
+        @($ProcessId, ($Started + 1), $Address, $Size),
+        @($ProcessId, $Started, ($Address + 1), $Size),
+        @($ProcessId, $Started, $Address, ($Size + 1))
+    )
+}
+$generationInputs = @(Get-WarpGenerationChanges 101 638900000000000000 140700000000000 4194304)
+if ($generationInputs.Count -ne 4) { throw "Generation fixture vector count changed" }
+$original = @([int]101, [long]638900000000000000, [uint64]140700000000000, [uint64]4194304)
+for ($row = 0; $row -lt 4; $row++) {
+    if ($generationInputs[$row].Count -ne 4) { throw "Generation fixture vector shape changed" }
+    for ($column = 0; $column -lt 4; $column++) {
+        $expected = $original[$column]
+        if ($row -eq $column) { $expected++ }
+        if ($generationInputs[$row][$column] -ne $expected) {
+            throw "Generation fixture must change exactly one scalar by one"
+        }
+    }
+}
+Write-Host "Actual native generation-vector construction and single-field mutations passed."
+
 if ($Native) {
     if (-not $IsWindows -or [IntPtr]::Size -ne 8) { throw "Native stack fixture requires Windows x64" }
     $start = [System.Diagnostics.ProcessStartInfo]::new()
@@ -273,6 +408,28 @@ if ($Native) {
         }
         $window = [IntPtr]::new([long]$Matches[1])
         $busyThread = [uint32]$Matches[2]
+        $warp = @($child.Modules | Where-Object { $_.ModuleName -ieq "d3d10warp.dll" })
+        if ($warp.Count -ne 1) { throw "Native fixture WARP image unavailable" }
+        $warpAddress = [uint64]$warp[0].BaseAddress.ToInt64()
+        $warpSize = [uint64]$warp[0].ModuleMemorySize
+        $started = $child.StartTime.ToUniversalTime().Ticks
+        $identity = [AtrinikReviewWarpIdentityProbe]::Snapshot($child, $child.Id, $started, $warpAddress, $warpSize)
+        if ($identity -notmatch '^module=d3d10warp.dll sha256=[0-9a-f]{64} timestamp=[0-9a-f]{8} image_size=[0-9a-f]{8} pdb=d3d10warp.pdb guid=[0-9a-f]{32} age=[0-9a-f]{1,8}$') {
+            throw "Native loaded WARP identity mismatch: $identity"
+        }
+        $duplicate = [System.Diagnostics.Process]::GetProcessById($child.Id)
+        try { $pendingIdentity = [AtrinikReviewWarpIdentityProbe]::StartLoaded($duplicate) }
+        finally { $duplicate.Dispose() }
+        if ($pendingIdentity.Finish() -cne $identity) {
+            throw "Asynchronous WARP identity/retained handle after caller disposal differed"
+        }
+        foreach ($changed in (Get-WarpGenerationChanges $child.Id $started $warpAddress $warpSize)) {
+            $invalidIdentity = [AtrinikReviewWarpIdentityProbe]::Snapshot($child, [int]$changed[0],
+                [long]$changed[1], [uint64]$changed[2], [uint64]$changed[3])
+            if ($invalidIdentity -notin @("warp_identity_wrong_process", "warp_identity_unavailable")) {
+                throw "Native WARP identity accepted changed process/module generation"
+            }
+        }
         $threadBaseline = [AtrinikReviewCloseStackProbe]::CaptureCpuBaseline($child)
         if ($null -eq $threadBaseline) { throw "Native thread CPU baseline unavailable" }
         try {
@@ -311,6 +468,7 @@ if ($Native) {
         }
         Write-Host "Native owned-window stack capture and natural child exit passed: $observed"
         Write-Host "Native owned CPU-busy worker ranking and bounded stack passed: $cpuRanked"
+        Write-Host "Native loaded System32 WARP identity and generation fences passed: $identity"
     } finally {
         if ($child.Id -and -not $child.HasExited) {
             $child.Kill($true)
