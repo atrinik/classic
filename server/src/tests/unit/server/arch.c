@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -90,6 +90,59 @@ START_TEST(test_arch_find) {
 }
 END_TEST
 
+/* Spell caches borrow from archetypes and must follow each server lifetime. */
+START_TEST(test_spells_reinitialize) {
+    for (int lifetime = 0; lifetime < 2; lifetime++) {
+        check_teardown();
+        check_setup();
+
+        /* Scan every cached spell, independent of treasure-generation RNG. */
+        int spell = spell_get_random(MAXLEVEL, SPELL_USE_BALM);
+        ck_assert_int_ge(spell, 0);
+        ck_assert_int_lt(spell, NROFREALSPELLS);
+        ck_assert((spells[spell].spell_use & SPELL_USE_BALM) != 0);
+        archetype_t *chosen = arch_find(spells[spell].id);
+        ck_assert_ptr_ne(chosen, NULL);
+        ck_assert_int_le(chosen->clone.level, MAXLEVEL);
+
+        for (int i = 0; i < NROFREALSPELLS; i++) {
+            archetype_t *at = arch_find(spells[i].id);
+            ck_assert_ptr_ne(at, NULL);
+            ck_assert_ptr_eq(spells[i].at, at);
+            ck_assert_int_eq(at->clone.stats.sp, i);
+            ck_assert_ptr_eq(spellarch[i],
+                             spells[i].archname != NULL ? arch_find(spells[i].archname) : NULL);
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_spells_book_eligibility) {
+    archetype_t *at = arch_find(spells[0].id);
+    ck_assert_ptr_ne(at, NULL);
+    int64_t original_value = at->clone.value;
+    int other_flags = spells[0].spell_use & ~SPELL_USE_BOOK;
+
+    /* An initialization call must refresh both directions of this derived bit. */
+    at->clone.value = 1;
+    init_spells();
+    ck_assert_int_eq(spells[0].spell_use, other_flags | SPELL_USE_BOOK);
+
+    at->clone.value = 0;
+    init_spells();
+    ck_assert_int_eq(spells[0].spell_use, other_flags);
+
+    at->clone.value = 1;
+    init_spells();
+    ck_assert_int_eq(spells[0].spell_use, other_flags | SPELL_USE_BOOK);
+
+    at->clone.value = original_value;
+    init_spells();
+    ck_assert_int_eq(spells[0].spell_use,
+                     other_flags | (original_value != 0 ? SPELL_USE_BOOK : 0));
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("arch");
     TCase *tc_core = tcase_create("Core");
@@ -102,6 +155,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_arch_to_object);
     tcase_add_test(tc_core, test_arch_get);
     tcase_add_test(tc_core, test_arch_find);
+    tcase_add_test(tc_core, test_spells_reinitialize);
+    tcase_add_test(tc_core, test_spells_book_eligibility);
 
     return s;
 }
