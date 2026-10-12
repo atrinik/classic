@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 import uuid
+import urllib.response
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -220,6 +221,36 @@ class DownloadTests(unittest.TestCase):
                 else:
                     with self.assertRaises(warp.Inconclusive):
                         warp.download_pdb(path, opener=opener)
+
+    def test_real_opener_redirect_dispatch_with_offline_transport(self):
+        destination = "https://" + warp.SYMBOL_BLOB_HOST + "/fixture?sig=private-fixture"
+        observed = []
+
+        class OfflineHTTPS(warp.urllib.request.HTTPSHandler):
+            def https_open(self, request):
+                observed.append((request.full_url, request.header_items()))
+                headers = Message()
+                if len(observed) == 1:
+                    headers["Location"] = destination
+                    response = urllib.response.addinfourl(
+                        io.BytesIO(b"unused redirect body"), headers, request.full_url, 302)
+                else:
+                    response = urllib.response.addinfourl(
+                        io.BytesIO(b"x" * 56), headers, request.full_url, 200)
+                response.msg = "fixture"
+                return response
+
+        redirect = warp.SymbolRedirect()
+        opener = warp.urllib.request.build_opener(
+            warp.urllib.request.ProxyHandler({}), redirect, OfflineHTTPS())
+        opener.symbol_redirect = redirect
+        with tempfile.TemporaryDirectory() as temporary:
+            result = warp.download_pdb(Path(temporary) / "pdb", opener=opener)
+        self.assertEqual(result["bytes"], 56)
+        self.assertEqual([url for url, _ in observed], [warp.URL, destination])
+        self.assertFalse(any(name.lower() in ("authorization", "cookie")
+                             for name, _ in observed[1][1]))
+        self.assertNotIn("private-fixture", json.dumps(result))
 
     def test_opener_has_no_proxy_or_auth_handlers(self):
         opener = warp.make_opener()
