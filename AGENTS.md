@@ -105,3 +105,13 @@
 - Run every affected module's tests, `python3 tools/verify_import_history.py`,
   and `git diff --check` before finishing. Keep generated files in ignored build
   directories and preserve unrelated work.
+- Dependency review is advisory, including operational errors. Before merge, the
+  implementing Codex must inspect the latest run for the current PR head and
+  read its job summary even when a bot comment exists, fix actionable introduced
+  risk, or record explicit maintainer acceptance of existing risk. A comment
+  from an earlier run is not current evidence; unavailable reports leave results
+  unknown. Reporting applies to eligible PR runs where this workflow exists in
+  the relevant PR/merge revision; removing branch filters does not backport it.
+  License metadata reporting does not automate compatibility policy: existing
+  repository license and provenance constraints remain authoritative. Validate
+  workflow changes with actionlint and `git diff --check`.
