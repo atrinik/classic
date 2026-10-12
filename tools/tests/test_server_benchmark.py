@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -14,6 +15,14 @@ from tools.ci import server_benchmark as benchmark
 
 ROOT = Path(__file__).resolve().parents[2]
 HISTORICAL_BASE = "a64ea9f7297772f652802147c2ec103152b3edc9"
+
+
+def fixture_git(*arguments, **kwargs):
+    # Commits can return while detached auto-maintenance still writes the clone.
+    # Keep task-owned fixtures independent of host maintenance, hooks and templates.
+    return subprocess.run(["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0",
+                           "-c", "core.hooksPath=/dev/null", "-c", "init.templateDir=",
+                           *arguments], **kwargs)
 
 
 class BenchmarkTests(unittest.TestCase):
@@ -44,8 +53,8 @@ class BenchmarkTests(unittest.TestCase):
         destination.write_text(content)
 
     def git(self, *arguments):
-        return subprocess.run(["git", "-C", str(self.root), *arguments], check=True,
-                              capture_output=True, text=True).stdout.strip()
+        return fixture_git("-C", str(self.root), *arguments, check=True,
+                           capture_output=True, text=True).stdout.strip()
 
     def commit(self):
         self.git("add", ".")
@@ -68,23 +77,67 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(set(result["locks"]), set(benchmark.LOCKS))
 
     def test_exact_original_contract_and_later_source_commits(self):
-        exists = subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e",
-                                 HISTORICAL_BASE + "^{commit}"], capture_output=True)
+        exists = fixture_git("-C", str(ROOT), "cat-file", "-e",
+                             HISTORICAL_BASE + "^{commit}", capture_output=True)
         if exists.returncode:
             self.skipTest("original benchmark contract unavailable in shallow history")
         source = Path(self.temporary.name) / "historical"
-        subprocess.run(["git", "clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(source)], check=True)
-        subprocess.run(["git", "-C", str(source), "checkout", "--quiet", "--detach", HISTORICAL_BASE], check=True)
+        fixture_git("clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(source), check=True)
+        fixture_git("-C", str(source), "checkout", "--quiet", "--detach", HISTORICAL_BASE, check=True)
         result = benchmark.resolve(source, HISTORICAL_BASE)
         self.assertEqual(result["image"], benchmark.GCC_IMAGE)
         self.assertEqual(result["compiler"], benchmark.GCC_COMPILER)
         # Source-only descendants retaining this producer contract also qualify.
         (source / "benchmark-descendant.txt").write_text("future source fixture\n")
-        subprocess.run(["git", "-C", str(source), "add", "benchmark-descendant.txt"], check=True)
-        subprocess.run(["git", "-C", str(source), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-                        "-c", "commit.gpgsign=false", "commit", "-qm", "future fixture"], check=True)
+        fixture_git("-C", str(source), "add", "benchmark-descendant.txt", check=True)
+        fixture_git("-C", str(source), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "-c", "commit.gpgsign=false", "commit", "-qm", "future fixture", check=True)
         revision = benchmark.git(source, "rev-parse", "HEAD").decode().strip()
         self.assertEqual(benchmark.resolve(source, revision)["compiler"], benchmark.GCC_COMPILER)
+
+    def test_fixture_git_disables_background_maintenance_and_inherited_hooks(self):
+        control = Path(self.temporary.name) / "host-policy"
+        control.mkdir()
+        hooks = control / "hooks"
+        hooks.mkdir()
+        marker = control / "hook-ran"
+        for name in ("post-checkout", "pre-commit", "post-commit"):
+            hook = hooks / name
+            hook.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(marker))}\nexit 1\n")
+            hook.chmod(0o755)
+        templates = control / "templates"
+        (templates / "hooks").mkdir(parents=True)
+        shutil.copy2(hooks / "post-commit", templates / "hooks/post-commit")
+        config = control / "gitconfig"
+        config.write_text(f"""[maintenance]
+    auto = true
+[maintenance "commit-graph"]
+    enabled = true
+    auto = 1
+[gc]
+    auto = 1
+[core]
+    hooksPath = {hooks}
+[init]
+    templateDir = {templates}
+""")
+        trace = control / "trace.jsonl"
+        case = type(self)("test_exact_original_contract_and_later_source_commits")
+        outcome = unittest.TestResult()
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1",
+                                     "GIT_TRACE2_EVENT": str(trace)}):
+            case.run(outcome)
+        if outcome.skipped:
+            self.skipTest(outcome.skipped[0][1])
+        self.assertTrue(outcome.wasSuccessful(), outcome.errors + outcome.failures)
+        self.assertFalse(marker.exists(), "host hooks must not execute in fixture repositories")
+        self.assertFalse(Path(case.temporary.name).exists(), "strict cleanup must remove the complete fixture")
+        events = [json.loads(line) for line in trace.read_text().splitlines()]
+        self.assertTrue(any(event.get("name") == "commit" for event in events))
+        self.assertFalse(any(event.get("name") in ("maintenance", "gc") or
+                             (event.get("event") == "child_start" and
+                              any(word in ("maintenance", "gc") for word in event.get("argv", [])))
+                             for event in events), "fixture Git must not launch background writers")
 
     def test_unknown_tampered_dirty_and_nonexact_inputs_rejected(self):
         for revision in ("HEAD", self.revision.upper(), "--detach", "f" * 39):
