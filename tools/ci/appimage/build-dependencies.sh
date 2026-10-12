@@ -19,10 +19,14 @@ export LDFLAGS="--rtlib=compiler-rt --unwindlib=libunwind -fuse-ld=lld"
 export CMAKE_PREFIX_PATH=${prefix} LD_LIBRARY_PATH=${prefix}/lib PKG_CONFIG_PATH=${prefix}/lib/pkgconfig
 build() {
  local source=$1; shift
+ # CMake treats bare archive-tool cache values as paths relative to its working
+ # directory. Curl's static-library feature probes must use the pinned tools.
  cmake -S "/build/${source}" -B "/build/${source}-build" -G Ninja \
-  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_AR=llvm-ar -DCMAKE_RANLIB=llvm-ranlib \
-  -DCMAKE_NM=llvm-nm -DCMAKE_STRIP=llvm-strip -DCMAKE_OBJCOPY=llvm-objcopy \
-  -DCMAKE_OBJDUMP=llvm-objdump -DCMAKE_READELF=llvm-readelf \
+  -DCMAKE_C_COMPILER=/opt/llvm-23.1.3/bin/clang -DCMAKE_CXX_COMPILER=/opt/llvm-23.1.3/bin/clang++ \
+  -DCMAKE_AR=/opt/llvm-23.1.3/bin/llvm-ar -DCMAKE_RANLIB=/opt/llvm-23.1.3/bin/llvm-ranlib \
+  -DCMAKE_NM=/opt/llvm-23.1.3/bin/llvm-nm -DCMAKE_STRIP=/opt/llvm-23.1.3/bin/llvm-strip \
+  -DCMAKE_OBJCOPY=/opt/llvm-23.1.3/bin/llvm-objcopy -DCMAKE_OBJDUMP=/opt/llvm-23.1.3/bin/llvm-objdump \
+  -DCMAKE_READELF=/opt/llvm-23.1.3/bin/llvm-readelf \
   "-DCMAKE_EXE_LINKER_FLAGS=${LDFLAGS}" "-DCMAKE_SHARED_LINKER_FLAGS=${LDFLAGS}" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${prefix}" -DCMAKE_INSTALL_LIBDIR=lib "$@"
  cmake --build "/build/${source}-build" --parallel 4
