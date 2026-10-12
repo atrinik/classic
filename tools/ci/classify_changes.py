@@ -25,6 +25,7 @@ NATIVE_SHARED_PATHS = {
     "codecov.yml",
     "tools/tests/test_coverage_presets.py",
     "tools/tests/test_server_benchmark.py",
+    "tools/tests/test_toolkit_dependency_interfaces.py",
     "tools/tests/test_llvm_coverage.py",
     "tools/tests/test_llvm_coverage_identity.py",
     "tools/tests/test_llvm_toolchain.py",

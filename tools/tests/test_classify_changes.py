@@ -129,6 +129,31 @@ class ClassifyChangesTests(unittest.TestCase):
         self.assertFalse(result["codeql_server"])
         self.assertTrue(result["codeql_core_cpp"])
 
+    def test_toolkit_dependency_interface_contract_selects_both_native_consumers(self) -> None:
+        path = "tools/tests/test_toolkit_dependency_interfaces.py"
+        self.assertTrue(classify_changes.is_native_shared(path))
+        result = classify_changes.classify([path])
+        self.assertTrue(result["client"])
+        self.assertTrue(result["server"])
+        self.assertFalse(result["windows"])
+        self.assertFalse(result["benchmark_client"])
+        self.assertFalse(result["benchmark_server"])
+        self.assertEqual(result["codeql_languages"], "python")
+
+    def test_toolkit_dependency_interface_routing_uses_exact_path(self) -> None:
+        for path in (
+            "tools/tests/test_toolkit_dependency_interfaces.py.bak",
+            "tools/tests/test_other_dependency_interfaces.py",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify_changes.is_native_shared(path))
+                result = classify_changes.classify([path])
+                self.assertFalse(result["client"])
+                self.assertFalse(result["server"])
+                self.assertFalse(result["windows"])
+                self.assertFalse(result["benchmark_client"])
+                self.assertFalse(result["benchmark_server"])
+
     def test_llvm_contract_changes_select_both_native_consumers(self) -> None:
         for path in ("cmake/toolchains/llvm.cmake", "cmake/toolchains/llvm-macos.cmake",
                      "cmake/AtrinikLLVM.cmake", "tools/ci/llvm_coverage.py",
