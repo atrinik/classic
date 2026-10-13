@@ -64,6 +64,15 @@ into `atrinik`. Local source runs may instead set the public, non-secret
 `data/discord-application-id` file. Never supply a Discord Client Secret,
 OAuth token, bot token, authorization code, or user credential.
 
+The sound dependency selects the published Classic restoration product. Its
+archive, restoration manifest and complete checksum inventory are pinned in
+`dependencies.lock.json`; acquisition revalidates installed bytes even when a
+managed dependency marker matches. The product preserves every original logical
+sound path and attribution, with Vorbis or Opus contents that the packaged mixer
+can decode. A `.mid` logical filename can therefore contain Ogg Opus, while FLAC
+replacement sources are rendered at their existing logical `.ogg` paths;
+do not substitute the original source archive or infer codecs from extensions.
+
 Linux x86_64 releases provide
 `atrinik-classic-client-VERSION-linux-x86_64.AppImage`. Verify the downloaded
 file against `SHA256SUMS`, make it executable with `chmod +x`, and run it directly.

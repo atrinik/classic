@@ -338,7 +338,8 @@ and the server image labels, and the released runtime starts successfully.
 
 `dependencies.bundle.json` binds the complete `sound`, `content`, `resources`,
 and `libpcpnatpmp` raw-archive set to the SHA-256 digests of all three source
-locks and both acquisition tools, issue #203's verified input-bundle digest,
+locks and the acquisition tools (including the Classic sound verifier), issue
+#203's verified input-bundle digest,
 a deterministic material digest, and the exact OCI manifest digest at
 `ghcr.io/atrinik/classic-dependencies`. The material tag is derived from the
 complete material digest and is immutable; release consumers use the manifest
@@ -554,6 +555,17 @@ decoders remain absent. The producer retains dependency and tool identities,
 licenses and checked sound/shader inputs with its packaging evidence. Retain
 the source/license appendix for the bundled application libraries and the
 static runtime, including its musl, FUSE and squashfuse components.
+
+Client sound inputs use the released `atrinik-sound-classic-runtime` product,
+whose converted Opus payloads retain the existing logical sound paths.
+The canonical sound lock pins the archive, restoration manifest and complete
+checksum inventory. Acquisition and matching-marker reuse verify every media
+and notice byte. Assembly and trusted AppImage inspection repeat this check
+and require actual Ogg Vorbis/Opus contents, independently of extensions or the
+candidate's own file inventory. The updater verifies the existing coordinate
+before a same-tag source-to-restoration migration; subsequent updates retain
+newer-version and strict-descendant checks. Desktop playback remains separate
+from these deterministic integrity and format checks.
 
 `client/tools/build-appimage.sh [OUTPUT_DIRECTORY]` requires
 `ATRINIK_PACKAGE_VERSION=MAJOR.MINOR.PATCH` and emits the exact versioned

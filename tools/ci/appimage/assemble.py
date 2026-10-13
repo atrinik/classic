@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
+SOUND_SPEC = importlib.util.spec_from_file_location("classic_sound", ROOT / "tools/release/classic_sound.py")
+assert SOUND_SPEC is not None and SOUND_SPEC.loader is not None
+classic_sound = importlib.util.module_from_spec(SOUND_SPEC)
+SOUND_SPEC.loader.exec_module(classic_sound)
 
 
 def sha256(path: Path) -> str:
@@ -35,6 +40,8 @@ def dynamic(path: Path) -> tuple[list[str], str | None]:
 
 
 def assemble(appdir: Path, prefix: Path, version: str, revision: str) -> None:
+    classic_sound.verify_tree(appdir / 'usr/share/games/atrinik/sound',
+                              classic_sound.load_dependency(ROOT))
     lock_path = HERE / 'packaging.lock.json'
     lock = json.loads(lock_path.read_text())
     if not re.fullmatch(r'[0-9a-f]{40}', revision):

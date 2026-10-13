@@ -4,12 +4,14 @@
     {
       "name": "sound",
       "repository": "atrinik/sound",
-      "tag": "v1.0.0",
-      "commit": "d0561bf9ff8dc88836818dbe602a5a256c6c0e3f",
-      "url": "https://github.com/atrinik/sound/releases/download/v1.0.0/atrinik-sound-1.0.0.tar.gz",
-      "sha256": "df76ee33dba206bceb74a2a3b56a2aba328620867478d4906ac2f160ada24d7e",
+      "tag": "v1.2.0",
+      "commit": "642e5a25a476c96b764054b7b57307274b0fabb5",
+      "url": "https://github.com/atrinik/sound/releases/download/v1.2.0/atrinik-sound-classic-runtime-1.2.0.tar.gz",
+      "sha256": "0a48a2a0087fecf0f9bbe815f20460ab70f858656b4e4a9d1479f8f03c8b09bf",
       "destination": "sound",
-      "strip_components": 1
+      "strip_components": 1,
+      "runtime_manifest_sha256": "1894c2ca0b563d1b4ab69c29ac839cf5d873680c416f343072aacad4308889cb",
+      "runtime_checksums_sha256": "20a86d0ec9117808a9df2eaeef3a38bd6106d953e8c0093dff05b68662bb8fdf"
     }
   ]
 }

@@ -30,6 +30,7 @@ LOCK_PATHS = (
 )
 ACQUISITION_CONTRACT_PATHS = (
     Path("server/tools/dependencies.py"),
+    Path("tools/release/classic_sound.py"),
     Path("tools/release/dependency_bundle.py"),
 )
 EXPECTED_NAMES = ("content", "libpcpnatpmp", "resources", "sound")

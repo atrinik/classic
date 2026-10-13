@@ -20,6 +20,9 @@ SPEC = importlib.util.spec_from_file_location("atrinik_appimage", Path(__file__)
 appimage = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = appimage
 SPEC.loader.exec_module(appimage)
+SOUND_FIXTURE_SPEC = importlib.util.spec_from_file_location("sound_fixtures", Path(__file__).with_name("test_classic_sound.py"))
+sound_fixtures = importlib.util.module_from_spec(SOUND_FIXTURE_SPEC)
+SOUND_FIXTURE_SPEC.loader.exec_module(sound_fixtures)
 
 
 class ListingTests(unittest.TestCase):
@@ -202,6 +205,19 @@ class AppImageTests(unittest.TestCase):
         self.write("usr/share/games/atrinik/client.cfg", "fixture config\n")
         for directory in ("data", "sound", "fonts", "textures"):
             self.write(f"usr/share/games/atrinik/{directory}/fixture", "fixture\n")
+        sound = sound_fixtures.make_tree(self.payload / "usr/share/games/atrinik/sound")
+        sound_root = self.payload / "usr/share/games/atrinik/sound"
+        self.write("usr/share/games/atrinik/sound/licenses/NOTICE", "original sound attribution\n")
+        checksum_path = sound_root / "SHA256SUMS"
+        checksum_path.write_text(checksum_path.read_text() +
+                                hashlib.sha256((sound_root / "licenses/NOTICE").read_bytes()).hexdigest() +
+                                "  licenses/NOTICE\n")
+        sound["runtime_checksums_sha256"] = hashlib.sha256(checksum_path.read_bytes()).hexdigest()
+        sound.update({"repository": "atrinik/sound", "destination": "sound", "strip_components": 1,
+                      "url": "https://github.com/atrinik/sound/releases/download/v1.0.0/atrinik-sound-classic-runtime-1.0.0.tar.gz",
+                      "sha256": "b" * 64})
+        self.sound_lock = {"schema_version": 1, "dependencies": [sound]}
+        (self.source / "client/dependencies.lock.json").write_text(json.dumps(self.sound_lock, indent=2) + "\n")
         self.metadata = {"schema": 1, "version": self.version, "revision": self.revision,
                          "source_date_epoch": 1791648000,
                          "lock_sha256": hashlib.sha256(self.lock_path.read_bytes()).hexdigest(),
@@ -864,6 +880,26 @@ class AppImageTests(unittest.TestCase):
             self.metadata["source_date_epoch"] = value
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "source epoch"):
                 self.validate(self.image(filesystem_epoch=epoch))
+
+    def test_resealed_sound_audio_cannot_authenticate_itself(self):
+        self.write("usr/share/games/atrinik/sound/effects/strike.mid", b"MThd raw MIDI source")
+        with self.assertRaisesRegex(ValueError, "Classic sound file differs from the pinned inventory"):
+            self.validate(self.image())
+
+    def test_resealed_sound_product_cannot_replace_committed_pins(self):
+        sound_fixtures.make_tree(self.payload / "usr/share/games/atrinik/sound", commit="f" * 40)
+        with self.assertRaisesRegex(ValueError, "Classic sound classic-runtime-manifest.json differs"):
+            self.validate(self.image())
+
+    def test_resealed_sound_notice_and_inner_inventory_are_source_bound(self):
+        root = self.payload / "usr/share/games/atrinik/sound"
+        self.write("usr/share/games/atrinik/sound/licenses/NOTICE", "forged attribution\n")
+        (root / "SHA256SUMS").write_text("".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n"
+            for path in sorted(root.rglob("*")) if path.is_file() and path.name != "SHA256SUMS"
+        ))
+        with self.assertRaisesRegex(ValueError, "Classic sound SHA256SUMS differs"):
+            self.validate(self.image())
 
 
 if __name__ == "__main__":

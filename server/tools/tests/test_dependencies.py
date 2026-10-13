@@ -57,6 +57,43 @@ class DependencyTests(unittest.TestCase):
             "strip_components": 1,
         }
 
+    def runtime_dependency(self, archive: Path, **changes: object) -> dict[str, object]:
+        dependency = {
+            "name": "sound",
+            "repository": "atrinik/sound",
+            "tag": "v1.2.3",
+            "commit": "a" * 40,
+            "url": "https://github.com/atrinik/sound/releases/download/v1.2.3/"
+                   "atrinik-sound-classic-runtime-1.2.3.tar.gz",
+            "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+            "destination": "sound",
+            "strip_components": 1,
+            "runtime_manifest_sha256": "",
+            "runtime_checksums_sha256": "",
+        }
+        dependency.update(changes)
+        return dependency
+
+    def make_runtime_archive(self) -> tuple[Path, dict[str, object]]:
+        tree = self.root / "runtime"
+        fixture_spec = importlib.util.spec_from_file_location(
+            "classic_sound_fixture",
+            Path(__file__).resolve().parents[3] / "tools/tests/test_classic_sound.py",
+        )
+        assert fixture_spec is not None and fixture_spec.loader is not None
+        fixture = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture)
+        pins = fixture.make_tree(tree, commit="a" * 40, tag="v1.2.3")
+        archive = self.root / "runtime.tar.gz"
+        with tarfile.open(archive, "w:gz") as output:
+            for path in tree.rglob("*"):
+                output.add(path, arcname=f"sound-v1.2.3/{path.relative_to(tree)}", recursive=False)
+        return archive, self.runtime_dependency(
+            archive,
+            runtime_manifest_sha256=pins["runtime_manifest_sha256"],
+            runtime_checksums_sha256=pins["runtime_checksums_sha256"],
+        )
+
     def test_installs_and_verifies_pinned_archive(self) -> None:
         archive = self.make_archive([("sound-v1.0.0/effects/test.ogg", b"sound", "file")])
         dependency = self.dependency(archive)
@@ -72,6 +109,35 @@ class DependencyTests(unittest.TestCase):
             dependencies.install_dependency(self.root, self.root / "build/cache", dependency),
             "current",
         )
+
+    def test_runtime_lock_requires_a_complete_canonical_pair_and_keeps_generic_records_valid(self) -> None:
+        archive = self.make_archive([("sound-v1.0.0/test", b"ok", "file")])
+        valid = self.runtime_dependency(archive, runtime_manifest_sha256="a" * 64,
+                                        runtime_checksums_sha256="b" * 64)
+        lock = self.root / "lock.json"
+        lock.write_text(json.dumps({"schema_version": 1, "dependencies": [valid]}), encoding="utf-8")
+        self.assertEqual(dependencies.load_lock(lock)[0]["name"], "sound")
+        for changed in (
+            {key: value for key, value in valid.items() if key != "runtime_checksums_sha256"},
+            {**valid, "name": "resources"},
+            {**valid, "runtime_manifest_sha256": "A" * 64},
+        ):
+            lock.write_text(json.dumps({"schema_version": 1, "dependencies": [changed]}), encoding="utf-8")
+            with self.assertRaisesRegex(dependencies.DependencyError, "runtime sound|metadata pins|SHA-256"):
+                dependencies.load_lock(lock)
+        generic = self.dependency(archive)
+        lock.write_text(json.dumps({"schema_version": 1, "dependencies": [generic]}), encoding="utf-8")
+        self.assertEqual(dependencies.load_lock(lock, allow_file_urls=True)[0]["name"], "sound")
+
+    def test_runtime_matching_marker_rechecks_the_closed_tree(self) -> None:
+        archive, dependency = self.make_runtime_archive()
+        cache = self.root / "cache"
+        cache.mkdir()
+        (cache / f"sound-{dependency['sha256']}.tar.gz").write_bytes(archive.read_bytes())
+        self.assertEqual(dependencies.install_dependency(self.root, cache, dependency, offline=True), "installed")
+        (self.root / "sound/effects/test.mid").write_bytes(b"tampered")
+        with self.assertRaisesRegex(dependencies.DependencyError, "Classic sound verification failed"):
+            dependencies.install_dependency(self.root, cache, dependency, offline=True)
 
     def test_refresh_repairs_payload_behind_a_valid_marker_offline(self) -> None:
         archive = self.make_archive(

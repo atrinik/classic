@@ -21,6 +21,7 @@ import urllib.request
 
 SOUND_REPOSITORY = "atrinik/sound"
 LOCK_PATH = Path("client/dependencies.lock.json")
+RUNTIME_PINS = {"runtime_manifest_sha256", "runtime_checksums_sha256"}
 MAX_RELEASE_PAGES = 100
 RELEASES_PER_PAGE = 100
 MAX_CHECKSUM_BYTES = 1024 * 1024
@@ -131,6 +132,14 @@ class GitHubAPI:
             raise UpdateError("GitHub compare response is malformed")
         return str(value["status"])
 
+    def commit_tree(self, repository: str, commit: str) -> str:
+        value = self.get(f"repos/{repository}/git/commits/{commit}")
+        tree = value.get("tree") if isinstance(value, dict) else None
+        digest = tree.get("sha") if isinstance(tree, dict) else None
+        if not isinstance(digest, str) or COMMIT_RE.fullmatch(digest) is None:
+            raise UpdateError("GitHub source commit tree is malformed")
+        return digest
+
 
 def download_bounded(url: str, output: BinaryIO, maximum: int) -> tuple[str, int]:
     parsed = urllib.parse.urlparse(url)
@@ -226,17 +235,18 @@ def release_by_tag(releases: list[dict[str, object]], tag: str) -> dict[str, obj
     return release
 
 
-def sound_archive_name(tag: str) -> str:
+def sound_archive_name(tag: str, *, runtime: bool = False) -> str:
     version = semantic_version(tag)
-    return f"atrinik-sound-{version[0]}.{version[1]}.{version[2]}.tar.gz"
+    product = "atrinik-sound-classic-runtime" if runtime else "atrinik-sound"
+    return f"{product}-{version[0]}.{version[1]}.{version[2]}.tar.gz"
 
 
 def checksum_for_release(
     release: dict[str, object], tag: str, directory: Path,
-    downloader: Callable[[str, BinaryIO, int], tuple[str, int]],
+    downloader: Callable[[str, BinaryIO, int], tuple[str, int]], *, runtime: bool = False,
 ) -> tuple[str, dict[str, object], str]:
     assets = asset_map(release)
-    archive_name = sound_archive_name(tag)
+    archive_name = sound_archive_name(tag, runtime=runtime)
     archive = assets.get(archive_name)
     checksums = assets.get("SHA256SUMS")
     if archive is None or checksums is None:
@@ -244,10 +254,37 @@ def checksum_for_release(
     base = f"https://github.com/{SOUND_REPOSITORY}/releases/download/{tag}"
     archive_url = asset_url(archive, f"{base}/{archive_name}")
     checksum_url = asset_url(checksums, f"{base}/SHA256SUMS")
-    checksum_path = directory / f"{tag}-SHA256SUMS"
+    purpose = "restoration" if runtime else "source"
+    checksum_path = directory / f"{tag}-{purpose}-SHA256SUMS"
     download_asset(checksums, checksum_url, checksum_path, MAX_CHECKSUM_BYTES, downloader)
     expected = parse_checksums(checksum_path.read_bytes(), archive_name)
     return expected, archive, archive_url
+
+
+def _runtime_pins(archive: Path, tag: str, commit: str, directory: Path,
+                  *, expected_tree: str | None = None) -> dict[str, str]:
+    """Verify the published restoration tree before accepting its inner pins."""
+    root = Path(__file__).resolve().parents[2]
+    modules = []
+    for relative in ("server/tools/dependencies.py", "tools/release/classic_sound.py"):
+        spec = importlib.util.spec_from_file_location(Path(relative).stem, root / relative)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        modules.append(module)
+    fetcher, verifier = modules
+    with tempfile.TemporaryDirectory(prefix="restoration-", dir=directory) as name:
+        tree = Path(name)
+        try:
+            fetcher.extract_archive(archive, tree, 1)
+            pins = {
+                "runtime_manifest_sha256": fetcher.sha256_file(tree / verifier.MANIFEST),
+                "runtime_checksums_sha256": fetcher.sha256_file(tree / verifier.CHECKSUMS),
+            }
+            verifier.verify_tree(tree, {"tag": tag, "commit": commit, "source_tree": expected_tree, **pins})
+        except (OSError, ValueError, fetcher.DependencyError) as error:
+            raise UpdateError(f"invalid published Classic restoration product: {error}") from error
+    return pins
 
 
 def verify_candidate(
@@ -258,9 +295,9 @@ def verify_candidate(
     version = semantic_version(tag)
     commit = api.tag_commit(SOUND_REPOSITORY, tag)
     expected_digest, archive, archive_url = checksum_for_release(
-        release, tag, directory, downloader
+        release, tag, directory, downloader, runtime=True
     )
-    archive_path = directory / f"{tag}-source.tar.gz"
+    archive_path = directory / f"{tag}-restoration.tar.gz"
     actual_digest = download_asset(
         archive, archive_url, archive_path, MAX_ARCHIVE_BYTES, downloader
     )
@@ -272,6 +309,8 @@ def verify_candidate(
         "commit": commit,
         "url": archive_url,
         "sha256": actual_digest,
+        **_runtime_pins(archive_path, tag, commit, directory,
+                        expected_tree=api.commit_tree(SOUND_REPOSITORY, commit)),
     }
 
 
@@ -323,7 +362,10 @@ def verify_current_coordinate(
             raise UpdateError("lock SHA-256 is malformed")
         if not isinstance(url, str):
             raise UpdateError("lock URL is malformed")
-        archive_name = sound_archive_name(str(tag))
+        runtime = bool(RUNTIME_PINS.intersection(current))
+        if runtime and not RUNTIME_PINS.issubset(current):
+            raise UpdateError("restoration sound requires both metadata pins")
+        archive_name = sound_archive_name(str(tag), runtime=runtime)
         expected_url = (
             f"https://github.com/{SOUND_REPOSITORY}/releases/download/"
             f"{tag}/{archive_name}"
@@ -334,9 +376,9 @@ def verify_current_coordinate(
         if api.tag_commit(SOUND_REPOSITORY, str(tag)) != commit:
             raise UpdateError("tag was reused for a different commit")
         expected, _, actual_url = checksum_for_release(
-            release, str(tag), directory, downloader
+            release, str(tag), directory, downloader, runtime=runtime
         )
-        archive_name = sound_archive_name(str(tag))
+        archive_name = sound_archive_name(str(tag), runtime=runtime)
         assets = asset_map(release)
         archive = assets[archive_name]
         archive_path = directory / f"{tag}-current.tar.gz"
@@ -349,6 +391,11 @@ def verify_current_coordinate(
             raise UpdateError("downloaded source archive digest differs from SHA256SUMS")
         if actual_url != url:
             raise UpdateError("release asset URL differs from the lock")
+        if runtime:
+            pins = _runtime_pins(archive_path, str(tag), commit, directory,
+                                  expected_tree=api.commit_tree(SOUND_REPOSITORY, commit))
+            if any(current[key] != pins[key] for key in RUNTIME_PINS):
+                raise UpdateError("restoration metadata pins differ from the lock")
         return version
     except UpdateError as error:
         raise UpdateError(f"{context}; {error}") from error
@@ -378,8 +425,9 @@ def update_lock(
     root: Path, value: dict[str, object], sound: dict[str, object],
     selected: dict[str, object], *, apply: bool,
 ) -> dict[str, object]:
-    before = {key: sound.get(key) for key in ("tag", "commit", "url", "sha256")}
-    after = {key: selected[key] for key in ("tag", "commit", "url", "sha256")}
+    fields = ("tag", "commit", "url", "sha256", "runtime_manifest_sha256", "runtime_checksums_sha256")
+    before = {key: sound.get(key) for key in fields}
+    after = {key: selected[key] for key in fields}
     if before == after:
         return {"changed": False, "old": before, "new": after}
     for key, new_value in after.items():
@@ -460,11 +508,16 @@ def execute(
                 version = semantic_version(tag)
             except UpdateError:
                 continue
-            if version <= current_version:
+            current_runtime = RUNTIME_PINS.issubset(current)
+            if version < current_version or (version == current_version and current_runtime):
                 continue
             try:
                 candidate = verify_candidate(release, api, directory, downloader)
-                if api.compare(SOUND_REPOSITORY, str(current["commit"]), str(candidate["commit"])) != "ahead":
+                same_tag_restoration = (version == current_version and not current_runtime
+                                        and candidate["commit"] == current["commit"])
+                if version == current_version and not same_tag_restoration:
+                    raise UpdateError("same-tag restoration must preserve the verified source commit")
+                if not same_tag_restoration and api.compare(SOUND_REPOSITORY, str(current["commit"]), str(candidate["commit"])) != "ahead":
                     raise UpdateError("candidate commit is not a strict descendant of the current lock")
                 accepted.append(candidate)
             except UpdateError as error:
@@ -516,14 +569,15 @@ def write_pr_body(evidence: dict[str, object], path: Path) -> None:
         "| Field | Old | New |",
         "| --- | --- | --- |",
     ]
-    for field in ("tag", "commit", "url", "sha256"):
+    for field in ("tag", "commit", "url", "sha256", "runtime_manifest_sha256", "runtime_checksums_sha256"):
         lines.append(f"| `{field}` | `{old.get(field)}` | `{new.get(field)}` |")
     lines.extend([
         "",
         "## Verification",
         "",
         "- Required one published, non-draft Sound release for every selected tag.",
-        "- Verified the immutable tag commit, canonical source archive URL, SHA256SUMS entry, and downloaded archive digest.",
+        "- Verified the immutable tag commit, canonical Classic restoration URL, SHA256SUMS entry, and downloaded archive digest.",
+        "- Pinned and verified the restoration manifest, complete checksum inventory, and Vorbis/Opus payload formats.",
         "- Re-ran the authoritative Classic dependency-lock loader before mutation.",
         "- Classic consumers continue to use the digest-pinned offline dependency bundle.",
         "",

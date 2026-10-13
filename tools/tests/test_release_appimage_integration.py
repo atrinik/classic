@@ -33,7 +33,7 @@ class ReleaseAppImageIntegrationTests(unittest.TestCase):
             "license": "MIT",
         })
         self.package.lock_path.write_text(json.dumps(self.package.lock, sort_keys=True) + "\n")
-        for relative in ("client/dependencies.lock.json", "server/dependencies.lock.json",
+        for relative in ("server/dependencies.lock.json",
                          "dependencies.bundle.json", "tools/release/finalize_artifacts.py"):
             destination = self.source / relative
             destination.parent.mkdir(parents=True, exist_ok=True)

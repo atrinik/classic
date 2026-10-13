@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import tarfile
 from pathlib import Path
 import tempfile
 import unittest
@@ -16,6 +17,9 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC is not None and SPEC.loader is not None
 UPDATER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPDATER)
+FIXTURE_SPEC = importlib.util.spec_from_file_location("sound_fixtures", ROOT / "tools/tests/test_classic_sound.py")
+sound_fixtures = importlib.util.module_from_spec(FIXTURE_SPEC)
+FIXTURE_SPEC.loader.exec_module(sound_fixtures)
 
 
 class FakeAPI(UPDATER.GitHubAPI):
@@ -23,6 +27,10 @@ class FakeAPI(UPDATER.GitHubAPI):
         self.release_pages = [releases]
         self.commits: dict[str, str] = {}
         self.comparisons: dict[tuple[str, str], str] = {}
+
+    def commit_tree(self, repository: str, commit: str) -> str:
+        assert repository == "atrinik/sound"
+        return "e" * 40
 
     def get(self, endpoint: str) -> object:
         if "/releases?" in endpoint:
@@ -38,6 +46,60 @@ class FakeAPI(UPDATER.GitHubAPI):
 
 
 class UpdateSoundLockTests(unittest.TestCase):
+    def test_runtime_candidate_archive_requires_supported_linked_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "sound"
+            coordinate = sound_fixtures.make_tree(root)
+            archive = base / "runtime.tar.gz"
+            def pack():
+                with tarfile.open(archive, "w:gz") as output:
+                    output.add(root, arcname="sound-v1.0.0")
+            pack()
+            manifest_path = root / "classic-runtime-manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            tree = manifest["source_tree"]
+            self.assertEqual(UPDATER._runtime_pins(archive, "v1.0.0", "a" * 40, base,
+                                                  expected_tree=tree),
+                             {key: coordinate[key] for key in UPDATER.RUNTIME_PINS})
+            with self.assertRaisesRegex(UPDATER.UpdateError, "source identity"):
+                UPDATER._runtime_pins(archive, "v1.0.0", "a" * 40, base,
+                                       expected_tree="0" * 40)
+            for field, value in (("codec", []), ("duration_seconds", 10**1000)):
+                with self.subTest(field=field):
+                    sound_fixtures.make_tree(root)
+                    malformed = json.loads(manifest_path.read_text())
+                    malformed["assets"][0]["output"][field] = value
+                    manifest_path.write_text(json.dumps(malformed))
+                    checksum_path = root / "SHA256SUMS"
+                    checksum_path.write_text("".join(
+                        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n"
+                        for path in sorted(root.rglob("*")) if path.is_file() and path != checksum_path
+                    ))
+                    pack()
+                    with self.assertRaisesRegex(UPDATER.UpdateError, "identity or format"):
+                        UPDATER._runtime_pins(archive, "v1.0.0", "a" * 40, base, expected_tree=tree)
+            sound_fixtures.make_tree(root)
+            manifest["schema_version"] = 999
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+            checksum_path = root / "SHA256SUMS"
+            checksum_path.write_text("".join(
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n"
+                for path in sorted(root.rglob("*")) if path.is_file() and path != checksum_path
+            ))
+            pack()
+            with self.assertRaisesRegex(UPDATER.UpdateError, "supported v1 schema"):
+                UPDATER._runtime_pins(archive, "v1.0.0", "a" * 40, base, expected_tree=tree)
+
+    def test_source_commit_tree_requires_an_exact_git_object(self) -> None:
+        api = UPDATER.GitHubAPI()
+        with mock.patch.object(api, "get", return_value={"tree": {"sha": "e" * 40}}):
+            self.assertEqual(api.commit_tree("atrinik/sound", "a" * 40), "e" * 40)
+        for value in (None, {}, {"tree": {}}, {"tree": {"sha": "not-a-tree"}}):
+            with mock.patch.object(api, "get", return_value=value):
+                with self.assertRaisesRegex(UPDATER.UpdateError, "source commit tree"):
+                    api.commit_tree("atrinik/sound", "a" * 40)
+
     def coordinate(self, tag: str, commit: str, digest: str) -> dict[str, object]:
         return {
             "name": "sound",
@@ -84,6 +146,29 @@ class UpdateSoundLockTests(unittest.TestCase):
             {archive_url: archive, checksum_url: checksum},
         )
 
+    def release_with_runtime(
+        self, tag: str, source: bytes, runtime: bytes,
+    ) -> tuple[dict[str, object], dict[str, bytes]]:
+        version = tag[1:]
+        base = f"https://github.com/atrinik/sound/releases/download/{tag}"
+        source_name = f"atrinik-sound-{version}.tar.gz"
+        runtime_name = f"atrinik-sound-classic-runtime-{version}.tar.gz"
+        source_url = f"{base}/{source_name}"
+        runtime_url = f"{base}/{runtime_name}"
+        checksums = (
+            f"{hashlib.sha256(source).hexdigest()}  {source_name}\n"
+            f"{hashlib.sha256(runtime).hexdigest()}  {runtime_name}\n"
+        ).encode()
+        checksum_url = f"{base}/SHA256SUMS"
+        return ({
+            "tag_name": tag, "draft": False, "published_at": "now",
+            "assets": [
+                {"name": source_name, "browser_download_url": source_url, "size": len(source)},
+                {"name": runtime_name, "browser_download_url": runtime_url, "size": len(runtime)},
+                {"name": "SHA256SUMS", "browser_download_url": checksum_url, "size": len(checksums)},
+            ],
+        }, {source_url: source, runtime_url: runtime, checksum_url: checksums})
+
     def downloader(self, downloads: dict[str, bytes]):
         def download(url: str, output, maximum: int) -> tuple[str, int]:
             data = downloads[url]
@@ -92,6 +177,12 @@ class UpdateSoundLockTests(unittest.TestCase):
             return hashlib.sha256(data).hexdigest(), len(data)
 
         return download
+
+    def write_lock(self, root: Path, dependency: dict[str, object]) -> None:
+        (root / UPDATER.LOCK_PATH).write_text(
+            json.dumps({"schema_version": 1, "dependencies": [dependency]}, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def test_pagination_is_bounded(self) -> None:
         first = [{"tag_name": f"v1.0.{index}"} for index in range(100)]
@@ -151,8 +242,10 @@ class UpdateSoundLockTests(unittest.TestCase):
         current_release, current_downloads = self.release(current_tag, current_archive)
         candidate_tag = "v1.6.0"
         candidate_commit = "b" * 40
-        candidate_archive = b"candidate"
-        candidate_release, candidate_downloads = self.release(candidate_tag, candidate_archive)
+        candidate_source, candidate_runtime = b"candidate-source", b"candidate-runtime"
+        candidate_release, candidate_downloads = self.release_with_runtime(
+            candidate_tag, candidate_source, candidate_runtime
+        )
         api = FakeAPI([current_release, candidate_release])
         api.commits.update({current_tag: current_commit, candidate_tag: candidate_commit})
         api.comparisons[(current_commit, candidate_commit)] = "ahead"
@@ -167,7 +260,10 @@ class UpdateSoundLockTests(unittest.TestCase):
         (root / "client/dependencies.lock.json").write_text(
             json.dumps(value, indent=2) + "\n", encoding="utf-8"
         )
-        with mock.patch.object(UPDATER, "validate_lock_with_loader"):
+        with mock.patch.object(UPDATER, "validate_lock_with_loader"), mock.patch.object(
+            UPDATER, "_runtime_pins", return_value={"runtime_manifest_sha256": "c" * 64,
+                                                      "runtime_checksums_sha256": "d" * 64},
+        ):
             evidence = UPDATER.execute(
                 root, apply=False, api=api, downloader=self.downloader(downloads)
             )
@@ -175,6 +271,10 @@ class UpdateSoundLockTests(unittest.TestCase):
         helper = mock.Mock()
         with (
             mock.patch.object(UPDATER, "validate_lock_with_loader"),
+            mock.patch.object(UPDATER, "_runtime_pins", return_value={
+                "runtime_manifest_sha256": "c" * 64,
+                "runtime_checksums_sha256": "d" * 64,
+            }),
             mock.patch.object(UPDATER.importlib.util, "spec_from_file_location", return_value=mock.Mock()),
             mock.patch.object(UPDATER.importlib.util, "module_from_spec", return_value=helper),
         ):
@@ -187,7 +287,82 @@ class UpdateSoundLockTests(unittest.TestCase):
         self.assertEqual((root / UPDATER.LOCK_PATH).read_bytes(), original)
         self.assertTrue(evidence["changed"])
         self.assertEqual(evidence["new"]["tag"], candidate_tag)
-        self.assertEqual(evidence["new"]["sha256"], hashlib.sha256(candidate_archive).hexdigest())
+        self.assertEqual(evidence["new"]["sha256"], hashlib.sha256(candidate_runtime).hexdigest())
+
+    def test_execute_migrates_a_verified_same_tag_source_lock_to_runtime_product(self) -> None:
+        tag = "v1.5.0"
+        commit = "a" * 40
+        source, runtime = b"source", b"runtime"
+        release, downloads = self.release_with_runtime(tag, source, runtime)
+        current = self.coordinate(tag, commit, hashlib.sha256(source).hexdigest())
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        (root / "client").mkdir()
+        self.write_lock(root, current)
+        api = FakeAPI([release])
+        api.commits[tag] = commit
+        pins = {"runtime_manifest_sha256": "c" * 64, "runtime_checksums_sha256": "d" * 64}
+        with (
+            mock.patch.object(UPDATER, "validate_lock_with_loader"),
+            mock.patch.object(UPDATER, "_runtime_pins", return_value=pins),
+        ):
+            evidence = UPDATER.execute(root, apply=False, api=api, downloader=self.downloader(downloads))
+        self.assertTrue(evidence["changed"])
+        self.assertEqual(evidence["new"]["tag"], tag)
+        self.assertEqual(evidence["new"]["url"], (
+            "https://github.com/atrinik/sound/releases/download/v1.5.0/"
+            "atrinik-sound-classic-runtime-1.5.0.tar.gz"
+        ))
+        self.assertEqual({key: evidence["new"][key] for key in pins}, pins)
+
+    def test_rejects_a_future_release_that_reuses_the_current_runtime_commit(self) -> None:
+        source, runtime = b"source", b"runtime"
+        current_tag, future_tag = "v1.5.0", "v1.6.0"
+        current_release, current_downloads = self.release_with_runtime(current_tag, source, runtime)
+        future_release, future_downloads = self.release_with_runtime(future_tag, source, runtime)
+        current = {**self.coordinate(current_tag, "a" * 40, hashlib.sha256(runtime).hexdigest()),
+                   "url": (
+                       "https://github.com/atrinik/sound/releases/download/v1.5.0/"
+                       "atrinik-sound-classic-runtime-1.5.0.tar.gz"
+                   ), "runtime_manifest_sha256": "c" * 64,
+                   "runtime_checksums_sha256": "d" * 64}
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        (root / "client").mkdir()
+        self.write_lock(root, current)
+        api = FakeAPI([current_release, future_release])
+        api.commits.update({current_tag: "a" * 40, future_tag: "a" * 40})
+        api.comparisons[("a" * 40, "a" * 40)] = "identical"
+        with mock.patch.object(UPDATER, "validate_lock_with_loader"), mock.patch.object(
+            UPDATER, "_runtime_pins", return_value={"runtime_manifest_sha256": "c" * 64,
+                                                      "runtime_checksums_sha256": "d" * 64},
+        ):
+            self.assertFalse(UPDATER.execute(
+                root, apply=False, api=api,
+                downloader=self.downloader({**current_downloads, **future_downloads}),
+            )["changed"])
+    def test_does_not_replace_an_already_restored_current_lock_at_same_version(self) -> None:
+        tag, source, runtime = "v1.5.0", b"source", b"runtime"
+        release, downloads = self.release_with_runtime(tag, source, runtime)
+        restored = {**self.coordinate(tag, "a" * 40, hashlib.sha256(runtime).hexdigest()),
+                    "url": (
+                        "https://github.com/atrinik/sound/releases/download/v1.5.0/"
+                        "atrinik-sound-classic-runtime-1.5.0.tar.gz"
+                    ), "runtime_manifest_sha256": "c" * 64,
+                    "runtime_checksums_sha256": "d" * 64}
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        (root / "client").mkdir()
+        self.write_lock(root, restored)
+        api = FakeAPI([release])
+        api.commits[tag] = "a" * 40
+        with mock.patch.object(UPDATER, "validate_lock_with_loader"), mock.patch.object(
+            UPDATER, "_runtime_pins", return_value={"runtime_manifest_sha256": "c" * 64,
+                                                      "runtime_checksums_sha256": "d" * 64},
+        ):
+            self.assertFalse(UPDATER.execute(
+                root, apply=False, api=api, downloader=self.downloader(downloads),
+            )["changed"])
 
     def test_pr_body_and_outputs_are_bounded_evidence(self) -> None:
         evidence = {
