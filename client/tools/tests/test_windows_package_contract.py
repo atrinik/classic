@@ -17,7 +17,13 @@ class WindowsPackageContractTests(unittest.TestCase):
         self.assertNotIn("-DBUILD_TESTING=ON", script)
         self.assertIn("'--gpu-player-view'", script)
         self.assertIn("'injected GPU conformance fault'", script)
-        self.assertIn("python3 tools/verify_gpu_fixture_provenance.py", script)
+        provenance_command = '"${host_python}" tools/verify_gpu_fixture_provenance.py'
+        self.assertIn(provenance_command, script)
+        self.assertIn("# atrinik-windows-host-python-contract: 1", script)
+        self.assertIn("host_python=python3", script)
+        self.assertIn("host_python=/usr/bin/python3", script)
+        self.assertIn("-DPython3_EXECUTABLE=/usr/bin/python3", script)
+        self.assertLess(script.index(provenance_command), script.index("cmake -S"))
         self.assertIn(
             "if (BUILD_TESTING)\n\tlist(APPEND SOURCES src/client/gpu_player_view.c)\nendif ()",
             sources,

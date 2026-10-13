@@ -13,10 +13,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
-  CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2
-  CLASSIC_LINUX_CCACHE_COMPILER: gcc-15.2.0
-  CLASSIC_LINUX_CCACHE_EPOCH: "1"
+  CLASSIC_LINUX_IMAGE: ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449
+  CLASSIC_LINUX_IMAGE_DIGEST: sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449
+  CLASSIC_LINUX_CCACHE_COMPILER: clang-23.1.3-lld-compiler-rt
+  CLASSIC_LINUX_CCACHE_EPOCH: "2"
 
 jobs:
   changes:
@@ -183,6 +183,9 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/pr-benchmarks.yml \
             --material tools/ci/run_linux_check.sh \
+            --material cmake/toolchains/llvm.cmake \
+            --material cmake/AtrinikLLVM.cmake \
+            --material tools/ci/llvm_coverage.py \
             --material client/tools/benchmark_lighting_regression.py \
             --material client/tools/benchmark_movement_regression.py \
             --material client/tools/movement_benchmark_schema.py \
@@ -207,6 +210,7 @@ jobs:
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --network none \
+            --env ATRINIK_LLVM_TOOLCHAIN=1 \
             --env CCACHE_DIR=/cache/ccache \
             --env CCACHE_MAXSIZE=500M \
             --env HOME=/tmp/classic-home \
@@ -273,6 +277,10 @@ jobs:
             --epoch "${CLASSIC_LINUX_CCACHE_EPOCH}" \
             --material .github/workflows/pr-benchmarks.yml \
             --material tools/ci/run_linux_check.sh \
+            --material tools/ci/server_benchmark.py \
+            --material cmake/toolchains/llvm.cmake \
+            --material cmake/AtrinikLLVM.cmake \
+            --material tools/ci/llvm_coverage.py \
             --material server/CMakeLists.txt \
             --material server/CMakePresets.json \
             --github-output "${GITHUB_OUTPUT}"
@@ -281,27 +289,15 @@ jobs:
           path: ${{ runner.temp }}/classic-ccache/server-benchmark
           key: ${{ steps.linux-cache.outputs.key }}
           restore-keys: ${{ steps.linux-cache.outputs.restore_prefix }}
-      - name: Pull pinned Classic Linux environment
-        run: docker pull "${CLASSIC_LINUX_IMAGE}"
-      - name: Prepare isolated server benchmark compiler cache
+      - name: Build and compare the server content-loader probes in their pinned cohorts
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          mkdir -p "${RUNNER_TEMP}/classic-ccache/server-benchmark"
-          chmod 1777 "${RUNNER_TEMP}/classic-ccache/server-benchmark"
-      - name: Build and compare the server content-loader probe
-        run: |
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            --network none \
-            --env CCACHE_DIR=/cache/ccache \
-            --env CCACHE_MAXSIZE=500M \
-            --env HOME=/tmp/classic-home \
-            --env ATRINIK_BENCHMARK_BASE_SHA="${{ github.event.pull_request.base.sha }}" \
-            --env ATRINIK_BENCHMARK_REVISION="${{ github.event.pull_request.head.sha }}" \
-            --volume "${GITHUB_WORKSPACE}:/workspace" \
-            --volume "${RUNNER_TEMP}/classic-ccache/server-benchmark:/cache/ccache" \
-            --workdir /workspace \
-            "${CLASSIC_LINUX_IMAGE}" \
-            tools/ci/run_linux_check.sh server-benchmark /workspace
+          python3 tools/ci/server_benchmark.py compare \
+            --source-root "${GITHUB_WORKSPACE}" \
+            --base "${BASE_SHA}" --head "${HEAD_SHA}" \
+            --cache "${RUNNER_TEMP}/classic-ccache/server-benchmark"
       - name: Publish server benchmark job summary
         if: always()
         run: |

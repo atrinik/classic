@@ -1,0 +1,602 @@
+# Copyright 2026 The Atrinik Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+import contextlib
+import copy
+import importlib.util
+import io
+import json
+import ssl
+from pathlib import Path
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[2]
+CI = ROOT / "tools/ci"
+SPEC = importlib.util.spec_from_file_location("prepare_macos_curl", CI / "prepare_macos_curl.py")
+COHORT = importlib.util.module_from_spec(SPEC)
+sys.path.insert(0, str(CI))
+try:
+    SPEC.loader.exec_module(COHORT)
+    import collect_macos_curl as COLLECTOR
+finally:
+    sys.path.pop(0)
+
+
+class MacOSCurlCohortTests(unittest.TestCase):
+    def setUp(self):
+        self.manifest = COHORT.load_manifest()
+
+    def test_private_fixture_requires_tls12_and_keeps_tls13_available(self):
+        with patch.object(ssl.SSLContext, "load_cert_chain") as load:
+            context = COHORT.private_tls_context("server.pem", "server.key")
+        self.assertEqual(context.protocol, ssl.PROTOCOL_TLS_SERVER)
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+        self.assertEqual(context.maximum_version, ssl.TLSVersion.MAXIMUM_SUPPORTED)
+        self.assertFalse(context.options & ssl.OP_NO_TLSv1_3)
+        load.assert_called_once_with("server.pem", "server.key")
+
+    def runtime(self):
+        baseline = self.manifest["baseline"]
+        result = dict(baseline["versions"], features=list(baseline["features"]),
+                      protocols=list(baseline["protocols"]), header_version="8.22.0",
+                      header_version_num=0x081600, version_num=0x081600,
+                      ares="1.34.6", cares_version="1.34.6", cares_header_version="1.34.6")
+        for name in ("public_tls_default", "public_tls_bundle", "private_tls_trusted"):
+            result[name] = {"code": 0, "status": 200, "ssl_verify_result": 0,
+                            "default_ca_bundle": None, "default_ca_path": None}
+        for name in ("public_tls_unrelated", "private_tls_untrusted", "private_tls_wrong_hostname"):
+            result[name] = {"code": 60, "status": 0, "ssl_verify_result": 20}
+        result["loaded_images"] = ["/usr/lib/libSystem.B.dylib"]
+        result["dependency_install_names"] = {"/usr/lib/libSystem.B.dylib": []}
+        return result
+
+    def baseline(self):
+        runtime = self.runtime()
+        runtime["ares"] = None
+        return {"runtime": runtime, "ca_bundle_sha256": self.manifest["ca_bundle_sha256"]}
+
+    def test_native_environment_removes_ambient_build_and_trust_overrides(self):
+        retained = {"PATH": "/fixture/bin", "HOME": "/fixture/home", "NORMAL": "retained",
+                    "SOURCE_DATE_EPOCH": "1791676800"}
+        overrides = {
+            "CONFIG_SITE": "/foreign/site", "CONFIG_SHELL": "/foreign/shell",
+            "BASH_ENV": "/foreign/bash-env", "ENV": "/foreign/env",
+            "MAKEFLAGS": "-e CC=foreign", "MFLAGS": "-e", "GNUMAKEFLAGS": "-e",
+            "MAKELEVEL": "3", "MAKEOVERRIDES": "CC=foreign",
+            "LIBS": "-lforeign", "CPP": "/foreign/cpp", "AR": "/foreign/ar", "ARFLAGS": "foreign",
+            "RANLIB": "/foreign/ranlib", "RANLIBFLAGS": "foreign", "NM": "/foreign/nm",
+            "LD": "/foreign/ld", "AS": "/foreign/as", "OBJCOPY": "/foreign/objcopy",
+            "OBJDUMP": "/foreign/objdump", "STRIP": "/foreign/strip",
+            "CC": "/foreign/cc", "CXX": "/foreign/cxx", "CFLAGS": "-O0",
+            "CXXFLAGS": "-O0", "CPPFLAGS": "-I/foreign", "LDFLAGS": "-L/foreign",
+            "PKGCONFIG": "/foreign/pkg-config", "KRB5CONFIG": "/foreign/krb5-config",
+            "PKG_CONFIG": "/foreign/pkg-config", "PKG_CONFIG_PATH": "/foreign/pkgconfig",
+            "PKG_CONFIG_LIBDIR": "/foreign/pkgconfig", "PKG_CONFIG_SYSTEM_INCLUDE_PATH": "/foreign/include",
+            "PKG_CONFIG_SYSTEM_LIBRARY_PATH": "/foreign/lib", "LIBRARY_PATH": "/foreign/lib",
+            "CCC_OVERRIDE_OPTIONS": "+-O0", "CCC_ADD_ARGS": "-O0",
+            "ac_cv_func_getaddrinfo": "no", "curl_cv_ssl": "foreign", "custom_cv_value": "foreign",
+            "CMAKE_C_COMPILER_LAUNCHER": "/foreign/launcher", "CMAKE_TOOLCHAIN_FILE": "/foreign/toolchain",
+            "CMAKE_CUSTOM_OVERRIDE": "foreign", "CCACHE_PREFIX": "/foreign/launcher",
+            "CCACHE_CUSTOM_OVERRIDE": "foreign", "DISTCC_HOSTS": "foreign", "DISTCC_CUSTOM_OVERRIDE": "foreign",
+            "DYLD_INSERT_LIBRARIES": "/foreign.dylib", "LD_PRELOAD": "/foreign.so",
+            "HTTPS_PROXY": "https://foreign.invalid", "all_proxy": "socks://foreign.invalid",
+            "SSL_CERT_FILE": "/foreign/ca", "CURL_CA_BUNDLE": "/foreign/ca",
+            "OPENSSL_CONF": "/foreign/openssl.cnf", "OPENSSL_MODULES": "/foreign/modules",
+        }
+        original = dict(retained, **overrides)
+        cleaned = COHORT.native_environment(original)
+        self.assertEqual(cleaned, dict(retained, CONFIG_SITE="/dev/null", CONFIG_SHELL="/bin/sh"))
+        self.assertEqual(original, dict(retained, **overrides))
+        self.assertNotIn("SOURCE_DATE_EPOCH", COHORT.native_environment({"PATH": "/fixture/bin"}))
+
+    def test_manifest_rejects_unsupported_schema_toolchain_and_malformed_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            for key, value in (("schema_version", 2), ("llvm_version", "23.1.2"),
+                               ("sha256", "a" * 63), ("sha256", "A" * 64)):
+                data = copy.deepcopy(self.manifest)
+                if key == "sha256":
+                    data["sources"]["curl"][key] = value
+                else:
+                    data[key] = value
+                path.write_text(json.dumps(data))
+                with self.subTest(key=key, value=value), patch.object(COHORT, "MANIFEST", path), \
+                        self.assertRaises(ValueError):
+                    COHORT.load_manifest()
+
+    def test_baseline_requires_exact_measured_capabilities_and_versions(self):
+        original = self.baseline()
+        COHORT.validate_baseline(original, self.manifest)
+        self.assertEqual(len(original["runtime"]["features"]), 20)
+        self.assertEqual(len(original["runtime"]["protocols"]), 25)
+        for key in ("features", "protocols"):
+            for lost in original["runtime"][key]:
+                data = copy.deepcopy(original)
+                data["runtime"][key].remove(lost)
+                with self.subTest(key=key, lost=lost), self.assertRaises(ValueError):
+                    COHORT.validate_baseline(data, self.manifest)
+            for added in ("unmeasured", original["runtime"][key][0]):
+                data = copy.deepcopy(original)
+                data["runtime"][key].append(added)
+                with self.subTest(key=key, added=added), self.assertRaises(ValueError):
+                    COHORT.validate_baseline(data, self.manifest)
+        for key in self.manifest["baseline"]["versions"]:
+            data = copy.deepcopy(original)
+            data["runtime"][key] = "changed version"
+            with self.subTest(version=key), self.assertRaises(ValueError):
+                COHORT.validate_baseline(data, self.manifest)
+        for key, value in (("ares", "1.34.6"),):
+            data = copy.deepcopy(original)
+            data["runtime"][key] = value
+            with self.assertRaises(ValueError):
+                COHORT.validate_baseline(data, self.manifest)
+        data = copy.deepcopy(original)
+        data["ca_bundle_sha256"] = "0" * 64
+        with self.assertRaises(ValueError):
+            COHORT.validate_baseline(data, self.manifest)
+
+    def test_baseline_trust_policy_and_positive_proofs_are_fixed(self):
+        for proof in ("public_tls_default", "public_tls_bundle"):
+            for key, value in (("code", 60), ("status", 301), ("ssl_verify_result", 20),
+                               ("default_ca_bundle", "/foreign.pem"), ("default_ca_path", "/foreign")):
+                data = self.baseline()
+                data["runtime"][proof][key] = value
+                with self.subTest(proof=proof, key=key), self.assertRaises(ValueError):
+                    COHORT.validate_baseline(data, self.manifest)
+
+    def test_runtime_preserves_every_capability_and_provider_identity(self):
+        original = self.runtime()
+        COHORT.validate_runtime(original, self.manifest)
+        extra = copy.deepcopy(original)
+        extra["features"].append("additional-supported-feature")
+        extra["protocols"].append("additional-supported-protocol")
+        COHORT.validate_runtime(extra, self.manifest)
+        for key in ("features", "protocols"):
+            for lost in original[key]:
+                data = copy.deepcopy(original)
+                data[key].remove(lost)
+                with self.subTest(key=key, lost=lost), self.assertRaises(ValueError):
+                    COHORT.validate_runtime(data, self.manifest)
+            data = copy.deepcopy(original)
+            data[key].append(data[key][0])
+            with self.subTest(duplicate=key), self.assertRaises(ValueError):
+                COHORT.validate_runtime(data, self.manifest)
+        changes = [(key, "changed version") for key in self.manifest["baseline"]["versions"]]
+        changes += [("header_version", "8.21.0"), ("header_version_num", 0x081500),
+                    ("ares", None), ("ares", "1.34.5"), ("cares_version", "1.34.5"), ("cares_header_version", "1.34.5"),
+                    ("features", original["features"] + ["asyn-rr"])]
+        for key, value in changes:
+            data = copy.deepcopy(original)
+            data[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                COHORT.validate_runtime(data, self.manifest)
+
+    def test_runtime_requires_verified_positive_and_specific_negative_tls_results(self):
+        for proof in ("public_tls_default", "public_tls_bundle", "private_tls_trusted"):
+            for key, value in (("code", 60), ("status", 0), ("status", 302), ("ssl_verify_result", 1)):
+                data = self.runtime()
+                data[proof][key] = value
+                with self.subTest(proof=proof, key=key, value=value), self.assertRaises(ValueError):
+                    COHORT.validate_runtime(data, self.manifest)
+        for proof in ("public_tls_unrelated", "private_tls_untrusted", "private_tls_wrong_hostname"):
+            for key, value in (("code", 0), ("code", 7), ("code", 35), ("status", 200)):
+                data = self.runtime()
+                data[proof][key] = value
+                with self.subTest(proof=proof, key=key, value=value), self.assertRaises(ValueError):
+                    COHORT.validate_runtime(data, self.manifest)
+        for proof in ("public_tls_default", "public_tls_bundle"):
+            for key in ("default_ca_bundle", "default_ca_path"):
+                data = self.runtime()
+                data[proof][key] = "/unexpected-default"
+                with self.subTest(proof=proof, key=key), self.assertRaises(ValueError):
+                    COHORT.validate_runtime(data, self.manifest)
+
+    def test_config_requires_cares_and_preserves_ldap_native_idn_and_trust_policy(self):
+        original = "\n".join(f"#define {name} 1" for name in self.manifest["required_config"])
+        COHORT.validate_config(original, self.manifest)
+        for name in self.manifest["required_config"]:
+            for replacement in ("", f"#define {name} 0", f"/* #undef {name} */"):
+                changed = original.replace(f"#define {name} 1", replacement)
+                with self.subTest(required=name, replacement=replacement), self.assertRaises(ValueError):
+                    COHORT.validate_config(changed, self.manifest)
+        for name in self.manifest["forbidden_config"]:
+            with self.subTest(forbidden=name), self.assertRaises(ValueError):
+                COHORT.validate_config(original + f'\n#define {name} "unexpected"', self.manifest)
+
+    def test_configure_policy_uses_sdk_zlib_and_owned_resolver(self):
+        prefix, sdk = Path("/owned curl"), Path("/native SDK")
+        deps = {name: Path("/kegs") / name for name in self.manifest["dependency_formulae"]}
+        arguments = COHORT.configure_arguments(prefix, sdk, deps)
+        options = dict(argument.split("=", 1) if "=" in argument else (argument, None)
+                       for argument in arguments)
+        self.assertEqual(options["--enable-ares"], str(prefix))
+        self.assertEqual(options["--with-zlib"], str(sdk / "usr"))
+        self.assertEqual(options["--with-default-ssl-backend"], "openssl")
+        for option, dep in (("ssl", "openssl@3"), ("brotli", "brotli"), ("zstd", "zstd"),
+                            ("libpsl", "libpsl"), ("libssh2", "libssh2"),
+                            ("nghttp2", "libnghttp2"), ("nghttp3", "libnghttp3"), ("ngtcp2", "libngtcp2")):
+            self.assertEqual(options["--with-" + option], str(deps[dep]))
+        for option in ("--disable-threaded-resolver", "--without-ca-bundle", "--without-ca-path",
+                       "--with-ca-fallback", "--with-apple-sectrust", "--with-gssapi",
+                       "--with-apple-idn", "--without-libidn2", "--enable-ldap", "--enable-ldaps"):
+            self.assertIn(option, options)
+        self.assertFalse(any("unwind" in value or "libstdc++" in value for value in arguments))
+
+    def test_source_archive_digest_root_and_link_containment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, (name, target) in enumerate((("curl-fixture/COPYING", None),
+                                                   ("other/COPYING", None),
+                                                   ("curl-fixture/../../escaped", None),
+                                                   ("/curl-fixture/absolute", None),
+                                                   ("curl-fixture/link", "../../escaped"))):
+                archive = root / f"source-{index}.tar"
+                with tarfile.open(archive, "w") as output:
+                    member = tarfile.TarInfo(name)
+                    if target:
+                        member.type = tarfile.SYMTYPE
+                        member.linkname = target
+                        output.addfile(member)
+                    else:
+                        content = b"source fixture"
+                        member.size = len(content)
+                        output.addfile(member, io.BytesIO(content))
+                source = {"sha256": COHORT.digest(archive), "directory": "curl-fixture"}
+                destination = root / f"destination-{index}"
+                with self.subTest(name=name, target=target):
+                    if index == 0:
+                        extracted = COHORT.extract_source(archive, destination, source)
+                        self.assertEqual((extracted / "COPYING").read_bytes(), b"source fixture")
+                        source["sha256"] = "0" * 64
+                        with self.assertRaises(ValueError):
+                            COHORT.extract_source(archive, root / "bad-digest", source)
+                        self.assertFalse((root / "bad-digest").exists())
+                    else:
+                        with self.assertRaises((ValueError, tarfile.TarError)):
+                            COHORT.extract_source(archive, destination, source)
+                self.assertFalse((root / "escaped").exists())
+
+    def test_loaded_inventory_rejects_foreign_providers_missing_images_and_dependency_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = root / "cohort"
+            (prefix / "lib").mkdir(parents=True)
+            curl, cares = prefix / "lib/libcurl.dylib", prefix / "lib/libcares.dylib"
+            probe, dep, foreign = root / "probe", root / "keg/ssl.dylib", root / "foreign/libcurl.dylib"
+            for path in (curl, cares, probe, dep, foreign):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"same-version fixture binary")
+            files = {str(dep): COHORT.digest(dep)}
+            data = {"loaded_library": str(curl), "loaded_cares_library": str(cares),
+                    "loaded_images": [str(curl), str(cares), str(probe), str(dep),
+                                      "/usr/lib/libSystem.B.dylib", "/System/Library/Frameworks/Security.framework/Security",
+                                      "/Library/Apple/System/Library/fixture.dylib"]}
+            platform_images = ["/usr/lib/libkrb5.dylib", "/usr/lib/libldap.dylib",
+                               "/usr/lib/libz.1.dylib", "/usr/lib/libicucore.A.dylib"]
+            data["loaded_images"].extend(platform_images)
+            # macOS shared-cache install names need no ordinary filesystem file.
+            data["dependency_install_names"] = {image: [] for image in data["loaded_images"]}
+            data["dependency_install_names"][str(curl)] = [str(cares)]
+            data["symbol_providers"] = {name: str(curl) for name in COLLECTOR.CURL_APIS}
+            data["symbol_providers"]["ares_version"] = str(cares)
+            COHORT.validate_loaded(data, prefix, files, probe, platform_images)
+            for missing in platform_images:
+                changed = copy.deepcopy(data)
+                changed["loaded_images"].remove(missing)
+                del changed["dependency_install_names"][missing]
+                with self.subTest(missing_platform=missing), self.assertRaisesRegex(ValueError, "baseline SDK"):
+                    COHORT.validate_loaded(changed, prefix, files, probe, platform_images)
+            mutations = [("loaded_library", str(foreign)), ("loaded_cares_library", str(foreign)),
+                         ("loaded_images", []), ("loaded_images", data["loaded_images"] + [str(curl)]),
+                         ("loaded_images", data["loaded_images"] + [str(foreign)]),
+                         ("loaded_images", data["loaded_images"] + ["relative.dylib"]),
+                         ("loaded_images", data["loaded_images"] + ["/usr/lib/../foreign.dylib"])]
+            mutations += [("loaded_images", [image for image in data["loaded_images"] if image != str(own)])
+                          for own in (curl, cares)]
+            for key, value in mutations:
+                changed = copy.deepcopy(data)
+                changed[key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    COHORT.validate_loaded(changed, prefix, files, probe)
+            captured_foreign_files = dict(files, **{str(foreign): COHORT.digest(foreign)})
+            for additional in ("/usr/lib/libcurl.4.dylib", "/usr/lib/libcares.2.dylib", str(foreign)):
+                changed = copy.deepcopy(data)
+                changed["loaded_images"].append(additional)
+                changed["dependency_install_names"][additional] = []
+                with self.subTest(extra_provider=additional), self.assertRaises(ValueError):
+                    COHORT.validate_loaded(changed, prefix, captured_foreign_files, probe)
+            with self.assertRaises(ValueError):
+                COHORT.validate_loaded(data, prefix, {}, probe)
+            dep.write_bytes(b"changed dependency bytes")
+            with self.assertRaises(ValueError):
+                COHORT.validate_loaded(data, prefix, files, probe)
+            curl.unlink()
+            curl.symlink_to(foreign)
+            with self.assertRaises(ValueError):
+                COHORT.validate_loaded(data, prefix, files, probe)
+
+    def test_system_curl_requires_preserved_baseline_platform_chain_and_owned_api_bindings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = root / "cohort"
+            curl, cares = prefix / "lib/libcurl.dylib", prefix / "lib/libcares.dylib"
+            probe, foreign = root / "probe", root / "brew/libcurl.4.dylib"
+            bottle = root / "baseline/libcurl.dylib"
+            for path in (curl, cares, probe, foreign, bottle):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"same-version fixture")
+            platform_root = "/usr/lib/libldap.dylib"
+            intermediary = "/System/Library/Frameworks/fixture.framework/fixture"
+            system = COLLECTOR.SYSTEM_CURL
+            platform = [platform_root, intermediary, system]
+            baseline = {"loaded_library": str(bottle), "loaded_images": [str(bottle), *platform],
+                        "dependency_install_names": {str(bottle): [platform_root], platform_root: [intermediary],
+                                                     intermediary: [system], system: []}}
+            data = {"loaded_library": str(curl), "loaded_cares_library": str(cares),
+                    "loaded_images": [str(curl), str(cares), str(probe), *platform],
+                    "dependency_install_names": {str(curl): [str(cares), platform_root], str(cares): [], str(probe): [str(curl)],
+                                                 **{key: copy.deepcopy(value) for key, value in baseline["dependency_install_names"].items()
+                                                    if key != str(bottle)}},
+                    "symbol_providers": {**{name: str(curl) for name in COLLECTOR.CURL_APIS},
+                                         "ares_version": str(cares)}}
+            files = {str(foreign): COHORT.digest(foreign)}
+
+            def validate(candidate=data, prior=baseline, roots=(platform_root,)):
+                COHORT.validate_loaded(candidate, prefix, files, probe, baseline=prior, platform_roots=roots)
+
+            validate()
+            with self.assertRaises(ValueError):
+                validate(prior=None)
+            with self.assertRaises(ValueError):
+                validate(roots=())
+            for side in ("baseline", "candidate"):
+                selected = str(bottle) if side == "baseline" else str(curl)
+                for parent, child in ((selected, platform_root), (platform_root, intermediary), (intermediary, system)):
+                    changed_data, changed_baseline = copy.deepcopy(data), copy.deepcopy(baseline)
+                    changed = changed_baseline if side == "baseline" else changed_data
+                    changed["dependency_install_names"][parent].remove(child)
+                    with self.subTest(side=side, missing_edge=(parent, child)), self.assertRaises(ValueError):
+                        validate(changed_data, changed_baseline)
+            changed = copy.deepcopy(data)
+            changed["dependency_install_names"][platform_root] = [system]
+            with self.assertRaisesRegex(ValueError, "preserve"):
+                validate(changed)
+            changed = copy.deepcopy(data)
+            other_root = "/usr/lib/libkrb5.dylib"
+            changed["loaded_images"].append(other_root)
+            changed["dependency_install_names"][other_root] = [system]
+            changed["dependency_install_names"][str(curl)] = [str(cares), other_root]
+            with self.assertRaisesRegex(ValueError, "preserve"):
+                validate(changed, roots=(platform_root, other_root))
+            for edge in (str(foreign), "@rpath/libcurl.4.dylib", "/usr/lib/../lib/libcurl.4.dylib"):
+                changed = copy.deepcopy(data)
+                changed["dependency_install_names"][intermediary] = [edge]
+                if edge == str(foreign):
+                    changed["loaded_images"].append(edge)
+                    changed["dependency_install_names"][edge] = [system]
+                with self.subTest(foreign_edge=edge), self.assertRaises(ValueError):
+                    validate(changed)
+            for missing in (intermediary, system):
+                changed = copy.deepcopy(baseline)
+                changed["loaded_images"].remove(missing)
+                del changed["dependency_install_names"][missing]
+                with self.subTest(baseline_missing_image=missing), self.assertRaises(ValueError):
+                    validate(prior=changed)
+            for extra in (str(foreign), "/usr/lib/libcurl.3.dylib", "/usr/lib/libcares.2.dylib"):
+                changed = copy.deepcopy(data)
+                changed["loaded_images"].append(extra)
+                changed["dependency_install_names"][extra] = []
+                with self.subTest(extra_provider=extra), self.assertRaises(ValueError):
+                    validate(changed)
+            for api in data["symbol_providers"]:
+                changed = copy.deepcopy(data)
+                changed["symbol_providers"][api] = str(foreign)
+                with self.subTest(api=api), self.assertRaises(ValueError):
+                    validate(changed)
+            changed = copy.deepcopy(data)
+            changed["dependency_install_names"][str(curl)] = []
+            with self.assertRaisesRegex(ValueError, "c-ares dependency edge"):
+                validate(changed)
+
+    def test_baseline_binding_requires_same_workflow_source_provider_and_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = root / "bottle"
+            library = prefix / "lib/libcurl.dylib"
+            library.parent.mkdir(parents=True)
+            library.write_bytes(b"baseline curl")
+            environment = {"GITHUB_RUN_ID": "17", "GITHUB_RUN_ATTEMPT": "1",
+                           "GITHUB_JOB": "native-curl", "GITHUB_REPOSITORY": "atrinik/classic"}
+            runtime = self.runtime()
+            runtime.update(loaded_library=str(library), loaded_images=[str(library)],
+                           dependency_install_names={str(library): []},
+                           symbol_providers={name: str(library) for name in COLLECTOR.CURL_APIS})
+            record = {"schema_version": 2, "source_commit": "a" * 40,
+                      "qualification_identity": COLLECTOR.qualification_identity(environment),
+                      "selected_library": str(library), "selected_library_sha256": COHORT.digest(library),
+                      "prefix": str(prefix), "runtime": runtime}
+            COHORT.bind_baseline(record, "a" * 40, environment)
+            for key, value in (("schema_version", 1), ("source_commit", "b" * 40)):
+                changed = dict(record, **{key: value})
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    COHORT.bind_baseline(changed, "a" * 40, environment)
+            for key, value in (("GITHUB_RUN_ID", "18"), ("GITHUB_RUN_ATTEMPT", "2"), ("GITHUB_JOB", "other-job")):
+                with self.subTest(identity=key), self.assertRaises(ValueError):
+                    COHORT.bind_baseline(record, "a" * 40, dict(environment, **{key: value}))
+            changed = copy.deepcopy(record)
+            changed["runtime"]["loaded_images"] = []
+            changed["runtime"]["dependency_install_names"] = {}
+            with self.assertRaises(ValueError):
+                COHORT.bind_baseline(changed, "a" * 40, environment)
+            library.write_bytes(b"baseline bytes replaced after collection")
+            with self.assertRaisesRegex(ValueError, "bytes changed"):
+                COHORT.bind_baseline(record, "a" * 40, environment)
+
+    def test_header_directories_are_owned_even_for_same_version_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix, foreign = root / "cohort", root / "foreign"
+            for include in (prefix / "include", foreign / "include"):
+                include.mkdir(parents=True)
+                (include / "curl").mkdir()
+                (include / "curl/curl.h").write_text("same version API")
+            COHORT.validate_headers(str(prefix / "include"), prefix)
+            for selected in (str(foreign / "include"), f"{prefix}/include;{foreign}/include"):
+                with self.subTest(selected=selected), self.assertRaises(ValueError):
+                    COHORT.validate_headers(selected, prefix)
+
+    def test_consumer_cache_binds_prefix_providers_headers_compiler_and_release_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix, foreign = root / "cohort", root / "same-version-foreign"
+            headers = ("curl/curl.h", "curl/curlver.h", "ares.h", "ares_version.h")
+            owned_files = [prefix / "lib/libcurl.dylib", prefix / "lib/libcares.dylib",
+                           *[prefix / "include" / name for name in headers]]
+            compiler = root / "llvm/bin/clang"
+            for path in [*owned_files, compiler]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"verified same-version fixture")
+            for path in (foreign / "lib/libcurl.dylib", foreign / "include/curl/curl.h", foreign / "bin/clang"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"verified same-version fixture")
+            receipt_path = prefix / "evidence/receipt.json"
+            receipt_path.parent.mkdir()
+            receipt = {"prefix": str(prefix), "curl_sha256": COHORT.digest(owned_files[0]),
+                       "cares_sha256": COHORT.digest(owned_files[1]),
+                       "header_hashes": {name: COHORT.digest(prefix / "include" / name) for name in headers},
+                       "tools": {"clang": {"path": str(compiler), "sha256": COHORT.digest(compiler)}},
+                       "release_flags": ["-O3", "-DNDEBUG"]}
+            receipt_path.write_text(json.dumps(receipt))
+            cache_path = root / "CMakeCache.txt"
+            cache = {"CURL_INCLUDE_DIR": str(prefix / "include"),
+                     "CURL_LIBRARY_RELEASE": str(prefix / "lib/libcurl.dylib"),
+                     "CMAKE_C_COMPILER": str(compiler), "CMAKE_BUILD_TYPE": "Release",
+                     "CMAKE_C_FLAGS_RELEASE": "-O3 -DNDEBUG"}
+
+            def write_cache(values):
+                cache_path.write_text("# fixture CMake cache\n" + "\n".join(
+                    f"{key}:STRING={value}" for key, value in values.items()) + "\n")
+
+            write_cache(cache)
+            with patch.object(COHORT.platform, "system", return_value="Linux"), \
+                    self.assertRaisesRegex(ValueError, "actual native Mac"):
+                COHORT.verify_consumer_cache(prefix, cache_path)
+            with patch.object(COHORT.platform, "system", return_value="Darwin"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                COHORT.verify_consumer_cache(prefix, cache_path)
+                mutations = [("CURL_INCLUDE_DIR", str(foreign / "include")),
+                             ("CURL_LIBRARY_RELEASE", str(foreign / "lib/libcurl.dylib")),
+                             ("CMAKE_C_COMPILER", str(foreign / "bin/clang")),
+                             ("CURL_INCLUDE_DIR", ""), ("CURL_LIBRARY_RELEASE", ""),
+                             ("CMAKE_BUILD_TYPE", "Debug"), ("CMAKE_C_FLAGS_RELEASE", "-O0 -DNDEBUG"),
+                             ("CMAKE_C_FLAGS_RELEASE", "-O3"), ("CMAKE_C_FLAGS_RELEASE", "-O3 -DNDEBUG -g")]
+                for key, value in mutations:
+                    changed = dict(cache, **{key: value})
+                    write_cache(changed)
+                    with self.subTest(cache_key=key, value=value), self.assertRaises(ValueError):
+                        COHORT.verify_consumer_cache(prefix, cache_path)
+                write_cache(cache)
+                changed = dict(receipt, prefix=str(foreign))
+                receipt_path.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError, "another install prefix"):
+                    COHORT.verify_consumer_cache(prefix, cache_path)
+                receipt_path.write_text(json.dumps(receipt))
+                for path in [*owned_files, compiler]:
+                    original = path.read_bytes()
+                    path.write_bytes(b"changed same-version fixture")
+                    with self.subTest(changed_bytes=path), self.assertRaises(ValueError):
+                        COHORT.verify_consumer_cache(prefix, cache_path)
+                    path.write_bytes(original)
+                COHORT.verify_consumer_cache(prefix, cache_path)
+
+    def test_diagnostics_retains_failed_configuration_without_private_keys_or_unknown_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "cohort"
+            diagnostics = ("CMakeCache.txt", "compile_commands.json", "config.log", "config.status",
+                           "lib/curl_config.h", "CMakeFiles/CMakeConfigureLog.yaml")
+            for build in ("llvm-probe", "cares-build", "curl-build", "curl-probe"):
+                for relative in diagnostics:
+                    path = prefix / "stage" / build / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(f"retained failure diagnostic: {build}/{relative}\n")
+                (prefix / "stage" / build / "unknown-source-file").write_text("exclude unknown source")
+            private = prefix / "stage/private-tls/private.key"
+            private.parent.mkdir()
+            private.write_text("private fixture key must remain excluded")
+            (prefix / "stage/curl-build/unknown.key").write_text("exclude key")
+            COHORT.retain_diagnostics(prefix)
+            evidence = prefix / "evidence/configuration"
+            expected = {f"{build}/{relative}" for build in ("llvm-probe", "cares-build", "curl-build", "curl-probe")
+                        for relative in diagnostics}
+            actual = {str(path.relative_to(evidence)) for path in evidence.rglob("*") if path.is_file()}
+            self.assertEqual(actual, expected)
+            self.assertEqual((evidence / "curl-build/config.log").read_text(),
+                             "retained failure diagnostic: curl-build/config.log\n")
+            self.assertFalse(any(path.suffix == ".key" for path in (prefix / "evidence").rglob("*")))
+            # A failed early configure may produce only config.log; missing optional
+            # diagnostics must not conceal the original command failure.
+            sparse = Path(directory) / "sparse"
+            log = sparse / "stage/curl-build/config.log"
+            log.parent.mkdir(parents=True)
+            log.write_text("configure exited before creating its cache\n")
+            COHORT.retain_diagnostics(sparse)
+            self.assertEqual((sparse / "evidence/configuration/curl-build/config.log").read_text(), log.read_text())
+
+    def test_prepare_preserves_command_failure_and_retains_early_configure_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix, llvm = root / "absent-cohort", root / "llvm"
+            llvm.mkdir()
+            bundle = root / "ca.pem"
+            bundle.write_text("fixture CA input")
+            manifest = copy.deepcopy(self.manifest)
+            manifest["ca_bundle_sha256"] = COHORT.digest(bundle)
+            baseline = self.baseline()
+            baseline["ca_bundle_sha256"] = manifest["ca_bundle_sha256"]
+            baseline_path = root / "baseline.json"
+            baseline_path.write_text(json.dumps(baseline))
+
+            def failed_build(owned_prefix, *arguments):
+                build = owned_prefix / "stage/curl-build"
+                build.mkdir(parents=True)
+                (build / "config.log").write_text("early configure failure\n")
+                evidence = owned_prefix / "evidence"
+                evidence.mkdir()
+                COHORT.Commands(evidence, {}).run("curl-configure", ["fixture-configure"])
+
+            result = subprocess.CompletedProcess(["fixture-configure"], 17, "partial", "configure failed")
+            with patch.object(COHORT, "load_manifest", return_value=manifest), \
+                    patch.object(COHORT.platform, "system", return_value="Darwin"), \
+                    patch.object(COHORT.platform, "machine", return_value="arm64"), \
+                    patch.object(COHORT, "_prepare_owned", side_effect=failed_build), \
+                    patch.object(COHORT.subprocess, "run", return_value=result), \
+                    self.assertRaisesRegex(ValueError, r"curl-configure \(17\)"):
+                COHORT.prepare(prefix, llvm, baseline_path, bundle)
+            self.assertEqual((prefix / "evidence/configuration/curl-build/config.log").read_text(),
+                             "early configure failure\n")
+            self.assertEqual(json.loads((prefix / "evidence/commands.json").read_text())[0]["returncode"], 17)
+
+    def test_failed_command_retains_output_status_and_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory)
+            commands = COHORT.Commands(evidence, {"PATH": "/fixture"})
+            result = subprocess.CompletedProcess(["fixture", "literal $(not executed)"], 17, "partial output", "failure detail")
+            with patch.object(COHORT.subprocess, "run", return_value=result) as run, \
+                    self.assertRaisesRegex(ValueError, "17"):
+                commands.run("failure", result.args)
+            self.assertEqual((evidence / "failure.stdout").read_text(), result.stdout)
+            self.assertEqual((evidence / "failure.stderr").read_text(), result.stderr)
+            record = json.loads((evidence / "commands.json").read_text())[0]
+            self.assertEqual(record["returncode"], 17)
+            self.assertEqual(record["arguments"], result.args)
+            self.assertEqual(run.call_args.args[0], result.args)
+            self.assertNotIn("shell", run.call_args.kwargs)
+
+
+if __name__ == "__main__":
+    unittest.main()

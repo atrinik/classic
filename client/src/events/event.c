@@ -170,6 +170,7 @@ int Event_PollInputDevice(void) {
     SDL_Event event;
     int x = 0, y = 0, done = 0;
     static Uint32 Ticks = 0;
+    static bool close_logged = false, quit_logged = false;
 
     /* Execute mouse actions, even if mouse button is being held. */
     if ((SDL_GetTicks() - Ticks > 125) || !Ticks) {
@@ -302,7 +303,18 @@ int Event_PollInputDevice(void) {
 
                 break;
 
+            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                if (!close_logged) {
+                    LOG(INFO, "Client window close event received.");
+                    close_logged = true;
+                }
+                break;
+
             case SDL_EVENT_QUIT:
+                if (!quit_logged) {
+                    LOG(INFO, "Client quit event received.");
+                    quit_logged = true;
+                }
                 done = 1;
                 break;
 

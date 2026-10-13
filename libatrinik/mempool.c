@@ -283,7 +283,7 @@ static void mempool_leak_info(mempool_struct *pool, StringBuffer *sb) {
 #else
     {
 #endif
-        snprintf(VS(buf), "no debug information available");
+        snprintf((buf), sizeof((buf)), "no debug information available");
     }
 
     for (i = 0; i < MEMPOOL_NROF_FREELISTS; i++) {

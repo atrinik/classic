@@ -88,8 +88,8 @@ static socket_struct *connection(size_t index) {
 
 static void login(socket_struct *ns, const char *password) {
     char name[MAX_BUF], secret[MAX_BUF];
-    snprintf(VS(name), "%s", fixture_name);
-    snprintf(VS(secret), "%s", password);
+    snprintf((name), sizeof((name)), "%s", fixture_name);
+    snprintf((secret), sizeof((secret)), "%s", password);
     account_login(ns, name, secret);
     /* Callers' buffers have no lifetime beyond submission. */
     memset(secret, 0, sizeof(secret));
@@ -97,9 +97,9 @@ static void login(socket_struct *ns, const char *password) {
 
 static void register_account(socket_struct *ns, const char *password) {
     char name[MAX_BUF], secret[MAX_BUF], confirmation[MAX_BUF];
-    snprintf(VS(name), "%s", registration_name);
-    snprintf(VS(secret), "%s", password);
-    snprintf(VS(confirmation), "%s", password);
+    snprintf((name), sizeof((name)), "%s", registration_name);
+    snprintf((secret), sizeof((secret)), "%s", password);
+    snprintf((confirmation), sizeof((confirmation)), "%s", password);
     account_register(ns, name, secret, confirmation);
     memset(secret, 0, sizeof(secret));
     memset(confirmation, 0, sizeof(confirmation));
@@ -189,10 +189,10 @@ static void fixture_setup(void) {
         suffix[i] = (char)('a' + (digit <= '9' ? digit - '0' : digit - 'a' + 10));
     }
     suffix[sizeof(suffix) - 1] = '\0';
-    snprintf(VS(fixture_name), "async%s", suffix);
-    snprintf(VS(registration_name), "reg%s", suffix);
+    snprintf((fixture_name), sizeof((fixture_name)), "async%s", suffix);
+    snprintf((registration_name), sizeof((registration_name)), "reg%s", suffix);
     suffix[0] = (char)toupper((unsigned char)suffix[0]);
-    snprintf(VS(fixture_character), "Async %s", suffix);
+    snprintf((fixture_character), sizeof((fixture_character)), "Async %s", suffix);
     account_path = account_make_path(fixture_name);
     fixture_player_path = player_make_path(fixture_character, "player.dat");
     registration_path = account_make_path(registration_name);
@@ -340,7 +340,7 @@ START_TEST(test_credentials_changed_while_pending_are_not_overwritten) {
     char record[PASSWORD_RECORD_SIZE];
     ck_assert(password_record_create("new-async-9!", record));
     char credential[PASSWORD_RECORD_SIZE + 16];
-    snprintf(VS(credential), "password %s", record);
+    snprintf((credential), sizeof((credential)), "password %s", record);
     replace_fixture_credential(credential);
     char *changed = read_account();
     auth_worker_pause_for_test(false);
@@ -389,7 +389,7 @@ START_TEST(test_pbkdf2_upgrade_is_transactional) {
     char salt_hex[65], hash_hex[65], credential[160];
     ck_assert_uint_eq(string_tohex(salt, sizeof(salt), VS(salt_hex), false), 64);
     ck_assert_uint_eq(string_tohex(hash, sizeof(hash), VS(hash_hex), false), 64);
-    snprintf(VS(credential), "pswd %s\nsalt %s", hash_hex, salt_hex);
+    snprintf((credential), sizeof((credential)), "pswd %s\nsalt %s", hash_hex, salt_hex);
     replace_fixture_credential(credential);
     char *legacy = read_account();
     socket_struct *ns = connection(0);
@@ -406,7 +406,7 @@ START_TEST(test_pbkdf2_upgrade_is_transactional) {
         ck_assert_ptr_null(strstr(after, "pswd "));
         ck_assert_ptr_null(strstr(after, "salt "));
         char character_line[MAX_BUF + 32];
-        snprintf(VS(character_line), "char human_male:%s::1", fixture_character);
+        snprintf((character_line), sizeof((character_line)), "char human_male:%s::1", fixture_character);
         ck_assert_ptr_nonnull(strstr(after, character_line));
         ck_assert_uint_eq(successful_logins(), 1);
     }
@@ -477,7 +477,7 @@ START_TEST(test_password_change_preserves_session_and_commits_atomically) {
     char *before = read_account();
     char old_password[MAX_BUF], new_password[] = "new-async-9!";
     char confirmation[] = "new-async-9!";
-    snprintf(VS(old_password), "%s", fixture_password);
+    snprintf((old_password), sizeof((old_password)), "%s", fixture_password);
     account_fail_saves_for_test(_i == 1);
     auth_worker_pause_for_test(true);
     account_password_change(ns, old_password, new_password, confirmation);
@@ -514,8 +514,8 @@ START_TEST(test_concurrent_password_changes_recheck_current_credential) {
     char old_first[MAX_BUF], old_second[MAX_BUF];
     char new_first[] = "first-async-9!", confirm_first[] = "first-async-9!";
     char new_second[] = "second-async-9!", confirm_second[] = "second-async-9!";
-    snprintf(VS(old_first), "%s", fixture_password);
-    snprintf(VS(old_second), "%s", fixture_password);
+    snprintf((old_first), sizeof((old_first)), "%s", fixture_password);
+    snprintf((old_second), sizeof((old_second)), "%s", fixture_password);
     auth_worker_pause_for_test(true);
     account_password_change(first, old_first, new_first, confirm_first);
     account_password_change(second, old_second, new_second, confirm_second);
@@ -562,7 +562,7 @@ START_TEST(test_password_reset_rechecks_actor_permission) {
     object *actor = pl->ob;
     auth_worker_pause_for_test(true);
     char name[MAX_BUF];
-    snprintf(VS(name), "%s", fixture_name);
+    snprintf((name), sizeof((name)), "%s", fixture_name);
     account_password_force(actor, name, "reset-async-8!");
     ck_assert_uint_ne(pl->cs->auth_request, 0);
     ck_assert(auth_worker_wait_running_for_test(1));
@@ -635,12 +635,12 @@ static socket_struct *submit_admission_operation(int operation) {
         ns->account = xstrdup(fixture_name);
         char old_password[MAX_BUF], password[] = "changed-async-9!";
         char confirmation[] = "changed-async-9!";
-        snprintf(VS(old_password), "%s", fixture_password);
+        snprintf((old_password), sizeof((old_password)), "%s", fixture_password);
         account_password_change(ns, old_password, password, confirmation);
     } else {
         player *pl = reset_actor();
         char name[MAX_BUF];
-        snprintf(VS(name), "%s", fixture_name);
+        snprintf((name), sizeof((name)), "%s", fixture_name);
         account_password_force(pl->ob, name, "changed-async-9!");
         ns = pl->cs;
     }

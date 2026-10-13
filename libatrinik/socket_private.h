@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -25,6 +25,7 @@
 #define TOOLKIT_SOCKET_PRIVATE_H
 
 #include "socket.h"
+#include "socket_fd_set.h"
 
 #include <openssl/opensslv.h>
 #if OPENSSL_VERSION_NUMBER >= 0x30500000L

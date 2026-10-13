@@ -43,7 +43,8 @@ The `llvm-coverage` preset selects the pinned toolchain and its own
 `build/llvm-coverage` cache and profiles. Existing `linux-coverage` build trees
 remain available for the previously released producer.
 
-The helper requires matching Clang, llvm-profdata and llvm-cov 23.1.3.
+The helper requires matching Clang, llvm-profdata, llvm-cov and llvm-readobj
+23.1.3.
 CTest writes separate `%m-%p.profraw` files for processes and shared libraries;
 LCOV includes production C sources and excludes tests, build output and upstream
 dependency trees. Missing or empty profiles fail the export. Run `prepare` only
@@ -89,8 +90,8 @@ callers must cleanse every copy after use and never log codes or route
 capabilities. Store consumers persist only the index and verifier. The focused
 `libatrinik-access-code` test includes independently computed hash vectors,
 invalid alphabets/lengths, identity binding, and deterministic entropy failure
-on supported Linux linkers. The helper alone does not provide admission or
-route registration.
+through linker wrappers on Linux and test-only source wrappers on macOS.
+The helper alone does not provide admission or route registration.
 
 ## Direct connection and rendezvous API
 

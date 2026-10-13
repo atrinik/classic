@@ -421,9 +421,9 @@ bool disease_infect(object *op, object *victim, bool force) {
 
         /* if the disease has a title, it has a special infection message */
         if (new_disease->title != NULL) {
-            snprintf(VS(buf), "%s %s!!", op->title, victim->name);
+            snprintf((buf), sizeof((buf)), "%s %s!!", op->title, victim->name);
         } else {
-            snprintf(VS(buf),
+            snprintf((buf), sizeof((buf)),
                      "You infect %s with your disease, %s!",
                      victim->name,
                      new_disease->name);

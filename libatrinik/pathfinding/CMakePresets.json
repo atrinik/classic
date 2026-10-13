@@ -8,8 +8,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": true,
-        "ENABLE_COVERAGE": true,
-        "ATRINIK_LLVM_TOOLCHAIN": true
+        "ENABLE_COVERAGE": true
       }
     }
   ],

@@ -9,35 +9,25 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     get_filename_component(component_dir "${component_file}" DIRECTORY)
     if (EXISTS "${component_dir}/cmake/AtrinikVersion.cmake")
         include("${component_dir}/cmake/AtrinikVersion.cmake")
-        if (ATRINIK_LLVM_TOOLCHAIN)
-            include("${component_dir}/cmake/AtrinikLLVMOptIn.cmake")
-        endif ()
+        include("${component_dir}/cmake/AtrinikLLVM.cmake")
     elseif (EXISTS "${component_dir}/../cmake/AtrinikVersion.cmake")
         include("${component_dir}/../cmake/AtrinikVersion.cmake")
-        if (ATRINIK_LLVM_TOOLCHAIN)
-            include("${component_dir}/../cmake/AtrinikLLVMOptIn.cmake")
-        endif ()
+        include("${component_dir}/../cmake/AtrinikLLVM.cmake")
     else ()
         include("${component_dir}/../../cmake/AtrinikVersion.cmake")
-        if (ATRINIK_LLVM_TOOLCHAIN)
-            include("${component_dir}/../../cmake/AtrinikLLVMOptIn.cmake")
-        endif ()
-    endif ()
-    if (ATRINIK_LLVM_TOOLCHAIN)
-        atrinik_initialize_optional_llvm_toolchain()
+        include("${component_dir}/../../cmake/AtrinikLLVM.cmake")
     endif ()
     atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
 
+    atrinik_initialize_llvm_toolchain()
     project(libatrinik VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
-    if (ATRINIK_LLVM_TOOLCHAIN)
-        atrinik_require_optional_llvm()
-    endif ()
+    atrinik_require_llvm()
 
     include(CTest)
     include(CMakePackageConfigHelpers)
 
     option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
-    option(ENABLE_COVERAGE "Enable native compiler coverage instrumentation" OFF)
+    option(ENABLE_COVERAGE "Enable native LLVM coverage instrumentation" OFF)
     option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
     option(BUILD_FUZZING "Build bounded libFuzzer protocol targets" OFF)
 
@@ -48,7 +38,7 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     function(atrinik_configure_target target)
         target_compile_features(${target} PRIVATE c_std_17)
         target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
-        if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
             target_compile_options(${target} PRIVATE
                 -Wall
                 -Wextra
@@ -62,24 +52,18 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             get_target_property(target_type ${target} TYPE)
             if (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT MINGW)
                 target_compile_options(${target} PRIVATE
-                    -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic -O0 -g)
+                    -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic
+                    -funique-internal-linkage-names -O0 -g)
                 if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
                     target_link_options(${target} PRIVATE -fprofile-instr-generate)
                 endif ()
-            elseif (CMAKE_C_COMPILER_ID STREQUAL "GNU")
-                # Transitional support for the previous immutable producer image.
-                target_compile_options(${target} PRIVATE
-                    --coverage -fprofile-abs-path -O0 -g)
-                if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
-                    target_link_options(${target} PRIVATE --coverage)
-                endif ()
             else ()
-                message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang or GCC")
+                message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang")
             endif ()
         endif ()
         if (ENABLE_SANITIZERS)
-            if (MINGW OR NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-                message(FATAL_ERROR "ENABLE_SANITIZERS requires native GCC or Clang")
+            if (MINGW OR NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+                message(FATAL_ERROR "ENABLE_SANITIZERS requires native Clang")
             endif ()
             target_compile_options(${target} PRIVATE
                 -fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -219,6 +203,31 @@ endif ()
 find_library(READLINE_LIBRARY readline)
 
 if (READLINE_LIBRARY)
+    if (NOT EXISTS "${READLINE_LIBRARY}")
+        message(FATAL_ERROR "The selected Readline library does not exist")
+    endif ()
+    # Resolve both sides of opt/Cellar or system-library symlinks before pairing.
+    file(REAL_PATH "${READLINE_LIBRARY}" atrinik_readline_library)
+    get_filename_component(atrinik_readline_libdir "${atrinik_readline_library}" DIRECTORY)
+    if (atrinik_readline_libdir MATCHES "^(.+)/(lib|lib64)(/[^/]+)?$")
+        set(atrinik_readline_headers "${CMAKE_MATCH_1}/include")
+    elseif (atrinik_readline_libdir MATCHES "^/(lib|lib64)(/[^/]+)?$")
+        # Non-usr-merged system layouts still pair /lib with /usr/include.
+        set(atrinik_readline_headers "/usr/include")
+    else ()
+        message(FATAL_ERROR "The selected Readline library requires a supported lib/lib64 prefix")
+    endif ()
+    find_path(READLINE_INCLUDE_DIR readline/readline.h
+        PATHS "${atrinik_readline_headers}" NO_DEFAULT_PATH)
+    if (NOT READLINE_INCLUDE_DIR OR
+            NOT EXISTS "${READLINE_INCLUDE_DIR}/readline/readline.h")
+        message(FATAL_ERROR "The selected Readline library requires matching Readline headers")
+    endif ()
+    file(REAL_PATH "${READLINE_INCLUDE_DIR}" atrinik_readline_selected_headers)
+    file(REAL_PATH "${atrinik_readline_headers}" atrinik_readline_expected_headers)
+    if (NOT atrinik_readline_selected_headers STREQUAL atrinik_readline_expected_headers)
+        message(FATAL_ERROR "Readline headers and library must come from the same resolved prefix")
+    endif ()
     set(HAVE_READLINE true)
 else ()
     message(STATUS "Could not find readline library, simple interactive console will be compiled instead.")
@@ -375,7 +384,7 @@ set(LIBATRINIK_PUBLIC_HEADER_NAMES
     utarray.h
     uthash.h
     utlist.h)
-set(LIBATRINIK_PRIVATE_HEADER_NAMES signals_private.h socket_private.h)
+set(LIBATRINIK_PRIVATE_HEADER_NAMES signals_private.h socket_private.h socket_fd_set.h)
 set(LIBATRINIK_BUILD_HEADERS ${LIBATRINIK_PUBLIC_HEADER_NAMES})
 list(APPEND LIBATRINIK_BUILD_HEADERS ${LIBATRINIK_PRIVATE_HEADER_NAMES})
 list(TRANSFORM LIBATRINIK_BUILD_HEADERS
@@ -507,11 +516,13 @@ endif ()
 
 # Link readline if available.
 if (HAVE_READLINE)
+    target_include_directories(${ATRINIK_TOOLKIT} PRIVATE ${READLINE_INCLUDE_DIR})
     target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE ${READLINE_LIBRARY})
 endif ()
 
 if (TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
-    target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    # metaserver_publisher.h exposes OpenSSL types to Core consumers.
+    target_link_libraries(${ATRINIK_TOOLKIT} PUBLIC OpenSSL::Crypto PRIVATE OpenSSL::SSL)
 else ()
     target_link_libraries(${ATRINIK_TOOLKIT} PRIVATE ${OPENSSL_LIBRARIES})
 endif ()
@@ -545,12 +556,21 @@ endif ()
 
 if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         ATRINIK_INTEGRATED_BUILD) AND BUILD_TESTING)
+    # Mach-O has no GNU --wrap. These test-only translation units compile the
+    # original implementation with selected calls redirected after system headers
+    # are loaded. Their definitions satisfy references before the normal static
+    # library is searched, so the original archive member is not extracted.
     add_executable(libatrinik-access-code tests/access_code.c)
     atrinik_configure_target(libatrinik-access-code)
     target_link_libraries(libatrinik-access-code PRIVATE Atrinik::Core)
-    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    if (UNIX AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_compile_definitions(libatrinik-access-code PRIVATE ACCESS_CODE_TEST_ENTROPY)
-        target_link_options(libatrinik-access-code PRIVATE "-Wl,--wrap=RAND_priv_bytes")
+        if (APPLE)
+            target_sources(libatrinik-access-code PRIVATE tests/wrapped/access_code.c)
+            target_link_libraries(libatrinik-access-code PRIVATE OpenSSL::Crypto)
+        else ()
+            target_link_options(libatrinik-access-code PRIVATE "-Wl,--wrap=RAND_priv_bytes")
+        endif ()
     endif ()
     add_test(NAME libatrinik-access-code COMMAND libatrinik-access-code)
 
@@ -562,9 +582,15 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     add_executable(libatrinik-sensitive-packet tests/sensitive_packet.c)
     atrinik_configure_target(libatrinik-sensitive-packet)
     target_link_libraries(libatrinik-sensitive-packet PRIVATE Atrinik::Core)
-    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    if (UNIX AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_compile_definitions(libatrinik-sensitive-packet PRIVATE PACKET_TEST_FREE)
-        target_link_options(libatrinik-sensitive-packet PRIVATE "-Wl,--wrap=free")
+        if (APPLE)
+            target_sources(libatrinik-sensitive-packet PRIVATE tests/wrapped/packet.c)
+            target_compile_definitions(libatrinik-sensitive-packet PRIVATE ATRINIK_TEST_SOURCE_WRAP)
+            target_link_libraries(libatrinik-sensitive-packet PRIVATE OpenSSL::Crypto ZLIB::ZLIB)
+        else ()
+            target_link_options(libatrinik-sensitive-packet PRIVATE "-Wl,--wrap=free")
+        endif ()
     endif ()
     add_test(NAME libatrinik-sensitive-packet COMMAND libatrinik-sensitive-packet)
 
@@ -592,6 +618,14 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-clioptions PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-clioptions COMMAND libatrinik-clioptions)
 
+    # Exercise binary console input and the Windows getline fallback on every
+    # platform, including Linux ASan builds whose libc already has getline.
+    add_executable(libatrinik-console tests/console.c
+        tests/wrapped/console.c tests/wrapped/porting_getline.c)
+    atrinik_configure_target(libatrinik-console)
+    target_link_libraries(libatrinik-console PRIVATE Atrinik::Core)
+    add_test(NAME libatrinik-console COMMAND libatrinik-console)
+
     add_executable(libatrinik-string tests/string.c)
     atrinik_configure_target(libatrinik-string)
     target_link_libraries(libatrinik-string PRIVATE Atrinik::Core)
@@ -607,7 +641,11 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-path PRIVATE Atrinik::Core)
     if (MINGW)
         target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=path_windows_token_user")
-    elseif (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    elseif (APPLE)
+        target_sources(libatrinik-path PRIVATE tests/wrapped/path.c)
+        target_compile_definitions(libatrinik-path PRIVATE ATRINIK_TEST_SOURCE_WRAP)
+        target_link_libraries(libatrinik-path PRIVATE OpenSSL::Crypto)
+    elseif (UNIX AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_link_options(libatrinik-path PRIVATE "-Wl,--wrap=fsync" "-Wl,--wrap=close")
     endif ()
     add_test(NAME libatrinik-path COMMAND libatrinik-path)
@@ -624,8 +662,13 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         add_executable(libatrinik-rendezvous-admission-https
             tests/rendezvous_admission_https.c)
         atrinik_configure_target(libatrinik-rendezvous-admission-https)
-        target_link_options(libatrinik-rendezvous-admission-https PRIVATE
-            "-Wl,--wrap=curl_easy_init")
+        if (APPLE)
+            target_compile_definitions(libatrinik-rendezvous-admission-https PRIVATE
+                ATRINIK_TEST_SOURCE_WRAP)
+        else ()
+            target_link_options(libatrinik-rendezvous-admission-https PRIVATE
+                "-Wl,--wrap=curl_easy_init")
+        endif ()
         target_link_libraries(libatrinik-rendezvous-admission-https PRIVATE Atrinik::Core)
         add_test(NAME libatrinik-rendezvous-admission-https
             COMMAND "${Python3_EXECUTABLE}"
@@ -658,14 +701,23 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
     target_link_libraries(libatrinik-socket-asset PRIVATE Atrinik::Core)
     add_test(NAME libatrinik-socket-asset COMMAND libatrinik-socket-asset)
 
-    if (UNIX AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    if (UNIX AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
         add_executable(libatrinik-socket-websocket tests/socket_websocket.c)
         atrinik_configure_target(libatrinik-socket-websocket)
-        target_link_options(libatrinik-socket-websocket PRIVATE
-            "-Wl,--wrap=curl_ws_recv")
+        if (APPLE)
+            target_sources(libatrinik-socket-websocket PRIVATE tests/wrapped/socket_direct.c)
+            target_link_libraries(libatrinik-socket-websocket PRIVATE OpenSSL::Crypto)
+        else ()
+            target_link_options(libatrinik-socket-websocket PRIVATE
+                "-Wl,--wrap=curl_ws_recv")
+        endif ()
         target_link_libraries(libatrinik-socket-websocket PRIVATE Atrinik::Core)
         add_test(NAME libatrinik-socket-websocket COMMAND libatrinik-socket-websocket)
     endif ()
+
+    add_executable(libatrinik-socket-fd-set tests/socket_fd_set.c)
+    atrinik_configure_target(libatrinik-socket-fd-set)
+    add_test(NAME libatrinik-socket-fd-set COMMAND libatrinik-socket-fd-set)
 
     if (HAVE_GETADDRINFO)
         add_executable(libatrinik-socket-address tests/socket_address.c)
@@ -686,7 +738,7 @@ if ((CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR
         add_executable(libatrinik-curl tests/curl.c)
         atrinik_configure_target(libatrinik-curl)
         target_link_libraries(libatrinik-curl PRIVATE Atrinik::Core Threads::Threads)
-        if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
             target_compile_definitions(libatrinik-curl PRIVATE ATRINIK_TEST_CURL_CLEANUP)
             target_link_options(libatrinik-curl PRIVATE "-Wl,--wrap=curl_easy_cleanup")
         endif ()

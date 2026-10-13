@@ -32,9 +32,13 @@ class PackageSourcesTests(unittest.TestCase):
             "LICENSE.md": "license\n",
             "ATTRIBUTIONS.md": "notices\n",
             "cmake/AtrinikVersion.cmake": "# version contract\n",
-            "cmake/AtrinikLLVMOptIn.cmake": "# optional LLVM selection\n",
-            "cmake/toolchains/llvm.cmake": "# pinned LLVM toolchain\n",
-            "tools/ci/llvm_coverage.py": "# native LLVM coverage export\n",
+            "cmake/AtrinikLLVM.cmake": "# LLVM initialization contract\n",
+            "cmake/InstallWindowsRuntime.cmake": "# Windows runtime closure\n",
+            "cmake/InstallLLVMRuntime.cmake": "# Native LLVM runtime notices\n",
+            "cmake/toolchains/llvm.cmake": "# LLVM toolchain\n",
+            "cmake/toolchains/llvm-macos.cmake": "# macOS LLVM toolchain\n",
+            "tools/ci/llvm_coverage.py": "# LLVM coverage conversion\n",
+            "tools/ci/stage_windows_runtime.py": "# LLVM inspector\n",
             "docs/history/imports.json": "{}\n",
             "client/.releaserc.json": "{}\n",
             "client/main.c": "int main(void) { return 0; }\n",
@@ -77,9 +81,6 @@ class PackageSourcesTests(unittest.TestCase):
         )
         with tarfile.open(output, "r:gz") as archive:
             names = set(archive.getnames())
-            for helper in ("cmake/AtrinikLLVMOptIn.cmake",
-                           "cmake/toolchains/llvm.cmake", "tools/ci/llvm_coverage.py"):
-                self.assertIn("atrinik-classic-client-5.6.0/" + helper, names)
             for relative in ("", "dependencies/protocol/", "dependencies/libatrinik/"):
                 revision = archive.extractfile(
                     f"atrinik-classic-client-5.6.0/{relative}SOURCE_REVISION"
@@ -104,6 +105,13 @@ class PackageSourcesTests(unittest.TestCase):
         self.assertIn(
             "atrinik-classic-client-5.6.0/cmake/AtrinikVersion.cmake", names
         )
+        self.assertIn("atrinik-classic-client-5.6.0/cmake/InstallWindowsRuntime.cmake", names)
+        self.assertIn("atrinik-classic-client-5.6.0/cmake/InstallLLVMRuntime.cmake", names)
+        self.assertIn("atrinik-classic-client-5.6.0/tools/ci/stage_windows_runtime.py", names)
+        self.assertIn("atrinik-classic-client-5.6.0/cmake/toolchains/llvm.cmake", names)
+        self.assertIn("atrinik-classic-client-5.6.0/cmake/toolchains/llvm-macos.cmake", names)
+        self.assertIn("atrinik-classic-client-5.6.0/cmake/AtrinikLLVM.cmake", names)
+        self.assertIn("atrinik-classic-client-5.6.0/tools/ci/llvm_coverage.py", names)
         self.assertIn(
             "atrinik-classic-client-5.6.0/PROVENANCE/history/imports.json", names
         )
@@ -130,6 +138,16 @@ class PackageSourcesTests(unittest.TestCase):
     def test_unsafe_source_path_is_rejected(self) -> None:
         with self.assertRaisesRegex(package_sources.PackageError, "unsafe archive path"):
             package_sources.selected_name("root", "../escape", "package")
+
+    def test_standalone_native_packages_retain_windows_closure_tools(self) -> None:
+        for scope in ("client", "server"):
+            for path in ("cmake/InstallWindowsRuntime.cmake", "tools/ci/stage_windows_runtime.py",
+                         "cmake/toolchains/llvm.cmake", "cmake/toolchains/llvm-macos.cmake",
+                         "tools/ci/llvm_coverage.py", "cmake/AtrinikLLVM.cmake",
+                         "cmake/InstallLLVMRuntime.cmake"):
+                with self.subTest(scope=scope, path=path):
+                    self.assertEqual(package_sources.selected_name(scope, path, "package"),
+                                     f"package/{path}")
 
 
 if __name__ == "__main__":

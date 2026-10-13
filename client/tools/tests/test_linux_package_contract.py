@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Exercise Debian packaging with an existing system ELF, without a client build."""
+# Copyright 2026 The Atrinik Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Exercise Debian packaging with a tiny selected-Clang ELF, without a client build."""
 
 import os
 from pathlib import Path
@@ -12,6 +14,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "tools/build-linux-package.sh"
+COMPILER = shutil.which(os.environ.get("CC", "clang"))
+RUNTIME_NOTICES = ("llvm", "clang", "clang-tools-extra", "lld", "compiler-rt", "libunwind")
 
 
 class LinuxPackageContractTests(unittest.TestCase):
@@ -85,9 +89,9 @@ class LinuxPackageContractTests(unittest.TestCase):
             self.assertIn("Required sibling source is missing", result.stderr)
             self.assertFalse((Path(directory) / "build").exists())
 
-    @unittest.skipUnless(all(shutil.which(tool) for tool in
+    @unittest.skipUnless(COMPILER and all(shutil.which(tool) for tool in
                             ("cmake", "cpack", "dpkg-deb", "dpkg-shlibdeps", "file")),
-                         "Debian packaging tools are required")
+                         "Clang and Debian packaging tools are required")
     def test_real_cpack_metadata_and_runtime_payload(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source"
@@ -95,16 +99,11 @@ class LinuxPackageContractTests(unittest.TestCase):
             cmake = (ROOT / "CMakeLists.txt").read_text()
             installer = cmake.split("# Installer.\n", 1)[1].split(
                 "# Configure the .h file", 1)[0]
-            # Reuse every authored install/CPack rule, substituting only the ELF
-            # target so the fixture never compiles application code on the host.
-            installer = installer.replace(
-                "install(TARGETS atrinik DESTINATION ${INSTALL_SUBDIR_BIN}\n"
-                "        COMPONENT AtrinikClient)",
-                'install(PROGRAMS "${CMAKE_CURRENT_SOURCE_DIR}/fixture-elf" DESTINATION ${INSTALL_SUBDIR_BIN}\n'
-                '        RENAME atrinik COMPONENT AtrinikClient)',
-            )
+            # Reuse every authored install/CPack rule with a tiny C target and
+            # the selected compiler's genuine runtime notices.
             prefix = '''cmake_minimum_required(VERSION 3.21)
-project(package-fixture LANGUAGES NONE)
+project(package-fixture LANGUAGES C)
+add_executable(atrinik fixture.c)
 set(PACKAGE_TYPE deb)
 set(PACKAGE_VERSION 5.1.0)
 set(PACKAGE_VERSION_MAJOR 5)
@@ -116,7 +115,12 @@ set(ATRINIK_ATTRIBUTIONS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/ATTRIBUTIONS.md")
 install(FILES LICENSE.md DESTINATION include/atrinik)
 '''
             (source / "CMakeLists.txt").write_text(prefix + installer)
-            shutil.copyfile("/bin/true", source / "fixture-elf")
+            (source / "fixture.c").write_text(
+                '#include <stdio.h>\nint main(void) { return puts("package fixture") < 0; }\n')
+            (source / "cmake").mkdir()
+            shutil.copyfile(ROOT.parent / "cmake/InstallLLVMRuntime.cmake",
+                            source / "cmake/InstallLLVMRuntime.cmake")
+            notices = Path(COMPILER).resolve().parent.parent / "share/licenses/llvm"
             for name in ("textures", "cache", "data", "fonts", "gfx_user", "settings",
                          "sound", "srv_files"):
                 (source / name).mkdir()
@@ -137,7 +141,9 @@ install(FILES LICENSE.md DESTINATION include/atrinik)
                 )
                 return result
             run("cmake", "-S", str(source), "-B", str(build),
-                "-DCMAKE_INSTALL_PREFIX=/usr", "-DCMAKE_SYSTEM_PROCESSOR=x86_64")
+                "-DCMAKE_INSTALL_PREFIX=/usr", "-DCMAKE_SYSTEM_PROCESSOR=x86_64",
+                f"-DCMAKE_C_COMPILER={COMPILER}")
+            run("cmake", "--build", str(build), "--parallel", "2")
             config = (build / "CPackConfig.cmake").read_text()
             self.assertIn('set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS "ON")', config)
             run("cpack", "--config", str(build / "CPackConfig.cmake"),
@@ -170,6 +176,10 @@ install(FILES LICENSE.md DESTINATION include/atrinik)
                              (source / "client.cfg").read_bytes())
             self.assertFalse((payload / "usr/include").exists())
             self.assertFalse((payload / "usr/lib").exists())
+            for name in RUNTIME_NOTICES:
+                notice = name + "-LICENSE.TXT"
+                installed = payload / "usr/share/doc/atrinik/licenses/llvm" / notice
+                self.assertEqual(installed.read_bytes(), (notices / notice).read_bytes())
             for path in payload.rglob("*"):
                 if path.is_dir():
                     self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755,
@@ -180,7 +190,7 @@ install(FILES LICENSE.md DESTINATION include/atrinik)
             self.assertTrue((payload / "usr/games/atrinik").stat().st_mode & stat.S_IXOTH)
             self.assertFalse((payload / "usr/share/games/atrinik/data/discord-application-id").exists())
             self.assertEqual((payload / "usr/games/atrinik").read_bytes(),
-                             Path("/bin/true").read_bytes())
+                             (build / "atrinik").read_bytes())
             for name, argument, message in (
                 ("prefix", "-DCMAKE_INSTALL_PREFIX=/opt", "CMAKE_INSTALL_PREFIX=/usr"),
                 ("architecture", "-DCMAKE_SYSTEM_PROCESSOR=aarch64", "Linux amd64"),
@@ -189,7 +199,8 @@ install(FILES LICENSE.md DESTINATION include/atrinik)
                                          str(Path(directory) / name),
                                          "-DCMAKE_SYSTEM_NAME=Linux",
                                          "-DCMAKE_SYSTEM_PROCESSOR=x86_64",
-                                         "-DCMAKE_INSTALL_PREFIX=/usr", argument],
+                                         "-DCMAKE_INSTALL_PREFIX=/usr",
+                                         f"-DCMAKE_C_COMPILER={COMPILER}", argument],
                                         capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)

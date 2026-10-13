@@ -12,8 +12,14 @@ find_program(CMAKE_CXX_COMPILER NAMES clang++ REQUIRED)
 find_program(CMAKE_AR NAMES llvm-ar REQUIRED)
 find_program(CMAKE_RANLIB NAMES llvm-ranlib REQUIRED)
 find_program(CMAKE_LINKER NAMES ld.lld REQUIRED)
+find_program(CMAKE_NM NAMES llvm-nm REQUIRED)
+find_program(CMAKE_STRIP NAMES llvm-strip REQUIRED)
+find_program(CMAKE_OBJCOPY NAMES llvm-objcopy REQUIRED)
+find_program(CMAKE_OBJDUMP NAMES llvm-objdump REQUIRED)
+find_program(CMAKE_READELF NAMES llvm-readelf REQUIRED)
 
-foreach (tool CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_AR CMAKE_RANLIB CMAKE_LINKER)
+foreach (tool CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_AR CMAKE_RANLIB CMAKE_LINKER
+        CMAKE_NM CMAKE_STRIP CMAKE_OBJCOPY CMAKE_OBJDUMP CMAKE_READELF)
     execute_process(COMMAND "${${tool}}" --version
         OUTPUT_VARIABLE tool_version ERROR_VARIABLE tool_error
         RESULT_VARIABLE tool_result)

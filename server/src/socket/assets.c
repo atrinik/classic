@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -229,7 +229,7 @@ static bool asset_cache_add(const char *name, const char *path) {
 static void
 asset_cache_directory(const char *root, const char *relative, const char *prefix, bool recursive) {
     char directory[HUGE_BUF];
-    int length = snprintf(VS(directory), "%s%s%s", root, *relative != '\0' ? "/" : "", relative);
+    int length = snprintf((directory), sizeof((directory)), "%s%s%s", root, *relative != '\0' ? "/" : "", relative);
     if (length < 0 || (size_t)length >= sizeof(directory)) {
         return;
     }
@@ -244,7 +244,7 @@ asset_cache_directory(const char *root, const char *relative, const char *prefix
             continue;
         }
         char child_relative[HUGE_BUF];
-        length = snprintf(VS(child_relative),
+        length = snprintf((child_relative), sizeof((child_relative)),
                           "%s%s%s",
                           relative,
                           *relative != '\0' ? "/" : "",
@@ -253,7 +253,7 @@ asset_cache_directory(const char *root, const char *relative, const char *prefix
             continue;
         }
         char path[HUGE_BUF];
-        length = snprintf(VS(path), "%s/%s", root, child_relative);
+        length = snprintf((path), sizeof((path)), "%s/%s", root, child_relative);
         if (length < 0 || (size_t)length >= sizeof(path)) {
             continue;
         }
@@ -270,7 +270,7 @@ asset_cache_directory(const char *root, const char *relative, const char *prefix
         }
 
         char name[HUGE_BUF];
-        length = snprintf(VS(name), "%s/%s", prefix, child_relative);
+        length = snprintf((name), sizeof((name)), "%s/%s", prefix, child_relative);
         if (length < 0 || (size_t)length >= sizeof(name)) {
             continue;
         }
@@ -284,10 +284,10 @@ asset_cache_directory(const char *root, const char *relative, const char *prefix
 
 void socket_assets_init(void) {
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s/data", settings.assetspath);
+    snprintf((path), sizeof((path)), "%s/data", settings.assetspath);
     asset_cache_directory(path, "", "data", false);
     asset_cache_directory(settings.resourcespath, "", "resources", true);
-    snprintf(VS(path), "%s/client-maps", settings.assetspath);
+    snprintf((path), sizeof((path)), "%s/client-maps", settings.assetspath);
     asset_cache_directory(path, "", "client-maps", false);
     LOG(INFO, "Cached %" PRIu64 " bytes of game assets in memory", asset_cache_size);
     server_metrics_asset_cache(asset_cache_rss);

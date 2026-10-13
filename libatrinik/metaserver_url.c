@@ -281,15 +281,15 @@ bool metaserver_url_rendezvous(const char *origin,
     size_t path_length = strlen(parsed.path);
     char path[MAX_BUF];
     bool root = strcmp(parsed.path, "/") == 0;
-    int path_result = root ? snprintf(VS(path), "/servers/%s", server_id)
-                           : snprintf(VS(path),
+    int path_result = root ? snprintf((path), sizeof((path)), "/servers/%s", server_id)
+                           : snprintf((path), sizeof((path)),
                                       "%s%sservers/%s",
                                       parsed.path,
                                       parsed.path[path_length - 1] == '/' ? "" : "/",
                                       server_id);
     bool ok = path_result > 0 && path_result < (int)sizeof(path);
     char query[32];
-    ok = ok && snprintf(VS(query), "role=%s", role) < (int)sizeof(query);
+    ok = ok && snprintf((query), sizeof((query)), "role=%s", role) < (int)sizeof(query);
     const char *websocket_scheme = strcmp(parsed.scheme, "https") == 0 ? "wss" : "ws";
     char *rendered = NULL;
     ok = ok && curl_url_set(parsed.handle, CURLUPART_PATH, path, 0) == CURLUE_OK &&
@@ -326,8 +326,8 @@ bool metaserver_url_access(const char *origin,
               (!websocket || metaserver_identity_valid(server_id));
     char path[128];
     if (ok) {
-        int n = websocket ? snprintf(VS(path), "/v1/access/rendezvous/classic/%s", server_id)
-                          : snprintf(VS(path), "/v1/access/resolve");
+        int n = websocket ? snprintf((path), sizeof((path)), "/v1/access/rendezvous/classic/%s", server_id)
+                          : snprintf((path), sizeof((path)), "/v1/access/resolve");
         ok = n > 0 && (size_t)n < sizeof(path);
     }
     char *rendered = NULL;

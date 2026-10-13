@@ -1,8 +1,26 @@
 /* Copyright 2026 The Atrinik Project
  * SPDX-License-Identifier: GPL-2.0-or-later */
+#include "../rendezvous_admission.h"
+
+/* Observe the real cancellable transfer before production cleans up its handle.
+ * Only numeric metadata is retained; never log URLs, headers or TLS text. */
+static CURLcode test_perform_cancellable(CURL *handle, const curl_cancel_t *cancel);
+#define curl_perform_cancellable test_perform_cancellable
+
 /* The private prepare seam preserves the production HTTPS/parser path while
  * selecting eight-bit work solely in this independently linked test. */
+#ifdef ATRINIK_TEST_SOURCE_WRAP
+/* Mach-O has no GNU --wrap. Load declarations before redirecting only calls
+ * in the production implementation included below. */
+#include <curl/curl.h>
+CURL *__wrap_curl_easy_init(void);
+#define curl_easy_init __wrap_curl_easy_init
+#endif
 #include "../rendezvous_admission.c"
+#undef curl_perform_cancellable
+#ifdef ATRINIK_TEST_SOURCE_WRAP
+#undef curl_easy_init
+#endif
 #include <toolkit/logger.h>
 #include "../socket_private.h"
 
@@ -17,18 +35,92 @@
 static const char ticket[] = "2222222222222222222222222222222222222222222222222222222222222222";
 static const char server_id[] = "1111111111111111111111111111111111111111111111111111111111111111";
 static unsigned int solver_calls;
+static unsigned int ca_init_calls;
+static unsigned int ca_set_calls;
+static int ca_set_result = -1;
+static bool diagnostic_easy;
+static unsigned int ca_file_seen, ca_file_matches, native_store_seen;
 
+/* libcurl debug data is not NUL-terminated and can include attempt secrets.
+ * Inspect only exact test-owned trust messages; discard every other byte. */
+static int trust_debug(CURL *handle, curl_infotype type, char *data, size_t size, void *context) {
+    (void)handle;
+    (void)context;
+    if (type != CURLINFO_TEXT)
+        return 0;
+    const char prefix[] = "  CAfile: ";
+    const char native[] = "  Native: Apple SecTrust\n";
+    if (size >= sizeof(prefix) - 1 && memcmp(data, prefix, sizeof(prefix) - 1) == 0) {
+        ca_file_seen++;
+        const char *ca = getenv("ATRINIK_TEST_ADMISSION_CA");
+        if (ca != NULL && size == sizeof(prefix) - 1 + strlen(ca) + 1 &&
+            memcmp(data + sizeof(prefix) - 1, ca, strlen(ca)) == 0 && data[size - 1] == '\n')
+            ca_file_matches++;
+    }
+    if (size == sizeof(native) - 1 && memcmp(data, native, size) == 0)
+        native_store_seen++;
+    return 0;
+}
+
+#ifdef ATRINIK_TEST_SOURCE_WRAP
+#define __real_curl_easy_init curl_easy_init
+#else
 CURL *__real_curl_easy_init(void);
+#endif
 CURL *__wrap_curl_easy_init(void) {
+    ca_init_calls++;
     CURL *handle = __real_curl_easy_init();
     const char *ca = getenv("ATRINIK_TEST_ADMISSION_CA");
     if (handle != NULL && ca != NULL) {
-        if (curl_easy_setopt(handle, CURLOPT_CAINFO, ca) != CURLE_OK) {
+        ca_set_calls++;
+        ca_set_result = (int)curl_easy_setopt(handle, CURLOPT_CAINFO, ca);
+        if (ca_set_result != CURLE_OK) {
             curl_easy_cleanup(handle);
             return NULL;
         }
     }
     return handle;
+}
+
+static CURLcode test_perform_cancellable(CURL *handle, const curl_cancel_t *cancel) {
+    CURLcode debug_result = curl_easy_setopt(handle, CURLOPT_DEBUGFUNCTION, trust_debug);
+    /* Never enable default verbose output if the private callback was rejected. */
+    CURLcode verbose_result = debug_result == CURLE_OK
+                                  ? curl_easy_setopt(handle, CURLOPT_VERBOSE, 1L)
+                                  : debug_result;
+    CURLcode result = verbose_result != CURLE_OK ? verbose_result
+                      : diagnostic_easy ? curl_easy_perform(handle)
+                                        : curl_perform_cancellable(handle, cancel);
+    long verify = -1, status = -1, os_error = -1;
+    CURLcode verify_info = curl_easy_getinfo(handle, CURLINFO_SSL_VERIFYRESULT, &verify);
+    CURLcode status_info = curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status);
+    CURLcode os_info = curl_easy_getinfo(handle, CURLINFO_OS_ERRNO, &os_error);
+    const curl_version_info_data *version = curl_version_info(CURLVERSION_NOW);
+    fprintf(stderr,
+            "HTTPS admission transport init_calls=%u ca_calls=%u ca_result=%d "
+            "curl_code=%d verify=%ld verify_info=%d status=%ld status_info=%d "
+            "os_errno=%ld os_info=%d version=%u async_dns=%d ares=%d "
+            "ca_seen=%u ca_matches=%u native_seen=%u debug_result=%d verbose_result=%d easy=%d\n",
+            ca_init_calls,
+            ca_set_calls,
+            ca_set_result,
+            (int)result,
+            verify,
+            (int)verify_info,
+            status,
+            (int)status_info,
+            os_error,
+            (int)os_info,
+            version != NULL ? version->version_num : 0U,
+            version != NULL && (version->features & CURL_VERSION_ASYNCHDNS) != 0,
+            version != NULL && version->ares != NULL,
+            ca_file_seen,
+            ca_file_matches,
+            native_store_seen,
+            (int)debug_result,
+            (int)verbose_result,
+            diagnostic_easy);
+    return result;
 }
 
 static rendezvous_admission_result_t solve_fast(const rendezvous_admission_challenge_t *challenge,
@@ -95,6 +187,7 @@ int main(int argc, char **argv) {
     toolkit_import(datetime);
     toolkit_import(curl);
     const char *mode = argv[2];
+    diagnostic_easy = strcmp(mode, "diagnostic-easy") == 0;
     if (strcmp(mode, "rate-socket") == 0) {
         int result = test_rate_limit_mapping(argv[1]);
         toolkit_deinit();
@@ -118,7 +211,14 @@ int main(int argc, char **argv) {
                                                              &retry_after_seconds,
                                                              solve_fast);
     uint64_t elapsed = datetime_monotonic_ms() - start;
-    if (strcmp(mode, "valid") == 0) {
+    if (strcmp(mode, "valid") == 0 || diagnostic_easy) {
+        if (result != RENDEZVOUS_ADMISSION_OK || solver_calls != 1) {
+            fprintf(stderr,
+                    "HTTPS admission outcome result=%d solver_calls=%u elapsed_ms=%llu\n",
+                    (int)result,
+                    solver_calls,
+                    (unsigned long long)elapsed);
+        }
         REQUIRE(result == RENDEZVOUS_ADMISSION_OK && solver_calls == 1);
         char *separator = strrchr(proof, '.');
         REQUIRE(separator != NULL && string_is_hex_fixed(separator + 1, 16, true));

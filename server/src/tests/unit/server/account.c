@@ -102,7 +102,7 @@ START_TEST(test_account_provision_password_file_permissions) {
     const char *character_name = "Scenario File";
     char error[HUGE_BUF];
     char password_path[HUGE_BUF];
-    snprintf(VS(password_path), "%s/scenario-password", settings.datapath);
+    snprintf((password_path), sizeof((password_path)), "%s/scenario-password", settings.datapath);
     char *account_path = account_make_path(account_name);
     char *player_path = player_make_path(character_name, "player.dat");
 
@@ -140,7 +140,7 @@ START_TEST(test_account_provision_password_file_permissions) {
     ck_assert_ptr_nonnull(strstr(error, "exactly one line"));
 
     char missing_password_path[HUGE_BUF];
-    snprintf(VS(missing_password_path), "%s/scenario-password-missing", settings.datapath);
+    snprintf((missing_password_path), sizeof((missing_password_path)), "%s/scenario-password-missing", settings.datapath);
     unlink(missing_password_path);
     ck_assert(!account_provision_from_file(account_name,
                                            missing_password_path,
@@ -198,7 +198,7 @@ START_TEST(test_account_provision_lighting_preset) {
     const char *character_name_canonical = "Scenario Lighting";
     char error[HUGE_BUF];
     char password_path[HUGE_BUF];
-    snprintf(VS(password_path), "%s/scenario-lighting-password", settings.datapath);
+    snprintf((password_path), sizeof((password_path)), "%s/scenario-lighting-password", settings.datapath);
     char *account_path = account_make_path(account_name_canonical);
     char *player_path = player_make_path(character_name_canonical, "player.dat");
 
@@ -254,7 +254,7 @@ START_TEST(test_account_provision_brynknot_idle_preserves_clock_and_existing_pla
     const char *character_name = "Scenario Brynknot";
     char error[HUGE_BUF];
     char password_path[HUGE_BUF];
-    snprintf(VS(password_path), "%s/scenario-brynknot-password", settings.datapath);
+    snprintf((password_path), sizeof((password_path)), "%s/scenario-brynknot-password", settings.datapath);
     char *account_path = account_make_path(account_name);
     char *player_path = player_make_path(character_name, "player.dat");
     char *metrics_path = player_make_path(character_name, "metrics.dat");
@@ -329,7 +329,7 @@ START_TEST(test_account_provision_writing_books_roundtrip_and_save_failure) {
     const char *character_name = "Scenario Writing";
     char error[HUGE_BUF];
     char password_path[HUGE_BUF];
-    snprintf(VS(password_path), "%s/scenario-writing-password", settings.datapath);
+    snprintf((password_path), sizeof((password_path)), "%s/scenario-writing-password", settings.datapath);
     char *account_path = account_make_path(account_name);
     char *player_path = player_make_path(character_name, "player.dat");
     char *metrics_path = player_make_path(character_name, "metrics.dat");
@@ -442,8 +442,8 @@ START_TEST(test_account_provision_lighting_preset_rolls_back) {
     char error[HUGE_BUF];
     char password_path[HUGE_BUF];
     char clock_path[HUGE_BUF];
-    snprintf(VS(password_path), "%s/scenario-rollback-password", settings.datapath);
-    snprintf(VS(clock_path), "%s/clockdata", settings.datapath);
+    snprintf((password_path), sizeof((password_path)), "%s/scenario-rollback-password", settings.datapath);
+    snprintf((clock_path), sizeof((clock_path)), "%s/clockdata", settings.datapath);
     char *account_path = account_make_path(account_name_canonical);
     char *player_path = player_make_path(character_name_canonical, "player.dat");
     char *metrics_path = player_make_path(character_name_canonical, "metrics.dat");
@@ -655,7 +655,7 @@ START_TEST(test_exploration_snapshot_batches) {
     exploration_begin(&ns);
     for (unsigned i = 0; i < 40; i++) {
         char name[32];
-        snprintf(VS(name), "/world/map%u", i);
+        snprintf((name), sizeof((name)), "/world/map%u", i);
         ck_assert(exploration_mark(&ns, name, 1, 1, 0, 0));
     }
     socket_buffer_clear(&ns);
@@ -779,7 +779,7 @@ START_TEST(test_exploration_session_flush_is_local_and_backpressure_retains_bits
     exploration_begin(&first);
     exploration_begin(&second);
     for (unsigned i = 0; i < 64; i++) {
-        snprintf(VS(unrelated_names[i]), "exploreunrelated%02u", i);
+        snprintf((unrelated_names[i]), sizeof((unrelated_names[i])), "exploreunrelated%02u", i);
         unrelated[i].state = ST_PLAYING;
         unrelated[i].account = unrelated_names[i];
         exploration_begin(&unrelated[i]);
@@ -840,7 +840,7 @@ START_TEST(test_exploration_ten_thousand_maps) {
     uint64_t started = datetime_monotonic_us();
     for (unsigned i = 0; i < 10000; i++) {
         char name[64];
-        snprintf(VS(name), "/world/map%05u", i);
+        snprintf((name), sizeof((name)), "/world/map%05u", i);
         ck_assert(exploration_mark(&ns, name, dimension, dimension, dimension - 1, dimension - 1));
     }
     uint64_t mark_us = datetime_monotonic_us() - started;
@@ -942,7 +942,7 @@ START_TEST(test_access_preserves_normal_command_permissions) {
     bool saved_required = settings.access_required;
     player pl = {0};
     settings.access_required = true;
-    snprintf(VS(settings.default_permission_groups), "[OP]");
+    snprintf((settings.default_permission_groups), sizeof((settings.default_permission_groups)), "[OP]");
     const char *commands[] = {"console", "create", "patch", "config", "password", "/console",
                               "kick", "ban", "freeze"};
     for (size_t i = 0; i < arraysize(commands); i++)
@@ -989,7 +989,7 @@ START_TEST(test_access_preserves_ordinary_registration) {
     memcpy(saved_store, settings.access_store, sizeof(saved_store));
     settings.access_required = true;
     settings.access_initialize = false;
-    snprintf(VS(settings.access_store), "%s", directory);
+    snprintf((settings.access_store), sizeof((settings.access_store)), "%s", directory);
     access_server_route_for_test(registration_access_route);
     ck_assert(access_server_init(identity_hex));
 
@@ -1050,7 +1050,7 @@ START_TEST(test_access_preserves_ordinary_registration) {
     settings.access_initialize = saved_initialize;
     memcpy(settings.access_store, saved_store, sizeof(saved_store));
     char snapshot[256];
-    snprintf(VS(snapshot), "%s/%s", directory, ACCESS_STORE_FILENAME);
+    snprintf((snapshot), sizeof((snapshot)), "%s/%s", directory, ACCESS_STORE_FILENAME);
     ck_assert_int_eq(unlink(snapshot), 0);
     ck_assert_int_eq(rmdir(directory), 0);
 }

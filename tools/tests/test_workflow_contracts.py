@@ -12,6 +12,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+WINDOWS_PRODUCER_REVISION = "4af130578df18a1944880cd279c7f23afe9cc668"
+WINDOWS_GENERAL_DIGEST = "01065f081cdf843a6591abf25f2b27734103ab385c5aa003b2eeb9a3a1ca0e5a"
+WINDOWS_FOCUSED_DIGEST = "5140299dee8e89a90c05c8372bc3e41a1819fdef5a9cfc9fcdbb0eaa07859bfd"
+WINDOWS_GENERAL_IMAGE = f"ghcr.io/atrinik/windows-build:1.18.0@sha256:{WINDOWS_GENERAL_DIGEST}"
+WINDOWS_FOCUSED_IMAGE = f"ghcr.io/atrinik/windows-build:classic-check-1.18.0@sha256:{WINDOWS_FOCUSED_DIGEST}"
 
 
 class WorkflowContractTests(unittest.TestCase):
@@ -19,13 +24,19 @@ class WorkflowContractTests(unittest.TestCase):
         return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
     def test_final_published_provider_pins_and_installed_library_lane(self) -> None:
-        classic = "ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2"
-        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml", "build-release-candidate.yml"):
+        classic = "ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449"
+        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml",
+                     "build-release-candidate.yml", "package-release.yml", "gpu-qualification.yml"):
             with self.subTest(workflow=name):
                 workflow = self.text(name)
                 self.assertIn(f"CLASSIC_LINUX_IMAGE: {classic}", workflow)
-                if name != "build-release-candidate.yml":
-                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2", workflow)
+                if name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml"):
+                    self.assertIn("CLASSIC_LINUX_IMAGE_DIGEST: sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449", workflow)
+        compiler = json.loads((ROOT / "tools/ci/appimage/packaging.lock.json").read_text())["compiler"]
+        self.assertEqual(compiler["image"], classic)
+        self.assertIn(f"FROM {classic} AS build", (ROOT / "server/Dockerfile").read_text())
+        self.assertIn(f"grep -Fx 'FROM {classic} AS build' server/Dockerfile",
+                      self.text("qualify-server-image.yml"))
         candidate = self.text("build-release-candidate.yml")
         sources = candidate[candidate.index("  sources:"):candidate.index("  client-linux:")]
         lane = sources[sources.index("      - name: Pull the immutable installed-library"):]
@@ -38,6 +49,214 @@ class WorkflowContractTests(unittest.TestCase):
         for forbidden in ("apt-get", "pip install", "docker/login-action", "GH_TOKEN"):
             self.assertNotIn(forbidden, lane)
         self.assertNotIn("apt-get", sources)
+
+    def test_windows_sdk_roles_preserve_python_worldmaker_and_historical_baseline(self) -> None:
+        check = self.text("check.yml")
+        baseline = check[check.index("      - name: Build the original pinned Windows font baseline"):
+                         check.index("      - name: Cross-build and stage standalone tests")]
+        target = check[check.index("      - name: Cross-build and stage standalone tests"):
+                       check.index("      - name: Build portable Windows server package")]
+        package = check[check.index("      - name: Build portable Windows server package"):
+                        check.index("  windows-test:")]
+        self.assertEqual(target.count(WINDOWS_GENERAL_IMAGE), 2)
+        self.assertNotIn(WINDOWS_FOCUSED_IMAGE, target)
+        self.assertEqual(target.count("-DENABLE_PYTHON_PLUGIN=OFF"), 2)
+        self.assertNotIn("worldmaker", target)
+        self.assertNotIn("WINDOWS_PYTHON", target)
+        self.assertIn(WINDOWS_GENERAL_IMAGE, package)
+        self.assertNotIn(WINDOWS_FOCUSED_IMAGE, package)
+        self.assertIn("bash tools/build-windows-package.sh", package)
+        server_helper = (ROOT / "server/tools/build-windows-package.sh").read_text()
+        self.assertIn("--worldmaker", server_helper)
+        self.assertIn("ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR", server_helper)
+        self.assertIn("/opt/llvm-23.1.3/bin", server_helper)
+        self.assertIn("CLASSIC_WINDOWS_FONT_BASELINE_IMAGE: ghcr.io/atrinik/windows-build:1.16.0@sha256:4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69", check)
+        self.assertNotIn("candidate-sha-", baseline)
+        self.assertIn("fd4943252ac872fce2995c286b10a0c6d249aba3", baseline)
+        gpu = self.text("gpu-qualification.yml")
+        self.assertIn(f"CLASSIC_WINDOWS_IMAGE: {WINDOWS_GENERAL_IMAGE}", gpu)
+        self.assertNotIn(WINDOWS_FOCUSED_IMAGE, gpu)
+        for digest in (WINDOWS_GENERAL_DIGEST, WINDOWS_FOCUSED_DIGEST):
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
+    @unittest.skipUnless(shutil.which("cmake"), "CMake unavailable")
+    def test_windows_server_sdk_roles_include_host_lexer_generators_with_python_off(self) -> None:
+        # Use the actual unconditional server lookup, without compiling the app.
+        # PythonOFF removes its plugin, not the Flex-generated loader sources.
+        server = (ROOT / "server/CMakeLists.txt").read_text()
+        required_flex = re.findall(r"^find_package\(FLEX REQUIRED\)$", server, re.MULTILINE)
+        self.assertEqual(required_flex, ["find_package(FLEX REQUIRED)"])
+        self.assertIn("flex_target(${name}", server)
+        integrated = (ROOT / "CMakeLists.txt").read_text()
+        self.assertIn('option(ATRINIK_BUILD_SERVER "Build the classic server" ON)', integrated)
+        self.assertIn("add_subdirectory(server)", integrated)
+        check = self.text("check.yml")
+        for name, next_name, source in (
+            ("Cross-build and stage standalone tests", "Cross-build Windows server", "."),
+            ("Cross-build Windows server", "Build portable Windows server package", "server"),
+        ):
+            with self.subTest(step=name):
+                step = check[check.index(f"      - name: {name}\n"):
+                             check.index(f"      - name: {next_name}\n")]
+                self.assertIn(WINDOWS_GENERAL_IMAGE, step)
+                self.assertNotIn(WINDOWS_FOCUSED_IMAGE, step)
+                commands = re.sub(r"\\\n\s*", " ", step)
+                configure = next(line for line in commands.splitlines()
+                                 if line.strip().startswith("cmake ") and f"-S {source} " in line)
+                self.assertIn("-DENABLE_PYTHON_PLUGIN=OFF", configure)
+                self.assertIn("-DFETCHCONTENT_SOURCE_DIR_LIBPCPNATPMP=/workspace/build/libpcpnatpmp-mingw-source", configure)
+                if source == ".":
+                    self.assertIn("-DATRINIK_GPU_SHADER_DIRECTORY=/workspace/build/gpu-shaders", configure)
+                    self.assertIn('-DPATCH_EXECUTABLE="$(command -v patch)"', step)
+                    self.assertIn("-P /workspace/server/cmake/apply_patch_idempotent.cmake", step)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = root / "required-generators.cmake"
+            fixture.write_text("\n".join((
+                "set(ENABLE_PYTHON_PLUGIN OFF)",
+                "set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)",
+                "set(CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH FALSE)",
+                "set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH FALSE)",
+                required_flex[0],
+                # Bison belongs to the general producer's host generator cohort;
+                # the current server directly invokes Flex for its three lexers.
+                "find_package(BISON REQUIRED)",
+            )) + "\n")
+            for role in ("general", "focused"):
+                sdk = root / role
+                sdk.mkdir()
+                if role == "general":
+                    for tool, version in (("flex", "flex 2.6.4"), ("bison", "bison (GNU Bison) 3.8.2")):
+                        executable = sdk / tool
+                        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
+                        executable.chmod(0o755)
+                # Ambient host SDK selectors must not supply missing generators
+                # to the focused fixture. Only its explicit CLI path is eligible.
+                result = subprocess.run([shutil.which("cmake"), f"-DCMAKE_PROGRAM_PATH={sdk}",
+                                         "-P", str(fixture)], capture_output=True, text=True,
+                                        env=dict(os.environ, CMAKE_PROGRAM_PATH=str(root / "general"),
+                                                 CMAKE_PREFIX_PATH=str(root / "general")))
+                with self.subTest(sdk=role):
+                    if role == "focused":
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("FLEX_EXECUTABLE", result.stdout + result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn("Found FLEX", result.stdout)
+                        self.assertIn("Found BISON", result.stdout)
+
+    def test_native_consumers_require_llvm_and_native_lcov(self) -> None:
+        for name in ("check.yml", "pr-benchmarks.yml", "daily-client-performance.yml"):
+            workflow = self.text(name)
+            with self.subTest(workflow=name):
+                self.assertIn("CLASSIC_LINUX_CCACHE_COMPILER: clang-23.1.3-lld-compiler-rt", workflow)
+                self.assertIn('CLASSIC_LINUX_CCACHE_EPOCH: "2"', workflow)
+                # Every cached native workload selects LLVM inside its container.
+                self.assertEqual(workflow.count("--env ATRINIK_LLVM_TOOLCHAIN=1"),
+                                 workflow.count("--env CCACHE_DIR=/cache/ccache") +
+                                 (1 if name == "check.yml" else 0))
+                self.assertNotIn("gcc-15.2.0", workflow)
+                if name != "daily-client-performance.yml":
+                    self.assertEqual(workflow.count("--material cmake/toolchains/llvm.cmake"),
+                                     workflow.count("--material tools/ci/run_linux_check.sh"))
+                    self.assertEqual(workflow.count("--material tools/ci/llvm_coverage.py"),
+                                     workflow.count("--material tools/ci/run_linux_check.sh"))
+        check = self.text("check.yml")
+        for report in ("libatrinik/coverage.lcov", "client/coverage.lcov",
+                       "server/coverage.lcov", "server/coverage-admin-root.lcov",
+                       "server/coverage-admin-nonroot.lcov"):
+            self.assertIn(report, check)
+        self.assertIn("files: tools/coverage.xml", check)
+        self.assertEqual(check.count('ATRINIK_LLVM_TOOLCHAIN: "1"'), 2)
+        qualify = self.text("gpu-qualification.yml")
+        self.assertIn('-DCMAKE_TOOLCHAIN_FILE=/workspace/cmake/toolchains/llvm.cmake', qualify)
+        self.assertIn("-DCMAKE_BUILD_TYPE=Release", qualify)
+        self.assertIn("name: Build matching Windows qualification bundle", qualify)
+        self.assertIn("needs: [shaders, windows-bundle]", qualify)
+        self.assertIn("--readobj llvm-readobj", qualify)
+        self.assertIn("--runtime-dir \"${ATRINIK_WINDOWS_RUNTIME_DIR}\"", qualify)
+        self.assertIn('test "$(cat client/build/gpu-qualification/source-revision)" = "${GITHUB_SHA}"', qualify)
+        self.assertIn("sha256sum --check client/build/gpu-qualification/shader-manifest.sha256", qualify)
+        self.assertIn("windows-gpu-qualification-${{ github.sha }}", qualify)
+        self.assertIn("if: runner.os == 'macOS'", qualify)
+        self.assertNotIn("matching native LLVM-MinGW toolchain required", qualify)
+        self.assertIn("--source-root \"${GITHUB_WORKSPACE}\" --check-runtime", qualify)
+        self.assertEqual(qualify.count("python3 ../tools/ci/run_gpu_qualification.py"), 4)
+        self.assertIn("tools/ci/llvm_coverage.py,target=/workspace/tools/ci/llvm_coverage.py,readonly", check)
+
+    def test_windows_font_baseline_is_separate_and_native_comparison_is_required(self) -> None:
+        workflow = self.text("check.yml")
+        build = workflow[workflow.index("  windows-test-build:"):workflow.index("  windows-test:")]
+        native = workflow[workflow.index("  windows-test:"):workflow.index("  server:\n    name: Server validation")]
+        baseline = build[build.index("      - name: Build the original pinned Windows font baseline"):
+                         build.index("      - name: Cross-build and stage standalone tests")]
+        self.assertIn("CLASSIC_WINDOWS_FONT_BASELINE_IMAGE", baseline)
+        self.assertIn("x86_64-w64-mingw32.shared-cmake -S tools/ci/font-render-probe", baseline)
+        self.assertIn("client-rich-presence-tests client-font-render-probe", build)
+        self.assertIn('cmake -E copy_directory build/font-baseline-bundle "${stage}/font-baseline"', build)
+        self.assertIn("ref: fd4943252ac872fce2995c286b10a0c6d249aba3", build)
+        self.assertIn("python3 tools/ci/stage_historical_windows_font.py", baseline)
+        self.assertIn("--historical-helper build/font-baseline-source/tools/ci/stage_windows_runtime.py", baseline)
+        self.assertIn("--notice-dir /opt/mxe/usr/x86_64-w64-mingw32.shared/share/licenses", baseline)
+        self.assertIn("--objdump x86_64-w64-mingw32.shared-objdump", baseline)
+        self.assertIn("staging-helper.sha256", baseline)
+        self.assertIn('--output-dir "${stage}/font-candidate"', build)
+        self.assertIn('cmake -E copy_directory client/fonts "${stage}/font-inputs"', build)
+        self.assertIn("font-baseline/client-font-render-probe.exe", native)
+        self.assertIn("font-candidate/client-font-render-probe.exe", native)
+        self.assertIn("compare_font_render.py", native)
+        self.assertIn('cmake -E copy client/tools/tests/test_font_output.py "${stage}"', build)
+        self.assertIn('foreach ($producer in @("font-baseline", "font-candidate"))', native)
+        self.assertIn('throw "Font output regression failed:', native)
+        self.assertIn('throw "LLVM font rendering differs:', native)
+        self.assertIn("$process.WaitForExit(120000)", native)
+        self.assertIn("$process.Kill($true)", native)
+        self.assertIn("name: native-windows-font-comparison-", native)
+        comparison = native[native.index("      - name: Require identical baseline and LLVM font rendering"):]
+        self.assertNotIn("continue-on-error", comparison)
+        self.assertIn("if: always()", comparison)
+
+    def test_windows_font_probe_logs_preserve_strict_comparison_and_failure_evidence(self) -> None:
+        comparison = self.text("check.yml").split(
+            "      - name: Require identical baseline and LLVM font rendering\n", 1)[1].split(
+                "  server:\n    name: Server validation", 1)[0]
+        capture = comparison.split("          function Invoke-FontProbe(", 1)[1].split(
+            '          Invoke-FontProbe "baseline"', 1)[0]
+        self.assertLess(capture.index("Font result directory is not empty:"),
+                        capture.index("Start-Process -FilePath"))
+        self.assertIn("Font result directory already exists:", comparison)
+        self.assertNotIn("New-Item -ItemType Directory -Force", comparison)
+        self.assertIn('$output = Join-Path $result "render"', capture)
+        self.assertIn('-RedirectStandardOutput $stdout -RedirectStandardError $stderr', capture)
+        self.assertIn('$stdout = Join-Path $result "probe.stdout.log"', capture)
+        self.assertIn('$stderr = Join-Path $result "probe.stderr.log"', capture)
+        self.assertIn('Font probe start: producer=$producer executable=$executable', capture)
+        self.assertIn('Font probe launched: producer=$producer native_pid=$($process.Id)', capture)
+        self.assertIn('} finally {', capture)
+        self.assertIn('Font probe finish: producer=$producer native_pid=$nativePid exit_code=$exitCode', capture)
+        self.assertIn('Get-Content -LiteralPath $log -Tail 40', capture)
+        self.assertIn('$_.Length -gt 1024', capture)
+        self.assertIn('Write-Warning "Cannot read font probe log tail:', capture)
+        self.assertNotIn('ReadToEnd', capture)
+        self.assertNotIn('2>&1', capture)
+        self.assertIn('$baseline = Join-Path $baselineResult "render"', comparison)
+        self.assertIn('$candidate = Join-Path $candidateResult "render"', comparison)
+        self.assertIn('client-font-render-probe.exe") $baselineResult', comparison)
+        self.assertIn('client-font-render-probe.exe") $candidateResult', comparison)
+        self.assertIn('"compare_font_render.py") $baseline $candidate', comparison)
+        self.assertIn('build/native-windows-tests/font-baseline-result', comparison)
+        self.assertIn('build/native-windows-tests/font-candidate-result', comparison)
+        self.assertIn('if: always()', comparison)
+
+    def test_native_version_package_acceptance_runs_in_pinned_core_container(self) -> None:
+        core = self.text("check.yml").split("  core:\n", 1)[1].split("  windows-test-build:\n", 1)[0]
+        self.assertIn("CI='' python3 -m coverage run --append", core)
+        native = core.split("      - name: Build and test core packages in the pinned environment", 1)[1].split("      - uses:", 1)[0]
+        self.assertIn('"${CLASSIC_LINUX_IMAGE}"', native)
+        self.assertIn("CI=1 python3 -m unittest -v", native)
+        self.assertIn("tools.tests.test_version_metadata.VersionMetadataTests.test_pathfinding_physical_tag_untagged_and_installed_package", native)
+        self.assertIn("set -euo pipefail", native)
+        self.assertNotIn("continue-on-error", native)
 
     def test_windows_publisher_uses_the_staged_ctest_fixture(self) -> None:
         workflow = self.text("check.yml")
@@ -196,9 +415,9 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("client-gpu-fixture-provenance", cmake)
         self.assertIn("DEPENDS client-gpu-fixture-provenance", cmake)
-        self.assertIn("python3 tools/verify_gpu_fixture_provenance.py", client_package)
+        self.assertIn('"${host_python}" tools/verify_gpu_fixture_provenance.py', client_package)
         self.assertIn(
-            "python3 ../client/tools/verify_gpu_fixture_provenance.py "
+            '"${host_python}" ../client/tools/verify_gpu_fixture_provenance.py '
             "--content-runtime runtime/content",
             server_package,
         )
@@ -404,8 +623,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('expected_sound=$(realpath -e sound)', script)
         self.assertIn('selected_sound=$(realpath -e "${profile_sound}")', script)
         self.assertIn('find -P "${profile_sound}" ! -type d ! -type f', script)
-        self.assertIn('python3 tools/dependencies.py sync', script)
-        self.assertIn('python3 tools/dependencies.py verify', script)
+        self.assertIn('"${host_python}" tools/dependencies.py sync', script)
+        self.assertIn('"${host_python}" tools/dependencies.py verify', script)
         self.assertIn(
             'profile_content=${ATRINIK_PROFILE_CONTENT_DIR:-}', server_script
         )
@@ -415,10 +634,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("validate_profile_tree ATRINIK_PROFILE_CONTENT_DIR", server_script)
         self.assertIn("validate_profile_tree ATRINIK_PROFILE_RESOURCES_DIR", server_script)
         self.assertIn(
-            "PYTHONDONTWRITEBYTECODE=1 ./atrinik-server", server_script
+            "PYTHONDONTWRITEBYTECODE=1 native_llvm ./atrinik-server", server_script
         )
-        self.assertIn('python3 tools/dependencies.py sync', server_script)
-        self.assertIn('python3 tools/dependencies.py verify', server_script)
+        self.assertIn('"${host_python}" tools/dependencies.py sync', server_script)
+        self.assertIn('"${host_python}" tools/dependencies.py verify', server_script)
         for workflow in ("build-release-candidate.yml", "package-release.yml"):
             workflow_text = self.text(workflow)
             self.assertNotIn("ATRINIK_PROFILE_SOUND_DIR", workflow_text)
@@ -885,16 +1104,19 @@ class WorkflowContractTests(unittest.TestCase):
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("coverage_preset=linux-coverage", runner)
-        self.assertIn("coverage_preset=llvm-coverage", runner)
+        self.assertIn(".tools.clang", runner)
+        self.assertIn("= 23.1.3", runner)
+        self.assertIn("--build-dir build/llvm-coverage", runner)
+        self.assertNotIn("coverage_preset=linux-coverage", runner)
+        self.assertNotIn("ATRINIK_LLVM_TOOLCHAIN", runner)
         server = runner[runner.index("  server)") : runner.index("  client)")]
-        coverage = server.index('cmake --preset "${coverage_preset}"')
+        coverage = server.index("cmake --preset llvm-coverage")
         release = server.index("cmake --preset linux-release")
         sanitizers = server.index("cmake --preset linux-sanitizers")
         self.assertLess(coverage, release)
         self.assertLess(release, sanitizers)
         self.assertIn('cmake --build "${release_directory}" --parallel', server)
-        self.assertIn('ctest --preset "${coverage_preset}" --parallel 4 -LE performance', server)
+        self.assertIn("ctest --preset llvm-coverage --parallel 4 -LE performance", server)
         for directory in ("release_directory", "sanitizer_directory"):
             self.assertIn(
                 f'ctest --test-dir "${{{directory}}}" --output-on-failure --parallel 4 -LE performance',
@@ -956,7 +1178,7 @@ class WorkflowContractTests(unittest.TestCase):
         client = runner[client_start : runner.index("  client-benchmark)", client_start)]
         for name, component in (("server", server), ("client", client)):
             with self.subTest(component=name):
-                coverage = component.index('cmake --preset "${coverage_preset}"')
+                coverage = component.index("cmake --preset llvm-coverage")
                 release = component.index("cmake --preset linux-release")
                 sanitizers = component.index("cmake --preset linux-sanitizers")
                 self.assertLess(coverage, release)
@@ -968,12 +1190,22 @@ class WorkflowContractTests(unittest.TestCase):
                     )
                 else:
                     self.assertNotIn("-DENABLE_PRECOMPILED_HEADERS=OFF", component)
-                self.assertIn('ctest --preset "${coverage_preset}"', component)
+                self.assertIn("ctest --preset llvm-coverage", component)
                 self.assertIn('ctest --test-dir "${release_directory}" --output-on-failure', component)
                 self.assertIn('ctest --test-dir "${sanitizer_directory}" --output-on-failure', component)
 
     def test_linux_validation_routes_every_noncoverage_operation_to_selected_tree(self) -> None:
         runner = (ROOT / "tools/ci/run_linux_check.sh").read_text()
+        for name, directory in (
+            ("release_directory", "build/llvm-release"),
+            ("integrated_release_directory", "build/integrated-llvm-release"),
+            ("sanitizer_directory", "build/llvm-sanitizers"),
+            ("protocol_directory", "build/llvm-check"),
+            ("library_release_directory", "build/llvm-release"),
+            ("install_directory", "build/llvm-install"),
+            ("consumer_directory", "build/llvm-consumer"),
+        ):
+            self.assertIn(f"{name}={directory}\n", runner)
         self.assertNotIn("cmake --build --preset linux-release", runner)
         self.assertNotIn("cmake --build --preset linux-sanitizers", runner)
         self.assertNotIn("ctest --preset linux-release", runner)
@@ -985,7 +1217,7 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn('-B "${sanitizer_directory}"', line)
         for root in ("source_root", "baseline_root"):
             self.assertIn(f'${{{root}}}/client/${{release_directory}}/atrinik', runner)
-            self.assertIn(f'${{{root}}}/server/${{release_directory}}', runner)
+        self.assertIn('${source_root}/server/${release_directory}', runner)
         for operation in (
             'cmake -S "${source_root}/protocol" -B "${source_root}/protocol/${protocol_directory}"',
             'cmake --build "${source_root}/protocol/${protocol_directory}"',
@@ -1055,85 +1287,86 @@ class WorkflowContractTests(unittest.TestCase):
                     self.assertNotIn("excluded_performance", result.stdout)
 
     @unittest.skipUnless(shutil.which("cmake") and shutil.which("ctest") and shutil.which("cc") and shutil.which("ninja"), "CMake, CTest, Ninja and a C compiler required")
-    def test_linux_validation_isolates_actual_compiler_caches_in_both_directions(self) -> None:
+    def test_linux_validation_preserves_old_compiler_caches_in_both_orders(self) -> None:
         runner = (ROOT / "tools/ci/run_linux_check.sh").read_text()
-        selection = runner[runner.index("llvm_toolchain="):runner.index("\nlauncher=(")]
+        selection = runner[runner.index("release_directory="):runner.index("\nlauncher=(")]
         names = (
             "release_directory", "integrated_release_directory", "sanitizer_directory",
             "protocol_directory", "library_release_directory", "install_directory",
             "consumer_directory",
         )
-        expected = {
-            "0": ("build/linux-release", "build/integrated-linux-release", "build/linux-sanitizers",
-                  "build/check", "build/release", "build/install", "build/consumer"),
-            "1": ("build/llvm-release", "build/integrated-llvm-release", "build/llvm-sanitizers",
-                  "build/llvm-check", "build/llvm-release", "build/llvm-install", "build/llvm-consumer"),
-        }
-        selected = {}
-        for mode in ("0", "1"):
-            result = subprocess.run(
-                ["bash", "-euc", 'jq() { case "$2" in .tools.clang) echo 23.1.3;; .tools.gcc) echo 15.2.0;; esac; }\n'
-                 + selection + '\nprintf "%s\\n" ' + " ".join(f'"${{{name}}}"' for name in names)],
-                env={**os.environ, "ATRINIK_LLVM_TOOLCHAIN": mode},
-                capture_output=True, check=True,
-            )
-            selected[mode] = dict(zip(names, result.stdout.decode().splitlines()))
-            self.assertEqual(tuple(selected[mode].values()), expected[mode])
-
+        previous = ("build/linux-release", "build/integrated-linux-release", "build/linux-sanitizers",
+                    "build/check", "build/release", "build/install", "build/consumer")
+        expected = ("build/llvm-release", "build/integrated-llvm-release", "build/llvm-sanitizers",
+                    "build/llvm-check", "build/llvm-release", "build/llvm-install", "build/llvm-consumer")
+        result = subprocess.run(
+            ["bash", "-euc", selection + '\nprintf "%s\\n" ' +
+             " ".join(f'"${{{name}}}"' for name in names)],
+            capture_output=True, text=True, check=True)
+        selected = tuple(result.stdout.splitlines())
+        self.assertEqual(selected, expected)
+        self.assertTrue(all(old != native for old, native in zip(previous, selected)))
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Path(temporary)
-            # Both fixture drivers delegate to the available host compiler. Distinct
-            # paths reproduce CMake's persistent compiler choice without requiring
-            # a production LLVM installation or compiling the Classic application.
-            compilers = {}
-            for mode in ("0", "1"):
-                driver = fixture / ("gcc-fixture" if mode == "0" else "clang-fixture")
+            # Distinct fixture paths use the available host compiler to exercise
+            # CMake's persistent compiler cache; this is not a Classic build or
+            # a simulated LLVM identity used to bypass production validation.
+            drivers = {}
+            for name in ("previous", "selected"):
+                driver = fixture / (name + "-compiler-driver")
                 driver.symlink_to(shutil.which("cc"))
-                compilers[mode] = driver
-            for order in (("0", "1", "0"), ("1", "0", "1")):
-                source = fixture / ("gcc-first" if order[0] == "0" else "llvm-first")
+                drivers[name] = driver
+            for order in (("previous", "selected", "previous"),
+                          ("selected", "previous", "selected")):
+                source = fixture / (order[0] + "-first")
                 source.mkdir()
                 (source / "CMakeLists.txt").write_text(
                     "cmake_minimum_required(VERSION 3.20)\nproject(cache_fixture C)\n"
-                    "enable_testing()\nadd_test(NAME cache_fixture COMMAND ${CMAKE_COMMAND} -E true)\n"
-                )
+                    "enable_testing()\nadd_test(NAME cache_fixture COMMAND ${CMAKE_COMMAND} -E true)\n")
                 (source / "CMakePresets.json").write_text(
-                    (ROOT / "client/CMakePresets.json").read_text()
-                )
+                    (ROOT / "client/CMakePresets.json").read_text())
+                visited = set()
                 for mode in order:
-                    for name in names:
+                    visited.add(mode)
+                    directories = previous if mode == "previous" else selected
+                    for name, directory in zip(names, directories):
                         if name == "install_directory":
                             continue
-                        build = source / name / selected[mode][name]
+                        build = source / name / directory
                         preset = (
                             "linux-release" if name in ("release_directory", "integrated_release_directory")
-                            else "linux-sanitizers" if name == "sanitizer_directory" else None
-                        )
+                            else "linux-sanitizers" if name == "sanitizer_directory" else None)
                         configure = (
                             ["cmake", "--preset", preset, "-B", str(build)] if preset
-                            else ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja"]
-                        )
+                            else ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja"])
                         result = subprocess.run(
-                            configure, cwd=source,
-                            env={**os.environ, "CC": str(compilers[mode])},
-                            capture_output=True, text=True,
-                        )
+                            configure, cwd=source, env={**os.environ, "CC": str(drivers[mode])},
+                            capture_output=True, text=True)
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                         cache = (build / "CMakeCache.txt").read_text()
-                        self.assertIn(f"CMAKE_C_COMPILER:FILEPATH={compilers[mode]}\n", cache)
+                        self.assertIn(f"CMAKE_C_COMPILER:FILEPATH={drivers[mode]}\n", cache)
                         if preset:
                             build_type = "Debug" if preset == "linux-sanitizers" else "Release"
                             self.assertIn(f"CMAKE_BUILD_TYPE:STRING={build_type}\n", cache)
                             result = subprocess.run(
-                                ["cmake", "--build", str(build)], capture_output=True, text=True
-                            )
+                                ["cmake", "--build", str(build)], capture_output=True, text=True)
                             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                             result = subprocess.run(
                                 ["ctest", "--test-dir", str(build), "--output-on-failure", "--no-tests=error"],
-                                cwd=source, capture_output=True, text=True,
-                            )
+                                cwd=source, capture_output=True, text=True)
                             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                             self.assertIn("cache_fixture", result.stdout)
+                    # Check every cache after each switch to prove both coordinates
+                    # retain the compiler selected by their own first configure.
+                    for configured in visited:
+                        cached = previous if configured == "previous" else selected
+                        for name, directory in zip(names, cached):
+                            if name == "install_directory":
+                                continue
+                            cache = source / name / directory / "CMakeCache.txt"
+                            if cache.exists():
+                                self.assertIn(f"CMAKE_C_COMPILER:FILEPATH={drivers[configured]}\n",
+                                              cache.read_text())
 
     def test_movement_regression_compares_immutable_baselines_across_contracts(self) -> None:
         runner = (ROOT / "tools" / "ci" / "run_linux_check.sh").read_text(
@@ -1263,7 +1496,9 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         for material in benchmark_materials:
             self.assertEqual(client_benchmark.count(f"--material {material}"), 1)
-        self.assertIn("tools/ci/run_linux_check.sh server-benchmark", workflow)
+        self.assertIn("python3 tools/ci/server_benchmark.py compare", workflow)
+        self.assertIn('--base "${BASE_SHA}" --head "${HEAD_SHA}"', workflow)
+        self.assertNotIn("tools/ci/run_linux_check.sh server-benchmark /workspace", workflow)
         self.assertNotIn("recover_attested_dependency_bundle.sh", workflow)
         self.assertNotIn("--trusted-bundle", workflow)
         self.assertIn("github.event.pull_request.base.sha", workflow)
@@ -1304,18 +1539,23 @@ class WorkflowContractTests(unittest.TestCase):
         server_job = candidate[
             candidate.index("  server-windows:") : candidate.index("  server-image:")
         ]
-        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
-        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
+        digest = WINDOWS_GENERAL_DIGEST
+        image = WINDOWS_GENERAL_IMAGE
         self.assertEqual(
-            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: 1.16.0-{digest}"), 1
+            candidate.count(f"WINDOWS_BUILD_CACHE_EPOCH: llvm-23.1.3-{WINDOWS_PRODUCER_REVISION}-{digest}"), 1
         )
-        self.assertEqual(candidate.count(image), 4)
+        from tools.release.windows_producer import LLVM_IMAGE, MXE_IMAGE
+        self.assertEqual(LLVM_IMAGE, image)
+        self.assertNotEqual(MXE_IMAGE, LLVM_IMAGE)
+        self.assertIn("windows_cache_epoch: ${{ steps.metadata.outputs.windows_cache_epoch }}", candidate)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", candidate)
         for job, component in ((client_job, "client"), (server_job, "server")):
             with self.subTest(component=component):
                 self.assertIn(f"path: {component}/build/ccache", job)
                 self.assertIn(f"windows-{component}-ccache-v1-", job)
-                self.assertEqual(job.count(digest), 2)
+                self.assertIn("WINDOWS_BUILD_IMAGE: ${{ needs.metadata.outputs.windows_image }}", job)
+                self.assertIn("WINDOWS_BUILD_CACHE_EPOCH: ${{ needs.metadata.outputs.windows_cache_epoch }}", job)
+                self.assertEqual(job.count('"${WINDOWS_BUILD_IMAGE}"'), 2)
                 self.assertEqual(job.count("${{ env.WINDOWS_BUILD_CACHE_EPOCH }}"), 2)
                 self.assertIn("${{ runner.os }}-${{ runner.arch }}", job)
                 self.assertIn("${{ needs.metadata.outputs.version }}", job)
@@ -1327,13 +1567,12 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn(
                     f"--env CCACHE_TEMPDIR=/tmp/atrinik-{component}-ccache", job
                 )
-                self.assertIn(
-                    "--env PATH=/opt/mxe/.ccache/bin:/opt/mxe/usr/bin:", job
-                )
+                self.assertIn('"${producer_environment[@]}"', job)
+                self.assertIn('--format docker-env > "${arguments_path}"', job)
         self.assertEqual(candidate.count("ccache --zero-stats"), 2)
         self.assertEqual(candidate.count("ccache --show-stats"), 2)
         self.assertEqual(candidate.count("--env CCACHE_MAXSIZE=500M"), 2)
-        self.assertEqual(candidate.count("--env PATH=/opt/mxe/.ccache/bin:"), 2)
+        self.assertEqual(candidate.count('"${producer_environment[@]}"'), 2)
 
     def test_discord_application_id_is_release_only_package_data(self) -> None:
         package = self.text("package-release.yml")
@@ -1379,15 +1618,90 @@ class WorkflowContractTests(unittest.TestCase):
             package_script,
         )
 
-    def test_only_release_metadata_checkouts_require_full_history(self) -> None:
+    def test_candidate_windows_jobs_execute_the_authenticated_producer_environment(self) -> None:
+        from tools.release.windows_producer import select_producer
+        workflow = self.text("build-release-candidate.yml")
+        # Current recipe authentication follows the exact committed source,
+        # while the historical cases remain fixed to their reviewed commits.
+        current_revision = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        for revision in (current_revision,
+                         "fd4943252ac872fce2995c286b10a0c6d249aba3",
+                         "34bbad5c3f4d9b303c17aec5e2c75b3550ec8983",
+                         "994e6fdc20da962be9c11055bda28ef5561a1dea",
+                         "24bee6c8a830aa7372a30be6b842210b07639f73",
+                         "c5a8f9fa2bdcfbae9311093fb69907c8d64b35d4",
+                         "2349e0e14276fee251250cd451da6da0e68a3148"):
+            with tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary) / "source"
+                subprocess.run(["git", "clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(workspace)], check=True)
+                subprocess.run(["git", "-C", str(workspace), "checkout", "--quiet", "--detach", revision], check=True)
+                expected = select_producer(workspace, revision)
+                self.assertEqual(expected["windows_mode"], "llvm" if revision == current_revision else "mxe")
+                self.assertEqual(subprocess.run(
+                    ["git", "-C", str(workspace), "status", "--porcelain"],
+                    check=True, capture_output=True, text=True,
+                ).stdout, "")
+                trusted = workspace / "build/windows-automation/tools/release"
+                trusted.mkdir(parents=True)
+                shutil.copyfile(ROOT / "tools/release/windows_producer.py", trusted / "windows_producer.py")
+                binary = workspace / "fixture-bin"
+                binary.mkdir()
+                docker = binary / "docker"
+                docker.write_text("#!/usr/bin/env python3\nimport json,pathlib,sys\npathlib.Path('docker-arguments.json').write_text(json.dumps(sys.argv[1:]))\n")
+                docker.chmod(0o755)
+                for job, end in (("client-windows", "server-windows"), ("server-windows", "server-image")):
+                    with self.subTest(revision=revision, job=job):
+                        section = workflow.split("  " + job + ":\n", 1)[1].split("  " + end + ":\n", 1)[0]
+                        self.assertIn("WINDOWS_BUILD_IMAGE: ${{ needs.metadata.outputs.windows_image }}", section)
+                        self.assertIn("WINDOWS_BUILD_CACHE_EPOCH: ${{ needs.metadata.outputs.windows_cache_epoch }}", section)
+                        self.assertIn('docker pull "${WINDOWS_BUILD_IMAGE}"', section)
+                        step = section.split("      - name: Build portable package from monorepo siblings", 1)[1].split("      - uses:", 1)[0]
+                        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+                        environment = dict(os.environ, PATH=str(binary) + ":" + os.environ["PATH"],
+                                           GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace),
+                                           RELEASE_REVISION=revision, RELEASE_VERSION="0.0.0", DISCORD_CONFIG_FILE="",
+                                           WINDOWS_BUILD_IMAGE=expected["windows_image"])
+                        result = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=workspace,
+                                                env=environment, capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        arguments = json.loads((workspace / "docker-arguments.json").read_text())
+                        selected = dict(argument.split("=", 1) for index, argument in enumerate(arguments)
+                                        if index and arguments[index - 1] == "--env")
+                        for name, value in expected["environment"].items():
+                            self.assertEqual(selected[name], value)
+                        if revision == current_revision:
+                            self.assertEqual(selected["ATRINIK_WINDOWS_HOST_PYTHON"], "/usr/bin/python3")
+                            self.assertEqual(arguments.count("ATRINIK_WINDOWS_HOST_PYTHON=/usr/bin/python3"), 1)
+                        else:
+                            self.assertNotIn("ATRINIK_WINDOWS_HOST_PYTHON", selected)
+                        forbidden_prefix = "ATRINIK_WINDOWS_" if expected["windows_mode"] == "mxe" else "MXE_"
+                        self.assertFalse(any(name.startswith(forbidden_prefix) for name in selected))
+                        self.assertIn(expected["windows_image"], arguments)
+                        self.assertNotIn("classic-check", expected["windows_image"])
+                        self.assertEqual(arguments[arguments.index("--network") + 1], "none")
+                # Selector failure must stop the actual workflow before Docker.
+                (workspace / "client/tools/build-windows-package.sh").write_text("unapproved source")
+                (workspace / "docker-arguments.json").unlink()
+                rejected = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=workspace,
+                                          env=environment, capture_output=True, text=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertFalse((workspace / "docker-arguments.json").exists())
+
+    def test_release_producer_validation_checkouts_require_history(self) -> None:
         candidate = self.text("build-release-candidate.yml")
         metadata_job = candidate[
             candidate.index("  metadata:") : candidate.index("  sources:")
         ]
-        remaining_jobs = candidate[candidate.index("  sources:") :]
-        self.assertEqual(candidate.count("fetch-depth: 0"), 1)
+        appimage = candidate[candidate.index("  client-appimage:"):candidate.index("  client-windows:")]
+        finalizer = candidate[candidate.index("  candidate:"):]
+        self.assertEqual(candidate.count("fetch-depth: 0"), 3)
         self.assertEqual(metadata_job.count("fetch-depth: 0"), 1)
-        self.assertNotIn("fetch-depth: 0", remaining_jobs)
+        self.assertEqual(appimage.count("fetch-depth: 0"), 1)
+        self.assertIn("path: candidate-source\n          persist-credentials: false\n          fetch-depth: 0", appimage)
+        self.assertEqual(finalizer.count("fetch-depth: 0"), 1)
 
     def test_core_uploads_exercised_python_release_tool_coverage(self) -> None:
         workflow = self.text("check.yml")
@@ -1404,11 +1718,8 @@ class WorkflowContractTests(unittest.TestCase):
         libatrinik_upload = core[core.index("- name: Upload libatrinik coverage") :]
         self.assertIn("files: tools/coverage.xml", tools_upload)
         self.assertIn("flags: release-tools", tools_upload)
-        self.assertNotIn("libatrinik/coverage.xml", tools_upload)
-        self.assertIn(
-            "files: libatrinik/coverage.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }}",
-            libatrinik_upload,
-        )
+        self.assertNotIn("libatrinik/coverage.lcov", tools_upload)
+        self.assertIn("files: libatrinik/coverage.lcov", libatrinik_upload)
         self.assertIn("flags: libatrinik", libatrinik_upload)
         self.assertNotIn("tools/coverage.xml", libatrinik_upload)
 
@@ -1440,14 +1751,13 @@ class WorkflowContractTests(unittest.TestCase):
         run_start = workflow.index("  windows-test:")
         run = workflow[run_start : workflow.index("  server:", run_start)]
         aggregate = workflow[workflow.index("  classic-validation:") :]
-        digest = "4266256d4b4196241df6463e687dd286022e24e3bc46dfafb4f877744a731d69"
-        image = f"ghcr.io/atrinik/windows-build:1.16.0@sha256:{digest}"
 
         self.assertIn("if: needs.changes.outputs.windows == 'true'", build)
-        self.assertEqual(build.count(image), 4)
-        self.assertEqual(build.count(digest), 4)
+        self.assertNotIn(WINDOWS_FOCUSED_IMAGE, build)
+        self.assertEqual(build.count(WINDOWS_GENERAL_IMAGE), 4)
+        self.assertNotIn("windows-build:1.16.0", build)
         self.assertNotIn("ghcr.io/atrinik/windows-build:1.0.5", build)
-        self.assertEqual(build.count("--network none"), 3)
+        self.assertEqual(build.count("--network none"), 4)
         self.assertIn("persist-credentials: false", build)
         self.assertIn("ref: ${{ env.COVERAGE_SHA }}", build)
         self.assertIn('test "$(git rev-parse HEAD)" = "${COVERAGE_SHA}"', build)
@@ -1472,7 +1782,7 @@ class WorkflowContractTests(unittest.TestCase):
             server_build,
         )
         self.assertLess(
-            server_build.index("x86_64-w64-mingw32.shared-cmake"),
+            server_build.index("-DCMAKE_TOOLCHAIN_FILE="),
             server_build.index("cmake --build server/build/windows-pr-server"),
         )
         self.assertIn(
@@ -1480,6 +1790,16 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("--env CCACHE_MAXSIZE=250M", build)
         self.assertNotIn("--env CCACHE_DIR=/opt/mxe", build)
+        baseline_start = build.index("      - name: Build the original pinned Windows font baseline")
+        baseline_end = build.index("      - name: Cross-build and stage standalone tests", baseline_start)
+        candidate_build = build[:baseline_start] + build[baseline_end:]
+        self.assertNotIn("/opt/mxe", candidate_build)
+        self.assertNotIn("x86_64-w64-mingw32.shared-cmake", candidate_build)
+        self.assertEqual(build.count("--env ATRINIK_WINDOWS_TARGET=x86_64-w64-mingw32"), 3)
+        self.assertEqual(build.count('-DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}"'), 4)
+        self.assertEqual(build.count("-DCMAKE_C_COMPILER_LAUNCHER=ccache"), 4)
+        self.assertIn("--readobj llvm-readobj", build)
+        self.assertIn('--runtime-dir "${ATRINIK_WINDOWS_RUNTIME_DIR}"', build)
         self.assertIn("-DBUILD_TESTING=ON", build)
         self.assertIn("python3 client/tools/dependencies.py sync --root client", build)
         self.assertIn("python3 server/tools/dependencies.py sync --root server", build)
@@ -1488,7 +1808,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("/data/discord-application-id", build)
         self.assertIn("not in archive.read(executable)", build)
         self.assertIn(
-            "--target libatrinik-path libatrinik-rendezvous "
+            "--target libatrinik-console libatrinik-path libatrinik-rendezvous "
             "libatrinik-signals \\",
             build,
         )
@@ -1499,6 +1819,12 @@ class WorkflowContractTests(unittest.TestCase):
             build,
         )
         self.assertIn("libatrinik-stun \\", build)
+        staged_tests = build.split("stage=libatrinik/build/windows-test-bundle", 1)[1]
+        staged_tests = staged_tests.split("cmake -E copy_directory", 1)[0]
+        self.assertIn("python3 tools/ci/stage_windows_runtime.py", staged_tests)
+        self.assertIn(
+            "libatrinik/build/windows-tests/libatrinik-console.exe", staged_tests
+        )
         self.assertIn(
             "libatrinik/build/windows-tests/libatrinik-socket-address.exe", build
         )
@@ -1557,6 +1883,13 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn('"atrinik-classic-issue-477-windows-one-click-*.zip"', run)
         self.assertRegex(run, r"actions/download-artifact@[0-9a-f]{40}\b")
+        self.assertRegex(
+            run,
+            r'& \(Join-Path \$bundle "libatrinik-console\.exe"\)\s+'
+            r'if \(\$LASTEXITCODE -ne 0\) \{\s+'
+            r'throw "libatrinik-console\.exe failed with exit code '
+            r'\$\{LASTEXITCODE\}"\s+\}',
+        )
         self.assertIn('"libatrinik-path.exe"', run)
         self.assertIn("New-Item -ItemType Junction", run)
         self.assertIn('"libatrinik-path.exe") $junction', run)
@@ -1838,7 +2171,10 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("bundle-verify", runner)
-        self.assertEqual(runner.count("--offline"), 8)
+        self.assertEqual(runner.count("--offline"), 6)
+        benchmark = (ROOT / "tools/ci/server_benchmark.py").read_text()
+        self.assertEqual(benchmark.count('"--offline"'), 2)
+        self.assertIn('"bundle-verify"', benchmark)
         self.assertIn('build/dependency-source-cache', runner)
         self.assertIn('--downloads "${dependency_downloads}"', runner)
         self.assertIn('"${baseline_root}/client/dependencies.lock.json"', runner)
@@ -2117,7 +2453,7 @@ class WorkflowContractTests(unittest.TestCase):
                     # Host-only payload fixtures need SquashFS inspection.
                     # Native compilation still uses only the pinned image.
                     preparation, native = job.split("      - name: Install Python test coverage tooling", 1)
-                    self.assertIn("squashfs-tools binutils libzstd1", preparation)
+                    self.assertIn("squashfs-tools llvm libzstd1", preparation)
                     self.assertNotIn("apt-get", native)
                 else:
                     self.assertNotIn("apt-get", job)
@@ -2146,19 +2482,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--env ATRINIK_BENCHMARK_REVISION="${expected_revision}"', gpu_coverage)
         self.assertIn("verify_gpu_coverage_record.py", gpu_coverage)
         self.assertIn("ATRINIK_GPU_CONFORMANCE_TEST_SUPPRESS_ROOT_GLYPH", gpu_coverage)
-        self.assertIn("coverage_preset=linux-coverage", gpu_coverage)
-        self.assertIn("coverage_preset=llvm-coverage", gpu_coverage)
-        self.assertIn('--env ATRINIK_COVERAGE_DIRECTORY="${coverage_directory}"', gpu_coverage)
-        self.assertIn('cmake --preset "${ATRINIK_COVERAGE_PRESET}"', gpu_coverage)
-        self.assertIn('ctest --preset "${ATRINIK_COVERAGE_PRESET}"', gpu_coverage)
+        self.assertIn("coverage_build=${client_root}/build/llvm-coverage", gpu_coverage)
+        self.assertIn('--env LLVM_PROFILE_FILE="${compiled_home}/build/llvm-coverage/llvm-profiles/%m-%p.profraw"', gpu_coverage)
+        self.assertIn("cmake --preset llvm-coverage", gpu_coverage)
+        self.assertIn("ctest --preset llvm-coverage", gpu_coverage)
+        self.assertNotIn("ATRINIK_LLVM_TOOLCHAIN", gpu_coverage)
         self.assertIn("lvp_icd.json", gpu_coverage)
         self.assertIn("--network none", gpu_coverage)
         self.assertIn("tools/ci/run_gpu_coverage.sh", client)
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage_job)
+        broad_image = (
+            "ghcr.io/atrinik/linux-build:1.18.0@sha256:"
+            "613cf43ab07634db005a28462a009c4c28c90dccb1b5175e13e8072b6dfe8d72"
+        )
+        self.assertIn(f"CLASSIC_GPU_COVERAGE_IMAGE: {broad_image}", workflow)
         self.assertIn(
-            "ghcr.io/atrinik/linux-build:1.16.0@sha256:"
-            "89fae13a18407d2341aea4199ab0d44ab319efb8138cb95da1b221e6748faa7e",
-            workflow,
+            f"CLASSIC_LINUX_RUNTIME_IMAGE: {broad_image}",
+            self.text("gpu-qualification.yml"),
         )
 
         measurement = (ROOT / "tools" / "ci" / "measure_linux_image.sh").read_text(
@@ -2210,10 +2550,7 @@ class WorkflowContractTests(unittest.TestCase):
             workflow.index("  integrated:\n    name: Integrated client/server graph")
         ]
         self.assertIn("tools/ci/run_gpu_coverage.sh", gpu_coverage)
-        self.assertIn(
-            "files: client/coverage.${{ env.ATRINIK_LLVM_TOOLCHAIN == '1' && 'lcov' || 'xml' }}",
-            gpu_coverage,
-        )
+        self.assertIn("files: client/coverage.lcov", gpu_coverage)
         self.assertIn("flags: client-gpu", gpu_coverage)
         native_coverage = gpu_coverage.split(
             "      - name: Upload GPU-complete client coverage", 1

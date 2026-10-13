@@ -154,7 +154,7 @@ static char *metaserver_cache_path(const client_metaserver_endpoint_t *endpoint)
         return NULL;
     }
     char relative[HUGE_BUF];
-    if (snprintf(VS(relative), DIRECTORY_CACHE "/metaserver-v6-%s.xml", scope) >=
+    if (snprintf((relative), sizeof((relative)), DIRECTORY_CACHE "/metaserver-v6-%s.xml", scope) >=
         (int)sizeof(relative)) {
         return NULL;
     }

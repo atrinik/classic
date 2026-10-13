@@ -581,7 +581,7 @@ static bool progression_level_begin(object *who,
                                     char transaction[GAMEPLAY_JOURNAL_TRANSACTION_ID_SIZE]) {
     char subject[GAMEPLAY_JOURNAL_ID_MAX + 1];
     if (op->type == PLAYER) {
-        snprintf(VS(subject), "level:character");
+        snprintf((subject), sizeof((subject)), "level:character");
     } else {
         const char *skill_id = skill_id_from_index(op->stats.sp);
         if (skill_id == NULL || !metrics_format_content_id(VS(subject), "skill", skill_id)) {

@@ -402,7 +402,7 @@ START_TEST(test_string_get_word) {
     free(cp);
 
     pos = 0;
-    snprintf(VS(word), "not empty");
+    snprintf((word), sizeof((word)), "not empty");
     ck_assert_ptr_eq(string_get_word(NULL, &pos, ' ', word, sizeof(word), 0), NULL);
     ck_assert_str_eq(word, "");
     ck_assert_uint_eq(pos, 0);

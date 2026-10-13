@@ -2,6 +2,23 @@
 
 set -euo pipefail
 
+# atrinik-windows-host-python-contract: 1
+# Managed producers bind host helpers and CMake discovery independently of PATH.
+# Generic callers retain their existing interpreter discovery when unset.
+host_python=python3
+host_python_arguments=()
+if [[ ${ATRINIK_WINDOWS_HOST_PYTHON+x} ]]; then
+  if [[ ${ATRINIK_WINDOWS_HOST_PYTHON} != /usr/bin/python3 || ! -x /usr/bin/python3 ]]; then
+    echo "ATRINIK_WINDOWS_HOST_PYTHON must identify /usr/bin/python3" >&2
+    exit 1
+  fi
+  host_python=/usr/bin/python3
+  host_python_arguments+=(
+    -DPython3_EXECUTABLE=/usr/bin/python3
+    -DPython3_FIND_VIRTUALENV=STANDARD
+  )
+fi
+
 output_directory=${1:-build/packages}
 version=${ATRINIK_PACKAGE_VERSION:-}
 if [[ ! ${version} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -17,7 +34,7 @@ if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
     exit 1
   fi
 fi
-for variable in MXE_TOOLCHAIN_FILE MXE_RUNTIME_DIR \
+for variable in ATRINIK_WINDOWS_TOOLCHAIN_FILE ATRINIK_WINDOWS_RUNTIME_DIR \
     ATRINIK_WINDOWS_PYTHON_INCLUDE_DIR ATRINIK_WINDOWS_PYTHON_LIBRARY \
     ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR; do
   if [[ -z ${!variable:-} || ! -e ${!variable} ]]; then
@@ -26,8 +43,12 @@ for variable in MXE_TOOLCHAIN_FILE MXE_RUNTIME_DIR \
   fi
 done
 
-mxe_cmake=${MXE_TARGET:-x86_64-w64-mingw32.shared}-cmake
-command -v "${mxe_cmake}" >/dev/null
+if [[ ${ATRINIK_WINDOWS_TARGET:-} != x86_64-w64-mingw32 ]]; then
+  echo "ATRINIK_WINDOWS_TARGET must be x86_64-w64-mingw32" >&2
+  exit 1
+fi
+command -v cmake >/dev/null
+command -v llvm-readobj >/dev/null
 dependency_downloads=${ATRINIK_DEPENDENCY_DOWNLOADS:-}
 dependency_sync_arguments=()
 profile_content=${ATRINIK_PROFILE_CONTENT_DIR:-}
@@ -69,8 +90,8 @@ else
   if [[ -n ${dependency_downloads} ]]; then
     dependency_sync_arguments+=(--cache "${dependency_downloads}" --refresh --offline)
   fi
-  python3 tools/dependencies.py sync "${dependency_sync_arguments[@]}"
-  python3 tools/dependencies.py verify
+  "${host_python}" tools/dependencies.py sync "${dependency_sync_arguments[@]}"
+  "${host_python}" tools/dependencies.py verify
 fi
 provenance_arguments=()
 if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
@@ -81,10 +102,37 @@ if [[ -n ${qualification} || -n ${qualification_sha} ]]; then
     --profile-resources "${profile_resources}"
   )
 fi
-python3 ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runtime/content "${provenance_arguments[@]}"
+"${host_python}" ../client/tools/verify_gpu_fixture_provenance.py --content-runtime runtime/content "${provenance_arguments[@]}"
 
 dependency_arguments=()
 native_compiler_arguments=()
+native_llvm_bin=/opt/llvm-23.1.3/bin
+script_source_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+native_toolchain=${script_source_root}/cmake/toolchains/llvm.cmake
+if [[ ! -f ${native_toolchain} ]]; then
+  native_toolchain=${script_source_root}/../cmake/toolchains/llvm.cmake
+fi
+if [[ ! -f ${native_toolchain} ]]; then
+  echo "The native LLVM worldmaker toolchain is missing" >&2
+  exit 1
+fi
+native_compiler_arguments+=("-DCMAKE_TOOLCHAIN_FILE=${native_toolchain}")
+# The inherited PATH selects LLVM-MinGW for the later cross build. Its clang
+# cannot link the Linux compiler-rt/libunwind used by the host worldmaker.
+native_llvm() {
+  env PATH="${native_llvm_bin}:${PATH}" \
+    CMAKE_TOOLCHAIN_FILE="${native_toolchain}" \
+    CC="${native_llvm_bin}/clang" CXX="${native_llvm_bin}/clang++" \
+    AR="${native_llvm_bin}/llvm-ar" RANLIB="${native_llvm_bin}/llvm-ranlib" \
+    LD="${native_llvm_bin}/ld.lld" "$@"
+}
+for native_tool in C_COMPILER:clang CXX_COMPILER:clang++ AR:llvm-ar \
+    RANLIB:llvm-ranlib LINKER:ld.lld NM:llvm-nm STRIP:llvm-strip \
+    OBJCOPY:llvm-objcopy OBJDUMP:llvm-objdump READELF:llvm-readelf; do
+  native_compiler_arguments+=(
+    "-DCMAKE_${native_tool%%:*}=${native_llvm_bin}/${native_tool#*:}"
+  )
+done
 monorepo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [[ -n ${monorepo_root} && -f ${monorepo_root}/protocol/CMakeLists.txt &&
     -f ${monorepo_root}/libatrinik/CMakeLists.txt ]]; then
@@ -133,14 +181,15 @@ cmake -E copy runtime/content/compatibility.json \
   "${package_root}/compatibility.json"
 cmake -E copy runtime/content/manifest.json "${package_root}/manifest.json"
 
-cmake -S . -B "${region_build}" -G Ninja \
+native_llvm cmake -S . -B "${region_build}" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=none \
   -DATRINIK_PACKAGE_VERSION="${version}" \
   "${native_compiler_arguments[@]}" \
+  "${host_python_arguments[@]}" \
   "${dependency_arguments[@]}"
-cmake --build "${region_build}" \
+native_llvm cmake --build "${region_build}" \
   --target atrinik-server plugin_arena plugin_python --parallel "$(nproc)"
 
 region_assets=${package_root}/region-assets
@@ -154,7 +203,7 @@ cmake -E copy_directory install_data "${region_data}"
 repository_root=$(pwd)
 (
   cd "${region_runtime}"
-  PYTHONDONTWRITEBYTECODE=1 ./atrinik-server \
+  PYTHONDONTWRITEBYTECODE=1 native_llvm ./atrinik-server \
     --worldmaker \
     --libpath="${repository_root}/${package_root}/lib" \
     --mapspath="${repository_root}/${package_root}/maps" \
@@ -168,17 +217,18 @@ cmake -E copy_directory "${region_assets}/client-maps" \
 cmake -E remove_directory "${region_runtime}"
 cmake -E remove_directory "${region_assets}"
 
-"${mxe_cmake}" -S . -B build/windows-release -G Ninja \
+cmake -S . -B build/windows-release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE="${MXE_TOOLCHAIN_FILE}" \
+  -DCMAKE_TOOLCHAIN_FILE="${ATRINIK_WINDOWS_TOOLCHAIN_FILE}" \
   -DBUILD_TESTING=OFF \
   -DPACKAGE_TYPE=zip \
   -DATRINIK_PACKAGE_VERSION="${version}" \
-  -DATRINIK_WINDOWS_RUNTIME_DIR="${MXE_RUNTIME_DIR}" \
+  -DATRINIK_WINDOWS_RUNTIME_DIR="${ATRINIK_WINDOWS_RUNTIME_DIR}" \
   -DATRINIK_WINDOWS_PYTHON_INCLUDE_DIR="${ATRINIK_WINDOWS_PYTHON_INCLUDE_DIR}" \
   -DATRINIK_WINDOWS_PYTHON_LIBRARY="${ATRINIK_WINDOWS_PYTHON_LIBRARY}" \
   -DATRINIK_WINDOWS_PYTHON_RUNTIME_DIR="${ATRINIK_WINDOWS_PYTHON_RUNTIME_DIR}" \
   -DATRINIK_SERVER_PACKAGE_ROOT="${repository_root}/${package_root}" \
+  "${host_python_arguments[@]}" \
   "${dependency_arguments[@]}"
 cmake --build build/windows-release --parallel "$(nproc)"
 mkdir -p "${output_directory}"

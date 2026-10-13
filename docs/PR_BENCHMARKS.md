@@ -30,10 +30,22 @@ retained for 14 days. Same-repository pull requests receive one bounded updated
 movement-summary comment; fork pull requests retain read-only workflow
 permissions and publish evidence only through the run summary and artifact.
 
-The workflow uses the same immutable dependency bundle and pinned Linux image
-as required validation, then disables container networking while building and
-running pull-request code. Applying the label never changes the required
-`Classic validation` aggregate, and an absent, removed, or not-applicable
+The candidate uses the same immutable dependency bundle and pinned LLVM Linux
+image as required validation. The server comparison stages a clean detached base
+and authenticates its committed benchmark producer contract. A baseline with the
+approved original workflow and runner uses their frozen Classic build 1.16.0
+image and GCC 15.2.0; a current LLVM baseline uses its own source toolchain in
+Classic build 1.18.0. Unknown or modified contracts fail before container launch.
+The host launches each probe in its own digest-pinned image with networking
+disabled, separate compiler caches and build trees, and runs only the required
+`server-content-benchmark` test. Evidence records revision, image, compiler and
+lock digests for both completed probes; a missing or failed probe produces no
+success summary. Historical source commits are selected by producer contract,
+not by a fixed commit whitelist. Release recovery approval is separate.
+
+The client retains its explicit GPU-qualification skip when the current source
+has no qualified player-view benchmark. Applying the label never changes the
+required `Classic validation` aggregate, and an absent, removed, or not-applicable
 request cannot leave that aggregate pending or make it fail.
 
 Push and merge-queue events run required correctness validation without timed
@@ -58,7 +70,13 @@ contracts are network-free:
 ```sh
 python3 -m unittest -v tools.tests.test_classify_changes
 python3 -m unittest -v tools.tests.test_workflow_contracts
+python3 -m unittest -v tools.tests.test_server_benchmark
 bash -n tools/ci/run_linux_check.sh
 shellcheck tools/ci/run_linux_check.sh
 actionlint .github/workflows/check.yml .github/workflows/pr-benchmarks.yml
 ```
+
+Native benchmark builds use the same explicit Clang 23.1.3, LLD and
+compiler-rt toolchain as Check and retain their existing Release optimization.
+LLVM and historical GCC observations belong to distinct environment cohorts;
+compare timings only within the compatible compiler and image cohort.

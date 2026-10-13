@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2026 The Atrinik Project                              *
+ *   Copyright 2026 The Atrinik Project                              *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -47,7 +47,7 @@
 
 static bool load_fixture(const char *contents, char *error, size_t error_size) {
     char path[HUGE_BUF];
-    snprintf(VS(path), "%s/regions-189-fixture.reg", settings.datapath);
+    snprintf((path), sizeof((path)), "%s/regions-189-fixture.reg", settings.datapath);
     FILE *fp = fopen(path, "wb");
     ck_assert_ptr_nonnull(fp);
     ck_assert_int_ne(fputs(contents, fp), EOF);
@@ -60,7 +60,7 @@ static bool load_fixture(const char *contents, char *error, size_t error_size) {
 
 static bool load_with_child(const char *child, char *error, size_t error_size) {
     char contents[HUGE_BUF * 2];
-    int length = snprintf(VS(contents), "%s%s", ROOT_REGION, child);
+    int length = snprintf((contents), sizeof((contents)), "%s%s", ROOT_REGION, child);
     ck_assert_int_ge(length, 0);
     ck_assert_uint_lt((size_t)length, sizeof(contents));
     return load_fixture(contents, error, error_size);
@@ -519,7 +519,7 @@ START_TEST(test_reload_load_order_and_map_transitions_are_deterministic) {
     ck_assert_msg(load_fixture(fixture, VS(error)), "%s", error);
     const region_struct *child = region_find_by_name("child");
     char digest[sizeof(child->celestial.digest_hex)];
-    snprintf(VS(digest), "%s", child->celestial.digest_hex);
+    snprintf((digest), sizeof((digest)), "%s", child->celestial.digest_hex);
     region_celestial_phases_t before;
     todtick = ULONG_MAX;
     region_celestial_phases(&child->celestial, todtick, &before);

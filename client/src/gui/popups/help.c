@@ -374,7 +374,7 @@ void help_show(const char *name) {
     if (hfile == NULL) {
         char buf[HUGE_BUF];
 
-        snprintf(VS(buf),
+        snprintf((buf), sizeof((buf)),
                  "[book]Help not found[/book][title]\n[center]The "
                  "specified help file could not be found.[/center]"
                  "[/title]");
@@ -428,7 +428,7 @@ void help_handle_tabulator(text_input_struct *text_input) {
         utarray_sort(command_matches, command_match_cmp);
         command_index = 0;
 
-        snprintf(VS(command_buf), "%s", text_input->str);
+        snprintf((command_buf), sizeof((command_buf)), "%s", text_input->str);
     }
 
     len = utarray_len(command_matches);
@@ -437,9 +437,9 @@ void help_handle_tabulator(text_input_struct *text_input) {
         return;
     }
 
-    snprintf(VS(buf), "/%s ", *((char **)utarray_eltptr(command_matches, command_index)));
+    snprintf((buf), sizeof((buf)), "/%s ", *((char **)utarray_eltptr(command_matches, command_index)));
     text_input_set(text_input, buf);
-    snprintf(VS(command_buf), "%s", buf);
+    snprintf((command_buf), sizeof((command_buf)), "%s", buf);
 
     command_index++;
 

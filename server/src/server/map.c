@@ -1197,7 +1197,7 @@ static void derive_map_filename_tiles(mapstruct *m, const char *pathname, int fl
                 continue;
             }
 
-            snprintf(VS(path),
+            snprintf((path), sizeof((path)),
                      "%s_%d_%d",
                      cp,
                      m->coords[0] + map_tiled_coords[i][0],
@@ -1424,7 +1424,7 @@ static mapstruct *load_temporary_map(mapstruct *m, int flags) {
                 m->path,
                 m->tmpname,
                 error);
-            snprintf(VS(buf), "%s", m->path);
+            snprintf((buf), sizeof((buf)), "%s", m->path);
             free_map(m, 1);
             delete_map(m);
             m = load_original_map(buf, NULL, 0);
@@ -1442,7 +1442,7 @@ static mapstruct *load_temporary_map(mapstruct *m, int flags) {
         LOG(BUG,
             "Invalid celestial structure in temporary map %s; falling back to original.",
             m->path);
-        snprintf(VS(buf), "%s", m->path);
+        snprintf((buf), sizeof((buf)), "%s", m->path);
         delete_map(m);
         return load_original_map(buf, NULL, 0);
     }
@@ -1517,7 +1517,7 @@ static bool load_unique_objects(mapstruct *m) {
         uintmax_t sequence = parsed == 2 ? strtoumax(raw_sequence, &end, 10) : 0;
         if (parsed == 2 && string_is_hex_fixed(run, 32, true) && errno == 0 &&
             end != raw_sequence && *end == '\0' && sequence <= UINT64_MAX) {
-            snprintf(VS(m->journal_unique_run_id), "%s", run);
+            snprintf((m->journal_unique_run_id), sizeof((m->journal_unique_run_id)), "%s", run);
             m->journal_unique_sequence = (uint64_t)sequence;
         } else {
             (void)fseek(fp, position, SEEK_SET);
@@ -1548,8 +1548,8 @@ typedef struct map_atomic_file {
 
 static bool map_atomic_open(map_atomic_file_t *file, const char *target) {
     memset(file, 0, sizeof(*file));
-    if (snprintf(VS(file->target), "%s", target) >= (int)sizeof(file->target) ||
-        snprintf(VS(file->temporary), "%s.new.XXXXXX", target) >= (int)sizeof(file->temporary)) {
+    if (snprintf((file->target), sizeof((file->target)), "%s", target) >= (int)sizeof(file->target) ||
+        snprintf((file->temporary), sizeof((file->temporary)), "%s.new.XXXXXX", target) >= (int)sizeof(file->temporary)) {
         return false;
     }
     int fd = mkstemp(file->temporary);
@@ -1685,7 +1685,7 @@ int new_save_map(mapstruct *m, int flag) {
             close(fd);
         }
 
-        snprintf(VS(filename), "%s", m->tmpname);
+        snprintf((filename), sizeof((filename)), "%s", m->tmpname);
     }
 
     if (m->celestial_schema == 1 && celestial_structure_v1_runtime_active() && !flag) {

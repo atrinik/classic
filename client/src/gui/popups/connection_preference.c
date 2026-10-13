@@ -102,7 +102,7 @@ static int popup_draw(popup_struct *popup) {
               &box);
 
     char buf[HUGE_BUF];
-    snprintf(VS(buf),
+    snprintf((buf), sizeof((buf)),
              "Choose which direct route %s should try first. If it is "
              "unavailable, the client continues with Automatic fallback.",
              preference_server->name);

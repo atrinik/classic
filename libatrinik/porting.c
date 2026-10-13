@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2014 Zoey Rose and Atrinik Development Team      *
+ *   Copyright (C) 2009-2026 Zoey Rose and Atrinik Development Team      *
  *                                                                       *
  * Fork from Crossfire (Multiplayer game for X-windows).                 *
  *                                                                       *
@@ -218,33 +218,38 @@ ssize_t _getline(char **lineptr, size_t *n, FILE *stream) {
     }
 
     buf = *lineptr;
-    bufsize = *n;
+    bufsize = buf != NULL ? *n : 0;
     numread = 0;
 
     c = fgetc(stream);
 
     if (c == EOF) {
-        errno = EINVAL;
         return -1;
     }
 
-    if (!buf) {
+    if (!buf || bufsize == 0) {
         bufsize = 1;
-        buf = malloc(bufsize);
-
-        if (!buf) {
+        char *grown = realloc(buf, bufsize);
+        if (grown == NULL) {
             return -1;
         }
+        buf = *lineptr = grown;
+        *n = bufsize;
     }
 
     while (c != EOF) {
-        if (numread > bufsize - 1) {
-            bufsize += 1;
-            buf = realloc(buf, bufsize);
-
-            if (!buf) {
+        /* Reserve the terminating NUL in addition to the next input byte. */
+        if (numread >= bufsize - 1) {
+            if (bufsize == SIZE_MAX) {
+                errno = EOVERFLOW;
                 return -1;
             }
+            char *grown = realloc(buf, bufsize + 1);
+            if (grown == NULL) {
+                return -1;
+            }
+            buf = *lineptr = grown;
+            *n = ++bufsize;
         }
 
         buf[numread++] = c;

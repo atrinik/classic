@@ -8,22 +8,32 @@ if [[ $# -ne 1 ]]; then
 fi
 
 prefix=$(realpath -m "$1")
-apt_prefix=()
-if ((EUID != 0)); then
-  apt_prefix=(sudo)
+# Compiler and system dependencies belong to the immutable Classic producer.
+# Installing distribution compiler packages here would create another cohort.
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+inventory = json.loads(Path('/usr/local/share/atrinik/classic-toolchain.json').read_text())
+if (inventory.get('target') != 'classic-final' or
+        inventory.get('platform') != 'linux/amd64' or
+        inventory.get('tools', {}).get('clang') != '23.1.3'):
+    raise SystemExit('run this helper inside the pinned LLVM 23.1.3 Classic producer')
+PY
+script_directory=$(realpath "$(dirname "${BASH_SOURCE[0]}")")
+toolchain=${script_directory}/../../cmake/toolchains/llvm.cmake
+if [[ ! -f ${toolchain} ]]; then
+  # Scoped client archives place tools/ and cmake/ beside each other.
+  toolchain=${script_directory}/../cmake/toolchains/llvm.cmake
 fi
-"${apt_prefix[@]}" apt-get update -qq
-"${apt_prefix[@]}" env DEBIAN_FRONTEND=noninteractive \
-  apt-get install -y -qq --no-install-recommends \
-  build-essential ca-certificates cmake curl gcovr libcurl4-openssl-dev libidn2-dev libopus-dev \
-  libopusfile-dev libsdl3-dev libsdl3-image-dev libsdl3-ttf-dev libssl-dev libxml2-dev ninja-build \
-  pkgconf python3 zlib1g-dev
+test -f "${toolchain}"
+export CC=clang CXX=clang++
 
 export CMAKE_PREFIX_PATH=${prefix}
 export LD_LIBRARY_PATH=${prefix}/lib
 export PKG_CONFIG_PATH=${prefix}/lib/pkgconfig
 
-if [[ -f ${prefix}/.atrinik-sdl-mixer-2 ]]; then
+if [[ -f ${prefix}/.atrinik-sdl-mixer-llvm-23.1.3 ]]; then
   exit 0
 fi
 
@@ -46,6 +56,7 @@ build_project() {
   cmake -S "${work}/${source}" -B "${work}/${source}-build" \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="${toolchain}" \
     -DCMAKE_INSTALL_PREFIX="${prefix}" \
     "$@"
   cmake --build "${work}/${source}-build" --parallel
@@ -76,4 +87,4 @@ pkg-config --atleast-version=3.4.0 sdl3
 pkg-config --atleast-version=3.2.0 sdl3-image
 pkg-config --atleast-version=3.2.0 sdl3-ttf
 pkg-config --exact-version=3.2.4 sdl3-mixer
-touch "${prefix}/.atrinik-sdl-mixer-2"
+touch "${prefix}/.atrinik-sdl-mixer-llvm-23.1.3"

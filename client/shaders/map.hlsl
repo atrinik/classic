@@ -452,29 +452,31 @@ uint4 final_light_horizontal(uint offset, uint count, int row_y, int x,
         }
     }
     uint right = low;
+    LightSpan sample_span;
+    int sample_x;
+    bool gap = false;
     if (right == 0u) {
-        LightSpan span = final_light_spans[offset];
-        return final_light_load(span.quad, int2(span.first_x, row_y), use_coverage, coverage);
+        sample_span = final_light_spans[offset];
+        sample_x = sample_span.first_x;
+    } else {
+        sample_span = final_light_spans[offset + right - 1u];
+        sample_x = min(x, sample_span.last_x);
+        gap = x > sample_span.last_x && right < count;
     }
-    uint left = right - 1u;
-    LightSpan left_span = final_light_spans[offset + left];
-    if (x <= left_span.last_x) {
-        return final_light_load(left_span.quad, int2(x, row_y), use_coverage, coverage);
-    }
-    if (right == count) {
-        LightSpan span = left_span;
-        return final_light_load(span.quad, int2(span.last_x, row_y), use_coverage, coverage);
+    /* Share the expensive bilinear sample across the edge, interior and gap
+     * paths instead of replicating its integer division graph at each site. */
+    uint4 left_light = final_light_load(sample_span.quad, int2(sample_x, row_y),
+                                        use_coverage, coverage);
+    if (!gap) {
+        return left_light;
     }
     LightSpan right_span = final_light_spans[offset + right];
-    uint left_coverage;
     uint right_coverage;
-    uint4 left_light = final_light_load(left_span.quad, int2(left_span.last_x, row_y),
-                                        use_coverage, left_coverage);
     uint4 right_light = final_light_load(right_span.quad, int2(right_span.first_x, row_y),
                                          use_coverage, right_coverage);
-    uint divisor = uint(right_span.first_x - left_span.last_x);
-    uint progress = uint(x - left_span.last_x);
-    coverage = light_extrapolate(left_coverage, right_coverage, progress, divisor);
+    uint divisor = uint(right_span.first_x - sample_span.last_x);
+    uint progress = uint(x - sample_span.last_x);
+    coverage = light_extrapolate(coverage, right_coverage, progress, divisor);
     return uint4(light_extrapolate(left_light.x, right_light.x, progress, divisor),
                  light_extrapolate(left_light.y, right_light.y, progress, divisor),
                  light_extrapolate(left_light.z, right_light.z, progress, divisor),

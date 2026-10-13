@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
-FROM ghcr.io/atrinik/classic-build:1.16.0@sha256:e1c366dbf83ef987765ff913bbb193868314a139ae1e00cc134b22a3159464f2 AS build
+FROM ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449 AS build
 
 # The qualified build image defaults to an unprivileged compiler user.
 USER root
@@ -105,6 +105,7 @@ COPY --from=build /src/server/build/release/atrinik-server-capabilities.json ./s
 COPY --from=build /src/server/build/release/atrinik-access-status ./server/atrinik-access-status
 COPY --from=build /src/server/build/release/libplugin_arena.so ./server/libplugin_arena.so
 COPY --from=build /src/server/build/release/libplugin_python.so ./server/libplugin_python.so
+COPY --from=build /opt/llvm-23.1.3/share/licenses/llvm /usr/share/licenses/atrinik-classic/llvm
 COPY --from=build /src/LICENSE.md /usr/share/licenses/atrinik-classic/LICENSE.md
 COPY --from=build /src/ATTRIBUTIONS.md /usr/share/doc/atrinik-classic/ATTRIBUTIONS.md
 COPY --chmod=0755 server/docker/server-entrypoint.sh /usr/local/bin/atrinik-server-entrypoint

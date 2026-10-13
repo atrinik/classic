@@ -36,7 +36,7 @@ static ssize_t fail_inventory_write(void *cookie, const char *buffer, size_t siz
 }
 
 static char *run_inventory_capture(const char *map_ids, size_t *size) {
-    snprintf(VS(settings.celestial_inventory_maps), "%s", map_ids);
+    snprintf((settings.celestial_inventory_maps), sizeof((settings.celestial_inventory_maps)), "%s", map_ids);
     settings.celestial_inventory_limit = 32;
     FILE *capture = tmpfile();
     ck_assert_ptr_ne(capture, NULL);
@@ -65,7 +65,7 @@ static void write_filename_tile_map(const char *root,
                                     const char *sky_above,
                                     const char *records) {
     char path[HUGE_BUF];
-    ck_assert_int_lt(snprintf(VS(path), "%s%s", root, logical_path), (int)sizeof(path));
+    ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", root, logical_path), (int)sizeof(path));
     path_ensure_directories(path);
     FILE *fp = fopen(path, "wb");
     ck_assert_ptr_nonnull(fp);
@@ -85,7 +85,7 @@ static void write_filename_tile_map(const char *root,
 
 static void write_legacy_filename_tile_map(const char *root, const char *logical_path) {
     char path[HUGE_BUF];
-    ck_assert_int_lt(snprintf(VS(path), "%s%s", root, logical_path), (int)sizeof(path));
+    ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", root, logical_path), (int)sizeof(path));
     path_ensure_directories(path);
     FILE *fp = fopen(path, "wb");
     ck_assert_ptr_nonnull(fp);
@@ -957,11 +957,11 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
     char prearch_path[HUGE_BUF];
     char missing_metadata_path[HUGE_BUF];
     char duplicate_metadata_path[HUGE_BUF];
-    snprintf(VS(west_path), "%s/west", temporary_maps);
-    snprintf(VS(east_path), "%s/east", temporary_maps);
-    snprintf(VS(prearch_path), "%s/prearch", temporary_maps);
-    snprintf(VS(missing_metadata_path), "%s/missing-metadata", temporary_maps);
-    snprintf(VS(duplicate_metadata_path), "%s/duplicate-metadata", temporary_maps);
+    snprintf((west_path), sizeof((west_path)), "%s/west", temporary_maps);
+    snprintf((east_path), sizeof((east_path)), "%s/east", temporary_maps);
+    snprintf((prearch_path), sizeof((prearch_path)), "%s/prearch", temporary_maps);
+    snprintf((missing_metadata_path), sizeof((missing_metadata_path)), "%s/missing-metadata", temporary_maps);
+    snprintf((duplicate_metadata_path), sizeof((duplicate_metadata_path)), "%s/duplicate-metadata", temporary_maps);
     FILE *west = fopen(west_path, "w");
     FILE *east = fopen(east_path, "w");
     FILE *prearch = fopen(prearch_path, "w");
@@ -1003,10 +1003,10 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
     ck_assert_int_eq(fclose(duplicate_metadata), 0);
     char saved_mapspath[MAX_BUF];
     char saved_inventory_maps[HUGE_BUF];
-    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
-    snprintf(VS(saved_inventory_maps), "%s", settings.celestial_inventory_maps);
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
+    snprintf((saved_inventory_maps), sizeof((saved_inventory_maps)), "%s", settings.celestial_inventory_maps);
     uint16_t saved_inventory_limit = settings.celestial_inventory_limit;
-    snprintf(VS(settings.mapspath), "%s", temporary_maps);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%s", temporary_maps);
     ck_assert_ptr_eq(ready_map_name("/prearch", NULL, MAP_FLUSH | MAP_NO_DYNAMIC), NULL);
     ck_assert_ptr_eq(ready_map_name("/missing-metadata", NULL, MAP_FLUSH | MAP_NO_DYNAMIC), NULL);
     ck_assert_ptr_eq(ready_map_name("/duplicate-metadata", NULL, MAP_FLUSH | MAP_NO_DYNAMIC), NULL);
@@ -1023,8 +1023,8 @@ START_TEST(test_inventory_is_bounded_deterministic_and_read_only) {
     ck_assert_ptr_ne(strstr(forward, "\tmap\t/west\t"), NULL);
     free(forward);
     free(reverse);
-    snprintf(VS(settings.mapspath), "%s", saved_mapspath);
-    snprintf(VS(settings.celestial_inventory_maps), "%s", saved_inventory_maps);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%s", saved_mapspath);
+    snprintf((settings.celestial_inventory_maps), sizeof((settings.celestial_inventory_maps)), "%s", saved_inventory_maps);
     settings.celestial_inventory_limit = saved_inventory_limit;
     ck_assert_int_eq(unlink(west_path), 0);
     ck_assert_int_eq(unlink(east_path), 0);
@@ -1107,22 +1107,22 @@ START_TEST(test_private_map_provenance_writes_authored_source) {
 
     char saved_datapath[HUGE_BUF];
     char saved_mapspath[HUGE_BUF];
-    snprintf(VS(saved_datapath), "%s", settings.datapath);
-    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
+    snprintf((saved_datapath), sizeof((saved_datapath)), "%s", settings.datapath);
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
 
     char datapath[HUGE_BUF], mapspath[HUGE_BUF], maps_dir[HUGE_BUF], source_path[HUGE_BUF];
     char private_path[HUGE_BUF], provenance_dir[HUGE_BUF], account_path[HUGE_BUF];
-    snprintf(VS(datapath), "%s/data", temporary_root);
-    snprintf(VS(mapspath), "%s", temporary_root);
-    snprintf(VS(maps_dir), "%s/maps", temporary_root);
-    snprintf(VS(source_path), "%s/maps/apartment", temporary_root);
-    snprintf(VS(private_path), "%s/data/players/a/alice/$maps$apartment", temporary_root);
-    snprintf(VS(provenance_dir), "%s/data/celestial-provenance", temporary_root);
-    snprintf(VS(account_path), "%s/data/accounts/a/alice.dat", temporary_root);
+    snprintf((datapath), sizeof((datapath)), "%s/data", temporary_root);
+    snprintf((mapspath), sizeof((mapspath)), "%s", temporary_root);
+    snprintf((maps_dir), sizeof((maps_dir)), "%s/maps", temporary_root);
+    snprintf((source_path), sizeof((source_path)), "%s/maps/apartment", temporary_root);
+    snprintf((private_path), sizeof((private_path)), "%s/data/players/a/alice/$maps$apartment", temporary_root);
+    snprintf((provenance_dir), sizeof((provenance_dir)), "%s/data/celestial-provenance", temporary_root);
+    snprintf((account_path), sizeof((account_path)), "%s/data/accounts/a/alice.dat", temporary_root);
     ck_assert_uint_lt(strlen(datapath), sizeof(settings.datapath));
     ck_assert_uint_lt(strlen(mapspath), sizeof(settings.mapspath));
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, mapspath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, mapspath);
 
     path_ensure_directories(source_path);
     path_ensure_directories(private_path);
@@ -1173,11 +1173,11 @@ START_TEST(test_private_map_provenance_writes_authored_source) {
     ck_assert_int_eq(unlink(private_path), 0);
     char private_parent[HUGE_BUF], private_grandparent[HUGE_BUF], players_dir[HUGE_BUF];
     char account_parent[HUGE_BUF], accounts_dir[HUGE_BUF];
-    snprintf(VS(private_parent), "%s/data/players/a/alice", temporary_root);
-    snprintf(VS(private_grandparent), "%s/data/players/a", temporary_root);
-    snprintf(VS(players_dir), "%s/data/players", temporary_root);
-    snprintf(VS(account_parent), "%s/data/accounts/a", temporary_root);
-    snprintf(VS(accounts_dir), "%s/data/accounts", temporary_root);
+    snprintf((private_parent), sizeof((private_parent)), "%s/data/players/a/alice", temporary_root);
+    snprintf((private_grandparent), sizeof((private_grandparent)), "%s/data/players/a", temporary_root);
+    snprintf((players_dir), sizeof((players_dir)), "%s/data/players", temporary_root);
+    snprintf((account_parent), sizeof((account_parent)), "%s/data/accounts/a", temporary_root);
+    snprintf((accounts_dir), sizeof((accounts_dir)), "%s/data/accounts", temporary_root);
     ck_assert_int_eq(rmdir(private_parent), 0);
     ck_assert_int_eq(rmdir(private_grandparent), 0);
     ck_assert_int_eq(rmdir(players_dir), 0);
@@ -1188,8 +1188,8 @@ START_TEST(test_private_map_provenance_writes_authored_source) {
     ck_assert_int_eq(rmdir(datapath), 0);
     ck_assert_uint_lt(strlen(saved_datapath), sizeof(settings.datapath));
     ck_assert_uint_lt(strlen(saved_mapspath), sizeof(settings.mapspath));
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
@@ -1211,7 +1211,7 @@ START_TEST(test_inactive_runtime_private_player_save_roundtrip) {
     if (_i >= 2) {
         map->map_flags |= MAP_FLAG_OUTDOOR;
     }
-    snprintf(VS(CONTR(pl)->savebed_map), "%s", private_path);
+    snprintf((CONTR(pl)->savebed_map), sizeof((CONTR(pl)->savebed_map)), "%s", private_path);
     CONTR(pl)->bed_x = 3;
     CONTR(pl)->bed_y = 4;
     object *sack = arch_get("sack");
@@ -1273,7 +1273,7 @@ START_TEST(test_active_runtime_private_player_identity_remains_owner_bound) {
     ck_assert_ptr_nonnull(private_path);
     FREE_AND_COPY_HASH(map->path, private_path);
     map->map_flags |= MAP_FLAG_UNIQUE;
-    snprintf(VS(CONTR(pl)->savebed_map), "%s", private_path);
+    snprintf((CONTR(pl)->savebed_map), sizeof((CONTR(pl)->savebed_map)), "%s", private_path);
     celestial_structure_set_runtime_active_for_test(true);
     ck_assert(player_save_checked(pl));
     char *player_path = player_make_path(pl->name, "player.dat");
@@ -1294,7 +1294,7 @@ START_TEST(test_active_runtime_private_player_identity_remains_owner_bound) {
     if (_i == 0) {
         FREE_AND_COPY_HASH(map->path, foreign_path);
     } else {
-        snprintf(VS(CONTR(pl)->savebed_map), "%s", foreign_path);
+        snprintf((CONTR(pl)->savebed_map), sizeof((CONTR(pl)->savebed_map)), "%s", foreign_path);
     }
     ck_assert(!player_save_checked(pl));
     fp = fopen(player_path, "rb");
@@ -1322,23 +1322,23 @@ START_TEST(test_private_map_loads_from_source_without_provenance) {
 
     char saved_datapath[HUGE_BUF];
     char saved_mapspath[HUGE_BUF];
-    snprintf(VS(saved_datapath), "%s", settings.datapath);
-    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
+    snprintf((saved_datapath), sizeof((saved_datapath)), "%s", settings.datapath);
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
 
     char datapath[HUGE_BUF], mapspath[HUGE_BUF], maps_dir[HUGE_BUF];
     char source_path[HUGE_BUF], private_path[HUGE_BUF], provenance_dir[HUGE_BUF];
     char players_dir[HUGE_BUF], players_a_dir[HUGE_BUF], character_dir[HUGE_BUF];
-    snprintf(VS(datapath), "%s/data", temporary_root);
-    snprintf(VS(mapspath), "%s", temporary_root);
-    snprintf(VS(maps_dir), "%s/maps", temporary_root);
-    snprintf(VS(source_path), "%s/maps/apartment", temporary_root);
-    snprintf(VS(private_path), "%s/data/players/a/alice/$maps$apartment", temporary_root);
-    snprintf(VS(provenance_dir), "%s/data/celestial-provenance", temporary_root);
-    snprintf(VS(players_dir), "%s/data/players", temporary_root);
-    snprintf(VS(players_a_dir), "%s/data/players/a", temporary_root);
-    snprintf(VS(character_dir), "%s/data/players/a/alice", temporary_root);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, mapspath);
+    snprintf((datapath), sizeof((datapath)), "%s/data", temporary_root);
+    snprintf((mapspath), sizeof((mapspath)), "%s", temporary_root);
+    snprintf((maps_dir), sizeof((maps_dir)), "%s/maps", temporary_root);
+    snprintf((source_path), sizeof((source_path)), "%s/maps/apartment", temporary_root);
+    snprintf((private_path), sizeof((private_path)), "%s/data/players/a/alice/$maps$apartment", temporary_root);
+    snprintf((provenance_dir), sizeof((provenance_dir)), "%s/data/celestial-provenance", temporary_root);
+    snprintf((players_dir), sizeof((players_dir)), "%s/data/players", temporary_root);
+    snprintf((players_a_dir), sizeof((players_a_dir)), "%s/data/players/a", temporary_root);
+    snprintf((character_dir), sizeof((character_dir)), "%s/data/players/a/alice", temporary_root);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, mapspath);
 
     path_ensure_directories(source_path);
     FILE *source = fopen(source_path, "wb");
@@ -1396,8 +1396,8 @@ START_TEST(test_private_map_loads_from_source_without_provenance) {
     ck_assert_int_eq(rmdir(datapath), 0);
     ck_assert_int_eq(unlink(source_path), 0);
     ck_assert_int_eq(rmdir(maps_dir), 0);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
 
     map = load_original_map(private_path, NULL, MAP_PLAYER_UNIQUE);
     ck_assert_ptr_eq(map, NULL);
@@ -1410,8 +1410,8 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
 
     char saved_mapspath[HUGE_BUF];
-    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
 
     write_filename_tile_map(temporary_root, "/world_5_5", "open", NULL);
     write_filename_tile_map(temporary_root, "/world_5_6", "open", NULL);
@@ -1577,11 +1577,11 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
     };
     for (size_t i = 0; i < arraysize(logical_paths); i++) {
         char path[HUGE_BUF];
-        ck_assert_int_lt(snprintf(VS(path), "%s%s", temporary_root, logical_paths[i]),
+        ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", temporary_root, logical_paths[i]),
                          (int)sizeof(path));
         ck_assert_int_eq(unlink(path), 0);
     }
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
@@ -1591,17 +1591,17 @@ START_TEST(test_filename_tiling_survives_temporary_map_reload) {
     ck_assert_ptr_nonnull(mkdtemp(temporary_root));
 
     char saved_mapspath[HUGE_BUF], saved_datapath[HUGE_BUF];
-    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
-    snprintf(VS(saved_datapath), "%s", settings.datapath);
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
+    snprintf((saved_datapath), sizeof((saved_datapath)), "%s", settings.datapath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
     char datapath[HUGE_BUF], temporary_dir[HUGE_BUF], unique_dir[HUGE_BUF];
-    snprintf(VS(datapath), "%s/data", temporary_root);
-    snprintf(VS(temporary_dir), "%s/data/tmp", temporary_root);
-    snprintf(VS(unique_dir), "%s/data/unique-items", temporary_root);
+    snprintf((datapath), sizeof((datapath)), "%s/data", temporary_root);
+    snprintf((temporary_dir), sizeof((temporary_dir)), "%s/data/tmp", temporary_root);
+    snprintf((unique_dir), sizeof((unique_dir)), "%s/data/unique-items", temporary_root);
     ck_assert_int_eq(mkdir(datapath, 0700), 0);
     ck_assert_int_eq(mkdir(temporary_dir, 0700), 0);
     ck_assert_int_eq(mkdir(unique_dir, 0700), 0);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
 
     bool vertical = _i == 2 || _i == 3;
     bool authored = _i == 4;
@@ -1689,9 +1689,9 @@ START_TEST(test_filename_tiling_survives_temporary_map_reload) {
     const char *logical_paths[] = {source_path, neighbor_path};
     for (size_t i = 0; i < arraysize(logical_paths); i++) {
         char path[HUGE_BUF];
-        snprintf(VS(path), "%s%s", temporary_root, logical_paths[i]);
+        snprintf((path), sizeof((path)), "%s%s", temporary_root, logical_paths[i]);
         ck_assert_int_eq(unlink(path), 0);
-        ck_assert_int_lt(snprintf(VS(path), "%s/data/unique-items/%s.v00",
+        ck_assert_int_lt(snprintf((path), sizeof((path)), "%s/data/unique-items/%s.v00",
                                   temporary_root, logical_paths[i] + 1),
                          (int)sizeof(path));
         if (i == 0 || swap_neighbor) {
@@ -1702,14 +1702,14 @@ START_TEST(test_filename_tiling_survives_temporary_map_reload) {
     }
     if (authored) {
         char path[HUGE_BUF];
-        snprintf(VS(path), "%s/world_5_6", temporary_root);
+        snprintf((path), sizeof((path)), "%s/world_5_6", temporary_root);
         ck_assert_int_eq(unlink(path), 0);
     }
     ck_assert_int_eq(rmdir(temporary_dir), 0);
     ck_assert_int_eq(rmdir(unique_dir), 0);
     ck_assert_int_eq(rmdir(datapath), 0);
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
@@ -1718,8 +1718,8 @@ START_TEST(test_rejected_temporary_map_withdraws_its_tile_backlinks) {
     char temporary_root[] = "/tmp/atrinik-celestial-filename-reject-XXXXXX";
     ck_assert_ptr_nonnull(mkdtemp(temporary_root));
     char saved_mapspath[HUGE_BUF];
-    snprintf(VS(saved_mapspath), "%s", settings.mapspath);
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
 
     const char *source_path = "/failure_5_5";
     const char *neighbor_path = "/failure_5_6";
@@ -1740,8 +1740,8 @@ START_TEST(test_rejected_temporary_map_withdraws_its_tile_backlinks) {
     ck_assert_ptr_eq(neighbor->tile_map[TILED_NORTH], unrelated);
 
     char source_filename[HUGE_BUF], temporary_filename[HUGE_BUF];
-    snprintf(VS(source_filename), "%s%s", temporary_root, source_path);
-    snprintf(VS(temporary_filename), "%s/saved-map", temporary_root);
+    snprintf((source_filename), sizeof((source_filename)), "%s%s", temporary_root, source_path);
+    snprintf((temporary_filename), sizeof((temporary_filename)), "%s/saved-map", temporary_root);
     if (_i == 2) {
         /* Rejecting a second, invalid source header must also undo its links. */
         write_filename_tile_map(temporary_root, source_path, "linked", NULL);
@@ -1775,17 +1775,17 @@ START_TEST(test_rejected_temporary_map_withdraws_its_tile_backlinks) {
     if (unrelated != NULL) {
         delete_map(unrelated);
         char path[HUGE_BUF];
-        snprintf(VS(path), "%s/unrelated", temporary_root);
+        snprintf((path), sizeof((path)), "%s/unrelated", temporary_root);
         ck_assert_int_eq(unlink(path), 0);
     }
     char neighbor_filename[HUGE_BUF];
-    snprintf(VS(neighbor_filename), "%s%s", temporary_root, neighbor_path);
+    snprintf((neighbor_filename), sizeof((neighbor_filename)), "%s%s", temporary_root, neighbor_path);
     ck_assert_int_eq(unlink(neighbor_filename), 0);
     ck_assert_int_eq(unlink(temporary_filename), 0);
     if (_i == 2) {
         ck_assert_int_eq(unlink(source_filename), 0);
     }
-    snprintf(VS(settings.mapspath), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
@@ -1795,10 +1795,10 @@ START_TEST(test_character_transaction_lifecycle_is_durable) {
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
 
     char saved_datapath[HUGE_BUF];
-    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    snprintf((saved_datapath), sizeof((saved_datapath)), "%s", settings.datapath);
     char datapath[HUGE_BUF], map_path[HUGE_BUF], player_path[HUGE_BUF], transaction_dir[HUGE_BUF];
-    snprintf(VS(datapath), "%s/data", temporary_root);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf((datapath), sizeof((datapath)), "%s/data", temporary_root);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
     strcpy(map_path, datapath);
     strcat(map_path, "/players/a/alice/$maps$apartment");
     strcpy(player_path, datapath);
@@ -1829,7 +1829,7 @@ START_TEST(test_character_transaction_lifecycle_is_durable) {
 
     ck_assert_int_eq(rmdir(transaction_dir), 0);
     ck_assert_int_eq(rmdir(datapath), 0);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
@@ -1839,11 +1839,11 @@ START_TEST(test_character_transaction_recovery_quarantines_prepared_group) {
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
 
     char saved_datapath[HUGE_BUF];
-    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    snprintf((saved_datapath), sizeof((saved_datapath)), "%s", settings.datapath);
     char datapath[HUGE_BUF], map_path[HUGE_BUF], player_path[HUGE_BUF];
     char ledger_path[HUGE_BUF], quarantine_dir[HUGE_BUF];
-    snprintf(VS(datapath), "%s/data", temporary_root);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf((datapath), sizeof((datapath)), "%s/data", temporary_root);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
     strcpy(map_path, datapath);
     strcat(map_path, "/players/a/alice/$maps$apartment");
     strcpy(player_path, datapath);
@@ -1932,7 +1932,7 @@ START_TEST(test_character_transaction_recovery_quarantines_prepared_group) {
     ck_assert_int_eq(rmdir(players_dir), 0);
     ck_assert_int_eq(rmdir(provenance_dir), 0);
     ck_assert_int_eq(rmdir(datapath), 0);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
@@ -1942,12 +1942,12 @@ START_TEST(test_committed_map_transaction_missing_unique_is_quarantined) {
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
 
     char saved_datapath[HUGE_BUF];
-    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    snprintf((saved_datapath), sizeof((saved_datapath)), "%s", settings.datapath);
     char datapath[HUGE_BUF], map_path[HUGE_BUF], unique_path[HUGE_BUF];
     char ledger_path[HUGE_BUF], transaction_dir[HUGE_BUF], provenance_dir[HUGE_BUF];
     char quarantine_dir[HUGE_BUF];
-    snprintf(VS(datapath), "%s/data", temporary_root);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf((datapath), sizeof((datapath)), "%s/data", temporary_root);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
     strcpy(map_path, datapath);
     strcat(map_path, "/map.dat");
     strcpy(unique_path, datapath);
@@ -2021,7 +2021,7 @@ START_TEST(test_committed_map_transaction_missing_unique_is_quarantined) {
     ck_assert_int_eq(rmdir(transaction_dir), 0);
     delete_map(map);
     ck_assert_int_eq(rmdir(datapath), 0);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST
@@ -2031,11 +2031,11 @@ START_TEST(test_character_transaction_rejects_path_escape) {
     ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
 
     char saved_datapath[HUGE_BUF];
-    snprintf(VS(saved_datapath), "%s", settings.datapath);
+    snprintf((saved_datapath), sizeof((saved_datapath)), "%s", settings.datapath);
     char datapath[HUGE_BUF], map_path[HUGE_BUF], player_path[HUGE_BUF];
     char transaction_dir[HUGE_BUF], transaction_path[HUGE_BUF];
-    snprintf(VS(datapath), "%s/data", temporary_root);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
+    snprintf((datapath), sizeof((datapath)), "%s/data", temporary_root);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, datapath);
     strcpy(map_path, datapath);
     strcat(map_path, "/players/a/alice/$maps$apartment");
     strcpy(player_path, datapath);
@@ -2086,7 +2086,7 @@ START_TEST(test_character_transaction_rejects_path_escape) {
     ck_assert_int_eq(unlink(transaction_path), 0);
     ck_assert_int_eq(rmdir(transaction_dir), 0);
     ck_assert_int_eq(rmdir(datapath), 0);
-    snprintf(VS(settings.datapath), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
+    snprintf((settings.datapath), sizeof((settings.datapath)), "%.*s", (int)sizeof(settings.datapath) - 1, saved_datapath);
     ck_assert_int_eq(rmdir(temporary_root), 0);
 }
 END_TEST

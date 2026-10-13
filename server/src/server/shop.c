@@ -190,7 +190,7 @@ const char *shop_get_cost_string(int64_t cost) {
     int64_t num = cost / coin->clone.value;
     cost -= num * coin->clone.value;
 
-    snprintf(VS(buf),
+    snprintf((buf), sizeof((buf)),
              "%" PRId64 " %s%s%s",
              num,
              materials_real[coin->clone.material_real].name,
@@ -848,7 +848,7 @@ static void shop_insert_coin_stacks(object *op,
         coin->nrof = chunk;
         if (transaction_id != NULL && transaction_id[0] != '\0') {
             char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
-            snprintf(VS(lineage), "currency:%s", transaction_id);
+            snprintf((lineage), sizeof((lineage)), "currency:%s", transaction_id);
             coin->custody_lineage = add_string(lineage);
         }
         if (on_floor) {
@@ -897,7 +897,7 @@ void shop_currency_tag_retire(object *op, const char *transaction_id) {
         return;
     }
     char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    snprintf(VS(lineage), "currency:%s", transaction_id);
+    snprintf((lineage), sizeof((lineage)), "currency:%s", transaction_id);
     shop_currency_tag_retire_inventory(op, lineage);
     if (op->map != NULL) {
         FOR_MAP_PREPARE(op->map, op->x, op->y, tmp) {
@@ -919,7 +919,7 @@ static object *shop_currency_tag_retire_one(object *coin, const char *transactio
         return coin;
     }
     char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
-    snprintf(VS(lineage), "currency:%s", transaction_id);
+    snprintf((lineage), sizeof((lineage)), "currency:%s", transaction_id);
     if (coin->custody_lineage == NULL || strcmp(coin->custody_lineage, lineage) != 0) {
         return NULL;
     }
@@ -1209,7 +1209,7 @@ object_semantic_result_t shop_insert_coin_object_reason(object *coin,
     }
     if (transaction[0] != '\0') {
         char lineage[GAMEPLAY_JOURNAL_ID_MAX + 1];
-        snprintf(VS(lineage), "currency:%s", transaction);
+        snprintf((lineage), sizeof((lineage)), "currency:%s", transaction);
         FREE_AND_COPY_HASH(coin->custody_lineage, lineage);
     }
     *inserted_out = object_insert_into(coin, where, 0);

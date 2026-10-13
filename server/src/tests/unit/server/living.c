@@ -387,14 +387,15 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_non_player_speed_is_not_clamped);
     tcase_add_test(tc_core, test_monster_living_speed_is_not_player_clamped);
 
-    /* The 13,146-event roundoff regression exceeds Check's default four-second
-     * deadline under coverage on shared CI CPUs; retain its full event sequence. */
-    TCase *tc_long_freeze = tcase_create("Long administrative freeze");
+    /* Keep all 13,146 real event ticks: shorter runs do not exercise the
+     * accumulated roundoff regression. Atomic LLVM coverage counters make
+     * this case exceed Check's default five-second per-test budget. */
+    TCase *tc_long_freeze = tcase_create("Long freeze");
     tcase_set_timeout(tc_long_freeze, 30);
     tcase_add_unchecked_fixture(tc_long_freeze, check_setup, check_teardown);
     tcase_add_checked_fixture(tc_long_freeze, check_test_setup, check_test_teardown);
-    tcase_add_test(tc_long_freeze, test_long_administrative_freeze_does_not_gain_roundoff_tick);
     suite_add_tcase(s, tc_long_freeze);
+    tcase_add_test(tc_long_freeze, test_long_administrative_freeze_does_not_gain_roundoff_tick);
 
     return s;
 }

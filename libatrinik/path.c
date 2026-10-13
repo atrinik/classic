@@ -275,7 +275,7 @@ void path_ensure_directories(const char *path) {
         return;
     }
 
-    snprintf(VS(buf), "%s", path);
+    snprintf((buf), sizeof((buf)), "%s", path);
     cp = buf;
 
     while ((cp = strchr(cp + 1, '/')) != NULL) {
@@ -473,7 +473,7 @@ bool path_write_atomic_existing(const char *path,
     HARD_ASSERT(data != NULL || size == 0);
 
     char temporary[HUGE_BUF];
-    if (snprintf(VS(temporary), "%s.tmp.XXXXXX", path) >= (int)sizeof(temporary)) {
+    if (snprintf((temporary), sizeof((temporary)), "%s.tmp.XXXXXX", path) >= (int)sizeof(temporary)) {
         return false;
     }
 
@@ -1126,7 +1126,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     }
 
     char temporary[HUGE_BUF];
-    if (snprintf(VS(temporary), "%s.tmp.%s", path, suffix) >= (int)sizeof(temporary)) {
+    if (snprintf((temporary), sizeof((temporary)), "%s.tmp.%s", path, suffix) >= (int)sizeof(temporary)) {
         free(directory);
         free(basename);
         free(normalized_path);
@@ -1272,7 +1272,7 @@ path_secret_create_atomic(const char *path, const void *data, size_t size) {
     char temporary[64];
     int temporary_fd = -1;
     if (directory_fd != -1 &&
-        snprintf(VS(temporary), ".atrinik-secret-%s", suffix) < (int)sizeof(temporary)) {
+        snprintf((temporary), sizeof((temporary)), ".atrinik-secret-%s", suffix) < (int)sizeof(temporary)) {
         int flags = O_WRONLY | O_CREAT | O_EXCL;
 #ifdef O_CLOEXEC
         flags |= O_CLOEXEC;

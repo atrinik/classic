@@ -30,7 +30,7 @@ int main(void) {
     toolkit_import(logger);
     toolkit_import(path);
 
-    snprintf(VS(test_directory), "/tmp/atrinik-face-cache-XXXXXX");
+    snprintf((test_directory), sizeof((test_directory)), "/tmp/atrinik-face-cache-XXXXXX");
     if (mkdtemp(test_directory) == NULL || !face_cache_start() || !face_cache_start()) {
         return 1;
     }

@@ -12,20 +12,16 @@ if (NOT ATRINIK_INTEGRATED_BUILD)
             "${ATRINIK_COMPONENT_SOURCE_DIR}/../cmake/AtrinikVersion.cmake")
     endif ()
     include("${ATRINIK_VERSION_MODULE}")
-    if (ATRINIK_LLVM_TOOLCHAIN)
-        get_filename_component(ATRINIK_CMAKE_MODULE_DIR "${ATRINIK_VERSION_MODULE}" DIRECTORY)
-        include("${ATRINIK_CMAKE_MODULE_DIR}/AtrinikLLVMOptIn.cmake")
-        atrinik_initialize_optional_llvm_toolchain()
-        unset(ATRINIK_CMAKE_MODULE_DIR)
-    endif ()
+    get_filename_component(ATRINIK_CMAKE_MODULE_DIR "${ATRINIK_VERSION_MODULE}" DIRECTORY)
+    include("${ATRINIK_CMAKE_MODULE_DIR}/AtrinikLLVM.cmake")
+    unset(ATRINIK_CMAKE_MODULE_DIR)
     unset(ATRINIK_VERSION_MODULE)
     unset(ATRINIK_COMPONENT_CMAKE_FILE)
     unset(ATRINIK_COMPONENT_SOURCE_DIR)
     atrinik_resolve_version(ATRINIK_SOURCE_VERSION)
+    atrinik_initialize_llvm_toolchain()
     project(atrinik-client VERSION "${ATRINIK_SOURCE_VERSION}" LANGUAGES C)
-    if (ATRINIK_LLVM_TOOLCHAIN)
-        atrinik_require_optional_llvm()
-    endif ()
+    atrinik_require_llvm()
     atrinik_initialize_version_metadata()
 endif ()
 
@@ -177,7 +173,7 @@ atrinik_find_root_document(ATRINIK_ATTRIBUTIONS_FILE ATTRIBUTIONS.md)
 
 option(ENABLE_WARNING_ERRORS "Treat compiler warnings as errors" ON)
 option(ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
-option(ENABLE_COVERAGE "Enable native compiler coverage instrumentation" OFF)
+option(ENABLE_COVERAGE "Enable native LLVM coverage instrumentation" OFF)
 set(PACKAGE_TYPE "none" CACHE STRING "Package type (none, appimage, deb, rpm, nsis, or zip)")
 set(ATRINIK_DISCORD_APPLICATION_ID_FILE "" CACHE FILEPATH
     "Optional file containing the public Discord Application ID")
@@ -225,7 +221,7 @@ function(atrinik_configure_target target)
     target_compile_features(${target} PRIVATE c_std_17)
     target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
     atrinik_apply_version_metadata(${target})
-    if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wno-unused-parameter -fno-common)
         if (ENABLE_WARNING_ERRORS)
@@ -233,8 +229,8 @@ function(atrinik_configure_target target)
         endif ()
     endif ()
     if (ENABLE_SANITIZERS)
-        if (MINGW OR NOT CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-            message(FATAL_ERROR "ENABLE_SANITIZERS requires native GCC or Clang")
+        if (MINGW OR NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+            message(FATAL_ERROR "ENABLE_SANITIZERS requires native Clang")
         endif ()
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -245,19 +241,13 @@ function(atrinik_configure_target target)
         get_target_property(target_type ${target} TYPE)
         if (CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT MINGW)
             target_compile_options(${target} PRIVATE
-                -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic -O0 -g)
+                -fprofile-instr-generate -fcoverage-mapping -fprofile-update=atomic
+                -funique-internal-linkage-names -O0 -g)
             if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
                 target_link_options(${target} PRIVATE -fprofile-instr-generate)
             endif ()
-        elseif (CMAKE_C_COMPILER_ID STREQUAL "GNU")
-            # Transitional support for the previous immutable producer image.
-            target_compile_options(${target} PRIVATE
-                --coverage -fprofile-abs-path -O0 -g)
-            if (target_type MATCHES "^(EXECUTABLE|MODULE_LIBRARY|SHARED_LIBRARY)$")
-                target_link_options(${target} PRIVATE --coverage)
-            endif ()
         else ()
-            message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang or GCC")
+            message(FATAL_ERROR "ENABLE_COVERAGE requires native Clang")
         endif ()
     endif ()
 endfunction()
@@ -418,14 +408,23 @@ if (MINGW)
 endif ()
 
 if (MINGW)
-    if (NOT CMAKE_OBJDUMP)
+    find_program(ATRINIK_LLVM_READOBJ NAMES llvm-readobj REQUIRED)
+    if (NOT ATRINIK_LLVM_READOBJ)
         message(FATAL_ERROR
-            "CMAKE_OBJDUMP is required to validate Windows client sound support")
+            "llvm-readobj is required to validate Windows client sound support")
+    endif ()
+
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/stage_windows_runtime.py")
+        set(ATRINIK_RUNTIME_HELPER "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/stage_windows_runtime.py")
+    else ()
+        set(ATRINIK_RUNTIME_HELPER "${CMAKE_CURRENT_SOURCE_DIR}/../tools/ci/stage_windows_runtime.py")
     endif ()
 
     add_custom_command(TARGET ${EXECUTABLE} POST_BUILD
         COMMAND ${CMAKE_COMMAND}
-            "-DATRINIK_OBJDUMP=${CMAKE_OBJDUMP}"
+            "-DATRINIK_READOBJ=${ATRINIK_LLVM_READOBJ}"
+            "-DATRINIK_PYTHON=${Python3_EXECUTABLE}"
+            "-DATRINIK_RUNTIME_HELPER=${ATRINIK_RUNTIME_HELPER}"
             "-DATRINIK_CLIENT_EXECUTABLE=$<TARGET_FILE:${EXECUTABLE}>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_windows_client_sound.cmake"
         COMMENT "Verifying that the Windows client imports SDL3_mixer"
@@ -433,7 +432,32 @@ if (MINGW)
 endif ()
 
 if (BUILD_TESTING)
+    # Focused tests discard unrelated production handlers on each object format.
+    if (APPLE)
+        set(ATRINIK_TEST_DEAD_STRIP_OPTION "-Wl,-dead_strip")
+    else ()
+        set(ATRINIK_TEST_DEAD_STRIP_OPTION "-Wl,--gc-sections")
+    endif ()
     set(ATRINIK_PYTHON3_EXECUTABLE "${Python3_EXECUTABLE}")
+
+    # Headless dependency equivalence probe, also built independently by the
+    # pinned Windows baseline producer (tools/ci/font-render-probe).
+    add_executable(client-font-render-probe src/tests/font_render.c)
+    atrinik_configure_target(client-font-render-probe)
+    target_link_libraries(client-font-render-probe PRIVATE
+        SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+    add_test(NAME client-font-output
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_font_output.py"
+            "$<TARGET_FILE:client-font-render-probe>")
+    set_tests_properties(client-font-output PROPERTIES TIMEOUT 60)
+    add_executable(client-font-output-cleanup-tests src/tests/font_output_cleanup.c)
+    atrinik_configure_target(client-font-output-cleanup-tests)
+    add_test(NAME client-font-output-cleanup
+        COMMAND "${ATRINIK_PYTHON3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/test_font_output.py" --cleanup
+            "$<TARGET_FILE:client-font-output-cleanup-tests>")
+    set_tests_properties(client-font-output-cleanup PROPERTIES TIMEOUT 30)
 
     set(ATRINIK_GPU_FIXTURE_PROVENANCE_COMMAND
         "${ATRINIK_PYTHON3_EXECUTABLE}"
@@ -974,10 +998,10 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-compound-packet-tests)
     # Keep optimized switch tables separate when discarding unrelated handlers.
     target_compile_options(client-compound-packet-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-fdata-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-fdata-sections>)
     target_link_options(client-compound-packet-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_compile_definitions(client-compound-packet-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-compound-packet-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -995,10 +1019,10 @@ if (BUILD_TESTING)
         src/tests/book_edit.c src/client/book_edit_packet.c src/client/book_edit_model.c src/gui/toolkit/text_input.c)
     atrinik_configure_target(client-book-edit-tests)
     target_compile_options(client-book-edit-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-fdata-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-fdata-sections>)
     target_link_options(client-book-edit-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_compile_definitions(client-book-edit-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_include_directories(client-book-edit-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
@@ -1176,9 +1200,9 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-item-drag-tests)
     target_compile_definitions(client-item-drag-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_compile_options(client-item-drag-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-item-drag-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_include_directories(client-item-drag-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -1192,9 +1216,9 @@ if (BUILD_TESTING)
     atrinik_configure_target(client-notification-tests)
     target_compile_definitions(client-notification-tests PRIVATE SDL_DISABLE_OLD_NAMES)
     target_compile_options(client-notification-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-notification-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_include_directories(client-notification-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -1225,9 +1249,9 @@ if (BUILD_TESTING)
         ATRINIK_RENDER_PROFILER_TESTING
         SDL_DISABLE_OLD_NAMES)
     target_compile_options(client-render-profiler-tests PRIVATE
-        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-ffunction-sections>)
+        $<$<COMPILE_LANG_AND_ID:C,Clang>:-ffunction-sections>)
     target_link_options(client-render-profiler-tests PRIVATE
-        $<$<LINK_LANG_AND_ID:C,GNU,Clang>:-Wl,--gc-sections>)
+        $<$<LINK_LANG_AND_ID:C,Clang>:${ATRINIK_TEST_DEAD_STRIP_OPTION}>)
     target_include_directories(client-render-profiler-tests BEFORE PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/src/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
@@ -1359,7 +1383,8 @@ if (PACKAGE_TYPE STREQUAL "deb")
     # default permissions to their final destination. Normalize only the owned
     # package layout, including /usr, for standalone cpack invocations too.
     foreach (directory IN ITEMS "." games share share/applications share/pixmaps
-            share/doc share/doc/atrinik share/games share/games/atrinik)
+            share/doc share/doc/atrinik share/doc/atrinik/licenses
+            share/doc/atrinik/licenses/llvm share/games share/games/atrinik)
         install(DIRECTORY DESTINATION "${directory}" COMPONENT AtrinikClient
             DIRECTORY_PERMISSIONS ${CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS})
     endforeach ()
@@ -1369,8 +1394,14 @@ if (WIN32 AND NOT UNIX)
     set(INSTALL_SUBDIR_SHARE ".")
     set(INSTALL_SUBDIR_DOC ".")
 
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallWindowsRuntime.cmake")
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallWindowsRuntime.cmake")
+    else ()
+        include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/InstallWindowsRuntime.cmake")
+    endif ()
+
     set(ATRINIK_WINDOWS_RUNTIME_DIR "" CACHE PATH
-        "Directory containing MinGW runtime DLLs for portable packages")
+        "Directory containing LLVM-MinGW runtime DLLs for portable packages")
     set(ATRINIK_CA_BUNDLE "${CMAKE_CURRENT_SOURCE_DIR}/ca-bundle.crt" CACHE FILEPATH
         "CA certificate bundle to install with the client")
 
@@ -1382,8 +1413,8 @@ if (WIN32 AND NOT UNIX)
             "${ATRINIK_WINDOWS_RUNTIME_DIR}/*.dll")
 
         if (ATRINIK_WINDOWS_RUNTIME_DLLS)
-            install(FILES ${ATRINIK_WINDOWS_RUNTIME_DLLS}
-                DESTINATION ${INSTALL_SUBDIR_BIN})
+            atrinik_install_windows_runtime("${INSTALL_SUBDIR_BIN}"
+                "$<TARGET_FILE:atrinik>")
 
             # A c-ares runtime must carry the complete notice from its toolchain.
             set(ATRINIK_WINDOWS_CARES_LICENSE
@@ -1429,6 +1460,12 @@ else ()
     endif ()
     set(INSTALL_SUBDIR_SHARE "share/games/atrinik")
     set(INSTALL_SUBDIR_DOC "share/doc/atrinik")
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallLLVMRuntime.cmake")
+        include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallLLVMRuntime.cmake")
+    else ()
+        include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/InstallLLVMRuntime.cmake")
+    endif ()
+    atrinik_install_llvm_runtime_notices("${INSTALL_SUBDIR_DOC}" AtrinikClient)
 
     set(ATRINIK_DESKTOP_FILE "${CMAKE_CURRENT_SOURCE_DIR}/atrinik.desktop")
     if (PACKAGE_TYPE STREQUAL "deb")

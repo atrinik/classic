@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2009-2026 Atrinik Development Team                    *
+ *   Copyright 2009-2026 The Atrinik Project                    *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -27,7 +27,7 @@ static void widget_draw(widgetdata *widget) {
 
     SDL_Rect box = {.w = widget->w, .h = widget->h};
     char hourly[64];
-    snprintf(VS(hourly), "%s", string_format_number_comma(telemetry_exp_per_hour()));
+    snprintf((hourly), sizeof((hourly)), "%s", string_format_number_comma(telemetry_exp_per_hour()));
 
     text_show_format(widget->surface,
                      FONT_ARIAL11,
@@ -52,10 +52,10 @@ static void widget_background(widgetdata *widget, int draw) {
 static int widget_event(widgetdata *widget, SDL_Event *event) {
     if (event->type == SDL_EVENT_MOUSE_MOTION) {
         char gained[64];
-        snprintf(VS(gained), "%s", string_format_number_comma(telemetry_exp_gained()));
+        snprintf((gained), sizeof((gained)), "%s", string_format_number_comma(telemetry_exp_gained()));
         uint64_t elapsed = telemetry_exp_elapsed_seconds();
         char buf[256];
-        snprintf(VS(buf),
+        snprintf((buf), sizeof((buf)),
                  "Experience gained: %s\nElapsed: %02" PRIu64 ":%02" PRIu64 ":%02" PRIu64
                  "\nRight-click to reset.",
                  gained,
