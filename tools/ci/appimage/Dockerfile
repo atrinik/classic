@@ -2,6 +2,8 @@ ARG ATRINIK_COMPILER_IMAGE
 FROM ${ATRINIK_COMPILER_IMAGE} AS compiler
 
 FROM ubuntu:24.04@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b AS builder
+# Retry transient snapshot mirror failures (HTTP 5xx) with backoff.
+RUN printf '%s\n' 'Acquire::Retries "8";' 'Acquire::Retries::Delay::Maximum "60";' > /etc/apt/apt.conf.d/80-atrinik-retries
 COPY tools/ca-certificates.deb /tmp/ca-certificates.deb
 RUN echo "641de77d8f142cfd62a1a6f964ba67b20754d3337c480efb529d086075a06c9a  /tmp/ca-certificates.deb" | sha256sum -c - && dpkg-deb -x /tmp/ca-certificates.deb /tmp/ca-bootstrap && mkdir -p /etc/ssl/certs && cat /tmp/ca-bootstrap/usr/share/ca-certificates/mozilla/*.crt > /etc/ssl/certs/ca-certificates.crt && rm -rf /tmp/ca-bootstrap /tmp/ca-certificates.deb
 # Ubuntu's signed archive keys authenticate this immutable snapshot. Do not disable signatures.
@@ -43,6 +45,8 @@ FROM builder AS build
 
 # Minimal test hosts have no application, SDL or graphics/audio development packages.
 FROM ubuntu:24.04@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b AS smoke-ubuntu24
+# Retry transient snapshot mirror failures (HTTP 5xx) with backoff.
+RUN printf '%s\n' 'Acquire::Retries "8";' 'Acquire::Retries::Delay::Maximum "60";' > /etc/apt/apt.conf.d/80-atrinik-retries
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && printf '%s\n' \
  'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261010T000000Z noble main' \
@@ -50,6 +54,8 @@ RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && printf '%s\n' \
  apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update && apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt install -y --no-install-recommends binutils util-linux coreutils && rm -rf /var/lib/apt/lists/* /etc/ssl/certs/ca-certificates.crt
 
 FROM ubuntu:26.04@sha256:88a381d5b5eeb2b35d3ad70925a362c37ce569daf43ede89ff818ec20e4d3794 AS smoke-ubuntu26
+# Retry transient snapshot mirror failures (HTTP 5xx) with backoff.
+RUN printf '%s\n' 'Acquire::Retries "8";' 'Acquire::Retries::Delay::Maximum "60";' > /etc/apt/apt.conf.d/80-atrinik-retries
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && printf '%s\n' \
  'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20261001T000000Z resolute main' \
@@ -57,6 +63,8 @@ RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && printf '%s\n' \
  apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt -o APT::Update::Error-Mode=any update && apt-get -o Acquire::https::CaInfo=/etc/ssl/certs/ca-certificates.crt install -y --no-install-recommends binutils util-linux coreutils && rm -rf /var/lib/apt/lists/* /etc/ssl/certs/ca-certificates.crt
 
 FROM debian:13-slim@sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483 AS smoke-debian13
+# Retry transient snapshot mirror failures (HTTP 5xx) with backoff.
+RUN printf '%s\n' 'Acquire::Retries "8";' 'Acquire::Retries::Delay::Maximum "60";' > /etc/apt/apt.conf.d/80-atrinik-retries
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN rm -f /etc/apt/sources.list.d/debian.sources && printf '%s\n' \
  'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg check-valid-until=no] https://snapshot.debian.org/archive/debian/20261001T000000Z/ trixie main' > /etc/apt/sources.list && \
