@@ -214,6 +214,12 @@ extern void sprite_cache_statistics_reset(void);
 extern void sprite_cache_statistics_get(sprite_cache_statistics_t *statistics);
 
 extern void surface_show(SDL_Surface *surface, int x, int y, SDL_Rect *srcrect, SDL_Surface *src);
+/** Draw source to a GPU target, clipping source_rect to the source bounds. */
+extern bool surface_blit_gpu(SDL_Surface *source,
+                             const SDL_Rect *source_rect,
+                             SDL_Surface *destination,
+                             int x,
+                             int y);
 extern bool surface_blit(SDL_Surface *source,
                          const SDL_Rect *source_rect,
                          SDL_Surface *destination,

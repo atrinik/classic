@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2026 Atrinik Development Team                         *
+ *   Copyright 2026 The Atrinik Project                                  *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -22,6 +22,32 @@
 #include <settings.h>
 #include <toolkit/toolkit.h>
 
+bool surface_blit_gpu(SDL_Surface *source,
+                      const SDL_Rect *source_rect,
+                      SDL_Surface *destination,
+                      int x,
+                      int y) {
+    SDL_Rect clipped;
+    if (source_rect != NULL) {
+        /* Match SDL_BlitSurface(): only the part of the source rectangle that
+         * lies inside the source is drawn, shifted by the clipped amount.
+         * Sampling beyond the source would read neighbouring atlas texels. */
+        SDL_Rect bounds = {0, 0, source->w, source->h};
+        if (!SDL_GetRectIntersection(source_rect, &bounds, &clipped)) {
+            return true;
+        }
+        x += clipped.x - source_rect->x;
+        y += clipped.y - source_rect->y;
+        source_rect = &clipped;
+    }
+    SDL_FRect gpu_destination = {
+        .x = (float)x,
+        .y = (float)y,
+        .w = (float)(source_rect != NULL ? source_rect->w : source->w),
+        .h = (float)(source_rect != NULL ? source_rect->h : source->h),
+    };
+    return gpu_renderer_draw_surface_to(destination, source, source_rect, &gpu_destination);
+}
 
 bool surface_blit(SDL_Surface *source,
                   const SDL_Rect *source_rect,
@@ -29,13 +55,11 @@ bool surface_blit(SDL_Surface *source,
                   SDL_Rect *destination_rect) {
     if (gpu_renderer_ready() &&
         (destination == NULL || gpu_renderer_canvas_registered(destination))) {
-        SDL_FRect gpu_destination = {
-            .x = destination_rect != NULL ? (float)destination_rect->x : 0.0f,
-            .y = destination_rect != NULL ? (float)destination_rect->y : 0.0f,
-            .w = (float)(source_rect != NULL ? source_rect->w : source->w),
-            .h = (float)(source_rect != NULL ? source_rect->h : source->h),
-        };
-        return gpu_renderer_draw_surface_to(destination, source, source_rect, &gpu_destination);
+        return surface_blit_gpu(source,
+                                source_rect,
+                                destination,
+                                destination_rect != NULL ? destination_rect->x : 0,
+                                destination_rect != NULL ? destination_rect->y : 0);
     }
     return SDL_BlitSurface(source, source_rect, destination, destination_rect);
 }
