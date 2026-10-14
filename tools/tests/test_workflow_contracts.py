@@ -1683,7 +1683,10 @@ class WorkflowContractTests(unittest.TestCase):
                         self.assertNotIn("classic-check", expected["windows_image"])
                         self.assertEqual(arguments[arguments.index("--network") + 1], "none")
                 # Selector failure must stop the actual workflow before Docker.
-                (workspace / "client/tools/build-windows-package.sh").write_text("unapproved source")
+                subprocess.run(["git", "-C", str(workspace), "-c", "commit.gpgsign=false",
+                                "-c", "user.name=Windows producer fixture",
+                                "-c", "user.email=fixture@example.invalid",
+                                "commit", "--quiet", "--allow-empty", "-m", "other head"], check=True)
                 (workspace / "docker-arguments.json").unlink()
                 rejected = subprocess.run(["bash", "-euo", "pipefail", "-c", script], cwd=workspace,
                                           env=environment, capture_output=True, text=True)

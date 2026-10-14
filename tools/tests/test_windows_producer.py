@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import io
 import json
 from pathlib import Path
@@ -22,7 +21,7 @@ class WindowsProducerTests(unittest.TestCase):
         self.git('init', '--quiet')
         self.git('config', 'user.name', 'Windows producer fixture')
         self.git('config', 'user.email', 'fixture@example.invalid')
-        self.recipe = {'client/CMakeLists.txt': self.blob('client/CMakeLists.txt', b'recipe\n')}
+        self.blob('client/CMakeLists.txt', b'recipe\n')
         self.descriptor_path = 'tools/ci/appimage/packaging.lock.json'
         self.blob(self.descriptor_path, json.dumps({'compiler': {
             'family': 'Clang', 'image': 'ghcr.io/atrinik/classic-build:1.18.0@sha256:' + 'a' * 64
@@ -34,11 +33,10 @@ class WindowsProducerTests(unittest.TestCase):
         return subprocess.run(['git', '-C', str(self.root), *arguments], check=True,
                               capture_output=True, text=True).stdout.strip()
 
-    def blob(self, path: str, contents: bytes) -> str:
+    def blob(self, path: str, contents: bytes) -> None:
         target = self.root / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(contents)
-        return hashlib.sha256(contents).hexdigest()
 
     def commit(self) -> str:
         self.git('add', '.')
@@ -46,8 +44,7 @@ class WindowsProducerTests(unittest.TestCase):
         return self.git('rev-parse', 'HEAD')
 
     def test_current_llvm_image_environment_and_compiler_cache(self) -> None:
-        with patch.object(producer, 'LLVM_RECIPE', self.recipe):
-            selected = producer.select_producer(self.root, self.revision)
+        selected = producer.select_producer(self.root, self.revision)
         self.assertEqual(selected['windows_image'], producer.LLVM_IMAGE)
         self.assertEqual(selected['windows_mode'], 'llvm')
         self.assertIn('llvm-mingw', selected['windows_cache_epoch'])
@@ -58,8 +55,7 @@ class WindowsProducerTests(unittest.TestCase):
         self.assertFalse(any(name.startswith('MXE_') for name in environment))
 
     def test_approved_historical_uses_general_sdk_and_inherits_python_worldmaker(self) -> None:
-        with patch.object(producer, 'HISTORICAL', {self.revision: {}}), \
-                patch.object(producer, 'MXE_RECIPE', self.recipe):
+        with patch.object(producer, 'HISTORICAL', frozenset({self.revision})):
             selected = producer.select_producer(self.root, self.revision)
         self.assertEqual(selected['windows_image'], producer.MXE_IMAGE)
         self.assertEqual(selected['windows_mode'], 'mxe')
@@ -77,42 +73,22 @@ class WindowsProducerTests(unittest.TestCase):
             argument for name, value in selected['environment'].items()
             for argument in ('--env', name + '=' + value)])
 
-    def test_unknown_history_and_descendants_are_not_automatically_approved(self) -> None:
+    def test_descendants_of_historical_commits_use_the_current_producer(self) -> None:
         historical = self.revision
         self.blob('unrelated', b'next revision')
         descendant = self.commit()
-        with patch.object(producer, 'HISTORICAL', {historical: {}}), \
-                patch.object(producer, 'MXE_RECIPE', self.recipe):
-            with self.assertRaises(ValueError):
-                producer.select_producer(self.root, descendant)
+        with patch.object(producer, 'HISTORICAL', frozenset({historical})):
+            self.assertEqual(producer.select_producer(self.root, descendant)['windows_mode'], 'llvm')
 
-    def test_tampered_historical_registry_blob_is_rejected(self) -> None:
-        with patch.object(producer, 'HISTORICAL', {self.revision: {}}), \
-                patch.object(producer, 'MXE_RECIPE', {'client/CMakeLists.txt': '0' * 64}):
-            with self.assertRaisesRegex(ValueError, 'unapproved Windows'):
-                producer.select_producer(self.root, self.revision)
-
-    def test_dirty_checkout_symlink_missing_blob_and_other_head_are_rejected(self) -> None:
-        with patch.object(producer, 'LLVM_RECIPE', self.recipe):
-            (self.root / 'client/CMakeLists.txt').write_text('tampered')
-            with self.assertRaisesRegex(ValueError, 'checkout differs'):
-                producer.select_producer(self.root, self.revision)
-            (self.root / 'client/CMakeLists.txt').unlink()
-            (self.root / 'client/CMakeLists.txt').symlink_to('/dev/null')
-            with self.assertRaises(ValueError):
-                producer.select_producer(self.root, self.revision)
-            self.git('checkout', '--', 'client/CMakeLists.txt')
-            with patch.object(producer, 'LLVM_RECIPE', {'missing': '0' * 64}):
-                with self.assertRaisesRegex(ValueError, 'regular source blob'):
-                    producer.select_producer(self.root, self.revision)
-            self.blob('new', b'new')
-            self.commit()
-            with self.assertRaisesRegex(ValueError, 'HEAD differs'):
-                producer.select_producer(self.root, self.revision)
+    def test_other_head_is_rejected(self) -> None:
+        self.blob('new', b'new')
+        self.commit()
+        with self.assertRaisesRegex(ValueError, 'HEAD differs'):
+            producer.select_producer(self.root, self.revision)
 
     def test_cli_rejects_revision_arguments_and_does_not_write_outputs_on_failure(self) -> None:
         output = self.root / 'outputs'
-        for revision in ('HEAD', '--help', self.revision.upper(), 'a' * 39, self.revision):
+        for revision in ('HEAD', '--help', self.revision.upper(), 'a' * 39, '0' * 40):
             result = subprocess.run(['python3', str(self.selector), '--source-root', str(self.root),
                                      '--revision=' + revision, '--github-output', str(output),
                                      '--format', 'docker-env'], capture_output=True, text=True)
@@ -123,8 +99,7 @@ class WindowsProducerTests(unittest.TestCase):
     def test_cli_success_emits_bounded_metadata_and_docker_argument_lines(self) -> None:
         output = self.root / 'outputs'
         printed = io.StringIO()
-        with patch.object(producer, 'LLVM_RECIPE', self.recipe), \
-                patch('sys.argv', [str(self.selector), '--source-root', str(self.root),
+        with patch('sys.argv', [str(self.selector), '--source-root', str(self.root),
                                    '--revision', self.revision, '--github-output', str(output),
                                    '--format', 'docker-env']), contextlib.redirect_stdout(printed):
             self.assertEqual(producer.main(), 0)
@@ -137,21 +112,20 @@ class WindowsProducerTests(unittest.TestCase):
         self.assertTrue(all('=' in argument for argument in arguments[1::2]))
 
     def test_current_llvm_rejects_absent_malformed_and_dirty_compiler_descriptor(self) -> None:
-        with patch.object(producer, 'LLVM_RECIPE', self.recipe):
-            (self.root / self.descriptor_path).write_text('{}')
-            with self.assertRaisesRegex(ValueError, 'descriptor checkout differs'):
-                producer.select_producer(self.root, self.revision)
-            self.revision = self.commit()
-            with self.assertRaisesRegex(ValueError, 'immutable LLVM compiler descriptor'):
-                producer.select_producer(self.root, self.revision)
-            self.blob(self.descriptor_path, b'{"compiler":{},"compiler":{}}')
-            self.revision = self.commit()
-            with self.assertRaisesRegex(ValueError, 'duplicate LLVM source descriptor'):
-                producer.select_producer(self.root, self.revision)
-            (self.root / self.descriptor_path).unlink()
-            self.revision = self.commit()
-            with self.assertRaisesRegex(ValueError, 'LLVM compiler descriptor'):
-                producer.select_producer(self.root, self.revision)
+        (self.root / self.descriptor_path).write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'descriptor checkout differs'):
+            producer.select_producer(self.root, self.revision)
+        self.revision = self.commit()
+        with self.assertRaisesRegex(ValueError, 'immutable LLVM compiler descriptor'):
+            producer.select_producer(self.root, self.revision)
+        self.blob(self.descriptor_path, b'{"compiler":{},"compiler":{}}')
+        self.revision = self.commit()
+        with self.assertRaisesRegex(ValueError, 'duplicate LLVM source descriptor'):
+            producer.select_producer(self.root, self.revision)
+        (self.root / self.descriptor_path).unlink()
+        self.revision = self.commit()
+        with self.assertRaisesRegex(ValueError, 'LLVM compiler descriptor'):
+            producer.select_producer(self.root, self.revision)
 
     def actual_current_source(self) -> tuple[Path, str]:
         repository = Path(__file__).resolve().parents[2]
@@ -184,32 +158,6 @@ class WindowsProducerTests(unittest.TestCase):
         self.assertEqual(selected['environment']['ATRINIK_WINDOWS_HOST_PYTHON'], '/usr/bin/python3')
         self.assertFalse(subprocess.run(['git', '-C', str(source), 'status', '--porcelain'],
                                         check=True, capture_output=True).stdout)
-        # Authenticate package helpers, configure entrypoints and shared protocol checks;
-        # committed drift must not silently admit a newer source recipe.
-        for path in ('client/tools/build-windows-package.sh', 'server/tools/build-windows-package.sh',
-                     'client/CMakeLists.txt', 'server/CMakeLists.txt',
-                     'libatrinik/CMakeLists.txt', 'libatrinik/cmake/RequireClassicProtocol.cmake',
-                     'cmake/AtrinikLLVM.cmake', 'cmake/AtrinikVersion.cmake',
-                     'cmake/InstallWindowsRuntime.cmake', 'client/cmake/verify_windows_client_sound.cmake',
-                     'server/cmake/pcpnatpmp.cmake', 'server/cmake/immutable_source_cache.cmake',
-                     'server/cmake/apply_patch_idempotent.cmake'):
-            with self.subTest(path=path):
-                subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', revision],
-                               check=True, capture_output=True)
-                target = source / path
-                target.write_bytes(target.read_bytes() + b'\n# unreviewed recipe change\n')
-                subprocess.run(['git', '-C', str(source), 'add', path], check=True, capture_output=True)
-                subprocess.run(['git', '-C', str(source), '-c', 'commit.gpgsign=false',
-                                '-c', 'user.name=Windows producer fixture',
-                                '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet',
-                                '-m', 'unreviewed recipe fixture'], check=True, capture_output=True)
-                changed = subprocess.run(['git', '-C', str(source), 'rev-parse', 'HEAD'],
-                                         check=True, capture_output=True, text=True).stdout.strip()
-                rejected = subprocess.run([sys.executable, str(self.selector), '--source-root',
-                                           str(source), '--revision', changed], capture_output=True, text=True)
-                self.assertNotEqual(rejected.returncode, 0)
-                self.assertEqual(rejected.stdout, '')
-                self.assertIn('unapproved Windows source recipe: ' + path, rejected.stderr)
 
     def test_actual_current_recipe_rejects_local_and_committed_shadow_alternatives(self) -> None:
         source, revision = self.actual_current_source()
@@ -244,15 +192,20 @@ class WindowsProducerTests(unittest.TestCase):
                 self.assertEqual(rejected.stdout, '')
                 self.assertIn('unapproved Windows source recipe alternative: ' + path, rejected.stderr)
 
-    def test_actual_current_recipe_admits_ordinary_source_revision(self) -> None:
+    def test_actual_current_recipe_admits_ordinary_source_and_build_changes(self) -> None:
         source, revision = self.actual_current_source()
-        target = source / 'server/src/server/main.c'
-        target.write_bytes(target.read_bytes() + b'\n/* ordinary source change fixture */\n')
-        changed = self.commit_actual_source(source)
-        self.assertNotEqual(changed, revision)
-        result = subprocess.run([sys.executable, str(self.selector), '--source-root', str(source),
-                                 '--revision', changed], check=True, capture_output=True, text=True)
-        self.assertEqual(json.loads(result.stdout)['windows_mode'], 'llvm')
+        for path, comment in (('server/src/server/main.c', b'\n/* ordinary source change fixture */\n'),
+                              ('client/CMakeLists.txt', b'\n# ordinary build change fixture\n')):
+            with self.subTest(path=path):
+                subprocess.run(['git', '-C', str(source), 'checkout', '--quiet', '--detach', revision],
+                               check=True, capture_output=True)
+                target = source / path
+                target.write_bytes(target.read_bytes() + comment)
+                changed = self.commit_actual_source(source)
+                self.assertNotEqual(changed, revision)
+                result = subprocess.run([sys.executable, str(self.selector), '--source-root', str(source),
+                                         '--revision', changed], check=True, capture_output=True, text=True)
+                self.assertEqual(json.loads(result.stdout)['windows_mode'], 'llvm')
 
     def test_actual_reviewed_source_commits_when_history_is_available(self) -> None:
         repository = Path(__file__).resolve().parents[2]
@@ -287,8 +240,6 @@ class WindowsProducerTests(unittest.TestCase):
             'fd4943252ac872fce2995c286b10a0c6d249aba3',
             '2349e0e14276fee251250cd451da6da0e68a3148',
         })
-        self.assertIn('server/CMakeLists.txt', producer.MXE_RECIPE)
-        self.assertIn('tools/ci/stage_windows_runtime.py', producer.MXE_RECIPE)
 
 
 if __name__ == '__main__':
