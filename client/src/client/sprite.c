@@ -1020,13 +1020,7 @@ done:
  */
 void surface_show(SDL_Surface *surface, int x, int y, SDL_Rect *srcrect, SDL_Surface *src) {
     if (surface == NULL || (gpu_renderer_ready() && gpu_renderer_canvas_registered(surface))) {
-        SDL_FRect destination = {
-            .x = (float)x,
-            .y = (float)y,
-            .w = (float)(srcrect != NULL ? srcrect->w : src->w),
-            .h = (float)(srcrect != NULL ? srcrect->h : src->h),
-        };
-        if (!gpu_renderer_draw_surface_to(surface, src, srcrect, &destination)) {
+        if (!surface_blit_gpu(src, srcrect, surface, x, y)) {
             LOG(ERROR, "Could not submit retained GPU surface: %s", SDL_GetError());
         }
         return;
