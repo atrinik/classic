@@ -144,6 +144,15 @@ text_render_glyph(TTF_Font *font, const char *glyph, uint64_t flags, SDL_Color c
                               : TTF_RenderText_Blended(font, glyph, 0, color);
 }
 
+/**
+ * Maximum number of rendered glyphs kept in the cache. Fading text (map
+ * names, tooltips) renders a distinct glyph for every alpha step, so the cache
+ * must be bounded; the least recently used glyphs are evicted first.
+ */
+#define TEXT_GLYPH_CACHE_LIMIT 4096
+/** Number of hash buckets; must be a power of two. */
+#define TEXT_GLYPH_CACHE_BUCKETS 4096
+
 typedef struct text_glyph_cache_entry {
     TTF_Font *font;
     Uint32 codepoint;
@@ -155,10 +164,20 @@ typedef struct text_glyph_cache_entry {
     bool strikethrough;
     bool solid_alpha_conversion;
     SDL_Surface *surface;
+    size_t bucket;
+    /** Next entry in the same hash bucket. */
     struct text_glyph_cache_entry *next;
+    /** Neighbours in the least recently used list. */
+    struct text_glyph_cache_entry *lru_prev;
+    struct text_glyph_cache_entry *lru_next;
 } text_glyph_cache_entry_t;
 
+static text_glyph_cache_entry_t *glyph_cache_buckets[TEXT_GLYPH_CACHE_BUCKETS];
+/** Most recently used glyph. */
 static text_glyph_cache_entry_t *glyph_cache;
+/** Least recently used glyph. */
+static text_glyph_cache_entry_t *glyph_cache_tail;
+static size_t glyph_cache_entries;
 
 static void text_show_impl(SDL_Surface *surface,
                            bool render_root,
@@ -170,18 +189,63 @@ static void text_show_impl(SDL_Surface *surface,
                            uint64_t flags,
                            SDL_Rect *box);
 
+static size_t
+text_glyph_cache_bucket(TTF_Font *font, Uint32 codepoint, Uint32 packed_color, Uint8 alpha) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    uint64_t values[] = {(uint64_t)(uintptr_t)font, codepoint, packed_color, alpha};
+    for (size_t i = 0; i < arraysize(values); i++) {
+        hash ^= values[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return (size_t)(hash ^ (hash >> 32)) & (TEXT_GLYPH_CACHE_BUCKETS - 1);
+}
+
+static void text_glyph_cache_lru_unlink(text_glyph_cache_entry_t *entry) {
+    if (entry->lru_prev != NULL) {
+        entry->lru_prev->lru_next = entry->lru_next;
+    } else {
+        glyph_cache = entry->lru_next;
+    }
+    if (entry->lru_next != NULL) {
+        entry->lru_next->lru_prev = entry->lru_prev;
+    } else {
+        glyph_cache_tail = entry->lru_prev;
+    }
+    entry->lru_prev = entry->lru_next = NULL;
+}
+
+static void text_glyph_cache_lru_push(text_glyph_cache_entry_t *entry) {
+    entry->lru_prev = NULL;
+    entry->lru_next = glyph_cache;
+    if (glyph_cache != NULL) {
+        glyph_cache->lru_prev = entry;
+    } else {
+        glyph_cache_tail = entry;
+    }
+    glyph_cache = entry;
+}
+
+static void text_glyph_cache_free(text_glyph_cache_entry_t *entry) {
+    text_glyph_cache_entry_t **link = &glyph_cache_buckets[entry->bucket];
+    while (*link != entry) {
+        link = &(*link)->next;
+    }
+    *link = entry->next;
+    text_glyph_cache_lru_unlink(entry);
+    glyph_cache_entries--;
+    gpu_renderer_invalidate_surface(entry->surface);
+    SDL_DestroySurface(entry->surface);
+    free(entry);
+}
+
 static void text_glyph_cache_remove_font(TTF_Font *font) {
-    text_glyph_cache_entry_t **link = &glyph_cache;
-    while (*link != NULL) {
-        text_glyph_cache_entry_t *entry = *link;
+    text_glyph_cache_entry_t *entry = glyph_cache;
+    while (entry != NULL) {
+        text_glyph_cache_entry_t *next = entry->lru_next;
         if (font == NULL || entry->font == font) {
-            *link = entry->next;
-            gpu_renderer_invalidate_surface(entry->surface);
-            SDL_DestroySurface(entry->surface);
-            free(entry);
-            continue;
+            text_glyph_cache_free(entry);
         }
-        link = &entry->next;
+        entry = next;
     }
 }
 
@@ -198,11 +262,17 @@ static SDL_Surface *text_glyph_cache_get(TTF_Font *font,
         ((Uint32)color.r << 24U) | ((Uint32)color.g << 16U) | ((Uint32)color.b << 8U) | color.a;
     int style = TTF_GetFontStyle(font);
     uint64_t render_flags = flags & TEXT_SOLID;
-    for (text_glyph_cache_entry_t *entry = glyph_cache; entry != NULL; entry = entry->next) {
+    size_t bucket = text_glyph_cache_bucket(font, codepoint, packed_color, alpha);
+    for (text_glyph_cache_entry_t *entry = glyph_cache_buckets[bucket]; entry != NULL;
+         entry = entry->next) {
         if (entry->font == font && entry->codepoint == codepoint && entry->style == style &&
             entry->render_flags == render_flags && entry->color == packed_color &&
             entry->alpha == alpha && entry->strikethrough == strikethrough && entry->flip == flip &&
             entry->solid_alpha_conversion == solid_alpha_conversion) {
+            if (entry != glyph_cache) {
+                text_glyph_cache_lru_unlink(entry);
+                text_glyph_cache_lru_push(entry);
+            }
             return entry->surface;
         }
     }
@@ -260,9 +330,18 @@ static SDL_Surface *text_glyph_cache_get(TTF_Font *font,
         .strikethrough = strikethrough,
         .solid_alpha_conversion = solid_alpha_conversion,
         .surface = surface,
-        .next = glyph_cache,
+        .bucket = bucket,
+        .next = glyph_cache_buckets[bucket],
     };
-    glyph_cache = entry;
+    glyph_cache_buckets[bucket] = entry;
+    text_glyph_cache_lru_push(entry);
+    glyph_cache_entries++;
+
+    /* Callers use each returned surface before the next lookup, so evicting
+     * older glyphs here never frees a surface that is still being drawn. */
+    while (glyph_cache_entries > TEXT_GLYPH_CACHE_LIMIT) {
+        text_glyph_cache_free(glyph_cache_tail);
+    }
     return surface;
 }
 
@@ -579,7 +658,9 @@ void text_init(void) {
         exit(EXIT_FAILURE);
     }
     fonts = NULL;
-    glyph_cache = NULL;
+    glyph_cache = glyph_cache_tail = NULL;
+    glyph_cache_entries = 0;
+    memset(glyph_cache_buckets, 0, sizeof(glyph_cache_buckets));
 
     text_link_color = text_link_color_default;
 }
@@ -2987,6 +3068,95 @@ bool text_test_measurement_preserves_selection(font_struct *font) {
     text_test_mouse_override = false;
     text_set_selection(NULL, NULL, NULL);
     return start == 7 && end == 11 && started == 1 && width > 0 && height > 0;
+}
+
+static size_t text_test_glyph_cache_entries(void) {
+    size_t entries = 0;
+    for (text_glyph_cache_entry_t *entry = glyph_cache; entry != NULL; entry = entry->lru_next) {
+        entries++;
+    }
+    return entries == glyph_cache_entries ? entries : SIZE_MAX;
+}
+
+static bool
+text_test_glyph_cache_lookup_line(TTF_Font *font, const char *line, SDL_Color color, Uint8 alpha) {
+    for (const char *cp = line; *cp != '\0'; cp++) {
+        char glyph[2] = {*cp, '\0'};
+        if (text_glyph_cache_get(font, (Uint32)*cp, glyph, 0, color, alpha, false, 0, true) ==
+            NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Regression for fading text (map names, tooltips) growing the glyph cache
+ * without bound: every alpha step of every glyph used to stay cached forever,
+ * and every later glyph lookup, such as chat text, scanned all of them.
+ */
+bool text_test_glyph_cache_bounded(const char *font_path) {
+    static const char *map_names[] = {
+        "The Underground City II",
+        "Strakewood Island",
+        "Brynknot Sewers",
+        "Incuna",
+        "Greyton Tower of Fire",
+        "Fort Ghzal Barracks",
+        "Clearhaven Temple Undercroft",
+        "Shattered Isles Docks",
+    };
+    static const char *chat =
+        "You hit skeleton archer for 16 (0) with fire. ghoul's attack roll modifiers: "
+        "sidestab +2 (net +2).";
+    const SDL_Color gold = {0xff, 0xcc, 0x00, 0xff};
+    const SDL_Color black = {0, 0, 0, 0xff};
+    const SDL_Color orange = {0xff, 0x99, 0x00, 0xff};
+    const int lookups = 200;
+
+    TTF_Font *font = TTF_OpenFont(font_path, 11);
+    if (font == NULL) {
+        fprintf(stderr, "glyph cache test: cannot open %s: %s\n", font_path, SDL_GetError());
+        return false;
+    }
+
+    bool success = text_test_glyph_cache_lookup_line(font, chat, orange, SDL_ALPHA_OPAQUE);
+    SDL_Surface *first =
+        text_glyph_cache_get(font, 'Y', "Y", 0, orange, SDL_ALPHA_OPAQUE, false, 0, true);
+
+    for (size_t name = 0; success && name < arraysize(map_names); name++) {
+        for (int alpha = 0; success && alpha <= SDL_ALPHA_OPAQUE; alpha++) {
+            success =
+                text_test_glyph_cache_lookup_line(font, map_names[name], gold, (Uint8)alpha) &&
+                text_test_glyph_cache_lookup_line(font, map_names[name], black, (Uint8)alpha);
+        }
+    }
+    size_t entries = text_test_glyph_cache_entries();
+
+    Uint64 started = SDL_GetTicksNS();
+    for (int i = 0; success && i < lookups; i++) {
+        success = text_test_glyph_cache_lookup_line(font, chat, orange, SDL_ALPHA_OPAQUE);
+    }
+    Uint64 elapsed = SDL_GetTicksNS() - started;
+    double per_lookup_ns = (double)elapsed / ((double)lookups * strlen(chat));
+
+    SDL_Surface *again =
+        text_glyph_cache_get(font, 'Y', "Y", 0, orange, SDL_ALPHA_OPAQUE, false, 0, true);
+    SDL_Surface *repeat =
+        text_glyph_cache_get(font, 'Y', "Y", 0, orange, SDL_ALPHA_OPAQUE, false, 0, true);
+
+    fprintf(stderr,
+            "glyph cache test: entries=%zu limit=%d lookup=%.1f ns/glyph\n",
+            entries,
+            TEXT_GLYPH_CACHE_LIMIT,
+            per_lookup_ns);
+
+    text_glyph_cache_remove_font(font);
+    bool emptied = text_test_glyph_cache_entries() == 0;
+    TTF_CloseFont(font);
+
+    return success && first != NULL && again != NULL && again == repeat && emptied &&
+           entries <= TEXT_GLYPH_CACHE_LIMIT;
 }
 #endif
 

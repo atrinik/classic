@@ -618,6 +618,9 @@ if (BUILD_TESTING)
         ATRINIK_WIDGET_TESTS)
 
     add_test(NAME client-help-parser COMMAND ${EXECUTABLE} --help-parser-test)
+    add_test(NAME client-text-glyph-cache
+        COMMAND ${EXECUTABLE} --text-glyph-cache-test
+            ${CMAKE_CURRENT_SOURCE_DIR}/fonts/sans.ttf)
 
     add_test(NAME client-access-lifecycle COMMAND ${EXECUTABLE} --access-lifecycle-test)
     add_test(NAME client-book-edit-lifecycle COMMAND ${EXECUTABLE} --book-edit-lifecycle-test)

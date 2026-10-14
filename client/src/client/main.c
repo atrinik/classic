@@ -1143,6 +1143,16 @@ int main(int argc, char *argv[]) {
         return hfiles_parser_test() ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
+    if (argc == 3 && strcmp(argv[1], "--text-glyph-cache-test") == 0) {
+        if (!TTF_Init()) {
+            fprintf(stderr, "glyph cache test: %s\n", SDL_GetError());
+            return EXIT_FAILURE;
+        }
+        bool bounded = text_test_glyph_cache_bounded(argv[2]);
+        TTF_Quit();
+        return bounded ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     if (argc == 4 && strcmp(argv[1], "--widget-priority-test") == 0) {
         return widget_priority_integration_test(argv[2], argv[3]);
     }
