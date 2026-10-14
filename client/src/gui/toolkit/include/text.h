@@ -388,6 +388,7 @@ extern void text_root_glyph_statistics_reset(void);
 extern void text_root_glyph_statistics_get(text_root_glyph_statistics_t *statistics);
 extern void text_root_glyph_test_suppress_once(void);
 extern bool text_test_measurement_preserves_selection(font_struct *font);
+extern bool text_test_glyph_cache_bounded(const char *font_path);
 #endif
 
 extern void text_offset_set(int x, int y);
