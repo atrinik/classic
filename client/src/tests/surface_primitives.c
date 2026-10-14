@@ -1,7 +1,7 @@
 /*************************************************************************
  *           Atrinik, a Multiplayer Online Role Playing Game             *
  *                                                                       *
- *   Copyright (C) 2026 The Atrinik Project                              *
+ *   Copyright 2026 The Atrinik Project                                  *
  *                                                                       *
  * This program is free software; you can redistribute it and/or modify  *
  * it under the terms of the GNU General Public License as published by  *
@@ -20,8 +20,15 @@
 
 SDL_Surface *OfflineRenderSurface = NULL;
 
+/* When set, surface_blit() takes its GPU path and draws are recorded. */
+static bool test_gpu_ready;
+static int test_gpu_draws;
+static bool test_gpu_source_set;
+static SDL_Rect test_gpu_source;
+static SDL_FRect test_gpu_destination;
+
 bool gpu_renderer_ready(void) {
-    return false;
+    return test_gpu_ready;
 }
 
 bool gpu_renderer_canvas_registered(SDL_Surface *surface) {
@@ -35,9 +42,16 @@ bool gpu_renderer_draw_surface_to(SDL_Surface *target,
                                   const SDL_FRect *destination) {
     (void)target;
     (void)surface;
-    (void)source;
-    (void)destination;
-    return false;
+    if (!test_gpu_ready) {
+        return false;
+    }
+    test_gpu_draws++;
+    test_gpu_source_set = source != NULL;
+    if (source != NULL) {
+        test_gpu_source = *source;
+    }
+    test_gpu_destination = *destination;
+    return true;
 }
 
 bool gpu_renderer_draw_surface_scaled_to(SDL_Surface *target,
@@ -687,8 +701,7 @@ static void test_opaque_indexed_rotation(void) {
     transparent.a = SDL_ALPHA_OPAQUE;
     TEST_CHECK(SDL_SetPaletteColors(palette, &transparent, 0, 1));
 
-    SDL_Surface *rotated =
-        rotozoomSurface(source, -135.0, 1.0, ZOOM_FILTER_PIXELART);
+    SDL_Surface *rotated = rotozoomSurface(source, -135.0, 1.0, ZOOM_FILTER_PIXELART);
     TEST_CHECK(rotated != NULL);
     Uint8 red, green, blue, alpha;
     TEST_CHECK(
@@ -700,8 +713,7 @@ static void test_opaque_indexed_rotation(void) {
 
 static void test_indexed_alpha_without_rotation(void) {
     SDL_Surface *source = create_indexed_alpha_surface();
-    SDL_Surface *scaled =
-        rotozoomSurface(source, 0.0, 1.0, ZOOM_FILTER_PIXELART);
+    SDL_Surface *scaled = rotozoomSurface(source, 0.0, 1.0, ZOOM_FILTER_PIXELART);
     TEST_CHECK(scaled != NULL);
     TEST_CHECK(scaled->format == SDL_PIXELFORMAT_INDEX8);
 
@@ -798,10 +810,8 @@ static void test_map_marker_rotation_contract(void) {
         for (int direction = 0; direction < 8; direction++) {
             /* region_map_render_marker() passes the already-clockwise
              * direction through the compatibility inverse. */
-            SDL_Surface *transformed = rotozoomSurface(converted,
-                                                       -(direction * 45.0),
-                                                       zooms[zoom],
-                                                       ZOOM_FILTER_PIXELART);
+            SDL_Surface *transformed =
+                rotozoomSurface(converted, -(direction * 45.0), zooms[zoom], ZOOM_FILTER_PIXELART);
             TEST_CHECK(transformed != NULL);
             assert_map_marker_palette(transformed);
             SDL_DestroySurface(transformed);
@@ -809,6 +819,51 @@ static void test_map_marker_rotation_contract(void) {
     }
 
     SDL_DestroySurface(converted);
+}
+
+static bool test_gpu_drew(int x, int y, int w, int h, int dx, int dy) {
+    return test_gpu_source_set && test_gpu_source.x == x && test_gpu_source.y == y &&
+           test_gpu_source.w == w && test_gpu_source.h == h &&
+           test_gpu_destination.x == (float)dx && test_gpu_destination.y == (float)dy &&
+           test_gpu_destination.w == (float)w && test_gpu_destination.h == (float)h;
+}
+
+/*
+ * The GPU path must clip an oversized source rectangle like SDL_BlitSurface()
+ * instead of sampling beyond the sprite; character-selection portraits pass a
+ * fixed 50x45 rectangle and drew black boxes and neighbouring atlas sprites.
+ */
+static void test_gpu_blit_clips_source_rect(void) {
+    SDL_Surface *source = SDL_CreateSurface(30, 40, SDL_PIXELFORMAT_RGBA32);
+    TEST_CHECK(source != NULL);
+    test_gpu_ready = true;
+
+    SDL_Rect oversized = {0, 0, 50, 45};
+    SDL_Rect destination = {10, 20, 0, 0};
+    TEST_CHECK(surface_blit(source, &oversized, NULL, &destination));
+    TEST_CHECK(test_gpu_draws == 1 && test_gpu_drew(0, 0, 30, 40, 10, 20));
+
+    TEST_CHECK(surface_blit_gpu(source, &oversized, NULL, 10, 20));
+    TEST_CHECK(test_gpu_draws == 2 && test_gpu_drew(0, 0, 30, 40, 10, 20));
+
+    SDL_Rect negative = {-5, -3, 20, 20};
+    TEST_CHECK(surface_blit_gpu(source, &negative, NULL, 10, 20));
+    TEST_CHECK(test_gpu_draws == 3 && test_gpu_drew(0, 0, 15, 17, 15, 23));
+
+    SDL_Rect inside = {4, 6, 8, 9};
+    TEST_CHECK(surface_blit_gpu(source, &inside, NULL, 1, 2));
+    TEST_CHECK(test_gpu_draws == 4 && test_gpu_drew(4, 6, 8, 9, 1, 2));
+
+    SDL_Rect outside = {30, 0, 10, 10};
+    TEST_CHECK(surface_blit_gpu(source, &outside, NULL, 0, 0));
+    TEST_CHECK(test_gpu_draws == 4);
+
+    TEST_CHECK(surface_blit_gpu(source, NULL, NULL, 7, 8));
+    TEST_CHECK(test_gpu_draws == 5 && !test_gpu_source_set && test_gpu_destination.w == 30.0f &&
+               test_gpu_destination.h == 40.0f);
+
+    test_gpu_ready = false;
+    SDL_DestroySurface(source);
 }
 
 int main(void) {
@@ -831,5 +886,6 @@ int main(void) {
     test_darken_preserves_alpha();
     test_zoom_filter_modes();
     test_map_marker_rotation_contract();
+    test_gpu_blit_clips_source_rect();
     return 0;
 }
