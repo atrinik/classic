@@ -72,6 +72,7 @@ jobs:
       version: ${{ steps.metadata.outputs.version }}
       artifact_schema: ${{ steps.metadata.outputs.artifact_schema }}
       compiler_image: ${{ steps.metadata.outputs.compiler_image }}
+      source_packaging_lock: ${{ steps.metadata.outputs.source_packaging_lock }}
       windows_image: ${{ steps.metadata.outputs.windows_image }}
       windows_mode: ${{ steps.metadata.outputs.windows_mode }}
       windows_cache_epoch: ${{ steps.metadata.outputs.windows_cache_epoch }}
@@ -112,15 +113,20 @@ jobs:
           artifact_schema=$(python3 build/release-automation/tools/release/release_artifacts.py \
             --print-source-schema --revision "${commit}" --source-root "${GITHUB_WORKSPACE}")
           [[ ${artifact_schema} == 1 || ${artifact_schema} == 2 || ${artifact_schema} == 3 ]]
+          source_packaging_lock=$(mktemp "${RUNNER_TEMP}/classic-source-packaging-lock.XXXXXX")
           compiler_image=$(python3 build/release-automation/tools/release/resolve_compiler_image.py \
             --source-root "${GITHUB_WORKSPACE}" --revision "${commit}" \
-            --current-image "${CLASSIC_LINUX_IMAGE}")
+            --current-image "${CLASSIC_LINUX_IMAGE}" \
+            --source-packaging-lock-output "${source_packaging_lock}")
           python3 build/release-automation/tools/release/windows_producer.py \
             --source-root "${GITHUB_WORKSPACE}" --revision "${commit}" \
             --github-output "${GITHUB_OUTPUT}"
           {
             echo "artifact_schema=${artifact_schema}"
             echo "compiler_image=${compiler_image}"
+            # Exact tagged lock bytes, so the token-holding image verifier
+            # never needs a candidate checkout of its own.
+            echo "source_packaging_lock=$(base64 -w0 < "${source_packaging_lock}")"
             echo "tag=${RELEASE_TAG}"
             echo "version=${RELEASE_VERSION}"
             echo "commit=${commit}"
@@ -853,8 +859,10 @@ jobs:
     env:
       CLASSIC_LINUX_IMAGE: ${{ needs.metadata.outputs.compiler_image }}
     # Holds a read-only token only to verify main-branch provenance of
-    # prebuilt images for this exact prepared context. No candidate code runs
-    # here, and any failure only makes the AppImage job build locally.
+    # prebuilt images for this exact prepared context. It never checks out the
+    # candidate: the metadata job supplies the resolved compiler image and the
+    # exact tagged lock bytes. Any failure only makes the AppImage job build
+    # locally.
     needs: [metadata]
     if: needs.metadata.outputs.artifact_schema == '3'
     continue-on-error: true
@@ -874,27 +882,17 @@ jobs:
           sparse-checkout: |
             tools/ci/appimage
             tools/release
-      - name: Check out candidate source as trusted-resolver input only
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.metadata.outputs.commit }}
-          path: candidate-source
-          persist-credentials: false
-          fetch-depth: 0
       - id: verify
         name: Verify prebuilt images for the exact prepared context
         env:
-          RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
+          SOURCE_PACKAGING_LOCK: ${{ needs.metadata.outputs.source_packaging_lock }}
           APPIMAGE_IMAGE_REPOSITORY: ghcr.io/atrinik/classic-appimage
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p build/appimage-prebuilt
           source_lock_path=$(mktemp "${RUNNER_TEMP}/classic-source-packaging-lock.XXXXXX")
           trap 'rm -f "${source_lock_path}"' EXIT
-          python3 tools/release/resolve_compiler_image.py \
-            --source-root "${GITHUB_WORKSPACE}/candidate-source" --revision "${RELEASE_REVISION}" \
-            --current-image "${CLASSIC_LINUX_IMAGE}" --source-packaging-lock-output "${source_lock_path}" \
-            > build/appimage-prebuilt/compiler-image.txt
+          printf '%s' "${SOURCE_PACKAGING_LOCK}" | base64 -d > "${source_lock_path}"
           compiler_arguments=()
           if test -s "${source_lock_path}"; then
             compiler_arguments=(--source-packaging-lock "${source_lock_path}")

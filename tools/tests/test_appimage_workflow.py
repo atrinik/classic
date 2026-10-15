@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import json
 import os
 import re
@@ -403,27 +404,29 @@ sys.exit(0 if os.environ.get('GH_VERIFY_OK') else 1)
         verifier = workflow.split('  appimage-prebuilt:\n', 1)[1].split('\n  candidate:\n', 1)[0]
         self.assertIn('attestations: read', verifier)
         self.assertNotIn('packages: write', verifier)
+        self.assertNotIn('candidate-source', verifier)
         script = textwrap.dedent(verifier.split('        run: |\n', 1)[1])
+        lock = json.dumps({'compiler': {'image': 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64}})
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             (workspace / 'bin').mkdir()
             trusted = workspace / 'tools/ci/appimage'
             trusted.mkdir(parents=True)
-            (workspace / 'tools/release').mkdir(parents=True)
-            shutil.copy2(ROOT / 'tools/release/resolve_compiler_image.py', workspace / 'tools/release')
             for name in ('context_key.py', 'prebuilt_images.py', 'graphical.Dockerfile'):
                 shutil.copy2(ROOT / 'tools/ci/appimage' / name, trusted)
-            (trusted / 'prepare.py').write_text("""import argparse, pathlib
+            (trusted / 'prepare.py').write_text("""import argparse, json, pathlib
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', type=pathlib.Path, required=True)
 parser.add_argument('--compiler-image', required=True)
 parser.add_argument('--source-packaging-lock', type=pathlib.Path)
 args = parser.parse_args()
+assert args.compiler_image == 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64
+assert json.loads(args.source_packaging_lock.read_bytes())['compiler']['image'] == args.compiler_image
 args.output.mkdir(parents=True)
 (args.output / 'Dockerfile').write_text('fixture\\n')
 """)
             (workspace / 'bin/docker').write_text("""#!/usr/bin/env python3
-import os, sys
+import sys
 if sys.argv[1] == 'pull':
     sys.exit(0)
 if sys.argv[1:3] == ['image', 'inspect']:
@@ -438,15 +441,6 @@ sys.exit(0 if os.environ.get('GH_VERIFY_OK') else 1)
 """)
             for tool in ('docker', 'gh'):
                 (workspace / 'bin' / tool).chmod(0o755)
-            source = workspace / 'candidate-source'
-            (source / 'tools/ci/appimage').mkdir(parents=True)
-            (source / 'tools/ci/appimage/packaging.lock.json').write_text(
-                json.dumps({'compiler': {'image': 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64}}))
-            for arguments in (['init', '--quiet'], ['add', '.'],
-                              ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
-                               '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture']):
-                subprocess.run(['git', '-C', str(source), *arguments], check=True)
-            revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
             for verify_ok, expected in (('1', 5), ('', 0)):
                 with self.subTest(verified=bool(verify_ok)):
                     for leftover in (workspace / 'build', workspace / 'gh-calls.jsonl', workspace / 'output'):
@@ -457,7 +451,8 @@ sys.exit(0 if os.environ.get('GH_VERIFY_OK') else 1)
                     environment = {key: value for key, value in os.environ.items() if key != 'GH_VERIFY_OK'}
                     environment.update(CLASSIC_LINUX_IMAGE='ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64,
                                        GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace),
-                                       GITHUB_OUTPUT=str(workspace / 'output'), RELEASE_REVISION=revision,
+                                       GITHUB_OUTPUT=str(workspace / 'output'),
+                                       SOURCE_PACKAGING_LOCK=base64.b64encode(lock.encode()).decode(),
                                        APPIMAGE_IMAGE_REPOSITORY='ghcr.io/atrinik/classic-appimage',
                                        PATH=f"{workspace / 'bin'}:{os.environ['PATH']}")
                     if verify_ok:

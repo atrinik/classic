@@ -1701,9 +1701,14 @@ class WorkflowContractTests(unittest.TestCase):
         appimage = candidate[candidate.index("  client-appimage:"):candidate.index("  client-windows:")]
         finalizer = candidate[candidate.index("  candidate:"):]
         verifier = candidate[candidate.index("  appimage-prebuilt:"):candidate.index("  candidate:")]
-        self.assertEqual(candidate.count("fetch-depth: 0"), 4)
-        self.assertEqual(verifier.count("fetch-depth: 0"), 1)
-        self.assertIn("path: candidate-source\n          persist-credentials: false\n          fetch-depth: 0", verifier)
+        self.assertEqual(candidate.count("fetch-depth: 0"), 3)
+        # The token-holding image verifier never checks out candidate source.
+        self.assertNotIn("candidate-source", verifier)
+        self.assertNotIn("needs.metadata.outputs.commit", verifier)
+        self.assertEqual(verifier.count("actions/checkout@"), 1)
+        self.assertIn("ref: ${{ github.sha }}", verifier)
+        self.assertIn("source_packaging_lock: ${{ steps.metadata.outputs.source_packaging_lock }}", metadata_job)
+        self.assertIn('--source-packaging-lock-output "${source_packaging_lock}"', metadata_job)
         self.assertEqual(metadata_job.count("fetch-depth: 0"), 1)
         self.assertEqual(appimage.count("fetch-depth: 0"), 1)
         self.assertIn("path: candidate-source\n          persist-credentials: false\n          fetch-depth: 0", appimage)
