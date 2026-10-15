@@ -231,9 +231,11 @@ out.mkdir(parents=True)
 """)
             docker = workspace / 'bin/docker'
             docker.write_text("""#!/usr/bin/env python3
-import json, pathlib, sys
+import json, os, pathlib, sys
 with pathlib.Path('docker-calls.jsonl').open('a') as stream:
     stream.write(json.dumps(sys.argv[1:]) + '\\n')
+if sys.argv[1] == 'build' and os.environ.get('FAIL_TARGET') in sys.argv:
+    sys.exit(1)
 if sys.argv[1] == 'run':
     print('fixture-package\\t1.2.3')
 elif sys.argv[1:3] == ['image', 'inspect']:
@@ -264,8 +266,9 @@ elif sys.argv[1:3] == ['image', 'inspect']:
             self.assertEqual((workspace / 'build/appimage-evidence/build-packages.tsv').read_text(),
                              'fixture-package\t1.2.3\n')
             calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
+            # Independent images build concurrently, so only the set is fixed.
             targets = [call[call.index('--target') + 1] for call in calls if call[0] == 'build' and '--target' in call]
-            self.assertEqual(targets, ['build', 'smoke-ubuntu24', 'smoke-ubuntu26', 'smoke-debian13'])
+            self.assertEqual(sorted(targets), sorted(['build', 'smoke-ubuntu24', 'smoke-ubuntu26', 'smoke-debian13']))
             graphical = next(call for call in calls if 'classic-appimage-graphical' in call and call[0] == 'build')
             self.assertIn('tools/ci/appimage/graphical.Dockerfile', graphical)
             self.assertEqual(graphical[-1], 'build/appimage-context')
@@ -273,6 +276,20 @@ elif sys.argv[1:3] == ['image', 'inspect']:
                 self.assertNotIn('candidate-source', ' '.join(call))
             self.assertEqual(calls[-1], ['run', '--rm', '--network', 'none',
                                         'classic-appimage-build', 'cat', '/build-packages.tsv'])
+
+            # One failed concurrent image build fails the step before any
+            # image inventory or package capture.
+            shutil.rmtree(workspace / 'build')
+            (workspace / 'docker-calls.jsonl').unlink()
+            failed = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                cwd=workspace, capture_output=True, text=True,
+                env=dict(os.environ, CLASSIC_LINUX_IMAGE="ghcr.io/atrinik/classic-build:1.16.0@sha256:" + "a" * 64,
+                         GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace), RELEASE_REVISION=revision,
+                         FAIL_TARGET='smoke-ubuntu26',
+                         PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+            self.assertNotEqual(failed.returncode, 0)
+            failed_calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
+            self.assertFalse(any(call[0] in ('run', 'image') for call in failed_calls))
 
     def test_probe_capture_rejects_failures_and_nonregular_host_outputs(self) -> None:
         job = self.job()

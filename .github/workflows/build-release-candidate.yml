@@ -418,19 +418,30 @@ jobs:
             --compiler-image "${CLASSIC_LINUX_IMAGE}" "${compiler_arguments[@]}" \
             > build/appimage-evidence/prepare.log 2>&1
           cp build/appimage-context/packaging.lock.json build/appimage-evidence/
+          # The builder, three clean runtimes and the graphical runtime are
+          # independent images; build them concurrently and fail on any error.
+          image_jobs=()
           docker build --platform linux/amd64 --target build --tag classic-appimage-build \
             --build-arg "ATRINIK_COMPILER_IMAGE=${CLASSIC_LINUX_IMAGE}" \
             --file build/appimage-context/Dockerfile build/appimage-context \
-            > build/appimage-evidence/image-build.log 2>&1
+            > build/appimage-evidence/image-build.log 2>&1 &
+          image_jobs+=("$!")
           for runtime in ubuntu24 ubuntu26 debian13; do
             docker build --platform linux/amd64 --target "smoke-${runtime}" \
               --tag "classic-appimage-${runtime}" \
               --file build/appimage-context/Dockerfile build/appimage-context \
-              > "build/appimage-evidence/image-${runtime}.log" 2>&1
+              > "build/appimage-evidence/image-${runtime}.log" 2>&1 &
+            image_jobs+=("$!")
           done
           docker build --platform linux/amd64 --tag classic-appimage-graphical \
             --file tools/ci/appimage/graphical.Dockerfile build/appimage-context \
-            > build/appimage-evidence/image-graphical.log 2>&1
+            > build/appimage-evidence/image-graphical.log 2>&1 &
+          image_jobs+=("$!")
+          image_failed=0
+          for job in "${image_jobs[@]}"; do
+            wait "${job}" || image_failed=1
+          done
+          test "${image_failed}" -eq 0
           docker image inspect classic-appimage-build classic-appimage-ubuntu24 \
             classic-appimage-ubuntu26 classic-appimage-debian13 classic-appimage-graphical \
             --format '{{.Id}}' > build/appimage-evidence/images.txt
