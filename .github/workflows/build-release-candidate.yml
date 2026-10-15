@@ -354,6 +354,85 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  appimage-prebuilt:
+    name: Verify reusable AppImage images
+    env:
+      CLASSIC_LINUX_IMAGE: ${{ needs.metadata.outputs.compiler_image }}
+    # Holds a read-only token only to verify main-branch provenance of
+    # prebuilt images for this exact prepared context. No candidate code runs
+    # here, and any failure only makes the AppImage job build locally.
+    needs: [metadata]
+    if: needs.metadata.outputs.artifact_schema == '3'
+    continue-on-error: true
+    permissions:
+      attestations: read
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      context_key: ${{ steps.verify.outputs.context_key }}
+      images: ${{ steps.verify.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            tools/ci/appimage
+            tools/release
+      - name: Check out candidate source as trusted-resolver input only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.commit }}
+          path: candidate-source
+          persist-credentials: false
+          fetch-depth: 0
+      - id: verify
+        name: Verify prebuilt images for the exact prepared context
+        env:
+          RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
+          APPIMAGE_IMAGE_REPOSITORY: ghcr.io/atrinik/classic-appimage
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build/appimage-prebuilt
+          source_lock_path=$(mktemp "${RUNNER_TEMP}/classic-source-packaging-lock.XXXXXX")
+          trap 'rm -f "${source_lock_path}"' EXIT
+          python3 tools/release/resolve_compiler_image.py \
+            --source-root "${GITHUB_WORKSPACE}/candidate-source" --revision "${RELEASE_REVISION}" \
+            --current-image "${CLASSIC_LINUX_IMAGE}" --source-packaging-lock-output "${source_lock_path}" \
+            > build/appimage-prebuilt/compiler-image.txt
+          compiler_arguments=()
+          if test -s "${source_lock_path}"; then
+            compiler_arguments=(--source-packaging-lock "${source_lock_path}")
+          fi
+          python3 tools/ci/appimage/prepare.py --output build/appimage-context \
+            --compiler-image "${CLASSIC_LINUX_IMAGE}" "${compiler_arguments[@]}" \
+            > build/appimage-prebuilt/prepare.log 2>&1
+          context_key=$(python3 tools/ci/appimage/context_key.py --context build/appimage-context \
+            --graphical-dockerfile tools/ci/appimage/graphical.Dockerfile)
+          images='{}'
+          for target in build smoke-ubuntu24 smoke-ubuntu26 smoke-debian13 graphical; do
+            reference="${APPIMAGE_IMAGE_REPOSITORY}:${target}-${context_key}"
+            if docker pull --platform linux/amd64 "${reference}" >&2 &&
+                digest_reference=$(docker image inspect --format '{{join .RepoDigests "\n"}}' "${reference}" \
+                  | grep -E "^${APPIMAGE_IMAGE_REPOSITORY}@sha256:[0-9a-f]{64}$" | head -n 1) &&
+                gh attestation verify "oci://${digest_reference}" --repo atrinik/classic \
+                  --signer-workflow atrinik/classic/.github/workflows/appimage-images.yml \
+                  --source-ref refs/heads/main >&2 &&
+                recorded=$(python3 tools/ci/appimage/prebuilt_images.py record \
+                  --repository "${APPIMAGE_IMAGE_REPOSITORY}" --target "${target}" \
+                  --images "${images}" --reference "${digest_reference}"); then
+              images="${recorded}"
+              echo "verified ${target}: ${digest_reference}"
+            else
+              echo "no verified prebuilt image for ${target}; the release builds it locally"
+            fi
+          done
+          {
+            echo "context_key=${context_key}"
+            echo "images=${images}"
+          } >> "${GITHUB_OUTPUT}"
+
   client-appimage:
     name: Build and smoke Ubuntu-baseline AppImage
     env:
@@ -363,7 +442,7 @@ jobs:
     # candidate scripts and payloads execute only in offline, unprivileged
     # containers with explicit environment allowlists and bounded mounts.
     # No runner home, socket, service token, or cache enters those containers.
-    needs: [metadata, dependencies, gpu-shaders]
+    needs: [metadata, dependencies, gpu-shaders, appimage-prebuilt]
     if: needs.metadata.outputs.artifact_schema == '3'
     permissions:
       contents: read
@@ -402,6 +481,11 @@ jobs:
       - name: Prepare pinned Ubuntu builder and clean runtime images
         env:
           RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
+          APPIMAGE_IMAGE_REPOSITORY: ghcr.io/atrinik/classic-appimage
+          # Content digests whose main-branch provenance the token-holding
+          # verifier job already checked for exactly this prepared context.
+          PREBUILT_CONTEXT_KEY: ${{ needs.appimage-prebuilt.outputs.context_key }}
+          PREBUILT_IMAGES: ${{ needs.appimage-prebuilt.outputs.images }}
         run: |
           mkdir -p build/appimage-evidence build/appimage-packages build/discord-config
           source_lock_path=$(mktemp "${RUNNER_TEMP}/classic-source-packaging-lock.XXXXXX")
@@ -418,25 +502,57 @@ jobs:
             --compiler-image "${CLASSIC_LINUX_IMAGE}" "${compiler_arguments[@]}" \
             > build/appimage-evidence/prepare.log 2>&1
           cp build/appimage-context/packaging.lock.json build/appimage-evidence/
-          # The builder, three clean runtimes and the graphical runtime are
-          # independent images; build them concurrently and fail on any error.
+          # Reuse the main-branch prebuilt image for this exact prepared context
+          # only after its provenance verifies; build any other target locally.
+          # The builder, three clean runtimes and graphical runtime are
+          # independent, so local builds run concurrently and any failure fails.
+          python3 tools/ci/appimage/context_key.py --context build/appimage-context \
+            --graphical-dockerfile tools/ci/appimage/graphical.Dockerfile \
+            > build/appimage-evidence/context-key.txt
+          context_key=$(cat build/appimage-evidence/context-key.txt)
+          prebuilt_image() {
+            local target="$1" local_tag="$2" digest_reference
+            test -n "${PREBUILT_CONTEXT_KEY}" && test "${PREBUILT_CONTEXT_KEY}" = "${context_key}" || return 1
+            digest_reference=$(python3 tools/ci/appimage/prebuilt_images.py select \
+              --repository "${APPIMAGE_IMAGE_REPOSITORY}" --target "${target}" \
+              --images "${PREBUILT_IMAGES}") || return 1
+            docker pull --platform linux/amd64 "${digest_reference}" >&2 || return 1
+            docker image inspect --format '{{join .RepoDigests "\n"}}' "${digest_reference}" \
+              | grep -Fqx "${digest_reference}" || return 1
+            docker tag "${digest_reference}" "${local_tag}" >&2 || return 1
+            echo "${digest_reference}"
+          }
+          build_image() {
+            local target="$1" local_tag="$2"
+            if test "${target}" = graphical; then
+              docker build --platform linux/amd64 --tag "${local_tag}" \
+                --file tools/ci/appimage/graphical.Dockerfile build/appimage-context
+            elif test "${target}" = build; then
+              docker build --platform linux/amd64 --target build --tag "${local_tag}" \
+                --build-arg "ATRINIK_COMPILER_IMAGE=${CLASSIC_LINUX_IMAGE}" \
+                --file build/appimage-context/Dockerfile build/appimage-context
+            else
+              docker build --platform linux/amd64 --target "${target}" --tag "${local_tag}" \
+                --file build/appimage-context/Dockerfile build/appimage-context
+            fi
+          }
           image_jobs=()
-          docker build --platform linux/amd64 --target build --tag classic-appimage-build \
-            --build-arg "ATRINIK_COMPILER_IMAGE=${CLASSIC_LINUX_IMAGE}" \
-            --file build/appimage-context/Dockerfile build/appimage-context \
-            > build/appimage-evidence/image-build.log 2>&1 &
-          image_jobs+=("$!")
-          for runtime in ubuntu24 ubuntu26 debian13; do
-            docker build --platform linux/amd64 --target "smoke-${runtime}" \
-              --tag "classic-appimage-${runtime}" \
-              --file build/appimage-context/Dockerfile build/appimage-context \
-              > "build/appimage-evidence/image-${runtime}.log" 2>&1 &
+          : > build/appimage-evidence/image-sources.txt
+          for entry in build:classic-appimage-build:image-build \
+              smoke-ubuntu24:classic-appimage-ubuntu24:image-ubuntu24 \
+              smoke-ubuntu26:classic-appimage-ubuntu26:image-ubuntu26 \
+              smoke-debian13:classic-appimage-debian13:image-debian13 \
+              graphical:classic-appimage-graphical:image-graphical; do
+            IFS=: read -r target local_tag log_name <<<"${entry}"
+            if digest_reference=$(prebuilt_image "${target}" "${local_tag}" \
+                2>> "build/appimage-evidence/${log_name}-prebuilt.log"); then
+              echo "${target} prebuilt ${digest_reference}" >> build/appimage-evidence/image-sources.txt
+              continue
+            fi
+            echo "${target} built" >> build/appimage-evidence/image-sources.txt
+            build_image "${target}" "${local_tag}" > "build/appimage-evidence/${log_name}.log" 2>&1 &
             image_jobs+=("$!")
           done
-          docker build --platform linux/amd64 --tag classic-appimage-graphical \
-            --file tools/ci/appimage/graphical.Dockerfile build/appimage-context \
-            > build/appimage-evidence/image-graphical.log 2>&1 &
-          image_jobs+=("$!")
           image_failed=0
           for job in "${image_jobs[@]}"; do
             wait "${job}" || image_failed=1
