@@ -413,30 +413,14 @@ void server_shutdown(void) {
  */
 static void dequeue_path_requests(void) {
 #ifdef LEFTOVER_CPU_FOR_PATHFINDING
-    static struct timeval new_time;
-    long leftover_sec, leftover_usec;
     object *wp;
 
-    while ((wp = path_get_next_request())) {
+    /* Always serve one bounded request, then spend only this tick's leftover
+     * time: stop once fewer than 10 ms remain, including after an overrun, so
+     * one tick can never drain the whole request queue. */
+    while ((wp = path_get_next_request()) != NULL) {
         waypoint_compute_path(wp);
-
-        (void)GETTIMEOFDAY(&new_time);
-
-        leftover_sec = last_time.tv_sec - new_time.tv_sec;
-        leftover_usec = max_time - (new_time.tv_usec - last_time.tv_usec);
-
-        /* This is very ugly, but probably the fastest for our use: */
-        while (leftover_usec < 0) {
-            leftover_usec += 1000000;
-            leftover_sec -= 1;
-        }
-        while (leftover_usec > 1000000) {
-            leftover_usec -= 1000000;
-            leftover_sec += 1;
-        }
-
-        /* Try to save about 10 ms */
-        if (leftover_sec < 1 && leftover_usec < 10000) {
+        if (sleep_delta_timeout_us() < UINT64_C(10000)) {
             break;
         }
     }

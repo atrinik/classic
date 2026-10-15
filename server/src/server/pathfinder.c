@@ -133,6 +133,13 @@ static double path_greed = 1.0;
 
 /** Default per-search generated-state budget; zero means unlimited. */
 static size_t path_max_generated = 10000U;
+
+/**
+ * Default number of non-resident tiled maps one search may load. Expanding a
+ * large search into unloaded overworld tiles otherwise performs synchronous
+ * disk loads on the game thread for every crossing.
+ */
+#define PATH_DEFAULT_MAX_MAP_LOADS 2U
 TOOLKIT_API(IMPORTS(clioptions), DEPENDS(logger));
 
 /**
@@ -714,7 +721,79 @@ typedef struct server_path_adapter {
     path_visualizer_t **visualizer;
     uint32_t visualizer_id;
     bool out_of_memory;
+    /** Remaining tiled-map loads; SIZE_MAX means unlimited. */
+    size_t map_loads_remaining;
+    /** Tiled-map loads attempted by this search. */
+    size_t map_loads;
 } server_path_adapter_t;
+
+/**
+ * Resolve coordinates like get_map_from_coord(), following only tiled maps that
+ * are already in memory. A non-resident neighbour is loaded only while the
+ * search's map-load budget remains; otherwise the location is unavailable.
+ */
+static mapstruct *
+path_map_from_coord(server_path_adapter_t *adapter, mapstruct *m, int *x, int *y) {
+    while (m != NULL) {
+        if (*x >= 0 && *x < MAP_WIDTH(m) && *y >= 0 && *y < MAP_HEIGHT(m)) {
+            return m;
+        }
+
+        int tile;
+        if (*x < 0) {
+            tile = *y < 0 ? TILED_NORTHWEST : (*y >= MAP_HEIGHT(m) ? TILED_SOUTHWEST : TILED_WEST);
+        } else if (*x >= MAP_WIDTH(m)) {
+            tile = *y < 0 ? TILED_NORTHEAST : (*y >= MAP_HEIGHT(m) ? TILED_SOUTHEAST : TILED_EAST);
+        } else {
+            tile = *y < 0 ? TILED_NORTH : TILED_SOUTH;
+        }
+
+        mapstruct *next = m->tile_map[tile];
+        if (next == NULL || next->in_memory != MAP_IN_MEMORY) {
+            if (adapter->map_loads_remaining == 0U) {
+                return NULL;
+            }
+            if (adapter->map_loads_remaining != SIZE_MAX) {
+                adapter->map_loads_remaining--;
+            }
+            adapter->map_loads++;
+            return get_map_from_coord(m, x, y);
+        }
+
+        switch (tile) {
+            case TILED_NORTHWEST:
+                *x += MAP_WIDTH(next);
+                *y += MAP_HEIGHT(next);
+                break;
+            case TILED_SOUTHWEST:
+                *x += MAP_WIDTH(next);
+                *y -= MAP_HEIGHT(m);
+                break;
+            case TILED_WEST:
+                *x += MAP_WIDTH(next);
+                break;
+            case TILED_NORTHEAST:
+                *x -= MAP_WIDTH(m);
+                *y += MAP_HEIGHT(next);
+                break;
+            case TILED_SOUTHEAST:
+                *x -= MAP_WIDTH(m);
+                *y -= MAP_HEIGHT(m);
+                break;
+            case TILED_EAST:
+                *x -= MAP_WIDTH(m);
+                break;
+            case TILED_NORTH:
+                *y += MAP_HEIGHT(next);
+                break;
+            default:
+                *y -= MAP_HEIGHT(m);
+                break;
+        }
+        m = next;
+    }
+    return NULL;
+}
 
 static uint64_t path_saturating_add(uint64_t left, uint64_t right) {
     return UINT64_MAX - left < right ? UINT64_MAX : left + right;
@@ -881,7 +960,7 @@ static bool path_core_goal(void *context, atrinik_pf_state_id id) {
         for (object *part = adapter->op; part != NULL; part = part->more) {
             int x = state->key.x + part->arch->clone.x;
             int y = state->key.y + part->arch->clone.y;
-            mapstruct *map = get_map_from_coord(state->key.map, &x, &y);
+            mapstruct *map = path_map_from_coord(adapter, state->key.map, &x, &y);
             rv_vector rv;
             if (map != NULL &&
                 get_rangevector_from_mapcoords(map,
@@ -1005,7 +1084,7 @@ static bool path_core_neighbors(void *context,
         int x = origin_x + freearr_x[direction];
         int y = origin_y + freearr_y[direction];
         bool diagonal = x != origin_x && y != origin_y;
-        mapstruct *map = get_map_from_coord(origin_map, &x, &y);
+        mapstruct *map = path_map_from_coord(adapter, origin_map, &x, &y);
         if (map == NULL || path_tile_blocked(adapter->op, map, x, y) != 0) {
             continue;
         }
@@ -1070,6 +1149,7 @@ void path_search_options_init(path_search_options_t *options) {
     }
     memset(options, 0, sizeof(*options));
     options->max_generated = path_max_generated;
+    options->max_map_loads = PATH_DEFAULT_MAX_MAP_LOADS;
 }
 
 static bool path_result_build(path_result_t *result,
@@ -1145,6 +1225,7 @@ path_result_t path_search(object *op,
         .start_distance_x = start_distance.distance_x,
         .start_distance_y = start_distance.distance_y,
         .visualizer = visualizer,
+        .map_loads_remaining = options->max_map_loads == 0U ? SIZE_MAX : options->max_map_loads,
     };
     path_state_t *start = path_state_get(&server_adapter, map1, x, y, true, NULL);
     atrinik_pf_context *context = atrinik_pf_context_create();
@@ -1178,6 +1259,7 @@ path_result_t path_search(object *op,
     result.generated = core_result.metrics.generated;
     result.examined_transitions = core_result.metrics.examined_transitions;
     result.peak_frontier = core_result.metrics.peak_frontier;
+    result.map_loads = server_adapter.map_loads;
     result.total_cost = core_result.metrics.total_cost;
     if (!server_adapter.out_of_memory && core_result.steps != NULL &&
         !path_result_build(&result, &server_adapter, &core_result)) {

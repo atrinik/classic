@@ -83,6 +83,8 @@ typedef struct path_search_options {
     size_t max_generated;
     size_t max_transitions;
     size_t max_frontier;
+    /** Tiled maps a search may load from disk; resident maps are free. */
+    size_t max_map_loads;
     bool return_partial;
 } path_search_options_t;
 
@@ -94,6 +96,8 @@ typedef struct path_result {
     size_t generated;
     size_t examined_transitions;
     size_t peak_frontier;
+    /** Non-resident tiled maps this search attempted to load. */
+    size_t map_loads;
     uint64_t total_cost;
 } path_result_t;
 

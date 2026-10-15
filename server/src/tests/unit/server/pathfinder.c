@@ -226,6 +226,56 @@ START_TEST(test_tiled_border_uses_alternate_open_crossing) {
 }
 END_TEST
 
+START_TEST(test_resident_tiled_crossings_spend_no_map_load_budget) {
+    mapstruct *source;
+    object *pl;
+    check_setup_env_pl(&source, &pl);
+    mapstruct *destination = get_empty_map(24, 24);
+    source->tile_map[TILED_EAST] = destination;
+    destination->tile_map[TILED_WEST] = source;
+
+    path_search_options_t options;
+    path_search_options_init(&options);
+    ck_assert_uint_eq(options.max_map_loads, 2);
+    options.max_map_loads = 1;
+    path_result_t result = path_search(pl, source, 2, 2, destination, 8, 8, &options, NULL);
+    ck_assert_int_eq(result.status, PATH_STATUS_FOUND);
+    ck_assert_uint_eq(result.map_loads, 0);
+    path_result_free(&result);
+}
+END_TEST
+
+START_TEST(test_non_resident_tiled_maps_respect_map_load_budget) {
+    mapstruct *source;
+    object *pl;
+    check_setup_env_pl(&source, &pl);
+    mapstruct *unloaded = get_empty_map(24, 24);
+    source->tile_map[TILED_EAST] = unloaded;
+    unloaded->tile_map[TILED_WEST] = source;
+    unloaded->in_memory = MAP_SWAPPED;
+
+    /* The goal lies on the non-resident eastern neighbour. Its load fails here
+     * (no tile path), so an unlimited search retries the synchronous load from
+     * every border cell; a bounded search attempts it exactly once. */
+    path_search_options_t options;
+    path_search_options_init(&options);
+    options.max_map_loads = 0;
+    path_result_t unlimited = path_search(pl, source, 2, 12, unloaded, 4, 12, &options, NULL);
+    ck_assert_int_ne(unlimited.status, PATH_STATUS_FOUND);
+    ck_assert_uint_gt(unlimited.map_loads, 1);
+
+    options.max_map_loads = 1;
+    path_result_t bounded = path_search(pl, source, 2, 12, unloaded, 4, 12, &options, NULL);
+    ck_assert_int_ne(bounded.status, PATH_STATUS_FOUND);
+    ck_assert_uint_eq(bounded.map_loads, 1);
+    ck_assert_uint_le(bounded.generated, unlimited.generated);
+
+    path_result_free(&unlimited);
+    path_result_free(&bounded);
+    unloaded->in_memory = MAP_IN_MEMORY;
+}
+END_TEST
+
 START_TEST(test_results_remain_isolated_across_searches) {
     mapstruct *map;
     object *pl;
@@ -301,6 +351,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_waypoint_abandons_stuck_cross_map_best_effort_target);
     tcase_add_test(tc_core, test_no_path_is_distinct_from_budget_exhaustion);
     tcase_add_test(tc_core, test_tiled_border_uses_alternate_open_crossing);
+    tcase_add_test(tc_core, test_resident_tiled_crossings_spend_no_map_load_budget);
+    tcase_add_test(tc_core, test_non_resident_tiled_maps_respect_map_load_budget);
     tcase_add_test(tc_core, test_results_remain_isolated_across_searches);
     tcase_add_test(tc_core, test_weighted_terrain_is_avoided);
     tcase_add_test(tc_core, test_representative_barrier_search_stays_bounded);
