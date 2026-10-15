@@ -1152,6 +1152,28 @@ void path_search_options_init(path_search_options_t *options) {
     options->max_map_loads = PATH_DEFAULT_MAX_MAP_LOADS;
 }
 
+/**
+ * Click-to-move generated-state cap: four times the client's visible area.
+ * Every click target lies inside that view, so an exhaustive search for an
+ * unreachable click must not explore the configured NPC-sized budget.
+ */
+#define PATH_CLICK_MAX_GENERATED ((size_t)MAP_CLIENT_X * (size_t)MAP_CLIENT_Y * 4U)
+
+/**
+ * Initialize options for a player's synchronous click-to-move search. The
+ * configured budget still applies when it is smaller.
+ */
+void path_search_options_init_click(path_search_options_t *options) {
+    if (options == NULL) {
+        return;
+    }
+    path_search_options_init(options);
+    if (options->max_generated == 0U || options->max_generated > PATH_CLICK_MAX_GENERATED) {
+        options->max_generated = PATH_CLICK_MAX_GENERATED;
+    }
+    options->max_map_loads = 1U;
+}
+
 static bool path_result_build(path_result_t *result,
                               server_path_adapter_t *adapter,
                               const atrinik_pf_result *core_result) {

@@ -166,6 +166,7 @@ extern path_node_t *path_compress(path_node_t *path);
 extern void path_visualize(path_visualization_t **visualization, path_visualizer_t **visualizer);
 
 extern void path_search_options_init(path_search_options_t *options);
+extern void path_search_options_init_click(path_search_options_t *options);
 
 /**
  * Check a tile using the same collision policy as path-search neighbors.
