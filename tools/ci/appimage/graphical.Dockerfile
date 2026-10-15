@@ -3,8 +3,9 @@
 # Build with the hash-verified context produced by prepare.py. This independent
 # host image deliberately does not copy the application dependency prefix.
 FROM ubuntu:24.04@sha256:f610ab94648195aa356059f5b41d6085c9d4d903c072430cdd1af7bdb646106b
-# Retry transient snapshot mirror failures (HTTP 5xx) with backoff.
-RUN printf '%s\n' 'Acquire::Retries "8";' 'Acquire::Retries::Delay::Maximum "60";' > /etc/apt/apt.conf.d/80-atrinik-retries
+# Retry transient snapshot mirror failures (HTTP 5xx) with backoff, and fail
+# stalled connections after 60 seconds so they are retried instead of hanging.
+RUN printf '%s\n' 'Acquire::Retries "8";' 'Acquire::Retries::Delay::Maximum "60";' 'Acquire::http::Timeout "60";' 'Acquire::https::Timeout "60";' > /etc/apt/apt.conf.d/80-atrinik-retries
 COPY tools/ca-certificates.deb /tmp/ca-certificates.deb
 RUN echo "641de77d8f142cfd62a1a6f964ba67b20754d3337c480efb529d086075a06c9a  /tmp/ca-certificates.deb" | sha256sum -c - && \
     dpkg-deb -x /tmp/ca-certificates.deb /tmp/ca-bootstrap && \
