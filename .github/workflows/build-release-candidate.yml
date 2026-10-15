@@ -400,9 +400,6 @@ jobs:
           name: discord-application-id-${{ inputs.tag }}
           path: build/discord-config
       - name: Prepare pinned Ubuntu builder and clean runtime images
-        # A stalled snapshot mirror must fail this release attempt quickly
-        # instead of holding the serialized release queue for the job limit.
-        timeout-minutes: 20
         env:
           RELEASE_REVISION: ${{ needs.metadata.outputs.commit }}
         run: |
