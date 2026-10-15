@@ -1700,7 +1700,10 @@ class WorkflowContractTests(unittest.TestCase):
         ]
         appimage = candidate[candidate.index("  client-appimage:"):candidate.index("  client-windows:")]
         finalizer = candidate[candidate.index("  candidate:"):]
-        self.assertEqual(candidate.count("fetch-depth: 0"), 3)
+        verifier = candidate[candidate.index("  appimage-prebuilt:"):candidate.index("  candidate:")]
+        self.assertEqual(candidate.count("fetch-depth: 0"), 4)
+        self.assertEqual(verifier.count("fetch-depth: 0"), 1)
+        self.assertIn("path: candidate-source\n          persist-credentials: false\n          fetch-depth: 0", verifier)
         self.assertEqual(metadata_job.count("fetch-depth: 0"), 1)
         self.assertEqual(appimage.count("fetch-depth: 0"), 1)
         self.assertIn("path: candidate-source\n          persist-credentials: false\n          fetch-depth: 0", appimage)

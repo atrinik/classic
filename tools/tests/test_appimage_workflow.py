@@ -77,9 +77,15 @@ class AppImageWorkflowTests(unittest.TestCase):
     def test_schema_specific_jobs_fail_closed(self) -> None:
         workflow = self.workflow()
         job = self.job()
-        self.assertIn("if: needs.metadata.outputs.artifact_schema == '3'", job)
         self.assertIn('needs: [metadata, dependencies, gpu-shaders, appimage-prebuilt]', job)
-        verifier = workflow.split('  appimage-prebuilt:\n', 1)[1].split('\n  client-appimage:\n', 1)[0]
+        condition = job.split('    if: >-\n', 1)[1].split('\n    permissions:', 1)[0]
+        for required in ("!cancelled()", "needs.metadata.result == 'success'",
+                         "needs.dependencies.result == 'success'", "needs.gpu-shaders.result == 'success'",
+                         "needs.metadata.outputs.artifact_schema == '3'"):
+            self.assertIn(required, condition)
+        # A failed advisory verifier must never skip the AppImage build.
+        self.assertNotIn('appimage-prebuilt.result', condition)
+        verifier = workflow.split('  appimage-prebuilt:\n', 1)[1].split('\n  candidate:\n', 1)[0]
         self.assertIn("if: needs.metadata.outputs.artifact_schema == '3'", verifier)
         self.assertIn('continue-on-error: true', verifier)
         finalizer = workflow.split('  candidate:\n', 1)[1]
@@ -380,11 +386,21 @@ sys.exit(0 if os.environ.get('GH_VERIFY_OK') else 1)
             self.assertIn(tool, publisher)
         self.assertIn('actions/attest@', publisher)
         self.assertIn('push-to-registry: true', publisher)
+        # Existing tags are re-checked so a push whose attestation failed is
+        # attested on a rerun instead of being skipped forever.
+        existing = publisher.split('      - id: existing\n', 1)[1].split('      - uses:', 1)[0]
+        self.assertIn('gh attestation verify', existing)
+        self.assertIn('attested=false', existing)
+        attest = publisher.split('Attest the published image', 1)[1].split('      - name:', 1)[0]
+        self.assertIn("if: steps.existing.outputs.attested != 'true'", attest)
+        self.assertIn('steps.image.outputs.digest || steps.existing.outputs.digest', attest)
+        build = publisher.split('Build and push the image', 1)[1].split('      - name:', 1)[0]
+        self.assertIn("if: steps.existing.outputs.exists == 'false'", build)
         self.assertIn('atrinik/classic/.github/workflows/appimage-images.yml', release)
 
     def test_prebuilt_verifier_records_only_attested_digests(self) -> None:
         workflow = self.workflow()
-        verifier = workflow.split('  appimage-prebuilt:\n', 1)[1].split('\n  client-appimage:\n', 1)[0]
+        verifier = workflow.split('  appimage-prebuilt:\n', 1)[1].split('\n  candidate:\n', 1)[0]
         self.assertIn('attestations: read', verifier)
         self.assertNotIn('packages: write', verifier)
         script = textwrap.dedent(verifier.split('        run: |\n', 1)[1])

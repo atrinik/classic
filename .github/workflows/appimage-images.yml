@@ -79,14 +79,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - id: existing
-        name: Skip an already published image for this context
+        name: Reuse an already published image for this context
         env:
           REFERENCE: ${{ steps.context.outputs.reference }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if docker buildx imagetools inspect "${REFERENCE}" > /dev/null 2>&1; then
+          if digest=$(docker buildx imagetools inspect "${REFERENCE}" --format '{{.Manifest.Digest}}' 2> /dev/null) &&
+              [[ ${digest} =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "exists=true" >> "${GITHUB_OUTPUT}"
+            echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+            # A run that pushed but failed to attest leaves an unattested tag;
+            # attest that exact digest instead of skipping it forever.
+            if gh attestation verify "oci://${APPIMAGE_IMAGE_REPOSITORY}@${digest}" --repo atrinik/classic \
+                --signer-workflow atrinik/classic/.github/workflows/appimage-images.yml \
+                --source-ref refs/heads/main > /dev/null 2>&1; then
+              echo "attested=true" >> "${GITHUB_OUTPUT}"
+            else
+              echo "attested=false" >> "${GITHUB_OUTPUT}"
+            fi
           else
             echo "exists=false" >> "${GITHUB_OUTPUT}"
+            echo "attested=false" >> "${GITHUB_OUTPUT}"
           fi
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         if: steps.existing.outputs.exists == 'false'
@@ -105,26 +118,25 @@ jobs:
           sbom: false
           push: true
           tags: ${{ steps.context.outputs.reference }}
-      - name: Attest the newly published image
-        if: steps.existing.outputs.exists == 'false'
+      - name: Attest the published image
+        if: steps.existing.outputs.attested != 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ env.APPIMAGE_IMAGE_REPOSITORY }}
-          subject-digest: ${{ steps.image.outputs.digest }}
+          subject-digest: ${{ steps.image.outputs.digest || steps.existing.outputs.digest }}
           push-to-registry: true
       - name: Record the published image
         env:
           REFERENCE: ${{ steps.context.outputs.reference }}
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ steps.image.outputs.digest || steps.existing.outputs.digest }}
           EXISTS: ${{ steps.existing.outputs.exists }}
         run: |
           {
             echo "### ${MATRIX_TARGET} AppImage image"
             echo "Reference: ${REFERENCE}"
+            echo "Digest: ${DIGEST}"
             if test "${EXISTS}" = true; then
               echo 'Already published for this exact context.'
-            else
-              echo "Digest: ${DIGEST}"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
     env:
