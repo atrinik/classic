@@ -2693,7 +2693,7 @@ void socket_command_move_path(socket_struct *ns,
     /* Click-to-move accepts exact routes only. A budget-limited partial route
      * must not be followed and then extended blindly to the requested tile. */
     path_search_options_t options;
-    path_search_options_init(&options);
+    path_search_options_init_click(&options);
     path_result_t result =
         path_search(pl->ob, pl->ob->map, pl->ob->x, pl->ob->y, m, xt, yt, &options, NULL);
     node = path_compress(result.path);

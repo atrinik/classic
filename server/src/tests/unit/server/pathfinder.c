@@ -276,6 +276,39 @@ START_TEST(test_non_resident_tiled_maps_respect_map_load_budget) {
 }
 END_TEST
 
+START_TEST(test_click_to_move_search_is_view_bounded) {
+    path_search_options_t click;
+    path_search_options_init_click(&click);
+    ck_assert_uint_eq(click.max_generated, (size_t)MAP_CLIENT_X * MAP_CLIENT_Y * 4U);
+    ck_assert_uint_eq(click.max_map_loads, 1);
+
+    char *errmsg = NULL;
+    ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 8", &errmsg),
+                  "%s", errmsg != NULL ? errmsg : "");
+    path_search_options_init_click(&click);
+    ck_assert_uint_eq(click.max_generated, 8);
+    ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 0", &errmsg),
+                  "%s", errmsg != NULL ? errmsg : "");
+    path_search_options_init_click(&click);
+    ck_assert_uint_eq(click.max_generated, (size_t)MAP_CLIENT_X * MAP_CLIENT_Y * 4U);
+    ck_assert_msg(clioptions_load_str("pathfinder_max_nodes = 10000", &errmsg),
+                  "%s", errmsg != NULL ? errmsg : "");
+
+    /* An unreachable click target in open terrain stops at the cap. */
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    for (int direction = 1; direction <= SIZEOFFREE1; direction++) {
+        SET_MAP_FLAGS(map, 20 + freearr_x[direction], 20 + freearr_y[direction], P_NO_PASS);
+    }
+    path_search_options_init_click(&click);
+    path_result_t result = path_search(pl, map, 1, 1, map, 20, 20, &click, NULL);
+    ck_assert_int_ne(result.status, PATH_STATUS_FOUND);
+    ck_assert_uint_le(result.generated, click.max_generated);
+    path_result_free(&result);
+}
+END_TEST
+
 START_TEST(test_results_remain_isolated_across_searches) {
     mapstruct *map;
     object *pl;
@@ -353,6 +386,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_tiled_border_uses_alternate_open_crossing);
     tcase_add_test(tc_core, test_resident_tiled_crossings_spend_no_map_load_budget);
     tcase_add_test(tc_core, test_non_resident_tiled_maps_respect_map_load_budget);
+    tcase_add_test(tc_core, test_click_to_move_search_is_view_bounded);
     tcase_add_test(tc_core, test_results_remain_isolated_across_searches);
     tcase_add_test(tc_core, test_weighted_terrain_is_avoided);
     tcase_add_test(tc_core, test_representative_barrier_search_stays_bounded);
