@@ -9,13 +9,41 @@ with the existing linked-depth MAP2 records.
 
 ## Geometry and policies
 
-`src/include/spatial.h` and `src/server/spatial.c` own loaded-only resolution
+`src/include/spatial.h` and `src/server/spatial.c` own coordinate resolution
 and integer supercover traversal. One tile and one linked story have equal
 geometric size. Coordinates resolve through resident reciprocal tiled links
 and their integer transforms. The physical stack admits thirteen levels;
 MAP2 advertises relative depths -6 through +6. Viewer clipping is not a bound
 on physical lighting or stable cover analysis. Missing, ambiguous, cyclic,
-over-bound or unavailable topology fails closed. Resolution never loads a map.
+over-bound or unavailable topology fails closed.
+
+Resolution itself does not load maps, so geometry never changes inside LOS,
+lighting or MAP2 publication. Before each player view update,
+`spatial_autoload_view()` walks tiled links from the viewer's map through
+every map overlapping the exact MAP2 rectangle and loads each one's vertical
+stack: twelve levels up, for sky light, and six down. A neighbor's extent is
+known only once it is resident; one that misses the rectangle in either axis
+is not walked. Every walked map covers at least one view cell, so
+`SPATIAL_VIEW_AUTOLOAD_MAPS` (the client view area) bounds the walk without
+dropping visible maps. All views share `SPATIAL_TICK_AUTOLOAD_BUDGET`
+synchronous loads per server tick, each viewer's own column first, so the
+remainder loads over later ticks; once the maps are resident the walk costs
+only link checks. Views that need loads queue first in, first out through a
+per-player position: once any view waited, only the longest waiter loads on
+the next tick, and a served view that still needs more rejoins at the back,
+so a viewer drawn early in every tick cannot starve the others. A seam whose load fails
+waits `SPATIAL_AUTOLOAD_RETRY_TICKS` before it is retried, so it cannot
+monopolize the budget or log on every update. Unauthored world neighbors
+load as dynamic copies of their originating map, as before.
+While enabled, coordinate resolution loads and links an unloaded tiled
+neighbor when the requested cell lies across that seam, as
+`get_map_from_tiled()` did for the pre-3D map view. This keeps the levels
+above a viewer resident, so a `sky_above linked` map receives sky light
+through them. Loading is bounded: only seams on the path toward the requested
+cell are followed, one resolution loads at most `SPATIAL_AUTOLOAD_BUDGET`
+maps, and no resolution loads while a resolution-triggered load is in
+progress, so a load cannot cascade through the world. Offset searches never
+load.
 
 The API runs on the server thread with borrowed map/object pointers and bounded
 temporary lookup storage. A retained cursor requires retained map lifetime.

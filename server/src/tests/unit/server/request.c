@@ -493,10 +493,14 @@ static bool map_cache_cell_has_roof(socket_struct *cs, int depth, int x, int y) 
     return false;
 }
 
-static bool map_cache_has_roof(socket_struct *cs, int depth) {
+/* Roofs retained over the viewer's own map; tiled neighbors loaded for the
+ * view may show their own buildings' roofs. */
+static bool map_cache_has_roof_on_map(socket_struct *cs, int depth, object *pl) {
     for (int x = 0; x < cs->mapx; x++) {
         for (int y = 0; y < cs->mapy; y++) {
-            if (map_cache_cell_has_roof(cs, depth, x, y)) {
+            int map_x = pl->x - cs->mapx_2 + x, map_y = pl->y - cs->mapy_2 + y;
+            if (map_x >= 0 && map_y >= 0 && map_x < MAP_WIDTH(pl->map) &&
+                map_y < MAP_HEIGHT(pl->map) && map_cache_cell_has_roof(cs, depth, x, y)) {
                 return true;
             }
         }
@@ -2475,6 +2479,40 @@ START_TEST(test_brynknot_east_seam_emits_valid_connected_map) {
 }
 END_TEST
 
+/* A ground level whose sky is linked through the map above it must receive
+ * daylight once a player views it: the view keeps that upper level resident,
+ * as the pre-3D map view's tiled-map loading did. Without it the Brynknot
+ * streets stayed black at noon outside lamp light. */
+START_TEST(test_view_loads_upper_level_for_linked_sky_light) {
+    unsigned long saved_todtick = todtick;
+    todtick = (todtick / HOURS_PER_DAY) * HOURS_PER_DAY + 12;
+
+    mapstruct *map = ready_map_name("/shattered_islands/world_1_69", NULL, 0);
+    ck_assert_ptr_nonnull(map);
+    ck_assert_int_eq(map->celestial_sky_above, CELESTIAL_SKY_LINKED);
+    ck_assert_ptr_eq(map->tile_map[TILED_UP], NULL);
+    ck_assert_int_lt(map_get_darkness(map, 20, 22, NULL), 100);
+
+    object *pl = player_get_dummy(NULL, NULL);
+    ck_assert_ptr_nonnull(pl);
+    object_remove(pl, 0);
+    pl->x = 12;
+    pl->y = 12;
+    pl = object_insert_map(pl, map, NULL, 0);
+    ck_assert_ptr_nonnull(pl);
+
+    for (size_t update = 0; update < 4 && map->tile_map[TILED_UP] == NULL; update++) {
+        socket_buffer_clear(CONTR(pl)->cs);
+        draw_client_map(pl);
+    }
+    ck_assert_ptr_nonnull(map->tile_map[TILED_UP]);
+    ck_assert_str_eq(map->tile_map[TILED_UP]->path, "/shattered_islands/world_1_69_1");
+    ck_assert_int_gt(map_get_darkness(map, 20, 22, NULL), 900);
+
+    todtick = saved_todtick;
+}
+END_TEST
+
 START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     mapstruct *map = ready_map_name("/shattered_islands/world_4_85", NULL, 0);
     ck_assert_ptr_nonnull(map);
@@ -2541,9 +2579,8 @@ START_TEST(test_incuna_unchanged_roof_level_remains_present) {
     MapCell *interior_roof = map_client_cache_cell(&cs->lastmap, 1, cs->mapx_2, cs->mapy_2, false);
     ck_assert_ptr_nonnull(interior_roof);
     ck_assert_uint_eq(interior_roof->cleared, 1);
-    /* Every authored Incuna roof cell belongs to this connected cutaway.
-     * Unloaded neighboring maps cannot contribute retained roof identities. */
-    ck_assert(!map_cache_has_roof(cs, 1));
+    /* Every authored Incuna roof cell belongs to this connected cutaway. */
+    ck_assert(!map_cache_has_roof_on_map(cs, 1, pl));
 
     request_move_player(&pl, map, 7, 6);
     socket_buffer_clear(cs);
@@ -3596,6 +3633,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_new_and_connected_map_updates_synchronize_world_clock);
     tcase_add_test(tc_core, test_brynknot_east_seam_emits_valid_connected_map);
     tcase_add_test(tc_core, test_incuna_unchanged_roof_level_remains_present);
+    tcase_add_test(tc_core, test_view_loads_upper_level_for_linked_sky_light);
     tcase_add_test(tc_core, test_local_player_remains_visible_without_disclosing_dark_actors);
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
     tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);

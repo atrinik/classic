@@ -16,11 +16,175 @@ typedef struct spatial_node {
 } spatial_node;
 
 static spatial_observer active_observer;
+static bool autoload_enabled;
+/* Loads remaining for the current view pass, shared by all views of a tick. */
+static unsigned *view_budget;
+/* The current view pass skipped a load it needed for lack of budget. */
+static bool view_wanted;
+static long view_budget_tick = -1;
+static unsigned tick_budget;
+/* First-in, first-out queue numbers for views waiting on loads. */
+static unsigned long wait_sequence, admitted_wait, oldest_wait;
+
+typedef struct view_map {
+    mapstruct *map;
+    int x, y;
+} view_map;
+static view_map view_maps[SPATIAL_VIEW_AUTOLOAD_MAPS];
+static struct {
+    const mapstruct *map;
+    unsigned long generation;
+} view_index[SPATIAL_VIEW_AUTOLOAD_MAPS * 2];
+static unsigned long view_generation;
+static bool view_active;
 
 spatial_observer spatial_observer_exchange(spatial_observer observer) {
     spatial_observer previous = active_observer;
     active_observer = observer;
     return previous;
+}
+
+bool spatial_autoload_exchange(bool enabled) {
+    bool previous = autoload_enabled;
+    autoload_enabled = enabled;
+    return previous;
+}
+
+/* Load and link one tiled neighbor on demand, as get_map_from_tiled() did for
+ * pre-3D map views. Loading stays disabled while the neighbor loads, so its
+ * lighting, objects and scripts see only resident maps and cannot chain into
+ * further loads. The caller's budget bounds the loads of a single resolution.
+ * Each attempt spends budget because a failed load costs the same disk work;
+ * a failed seam then waits before retrying so later seams make progress. */
+static void autoload(mapstruct *map, int direction, unsigned *budget) {
+    if (budget == NULL || !autoload_enabled || map->tile_path[direction] == NULL ||
+        map->tile_autoload_retry[direction] > pticks) {
+        return;
+    }
+    mapstruct *other = map->tile_map[direction];
+    if (other != NULL && other->in_memory == MAP_IN_MEMORY) {
+        return;
+    }
+    if (*budget == 0 || (view_budget != NULL && *view_budget == 0)) {
+        view_wanted = true;
+        return;
+    }
+    (*budget)--;
+    if (view_budget != NULL) {
+        (*view_budget)--;
+    }
+    autoload_enabled = false;
+    mapstruct *loaded = get_map_from_tiled(map, direction);
+    autoload_enabled = true;
+    map->tile_autoload_retry[direction] =
+        loaded == NULL ? pticks + SPATIAL_AUTOLOAD_RETRY_TICKS : 0;
+}
+
+/* Record a map overlapping the view once; false when already visited. */
+static bool view_map_add(mapstruct *map, int x, int y, size_t *count) {
+    size_t mask = arraysize(view_index) - 1;
+    size_t slot = ((uintptr_t)map >> 4) & mask;
+    while (view_index[slot].generation == view_generation) {
+        if (view_index[slot].map == map) {
+            return false;
+        }
+        slot = (slot + 1) & mask;
+    }
+    if (*count == SPATIAL_VIEW_AUTOLOAD_MAPS) {
+        return false;
+    }
+    view_index[slot].map = map;
+    view_index[slot].generation = view_generation;
+    view_maps[*count] = (view_map){.map = map, .x = x, .y = y};
+    (*count)++;
+    return true;
+}
+
+void spatial_autoload_view(mapstruct *origin, int min_x, int min_y, int max_x, int max_y,
+                           unsigned long *wait) {
+    if (view_active || origin == NULL || origin->in_memory != MAP_IN_MEMORY ||
+        wait == NULL || min_x > max_x || min_y > max_y) {
+        return;
+    }
+    if (view_budget_tick != pticks) {
+        view_budget_tick = pticks;
+        tick_budget = SPATIAL_TICK_AUTOLOAD_BUDGET;
+        admitted_wait = oldest_wait;
+        oldest_wait = 0;
+    }
+    /* Once a view had to wait, only the longest waiter may load, so a viewer
+     * drawn early in every tick cannot starve the ones drawn after it. */
+    bool admitted = admitted_wait == 0 || (*wait != 0 && *wait <= admitted_wait);
+    unsigned none = 0, before = tick_budget, budget = UINT_MAX;
+
+    /* Walk tiled links directly: this runs on every view update, so it must
+     * cost only link checks once everything is resident. Starting from the
+     * viewer's map, visit every map overlapping the view rectangle at its
+     * offset from the origin and load each one's vertical stack, the viewer's
+     * own column first, upward before downward. A neighbor's extent is known
+     * only once it is resident; one that misses the rectangle is not walked. */
+    static const int sx[TILED_UP] = {0, 1, 0, -1, 1, 1, -1, -1};
+    static const int sy[TILED_UP] = {-1, 0, 1, 0, -1, 1, 1, -1};
+    view_active = true;
+    view_generation++;
+    size_t count = 0;
+    (void)view_map_add(origin, 0, 0, &count);
+    unsigned *previous_budget = view_budget;
+    view_budget = admitted ? &tick_budget : &none;
+    view_wanted = false;
+    bool previous = spatial_autoload_exchange(true);
+    for (size_t i = 0; i < count && !view_wanted; i++) {
+        mapstruct *base = view_maps[i].map;
+        int base_x = view_maps[i].x, base_y = view_maps[i].y;
+        for (int direction = TILED_UP; direction <= TILED_DOWN; direction++) {
+            int levels = direction == TILED_UP ? SPATIAL_STACK_LEVELS - 1 : MAP2_MAX_DEPTH;
+            mapstruct *map = base;
+            for (int depth = 0; depth < levels; depth++) {
+                autoload(map, direction, &budget);
+                map = map->tile_map[direction];
+                if (map == NULL || map->in_memory != MAP_IN_MEMORY) {
+                    break;
+                }
+            }
+        }
+        for (int direction = 0; direction < TILED_UP; direction++) {
+            if ((sx[direction] < 0 && min_x >= base_x) ||
+                (sx[direction] > 0 && max_x < base_x + MAP_WIDTH(base)) ||
+                (sy[direction] < 0 && min_y >= base_y) ||
+                (sy[direction] > 0 && max_y < base_y + MAP_HEIGHT(base))) {
+                continue;
+            }
+            autoload(base, direction, &budget);
+            mapstruct *next = base->tile_map[direction];
+            if (next == NULL || next->in_memory != MAP_IN_MEMORY) {
+                continue;
+            }
+            int next_x = base_x + (sx[direction] < 0 ? -MAP_WIDTH(next) :
+                                   sx[direction] > 0 ? MAP_WIDTH(base) : 0);
+            int next_y = base_y + (sy[direction] < 0 ? -MAP_HEIGHT(next) :
+                                   sy[direction] > 0 ? MAP_HEIGHT(base) : 0);
+            if (next_x > max_x || next_x + MAP_WIDTH(next) <= min_x ||
+                next_y > max_y || next_y + MAP_HEIGHT(next) <= min_y) {
+                continue;
+            }
+            (void)view_map_add(next, next_x, next_y, &count);
+        }
+    }
+    (void)spatial_autoload_exchange(previous);
+    view_budget = previous_budget;
+    view_active = false;
+
+    if (!view_wanted) {
+        *wait = 0;
+        return;
+    }
+    /* A view that loaded and still needs more rejoins at the back. */
+    if (*wait == 0 || tick_budget != before) {
+        *wait = ++wait_sequence;
+    }
+    if (oldest_wait == 0 || *wait < oldest_wait) {
+        oldest_wait = *wait;
+    }
 }
 
 static bool resident(const mapstruct *map) {
@@ -114,9 +278,10 @@ static bool local_alternatives_valid(const spatial_node *source,
 
 /* Coordinate-directed search considers both orders of a vertical/horizontal
  * seam. Every visited identity must have one transform. Unlike recursive map
- * lookup this bounds cycles and does not load a map. */
+ * lookup this bounds cycles. A coordinate search with a budget loads only the
+ * seams it follows toward the requested cell; a target search never loads. */
 static bool resolve_search(mapstruct *origin, int x, int y, int z,
-                           mapstruct *target, spatial_node *result) {
+                           mapstruct *target, spatial_node *result, unsigned *budget) {
     if (!resident(origin) || !stack_valid(origin) ||
         z <= -SPATIAL_STACK_LEVELS || z >= SPATIAL_STACK_LEVELS ||
         x < -SPATIAL_COORD_LIMIT || x > SPATIAL_COORD_LIMIT ||
@@ -167,6 +332,9 @@ static bool resolve_search(mapstruct *origin, int x, int y, int z,
                 !(direction == TILED_UP && z > node.offset[2]) &&
                 !(direction == TILED_DOWN && z < node.offset[2])) {
                 continue;
+            }
+            if (target == NULL) {
+                autoload(node.map, direction, budget);
             }
             spatial_node next;
             if (!neighbor(&node, direction, &next)) {
@@ -295,9 +463,23 @@ bool spatial_resolve(mapstruct *origin, int x, int y, int z, spatial_cell *cell)
         return false;
     }
     *cell = (spatial_cell){.x = x, .y = y, .z = z};
-    if (resident(origin) && z > -SPATIAL_STACK_LEVELS && z < SPATIAL_STACK_LEVELS &&
-        x >= 0 && y >= 0 && x < MAP_WIDTH(origin) && y < MAP_HEIGHT(origin) &&
-        stack_valid(origin)) {
+    unsigned budget = SPATIAL_AUTOLOAD_BUDGET;
+    bool in_column = resident(origin) && z > -SPATIAL_STACK_LEVELS &&
+                     z < SPATIAL_STACK_LEVELS && x >= 0 && y >= 0 &&
+                     x < MAP_WIDTH(origin) && y < MAP_HEIGHT(origin);
+    if (in_column) {
+        /* Load only the levels between the origin and the requested depth. */
+        mapstruct *map = origin;
+        int direction = z < 0 ? TILED_DOWN : TILED_UP;
+        for (int depth = 0; depth < abs(z) && map != NULL; depth++) {
+            autoload(map, direction, &budget);
+            map = map->tile_map[direction];
+            if (map != NULL && map->in_memory != MAP_IN_MEMORY) {
+                break;
+            }
+        }
+    }
+    if (in_column && stack_valid(origin)) {
         mapstruct *map = origin;
         int direction = z < 0 ? TILED_DOWN : TILED_UP;
         for (int depth = 0; depth < abs(z); depth++) {
@@ -310,7 +492,7 @@ bool spatial_resolve(mapstruct *origin, int x, int y, int z, spatial_cell *cell)
         return true;
     }
     spatial_node node;
-    if (!resolve_search(origin, x, y, z, NULL, &node)) {
+    if (!resolve_search(origin, x, y, z, NULL, &node, &budget)) {
         return false;
     }
     cell->map = node.map;
@@ -374,7 +556,7 @@ bool spatial_offset(mapstruct *origin, mapstruct *target, int *dx, int *dy, int 
     }
     spatial_node node;
     if (target == NULL || dx == NULL || dy == NULL || dz == NULL ||
-        !resolve_search(origin, 0, 0, 0, target, &node)) {
+        !resolve_search(origin, 0, 0, 0, target, &node, NULL)) {
         return false;
     }
     *dx = node.offset[0];

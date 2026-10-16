@@ -59,9 +59,40 @@ spatial_observer spatial_observer_exchange(spatial_observer observer);
 
 typedef enum spatial_policy { SPATIAL_SIGHT, SPATIAL_COMBAT } spatial_policy;
 
-/* Server-thread only: borrowed map/object pointers; no loads or mutations;
- * bounded temporary lookup storage. Cursors may only survive while the caller
- * retains map lifetime.
+/* While enabled, coordinate resolution (spatial_resolve and the default ray
+ * resolver) loads and links an unloaded tiled neighbor when the requested cell
+ * lies across that seam, like get_map_from_tiled(). Loading is bounded: only
+ * seams on the path toward the requested cell are followed, each resolution
+ * loads at most SPATIAL_AUTOLOAD_BUDGET maps, and nothing loads while a
+ * resolution-triggered load is in progress, so one lookup cannot cascade
+ * through the world. Offset searches never load. Loading is disabled by
+ * default: geometry must not change inside LOS, lighting or MAP2 publication.
+ * Returns the previous state. */
+#define SPATIAL_AUTOLOAD_BUDGET SPATIAL_STACK_LEVELS
+bool spatial_autoload_exchange(bool enabled);
+
+/* Load the tiled maps a MAP2 view can show: every map overlapping the
+ * rectangle min..max (inclusive, in origin coordinates, possibly beyond its
+ * edges) and each such map's vertical stack, twelve levels up for sky light
+ * and six down. All views share SPATIAL_TICK_AUTOLOAD_BUDGET loads per server
+ * tick, each viewer's own column first; calling this on every view update
+ * loads the remainder over later ticks. Views needing loads queue first in,
+ * first out through the caller-owned *wait (zero when not waiting): once any
+ * view waited, only the longest waiter loads, and a served view that still
+ * needs more rejoins at the back. A seam that fails to load waits
+ * SPATIAL_AUTOLOAD_RETRY_TICKS before it is retried, so it cannot monopolize
+ * the budget. Call before LOS or MAP2 work, never inside it; scripts run by a
+ * load may remove the viewer, so revalidate it afterwards. */
+#define SPATIAL_TICK_AUTOLOAD_BUDGET 2
+/* Each overlapped map covers at least one cell of a client-sized view. */
+#define SPATIAL_VIEW_AUTOLOAD_MAPS (MAP_CLIENT_X * MAP_CLIENT_Y)
+#define SPATIAL_AUTOLOAD_RETRY_TICKS ((long)(30 * MAX_TICKS))
+void spatial_autoload_view(mapstruct *origin, int min_x, int min_y, int max_x, int max_y,
+                           unsigned long *wait);
+
+/* Server-thread only: borrowed map/object pointers; no mutations other than
+ * the bounded tiled-map loading above; bounded temporary lookup storage.
+ * Cursors may only survive while the caller retains map lifetime.
  * Invalid, ambiguous, over-bound or unavailable topology fails closed. */
 bool spatial_resolve(mapstruct *origin, int x, int y, int z, spatial_cell *cell);
 bool spatial_offset(mapstruct *origin, mapstruct *target, int *dx, int *dy, int *dz);

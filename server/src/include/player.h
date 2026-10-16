@@ -246,6 +246,10 @@ struct pl_player {
     /** Last Y position we sent to client. */
     int map_tile_y;
 
+    /** Queue position while this view waits for tiled map loads; see
+     * spatial_autoload_view(). */
+    unsigned long view_autoload_wait;
+
     /** Scroll X offset between 2 map updates. */
     int map_off_x;
 
