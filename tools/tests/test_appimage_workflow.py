@@ -1,5 +1,6 @@
 from pathlib import Path
 import base64
+import gzip
 import json
 import os
 import re
@@ -452,7 +453,7 @@ sys.exit(0 if os.environ.get('GH_VERIFY_OK') else 1)
                     environment.update(CLASSIC_LINUX_IMAGE='ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64,
                                        GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace),
                                        GITHUB_OUTPUT=str(workspace / 'output'),
-                                       SOURCE_PACKAGING_LOCK=base64.b64encode(lock.encode()).decode(),
+                                       SOURCE_PACKAGING_LOCK=base64.b64encode(gzip.compress(lock.encode(), mtime=0)).decode(),
                                        APPIMAGE_IMAGE_REPOSITORY='ghcr.io/atrinik/classic-appimage',
                                        PATH=f"{workspace / 'bin'}:{os.environ['PATH']}")
                     if verify_ok:
