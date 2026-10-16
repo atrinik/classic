@@ -627,16 +627,22 @@ void draw_client_map(object *pl) {
     /* Keep the tiled maps this view can show resident, including the levels
      * above it that sky light comes through. Loading happens here, before
      * any LOS or MAP2 work, as the pre-3D view's get_map_from_tiled() did. */
+    /* A load may run scripts that log this viewer out and recycle its
+     * controller, so the queue position lives in local storage until the
+     * captured connection is proven current again. */
     tag_t view_count = pl->count;
-    socket_struct *view_cs = CONTR(pl)->cs;
+    player *view_controller = CONTR(pl);
+    socket_struct *view_cs = view_controller->cs;
+    unsigned long view_wait = view_controller->view_autoload_wait;
     spatial_autoload_view(pl->map, pl->x - view_cs->mapx_2, pl->y - view_cs->mapy_2,
                           pl->x + (view_cs->mapx + 1) / 2 - 1,
                           pl->y + (view_cs->mapy + 1) / 2 - 1,
-                          &CONTR(pl)->view_autoload_wait);
-    if (!OBJECT_VALID(pl, view_count) || !OBJECT_ACTIVE(pl) || !pl->map ||
-        pl->map->in_memory != MAP_IN_MEMORY) {
+                          &view_wait);
+    if (!player_connection_is_current(pl, view_count, view_controller, view_cs) ||
+        !OBJECT_ACTIVE(pl) || !pl->map || pl->map->in_memory != MAP_IN_MEMORY) {
         return;
     }
+    view_controller->view_autoload_wait = view_wait;
 
     CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
 
