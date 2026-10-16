@@ -1709,6 +1709,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ref: ${{ github.sha }}", verifier)
         self.assertIn("source_packaging_lock: ${{ steps.metadata.outputs.source_packaging_lock }}", metadata_job)
         self.assertIn('--source-packaging-lock-output "${source_packaging_lock}"', metadata_job)
+        # The lock crosses jobs as one environment string, which the kernel
+        # caps at 128 KiB; the raw base64 lock exceeded it.
+        self.assertIn('gzip -9n < "${source_packaging_lock}" | base64 -w0', metadata_job)
+        self.assertIn('base64 -d | gzip -dc > "${source_lock_path}"', verifier)
         self.assertEqual(metadata_job.count("fetch-depth: 0"), 1)
         self.assertEqual(appimage.count("fetch-depth: 0"), 1)
         self.assertIn("path: candidate-source\n          persist-credentials: false\n          fetch-depth: 0", appimage)
