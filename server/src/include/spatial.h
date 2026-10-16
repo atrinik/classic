@@ -76,14 +76,19 @@ bool spatial_autoload_exchange(bool enabled);
  * edges) and each such map's vertical stack, twelve levels up for sky light
  * and six down. All views share SPATIAL_TICK_AUTOLOAD_BUDGET loads per server
  * tick, each viewer's own column first; calling this on every view update
- * loads the remainder over later ticks. A seam that fails to load waits
+ * loads the remainder over later ticks. Views needing loads queue first in,
+ * first out through the caller-owned *wait (zero when not waiting): once any
+ * view waited, only the longest waiter loads, and a served view that still
+ * needs more rejoins at the back. A seam that fails to load waits
  * SPATIAL_AUTOLOAD_RETRY_TICKS before it is retried, so it cannot monopolize
  * the budget. Call before LOS or MAP2 work, never inside it; scripts run by a
  * load may remove the viewer, so revalidate it afterwards. */
 #define SPATIAL_TICK_AUTOLOAD_BUDGET 2
-#define SPATIAL_VIEW_AUTOLOAD_MAPS 64
+/* Each overlapped map covers at least one cell of a client-sized view. */
+#define SPATIAL_VIEW_AUTOLOAD_MAPS (MAP_CLIENT_X * MAP_CLIENT_Y)
 #define SPATIAL_AUTOLOAD_RETRY_TICKS ((long)(30 * MAX_TICKS))
-void spatial_autoload_view(mapstruct *origin, int min_x, int min_y, int max_x, int max_y);
+void spatial_autoload_view(mapstruct *origin, int min_x, int min_y, int max_x, int max_y,
+                           unsigned long *wait);
 
 /* Server-thread only: borrowed map/object pointers; no mutations other than
  * the bounded tiled-map loading above; bounded temporary lookup storage.

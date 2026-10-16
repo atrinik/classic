@@ -631,7 +631,8 @@ void draw_client_map(object *pl) {
     socket_struct *view_cs = CONTR(pl)->cs;
     spatial_autoload_view(pl->map, pl->x - view_cs->mapx_2, pl->y - view_cs->mapy_2,
                           pl->x + (view_cs->mapx + 1) / 2 - 1,
-                          pl->y + (view_cs->mapy + 1) / 2 - 1);
+                          pl->y + (view_cs->mapy + 1) / 2 - 1,
+                          &CONTR(pl)->view_autoload_wait);
     if (!OBJECT_VALID(pl, view_count) || !OBJECT_ACTIVE(pl) || !pl->map ||
         pl->map->in_memory != MAP_IN_MEMORY) {
         return;

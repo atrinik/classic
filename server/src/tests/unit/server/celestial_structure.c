@@ -85,6 +85,34 @@ static void write_filename_tile_map(const char *root,
     ck_assert_int_eq(fclose(fp), 0);
 }
 
+static void write_sized_tile_map(const char *root,
+                                 const char *logical_path,
+                                 const char *sky_above,
+                                 int width,
+                                 int height,
+                                 const char *records) {
+    char path[HUGE_BUF];
+    ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", root, logical_path), (int)sizeof(path));
+    path_ensure_directories(path);
+    FILE *fp = fopen(path, "wb");
+    ck_assert_ptr_nonnull(fp);
+    ck_assert_int_ge(fprintf(fp,
+                             "arch map\n"
+                             "name Fixture\n"
+                             "celestial_schema 1\n"
+                             "sky_above %s\n"
+                             "width %d\n"
+                             "height %d\n"
+                             "%s"
+                             "end\n",
+                             sky_above,
+                             width,
+                             height,
+                             records != NULL ? records : ""),
+                     0);
+    ck_assert_int_eq(fclose(fp), 0);
+}
+
 static void write_legacy_filename_tile_map(const char *root, const char *logical_path) {
     char path[HUGE_BUF];
     ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", root, logical_path), (int)sizeof(path));
@@ -1658,11 +1686,12 @@ START_TEST(test_spatial_resolve_loads_only_requested_tiled_maps) {
 
     /* Successive view updates load the viewer's whole upward stack, a bounded
      * number of maps at a time, and restore the disabled default. */
+    unsigned long street_wait = 0;
     mapstruct *street = ready_map_name("/vertical_95_95", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_nonnull(street);
     ck_assert_ptr_eq(street->tile_map[TILED_UP], NULL);
     pticks++;
-    spatial_autoload_view(street, 4, 4, 20, 20);
+    spatial_autoload_view(street, 4, 4, 20, 20, &street_wait);
     ck_assert(!spatial_autoload_exchange(false));
     mapstruct *street_first = street->tile_map[TILED_UP];
     ck_assert_ptr_nonnull(street_first);
@@ -1671,10 +1700,10 @@ START_TEST(test_spatial_resolve_loads_only_requested_tiled_maps) {
     ck_assert_str_eq(street_second->path, "/vertical_95_95_2");
     ck_assert_ptr_eq(street_second->tile_map[TILED_UP], NULL);
     /* The tick's loads are spent; the next tick continues. */
-    spatial_autoload_view(street, 4, 4, 20, 20);
+    spatial_autoload_view(street, 4, 4, 20, 20, &street_wait);
     ck_assert_ptr_eq(street_second->tile_map[TILED_UP], NULL);
     pticks++;
-    spatial_autoload_view(street, 4, 4, 20, 20);
+    spatial_autoload_view(street, 4, 4, 20, 20, &street_wait);
     mapstruct *street_third = street_second->tile_map[TILED_UP];
     ck_assert_ptr_nonnull(street_third);
     ck_assert_str_eq(street_third->path, "/vertical_95_95_3");
@@ -1729,17 +1758,18 @@ START_TEST(test_spatial_view_autoload_covers_rectangle_and_defers_failures) {
     write_filename_tile_map(temporary_root, "/invalid_north", "linked", NULL);
     write_filename_tile_map(temporary_root, "/invalid_east", "linked", NULL);
 
+    unsigned long view_wait = 0;
     mapstruct *origin = ready_map_name("/world_40_40", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_nonnull(origin);
 
     /* A view ending on the map's last column shows no neighbor. */
     pticks++;
-    spatial_autoload_view(origin, 0, 0, MAP_WIDTH(origin) - 1, MAP_HEIGHT(origin) - 1);
+    spatial_autoload_view(origin, 0, 0, MAP_WIDTH(origin) - 1, MAP_HEIGHT(origin) - 1, &view_wait);
     ck_assert_ptr_eq(origin->tile_map[TILED_EAST], NULL);
 
     /* A view crossing two seams loads both maps, and nothing beyond it. */
     pticks++;
-    spatial_autoload_view(origin, 0, 0, 2 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1);
+    spatial_autoload_view(origin, 0, 0, 2 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1, &view_wait);
     mapstruct *second = origin->tile_map[TILED_EAST];
     ck_assert_ptr_nonnull(second);
     mapstruct *third = second->tile_map[TILED_EAST];
@@ -1748,10 +1778,10 @@ START_TEST(test_spatial_view_autoload_covers_rectangle_and_defers_failures) {
     ck_assert_ptr_eq(third->tile_map[TILED_EAST], NULL);
 
     /* Every view of a tick shares one load budget. */
-    spatial_autoload_view(origin, 0, 0, 3 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1);
+    spatial_autoload_view(origin, 0, 0, 3 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1, &view_wait);
     ck_assert_ptr_eq(third->tile_map[TILED_EAST], NULL);
     pticks++;
-    spatial_autoload_view(origin, 0, 0, 3 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1);
+    spatial_autoload_view(origin, 0, 0, 3 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1, &view_wait);
     mapstruct *fourth = third->tile_map[TILED_EAST];
     ck_assert_ptr_nonnull(fourth);
 
@@ -1759,14 +1789,14 @@ START_TEST(test_spatial_view_autoload_covers_rectangle_and_defers_failures) {
     mapstruct *failing = ready_map_name("/world_50_50", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_nonnull(failing);
     pticks++;
-    spatial_autoload_view(failing, -1, -1, MAP_WIDTH(failing), MAP_HEIGHT(failing));
+    spatial_autoload_view(failing, -1, -1, MAP_WIDTH(failing), MAP_HEIGHT(failing), &view_wait);
     ck_assert_ptr_eq(failing->tile_map[TILED_NORTH], NULL);
     ck_assert_ptr_eq(failing->tile_map[TILED_EAST], NULL);
     ck_assert_ptr_eq(failing->tile_map[TILED_SOUTH], NULL);
     ck_assert_int_gt(failing->tile_autoload_retry[TILED_NORTH], pticks);
     ck_assert_int_gt(failing->tile_autoload_retry[TILED_EAST], pticks);
     pticks++;
-    spatial_autoload_view(failing, -1, -1, MAP_WIDTH(failing), MAP_HEIGHT(failing));
+    spatial_autoload_view(failing, -1, -1, MAP_WIDTH(failing), MAP_HEIGHT(failing), &view_wait);
     mapstruct *south = failing->tile_map[TILED_SOUTH];
     ck_assert_ptr_nonnull(south);
     ck_assert_str_eq(south->path, "/world_50_51");
@@ -1778,6 +1808,133 @@ START_TEST(test_spatial_view_autoload_covers_rectangle_and_defers_failures) {
     delete_map(third);
     delete_map(second);
     delete_map(origin);
+    for (size_t i = 0; i < arraysize(logical_paths); i++) {
+        char path[HUGE_BUF];
+        ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", temporary_root, logical_paths[i]),
+                         (int)sizeof(path));
+        ck_assert_int_eq(unlink(path), 0);
+    }
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
+START_TEST(test_spatial_view_autoload_queues_waiting_viewers) {
+    char temporary_root[] = "/tmp/atrinik-spatial-queue-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_mapspath[HUGE_BUF];
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+
+    const char *logical_paths[] = {
+        "/vertical_97_97",   "/vertical_97_97_1", "/vertical_97_97_2", "/vertical_97_97_3",
+        "/vertical_97_97_4", "/vertical_97_97_5", "/vertical_97_97_6",
+        "/vertical_98_98",   "/vertical_98_98_1",
+    };
+    for (size_t i = 0; i < 6; i++) {
+        write_filename_tile_map(temporary_root, logical_paths[i], "linked", NULL);
+    }
+    write_filename_tile_map(temporary_root, logical_paths[6], "open", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[7], "linked", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[8], "open", NULL);
+
+    /* Viewer A is drawn first every tick and needs six loads; viewer B needs
+     * one. B must not wait until A's whole stack has loaded. */
+    mapstruct *a = ready_map_name("/vertical_97_97", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    mapstruct *b = ready_map_name("/vertical_98_98", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(a);
+    ck_assert_ptr_nonnull(b);
+    unsigned long a_wait = 0, b_wait = 0;
+    for (int tick = 0; tick < 3; tick++) {
+        pticks++;
+        spatial_autoload_view(a, 4, 4, 20, 20, &a_wait);
+        spatial_autoload_view(b, 4, 4, 20, 20, &b_wait);
+    }
+    ck_assert_ptr_nonnull(b->tile_map[TILED_UP]);
+    ck_assert_uint_eq(b_wait, 0);
+    size_t a_levels = 0;
+    for (mapstruct *level = a->tile_map[TILED_UP]; level != NULL; level = level->tile_map[TILED_UP]) {
+        a_levels++;
+    }
+    ck_assert_uint_eq(a_levels, 4);
+    ck_assert_uint_ne(a_wait, 0);
+
+    /* A continues once nobody has waited longer. */
+    for (int tick = 0; tick < 3 && a_wait != 0; tick++) {
+        pticks++;
+        spatial_autoload_view(a, 4, 4, 20, 20, &a_wait);
+        spatial_autoload_view(b, 4, 4, 20, 20, &b_wait);
+    }
+    ck_assert_uint_eq(a_wait, 0);
+    mapstruct *levels[6];
+    mapstruct *level = a;
+    for (size_t i = 0; i < 6; i++) {
+        level = level->tile_map[TILED_UP];
+        ck_assert_ptr_nonnull(level);
+        levels[i] = level;
+    }
+    ck_assert_ptr_eq(levels[5]->tile_map[TILED_UP], NULL);
+
+    for (size_t i = 6; i-- > 0;) {
+        delete_map(levels[i]);
+    }
+    delete_map(a);
+    delete_map(b->tile_map[TILED_UP]);
+    delete_map(b);
+    for (size_t i = 0; i < arraysize(logical_paths); i++) {
+        char path[HUGE_BUF];
+        ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", temporary_root, logical_paths[i]),
+                         (int)sizeof(path));
+        ck_assert_int_eq(unlink(path), 0);
+    }
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
+START_TEST(test_spatial_view_autoload_walks_only_overlapping_maps) {
+    char temporary_root[] = "/tmp/atrinik-spatial-overlap-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_mapspath[HUGE_BUF];
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+
+    const char *logical_paths[] = {"/wide", "/narrow_north", "/narrow_north_up", "/wide_east"};
+    write_sized_tile_map(temporary_root, "/wide", "open", 64, 24,
+                         "tile_path_1 /narrow_north\n"
+                         "celestial_boundary_1 discontinuous\n"
+                         "tile_path_2 /wide_east\n"
+                         "celestial_boundary_2 discontinuous\n");
+    write_sized_tile_map(temporary_root, "/narrow_north", "linked", 1, 24,
+                         "tile_path_9 /narrow_north_up\n"
+                         "celestial_boundary_9 continuous\n");
+    write_sized_tile_map(temporary_root, "/narrow_north_up", "open", 1, 24,
+                         "tile_path_10 /narrow_north\n"
+                         "celestial_boundary_10 continuous\n");
+    write_sized_tile_map(temporary_root, "/wide_east", "open", 24, 24, NULL);
+
+    /* Near the east side of a wide map the view crosses north and east. The
+     * 1-wide north neighbor at x=0 lies outside the view: once its extent is
+     * known it is not walked, so its upper level never loads. */
+    mapstruct *wide = ready_map_name("/wide", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(wide);
+    unsigned long wait = 0;
+    for (int tick = 0; tick < 4; tick++) {
+        pticks++;
+        spatial_autoload_view(wide, 47, -4, 78, 27, &wait);
+    }
+    mapstruct *east = wide->tile_map[TILED_EAST];
+    ck_assert_ptr_nonnull(east);
+    mapstruct *north = wide->tile_map[TILED_NORTH];
+    ck_assert_ptr_nonnull(north);
+    ck_assert_ptr_eq(north->tile_map[TILED_UP], NULL);
+    ck_assert_uint_eq(wait, 0);
+
+    delete_map(east);
+    delete_map(north);
+    delete_map(wide);
     for (size_t i = 0; i < arraysize(logical_paths); i++) {
         char path[HUGE_BUF];
         ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", temporary_root, logical_paths[i]),
@@ -2316,6 +2473,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_filename_tiling_restores_legacy_links);
     tcase_add_test(tc_core, test_spatial_resolve_loads_only_requested_tiled_maps);
     tcase_add_test(tc_core, test_spatial_view_autoload_covers_rectangle_and_defers_failures);
+    tcase_add_test(tc_core, test_spatial_view_autoload_queues_waiting_viewers);
+    tcase_add_test(tc_core, test_spatial_view_autoload_walks_only_overlapping_maps);
     tcase_add_loop_test(tc_core, test_filename_tiling_survives_temporary_map_reload, 0, 5);
     tcase_add_loop_test(tc_core, test_rejected_temporary_map_withdraws_its_tile_backlinks, 0, 4);
     tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);

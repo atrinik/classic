@@ -20,12 +20,18 @@ over-bound or unavailable topology fails closed.
 Resolution itself does not load maps, so geometry never changes inside LOS,
 lighting or MAP2 publication. Before each player view update,
 `spatial_autoload_view()` walks tiled links from the viewer's map through
-every map overlapping the exact MAP2 rectangle (at most
-`SPATIAL_VIEW_AUTOLOAD_MAPS`) and loads each one's vertical stack: twelve
-levels up, for sky light, and six down. All views share
-`SPATIAL_TICK_AUTOLOAD_BUDGET` synchronous loads per server tick, each
-viewer's own column first, so the remainder loads over later ticks; once the
-maps are resident the walk costs only link checks. A seam whose load fails
+every map overlapping the exact MAP2 rectangle and loads each one's vertical
+stack: twelve levels up, for sky light, and six down. A neighbor's extent is
+known only once it is resident; one that misses the rectangle in either axis
+is not walked. Every walked map covers at least one view cell, so
+`SPATIAL_VIEW_AUTOLOAD_MAPS` (the client view area) bounds the walk without
+dropping visible maps. All views share `SPATIAL_TICK_AUTOLOAD_BUDGET`
+synchronous loads per server tick, each viewer's own column first, so the
+remainder loads over later ticks; once the maps are resident the walk costs
+only link checks. Views that need loads queue first in, first out through a
+per-player position: once any view waited, only the longest waiter loads on
+the next tick, and a served view that still needs more rejoins at the back,
+so a viewer drawn early in every tick cannot starve the others. A seam whose load fails
 waits `SPATIAL_AUTOLOAD_RETRY_TICKS` before it is retried, so it cannot
 monopolize the budget or log on every update. Unauthored world neighbors
 load as dynamic copies of their originating map, as before.
