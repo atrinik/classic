@@ -17,8 +17,10 @@ typedef struct spatial_node {
 
 static spatial_observer active_observer;
 static bool autoload_enabled;
-/* Optional loads remaining for the current view update, shared by its resolutions. */
+/* Loads remaining for the current view pass, shared by all views of a tick. */
 static unsigned *view_budget;
+static long view_budget_tick = -1;
+static unsigned tick_budget;
 
 spatial_observer spatial_observer_exchange(spatial_observer observer) {
     spatial_observer previous = active_observer;
@@ -35,10 +37,13 @@ bool spatial_autoload_exchange(bool enabled) {
 /* Load and link one tiled neighbor on demand, as get_map_from_tiled() did for
  * pre-3D map views. Loading stays disabled while the neighbor loads, so its
  * lighting, objects and scripts see only resident maps and cannot chain into
- * further loads. The caller's budget bounds the loads of a single resolution. */
+ * further loads. The caller's budget bounds the loads of a single resolution.
+ * Each attempt spends budget because a failed load costs the same disk work;
+ * a failed seam then waits before retrying so later seams make progress. */
 static void autoload(mapstruct *map, int direction, unsigned *budget) {
     if (budget == NULL || *budget == 0 || !autoload_enabled ||
-        (view_budget != NULL && *view_budget == 0) || map->tile_path[direction] == NULL) {
+        (view_budget != NULL && *view_budget == 0) || map->tile_path[direction] == NULL ||
+        map->tile_autoload_retry[direction] > pticks) {
         return;
     }
     mapstruct *other = map->tile_map[direction];
@@ -50,59 +55,81 @@ static void autoload(mapstruct *map, int direction, unsigned *budget) {
         (*view_budget)--;
     }
     autoload_enabled = false;
-    (void)get_map_from_tiled(map, direction);
+    mapstruct *loaded = get_map_from_tiled(map, direction);
     autoload_enabled = true;
+    map->tile_autoload_retry[direction] =
+        loaded == NULL ? pticks + SPATIAL_AUTOLOAD_RETRY_TICKS : 0;
 }
 
-void spatial_autoload_view(mapstruct *origin, int x, int y, int half_width, int half_height) {
-    if (origin == NULL || origin->in_memory != MAP_IN_MEMORY) {
+void spatial_autoload_view(mapstruct *origin, int min_x, int min_y, int max_x, int max_y) {
+    if (origin == NULL || origin->in_memory != MAP_IN_MEMORY || min_x > max_x ||
+        min_y > max_y) {
+        return;
+    }
+    if (view_budget_tick != pticks) {
+        view_budget_tick = pticks;
+        tick_budget = SPATIAL_TICK_AUTOLOAD_BUDGET;
+    }
+    if (tick_budget == 0) {
         return;
     }
     /* Walk tiled links directly: this runs on every view update, so it must
-     * cost only pointer checks once everything is resident. The viewer's map
-     * and the horizontal neighbors the view extends into each load their
-     * vertical stack, the viewer's column first and upward before downward.
-     * A view spanning more than one neighbor in a direction (a map narrower
-     * than half the view) only reaches the adjacent one. Loads are
-     * synchronous, so one update loads at most SPATIAL_VIEW_AUTOLOAD_BUDGET
-     * maps; the remainder loads over the following ticks. */
-    bool north = y - half_height < 0, south = y + half_height >= MAP_HEIGHT(origin);
-    bool west = x - half_width < 0, east = x + half_width >= MAP_WIDTH(origin);
-    const struct {
-        bool needed;
-        int direction;
-    } horizontal[] = {
-        {true, -1},
-        {north, TILED_NORTH}, {east, TILED_EAST}, {south, TILED_SOUTH}, {west, TILED_WEST},
-        {north && east, TILED_NORTHEAST}, {south && east, TILED_SOUTHEAST},
-        {south && west, TILED_SOUTHWEST}, {north && west, TILED_NORTHWEST},
-    };
-    unsigned remaining = SPATIAL_VIEW_AUTOLOAD_BUDGET, budget = SPATIAL_AUTOLOAD_BUDGET;
+     * cost only link checks once everything is resident. Starting from the
+     * viewer's map, visit every map overlapping the view rectangle at its
+     * offset from the origin and load each one's vertical stack, the viewer's
+     * own column first, upward before downward. */
+    static const int sx[TILED_UP] = {0, 1, 0, -1, 1, 1, -1, -1};
+    static const int sy[TILED_UP] = {-1, 0, 1, 0, -1, 1, 1, -1};
+    struct {
+        mapstruct *map;
+        int x, y;
+    } maps[SPATIAL_VIEW_AUTOLOAD_MAPS];
+    size_t count = 1;
+    maps[0].map = origin;
+    maps[0].x = maps[0].y = 0;
+    unsigned budget = UINT_MAX;
     unsigned *previous_budget = view_budget;
-    view_budget = &remaining;
+    view_budget = &tick_budget;
     bool previous = spatial_autoload_exchange(true);
-    for (size_t i = 0; i < arraysize(horizontal) && remaining != 0; i++) {
-        if (!horizontal[i].needed) {
-            continue;
-        }
-        mapstruct *base = origin;
-        if (horizontal[i].direction >= 0) {
-            autoload(origin, horizontal[i].direction, &budget);
-            base = origin->tile_map[horizontal[i].direction];
-        }
-        if (base == NULL || base->in_memory != MAP_IN_MEMORY) {
-            continue;
-        }
+    for (size_t i = 0; i < count && tick_budget != 0; i++) {
+        mapstruct *base = maps[i].map;
+        int base_x = maps[i].x, base_y = maps[i].y;
         for (int direction = TILED_UP; direction <= TILED_DOWN; direction++) {
             int levels = direction == TILED_UP ? SPATIAL_STACK_LEVELS - 1 : MAP2_MAX_DEPTH;
             mapstruct *map = base;
-            for (int depth = 0; depth < levels && remaining != 0; depth++) {
+            for (int depth = 0; depth < levels; depth++) {
                 autoload(map, direction, &budget);
                 map = map->tile_map[direction];
                 if (map == NULL || map->in_memory != MAP_IN_MEMORY) {
                     break;
                 }
             }
+        }
+        for (int direction = 0; direction < TILED_UP; direction++) {
+            if ((sx[direction] < 0 && min_x >= base_x) ||
+                (sx[direction] > 0 && max_x < base_x + MAP_WIDTH(base)) ||
+                (sy[direction] < 0 && min_y >= base_y) ||
+                (sy[direction] > 0 && max_y < base_y + MAP_HEIGHT(base))) {
+                continue;
+            }
+            autoload(base, direction, &budget);
+            mapstruct *next = base->tile_map[direction];
+            if (next == NULL || next->in_memory != MAP_IN_MEMORY) {
+                continue;
+            }
+            bool seen = false;
+            for (size_t j = 0; j < count && !seen; j++) {
+                seen = maps[j].map == next;
+            }
+            if (seen || count == SPATIAL_VIEW_AUTOLOAD_MAPS) {
+                continue;
+            }
+            maps[count].map = next;
+            maps[count].x = base_x + (sx[direction] < 0 ? -MAP_WIDTH(next) :
+                                      sx[direction] > 0 ? MAP_WIDTH(base) : 0);
+            maps[count].y = base_y + (sy[direction] < 0 ? -MAP_HEIGHT(next) :
+                                      sy[direction] > 0 ? MAP_HEIGHT(base) : 0);
+            count++;
         }
     }
     (void)spatial_autoload_exchange(previous);

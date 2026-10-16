@@ -678,6 +678,9 @@ typedef struct mapdef {
     /** Path to adjoining maps (shared strings) */
     shstr *tile_path[TILED_NUM];
 
+    /** Earliest tick a failed on-demand load of each adjoining map may retry. */
+    long tile_autoload_retry[TILED_NUM];
+
     /** Celestial-v1 policy paired with each explicitly authored tile path. */
     uint8_t celestial_boundary[TILED_NUM];
 

@@ -628,8 +628,10 @@ void draw_client_map(object *pl) {
      * above it that sky light comes through. Loading happens here, before
      * any LOS or MAP2 work, as the pre-3D view's get_map_from_tiled() did. */
     tag_t view_count = pl->count;
-    spatial_autoload_view(pl->map, pl->x, pl->y, CONTR(pl)->cs->mapx_2,
-                          CONTR(pl)->cs->mapy_2);
+    socket_struct *view_cs = CONTR(pl)->cs;
+    spatial_autoload_view(pl->map, pl->x - view_cs->mapx_2, pl->y - view_cs->mapy_2,
+                          pl->x + (view_cs->mapx + 1) / 2 - 1,
+                          pl->y + (view_cs->mapy + 1) / 2 - 1);
     if (!OBJECT_VALID(pl, view_count) || !OBJECT_ACTIVE(pl) || !pl->map ||
         pl->map->in_memory != MAP_IN_MEMORY) {
         return;

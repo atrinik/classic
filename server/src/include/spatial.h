@@ -70,14 +70,20 @@ typedef enum spatial_policy { SPATIAL_SIGHT, SPATIAL_COMBAT } spatial_policy;
  * Returns the previous state. */
 #define SPATIAL_AUTOLOAD_BUDGET SPATIAL_STACK_LEVELS
 bool spatial_autoload_exchange(bool enabled);
-/* Load the tiled maps a viewer centered at origin x/y can show within the given
- * half extents at every MAP2 depth, plus its full upward stack for sky light.
- * At most SPATIAL_VIEW_AUTOLOAD_BUDGET maps load per call, the viewer's column
- * first; calling it on every view update loads the rest over later ticks.
- * Call before LOS or MAP2 work, never inside it; scripts run by a load may
- * remove the viewer, so revalidate it afterwards. */
-#define SPATIAL_VIEW_AUTOLOAD_BUDGET 2
-void spatial_autoload_view(mapstruct *origin, int x, int y, int half_width, int half_height);
+
+/* Load the tiled maps a MAP2 view can show: every map overlapping the
+ * rectangle min..max (inclusive, in origin coordinates, possibly beyond its
+ * edges) and each such map's vertical stack, twelve levels up for sky light
+ * and six down. All views share SPATIAL_TICK_AUTOLOAD_BUDGET loads per server
+ * tick, each viewer's own column first; calling this on every view update
+ * loads the remainder over later ticks. A seam that fails to load waits
+ * SPATIAL_AUTOLOAD_RETRY_TICKS before it is retried, so it cannot monopolize
+ * the budget. Call before LOS or MAP2 work, never inside it; scripts run by a
+ * load may remove the viewer, so revalidate it afterwards. */
+#define SPATIAL_TICK_AUTOLOAD_BUDGET 2
+#define SPATIAL_VIEW_AUTOLOAD_MAPS 64
+#define SPATIAL_AUTOLOAD_RETRY_TICKS ((long)(30 * MAX_TICKS))
+void spatial_autoload_view(mapstruct *origin, int min_x, int min_y, int max_x, int max_y);
 
 /* Server-thread only: borrowed map/object pointers; no mutations other than
  * the bounded tiled-map loading above; bounded temporary lookup storage.

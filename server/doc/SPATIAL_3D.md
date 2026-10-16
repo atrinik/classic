@@ -19,10 +19,16 @@ over-bound or unavailable topology fails closed.
 
 Resolution itself does not load maps, so geometry never changes inside LOS,
 lighting or MAP2 publication. Before each player view update,
-`spatial_autoload_view()` loads the viewer's map stack and the stacks of the
-horizontal neighbors the view extends into: twelve levels up, for sky light,
-and six down. It loads at most `SPATIAL_VIEW_AUTOLOAD_BUDGET` maps per update,
-the viewer's column first, and costs only link checks once they are resident.
+`spatial_autoload_view()` walks tiled links from the viewer's map through
+every map overlapping the exact MAP2 rectangle (at most
+`SPATIAL_VIEW_AUTOLOAD_MAPS`) and loads each one's vertical stack: twelve
+levels up, for sky light, and six down. All views share
+`SPATIAL_TICK_AUTOLOAD_BUDGET` synchronous loads per server tick, each
+viewer's own column first, so the remainder loads over later ticks; once the
+maps are resident the walk costs only link checks. A seam whose load fails
+waits `SPATIAL_AUTOLOAD_RETRY_TICKS` before it is retried, so it cannot
+monopolize the budget or log on every update. Unauthored world neighbors
+load as dynamic copies of their originating map, as before.
 While enabled, coordinate resolution loads and links an unloaded tiled
 neighbor when the requested cell lies across that seam, as
 `get_map_from_tiled()` did for the pre-3D map view. This keeps the levels

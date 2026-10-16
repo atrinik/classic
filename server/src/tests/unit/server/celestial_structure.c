@@ -23,6 +23,7 @@
 #include <player.h>
 #include <spatial.h>
 #include <swap.h>
+#include <tod.h>
 #include <toolkit/path.h>
 
 #include <openssl/sha.h>
@@ -1660,7 +1661,8 @@ START_TEST(test_spatial_resolve_loads_only_requested_tiled_maps) {
     mapstruct *street = ready_map_name("/vertical_95_95", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
     ck_assert_ptr_nonnull(street);
     ck_assert_ptr_eq(street->tile_map[TILED_UP], NULL);
-    spatial_autoload_view(street, 12, 12, 8, 8);
+    pticks++;
+    spatial_autoload_view(street, 4, 4, 20, 20);
     ck_assert(!spatial_autoload_exchange(false));
     mapstruct *street_first = street->tile_map[TILED_UP];
     ck_assert_ptr_nonnull(street_first);
@@ -1668,7 +1670,11 @@ START_TEST(test_spatial_resolve_loads_only_requested_tiled_maps) {
     ck_assert_ptr_nonnull(street_second);
     ck_assert_str_eq(street_second->path, "/vertical_95_95_2");
     ck_assert_ptr_eq(street_second->tile_map[TILED_UP], NULL);
-    spatial_autoload_view(street, 12, 12, 8, 8);
+    /* The tick's loads are spent; the next tick continues. */
+    spatial_autoload_view(street, 4, 4, 20, 20);
+    ck_assert_ptr_eq(street_second->tile_map[TILED_UP], NULL);
+    pticks++;
+    spatial_autoload_view(street, 4, 4, 20, 20);
     mapstruct *street_third = street_second->tile_map[TILED_UP];
     ck_assert_ptr_nonnull(street_third);
     ck_assert_str_eq(street_third->path, "/vertical_95_95_3");
@@ -1682,6 +1688,96 @@ START_TEST(test_spatial_resolve_loads_only_requested_tiled_maps) {
     delete_map(ground);
     delete_map(east);
     delete_map(west);
+    for (size_t i = 0; i < arraysize(logical_paths); i++) {
+        char path[HUGE_BUF];
+        ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", temporary_root, logical_paths[i]),
+                         (int)sizeof(path));
+        ck_assert_int_eq(unlink(path), 0);
+    }
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
+START_TEST(test_spatial_view_autoload_covers_rectangle_and_defers_failures) {
+    char temporary_root[] = "/tmp/atrinik-spatial-view-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_mapspath[HUGE_BUF];
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+
+    const char *logical_paths[] = {
+        "/world_40_40", "/world_41_40", "/world_42_40", "/world_43_40",
+        "/world_50_50", "/world_50_51", "/invalid_north", "/invalid_east",
+    };
+    /* Named like real maps: unauthored world neighbors become dynamic copies of
+     * the map that loads them. */
+    for (size_t i = 0; i < 4; i++) {
+        write_filename_tile_map(temporary_root, logical_paths[i], "open", "name Fixture\n");
+    }
+    write_filename_tile_map(temporary_root,
+                            "/world_50_50",
+                            "open",
+                            "name Fixture\n"
+                            "tile_path_1 /invalid_north\n"
+                            "celestial_boundary_1 discontinuous\n"
+                            "tile_path_2 /invalid_east\n"
+                            "celestial_boundary_2 discontinuous\n");
+    write_filename_tile_map(temporary_root, "/world_50_51", "open", "name Fixture\n");
+    /* A linked sky without an upper map fails validation, so these loads fail. */
+    write_filename_tile_map(temporary_root, "/invalid_north", "linked", NULL);
+    write_filename_tile_map(temporary_root, "/invalid_east", "linked", NULL);
+
+    mapstruct *origin = ready_map_name("/world_40_40", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(origin);
+
+    /* A view ending on the map's last column shows no neighbor. */
+    pticks++;
+    spatial_autoload_view(origin, 0, 0, MAP_WIDTH(origin) - 1, MAP_HEIGHT(origin) - 1);
+    ck_assert_ptr_eq(origin->tile_map[TILED_EAST], NULL);
+
+    /* A view crossing two seams loads both maps, and nothing beyond it. */
+    pticks++;
+    spatial_autoload_view(origin, 0, 0, 2 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1);
+    mapstruct *second = origin->tile_map[TILED_EAST];
+    ck_assert_ptr_nonnull(second);
+    mapstruct *third = second->tile_map[TILED_EAST];
+    ck_assert_ptr_nonnull(third);
+    ck_assert_str_eq(third->path, "/world_42_40");
+    ck_assert_ptr_eq(third->tile_map[TILED_EAST], NULL);
+
+    /* Every view of a tick shares one load budget. */
+    spatial_autoload_view(origin, 0, 0, 3 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1);
+    ck_assert_ptr_eq(third->tile_map[TILED_EAST], NULL);
+    pticks++;
+    spatial_autoload_view(origin, 0, 0, 3 * MAP_WIDTH(origin) + 1, MAP_HEIGHT(origin) - 1);
+    mapstruct *fourth = third->tile_map[TILED_EAST];
+    ck_assert_ptr_nonnull(fourth);
+
+    /* Failed seams wait before retrying, so a valid later seam still loads. */
+    mapstruct *failing = ready_map_name("/world_50_50", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(failing);
+    pticks++;
+    spatial_autoload_view(failing, -1, -1, MAP_WIDTH(failing), MAP_HEIGHT(failing));
+    ck_assert_ptr_eq(failing->tile_map[TILED_NORTH], NULL);
+    ck_assert_ptr_eq(failing->tile_map[TILED_EAST], NULL);
+    ck_assert_ptr_eq(failing->tile_map[TILED_SOUTH], NULL);
+    ck_assert_int_gt(failing->tile_autoload_retry[TILED_NORTH], pticks);
+    ck_assert_int_gt(failing->tile_autoload_retry[TILED_EAST], pticks);
+    pticks++;
+    spatial_autoload_view(failing, -1, -1, MAP_WIDTH(failing), MAP_HEIGHT(failing));
+    mapstruct *south = failing->tile_map[TILED_SOUTH];
+    ck_assert_ptr_nonnull(south);
+    ck_assert_str_eq(south->path, "/world_50_51");
+    ck_assert(!spatial_autoload_exchange(false));
+
+    delete_map(south);
+    delete_map(failing);
+    delete_map(fourth);
+    delete_map(third);
+    delete_map(second);
+    delete_map(origin);
     for (size_t i = 0; i < arraysize(logical_paths); i++) {
         char path[HUGE_BUF];
         ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", temporary_root, logical_paths[i]),
@@ -2219,6 +2315,7 @@ static Suite *suite(void) {
     tcase_add_loop_test(tc_core, test_active_runtime_private_player_identity_remains_owner_bound, 0, 2);
     tcase_add_test(tc_core, test_filename_tiling_restores_legacy_links);
     tcase_add_test(tc_core, test_spatial_resolve_loads_only_requested_tiled_maps);
+    tcase_add_test(tc_core, test_spatial_view_autoload_covers_rectangle_and_defers_failures);
     tcase_add_loop_test(tc_core, test_filename_tiling_survives_temporary_map_reload, 0, 5);
     tcase_add_loop_test(tc_core, test_rejected_temporary_map_withdraws_its_tile_backlinks, 0, 4);
     tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
