@@ -125,8 +125,10 @@ jobs:
             echo "artifact_schema=${artifact_schema}"
             echo "compiler_image=${compiler_image}"
             # Exact tagged lock bytes, so the token-holding image verifier
-            # never needs a candidate checkout of its own.
-            echo "source_packaging_lock=$(base64 -w0 < "${source_packaging_lock}")"
+            # never needs a candidate checkout of its own. Compressed so the
+            # value stays well under the kernel's 128 KiB limit for one
+            # environment string.
+            echo "source_packaging_lock=$(gzip -9n < "${source_packaging_lock}" | base64 -w0)"
             echo "tag=${RELEASE_TAG}"
             echo "version=${RELEASE_VERSION}"
             echo "commit=${commit}"
@@ -892,7 +894,9 @@ jobs:
           mkdir -p build/appimage-prebuilt
           source_lock_path=$(mktemp "${RUNNER_TEMP}/classic-source-packaging-lock.XXXXXX")
           trap 'rm -f "${source_lock_path}"' EXIT
-          printf '%s' "${SOURCE_PACKAGING_LOCK}" | base64 -d > "${source_lock_path}"
+          if test -n "${SOURCE_PACKAGING_LOCK}"; then
+            printf '%s' "${SOURCE_PACKAGING_LOCK}" | base64 -d | gzip -dc > "${source_lock_path}"
+          fi
           compiler_arguments=()
           if test -s "${source_lock_path}"; then
             compiler_arguments=(--source-packaging-lock "${source_lock_path}")
