@@ -59,9 +59,29 @@ spatial_observer spatial_observer_exchange(spatial_observer observer);
 
 typedef enum spatial_policy { SPATIAL_SIGHT, SPATIAL_COMBAT } spatial_policy;
 
-/* Server-thread only: borrowed map/object pointers; no loads or mutations;
- * bounded temporary lookup storage. Cursors may only survive while the caller
- * retains map lifetime.
+/* While enabled, coordinate resolution (spatial_resolve and the default ray
+ * resolver) loads and links an unloaded tiled neighbor when the requested cell
+ * lies across that seam, like get_map_from_tiled(). Loading is bounded: only
+ * seams on the path toward the requested cell are followed, each resolution
+ * loads at most SPATIAL_AUTOLOAD_BUDGET maps, and nothing loads while a
+ * resolution-triggered load is in progress, so one lookup cannot cascade
+ * through the world. Offset searches never load. Loading is disabled by
+ * default: geometry must not change inside LOS, lighting or MAP2 publication.
+ * Returns the previous state. */
+#define SPATIAL_AUTOLOAD_BUDGET SPATIAL_STACK_LEVELS
+bool spatial_autoload_exchange(bool enabled);
+/* Load the tiled maps a viewer centered at origin x/y can show within the given
+ * half extents at every MAP2 depth, plus its full upward stack for sky light.
+ * At most SPATIAL_VIEW_AUTOLOAD_BUDGET maps load per call, the viewer's column
+ * first; calling it on every view update loads the rest over later ticks.
+ * Call before LOS or MAP2 work, never inside it; scripts run by a load may
+ * remove the viewer, so revalidate it afterwards. */
+#define SPATIAL_VIEW_AUTOLOAD_BUDGET 2
+void spatial_autoload_view(mapstruct *origin, int x, int y, int half_width, int half_height);
+
+/* Server-thread only: borrowed map/object pointers; no mutations other than
+ * the bounded tiled-map loading above; bounded temporary lookup storage.
+ * Cursors may only survive while the caller retains map lifetime.
  * Invalid, ambiguous, over-bound or unavailable topology fails closed. */
 bool spatial_resolve(mapstruct *origin, int x, int y, int z, spatial_cell *cell);
 bool spatial_offset(mapstruct *origin, mapstruct *target, int *dx, int *dy, int *dz);

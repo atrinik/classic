@@ -21,6 +21,7 @@
 #include <map.h>
 #include <object.h>
 #include <player.h>
+#include <spatial.h>
 #include <swap.h>
 #include <toolkit/path.h>
 
@@ -1586,6 +1587,112 @@ START_TEST(test_filename_tiling_restores_legacy_links) {
 }
 END_TEST
 
+START_TEST(test_spatial_resolve_loads_only_requested_tiled_maps) {
+    char temporary_root[] = "/tmp/atrinik-spatial-autoload-XXXXXX";
+    ck_assert_ptr_ne(mkdtemp(temporary_root), NULL);
+
+    char saved_mapspath[HUGE_BUF];
+    snprintf((saved_mapspath), sizeof((saved_mapspath)), "%s", settings.mapspath);
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, temporary_root);
+
+    const char *logical_paths[] = {
+        "/vertical_90_90", "/vertical_90_90_1", "/vertical_90_90_2",
+        "/world_20_20",    "/world_21_20",      "/world_22_20",
+        "/vertical_95_95", "/vertical_95_95_1", "/vertical_95_95_2",
+        "/vertical_95_95_3",
+    };
+    write_filename_tile_map(temporary_root, logical_paths[0], "linked", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[1], "linked", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[2], "open", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[3], "open", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[4], "open", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[5], "open", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[6], "linked", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[7], "linked", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[8], "linked", NULL);
+    write_filename_tile_map(temporary_root, logical_paths[9], "open", NULL);
+
+    /* A ground level loads without its upper level, as for a player walking
+     * a town street. The view of the level above must load it on demand. */
+    mapstruct *ground = ready_map_name("/vertical_90_90", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(ground);
+    ck_assert_ptr_eq(ground->tile_map[TILED_UP], NULL);
+    spatial_cell cell;
+
+    /* LOS, lighting and MAP2 publication never load. */
+    ck_assert(!spatial_resolve(ground, 1, 1, 1, &cell));
+    ck_assert_ptr_eq(ground->tile_map[TILED_UP], NULL);
+    ck_assert(spatial_autoload_exchange(true) == false);
+    int dx, dy, dz;
+
+    ck_assert(spatial_resolve(ground, 1, 1, 1, &cell));
+    mapstruct *first = ground->tile_map[TILED_UP];
+    ck_assert_ptr_nonnull(first);
+    ck_assert_ptr_eq(cell.map, first);
+    ck_assert_str_eq(first->path, "/vertical_90_90_1");
+    ck_assert_int_eq(cell.x, 1);
+    ck_assert_int_eq(cell.y, 1);
+    /* Only the requested level loads; nothing cascades further up. */
+    ck_assert_ptr_eq(first->tile_map[TILED_UP], NULL);
+
+    ck_assert(spatial_resolve(ground, 1, 1, 2, &cell));
+    mapstruct *second = first->tile_map[TILED_UP];
+    ck_assert_ptr_nonnull(second);
+    ck_assert_ptr_eq(cell.map, second);
+    ck_assert(spatial_offset(ground, second, &dx, &dy, &dz));
+    ck_assert_int_eq(dz, 2);
+
+    /* Horizontal seams load only the neighbor containing the cell. */
+    mapstruct *west = ready_map_name("/world_20_20", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(west);
+    ck_assert_ptr_eq(west->tile_map[TILED_EAST], NULL);
+    ck_assert(spatial_resolve(west, MAP_WIDTH(west) + 2, 3, 0, &cell));
+    mapstruct *east = west->tile_map[TILED_EAST];
+    ck_assert_ptr_nonnull(east);
+    ck_assert_ptr_eq(cell.map, east);
+    ck_assert_int_eq(cell.x, 2);
+    ck_assert_int_eq(cell.y, 3);
+    ck_assert_ptr_eq(east->tile_map[TILED_EAST], NULL);
+    ck_assert(spatial_autoload_exchange(false));
+
+    /* Successive view updates load the viewer's whole upward stack, a bounded
+     * number of maps at a time, and restore the disabled default. */
+    mapstruct *street = ready_map_name("/vertical_95_95", NULL, MAP_FLUSH | MAP_NO_DYNAMIC);
+    ck_assert_ptr_nonnull(street);
+    ck_assert_ptr_eq(street->tile_map[TILED_UP], NULL);
+    spatial_autoload_view(street, 12, 12, 8, 8);
+    ck_assert(!spatial_autoload_exchange(false));
+    mapstruct *street_first = street->tile_map[TILED_UP];
+    ck_assert_ptr_nonnull(street_first);
+    mapstruct *street_second = street_first->tile_map[TILED_UP];
+    ck_assert_ptr_nonnull(street_second);
+    ck_assert_str_eq(street_second->path, "/vertical_95_95_2");
+    ck_assert_ptr_eq(street_second->tile_map[TILED_UP], NULL);
+    spatial_autoload_view(street, 12, 12, 8, 8);
+    mapstruct *street_third = street_second->tile_map[TILED_UP];
+    ck_assert_ptr_nonnull(street_third);
+    ck_assert_str_eq(street_third->path, "/vertical_95_95_3");
+
+    delete_map(street_third);
+    delete_map(street_second);
+    delete_map(street_first);
+    delete_map(street);
+    delete_map(second);
+    delete_map(first);
+    delete_map(ground);
+    delete_map(east);
+    delete_map(west);
+    for (size_t i = 0; i < arraysize(logical_paths); i++) {
+        char path[HUGE_BUF];
+        ck_assert_int_lt(snprintf((path), sizeof((path)), "%s%s", temporary_root, logical_paths[i]),
+                         (int)sizeof(path));
+        ck_assert_int_eq(unlink(path), 0);
+    }
+    snprintf((settings.mapspath), sizeof((settings.mapspath)), "%.*s", (int)sizeof(settings.mapspath) - 1, saved_mapspath);
+    ck_assert_int_eq(rmdir(temporary_root), 0);
+}
+END_TEST
+
 START_TEST(test_filename_tiling_survives_temporary_map_reload) {
     char temporary_root[] = "/tmp/atrinik-celestial-filename-swap-XXXXXX";
     ck_assert_ptr_nonnull(mkdtemp(temporary_root));
@@ -2111,6 +2218,7 @@ static Suite *suite(void) {
     tcase_add_loop_test(tc_core, test_inactive_runtime_private_player_save_roundtrip, 0, 4);
     tcase_add_loop_test(tc_core, test_active_runtime_private_player_identity_remains_owner_bound, 0, 2);
     tcase_add_test(tc_core, test_filename_tiling_restores_legacy_links);
+    tcase_add_test(tc_core, test_spatial_resolve_loads_only_requested_tiled_maps);
     tcase_add_loop_test(tc_core, test_filename_tiling_survives_temporary_map_reload, 0, 5);
     tcase_add_loop_test(tc_core, test_rejected_temporary_map_withdraws_its_tile_backlinks, 0, 4);
     tcase_add_test(tc_core, test_character_transaction_lifecycle_is_durable);
