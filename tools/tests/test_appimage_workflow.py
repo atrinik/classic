@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import json
 import os
 import re
@@ -77,8 +78,17 @@ class AppImageWorkflowTests(unittest.TestCase):
     def test_schema_specific_jobs_fail_closed(self) -> None:
         workflow = self.workflow()
         job = self.job()
-        self.assertIn("if: needs.metadata.outputs.artifact_schema == '3'", job)
-        self.assertIn('needs: [metadata, dependencies, gpu-shaders]', job)
+        self.assertIn('needs: [metadata, dependencies, gpu-shaders, appimage-prebuilt]', job)
+        condition = job.split('    if: >-\n', 1)[1].split('\n    permissions:', 1)[0]
+        for required in ("!cancelled()", "needs.metadata.result == 'success'",
+                         "needs.dependencies.result == 'success'", "needs.gpu-shaders.result == 'success'",
+                         "needs.metadata.outputs.artifact_schema == '3'"):
+            self.assertIn(required, condition)
+        # A failed advisory verifier must never skip the AppImage build.
+        self.assertNotIn('appimage-prebuilt.result', condition)
+        verifier = workflow.split('  appimage-prebuilt:\n', 1)[1].split('\n  candidate:\n', 1)[0]
+        self.assertIn("if: needs.metadata.outputs.artifact_schema == '3'", verifier)
+        self.assertIn('continue-on-error: true', verifier)
         finalizer = workflow.split('  candidate:\n', 1)[1]
         self.assertIn('      - client-appimage\n', finalizer)
         for schema, deb, app in ((1, 'skipped', 'skipped'), (2, 'success', 'skipped'),
@@ -236,12 +246,28 @@ with pathlib.Path('docker-calls.jsonl').open('a') as stream:
     stream.write(json.dumps(sys.argv[1:]) + '\\n')
 if sys.argv[1] == 'build' and os.environ.get('FAIL_TARGET') in sys.argv:
     sys.exit(1)
+if sys.argv[1] == 'pull':
+    sys.exit(0 if os.environ.get('PULL_OK') else 1)
 if sys.argv[1] == 'run':
     print('fixture-package\\t1.2.3')
+elif sys.argv[1:3] == ['image', 'inspect'] and any('RepoDigests' in argument for argument in sys.argv):
+    reference = sys.argv[-1]
+    print(reference if '@sha256:' in reference else os.environ.get('FAKE_DIGEST', ''))
 elif sys.argv[1:3] == ['image', 'inspect']:
     print('sha256:' + 'a' * 64)
 """)
             docker.chmod(0o755)
+            gh = workspace / 'bin/gh'
+            gh.write_text("""#!/usr/bin/env python3
+import json, os, pathlib, sys
+with pathlib.Path('gh-calls.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\\n')
+sys.exit(0 if os.environ.get('GH_VERIFY_OK') else 1)
+""")
+            gh.chmod(0o755)
+            shutil.copy2(ROOT / 'tools/ci/appimage/context_key.py', trusted)
+            shutil.copy2(ROOT / 'tools/ci/appimage/prebuilt_images.py', trusted)
+            shutil.copy2(ROOT / 'tools/ci/appimage/graphical.Dockerfile', trusted)
             # Only the trusted resolver reads committed candidate lock data;
             # candidate preparation code never executes on the host.
             candidate = workspace / 'candidate-source/tools/ci/appimage'
@@ -254,18 +280,43 @@ elif sys.argv[1:3] == ['image', 'inspect']:
                                '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture']):
                 subprocess.run(['git', '-C', str(source), *arguments], check=True)
             revision = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
-            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
-                cwd=workspace, capture_output=True, text=True,
-                env=dict(os.environ, CLASSIC_LINUX_IMAGE="ghcr.io/atrinik/classic-build:1.16.0@sha256:" + "a" * 64,
-                         GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace), RELEASE_REVISION=revision,
-                         PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+
+            def run(**extra):
+                for leftover in (workspace / 'build', workspace / 'docker-calls.jsonl', workspace / 'gh-calls.jsonl'):
+                    if leftover.is_dir():
+                        shutil.rmtree(leftover)
+                    elif leftover.exists():
+                        leftover.unlink()
+                environment = {key: value for key, value in os.environ.items()
+                               if key not in ('PULL_OK', 'GH_VERIFY_OK', 'FAIL_TARGET', 'FAKE_DIGEST',
+                                              'PREBUILT_CONTEXT_KEY', 'PREBUILT_IMAGES')}
+                environment.update(CLASSIC_LINUX_IMAGE="ghcr.io/atrinik/classic-build:1.16.0@sha256:" + "a" * 64,
+                                   GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace),
+                                   RELEASE_REVISION=revision,
+                                   APPIMAGE_IMAGE_REPOSITORY='ghcr.io/atrinik/classic-appimage',
+                                   PATH=f"{workspace / 'bin'}:{os.environ['PATH']}", **extra)
+                completed = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
+                                           cwd=workspace, capture_output=True, text=True, env=environment)
+                docker_log = workspace / 'docker-calls.jsonl'
+                gh_log = workspace / 'gh-calls.jsonl'
+                return (completed,
+                        [json.loads(line) for line in docker_log.read_text().splitlines()] if docker_log.exists() else [],
+                        [json.loads(line) for line in gh_log.read_text().splitlines()] if gh_log.exists() else [])
+
+            result, calls, gh_calls = run()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, '')
             self.assertEqual((workspace / 'build/appimage-evidence/packaging.lock.json').read_text(),
                              '{"fixture": "locked inputs"}\n')
             self.assertEqual((workspace / 'build/appimage-evidence/build-packages.tsv').read_text(),
                              'fixture-package\t1.2.3\n')
-            calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
+            self.assertEqual(gh_calls, [])
+            sources = (workspace / 'build/appimage-evidence/image-sources.txt').read_text().split()
+            self.assertEqual(sources.count('built'), 5)
+            key = (workspace / 'build/appimage-evidence/context-key.txt').read_text().strip()
+            self.assertRegex(key, r'^[0-9a-f]{64}$')
+            # Without verified prebuilt digests nothing is pulled.
+            self.assertFalse(any(call[0] == 'pull' for call in calls))
             # Independent images build concurrently, so only the set is fixed.
             targets = [call[call.index('--target') + 1] for call in calls if call[0] == 'build' and '--target' in call]
             self.assertEqual(sorted(targets), sorted(['build', 'smoke-ubuntu24', 'smoke-ubuntu26', 'smoke-debian13']))
@@ -279,17 +330,147 @@ elif sys.argv[1:3] == ['image', 'inspect']:
 
             # One failed concurrent image build fails the step before any
             # image inventory or package capture.
-            shutil.rmtree(workspace / 'build')
-            (workspace / 'docker-calls.jsonl').unlink()
-            failed = subprocess.run(['bash', '-euo', 'pipefail', '-c', script],
-                cwd=workspace, capture_output=True, text=True,
-                env=dict(os.environ, CLASSIC_LINUX_IMAGE="ghcr.io/atrinik/classic-build:1.16.0@sha256:" + "a" * 64,
-                         GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace), RELEASE_REVISION=revision,
-                         FAIL_TARGET='smoke-ubuntu26',
-                         PATH=f"{workspace / 'bin'}:{os.environ['PATH']}"))
+            failed, failed_calls, _ = run(FAIL_TARGET='smoke-ubuntu26')
             self.assertNotEqual(failed.returncode, 0)
-            failed_calls = [json.loads(line) for line in (workspace / 'docker-calls.jsonl').read_text().splitlines()]
-            self.assertFalse(any(call[0] in ('run', 'image') for call in failed_calls))
+            self.assertFalse(any(call[0] == 'run' or call[:2] == ['image', 'inspect'] and '--format' in call
+                                 and call[call.index('--format') + 1] == '{{.Id}}' for call in failed_calls))
+
+            # Verified digests for exactly this context replace every local build,
+            # pulled by immutable digest without any token in this job.
+            targets = ('build', 'smoke-ubuntu24', 'smoke-ubuntu26', 'smoke-debian13', 'graphical')
+            digest = 'ghcr.io/atrinik/classic-appimage@sha256:' + 'b' * 64
+            verified = json.dumps({target: digest for target in targets})
+            hit, hit_calls, hit_gh = run(PULL_OK='1', PREBUILT_CONTEXT_KEY=key, PREBUILT_IMAGES=verified)
+            self.assertEqual(hit.returncode, 0, hit.stderr)
+            self.assertEqual(hit_gh, [])
+            self.assertFalse(any(call[0] == 'build' for call in hit_calls))
+            self.assertEqual([call[-1] for call in hit_calls if call[0] == 'pull'], [digest] * 5)
+            tags = sorted(call[2] for call in hit_calls if call[0] == 'tag')
+            self.assertEqual(tags, sorted(['classic-appimage-build', 'classic-appimage-ubuntu24',
+                                           'classic-appimage-ubuntu26', 'classic-appimage-debian13',
+                                           'classic-appimage-graphical']))
+            hit_sources = (workspace / 'build/appimage-evidence/image-sources.txt').read_text().splitlines()
+            self.assertEqual(hit_sources, [f'{target} prebuilt {digest}' for target in targets])
+            self.assertEqual(hit_calls[-1], ['run', '--rm', '--network', 'none',
+                                             'classic-appimage-build', 'cat', '/build-packages.tsv'])
+
+            # Digests verified for a different context are never used.
+            mismatch, mismatch_calls, _ = run(PULL_OK='1', PREBUILT_CONTEXT_KEY='0' * 64, PREBUILT_IMAGES=verified)
+            self.assertEqual(mismatch.returncode, 0, mismatch.stderr)
+            self.assertFalse(any(call[0] in ('pull', 'tag') for call in mismatch_calls))
+            self.assertEqual(sum(1 for call in mismatch_calls if call[0] == 'build'), 5)
+
+            # A failed digest pull or a malformed reference falls back to building.
+            missing, missing_calls, _ = run(PREBUILT_CONTEXT_KEY=key, PREBUILT_IMAGES=verified)
+            self.assertEqual(missing.returncode, 0, missing.stderr)
+            self.assertFalse(any(call[0] == 'tag' for call in missing_calls))
+            self.assertEqual(sum(1 for call in missing_calls if call[0] == 'build'), 5)
+            malformed, malformed_calls, _ = run(PULL_OK='1', PREBUILT_CONTEXT_KEY=key,
+                                                PREBUILT_IMAGES=json.dumps({'build': 'ghcr.io/x/y:latest'}))
+            self.assertEqual(malformed.returncode, 0, malformed.stderr)
+            self.assertFalse(any(call[0] in ('pull', 'tag') for call in malformed_calls))
+
+    def test_publisher_prepares_the_same_context_as_releases(self) -> None:
+        release = self.workflow()
+        publisher = (ROOT / '.github/workflows/appimage-images.yml').read_text()
+        pin = re.compile(r'^  CLASSIC_LINUX_IMAGE: (\S+)$', re.MULTILINE)
+        self.assertEqual(pin.findall(publisher), pin.findall(release)[:1])
+        self.assertIn('APPIMAGE_IMAGE_REPOSITORY: ghcr.io/atrinik/classic-appimage', publisher)
+        self.assertIn('APPIMAGE_IMAGE_REPOSITORY: ghcr.io/atrinik/classic-appimage', release)
+        self.assertIn("github.ref == 'refs/heads/main'", publisher)
+        self.assertIn('branches: [main]', publisher)
+        self.assertNotIn('pull_request', publisher)
+        for target in ('build', 'smoke-ubuntu24', 'smoke-ubuntu26', 'smoke-debian13', 'graphical'):
+            self.assertIn(target, publisher.split('target: [', 1)[1].split(']', 1)[0])
+        for tool in ('tools/release/resolve_compiler_image.py', 'tools/ci/appimage/prepare.py',
+                     'tools/ci/appimage/context_key.py'):
+            self.assertIn(tool, publisher)
+        self.assertIn('actions/attest@', publisher)
+        self.assertIn('push-to-registry: true', publisher)
+        # Existing tags are re-checked so a push whose attestation failed is
+        # attested on a rerun instead of being skipped forever.
+        existing = publisher.split('      - id: existing\n', 1)[1].split('      - uses:', 1)[0]
+        self.assertIn('gh attestation verify', existing)
+        self.assertIn('attested=false', existing)
+        attest = publisher.split('Attest the published image', 1)[1].split('      - name:', 1)[0]
+        self.assertIn("if: steps.existing.outputs.attested != 'true'", attest)
+        self.assertIn('steps.image.outputs.digest || steps.existing.outputs.digest', attest)
+        build = publisher.split('Build and push the image', 1)[1].split('      - name:', 1)[0]
+        self.assertIn("if: steps.existing.outputs.exists == 'false'", build)
+        self.assertIn('atrinik/classic/.github/workflows/appimage-images.yml', release)
+
+    def test_prebuilt_verifier_records_only_attested_digests(self) -> None:
+        workflow = self.workflow()
+        verifier = workflow.split('  appimage-prebuilt:\n', 1)[1].split('\n  candidate:\n', 1)[0]
+        self.assertIn('attestations: read', verifier)
+        self.assertNotIn('packages: write', verifier)
+        self.assertNotIn('candidate-source', verifier)
+        script = textwrap.dedent(verifier.split('        run: |\n', 1)[1])
+        lock = json.dumps({'compiler': {'image': 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64}})
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            (workspace / 'bin').mkdir()
+            trusted = workspace / 'tools/ci/appimage'
+            trusted.mkdir(parents=True)
+            for name in ('context_key.py', 'prebuilt_images.py', 'graphical.Dockerfile'):
+                shutil.copy2(ROOT / 'tools/ci/appimage' / name, trusted)
+            (trusted / 'prepare.py').write_text("""import argparse, json, pathlib
+parser = argparse.ArgumentParser()
+parser.add_argument('--output', type=pathlib.Path, required=True)
+parser.add_argument('--compiler-image', required=True)
+parser.add_argument('--source-packaging-lock', type=pathlib.Path)
+args = parser.parse_args()
+assert args.compiler_image == 'ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64
+assert json.loads(args.source_packaging_lock.read_bytes())['compiler']['image'] == args.compiler_image
+args.output.mkdir(parents=True)
+(args.output / 'Dockerfile').write_text('fixture\\n')
+""")
+            (workspace / 'bin/docker').write_text("""#!/usr/bin/env python3
+import sys
+if sys.argv[1] == 'pull':
+    sys.exit(0)
+if sys.argv[1:3] == ['image', 'inspect']:
+    print('other.example/image@sha256:' + 'c' * 64)
+    print('ghcr.io/atrinik/classic-appimage@sha256:' + 'b' * 64)
+""")
+            (workspace / 'bin/gh').write_text("""#!/usr/bin/env python3
+import json, os, pathlib, sys
+with pathlib.Path('gh-calls.jsonl').open('a') as stream:
+    stream.write(json.dumps(sys.argv[1:]) + '\\n')
+sys.exit(0 if os.environ.get('GH_VERIFY_OK') else 1)
+""")
+            for tool in ('docker', 'gh'):
+                (workspace / 'bin' / tool).chmod(0o755)
+            for verify_ok, expected in (('1', 5), ('', 0)):
+                with self.subTest(verified=bool(verify_ok)):
+                    for leftover in (workspace / 'build', workspace / 'gh-calls.jsonl', workspace / 'output'):
+                        if leftover.is_dir():
+                            shutil.rmtree(leftover)
+                        elif leftover.exists():
+                            leftover.unlink()
+                    environment = {key: value for key, value in os.environ.items() if key != 'GH_VERIFY_OK'}
+                    environment.update(CLASSIC_LINUX_IMAGE='ghcr.io/atrinik/classic-build:1.16.0@sha256:' + 'a' * 64,
+                                       GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(workspace),
+                                       GITHUB_OUTPUT=str(workspace / 'output'),
+                                       SOURCE_PACKAGING_LOCK=base64.b64encode(lock.encode()).decode(),
+                                       APPIMAGE_IMAGE_REPOSITORY='ghcr.io/atrinik/classic-appimage',
+                                       PATH=f"{workspace / 'bin'}:{os.environ['PATH']}")
+                    if verify_ok:
+                        environment['GH_VERIFY_OK'] = verify_ok
+                    result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script], cwd=workspace,
+                                            capture_output=True, text=True, env=environment)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    outputs = dict(line.split('=', 1) for line in (workspace / 'output').read_text().splitlines())
+                    self.assertRegex(outputs['context_key'], r'^[0-9a-f]{64}$')
+                    images = json.loads(outputs['images'])
+                    self.assertEqual(len(images), expected)
+                    for reference in images.values():
+                        self.assertEqual(reference, 'ghcr.io/atrinik/classic-appimage@sha256:' + 'b' * 64)
+                    calls = [json.loads(line) for line in (workspace / 'gh-calls.jsonl').read_text().splitlines()]
+                    self.assertEqual(len(calls), 5)
+                    for call in calls:
+                        self.assertEqual(call[1], 'verify')
+                        self.assertEqual(call[2], 'oci://ghcr.io/atrinik/classic-appimage@sha256:' + 'b' * 64)
 
     def test_probe_capture_rejects_failures_and_nonregular_host_outputs(self) -> None:
         job = self.job()
