@@ -1355,9 +1355,8 @@ static void map_cache_mark_fow(map_cell_store_t *level,
                 map_cell_store_set_light_state(level, index, MAP_LIGHT_CACHE_CLEARED);
             }
             /* Cells leaving the window are no longer updated by the server:
-             * fog keeps remembered occluders but no live coarse level. */
-            level->headers[index].client_light_known &= (uint8_t)~1U;
-            memset(level->headers[index].local_light, 0, sizeof(level->headers[index].local_light));
+             * fog keeps its remembered occluders and its last authorized
+             * coarse levels, as the server freezes them for fog. */
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
         }

@@ -1632,6 +1632,25 @@ START_TEST(test_client_lighting_local_level_crosses_horizontal_seams) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_resists_radius_probing) {
+    /* A viewer who controls a known light on another tile of the block
+     * learns only max(own, hidden) as it raises its radius, never the hidden
+     * radius through mask saturation. */
+    mapstruct *reference = get_empty_map(9, 9);
+    add_colored_light(reference, 3, 3, 7, LIGHT_COLOR_WHITE);
+    int hidden_level = light_local_level(reference, 4, 4);
+    for (int probe = 1; probe <= 13; probe++) {
+        mapstruct *alone = get_empty_map(9, 9);
+        add_colored_light(alone, 5, 5, probe, LIGHT_COLOR_WHITE);
+        int own_level = light_local_level(alone, 4, 4);
+        mapstruct *both = get_empty_map(9, 9);
+        add_colored_light(both, 3, 3, 7, LIGHT_COLOR_WHITE);
+        add_colored_light(both, 5, 5, probe, LIGHT_COLOR_WHITE);
+        ck_assert_int_eq(light_local_level(both, 4, 4), MAX(own_level, hidden_level));
+    }
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
     /* A 7-wide map has blocks 0..2 and 3..6: the last cell joins its
      * neighbor instead of forming a one-cell block. */
@@ -1820,6 +1839,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
+    tcase_add_test(tc_core, test_client_lighting_local_level_resists_radius_probing);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);
