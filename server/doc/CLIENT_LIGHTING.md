@@ -402,7 +402,13 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    depend on the viewer's emitter, so an unlit player keeps it. Then the
    unchanged unsigned Q16 tone/LUT stage runs; negative intermediate values
    never reach it.
-5. Recompute when emitters, occluders, coarse levels or the camera change. A presentation-only time animates emitters whose flicker bit
+5. Recompute when emitters, occluders, coarse levels or the camera change.
+   Recomputation is bounded per presented frame: a server may change an
+   emitter on every depth in every update, so a frame rebuilds at most two
+   depths whose emitter field is only out of date, and the rest keep their
+   previous field until following frames rebuild them; a depth whose cache
+   window moved or resized is always rebuilt. Offline proofs disable the
+   bound so every frame is fully rebuilt. A presentation-only time animates emitters whose flicker bit
    is set, without server traffic. The function is deterministic: `t` is the
    client presentation clock in milliseconds since the client started (the
    frame tick `LastTick`, origin 0), the key is `k = floor(t / 125)`, and key
