@@ -1651,6 +1651,37 @@ START_TEST(test_client_lighting_local_level_resists_radius_probing) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_resists_colocated_probing) {
+    /* A known emitter placed on the same tile as a private one never sums
+     * with it, so stepping its radius reveals only the larger level. */
+    for (int hidden = 1; hidden <= 3; hidden++) {
+        mapstruct *private_only = get_empty_map(9, 9);
+        add_colored_light(private_only, 4, 4, hidden, LIGHT_COLOR_WHITE);
+        int hidden_level = light_local_level(private_only, 4, 4);
+        for (int probe = 1; probe <= 13; probe++) {
+            mapstruct *alone = get_empty_map(9, 9);
+            add_colored_light(alone, 4, 4, probe, LIGHT_COLOR_WHITE);
+            mapstruct *both = get_empty_map(9, 9);
+            add_colored_light(both, 4, 4, hidden, LIGHT_COLOR_WHITE);
+            add_colored_light(both, 4, 4, probe, LIGHT_COLOR_WHITE);
+            ck_assert_int_eq(light_local_level(both, 4, 4),
+                             MAX(light_local_level(alone, 4, 4), hidden_level));
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_crosses_unaligned_seams) {
+    /* Blocks of maps with different heights do not align; light still
+     * crosses the continuous seam between them. */
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(7, 7);
+    link_horizontal_maps(west, east);
+    add_colored_light(east, 0, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(west, 8, 4), 0);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
     /* A 7-wide map has blocks 0..2 and 3..6: the last cell joins its
      * neighbor instead of forming a one-cell block. */
@@ -1840,6 +1871,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
     tcase_add_test(tc_core, test_client_lighting_local_level_resists_radius_probing);
+    tcase_add_test(tc_core, test_client_lighting_local_level_resists_colocated_probing);
+    tcase_add_test(tc_core, test_client_lighting_local_level_crosses_unaligned_seams);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);

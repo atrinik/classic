@@ -1461,10 +1461,12 @@ static void light_local_block(int coordinate, int size, int *start, int *end) {
 
 /**
  * Pooled sources of a block: the strongest positive and the strongest negative
- * per-tile scalar mask. Tiles are never summed with one another, so a viewer's
- * own known light on another tile of the block cannot combine with a hidden
- * source through the nonlinear mask and reveal its radius by saturation;
- * raising it only reveals max(own, hidden), which the level already discloses.
+ * single-source mask. Each emitting object counts with its own glow radius,
+ * and light a space's counter holds without an object counts as one more
+ * source; sources are never summed with one another. A viewer's known light,
+ * even on the same tile as a private source, therefore cannot combine with it
+ * through the nonlinear mask and reveal its radius by saturation: it reveals
+ * only the maximum, which the level already discloses.
  */
 static void light_local_block_sources(mapstruct *map, int bx, int ex, int by, int ey,
                                       int *positive, int *negative) {
@@ -1472,9 +1474,23 @@ static void light_local_block_sources(mapstruct *map, int bx, int ex, int by, in
     *negative = 0;
     for (int cy = by; cy < ey; cy++) {
         for (int cx = bx; cx < ex; cx++) {
-            int mask = get_real_light_source_value(GET_MAP_SPACE_PTR(map, cx, cy)->light_source);
-            *positive = MAX(*positive, mask);
-            *negative = MIN(*negative, mask);
+            const MapSpace *space = GET_MAP_SPACE_PTR(map, cx, cy);
+            int64_t residual = space->light_source;
+            for (const object *op = GET_MAP_OB(map, cx, cy); op != NULL; op = op->above) {
+                if (op->glow_radius == 0) {
+                    continue;
+                }
+                int mask = get_real_light_source_value(op->glow_radius);
+                *positive = MAX(*positive, mask);
+                *negative = MIN(*negative, mask);
+                residual -= op->glow_radius;
+            }
+            if (residual != 0) {
+                int mask = get_real_light_source_value(
+                    (int)MAX(INT32_MIN, MIN(INT32_MAX, residual)));
+                *positive = MAX(*positive, mask);
+                *negative = MIN(*negative, mask);
+            }
         }
     }
 }
@@ -1559,66 +1575,28 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     return level;
 }
 
-static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
-    /* Sources are pooled per block before propagation and reach a block by
-     * the gap between the two blocks, which depends only on block geometry,
-     * so a source's position inside its block never changes any block's
-     * level. The own block and its eight neighbors, on this level and on
-     * linked levels, are within the largest radius. */
-    int32_t positive = 0, negative = 0;
-    static const int offsets[9][2] = {{0, 0},  {-1, 0}, {1, 0},  {0, -1}, {0, 1},
-                                      {-1, -1}, {1, -1}, {-1, 1}, {1, 1}};
-    for (int dz = -MAX_LIGHT_RADIUS; dz <= MAX_LIGHT_RADIUS; dz++) {
-        mapstruct *level_map = dz == 0 ? map : light_local_level_map(map, dz);
-        if (level_map == NULL) {
-            continue;
-        }
-        for (size_t i = 0; i < arraysize(offsets); i++) {
-            int sx = bx, sex = ex, sy = by, sey = ey;
-            mapstruct *source_map = level_map;
-            /* A neighbor block across a seam lies on the linked map, whose
-             * cells are offset by its own or this map's extent. */
-            int shift_x2 = 0, shift_y2 = 0;
-            if (offsets[i][0] != 0) {
-                int probe = offsets[i][0] < 0 ? bx - 1 : ex;
-                if (probe < 0 || probe >= MAP_WIDTH(map)) {
-                    mapstruct *next = light_local_seam(level_map, probe < 0 ? TILED_WEST : TILED_EAST);
-                    if (next == NULL || MAP_HEIGHT(next) != MAP_HEIGHT(level_map)) {
-                        continue;
-                    }
-                    light_local_block(probe < 0 ? MAP_WIDTH(next) - 1 : 0, MAP_WIDTH(next), &sx,
-                                      &sex);
-                    shift_x2 = probe < 0 ? -2 * MAP_WIDTH(next) : 2 * MAP_WIDTH(level_map);
-                    source_map = next;
-                } else {
-                    light_local_block(probe, MAP_WIDTH(map), &sx, &sex);
-                }
-            }
-            if (offsets[i][1] != 0) {
-                int probe = offsets[i][1] < 0 ? by - 1 : ey;
-                if (probe < 0 || probe >= MAP_HEIGHT(map)) {
-                    /* A diagonal neighbor is reached through both seams. */
-                    mapstruct *next =
-                        light_local_seam(source_map, probe < 0 ? TILED_NORTH : TILED_SOUTH);
-                    if (next == NULL || MAP_WIDTH(next) != MAP_WIDTH(source_map)) {
-                        continue;
-                    }
-                    light_local_block(probe < 0 ? MAP_HEIGHT(next) - 1 : 0, MAP_HEIGHT(next), &sy,
-                                      &sey);
-                    shift_y2 = probe < 0 ? -2 * MAP_HEIGHT(next) : 2 * MAP_HEIGHT(source_map);
-                    source_map = next;
-                } else {
-                    light_local_block(probe, MAP_HEIGHT(map), &sy, &sey);
-                }
-            }
-            int strongest[2];
-            light_local_block_sources(source_map, sx, sex, sy, sey, &strongest[0], &strongest[1]);
-            /* Gap in cells between the source block and this block, in this
-             * map's coordinates; zero for the own block. */
-            int ox = shift_x2 / 2, oy = shift_y2 / 2;
+/**
+ * Pool every block of one source map region within reach of the target block
+ * [bx, ex) x [by, ey). The region's cell (cx, cy) lies at (cx + ox, cy + oy) in
+ * the target map's coordinates; its blocks need not align with the target's,
+ * because each reaches it by the gap between the two rectangles.
+ */
+static void light_local_pool_region(mapstruct *source, int ox, int oy, int dz, int bx, int ex,
+                                    int by, int ey, int32_t *positive, int32_t *negative) {
+    int reach = MAX_LIGHT_RADIUS;
+    int x0 = MAX(0, bx - reach - ox), x1 = MIN(MAP_WIDTH(source), ex + reach - ox);
+    int y0 = MAX(0, by - reach - oy), y1 = MIN(MAP_HEIGHT(source), ey + reach - oy);
+    for (int cy = y0; cy < y1;) {
+        int sy, sey;
+        light_local_block(cy, MAP_HEIGHT(source), &sy, &sey);
+        for (int cx = x0; cx < x1;) {
+            int sx, sex;
+            light_local_block(cx, MAP_WIDTH(source), &sx, &sex);
             int gap_x = MAX(0, MAX(sx + ox - (ex - 1), bx - (sex - 1 + ox)));
             int gap_y = MAX(0, MAX(sy + oy - (ey - 1), by - (sey - 1 + oy)));
             int distance_squared = gap_x * gap_x + gap_y * gap_y + dz * dz;
+            int strongest[2];
+            light_local_block_sources(source, sx, sex, sy, sey, &strongest[0], &strongest[1]);
             for (int sign = 0; sign < 2; sign++) {
                 int mask = strongest[sign];
                 if (mask == 0) {
@@ -1631,9 +1609,61 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
                 }
                 int32_t value = light_mask_value(abs(mask), distance_squared);
                 if (mask > 0) {
-                    positive = MAX(positive, value);
+                    *positive = MAX(*positive, value);
                 } else {
-                    negative = MIN(negative, -value);
+                    *negative = MIN(*negative, -value);
+                }
+            }
+            cx = sex;
+        }
+        cy = sey;
+    }
+}
+
+static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
+    /* Sources are pooled per block before propagation and reach a block by
+     * the gap between the two blocks, which depends only on block geometry,
+     * so a source's position inside its block never changes any block's
+     * level. Blocks within the largest radius count on this map, on maps
+     * across continuous seams, corners through two seams, and on linked
+     * levels above and below; no map is ever loaded for it. */
+    int32_t positive = 0, negative = 0;
+    for (int dz = -MAX_LIGHT_RADIUS; dz <= MAX_LIGHT_RADIUS; dz++) {
+        mapstruct *level_map = dz == 0 ? map : light_local_level_map(map, dz);
+        if (level_map == NULL) {
+            continue;
+        }
+        light_local_pool_region(level_map, 0, 0, dz, bx, ex, by, ey, &positive, &negative);
+        static const int horizontal[2] = {TILED_WEST, TILED_EAST};
+        static const int vertical[2] = {TILED_NORTH, TILED_SOUTH};
+        mapstruct *columns[2];
+        int column_ox[2];
+        for (int side = 0; side < 2; side++) {
+            columns[side] = light_local_seam(level_map, horizontal[side]);
+            column_ox[side] = columns[side] == NULL ? 0
+                              : side == 0      ? -MAP_WIDTH(columns[side])
+                                               : MAP_WIDTH(level_map);
+            if (columns[side] != NULL) {
+                light_local_pool_region(columns[side], column_ox[side], 0, dz, bx, ex, by, ey,
+                                        &positive, &negative);
+            }
+        }
+        for (int side = 0; side < 2; side++) {
+            mapstruct *row = light_local_seam(level_map, vertical[side]);
+            if (row != NULL) {
+                int oy = side == 0 ? -MAP_HEIGHT(row) : MAP_HEIGHT(level_map);
+                light_local_pool_region(row, 0, oy, dz, bx, ex, by, ey, &positive, &negative);
+            }
+            /* Corners are reached through the horizontal seam, then the vertical. */
+            for (int column = 0; column < 2; column++) {
+                if (columns[column] == NULL) {
+                    continue;
+                }
+                mapstruct *corner = light_local_seam(columns[column], vertical[side]);
+                if (corner != NULL) {
+                    int oy = side == 0 ? -MAP_HEIGHT(corner) : MAP_HEIGHT(columns[column]);
+                    light_local_pool_region(corner, column_ox[column], oy, dz, bx, ex, by, ey,
+                                            &positive, &negative);
                 }
             }
         }
