@@ -251,6 +251,17 @@ typedef struct map_client_lighting_field {
 } map_client_lighting_field_t;
 
 static map_client_lighting_field_t map_client_lighting_fields[MAP2_LEVELS];
+
+/**
+ * A level lost emitters or its store: give it a fresh revision and drop its
+ * field, so no frame presents the revoked emitters while a rebuild waits for
+ * the per-frame budget; until it is rebuilt the level composes coarse light
+ * only, and an allocator reusing the store's address cannot revive it.
+ */
+static void map_emitter_revoke(size_t level) {
+    map_emitter_revision_bump(level);
+    map_client_lighting_fields[level].valid = false;
+}
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 /** Offline proofs only: the discrete per-tile projection pinned by approved
  * conformance goldens. Players always get smooth lighting. */
@@ -1378,12 +1389,11 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             int physical_y = (y + map_cache_origin_y) % height;
             size_t index = (size_t)physical_y * width + physical_x;
             map_cell_t *cell = map_cell_store_slot(level, index, false);
-            /* Cells leaving the window are no longer updated by the server:
-             * fog keeps its last signed base radiance and keyframe, its
-             * remembered occluders and its last authorized coarse levels, as
-             * the server freezes them for fog and a soft clear keeps them. */
+            /* Cells leaving the window keep their signed base radiance,
+             * keyframe, remembered occluders and coarse levels, as a soft
+             * clear does; their emitters are revoked. */
             if (cell != NULL && cell->emitters != NULL && !cell->fow) {
-                map_emitter_revision_bump(level_index);
+                map_emitter_revoke(level_index);
             }
             if (cell != NULL && (!cell->fow || cell->structural_fow)) {
                 map_clear_live_cell(cell);
@@ -1447,6 +1457,7 @@ void map_set_level_mask(uint16_t mask) {
             map_cell_store_destroy(level_cells[index]);
             level_cells[index] = NULL;
             level_lighting_revision[index]++;
+            map_emitter_revoke(index);
         }
     }
 
@@ -2036,7 +2047,7 @@ void clear_map(bool hard) {
     /* Slots cleared in place keep the cache origin, so the emitter field must
      * not mistake the next map's cells for the previous ones. */
     for (size_t level = 0; level < MAP2_LEVELS; level++) {
-        map_emitter_revision_bump(level);
+        map_emitter_revoke(level);
     }
     if (hard) {
         map_hard_clear_abort_pending();
@@ -2163,6 +2174,7 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
             map_cell_store_destroy(old_cells);
             level_cells[level] = new_cells;
             level_lighting_revision[level]++;
+            map_emitter_revoke(level);
         }
 
         map_cache_origin_x = 0;
@@ -2180,7 +2192,7 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                     level_lighting_revision[level]++;
                     /* The origin may not move, so the store alone must stop
                      * matching a field built from the discarded cells. */
-                    map_emitter_revision_bump(level);
+                    map_emitter_revoke(level);
                 }
             }
             map_cache_origin_x = 0;
@@ -3221,8 +3233,9 @@ void map_clear_cell(int x, int y, bool hard) {
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
     /* Only a clear that removes emitters, or an evaluated occluder on a hard
      * clear, changes the emitter field; an idempotent clear relights nothing. */
-    if ((cell != NULL && cell->emitters != NULL) ||
-        (hard && map_cell_effective_occluder(&cells->headers[index]) != 0)) {
+    if (cell != NULL && cell->emitters != NULL) {
+        map_emitter_revoke(current_level_index);
+    } else if (hard && map_cell_effective_occluder(&cells->headers[index]) != 0) {
         map_emitter_revision_bump(current_level_index);
     }
     map_cell_clear_client_light(index, hard);
@@ -3477,7 +3490,11 @@ void map_set_fow(int x, int y, bool fow) {
      * carries emitters changes it; an emitter-free toggle relights nothing. */
     cell = map_cell_store_slot(cells, index, false);
     if (cell != NULL && cell->emitters != NULL) {
-        map_emitter_revision_bump(current_level_index);
+        if (fow) {
+            map_emitter_revoke(current_level_index);
+        } else {
+            map_emitter_revision_bump(current_level_index);
+        }
     }
 }
 
@@ -5652,6 +5669,9 @@ static void map_flicker_lighting_update(void) {
     }
     if (flickering) {
         map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+        /* A dynamic minimap retains its own target: advance its flicker too,
+         * at its own throttle. */
+        minimap_redraw_request();
     }
 }
 
@@ -6812,6 +6832,22 @@ bool widget_map_client_lighting_state_test(void) {
     map_emitter_frame_end();
     success = success && (map_redraw_pending_reasons() & MAP_REDRAW_REASON_LIGHTING) != 0;
     map_redraw_consume();
+    /* A revocation drops the field at once: over budget, the level composes
+     * coarse light only rather than presenting the revoked emitters. */
+    map_emitter_frame_begin();
+    for (int rebuild = 0; rebuild <= MAP_EMITTER_REBUILDS_PER_FRAME; rebuild++) {
+        map_emitter_revision_bump(current_level_index);
+        map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    }
+    map_set_layer_emitter(9, 8, layer, 1, 0, UINT32_C(0xffffff));
+    map_set_fow(9, 8, true);
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && !budget_field->valid;
+    map_redraw_consume();
+    map_emitter_frame_end();
+    map_redraw_consume();
+    map_clear_cell(9, 8, true);
+    map_set_fow(9, 8, false);
     /* An auxiliary view after the frame shares its spent budget. */
     map_emitter_auxiliary_begin();
     map_emitter_revision_bump(current_level_index);
