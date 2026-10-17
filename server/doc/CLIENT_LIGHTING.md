@@ -262,7 +262,10 @@ connection.
   and keeps its coarse levels at the values last sent while it was visible,
   so a client cannot follow a hidden source through fog. Only the viewer's
   own vision-floor bit is refreshed, in a layerless record. A tile never seen
-  has level 0. The client keeps the tile's last base radiance. This continues while the per-socket cache is valid;
+  has level 0. The client keeps the tile's last base radiance and keyframe,
+  and the server sends a fogged tile no base, RGB or keyframe record and keeps
+  its cache entry, so remembered lighting is the last authorized sample and
+  never follows the hidden cell's environment. This continues while the per-socket cache is valid;
   a map change, hard clear or reconnect ends it. Remembered tiles never
   receive objects, emitters or occluder changes: those describe objects, and
   the objects on a remembered tile are not currently sent.
