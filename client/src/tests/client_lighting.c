@@ -139,6 +139,10 @@ static void test_colors_beyond_the_bound_keep_their_hue(void) {
     evaluate(many, 10);
     TEST_CHECK(cell_at(4, 4)->rgb[2] > cell_at(4, 4)->rgb[0]);
     TEST_CHECK(cell_at(4, 4)->rgb[2] == cell_at(4, 4)->scalar);
+    /* Folded radius-1 constituents keep the radius-1 reach: no colored light
+     * appears where none of their own profiles reaches. */
+    int32_t far_scalar = cell_at(7, 4)->scalar;
+    TEST_CHECK(cell_at(7, 4)->rgb[2] == far_scalar && cell_at(7, 4)->rgb[0] == far_scalar);
 }
 
 static void test_darkness_is_negative_and_uncolored(void) {
