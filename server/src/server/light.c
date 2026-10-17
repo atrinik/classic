@@ -585,14 +585,24 @@ static bool light_resolve_cached(light_resolve_cache *cache, int x, int y, int z
         if (cache->epoch != los_geometry_epoch()) {
             /* Resolution loaded a map. Keep nothing from before or during it. */
             light_resolve_cache_reset(cache);
-            *cell = resolved;
+            if (found) {
+                *cell = resolved;
+            }
             return found;
         }
+        /* A failed resolution need not initialize its cell; keep only the state. */
+        if (!found) {
+            *state = LIGHT_RESOLVE_MISSING;
+            return false;
+        }
         cache->cells[iz][iy][ix] = resolved;
-        *state = found ? LIGHT_RESOLVE_FOUND : LIGHT_RESOLVE_MISSING;
+        *state = LIGHT_RESOLVE_FOUND;
+    }
+    if (*state == LIGHT_RESOLVE_MISSING) {
+        return false;
     }
     *cell = cache->cells[iz][iy][ix];
-    return *state == LIGHT_RESOLVE_FOUND;
+    return true;
 }
 
 static bool light_ray_resolve(mapstruct *origin, int x, int y, int z, spatial_cell *cell,
