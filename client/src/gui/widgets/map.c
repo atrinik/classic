@@ -1344,19 +1344,13 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             int physical_y = (y + map_cache_origin_y) % height;
             size_t index = (size_t)physical_y * width + physical_x;
             map_cell_t *cell = map_cell_store_slot(level, index, false);
-            bool had_light_state =
-                level->headers[index].light_state != MAP_LIGHT_CACHE_UNKNOWN ||
-                (cell != NULL && (cell->lights != NULL || cell->light_keyframe != NULL));
+            /* Cells leaving the window are no longer updated by the server:
+             * fog keeps its last signed base radiance and keyframe, its
+             * remembered occluders and its last authorized coarse levels, as
+             * the server freezes them for fog and a soft clear keeps them. */
             if (cell != NULL && (!cell->fow || cell->structural_fow)) {
                 map_clear_live_cell(cell);
-                map_cell_clear_light_state(cell);
             }
-            if (had_light_state) {
-                map_cell_store_set_light_state(level, index, MAP_LIGHT_CACHE_CLEARED);
-            }
-            /* Cells leaving the window are no longer updated by the server:
-             * fog keeps its remembered occluders and its last authorized
-             * coarse levels, as the server freezes them for fog. */
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
         }
@@ -3190,10 +3184,8 @@ void map_clear_cell(int x, int y, bool hard) {
     }
 
     map_clear_live_cell(cell);
-    map_cell_clear_light_state(cell);
-    if (had_light_state) {
-        map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_CLEARED);
-    }
+    /* A remembered tile keeps its base radiance: its coarse level keeps
+     * arriving and composes onto it in fog. */
     map_cell_store_set_fow(cells, index, true, false);
     map_cell_store_trim_slot(cells, index);
 
@@ -6074,9 +6066,12 @@ bool widget_map_temporal_lighting_test(void) {
     historical->radiance = UINT16_MAX;
     historical->known = 1;
     map_clear_cell(0, 0, false);
+    /* A remembered tile keeps its base radiance in fog. */
+    success = success && historical->radiance == UINT16_MAX && historical->known;
+    /* Without a retained sample the neighbors' interpolated light applies. */
+    historical->known = 0;
     success = success &&
-              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 200 &&
-              historical->radiance == UINT16_MAX && !historical->known;
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 200;
     /* Current authoritative samples keep their established discrete transfer. */
     historical->known = 1;
     historical->radiance = 2048;
@@ -6400,12 +6395,13 @@ bool widget_map_lighting_diagnostic_test(void) {
               diagnostic.working_scalar == UINT16_MAX;
 
     got = success && map_lighting_diagnostic_get(0, 16, 16, 0, false, &diagnostic);
+    /* Fog no longer revokes light state, so a remembered cell is neither
+     * stale nor cleared; with no sample received nothing is available. */
     success = success && got && !diagnostic.visible && diagnostic.fogged && diagnostic.remembered &&
-              diagnostic.stale && !diagnostic.received && !diagnostic.missing &&
-              diagnostic.cleared && !diagnostic.keyframe_valid && !diagnostic.working_available &&
+              !diagnostic.stale && !diagnostic.received && !diagnostic.missing &&
+              !diagnostic.cleared && !diagnostic.keyframe_valid && !diagnostic.working_available &&
               !diagnostic.presentation_available && diagnostic.received_scalar == 0 &&
-              diagnostic.working_scalar == 0 &&
-              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_STALE) != 0;
+              diagnostic.working_scalar == 0;
 
     success = success &&
               map_light_keyframe_transaction_begin(8, 100, 200, MAP2_LIGHT_KEYFRAME_CONTINUOUS) &&

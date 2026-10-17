@@ -1903,7 +1903,9 @@ START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     uint64_t blocker_bits = light_occluder_object_bits(blocker);
     ck_assert_uint_eq(blocker_bits & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
     /* An unauthored view blocker transmits nothing through any of its faces. */
-    ck_assert_uint_eq((blocker_bits >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) & 0xffffU, 0xffffU);
+    ck_assert_uint_eq((light_occluder_finish(blocker_bits) >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) &
+                          0xffffU,
+                      0xffffU);
 
     add_roof_surface(map, 2, 2);
     object *roof = NULL;
@@ -1919,8 +1921,27 @@ START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     uint64_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
     ck_assert_uint_eq(combined & (MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW),
                       MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW);
-    ck_assert_uint_eq((combined >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) & 0xffffU, 0xffffU);
+    ck_assert_uint_eq((light_occluder_finish(combined) >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) &
+                          0xffffU,
+                      0xffffU);
+    ck_assert_uint_eq(light_occluder_finish(combined) & LIGHT_OCCLUDER_INTERNAL, 0);
     ck_assert_uint_eq(light_occluder_combine(0, 0), 0);
+    /* The opaque fallback applies only to faces no sent object authors: a
+     * glass pane authoring the east face keeps its transmission beside a
+     * view blocker that authors only its north face. */
+    object *wall = add_light_blocker(map, 4, 4);
+    object_set_value(wall, "celestial_faces", "N", true);
+    object *pane = arch_get("letter");
+    object_set_value(pane, "celestial_transmission", "glass", true);
+    object_set_value(pane, "celestial_faces", "E", true);
+    uint64_t cell = light_occluder_finish(
+        light_occluder_combine(light_occluder_object_bits(wall), light_occluder_object_bits(pane)));
+    int pane_east = (int)((cell >> (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 4)) & 15U);
+    ck_assert_int_lt(pane_east, 15);
+    ck_assert_int_gt(pane_east, 0);
+    ck_assert_uint_eq((cell >> (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 8)) & 15U, 15U);
+    ck_assert_uint_eq((cell >> (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 12)) & 15U, 15U);
+    object_destroy(pane);
     /* The vertical nibble combines by maximum, independently of the
      * horizontal one. */
     uint64_t glass = UINT64_C(3) << LIGHT_OCCLUDER_VERTICAL_SHIFT,

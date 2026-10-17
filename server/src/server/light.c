@@ -417,20 +417,23 @@ uint64_t light_occluder_object_bits(const object *op) {
     if (op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) {
         faces |= CELESTIAL_FACE_DOWN;
     }
-    /* Each cardinal face keeps its own coefficient, as spatial_face_light()
-     * does: an authored face transmits its authored value, an unauthored face
-     * of a view blocker transmits nothing, and other faces stay open. */
+    /* Each cardinal face keeps its own coefficient, as spatial_cell_light_face()
+     * does: an authored face transmits its authored value and is marked
+     * authored. Whether an unauthored face is opaque depends on every sent
+     * object of the cell, so a view blocker only records the fallback, which
+     * light_occluder_finish() applies to faces no sent object authors. */
     static const uint8_t cardinal[4] = {CELESTIAL_FACE_NORTH, CELESTIAL_FACE_EAST,
                                         CELESTIAL_FACE_SOUTH, CELESTIAL_FACE_WEST};
     for (size_t face = 0; face < arraysize(cardinal); face++) {
-        uint16_t coefficient = SPATIAL_LIGHT_SCALE;
         if ((faces & cardinal[face]) != 0) {
-            coefficient = light_occluder_transmission(op);
-        } else if (bits & MAP2_OCCLUDER_BLOCKSVIEW) {
-            coefficient = 0;
+            bits |= light_occluder_attenuation(light_occluder_transmission(op))
+                    << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT +
+                        MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face);
+            bits |= UINT64_C(1) << (LIGHT_OCCLUDER_AUTHORED_SHIFT + face);
         }
-        bits |= light_occluder_attenuation(coefficient)
-                << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face);
+    }
+    if (bits & MAP2_OCCLUDER_BLOCKSVIEW) {
+        bits |= LIGHT_OCCLUDER_BLOCKER_FALLBACK;
     }
     /* The downward face is the slab between this cell and the one below, so a
      * glass floor attenuates only vertical crossings. */
@@ -460,8 +463,22 @@ bool light_emitter_disclosed(const object *viewer, const object *op) {
 
 /** Combine the occluder bits of two sent objects of one cell: geometry and
  * faces are joined, and every attenuation nibble keeps the stronger one. */
+uint64_t light_occluder_finish(uint64_t bits) {
+    uint64_t finished = bits & ~LIGHT_OCCLUDER_INTERNAL;
+    if (bits & LIGHT_OCCLUDER_BLOCKER_FALLBACK) {
+        for (int face = 0; face < 4; face++) {
+            if (!(bits & (UINT64_C(1) << (LIGHT_OCCLUDER_AUTHORED_SHIFT + face)))) {
+                finished |= UINT64_C(15) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT +
+                                             MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face);
+            }
+        }
+    }
+    return finished;
+}
+
 uint64_t light_occluder_combine(uint64_t first, uint64_t second) {
-    uint64_t combined = (first | second) & UINT64_C(0xffff);
+    uint64_t combined = ((first | second) & UINT64_C(0xffff)) |
+                        ((first | second) & LIGHT_OCCLUDER_INTERNAL);
     uint64_t vertical = MAX((first >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U,
                             (second >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U);
     combined |= vertical << LIGHT_OCCLUDER_VERTICAL_SHIFT;
