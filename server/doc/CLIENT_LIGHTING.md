@@ -96,7 +96,7 @@ word already uses bits 6–15 for coordinates:
 
 | Field | Bytes | When | Meaning |
 | --- | --- | --- | --- |
-| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 + n | changed | `uint8` count `n` of `1..7`, then `n` level bytes: level `i` applies to sub-layer `i`, and sub-layers from `n` on use level `n - 1`. Each level byte: bits 0–4 signed level `-15..15` (two's complement; `-16` invalid); bit 5 reserved, zero; bit 6: remote sample, the sub-layer's light was sampled at another space than its cell, so the client composes no emitter field into it; bit 7: apply the viewer's vision floor during composition |
+| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 + n | changed | `uint8` count `n` of `1..7`, then `n` level bytes: level `i` applies to sub-layer `i`, and sub-layers from `n` on use level `n - 1`. Each level byte: bits 0–4 signed level `-15..15` (two's complement; `-16` invalid); bit 5: the viewer's `tli` override, which adds raw 1280 (daylight) neutrally during composition; bit 6: remote sample, the sub-layer's light was sampled at another space than its cell, so the client composes no emitter field into it; bit 7: apply the viewer's vision floor during composition |
 | `MAP2_FLAG_EXT_OCCLUDER` (16) | 5 | changed | `uint16`: bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7 reserved, zero; bits 8–11: local light does not cross the north, east, south or west face; bits 12–13: nor the upward or downward face; bits 14–15 reserved, zero. Then `uint16`: attenuation `a` of the north, east, south and west faces, one nibble each from bit 0. Then `uint8`: bits 0–3 vertical attenuation `v` of the downward face; bits 4–7 reserved, zero |
 
 Attenuation `a` and `v` share one scale: 0 is unattenuated, 1–14 is the
@@ -194,8 +194,11 @@ connection.
   timed-light display endpoints, once celestial light leaves the base) is
   deleted with the celestial follow-up.
 - **Base radiance** is the environment term of each sub-layer: raw light minus
-  the local source value, encoded as signed Q4.11. The existing `tli` override is
-  folded in per viewer, as today. The XRAY floor is not applied (see Vision
+  the local source value, encoded as signed Q4.11. The viewer's `tli`
+  override is not folded in: it is a viewer property carried as bit 5 of the
+  local-light byte, refreshed on remembered tiles like the vision-floor bit,
+  so a tile that entered fog follows a later `/tli` toggle instead of keeping
+  the offset frozen in its base. The XRAY floor is not applied (see Vision
   floor). There is no aggregate fallback: negative environment is sent as
   negative base.
 - **Coarse local light** is derived each time MAP2 sends a visible cell, from
@@ -267,10 +270,14 @@ connection.
   is combined. The server sends base radiance without that floor and sets bit 7
   of the local-light byte for viewers with XRAY; the client applies the same
   floor to the composed signed values, before clamping (Client, step 3). When
-  bit 7 is set and the composed scalar `S` is below raw 100, the client adds
-  `100 - S` neutrally to the scalar and to every channel, exactly as the server
-  used to raise raw light before resolving color.
-  Conformance vector: scalar/RGB `(80, 80, 0, 0)` becomes `(100, 100, 20, 20)`.
+  bit 7 is set and the composed scalar `S` is below the floor, the client adds
+  the difference neutrally to the scalar and to every channel, exactly as the
+  server used to raise raw light before resolving color. Composition works in
+  Q5.11, so the floor is raw 100 encoded, Q5.11 160
+  (`light_profile_raw_to_radiance(100)`), never the raw number itself.
+  Conformance vector, in raw light: scalar/RGB `(80, 80, 0, 0)` becomes
+  `(100, 100, 20, 20)`; in Q5.11, `(128, 128, 0, 0)` becomes
+  `(160, 160, 32, 32)`.
   This is a property of the viewer only, so it discloses nothing about sources.
 - **Emitters** are copied from `glow_radius`, `light_color` and the
   `light_flicker` object attribute (archetype default, boolean) of the object
@@ -299,9 +306,12 @@ connection.
   as a roof or camera surface, owns one even without `sky_boundary`);
   each is the maximum attenuation over the sent objects (the minimum
   coefficient, as the server's face traversal takes), quantized up to the next
-  step. A cardinal face a sent view blocker does not author is opaque, and
-  other unauthored faces stay open, as in `spatial_cell_light_face()`, whose
-  implicit view-blocker fallback never applies to the downward face: an
+  step. A cardinal face that no sent object of the cell authors is opaque when
+  any sent object blocks view, and other unauthored faces stay open, as in
+  `spatial_cell_light_face()`: its implicit fallback applies only when no
+  object authors the face, so a transmissive pane authoring a face keeps its
+  transmission beside a view blocker that does not, and the fallback never
+  applies to the downward face: an
   ordinary wall without a downward face leaves `v` open, so light still
   crosses between floors at walls. A client step
   leaves its cell through the exit face of its direction. A tied diagonal step
@@ -402,7 +412,9 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    so the coarse and emitter terms keep their full weight. The vision floor
    (if bit 7 is set) applies next, to the signed scalar and channels, as the
    server raises the raw scalar before resolving color: pre-floor scalar and
-   channel `(80, -40)` become `(100, -20)`, and then `(100, 0)`. Negative
+   channel raw `(80, -40)` (Q5.11 `(128, -64)`) become raw `(100, -20)`
+   (Q5.11 `(160, -32)`), and then `(100, 0)`. A set `tli` bit adds raw 1280,
+   converted the same way, neutrally to `L` before the floor. Negative
    channels then clamp to zero; if the largest channel then
    exceeds the finite range, all three channels scale together so the strongest
    is 65535, as the server's common-vector overflow rule requires, keeping hue.
@@ -462,9 +474,10 @@ trade-off.
 
 Remembered (fog) tiles compose their signed base and their frozen coarse
 levels, then receive the remembered-world lift of
-MAP_RENDERING.md: when the composed scalar `S` is below raw 40, `40 - S` is
-added neutrally before window attenuation, so dark remembered geometry keeps
-rendering at `(40, 40, 40)` rather than black. They never compose the
+MAP_RENDERING.md: when the composed scalar `S` is below the lift, the
+difference is added neutrally before window attenuation, so dark remembered
+geometry keeps rendering at raw `(40, 40, 40)` rather than black. The lift is
+raw 40 encoded, Q5.11 64, because `S` is Q5.11. They never compose the
 remembered emitters of the
 objects shown in fog, which may since have changed, and their faces are closed
 by the server's face bits, so emitter rays from visible cells stop at their

@@ -3610,6 +3610,22 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_eq(cell->client_light_known & 3U, 3U);
     ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
+    /* tli is a viewer bit, not part of the base, and follows a toggle. */
+    ck_assert_uint_eq(cell->local_light[0] & MAP2_LOCAL_LIGHT_TLI, MAP2_LOCAL_LIGHT_TLI);
+    pl->tli = 0;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->local_light[0] & MAP2_LOCAL_LIGHT_TLI, 0);
+    pl->tli = 1;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
     ck_assert_uint_ne(cell->emitter_layers, 0);
     ck_assert_uint_eq(cell->emitter_stale, 0);
     uint32_t digest = cell->emitter_digest;

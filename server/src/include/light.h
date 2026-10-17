@@ -72,6 +72,13 @@ extern int8_t light_local_level_from_extrema(int32_t positive, int32_t negative)
 #define LIGHT_OCCLUDER_VERTICAL_SHIFT 16
 /** Horizontal face nibbles (north, east, south, west) of a server occluder. */
 #define LIGHT_OCCLUDER_HORIZONTAL_SHIFT 32
+/** Server-only: which cardinal faces a sent object authors, one bit each. */
+#define LIGHT_OCCLUDER_AUTHORED_SHIFT 48
+/** Server-only: a sent view blocker makes faces no sent object authors opaque. */
+#define LIGHT_OCCLUDER_BLOCKER_FALLBACK (UINT64_C(1) << 52)
+/** Server-only bits that light_occluder_finish() resolves and strips. */
+#define LIGHT_OCCLUDER_INTERNAL ((UINT64_C(15) << LIGHT_OCCLUDER_AUTHORED_SHIFT) | \
+                                 LIGHT_OCCLUDER_BLOCKER_FALLBACK)
 
 /** MAP2 occluder bits of one object being sent to the viewer (protocol 1085). */
 extern uint64_t light_occluder_object_bits(const object *op);
@@ -88,6 +95,11 @@ extern bool light_emitter_disclosed(const object *viewer, const object *op);
 
 /** Combine the occluder bits of two sent objects of one cell. */
 extern uint64_t light_occluder_combine(uint64_t first, uint64_t second);
+
+/** Resolve combined occluder bits of a cell for the wire: a face no sent
+ * object authors is opaque if any sent object blocks view, as the server's
+ * implicit fallback applies only when no object authors the face. */
+extern uint64_t light_occluder_finish(uint64_t bits);
 
 /** The shared celestial model's inputs for one map and gameplay hour: its
  * effective profile's light constants and phases, any lunar override applied. */

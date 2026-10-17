@@ -613,7 +613,8 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
     ck_assert(map_protocol_client_lighting_valid(INT8_MAX, 0, 0));
     ck_assert(map_protocol_client_lighting_valid(INT8_MIN, 0, 0));
     ck_assert(!map_protocol_client_lighting_valid(1, 0x10, 0));
-    ck_assert(!map_protocol_client_lighting_valid(1, 0x20, 0));
+    /* Bit 5 carries the viewer's tli override. */
+    ck_assert(map_protocol_client_lighting_valid(1, MAP2_LOCAL_LIGHT_TLI, 0));
     /* Bit 6 marks a remote sample; it does not make level -16 valid. */
     ck_assert(map_protocol_client_lighting_valid(1, MAP2_LOCAL_LIGHT_REMOTE, 0));
     ck_assert(map_protocol_client_lighting_valid(

@@ -453,8 +453,13 @@ typedef struct socket_face_batch_response {
 #define MAP2_LOCAL_LIGHT_LEVEL_RAW 160
 /** Signed five-bit level of the local light byte. */
 #define MAP2_LOCAL_LIGHT_LEVEL_MASK 0x1f
-/** Bits a 1085 peer must leave zero in the local light byte. */
-#define MAP2_LOCAL_LIGHT_RESERVED 0x20
+/** Bits a 1085 peer must leave zero in the local light byte (none remain). */
+#define MAP2_LOCAL_LIGHT_RESERVED 0x00
+/** The viewer's tli override: add raw MAP2_LOCAL_LIGHT_TLI_RAW, neutrally, in
+ * composition. A viewer property, refreshed on remembered tiles too. */
+#define MAP2_LOCAL_LIGHT_TLI 0x20
+/** Raw light the tli override adds (daylight). */
+#define MAP2_LOCAL_LIGHT_TLI_RAW 1280
 /** The sub-layer's light was sampled at another space than its cell: the
  * client composes only its coarse level, never the cell's emitter field. */
 #define MAP2_LOCAL_LIGHT_REMOTE 0x40
@@ -465,8 +470,10 @@ typedef struct socket_face_batch_response {
 
 /**
  * @defgroup MAP2_OCCLUDER_xxx Map2 occluder bits
- * Geometry of a sent cell that the client uses to occlude emitter light.
- * Bits 4-7 hold a transmission attenuation a: coefficient 256 - 16a.
+ * Geometry of a sent cell that the client uses to occlude emitter light:
+ * bits 0-3 geometry, bits 4-7 reserved (zero), bits 8-13 closed faces. The
+ * per-face attenuation is not in this word: it follows as a separate uint16
+ * of north, east, south and west nibbles, then the vertical byte.
  *@{*/
 #define MAP2_OCCLUDER_BLOCKSVIEW 1
 #define MAP2_OCCLUDER_FLOOR 2
