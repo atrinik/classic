@@ -141,6 +141,11 @@ bool minimap_redraw_due(void) {
     return client_ui_ticks() - minimap->dynamic_redraw_ticks >= MINIMAP_DYNAMIC_REDRAW_INTERVAL;
 }
 
+void minimap_redraw_request(void) {
+    /* Throttled: a dynamic minimap still waits for its redraw interval. */
+    minimap_redraw_flag = 1;
+}
+
 void minimap_redraw_force(void) {
     minimap_redraw_flag = 1;
 

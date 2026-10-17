@@ -3757,24 +3757,22 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     ck_assert_uint_eq(cell->local_light[0], visible_level);
     uint8_t before = cell->local_light[0];
 
-    /* Hidden light that appears behind the wall never reaches the remembered
-     * tile: its coarse level stays frozen at the last authorized value, so a
-     * client cannot follow a hidden source through fog. No object, emitter or
-     * occluder is sent there either. */
-    object *lamp = arch_get("letter");
-    lamp->glow_radius = 9;
-    lamp->light_color = UINT32_C(0xffffff);
-    lamp->x = op->x + 2;
-    lamp->y = op->y + 1;
-    ck_assert_ptr_nonnull(object_insert_map(lamp, map, NULL, INS_NO_MERGE));
+    /* A previously sent tile keeps receiving light-level updates while the
+     * per-socket cache is valid (maintainer decision): a light change behind
+     * the wall updates its coarse level. No object, emitter or
+     * occluder is sent there. */
+    int steady_x = steady->x, steady_y = steady->y;
+    object_remove(steady, 0);
+    object_destroy(steady);
     pticks++;
     socket_buffer_clear(pl->cs);
     draw_client_map(op);
     ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
     cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
     ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_eq(cell->local_light[0], before);
-    ck_assert_int_ne(light_local_level(map, lamp->x, lamp->y), 0);
+    ck_assert_uint_ne(cell->local_light[0], before);
+    ck_assert(map_protocol_local_light_decode(cell->local_light[0], &decoded, &decoded_floor));
+    ck_assert_int_eq(decoded, light_local_level(map, steady_x, steady_y));
     ck_assert_uint_eq(cell->emitter_layers, 0);
     ck_assert_uint_eq(cell->client_light_known & 2U, 0);
     for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
