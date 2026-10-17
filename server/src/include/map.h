@@ -693,6 +693,10 @@ typedef struct mapdef {
     /** Parsed celestial-v1 schema number (zero means legacy content). */
     uint8_t celestial_schema;
 
+    /** Advances whenever a local light source counter on this map changes;
+     * coarse light caches validate against the maps their walk reaches. */
+    uint64_t light_local_epoch;
+
     /** Parsed celestial-v1 sky anchor. */
     uint8_t celestial_sky_above;
 

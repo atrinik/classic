@@ -1726,6 +1726,18 @@ START_TEST(test_client_lighting_local_level_shares_tall_stacks) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_source_epochs_are_per_map) {
+    /* A source change advances only its own map's epoch, so coarse levels
+     * whose walk never reaches that map stay cached. */
+    mapstruct *lit = get_empty_map(9, 9);
+    mapstruct *other = get_empty_map(9, 9);
+    uint64_t lit_epoch = lit->light_local_epoch, other_epoch = other->light_local_epoch;
+    add_colored_light(lit, 4, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_uint_gt(lit->light_local_epoch, lit_epoch);
+    ck_assert_uint_eq(other->light_local_epoch, other_epoch);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_fails_closed_on_unbounded_cycles) {
     /* Reciprocal east, north, west and south links that return to the same
      * offset on a new map each lap place unboundedly many maps within reach;
@@ -2088,6 +2100,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_final_block_is_order_independent);
     tcase_add_test(tc_core, test_client_lighting_hidden_wall_surfaces_own_a_downward_face);
     tcase_add_test(tc_core, test_client_lighting_local_level_shares_tall_stacks);
+    tcase_add_test(tc_core, test_client_lighting_local_source_epochs_are_per_map);
     tcase_add_test(tc_core, test_client_lighting_local_level_fails_closed_on_unbounded_cycles);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_every_reachable_tiny_map);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);

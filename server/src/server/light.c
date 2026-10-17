@@ -43,8 +43,6 @@
 #define MAX_LIGHT_SOURCE LIGHT_PROFILE_SOURCE_MAX
 #define MAX_LIGHT_RADIUS LIGHT_PROFILE_RADIUS_MAX
 
-/** Advances whenever a space's source counter changes; see light_local_level(). */
-static uint64_t light_local_epoch = 1;
 /** Full queues publish early; this bounds scope bookkeeping, not reach. */
 #define LIGHT_PENDING_MAX ((1 + 2 * MAP2_MAX_DEPTH) * (1 + TILED_NUM_DIR))
 
@@ -943,7 +941,8 @@ static void adjust_grouped_light_source(mapstruct *map,
     MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
     int old_mask = get_real_light_source_value(*counter);
     *counter += light;
-    light_local_epoch++;
+    /* Only coarse levels whose walk reaches this map are invalidated. */
+    map->light_local_epoch++;
     int new_mask = get_real_light_source_value(*counter);
 
     if (map->in_memory != MAP_LOADING && old_mask != new_mask) {
@@ -1432,21 +1431,27 @@ static mapstruct *light_local_seam(mapstruct *map, int tile) {
     return next;
 }
 
-/** Remembered levels of recently sampled blocks, valid for one source and
- * geometry epoch: every cell and sub-layer of a block shares its level. */
+/** Remembered levels of recently sampled blocks, valid while the sources of
+ * every map their walk reaches and the geometry epoch are unchanged: every
+ * cell and sub-layer of a block shares its level. */
 #define LIGHT_LOCAL_CACHE_SIZE 1024
 
 typedef struct light_local_cache_entry {
     const mapstruct *map;
     tag_t count;
     int bx, by;
-    uint64_t source_epoch, geometry_epoch;
+    uint64_t source_hash, geometry_epoch;
     int8_t level;
 } light_local_cache_entry;
 
 static light_local_cache_entry light_local_cache[LIGHT_LOCAL_CACHE_SIZE];
 
-static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey);
+typedef struct light_local_region light_local_region;
+static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
+                             const light_local_region **regions, size_t *count);
+static uint64_t light_local_hash(const light_local_region *regions, size_t count);
+static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,
+                                     int ex, int by, int ey);
 
 int8_t light_local_level(mapstruct *map, int x, int y) {
     HARD_ASSERT(map != NULL && map->spaces != NULL);
@@ -1458,19 +1463,27 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     int bx, by, ex, ey;
     light_local_block(x, MAP_WIDTH(map), &bx, &ex);
     light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    /* The walk is cheap next to pooling: it decides which maps the level
+     * depends on, so a cached level stays valid until a source on one of
+     * those maps changes, never because of an unrelated map. */
+    const light_local_region *regions;
+    size_t count;
+    if (!light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
+        return 0;
+    }
+    uint64_t hash = light_local_hash(regions, count);
     uint64_t geometry = los_geometry_epoch();
     size_t slot = (((uintptr_t)map >> 4) ^ ((size_t)bx * 31u) ^ ((size_t)by * 1031u)) %
                   LIGHT_LOCAL_CACHE_SIZE;
     light_local_cache_entry *entry = &light_local_cache[slot];
     if (entry->map == map && entry->count == map->count && entry->bx == bx &&
-        entry->by == by && entry->source_epoch == light_local_epoch &&
-        entry->geometry_epoch == geometry) {
+        entry->by == by && entry->source_hash == hash && entry->geometry_epoch == geometry) {
         return entry->level;
     }
-    int8_t level = light_local_level_compute(map, bx, ex, by, ey);
+    int8_t level = light_local_level_pool(regions, count, bx, ex, by, ey);
     *entry = (light_local_cache_entry){.map = map, .count = map->count, .bx = bx, .by = by,
-                                       .source_epoch = light_local_epoch,
-                                       .geometry_epoch = geometry, .level = level};
+                                       .source_hash = hash, .geometry_epoch = geometry,
+                                       .level = level};
     return level;
 }
 
@@ -1527,10 +1540,10 @@ static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, i
 
 /** One map placed relative to the target block: cell (cx, cy) lies at
  * (cx + ox, cy + oy) on the target map, on any level of its linked stack. */
-typedef struct light_local_region {
+struct light_local_region {
     mapstruct *map;
     int ox, oy;
-} light_local_region;
+};
 
 /**
  * Most maps one coarse level may pool. Real topologies stay far below it (a
@@ -1542,7 +1555,8 @@ typedef struct light_local_region {
 #define LIGHT_LOCAL_REGIONS_MAX 4096
 
 
-static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
+static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
+                             const light_local_region **regions_out, size_t *count_out) {
     /* Sources are pooled per block before propagation and reach a block by
      * the horizontal gap between the two blocks, which depends only on block
      * geometry, so a source's position inside its block never changes any
@@ -1565,7 +1579,6 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
                                 TILED_SOUTHWEST, TILED_NORTHWEST, TILED_UP,
                                 TILED_DOWN};
     int reach = MAX_LIGHT_RADIUS;
-    int32_t positive = 0, negative = 0;
     size_t count = 0;
     if (capacity == 0) {
         capacity = 64;
@@ -1574,8 +1587,6 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
     regions[count++] = (light_local_region){.map = map};
     for (size_t i = 0; i < count; i++) {
         light_local_region region = regions[i];
-        light_local_pool_region(region.map, region.ox, region.oy, bx, ex, by, ey, &positive,
-                                &negative);
         for (size_t t = 0; t < arraysize(tiles); t++) {
             light_local_region next = region;
             next.map = light_local_seam(region.map, tiles[t]);
@@ -1612,9 +1623,9 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
                        regions[j].oy == next.oy;
             }
             if (!seen) {
+                /* Fail closed for the whole component past the bound. */
                 if (count == LIGHT_LOCAL_REGIONS_MAX) {
-                    /* Fail closed: pool nothing rather than an arbitrary part. */
-                    return 0;
+                    return false;
                 }
                 if (count == capacity) {
                     capacity *= 2;
@@ -1623,6 +1634,31 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
                 regions[count++] = next;
             }
         }
+    }
+    *regions_out = regions;
+    *count_out = count;
+    return true;
+}
+
+/** Identity of the sources a walk reaches: each map with its source epoch. */
+static uint64_t light_local_hash(const light_local_region *regions, size_t count) {
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (size_t i = 0; i < count; i++) {
+        uint64_t parts[2] = {(uint64_t)(uintptr_t)regions[i].map,
+                             regions[i].map->light_local_epoch};
+        for (size_t part = 0; part < 2; part++) {
+            hash = (hash ^ parts[part]) * UINT64_C(1099511628211);
+        }
+    }
+    return hash;
+}
+
+static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,
+                                     int ex, int by, int ey) {
+    int32_t positive = 0, negative = 0;
+    for (size_t i = 0; i < count; i++) {
+        light_local_pool_region(regions[i].map, regions[i].ox, regions[i].oy, bx, ex, by, ey,
+                                &positive, &negative);
     }
     return light_local_level_from_extrema(positive, negative);
 }
