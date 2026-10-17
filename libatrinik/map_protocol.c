@@ -272,7 +272,7 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
         if (!map_packet_read_uint8(reader, &ext_flags) ||
             (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 |
                            MAP2_FLAG_EXT_LIGHT_KEYFRAME | MAP2_FLAG_EXT_LOCAL_LIGHT |
-                           MAP2_FLAG_EXT_BASE_DEFICIT | MAP2_FLAG_EXT_OCCLUDER)) != 0) {
+                           MAP2_FLAG_EXT_LIGHT_AGGREGATE | MAP2_FLAG_EXT_OCCLUDER)) != 0) {
             return false;
         }
 
@@ -349,15 +349,22 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
             }
         }
 
-        if ((ext_flags & MAP2_FLAG_EXT_BASE_DEFICIT) &&
-            !map_packet_skip(reader, sizeof(uint16_t))) {
-            return false;
+        if (ext_flags & MAP2_FLAG_EXT_LIGHT_AGGREGATE) {
+            uint8_t aggregate;
+
+            if (!map_packet_read_uint8(reader, &aggregate) ||
+                (aggregate & ~((UINT8_C(1) << MAP2_PROTOCOL_SUB_LAYERS) - 1)) != 0) {
+                return false;
+            }
         }
 
-        /* Every occluder byte is meaningful: four geometry bits and a
-         * four-bit transmission attenuation. */
-        if ((ext_flags & MAP2_FLAG_EXT_OCCLUDER) && !map_packet_skip(reader, sizeof(uint8_t))) {
-            return false;
+        if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
+            uint16_t occluder;
+
+            if (!map_packet_read_uint16(reader, &occluder) ||
+                (occluder & MAP2_OCCLUDER_RESERVED) != 0) {
+                return false;
+            }
         }
     }
 

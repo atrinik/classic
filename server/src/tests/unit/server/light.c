@@ -1570,6 +1570,16 @@ START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_occluder_faces_mark_missing_neighbors) {
+    mapstruct *map = get_empty_map(5, 5);
+    uint16_t north = 1U << MAP2_OCCLUDER_FACE_SHIFT, east = north << 1, south = north << 2,
+             west = north << 3;
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2), 0);
+    ck_assert_uint_eq(light_occluder_faces(map, 0, 0), north | west);
+    ck_assert_uint_eq(light_occluder_faces(map, 4, 4), east | south);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_keeps_darkness_sign) {
     mapstruct *map = get_empty_map(6, 6);
     add_colored_light(map, 1, 1, -13, LIGHT_COLOR_WHITE);
@@ -1684,6 +1694,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
+    tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_sent_objects);
 
     return s;

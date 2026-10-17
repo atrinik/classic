@@ -515,7 +515,7 @@ END_TEST
 /** One cell with an emitter layer and both client-lighting extensions. */
 static packet_struct *map_protocol_client_lighting_level_color(int8_t radius, uint32_t color,
                                                               uint8_t level_value,
-                                                              uint8_t occluder) {
+                                                              uint16_t occluder) {
     packet_struct *level = packet_new(0, 32, 16);
     packet_writer_write_uint16(level, 0);
     packet_writer_write_uint8(level, 1);
@@ -528,17 +528,17 @@ static packet_struct *map_protocol_client_lighting_level_color(int8_t radius, ui
     packet_writer_write_uint8(level, (uint8_t)(color >> 16));
     packet_writer_write_uint8(level, (uint8_t)(color >> 8));
     packet_writer_write_uint8(level, (uint8_t)color);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_BASE_DEFICIT |
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_LIGHT_AGGREGATE |
                                          MAP2_FLAG_EXT_OCCLUDER);
     packet_writer_write_uint8(level, level_value);
-    packet_writer_write_uint16(level, 80);
-    packet_writer_write_uint8(level, occluder);
+    packet_writer_write_uint8(level, 0x41);
+    packet_writer_write_uint16(level, occluder);
     return level;
 }
 
 /** Positive emitters get an orange color and darkness the achromatic one. */
 static packet_struct *map_protocol_client_lighting_level(int8_t radius, uint8_t level_value,
-                                                        uint8_t occluder) {
+                                                        uint16_t occluder) {
     return map_protocol_client_lighting_level_color(radius, radius > 0 ? UINT32_C(0xff8040) : 0,
                                                     level_value, occluder);
 }
@@ -554,7 +554,7 @@ static bool map_protocol_client_lighting_valid_color(int8_t radius, uint32_t col
 }
 
 static bool map_protocol_client_lighting_valid(int8_t radius, uint8_t level_value,
-                                               uint8_t occluder) {
+                                               uint16_t occluder) {
     packet_struct *level = map_protocol_client_lighting_level(radius, level_value, occluder);
     packet_struct *packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
@@ -572,7 +572,9 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
                                                  all_geometry));
     ck_assert(map_protocol_client_lighting_valid(-13,
                                                  map_protocol_local_light_encode(-15, false),
-                                                 0xff));
+                                                 0x0fff));
+    /* Reserved occluder bits 12-15 are malformed. */
+    ck_assert(!map_protocol_client_lighting_valid(1, 0, 0x1000));
     ck_assert(map_protocol_client_lighting_valid(1, map_protocol_local_light_encode(0, false), 0));
     /* A zero radius, level -16 and reserved local-light bits are malformed.
      * Every occluder byte is meaningful. */

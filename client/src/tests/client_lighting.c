@@ -31,7 +31,7 @@
     } while (0)
 
 static client_lighting_cell_t cells[WIDTH * HEIGHT];
-static uint8_t occluders[WIDTH * HEIGHT];
+static uint16_t occluders[WIDTH * HEIGHT];
 
 static const client_lighting_cell_t *cell_at(int x, int y) {
     return &cells[y * WIDTH + x];
@@ -58,7 +58,7 @@ static void test_open_white_source_matches_server_profile(void) {
 static void test_wall_stops_light_but_keeps_its_face(void) {
     memset(occluders, 0, sizeof(occluders));
     occluders[4 * WIDTH + 4] =
-        (uint8_t)(MAP2_OCCLUDER_BLOCKSVIEW | 15U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+        (uint16_t)(MAP2_OCCLUDER_BLOCKSVIEW | 15U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
     client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(4, 4)->scalar > 0);
@@ -82,7 +82,7 @@ static void test_transmission_attenuates_crossed_cells(void) {
     client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
     evaluate(&torch, 1);
     int32_t open = cell_at(4, 4)->scalar;
-    occluders[4 * WIDTH + 3] = (uint8_t)(8U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    occluders[4 * WIDTH + 3] = (uint16_t)(8U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(4, 4)->scalar == (open * 128 + 128) / 256);
 }
@@ -94,9 +94,21 @@ static void test_transmissive_blocker_keeps_its_attenuation(void) {
     int32_t open = cell_at(4, 4)->scalar;
     /* Glass that blocks view but transmits 192/256 (attenuation 4). */
     occluders[4 * WIDTH + 3] =
-        (uint8_t)(MAP2_OCCLUDER_BLOCKSVIEW | 4U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+        (uint16_t)(MAP2_OCCLUDER_BLOCKSVIEW | 4U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(4, 4)->scalar == (open * 192 + 128) / 256);
+}
+
+static void test_discontinuous_face_stops_light(void) {
+    memset(occluders, 0, sizeof(occluders));
+    /* The east face of (4, 4) is a discontinuous seam. */
+    occluders[4 * WIDTH + 4] = (uint16_t)(2U << MAP2_OCCLUDER_FACE_SHIFT);
+    client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(4, 4)->scalar > 0);
+    TEST_CHECK(cell_at(5, 4)->scalar == 0);
+    TEST_CHECK(cell_at(6, 4)->scalar == 0);
+    TEST_CHECK(cell_at(3, 5)->scalar > 0);
 }
 
 static void test_darkness_is_negative_and_uncolored(void) {
@@ -199,6 +211,7 @@ int main(void) {
     test_same_tile_emitters_share_the_server_cap();
     test_transmission_attenuates_crossed_cells();
     test_transmissive_blocker_keeps_its_attenuation();
+    test_discontinuous_face_stops_light();
     test_darkness_is_negative_and_uncolored();
     test_colored_light_keeps_hue();
     test_constituent_colors_keep_their_own_profiles();

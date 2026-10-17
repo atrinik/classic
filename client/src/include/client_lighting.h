@@ -50,7 +50,7 @@ typedef struct client_lighting_cell {
  */
 void client_lighting_evaluate(int width,
                               int height,
-                              const uint8_t *occluders,
+                              const uint16_t *occluders,
                               const client_lighting_emitter_t *emitters,
                               size_t count,
                               client_lighting_cell_t *cells);

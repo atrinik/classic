@@ -57,22 +57,30 @@ typedef struct client_lighting_accumulator {
  * an unauthored view blocker stops light while authored glass or a grate that
  * also blocks view still transmits.
  */
-static uint16_t client_lighting_coefficient(uint8_t occluder) {
-    int attenuation = occluder >> MAP2_OCCLUDER_ATTENUATION_SHIFT;
+static uint16_t client_lighting_coefficient(uint16_t occluder) {
+    int attenuation = (occluder >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15;
     if (attenuation == 15) {
         return 0;
     }
     return (uint16_t)(256 - attenuation * MAP2_OCCLUDER_ATTENUATION_STEP);
 }
 
+/** Whether local light cannot leave a cell through the face towards (sx, sy). */
+static bool client_lighting_face_closed(uint16_t occluder, int sx, int sy) {
+    uint16_t faces = occluder >> MAP2_OCCLUDER_FACE_SHIFT;
+    return (sy < 0 && (faces & 1U)) || (sx > 0 && (faces & 2U)) || (sy > 0 && (faces & 4U)) ||
+           (sx < 0 && (faces & 8U));
+}
+
 /**
  * Transmit a value from (x, y) to (x + dx, y + dy). Cells strictly between
- * attenuate in travel order; a view blocker stops the ray. The destination is
- * an exposed face and keeps the light that reaches it.
+ * attenuate in travel order; a view blocker stops the ray, and so does a face
+ * marked discontinuous on the cell it leaves. The destination is an exposed
+ * face and keeps the light that reaches it.
  */
 static int32_t client_lighting_path(int width,
                                     int height,
-                                    const uint8_t *occluders,
+                                    const uint16_t *occluders,
                                     int x,
                                     int y,
                                     int dx,
@@ -80,15 +88,24 @@ static int32_t client_lighting_path(int width,
                                     int32_t value) {
     int steps = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
     int32_t transmitted = value;
-    for (int step = 1; step < steps && transmitted != 0; step++) {
+    int px = x, py = y;
+    for (int step = 1; step <= steps && transmitted != 0; step++) {
         int cx = x + (dx * step * 2 + (dx < 0 ? -steps : steps)) / (steps * 2);
         int cy = y + (dy * step * 2 + (dy < 0 ? -steps : steps)) / (steps * 2);
         if (cx < 0 || cy < 0 || cx >= width || cy >= height) {
             return 0;
         }
-        uint8_t occluder = occluders != NULL ? occluders[(size_t)cy * width + cx] : 0;
-        uint16_t coefficient = client_lighting_coefficient(occluder);
-        transmitted = (int32_t)(((int64_t)transmitted * coefficient + 128) / 256);
+        uint16_t previous = occluders != NULL ? occluders[(size_t)py * width + px] : 0;
+        if (client_lighting_face_closed(previous, cx - px, cy - py)) {
+            return 0;
+        }
+        if (step < steps) {
+            uint16_t occluder = occluders != NULL ? occluders[(size_t)cy * width + cx] : 0;
+            uint16_t coefficient = client_lighting_coefficient(occluder);
+            transmitted = (int32_t)(((int64_t)transmitted * coefficient + 128) / 256);
+        }
+        px = cx;
+        py = cy;
     }
     return transmitted;
 }
@@ -96,7 +113,7 @@ static int32_t client_lighting_path(int width,
 /** Add one unsigned profile, transmitted from its tile, to the accumulators. */
 static void client_lighting_add(int width,
                                 int height,
-                                const uint8_t *occluders,
+                                const uint16_t *occluders,
                                 client_lighting_accumulator_t *accumulators,
                                 int x,
                                 int y,
@@ -141,7 +158,7 @@ static void client_lighting_add(int width,
 
 void client_lighting_evaluate(int width,
                               int height,
-                              const uint8_t *occluders,
+                              const uint16_t *occluders,
                               const client_lighting_emitter_t *emitters,
                               size_t count,
                               client_lighting_cell_t *cells) {
