@@ -363,46 +363,6 @@ void light_base_radiance_signed(const MapSpace *space,
 }
 
 /**
- * Signed coarse local light of the fixed 3x3 block containing a cell, aligned
- * to map-local coordinates; edge remainders join the adjacent block. The strongest positive
- * and negative local scalars compete by magnitude, which is quantized down to
- * whole 1/8-daylight levels. Every cell of a block shares one value, so the
- * peak does not single out a source tile; neither hue nor count is kept. The
- * block never reads another map.
- */
-/**
- * Block of one axis: three cells aligned to the map, except that a one- or
- * two-cell remainder at the edge joins its neighbor, so no block is narrower
- * than three cells unless the map is.
- */
-static void light_local_block(int coordinate, int size, int *start, int *end) {
-    *start = coordinate - coordinate % 3;
-    if (*start + 3 > size) {
-        *start = MAX(0, *start - 3);
-    }
-    *end = *start + 6 > size ? size : *start + 3;
-}
-
-int8_t light_local_level(mapstruct *map, int x, int y) {
-    HARD_ASSERT(map != NULL && map->spaces != NULL);
-    int32_t positive = 0, negative = 0;
-    int bx, by, ex, ey;
-    light_local_block(x, MAP_WIDTH(map), &bx, &ex);
-    light_local_block(y, MAP_HEIGHT(map), &by, &ey);
-    for (int cy = by; cy < ey; cy++) {
-        for (int cx = bx; cx < ex; cx++) {
-            int32_t value = GET_MAP_SPACE_PTR(map, cx, cy)->light_source_value;
-            positive = MAX(positive, value);
-            negative = MIN(negative, value);
-        }
-    }
-    bool darker = -(int64_t)negative > positive;
-    int64_t magnitude = darker ? -(int64_t)negative : positive;
-    int level = (int)MIN(magnitude / MAP2_LOCAL_LIGHT_LEVEL_RAW, MAP2_LOCAL_LIGHT_LEVEL_MAX);
-    return (int8_t)(darker ? -level : level);
-}
-
-/**
  * MAP2 occluder bits contributed by one object that is being sent to the
  * viewer. Only the object's own flags and authored horizontal transmission
  * count, never space-wide flags that also aggregate hidden or unsent objects.
@@ -1466,4 +1426,88 @@ void remove_light_source_list(mapstruct *map) {
     }
 
     map->first_light = NULL;
+}
+
+/**
+ * Signed coarse local light of the fixed 3x3 block containing a cell, aligned
+ * to map-local coordinates; edge remainders join the adjacent block. Each
+ * block's sources are pooled before propagation, the strongest positive and
+ * negative pooled contributions compete by magnitude, and the result is
+ * quantized down to whole 1/8-daylight levels. No block's level depends on
+ * where inside a block a source sits; neither hue nor count is kept. The
+ * block never reads another map.
+ */
+/**
+ * Block of one axis: three cells aligned to the map, except that a one- or
+ * two-cell remainder at the edge joins its neighbor, so no block is narrower
+ * than three cells unless the map is.
+ */
+static void light_local_block(int coordinate, int size, int *start, int *end) {
+    *start = coordinate - coordinate % 3;
+    if (*start + 3 > size) {
+        *start = MAX(0, *start - 3);
+    }
+    *end = *start + 6 > size ? size : *start + 3;
+}
+
+/** Pooled source counter of a block: the sum of its spaces' scalar counters. */
+static int32_t light_local_block_sources(mapstruct *map, int bx, int ex, int by, int ey) {
+    int64_t sum = 0;
+    for (int cy = by; cy < ey; cy++) {
+        for (int cx = bx; cx < ex; cx++) {
+            sum += GET_MAP_SPACE_PTR(map, cx, cy)->light_source;
+        }
+    }
+    return (int32_t)MAX(INT32_MIN, MIN(INT32_MAX, sum));
+}
+
+int8_t light_local_level(mapstruct *map, int x, int y) {
+    HARD_ASSERT(map != NULL && map->spaces != NULL);
+    int bx, by, ex, ey;
+    light_local_block(x, MAP_WIDTH(map), &bx, &ex);
+    light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    /* Sources are pooled per block before propagation and reach a block by
+     * block-center distance, so a source's position inside its block never
+     * changes any block's level. Only the own block and its edge neighbors
+     * are within the largest radius; diagonal centers are farther. */
+    int32_t positive = 0, negative = 0;
+    static const int offsets[5][2] = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    for (size_t i = 0; i < arraysize(offsets); i++) {
+        int sx = bx, sex = ex, sy = by, sey = ey;
+        if (offsets[i][0] != 0) {
+            int probe = offsets[i][0] < 0 ? bx - 1 : ex;
+            if (probe < 0 || probe >= MAP_WIDTH(map)) {
+                continue;
+            }
+            light_local_block(probe, MAP_WIDTH(map), &sx, &sex);
+        }
+        if (offsets[i][1] != 0) {
+            int probe = offsets[i][1] < 0 ? by - 1 : ey;
+            if (probe < 0 || probe >= MAP_HEIGHT(map)) {
+                continue;
+            }
+            light_local_block(probe, MAP_HEIGHT(map), &sy, &sey);
+        }
+        int mask = get_real_light_source_value(light_local_block_sources(map, sx, sex, sy, sey));
+        if (mask == 0) {
+            continue;
+        }
+        /* Doubled center coordinates keep remainder blocks exact. */
+        int dx2 = (sx + sex - 1) - (bx + ex - 1), dy2 = (sy + sey - 1) - (by + ey - 1);
+        int distance_squared = (dx2 * dx2 + dy2 * dy2 + 2) / 4;
+        int radius = light_profiles[abs(mask)].radial_radius;
+        if (distance_squared > radius * radius) {
+            continue;
+        }
+        int32_t value = light_mask_value(abs(mask), distance_squared);
+        if (mask > 0) {
+            positive = MAX(positive, value);
+        } else {
+            negative = MIN(negative, -value);
+        }
+    }
+    bool darker = -(int64_t)negative > positive;
+    int64_t magnitude = darker ? -(int64_t)negative : positive;
+    int level = (int)MIN(magnitude / MAP2_LOCAL_LIGHT_LEVEL_RAW, MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    return (int8_t)(darker ? -level : level);
 }

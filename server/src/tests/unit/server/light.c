@@ -1574,6 +1574,31 @@ START_TEST(test_client_lighting_local_level_hides_translation_within_block) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_neighbors_hide_translation) {
+    /* A source anywhere inside the center block yields the same level in
+     * every block, so neighboring blocks cannot triangulate its tile. */
+    int reference[3][3] = {{0}};
+    for (int position = 0; position < 9; position++) {
+        mapstruct *map = get_empty_map(9, 9);
+        add_colored_light(map, 3 + position % 3, 3 + position / 3, 13, LIGHT_COLOR_WHITE);
+        for (int by = 0; by < 3; by++) {
+            for (int bx = 0; bx < 3; bx++) {
+                int level = light_local_level(map, bx * 3 + 1, by * 3 + 1);
+                if (position == 0) {
+                    reference[by][bx] = level;
+                } else {
+                    ck_assert_int_eq(level, reference[by][bx]);
+                }
+            }
+        }
+    }
+    /* Light still bleeds into edge neighbors, never into diagonal ones. */
+    ck_assert_int_gt(reference[1][1], 0);
+    ck_assert_int_ge(reference[1][0], 0);
+    ck_assert_int_eq(reference[0][0], 0);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
     /* A 7-wide map has blocks 0..2 and 3..6: the last cell joins its
      * neighbor instead of forming a one-cell block. */
@@ -1755,6 +1780,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
     tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
+    tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);
