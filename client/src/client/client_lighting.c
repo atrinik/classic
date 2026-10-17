@@ -92,25 +92,46 @@ static int32_t client_lighting_path(int width,
                                     int dx,
                                     int dy,
                                     int32_t value) {
-    int steps = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
+    /* The same supercover events as spatial_ray_next_resolved(): each step
+     * advances the axis whose next boundary comes first, and only an exact tie
+     * advances both, crossing the faces of both grazing side cells too. */
+    const int direction[2] = {dx, dy};
+    uint64_t crossed[2] = {0, 0};
     int32_t transmitted = value;
     int px = x, py = y;
-    for (int step = 1; step <= steps && transmitted != 0; step++) {
-        int cx = x + (dx * step * 2 + (dx < 0 ? -steps : steps)) / (steps * 2);
-        int cy = y + (dy * step * 2 + (dy < 0 ? -steps : steps)) / (steps * 2);
+    while ((px != x + dx || py != y + dy) && transmitted != 0) {
+        int first = -1;
+        unsigned axes = 0;
+        for (int axis = 0; axis < 2; axis++) {
+            if (direction[axis] == 0) {
+                continue;
+            }
+            if (first < 0) {
+                first = axis;
+                axes = 1U << axis;
+                continue;
+            }
+            uint64_t left = (2 * crossed[axis] + 1) * (uint64_t)abs(direction[first]);
+            uint64_t right = (2 * crossed[first] + 1) * (uint64_t)abs(direction[axis]);
+            if (left < right) {
+                first = axis;
+                axes = 1U << axis;
+            } else if (left == right) {
+                axes |= 1U << axis;
+            }
+        }
+        int sx = (axes & 1U) ? (dx > 0 ? 1 : -1) : 0;
+        int sy = (axes & 2U) ? (dy > 0 ? 1 : -1) : 0;
+        int cx = px + sx, cy = py + sy;
         if (cx < 0 || cy < 0 || cx >= width || cy >= height) {
             return 0;
         }
         uint32_t previous = occluders != NULL ? occluders[(size_t)py * width + px] : 0;
-        if (client_lighting_face_closed(previous, cx - px, cy - py)) {
+        if (client_lighting_face_closed(previous, sx, sy)) {
             return 0;
         }
-        uint16_t coefficient = client_lighting_coefficient(previous, cx - px, cy - py);
-        if (cx != px && cy != py) {
-            /* A tied diagonal step also crosses the faces of both grazing side
-             * cells towards the destination, as the shared supercover event
-             * emits them; every one bounds the transmission. */
-            int sx = cx - px, sy = cy - py;
+        uint16_t coefficient = client_lighting_coefficient(previous, sx, sy);
+        if (sx != 0 && sy != 0) {
             uint32_t side_x = occluders != NULL ? occluders[(size_t)py * width + cx] : 0;
             uint32_t side_y = occluders != NULL ? occluders[(size_t)cy * width + px] : 0;
             if (client_lighting_face_closed(side_x, 0, sy) ||
@@ -121,6 +142,11 @@ static int32_t client_lighting_path(int width,
             coefficient = MIN(coefficient, client_lighting_coefficient(side_y, sx, 0));
         }
         transmitted = (int32_t)(((int64_t)transmitted * coefficient + 128) / 256);
+        for (int axis = 0; axis < 2; axis++) {
+            if (axes & (1U << axis)) {
+                crossed[axis]++;
+            }
+        }
         px = cx;
         py = cy;
     }

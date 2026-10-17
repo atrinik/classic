@@ -118,6 +118,24 @@ static void test_diagonal_steps_cross_side_cell_faces(void) {
     TEST_CHECK(cell_at(4, 3)->scalar == (open * 128 + 128) / 256);
 }
 
+static void test_rays_follow_the_server_supercover_events(void) {
+    memset(occluders, 0, sizeof(occluders));
+    /* (2, 4) -> (4, 5) steps x, y, x as spatial_ray_next() does, never a
+     * diagonal, so a closed face on the off-ray cell (2, 5) casts no shadow. */
+    client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
+    evaluate(&torch, 1);
+    int32_t open = cell_at(4, 5)->scalar;
+    TEST_CHECK(open > 0);
+    occluders[5 * WIDTH + 2] = client_lighting_occluder(2U << MAP2_OCCLUDER_FACE_SHIFT, 0xffff);
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(4, 5)->scalar == open);
+    /* The cell the ray does leave first, (3, 4), shadows it. */
+    memset(occluders, 0, sizeof(occluders));
+    occluders[4 * WIDTH + 3] = client_lighting_occluder(MAP2_OCCLUDER_BLOCKSVIEW, 0xffff);
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(4, 5)->scalar == 0);
+}
+
 static void test_transmissive_blocker_keeps_its_attenuation(void) {
     memset(occluders, 0, sizeof(occluders));
     client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
@@ -356,6 +374,7 @@ int main(void) {
     test_transmissive_blocker_keeps_its_attenuation();
     test_face_attenuation_is_directional();
     test_diagonal_steps_cross_side_cell_faces();
+    test_rays_follow_the_server_supercover_events();
     test_discontinuous_face_stops_light();
     test_occluded_source_cell_attenuates_its_light();
     test_colors_beyond_the_bound_keep_their_hue();
