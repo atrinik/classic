@@ -125,11 +125,11 @@ void client_lighting_evaluate(int width,
     if (count == 0 || width <= 0 || height <= 0) {
         return;
     }
-    if (count > CLIENT_LIGHTING_EMITTERS_MAX) {
-        count = CLIENT_LIGHTING_EMITTERS_MAX;
-    }
 
-    client_lighting_group_t groups[CLIENT_LIGHTING_EMITTERS_MAX];
+    client_lighting_group_t *groups = calloc(count, sizeof(*groups));
+    if (groups == NULL) {
+        return;
+    }
     size_t group_count = 0;
     for (size_t i = 0; i < count; i++) {
         size_t group = 0;
@@ -149,6 +149,7 @@ void client_lighting_evaluate(int width,
 
     client_lighting_accumulator_t *accumulators = calloc(total, sizeof(*accumulators));
     if (accumulators == NULL) {
+        free(groups);
         return;
     }
     for (size_t group = 0; group < group_count; group++) {
@@ -188,6 +189,7 @@ void client_lighting_evaluate(int width,
         }
     }
     free(accumulators);
+    free(groups);
 }
 
 int32_t client_lighting_compose(int32_t emitter_raw, int8_t level) {

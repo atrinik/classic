@@ -23,9 +23,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/** Grouped emitters evaluated per viewport; the strongest win beyond this. */
-#define CLIENT_LIGHTING_EMITTERS_MAX 256
-
 /** One visible emitter at a grid cell. */
 typedef struct client_lighting_emitter {
     int x;
@@ -42,6 +39,7 @@ typedef struct client_lighting_cell {
 
 /**
  * Evaluate emitters into a width-by-height grid.
+ * Every emitter is evaluated; none is dropped for capacity.
  * @param occluders MAP2 occluder bits per cell in row-major order, or NULL
  * for open geometry.
  * @param cells Output of width * height cells.

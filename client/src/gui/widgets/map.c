@@ -5252,8 +5252,8 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
 
     int cache_width = map_width * MAP_FOW_SIZE, cache_height = map_height * MAP_FOW_SIZE;
     uint8_t *occluders = xcalloc(count, sizeof(*occluders));
-    client_lighting_emitter_t emitters[CLIENT_LIGHTING_EMITTERS_MAX];
-    size_t emitter_count = 0;
+    client_lighting_emitter_t *emitters = NULL;
+    size_t emitter_count = 0, emitter_capacity = 0;
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             int cache_x = field->origin_x + x, cache_y = field->origin_y + y;
@@ -5272,7 +5272,11 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
             }
             for (const map_cell_layer_record_t *record = cell->layers; record != NULL;
                  record = record->next) {
-                if (record->emitter_radius != 0 && emitter_count < arraysize(emitters)) {
+                if (record->emitter_radius != 0) {
+                    if (emitter_count == emitter_capacity) {
+                        emitter_capacity = emitter_capacity == 0 ? 64 : emitter_capacity * 2;
+                        emitters = xreallocarray(emitters, emitter_capacity, sizeof(*emitters));
+                    }
                     emitters[emitter_count++] = (client_lighting_emitter_t){
                         .x = x, .y = y, .radius = record->emitter_radius,
                         .color = record->emitter_color};
@@ -5281,6 +5285,7 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
         }
     }
     client_lighting_evaluate(width, height, occluders, emitters, emitter_count, field->cells);
+    free(emitters);
     free(occluders);
 }
 

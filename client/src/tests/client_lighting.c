@@ -105,6 +105,36 @@ static void test_colored_light_keeps_hue(void) {
     TEST_CHECK(cell_at(4, 4)->rgb[2] == 0);
 }
 
+static void test_constituent_colors_keep_their_own_profiles(void) {
+    memset(occluders, 0, sizeof(occluders));
+    client_lighting_emitter_t pair[2] = {
+        {.x = 4, .y = 4, .radius = 13, .color = 0xff0000},
+        {.x = 4, .y = 4, .radius = 1, .color = 0x0000ff},
+    };
+    evaluate(pair, 2);
+    /* Both colors mix at the center; only the long red source reaches out. */
+    TEST_CHECK(cell_at(4, 4)->rgb[0] > 0 && cell_at(4, 4)->rgb[2] > 0);
+    TEST_CHECK(cell_at(7, 4)->rgb[0] > 0);
+    TEST_CHECK(cell_at(7, 4)->rgb[2] == 0);
+}
+
+static void test_many_emitters_are_all_evaluated(void) {
+    enum { SIDE = 20 };
+    static client_lighting_emitter_t emitters[SIDE * SIDE];
+    static client_lighting_cell_t field[SIDE * SIDE];
+    size_t count = 0;
+    for (int y = 0; y < SIDE; y++) {
+        for (int x = 0; x < SIDE; x++) {
+            emitters[count++] = (client_lighting_emitter_t){
+                .x = x, .y = y, .radius = 1, .color = 0xffffff};
+        }
+    }
+    client_lighting_evaluate(SIDE, SIDE, NULL, emitters, count, field);
+    for (size_t i = 0; i < count; i++) {
+        TEST_CHECK(field[i].scalar >= light_profile_value(light_profile_mask(1), 0));
+    }
+}
+
 static void test_compose_by_sign_and_clamp_to_level(void) {
     int32_t step = MAP2_LOCAL_LIGHT_LEVEL_RAW;
     TEST_CHECK(client_lighting_compose(100, 2) == 2 * step);
@@ -127,6 +157,8 @@ int main(void) {
     test_transmission_attenuates_crossed_cells();
     test_darkness_is_negative_and_uncolored();
     test_colored_light_keeps_hue();
+    test_constituent_colors_keep_their_own_profiles();
+    test_many_emitters_are_all_evaluated();
     test_compose_by_sign_and_clamp_to_level();
     return EXIT_SUCCESS;
 }
