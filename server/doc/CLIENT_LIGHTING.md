@@ -203,10 +203,13 @@ connection.
   needed. Each sub-layer takes the level of the space its light was sampled
   at, which can differ between sub-layers; the server sends the shortest level
   count describing them. A sub-layer sampled at another space than its cell,
-  such as one showing a multi-part object's head, sets the remote-sample bit:
-  the cell's emitters and occluders describe the cell, not that space, so the
-  client composes only the sampled space's coarse level into it, never the
-  cell's emitter field:
+  such as one showing a multi-part object's head, sets the remote-sample bit,
+  but only when that object is actually sent: a candidate that darkness gating
+  or plugin visibility rejects afterwards resets the sample to the cell, so an
+  unsent object never selects another space or the bit. The sampled space then:
+  the cell's emitters and occluders describe the cell, not it, so the client
+  composes only its coarse level into the sub-layer, never the cell's emitter
+  field:
   - blocks partition each map axis of size `W` independently: with
     `k = floor(W / 3)`, block `i < k - 1` covers `[3i, 3i + 3)` and the last
     block covers `[3(k - 1), W)`, so a remainder of one or two cells joins it
@@ -238,7 +241,9 @@ connection.
     therefore presented at its horizontal strength; that bleed is presentation
     only, like the bleed through walls below. Each map is divided into its own blocks and measured in the
     target map's coordinates, so the blocks of neighboring maps need not align.
-    No map is ever loaded for it. A source anywhere inside a block therefore
+    No map is ever loaded for it, and no reachable map is dropped: the pool
+    grows with the reachable topology, which is finite because every map is
+    placed once per offset within reach. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
     triangulate its tile;
   - the strongest positive and the strongest negative contribution reaching
