@@ -5459,6 +5459,50 @@ typedef struct map_client_lighting_field {
 
 static map_client_lighting_field_t map_client_lighting_fields[MAP2_LEVELS];
 
+/* Emitter-field rebuilds a presented frame may run for fields that are only
+ * out of date. A server can legitimately change an emitter on every depth in
+ * every update, so without a bound one update could cost 13 full field
+ * evaluations on the render path. Fields beyond the budget keep their previous
+ * result for that frame and are rebuilt on following frames; a field whose
+ * store, origin or size changed is always rebuilt. */
+#define MAP_EMITTER_REBUILDS_PER_FRAME 2
+static bool map_emitter_budget_enabled = true;
+static bool map_emitter_frame_active;
+static unsigned map_emitter_frame_rebuilds;
+static bool map_emitter_rebuild_deferred;
+
+void map_set_emitter_rebuild_budget(bool enabled) {
+    map_emitter_budget_enabled = enabled;
+}
+
+/** Start counting rebuilds for one presented primary frame. */
+static void map_emitter_frame_begin(void) {
+    map_emitter_frame_active = map_emitter_budget_enabled;
+    map_emitter_frame_rebuilds = 0;
+}
+
+/** After a frame's redraw is consumed: schedule the deferred rebuilds. */
+static void map_emitter_frame_end(void) {
+    map_emitter_frame_active = false;
+    if (map_emitter_rebuild_deferred) {
+        map_emitter_rebuild_deferred = false;
+        map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    }
+}
+
+/** Whether an out-of-date field may be rebuilt now; counts every rebuild. */
+static bool map_emitter_rebuild_allowed(bool required) {
+    if (!map_emitter_frame_active) {
+        return true;
+    }
+    if (!required && map_emitter_frame_rebuilds >= MAP_EMITTER_REBUILDS_PER_FRAME) {
+        map_emitter_rebuild_deferred = true;
+        return false;
+    }
+    map_emitter_frame_rebuilds++;
+    return true;
+}
+
 /** Rebuild the current level's emitter field from sent emitters and occluders. */
 static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
     int margin = LIGHT_PROFILE_RADIUS_MAX;
@@ -5596,12 +5640,13 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
                   (header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_REMOTE) != 0;
 
     map_client_lighting_field_t *field = &map_client_lighting_fields[current_level_index];
-    if (!field->valid || field->store != cells ||
-        field->revision != level_emitter_revision[current_level_index] ||
-        field->cache_origin_x != map_cache_origin_x ||
-        field->cache_origin_y != map_cache_origin_y ||
-        field->width != map_width + LIGHT_PROFILE_RADIUS_MAX * 2 ||
-        field->height != map_height + LIGHT_PROFILE_RADIUS_MAX * 2) {
+    bool structural = !field->valid || field->store != cells ||
+                      field->cache_origin_x != map_cache_origin_x ||
+                      field->cache_origin_y != map_cache_origin_y ||
+                      field->width != map_width + LIGHT_PROFILE_RADIUS_MAX * 2 ||
+                      field->height != map_height + LIGHT_PROFILE_RADIUS_MAX * 2;
+    if ((structural || field->revision != level_emitter_revision[current_level_index]) &&
+        map_emitter_rebuild_allowed(structural)) {
         map_client_lighting_rebuild(field);
     }
     const client_lighting_cell_t *local = NULL;
@@ -6635,6 +6680,25 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40) &&
               composed_rgb[0] == composed_scalar && composed_rgb[2] == composed_scalar;
+    /* A presented frame rebuilds at most its budget of out-of-date emitter
+     * fields; the rest are deferred to a requested redraw, and rebuilds
+     * outside a frame stay unbounded. */
+    map_client_lighting_field_t *budget_field = &map_client_lighting_fields[current_level_index];
+    uint16_t budget_scalar = 0, budget_rgb[3] = {0, 0, 0};
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    map_emitter_frame_begin();
+    for (int rebuild = 0; rebuild <= MAP_EMITTER_REBUILDS_PER_FRAME; rebuild++) {
+        map_emitter_revision_bump(current_level_index);
+        map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    }
+    success = success && budget_field->valid &&
+              budget_field->revision != level_emitter_revision[current_level_index];
+    map_redraw_consume();
+    map_emitter_frame_end();
+    success = success && (map_redraw_pending_reasons() & MAP_REDRAW_REASON_LIGHTING) != 0;
+    map_redraw_consume();
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && budget_field->revision == level_emitter_revision[current_level_index];
     /* A remote sample composes its coarse level, never the cell's emitters. */
     map_set_light_radiance(14, 8, 0, 160);
     map_set_light_radiance(14, 8, 1, 160);
@@ -8881,6 +8945,7 @@ void map_draw_map(SDL_Surface *surface) {
     bool gpu_output = gpu_renderer_ready() && (primary_surface || map_gpu_auxiliary);
     if (primary_surface) {
         map_flicker_lighting_update();
+        map_emitter_frame_begin();
     }
     uint32_t pending_redraw_reasons = primary_surface ? map_redraw_pending_reasons() : 0;
     bool animation_only = primary_surface && !map_redraw_due() && map_animation_redraw_due() &&
@@ -9665,10 +9730,12 @@ static void widget_draw(widgetdata *widget) {
     if (!map_state_transaction_active() && map_redraw_due()) {
         map_draw_map(widget->surface);
         map_redraw_consume();
+        map_emitter_frame_end();
         effect_sprites_play();
     } else if (!map_state_transaction_active() && map_animation_redraw_due()) {
         map_draw_map(widget->surface);
         map_animation_redraw_consume();
+        map_emitter_frame_end();
         effect_sprites_play();
     }
 
