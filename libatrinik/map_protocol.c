@@ -258,7 +258,6 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                     /* Darkness is achromatic and positive light needs a
                      * nonzero linear peak. */
                     if (!map_packet_read_int8(reader, &radius) || radius == 0 ||
-                        radius < -MAP2_EMITTER_RADIUS_MAX || radius > MAP2_EMITTER_RADIUS_MAX ||
                         !map_packet_read_uint8(reader, &red) ||
                         !map_packet_read_uint8(reader, &green) ||
                         !map_packet_read_uint8(reader, &blue) ||

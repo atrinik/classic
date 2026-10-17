@@ -1869,8 +1869,9 @@ void draw_client_map2(object *pl) {
                              * zero linear peak is rejected as authored light. */
                             if (client_lighting && tmp->glow_radius != 0 &&
                                 (tmp->glow_radius < 0 || emitter_color != 0)) {
-                                int radius = MAX(-MAP2_EMITTER_RADIUS_MAX,
-                                                 MIN(MAP2_EMITTER_RADIUS_MAX, tmp->glow_radius));
+                                /* Unclamped: the client sums a tile's radii
+                                 * before light_mask saturates them. */
+                                int radius = tmp->glow_radius;
                                 emitter = (uint32_t)(uint8_t)(int8_t)radius << 24 |
                                           (radius > 0 ? emitter_color : 0);
                                 flags2 |= MAP2_FLAG2_EMITTER;
@@ -2334,9 +2335,13 @@ void draw_client_map2(object *pl) {
                     mp->emitter_stale |= mp->emitter_layers & ~cell_emitter_sent;
                     mp->emitter_digest = cell_emitter_digest;
                 }
-                /* The client forgets the live level in fog; resend on return. */
+                /* The client forgets the live level and emitters in fog; resend
+                 * both once the cell is visible again. */
                 if (client_lighting && tile_fow) {
                     mp->client_light_known &= (uint8_t)~1U;
+                    if (light_state_discarded) {
+                        mp->emitter_stale |= mp->emitter_layers;
+                    }
                 }
                 uint8_t local_light = 0, occluder = 0;
                 if (client_lighting && !tile_fow) {
