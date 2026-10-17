@@ -1145,8 +1145,12 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     cs->celestial_generation++;
     packet_struct *packet = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
     packet_debug_data(packet, 0, "Celestial inputs");
-    HARD_ASSERT(celestial_protocol_write(packet, cs->celestial_generation, start_seconds, slots,
-                                         count));
+    /* The probe already validated these inputs; the write must still run
+     * where assertions compile out. */
+    bool written = celestial_protocol_write(packet, cs->celestial_generation, start_seconds,
+                                            slots, count);
+    HARD_ASSERT(written);
+    (void)written;
     cs->celestial_sent = true;
     cs->celestial_sent_digest = digest;
     socket_send_packet(cs, packet);
