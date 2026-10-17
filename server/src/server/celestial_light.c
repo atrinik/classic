@@ -25,13 +25,14 @@
 #include <server_main.h>
 #include <spatial.h>
 #include <tod.h>
+#include <toolkit/celestial_model.h>
 #include <toolkit/datetime.h>
 
 #include <stdint.h>
 
-#define CELESTIAL_SCALE 256
-#define CELESTIAL_DIRECT_REACH 32
-#define CELESTIAL_SPILL_PASSES 4
+#define CELESTIAL_SCALE CELESTIAL_MODEL_SCALE
+#define CELESTIAL_DIRECT_REACH CELESTIAL_MODEL_DIRECT_REACH
+#define CELESTIAL_SPILL_PASSES CELESTIAL_MODEL_SPILL_PASSES
 
 /* All solve allocations, including dependency snapshots, share one ceiling. */
 #define CELESTIAL_PENDING_MEMORY_MAX ((size_t)1923584)
@@ -67,110 +68,38 @@ uint64_t celestial_light_rebuilds_for_test(void) {
 }
 #endif
 
-typedef struct celestial_model {
-    int32_t direct;
-    int32_t diffuse;
-    int32_t moon;
-    int32_t starlight;
-    uint16_t solar_color[3];
-    uint16_t moon_color[3];
-    uint16_t starlight_color[3];
-    uint16_t solar_brightness;
-    int32_t solar_elevation;
-    int32_t moon_elevation;
-    uint8_t solar_direction;
-    uint8_t moon_direction;
-} celestial_model;
+/* Sources and transport arithmetic are libatrinik's, shared with clients that
+ * compute celestial light themselves, so both produce identical fields. */
+typedef celestial_model_t celestial_model;
 
-static const int32_t solar_elevation[HOURS_PER_DAY] = {
-    -32768, -31651, -28378, -23170, -16384, -8481, 0, 8481,  16384, 23170, 28378, 31651,
-    32768, 31651, 28378, 23170, 16384, 8481,  0, -8481, -16384, -23170, -28378, -31651,
-};
-
-static const uint8_t solar_azimuth[HOURS_PER_DAY] = {
-    NORTH, NORTH, NORTHEAST, NORTHEAST, NORTHEAST, EAST, EAST, EAST,
-    SOUTHEAST, SOUTHEAST, SOUTH, SOUTH, SOUTH, SOUTH, SOUTH, SOUTHWEST,
-    SOUTHWEST, WEST, WEST, WEST, NORTHWEST, NORTHWEST, NORTHWEST, NORTH,
-};
-
-static const uint16_t season_factor[MONTHS_PER_YEAR] = {
-    24576, 25600, 27648, 29952, 31744, 32768,
-    32768, 31744, 29952, 27648, 25600, 24576,
-};
-
-static uint64_t celestial_round(uint64_t numerator, uint64_t denominator) {
-    HARD_ASSERT(denominator != 0);
-    return numerator / denominator +
-           (numerator % denominator >= (denominator + 1) / 2 ? 1 : 0);
-}
-
-static int32_t celestial_scale_value(int32_t value, uint32_t scale, uint32_t denominator) {
-    if (value <= 0 || scale == 0) {
-        return 0;
-    }
-    return (int32_t)celestial_round((uint64_t)value * scale, denominator);
-}
-
-static int32_t solar_elevation_at(uint16_t solar_hour, uint16_t season_phase) {
-    int32_t elevation = solar_elevation[solar_hour];
-    uint16_t factor = season_factor[season_phase / HOURS_PER_MONTH];
-    uint64_t magnitude = celestial_round((uint64_t)abs(elevation) * factor, 32768);
-    return elevation < 0 ? -(int32_t)magnitude : (int32_t)magnitude;
+void celestial_light_model_inputs(const mapstruct *map,
+                                  uint64_t absolute_hour,
+                                  celestial_model_inputs_t *inputs) {
+    const region_celestial_profile_t *profile = region_celestial_for_map(map);
+    region_celestial_phases_t phases;
+    region_celestial_phases(profile, absolute_hour, &phases);
+    (void)celestial_override_apply(profile->lunar_period, &phases.lunar);
+    memset(inputs, 0, sizeof(*inputs));
+    memcpy(inputs->day_linear, profile->day_linear, sizeof(inputs->day_linear));
+    memcpy(inputs->night_linear, profile->night_linear, sizeof(inputs->night_linear));
+    inputs->day_brightness = profile->day_brightness;
+    inputs->night_brightness = profile->night_brightness;
+    memcpy(inputs->moon_linear, profile->moon_linear, sizeof(inputs->moon_linear));
+    inputs->moon_max = profile->moon_max;
+    memcpy(inputs->starlight_linear, profile->starlight_linear, sizeof(inputs->starlight_linear));
+    inputs->starlight_strength = profile->starlight_strength;
+    inputs->lunar_period = profile->lunar_period;
+    inputs->solar_hour = phases.solar;
+    inputs->season_phase = phases.season;
+    inputs->lunar_age = phases.lunar;
 }
 
 static void celestial_model_for_map(const mapstruct *map,
                                     uint64_t absolute_hour,
                                     celestial_model *model) {
-    const region_celestial_profile_t *profile = region_celestial_for_map(map);
-    region_celestial_phases_t phases;
-    celestial_lunar_input lunar_input;
-    celestial_lunar_sample lunar;
-
-    memset(model, 0, sizeof(*model));
-    region_celestial_phases(profile, absolute_hour, &phases);
-    model->solar_direction = solar_azimuth[phases.solar];
-
-    int32_t elevation = solar_elevation_at(phases.solar, phases.season);
-    model->solar_elevation = elevation;
-    uint16_t factor = season_factor[phases.season / HOURS_PER_MONTH];
-    int32_t twilight = -(int32_t)celestial_round(UINT64_C(8481) * factor, 32768);
-    if (elevation > 0) {
-        model->direct = celestial_scale_value(elevation, 960, 32768);
-        model->diffuse = 64 + celestial_scale_value(elevation, 256, 32768);
-    } else if (elevation == 0) {
-        model->diffuse = 64;
-    } else if (elevation >= twilight) {
-        model->diffuse = 16;
-    }
-
-    uint32_t daylight = (uint32_t)MAX(elevation, 0);
-    uint32_t inverse = 32768 - MIN(daylight, 32768U);
-    uint64_t brightness_numerator =
-        (uint64_t)profile->night_brightness * inverse +
-        (uint64_t)profile->day_brightness * MIN(daylight, 32768U);
-    uint16_t brightness = (uint16_t)celestial_round(brightness_numerator, 32768);
-    for (size_t channel = 0; channel < 3; channel++) {
-        uint64_t color_numerator =
-            (uint64_t)profile->night_linear[channel] * inverse +
-            (uint64_t)profile->day_linear[channel] * MIN(daylight, 32768U);
-        uint16_t color = (uint16_t)celestial_round(color_numerator, 32768);
-        model->solar_color[channel] = color;
-    }
-    model->solar_brightness = brightness;
-
-    region_celestial_lunar_input(profile, absolute_hour, &lunar_input);
-    (void)celestial_override_apply(profile->lunar_period, &lunar_input.lunar_age);
-    if (!celestial_lunar_evaluate(&lunar_input, &lunar)) {
-        return;
-    }
-    model->moon_direction = lunar.azimuth;
-    model->moon_elevation = lunar.elevation;
-    model->moon = lunar.moon_strength;
-    model->starlight = lunar.starlight_strength;
-    memcpy(model->moon_color, profile->moon_linear, sizeof(model->moon_color));
-    memcpy(model->starlight_color,
-           profile->starlight_linear,
-           sizeof(model->starlight_color));
+    celestial_model_inputs_t inputs;
+    celestial_light_model_inputs(map, absolute_hour, &inputs);
+    celestial_model_evaluate(&inputs, model);
 }
 
 static uint16_t transmission_value(const char *value) {
@@ -254,7 +183,7 @@ bool celestial_light_geometry_update(mapstruct *map, int x, int y) {
 }
 
 static int32_t transmit(int32_t value, uint16_t coefficient) {
-    return (int32_t)celestial_round((uint64_t)MAX(value, 0) * coefficient, CELESTIAL_SCALE);
+    return celestial_model_transmit(value, coefficient);
 }
 
 static void direction_delta(uint8_t direction, int *dx, int *dy) {
@@ -418,15 +347,8 @@ static void celestial_ray_step(celestial_ray *ray) {
 
 static int32_t celestial_ray_value(const celestial_ray *ray, int32_t source,
                                    int32_t *aperture) {
-    int32_t value = ray->sky ? source : 0;
-    int32_t spill = 0;
-    for (unsigned i = ray->count; i-- > 0;) {
-        value = transmit(value, ray->coefficients[i]);
-        spill = transmit(spill, ray->coefficients[i]);
-        if (ray->apertures[i]) spill = value;
-    }
-    if (aperture != NULL) *aperture = spill;
-    return value;
+    return celestial_model_ray_value(ray->coefficients, ray->apertures, ray->count, ray->sky,
+                                     source, aperture);
 }
 
 /* Four spill cells around the output plus each seed's 32-cell directional
@@ -509,40 +431,15 @@ static void transport_line(mapstruct *map, const celestial_model *model,
     }
 }
 
+static uint16_t relax_spill(int x, int y, int dx, int dy, void *context) {
+    return celestial_spill_coefficient(context, x, y, dx, dy);
+}
+
 static void relax_diffuse(mapstruct *map, int32_t *values) {
-    int width = celestial_scratch_width(map), height = celestial_scratch_height(map);
-    size_t count = (size_t)width * height;
-    bool active = false;
-    for (size_t i = 0; i < count; i++) active |= values[i] != 0;
-    if (!active) return;
-    int32_t *next = xcalloc(count, sizeof(*next));
-    int32_t *original = values;
-    for (int pass = 0; pass < CELESTIAL_SPILL_PASSES; pass++) {
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int32_t best = values[x + width * y];
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dx = -1; dx <= 1; dx++) {
-                        if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 ||
-                            x + dx >= width || y + dy >= height) continue;
-                        uint16_t coefficient = celestial_spill_coefficient(map, x, y, dx, dy);
-                        int32_t candidate = transmit(values[x + dx + width * (y + dy)], coefficient);
-                        candidate = transmit(candidate, dx != 0 && dy != 0 ? 181 : 192);
-                        best = MAX(best, candidate);
-                    }
-                }
-                next[x + width * y] = best;
-            }
-        }
-        int32_t *swap = values;
-        values = next;
-        next = swap;
-    }
-    if (values != original) {
-        memcpy(original, values, count * sizeof(*original));
-        free(values);
-    } else {
-        free(next);
+    if (!celestial_model_relax(values, celestial_scratch_width(map), celestial_scratch_height(map),
+                               relax_spill, map)) {
+        LOG(ERROR, "Out of memory relaxing the celestial field.");
+        abort();
     }
 }
 
@@ -653,25 +550,11 @@ static void publish_map_field(mapstruct *map,
         for (int x = 0; x < map->width; x++) {
             int index = x + CELESTIAL_SPILL_PASSES + celestial_scratch_width(map) *
                         (y + CELESTIAL_SPILL_PASSES);
-            int32_t solar = celestial_scale_value(direct[index] + diffuse[index] +
-                                                      aperture_direct[index],
-                                                  model->solar_brightness,
-                                                  256);
-            int32_t moon_value = moon[index] + moon_aperture[index];
-            int32_t value = solar + moon_value + starlight[index];
+            int32_t value, rgb[3];
+            celestial_model_publish(model, direct[index], diffuse[index], aperture_direct[index],
+                                    moon[index], moon_aperture[index], starlight[index], &value,
+                                    rgb);
             MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
-            int32_t rgb[3] = {0, 0, 0};
-            for (size_t channel = 0; channel < 3; channel++) {
-                rgb[channel] = celestial_scale_value(solar,
-                                                      model->solar_color[channel],
-                                                      UINT16_MAX);
-                rgb[channel] += celestial_scale_value(moon_value,
-                                                       model->moon_color[channel],
-                                                       UINT16_MAX);
-                rgb[channel] += celestial_scale_value(starlight[index],
-                                                       model->starlight_color[channel],
-                                                       UINT16_MAX);
-            }
             space->celestial_light_value = value;
             memcpy(space->celestial_light_rgb, rgb, sizeof(rgb));
         }
@@ -1174,16 +1057,10 @@ static bool pending_step(celestial_pending_t *job) {
         size_t cell = job->cell;
         size_t sample = x + CELESTIAL_SPILL_PASSES + celestial_scratch_width(level->map) *
                         (y + CELESTIAL_SPILL_PASSES);
-        int32_t solar = celestial_scale_value(job->direct[sample] + job->diffuse[sample] +
-                                                 job->aperture[sample],
-                                             job->model.solar_brightness, 256);
-        int32_t moon = job->moon[sample] + job->moon_aperture[sample];
-        level->value[cell] = solar + moon + job->stars[sample];
-        for (size_t channel = 0; channel < 3; channel++) {
-            level->rgb[cell][channel] = celestial_scale_value(solar, job->model.solar_color[channel], UINT16_MAX) +
-                celestial_scale_value(moon, job->model.moon_color[channel], UINT16_MAX) +
-                celestial_scale_value(job->stars[sample], job->model.starlight_color[channel], UINT16_MAX);
-        }
+        celestial_model_publish(&job->model, job->direct[sample], job->diffuse[sample],
+                                job->aperture[sample], job->moon[sample],
+                                job->moon_aperture[sample], job->stars[sample],
+                                &level->value[cell], level->rgb[cell]);
         if (++job->cell == level->cells) {
             job->cell = 0;
             pending_free_scratch(job);

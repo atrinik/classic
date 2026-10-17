@@ -28,6 +28,7 @@
 #include <decls.h>
 
 #include <stdint.h>
+#include <toolkit/celestial_model.h>
 
 /**
  * @file
@@ -83,6 +84,12 @@ extern bool light_emitter_disclosed(const object *viewer, const object *op);
 
 /** Combine the occluder bits of two sent objects of one cell. */
 extern uint64_t light_occluder_combine(uint64_t first, uint64_t second);
+
+/** The shared celestial model's inputs for one map and gameplay hour: its
+ * effective profile's light constants and phases, any lunar override applied. */
+extern void celestial_light_model_inputs(const mapstruct *map,
+                                         uint64_t absolute_hour,
+                                         celestial_model_inputs_t *inputs);
 
 /** Invalidate the bounded celestial field after structural/topology changes. */
 extern void celestial_light_invalidate(mapstruct *map);

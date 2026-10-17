@@ -101,3 +101,4 @@ class ServerToClientCommand(IntEnum):
     ACCESS_POLICY = 31
     REGION_EXPLORATION = 32
     BOOK_EDIT = 33
+    CELESTIAL = 34

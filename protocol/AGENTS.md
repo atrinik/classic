@@ -54,7 +54,11 @@
   and `MAP2_FLAG_EXT_OCCLUDER` cell extensions (`libatrinik/socket.h`). It is
   the only lighting model: per-sub-layer lighting words are always signed
   Q4.11 base radiance, with no negotiation, option or legacy full-radiance
-  meaning, and the version handshake rejects earlier peers; see
+  meaning, and the version handshake rejects earlier peers. It also appends S2C
+  `CELESTIAL` (34): region light constants and effective phases, framed by
+  `celestial_protocol_write()` in `libatrinik/celestial_model.c` and sent to
+  every connection; see
+  [`CLIENT_CELESTIAL.md`](../server/doc/CLIENT_CELESTIAL.md) and
   [`CLIENT_LIGHTING.md`](../server/doc/CLIENT_LIGHTING.md).
 
 - Rendezvous admission transport identities live in `schema/rendezvous-admission.json`

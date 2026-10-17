@@ -1037,6 +1037,121 @@ static int16_t map_space_support_height(MapSpace *msp) {
         }                                                                                       \
     }
 
+/** Distinct celestial profiles of the maps one MAP2 update shows. */
+typedef struct map2_celestial_maps {
+    const mapstruct *maps[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    const region_celestial_profile_t *profiles[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    size_t count;
+} map2_celestial_maps_t;
+
+/** Note the celestial profile of a celestial-v1 map this update shows. */
+static void map2_celestial_note(map2_celestial_maps_t *seen, const mapstruct *map) {
+    if (map->celestial_schema != 1) {
+        return;
+    }
+    const region_celestial_profile_t *profile = region_celestial_for_map(map);
+    for (size_t i = 0; i < seen->count; i++) {
+        if (seen->profiles[i] == profile ||
+            memcmp(seen->profiles[i]->digest, profile->digest, sizeof(profile->digest)) == 0) {
+            return;
+        }
+    }
+    if (seen->count == arraysize(seen->maps)) {
+        /* Further profiles get no slot; their fragments fail closed. */
+        return;
+    }
+    seen->maps[seen->count] = map;
+    seen->profiles[seen->count++] = profile;
+}
+
+static bool map2_celestial_slot_assigned(const socket_struct *cs, int slot) {
+    return (cs->celestial_slots_assigned[slot / 64] >> (slot % 64)) & 1U;
+}
+
+/**
+ * Send the CELESTIAL inputs of the profiles this update shows when their
+ * encoding differs from the last payload sent. A profile keeps its slot while
+ * it stays in view; a slot no shown profile uses is reassigned only when one
+ * is needed.
+ */
+static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *seen) {
+    static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    int slot_of[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    uint64_t used[(CELESTIAL_PROTOCOL_SLOTS_MAX + 63) / 64] = {0};
+    for (size_t i = 0; i < seen->count; i++) {
+        slot_of[i] = -1;
+        for (int slot = 0; slot < CELESTIAL_PROTOCOL_SLOT_NONE; slot++) {
+            if (map2_celestial_slot_assigned(cs, slot) &&
+                memcmp(cs->celestial_slot_digest[slot], seen->profiles[i]->digest, 32) == 0) {
+                slot_of[i] = slot;
+                used[slot / 64] |= UINT64_C(1) << (slot % 64);
+                break;
+            }
+        }
+    }
+    for (size_t i = 0; i < seen->count; i++) {
+        if (slot_of[i] >= 0) {
+            continue;
+        }
+        int free_slot = -1;
+        for (int slot = 0; slot < CELESTIAL_PROTOCOL_SLOT_NONE && free_slot < 0; slot++) {
+            if (!map2_celestial_slot_assigned(cs, slot)) {
+                free_slot = slot;
+            }
+        }
+        for (int slot = 0; slot < CELESTIAL_PROTOCOL_SLOT_NONE && free_slot < 0; slot++) {
+            if (!((used[slot / 64] >> (slot % 64)) & 1U)) {
+                free_slot = slot;
+            }
+        }
+        if (free_slot < 0) {
+            continue;
+        }
+        memcpy(cs->celestial_slot_digest[free_slot], seen->profiles[i]->digest, 32);
+        cs->celestial_slots_assigned[free_slot / 64] |= UINT64_C(1) << (free_slot % 64);
+        used[free_slot / 64] |= UINT64_C(1) << (free_slot % 64);
+        slot_of[i] = free_slot;
+    }
+
+    size_t count = 0;
+    for (int slot = 0; slot < CELESTIAL_PROTOCOL_SLOT_NONE; slot++) {
+        for (size_t i = 0; i < seen->count; i++) {
+            if (slot_of[i] != slot) {
+                continue;
+            }
+            slots[count].slot = (uint8_t)slot;
+            celestial_light_model_inputs(seen->maps[i], (uint64_t)todtick, &slots[count].current);
+            celestial_light_model_inputs(seen->maps[i], (uint64_t)todtick + 1, &slots[count].next);
+            count++;
+        }
+    }
+
+    uint64_t start_seconds = (uint64_t)todtick * UINT64_C(3600);
+    /* Compare the encoding without the generation, which only advances. */
+    packet_struct *probe = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
+    if (!celestial_protocol_write(probe, 0, start_seconds, slots, count)) {
+        LOG(ERROR, "Invalid celestial inputs; not sent.");
+        packet_free(probe);
+        return;
+    }
+    uint64_t digest = UINT64_C(1469598103934665603);
+    for (size_t i = 0; i < probe->len; i++) {
+        digest = (digest ^ probe->data[i]) * UINT64_C(1099511628211);
+    }
+    packet_free(probe);
+    if (cs->celestial_sent && cs->celestial_sent_digest == digest) {
+        return;
+    }
+    cs->celestial_generation++;
+    packet_struct *packet = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
+    packet_debug_data(packet, 0, "Celestial inputs");
+    HARD_ASSERT(celestial_protocol_write(packet, cs->celestial_generation, start_seconds, slots,
+                                         count));
+    cs->celestial_sent = true;
+    cs->celestial_sent_digest = digest;
+    socket_send_packet(cs, packet);
+}
+
 /** Remembered fog that keeps receiving client light (MapCell bit 3). */
 #define MAP2_CLIENT_LIGHT_REMEMBERED 8U
 
@@ -1248,6 +1363,7 @@ void draw_client_map2(object *pl) {
     packet_writer_mark_t packet_save_buf;
     bool timed_light_descriptor = false;
     bool light_state_invalidated = false;
+    map2_celestial_maps_t celestial_maps = {0};
     uint64_t timed_light_generation = 0;
     uint64_t timed_light_start_seconds = 0;
     uint64_t timed_light_end_seconds = 0;
@@ -1453,6 +1569,7 @@ void draw_client_map2(object *pl) {
                 /* Retain every physical level even when its delta is empty. */
                 level_present = true;
                 msp = GET_MAP_SPACE_PTR(m, nx, ny);
+                map2_celestial_note(&celestial_maps, m);
                 blocksview = d & BLOCKED_LOS_BLOCKED;
                 bool camera_covered = level_visibility != MAP_LEVEL_VISIBLE;
                 /* An exposed roof/floor receives incident light even when its
@@ -2743,6 +2860,8 @@ void draw_client_map2(object *pl) {
     exploration_flush(view_socket, false);
     bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
                             CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
+    /* Celestial inputs precede the map update that shows their profiles. */
+    map2_send_celestial(CONTR(pl)->cs, &celestial_maps);
     socket_send_packet(CONTR(pl)->cs, packet_header);
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);

@@ -87,6 +87,7 @@
     {"id": 30, "symbol": "ACCESS_ADMIN_RESULT", "wire_name": "access_admin_result"},
     {"id": 31, "symbol": "ACCESS_POLICY", "wire_name": "access_policy"},
     {"id": 32, "symbol": "REGION_EXPLORATION", "wire_name": "region_exploration"},
-    {"id": 33, "symbol": "BOOK_EDIT", "wire_name": "book_edit"}
+    {"id": 33, "symbol": "BOOK_EDIT", "wire_name": "book_edit"},
+    {"id": 34, "symbol": "CELESTIAL", "wire_name": "celestial"}
   ]
 }
