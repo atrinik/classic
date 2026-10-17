@@ -388,9 +388,12 @@ int32_t client_lighting_compose(int32_t emitter_raw, int8_t level) {
     /* The coarse level is a floor (a ceiling for darkness) under the emitter
      * field, never a cap: it bins the strongest single source while the field
      * groups a tile's sent emitters, which may exceed that bin. */
-    if (level > 0 && local < level * step) {
+    /* An emitter field of the opposite sign that is at least as strong as the
+     * floor is exact sent light and wins: the coarse sign comes from single
+     * sources, so grouped sent emitters can outweigh it. */
+    if (level > 0 && local < level * step && -local < level * step) {
         local = level * step;
-    } else if (level < 0 && local > level * step) {
+    } else if (level < 0 && local > level * step && local < -level * step) {
         local = level * step;
     }
     return local;

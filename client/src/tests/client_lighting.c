@@ -389,6 +389,11 @@ static void test_compose_by_sign_over_the_coarse_floor(void) {
     TEST_CHECK(client_lighting_compose(-1000, -1) == -1000);
     TEST_CHECK(client_lighting_compose(500, 0) == 500);
     TEST_CHECK(client_lighting_compose(-500, 0) == -500);
+    /* A stronger grouped field of the opposite sign survives the floor. */
+    TEST_CHECK(client_lighting_compose(640, -2) == 640);
+    TEST_CHECK(client_lighting_compose(100, -2) == -2 * step);
+    TEST_CHECK(client_lighting_compose(-640, 2) == -640);
+    TEST_CHECK(client_lighting_compose(-100, 2) == 2 * step);
     TEST_CHECK(client_lighting_compose(42, 0) == 42);
     TEST_CHECK(client_lighting_compose(5000, MAP2_LOCAL_LIGHT_LEVEL_MAX) == 5000);
     TEST_CHECK(client_lighting_compose(-5000, -MAP2_LOCAL_LIGHT_LEVEL_MAX) == -5000);
