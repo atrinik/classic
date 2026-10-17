@@ -3637,6 +3637,30 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_negotiation_is_fixed_after_setup) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    socket_struct *cs = CONTR(op)->cs;
+    bool saved_client_lighting = settings.client_lighting;
+    bool saved_setup = cs->setup_completed;
+    settings.client_lighting = true;
+    cs->setup_completed = true;
+    cs->client_lighting = false;
+    /* An admitted player cannot change the mode, or force cache resets. */
+    uint8_t enable[] = {CMD_SETUP_CLIENT_LIGHTING, CLIENT_LIGHTING_CAP_COMPOSITOR};
+    socket_command_setup(cs, CONTR(op), enable, sizeof(enable), 0);
+    ck_assert(!cs->client_lighting);
+    cs->client_lighting = true;
+    uint8_t disable[] = {CMD_SETUP_CLIENT_LIGHTING, 0};
+    socket_command_setup(cs, CONTR(op), disable, sizeof(disable), 0);
+    ck_assert(cs->client_lighting);
+    cs->client_lighting = false;
+    cs->setup_completed = saved_setup;
+    settings.client_lighting = saved_client_lighting;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -3724,6 +3748,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
     tcase_add_test(tc_core, test_odd_view_los_matches_emitted_map_coordinates);
     tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
+    tcase_add_test(tc_core, test_client_lighting_negotiation_is_fixed_after_setup);
     return s;
 }
 

@@ -189,9 +189,13 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
             packet_writer_write_uint8(packet, ns->connection_mode);
         } else if (type == CMD_SETUP_CLIENT_LIGHTING) {
             uint8_t capabilities = packet_reader_read_uint8(&reader);
-            client_lighting = settings.client_lighting &&
-                              (capabilities & CLIENT_LIGHTING_CAP_COMPOSITOR) != 0;
-            client_lighting_present = true;
+            /* Fixed by the initial SETUP; later SETUPs only echo the mode, so
+             * a player cannot force repeated per-socket cache resets. */
+            client_lighting = ns->setup_completed
+                                  ? ns->client_lighting
+                                  : settings.client_lighting &&
+                                        (capabilities & CLIENT_LIGHTING_CAP_COMPOSITOR) != 0;
+            client_lighting_present = !ns->setup_completed;
             packet_debug_data(packet, 0, "Client lighting");
             packet_writer_write_uint8(packet,
                                       client_lighting ? CLIENT_LIGHTING_CAP_COMPOSITOR : 0);
