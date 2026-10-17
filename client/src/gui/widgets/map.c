@@ -223,8 +223,16 @@ static uint64_t map_cell_next_painter_identity = 1;
 static uint64_t map_next_presentation_token = 1;
 static uint64_t level_lighting_revision[MAP2_LEVELS];
 /* Advances only when a level's emitters, occluders or live residency change,
- * so base-light and timed-light updates do not rebuild the emitter field. */
+ * so base-light and timed-light updates do not rebuild the emitter field.
+ * Values come from one clock and are never reused, so a revision moves with
+ * its store through level scrolls and is restored on abort without ever
+ * matching a field built from other cells. */
 static uint64_t level_emitter_revision[MAP2_LEVELS];
+static uint64_t level_emitter_clock;
+
+static void map_emitter_revision_bump(size_t level) {
+    level_emitter_revision[level] = ++level_emitter_clock;
+}
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 /** Offline proofs only: the discrete per-tile projection pinned by approved
  * conformance goldens. Players always get smooth lighting. */
@@ -1365,7 +1373,7 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             /* Cells leaving the window are no longer updated by the server:
              * fog keeps its remembered occluders and its last authorized
              * coarse levels, as the server freezes them for fog. */
-            level_emitter_revision[level_index]++;
+            map_emitter_revision_bump(level_index);
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
         }
@@ -1469,6 +1477,7 @@ static struct {
     size_t current_level_index;
     uint16_t level_mask;
     uint64_t lighting_revision[MAP2_LEVELS];
+    uint64_t emitter_revision[MAP2_LEVELS];
     map_cell_store_t *original_levels[MAP2_LEVELS];
     map_cell_store_t *full_snapshot_levels[MAP2_LEVELS];
     map_anim_t *animations;
@@ -1626,6 +1635,9 @@ void map_state_transaction_begin(bool full_snapshot) {
     memcpy(map_state_transaction.lighting_revision,
            level_lighting_revision,
            sizeof(level_lighting_revision));
+    memcpy(map_state_transaction.emitter_revision,
+           level_emitter_revision,
+           sizeof(level_emitter_revision));
     map_state_transaction.ambient_clear = false;
     map_state_transaction.ambient_scroll_x = 0;
     map_state_transaction.ambient_scroll_y = 0;
@@ -1730,10 +1742,12 @@ void map_state_transaction_abort(void) {
     memcpy(level_lighting_revision,
            map_state_transaction.lighting_revision,
            sizeof(level_lighting_revision));
-    /* Restored cells invalidate any emitter field built meanwhile. */
-    for (size_t level = 0; level < MAP2_LEVELS; level++) {
-        level_emitter_revision[level]++;
-    }
+    /* The restored cells are the ones the saved revisions describe; a field
+     * built meanwhile holds a newer clock value and is rebuilt, while fields
+     * of untouched levels stay valid, so a no-op abort relights nothing. */
+    memcpy(level_emitter_revision,
+           map_state_transaction.emitter_revision,
+           sizeof(level_emitter_revision));
     MapData = map_state_transaction.map_data;
     map_state_transaction_restore_region_fow();
     cells = level_cells[current_level_index];
@@ -2008,7 +2022,7 @@ void clear_map(bool hard) {
     /* Slots cleared in place keep the cache origin, so the emitter field must
      * not mistake the next map's cells for the previous ones. */
     for (size_t level = 0; level < MAP2_LEVELS; level++) {
-        level_emitter_revision[level]++;
+        map_emitter_revision_bump(level);
     }
     if (hard) {
         map_hard_clear_abort_pending();
@@ -2255,6 +2269,11 @@ void map_level_scroll(int dz) {
 
     map_cell_store_t *shifted[MAP2_LEVELS] = {0};
     uint64_t shifted_revisions[MAP2_LEVELS] = {0};
+    uint64_t shifted_emitter_revisions[MAP2_LEVELS];
+    for (size_t i = 0; i < MAP2_LEVELS; i++) {
+        /* A depth without a source store starts a fresh field. */
+        shifted_emitter_revisions[i] = ++level_emitter_clock;
+    }
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         int source_depth = depth + dz;
 
@@ -2262,6 +2281,9 @@ void map_level_scroll(int dz) {
             shifted[MAP2_DEPTH_INDEX(depth)] = level_cells[MAP2_DEPTH_INDEX(source_depth)];
             shifted_revisions[MAP2_DEPTH_INDEX(depth)] =
                 level_lighting_revision[MAP2_DEPTH_INDEX(source_depth)];
+            /* The emitter field's revision moves with its store. */
+            shifted_emitter_revisions[MAP2_DEPTH_INDEX(depth)] =
+                level_emitter_revision[MAP2_DEPTH_INDEX(source_depth)];
             level_cells[MAP2_DEPTH_INDEX(source_depth)] = NULL;
         }
     }
@@ -2270,6 +2292,7 @@ void map_level_scroll(int dz) {
         map_cell_store_destroy(level_cells[i]);
         level_cells[i] = shifted[i];
         level_lighting_revision[i] = shifted_revisions[i];
+        level_emitter_revision[i] = shifted_emitter_revisions[i];
     }
 
     if (dz > 0) {
@@ -3169,7 +3192,7 @@ void map_clear_cell(int x, int y, bool hard) {
      * changes the emitter field; an idempotent clear relights nothing. */
     if ((cell != NULL && cell->emitters != NULL) ||
         (hard && (cells->headers[index].client_light_known & 2U))) {
-        level_emitter_revision[current_level_index]++;
+        map_emitter_revision_bump(current_level_index);
     }
     map_cell_clear_client_light(index, hard);
     if (cell == NULL) {
@@ -3283,7 +3306,7 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     cell->emitters = next;
     map_cell_store_trim_slot(cells, index);
     level_lighting_revision[current_level_index]++;
-    level_emitter_revision[current_level_index]++;
+    map_emitter_revision_bump(current_level_index);
 }
 
 /** Return the emitter of one sent layer, if any. */
@@ -3344,7 +3367,7 @@ void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t 
     header->occluder_vertical = vertical;
     header->client_light_known |= 2U;
     level_lighting_revision[current_level_index]++;
-    level_emitter_revision[current_level_index]++;
+    map_emitter_revision_bump(current_level_index);
 }
 
 bool map_lighting_is_smooth(void) {
@@ -3404,7 +3427,7 @@ void map_set_fow(int x, int y, bool fow) {
 
     map_cell_store_set_fow(cells, index, fow, fow);
     level_lighting_revision[current_level_index]++;
-    level_emitter_revision[current_level_index]++;
+    map_emitter_revision_bump(current_level_index);
 }
 
 /** Return the currently cached visibility state for one map tile. */
@@ -6482,7 +6505,14 @@ bool widget_map_client_lighting_state_test(void) {
               map_get_local_light_layer(7, 7, NUM_SUB_LAYERS - 1, &signed_level, &vision) &&
               signed_level == -2;
 
-    /* An aborted update restores the previous client-lighting state. */
+    /* An aborted update restores the previous client-lighting state, and
+     * with it the emitter revisions, so a no-op abort relights nothing. */
+    uint64_t emitter_revisions[MAP2_LEVELS];
+    memcpy(emitter_revisions, level_emitter_revision, sizeof(emitter_revisions));
+    map_state_transaction_begin(false);
+    map_state_transaction_abort();
+    success = success &&
+              memcmp(emitter_revisions, level_emitter_revision, sizeof(emitter_revisions)) == 0;
     map_state_transaction_begin(false);
     map_set_local_light(5, 5, map_protocol_local_light_encode(3, false));
     map_set_occluder(5, 5, MAP2_OCCLUDER_FLOOR, 0, 0);
@@ -6493,7 +6523,8 @@ bool widget_map_client_lighting_state_test(void) {
               map_get_occluder(5, 5, &bits, &horizontal, &vertical) &&
               bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF) && horizontal == 0x3210 &&
               vertical == 4 &&
-              !map_get_layer_emitter(5, 5, layer, &radius, &emitter_flags, &color);
+              !map_get_layer_emitter(5, 5, layer, &radius, &emitter_flags, &color) &&
+              memcmp(emitter_revisions, level_emitter_revision, sizeof(emitter_revisions)) == 0;
 
     /* A soft clear makes remembered fog, which keeps its occluders and the
      * coarse level the server keeps updating; a hard clear revokes both. */
@@ -6605,6 +6636,20 @@ bool widget_map_client_lighting_state_test(void) {
     map_lighting_radiance(12 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 8), 0,
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 300;
+
+    /* A store carries its emitter revision through level scrolls: changed
+     * while at another depth, it never matches a field built before. */
+    success = success && map_select_level(0, true);
+    uint64_t unchanged = level_emitter_revision[MAP2_DEPTH_INDEX(0)];
+    map_level_scroll(-1);
+    success = success && level_emitter_revision[MAP2_DEPTH_INDEX(1)] == unchanged &&
+              level_emitter_revision[MAP2_DEPTH_INDEX(0)] != unchanged &&
+              map_select_level(1, false);
+    map_set_layer_emitter(3, 3, layer, 5, 0, UINT32_C(0xffffff));
+    uint64_t changed = level_emitter_revision[MAP2_DEPTH_INDEX(1)];
+    map_level_scroll(1);
+    success = success && changed != unchanged &&
+              level_emitter_revision[MAP2_DEPTH_INDEX(0)] == changed;
 
     for (size_t store = 0; store < arraysize(map_client_lighting_fields); store++) {
         map_client_lighting_fields[store].valid = false;
