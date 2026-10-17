@@ -1631,14 +1631,16 @@ static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, i
 typedef struct light_local_region {
     mapstruct *map;
     int ox, oy;
-    /** Levels above (positive) or below the target, for the stack bound. */
-    int dz;
 } light_local_region;
 
-/** Levels a coarse vertical bucket spans from its target: every pair of
- * depths in one 13-depth MAP2 window lies within it, so a source inside the
- * window reaches all of them alike, and no stack makes pooling unbounded. */
-#define LIGHT_LOCAL_STACK_REACH (2 * MAP2_MAX_DEPTH)
+/**
+ * Most maps one coarse level may pool. Real topologies stay far below it (a
+ * 13-level stack of one-cell maps within reach places 1053); a component
+ * that exceeds it, such as an unbounded legacy link cycle or stack, fails
+ * closed to level 0 for every target in it, so no rebuild is unbounded and
+ * the levels of such a component still agree.
+ */
+#define LIGHT_LOCAL_REGIONS_MAX 4096
 
 
 static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
@@ -1651,10 +1653,9 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
      * for it. The linked levels of a stack form one vertical bucket: a
      * source on any of them counts at its horizontal gap alone, so every
      * level of the stack gets the same level and the levels never reveal
-     * which floor a hidden source is on. The bucket spans at most
-     * LIGHT_LOCAL_STACK_REACH levels from the target, which covers any
-     * MAP2 window and bounds the work for tall stacks. Regions are keyed by
-     * map and horizontal offset, which also ends cyclic level links. */
+     * which floor a hidden source is on. Regions are keyed by map and
+     * horizontal offset, which also ends cyclic level links, and a
+     * component placing more than LIGHT_LOCAL_REGIONS_MAX maps fails closed. */
     /* Placed maps grow with the reachable topology, never truncated: each
      * (map, offset) is placed once and offsets stay within reach, so the set
      * is finite however small the maps are. */
@@ -1684,9 +1685,7 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
             }
             if (tiles[t] == TILED_UP || tiles[t] == TILED_DOWN) {
                 /* Blocks align only across levels of the same dimensions. */
-                next.dz += tiles[t] == TILED_UP ? 1 : -1;
-                if (abs(next.dz) > LIGHT_LOCAL_STACK_REACH ||
-                    MAP_WIDTH(next.map) != MAP_WIDTH(region.map) ||
+                if (MAP_WIDTH(next.map) != MAP_WIDTH(region.map) ||
                     MAP_HEIGHT(next.map) != MAP_HEIGHT(region.map)) {
                     continue;
                 }
@@ -1714,6 +1713,10 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
                        regions[j].oy == next.oy;
             }
             if (!seen) {
+                if (count == LIGHT_LOCAL_REGIONS_MAX) {
+                    /* Fail closed: pool nothing rather than an arbitrary part. */
+                    return 0;
+                }
                 if (count == capacity) {
                     capacity *= 2;
                     regions = xreallocarray(regions, capacity, sizeof(*regions));
