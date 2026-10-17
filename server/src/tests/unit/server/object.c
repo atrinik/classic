@@ -1125,6 +1125,59 @@ START_TEST(test_object_decrease) {
 }
 END_TEST
 
+START_TEST(test_object_insert_inventory_reason_is_all_or_nothing) {
+    object *holder = object_get();
+    object *sword = arch_get("sword");
+    object *bolt = arch_get("bolt");
+    sword->weight = 40;
+    sword->nrof = 1;
+    bolt->weight = 30;
+    bolt->nrof = 1;
+    object_insert_into(sword, holder, 0);
+    object_insert_into(bolt, holder, 0);
+    ck_assert_uint_eq(holder->carrying, 70);
+
+    /* The first item alone would fit; the combined batch does not, so
+     * nothing moves. */
+    object *merchant = arch_get("kobold");
+    merchant->carrying = UINT32_MAX - 50;
+    ck_assert_int_eq(object_insert_inventory_reason(holder, merchant, "test.stock"),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(merchant->inv, NULL);
+    ck_assert_uint_eq(merchant->carrying, UINT32_MAX - 50);
+    ck_assert_uint_eq(holder->carrying, 70);
+    ck_assert(object_is_in_inventory(sword, holder));
+    ck_assert(object_is_in_inventory(bolt, holder));
+
+    /* Currency anywhere in the batch is refused before anything moves. */
+    merchant->carrying = 0;
+    object *coin = arch_get("coppercoin");
+    object_insert_into(coin, holder, 0);
+    ck_assert_int_eq(object_insert_inventory_reason(holder, merchant, "test.stock"),
+                     OBJECT_SEMANTIC_FAILED);
+    ck_assert_ptr_eq(merchant->inv, NULL);
+    object_remove(coin, 0);
+    object_destroy(coin);
+
+    /* An empty source, or a source that is not detached, is refused. */
+    object *empty = object_get();
+    ck_assert_int_eq(object_insert_inventory_reason(empty, merchant, "test.stock"),
+                     OBJECT_SEMANTIC_FAILED);
+    object_destroy(empty);
+
+    ck_assert_int_eq(object_insert_inventory_reason(holder, merchant, "test.stock"),
+                     OBJECT_SEMANTIC_COMMITTED);
+    ck_assert_ptr_eq(holder->inv, NULL);
+    ck_assert_uint_eq(holder->carrying, 0);
+    ck_assert(object_is_in_inventory(sword, merchant));
+    ck_assert(object_is_in_inventory(bolt, merchant));
+    ck_assert_uint_eq(merchant->carrying, 70);
+
+    object_destroy(holder);
+    object_destroy(merchant);
+}
+END_TEST
+
 START_TEST(test_object_insert_into) {
     object *container, *item;
 
@@ -1926,6 +1979,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_object_dump);
     tcase_add_test(tc_core, test_object_insert_map);
     tcase_add_test(tc_core, test_object_decrease);
+    tcase_add_test(tc_core, test_object_insert_inventory_reason_is_all_or_nothing);
     tcase_add_test(tc_core, test_object_insert_into);
     tcase_add_test(tc_core, test_object_can_pick);
     tcase_add_test(tc_core, test_object_clone);

@@ -2581,7 +2581,7 @@ static PyObject *Atrinik_Object_GetRangeVector(Atrinik_Object *self, PyObject *a
 /** Documentation for Atrinik_Object_CreateTreasure(). */
 static const char doc_Atrinik_Object_CreateTreasure[] =
     ".. method:: CreateTreasure(treasure=None, level=0, flags=0, "
-    "a_chance=Atrinik.TREASURE_ARTIFACT_CHANCE).\n\n"
+    "a_chance=Atrinik.TREASURE_ARTIFACT_CHANCE, *, reason=None).\n\n"
     "Create treasure inside (or below, if :attr:`~Atrinik.GT_ENVIRONMENT` flag was "
     "set) the object.\n\n"
     ":param treasure: Treasure list name to generate. If None, will try to "
@@ -2597,8 +2597,28 @@ static const char doc_Atrinik_Object_CreateTreasure[] =
     ":param a_chance: Chance for the treasure to become artifact, if possible. A "
     "value of 0 will disable any chance for artifacts.\n"
     ":type a_chance: int\n"
+    ":param reason: Required to stock persistent non-player state; only "
+    "``\"merchant.stock\"`` is accepted. Stocked treasure must not contain "
+    "currency and is inserted with that reason; a player's later purchase is the "
+    "audited acquisition.\n"
+    ":type reason: str or None\n"
     ":raises ValueError: If treasure is not valid.\n"
-    ":raises RuntimeError: If generation would mutate persistent non-player state.";
+    ":raises RuntimeError: If generation would mutate persistent non-player state "
+    "without an accepted reason, would drop treasure on the map, or would stock "
+    "currency.";
+
+/** The only reason that may stock persistent non-player state with treasure. */
+#define CREATE_TREASURE_STOCK_REASON "merchant.stock"
+
+/** Whether any object in the inventory tree is currency. */
+static bool python_inventory_contains_money(object *op) {
+    for (object *tmp = op->inv; tmp != NULL; tmp = tmp->below) {
+        if (tmp->type == MONEY || python_inventory_contains_money(tmp)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 /**
  * Implements Atrinik.Object.Object.CreateTreasure() Python method.
@@ -2606,30 +2626,34 @@ static const char doc_Atrinik_Object_CreateTreasure[] =
  */
 static PyObject *
 Atrinik_Object_CreateTreasure(Atrinik_Object *self, PyObject *args, PyObject *keywds) {
-    static char *kwlist[] = {"treasure", "level", "flags", "a_chance", NULL};
+    static char *kwlist[] = {"treasure", "level", "flags", "a_chance", "reason", NULL};
     const char *treasure_name = NULL;
+    const char *reason = NULL;
     int level = 0, flags = 0, a_chance = TREASURE_ARTIFACT_CHANCE;
     treasure_list_t *t;
 
     if (!PyArg_ParseTupleAndKeywords(args,
                                      keywds,
-                                     "|ziii",
+                                     "|ziii$z",
                                      kwlist,
                                      &treasure_name,
                                      &level,
                                      &flags,
-                                     &a_chance)) {
+                                     &a_chance,
+                                     &reason)) {
         return NULL;
     }
 
     OBJEXISTCHECK(self);
 
     object *root = hooks->object_get_env(self->obj);
+    bool stock = python_object_is_persistent(self->obj) && root->type != PLAYER;
     if ((flags & GT_ENVIRONMENT) != 0 ||
-        (python_object_is_persistent(self->obj) && root->type != PLAYER)) {
+        (stock && (reason == NULL || strcmp(reason, CREATE_TREASURE_STOCK_REASON) != 0))) {
         PyErr_SetString(PyExc_RuntimeError,
                         "CreateTreasure cannot generate persistent non-player state; use explicit "
-                        "reason-aware item or currency APIs.");
+                        "reason-aware item or currency APIs, or reason=\""
+                        CREATE_TREASURE_STOCK_REASON "\" for merchant stock.");
         return NULL;
     }
 
@@ -2665,11 +2689,47 @@ Atrinik_Object_CreateTreasure(Atrinik_Object *self, PyObject *args, PyObject *ke
         }
     }
 
-    /* Create the treasure. */
-    hooks->treasure_generate(t, self->obj, level, flags);
+    if (!stock) {
+        /* Create the treasure. */
+        hooks->treasure_generate(t, self->obj, level, flags);
+        Py_RETURN_NONE;
+    }
 
-    Py_INCREF(Py_None);
-    return Py_None;
+    /* Merchant stock: generate into a detached holder so nothing reaches
+     * persistent state until the whole batch is known to be currency-free.
+     * Treasure processing reads its creator's type, experience, and
+     * identified/no-pick flags, so the holder carries the target's. */
+    object *holder = hooks->object_get();
+    holder->type = self->obj->type;
+    holder->stats.exp = self->obj->stats.exp;
+    if (QUERY_FLAG(self->obj, FLAG_IDENTIFIED)) {
+        SET_FLAG(holder, FLAG_IDENTIFIED);
+    }
+    if (QUERY_FLAG(self->obj, FLAG_NO_PICK)) {
+        SET_FLAG(holder, FLAG_NO_PICK);
+    }
+    hooks->treasure_generate(t, holder, level, flags);
+    /* Only generation reads the borrowed type; destroy the holder as the
+     * plain object it is, so no type-specific teardown runs on it. */
+    holder->type = 0;
+    if (python_inventory_contains_money(holder)) {
+        hooks->object_destroy(holder);
+        PyErr_SetString(PyExc_RuntimeError,
+                        "CreateTreasure cannot stock currency into persistent non-player state.");
+        return NULL;
+    }
+
+    /* An empty batch stocks nothing. Otherwise the server preflights the whole
+     * batch, so a refusal leaves the merchant's inventory untouched. */
+    if (holder->inv != NULL &&
+        hooks->object_insert_inventory_reason(holder, self->obj, CREATE_TREASURE_STOCK_REASON) !=
+            OBJECT_SEMANTIC_COMMITTED) {
+        hooks->object_destroy(holder);
+        PyErr_SetString(PyExc_RuntimeError, "Merchant stock could not be inserted.");
+        return NULL;
+    }
+    hooks->object_destroy(holder);
+    Py_RETURN_NONE;
 }
 
 /** Documentation for Atrinik_Object_Move(). */

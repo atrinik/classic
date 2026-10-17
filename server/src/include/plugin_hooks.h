@@ -775,6 +775,11 @@ struct plugin_hooklist
     PLUGIN_HOOK_FUNCTION(void, light_source_prepare_change, void)
     PLUGIN_HOOK_FUNCTION(void, object_update, object *, int)
     PLUGIN_HOOK_FUNCTION(void, los_publication_changed, void)
+    PLUGIN_HOOK_FUNCTION(object_semantic_result_t,
+                         object_insert_inventory_reason,
+                         object *,
+                         object *,
+                         const char *)
 
 };
 // clang-format on
