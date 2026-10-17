@@ -195,7 +195,12 @@ connection.
   timed-light display endpoints, once celestial light leaves the base) is
   deleted with the celestial follow-up.
 - **Base radiance** is the environment term of each sub-layer: raw light minus
-  the local source value, encoded as signed Q4.11. The viewer's `tli`
+  the local source value, encoded as signed Q4.11. Its channels are built
+  directly from the signed environment components, never by subtracting local
+  light from an aggregate whose channels were already clamped: each channel is
+  the neutral non-local, non-celestial term plus that channel of the
+  celestial RGB field, in signed arithmetic (`light_base_radiance_signed()`),
+  so neutral `-80` beside a red `+80` emitter stays `(-80, -80, -80)`. The viewer's `tli`
   override is not folded in: it is a viewer property carried as bit 5 of the
   local-light byte, refreshed on remembered tiles like the vision-floor bit,
   so a tile that entered fog follows a later `/tli` toggle instead of keeping
@@ -484,8 +489,12 @@ trade-off.
 
 Remembered (fog) tiles compose their signed base and their frozen coarse
 levels, then receive the remembered-world lift of
-MAP_RENDERING.md: when the composed scalar `S` is below the lift, the
-difference is added neutrally before window attenuation, so dark remembered
+MAP_RENDERING.md on the signed composed scalar and channels, after the vision
+floor and before the negative clamp and common-vector scaling of step 3, as
+`C_display = max(0, C + lift)` requires: when the composed scalar `S` is below
+the lift, the difference is added neutrally (raw `S = -40` with a channel at
+raw `-100` lifts that channel to raw `-20`, which then clamps to 0), and only
+then the window attenuation runs, so dark remembered
 geometry keeps rendering at raw `(40, 40, 40)` rather than black. The lift is
 raw 40 encoded, Q5.11 64, because `S` is Q5.11. They never compose the
 remembered emitters of the
