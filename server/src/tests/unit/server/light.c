@@ -1706,6 +1706,27 @@ START_TEST(test_client_lighting_hidden_wall_surfaces_own_a_downward_face) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_bounds_tall_stacks) {
+    /* A stack taller than a MAP2 window pools only within twelve levels of
+     * the target, so a long legacy stack never makes pooling unbounded,
+     * while every depth of one window still shares a source inside it. */
+    enum { FLOORS = 20 };
+    mapstruct *floors[FLOORS];
+    for (int floor = 0; floor < FLOORS; floor++) {
+        floors[floor] = get_empty_map(9, 9);
+        if (floor > 0) {
+            link_stacked_maps(floors[floor - 1], floors[floor]);
+        }
+    }
+    add_colored_light(floors[FLOORS - 1], 4, 4, 13, LIGHT_COLOR_WHITE);
+    int top = light_local_level(floors[FLOORS - 1], 4, 4);
+    ck_assert_int_gt(top, 0);
+    ck_assert_int_eq(light_local_level(floors[FLOORS - 1 - 12], 4, 4), top);
+    ck_assert_int_eq(light_local_level(floors[FLOORS - 1 - 13], 4, 4), 0);
+    ck_assert_int_eq(light_local_level(floors[0], 4, 4), 0);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_pools_every_reachable_tiny_map) {
     /* Thirteen floors of 9x9 one-cell maps place 1053 maps within reach,
      * more than any small fixed bound; none is dropped, so every floor still
@@ -2032,6 +2053,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_diagonal_seams);
     tcase_add_test(tc_core, test_client_lighting_local_level_final_block_is_order_independent);
     tcase_add_test(tc_core, test_client_lighting_hidden_wall_surfaces_own_a_downward_face);
+    tcase_add_test(tc_core, test_client_lighting_local_level_bounds_tall_stacks);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_every_reachable_tiny_map);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
