@@ -286,8 +286,11 @@ connection.
   the objects authoring that face, and objects with a downward face set `v`;
   each is the maximum attenuation over the sent objects (the minimum
   coefficient, as the server's face traversal takes), quantized up to the next
-  step. A face a sent view blocker does not author is opaque, and other
-  unauthored faces stay open, as in `spatial_face_light()`. A client step
+  step. A cardinal face a sent view blocker does not author is opaque, and
+  other unauthored faces stay open, as in `spatial_cell_light_face()`, whose
+  implicit view-blocker fallback never applies to the downward face: an
+  ordinary wall without a downward face leaves `v` open, so light still
+  crosses between floors at walls. A client step
   leaves its cell through the exit face of its direction. A tied diagonal step
   crosses every face the shared supercover event emits: the source cell's two
   exit faces and both grazing side cells' faces towards the destination, and
