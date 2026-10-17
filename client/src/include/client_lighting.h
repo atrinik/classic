@@ -43,7 +43,8 @@ typedef struct client_lighting_emitter {
 typedef struct client_lighting_cell {
     int32_t scalar;
     int32_t rgb[3];
-    /** The part of scalar and rgb from emitters that opted in to flicker. */
+    /** The flickering emitters' contribution to the grouped scalar and rgb:
+     * the field minus the field of the same tiles without them. */
     int32_t flicker_scalar;
     int32_t flicker_rgb[3];
 } client_lighting_cell_t;
