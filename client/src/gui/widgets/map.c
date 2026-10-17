@@ -6637,10 +6637,10 @@ bool widget_map_client_lighting_state_test(void) {
               signed_level == -2;
     /* The getter reports the remote-sample bit with the decoded level. */
     bool remote_sample = true;
-    uint8_t remote_layers[2] = {map_protocol_local_light_encode(1, false),
-                                map_protocol_local_light_encode(-2, false) |
-                                    MAP2_LOCAL_LIGHT_REMOTE};
-    map_set_local_light_layers(7, 7, 2, remote_layers);
+    uint8_t remote_getter_layers[2] = {map_protocol_local_light_encode(1, false),
+                                       map_protocol_local_light_encode(-2, false) |
+                                           MAP2_LOCAL_LIGHT_REMOTE};
+    map_set_local_light_layers(7, 7, 2, remote_getter_layers);
     success = success &&
               map_get_local_light_layer(7, 7, 0, &signed_level, &vision, &remote_sample) &&
               !remote_sample &&
