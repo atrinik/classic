@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
-FROM ghcr.io/atrinik/classic-build:1.18.0@sha256:86d3c4182dc786db8ace56d9d8dc57ff4f14c1c4f517b728547626f576280449 AS build
+FROM ghcr.io/atrinik/classic-build:1.28.0@sha256:8176e8049130736ad3fab3f57f474524560acd9c7c98e5dac11750caf7d38755 AS build
 
 # The qualified build image defaults to an unprivileged compiler user.
 USER root
