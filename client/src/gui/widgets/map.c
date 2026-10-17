@@ -5578,6 +5578,11 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
         level = 0;
         vision_floor = false;
     }
+    /* A remote sample's light comes from another space than this cell, whose
+     * emitters and occluders do not describe it: only its coarse level
+     * composes. */
+    bool remote = (header->client_light_known & 1U) && sub_layer < NUM_SUB_LAYERS &&
+                  (header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_REMOTE) != 0;
 
     map_client_lighting_field_t *field = &map_client_lighting_fields[current_level_index];
     if (!field->valid || field->store != cells ||
@@ -5590,7 +5595,7 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
     }
     const client_lighting_cell_t *local = NULL;
     int fx = x - field->origin_x, fy = y - field->origin_y;
-    if (fx >= 0 && fy >= 0 && fx < field->width && fy < field->height) {
+    if (!remote && fx >= 0 && fy >= 0 && fx < field->width && fy < field->height) {
         local = &field->cells[(size_t)fy * field->width + fx];
     }
 
@@ -6589,6 +6594,21 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40) &&
               composed_rgb[0] == composed_scalar && composed_rgb[2] == composed_scalar;
+    /* A remote sample composes its coarse level, never the cell's emitters. */
+    map_set_light_radiance(14, 8, 0, 160);
+    map_set_light_radiance(14, 8, 1, 160);
+    map_set_layer_emitter(14, 8, layer, 1, 0, UINT32_C(0xffffff));
+    uint8_t remote_layers[2] = {map_protocol_local_light_encode(0, false),
+                                map_protocol_local_light_encode(0, false) |
+                                    MAP2_LOCAL_LIGHT_REMOTE};
+    map_set_local_light_layers(14, 8, 2, remote_layers);
+    map_lighting_radiance(14 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(14, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40);
+    map_lighting_radiance(14 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(14, 8), 1,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160;
+    map_clear_cell(14, 8, true);
     /* The viewer's vision floor applies after composition. */
     map_set_light_radiance(10, 8, 0, 0);
     map_set_local_light(10, 8, map_protocol_local_light_encode(0, true));
