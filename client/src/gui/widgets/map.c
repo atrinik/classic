@@ -3362,12 +3362,18 @@ void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t 
         header->occluder_horizontal == horizontal && header->occluder_vertical == vertical) {
         return;
     }
+    /* The emitter field reads only the geometry bits and horizontal
+     * attenuation, so a vertical-only change never rebuilds it. */
+    bool evaluated = !(header->client_light_known & 2U) || header->occluder != bits ||
+                     header->occluder_horizontal != horizontal;
     header->occluder = bits;
     header->occluder_horizontal = horizontal;
     header->occluder_vertical = vertical;
     header->client_light_known |= 2U;
     level_lighting_revision[current_level_index]++;
-    map_emitter_revision_bump(current_level_index);
+    if (evaluated) {
+        map_emitter_revision_bump(current_level_index);
+    }
 }
 
 bool map_lighting_is_smooth(void) {
@@ -6546,6 +6552,15 @@ bool widget_map_client_lighting_state_test(void) {
     map_clear_cell(9, 9, true);
     map_clear_cell(9, 9, false);
     success = success && level_emitter_revision[current_level_index] == emitter_revision;
+    /* Only occluder inputs the emitter field evaluates rebuild it. */
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1111, 1);
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1111, 2);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision &&
+              map_get_occluder(9, 9, &bits, &horizontal, &vertical) && vertical == 2;
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1112, 2);
+    success = success && level_emitter_revision[current_level_index] != emitter_revision;
+    map_clear_cell(9, 9, true);
     /* A header-only update is a visible change too. */
     map_cell_snapshot(6, 6, &before);
     map_set_local_light(6, 6, map_protocol_local_light_encode(2, false));
