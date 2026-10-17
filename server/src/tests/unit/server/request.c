@@ -3704,6 +3704,19 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_cache_fields_add_no_padding) {
+    /* The 64-bit protocol-1085 fields follow the 64-bit generation and pack
+     * without alignment padding, as the per-socket budget counts them. */
+    ck_assert_uint_eq(offsetof(MapCell, occluder),
+                      offsetof(MapCell, light_next_generation) + sizeof(uint64_t));
+    ck_assert_uint_eq(offsetof(MapCell, emitter_layers), offsetof(MapCell, occluder) + 8);
+    ck_assert_uint_eq(offsetof(MapCell, emitter_stale), offsetof(MapCell, emitter_layers) + 8);
+    ck_assert_uint_eq(offsetof(MapCell, emitter_digest), offsetof(MapCell, emitter_stale) + 8);
+    ck_assert_uint_eq(offsetof(MapCell, light_next_rgb_radiance),
+                      offsetof(MapCell, emitter_digest) + sizeof(uint32_t));
+}
+END_TEST
+
 START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     mapstruct *map;
     object *op;
@@ -3779,6 +3792,18 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
         ck_assert_int_eq(cell->faces[layer], 0);
     }
 
+    /* The remembered tile's base radiance keeps updating as well. */
+    ck_assert_uint_ne(cell->light_known[0], 0);
+    uint16_t base_before = cell->light_radiance[0];
+    set_map_darkness(map, MAP_DARKNESS(map) > 0 ? 0 : MAX_DARKNESS);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->light_radiance[0], base_before);
+    ck_assert_uint_eq(cell->emitter_layers, 0);
 }
 END_TEST
 
@@ -3869,6 +3894,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
     tcase_add_test(tc_core, test_odd_view_los_matches_emitted_map_coordinates);
     tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
+    tcase_add_test(tc_core, test_client_lighting_cache_fields_add_no_padding);
     tcase_add_test(tc_core, test_client_lighting_remembered_tiles_keep_coarse_light);
     return s;
 }

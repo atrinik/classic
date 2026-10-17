@@ -1282,20 +1282,160 @@ static void map2_sample_light(object *pl,
     }
 }
 
-static bool map_append_remembered_light(packet_struct *packet,
-                                        MapCell *cached,
-                                        uint16_t mask,
-                                        const uint8_t levels[NUM_SUB_LAYERS]) {
-    if (map2_local_light_known(cached, levels)) {
+/**
+ * Send the light levels of a remembered tile: its current signed base
+ * radiance, colored channels, next-hour keyframe endpoint and coarse levels,
+ * each only when it changed against the cache. A previously sent tile keeps
+ * receiving these while the per-socket cache is valid (maintainer decision);
+ * the record carries no layer, object, emitter or occluder.
+ */
+static bool map_append_remembered_tile(packet_struct *packet,
+                                       MapCell *cached,
+                                       uint16_t mask,
+                                       const uint8_t levels[NUM_SUB_LAYERS],
+                                       const map2_light_sample_t *sample,
+                                       bool timed_light_descriptor,
+                                       uint64_t timed_light_generation) {
+    uint16_t scalar = sample->radiance;
+    uint16_t rgb[3];
+    memcpy(rgb, sample->rgb, sizeof(rgb));
+    bool colored = rgb[0] != scalar || rgb[1] != scalar || rgb[2] != scalar;
+    uint8_t rgb_bitmap = colored ? (uint8_t)((1U << NUM_SUB_LAYERS) - 1) : 0;
+
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        if (!cached->light_known[sub_layer] || cached->light_radiance[sub_layer] != scalar) {
+            mask |= sub_layer == 0 ? MAP2_MASK_LIGHT_LEVEL : MAP2_MASK_LIGHT_LEVEL_MORE;
+        }
+    }
+    bool rgb_changed = rgb_bitmap != cached->light_rgb_explicit;
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS && !rgb_changed; sub_layer++) {
+        rgb_changed = (colored && !cached->light_rgb_known[sub_layer]) ||
+                      (cached->light_rgb_known[sub_layer] &&
+                       memcmp(cached->light_rgb_radiance[sub_layer], rgb, sizeof(rgb)) != 0);
+    }
+
+    /* The next-hour endpoint, as the visible path derives it. */
+    uint16_t next_scalar = scalar;
+    uint16_t next_rgb[3];
+    memcpy(next_rgb, rgb, sizeof(next_rgb));
+    const MapSpace *space = sample->space;
+    if (sample->next_ready && (space->celestial_light_next_value != space->celestial_light_value ||
+                               memcmp(space->celestial_light_next_rgb,
+                                      space->celestial_light_rgb,
+                                      sizeof(space->celestial_light_rgb)) != 0)) {
+        MapSpace next_space = *space;
+        int next_raw = sample->present - space->celestial_light_value +
+                       space->celestial_light_next_value;
+        next_space.celestial_light_value = space->celestial_light_next_value;
+        memcpy(next_space.celestial_light_rgb,
+               space->celestial_light_next_rgb,
+               sizeof(next_space.celestial_light_rgb));
+        int16_t signed_scalar, signed_rgb[3];
+        light_base_radiance_signed(&next_space, next_raw, &signed_scalar, signed_rgb);
+        next_scalar = (uint16_t)signed_scalar;
+        for (size_t channel = 0; channel < 3; channel++) {
+            next_rgb[channel] = (uint16_t)signed_rgb[channel];
+        }
+    }
+    bool next_colored =
+        next_rgb[0] != next_scalar || next_rgb[1] != next_scalar || next_rgb[2] != next_scalar;
+    uint8_t next_rgb_bitmap = next_colored ? (uint8_t)((1U << NUM_SUB_LAYERS) - 1) : 0;
+    uint8_t next_bitmap = 0;
+    bool next_changed = false;
+    if (timed_light_descriptor) {
+        next_changed = cached->light_next_generation != timed_light_generation ||
+                       cached->light_next_rgb_explicit != next_rgb_bitmap;
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            bool differs = !cached->light_next_known[sub_layer] ||
+                           cached->light_next_radiance[sub_layer] != next_scalar ||
+                           memcmp(cached->light_next_rgb_radiance[sub_layer], next_rgb,
+                                  sizeof(next_rgb)) != 0 ||
+                           cached->light_next_generation != timed_light_generation;
+            if (differs || next_scalar != scalar ||
+                memcmp(next_rgb, rgb, sizeof(rgb)) != 0) {
+                next_bitmap |= (uint8_t)(1U << sub_layer);
+            }
+            next_changed |= differs;
+        }
+    }
+
+    uint8_t ext_flags = 0;
+    if (rgb_changed) {
+        ext_flags |= MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16;
+    }
+    if (timed_light_descriptor && next_changed) {
+        ext_flags |= MAP2_FLAG_EXT_LIGHT_KEYFRAME;
+    }
+    if (!map2_local_light_known(cached, levels)) {
+        ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
+    }
+    if (ext_flags == 0 && !(mask & (MAP2_MASK_LIGHT_LEVEL | MAP2_MASK_LIGHT_LEVEL_MORE))) {
         return false;
     }
+
     packet_debug_data(packet, 0, "Remembered tile light, mask");
     packet_writer_write_uint16(packet, mask);
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        if ((sub_layer == 0 && !(mask & MAP2_MASK_LIGHT_LEVEL)) ||
+            (sub_layer != 0 && !(mask & MAP2_MASK_LIGHT_LEVEL_MORE))) {
+            continue;
+        }
+        packet_debug_data(packet, 1, "Q5.11 scalar radiance (sub-layer: %d)", sub_layer);
+        packet_writer_write_uint16(packet, scalar);
+        cached->light_radiance[sub_layer] = scalar;
+        cached->light_known[sub_layer] = 1;
+        if (!colored) {
+            for (size_t channel = 0; channel < 3; channel++) {
+                cached->light_rgb_radiance[sub_layer][channel] = scalar;
+            }
+            cached->light_rgb_known[sub_layer] = 1;
+        }
+    }
     packet_debug_data(packet, 1, "Number of layers");
     packet_writer_write_uint8(packet, 0);
     packet_debug_data(packet, 1, "Extended tile flags");
-    packet_writer_write_uint8(packet, MAP2_FLAG_EXT_LOCAL_LIGHT);
-    map2_write_local_light(packet, cached, levels);
+    packet_writer_write_uint8(packet, ext_flags);
+    if (ext_flags & MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16) {
+        packet_debug_data(packet, 1, "Colored-light sub-layer bitmap");
+        packet_writer_write_uint8(packet, rgb_bitmap);
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            if (rgb_bitmap & (1U << sub_layer)) {
+                for (size_t channel = 0; channel < 3; channel++) {
+                    packet_writer_write_uint16(packet, rgb[channel]);
+                }
+            }
+            memcpy(cached->light_rgb_radiance[sub_layer], rgb, sizeof(rgb));
+            cached->light_rgb_known[sub_layer] = 1;
+        }
+        cached->light_rgb_explicit = rgb_bitmap;
+    }
+    if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
+        next_bitmap |= next_rgb_bitmap;
+        packet_debug_data(packet, 1, "Next-hour scalar endpoint bitmap");
+        packet_writer_write_uint8(packet, next_bitmap);
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            if (next_bitmap & (1U << sub_layer)) {
+                packet_writer_write_uint16(packet, next_scalar);
+            }
+            cached->light_next_radiance[sub_layer] = next_scalar;
+            cached->light_next_known[sub_layer] = 1;
+        }
+        packet_debug_data(packet, 1, "Next-hour RGB endpoint bitmap");
+        packet_writer_write_uint8(packet, next_rgb_bitmap);
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            if (next_rgb_bitmap & (1U << sub_layer)) {
+                for (size_t channel = 0; channel < 3; channel++) {
+                    packet_writer_write_uint16(packet, next_rgb[channel]);
+                }
+            }
+            memcpy(cached->light_next_rgb_radiance[sub_layer], next_rgb, sizeof(next_rgb));
+        }
+        cached->light_next_rgb_explicit = next_rgb_bitmap;
+        cached->light_next_generation = timed_light_generation;
+    }
+    if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
+        map2_write_local_light(packet, cached, levels);
+    }
     return true;
 }
 
@@ -1653,7 +1793,14 @@ void draw_client_map2(object *pl) {
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
                     if (remembered) {
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
-                        map_append_remembered_light(packet, mp, mask, remembered_light);
+                        map2_light_sample_t sample;
+                        map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0, &sample);
+                        if (sample.snap) {
+                            timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+                        }
+                        map_append_remembered_tile(packet, mp, mask, remembered_light, &sample,
+                                                   timed_light_descriptor,
+                                                   timed_light_generation);
                     }
                     continue;
                 }
