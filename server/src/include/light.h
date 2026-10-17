@@ -68,6 +68,9 @@ extern uint8_t light_occluder_object_bits(const object *op);
 /** MAP2 occluder face bits of one cell: faces local light cannot cross. */
 extern uint16_t light_occluder_faces(mapstruct *map, int x, int y);
 
+/** Whether MAP2 may disclose an object's emitter to a viewer (protocol 1085). */
+extern bool light_emitter_disclosed(const object *viewer, const object *op);
+
 /** Combine the occluder bits of two sent objects of one cell. */
 extern uint8_t light_occluder_combine(uint8_t first, uint8_t second);
 

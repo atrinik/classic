@@ -109,11 +109,10 @@ both modes.
 
 ## Server
 
-- **Local masks become scalar-only for gameplay.** With `client_lighting`
-  enabled, the positive and color masks, and RGB accumulation for local
-  sources, are no longer needed for presentation. A later step stops building
-  them, which removes two thirds of local mask tracing (compare #616).
-  Celestial fields are unchanged.
+- **Local masks stay complete.** Gameplay needs only the scalar mask, but the
+  positive and color masks remain, because aggregate fallback samples (see
+  Negative environment) and clients that did not negotiate the compositor need
+  exact legacy RGB. Celestial fields are unchanged.
 - **Coarse local light** is derived each time MAP2 sends a cell, from the
   already maintained per-cell `light_source_value`. No new per-map state is
   needed, and a change anywhere in the block reaches every cell of it on the
@@ -144,8 +143,12 @@ both modes.
   applies the same floor after composition. This is a property of the viewer
   only, so it discloses nothing about sources.
 - **Emitters** are copied from `glow_radius` and `light_color` of the object
-  MAP2 is already sending (the object on that tile, including the viewer's
-  derived emitter). A negative radius is sent with color `000000`. The
+  MAP2 is already sending (the object on that tile, including the viewer's own
+  derived emitter). Another player's emitter is never sent: it is derived from
+  the strongest eligible item in that player's private inventory, so its exact
+  radius and color would disclose inventory state that item packets show only to
+  the owner. Other players' light reaches the viewer only through the coarse
+  level. A negative radius is sent with color `000000`. The
   per-socket cache keeps, per cell, a bitmap of layers that carry an emitter,
   a bitmap of stale emitter layers and a digest of the cell's emitters
   (20 bytes). Gaining or losing an emitter forces a layer delta; a radius- or
@@ -184,7 +187,8 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    a tile's emitters are not sent, the client underestimates and the coarse
    level supplies the rest. Every visible emitter is evaluated; the GPU stage
    processes them in batches rather than truncating. The occluders are an R8
-   cell grid per depth.
+   cell grid per depth. That grid is 16-bit (R16), because face bits 8–11 must
+   reach the ray walk.
 2. A compute (or full-screen fragment) pass evaluates every light vertex of the
    existing compact light rows. It sums emitter profiles using the same radial
    tables as the server (`light_profiles`, radius ≤ 4, vertical ≤ 4) with a 3D
@@ -222,7 +226,9 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    presentation-only time uniform permits flicker for emitters whose archetype
    opts in, without server traffic. Flicker modulates the emitter field after
    composition (`L + E' - E` for flickered sum `E'`), so the coarse floor of a
-   block that the emitter itself lights cannot suppress it.
+   block that the emitter itself lights cannot suppress it. The flickered
+   scalar and channels are then saturated again, negative values to zero and
+   positive overflow by common-vector scaling, before the unsigned Q16 stage.
 
 Using `max()`/`min()` instead of a sum avoids double counting, because the
 coarse term already includes visible sources. The cost is underestimating
@@ -291,7 +297,8 @@ information (see Contract change).
    qualification: GPU frame budgets as in MAP_RENDERING.md, plus offline
    player-view proofs comparing indoor, outdoor and cutaway Brynknot fixtures.
 4. Enable `client_lighting` on development, then production.
-5. Remove server positive/color local masks and the legacy full-radiance path.
+5. Remove the legacy full-radiance path for compositor clients. Positive and
+   color masks remain for aggregate fallback samples and other clients.
    Update MAP_RENDERING.md to make this document normative.
 
 ## Test plan
@@ -312,7 +319,8 @@ information (see Contract change).
   composition and block limits for positive, negative and zero levels;
   vision floor after composition; FOW cells carry no emitters; GPU frame-time
   budgets.
-- Privacy: all cells of a block report the same level; edge remainders join
+- Privacy: another player's inventory-derived emitter is never sent, while the
+  viewer's own is; all cells of a block report the same level; edge remainders join
   the adjacent block; levels never exceed 15 in magnitude; moving a single
   uncancelled source within its block leaves its own block's level unchanged.
 

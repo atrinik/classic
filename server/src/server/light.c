@@ -413,6 +413,14 @@ uint8_t light_occluder_object_bits(const object *op) {
     return bits;
 }
 
+/**
+ * Whether MAP2 may disclose an object's emitter to a viewer. Another player's
+ * glow is derived from its private inventory, so only the viewer's own is.
+ */
+bool light_emitter_disclosed(const object *viewer, const object *op) {
+    return op->type != PLAYER || op == viewer;
+}
+
 /** Combine the occluder bits of two sent objects of one cell. */
 uint8_t light_occluder_combine(uint8_t first, uint8_t second) {
     uint8_t geometry = (uint8_t)((first | second) & ((1U << MAP2_OCCLUDER_ATTENUATION_SHIFT) - 1));

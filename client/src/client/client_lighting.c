@@ -73,10 +73,11 @@ static bool client_lighting_face_closed(uint16_t occluder, int sx, int sy) {
 }
 
 /**
- * Transmit a value from (x, y) to (x + dx, y + dy). Cells strictly between
- * attenuate in travel order; a view blocker stops the ray, and so does a face
- * marked discontinuous on the cell it leaves. The destination is an exposed
- * face and keeps the light that reaches it.
+ * Transmit a value from (x, y) to (x + dx, y + dy). Every cell the ray leaves,
+ * the source included, attenuates it in travel order, as the server takes a
+ * crossed face's coefficient from its source cell; a view blocker stops it, and
+ * so does a face marked discontinuous. The destination is an exposed face and
+ * keeps the light that reaches it.
  */
 static int32_t client_lighting_path(int width,
                                     int height,
@@ -99,11 +100,8 @@ static int32_t client_lighting_path(int width,
         if (client_lighting_face_closed(previous, cx - px, cy - py)) {
             return 0;
         }
-        if (step < steps) {
-            uint16_t occluder = occluders != NULL ? occluders[(size_t)cy * width + cx] : 0;
-            uint16_t coefficient = client_lighting_coefficient(occluder);
-            transmitted = (int32_t)(((int64_t)transmitted * coefficient + 128) / 256);
-        }
+        uint16_t coefficient = client_lighting_coefficient(previous);
+        transmitted = (int32_t)(((int64_t)transmitted * coefficient + 128) / 256);
         px = cx;
         py = cy;
     }
@@ -120,7 +118,7 @@ static void client_lighting_add(int width,
                                 int mask,
                                 int sign,
                                 int target,
-                                uint32_t color) {
+                                const uint16_t linear[3]) {
     if (mask == 0) {
         return;
     }
@@ -147,8 +145,7 @@ static void client_lighting_add(int width,
                 /* For color, sign carries the multiplicity of identical
                  * constituents. */
                 for (size_t channel = 0; channel < 3; channel++) {
-                    cell->color[channel] += (int64_t)sign * value *
-                                            light_profile_color_component(color, channel);
+                    cell->color[channel] += (int64_t)sign * value * linear[channel];
                 }
                 cell->weight += (int64_t)sign * value * UINT16_MAX;
             }
@@ -205,29 +202,53 @@ void client_lighting_evaluate(int width,
         const client_lighting_group_t *g = &groups[group];
         int scalar_mask = light_profile_mask(g->radius);
         client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
-                            abs(scalar_mask), scalar_mask < 0 ? -1 : 1, 0, 0);
+                            abs(scalar_mask), scalar_mask < 0 ? -1 : 1, 0, NULL);
         client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
-                            light_profile_mask(g->positive_radius), 1, 1, 0);
-        /* Identical constituents add one weighted profile; at most
-         * CLIENT_LIGHTING_COLORS_MAX distinct colors per tile keep their own
-         * profile, and light beyond that stays in the neutral scalar. */
+                            light_profile_mask(g->positive_radius), 1, 1, NULL);
+        /* Identical constituents add one weighted profile. The first
+         * CLIENT_LIGHTING_COLORS_MAX distinct colors keep their own profile;
+         * the rest fold into one profile of their summed radius with their
+         * radius-weighted mean linear color, so their hue survives while the
+         * work per tile stays bounded. */
         size_t distinct = 0;
+        int rest_radius = 0;
+        uint64_t rest_linear[3] = {0}, rest_weight = 0;
         for (size_t i = g->first; i < g->end; i++) {
-            if (emitters[i].radius <= 0 || (i > g->first && emitters[i].radius == emitters[i - 1].radius &&
-                                            emitters[i].color == emitters[i - 1].color)) {
+            if (emitters[i].radius <= 0 ||
+                (i > g->first && emitters[i].radius == emitters[i - 1].radius &&
+                 emitters[i].color == emitters[i - 1].color)) {
                 continue;
             }
-            if (distinct++ == CLIENT_LIGHTING_COLORS_MAX) {
-                break;
-            }
             int multiplicity = 1;
-            while (i + multiplicity < g->end && emitters[i + multiplicity].radius == emitters[i].radius &&
+            while (i + multiplicity < g->end &&
+                   emitters[i + multiplicity].radius == emitters[i].radius &&
                    emitters[i + multiplicity].color == emitters[i].color) {
                 multiplicity++;
             }
+            uint16_t linear[3];
+            for (size_t channel = 0; channel < 3; channel++) {
+                linear[channel] = light_profile_color_component(emitters[i].color, channel);
+            }
+            if (distinct++ < CLIENT_LIGHTING_COLORS_MAX) {
+                client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
+                                    light_profile_mask(emitters[i].radius), multiplicity, 2,
+                                    linear);
+                continue;
+            }
+            uint64_t weight = (uint64_t)emitters[i].radius * (uint64_t)multiplicity;
+            rest_radius += emitters[i].radius * multiplicity;
+            rest_weight += weight;
+            for (size_t channel = 0; channel < 3; channel++) {
+                rest_linear[channel] += weight * linear[channel];
+            }
+        }
+        if (rest_weight != 0) {
+            uint16_t linear[3];
+            for (size_t channel = 0; channel < 3; channel++) {
+                linear[channel] = (uint16_t)((rest_linear[channel] + rest_weight / 2) / rest_weight);
+            }
             client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
-                                light_profile_mask(emitters[i].radius), multiplicity, 2,
-                                emitters[i].color);
+                                light_profile_mask(rest_radius), 1, 2, linear);
         }
     }
 

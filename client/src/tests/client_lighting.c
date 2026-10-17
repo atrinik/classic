@@ -111,6 +111,36 @@ static void test_discontinuous_face_stops_light(void) {
     TEST_CHECK(cell_at(3, 5)->scalar > 0);
 }
 
+static void test_occluded_source_cell_attenuates_its_light(void) {
+    memset(occluders, 0, sizeof(occluders));
+    client_lighting_emitter_t torch = {.x = 4, .y = 4, .radius = 13, .color = 0xffffff};
+    evaluate(&torch, 1);
+    int32_t open_center = cell_at(4, 4)->scalar, open_side = cell_at(5, 4)->scalar;
+    /* A lamp inside a transmissive cell keeps its own tile lit but leaves it
+     * attenuated; inside an opaque cell nothing leaves. */
+    occluders[4 * WIDTH + 4] = (uint16_t)(8U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(4, 4)->scalar == open_center);
+    TEST_CHECK(cell_at(5, 4)->scalar == (open_side * 128 + 128) / 256);
+    occluders[4 * WIDTH + 4] = (uint16_t)(15U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(5, 4)->scalar == 0);
+}
+
+static void test_colors_beyond_the_bound_keep_their_hue(void) {
+    memset(occluders, 0, sizeof(occluders));
+    /* Ten distinct blue-ish constituents: the two beyond the bound fold into
+     * one colored profile instead of becoming neutral. */
+    client_lighting_emitter_t many[10];
+    for (int i = 0; i < 10; i++) {
+        many[i] = (client_lighting_emitter_t){
+            .x = 4, .y = 4, .radius = 1, .color = (uint32_t)(0x0000f0 + i)};
+    }
+    evaluate(many, 10);
+    TEST_CHECK(cell_at(4, 4)->rgb[2] > cell_at(4, 4)->rgb[0]);
+    TEST_CHECK(cell_at(4, 4)->rgb[2] == cell_at(4, 4)->scalar);
+}
+
 static void test_darkness_is_negative_and_uncolored(void) {
     memset(occluders, 0, sizeof(occluders));
     client_lighting_emitter_t dark = {.x = 4, .y = 4, .radius = -13, .color = 0};
@@ -212,6 +242,8 @@ int main(void) {
     test_transmission_attenuates_crossed_cells();
     test_transmissive_blocker_keeps_its_attenuation();
     test_discontinuous_face_stops_light();
+    test_occluded_source_cell_attenuates_its_light();
+    test_colors_beyond_the_bound_keep_their_hue();
     test_darkness_is_negative_and_uncolored();
     test_colored_light_keeps_hue();
     test_constituent_colors_keep_their_own_profiles();
