@@ -12874,6 +12874,11 @@ void map_runtime_deinit(void) {
     memset(&map_retained_primary_context, 0, sizeof(map_retained_primary_context));
     memset(&map_retained_primary_projection, 0, sizeof(map_retained_primary_projection));
 
+    /* Emitter fields belong to this runtime's stores. */
+    for (size_t i = 0; i < arraysize(map_client_lighting_fields); i++) {
+        free(map_client_lighting_fields[i].cells);
+        memset(&map_client_lighting_fields[i], 0, sizeof(map_client_lighting_fields[i]));
+    }
     for (size_t i = 0; i < arraysize(level_cells); i++) {
         map_cell_store_destroy(level_cells[i]);
         level_cells[i] = NULL;

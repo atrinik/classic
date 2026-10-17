@@ -67,8 +67,10 @@ int light_profile_value(int mask, int distance_squared);
  * its strongest channel is 65535.
  * @param color Authored 0xRRGGBB; higher bits are ignored.
  * @param channel 0 red, 1 green, 2 blue.
- * @return Normalized channel; 0 for every channel of color 000000, which
- * positive sources must not use.
+ * @return Normalized channel; 0 for every channel of color 000000. Black is a
+ * valid positive-source color: its zero vector still adds scalar light and
+ * color weight, so it dilutes the hue of other sources it is grouped or
+ * accumulated with, exactly as the server's resolver weighs it.
  */
 uint16_t light_profile_color_component(uint32_t color, size_t channel);
 
