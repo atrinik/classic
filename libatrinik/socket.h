@@ -479,7 +479,8 @@ typedef struct socket_face_batch_response {
 #define MAP2_OCCLUDER_FLOOR 2
 #define MAP2_OCCLUDER_ROOF 4
 #define MAP2_OCCLUDER_DOOR_CLOSED 8
-/** Attenuation of one face nibble: a crossing transmits 256 - 16 a. */
+/** Attenuation step of one face nibble a: a crossing transmits 256 - 16 a for
+ * a of 0..14, and nothing for a == 15, the opaque sentinel. */
 #define MAP2_OCCLUDER_ATTENUATION_STEP 16
 /** Bits per horizontal face attenuation nibble. */
 #define MAP2_OCCLUDER_FACE_ATTENUATION_BITS 4
