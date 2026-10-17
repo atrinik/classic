@@ -1114,6 +1114,7 @@ static void map2_write_local_light(packet_struct *packet,
  */
 static void map2_frozen_local_light(const MapCell *cached,
                                     bool vision_floor,
+                                    bool tli,
                                     uint8_t levels[NUM_SUB_LAYERS]) {
     bool known = (cached->client_light_known & 1U) && cached->local_light_count != 0;
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
@@ -1128,7 +1129,8 @@ static void map2_frozen_local_light(const MapCell *cached,
             }
             remote = cached->local_light[index] & MAP2_LOCAL_LIGHT_REMOTE;
         }
-        levels[sub_layer] = map_protocol_local_light_encode(level, vision_floor) | remote;
+        levels[sub_layer] = map_protocol_local_light_encode(level, vision_floor) | remote |
+                            (tli ? MAP2_LOCAL_LIGHT_TLI : 0);
     }
 }
 
@@ -1485,7 +1487,8 @@ void draw_client_map2(object *pl) {
                      * soft clear erases them from the cache. */
                     uint8_t frozen[NUM_SUB_LAYERS];
                     if (remembered) {
-                        map2_frozen_local_light(previous, (special_vision & 1) != 0, frozen);
+                        map2_frozen_local_light(previous, (special_vision & 1) != 0,
+                                                CONTR(pl)->tli != 0, frozen);
                     }
                     map_if_clearcell(false);
                     mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
@@ -1729,8 +1732,13 @@ void draw_client_map2(object *pl) {
 
                             present_raw[sub_layer] = raw_light[sub_layer];
                             /* Signed base carries negative environment, so
-                             * darkness composes on the client everywhere. */
+                             * darkness composes on the client everywhere. The
+                             * viewer's tli travels as a local-light bit, so
+                             * remembered tiles follow a toggle. */
                             present_raw[sub_layer] -= light_spaces[sub_layer]->light_source_value;
+                            if (CONTR(pl)->tli) {
+                                present_raw[sub_layer] -= global_darkness_table[MAX_DARKNESS];
+                            }
 
                             /* XRAY vision is an explicit authorization to see
                              * through darkness. Static MAP2 geometry remains
@@ -2495,7 +2503,8 @@ void draw_client_map2(object *pl) {
                 uint8_t local_light[NUM_SUB_LAYERS];
                 uint64_t occluder = 0;
                 if (tile_fow) {
-                    map2_frozen_local_light(mp, (special_vision & 1) != 0, local_light);
+                    map2_frozen_local_light(mp, (special_vision & 1) != 0, CONTR(pl)->tli != 0,
+                                            local_light);
                 } else {
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                         bool remote = light_maps[sub_layer] != NULL &&
@@ -2510,14 +2519,15 @@ void draw_client_map2(object *pl) {
                          * cell, not a remotely sampled space. */
                         local_light[sub_layer] =
                             map_protocol_local_light_encode(level, (special_vision & 1) != 0) |
-                            (remote ? MAP2_LOCAL_LIGHT_REMOTE : 0);
+                            (remote ? MAP2_LOCAL_LIGHT_REMOTE : 0) |
+                            (CONTR(pl)->tli ? MAP2_LOCAL_LIGHT_TLI : 0);
                     }
                 }
                 if (!map2_local_light_known(mp, local_light)) {
                     ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
                 }
                 if (!tile_fow) {
-                    occluder = cell_occluder |
+                    occluder = light_occluder_finish(cell_occluder) |
                                light_occluder_faces(m, nx, ny,
                                                     map2_neighbors_in_view(pl, depth, ax, ay));
                     if (!(mp->client_light_known & 2U) || mp->occluder != occluder) {

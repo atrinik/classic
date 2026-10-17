@@ -5701,6 +5701,12 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
      * composes. */
     bool remote = (header->client_light_known & 1U) && sub_layer < NUM_SUB_LAYERS &&
                   (header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_REMOTE) != 0;
+    /* The viewer's tli override is a neutral raw term, refreshed by the
+     * server on remembered tiles too, never part of the base. */
+    int64_t tli = (header->client_light_known & 1U) && sub_layer < NUM_SUB_LAYERS &&
+                          (header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_TLI) != 0
+                      ? MAP2_LOCAL_LIGHT_TLI_RAW
+                      : 0;
 
     map_client_lighting_field_t *field = &map_client_lighting_fields[current_level_index];
     bool usable = field->valid && field->cells != NULL && field->store == cells &&
@@ -5741,12 +5747,12 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
     /* Base words are signed Q4.11. Everything stays signed and unsaturated
      * until the vision floor, then clamps, scales and saturates once. */
     int64_t scalar_value =
-        (int16_t)*scalar + map_lighting_raw_to_radiance_signed(composed + flicker_scalar);
+        (int16_t)*scalar + map_lighting_raw_to_radiance_signed(composed + flicker_scalar + tli);
     int64_t channels[3];
     for (size_t channel = 0; channel < 3; channel++) {
         /* The emitter field's per-channel hue delta rides on the composed
          * scalar; coarse light beyond it is neutral. */
-        int64_t channel_raw = (int64_t)composed + flicker_rgb[channel];
+        int64_t channel_raw = (int64_t)composed + flicker_rgb[channel] + tli;
         if (local != NULL) {
             channel_raw += local->rgb[channel] - local->scalar;
         }
@@ -6835,6 +6841,14 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160;
     map_clear_cell(14, 8, true);
+    /* The tli bit adds daylight neutrally, on visible and remembered cells. */
+    map_set_light_radiance(12, 9, 0, 0);
+    map_set_local_light(12, 9, map_protocol_local_light_encode(0, false) | MAP2_LOCAL_LIGHT_TLI);
+    map_lighting_radiance(12 + MAP_STARTX, 9 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 9), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_TLI_RAW) &&
+              composed_rgb[0] == composed_scalar && composed_rgb[2] == composed_scalar;
+    map_clear_cell(12, 9, true);
     /* The viewer's vision floor applies after composition. */
     map_set_light_radiance(10, 8, 0, 0);
     map_set_local_light(10, 8, map_protocol_local_light_encode(0, true));
