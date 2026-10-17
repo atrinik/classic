@@ -430,7 +430,8 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    channels then clamp to zero; if the largest channel then
    exceeds the finite range, all three channels scale together so the strongest
    is 65535, as the server's common-vector overflow rule requires, keeping hue.
-   The scalar saturates at 65535.
+   The scalar clamps to `0..65535`: negative composed light never reaches the
+   unsigned stages that follow.
 4. **Player field.** After composition, and after the vision floor, the
    existing independent local-player presentation field (radius 8, center
    strength 80, neutral) is added exactly as MAP_RENDERING.md specifies today:
@@ -470,10 +471,14 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    flickered output at a fixed `t`. Flicker modulates the composed value only
    where the emitter field supplied it (`L = E`, decided before the `tli`
    term is added): there it becomes
-   `L + E' - E` for flickered sum `E'`, so the coarse floor of a block that the
-   emitter itself lights cannot suppress it. Where the coarse level dominates
-   (`L = 160C ≠ E`), that floor carries other steady light and `L` is
-   unchanged. A cell whose flicker changes only its channels (grouping can cap
+   `L + E' - E` for flickered sum `E'`, so the coarse floor never masks the
+   flicker of light the emitter field supplies. Where the coarse level
+   dominates (`L = 160C ≠ E`) `L` is unchanged: the coarse level is anonymous
+   by design, so the client cannot tell whether that floor comes from the
+   flickering emitter or from hidden steady light, and presents it steady.
+   Within an emitter's own block, its halo below the block's floor therefore
+   does not flicker; that is the accepted cost of not attributing coarse light
+   to sources. A cell whose flicker changes only its channels (grouping can cap
    the scalar while hue still flickers) flickers too. The delta is applied in
    raw light, replacing raw `L` by `L + E' - E` before the Q5.11 conversion of
    step 3 (for `E = 160`, `E_s = 0` and `g = 205` the delta is raw `-31`, so
