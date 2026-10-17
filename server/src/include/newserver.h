@@ -113,14 +113,12 @@ typedef struct MapCell_struct {
     /** Last coarse local light level sent (protocol 1085 client lighting). */
     uint8_t local_light;
 
-    /** Last occluder bits sent (protocol 1085 client lighting). */
-    uint16_t occluder;
+    /** Last occluder bits sent, vertical attenuation in bits 16-19 (1085). */
+    uint32_t occluder;
 
-    /** Whether local_light, occluder and aggregate were sent: bits 0, 1, 2. */
+    /** Bit 0: local_light sent; bit 1: occluder sent; bit 3: the cell was
+     * authorized and is now remembered fog that keeps receiving light. */
     uint8_t client_light_known;
-
-    /** Last bitmap of sub-layers sent as complete aggregate radiance. */
-    uint8_t light_aggregate;
 
     /** Layers whose last sent object carried an emitter, one bit each. */
     uint64_t emitter_layers;

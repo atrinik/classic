@@ -27,9 +27,6 @@ typedef struct client_lighting_group {
     size_t end;
 } client_lighting_group_t;
 
-/** Distinct color constituents per tile that keep their own profile. */
-#define CLIENT_LIGHTING_COLORS_MAX 8
-
 /** Order emitters by tile, then radius and color, so equal ones are adjacent. */
 static int client_lighting_emitter_compare(const void *left, const void *right) {
     const client_lighting_emitter_t *a = left, *b = right;
@@ -205,15 +202,9 @@ void client_lighting_evaluate(int width,
                             abs(scalar_mask), scalar_mask < 0 ? -1 : 1, 0, NULL);
         client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
                             light_profile_mask(g->positive_radius), 1, 1, NULL);
-        /* Identical constituents add one weighted profile. The first
-         * CLIENT_LIGHTING_COLORS_MAX distinct colors keep their own profile;
-         * the rest fold per original profile index into one radius-weighted
-         * mean color, so each keeps its own spatial reach while the work per
-         * tile stays bounded by the number of profiles. */
-        size_t distinct = 0;
-        uint64_t rest_linear[LIGHT_PROFILE_COUNT][3] = {{0}};
-        uint64_t rest_weight[LIGHT_PROFILE_COUNT] = {0};
-        int rest_count[LIGHT_PROFILE_COUNT] = {0};
+        /* Identical constituents add one weighted profile; every distinct
+         * one keeps its own profile and exact server weight. A tile has at
+         * most one emitter per sent layer record, so this stays bounded. */
         for (size_t i = g->first; i < g->end; i++) {
             if (emitters[i].radius <= 0 ||
                 (i > g->first && emitters[i].radius == emitters[i - 1].radius &&
@@ -230,30 +221,8 @@ void client_lighting_evaluate(int width,
             for (size_t channel = 0; channel < 3; channel++) {
                 linear[channel] = light_profile_color_component(emitters[i].color, channel);
             }
-            int mask = light_profile_mask(emitters[i].radius);
-            if (distinct++ < CLIENT_LIGHTING_COLORS_MAX) {
-                client_lighting_add(width, height, occluders, accumulators, g->x, g->y, mask,
-                                    multiplicity, 2, linear);
-                continue;
-            }
-            uint64_t weight = (uint64_t)emitters[i].radius * (uint64_t)multiplicity;
-            rest_weight[mask] += weight;
-            rest_count[mask] += multiplicity;
-            for (size_t channel = 0; channel < 3; channel++) {
-                rest_linear[mask][channel] += weight * linear[channel];
-            }
-        }
-        for (int mask = 1; mask < LIGHT_PROFILE_COUNT; mask++) {
-            if (rest_weight[mask] == 0) {
-                continue;
-            }
-            uint16_t linear[3];
-            for (size_t channel = 0; channel < 3; channel++) {
-                linear[channel] =
-                    (uint16_t)((rest_linear[mask][channel] + rest_weight[mask] / 2) / rest_weight[mask]);
-            }
-            client_lighting_add(width, height, occluders, accumulators, g->x, g->y, mask,
-                                rest_count[mask], 2, linear);
+            client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
+                                light_profile_mask(emitters[i].radius), multiplicity, 2, linear);
         }
     }
 

@@ -124,6 +124,7 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
     uint8_t type;
     uint8_t asset_capabilities = 0;
     bool asset_capabilities_present = false;
+    uint8_t client_lighting = 0;
 
     while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         type = packet_reader_read_uint8(&reader);
@@ -151,7 +152,7 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
         } else if (type == CMD_SETUP_CONNECTION_MODE) {
             packet_reader_read_uint8(&reader);
         } else if (type == CMD_SETUP_CLIENT_LIGHTING) {
-            packet_reader_read_uint8(&reader);
+            client_lighting = packet_reader_read_uint8(&reader);
         } else {
             packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         }
@@ -166,6 +167,9 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
     }
 
     if (initial_setup) {
+        /* The echoed mode is fixed for the connection; it decides whether
+         * MAP2 base radiance words are signed. */
+        map_set_client_lighting_mode((client_lighting & CLIENT_LIGHTING_CAP_COMPOSITOR) != 0);
         cpl.state = ST_REQUEST_FILES_LISTING;
     }
 }
@@ -1289,7 +1293,7 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                                  0,
                                  "",
                                  0);
-                    map_set_layer_emitter(x, y, cleared_layer, 0, 0);
+                    map_set_layer_emitter(x, y, cleared_layer, 0, 0, 0);
                 } else { /* We have some data. */
                     int16_t face, height = 0, zoom_x = 0, zoom_y = 0, align = 0, rotate = 0;
                     uint8_t flags, obj_flags, quick_pos = 0, probe = 0, draw_double = 0, alpha = 0,
@@ -1299,6 +1303,7 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                     char player_name[64], player_color[COLOR_BUF], glow[COLOR_BUF];
                     uint32_t target_object_count = 0;
                     int8_t emitter_radius = 0;
+                    uint8_t emitter_flags = 0;
                     uint32_t emitter_color = 0;
 
                     anim_speed = anim_facing = anim_flags = anim_state = 0;
@@ -1400,6 +1405,7 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                         /* Bounds were checked by map_protocol_validate(). */
                         if (flags2 & MAP2_FLAG2_EMITTER) {
                             emitter_radius = packet_reader_read_int8(&reader);
+                            emitter_flags = packet_reader_read_uint8(&reader);
                             emitter_color = (uint32_t)packet_reader_read_uint8(&reader) << 16;
                             emitter_color |= (uint32_t)packet_reader_read_uint8(&reader) << 8;
                             emitter_color |= packet_reader_read_uint8(&reader);
@@ -1449,7 +1455,7 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                                  exit,
                                  glow,
                                  glow_speed);
-                    map_set_layer_emitter(x, y, type, emitter_radius, emitter_color);
+                    map_set_layer_emitter(x, y, type, emitter_radius, emitter_flags, emitter_color);
                 }
             }
 
@@ -1522,12 +1528,10 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                 map_set_local_light(x, y, packet_reader_read_uint8(&reader));
             }
 
-            if (ext_flags & MAP2_FLAG_EXT_LIGHT_AGGREGATE) {
-                map_set_light_aggregate(x, y, packet_reader_read_uint8(&reader));
-            }
-
             if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
-                map_set_occluder(x, y, packet_reader_read_uint16(&reader));
+                uint16_t occluder = packet_reader_read_uint16(&reader);
+                uint8_t vertical = packet_reader_read_uint8(&reader);
+                map_set_occluder(x, y, occluder, vertical);
             }
 
             if (fow_updated) {

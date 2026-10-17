@@ -129,8 +129,8 @@ static void test_occluded_source_cell_attenuates_its_light(void) {
 
 static void test_colors_beyond_the_bound_keep_their_hue(void) {
     memset(occluders, 0, sizeof(occluders));
-    /* Ten distinct blue-ish constituents: the two beyond the bound fold into
-     * one colored profile instead of becoming neutral. */
+    /* Ten distinct blue-ish constituents all keep their own colored profile
+     * instead of becoming neutral. */
     client_lighting_emitter_t many[10];
     for (int i = 0; i < 10; i++) {
         many[i] = (client_lighting_emitter_t){
@@ -139,10 +139,29 @@ static void test_colors_beyond_the_bound_keep_their_hue(void) {
     evaluate(many, 10);
     TEST_CHECK(cell_at(4, 4)->rgb[2] > cell_at(4, 4)->rgb[0]);
     TEST_CHECK(cell_at(4, 4)->rgb[2] == cell_at(4, 4)->scalar);
-    /* Folded radius-1 constituents keep the radius-1 reach: no colored light
-     * appears where none of their own profiles reaches. */
+    /* Radius-1 constituents keep the radius-1 reach: no colored light appears
+     * where none of their own profiles reaches. */
     int32_t far_scalar = cell_at(7, 4)->scalar;
     TEST_CHECK(cell_at(7, 4)->rgb[2] == far_scalar && cell_at(7, 4)->rgb[0] == far_scalar);
+}
+
+static void test_many_colors_keep_exact_server_weights(void) {
+    memset(occluders, 0, sizeof(occluders));
+    /* Radii 6 and 7 select the same profile, so the server weighs a red 6 and
+     * a blue 7 equally; a radius-weighted fold would tint towards blue. Eight
+     * red/blue-symmetric fillers come first so the pair is beyond eight. */
+    TEST_CHECK(light_profile_mask(6) == light_profile_mask(7));
+    client_lighting_emitter_t many[10];
+    for (int i = 0; i < 8; i++) {
+        uint32_t level = (uint32_t)(0x80 + i);
+        many[i] = (client_lighting_emitter_t){
+            .x = 4, .y = 4, .radius = 1, .color = level << 16 | 0x8000 | level};
+    }
+    many[8] = (client_lighting_emitter_t){.x = 4, .y = 4, .radius = 6, .color = 0xff0000};
+    many[9] = (client_lighting_emitter_t){.x = 4, .y = 4, .radius = 7, .color = 0x0000ff};
+    evaluate(many, 10);
+    TEST_CHECK(cell_at(4, 4)->rgb[0] == cell_at(4, 4)->rgb[2]);
+    TEST_CHECK(cell_at(5, 4)->rgb[0] == cell_at(5, 4)->rgb[2]);
 }
 
 static void test_darkness_is_negative_and_uncolored(void) {
@@ -248,6 +267,7 @@ int main(void) {
     test_discontinuous_face_stops_light();
     test_occluded_source_cell_attenuates_its_light();
     test_colors_beyond_the_bound_keep_their_hue();
+    test_many_colors_keep_exact_server_weights();
     test_darkness_is_negative_and_uncolored();
     test_colored_light_keeps_hue();
     test_constituent_colors_keep_their_own_profiles();

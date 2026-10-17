@@ -28,6 +28,8 @@ typedef struct client_lighting_emitter {
     int x;
     int y;
     int8_t radius;
+    /** MAP2 emitter flags; MAP2_EMITTER_FLICKER opts in to presentation flicker. */
+    uint8_t flags;
     uint32_t color;
 } client_lighting_emitter_t;
 

@@ -101,13 +101,20 @@ typedef struct map_cell_layer_record {
     char glow[COLOR_BUF];
 } map_cell_layer_record_t;
 
-/** Protocol 1085 emitter of one sent layer, kept only for emitting layers. */
-typedef struct map_cell_emitter_record {
-    struct map_cell_emitter_record *next;
+/** Protocol 1085 emitter of one sent layer: 6 packed bytes, no pointer. */
+typedef struct map_cell_emitter {
     uint8_t layer;
     int8_t radius;
-    uint32_t color;
-} map_cell_emitter_record_t;
+    uint8_t flags;
+    uint8_t rgb[3];
+} map_cell_emitter_t;
+
+/** Packed emitters of one cell, allocated only for emitting cells and bounded
+ * by its sent layer records; entries stay sorted by layer. */
+typedef struct map_cell_emitters {
+    uint8_t count;
+    map_cell_emitter_t entries[];
+} map_cell_emitters_t;
 
 typedef struct map_cell_sublayer_record {
     struct map_cell_sublayer_record *next;
@@ -158,7 +165,7 @@ typedef struct map_cell {
     map_cell_actor_record_t *actors;
     map_cell_light_record_t *lights;
     map_cell_light_keyframe_record_t *light_keyframe;
-    map_cell_emitter_record_t *emitters;
+    map_cell_emitters_t *emitters;
     /** Monotonic identity retained across transaction clones for painter reuse. */
     uint64_t painter_identity;
     uint8_t fow;
@@ -194,10 +201,10 @@ typedef struct map_cell_header {
     uint8_t light_state;
     /** Protocol 1085 coarse local light byte: signed level and vision floor. */
     uint8_t local_light;
-    /** Bit 0: local_light received; bit 1: occluder; bit 2: light_aggregate. */
+    /** Bit 0: local_light received; bit 1: occluder received. */
     uint8_t client_light_known;
-    /** Protocol 1085 sub-layers whose radiance is complete aggregate light. */
-    uint8_t light_aggregate;
+    /** Protocol 1085 vertical attenuation byte of the occluder. */
+    uint8_t occluder_vertical;
     /** Protocol 1085 occluder bits of the cell. */
     uint16_t occluder;
 } map_cell_header_t;
@@ -216,6 +223,9 @@ static uint64_t level_lighting_revision[MAP2_LEVELS];
 /* Advances only when a level's emitters, occluders or live residency change,
  * so base-light and timed-light updates do not rebuild the emitter field. */
 static uint64_t level_emitter_revision[MAP2_LEVELS];
+/** Whether this connection runs protocol 1085 client lighting: base radiance
+ * words are then signed Q4.11 and the client composes local light. */
+static bool map_client_lighting_mode;
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 static uint16_t map_level_mask;
 static int map_width;
@@ -347,10 +357,17 @@ static void map_cell_record_release(void *record, size_t size) {
     free(record);
 }
 
-static map_cell_emitter_record_t *map_cell_emitter_record(const map_cell_t *cell, int layer) {
-    for (map_cell_emitter_record_t *record = cell->emitters; record != NULL; record = record->next) {
-        if (record->layer == layer) {
-            return record;
+static size_t map_cell_emitters_size(size_t count) {
+    return sizeof(map_cell_emitters_t) + count * sizeof(map_cell_emitter_t);
+}
+
+static const map_cell_emitter_t *map_cell_emitter_record(const map_cell_t *cell, int layer) {
+    if (cell == NULL || cell->emitters == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < cell->emitters->count; i++) {
+        if (cell->emitters->entries[i].layer == layer) {
+            return &cell->emitters->entries[i];
         }
     }
     return NULL;
@@ -358,11 +375,8 @@ static map_cell_emitter_record_t *map_cell_emitter_record(const map_cell_t *cell
 
 /** Release every emitter of a cell; live light never outlives visibility. */
 static void map_cell_emitters_release(map_cell_t *cell) {
-    map_cell_emitter_record_t *record = cell->emitters;
-    while (record != NULL) {
-        map_cell_emitter_record_t *next = record->next;
-        map_cell_record_release(record, sizeof(*record));
-        record = next;
+    if (cell->emitters != NULL) {
+        map_cell_record_release(cell->emitters, map_cell_emitters_size(cell->emitters->count));
     }
     cell->emitters = NULL;
 }
@@ -637,13 +651,10 @@ static uint64_t map_cell_content_hash(const map_cell_t *cell) {
     if (cell->light_keyframe != NULL) {
         hash = map_cell_hash_bytes(hash, cell->light_keyframe, sizeof(*cell->light_keyframe));
     }
-    for (int layer = 0; layer < NUM_REAL_LAYERS; layer++) {
-        const map_cell_emitter_record_t *emitter = map_cell_emitter_record(cell, layer);
-        if (emitter != NULL) {
-            hash = map_cell_hash_bytes(hash, &emitter->layer, sizeof(emitter->layer));
-            hash = map_cell_hash_bytes(hash, &emitter->radius, sizeof(emitter->radius));
-            hash = map_cell_hash_bytes(hash, &emitter->color, sizeof(emitter->color));
-        }
+    if (cell->emitters != NULL) {
+        hash = map_cell_hash_bytes(hash,
+                                   cell->emitters,
+                                   map_cell_emitters_size(cell->emitters->count));
     }
     return hash;
 }
@@ -747,12 +758,10 @@ static map_cell_t *map_cell_clone(const map_cell_t *source) {
         clone->light_keyframe = map_cell_record_allocate(sizeof(*clone->light_keyframe));
         *clone->light_keyframe = *source->light_keyframe;
     }
-    for (const map_cell_emitter_record_t *record = source->emitters; record != NULL;
-         record = record->next) {
-        map_cell_emitter_record_t *copy = map_cell_record_allocate(sizeof(*copy));
-        *copy = *record;
-        copy->next = clone->emitters;
-        clone->emitters = copy;
+    if (source->emitters != NULL) {
+        size_t size = map_cell_emitters_size(source->emitters->count);
+        clone->emitters = map_cell_record_allocate(size);
+        memcpy(clone->emitters, source->emitters, size);
     }
     return clone;
 }
@@ -1351,10 +1360,10 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             if (had_light_state) {
                 map_cell_store_set_light_state(level, index, MAP_LIGHT_CACHE_CLEARED);
             }
-            /* Fog keeps remembered occluders but no live coarse level. */
-            level->headers[index].client_light_known &= (uint8_t)~5U;
+            /* Cells leaving the window are no longer updated by the server:
+             * fog keeps remembered occluders but no live coarse level. */
+            level->headers[index].client_light_known &= (uint8_t)~1U;
             level->headers[index].local_light = 0;
-            level->headers[index].light_aggregate = 0;
             level_emitter_revision[level_index]++;
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
@@ -1941,8 +1950,8 @@ void map_cell_snapshot(int x, int y, map_cell_snapshot_t *snapshot) {
         .structural_fow = header->structural_fow,
         .local_light = header->local_light,
         .occluder = header->occluder,
+        .occluder_vertical = header->occluder_vertical,
         .client_light_known = header->client_light_known,
-        .light_aggregate = header->light_aggregate,
     };
 }
 
@@ -1955,8 +1964,8 @@ bool map_cell_changed(int x, int y, const map_cell_snapshot_t *snapshot) {
            snapshot->structural_fow != current.structural_fow ||
            snapshot->local_light != current.local_light ||
            snapshot->occluder != current.occluder ||
-           snapshot->client_light_known != current.client_light_known ||
-           snapshot->light_aggregate != current.light_aggregate;
+           snapshot->occluder_vertical != current.occluder_vertical ||
+           snapshot->client_light_known != current.client_light_known;
 }
 
 /**
@@ -3132,20 +3141,19 @@ void map_set_data(int x,
  */
 /**
  * Revoke protocol 1085 client-light state of a cache coordinate. A soft clear
- * keeps remembered occluders and drops only the live coarse level.
+ * turns the cell into remembered fog, which keeps its occluders and its coarse
+ * level: the server keeps updating that level while its cache is valid. A
+ * hard clear revokes both.
  */
 static void map_cell_clear_client_light(size_t index, bool hard) {
     map_cell_header_t *header = &cells->headers[index];
-    uint8_t mask = hard ? 7U : 5U;
-    if ((header->client_light_known & mask) == 0) {
+    if (!hard || header->client_light_known == 0) {
         return;
     }
-    header->client_light_known &= (uint8_t)~mask;
+    header->client_light_known = 0;
     header->local_light = 0;
-    header->light_aggregate = 0;
-    if (hard) {
-        header->occluder = 0;
-    }
+    header->occluder = 0;
+    header->occluder_vertical = 0;
     level_lighting_revision[current_level_index]++;
 }
 
@@ -3199,9 +3207,13 @@ void map_clear_cell(int x, int y, bool hard) {
     }
 
     map_clear_live_cell(cell);
-    map_cell_clear_light_state(cell);
-    if (had_light_state) {
-        map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_CLEARED);
+    /* Client lighting keeps a remembered tile's base radiance: its coarse
+     * level keeps arriving and composes onto it in fog. */
+    if (!map_client_lighting_mode) {
+        map_cell_clear_light_state(cell);
+        if (had_light_state) {
+            map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_CLEARED);
+        }
     }
     map_cell_store_set_fow(cells, index, true, false);
     map_cell_store_trim_slot(cells, index);
@@ -3222,51 +3234,67 @@ void map_set_structural_support_height(int x, int y, int16_t height) {
 }
 
 /** Replace the emitter of one sent layer; radius 0 removes it. */
-void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint32_t color) {
+void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags, uint32_t color) {
     HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
-    const map_cell_emitter_record_t *old = cell != NULL ? map_cell_emitter_record(cell, layer) : NULL;
+    const map_cell_emitter_t *old = map_cell_emitter_record(cell, layer);
     color = radius != 0 ? color & UINT32_C(0xffffff) : 0;
+    flags = radius != 0 ? flags : 0;
+    map_cell_emitter_t entry = {
+        .layer = (uint8_t)layer,
+        .radius = radius,
+        .flags = flags,
+        .rgb = {(uint8_t)(color >> 16), (uint8_t)(color >> 8), (uint8_t)color},
+    };
     if (old == NULL && radius == 0) {
         return;
     }
-    if (old != NULL && old->radius == radius && old->color == color) {
+    if (old != NULL && memcmp(old, &entry, sizeof(entry)) == 0) {
         return;
     }
     map_state_transaction_record_cell(x, y);
     cell = MAP_CELL_GET_MIDDLE_MUTABLE(x, y);
-    map_cell_emitter_record_t **link = &cell->emitters;
-    while (*link != NULL && (*link)->layer != layer) {
-        link = &(*link)->next;
+    size_t count = cell->emitters != NULL ? cell->emitters->count : 0;
+    size_t position = 0;
+    while (position < count && cell->emitters->entries[position].layer < layer) {
+        position++;
     }
-    if (radius == 0) {
-        map_cell_emitter_record_t *record = *link;
-        *link = record->next;
-        map_cell_record_release(record, sizeof(*record));
-    } else {
-        if (*link == NULL) {
-            *link = map_cell_record_allocate(sizeof(**link));
-            (*link)->layer = (uint8_t)layer;
+    bool present = position < count && cell->emitters->entries[position].layer == layer;
+    size_t next_count = count + (radius == 0 ? 0 : 1) - (present ? 1 : 0);
+    map_cell_emitters_t *next = NULL;
+    if (next_count != 0) {
+        next = map_cell_record_allocate(map_cell_emitters_size(next_count));
+        next->count = (uint8_t)next_count;
+        size_t out = 0;
+        for (size_t i = 0; i < position; i++) {
+            next->entries[out++] = cell->emitters->entries[i];
         }
-        (*link)->radius = radius;
-        (*link)->color = color;
+        if (radius != 0) {
+            next->entries[out++] = entry;
+        }
+        for (size_t i = position + (present ? 1 : 0); i < count; i++) {
+            next->entries[out++] = cell->emitters->entries[i];
+        }
     }
+    map_cell_emitters_release(cell);
+    cell->emitters = next;
     map_cell_store_trim_slot(cells, index);
     level_lighting_revision[current_level_index]++;
     level_emitter_revision[current_level_index]++;
 }
 
 /** Return the emitter of one sent layer, if any. */
-bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint32_t *color) {
+bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint8_t *flags,
+                           uint32_t *color) {
     HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
-    const map_cell_emitter_record_t *record =
-        map_cell_emitter_record(MAP_CELL_GET_MIDDLE(x, y), layer);
+    const map_cell_emitter_t *record = map_cell_emitter_record(MAP_CELL_GET_MIDDLE(x, y), layer);
     if (record == NULL) {
         return false;
     }
     *radius = record->radius;
-    *color = record->color;
+    *flags = record->flags;
+    *color = (uint32_t)record->rgb[0] << 16 | (uint32_t)record->rgb[1] << 8 | record->rgb[2];
     return true;
 }
 
@@ -3288,38 +3316,32 @@ void map_set_local_light(int x, int y, uint8_t value) {
     level_lighting_revision[current_level_index]++;
 }
 
-/** Store which sub-layers of a visible cell carry complete aggregate light. */
-void map_set_light_aggregate(int x, int y, uint8_t bitmap) {
-    map_state_transaction_record_cell(x, y);
-    map_cell_header_t *header =
-        &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
-    if ((header->client_light_known & 4U) && header->light_aggregate == bitmap) {
-        return;
-    }
-    header->light_aggregate = bitmap;
-    header->client_light_known |= 4U;
-    level_lighting_revision[current_level_index]++;
-}
-
-/** Return the aggregate sub-layer bitmap of a cell, 0 when none was received. */
-uint8_t map_get_light_aggregate(int x, int y) {
-    const map_cell_header_t *header =
-        &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
-    return (header->client_light_known & 4U) ? header->light_aggregate : 0;
-}
-
 /** Store the occluder bits of a cell; remembered cells keep their last bits. */
-void map_set_occluder(int x, int y, uint16_t bits) {
+void map_set_occluder(int x, int y, uint16_t bits, uint8_t vertical) {
     map_state_transaction_record_cell(x, y);
     map_cell_header_t *header =
         &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
-    if ((header->client_light_known & 2U) && header->occluder == bits) {
+    if ((header->client_light_known & 2U) && header->occluder == bits &&
+        header->occluder_vertical == vertical) {
         return;
     }
     header->occluder = bits;
+    header->occluder_vertical = vertical;
     header->client_light_known |= 2U;
     level_lighting_revision[current_level_index]++;
     level_emitter_revision[current_level_index]++;
+}
+
+/** Select the radiance meaning negotiated by the initial SETUP. */
+void map_set_client_lighting_mode(bool compositor) {
+    if (map_client_lighting_mode == compositor) {
+        return;
+    }
+    map_client_lighting_mode = compositor;
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        level_lighting_revision[level]++;
+        level_emitter_revision[level]++;
+    }
 }
 
 /** Return the signed coarse local light level and vision floor of a cell. */
@@ -3332,14 +3354,15 @@ bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor) {
     return map_protocol_local_light_decode(header->local_light, level, vision_floor);
 }
 
-/** Return the occluder bits of a cell, if they were received. */
-bool map_get_occluder(int x, int y, uint16_t *bits) {
+/** Return the occluder bits and vertical byte of a cell, if received. */
+bool map_get_occluder(int x, int y, uint16_t *bits, uint8_t *vertical) {
     const map_cell_header_t *header =
         &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
     if (!(header->client_light_known & 2U)) {
         return false;
     }
     *bits = header->occluder;
+    *vertical = header->occluder_vertical;
     return true;
 }
 
@@ -4271,10 +4294,13 @@ static void
 map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uint16_t rgb[3]);
 
 /** Historical scalar storage is not current lighting authority after a soft clear. */
-static uint16_t
-map_remembered_discrete_radiance(int x, int y, const map_cell_t *cell, uint8_t sub_layer) {
+static uint16_t map_remembered_discrete_radiance(int x,
+                                                 int y,
+                                                 const map_cell_t *cell,
+                                                 uint8_t sub_layer,
+                                                 uint16_t composed) {
     const map_cell_light_record_t *light = map_cell_light_record_read(cell, sub_layer);
-    uint16_t radiance = light->radiance;
+    uint16_t radiance = composed;
     if (!light->known) {
         uint16_t rgb[3];
         map_lighting_radiance(x, y, cell, sub_layer, &radiance, rgb);
@@ -4452,14 +4478,13 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
         uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
-        if (!data->cell->fow) {
-            /* Discrete lighting composes client light like the smooth path. */
-            uint16_t rgb[3] = {radiance, radiance, radiance};
-            map_client_lighting_apply(data->x, data->y, data->sub_layer, &radiance, rgb);
-        }
+        /* Discrete lighting composes client light like the smooth path, on
+         * remembered cells too: they keep receiving their coarse level. */
+        uint16_t rgb[3] = {radiance, radiance, radiance};
+        map_client_lighting_apply(data->x, data->y, data->sub_layer, &radiance, rgb);
         if (data->cell->fow && remembered) {
-            radiance =
-                map_remembered_discrete_radiance(data->x, data->y, data->cell, data->sub_layer);
+            radiance = map_remembered_discrete_radiance(
+                data->x, data->y, data->cell, data->sub_layer, radiance);
         } else if (data->world_surface && data->primary_level && data->depth == 0 &&
                    !data->cell->fow) {
             radiance = map_visibility_add_player_radiance(
@@ -5311,6 +5336,24 @@ map_lighting_interpolate(uint16_t current, uint16_t next, uint64_t progress, uin
     return (uint16_t)(reduction > current ? 0 : current - reduction);
 }
 
+/** Interpolate signed Q4.11 endpoints, rounding half away from zero. */
+static uint16_t map_lighting_interpolate_signed(uint16_t current,
+                                                uint16_t next,
+                                                uint64_t progress,
+                                                uint64_t duration) {
+    if (progress == 0 || current == next) {
+        return current;
+    }
+    if (progress >= duration) {
+        return next;
+    }
+    int64_t delta = (int64_t)(int16_t)next - (int16_t)current;
+    int64_t scaled = delta * (int64_t)progress;
+    int64_t step = (scaled + (scaled < 0 ? -(int64_t)duration / 2 : (int64_t)duration / 2)) /
+                   (int64_t)duration;
+    return (uint16_t)(int16_t)((int16_t)current + step);
+}
+
 /** Resolve one cell's temporal aggregate endpoint before spatial filtering. */
 static bool map_lighting_temporal_sample(const map_cell_t *cell,
                                          uint8_t sub_layer,
@@ -5332,12 +5375,14 @@ static bool map_lighting_temporal_sample(const map_cell_t *cell,
     uint64_t progress = now <= map_cell_light_keyframe_record_read(cell)->start_seconds
                             ? 0
                             : now - map_cell_light_keyframe_record_read(cell)->start_seconds;
-    *scalar = map_lighting_interpolate(map_cell_light_record_read(cell, sub_layer)->radiance,
-                                       map_cell_light_record_read(cell, sub_layer)->next_radiance,
-                                       progress,
-                                       duration);
+    uint16_t (*interpolate)(uint16_t, uint16_t, uint64_t, uint64_t) =
+        map_client_lighting_mode ? map_lighting_interpolate_signed : map_lighting_interpolate;
+    *scalar = interpolate(map_cell_light_record_read(cell, sub_layer)->radiance,
+                          map_cell_light_record_read(cell, sub_layer)->next_radiance,
+                          progress,
+                          duration);
     for (size_t channel = 0; channel < 3; channel++) {
-        rgb[channel] = map_lighting_interpolate(
+        rgb[channel] = interpolate(
             map_cell_light_record_read(cell, sub_layer)->rgb_radiance[channel],
             map_cell_light_record_read(cell, sub_layer)->next_rgb_radiance[channel],
             progress,
@@ -5399,19 +5444,25 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
             if (header->client_light_known & 2U) {
                 occluders[(size_t)y * width + x] = header->occluder;
             }
-            /* Remembered cells keep their occluders but carry no live light. */
+            /* Remembered cells keep their occluders, but their remembered
+             * objects' emitters may have changed since: compose none. */
             const map_cell_t *cell = MAP_CELL_GET(cache_x, cache_y);
-            if (cell->fow) {
+            if (cell->fow || cell->emitters == NULL) {
                 continue;
             }
-            for (const map_cell_emitter_record_t *record = cell->emitters; record != NULL;
-                 record = record->next) {
+            for (size_t i = 0; i < cell->emitters->count; i++) {
+                const map_cell_emitter_t *record = &cell->emitters->entries[i];
                 if (emitter_count == emitter_capacity) {
                     emitter_capacity = emitter_capacity == 0 ? 64 : emitter_capacity * 2;
                     emitters = xreallocarray(emitters, emitter_capacity, sizeof(*emitters));
                 }
                 emitters[emitter_count++] = (client_lighting_emitter_t){
-                    .x = x, .y = y, .radius = record->radius, .color = record->color};
+                    .x = x,
+                    .y = y,
+                    .radius = record->radius,
+                    .flags = record->flags,
+                    .color = (uint32_t)record->rgb[0] << 16 | (uint32_t)record->rgb[1] << 8 |
+                             record->rgb[2]};
             }
         }
     }
@@ -5421,20 +5472,25 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
 }
 
 /**
- * Add client-composed local light to a received base sample. Cells without a
- * coarse level keep the server's complete radiance (the legacy path).
+ * Compose client local light onto a received signed base sample and return
+ * the unsigned presentation radiance. On a legacy connection the sample is
+ * already complete radiance and stays unchanged.
  */
 static void
 map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uint16_t rgb[3]) {
-    const map_cell_header_t *header = &cells->headers[map_cache_physical_index(x, y)];
-    int8_t level;
-    bool vision_floor;
-    /* Aggregate sub-layers already carry complete server light. */
-    if (!(header->client_light_known & 1U) || header->fow ||
-        ((header->client_light_known & 4U) &&
-         (header->light_aggregate & (UINT8_C(1) << sub_layer)) != 0) ||
-        !map_protocol_local_light_decode(header->local_light, &level, &vision_floor)) {
+    (void)sub_layer;
+    if (!map_client_lighting_mode) {
         return;
+    }
+    const map_cell_header_t *header = &cells->headers[map_cache_physical_index(x, y)];
+    int8_t level = 0;
+    bool vision_floor = false;
+    /* Visible and remembered cells alike compose their coarse level; a cell
+     * without one composes only the emitter field. */
+    if (!(header->client_light_known & 1U) ||
+        !map_protocol_local_light_decode(header->local_light, &level, &vision_floor)) {
+        level = 0;
+        vision_floor = false;
     }
 
     map_client_lighting_field_t *field = &map_client_lighting_fields[current_level_index];
@@ -5456,7 +5512,8 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
     int32_t composed = client_lighting_compose(emitter, level);
     int32_t delta = composed >= 0 ? light_profile_raw_to_radiance(composed)
                                   : -(int32_t)light_profile_raw_to_radiance(-composed);
-    int32_t scalar_value = MAX(0, MIN((int32_t)UINT16_MAX, (int32_t)*scalar + delta));
+    /* Base words are signed Q4.11; composition stays signed until clamping. */
+    int32_t scalar_value = MAX(0, MIN((int32_t)UINT16_MAX, (int32_t)(int16_t)*scalar + delta));
     int32_t channels[3];
     for (size_t channel = 0; channel < 3; channel++) {
         /* The emitter field's per-channel hue delta rides on the composed
@@ -5468,7 +5525,7 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
         int32_t channel_delta = channel_raw >= 0
                                     ? light_profile_raw_to_radiance(channel_raw)
                                     : -(int32_t)light_profile_raw_to_radiance(-channel_raw);
-        channels[channel] = MAX(0, (int32_t)rgb[channel] + channel_delta);
+        channels[channel] = MAX(0, (int32_t)(int16_t)rgb[channel] + channel_delta);
     }
     /* Common-vector overflow: scale all channels together to keep hue. */
     int32_t peak = MAX(channels[0], MAX(channels[1], channels[2]));
@@ -6221,18 +6278,18 @@ bool widget_map_temporal_lighting_test(void) {
     historical->known = 1;
     map_clear_cell(0, 0, false);
     success = success &&
-              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 200 &&
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, historical->radiance) == 200 &&
               historical->radiance == UINT16_MAX && !historical->known;
     /* Current authoritative samples keep their established discrete transfer. */
     historical->known = 1;
     historical->radiance = 2048;
     success =
-        success && map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 2048;
+        success && map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, historical->radiance) == 2048;
     historical->known = 0;
     historical->radiance = UINT16_MAX;
     light->known = 0;
     success = success &&
-              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) ==
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, historical->radiance) ==
                   MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
               historical->radiance == UINT16_MAX;
     light->known = 1;
@@ -6293,27 +6350,45 @@ bool widget_map_client_lighting_state_test(void) {
 
     int layer = GET_MAP_LAYER(LAYER_ITEM, 0);
     int8_t radius = 0;
+    uint8_t emitter_flags = 0;
     uint32_t color = 0;
     uint16_t bits = 0;
+    uint8_t vertical = 0;
     int8_t level = 0;
     bool vision_floor = false;
-    success = success && !map_get_layer_emitter(4, 4, layer, &radius, &color) &&
-              !map_get_local_light(4, 4, &level, &vision_floor) && !map_get_occluder(4, 4, &bits);
+    success = success && !map_get_layer_emitter(4, 4, layer, &radius, &emitter_flags, &color) &&
+              !map_get_local_light(4, 4, &level, &vision_floor) &&
+              !map_get_occluder(4, 4, &bits, &vertical);
 
-    /* An emitter rides on its layer record and changes the lighting revision. */
+    /* An emitter is a packed sidecar entry and changes the lighting revision. */
     uint64_t revision = level_lighting_revision[current_level_index];
-    map_set_layer_emitter(4, 4, layer, 9, UINT32_C(0x12ff8040));
-    success = success && map_get_layer_emitter(4, 4, layer, &radius, &color) && radius == 9 &&
+    map_set_layer_emitter(4, 4, layer, 9, MAP2_EMITTER_FLICKER, UINT32_C(0x12ff8040));
+    success = success && map_get_layer_emitter(4, 4, layer, &radius, &emitter_flags, &color) &&
+              radius == 9 && emitter_flags == MAP2_EMITTER_FLICKER &&
               color == UINT32_C(0xff8040) &&
               level_lighting_revision[current_level_index] != revision;
     revision = level_lighting_revision[current_level_index];
-    map_set_layer_emitter(4, 4, layer, 9, UINT32_C(0xff8040));
+    map_set_layer_emitter(4, 4, layer, 9, MAP2_EMITTER_FLICKER, UINT32_C(0xff8040));
     success = success && level_lighting_revision[current_level_index] == revision;
-    map_set_layer_emitter(4, 4, layer, -13, 0);
-    success = success && map_get_layer_emitter(4, 4, layer, &radius, &color) && radius == -13;
-    /* Removing the only field of a layer releases its record. */
-    map_set_layer_emitter(4, 4, layer, 0, 0);
-    success = success && !map_get_layer_emitter(4, 4, layer, &radius, &color) &&
+    /* A flag-only change is a change. */
+    map_set_layer_emitter(4, 4, layer, 9, 0, UINT32_C(0xff8040));
+    success = success && level_lighting_revision[current_level_index] != revision &&
+              map_get_layer_emitter(4, 4, layer, &radius, &emitter_flags, &color) &&
+              emitter_flags == 0;
+    /* Entries of several layers share one allocation, ordered by layer. */
+    int lower = GET_MAP_LAYER(LAYER_FLOOR, 0);
+    map_set_layer_emitter(4, 4, lower, 2, 0, UINT32_C(0x0000ff));
+    const map_cell_t *packed = MAP_CELL_GET_MIDDLE(4, 4);
+    success = success && packed->emitters != NULL && packed->emitters->count == 2 &&
+              packed->emitters->entries[0].layer == lower &&
+              packed->emitters->entries[1].layer == layer;
+    map_set_layer_emitter(4, 4, lower, 0, 0, 0);
+    map_set_layer_emitter(4, 4, layer, -13, 0, 0);
+    success = success && map_get_layer_emitter(4, 4, layer, &radius, &emitter_flags, &color) &&
+              radius == -13 && color == 0;
+    /* Removing the only emitter of a cell releases its sidecar and slot. */
+    map_set_layer_emitter(4, 4, layer, 0, 0, 0);
+    success = success && !map_get_layer_emitter(4, 4, layer, &radius, &emitter_flags, &color) &&
               map_cell_store_slot(cells,
                                   map_cache_physical_index(4 + MAP_STARTX, 4 + MAP_STARTY),
                                   false) == NULL;
@@ -6325,54 +6400,62 @@ bool widget_map_client_lighting_state_test(void) {
               !vision;
     map_set_local_light(5, 5, map_protocol_local_light_encode(-MAP2_LOCAL_LIGHT_LEVEL_MAX, true));
     map_set_occluder(5, 5, MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
-                               (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT));
+                               (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT), 4);
     success = success && map_get_local_light(5, 5, &signed_level, &vision) &&
               signed_level == -MAP2_LOCAL_LIGHT_LEVEL_MAX && vision &&
-              map_get_occluder(5, 5, &bits) &&
+              map_get_occluder(5, 5, &bits, &vertical) &&
               bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
-                       (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT));
+                       (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT)) &&
+              vertical == 4;
+    /* A vertical-only change is a change. */
+    revision = level_lighting_revision[current_level_index];
+    map_set_occluder(5, 5, bits, 5);
+    map_set_occluder(5, 5, bits, 4);
+    success = success && level_lighting_revision[current_level_index] == revision + 2;
 
     /* An aborted update restores the previous client-lighting state. */
     map_state_transaction_begin(false);
     map_set_local_light(5, 5, map_protocol_local_light_encode(3, false));
-    map_set_occluder(5, 5, MAP2_OCCLUDER_FLOOR);
-    map_set_layer_emitter(5, 5, layer, 4, UINT32_C(0x00ff00));
+    map_set_occluder(5, 5, MAP2_OCCLUDER_FLOOR, 0);
+    map_set_layer_emitter(5, 5, layer, 4, 0, UINT32_C(0x00ff00));
     map_state_transaction_abort();
     success = success && map_get_local_light(5, 5, &signed_level, &vision) &&
               signed_level == -MAP2_LOCAL_LIGHT_LEVEL_MAX && vision &&
-              map_get_occluder(5, 5, &bits) &&
+              map_get_occluder(5, 5, &bits, &vertical) &&
               bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
                        (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT)) &&
-              !map_get_layer_emitter(5, 5, layer, &radius, &color);
+              vertical == 4 &&
+              !map_get_layer_emitter(5, 5, layer, &radius, &emitter_flags, &color);
 
-    /* A soft clear drops the live level but keeps remembered occluders; a
-     * hard clear revokes both. Each is a visible change. */
+    /* A soft clear makes remembered fog, which keeps its occluders and the
+     * coarse level the server keeps updating; a hard clear revokes both. */
     map_cell_snapshot_t before;
-    map_cell_snapshot(5, 5, &before);
     map_clear_cell(5, 5, false);
-    success = success && map_cell_changed(5, 5, &before) &&
-              !map_get_local_light(5, 5, &signed_level, &vision) && map_get_occluder(5, 5, &bits);
+    success = success && map_get_local_light(5, 5, &signed_level, &vision) &&
+              signed_level == -MAP2_LOCAL_LIGHT_LEVEL_MAX &&
+              map_get_occluder(5, 5, &bits, &vertical);
+    map_set_local_light(5, 5, map_protocol_local_light_encode(2, false));
+    success = success && map_get_local_light(5, 5, &signed_level, &vision) && signed_level == 2;
     map_cell_snapshot(5, 5, &before);
     map_clear_cell(5, 5, true);
-    success = success && map_cell_changed(5, 5, &before) && !map_get_occluder(5, 5, &bits);
-    /* The aggregate bitmap is live state: a soft clear drops it. */
-    map_set_light_aggregate(7, 7, 0x41);
-    success = success && map_get_light_aggregate(7, 7) == 0x41;
-    map_clear_cell(7, 7, false);
-    success = success && map_get_light_aggregate(7, 7) == 0;
+    success = success && map_cell_changed(5, 5, &before) &&
+              !map_get_occluder(5, 5, &bits, &vertical) &&
+              !map_get_local_light(5, 5, &signed_level, &vision);
     /* A header-only update is a visible change too. */
     map_cell_snapshot(6, 6, &before);
     map_set_local_light(6, 6, map_protocol_local_light_encode(2, false));
     success = success && map_cell_changed(6, 6, &before);
 
-    /* Composition adds client emitter light to the received base sample. */
+    /* Composition adds client emitter light to the received signed base. */
+    bool saved_mode = map_client_lighting_mode;
+    map_client_lighting_mode = true;
     uint16_t composed_scalar = 0, composed_rgb[3];
     map_set_light_radiance(8, 8, 0, 160);
     map_set_local_light(8, 8, map_protocol_local_light_encode(0, false));
     map_lighting_radiance(8 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(8, 8), 0,
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160;
-    map_set_layer_emitter(8, 8, layer, 1, UINT32_C(0xffffff));
+    map_set_layer_emitter(8, 8, layer, 1, 0, UINT32_C(0xffffff));
     map_lighting_radiance(8 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(8, 8), 0,
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40) &&
@@ -6385,26 +6468,51 @@ bool widget_map_client_lighting_state_test(void) {
     success = success &&
               composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
     /* An overflowing colored sum scales its channels together. */
-    map_set_light_radiance(14, 8, 0, 64000);
-    uint16_t warm[NUM_SUB_LAYERS][3] = {{64000, 32000, 16000}};
+    map_set_light_radiance(14, 8, 0, 32000);
+    uint16_t warm[NUM_SUB_LAYERS][3] = {{32700, 16000, 8000}};
     map_set_light_rgb_radiance(14, 8, 1, warm);
     map_set_local_light(14, 8, map_protocol_local_light_encode(MAP2_LOCAL_LIGHT_LEVEL_MAX, false));
     map_lighting_radiance(14 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(14, 8), 0,
                           &composed_scalar, composed_rgb);
-    success = success && composed_rgb[0] == UINT16_MAX && composed_rgb[1] < composed_rgb[0] &&
-              composed_rgb[2] < composed_rgb[1] && composed_rgb[1] > 32000;
-    /* An aggregate sub-layer is used exactly as received. */
-    map_set_light_radiance(16, 8, 0, 120);
-    map_set_local_light(16, 8, map_protocol_local_light_encode(2, true));
-    map_set_light_aggregate(16, 8, 1);
+    success = success && composed_rgb[0] < UINT16_MAX && composed_rgb[1] < composed_rgb[0] &&
+              composed_rgb[2] < composed_rgb[1] && composed_rgb[1] > 16000;
+    /* Negative environment cancels equal composed light exactly, and darker
+     * environment clamps at zero after composition. */
+    map_set_light_radiance(16, 8, 0, (uint16_t)map_protocol_signed_radiance_encode(-320));
+    map_set_local_light(16, 8, map_protocol_local_light_encode(2, false));
     map_lighting_radiance(16 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(16, 8), 0,
                           &composed_scalar, composed_rgb);
-    success = success && composed_scalar == 120;
+    success = success && composed_scalar == 0 && composed_rgb[0] == 0;
+    map_set_light_radiance(16, 8, 0, (uint16_t)map_protocol_signed_radiance_encode(-160));
+    map_lighting_radiance(16 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(16, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success &&
+              composed_scalar == (uint16_t)(light_profile_raw_to_radiance(320) -
+                                            light_profile_raw_to_radiance(160));
+    /* Remembered fog keeps composing its coarse level. */
+    map_set_light_radiance(17, 8, 0, 0);
+    map_set_local_light(17, 8, map_protocol_local_light_encode(1, false));
+    map_clear_cell(17, 8, false);
+    map_lighting_radiance(17 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(17, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == light_profile_raw_to_radiance(160);
+    /* Signed keyframe endpoints interpolate through zero. */
+    success = success &&
+              (int16_t)map_lighting_interpolate_signed((uint16_t)(int16_t)-100, 100, 1, 2) == 0 &&
+              (int16_t)map_lighting_interpolate_signed((uint16_t)(int16_t)-100, 100, 1, 4) == -50 &&
+              (int16_t)map_lighting_interpolate_signed(100, (uint16_t)(int16_t)-101, 1, 2) == -1;
     /* Without a coarse level the server's radiance stays authoritative. */
     map_set_light_radiance(12, 8, 0, 300);
     map_lighting_radiance(12 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 8), 0,
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 300;
+    /* A legacy connection's words are complete unsigned radiance. */
+    map_client_lighting_mode = false;
+    map_set_light_radiance(12, 8, 0, 65000);
+    map_lighting_radiance(12 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 65000;
+    map_client_lighting_mode = saved_mode;
 
     for (size_t store = 0; store < arraysize(map_client_lighting_fields); store++) {
         map_client_lighting_fields[store].valid = false;

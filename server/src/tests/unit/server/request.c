@@ -3619,6 +3619,21 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     ck_assert_uint_eq(cell->emitter_stale, 0);
     ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
 
+    /* A flicker opt-in is part of the emitter: toggling it resends the layer. */
+    digest = cell->emitter_digest;
+    ck_assert(object_set_value(blocker, "light_flicker", "1", true));
+    ck_assert(light_emitter_flickers(blocker));
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->emitter_digest, digest);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+
     /* A hidden object is not sent, so neither its geometry nor its light is
      * disclosed, although the space still blocks view server-side. */
     SET_FLAG(blocker, FLAG_HIDDEN);
@@ -3631,6 +3646,77 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, 0);
     ck_assert_uint_eq(cell->emitter_layers, 0);
+
+    settings.client_lighting = saved_client_lighting;
+    pl->cs->client_lighting = false;
+}
+END_TEST
+
+START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    bool saved_client_lighting = settings.client_lighting;
+    settings.client_lighting = true;
+    pl->cs->client_lighting = true;
+    int ax = pl->cs->mapx_2 + 2, ay = pl->cs->mapy_2;
+    object *content = arch_get("letter");
+    content->x = op->x + 2;
+    content->y = op->y;
+    ck_assert_ptr_nonnull(object_insert_map(content, map, NULL, INS_NO_MERGE));
+
+    /* The tile two cells east is sent while it is in view. */
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->fow_known, 0);
+
+    /* A wall between the viewer and that tile turns it into remembered fog. */
+    object *wall = arch_get("letter");
+    SET_FLAG(wall, FLAG_BLOCKSVIEW);
+    wall->x = op->x + 1;
+    wall->y = op->y;
+    wall = object_insert_map(wall, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(wall);
+    pl->update_los = 1;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->cleared, 1);
+    ck_assert_uint_ne(cell->client_light_known & 8U, 0);
+    ck_assert_uint_ne(cell->client_light_known & 1U, 0);
+    uint8_t before = cell->local_light;
+
+    /* Hidden light behind the wall reaches the remembered tile only as its
+     * coarse block level; no object, emitter or occluder is sent there. */
+    object *lamp = arch_get("letter");
+    lamp->glow_radius = 9;
+    lamp->light_color = UINT32_C(0xffffff);
+    lamp->x = op->x + 2;
+    lamp->y = op->y + 1;
+    ck_assert_ptr_nonnull(object_insert_map(lamp, map, NULL, INS_NO_MERGE));
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->local_light, before);
+    int8_t level;
+    bool vision_floor;
+    ck_assert(map_protocol_local_light_decode(cell->local_light, &level, &vision_floor));
+    ck_assert_int_eq(level, light_local_level(map, lamp->x, lamp->y));
+    ck_assert_uint_eq(cell->emitter_layers, 0);
+    ck_assert_uint_eq(cell->client_light_known & 2U, 0);
+    for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+        ck_assert_int_eq(cell->faces[layer], 0);
+    }
 
     settings.client_lighting = saved_client_lighting;
     pl->cs->client_lighting = false;
@@ -3749,6 +3835,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_odd_view_los_matches_emitted_map_coordinates);
     tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
     tcase_add_test(tc_core, test_client_lighting_negotiation_is_fixed_after_setup);
+    tcase_add_test(tc_core, test_client_lighting_remembered_tiles_keep_coarse_light);
     return s;
 }
 
