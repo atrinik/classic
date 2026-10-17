@@ -119,8 +119,14 @@ typedef struct MapCell_struct {
     /** Whether local_light and occluder have been sent, bit 0 and bit 1. */
     uint8_t client_light_known;
 
-    /** Last emitter sent per layer: int8 radius in the top byte, then sRGB. */
-    uint32_t emitter[NUM_REAL_LAYERS];
+    /** Layers whose last sent object carried an emitter, one bit each. */
+    uint64_t emitter_layers;
+
+    /** Emitter layers to resend on the next update because a value changed. */
+    uint64_t emitter_stale;
+
+    /** FNV-1a digest of every emitter the cell currently shows. */
+    uint32_t emitter_digest;
 
     /** Faces we sent. */
     int16_t faces[NUM_REAL_LAYERS];

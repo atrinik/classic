@@ -107,8 +107,7 @@ both modes.
   only, so it discloses nothing about sources.
 - **Emitters** are copied from `glow_radius` and `light_color` of the object
   MAP2 is already sending (the object on that tile, including the viewer's
-  derived emitter). A negative radius is sent with color `000000`. Each sent layer caches its last emitter, so a change of
-  radius or color alone forces a layer delta even when the face is unchanged.
+
   Emitters of objects not sent, whether hidden, out of sight, dark-gated,
   plugin-hidden or below the top object of a layer, are never sent.
 - **Occluders** are derived only from the objects MAP2 sends to this viewer:
@@ -258,10 +257,6 @@ and equal disclosure for visible ones.
   32 levels.
 - Directional faces: cell-wide transmission approximates walls that block only
   some faces. Per-face coefficients would need four nibbles per cell.
-- Per-socket cache budget: detecting emitter changes needs one 32-bit entry per
-  MAP2 layer (49 per cell record, 196 bytes) plus three bytes per record. That
-  exceeds MAP_RENDERING.md's 56-byte lighting cache budget, which must be
-  revised or replaced by a compact change token.
 - Whether celestial light should also move to the client, using region profile,
   time and authored sky exposure. That would remove the remaining heavy server
   solver, but it requires sending sky-exposure structure for upper levels that

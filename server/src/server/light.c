@@ -355,9 +355,9 @@ uint8_t light_occluder_object_bits(const object *op) {
     const object *head = HEAD(op);
     uint8_t bits = 0;
     uint16_t coefficient = SPATIAL_LIGHT_SCALE;
+    bool authored = false;
     if (QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
         bits |= MAP2_OCCLUDER_BLOCKSVIEW;
-        coefficient = 0;
     }
     if (QUERY_FLAG(op, FLAG_IS_FLOOR)) {
         bits |= MAP2_OCCLUDER_FLOOR;
@@ -382,9 +382,14 @@ uint8_t light_occluder_object_bits(const object *op) {
             value = object_get_value(op, "celestial_transmission");
         }
         celestial_transmission_t transmission = celestial_structure_transmission(value);
-        coefficient = MIN(coefficient, transmission == CELESTIAL_TRANSMISSION_INVALID
-                                           ? 0
-                                           : (uint16_t)transmission);
+        coefficient = transmission == CELESTIAL_TRANSMISSION_INVALID ? 0
+                                                                     : (uint16_t)transmission;
+        authored = true;
+    }
+    /* Authored glass or grate keeps its transmission even on a view blocker;
+     * an unauthored blocker transmits nothing. */
+    if (!authored && (bits & MAP2_OCCLUDER_BLOCKSVIEW)) {
+        coefficient = 0;
     }
     /* Round the attenuation up so the client never transmits more light. */
     int attenuation = (SPATIAL_LIGHT_SCALE - coefficient + MAP2_OCCLUDER_ATTENUATION_STEP - 1) /

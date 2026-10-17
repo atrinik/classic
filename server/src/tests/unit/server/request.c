@@ -3590,11 +3590,27 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_eq(cell->client_light_known & 3U, 3U);
     ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
-    uint32_t sent_emitter = 0;
-    for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
-        sent_emitter |= cell->emitter[layer];
-    }
-    ck_assert_uint_eq(sent_emitter, (uint32_t)(uint8_t)5 << 24 | UINT32_C(0xff8040));
+    ck_assert_uint_ne(cell->emitter_layers, 0);
+    ck_assert_uint_eq(cell->emitter_stale, 0);
+    uint32_t digest = cell->emitter_digest;
+
+    /* A color-only change reuses the cached layer once, marks it stale and
+     * resends it on the next update. */
+    blocker->light_color = UINT32_C(0x40ff80);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->emitter_digest, digest);
+    ck_assert_uint_eq(cell->emitter_stale, cell->emitter_layers);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->emitter_stale, 0);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
 
     /* A hidden object is not sent, so neither its geometry nor its light is
      * disclosed, although the space still blocks view server-side. */
@@ -3607,11 +3623,7 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, 0);
-    sent_emitter = 0;
-    for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
-        sent_emitter |= cell->emitter[layer];
-    }
-    ck_assert_uint_eq(sent_emitter, 0);
+    ck_assert_uint_eq(cell->emitter_layers, 0);
 
     settings.client_lighting = saved_client_lighting;
 }
