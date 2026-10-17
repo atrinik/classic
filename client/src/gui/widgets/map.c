@@ -1309,6 +1309,7 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             /* Fog keeps remembered occluders but no live coarse level. */
             level->headers[index].client_light_known &= (uint8_t)~1U;
             level->headers[index].local_light = 0;
+            level_emitter_revision[level_index]++;
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
         }
