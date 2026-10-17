@@ -24,7 +24,26 @@ typedef struct client_lighting_group {
     int radius;
     int positive_radius;
     size_t first;
+    size_t end;
 } client_lighting_group_t;
+
+/** Distinct color constituents per tile that keep their own profile. */
+#define CLIENT_LIGHTING_COLORS_MAX 8
+
+/** Order emitters by tile, then radius and color, so equal ones are adjacent. */
+static int client_lighting_emitter_compare(const void *left, const void *right) {
+    const client_lighting_emitter_t *a = left, *b = right;
+    if (a->y != b->y) {
+        return a->y < b->y ? -1 : 1;
+    }
+    if (a->x != b->x) {
+        return a->x < b->x ? -1 : 1;
+    }
+    if (a->radius != b->radius) {
+        return a->radius < b->radius ? -1 : 1;
+    }
+    return a->color < b->color ? -1 : a->color > b->color ? 1 : 0;
+}
 
 typedef struct client_lighting_accumulator {
     int64_t scalar;
@@ -108,11 +127,13 @@ static void client_lighting_add(int width,
             } else if (target == 1) {
                 cell->positive += value;
             } else {
+                /* For color, sign carries the multiplicity of identical
+                 * constituents. */
                 for (size_t channel = 0; channel < 3; channel++) {
-                    cell->color[channel] +=
-                        (int64_t)value * light_profile_color_component(color, channel);
+                    cell->color[channel] += (int64_t)sign * value *
+                                            light_profile_color_component(color, channel);
                 }
-                cell->weight += (int64_t)value * UINT16_MAX;
+                cell->weight += (int64_t)sign * value * UINT16_MAX;
             }
         }
     }
@@ -130,30 +151,37 @@ void client_lighting_evaluate(int width,
         return;
     }
 
+    /* Sort a copy by tile so grouping and constituent scans stay linear in
+     * the number of emitters a server can send. */
+    client_lighting_emitter_t *sorted = malloc(count * sizeof(*sorted));
     client_lighting_group_t *groups = calloc(count, sizeof(*groups));
-    if (groups == NULL) {
+    if (sorted == NULL || groups == NULL) {
+        free(sorted);
+        free(groups);
         return;
     }
+    memcpy(sorted, emitters, count * sizeof(*sorted));
+    qsort(sorted, count, sizeof(*sorted), client_lighting_emitter_compare);
+    emitters = sorted;
     size_t group_count = 0;
     for (size_t i = 0; i < count; i++) {
-        size_t group = 0;
-        while (group < group_count &&
-               (groups[group].x != emitters[i].x || groups[group].y != emitters[i].y)) {
-            group++;
-        }
-        if (group == group_count) {
+        if (group_count == 0 || groups[group_count - 1].x != emitters[i].x ||
+            groups[group_count - 1].y != emitters[i].y) {
             groups[group_count++] = (client_lighting_group_t){
-                .x = emitters[i].x, .y = emitters[i].y, .first = i};
+                .x = emitters[i].x, .y = emitters[i].y, .first = i, .end = i};
         }
-        groups[group].radius += emitters[i].radius;
+        client_lighting_group_t *group = &groups[group_count - 1];
+        group->end = i + 1;
+        group->radius += emitters[i].radius;
         if (emitters[i].radius > 0) {
-            groups[group].positive_radius += emitters[i].radius;
+            group->positive_radius += emitters[i].radius;
         }
     }
 
     client_lighting_accumulator_t *accumulators = calloc(total, sizeof(*accumulators));
     if (accumulators == NULL) {
         free(groups);
+        free(sorted);
         return;
     }
     for (size_t group = 0; group < group_count; group++) {
@@ -163,12 +191,26 @@ void client_lighting_evaluate(int width,
                             abs(scalar_mask), scalar_mask < 0 ? -1 : 1, 0, 0);
         client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
                             light_profile_mask(g->positive_radius), 1, 1, 0);
-        for (size_t i = g->first; i < count; i++) {
-            if (emitters[i].x == g->x && emitters[i].y == g->y && emitters[i].radius > 0) {
-                client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
-                                    light_profile_mask(emitters[i].radius), 1, 2,
-                                    emitters[i].color);
+        /* Identical constituents add one weighted profile; at most
+         * CLIENT_LIGHTING_COLORS_MAX distinct colors per tile keep their own
+         * profile, and light beyond that stays in the neutral scalar. */
+        size_t distinct = 0;
+        for (size_t i = g->first; i < g->end; i++) {
+            if (emitters[i].radius <= 0 || (i > g->first && emitters[i].radius == emitters[i - 1].radius &&
+                                            emitters[i].color == emitters[i - 1].color)) {
+                continue;
             }
+            if (distinct++ == CLIENT_LIGHTING_COLORS_MAX) {
+                break;
+            }
+            int multiplicity = 1;
+            while (i + multiplicity < g->end && emitters[i + multiplicity].radius == emitters[i].radius &&
+                   emitters[i + multiplicity].color == emitters[i].color) {
+                multiplicity++;
+            }
+            client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
+                                light_profile_mask(emitters[i].radius), multiplicity, 2,
+                                emitters[i].color);
         }
     }
 
@@ -194,6 +236,7 @@ void client_lighting_evaluate(int width,
     }
     free(accumulators);
     free(groups);
+    free(sorted);
 }
 
 int32_t client_lighting_compose(int32_t emitter_raw, int8_t level) {

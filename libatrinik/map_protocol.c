@@ -272,7 +272,7 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
         if (!map_packet_read_uint8(reader, &ext_flags) ||
             (ext_flags & ~(MAP2_FLAG_EXT_ANIM | MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 |
                            MAP2_FLAG_EXT_LIGHT_KEYFRAME | MAP2_FLAG_EXT_LOCAL_LIGHT |
-                           MAP2_FLAG_EXT_OCCLUDER)) != 0) {
+                           MAP2_FLAG_EXT_BASE_DEFICIT | MAP2_FLAG_EXT_OCCLUDER)) != 0) {
             return false;
         }
 
@@ -347,6 +347,11 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                 !map_protocol_local_light_decode(value, &level, &vision_floor)) {
                 return false;
             }
+        }
+
+        if ((ext_flags & MAP2_FLAG_EXT_BASE_DEFICIT) &&
+            !map_packet_skip(reader, sizeof(uint16_t))) {
+            return false;
         }
 
         /* Every occluder byte is meaningful: four geometry bits and a

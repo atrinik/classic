@@ -52,7 +52,7 @@
 - Revision 1085 preserves command IDs and adds client-computed lighting fields
   to MAP2: `MAP2_FLAG2_EMITTER` on sent layers and the `MAP2_FLAG_EXT_LOCAL_LIGHT`
   and `MAP2_FLAG_EXT_OCCLUDER` cell extensions (`libatrinik/socket.h`), plus
-  SETUP subtype `CMD_SETUP_CLIENT_LIGHTING` (6). A server sends the MAP2
+  `MAP2_FLAG_EXT_BASE_DEFICIT` and SETUP subtype `CMD_SETUP_CLIENT_LIGHTING` (6). A server sends the MAP2
   fields only to connections that negotiated the compositor while
   `client_lighting` is enabled; see
   [`CLIENT_LIGHTING.md`](../server/doc/CLIENT_LIGHTING.md).

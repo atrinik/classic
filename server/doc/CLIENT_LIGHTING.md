@@ -68,6 +68,7 @@ word already uses bits 6–15 for coordinates:
 | Field | Bytes | When | Meaning |
 | --- | --- | --- | --- |
 | `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 | changed | bits 0–4: signed level `-15..15` (two's complement; `-16` invalid); bits 5–6 reserved, zero; bit 7: apply the viewer's vision floor after composition |
+| `MAP2_FLAG_EXT_BASE_DEFICIT` (32) | 2 | changed | Magnitude of negative base light (raw, saturating at 65535), e.g. from darkness floors; the unsigned base bytes are then 0 |
 | `MAP2_FLAG_EXT_OCCLUDER` (16) | 1 | changed | bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7: transmission attenuation `a` (0 unattenuated, 1–14 coefficient `256 - 16a`, 15 opaque). A view blocker with authored transmission keeps its attenuation. |
 
 Per MAP2 layer (existing `flags2`):
@@ -128,6 +129,12 @@ both modes.
     and keep the sign.
 - **Viewer overrides.** Base radiance is computed per viewer when MAP2 builds
   its view, so the existing `tli` lighting override is already folded into it.
+- **Base deficit.** Environmental light can be negative, for example a floor
+  with negative light. The unsigned base bytes cannot carry that, so the server
+  sends base 0 and the magnitude as `MAP2_FLAG_EXT_BASE_DEFICIT` for the cell
+  record (the strongest deficit of its sub-layers). The client subtracts it
+  after adding `L`, so darkness still cancels local light as in the aggregate
+  path.
 - **Vision floor.** XRAY raises presentation light to raw 100 after all light
   is combined. The server therefore sends base radiance without that floor
   and sets bit 7 of the local-light byte for viewers with XRAY. The client then
@@ -145,9 +152,10 @@ both modes.
 - **Occluders** are derived only from the objects MAP2 sends to this viewer:
   the sent object of each layer, after plugin visibility and hidden-object
   filtering. A sent view blocker, floor, roof surface or closed door sets its
-  bit, and a sent object's authored horizontal transmission
-  (`celestial_transmission`, or the door's open/closed value) sets the
-  attenuation, quantized up to the next step. Space-wide flags such as
+  bit. Its authored horizontal transmission (`celestial_transmission`, or the
+  door's open/closed value) gives a coefficient; the cell's attenuation is the
+  maximum over all sent objects (the minimum coefficient, as the server's face
+  traversal takes), quantized up to the next step. Space-wide flags such as
   `P_BLOCKSVIEW` are never used, because they aggregate hidden and unsent
   objects too. Unsent geometry therefore contributes nothing, and the client
   may light past a blocker it cannot see; that errs towards disclosing less.
@@ -190,7 +198,8 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
 
    The emitter sum carries hue as signed per-channel deltas relative to its
    scalar, so overlapping light and darkness keep the server's color shift; the
-   coarse term is neutral. Final radiance = base + `L` per scalar and channel.
+   coarse term is neutral. Final radiance = base + `L` − deficit per scalar and
+   channel (the deficit is neutral).
    Negative channels clamp to zero; if the largest channel then exceeds the
    finite range, all three channels scale together so the strongest is 65535,
    as the server's common-vector overflow rule requires, keeping hue. The scalar
@@ -232,9 +241,14 @@ What a modified client can learn, beyond today's MAP2:
 - **Visible emitters:** radius and color of objects it already sees. This is
   new, but it concerns only already-authorized objects.
 - **Hidden light:** for each visible cell, the signed 1/8-daylight level of
-  the strongest local light in its fixed 3×3 block. All nine cells of a block
-  share one value, so a source cannot be located more precisely than its block
-  from the peak alone. Hue, count and profile are never sent.
+  the strongest local light in its fixed block. All cells of a block share one
+  value, so a single uncancelled source cannot be located more precisely than
+  its block from the peak alone. Sources on one tile group before the
+  nonlinear profile, so moving one of several co-located sources within the
+  block can change the level (for example `+3` and `-1` group to `+2`, while
+  separating them restores the `+3` peak). The level then reveals that the
+  sources are no longer co-located, not where they are. Hue, count and profile
+  are never sent.
 - **Residual leakage, honestly stated:** moving a hidden source within its block
   can still change the levels of neighboring blocks through falloff. Comparing
   neighboring blocks therefore narrows the position somewhat, but only to the
@@ -245,8 +259,9 @@ What a modified client can learn, beyond today's MAP2:
   of anything not itself sent in MAP2, and no property of hidden or unsent
   geometry.
 
-This is strictly less disclosure than the current contract for hidden sources,
-and equal disclosure for visible ones.
+This is less disclosure than the current contract for hidden sources, and an
+intentional increase for visible ones: their emitter radius and color are new
+information (see Contract change).
 
 ## Rollout
 
@@ -287,9 +302,8 @@ and equal disclosure for visible ones.
   vision floor after composition; FOW cells carry no emitters; GPU frame-time
   budgets.
 - Privacy: all cells of a block report the same level; edge remainders join
-  the adjacent block; levels never exceed
-  15 in magnitude; moving a source within its block leaves its own block's level
-  unchanged.
+  the adjacent block; levels never exceed 15 in magnitude; moving a single
+  uncancelled source within its block leaves its own block's level unchanged.
 
 ## Open questions
 

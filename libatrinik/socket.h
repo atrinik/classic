@@ -440,6 +440,8 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG_EXT_LOCAL_LIGHT 8
 /** Occluder bits of the cell follow (1085). */
 #define MAP2_FLAG_EXT_OCCLUDER 16
+/** uint16 magnitude of negative base light follows, after the local level (1085). */
+#define MAP2_FLAG_EXT_BASE_DEFICIT 32
 /*@}*/
 
 /** Largest coarse local light magnitude; each level is 1/8 daylight. */

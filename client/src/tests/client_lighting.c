@@ -163,6 +163,23 @@ static void test_many_emitters_are_all_evaluated(void) {
     }
 }
 
+static void test_duplicate_constituents_share_one_weighted_profile(void) {
+    memset(occluders, 0, sizeof(occluders));
+    client_lighting_emitter_t one = {.x = 4, .y = 4, .radius = 5, .color = 0xff8040};
+    evaluate(&one, 1);
+    client_lighting_cell_t single = *cell_at(4, 4);
+    /* Many identical constituents on a tile resolve to the same hue. */
+    static client_lighting_emitter_t many[200];
+    for (size_t i = 0; i < 200; i++) {
+        many[i] = one;
+    }
+    evaluate(many, 200);
+    for (int channel = 0; channel < 3; channel++) {
+        TEST_CHECK(cell_at(4, 4)->rgb[channel] - cell_at(4, 4)->scalar ==
+                   single.rgb[channel] - single.scalar);
+    }
+}
+
 static void test_compose_by_sign_and_clamp_to_level(void) {
     int32_t step = MAP2_LOCAL_LIGHT_LEVEL_RAW;
     TEST_CHECK(client_lighting_compose(100, 2) == 2 * step);
@@ -188,6 +205,7 @@ int main(void) {
     test_colored_light_keeps_hue();
     test_constituent_colors_keep_their_own_profiles();
     test_cancelled_scalar_keeps_color_shift();
+    test_duplicate_constituents_share_one_weighted_profile();
     test_many_emitters_are_all_evaluated();
     test_compose_by_sign_and_clamp_to_level();
     return EXIT_SUCCESS;

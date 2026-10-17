@@ -2348,10 +2348,22 @@ void draw_client_map2(object *pl) {
                  * cell is visible again. Emitters are withheld in fog, so their
                  * layers are resent on return through the presence bit. */
                 if (client_lighting && tile_fow) {
-                    mp->client_light_known &= (uint8_t)~1U;
+                    mp->client_light_known &= (uint8_t)~5U;
                 }
                 uint8_t local_light = 0, occluder = 0;
+                uint16_t base_deficit = 0;
                 if (client_lighting && !tile_fow) {
+                    /* Negative environmental light the unsigned base bytes
+                     * cannot carry; the client subtracts it after composing. */
+                    for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                        if (light_set[sub_layer] && present_raw[sub_layer] < 0) {
+                            base_deficit = (uint16_t)MAX(base_deficit,
+                                                         MIN(-present_raw[sub_layer], UINT16_MAX));
+                        }
+                    }
+                    if (!(mp->client_light_known & 4U) || mp->base_deficit != base_deficit) {
+                        ext_flags |= MAP2_FLAG_EXT_BASE_DEFICIT;
+                    }
                     local_light = map_protocol_local_light_encode(light_local_level(m, nx, ny),
                                                                   (special_vision & 1) != 0);
                     occluder = cell_occluder;
@@ -2461,6 +2473,13 @@ void draw_client_map2(object *pl) {
                     packet_writer_write_uint8(packet, local_light);
                     mp->local_light = local_light;
                     mp->client_light_known |= 1U;
+                }
+
+                if (ext_flags & MAP2_FLAG_EXT_BASE_DEFICIT) {
+                    packet_debug_data(packet, 1, "Base light deficit");
+                    packet_writer_write_uint16(packet, base_deficit);
+                    mp->base_deficit = base_deficit;
+                    mp->client_light_known |= 4U;
                 }
 
                 if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
