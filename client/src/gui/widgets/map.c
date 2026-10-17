@@ -5723,9 +5723,12 @@ static void map_lighting_scale_overflow(int64_t channels[3]) {
 
 /** Signed raw light to Q5.11 radiance, unsaturated, rounding as the server. */
 static int64_t map_lighting_raw_to_radiance_signed(int64_t raw) {
-    /* The base encoding's rounding and symmetric saturation, so equal
-     * opposite terms cancel even beyond raw +-20479. */
-    return map_protocol_signed_radiance_encode(raw);
+    /* The base encoding's rounding without its saturation: only the base is
+     * bounded (to raw +-20479), so base + local stays exact whenever the
+     * environment lies in that range, residuals included. */
+    int64_t magnitude = raw < 0 ? -raw : raw;
+    int64_t radiance = (magnitude * 8 + 2) / 5;
+    return raw < 0 ? -radiance : radiance;
 }
 
 /**
@@ -7009,13 +7012,14 @@ bool widget_map_client_lighting_state_test(void) {
     int64_t overflow[3] = {81919, 40959, 20480};
     map_lighting_scale_overflow(overflow);
     success = success && overflow[0] == 65535 && overflow[1] == 32768 && overflow[2] == 16384;
-    /* The composed local term saturates like the base, so equal opposite
-     * terms beyond raw 20479 still cancel. */
+    /* The local term is not saturated: with the environment in range the
+     * sum keeps its residual (raw 20000 - 25000 = -5000), and dense local
+     * light far beyond the base's bound keeps its full weight. */
     success = success &&
-              (int64_t)map_protocol_signed_radiance_encode(30000) +
-                      map_lighting_raw_to_radiance_signed(-30000) == 0 &&
-              (int64_t)map_protocol_signed_radiance_encode(-30000) +
-                      map_lighting_raw_to_radiance_signed(30000) == 0;
+              (int64_t)map_protocol_signed_radiance_encode(20000) +
+                      map_lighting_raw_to_radiance_signed(-25000) ==
+                  map_lighting_raw_to_radiance_signed(-5000) &&
+              map_lighting_raw_to_radiance_signed(-30000) == -48000;
     /* An overflowing colored sum scales its channels together. */
     map_set_light_radiance(14, 8, 0, 32000);
     uint16_t warm[NUM_SUB_LAYERS][3] = {{32700, 16000, 8000}};
