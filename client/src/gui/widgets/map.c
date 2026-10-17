@@ -5789,7 +5789,10 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
      * emitter lights cannot suppress it; a dominating coarse floor carries
      * other steady light and is left alone. Channel-only flicker counts. */
     int64_t flicker_scalar = 0, flicker_rgb[3] = {0, 0, 0};
+    /* An emitter field equal to a nonzero coarse floor may coincide with
+     * hidden steady light, so equality counts as coarse-dominated. */
     if (local != NULL && composed == emitter &&
+        (level == 0 || emitter != level * MAP2_LOCAL_LIGHT_LEVEL_RAW) &&
         (local->flicker_scalar != 0 || local->flicker_rgb[0] != 0 ||
          local->flicker_rgb[1] != 0 || local->flicker_rgb[2] != 0)) {
         int64_t gain = (int64_t)client_lighting_flicker_gain(LastTick) - 256;
@@ -6933,6 +6936,14 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success &&
               composed_scalar == light_profile_raw_to_radiance(2 * MAP2_LOCAL_LIGHT_LEVEL_RAW);
+    /* Nor one exactly equal to the floor: a radius-3 flickering emitter
+     * (raw 160) on a level-1 block may be hidden steady light. */
+    map_set_layer_emitter(16, 8, layer, 3, MAP2_EMITTER_FLICKER, UINT32_C(0xffffff));
+    map_set_local_light(16, 8, map_protocol_local_light_encode(1, false));
+    map_lighting_radiance(16 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(16, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success &&
+              composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_LEVEL_RAW);
     LastTick = saved_tick;
     map_clear_cell(16, 8, true);
     /* Visible again for the tests that reuse this cell. */
