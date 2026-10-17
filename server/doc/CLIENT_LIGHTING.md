@@ -143,8 +143,10 @@ Conformance vectors: raw `0 → 0`, `1 → 2`, `-1 → -2`, `160 → 256`,
 `-20480 → -32767`. Current world, map and celestial anchors stay within raw
 ±1280, far inside the range.
 
-Because the encoding is odd-symmetric, environment and composed light of equal
-magnitude cancel to exactly zero, as the server's single raw sum does; other
+Because the encoding is odd-symmetric, and the client saturates its composed
+local term with the same symmetric bound (Client, step 3), environment and
+composed light of equal magnitude cancel to exactly zero, as the server's
+single raw sum does, even beyond raw ±20479; other
 sums differ from the server's single rounding by at most one Q4.11 unit per
 channel. The scalar and each channel are encoded independently, and a negative
 channel is meaningful until composition finishes.
@@ -416,10 +418,12 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    scalar, so overlapping light and darkness keep the server's color shift; the
    coarse term is neutral. `E`, `C` and `L` are raw light. `L`, with each
    channel's hue delta, converts to radiance with the server's rounding applied
-   to its magnitude, `sign(r) · floor((|r| · 8 + 2) / 5)`, without saturating.
-   The composed radiance is, per scalar and channel, signed base + converted
-   `L`, all in Q5.11 units in unbounded signed arithmetic,
-   so the coarse and emitter terms keep their full weight. The vision floor
+   to its magnitude, `sign(r) · floor((|r| · 8 + 2) / 5)`, saturating
+   symmetrically to `-32767..32767` exactly as the base encoding does, so
+   equal opposite terms still cancel when either lies beyond raw ±20479
+   (16× daylight), where presentation is already saturated. The composed
+   radiance is, per scalar and channel, signed base + converted `L`, both in
+   Q5.11 units, summed in signed arithmetic without further saturation. The vision floor
    (if bit 7 is set) applies next, to the signed scalar and channels, as the
    server raises the raw scalar before resolving color: pre-floor scalar and
    channel raw `(80, -40)` (Q5.11 `(128, -64)`) become raw `(100, -20)`
