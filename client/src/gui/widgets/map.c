@@ -241,6 +241,11 @@ typedef struct map_client_lighting_field {
     uint64_t revision;
     int cache_origin_x;
     int cache_origin_y;
+    /* The cache scroll counters when the field was built: their difference
+     * to the current counters is the exact scroll since, never a guess from
+     * wrapped origins. */
+    int64_t scroll_x;
+    int64_t scroll_y;
     int origin_x;
     int origin_y;
     int width;
@@ -251,6 +256,9 @@ typedef struct map_client_lighting_field {
 } map_client_lighting_field_t;
 
 static map_client_lighting_field_t map_client_lighting_fields[MAP2_LEVELS];
+/** Accumulated cache scroll offsets, unwrapped. */
+static int64_t map_cache_scroll_x;
+static int64_t map_cache_scroll_y;
 
 /**
  * A level lost emitters or its store: give it a fresh revision and drop its
@@ -1499,6 +1507,8 @@ static struct {
     int height;
     int origin_x;
     int origin_y;
+    int64_t scroll_x;
+    int64_t scroll_y;
     size_t current_level_index;
     uint16_t level_mask;
     uint64_t lighting_revision[MAP2_LEVELS];
@@ -1651,6 +1661,8 @@ void map_state_transaction_begin(bool full_snapshot) {
     map_state_transaction.height = map_height;
     map_state_transaction.origin_x = map_cache_origin_x;
     map_state_transaction.origin_y = map_cache_origin_y;
+    map_state_transaction.scroll_x = map_cache_scroll_x;
+    map_state_transaction.scroll_y = map_cache_scroll_y;
     map_state_transaction.current_level_index = current_level_index;
     map_state_transaction.level_mask = map_level_mask;
     map_state_transaction.map_data = MapData;
@@ -1768,6 +1780,8 @@ void map_state_transaction_abort(void) {
     map_height = map_state_transaction.height;
     map_cache_origin_x = map_state_transaction.origin_x;
     map_cache_origin_y = map_state_transaction.origin_y;
+    map_cache_scroll_x = map_state_transaction.scroll_x;
+    map_cache_scroll_y = map_state_transaction.scroll_y;
     current_level_index = map_state_transaction.current_level_index;
     map_level_mask = map_state_transaction.level_mask;
     memcpy(level_lighting_revision,
@@ -2206,6 +2220,8 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
         } else if (dx != 0 || dy != 0) {
             map_cache_origin_x = (map_cache_origin_x + dx + width) % width;
             map_cache_origin_y = (map_cache_origin_y + dy + height) % height;
+            map_cache_scroll_x += dx;
+            map_cache_scroll_y += dy;
 
             int view_x = map_width * (MAP_FOW_SIZE / 2);
             int view_y = map_height * (MAP_FOW_SIZE / 2);
@@ -5548,22 +5564,23 @@ static bool map_emitter_rebuild_allowed(void) {
     return true;
 }
 
-/** Signed shortest step from one cache origin to another on a wrapped axis. */
-static int map_cache_origin_delta(int from, int to, int size) {
-    int delta = ((to - from) % size + size) % size;
-    return delta > size / 2 ? delta - size : delta;
-}
-
 /**
  * Present a field built before the cache window scrolled: a physical cell's
- * light moves with it, cells newly exposed at the edge start unlit, and the
- * field stays out of date until a frame within the budget rebuilds it.
+ * light moves with it by the exact accumulated scroll, cells newly exposed at
+ * the edge start unlit, and the field stays out of date until a frame within
+ * the budget rebuilds it.
+ * @return False, leaving the field unusable, when the scroll moved every cell
+ * out of it.
  */
-static void map_client_lighting_translate(map_client_lighting_field_t *field) {
-    int dx = map_cache_origin_delta(field->cache_origin_x, map_cache_origin_x,
-                                    map_width * MAP_FOW_SIZE);
-    int dy = map_cache_origin_delta(field->cache_origin_y, map_cache_origin_y,
-                                    map_height * MAP_FOW_SIZE);
+static bool map_client_lighting_translate(map_client_lighting_field_t *field) {
+    int64_t scroll_dx = map_cache_scroll_x - field->scroll_x;
+    int64_t scroll_dy = map_cache_scroll_y - field->scroll_y;
+    if (scroll_dx <= -field->width || scroll_dx >= field->width ||
+        scroll_dy <= -field->height || scroll_dy >= field->height) {
+        field->valid = false;
+        return false;
+    }
+    int dx = (int)scroll_dx, dy = (int)scroll_dy;
     size_t count = (size_t)field->width * field->height;
     client_lighting_cell_t *moved = xcalloc(count, sizeof(*moved));
     for (int y = 0; y < field->height; y++) {
@@ -5583,8 +5600,11 @@ static void map_client_lighting_translate(map_client_lighting_field_t *field) {
     field->cells = moved;
     field->cache_origin_x = map_cache_origin_x;
     field->cache_origin_y = map_cache_origin_y;
+    field->scroll_x = map_cache_scroll_x;
+    field->scroll_y = map_cache_scroll_y;
     /* No revision is ever this value, so the field stays out of date. */
     field->revision = UINT64_MAX;
+    return true;
 }
 
 /** Rebuild the current level's emitter field from sent emitters and occluders. */
@@ -5602,6 +5622,8 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
     field->origin_y = MAP_STARTY - margin;
     field->cache_origin_x = map_cache_origin_x;
     field->cache_origin_y = map_cache_origin_y;
+    field->scroll_x = map_cache_scroll_x;
+    field->scroll_y = map_cache_scroll_y;
     field->revision = level_emitter_revision[current_level_index];
     field->store = cells;
     field->valid = true;
@@ -5740,13 +5762,15 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
                   field->width == map_width + LIGHT_PROFILE_RADIUS_MAX * 2 &&
                   field->height == map_height + LIGHT_PROFILE_RADIUS_MAX * 2;
     bool moved = usable && (field->cache_origin_x != map_cache_origin_x ||
-                            field->cache_origin_y != map_cache_origin_y);
+                            field->cache_origin_y != map_cache_origin_y ||
+                            field->scroll_x != map_cache_scroll_x ||
+                            field->scroll_y != map_cache_scroll_y);
     if (!usable || moved || field->revision != level_emitter_revision[current_level_index]) {
         if (map_emitter_rebuild_allowed()) {
             map_client_lighting_rebuild(field);
             usable = true;
         } else if (moved) {
-            map_client_lighting_translate(field);
+            usable = map_client_lighting_translate(field);
         }
     }
     const client_lighting_cell_t *local = NULL;
@@ -6824,11 +6848,24 @@ bool widget_map_client_lighting_state_test(void) {
      * stays out of date, and a depth without a usable field composes only
      * its base and coarse level. */
     int saved_budget_origin = map_cache_origin_x;
+    int64_t saved_budget_scroll = map_cache_scroll_x;
     map_cache_origin_x = (map_cache_origin_x + 1) % (map_width * MAP_FOW_SIZE);
+    map_cache_scroll_x += 1;
     map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
     success = success && budget_field->valid && budget_field->cache_origin_x == map_cache_origin_x &&
+              budget_field->scroll_x == map_cache_scroll_x &&
               budget_field->revision == UINT64_MAX;
+    /* A scroll larger than half the cache keeps its true direction: one that
+     * moves every cell out of the field leaves it unusable, never translated
+     * onto unrelated cells through the wrapped origins. */
+    int cache_width = map_width * MAP_FOW_SIZE;
+    int large = cache_width - 2;
+    map_cache_origin_x = (map_cache_origin_x + large) % cache_width;
+    map_cache_scroll_x += large;
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && !budget_field->valid;
     map_cache_origin_x = saved_budget_origin;
+    map_cache_scroll_x = saved_budget_scroll;
     budget_field->valid = false;
     map_set_light_radiance(8, 8, 0, 160);
     budget_scalar = 160;
