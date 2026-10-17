@@ -151,8 +151,15 @@ channel is meaningful until composition finishes.
 ### Budgets
 
 MAP_RENDERING.md caps per-sub-layer *lighting samples* at 8 bytes and the
-per-socket lighting cache at 56 bytes per cell; signed base keeps 8 bytes per
-sub-layer. Emitters are object attributes, not lighting samples: their 5 bytes
+client and per-socket lighting storage at 56 bytes per cell. Once celestial
+light is computed on the client (rollout step 3), the base is environment only,
+which is neutral (map ambient, `tli` and darkness), and its next-hour endpoint
+has no celestial change left to interpolate: the base RGB words and the
+timed-light next endpoints retire, and the base keeps one signed scalar per
+sub-layer. A fully populated cell then stores 14 bytes of base, 7 bytes of
+coarse levels and 5 bytes of occluder, 26 bytes of the 56. The intermediate
+stack steps are never released on their own (see Rollout), so no shipped build
+exceeds the cap. Emitters are object attributes, not lighting samples: their 5 bytes
 ride on the layer record of the object they describe, within the unchanged
 complete-MAP2 and continuation limits. The client stores emitters in one packed
 per-cell array of 6-byte entries (layer, radius, flags, RGB), allocated only
@@ -193,13 +200,16 @@ connection.
   - the block is the fixed 3×3 square containing the cell, aligned to map-local
     coordinates (`x - x % 3`, `y - y % 3`). A remainder of one or two cells at a
     map edge joins the adjacent block instead of forming a smaller one, so no
-    block is narrower than three cells unless the map itself is. The block never
-    reads another map and never loads one;
+    block is narrower than three cells unless the map itself is. It never reads
+    a horizontally adjacent map and never loads one;
   - pool the scalar source counters of each block and resolve the sum through
     the same mask table, before any propagation. The pooled source of a block
     reaches the block by block-center distance: the own block at distance 0
     and its four edge neighbors at center distance 3 are within the largest
-    radius, diagonal blocks are not. A source anywhere inside a block therefore
+    radius, diagonal blocks are not. Blocks at the same position on linked
+    levels above and below count too, adding the vertical distance as the
+    server's masks do, when every step is a resident, reciprocally linked map
+    of the same dimensions; a level is never loaded for it. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
     triangulate its tile;
   - the strongest positive and the strongest negative pooled contribution
@@ -251,9 +261,11 @@ connection.
   coefficient, as the server's face traversal takes), quantized up to the next
   step. A face a sent view blocker does not author is opaque, and other
   unauthored faces stay open, as in `spatial_face_light()`. A client step
-  leaves its cell through the exit face of its direction; a diagonal step takes
-  the smaller coefficient of the two faces it crosses, so the client never
-  transmits more light than the server. Space-wide flags such as `P_BLOCKSVIEW`
+  leaves its cell through the exit face of its direction. A tied diagonal step
+  crosses every face the shared supercover event emits: the source cell's two
+  exit faces and both grazing side cells' faces towards the destination, and
+  the smallest of their coefficients applies (a three-axis tie likewise takes
+  all twelve), so the client never transmits more light than the server. Space-wide flags such as `P_BLOCKSVIEW`
   are never used, because they aggregate hidden and unsent objects too. Unsent
   geometry therefore contributes nothing, and the client may light past a
   blocker it cannot see; that errs towards disclosing less.
@@ -282,21 +294,28 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    same-cell cap. Color keeps every distinct constituent (color and profile)
    with its exact server weight, resolved against the grouped positive term
    exactly as the server resolves its color accumulators, so hue can vary with
-   distance. Constituents are never folded: a tile has at most one emitter per
-   sent layer record, which MAP2 already bounds, so the work per tile is
-   bounded without approximation. When some of a tile's emitters are not sent,
+   distance. Constituents that resolve to one profile share its value at every
+   distance and its rays, so they fold exactly into one walk with their summed
+   color: a tile costs at most one walk per profile, however many emitters it
+   carries. When some of a tile's emitters are not sent,
    the client underestimates and the coarse level supplies the rest. The
-   occluders are an R16 cell grid per depth plus an R8 vertical-attenuation
-   grid, because face bits 8–13 must reach the ray walk.
+   occluders are, per depth, an R16 grid of geometry and face bits (bits 8–13
+   must reach the ray walk), a second R16 grid of the four horizontal face
+   attenuation nibbles, and an R8 vertical-attenuation grid. The CPU reference
+   packs the two words of a cell into one 32-bit value.
 2. A compute (or full-screen fragment) pass evaluates every light vertex of the
    existing compact light rows. It sums emitter profiles using the same radial
    tables as the server (`light_profiles`, radius ≤ 4, vertical ≤ 4) with a 3D
    DDA through the occluder grid, so it follows the same "stop after the exposed
    face" and floor-crossing rules as `light_path_value()`. Light attenuates as
    it leaves each cell, the source cell included. Horizontal steps apply the
-   cell's `a`, vertical steps apply `v` of the upper cell of the crossing, and a
-   step across a face marked closed stops the ray: bits 8–11 for horizontal
-   steps and bits 12–13 for steps to the linked level above or below.
+   `a` of the face they leave by, vertical steps apply `v` of the upper cell of
+   the crossing, and a step across a face marked closed stops the ray: bits
+   8–11 for horizontal steps and bits 12–13 for steps to the linked level above
+   or below. A vertical step that terminates on a visible floor or roof surface
+   skips that receiving slab's `v`, under the same terminal-surface predicate as
+   `light_path_value()`, so the exposed surface is lit; source-side virtual
+   cover still applies.
 3. Combine the client emitter sum `E` with the coarse block level `C` (raw
    step 160), which is a bleed hint for the whole block:
    - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
@@ -327,8 +346,16 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    unchanged unsigned Q16 tone/LUT stage runs; negative intermediate values
    never reach it.
 5. Recompute when emitters, occluders, coarse levels, celestial inputs or the
-   camera change. A presentation-only time uniform animates emitters whose
-   flicker bit is set, without server traffic. Flicker modulates the emitter
+   camera change. A presentation-only time animates emitters whose flicker bit
+   is set, without server traffic. The function is deterministic: for the
+   client presentation clock `t` in milliseconds, keys fall every 125 ms; key
+   `k` has dip `h(k) mod 52`, where `h` is SplitMix64's finalizer of
+   `k + 0x9e3779b97f4a7c15` truncated to 32 bits; with `f = (t mod 125) · 256 /
+   125` (integer division) the dip is `(h(k)·(256 - f) + h(k+1)·f + 128) / 256`
+   and the Q0.8 gain `g = 256 - dip`, always in `205..256`. The flicker
+   emitters' own field `F` (scalar and channels) becomes `F · (g - 256) / 256`,
+   truncated towards zero, so `E' - E` is that delta. Conformance compares
+   flickered output at a fixed `t`. Flicker modulates the emitter
    field after composition (`L + E' - E` for flickered sum `E'`), so the coarse
    floor of a block that the emitter itself lights cannot suppress it. The delta
    is added to the signed, unbounded composed scalar and channels, and the
@@ -414,13 +441,15 @@ server selects a model per map. The worst case is the 17×17 window over 13
 depths, 3,757 cells or about 11 KB, so a complete closure always fits in one
 command: each `CELESTIAL_STRUCTURE` replaces the client's closure atomically,
 and no continuation framing is needed. It is resent when the closure moves
-with the player, when a structure revision changes a cell, or when a door or
-gate in a currently visible cell changes state.
+with the player, or when a structure revision, door or gate changes a
+currently visible cell.
 
-Disclosure rule: door and gate coefficients carry their current state only for
-currently visible cells. A remembered cell keeps the coefficients it had when
-it was last visible, so an unseen door opening behind a wall reveals no
-activity. Nothing else in a structure record changes at runtime.
+Disclosure rule: a structure record changes only for currently visible cells.
+A remembered cell keeps its entire record (signature, sky cover, sky exit,
+continuity and door or gate coefficients) as it was when last visible, until
+it is visible again, so neither an unseen door opening nor a wall or floor
+built or removed out of sight reveals activity or timing. A structure revision
+of a remembered cell sends nothing.
 The record never names objects, creatures, items or light sources, and closure
 cells carry no light of any kind. Seam continuity is static authored data; the
 server autoloads the closure's maps with the same bounded autoload the MAP2
@@ -576,7 +605,8 @@ release containing protocol 1085 contains all of them.
 - Celestial: the libatrinik model matches the server's model for all solar
   hours, season months and lunar ages; the client solver on the encoded closure
   matches the server solver bit for bit on outdoor, roofed, glass, grate, door,
-  aperture-spill and multi-level fixtures; remembered doors keep their remembered state and cells outside the closure
+  aperture-spill and multi-level fixtures; remembered cells keep their whole structure record when another player builds,
+  removes or opens there, checked with two clients; cells outside the closure
   solve as open air; mixed-profile closures select each fragment's slot, and
   slot 255 gives zero celestial light; region slots carry no digest or epoch.
 - Privacy: another player's inventory-derived emitter is never sent, while the
