@@ -255,8 +255,9 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                     int8_t radius;
                     uint8_t emitter_flags, red, green, blue;
 
-                    /* Darkness is achromatic, never flickers, and positive
-                     * light needs a nonzero linear peak. */
+                    /* Darkness is achromatic and never flickers. Positive
+                     * light may be black: its zero linear vector dilutes hue
+                     * exactly as the server's resolver weighs it. */
                     if (!map_packet_read_int8(reader, &radius) || radius == 0 ||
                         !map_packet_read_uint8(reader, &emitter_flags) ||
                         (emitter_flags & MAP2_EMITTER_RESERVED) != 0 ||
@@ -264,7 +265,7 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
                         !map_packet_read_uint8(reader, &red) ||
                         !map_packet_read_uint8(reader, &green) ||
                         !map_packet_read_uint8(reader, &blue) ||
-                        (radius > 0) != ((red | green | blue) != 0)) {
+                        (radius < 0 && (red | green | blue) != 0)) {
                         return false;
                     }
                 }

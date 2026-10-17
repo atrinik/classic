@@ -619,9 +619,10 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
     ck_assert(map_protocol_client_lighting_valid(
         1, map_protocol_local_light_encode(-15, true) | MAP2_LOCAL_LIGHT_REMOTE, 0));
     ck_assert(!map_protocol_client_lighting_valid(1, MAP2_LOCAL_LIGHT_REMOTE | 0x10, 0));
-    /* Positive light needs a nonzero color and darkness is achromatic. */
+    /* Positive light may be black (valid content the server renders as a
+     * zero linear vector) and darkness is achromatic. */
     ck_assert(map_protocol_client_lighting_valid_color(5, UINT32_C(0x000001)));
-    ck_assert(!map_protocol_client_lighting_valid_color(5, 0));
+    ck_assert(map_protocol_client_lighting_valid_color(5, 0));
     ck_assert(map_protocol_client_lighting_valid_color(-5, 0));
     ck_assert(!map_protocol_client_lighting_valid_color(-5, UINT32_C(0x000100)));
     /* Flicker is a light-only opt-in; other emitter flag bits are reserved. */
