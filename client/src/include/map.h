@@ -231,6 +231,7 @@ typedef struct map_cell_snapshot {
     uint8_t local_light;
     uint8_t occluder;
     uint8_t client_light_known;
+    uint16_t base_deficit;
 } map_cell_snapshot_t;
 
 /** Version of the copyable, opt-in lighting diagnostic record. */
@@ -484,6 +485,8 @@ extern void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint32
 extern bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint32_t *color);
 extern void map_set_local_light(int x, int y, uint8_t value);
 extern void map_set_occluder(int x, int y, uint8_t bits);
+extern void map_set_base_deficit(int x, int y, uint16_t deficit);
+extern uint16_t map_get_base_deficit(int x, int y);
 extern bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor);
 extern bool map_get_occluder(int x, int y, uint8_t *bits);
 extern void

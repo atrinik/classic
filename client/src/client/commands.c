@@ -1522,6 +1522,10 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
                 map_set_local_light(x, y, packet_reader_read_uint8(&reader));
             }
 
+            if (ext_flags & MAP2_FLAG_EXT_BASE_DEFICIT) {
+                map_set_base_deficit(x, y, packet_reader_read_uint16(&reader));
+            }
+
             if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
                 map_set_occluder(x, y, packet_reader_read_uint8(&reader));
             }

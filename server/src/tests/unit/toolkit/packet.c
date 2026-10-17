@@ -528,8 +528,10 @@ static packet_struct *map_protocol_client_lighting_level_color(int8_t radius, ui
     packet_writer_write_uint8(level, (uint8_t)(color >> 16));
     packet_writer_write_uint8(level, (uint8_t)(color >> 8));
     packet_writer_write_uint8(level, (uint8_t)color);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_OCCLUDER);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_BASE_DEFICIT |
+                                         MAP2_FLAG_EXT_OCCLUDER);
     packet_writer_write_uint8(level, level_value);
+    packet_writer_write_uint16(level, 80);
     packet_writer_write_uint8(level, occluder);
     return level;
 }

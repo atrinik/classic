@@ -188,8 +188,10 @@ typedef struct map_cell_header {
     uint8_t local_light;
     /** Protocol 1085 occluder bits of the cell. */
     uint8_t occluder;
-    /** Bit 0: local_light received; bit 1: occluder received. */
+    /** Bit 0: local_light received; bit 1: occluder; bit 2: base_deficit. */
     uint8_t client_light_known;
+    /** Protocol 1085 magnitude of negative base light of the visible cell. */
+    uint16_t base_deficit;
 } map_cell_header_t;
 
 static map_cell_store_t *cells;
@@ -1302,8 +1304,9 @@ static void map_cache_mark_fow(map_cell_store_t *level,
                 map_cell_store_set_light_state(level, index, MAP_LIGHT_CACHE_CLEARED);
             }
             /* Fog keeps remembered occluders but no live coarse level. */
-            level->headers[index].client_light_known &= (uint8_t)~1U;
+            level->headers[index].client_light_known &= (uint8_t)~5U;
             level->headers[index].local_light = 0;
+            level->headers[index].base_deficit = 0;
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
         }
@@ -1886,6 +1889,7 @@ void map_cell_snapshot(int x, int y, map_cell_snapshot_t *snapshot) {
         .local_light = header->local_light,
         .occluder = header->occluder,
         .client_light_known = header->client_light_known,
+        .base_deficit = header->base_deficit,
     };
 }
 
@@ -1898,7 +1902,8 @@ bool map_cell_changed(int x, int y, const map_cell_snapshot_t *snapshot) {
            snapshot->structural_fow != current.structural_fow ||
            snapshot->local_light != current.local_light ||
            snapshot->occluder != current.occluder ||
-           snapshot->client_light_known != current.client_light_known;
+           snapshot->client_light_known != current.client_light_known ||
+           snapshot->base_deficit != current.base_deficit;
 }
 
 /**
@@ -3076,12 +3081,13 @@ void map_set_data(int x,
  */
 static void map_cell_clear_client_light(size_t index, bool hard) {
     map_cell_header_t *header = &cells->headers[index];
-    uint8_t mask = hard ? 3U : 1U;
+    uint8_t mask = hard ? 7U : 5U;
     if ((header->client_light_known & mask) == 0) {
         return;
     }
     header->client_light_known &= (uint8_t)~mask;
     header->local_light = 0;
+    header->base_deficit = 0;
     if (hard) {
         header->occluder = 0;
     }
@@ -3212,6 +3218,26 @@ void map_set_local_light(int x, int y, uint8_t value) {
     header->local_light = value;
     header->client_light_known |= 1U;
     level_lighting_revision[current_level_index]++;
+}
+
+/** Store the negative base light magnitude of a visible cell. */
+void map_set_base_deficit(int x, int y, uint16_t deficit) {
+    map_state_transaction_record_cell(x, y);
+    map_cell_header_t *header =
+        &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+    if ((header->client_light_known & 4U) && header->base_deficit == deficit) {
+        return;
+    }
+    header->base_deficit = deficit;
+    header->client_light_known |= 4U;
+    level_lighting_revision[current_level_index]++;
+}
+
+/** Return the negative base light magnitude of a cell, 0 when none was received. */
+uint16_t map_get_base_deficit(int x, int y) {
+    const map_cell_header_t *header =
+        &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+    return (header->client_light_known & 4U) ? header->base_deficit : 0;
 }
 
 /** Store the occluder bits of a cell; remembered cells keep their last bits. */
@@ -6100,6 +6126,11 @@ bool widget_map_client_lighting_state_test(void) {
     map_cell_snapshot(5, 5, &before);
     map_clear_cell(5, 5, true);
     success = success && map_cell_changed(5, 5, &before) && !map_get_occluder(5, 5, &bits);
+    /* The base deficit is live state: a soft clear drops it. */
+    map_set_base_deficit(7, 7, 80);
+    success = success && map_get_base_deficit(7, 7) == 80;
+    map_clear_cell(7, 7, false);
+    success = success && map_get_base_deficit(7, 7) == 0;
     /* A header-only update is a visible change too. */
     map_cell_snapshot(6, 6, &before);
     map_set_local_light(6, 6, map_protocol_local_light_encode(2, false));

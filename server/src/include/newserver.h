@@ -116,8 +116,11 @@ typedef struct MapCell_struct {
     /** Last occluder bits sent (protocol 1085 client lighting). */
     uint8_t occluder;
 
-    /** Whether local_light and occluder have been sent, bit 0 and bit 1. */
+    /** Whether local_light, occluder and base_deficit were sent: bits 0, 1, 2. */
     uint8_t client_light_known;
+
+    /** Last negative base light magnitude sent (protocol 1085). */
+    uint16_t base_deficit;
 
     /** Layers whose last sent object carried an emitter, one bit each. */
     uint64_t emitter_layers;
