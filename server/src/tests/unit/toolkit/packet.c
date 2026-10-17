@@ -572,11 +572,12 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
                                                  map_protocol_local_light_encode(-15, false),
                                                  0xff));
     ck_assert(map_protocol_client_lighting_valid(1, map_protocol_local_light_encode(0, false), 0));
-    /* A zero or out-of-range radius, level -16 and reserved local-light bits
-     * are malformed. Every occluder byte is meaningful. */
+    /* A zero radius, level -16 and reserved local-light bits are malformed.
+     * Every occluder byte is meaningful. */
     ck_assert(!map_protocol_client_lighting_valid(0, 0, 0));
-    ck_assert(!map_protocol_client_lighting_valid(14, 0, 0));
-    ck_assert(!map_protocol_client_lighting_valid(-14, 0, 0));
+    /* Radii are unclamped: the whole nonzero int8 range is valid. */
+    ck_assert(map_protocol_client_lighting_valid(INT8_MAX, 0, 0));
+    ck_assert(map_protocol_client_lighting_valid(INT8_MIN, 0, 0));
     ck_assert(!map_protocol_client_lighting_valid(1, 0x10, 0));
     ck_assert(!map_protocol_client_lighting_valid(1, 0x20, 0));
     ck_assert(!map_protocol_client_lighting_valid(1, 0x40, 0));

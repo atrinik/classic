@@ -3173,7 +3173,6 @@ void map_set_structural_support_height(int x, int y, int16_t height) {
 /** Replace the emitter of one sent layer; radius 0 removes it. */
 void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint32_t color) {
     HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
-    HARD_ASSERT(radius >= -MAP2_EMITTER_RADIUS_MAX && radius <= MAP2_EMITTER_RADIUS_MAX);
     map_cell_t *cell = map_cell_store_slot(cells,
                                            map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY),
                                            false);

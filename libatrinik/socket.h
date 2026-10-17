@@ -421,9 +421,6 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG2_EMITTER 2048
 /*@}*/
 
-/** Largest absolute emitter glow radius carried by MAP2_FLAG2_EMITTER. */
-#define MAP2_EMITTER_RADIUS_MAX 13
-
 /**
  * @defgroup MAP2_FLAG_EXT_xxx Map2 tile flags
  * Flags used to mark what kind of data there is on different
