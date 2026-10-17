@@ -5386,7 +5386,15 @@ static void map_client_lighting_apply(int x, int y, uint16_t *scalar, uint16_t r
         int32_t channel_delta = channel_raw >= 0
                                     ? light_profile_raw_to_radiance(channel_raw)
                                     : -(int32_t)light_profile_raw_to_radiance(-channel_raw);
-        channels[channel] = MAX(0, MIN((int32_t)UINT16_MAX, (int32_t)rgb[channel] + channel_delta));
+        channels[channel] = MAX(0, (int32_t)rgb[channel] + channel_delta);
+    }
+    /* Common-vector overflow: scale all channels together to keep hue. */
+    int32_t peak = MAX(channels[0], MAX(channels[1], channels[2]));
+    if (peak > (int32_t)UINT16_MAX) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            channels[channel] =
+                (int32_t)(((int64_t)channels[channel] * UINT16_MAX + peak / 2) / peak);
+        }
     }
 
     if (vision_floor) {
@@ -6286,6 +6294,15 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success &&
               composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
+    /* An overflowing colored sum scales its channels together. */
+    map_set_light_radiance(14, 8, 0, 64000);
+    uint16_t warm[NUM_SUB_LAYERS][3] = {{64000, 32000, 16000}};
+    map_set_light_rgb_radiance(14, 8, 1, warm);
+    map_set_local_light(14, 8, map_protocol_local_light_encode(MAP2_LOCAL_LIGHT_LEVEL_MAX, false));
+    map_lighting_radiance(14 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(14, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_rgb[0] == UINT16_MAX && composed_rgb[1] < composed_rgb[0] &&
+              composed_rgb[2] < composed_rgb[1] && composed_rgb[1] > 32000;
     /* Without a coarse level the server's radiance stays authoritative. */
     map_set_light_radiance(12, 8, 0, 300);
     map_lighting_radiance(12 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 8), 0,

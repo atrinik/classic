@@ -21,7 +21,7 @@ function(atrinik_require_classic_protocol)
         if (NOT selected_${header})
             message(FATAL_ERROR
                 "Selected Atrinik::Protocol lacks required ${header}.h; "
-                "libatrinik requires Classic protocol revision >=1084 with canonical TALK modes "
+                "libatrinik requires Classic protocol revision >=1085 with canonical TALK modes "
                 "and rendezvous admission. Use matching sibling, embedded, explicit-source, or "
                 "installed Classic protocol sources; the historical v1.0.0 lock is incompatible.")
         endif ()
@@ -32,8 +32,8 @@ function(atrinik_require_classic_protocol)
     if (NOT commands MATCHES "(^|\n)[ \t]*#define[ \t]+ATRINIK_PROTOCOL_VERSION[ \t]+([0-9]+)U?[ \t]*(\n|$)")
         message(FATAL_ERROR "Selected Atrinik::Protocol has no canonical game revision definition")
     endif ()
-    if (CMAKE_MATCH_2 LESS 1084)
-        message(FATAL_ERROR "Selected Atrinik::Protocol game revision must be >=1084 for public TALK definitions")
+    if (CMAKE_MATCH_2 LESS 1085)
+        message(FATAL_ERROR "Selected Atrinik::Protocol game revision must be >=1085 for public TALK and MAP2 client-lighting definitions")
     endif ()
     set(mode 1)
     foreach (name IN ITEMS NPC INV BELOW CONTAINER NPC_NAME CLOSE NPC_TARGET)
