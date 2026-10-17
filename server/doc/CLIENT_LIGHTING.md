@@ -68,8 +68,8 @@ word already uses bits 6–15 for coordinates:
 | Field | Bytes | When | Meaning |
 | --- | --- | --- | --- |
 | `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 | changed | bits 0–4: signed level `-15..15` (two's complement; `-16` invalid); bits 5–6 reserved, zero; bit 7: apply the viewer's vision floor after composition |
-| `MAP2_FLAG_EXT_BASE_DEFICIT` (32) | 2 | changed | Magnitude of negative base light (raw, saturating at 65535), e.g. from darkness floors; the unsigned base bytes are then 0 |
-| `MAP2_FLAG_EXT_OCCLUDER` (16) | 1 | changed | bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7: transmission attenuation `a` (0 unattenuated, 1–14 coefficient `256 - 16a`, 15 opaque). A view blocker with authored transmission keeps its attenuation. |
+| `MAP2_FLAG_EXT_LIGHT_AGGREGATE` (32) | 1 | changed | Bitmap of sub-layers whose radiance, including timed-light endpoints, is complete aggregate light with the legacy meaning; the client composes nothing for them. Bit 7 is reserved, zero. |
+| `MAP2_FLAG_EXT_OCCLUDER` (16) | 2 | changed | bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7: transmission attenuation `a` (0 unattenuated, 1–14 coefficient `256 - 16a`, 15 opaque; a view blocker with authored transmission keeps its attenuation); bits 8–11: local light does not cross the north, east, south or west face; bits 12–15 reserved, zero |
 
 Per MAP2 layer (existing `flags2`):
 
@@ -90,7 +90,7 @@ the object they describe, so a cell whose seven object layers of a sub-layer
 all emit adds 28 bytes of object payload, within the unchanged complete-MAP2
 and continuation limits. The client keeps an emitter in the layer record it
 already allocates for that object (8 bytes per emitting record), and the
-per-socket cache adds 23 bytes per cell (see Server). The rollout's final step
+per-socket cache adds 24 bytes per cell (see Server). The rollout's final step
 records these figures in MAP_RENDERING.md.
 
 The existing per-sub-layer Q5.11 lighting bytes carry **base radiance only**
@@ -129,12 +129,15 @@ both modes.
     and keep the sign.
 - **Viewer overrides.** Base radiance is computed per viewer when MAP2 builds
   its view, so the existing `tli` lighting override is already folded into it.
-- **Base deficit.** Environmental light can be negative, for example a floor
-  with negative light. The unsigned base bytes cannot carry that, so the server
-  sends base 0 and the magnitude as `MAP2_FLAG_EXT_BASE_DEFICIT` for the cell
-  record (the strongest deficit of its sub-layers). The client subtracts it
-  after adding `L`, so darkness still cancels local light as in the aggregate
-  path.
+- **Negative environment.** Environmental light can be negative, for example a
+  floor with negative light, and the unsigned base bytes cannot carry that. A
+  sub-layer whose base would be negative is therefore sent as complete
+  aggregate radiance with the legacy meaning (local light, the XRAY floor and
+  timed-light endpoints included), and marked in
+  `MAP2_FLAG_EXT_LIGHT_AGGREGATE`. The client composes nothing for it, so
+  darkness cancels local light exactly as today, per sub-layer and across
+  keyframes. Those samples disclose aggregate local light as the current
+  contract does; this trade-off is an open question.
 - **Vision floor.** XRAY raises presentation light to raw 100 after all light
   is combined. The server therefore sends base radiance without that floor
   and sets bit 7 of the local-light byte for viewers with XRAY. The client then
@@ -155,7 +158,12 @@ both modes.
   bit. Its authored horizontal transmission (`celestial_transmission`, or the
   door's open/closed value) gives a coefficient; the cell's attenuation is the
   maximum over all sent objects (the minimum coefficient, as the server's face
-  traversal takes), quantized up to the next step. Space-wide flags such as
+  traversal takes), quantized up to the next step. Face bits 8–11 mark faces
+  that local light does not cross: a neighbor on another map whose seam is not
+  continuous for local light (mixed schema, discontinuous boundary,
+  nonreciprocal link or a different effective profile digest), or one that is
+  not resident, exactly as `light_path_value()` stops there. Seams are map
+  structure, not sources. Space-wide flags such as
   `P_BLOCKSVIEW` are never used, because they aggregate hidden and unsent
   objects too. Unsent geometry therefore contributes nothing, and the client
   may light past a blocker it cannot see; that errs towards disclosing less.
@@ -182,7 +190,8 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    tables as the server (`light_profiles`, radius ≤ 4, vertical ≤ 4) with a 3D
    DDA through the occluder grid, so it follows the same "stop after the exposed
    face" and floor-crossing rules as `light_path_value()`. Partial transmission
-   applies each crossed cell's attenuation.
+   applies each crossed cell's attenuation, and a step across a face marked
+   discontinuous (bits 8–11) stops the ray, as at a discontinuous map seam.
 3. Combine the client emitter sum `E` with the coarse block level `C` (raw
    step 160), which is a bleed hint for the whole block:
    - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
@@ -198,8 +207,8 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
 
    The emitter sum carries hue as signed per-channel deltas relative to its
    scalar, so overlapping light and darkness keep the server's color shift; the
-   coarse term is neutral. Final radiance = base + `L` − deficit per scalar and
-   channel (the deficit is neutral).
+   coarse term is neutral. Final radiance = base + `L` per scalar and channel,
+   except for aggregate sub-layers, which are used as received.
    Negative channels clamp to zero; if the largest channel then exceeds the
    finite range, all three channels scale together so the strongest is 65535,
    as the server's common-vector overflow rule requires, keeping hue. The scalar
@@ -211,7 +220,9 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    raw 1280, so this cannot occur with present content.
 4. Recompute when emitters, occluders, coarse levels or the camera change. A
    presentation-only time uniform permits flicker for emitters whose archetype
-   opts in, without server traffic.
+   opts in, without server traffic. Flicker modulates the emitter field after
+   composition (`L + E' - E` for flickered sum `E'`), so the coarse floor of a
+   block that the emitter itself lights cannot suppress it.
 
 Using `max()`/`min()` instead of a sum avoids double counting, because the
 coarse term already includes visible sources. The cost is underestimating
