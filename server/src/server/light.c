@@ -1354,6 +1354,25 @@ static int32_t light_local_block_sources(mapstruct *map, int bx, int ex, int by,
     return (int32_t)MAX(INT32_MIN, MIN(INT32_MAX, sum));
 }
 
+/**
+ * The level dz steps above (positive) or below the map, when every step is a
+ * resident, reciprocally linked map of the same dimensions, so blocks align.
+ * Never loads a map.
+ */
+static mapstruct *light_local_level_map(mapstruct *map, int dz) {
+    int direction = dz > 0 ? TILED_UP : TILED_DOWN;
+    for (int step = 0; step < abs(dz) && map != NULL; step++) {
+        mapstruct *next = map->tile_map[direction];
+        if (next == NULL || next->in_memory != MAP_IN_MEMORY || next->spaces == NULL ||
+            next->tile_map[map_tiled_reverse[direction]] != map ||
+            MAP_WIDTH(next) != MAP_WIDTH(map) || MAP_HEIGHT(next) != MAP_HEIGHT(map)) {
+            return NULL;
+        }
+        map = next;
+    }
+    return map;
+}
+
 int8_t light_local_level(mapstruct *map, int x, int y) {
     HARD_ASSERT(map != NULL && map->spaces != NULL);
     int bx, by, ex, ey;
@@ -1361,42 +1380,50 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     light_local_block(y, MAP_HEIGHT(map), &by, &ey);
     /* Sources are pooled per block before propagation and reach a block by
      * block-center distance, so a source's position inside its block never
-     * changes any block's level. Only the own block and its edge neighbors
-     * are within the largest radius; diagonal centers are farther. */
+     * changes any block's level. Within the largest radius are the own block
+     * and its edge neighbors, on this level and on linked levels above and
+     * below as the server's masks reach them; diagonal centers are farther. */
     int32_t positive = 0, negative = 0;
     static const int offsets[5][2] = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
-    for (size_t i = 0; i < arraysize(offsets); i++) {
-        int sx = bx, sex = ex, sy = by, sey = ey;
-        if (offsets[i][0] != 0) {
-            int probe = offsets[i][0] < 0 ? bx - 1 : ex;
-            if (probe < 0 || probe >= MAP_WIDTH(map)) {
-                continue;
-            }
-            light_local_block(probe, MAP_WIDTH(map), &sx, &sex);
-        }
-        if (offsets[i][1] != 0) {
-            int probe = offsets[i][1] < 0 ? by - 1 : ey;
-            if (probe < 0 || probe >= MAP_HEIGHT(map)) {
-                continue;
-            }
-            light_local_block(probe, MAP_HEIGHT(map), &sy, &sey);
-        }
-        int mask = get_real_light_source_value(light_local_block_sources(map, sx, sex, sy, sey));
-        if (mask == 0) {
+    for (int dz = -MAX_LIGHT_RADIUS; dz <= MAX_LIGHT_RADIUS; dz++) {
+        mapstruct *level_map = dz == 0 ? map : light_local_level_map(map, dz);
+        if (level_map == NULL) {
             continue;
         }
-        /* Doubled center coordinates keep remainder blocks exact. */
-        int dx2 = (sx + sex - 1) - (bx + ex - 1), dy2 = (sy + sey - 1) - (by + ey - 1);
-        int distance_squared = (dx2 * dx2 + dy2 * dy2 + 2) / 4;
-        int radius = light_profile_radius(abs(mask));
-        if (distance_squared > radius * radius) {
-            continue;
-        }
-        int32_t value = light_mask_value(abs(mask), distance_squared);
-        if (mask > 0) {
-            positive = MAX(positive, value);
-        } else {
-            negative = MIN(negative, -value);
+        for (size_t i = 0; i < arraysize(offsets); i++) {
+            int sx = bx, sex = ex, sy = by, sey = ey;
+            if (offsets[i][0] != 0) {
+                int probe = offsets[i][0] < 0 ? bx - 1 : ex;
+                if (probe < 0 || probe >= MAP_WIDTH(map)) {
+                    continue;
+                }
+                light_local_block(probe, MAP_WIDTH(map), &sx, &sex);
+            }
+            if (offsets[i][1] != 0) {
+                int probe = offsets[i][1] < 0 ? by - 1 : ey;
+                if (probe < 0 || probe >= MAP_HEIGHT(map)) {
+                    continue;
+                }
+                light_local_block(probe, MAP_HEIGHT(map), &sy, &sey);
+            }
+            int mask = get_real_light_source_value(
+                light_local_block_sources(level_map, sx, sex, sy, sey));
+            if (mask == 0) {
+                continue;
+            }
+            /* Doubled center coordinates keep remainder blocks exact. */
+            int dx2 = (sx + sex - 1) - (bx + ex - 1), dy2 = (sy + sey - 1) - (by + ey - 1);
+            int distance_squared = (dx2 * dx2 + dy2 * dy2 + 2) / 4 + dz * dz;
+            int radius = light_profile_radius(abs(mask));
+            if (distance_squared > radius * radius || abs(dz) > MIN(radius, MAP2_MAX_DEPTH)) {
+                continue;
+            }
+            int32_t value = light_mask_value(abs(mask), distance_squared);
+            if (mask > 0) {
+                positive = MAX(positive, value);
+            } else {
+                negative = MIN(negative, -value);
+            }
         }
     }
     bool darker = -(int64_t)negative > positive;

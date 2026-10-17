@@ -79,8 +79,9 @@ static bool client_lighting_face_closed(uint32_t occluder, int sx, int sy) {
 /**
  * Transmit a value from (x, y) to (x + dx, y + dy). Every cell the ray leaves,
  * the source included, attenuates it in travel order, as the server takes a
- * crossed face's coefficient from its source cell; a view blocker stops it, and
- * so does a face marked discontinuous. The destination is an exposed face and
+ * crossed face's coefficient from its source cell; a diagonal step also
+ * crosses both side cells' faces. A view blocker stops it, and so does a face
+ * marked discontinuous. The destination is an exposed face and
  * keeps the light that reaches it.
  */
 static int32_t client_lighting_path(int width,
@@ -105,6 +106,20 @@ static int32_t client_lighting_path(int width,
             return 0;
         }
         uint16_t coefficient = client_lighting_coefficient(previous, cx - px, cy - py);
+        if (cx != px && cy != py) {
+            /* A tied diagonal step also crosses the faces of both grazing side
+             * cells towards the destination, as the shared supercover event
+             * emits them; every one bounds the transmission. */
+            int sx = cx - px, sy = cy - py;
+            uint32_t side_x = occluders != NULL ? occluders[(size_t)py * width + cx] : 0;
+            uint32_t side_y = occluders != NULL ? occluders[(size_t)cy * width + px] : 0;
+            if (client_lighting_face_closed(side_x, 0, sy) ||
+                client_lighting_face_closed(side_y, sx, 0)) {
+                return 0;
+            }
+            coefficient = MIN(coefficient, client_lighting_coefficient(side_x, 0, sy));
+            coefficient = MIN(coefficient, client_lighting_coefficient(side_y, sx, 0));
+        }
         transmitted = (int32_t)(((int64_t)transmitted * coefficient + 128) / 256);
         px = cx;
         py = cy;

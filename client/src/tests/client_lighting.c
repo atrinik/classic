@@ -99,6 +99,25 @@ static void test_face_attenuation_is_directional(void) {
     TEST_CHECK(cell_at(3, 3)->scalar == open_north);
 }
 
+static void test_diagonal_steps_cross_side_cell_faces(void) {
+    memset(occluders, 0, sizeof(occluders));
+    client_lighting_emitter_t torch = {.x = 3, .y = 4, .radius = 13, .color = 0xffffff};
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(4, 3)->scalar > 0);
+    /* A wall beside the source closes the diagonal step past its corner. */
+    occluders[4 * WIDTH + 4] = client_lighting_occluder(MAP2_OCCLUDER_BLOCKSVIEW, 0xffff);
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(4, 3)->scalar == 0);
+    /* Glass beside it attenuates the diagonal step by its north face. */
+    int32_t open = 0;
+    memset(occluders, 0, sizeof(occluders));
+    evaluate(&torch, 1);
+    open = cell_at(4, 3)->scalar;
+    occluders[4 * WIDTH + 4] = client_lighting_occluder(0, 0x0008);
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(4, 3)->scalar == (open * 128 + 128) / 256);
+}
+
 static void test_transmissive_blocker_keeps_its_attenuation(void) {
     memset(occluders, 0, sizeof(occluders));
     client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
@@ -336,6 +355,7 @@ int main(void) {
     test_transmission_attenuates_crossed_cells();
     test_transmissive_blocker_keeps_its_attenuation();
     test_face_attenuation_is_directional();
+    test_diagonal_steps_cross_side_cell_faces();
     test_discontinuous_face_stops_light();
     test_occluded_source_cell_attenuates_its_light();
     test_colors_beyond_the_bound_keep_their_hue();

@@ -1599,6 +1599,23 @@ START_TEST(test_client_lighting_local_level_neighbors_hide_translation) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_reaches_linked_depths) {
+    /* A hidden source on the level above still reaches this level's coarse
+     * light, as the server's own mask does through the linked depth. */
+    mapstruct *map = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    link_stacked_maps(map, upper);
+    add_colored_light(upper, 4, 4, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(map, 4, 4);
+    ck_assert_int_gt(level, 0);
+    /* Never stronger than on the source's own level. */
+    ck_assert_int_le(level, light_local_level(upper, 4, 4));
+    /* An unlinked level contributes nothing. */
+    mapstruct *alone = get_empty_map(9, 9);
+    ck_assert_int_eq(light_local_level(alone, 4, 4), 0);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
     /* A 7-wide map has blocks 0..2 and 3..6: the last cell joins its
      * neighbor instead of forming a one-cell block. */
@@ -1785,6 +1802,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
     tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
     tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
+    tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);
