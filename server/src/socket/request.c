@@ -1458,6 +1458,8 @@ void draw_client_map2(object *pl) {
 
                 /* Initialize default values for some variables. */
                 ext_flags = 0;
+                /* Occluders of the objects actually sent to this viewer. */
+                uint8_t cell_occluder = 0;
                 packet_writer_mark(packet, &packet_save_buf);
                 anim_num = 0;
                 uint8_t anim_type[NUM_SUB_LAYERS] = {0};
@@ -1856,12 +1858,20 @@ void draw_client_map2(object *pl) {
                             /* The emitter of an object already being sent
                              * discloses nothing beyond its face and tile. */
                             uint32_t emitter = 0;
-                            if (client_lighting && tmp->glow_radius != 0) {
+                            uint32_t emitter_color = tmp->light_color & UINT32_C(0xffffff);
+                            /* Darkness is achromatic; a positive source with a
+                             * zero linear peak is rejected as authored light. */
+                            if (client_lighting && tmp->glow_radius != 0 &&
+                                (tmp->glow_radius < 0 || emitter_color != 0)) {
                                 int radius = MAX(-MAP2_EMITTER_RADIUS_MAX,
                                                  MIN(MAP2_EMITTER_RADIUS_MAX, tmp->glow_radius));
                                 emitter = (uint32_t)(uint8_t)(int8_t)radius << 24 |
-                                          (tmp->light_color & UINT32_C(0xffffff));
+                                          (radius > 0 ? emitter_color : 0);
                                 flags2 |= MAP2_FLAG2_EMITTER;
+                            }
+                            if (client_lighting) {
+                                cell_occluder = light_occluder_combine(
+                                    cell_occluder, light_occluder_object_bits(tmp));
                             }
 
                             if (flags2) {
@@ -2298,7 +2308,7 @@ void draw_client_map2(object *pl) {
                 if (client_lighting && !tile_fow) {
                     local_light = map_protocol_local_light_encode(light_local_level(m, nx, ny),
                                                                   (special_vision & 1) != 0);
-                    occluder = light_occluder_bits(m, nx, ny);
+                    occluder = cell_occluder;
                     if (!(mp->client_light_known & 1U) || mp->local_light != local_light) {
                         ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
                     }

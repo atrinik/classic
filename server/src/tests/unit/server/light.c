@@ -1565,17 +1565,33 @@ START_TEST(test_client_lighting_local_level_keeps_darkness_sign) {
 }
 END_TEST
 
-START_TEST(test_client_lighting_occluder_bits_follow_geometry) {
+START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     mapstruct *map = get_empty_map(5, 5);
-    ck_assert_uint_eq(light_occluder_bits(map, 1, 1), 0);
-    add_light_blocker(map, 1, 1);
-    ck_assert_uint_eq(light_occluder_bits(map, 1, 1) & MAP2_OCCLUDER_BLOCKSVIEW,
-                      MAP2_OCCLUDER_BLOCKSVIEW);
+    object *plain = add_colored_light(map, 3, 3, 0, LIGHT_COLOR_WHITE);
+    ck_assert_uint_eq(light_occluder_object_bits(plain), 0);
+
+    object *blocker = add_light_blocker(map, 1, 1);
+    uint8_t blocker_bits = light_occluder_object_bits(blocker);
+    ck_assert_uint_eq(blocker_bits & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
     /* A view blocker transmits nothing through its faces. */
-    ck_assert_uint_eq(light_occluder_bits(map, 1, 1) >> MAP2_OCCLUDER_ATTENUATION_SHIFT, 15);
-    ck_assert_uint_eq(light_occluder_bits(map, 3, 3) >> MAP2_OCCLUDER_ATTENUATION_SHIFT, 0);
+    ck_assert_uint_eq(blocker_bits >> MAP2_OCCLUDER_ATTENUATION_SHIFT, 15);
+
     add_roof_surface(map, 2, 2);
-    ck_assert_uint_eq(light_occluder_bits(map, 2, 2) & MAP2_OCCLUDER_ROOF, MAP2_OCCLUDER_ROOF);
+    object *roof = NULL;
+    for (object *op = GET_MAP_OB(map, 2, 2); op != NULL; op = op->above) {
+        if (object_is_roof_surface(op)) {
+            roof = op;
+        }
+    }
+    ck_assert_ptr_nonnull(roof);
+    ck_assert_uint_eq(light_occluder_object_bits(roof) & MAP2_OCCLUDER_ROOF, MAP2_OCCLUDER_ROOF);
+
+    /* Combining keeps every geometry bit and the stronger attenuation. */
+    uint8_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
+    ck_assert_uint_eq(combined & (MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW),
+                      MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW);
+    ck_assert_uint_eq(combined >> MAP2_OCCLUDER_ATTENUATION_SHIFT, 15);
+    ck_assert_uint_eq(light_occluder_combine(0, 0), 0);
 }
 END_TEST
 
@@ -1648,7 +1664,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_and_quantizes);
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
-    tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_geometry);
+    tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_sent_objects);
 
     return s;
 }

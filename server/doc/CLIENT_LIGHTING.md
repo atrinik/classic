@@ -27,9 +27,10 @@ The client computes the presentation lighting of everything it can already see,
 on the GPU. The server keeps authoritative gameplay light and sends only what
 the client cannot legitimately know, in a form that does not identify sources:
 
-1. **Base radiance**: ambient, floor, world and celestial light. None of these
-   is a source the player could locate. This stays Q5.11 with RGB, because it
-   describes the environment (time of day, sky exposure, map ambient).
+1. **Base radiance**: ambient, floor, world and celestial light, plus the
+   viewer's own `tli` override. None of these is a source the player could
+   locate. This stays Q5.11 with RGB, because it describes the environment
+   (time of day, sky exposure, map ambient).
 2. **Emitters of visible objects**: glow radius and authored color, sent only
    with an object that MAP2 already sends. Its existence and tile are already
    disclosed by its face, so the emitter adds no new location information.
@@ -38,8 +39,8 @@ the client cannot legitimately know, in a form that does not identify sources:
    (and darkness) from hidden sources still bleeds through walls without
    identifying the source tile, count, or hue.
 4. **Occluders of visible cells**: blocks-view, floor, roof and door bits plus a
-   quantized transmission for geometry the client already sees, so the client
-   can occlude and attenuate emitter light.
+   quantized transmission, derived only from objects MAP2 sends to this viewer,
+   so the client can occlude and attenuate emitter light.
 
 Gameplay keeps using the full authoritative server light. That includes
 darkness gating of live objects in MAP2 (`raw_light <= 0`), infravision,
@@ -66,12 +67,14 @@ Per MAP2 layer (existing `flags2`):
 
 | Field | Bytes | Meaning |
 | --- | --- | --- |
-| `MAP2_FLAG2_EMITTER` (2048) | 1 + 3 | signed `glow_radius` clamped to `-13..13` (0 invalid), then authored sRGB `RRGGBB` (`000000` for darkness) |
+| `MAP2_FLAG2_EMITTER` (2048) | 1 + 3 | signed `glow_radius` clamped to `-13..13` (0 invalid), then authored sRGB `RRGGBB`: nonzero for a positive radius, `000000` for a negative one |
 
 The existing per-sub-layer Q5.11 lighting bytes carry **base radiance only**
 when the server runs client lighting. The 8-byte per-sub-layer budget is
-unchanged. Decoders reject an emitter radius of 0 or outside `-13..13`, a local
-level of `-16`, and nonzero reserved bits. Rejection happens before any state is
+unchanged. Decoders reject an emitter radius of 0 or outside `-13..13`, a
+positive radius with color `000000` (a zero linear peak, which MAP_RENDERING.md
+rejects for positive sources), a negative radius with a nonzero color (darkness
+is achromatic), a local level of `-16`, and nonzero reserved bits. Rejection happens before any state is
 published, exactly as for other malformed MAP2 fields. A server running the
 legacy path sends no `LOCAL_LIGHT`, `OCCLUDER` or `EMITTER` fields, and its base
 bytes keep their current full-radiance meaning. A 1085 client therefore renders
@@ -95,6 +98,8 @@ both modes.
     block; the larger magnitude wins;
   - quantize the magnitude down to 1/8-daylight levels (raw 160), clamp to 15,
     and keep the sign.
+- **Viewer overrides.** Base radiance is computed per viewer when MAP2 builds
+  its view, so the existing `tli` lighting override is already folded into it.
 - **Vision floor.** XRAY raises presentation light to raw 100 after all light
   is combined. The server therefore sends base radiance without that floor
   and sets bit 7 of the local-light byte for viewers with XRAY. The client then
@@ -102,14 +107,19 @@ both modes.
   only, so it discloses nothing about sources.
 - **Emitters** are copied from `glow_radius` and `light_color` of the object
   MAP2 is already sending (the object on that tile, including the viewer's
-  derived emitter). Each sent layer caches its last emitter, so a change of
+  derived emitter). A negative radius is sent with color `000000`. Each sent layer caches its last emitter, so a change of
   radius or color alone forces a layer delta even when the face is unchanged.
   Emitters of objects not sent, whether hidden, out of sight, dark-gated,
   plugin-hidden or below the top object of a layer, are never sent.
-- **Occluders** are derived from the per-space flags and light geometry MAP2
-  already consults, for cells that MAP2 sends. The transmission attenuation is
-  the cell-wide minimum of its four horizontal face coefficients
-  (`spatial_cell_light_face()`), quantized up to the next attenuation step.
+- **Occluders** are derived only from the objects MAP2 sends to this viewer:
+  the sent object of each layer, after plugin visibility and hidden-object
+  filtering. A sent view blocker, floor, roof surface or closed door sets its
+  bit, and a sent object's authored horizontal transmission
+  (`celestial_transmission`, or the door's open/closed value) sets the
+  attenuation, quantized up to the next step. Space-wide flags such as
+  `P_BLOCKSVIEW` are never used, because they aggregate hidden and unsent
+  objects too. Unsent geometry therefore contributes nothing, and the client
+  may light past a blocker it cannot see; that errs towards disclosing less.
 - **No per-player light recompute.** MAP2 reads cached base radiance and per-cell
   scalars. Celestial ensure and keyframe work move out of the per-cell loop into
   one pass per resident map per tick (see Follow-up work).
@@ -119,24 +129,33 @@ both modes.
 The GPU light pass gains an emitter stage before the existing tone/LUT stages:
 
 1. Group the visible emitters of a tile exactly as the server groups a tile's
-   `light_source` counters: sum the radii of the tile's sent emitters, then map
-   the sum through `light_mask`. When every emitter of a tile is sent, this
-   reproduces the server's same-cell cap; when some are not, the client
-   underestimates and the coarse level supplies the rest. Upload at most 256
-   grouped emitters per viewport (strongest first, ties by row-major cell) as a
-   structured buffer, and the occluders as an R8 cell grid per depth.
+   counters. The scalar and positive terms sum the radii of the tile's sent
+   emitters and map each sum through `light_mask`, which reproduces the
+   same-cell cap. Color keeps every constituent emitter with its own profile
+   and color, resolved against the grouped positive term exactly as the server
+   resolves its color accumulators, so hue can vary with distance. When some of
+   a tile's emitters are not sent, the client underestimates and the coarse
+   level supplies the rest. Every visible emitter is evaluated; the GPU stage
+   processes them in batches rather than truncating. The occluders are an R8
+   cell grid per depth.
 2. A compute (or full-screen fragment) pass evaluates every light vertex of the
    existing compact light rows. It sums emitter profiles using the same radial
    tables as the server (`light_profiles`, radius ≤ 4, vertical ≤ 4) with a 3D
    DDA through the occluder grid, so it follows the same "stop after the exposed
    face" and floor-crossing rules as `light_path_value()`. Partial transmission
    applies each crossed cell's attenuation.
-3. Combine the client emitter sum `E` with the coarse level `C` (raw step 160):
+3. Combine the client emitter sum `E` with the coarse block level `C` (raw
+   step 160), which is a bleed hint for the whole block:
    - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
-   - then clamp `L` into the server's level: at most `160(C + 1) - 1` when
-     `C >= 0` and `C < 15`, and at least `160(C - 1) + 1` when `C <= 0` and
-     `C > -15`. The client never shows more light, or less darkness, than the
-     authoritative level allows.
+   - then limit `L` to the block's level: at most `160(C + 1) - 1` when `C >= 0`
+     and `C < 15`, and at least `160(C - 1) + 1` when `C <= 0` and `C > -15`.
+
+   `C` is the block's extremum, not a per-cell bound. Cells of a block that are
+   authoritatively darker than its brightest cell, such as the unlit side of a
+   wall, are presented at the block's level. That is the intended bleed of
+   hidden light through walls. It is presentation only: gameplay darkness
+   gating uses each cell's own server light, so such a cell can look lit while
+   its dark-gated live objects remain unsent.
 
    The emitter sum carries hue; the coarse term is neutral. Final radiance =
    base + `L`, then the vision floor if bit 7 is set, before the unchanged
@@ -166,8 +185,10 @@ What a modified client can learn, beyond today's MAP2:
   neighboring blocks therefore narrows the position somewhat, but only to the
   extent that the falloff crosses a level boundary. Quantization limits this;
   nothing short of hiding the field entirely removes it.
+- **Occluders:** only properties of objects MAP2 already sends to the viewer.
 - **Never sent:** source identity, count, exact tile, color, profile or height
-  of anything not itself sent in MAP2.
+  of anything not itself sent in MAP2, and no property of hidden or unsent
+  geometry.
 
 This is strictly less disclosure than the current contract for hidden sources,
 and equal disclosure for visible ones.
@@ -193,16 +214,19 @@ and equal disclosure for visible ones.
 ## Test plan
 
 - Protocol: encode/decode round trips; reserved bits; radius 0 and out of
-  range; level `-16`; truncated emitter/occluder fields; reconnect reset;
+  range; positive radius with color `000000` and negative radius with a color;
+  level `-16`; truncated emitter/occluder fields; reconnect reset;
   and a failed parse leaving map state unchanged.
 - Server: coarse level equals the block's signed quantized peak for fixtures
   with a hidden source behind a wall; no emitter or occluder for an unsent
-  object or cell; an emitter-only change produces a layer delta; gameplay
+  object or cell; hidden and plugin-hidden blockers set no occluder bits;
+  an emitter-only change produces a layer delta; `tli` stays in base radiance; gameplay
   darkness gating identical with the flag on and off; the vision-floor bit
   follows XRAY.
 - Client: emitter field matches a CPU reference of `light_path_value()` for
   open, walled, roofed, transmissive and multi-depth fixtures; per-tile
-  grouping; composition and clamping for positive, negative and zero levels;
+  grouping with constituent colors; no truncation with many emitters;
+  composition and block limits for positive, negative and zero levels;
   vision floor after composition; FOW cells carry no emitters; GPU frame-time
   budgets.
 - Privacy: all nine cells of a block report the same level; levels never exceed

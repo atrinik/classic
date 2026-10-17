@@ -513,8 +513,9 @@ START_TEST(test_map_protocol_validates_timed_light_keyframes) {
 END_TEST
 
 /** One cell with an emitter layer and both client-lighting extensions. */
-static packet_struct *map_protocol_client_lighting_level(int8_t radius, uint8_t level_value,
-                                                        uint8_t occluder) {
+static packet_struct *map_protocol_client_lighting_level_color(int8_t radius, uint32_t color,
+                                                              uint8_t level_value,
+                                                              uint8_t occluder) {
     packet_struct *level = packet_new(0, 32, 16);
     packet_writer_write_uint16(level, 0);
     packet_writer_write_uint8(level, 1);
@@ -524,13 +525,30 @@ static packet_struct *map_protocol_client_lighting_level(int8_t radius, uint8_t 
     packet_writer_write_uint8(level, MAP2_FLAG_MORE);
     packet_writer_write_uint32(level, MAP2_FLAG2_EMITTER);
     packet_writer_write_int8(level, radius);
-    packet_writer_write_uint8(level, 0xff);
-    packet_writer_write_uint8(level, 0x80);
-    packet_writer_write_uint8(level, 0x40);
+    packet_writer_write_uint8(level, (uint8_t)(color >> 16));
+    packet_writer_write_uint8(level, (uint8_t)(color >> 8));
+    packet_writer_write_uint8(level, (uint8_t)color);
     packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_OCCLUDER);
     packet_writer_write_uint8(level, level_value);
     packet_writer_write_uint8(level, occluder);
     return level;
+}
+
+/** Positive emitters get an orange color and darkness the achromatic one. */
+static packet_struct *map_protocol_client_lighting_level(int8_t radius, uint8_t level_value,
+                                                        uint8_t occluder) {
+    return map_protocol_client_lighting_level_color(radius, radius > 0 ? UINT32_C(0xff8040) : 0,
+                                                    level_value, occluder);
+}
+
+static bool map_protocol_client_lighting_valid_color(int8_t radius, uint32_t color) {
+    packet_struct *level = map_protocol_client_lighting_level_color(radius, color, 0, 0);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    bool valid = map_protocol_validate(packet->data, packet->len, 0, 21, 21);
+    packet_free(packet);
+    packet_free(level);
+    return valid;
 }
 
 static bool map_protocol_client_lighting_valid(int8_t radius, uint8_t level_value,
@@ -562,6 +580,11 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
     ck_assert(!map_protocol_client_lighting_valid(1, 0x10, 0));
     ck_assert(!map_protocol_client_lighting_valid(1, 0x20, 0));
     ck_assert(!map_protocol_client_lighting_valid(1, 0x40, 0));
+    /* Positive light needs a nonzero color and darkness is achromatic. */
+    ck_assert(map_protocol_client_lighting_valid_color(5, UINT32_C(0x000001)));
+    ck_assert(!map_protocol_client_lighting_valid_color(5, 0));
+    ck_assert(map_protocol_client_lighting_valid_color(-5, 0));
+    ck_assert(!map_protocol_client_lighting_valid_color(-5, UINT32_C(0x000100)));
 
     for (int level = -MAP2_LOCAL_LIGHT_LEVEL_MAX; level <= MAP2_LOCAL_LIGHT_LEVEL_MAX; level++) {
         for (int floor_bit = 0; floor_bit < 2; floor_bit++) {
