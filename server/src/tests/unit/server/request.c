@@ -3563,6 +3563,60 @@ START_TEST(test_removed_player_connection_keeps_servicing_queued_output) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
+    mapstruct *map;
+    object *op;
+    check_setup_env_pl(&map, &op);
+    request_move_player(&op, map, 12, 12);
+    player *pl = CONTR(op);
+    pl->tli = 1;
+    bool saved_client_lighting = settings.client_lighting;
+    settings.client_lighting = true;
+
+    object *blocker = arch_get("letter");
+    SET_FLAG(blocker, FLAG_BLOCKSVIEW);
+    blocker->glow_radius = 5;
+    blocker->light_color = UINT32_C(0xff8040);
+    blocker->x = op->x + 1;
+    blocker->y = op->y;
+    blocker = object_insert_map(blocker, map, NULL, INS_NO_MERGE);
+    ck_assert_ptr_nonnull(blocker);
+
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0,
+                                         pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->client_light_known & 3U, 3U);
+    ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
+    uint32_t sent_emitter = 0;
+    for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+        sent_emitter |= cell->emitter[layer];
+    }
+    ck_assert_uint_eq(sent_emitter, (uint32_t)(uint8_t)5 << 24 | UINT32_C(0xff8040));
+
+    /* A hidden object is not sent, so neither its geometry nor its light is
+     * disclosed, although the space still blocks view server-side. */
+    SET_FLAG(blocker, FLAG_HIDDEN);
+    object_update(blocker, UP_OBJ_FLAGS);
+    ck_assert(GET_MAP_FLAGS(map, blocker->x, blocker->y) & P_BLOCKSVIEW);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, 0);
+    sent_emitter = 0;
+    for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+        sent_emitter |= cell->emitter[layer];
+    }
+    ck_assert_uint_eq(sent_emitter, 0);
+
+    settings.client_lighting = saved_client_lighting;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -3649,6 +3703,7 @@ static Suite *suite(void) {
                    test_map_exit_semantic_accepts_usable_destination_forms_without_loading);
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
     tcase_add_test(tc_core, test_odd_view_los_matches_emitted_map_coordinates);
+    tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
     return s;
 }
 

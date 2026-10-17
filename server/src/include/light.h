@@ -62,8 +62,11 @@ extern void light_base_radiance_from_raw(const MapSpace *space,
 /** Signed, source-anonymous coarse local light level of one cell (protocol 1085). */
 extern int8_t light_local_level(mapstruct *map, int x, int y);
 
-/** MAP2 occluder bits of one cell (protocol 1085). */
-extern uint8_t light_occluder_bits(mapstruct *map, int x, int y);
+/** MAP2 occluder bits of one object being sent to the viewer (protocol 1085). */
+extern uint8_t light_occluder_object_bits(const object *op);
+
+/** Combine the occluder bits of two sent objects of one cell. */
+extern uint8_t light_occluder_combine(uint8_t first, uint8_t second);
 
 /** Invalidate the bounded celestial field after structural/topology changes. */
 extern void celestial_light_invalidate(mapstruct *map);

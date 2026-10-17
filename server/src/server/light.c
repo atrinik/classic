@@ -33,6 +33,7 @@
 #include <light.h>
 #include <object.h>
 #include <spatial.h>
+#include <celestial_structure.h>
 #include <region.h>
 
 #define NR_LIGHT_MASK 10
@@ -380,36 +381,60 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     return (int8_t)(darker ? -level : level);
 }
 
-uint8_t light_occluder_bits(mapstruct *map, int x, int y) {
-    HARD_ASSERT(map != NULL);
-    const MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
-    int flags = GET_MAP_FLAGS(map, x, y);
+/**
+ * MAP2 occluder bits contributed by one object that is being sent to the
+ * viewer. Only the object's own flags and authored horizontal transmission
+ * count, never space-wide flags that also aggregate hidden or unsent objects.
+ */
+uint8_t light_occluder_object_bits(const object *op) {
+    HARD_ASSERT(op != NULL);
+    const object *head = HEAD(op);
     uint8_t bits = 0;
-    if (flags & P_BLOCKSVIEW) {
+    uint16_t coefficient = SPATIAL_LIGHT_SCALE;
+    if (QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
         bits |= MAP2_OCCLUDER_BLOCKSVIEW;
+        coefficient = 0;
     }
-    if (space->light_geometry & 2U) {
+    if (QUERY_FLAG(op, FLAG_IS_FLOOR)) {
         bits |= MAP2_OCCLUDER_FLOOR;
     }
-    if (space->light_geometry & 4U) {
+    if (object_is_roof_surface(op)) {
         bits |= MAP2_OCCLUDER_ROOF;
     }
-    if (flags & P_DOOR_CLOSED) {
+    bool closed = head->type == DOOR && QUERY_FLAG(head, FLAG_DOOR_CLOSED);
+    if (closed) {
         bits |= MAP2_OCCLUDER_DOOR_CLOSED;
     }
-    /* Cell-wide minimum of the horizontal face coefficients, rounded up to
-     * the next attenuation step so the client never transmits more light. */
-    static const int normals[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-    spatial_cell cell = {.map = map, .x = x, .y = y, .z = 0};
-    uint16_t coefficient = SPATIAL_LIGHT_SCALE;
-    for (size_t i = 0; i < arraysize(normals); i++) {
-        coefficient = MIN(coefficient,
-                          spatial_cell_light_face(&cell, normals[i][0], normals[i][1], 0, NULL));
+    uint8_t horizontal = CELESTIAL_FACE_NORTH | CELESTIAL_FACE_EAST | CELESTIAL_FACE_SOUTH |
+                         CELESTIAL_FACE_WEST;
+    if ((celestial_structure_faces(op) & horizontal) != 0) {
+        const char *value;
+        if (op->type == DOOR || op->type == GATE) {
+            bool shut = op->type == DOOR ? QUERY_FLAG(op, FLAG_DOOR_CLOSED)
+                                         : QUERY_FLAG(op, FLAG_NO_PASS);
+            value = object_get_value(op, shut ? "celestial_transmission_closed"
+                                              : "celestial_transmission_open");
+        } else {
+            value = object_get_value(op, "celestial_transmission");
+        }
+        celestial_transmission_t transmission = celestial_structure_transmission(value);
+        coefficient = MIN(coefficient, transmission == CELESTIAL_TRANSMISSION_INVALID
+                                           ? 0
+                                           : (uint16_t)transmission);
     }
+    /* Round the attenuation up so the client never transmits more light. */
     int attenuation = (SPATIAL_LIGHT_SCALE - coefficient + MAP2_OCCLUDER_ATTENUATION_STEP - 1) /
                       MAP2_OCCLUDER_ATTENUATION_STEP;
     bits |= (uint8_t)(MIN(attenuation, 15) << MAP2_OCCLUDER_ATTENUATION_SHIFT);
     return bits;
+}
+
+/** Combine the occluder bits of two sent objects of one cell. */
+uint8_t light_occluder_combine(uint8_t first, uint8_t second) {
+    uint8_t geometry = (uint8_t)((first | second) & ((1U << MAP2_OCCLUDER_ATTENUATION_SHIFT) - 1));
+    uint8_t attenuation = MAX(first >> MAP2_OCCLUDER_ATTENUATION_SHIFT,
+                              second >> MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    return (uint8_t)(geometry | attenuation << MAP2_OCCLUDER_ATTENUATION_SHIFT);
 }
 
 typedef struct light_profile {
