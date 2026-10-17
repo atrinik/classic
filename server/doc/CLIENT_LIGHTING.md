@@ -75,9 +75,9 @@ radiance, sent emitters and sent occluders.
 Only light of local sources the viewer cannot see is coarse. Exact per-tile
 local light on authorized tiles was considered and rejected: the per-cell
 gradient around a wall locates the hidden source, which is exactly the
-disclosure this design removes (see Problem). Remembered tiles keep the coarse
-levels they had while visible, which needs no live information about the
-remembered area.
+disclosure this design removes (see Problem). Remembered tiles keep receiving
+their coarse levels, like all their light levels, while the per-socket cache
+is valid (the maintainer's disclosure boundary for previously sent tiles).
 
 ## Wire contract (protocol revision 1085)
 
@@ -161,9 +161,11 @@ MAP_RENDERING.md caps per-sub-layer *lighting samples* at 8 bytes and the
 client and per-socket lighting storage at 56 bytes per cell. Signed base keeps
 the 8 bytes per sub-layer, 56 per fully populated cell, and the cell gains 13
 bytes of header: 7 coarse levels, 5 bytes of occluder and a known-state byte.
-This design therefore raises the per-cell lighting storage cap to 72 bytes; the
-rollout qualifies client and server memory at that cap, and its final step
-records it in MAP_RENDERING.md. The celestial follow-up retires the base RGB
+This design therefore raises the client's per-cell lighting storage cap to 72
+bytes. The server's per-socket cell keeps the 56 bytes of signed base and adds
+the 37 bytes of protocol-1085 state below, so its cap is 93 bytes per fully
+populated cell. The rollout qualifies client memory at 72 and server memory
+at 93 bytes, and its final step records both in MAP_RENDERING.md. The celestial follow-up retires the base RGB
 words and next-hour endpoints once the base is neutral, reducing a cell to 27
 bytes: 14 of scalar base, 7 coarse levels, 5 of occluder and the known-state
 byte. Emitters are object attributes, not lighting samples: their 5 bytes
@@ -249,10 +251,14 @@ connection.
     diagonal horizontal seams and links to the levels above and below, taken
     in any order, so corner maps, maps linked only diagonally and a level
     linked only from a neighboring map count too. The linked levels
-    of a stack form one vertical bucket: a block on any of them reaches the
-    target at the horizontal distance `sqrt(gx² + gy²)` of their gaps, whatever
-    the number of levels between them, so every level of a stack gets the same
-    level and viewers with cells on several floors cannot tell which floor a
+    of a stack form one vertical bucket: a block on any of them, up to 12
+    levels (twice `MAP2_MAX_DEPTH`) above or below the target, reaches it at
+    the horizontal distance `sqrt(gx² + gy²)` of their gaps, whatever the
+    number of levels between them. Any two depths of one 13-depth MAP2 window
+    lie within that span, so every level of a window gets the same level from
+    a source inside it, and the bound keeps the work finite for stacks taller
+    than a window (legacy schema-0 stacks included); so the levels of a stack
+    agree and viewers with cells on several floors cannot tell which floor a
     hidden source is on, or follow it between floors. Light through floors is
     therefore presented at its horizontal strength; that bleed is presentation
     only, like the bleed through walls below. Each map is divided into its own blocks and measured in the
@@ -515,8 +521,8 @@ Remembered (fog) tiles compose their signed base and their coarse levels,
 which keep updating while the per-socket cache is valid, then receive the remembered-world lift of
 MAP_RENDERING.md on the signed composed scalar and channels, after the vision
 floor and before the negative clamp and common-vector scaling of step 3, as
-`C_display = max(0, C + lift)` requires: when the composed scalar `S` is below
-the lift, the difference is added neutrally (raw `S = -40` with a channel at
+`C_display = max(0, C + lift)` requires: whenever the composed scalar `S` is
+below the floor of raw 40 (Q5.11 64), `lift = 40 - S` is added neutrally (raw `S = -40` with a channel at
 raw `-100` lifts that channel to raw `-20`, which then clamps to 0), and only
 then the window attenuation runs, so dark remembered
 geometry keeps rendering at raw `(40, 40, 40)` rather than black. The lift is
