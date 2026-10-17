@@ -1360,20 +1360,16 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             int physical_y = (y + map_cache_origin_y) % height;
             size_t index = (size_t)physical_y * width + physical_x;
             map_cell_t *cell = map_cell_store_slot(level, index, false);
-            bool had_light_state =
-                level->headers[index].light_state != MAP_LIGHT_CACHE_UNKNOWN ||
-                (cell != NULL && (cell->lights != NULL || cell->light_keyframe != NULL));
+            /* Cells leaving the window are no longer updated by the server:
+             * fog keeps its last signed base radiance and keyframe, its
+             * remembered occluders and its last authorized coarse levels, as
+             * the server freezes them for fog and a soft clear keeps them. */
+            if (cell != NULL && cell->emitters != NULL && !cell->fow) {
+                map_emitter_revision_bump(level_index);
+            }
             if (cell != NULL && (!cell->fow || cell->structural_fow)) {
                 map_clear_live_cell(cell);
-                map_cell_clear_light_state(cell);
             }
-            if (had_light_state) {
-                map_cell_store_set_light_state(level, index, MAP_LIGHT_CACHE_CLEARED);
-            }
-            /* Cells leaving the window are no longer updated by the server:
-             * fog keeps its remembered occluders and its last authorized
-             * coarse levels, as the server freezes them for fog. */
-            map_emitter_revision_bump(level_index);
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
         }
@@ -2164,6 +2160,9 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                                sizeof(level_cells[level]->headers[cell]));
                     }
                     level_lighting_revision[level]++;
+                    /* The origin may not move, so the store alone must stop
+                     * matching a field built from the discarded cells. */
+                    map_emitter_revision_bump(level);
                 }
             }
             map_cache_origin_x = 0;
@@ -3171,6 +3170,13 @@ void map_set_data(int x,
  * level: the server keeps updating that level while its cache is valid. A
  * hard clear revokes both.
  */
+/** The occluder word the emitter field evaluates for a cell: zero when unknown. */
+static uint32_t map_cell_effective_occluder(const map_cell_header_t *header) {
+    return (header->client_light_known & 2U)
+               ? client_lighting_occluder(header->occluder, header->occluder_horizontal)
+               : 0;
+}
+
 static void map_cell_clear_client_light(size_t index, bool hard) {
     map_cell_header_t *header = &cells->headers[index];
     if (!hard || header->client_light_known == 0) {
@@ -3188,10 +3194,10 @@ void map_clear_cell(int x, int y, bool hard) {
     map_state_transaction_record_cell(x, y);
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
-    /* Only a clear that removes emitters, or occluders on a hard clear,
-     * changes the emitter field; an idempotent clear relights nothing. */
+    /* Only a clear that removes emitters, or an evaluated occluder on a hard
+     * clear, changes the emitter field; an idempotent clear relights nothing. */
     if ((cell != NULL && cell->emitters != NULL) ||
-        (hard && (cells->headers[index].client_light_known & 2U))) {
+        (hard && map_cell_effective_occluder(&cells->headers[index]) != 0)) {
         map_emitter_revision_bump(current_level_index);
     }
     map_cell_clear_client_light(index, hard);
@@ -3362,11 +3368,11 @@ void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t 
         header->occluder_horizontal == horizontal && header->occluder_vertical == vertical) {
         return;
     }
-    /* The emitter field reads only the evaluated occluder word, so a change
-     * of any other bit or of the vertical byte never rebuilds it. */
-    bool evaluated = !(header->client_light_known & 2U) ||
-                     client_lighting_occluder(header->occluder, header->occluder_horizontal) !=
-                         client_lighting_occluder(bits, horizontal);
+    /* The emitter field reads only the evaluated occluder word, an unknown
+     * occluder reading as zero, so a change of any other bit, of the vertical
+     * byte or of knownness alone never rebuilds it. */
+    bool evaluated =
+        map_cell_effective_occluder(header) != client_lighting_occluder(bits, horizontal);
     header->occluder = bits;
     header->occluder_horizontal = horizontal;
     header->occluder_vertical = vertical;
@@ -5909,8 +5915,11 @@ bool map_lighting_diagnostic_get(int depth,
 
     const map_cell_light_record_t *light = map_cell_light_record_read(cell, sub_layer);
     diagnostic->received = light->known != 0;
-    diagnostic->received_scalar = light->radiance;
-    memcpy(diagnostic->received_rgb, light->rgb_radiance, sizeof(diagnostic->received_rgb));
+    /* Base endpoints are signed words; report them as composition reads them. */
+    diagnostic->received_scalar = (int16_t)light->radiance;
+    for (size_t channel = 0; channel < 3; channel++) {
+        diagnostic->received_rgb[channel] = (int16_t)light->rgb_radiance[channel];
+    }
     diagnostic->received_rgb_explicit = light->rgb_explicit != 0;
 
     const map_cell_light_keyframe_record_t *keyframe = map_cell_light_keyframe_record_read(cell);
@@ -5919,8 +5928,10 @@ bool map_lighting_diagnostic_get(int depth,
     diagnostic->keyframe_start_seconds = keyframe->start_seconds;
     diagnostic->keyframe_end_seconds = keyframe->end_seconds;
     diagnostic->next_known = light->next_known != 0;
-    diagnostic->next_scalar = light->next_radiance;
-    memcpy(diagnostic->next_rgb, light->next_rgb_radiance, sizeof(diagnostic->next_rgb));
+    diagnostic->next_scalar = (int16_t)light->next_radiance;
+    for (size_t channel = 0; channel < 3; channel++) {
+        diagnostic->next_rgb[channel] = (int16_t)light->next_rgb_radiance[channel];
+    }
     diagnostic->next_rgb_explicit = light->next_rgb_explicit != 0;
     diagnostic->missing = !diagnostic->received && !diagnostic->received_rgb_explicit &&
                           !diagnostic->keyframe_valid && light->radiance == 0;
@@ -6087,10 +6098,10 @@ map_lighting_diagnostic_emit_tile(int depth, int x, int y, int sub_layer, bool s
     draw_info_format(COLOR_WHITE,
                      "lightdiag v%u x=%d y=%d depth=%d sub=%u "
                      "state=visible:%u remembered:%u fogged:%u stale:%u missing:%u cleared:%u "
-                     "source=server-map2-aggregate received:%u scalar:%u rgb:%u,%u,%u "
+                     "source=server-map2-aggregate received:%u scalar:%d rgb:%d,%d,%d "
                      "rgb-explicit:%u unit=Q5.11(sample/2048) "
                      "keyframe:valid:%u generation:%" PRIu64 " start:%" PRIu64 " end:%" PRIu64
-                     " next:%u scalar:%u rgb:%u,%u,%u rgb-explicit:%u "
+                     " next:%u scalar:%d rgb:%d,%d,%d rgb-explicit:%u "
                      "working:available:%u scalar:%u rgb:%u,%u,%u interpolated:%u borrowed:%u "
                      "presentation:mode:%s available:%u brightness:%u rgb:%u,%u,%u reasons=%s",
                      MAP_LIGHTING_DIAGNOSTIC_VERSION,
@@ -6577,6 +6588,24 @@ bool widget_map_client_lighting_state_test(void) {
                      0x1112, 2);
     success = success && level_emitter_revision[current_level_index] != emitter_revision;
     map_clear_cell(9, 9, true);
+    /* Unknown and known-zero occluders are the same evaluator input. */
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0, 3);
+    map_clear_cell(9, 9, true);
+    map_set_occluder(9, 9, 0, 0, 0);
+    map_clear_cell(9, 9, true);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
+    /* Scrolling a lit tile into fog keeps its signed base, as a soft clear
+     * does, so remembered geometry never borrows neighboring light. */
+    map_set_light_radiance(11, 9, 0, (uint16_t)map_protocol_signed_radiance_encode(-160));
+    map_cache_mark_fow(cells, current_level_index, 11 + MAP_STARTX, 12 + MAP_STARTX,
+                       9 + MAP_STARTY, 10 + MAP_STARTY, map_width * MAP_FOW_SIZE,
+                       map_height * MAP_FOW_SIZE);
+    const map_cell_light_record_t *fog_light =
+        map_cell_light_record_read(MAP_CELL_GET_MIDDLE(11, 9), 0);
+    success = success && MAP_CELL_GET_MIDDLE(11, 9)->fow && fog_light->known &&
+              (int16_t)fog_light->radiance == -256;
+    map_clear_cell(11, 9, true);
     /* A header-only update is a visible change too. */
     map_cell_snapshot(6, 6, &before);
     map_set_local_light(6, 6, map_protocol_local_light_encode(2, false));
@@ -6804,6 +6833,11 @@ bool widget_map_lighting_diagnostic_test(void) {
         success = fixture_received && diagnostic.received &&
                   diagnostic.received_scalar == fixtures[index].scalar;
     }
+    /* A negative signed base is reported as the value composition uses. */
+    map_set_light_radiance(8, 8, 0, (uint16_t)map_protocol_signed_radiance_encode(-160));
+    success = success && map_lighting_diagnostic_get(0, 8, 8, 0, false, &diagnostic) &&
+              diagnostic.received_scalar == -256;
+    map_set_light_radiance(8, 8, 0, 2048);
     bool got = success && map_lighting_diagnostic_get(0, 8, 8, 0, false, &diagnostic);
     success = success && got && diagnostic.visible && !diagnostic.fogged && diagnostic.received &&
               diagnostic.working_available && diagnostic.received_scalar == 2048 &&
@@ -11492,7 +11526,7 @@ static void map_edge_lighting_vertex(const char *phase, int marker, int x, int y
                value.remembered ? "true" : "false",
                value.reasons);
         if (value.visible && !value.fogged) {
-            printf(",\"received\":%s,\"received_scalar\":%u,\"received_rgb\":[%u,%u,%u],"
+            printf(",\"received\":%s,\"received_scalar\":%d,\"received_rgb\":[%d,%d,%d],"
                    "\"working_available\":%s,\"working_scalar\":%u,\"working_rgb\":[%u,%u,%u],"
                    "\"presentation_available\":%s,\"presentation_rgb\":[%u,%u,%u]",
                    value.received ? "true" : "false",

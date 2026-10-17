@@ -264,8 +264,9 @@ typedef struct map_lighting_diagnostic {
 
     /** Current server-authorized MAP2 aggregate endpoint is present. */
     bool received;
-    uint16_t received_scalar;
-    uint16_t received_rgb[3];
+    /** Signed Q4.11 base words, as composition reads them. */
+    int16_t received_scalar;
+    int16_t received_rgb[3];
     bool received_rgb_explicit;
 
     /** The optional timed MAP2 endpoint which the client may interpolate. */
@@ -274,8 +275,8 @@ typedef struct map_lighting_diagnostic {
     uint64_t keyframe_generation;
     uint64_t keyframe_start_seconds;
     uint64_t keyframe_end_seconds;
-    uint16_t next_scalar;
-    uint16_t next_rgb[3];
+    int16_t next_scalar;
+    int16_t next_rgb[3];
     bool next_rgb_explicit;
 
     /** Client working value after temporal resolution and bounded borrowing. */
