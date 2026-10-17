@@ -30,7 +30,7 @@ class ProtocolCapabilityTests(unittest.TestCase):
                     (headers / ('talk.h' if case == 'missing_talk' else 'rendezvous_admission.h')).unlink()
                 replacements = {
                     'pre_talk': ('CMD_TALK_NPC_TARGET = 7,', ''),
-                    'old_revision': ('VERSION 1084U', 'VERSION 1083U'),
+                    'old_revision': ('VERSION 1085U', 'VERSION 1084U'),
                     'wrong_mode': ('CMD_TALK_CLOSE = 6,', 'CMD_TALK_CLOSE = 8,'),
                     'wrong_bound': ('MESSAGE_MAX 4095U', 'MESSAGE_MAX 4096U'),
                     'comment_only': ('CMD_TALK_NPC_TARGET = 7,', '// CMD_TALK_NPC_TARGET = 7,'),
@@ -48,7 +48,7 @@ class ProtocolCapabilityTests(unittest.TestCase):
                 if case == 'shadowed':
                     earlier = root / 'earlier/atrinik/protocol'
                     earlier.mkdir(parents=True)
-                    (earlier / 'game_commands.h').write_text(commands.read_text().replace('VERSION 1084U', 'VERSION 1072U'))
+                    (earlier / 'game_commands.h').write_text(commands.read_text().replace('VERSION 1085U', 'VERSION 1072U'))
                     include = str(root / 'earlier') + ';' + include
                 (root / 'CMakeLists.txt').write_text(
                     'cmake_minimum_required(VERSION 3.21)\nproject(capabilities NONE)\n'

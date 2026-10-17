@@ -92,6 +92,20 @@ typedef struct MapCell_struct {
     /** Timed-light generation for the cached next endpoint. */
     uint64_t light_next_generation;
 
+    /* 64-bit protocol-1085 cache fields sit together so they add no
+     * alignment padding to every cell (client lighting budget). */
+    /** Last occluder bits sent, vertical attenuation in bits 16-19 (1085). */
+    uint64_t occluder;
+
+    /** Layers whose last sent object carried an emitter, one bit each. */
+    uint64_t emitter_layers;
+
+    /** Emitter layers to resend on the next update because a value changed. */
+    uint64_t emitter_stale;
+
+    /** FNV-1a digest of every emitter the cell currently shows. */
+    uint32_t emitter_digest;
+
     /** Last next-hour RGB endpoint sent to the client. */
     uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
 
@@ -109,6 +123,14 @@ typedef struct MapCell_struct {
 
     /** Whether the fog-of-war state has been sent at least once. */
     uint8_t fow_known;
+
+    /** Encoded coarse local light per sub-layer, and how many were sent. */
+    uint8_t local_light[NUM_SUB_LAYERS];
+    uint8_t local_light_count;
+
+    /** Bit 0: local_light sent; bit 1: occluder sent; bit 3: the cell was
+     * authorized and is now remembered fog that keeps receiving light. */
+    uint8_t client_light_known;
 
     /** Faces we sent. */
     int16_t faces[NUM_REAL_LAYERS];

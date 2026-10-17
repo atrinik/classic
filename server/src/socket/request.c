@@ -1037,6 +1037,293 @@ static int16_t map_space_support_height(MapSpace *msp) {
         }                                                                                       \
     }
 
+/** Remembered fog that keeps receiving client light (MapCell bit 3). */
+#define MAP2_CLIENT_LIGHT_REMEMBERED 8U
+
+/**
+ * Whether a view cell is in the viewer's view this update: inside the window,
+ * on a map, not hidden or behind a wall boundary, and not remembered fog.
+ */
+static bool map2_cell_in_view(object *pl, int depth, int ax, int ay) {
+    socket_struct *cs = CONTR(pl)->cs;
+    if (depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH || ax < 0 || ay < 0 ||
+        ax >= cs->mapx || ay >= cs->mapy) {
+        return false;
+    }
+    uint8_t d = CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(depth)][ax][ay];
+    map_level_visibility visibility = CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(depth)][ax][ay];
+    return !(d & BLOCKED_LOS_OUT_OF_MAP) && visibility != MAP_LEVEL_HIDDEN &&
+           visibility != MAP_LEVEL_WALL_BOUNDARY && !(depth <= 0 && (d & BLOCKED_LOS_BLOCKED));
+}
+
+/** Occluder face mask of the north, east, south, west, upper and lower view
+ * neighbors of a cell that are in view, for light_occluder_faces(). */
+static uint8_t map2_neighbors_in_view(object *pl, int depth, int ax, int ay) {
+    static const int8_t offsets[6][3] = {
+        {0, -1, 0}, {1, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
+    };
+    uint8_t mask = 0;
+    for (size_t i = 0; i < arraysize(offsets); i++) {
+        if (map2_cell_in_view(pl, depth + offsets[i][2], ax + offsets[i][0], ay + offsets[i][1])) {
+            mask |= (uint8_t)(1U << i);
+        }
+    }
+    return mask;
+}
+
+/**
+ * Send the coarse level of a remembered fog cell without disclosing any
+ * object layer. The client retains it in fog and composes it there.
+ */
+/** Shortest level count describing per-sub-layer levels: sub-layers from the
+ * count on reuse its last level, so trailing equal levels collapse. */
+static uint8_t map2_local_light_count(const uint8_t levels[NUM_SUB_LAYERS]) {
+    uint8_t count = NUM_SUB_LAYERS;
+    while (count > 1 && levels[count - 1] == levels[count - 2]) {
+        count--;
+    }
+    return count;
+}
+
+/** Whether the client already holds exactly these levels. */
+static bool map2_local_light_known(const MapCell *cached, const uint8_t levels[NUM_SUB_LAYERS]) {
+    uint8_t count = map2_local_light_count(levels);
+    return (cached->client_light_known & 1U) && cached->local_light_count == count &&
+           memcmp(cached->local_light, levels, count) == 0;
+}
+
+/** Write a LOCAL_LIGHT payload and record it as sent. */
+static void map2_write_local_light(packet_struct *packet,
+                                   MapCell *cached,
+                                   const uint8_t levels[NUM_SUB_LAYERS]) {
+    uint8_t count = map2_local_light_count(levels);
+    packet_debug_data(packet, 1, "Coarse local light levels");
+    packet_writer_write_uint8(packet, count);
+    for (uint8_t i = 0; i < count; i++) {
+        packet_writer_write_uint8(packet, levels[i]);
+    }
+    memcpy(cached->local_light, levels, count);
+    cached->local_light_count = count;
+    cached->client_light_known |= 1U;
+}
+
+/** One sub-layer's light sample, taken at the space it is lit at. */
+typedef struct map2_light_sample {
+    MapSpace *space;
+    int raw;
+    int present;
+    uint16_t radiance;
+    uint16_t rgb[3];
+    bool next_ready;
+    /** The sampled map's keyframe is not ready: the update must snap, but
+     * only once this sample is known to be the one the sub-layer keeps. */
+    bool snap;
+} map2_light_sample_t;
+
+/**
+ * Sample one sub-layer's light at a space: raw gameplay light (with the
+ * viewer's tli and XRAY), and the signed base radiance without local light or
+ * tli, which the client composes from the local-light byte.
+ */
+static void map2_sample_light(object *pl,
+                              mapstruct *map,
+                              int x,
+                              int y,
+                              bool xray,
+                              map2_light_sample_t *sample) {
+    sample->next_ready = false;
+    sample->snap = false;
+    if (map->celestial_schema == 1) {
+        sample->next_ready = celestial_light_keyframe_request(map, (uint64_t)todtick);
+        sample->snap = !sample->next_ready;
+    }
+    sample->space = GET_MAP_SPACE_PTR(map, x, y);
+    sample->raw = map_get_darkness(map, x, y, NULL);
+    if (CONTR(pl)->tli) {
+        sample->raw += global_darkness_table[MAX_DARKNESS];
+    }
+    /* Signed base carries negative environment, so darkness composes on the
+     * client everywhere. The viewer's tli travels as a local-light bit, so
+     * remembered tiles follow a toggle. */
+    sample->present = sample->raw - sample->space->light_source_value;
+    if (CONTR(pl)->tli) {
+        sample->present -= global_darkness_table[MAX_DARKNESS];
+    }
+    /* XRAY vision is an explicit authorization to see through darkness.
+     * Static MAP2 geometry remains authorized at zero radiance so the client
+     * can retain it for remembered-world presentation; live entities and
+     * effects remain light-gated. Client lighting applies the floor after it
+     * adds local light, as announced in the local byte. */
+    if (sample->raw < 100 && xray) {
+        sample->raw = 100;
+    }
+    /* Signed words travel as their uint16 bit patterns, so the delta cache is
+     * unchanged. */
+    int16_t scalar, rgb[3];
+    light_base_radiance_signed(sample->space, sample->present, &scalar, rgb);
+    sample->radiance = (uint16_t)scalar;
+    for (size_t channel = 0; channel < 3; channel++) {
+        sample->rgb[channel] = (uint16_t)rgb[channel];
+    }
+}
+
+/**
+ * Send the light levels of a remembered tile: its current signed base
+ * radiance, colored channels, next-hour keyframe endpoint and coarse levels,
+ * each only when it changed against the cache. A previously sent tile keeps
+ * receiving these while the per-socket cache is valid (maintainer decision);
+ * the record carries no layer, object, emitter or occluder.
+ */
+static bool map_append_remembered_tile(packet_struct *packet,
+                                       MapCell *cached,
+                                       uint16_t mask,
+                                       const uint8_t levels[NUM_SUB_LAYERS],
+                                       const map2_light_sample_t *sample,
+                                       bool timed_light_descriptor,
+                                       uint64_t timed_light_generation) {
+    uint16_t scalar = sample->radiance;
+    uint16_t rgb[3];
+    memcpy(rgb, sample->rgb, sizeof(rgb));
+    bool colored = rgb[0] != scalar || rgb[1] != scalar || rgb[2] != scalar;
+    uint8_t rgb_bitmap = colored ? (uint8_t)((1U << NUM_SUB_LAYERS) - 1) : 0;
+
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        if (!cached->light_known[sub_layer] || cached->light_radiance[sub_layer] != scalar) {
+            mask |= sub_layer == 0 ? MAP2_MASK_LIGHT_LEVEL : MAP2_MASK_LIGHT_LEVEL_MORE;
+        }
+    }
+    bool rgb_changed = rgb_bitmap != cached->light_rgb_explicit;
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS && !rgb_changed; sub_layer++) {
+        rgb_changed = (colored && !cached->light_rgb_known[sub_layer]) ||
+                      (cached->light_rgb_known[sub_layer] &&
+                       memcmp(cached->light_rgb_radiance[sub_layer], rgb, sizeof(rgb)) != 0);
+    }
+
+    /* The next-hour endpoint, as the visible path derives it. */
+    uint16_t next_scalar = scalar;
+    uint16_t next_rgb[3];
+    memcpy(next_rgb, rgb, sizeof(next_rgb));
+    const MapSpace *space = sample->space;
+    if (sample->next_ready && (space->celestial_light_next_value != space->celestial_light_value ||
+                               memcmp(space->celestial_light_next_rgb,
+                                      space->celestial_light_rgb,
+                                      sizeof(space->celestial_light_rgb)) != 0)) {
+        MapSpace next_space = *space;
+        int next_raw = sample->present - space->celestial_light_value +
+                       space->celestial_light_next_value;
+        next_space.celestial_light_value = space->celestial_light_next_value;
+        memcpy(next_space.celestial_light_rgb,
+               space->celestial_light_next_rgb,
+               sizeof(next_space.celestial_light_rgb));
+        int16_t signed_scalar, signed_rgb[3];
+        light_base_radiance_signed(&next_space, next_raw, &signed_scalar, signed_rgb);
+        next_scalar = (uint16_t)signed_scalar;
+        for (size_t channel = 0; channel < 3; channel++) {
+            next_rgb[channel] = (uint16_t)signed_rgb[channel];
+        }
+    }
+    bool next_colored =
+        next_rgb[0] != next_scalar || next_rgb[1] != next_scalar || next_rgb[2] != next_scalar;
+    uint8_t next_rgb_bitmap = next_colored ? (uint8_t)((1U << NUM_SUB_LAYERS) - 1) : 0;
+    uint8_t next_bitmap = 0;
+    bool next_changed = false;
+    if (timed_light_descriptor) {
+        next_changed = cached->light_next_generation != timed_light_generation ||
+                       cached->light_next_rgb_explicit != next_rgb_bitmap;
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            bool differs = !cached->light_next_known[sub_layer] ||
+                           cached->light_next_radiance[sub_layer] != next_scalar ||
+                           memcmp(cached->light_next_rgb_radiance[sub_layer], next_rgb,
+                                  sizeof(next_rgb)) != 0 ||
+                           cached->light_next_generation != timed_light_generation;
+            if (differs || next_scalar != scalar ||
+                memcmp(next_rgb, rgb, sizeof(rgb)) != 0) {
+                next_bitmap |= (uint8_t)(1U << sub_layer);
+            }
+            next_changed |= differs;
+        }
+    }
+
+    uint8_t ext_flags = 0;
+    if (rgb_changed) {
+        ext_flags |= MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16;
+    }
+    if (timed_light_descriptor && next_changed) {
+        ext_flags |= MAP2_FLAG_EXT_LIGHT_KEYFRAME;
+    }
+    if (!map2_local_light_known(cached, levels)) {
+        ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
+    }
+    if (ext_flags == 0 && !(mask & (MAP2_MASK_LIGHT_LEVEL | MAP2_MASK_LIGHT_LEVEL_MORE))) {
+        return false;
+    }
+
+    packet_debug_data(packet, 0, "Remembered tile light, mask");
+    packet_writer_write_uint16(packet, mask);
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        if ((sub_layer == 0 && !(mask & MAP2_MASK_LIGHT_LEVEL)) ||
+            (sub_layer != 0 && !(mask & MAP2_MASK_LIGHT_LEVEL_MORE))) {
+            continue;
+        }
+        packet_debug_data(packet, 1, "Q5.11 scalar radiance (sub-layer: %d)", sub_layer);
+        packet_writer_write_uint16(packet, scalar);
+        cached->light_radiance[sub_layer] = scalar;
+        cached->light_known[sub_layer] = 1;
+        if (!colored) {
+            for (size_t channel = 0; channel < 3; channel++) {
+                cached->light_rgb_radiance[sub_layer][channel] = scalar;
+            }
+            cached->light_rgb_known[sub_layer] = 1;
+        }
+    }
+    packet_debug_data(packet, 1, "Number of layers");
+    packet_writer_write_uint8(packet, 0);
+    packet_debug_data(packet, 1, "Extended tile flags");
+    packet_writer_write_uint8(packet, ext_flags);
+    if (ext_flags & MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16) {
+        packet_debug_data(packet, 1, "Colored-light sub-layer bitmap");
+        packet_writer_write_uint8(packet, rgb_bitmap);
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            if (rgb_bitmap & (1U << sub_layer)) {
+                for (size_t channel = 0; channel < 3; channel++) {
+                    packet_writer_write_uint16(packet, rgb[channel]);
+                }
+            }
+            memcpy(cached->light_rgb_radiance[sub_layer], rgb, sizeof(rgb));
+            cached->light_rgb_known[sub_layer] = 1;
+        }
+        cached->light_rgb_explicit = rgb_bitmap;
+    }
+    if (ext_flags & MAP2_FLAG_EXT_LIGHT_KEYFRAME) {
+        next_bitmap |= next_rgb_bitmap;
+        packet_debug_data(packet, 1, "Next-hour scalar endpoint bitmap");
+        packet_writer_write_uint8(packet, next_bitmap);
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            if (next_bitmap & (1U << sub_layer)) {
+                packet_writer_write_uint16(packet, next_scalar);
+            }
+            cached->light_next_radiance[sub_layer] = next_scalar;
+            cached->light_next_known[sub_layer] = 1;
+        }
+        packet_debug_data(packet, 1, "Next-hour RGB endpoint bitmap");
+        packet_writer_write_uint8(packet, next_rgb_bitmap);
+        for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+            if (next_rgb_bitmap & (1U << sub_layer)) {
+                for (size_t channel = 0; channel < 3; channel++) {
+                    packet_writer_write_uint16(packet, next_rgb[channel]);
+                }
+            }
+            memcpy(cached->light_next_rgb_radiance[sub_layer], next_rgb, sizeof(next_rgb));
+        }
+        cached->light_next_rgb_explicit = next_rgb_bitmap;
+        cached->light_next_generation = timed_light_generation;
+    }
+    if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
+        map2_write_local_light(packet, cached, levels);
+    }
+    return true;
+}
+
 /** Send changed base geometry without disclosing any drawable object layer. */
 static bool map_append_support_height(packet_struct *packet,
                                       MapCell *cached,
@@ -1102,12 +1389,23 @@ void draw_client_map2(object *pl) {
     int special_vision;
     uint16_t mask;
     int layer, raw_light[NUM_SUB_LAYERS], light_set[NUM_SUB_LAYERS];
+    /* Presentation raw light: base light only when clients compute local
+     * light themselves. Gameplay darkness gating keeps using raw_light. */
+    int present_raw[NUM_SUB_LAYERS];
     uint16_t light_radiance[NUM_SUB_LAYERS];
     uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
     uint16_t light_next_radiance[NUM_SUB_LAYERS];
     uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
     MapSpace *light_spaces[NUM_SUB_LAYERS];
+    /* The candidate each sub-layer's gating light was taken from, and
+     * whether that was another space than the cell: a candidate rejected
+     * afterwards by darkness gating or plugin visibility hands gating back to
+     * the cell. The light sent is always the cell's own. */
+    const object *light_sample_objects[NUM_SUB_LAYERS];
+    bool light_sample_remote[NUM_SUB_LAYERS];
     bool light_next_ready[NUM_SUB_LAYERS];
+    /* Whether a sub-layer's kept sample needs the update to snap. */
+    bool light_next_snap[NUM_SUB_LAYERS];
     int ext_flags, anim_num;
     int num_layers;
     object *tmp, *tmp2;
@@ -1350,9 +1648,42 @@ void draw_client_map2(object *pl) {
                  * static fog geometry. Camera cover instead serializes explicit
                  * layer removals so covered interiors cannot persist as fog. */
                 if (depth == 0 && blocksview && !camera_covered) {
+                    /* Only a cell the client was sent becomes remembered fog
+                     * that keeps receiving light while this cache is valid. */
+                    MapCell *previous =
+                        map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, false);
+                    bool remembered = previous != NULL &&
+                                      (previous->cleared != 1
+                                           ? previous->fow_known != 0
+                                           : (previous->client_light_known &
+                                              MAP2_CLIENT_LIGHT_REMEMBERED) != 0);
+                    /* A previously sent tile keeps receiving its current
+                     * coarse level (maintainer decision: light levels of
+                     * previously sent tiles are disclosed); no object,
+                     * emitter or occluder is sent for it. */
+                    uint8_t remembered_light[NUM_SUB_LAYERS];
+                    if (remembered) {
+                        int8_t level = light_local_level(m, nx, ny);
+                        for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                            remembered_light[sub_layer] =
+                                map_protocol_local_light_encode(level, (special_vision & 1) != 0) |
+                                (CONTR(pl)->tli ? MAP2_LOCAL_LIGHT_TLI : 0);
+                        }
+                    }
                     map_if_clearcell(false);
                     mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
+                    if (remembered) {
+                        mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
+                        map2_light_sample_t sample;
+                        map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0, &sample);
+                        if (sample.snap) {
+                            timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+                        }
+                        map_append_remembered_tile(packet, mp, mask, remembered_light, &sample,
+                                                   timed_light_descriptor,
+                                                   timed_light_generation);
+                    }
                     continue;
                 }
                 if (depth > 0 && blocksview && level_visibility == MAP_LEVEL_VISIBLE) {
@@ -1441,6 +1772,7 @@ void draw_client_map2(object *pl) {
 
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     light_set[sub_layer] = 0;
+                    present_raw[sub_layer] = 0;
                     light_radiance[sub_layer] = 0;
                     light_next_radiance[sub_layer] = 0;
                     memset(light_rgb_radiance[sub_layer], 0, sizeof(light_rgb_radiance[sub_layer]));
@@ -1448,11 +1780,19 @@ void draw_client_map2(object *pl) {
                            0,
                            sizeof(light_next_rgb_radiance[sub_layer]));
                     light_spaces[sub_layer] = NULL;
+                    light_sample_remote[sub_layer] = false;
+                    light_sample_objects[sub_layer] = NULL;
                     light_next_ready[sub_layer] = false;
+                    light_next_snap[sub_layer] = false;
                 }
 
                 /* Initialize default values for some variables. */
                 ext_flags = 0;
+                /* Occluders of the objects actually sent to this viewer, and the
+                 * emitters it shows, digested to detect value-only changes. */
+                uint64_t cell_occluder = 0;
+                uint32_t cell_emitter_digest = UINT32_C(2166136261);
+                uint64_t cell_emitter_sent = 0;
                 packet_writer_mark(packet, &packet_save_buf);
                 anim_num = 0;
                 uint8_t anim_type[NUM_SUB_LAYERS] = {0};
@@ -1560,39 +1900,46 @@ void draw_client_map2(object *pl) {
                         if (tmp != NULL &&
                             (!light_set[sub_layer] || (layer == LAYER_EFFECT && sub_layer > 0))) {
                             light_set[sub_layer] = 1;
-                            if (tmp->map->celestial_schema == 1) {
-                                light_next_ready[sub_layer] =
-                                    celestial_light_keyframe_request(tmp->map, (uint64_t)todtick);
-                                if (!light_next_ready[sub_layer]) {
-                                    timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
-                                }
+                            light_sample_objects[sub_layer] = tmp;
+                            map2_light_sample_t sample;
+                            map2_sample_light(pl, tmp->map, tmp->x, tmp->y, (special_vision & 1) != 0,
+                                              &sample);
+                            /* Gameplay darkness gating reads the candidate's
+                             * own space; the light sent is the record cell's,
+                             * the authorized tile, never another space. */
+                            light_sample_remote[sub_layer] = sample.space != msp;
+                            int gating_raw = sample.raw;
+                            if (light_sample_remote[sub_layer]) {
+                                map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0,
+                                                  &sample);
                             }
-                            light_spaces[sub_layer] = GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y);
-                            raw_light[sub_layer] = map_get_darkness(tmp->map, tmp->x, tmp->y, NULL);
-
-                            if (CONTR(pl)->tli) {
-                                raw_light[sub_layer] += global_darkness_table[MAX_DARKNESS];
-                            }
-
-                            /* XRAY vision is an explicit authorization to see
-                             * through darkness. Static MAP2 geometry remains
-                             * authorized at zero radiance so the client can
-                             * retain it for remembered-world presentation;
-                             * live entities and effects remain light-gated. */
-                            if (raw_light[sub_layer] < 100 && special_vision & 1) {
-                                raw_light[sub_layer] = 100;
-                            }
-
-                            light_radiance_from_raw(GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y),
-                                                    raw_light[sub_layer],
-                                                    &light_radiance[sub_layer],
-                                                    light_rgb_radiance[sub_layer]);
+                            sample.raw = gating_raw;
+                            light_next_ready[sub_layer] = sample.next_ready;
+                            light_next_snap[sub_layer] = sample.snap;
+                            light_spaces[sub_layer] = sample.space;
+                            raw_light[sub_layer] = sample.raw;
+                            present_raw[sub_layer] = sample.present;
+                            light_radiance[sub_layer] = sample.radiance;
+                            memcpy(light_rgb_radiance[sub_layer], sample.rgb, sizeof(sample.rgb));
                         }
 
                         /* The viewer remains visible even in total darkness. This
                          * exception grants no visibility to other live objects. */
                         if (tmp != NULL && tmp != pl && raw_light[sub_layer] <= 0 &&
                             !map_layer_is_remembered_geometry(layer) && !roof_surface) {
+                            if (light_sample_objects[sub_layer] == tmp) {
+                                /* The rejected candidate's own space no
+                                 * longer gates later objects of this
+                                 * sub-layer: the cell's light does. */
+                                light_sample_objects[sub_layer] = NULL;
+                                if (light_sample_remote[sub_layer]) {
+                                    map2_light_sample_t sample;
+                                    map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0,
+                                                      &sample);
+                                    raw_light[sub_layer] = sample.raw;
+                                    light_sample_remote[sub_layer] = false;
+                                }
+                            }
                             tmp = NULL;
                         }
 
@@ -1785,19 +2132,33 @@ void draw_client_map2(object *pl) {
                              * reveal transitions produce the required wire
                              * update. */
                             if (hidden) {
+                                if (light_sample_objects[sub_layer] == tmp) {
+                                    light_sample_objects[sub_layer] = NULL;
+                                    if (light_sample_remote[sub_layer]) {
+                                        map2_light_sample_t sample;
+                                        map2_sample_light(pl, m, nx, ny,
+                                                          (special_vision & 1) != 0, &sample);
+                                        raw_light[sub_layer] = sample.raw;
+                                        light_sample_remote[sub_layer] = false;
+                                    }
+                                }
                                 if (flags2 & MAP2_FLAG2_PROBE) {
                                     CONTR(pl)->target_object = NULL;
                                     CONTR(pl)->target_object_count = 0;
                                     target_cleared = true;
                                 }
 
-                                bool was_cached = mp->faces[socket_layer] != 0;
+                                uint64_t layer_bit = UINT64_C(1) << socket_layer;
+                                bool was_cached = mp->faces[socket_layer] != 0 ||
+                                                  (mp->emitter_layers & layer_bit) != 0;
                                 mp->faces[socket_layer] = 0;
                                 mp->quick_pos[socket_layer] = 0;
                                 mp->flags[socket_layer] = 0;
                                 mp->roof[socket_layer] = 0;
                                 mp->door[socket_layer] = 0;
                                 mp->exit[socket_layer] = 0;
+                                mp->emitter_layers &= ~layer_bit;
+                                mp->emitter_stale &= ~layer_bit;
                                 mp->anim_speed[socket_layer] = 0;
                                 mp->anim_facing[socket_layer] = 0;
 
@@ -1829,6 +2190,39 @@ void draw_client_map2(object *pl) {
                                 is_exit = 1;
                             }
 
+                            /* The emitter of an object already being sent
+                             * discloses nothing beyond its face and tile. */
+                            /* Radius, flags and color: bits 32-39, 24-31, 0-23. */
+                            uint64_t emitter = 0;
+                            uint32_t emitter_color = tmp->light_color & UINT32_C(0xffffff);
+                            /* Darkness is achromatic; black positive light is
+                             * sent as it is. Remembered cells in fog carry no
+                             * live light. */
+                            if (!tile_fow && light_emitter_disclosed(pl, tmp) &&
+                                tmp->glow_radius != 0) {
+                                /* Unclamped: the client sums a tile's radii
+                                 * before light_mask saturates them. */
+                                int radius = tmp->glow_radius;
+                                uint8_t emitter_flags =
+                                    radius > 0 && light_emitter_flickers(tmp) ? MAP2_EMITTER_FLICKER
+                                                                              : 0;
+                                emitter = (uint64_t)(uint8_t)(int8_t)radius << 32 |
+                                          (uint64_t)emitter_flags << 24 |
+                                          (radius > 0 ? emitter_color : 0);
+                                flags2 |= MAP2_FLAG2_EMITTER;
+                            }
+                            uint64_t emitter_bit = UINT64_C(1) << socket_layer;
+                            cell_occluder = light_occluder_combine(
+                                cell_occluder, light_occluder_object_bits(tmp));
+                            if (emitter != 0) {
+                                uint64_t entry[2] = {(uint64_t)socket_layer, emitter};
+                                const uint8_t *bytes = (const uint8_t *)entry;
+                                for (size_t i = 0; i < sizeof(entry); i++) {
+                                    cell_emitter_digest = (cell_emitter_digest ^ bytes[i]) *
+                                                          UINT32_C(16777619);
+                                }
+                            }
+
                             if (flags2) {
                                 flags |= MAP2_FLAG_MORE;
                             }
@@ -1850,6 +2244,8 @@ void draw_client_map2(object *pl) {
                                 mp->roof[socket_layer] == is_roof &&
                                 mp->door[socket_layer] == is_door &&
                                 mp->exit[socket_layer] == is_exit &&
+                                ((mp->emitter_layers & emitter_bit) != 0) == (emitter != 0) &&
+                                (mp->emitter_stale & emitter_bit) == 0 &&
                                 (layer != LAYER_LIVING || !IS_LIVE(head) ||
                                  (mp->probe == probe_val &&
                                   mp->target_object_count[sub_layer] == target_object_count)) &&
@@ -1872,6 +2268,13 @@ void draw_client_map2(object *pl) {
                             mp->roof[socket_layer] = is_roof;
                             mp->door[socket_layer] = is_door;
                             mp->exit[socket_layer] = is_exit;
+                            if (emitter != 0) {
+                                mp->emitter_layers |= emitter_bit;
+                            } else {
+                                mp->emitter_layers &= ~emitter_bit;
+                            }
+                            mp->emitter_stale &= ~emitter_bit;
+                            cell_emitter_sent |= emitter_bit;
                             mp->anim_speed[socket_layer] = anim_speed;
                             mp->anim_facing[socket_layer] = anim_facing;
 
@@ -2015,8 +2418,21 @@ void draw_client_map2(object *pl) {
                                     packet_debug_data(packet_layer, 3, "Glow speed");
                                     packet_writer_write_uint8(packet_layer, head->glow_speed);
                                 }
+
+                                if (flags2 & MAP2_FLAG2_EMITTER) {
+                                    packet_debug_data(packet_layer, 3, "Emitter glow radius");
+                                    packet_writer_write_int8(packet_layer,
+                                                             (int8_t)(uint8_t)(emitter >> 32));
+                                    packet_debug_data(packet_layer, 3, "Emitter flags");
+                                    packet_writer_write_uint8(packet_layer, (uint8_t)(emitter >> 24));
+                                    packet_debug_data(packet_layer, 3, "Emitter sRGB");
+                                    packet_writer_write_uint8(packet_layer, (uint8_t)(emitter >> 16));
+                                    packet_writer_write_uint8(packet_layer, (uint8_t)(emitter >> 8));
+                                    packet_writer_write_uint8(packet_layer, (uint8_t)emitter);
+                                }
                             }
-                        } else if (mp->faces[socket_layer]) {
+                        } else if (mp->faces[socket_layer] ||
+                                   (mp->emitter_layers & (UINT64_C(1) << socket_layer)) != 0) {
                             /* Didn't find anything. Now, if we have previously seen
                              * a face on this layer, we will want the client to
                              * clear it. */
@@ -2026,6 +2442,8 @@ void draw_client_map2(object *pl) {
                             mp->roof[socket_layer] = 0;
                             mp->door[socket_layer] = 0;
                             mp->exit[socket_layer] = 0;
+                            mp->emitter_layers &= ~(UINT64_C(1) << socket_layer);
+                            mp->emitter_stale &= ~(UINT64_C(1) << socket_layer);
                             mp->anim_speed[socket_layer] = 0;
                             mp->anim_facing[socket_layer] = 0;
 
@@ -2048,6 +2466,11 @@ void draw_client_map2(object *pl) {
                 uint8_t light_next_rgb_bitmap = 0;
                 bool light_next_changed = false;
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    /* Readiness counts only once the sample is final, so a
+                     * rejected candidate's map never makes the update snap. */
+                    if (light_set[sub_layer] && light_next_snap[sub_layer]) {
+                        timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+                    }
                     uint16_t current_scalar = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
                     uint16_t current_rgb[3] = {current_scalar, current_scalar, current_scalar};
                     if (light_set[sub_layer]) {
@@ -2066,7 +2489,7 @@ void draw_client_map2(object *pl) {
                                 light_spaces[sub_layer]->celestial_light_rgb,
                                 sizeof(light_spaces[sub_layer]->celestial_light_rgb)) != 0)) {
                         MapSpace next_space = *light_spaces[sub_layer];
-                        int next_raw = raw_light[sub_layer] -
+                        int next_raw = present_raw[sub_layer] -
                                        light_spaces[sub_layer]->celestial_light_value +
                                        light_spaces[sub_layer]->celestial_light_next_value;
                         next_space.celestial_light_value =
@@ -2074,10 +2497,12 @@ void draw_client_map2(object *pl) {
                         memcpy(next_space.celestial_light_rgb,
                                light_spaces[sub_layer]->celestial_light_next_rgb,
                                sizeof(next_space.celestial_light_rgb));
-                        light_radiance_from_raw(&next_space,
-                                                next_raw,
-                                                &light_next_radiance[sub_layer],
-                                                light_next_rgb_radiance[sub_layer]);
+                        int16_t scalar, rgb[3];
+                        light_base_radiance_signed(&next_space, next_raw, &scalar, rgb);
+                        light_next_radiance[sub_layer] = (uint16_t)scalar;
+                        for (size_t channel = 0; channel < 3; channel++) {
+                            light_next_rgb_radiance[sub_layer][channel] = (uint16_t)rgb[channel];
+                        }
                     }
 
                     if (light_next_radiance[sub_layer] != current_scalar ||
@@ -2242,6 +2667,43 @@ void draw_client_map2(object *pl) {
                     ext_flags |= MAP2_FLAG_EXT_LIGHT_KEYFRAME;
                 }
 
+                /* Client lighting fields describe only cells the viewer
+                 * currently sees; remembered cells keep their last values. */
+                /* A value-only emitter change on a layer served from cache is
+                 * resent on the next update. */
+                if (cell_emitter_digest != mp->emitter_digest) {
+                    mp->emitter_stale |= mp->emitter_layers & ~cell_emitter_sent;
+                    mp->emitter_digest = cell_emitter_digest;
+                }
+                /* Remembered cells keep receiving the coarse level, which the
+                 * client retains in fog; emitters and occluders describe sent
+                 * objects, so fog withholds them and their layers are resent
+                 * on return through the presence bit. */
+                /* Every sub-layer takes the cell's coarse level, the light of
+                 * the authorized tile, on visible and remembered cells alike. */
+                uint8_t local_light[NUM_SUB_LAYERS];
+                uint64_t occluder = 0;
+                {
+                    int8_t level = light_local_level(m, nx, ny);
+                    for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                        local_light[sub_layer] =
+                            map_protocol_local_light_encode(level, (special_vision & 1) != 0) |
+                            (CONTR(pl)->tli ? MAP2_LOCAL_LIGHT_TLI : 0);
+                    }
+                }
+                if (!map2_local_light_known(mp, local_light)) {
+                    ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
+                }
+                if (!tile_fow) {
+                    occluder = light_occluder_finish(cell_occluder) |
+                               light_occluder_faces(m, nx, ny,
+                                                    map2_neighbors_in_view(pl, depth, ax, ay));
+                    if (!(mp->client_light_known & 2U) || mp->occluder != occluder) {
+                        ext_flags |= MAP2_FLAG_EXT_OCCLUDER;
+                    }
+                }
+                mp->client_light_known &= (uint8_t)~MAP2_CLIENT_LIGHT_REMEMBERED;
+
                 /* Add flags for this tile. */
                 packet_debug_data(packet, 1, "Extended tile flags");
                 packet_writer_write_uint8(packet, ext_flags);
@@ -2311,6 +2773,7 @@ void draw_client_map2(object *pl) {
                     mp->light_next_generation = timed_light_generation;
                 }
 
+
                 if (light_state_discarded) {
                     map_invalidate_light_cache(mp);
                     light_state_invalidated = true;
@@ -2333,6 +2796,23 @@ void draw_client_map2(object *pl) {
                         packet_debug_data(packet, 1, "Animation value");
                         packet_writer_write_int16(packet, anim_value[sub_layer]);
                     }
+                }
+
+                if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
+                    map2_write_local_light(packet, mp, local_light);
+                }
+
+                if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
+                    packet_debug_data(packet, 1, "Occluder bits");
+                    packet_writer_write_uint16(packet, (uint16_t)occluder);
+                    packet_debug_data(packet, 1, "Horizontal face attenuation");
+                    packet_writer_write_uint16(
+                        packet, (uint16_t)(occluder >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT));
+                    packet_debug_data(packet, 1, "Vertical occluder attenuation");
+                    packet_writer_write_uint8(packet,
+                                              (uint8_t)(occluder >> LIGHT_OCCLUDER_VERTICAL_SHIFT));
+                    mp->occluder = occluder;
+                    mp->client_light_known |= 2U;
                 }
 
                 /* If nothing has really changed, go back to the old position

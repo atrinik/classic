@@ -19,6 +19,7 @@
 #include <arch.h>
 #include <object.h>
 #include <swap.h>
+#include <toolkit/map_protocol.h>
 
 START_TEST(test_light_level_anchors) {
     ck_assert_uint_eq(light_level_from_raw(-1), 0);
@@ -1487,6 +1488,528 @@ START_TEST(test_local_glass_floor_attenuates_color_and_neutral_darkness) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_base_radiance_omits_local_color) {
+    MapSpace space = {0};
+    int16_t scalar, radiance[3];
+    uint16_t expected_scalar, expected[3];
+
+    space.light_source_value = 80;
+    space.light_source_positive_value = 80;
+    space.light_source_color_weight = INT64_C(80) * UINT16_MAX;
+    space.light_source_color[0] = INT64_C(80) * UINT16_MAX;
+    space.celestial_light_value = 200;
+    space.celestial_light_rgb[0] = 100;
+    space.celestial_light_rgb[1] = 200;
+    space.celestial_light_rgb[2] = 400;
+    light_base_radiance_signed(&space, 1280, &scalar, radiance);
+
+    /* For positive environment the signed words equal the legacy neutral ones. */
+    MapSpace neutral = space;
+    neutral.light_source_color_weight = 0;
+    memset(neutral.light_source_color, 0, sizeof(neutral.light_source_color));
+    light_radiance_from_raw(&neutral, 1280, &expected_scalar, expected);
+    ck_assert_int_eq(scalar, expected_scalar);
+    for (size_t channel = 0; channel < 3; channel++) {
+        ck_assert_int_eq(radiance[channel], expected[channel]);
+    }
+    /* Celestial hue survives; the local red tint does not. */
+    ck_assert_int_lt(radiance[0], radiance[2]);
+}
+END_TEST
+
+START_TEST(test_client_lighting_base_radiance_keeps_negative_environment) {
+    MapSpace space = {0};
+    int16_t scalar, radiance[3];
+    space.celestial_light_value = 100;
+    space.celestial_light_rgb[0] = 0;
+    space.celestial_light_rgb[1] = 100;
+    space.celestial_light_rgb[2] = 300;
+    /* A darkness floor of raw -400 under raw 100 of celestial light. */
+    light_base_radiance_signed(&space, -300, &scalar, radiance);
+    ck_assert_int_eq(scalar, map_protocol_signed_radiance_encode(-300));
+    ck_assert_int_eq(radiance[0], map_protocol_signed_radiance_encode(-400));
+    ck_assert_int_eq(radiance[1], map_protocol_signed_radiance_encode(-300));
+    ck_assert_int_eq(radiance[2], map_protocol_signed_radiance_encode(-100));
+    /* Equal light composed onto the darkness cancels exactly. */
+    ck_assert_int_eq(scalar + map_protocol_signed_radiance_encode(300), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_pools_and_quantizes) {
+    mapstruct *map = get_empty_map(9, 9);
+    add_colored_light(map, 4, 4, 13, UINT32_C(0xff0000));
+    int32_t peak = GET_MAP_SPACE_PTR(map, 4, 4)->light_source_value;
+    ck_assert_int_gt(peak, 0);
+    int expected = MIN(peak / MAP2_LOCAL_LIGHT_LEVEL_RAW, MAP2_LOCAL_LIGHT_LEVEL_MAX);
+
+    /* The fixed block (3..5, 3..5) holds the source; all nine cells share its
+     * peak, so the level cannot single out the source tile. */
+    for (int y = 3; y <= 5; y++) {
+        for (int x = 3; x <= 5; x++) {
+            ck_assert_int_eq(light_local_level(map, x, y), expected);
+        }
+    }
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            int level = light_local_level(map, x, y);
+            ck_assert_int_ge(level, 0);
+            ck_assert_int_le(level, expected);
+            /* Cells of one block always agree. */
+            ck_assert_int_eq(level, light_local_level(map, x - x % 3, y - y % 3));
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_hides_translation_within_block) {
+    int levels[9];
+    for (int position = 0; position < 9; position++) {
+        mapstruct *map = get_empty_map(9, 9);
+        add_colored_light(map, 3 + position % 3, 3 + position / 3, 13, LIGHT_COLOR_WHITE);
+        levels[position] = light_local_level(map, 4, 4);
+    }
+    for (int position = 1; position < 9; position++) {
+        ck_assert_int_eq(levels[position], levels[0]);
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_neighbors_hide_translation) {
+    /* A source anywhere inside the center block yields the same level in
+     * every block, so neighboring blocks cannot triangulate its tile. */
+    int reference[3][3] = {{0}};
+    for (int position = 0; position < 9; position++) {
+        mapstruct *map = get_empty_map(9, 9);
+        add_colored_light(map, 3 + position % 3, 3 + position / 3, 13, LIGHT_COLOR_WHITE);
+        for (int by = 0; by < 3; by++) {
+            for (int bx = 0; bx < 3; bx++) {
+                int level = light_local_level(map, bx * 3 + 1, by * 3 + 1);
+                if (position == 0) {
+                    reference[by][bx] = level;
+                } else {
+                    ck_assert_int_eq(level, reference[by][bx]);
+                }
+            }
+        }
+    }
+    /* Light bleeds into every neighboring block it reaches, edges at least
+     * as brightly as corners. */
+    ck_assert_int_gt(reference[1][1], 0);
+    ck_assert_int_gt(reference[1][0], 0);
+    ck_assert_int_gt(reference[0][0], 0);
+    ck_assert_int_ge(reference[1][0], reference[0][0]);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_reaches_linked_depths) {
+    /* A hidden source on the level above still reaches this level's coarse
+     * light, as the server's own mask does through the linked depth. */
+    mapstruct *map = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    link_stacked_maps(map, upper);
+    add_colored_light(upper, 4, 4, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(map, 4, 4);
+    ck_assert_int_gt(level, 0);
+    /* Linked levels are one vertical bucket: the same as on its own level. */
+    ck_assert_int_eq(level, light_local_level(upper, 4, 4));
+    /* An unlinked level contributes nothing. */
+    mapstruct *alone = get_empty_map(9, 9);
+    ck_assert_int_eq(light_local_level(alone, 4, 4), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_hides_source_floor) {
+    /* A hidden source moving between the floors of a linked stack never
+     * changes any floor's level, so viewers with cells on several floors
+     * cannot follow it from floor to floor. */
+    int reference[1][3];
+    for (int source_floor = 0; source_floor < 3; source_floor++) {
+        mapstruct *floors[3];
+        for (int floor = 0; floor < 3; floor++) {
+            floors[floor] = get_empty_map(9, 9);
+            if (floor > 0) {
+                link_stacked_maps(floors[floor - 1], floors[floor]);
+            }
+        }
+        add_colored_light(floors[source_floor], 4, 4, 5, LIGHT_COLOR_WHITE);
+        for (int floor = 0; floor < 3; floor++) {
+            for (int x = 0; x < 3; x++) {
+                int level = light_local_level(floors[floor], x * 3 + 1, 4);
+                if (source_floor == 0 && floor == 0) {
+                    reference[0][x] = level;
+                }
+                ck_assert_int_eq(level, reference[0][x]);
+            }
+        }
+    }
+    ck_assert_int_gt(reference[0][1], 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_quantizes_each_sign_first) {
+    /* A known positive light cannot split a hidden darkness's bin: hidden
+     * raw -160 and -249 are both level -1, and against a known +180 both
+     * give the same result. */
+    ck_assert_int_eq(light_local_level_from_extrema(0, -160), -1);
+    ck_assert_int_eq(light_local_level_from_extrema(0, -249), -1);
+    ck_assert_int_eq(light_local_level_from_extrema(180, -160),
+                     light_local_level_from_extrema(180, -249));
+    ck_assert_int_eq(light_local_level_from_extrema(180, -249), 1);
+    ck_assert_int_eq(light_local_level_from_extrema(180, -320), -2);
+    ck_assert_int_eq(light_local_level_from_extrema(INT32_MAX, 0), MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    ck_assert_int_eq(light_local_level_from_extrema(0, INT32_MIN), -MAP2_LOCAL_LIGHT_LEVEL_MAX);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_crosses_diagonal_seams) {
+    /* A source on a map linked only diagonally still reaches the coarse
+     * level, as the light topology crosses that seam directly. */
+    mapstruct *southwest = get_empty_map(9, 9);
+    mapstruct *northeast = get_empty_map(9, 9);
+    southwest->tile_map[TILED_NORTHEAST] = northeast;
+    northeast->tile_map[TILED_SOUTHWEST] = southwest;
+    add_colored_light(northeast, 0, 8, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(southwest, 8, 0), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_final_block_is_order_independent) {
+    /* With a one-cell remainder every member of the final block shares one
+     * block, whichever member is sampled first. */
+    int levels[4][4];
+    for (int first = 0; first < 4; first++) {
+        mapstruct *map = get_empty_map(7, 7);
+        add_colored_light(map, 6, 3, 13, LIGHT_COLOR_WHITE);
+        levels[first][first] = light_local_level(map, 3 + first, 3);
+        for (int x = 0; x < 4; x++) {
+            levels[first][x] = light_local_level(map, 3 + x, 3);
+        }
+    }
+    for (int first = 0; first < 4; first++) {
+        for (int x = 0; x < 4; x++) {
+            ck_assert_int_eq(levels[first][x], levels[0][0]);
+        }
+    }
+    ck_assert_int_gt(levels[0][0], 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_hidden_wall_surfaces_own_a_downward_face) {
+    /* A hidden wall-layer surface without sky_boundary blocks vertical light
+     * as spatial_cell_light_face() makes it do. */
+    object *roof = arch_get("letter");
+    roof->layer = LAYER_WALL;
+    SET_FLAG(roof, FLAG_HIDDEN);
+    uint64_t bits = light_occluder_object_bits(roof);
+    ck_assert_uint_eq((bits >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U, 15U);
+    object_destroy(roof);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_shares_tall_stacks) {
+    /* A stack taller than a MAP2 window is still one vertical bucket: every
+     * level gets the same level, so its floors never reveal the source's. */
+    enum { FLOORS = 20 };
+    mapstruct *floors[FLOORS];
+    for (int floor = 0; floor < FLOORS; floor++) {
+        floors[floor] = get_empty_map(9, 9);
+        if (floor > 0) {
+            link_stacked_maps(floors[floor - 1], floors[floor]);
+        }
+    }
+    add_colored_light(floors[FLOORS - 1], 4, 4, 13, LIGHT_COLOR_WHITE);
+    int top = light_local_level(floors[FLOORS - 1], 4, 4);
+    ck_assert_int_gt(top, 0);
+    for (int floor = 0; floor < FLOORS; floor++) {
+        ck_assert_int_eq(light_local_level(floors[floor], 4, 4), top);
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_fails_closed_on_unbounded_cycles) {
+    /* Reciprocal east, north, west and south links that return to the same
+     * offset on a new map each lap place unboundedly many maps within reach;
+     * past the bound the level fails closed to 0 instead of walking them. */
+    enum { LAPS = 1100 };
+    mapstruct *start = get_empty_map(3, 3);
+    mapstruct *at = start;
+    static const int steps[4][2] = {{TILED_EAST, TILED_WEST},
+                                    {TILED_NORTH, TILED_SOUTH},
+                                    {TILED_WEST, TILED_EAST},
+                                    {TILED_SOUTH, TILED_NORTH}};
+    for (int lap = 0; lap < LAPS; lap++) {
+        for (int step = 0; step < 4; step++) {
+            mapstruct *next = get_empty_map(3, 3);
+            at->tile_map[steps[step][0]] = next;
+            next->tile_map[steps[step][1]] = at;
+            at = next;
+        }
+    }
+    add_colored_light(start->tile_map[TILED_EAST], 0, 0, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level(start, 0, 0), 0);
+    /* A single short lap stays well inside the bound and pools normally. */
+    mapstruct *west = get_empty_map(3, 3), *east = get_empty_map(3, 3);
+    link_horizontal_maps(west, east);
+    add_colored_light(east, 0, 0, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(west, 0, 0), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_pools_every_reachable_tiny_map) {
+    /* Twenty-five floors of 5x5 three-cell maps place 625 maps within reach,
+     * more than any small fixed bound; none is dropped, so every floor still
+     * pools the source beside the top floor's center and all floors agree. */
+    enum { GRID = 5, FLOORS = 25 };
+    static mapstruct *maps[FLOORS][GRID][GRID];
+    for (int floor = 0; floor < FLOORS; floor++) {
+        for (int y = 0; y < GRID; y++) {
+            for (int x = 0; x < GRID; x++) {
+                maps[floor][y][x] = get_empty_map(3, 3);
+                if (x > 0) {
+                    link_horizontal_maps(maps[floor][y][x - 1], maps[floor][y][x]);
+                }
+                if (y > 0) {
+                    maps[floor][y - 1][x]->tile_map[TILED_SOUTH] = maps[floor][y][x];
+                    maps[floor][y][x]->tile_map[TILED_NORTH] = maps[floor][y - 1][x];
+                }
+                if (floor > 0) {
+                    link_stacked_maps(maps[floor - 1][y][x], maps[floor][y][x]);
+                }
+            }
+        }
+    }
+    add_colored_light(maps[FLOORS - 1][GRID / 2][GRID / 2 + 1], 0, 0, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(maps[0][GRID / 2][GRID / 2], 0, 0);
+    ck_assert_int_gt(level, 0);
+    for (int floor = 1; floor < FLOORS; floor++) {
+        ck_assert_int_eq(light_local_level(maps[floor][GRID / 2][GRID / 2], 0, 0), level);
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_reaches_levels_linked_from_neighbors) {
+    /* The level above the east neighbor is linked only from that neighbor,
+     * yet the server's masks reach this map through the seam and then the
+     * link; the coarse level pools it as well. */
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    link_horizontal_maps(west, east);
+    link_stacked_maps(east, upper);
+    ck_assert_ptr_null(west->tile_map[TILED_UP]);
+    add_colored_light(upper, 0, 4, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(west, 8, 4);
+    ck_assert_int_gt(level, 0);
+    ck_assert_int_le(level, light_local_level(east, 0, 4));
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_crosses_horizontal_seams) {
+    /* A hidden source just across a continuous seam still reaches the coarse
+     * level, as the server's masks carry it into this map. */
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    link_horizontal_maps(west, east);
+    add_colored_light(east, 0, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(west, 8, 4), 0);
+    /* Without the link nothing reaches it. */
+    mapstruct *alone = get_empty_map(9, 9);
+    ck_assert_int_eq(light_local_level(alone, 8, 4), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_resists_radius_probing) {
+    /* A viewer who controls a known light on another tile of the block
+     * learns only max(own, hidden) as it raises its radius, never the hidden
+     * radius through mask saturation. */
+    mapstruct *reference = get_empty_map(9, 9);
+    add_colored_light(reference, 3, 3, 7, LIGHT_COLOR_WHITE);
+    int hidden_level = light_local_level(reference, 4, 4);
+    for (int probe = 1; probe <= 13; probe++) {
+        mapstruct *alone = get_empty_map(9, 9);
+        add_colored_light(alone, 5, 5, probe, LIGHT_COLOR_WHITE);
+        int own_level = light_local_level(alone, 4, 4);
+        mapstruct *both = get_empty_map(9, 9);
+        add_colored_light(both, 3, 3, 7, LIGHT_COLOR_WHITE);
+        add_colored_light(both, 5, 5, probe, LIGHT_COLOR_WHITE);
+        ck_assert_int_eq(light_local_level(both, 4, 4), MAX(own_level, hidden_level));
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_resists_colocated_probing) {
+    /* A known emitter placed on the same tile as a private one never sums
+     * with it, so stepping its radius reveals only the larger level. */
+    for (int hidden = 1; hidden <= 3; hidden++) {
+        mapstruct *private_only = get_empty_map(9, 9);
+        add_colored_light(private_only, 4, 4, hidden, LIGHT_COLOR_WHITE);
+        int hidden_level = light_local_level(private_only, 4, 4);
+        for (int probe = 1; probe <= 13; probe++) {
+            mapstruct *alone = get_empty_map(9, 9);
+            add_colored_light(alone, 4, 4, probe, LIGHT_COLOR_WHITE);
+            mapstruct *both = get_empty_map(9, 9);
+            add_colored_light(both, 4, 4, hidden, LIGHT_COLOR_WHITE);
+            add_colored_light(both, 4, 4, probe, LIGHT_COLOR_WHITE);
+            ck_assert_int_eq(light_local_level(both, 4, 4),
+                             MAX(light_local_level(alone, 4, 4), hidden_level));
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_crosses_unaligned_seams) {
+    /* Blocks of maps with different heights do not align; light still
+     * crosses the continuous seam between them. */
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(7, 7);
+    link_horizontal_maps(west, east);
+    add_colored_light(east, 0, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(west, 8, 4), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
+    /* A 7-wide map has blocks 0..2 and 3..6: the last cell joins its
+     * neighbor instead of forming a one-cell block. */
+    mapstruct *map = get_empty_map(7, 7);
+    add_colored_light(map, 6, 6, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(map, 6, 6);
+    ck_assert_int_gt(level, 0);
+    for (int y = 3; y < 7; y++) {
+        for (int x = 3; x < 7; x++) {
+            ck_assert_int_eq(light_local_level(map, x, y), level);
+        }
+    }
+    /* A map narrower than a block would locate a hidden source within fewer
+     * than nine cells: it reports and contributes nothing (fail closed). */
+    mapstruct *narrow = get_empty_map(2, 2);
+    add_colored_light(narrow, 1, 1, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level(narrow, 0, 0), 0);
+    mapstruct *beside = get_empty_map(9, 9);
+    mapstruct *sliver = get_empty_map(1, 9);
+    link_horizontal_maps(beside, sliver);
+    add_colored_light(sliver, 0, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level(beside, 8, 4), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_occluder_faces_mark_missing_neighbors) {
+    mapstruct *map = get_empty_map(5, 5);
+    uint16_t north = 1U << MAP2_OCCLUDER_FACE_SHIFT, east = north << 1, south = north << 2,
+             west = north << 3, up = north << 4, down = north << 5;
+    uint8_t all = 0x3f;
+    /* An unlinked map transmits no local light up or down either. */
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, all), up | down);
+    ck_assert_uint_eq(light_occluder_faces(map, 0, 0, all), north | west | up | down);
+    ck_assert_uint_eq(light_occluder_faces(map, 4, 4, all), east | south | up | down);
+    mapstruct *upper = get_empty_map(5, 5);
+    link_stacked_maps(map, upper);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, all) & up, 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_occluder_faces_close_towards_unseen_cells) {
+    mapstruct *map = get_empty_map(5, 5);
+    mapstruct *upper = get_empty_map(5, 5);
+    link_stacked_maps(map, upper);
+    uint16_t north = 1U << MAP2_OCCLUDER_FACE_SHIFT, east = north << 1, up = north << 4;
+    /* A face towards a neighbor that is not in view is closed whatever the
+     * seam, so the bits never reflect anything beyond the view. */
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, 0x3f & ~1U) & north, north);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, 0x3f & ~2U) & east, east);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, 0x3f & ~16U) & up, up);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, 0) & 0x3f00U, 0x3f00U);
+}
+END_TEST
+
+START_TEST(test_client_lighting_withholds_other_players_emitters) {
+    object viewer = {0}, other_player = {0}, lamp = {0};
+    viewer.type = PLAYER;
+    other_player.type = PLAYER;
+    lamp.type = LIGHT_SOURCE;
+    /* Another player's glow comes from private inventory; the viewer's own
+     * and ordinary objects' emitters are public with the object. */
+    ck_assert(light_emitter_disclosed(&viewer, &viewer));
+    ck_assert(!light_emitter_disclosed(&viewer, &other_player));
+    ck_assert(light_emitter_disclosed(&viewer, &lamp));
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_keeps_darkness_sign) {
+    mapstruct *map = get_empty_map(6, 6);
+    add_colored_light(map, 1, 1, -13, LIGHT_COLOR_WHITE);
+    int32_t darkest = GET_MAP_SPACE_PTR(map, 1, 1)->light_source_value;
+    ck_assert_int_lt(darkest, 0);
+    int expected = -MIN(-darkest / MAP2_LOCAL_LIGHT_LEVEL_RAW, MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    ck_assert_int_lt(expected, 0);
+    ck_assert_int_eq(light_local_level(map, 0, 0), expected);
+    ck_assert_int_eq(light_local_level(map, 2, 2), expected);
+    /* A map edge clips the block without reading or loading neighbors. */
+    ck_assert_int_ge(light_local_level(map, 5, 5), -MAP2_LOCAL_LIGHT_LEVEL_MAX);
+}
+END_TEST
+
+START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
+    mapstruct *map = get_empty_map(5, 5);
+    object *plain = add_colored_light(map, 3, 3, 0, LIGHT_COLOR_WHITE);
+    ck_assert_uint_eq(light_occluder_object_bits(plain), 0);
+
+    object *blocker = add_light_blocker(map, 1, 1);
+    uint64_t blocker_bits = light_occluder_object_bits(blocker);
+    ck_assert_uint_eq(blocker_bits & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
+    /* An unauthored view blocker transmits nothing through any of its faces. */
+    ck_assert_uint_eq((light_occluder_finish(blocker_bits) >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) &
+                          0xffffU,
+                      0xffffU);
+
+    add_roof_surface(map, 2, 2);
+    object *roof = NULL;
+    for (object *op = GET_MAP_OB(map, 2, 2); op != NULL; op = op->above) {
+        if (object_is_roof_surface(op)) {
+            roof = op;
+        }
+    }
+    ck_assert_ptr_nonnull(roof);
+    ck_assert_uint_eq(light_occluder_object_bits(roof) & MAP2_OCCLUDER_ROOF, MAP2_OCCLUDER_ROOF);
+
+    /* Combining keeps every geometry bit and the stronger attenuation. */
+    uint64_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
+    ck_assert_uint_eq(combined & (MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW),
+                      MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW);
+    ck_assert_uint_eq((light_occluder_finish(combined) >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) &
+                          0xffffU,
+                      0xffffU);
+    ck_assert_uint_eq(light_occluder_finish(combined) & LIGHT_OCCLUDER_INTERNAL, 0);
+    ck_assert_uint_eq(light_occluder_combine(0, 0), 0);
+    /* The opaque fallback applies only to faces no sent object authors: a
+     * glass pane authoring the east face keeps its transmission beside a
+     * view blocker that authors only its north face. */
+    object *wall = add_light_blocker(map, 4, 4);
+    object_set_value(wall, "celestial_faces", "N", true);
+    object *pane = arch_get("letter");
+    object_set_value(pane, "celestial_transmission", "glass", true);
+    object_set_value(pane, "celestial_faces", "E", true);
+    uint64_t cell = light_occluder_finish(
+        light_occluder_combine(light_occluder_object_bits(wall), light_occluder_object_bits(pane)));
+    int pane_east = (int)((cell >> (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 4)) & 15U);
+    ck_assert_int_lt(pane_east, 15);
+    ck_assert_int_gt(pane_east, 0);
+    ck_assert_uint_eq((cell >> (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 8)) & 15U, 15U);
+    ck_assert_uint_eq((cell >> (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 12)) & 15U, 15U);
+    object_destroy(pane);
+    /* The vertical nibble combines by maximum, independently of the
+     * horizontal one. */
+    uint64_t glass = UINT64_C(3) << LIGHT_OCCLUDER_VERTICAL_SHIFT,
+             slab = UINT64_C(15) << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    ck_assert_uint_eq(light_occluder_combine(glass, slab), slab);
+    /* Each horizontal face nibble combines by maximum on its own. */
+    uint64_t east = UINT64_C(2) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 4);
+    uint64_t west = UINT64_C(9) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 12);
+    ck_assert_uint_eq(light_occluder_combine(glass, east), glass | east);
+    ck_assert_uint_eq(light_occluder_combine(east, west), east | west);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("light");
     TCase *tc_core = tcase_create("Core");
@@ -1552,6 +2075,31 @@ static Suite *suite(void) {
                    test_map_teardown_withdraws_linked_light_and_invalidates_celestial_once);
     tcase_add_test(tc_core, test_successful_map_save_preserves_light_and_future_gameplay_rebuilds);
     tcase_add_test(tc_core, test_failed_map_save_preserves_live_objects_state_and_light);
+    tcase_add_test(tc_core, test_client_lighting_base_radiance_omits_local_color);
+    tcase_add_test(tc_core, test_client_lighting_local_level_pools_and_quantizes);
+    tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
+    tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
+    tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
+    tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
+    tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
+    tcase_add_test(tc_core, test_client_lighting_local_level_hides_source_floor);
+    tcase_add_test(tc_core, test_client_lighting_local_level_quantizes_each_sign_first);
+    tcase_add_test(tc_core, test_client_lighting_local_level_crosses_diagonal_seams);
+    tcase_add_test(tc_core, test_client_lighting_local_level_final_block_is_order_independent);
+    tcase_add_test(tc_core, test_client_lighting_hidden_wall_surfaces_own_a_downward_face);
+    tcase_add_test(tc_core, test_client_lighting_local_level_shares_tall_stacks);
+    tcase_add_test(tc_core, test_client_lighting_local_level_fails_closed_on_unbounded_cycles);
+    tcase_add_test(tc_core, test_client_lighting_local_level_pools_every_reachable_tiny_map);
+    tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);
+    tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
+    tcase_add_test(tc_core, test_client_lighting_local_level_resists_radius_probing);
+    tcase_add_test(tc_core, test_client_lighting_local_level_resists_colocated_probing);
+    tcase_add_test(tc_core, test_client_lighting_local_level_crosses_unaligned_seams);
+    tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
+    tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
+    tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);
+    tcase_add_test(tc_core, test_client_lighting_base_radiance_keeps_negative_environment);
+    tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_sent_objects);
 
     return s;
 }

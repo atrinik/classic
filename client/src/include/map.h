@@ -228,6 +228,11 @@ typedef struct map_cell_snapshot {
     int16_t support_height;
     uint8_t fow;
     uint8_t structural_fow;
+    uint8_t local_light[NUM_SUB_LAYERS];
+    uint16_t occluder;
+    uint16_t occluder_horizontal;
+    uint8_t occluder_vertical;
+    uint8_t client_light_known;
 } map_cell_snapshot_t;
 
 /** Version of the copyable, opt-in lighting diagnostic record. */
@@ -460,6 +465,8 @@ bool widget_map_light_keyframe_capacity_test(void);
 bool widget_map_temporal_lighting_test(void);
 /** Verify diagnostic stages, deterministic fixtures, and fog privacy state. */
 bool widget_map_lighting_diagnostic_test(void);
+/** Verify protocol 1085 emitter, coarse local light and occluder state. */
+bool widget_map_client_lighting_state_test(void);
 /** Verify the complete negotiated overscan window remains a render candidate. */
 bool widget_map_projection_contract_test(void);
 #endif
@@ -475,6 +482,19 @@ extern void map_set_fow(int x, int y, bool fow);
 extern bool map_get_fow(int x, int y);
 
 extern void map_set_light_radiance(int x, int y, int sub_layer, uint16_t radiance);
+extern void
+map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags, uint32_t color);
+extern bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint8_t *flags,
+                                  uint32_t *color);
+extern void map_set_local_light(int x, int y, uint8_t value);
+extern void map_set_local_light_layers(int x, int y, uint8_t count, const uint8_t *levels);
+/** Signed coarse level, vision floor and, if flags is not NULL, the
+ * MAP2_LOCAL_LIGHT_TLI bit of one sub-layer. */
+extern bool map_get_local_light_layer(int x, int y, uint8_t sub_layer, int8_t *level,
+                                      bool *vision_floor, uint8_t *flags);
+extern void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t vertical);
+extern bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor);
+extern bool map_get_occluder(int x, int y, uint16_t *bits, uint16_t *horizontal, uint8_t *vertical);
 extern void
 map_set_light_rgb_radiance(int x, int y, uint8_t bitmap, const uint16_t rgb[NUM_SUB_LAYERS][3]);
 

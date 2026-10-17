@@ -1256,6 +1256,7 @@ static void init_library(int argc, char *argv[]) {
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE(cli, recycle_tmp_maps, "Preserve loaded map state across restarts");
     clioptions_enable_changeable(cli);
+    /* Startup-only: connected sockets cache the lighting mode per cell. */
     CLIOPTIONS_CREATE_ARGUMENT(cli, speed, "Server speed");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, speed_multiplier, "Speed multiplier");

@@ -417,6 +417,8 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG2_DOOR 512
 /** The object is a visible map transition. */
 #define MAP2_FLAG2_EXIT 1024
+/** The sent object emits light: int8 glow radius, flags, then sRGB R, G, B (1085). */
+#define MAP2_FLAG2_EMITTER 2048
 /*@}*/
 
 /**
@@ -430,6 +432,63 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 2
 /** Next authoritative hourly aggregate-light endpoint follows. */
 #define MAP2_FLAG_EXT_LIGHT_KEYFRAME 4
+/** Coarse, source-anonymous local light levels follow (1085): a count n of
+ * 1..MAP2_PROTOCOL_SUB_LAYERS, then n level bytes. Level i applies to sub-layer i, and
+ * sub-layers from n on use level n - 1. */
+#define MAP2_FLAG_EXT_LOCAL_LIGHT 8
+/** Occluder of the cell follows (1085): uint16 geometry and face bits, uint16
+ * horizontal face attenuation nibbles (north, east, south, west from the low
+ * nibble), then the vertical byte. */
+#define MAP2_FLAG_EXT_OCCLUDER 16
+/*@}*/
+
+/** Emitter flag: the client may animate this emitter's light (1085). */
+#define MAP2_EMITTER_FLICKER 0x01U
+/** Emitter flag bits a 1085 peer must leave zero. */
+#define MAP2_EMITTER_RESERVED 0xfeU
+
+/** Largest coarse local light magnitude; each level is 1/8 daylight. */
+#define MAP2_LOCAL_LIGHT_LEVEL_MAX 15
+/** Raw light covered by one coarse local light level. */
+#define MAP2_LOCAL_LIGHT_LEVEL_RAW 160
+/** Signed five-bit level of the local light byte. */
+#define MAP2_LOCAL_LIGHT_LEVEL_MASK 0x1f
+/** Bits a 1085 peer must leave zero in the local light byte. */
+#define MAP2_LOCAL_LIGHT_RESERVED 0x40
+/** The viewer's tli override: add raw MAP2_LOCAL_LIGHT_TLI_RAW, neutrally, in
+ * composition. A viewer property, refreshed on remembered tiles too. */
+#define MAP2_LOCAL_LIGHT_TLI 0x20
+/** Raw light the tli override adds (daylight). */
+#define MAP2_LOCAL_LIGHT_TLI_RAW 1280
+/** Apply the viewer's vision floor after composing local light. */
+#define MAP2_LOCAL_LIGHT_VISION_FLOOR 0x80
+/** Raw light of the XRAY vision floor. */
+#define MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW 100
+
+/**
+ * @defgroup MAP2_OCCLUDER_xxx Map2 occluder bits
+ * Geometry of a sent cell that the client uses to occlude emitter light:
+ * bits 0-3 geometry, bits 4-7 reserved (zero), bits 8-13 closed faces. The
+ * per-face attenuation is not in this word: it follows as a separate uint16
+ * of north, east, south and west nibbles, then the vertical byte.
+ *@{*/
+#define MAP2_OCCLUDER_BLOCKSVIEW 1
+#define MAP2_OCCLUDER_FLOOR 2
+#define MAP2_OCCLUDER_ROOF 4
+#define MAP2_OCCLUDER_DOOR_CLOSED 8
+/** Attenuation step of one face nibble a: a crossing transmits 256 - 16 a for
+ * a of 0..14, and nothing for a == 15, the opaque sentinel. */
+#define MAP2_OCCLUDER_ATTENUATION_STEP 16
+/** Bits per horizontal face attenuation nibble. */
+#define MAP2_OCCLUDER_FACE_ATTENUATION_BITS 4
+/** First of six face bits (north, east, south, west, up, down) local light cannot cross. */
+#define MAP2_OCCLUDER_FACE_SHIFT 8
+/** Occluder bits a 1085 peer must leave zero. */
+#define MAP2_OCCLUDER_RESERVED 0xc0f0U
+/** Vertical attenuation v of the downward face, low nibble of the occluder byte. */
+#define MAP2_OCCLUDER_VERTICAL_MASK 0x0fU
+/** Occluder byte bits a 1085 peer must leave zero. */
+#define MAP2_OCCLUDER_VERTICAL_RESERVED 0xf0U
 /*@}*/
 
 /**

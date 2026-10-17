@@ -33,9 +33,15 @@
 #include <light.h>
 #include <object.h>
 #include <spatial.h>
+#include <celestial_structure.h>
+#include <toolkit/map_protocol.h>
 #include <region.h>
+#include <los.h>
 
 #define NR_LIGHT_MASK 10
+
+/** Advances whenever a space's source counter changes; see light_local_level(). */
+static uint64_t light_local_epoch = 1;
 #define MAX_LIGHT_SOURCE 13
 #define MAX_LIGHT_RADIUS 4
 #define LIGHT_DISTANCE_SCALE 256
@@ -341,6 +347,146 @@ void light_radiance_from_raw(const MapSpace *space,
     for (size_t channel = 0; channel < arraysize(channels); channel++) {
         radiance[channel] = light_raw_to_radiance(channels[channel]);
     }
+}
+
+void light_base_radiance_signed(const MapSpace *space,
+                                int raw_light,
+                                int16_t *scalar_radiance,
+                                int16_t radiance[3]) {
+    HARD_ASSERT(space != NULL);
+    HARD_ASSERT(scalar_radiance != NULL);
+    HARD_ASSERT(radiance != NULL);
+    /* The legacy resolver without local color, minus its zero clamp: the
+     * neutral non-local term plus the celestial RGB field, each signed. */
+    *scalar_radiance = map_protocol_signed_radiance_encode(raw_light);
+    int64_t neutral = (int64_t)raw_light - MAX(space->celestial_light_value, 0);
+    for (size_t channel = 0; channel < 3; channel++) {
+        radiance[channel] = map_protocol_signed_radiance_encode(
+            neutral + MAX(space->celestial_light_rgb[channel], 0));
+    }
+}
+
+/** Attenuation step of a coefficient, rounded up so the client never
+ * transmits more light than the server. */
+static uint64_t light_occluder_attenuation(uint16_t coefficient) {
+    int attenuation = (SPATIAL_LIGHT_SCALE - coefficient + MAP2_OCCLUDER_ATTENUATION_STEP - 1) /
+                      MAP2_OCCLUDER_ATTENUATION_STEP;
+    return (uint64_t)MIN(attenuation, 15);
+}
+
+/** Authored transmission of an object face, by door and gate state. */
+static uint16_t light_occluder_transmission(const object *op) {
+    const char *value;
+    if (op->type == DOOR || op->type == GATE) {
+        bool shut = op->type == DOOR ? QUERY_FLAG(op, FLAG_DOOR_CLOSED)
+                                     : QUERY_FLAG(op, FLAG_NO_PASS);
+        value = object_get_value(op, shut ? "celestial_transmission_closed"
+                                          : "celestial_transmission_open");
+    } else {
+        value = object_get_value(op, "celestial_transmission");
+    }
+    celestial_transmission_t transmission = celestial_structure_transmission(value);
+    return transmission == CELESTIAL_TRANSMISSION_INVALID ? 0 : (uint16_t)transmission;
+}
+
+/**
+ * MAP2 occluder bits contributed by one object that is being sent to the
+ * viewer. Only the object's own flags and authored face transmission count,
+ * never space-wide flags that also aggregate hidden or unsent objects.
+ */
+uint64_t light_occluder_object_bits(const object *op) {
+    HARD_ASSERT(op != NULL);
+    const object *head = HEAD(op);
+    uint64_t bits = 0;
+    if (QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
+        bits |= MAP2_OCCLUDER_BLOCKSVIEW;
+    }
+    if (QUERY_FLAG(op, FLAG_IS_FLOOR)) {
+        bits |= MAP2_OCCLUDER_FLOOR;
+    }
+    if (object_is_roof_surface(op)) {
+        bits |= MAP2_OCCLUDER_ROOF;
+    }
+    bool closed = head->type == DOOR && QUERY_FLAG(head, FLAG_DOOR_CLOSED);
+    if (closed) {
+        bits |= MAP2_OCCLUDER_DOOR_CLOSED;
+    }
+    uint8_t faces = celestial_structure_faces(op);
+    /* Hidden wall-layer surfaces (roofs, camera surfaces) own a downward face
+     * as spatial_cell_light_face() gives them, even without sky_boundary. */
+    if (op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) {
+        faces |= CELESTIAL_FACE_DOWN;
+    }
+    /* Each cardinal face keeps its own coefficient, as spatial_cell_light_face()
+     * does: an authored face transmits its authored value and is marked
+     * authored. Whether an unauthored face is opaque depends on every sent
+     * object of the cell, so a view blocker only records the fallback, which
+     * light_occluder_finish() applies to faces no sent object authors. */
+    static const uint8_t cardinal[4] = {CELESTIAL_FACE_NORTH, CELESTIAL_FACE_EAST,
+                                        CELESTIAL_FACE_SOUTH, CELESTIAL_FACE_WEST};
+    for (size_t face = 0; face < arraysize(cardinal); face++) {
+        if ((faces & cardinal[face]) != 0) {
+            bits |= light_occluder_attenuation(light_occluder_transmission(op))
+                    << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT +
+                        MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face);
+            bits |= UINT64_C(1) << (LIGHT_OCCLUDER_AUTHORED_SHIFT + face);
+        }
+    }
+    if (bits & MAP2_OCCLUDER_BLOCKSVIEW) {
+        bits |= LIGHT_OCCLUDER_BLOCKER_FALLBACK;
+    }
+    /* The downward face is the slab between this cell and the one below, so a
+     * glass floor attenuates only vertical crossings. */
+    if ((faces & CELESTIAL_FACE_DOWN) != 0) {
+        bits |= light_occluder_attenuation(light_occluder_transmission(op))
+                << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    }
+    return bits;
+}
+
+/**
+ * Whether a sent object's emitter opts in to client-side flicker, through the
+ * boolean light_flicker attribute (usually an archetype default).
+ */
+bool light_emitter_flickers(const object *op) {
+    const char *value = object_get_value(op, "light_flicker");
+    return value != NULL && (strcmp(value, "1") == 0 || KEYWORD_IS_TRUE(value));
+}
+
+/**
+ * Whether MAP2 may disclose an object's emitter to a viewer. Another player's
+ * glow is derived from its private inventory, so only the viewer's own is.
+ */
+bool light_emitter_disclosed(const object *viewer, const object *op) {
+    return op->type != PLAYER || op == viewer;
+}
+
+/** Combine the occluder bits of two sent objects of one cell: geometry and
+ * faces are joined, and every attenuation nibble keeps the stronger one. */
+uint64_t light_occluder_finish(uint64_t bits) {
+    uint64_t finished = bits & ~LIGHT_OCCLUDER_INTERNAL;
+    if (bits & LIGHT_OCCLUDER_BLOCKER_FALLBACK) {
+        for (int face = 0; face < 4; face++) {
+            if (!(bits & (UINT64_C(1) << (LIGHT_OCCLUDER_AUTHORED_SHIFT + face)))) {
+                finished |= UINT64_C(15) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT +
+                                             MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face);
+            }
+        }
+    }
+    return finished;
+}
+
+uint64_t light_occluder_combine(uint64_t first, uint64_t second) {
+    uint64_t combined = ((first | second) & UINT64_C(0xffff)) |
+                        ((first | second) & LIGHT_OCCLUDER_INTERNAL);
+    uint64_t vertical = MAX((first >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U,
+                            (second >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U);
+    combined |= vertical << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    for (int face = 0; face < 4; face++) {
+        int shift = LIGHT_OCCLUDER_HORIZONTAL_SHIFT + MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face;
+        combined |= MAX((first >> shift) & 15U, (second >> shift) & 15U) << shift;
+    }
+    return combined;
 }
 
 typedef struct light_profile {
@@ -658,6 +804,56 @@ static bool light_face_continuous(const spatial_face *face) {
                   region_celestial_for_map(to)->digest, 32) == 0;
 }
 
+/**
+ * MAP2 occluder face bits: faces of a sent cell that local light cannot cross.
+ * Only static seam structure between two cells both in the viewer's view is
+ * encoded; a face towards any other cell is closed, so the bits never depend
+ * on whether some map is resident.
+ */
+uint16_t light_occluder_faces(mapstruct *map, int x, int y, uint8_t in_view) {
+    HARD_ASSERT(map != NULL);
+    static const int8_t normals[6][3] = {
+        {0, -1, 0}, {1, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
+    };
+    uint16_t bits = 0;
+    for (size_t i = 0; i < arraysize(normals); i++) {
+        uint16_t bit = (uint16_t)(1U << (MAP2_OCCLUDER_FACE_SHIFT + i));
+        if ((in_view & (1U << i)) == 0) {
+            bits |= bit;
+            continue;
+        }
+        int rx = x + normals[i][0], ry = y + normals[i][1];
+        mapstruct *target;
+        if (normals[i][2] != 0) {
+            /* Vertical crossings use the linked level, like the light path. */
+            target = map->tile_map[normals[i][2] > 0 ? TILED_UP : TILED_DOWN];
+            if (target != NULL && (target->in_memory != MAP_IN_MEMORY ||
+                                   rx >= MAP_WIDTH(target) || ry >= MAP_HEIGHT(target))) {
+                target = NULL;
+            }
+        } else {
+            target = get_map_from_coord2(map, &rx, &ry);
+        }
+        spatial_face face = {
+            .from = {.map = map, .x = x, .y = y, .z = 0},
+            .to = {.map = target, .x = rx, .y = ry, .z = normals[i][2]},
+            .normal = {normals[i][0], normals[i][1], normals[i][2]},
+        };
+        /* A neighbor in view is resident; a failure here is a broken seam. */
+        if (target == NULL || target->spaces == NULL || !light_face_continuous(&face)) {
+            bits |= bit;
+            continue;
+        }
+        /* A sealed virtual sky cover closes the upward face of the lower cell. */
+        const spatial_cell *lower = normals[i][2] > 0 ? &face.from
+                                    : normals[i][2] < 0 ? &face.to : NULL;
+        if (lower != NULL && spatial_cell_light_face(lower, 0, 0, 1, NULL) == 0) {
+            bits |= bit;
+        }
+    }
+    return bits;
+}
+
 /** A terminal roof/wall sample represents its incident surface, not the
  * inaccessible contents behind it. A plain floor still covers its contents. */
 static bool light_terminal_surface(const spatial_cell *cell) {
@@ -858,6 +1054,7 @@ static void adjust_grouped_light_source(mapstruct *map,
     MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
     int old_mask = get_real_light_source_value(*counter);
     *counter += light;
+    light_local_epoch++;
     int new_mask = get_real_light_source_value(*counter);
 
     if (map->in_memory != MAP_LOADING && old_mask != new_mask) {
@@ -1260,4 +1457,294 @@ void remove_light_source_list(mapstruct *map) {
     }
 
     map->first_light = NULL;
+}
+
+/**
+ * Signed coarse local light of the fixed 3x3 block containing a cell, aligned
+ * to map-local coordinates; edge remainders join the adjacent block. Each
+ * block's sources are pooled before propagation, the strongest positive and
+ * negative pooled contributions compete by magnitude, and the result is
+ * quantized down to whole 1/8-daylight levels. No block's level depends on
+ * where inside a block a source sits; neither hue nor count is kept. The
+ * block never reads another map.
+ */
+/**
+ * Block of one axis: three cells aligned to the map, except that a one- or
+ * two-cell remainder at the edge joins its neighbor, so no block is narrower
+ * than three cells unless the map is.
+ */
+static void light_local_block(int coordinate, int size, int *start, int *end) {
+    *start = coordinate - coordinate % 3;
+    if (*start + 3 > size) {
+        *start = MAX(0, *start - 3);
+    }
+    *end = *start + 6 > size ? size : *start + 3;
+}
+
+/**
+ * Pooled sources of a block: the strongest positive and the strongest negative
+ * single-source mask. Each emitting object counts with its own glow radius,
+ * and light a space's counter holds without an object counts as one more
+ * source; sources are never summed with one another. A viewer's known light,
+ * even on the same tile as a private source, therefore cannot combine with it
+ * through the nonlinear mask and reveal its radius by saturation: it reveals
+ * only the maximum, which the level already discloses.
+ */
+static void light_local_block_sources(mapstruct *map, int bx, int ex, int by, int ey,
+                                      int *positive, int *negative) {
+    *positive = 0;
+    *negative = 0;
+    for (int cy = by; cy < ey; cy++) {
+        for (int cx = bx; cx < ex; cx++) {
+            const MapSpace *space = GET_MAP_SPACE_PTR(map, cx, cy);
+            int64_t residual = space->light_source;
+            for (const object *op = GET_MAP_OB(map, cx, cy); op != NULL; op = op->above) {
+                if (op->glow_radius == 0) {
+                    continue;
+                }
+                int mask = get_real_light_source_value(op->glow_radius);
+                *positive = MAX(*positive, mask);
+                *negative = MIN(*negative, mask);
+                residual -= op->glow_radius;
+            }
+            if (residual != 0) {
+                int mask = get_real_light_source_value(
+                    (int)MAX(INT32_MIN, MIN(INT32_MAX, residual)));
+                *positive = MAX(*positive, mask);
+                *negative = MIN(*negative, mask);
+            }
+        }
+    }
+}
+
+/**
+ * The resident neighbor of a map across one seam that local light crosses: a
+ * reciprocal link, and continuity as light_face_continuous() requires (two
+ * schema-0 maps, or two celestial-v1 maps with continuous boundaries and equal
+ * effective profiles). Never loads a map.
+ */
+static mapstruct *light_local_seam(mapstruct *map, int tile) {
+    mapstruct *next = map->tile_map[tile];
+    int reverse = map_tiled_reverse[tile];
+    if (next == NULL || next->in_memory != MAP_IN_MEMORY || next->spaces == NULL ||
+        next->tile_map[reverse] != map) {
+        return NULL;
+    }
+    if (map->celestial_schema == 0 && next->celestial_schema == 0) {
+        return next;
+    }
+    if (map->celestial_schema != 1 || next->celestial_schema != 1 ||
+        map->celestial_boundary[tile] != CELESTIAL_BOUNDARY_CONTINUOUS ||
+        next->celestial_boundary[reverse] != CELESTIAL_BOUNDARY_CONTINUOUS ||
+        memcmp(region_celestial_for_map(map)->digest, region_celestial_for_map(next)->digest,
+               32) != 0) {
+        return NULL;
+    }
+    return next;
+}
+
+/** Remembered levels of recently sampled blocks, valid for one source and
+ * geometry epoch: every cell and sub-layer of a block shares its level. */
+#define LIGHT_LOCAL_CACHE_SIZE 1024
+
+typedef struct light_local_cache_entry {
+    const mapstruct *map;
+    tag_t count;
+    int bx, by;
+    uint64_t source_epoch, geometry_epoch;
+    int8_t level;
+} light_local_cache_entry;
+
+static light_local_cache_entry light_local_cache[LIGHT_LOCAL_CACHE_SIZE];
+
+static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey);
+
+int8_t light_local_level(mapstruct *map, int x, int y) {
+    HARD_ASSERT(map != NULL && map->spaces != NULL);
+    /* A block of fewer than nine cells would locate a hidden source too
+     * precisely: such a map reports no coarse light (fail closed). */
+    if (MAP_WIDTH(map) < 3 || MAP_HEIGHT(map) < 3) {
+        return 0;
+    }
+    int bx, by, ex, ey;
+    light_local_block(x, MAP_WIDTH(map), &bx, &ex);
+    light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    uint64_t geometry = los_geometry_epoch();
+    size_t slot = (((uintptr_t)map >> 4) ^ ((size_t)bx * 31u) ^ ((size_t)by * 1031u)) %
+                  LIGHT_LOCAL_CACHE_SIZE;
+    light_local_cache_entry *entry = &light_local_cache[slot];
+    if (entry->map == map && entry->count == map->count && entry->bx == bx &&
+        entry->by == by && entry->source_epoch == light_local_epoch &&
+        entry->geometry_epoch == geometry) {
+        return entry->level;
+    }
+    int8_t level = light_local_level_compute(map, bx, ex, by, ey);
+    *entry = (light_local_cache_entry){.map = map, .count = map->count, .bx = bx, .by = by,
+                                       .source_epoch = light_local_epoch,
+                                       .geometry_epoch = geometry, .level = level};
+    return level;
+}
+
+/**
+ * Pool every block of one source map region within reach of the target block
+ * [bx, ex) x [by, ey). The region's cell (cx, cy) lies at (cx + ox, cy + oy) in
+ * the target map's coordinates; its blocks need not align with the target's,
+ * because each reaches it by the gap between the two rectangles. The region
+ * may be any level of the target's linked stack: levels form one vertical
+ * bucket, so only the horizontal gap counts.
+ */
+static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, int ex, int by,
+                                    int ey, int32_t *positive, int32_t *negative) {
+    /* A map narrower than a block would pin a source to fewer than nine
+     * cells: it contributes nothing (fail closed). */
+    if (MAP_WIDTH(source) < 3 || MAP_HEIGHT(source) < 3) {
+        return;
+    }
+    int reach = MAX_LIGHT_RADIUS;
+    int x0 = MAX(0, bx - reach - ox), x1 = MIN(MAP_WIDTH(source), ex + reach - ox);
+    int y0 = MAX(0, by - reach - oy), y1 = MIN(MAP_HEIGHT(source), ey + reach - oy);
+    for (int cy = y0; cy < y1;) {
+        int sy, sey;
+        light_local_block(cy, MAP_HEIGHT(source), &sy, &sey);
+        for (int cx = x0; cx < x1;) {
+            int sx, sex;
+            light_local_block(cx, MAP_WIDTH(source), &sx, &sex);
+            int gap_x = MAX(0, MAX(sx + ox - (ex - 1), bx - (sex - 1 + ox)));
+            int gap_y = MAX(0, MAX(sy + oy - (ey - 1), by - (sey - 1 + oy)));
+            int distance_squared = gap_x * gap_x + gap_y * gap_y;
+            int strongest[2];
+            light_local_block_sources(source, sx, sex, sy, sey, &strongest[0], &strongest[1]);
+            for (int sign = 0; sign < 2; sign++) {
+                int mask = strongest[sign];
+                if (mask == 0) {
+                    continue;
+                }
+                int radius = light_profiles[abs(mask)].radial_radius;
+                if (distance_squared > radius * radius) {
+                    continue;
+                }
+                int32_t value = light_mask_value(abs(mask), distance_squared);
+                if (mask > 0) {
+                    *positive = MAX(*positive, value);
+                } else {
+                    *negative = MIN(*negative, -value);
+                }
+            }
+            cx = sex;
+        }
+        cy = sey;
+    }
+}
+
+/** One map placed relative to the target block: cell (cx, cy) lies at
+ * (cx + ox, cy + oy) on the target map, on any level of its linked stack. */
+typedef struct light_local_region {
+    mapstruct *map;
+    int ox, oy;
+} light_local_region;
+
+/**
+ * Most maps one coarse level may pool. Real topologies stay far below it (a
+ * 13-level stack of one-cell maps within reach places 1053); a component
+ * that exceeds it, such as an unbounded legacy link cycle or stack, fails
+ * closed to level 0 for every target in it, so no rebuild is unbounded and
+ * the levels of such a component still agree.
+ */
+#define LIGHT_LOCAL_REGIONS_MAX 4096
+
+
+static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
+    /* Sources are pooled per block before propagation and reach a block by
+     * the horizontal gap between the two blocks, which depends only on block
+     * geometry, so a source's position inside its block never changes any
+     * block's level. Every map within the largest radius counts, reached
+     * through continuous horizontal seams and linked levels in any order (a
+     * level linked only from a neighbor counts too); no map is ever loaded
+     * for it. The linked levels of a stack form one vertical bucket: a
+     * source on any of them counts at its horizontal gap alone, so every
+     * level of the stack gets the same level and the levels never reveal
+     * which floor a hidden source is on. Regions are keyed by map and
+     * horizontal offset, which also ends cyclic level links, and a
+     * component placing more than LIGHT_LOCAL_REGIONS_MAX maps fails closed. */
+    /* Placed maps grow with the reachable topology, never truncated: each
+     * (map, offset) is placed once and offsets stay within reach, so the set
+     * is finite however small the maps are. */
+    static light_local_region *regions;
+    static size_t capacity;
+    static const int tiles[] = {TILED_WEST,      TILED_EAST,      TILED_NORTH,
+                                TILED_SOUTH,     TILED_NORTHEAST, TILED_SOUTHEAST,
+                                TILED_SOUTHWEST, TILED_NORTHWEST, TILED_UP,
+                                TILED_DOWN};
+    int reach = MAX_LIGHT_RADIUS;
+    int32_t positive = 0, negative = 0;
+    size_t count = 0;
+    if (capacity == 0) {
+        capacity = 64;
+        regions = xmallocarray(capacity, sizeof(*regions));
+    }
+    regions[count++] = (light_local_region){.map = map};
+    for (size_t i = 0; i < count; i++) {
+        light_local_region region = regions[i];
+        light_local_pool_region(region.map, region.ox, region.oy, bx, ex, by, ey, &positive,
+                                &negative);
+        for (size_t t = 0; t < arraysize(tiles); t++) {
+            light_local_region next = region;
+            next.map = light_local_seam(region.map, tiles[t]);
+            if (next.map == NULL) {
+                continue;
+            }
+            if (tiles[t] == TILED_UP || tiles[t] == TILED_DOWN) {
+                /* Blocks align only across levels of the same dimensions. */
+                if (MAP_WIDTH(next.map) != MAP_WIDTH(region.map) ||
+                    MAP_HEIGHT(next.map) != MAP_HEIGHT(region.map)) {
+                    continue;
+                }
+            } else {
+                /* Diagonal seams move on both axes, as the light topology
+                 * crosses them directly. */
+                bool west = tiles[t] == TILED_WEST || tiles[t] == TILED_SOUTHWEST ||
+                            tiles[t] == TILED_NORTHWEST;
+                bool east = tiles[t] == TILED_EAST || tiles[t] == TILED_NORTHEAST ||
+                            tiles[t] == TILED_SOUTHEAST;
+                bool north = tiles[t] == TILED_NORTH || tiles[t] == TILED_NORTHEAST ||
+                             tiles[t] == TILED_NORTHWEST;
+                bool south = tiles[t] == TILED_SOUTH || tiles[t] == TILED_SOUTHEAST ||
+                             tiles[t] == TILED_SOUTHWEST;
+                next.ox += west ? -MAP_WIDTH(next.map) : east ? MAP_WIDTH(region.map) : 0;
+                next.oy += north ? -MAP_HEIGHT(next.map) : south ? MAP_HEIGHT(region.map) : 0;
+            }
+            if (next.ox >= ex + reach || next.ox + MAP_WIDTH(next.map) <= bx - reach ||
+                next.oy >= ey + reach || next.oy + MAP_HEIGHT(next.map) <= by - reach) {
+                continue;
+            }
+            bool seen = false;
+            for (size_t j = 0; j < count && !seen; j++) {
+                seen = regions[j].map == next.map && regions[j].ox == next.ox &&
+                       regions[j].oy == next.oy;
+            }
+            if (!seen) {
+                if (count == LIGHT_LOCAL_REGIONS_MAX) {
+                    /* Fail closed: pool nothing rather than an arbitrary part. */
+                    return 0;
+                }
+                if (count == capacity) {
+                    capacity *= 2;
+                    regions = xreallocarray(regions, capacity, sizeof(*regions));
+                }
+                regions[count++] = next;
+            }
+        }
+    }
+    return light_local_level_from_extrema(positive, negative);
+}
+
+int8_t light_local_level_from_extrema(int32_t positive, int32_t negative) {
+    /* Each sign is quantized before they compete, so a viewer's known light of
+     * the opposite sign learns only the hidden extremum's level, never where
+     * it lies inside its 1/8-daylight bin. Equal levels go to light. */
+    int light = (int)MIN(MAX(positive, 0) / MAP2_LOCAL_LIGHT_LEVEL_RAW,
+                         MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    int dark = (int)MIN(MAX(-(int64_t)negative, 0) / MAP2_LOCAL_LIGHT_LEVEL_RAW,
+                        MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    return (int8_t)(dark > light ? -dark : light);
 }
