@@ -1466,17 +1466,41 @@ static int32_t light_local_block_sources(mapstruct *map, int bx, int ex, int by,
 }
 
 /**
+ * The resident neighbor of a map across one seam that local light crosses: a
+ * reciprocal link, and continuity as light_face_continuous() requires (two
+ * schema-0 maps, or two celestial-v1 maps with continuous boundaries and equal
+ * effective profiles). Never loads a map.
+ */
+static mapstruct *light_local_seam(mapstruct *map, int tile) {
+    mapstruct *next = map->tile_map[tile];
+    int reverse = map_tiled_reverse[tile];
+    if (next == NULL || next->in_memory != MAP_IN_MEMORY || next->spaces == NULL ||
+        next->tile_map[reverse] != map) {
+        return NULL;
+    }
+    if (map->celestial_schema == 0 && next->celestial_schema == 0) {
+        return next;
+    }
+    if (map->celestial_schema != 1 || next->celestial_schema != 1 ||
+        map->celestial_boundary[tile] != CELESTIAL_BOUNDARY_CONTINUOUS ||
+        next->celestial_boundary[reverse] != CELESTIAL_BOUNDARY_CONTINUOUS ||
+        memcmp(region_celestial_for_map(map)->digest, region_celestial_for_map(next)->digest,
+               32) != 0) {
+        return NULL;
+    }
+    return next;
+}
+
+/**
  * The level dz steps above (positive) or below the map, when every step is a
- * resident, reciprocally linked map of the same dimensions, so blocks align.
- * Never loads a map.
+ * seam light crosses into a map of the same dimensions, so blocks align.
  */
 static mapstruct *light_local_level_map(mapstruct *map, int dz) {
     int direction = dz > 0 ? TILED_UP : TILED_DOWN;
     for (int step = 0; step < abs(dz) && map != NULL; step++) {
-        mapstruct *next = map->tile_map[direction];
-        if (next == NULL || next->in_memory != MAP_IN_MEMORY || next->spaces == NULL ||
-            next->tile_map[map_tiled_reverse[direction]] != map ||
-            MAP_WIDTH(next) != MAP_WIDTH(map) || MAP_HEIGHT(next) != MAP_HEIGHT(map)) {
+        mapstruct *next = light_local_seam(map, direction);
+        if (next == NULL || MAP_WIDTH(next) != MAP_WIDTH(map) ||
+            MAP_HEIGHT(next) != MAP_HEIGHT(map)) {
             return NULL;
         }
         map = next;
@@ -1490,12 +1514,13 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     light_local_block(x, MAP_WIDTH(map), &bx, &ex);
     light_local_block(y, MAP_HEIGHT(map), &by, &ey);
     /* Sources are pooled per block before propagation and reach a block by
-     * block-center distance, so a source's position inside its block never
-     * changes any block's level. Within the largest radius are the own block
-     * and its edge neighbors, on this level and on linked levels above and
-     * below as the server's masks reach them; diagonal centers are farther. */
+     * the gap between the two blocks, which depends only on block geometry,
+     * so a source's position inside its block never changes any block's
+     * level. The own block and its eight neighbors, on this level and on
+     * linked levels, are within the largest radius. */
     int32_t positive = 0, negative = 0;
-    static const int offsets[5][2] = {{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+    static const int offsets[9][2] = {{0, 0},  {-1, 0}, {1, 0},  {0, -1}, {0, 1},
+                                      {-1, -1}, {1, -1}, {-1, 1}, {1, 1}};
     for (int dz = -MAX_LIGHT_RADIUS; dz <= MAX_LIGHT_RADIUS; dz++) {
         mapstruct *level_map = dz == 0 ? map : light_local_level_map(map, dz);
         if (level_map == NULL) {
@@ -1503,28 +1528,53 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
         }
         for (size_t i = 0; i < arraysize(offsets); i++) {
             int sx = bx, sex = ex, sy = by, sey = ey;
+            mapstruct *source_map = level_map;
+            /* A neighbor block across a seam lies on the linked map, whose
+             * cells are offset by its own or this map's extent. */
+            int shift_x2 = 0, shift_y2 = 0;
             if (offsets[i][0] != 0) {
                 int probe = offsets[i][0] < 0 ? bx - 1 : ex;
                 if (probe < 0 || probe >= MAP_WIDTH(map)) {
-                    continue;
+                    mapstruct *next = light_local_seam(level_map, probe < 0 ? TILED_WEST : TILED_EAST);
+                    if (next == NULL || MAP_HEIGHT(next) != MAP_HEIGHT(level_map)) {
+                        continue;
+                    }
+                    light_local_block(probe < 0 ? MAP_WIDTH(next) - 1 : 0, MAP_WIDTH(next), &sx,
+                                      &sex);
+                    shift_x2 = probe < 0 ? -2 * MAP_WIDTH(next) : 2 * MAP_WIDTH(level_map);
+                    source_map = next;
+                } else {
+                    light_local_block(probe, MAP_WIDTH(map), &sx, &sex);
                 }
-                light_local_block(probe, MAP_WIDTH(map), &sx, &sex);
             }
             if (offsets[i][1] != 0) {
                 int probe = offsets[i][1] < 0 ? by - 1 : ey;
                 if (probe < 0 || probe >= MAP_HEIGHT(map)) {
-                    continue;
+                    /* A diagonal neighbor is reached through both seams. */
+                    mapstruct *next =
+                        light_local_seam(source_map, probe < 0 ? TILED_NORTH : TILED_SOUTH);
+                    if (next == NULL || MAP_WIDTH(next) != MAP_WIDTH(source_map)) {
+                        continue;
+                    }
+                    light_local_block(probe < 0 ? MAP_HEIGHT(next) - 1 : 0, MAP_HEIGHT(next), &sy,
+                                      &sey);
+                    shift_y2 = probe < 0 ? -2 * MAP_HEIGHT(next) : 2 * MAP_HEIGHT(source_map);
+                    source_map = next;
+                } else {
+                    light_local_block(probe, MAP_HEIGHT(map), &sy, &sey);
                 }
-                light_local_block(probe, MAP_HEIGHT(map), &sy, &sey);
             }
             int mask = get_real_light_source_value(
-                light_local_block_sources(level_map, sx, sex, sy, sey));
+                light_local_block_sources(source_map, sx, sex, sy, sey));
             if (mask == 0) {
                 continue;
             }
-            /* Doubled center coordinates keep remainder blocks exact. */
-            int dx2 = (sx + sex - 1) - (bx + ex - 1), dy2 = (sy + sey - 1) - (by + ey - 1);
-            int distance_squared = (dx2 * dx2 + dy2 * dy2 + 2) / 4 + dz * dz;
+            /* Gap in cells between the source block and this block, in this
+             * map's coordinates; zero for the own block. */
+            int ox = shift_x2 / 2, oy = shift_y2 / 2;
+            int gap_x = MAX(0, MAX(sx + ox - (ex - 1), bx - (sex - 1 + ox)));
+            int gap_y = MAX(0, MAX(sy + oy - (ey - 1), by - (sey - 1 + oy)));
+            int distance_squared = gap_x * gap_x + gap_y * gap_y + dz * dz;
             int radius = light_profiles[abs(mask)].radial_radius;
             if (distance_squared > radius * radius || abs(dz) > MIN(radius, MAP2_MAX_DEPTH)) {
                 continue;

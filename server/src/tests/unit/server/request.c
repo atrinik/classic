@@ -3601,12 +3601,25 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     content->y = op->y;
     ck_assert_ptr_nonnull(object_insert_map(content, map, NULL, INS_NO_MERGE));
 
+    /* A lamp beside the tile gives it a nonzero level while it is visible. */
+    object *steady = arch_get("letter");
+    steady->glow_radius = 13;
+    steady->light_color = UINT32_C(0xffffff);
+    steady->x = op->x + 2;
+    steady->y = op->y;
+    ck_assert_ptr_nonnull(object_insert_map(steady, map, NULL, INS_NO_MERGE));
+
     /* The tile two cells east is sent while it is in view. */
     socket_buffer_clear(pl->cs);
     draw_client_map(op);
     MapCell *cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_ne(cell->fow_known, 0);
+    uint8_t visible_level = cell->local_light[0];
+    int8_t decoded;
+    bool decoded_floor;
+    ck_assert(map_protocol_local_light_decode(visible_level, &decoded, &decoded_floor));
+    ck_assert_int_gt(decoded, 0);
 
     /* A wall between the viewer and that tile turns it into remembered fog. */
     object *wall = arch_get("letter");
@@ -3625,6 +3638,8 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     ck_assert_uint_eq(cell->cleared, 1);
     ck_assert_uint_ne(cell->client_light_known & 8U, 0);
     ck_assert_uint_ne(cell->client_light_known & 1U, 0);
+    /* Entering fog keeps the level last sent while visible, not zero. */
+    ck_assert_uint_eq(cell->local_light[0], visible_level);
     uint8_t before = cell->local_light[0];
 
     /* Hidden light that appears behind the wall never reaches the remembered
