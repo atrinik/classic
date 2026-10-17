@@ -41,6 +41,9 @@ typedef struct client_lighting_emitter {
 typedef struct client_lighting_cell {
     int32_t scalar;
     int32_t rgb[3];
+    /** The part of scalar and rgb from emitters that opted in to flicker. */
+    int32_t flicker_scalar;
+    int32_t flicker_rgb[3];
 } client_lighting_cell_t;
 
 /**
@@ -56,6 +59,12 @@ void client_lighting_evaluate(int width,
                               const client_lighting_emitter_t *emitters,
                               size_t count,
                               client_lighting_cell_t *cells);
+
+/**
+ * Presentation flicker gain in Q0.8 (256 is steady) for a monotonic time in
+ * milliseconds. Deterministic and bounded to 205..256, so flicker only dims.
+ */
+uint16_t client_lighting_flicker_gain(uint64_t time_ms);
 
 /** Combine the client's emitter scalar with the server's signed coarse level. */
 int32_t client_lighting_compose(int32_t emitter_raw, int8_t level);

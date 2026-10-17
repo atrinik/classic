@@ -17,17 +17,7 @@
 #include <toolkit/light_profile.h>
 #include <toolkit/socket.h>
 
-/** Emitters of one tile, grouped like the server's per-space counters. */
-typedef struct client_lighting_group {
-    int x;
-    int y;
-    int radius;
-    int positive_radius;
-    size_t first;
-    size_t end;
-} client_lighting_group_t;
-
-/** Order emitters by tile, then radius and color, so equal ones are adjacent. */
+/** Order emitters by tile, then radius and color. */
 static int client_lighting_emitter_compare(const void *left, const void *right) {
     const client_lighting_emitter_t *a = left, *b = right;
     if (a->y != b->y) {
@@ -115,7 +105,7 @@ static void client_lighting_add(int width,
                                 int mask,
                                 int sign,
                                 int target,
-                                const uint16_t linear[3]) {
+                                const int64_t linear[3]) {
     if (mask == 0) {
         return;
     }
@@ -139,14 +129,94 @@ static void client_lighting_add(int width,
             } else if (target == 1) {
                 cell->positive += value;
             } else {
-                /* For color, sign carries the multiplicity of identical
-                 * constituents. */
+                /* For color, linear is the multiplicity-weighted sum of a
+                 * profile's constituent colors and sign their count. */
                 for (size_t channel = 0; channel < 3; channel++) {
-                    cell->color[channel] += (int64_t)sign * value * linear[channel];
+                    cell->color[channel] += (int64_t)value * linear[channel];
                 }
                 cell->weight += (int64_t)sign * value * UINT16_MAX;
             }
         }
+    }
+}
+
+/**
+ * Accumulate one emitter set, sorted by tile, as the server's per-space
+ * counters do. Every positive constituent adds its own profile with its own
+ * color; constituents sharing a resolved profile share its value at every
+ * distance and its rays, so they fold exactly into one walk whose color is
+ * their summed linear color. A tile therefore costs at most
+ * LIGHT_PROFILE_COUNT color walks however many emitters it carries.
+ */
+static void client_lighting_accumulate(int width,
+                                       int height,
+                                       const uint16_t *occluders,
+                                       const client_lighting_emitter_t *emitters,
+                                       size_t count,
+                                       bool flicker_only,
+                                       client_lighting_accumulator_t *accumulators) {
+    size_t i = 0;
+    while (i < count) {
+        int x = emitters[i].x, y = emitters[i].y;
+        int radius = 0, positive_radius = 0;
+        int64_t linear[LIGHT_PROFILE_COUNT][3] = {{0}};
+        int64_t multiplicity[LIGHT_PROFILE_COUNT] = {0};
+        bool any = false;
+        for (; i < count && emitters[i].x == x && emitters[i].y == y; i++) {
+            const client_lighting_emitter_t *emitter = &emitters[i];
+            if (flicker_only &&
+                (emitter->radius <= 0 || !(emitter->flags & MAP2_EMITTER_FLICKER))) {
+                continue;
+            }
+            any = true;
+            radius += emitter->radius;
+            if (emitter->radius <= 0) {
+                continue;
+            }
+            positive_radius += emitter->radius;
+            int profile = light_profile_mask(emitter->radius);
+            multiplicity[profile]++;
+            for (size_t channel = 0; channel < 3; channel++) {
+                linear[profile][channel] += light_profile_color_component(emitter->color, channel);
+            }
+        }
+        if (!any) {
+            continue;
+        }
+        int scalar_mask = light_profile_mask(radius);
+        client_lighting_add(width, height, occluders, accumulators, x, y, abs(scalar_mask),
+                            scalar_mask < 0 ? -1 : 1, 0, NULL);
+        client_lighting_add(width, height, occluders, accumulators, x, y,
+                            light_profile_mask(positive_radius), 1, 1, NULL);
+        for (int profile = 1; profile < LIGHT_PROFILE_COUNT; profile++) {
+            if (multiplicity[profile] != 0) {
+                client_lighting_add(width, height, occluders, accumulators, x, y, profile,
+                                    (int)multiplicity[profile], 2, linear[profile]);
+            }
+        }
+    }
+}
+
+/**
+ * Resolve color as the server's radiance resolver does for local light: the
+ * capped positive part takes the accumulated hue and the rest is neutral.
+ * Channels stay signed; the caller clamps them only after composition.
+ */
+static void client_lighting_resolve(const client_lighting_accumulator_t *a,
+                                    int32_t *scalar,
+                                    int32_t rgb[3]) {
+    int64_t accumulated = a->weight > 0 ? a->weight / UINT16_MAX : 0;
+    int64_t effective = a->weight > 0 ? (a->positive > 0 ? a->positive : 0) : 0;
+    if (effective > accumulated) {
+        effective = accumulated;
+    }
+    *scalar = (int32_t)a->scalar;
+    for (size_t channel = 0; channel < 3; channel++) {
+        int64_t colored = 0;
+        if (effective > 0) {
+            colored = (a->color[channel] * effective + a->weight / 2) / a->weight;
+        }
+        rgb[channel] = (int32_t)(a->scalar - effective + colored);
     }
 }
 
@@ -162,93 +232,50 @@ void client_lighting_evaluate(int width,
         return;
     }
 
-    /* Sort a copy by tile so grouping and constituent scans stay linear in
-     * the number of emitters a server can send. */
+    /* Sort a copy by tile so grouping stays linear in the emitter count. */
     client_lighting_emitter_t *sorted = malloc(count * sizeof(*sorted));
-    client_lighting_group_t *groups = calloc(count, sizeof(*groups));
-    if (sorted == NULL || groups == NULL) {
+    client_lighting_accumulator_t *all = calloc(total, sizeof(*all));
+    client_lighting_accumulator_t *flicker = calloc(total, sizeof(*flicker));
+    if (sorted == NULL || all == NULL || flicker == NULL) {
         free(sorted);
-        free(groups);
+        free(all);
+        free(flicker);
         return;
     }
     memcpy(sorted, emitters, count * sizeof(*sorted));
     qsort(sorted, count, sizeof(*sorted), client_lighting_emitter_compare);
-    emitters = sorted;
-    size_t group_count = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (group_count == 0 || groups[group_count - 1].x != emitters[i].x ||
-            groups[group_count - 1].y != emitters[i].y) {
-            groups[group_count++] = (client_lighting_group_t){
-                .x = emitters[i].x, .y = emitters[i].y, .first = i, .end = i};
-        }
-        client_lighting_group_t *group = &groups[group_count - 1];
-        group->end = i + 1;
-        group->radius += emitters[i].radius;
-        if (emitters[i].radius > 0) {
-            group->positive_radius += emitters[i].radius;
-        }
-    }
-
-    client_lighting_accumulator_t *accumulators = calloc(total, sizeof(*accumulators));
-    if (accumulators == NULL) {
-        free(groups);
-        free(sorted);
-        return;
-    }
-    for (size_t group = 0; group < group_count; group++) {
-        const client_lighting_group_t *g = &groups[group];
-        int scalar_mask = light_profile_mask(g->radius);
-        client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
-                            abs(scalar_mask), scalar_mask < 0 ? -1 : 1, 0, NULL);
-        client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
-                            light_profile_mask(g->positive_radius), 1, 1, NULL);
-        /* Identical constituents add one weighted profile; every distinct
-         * one keeps its own profile and exact server weight. A tile has at
-         * most one emitter per sent layer record, so this stays bounded. */
-        for (size_t i = g->first; i < g->end; i++) {
-            if (emitters[i].radius <= 0 ||
-                (i > g->first && emitters[i].radius == emitters[i - 1].radius &&
-                 emitters[i].color == emitters[i - 1].color)) {
-                continue;
-            }
-            int multiplicity = 1;
-            while (i + multiplicity < g->end &&
-                   emitters[i + multiplicity].radius == emitters[i].radius &&
-                   emitters[i + multiplicity].color == emitters[i].color) {
-                multiplicity++;
-            }
-            uint16_t linear[3];
-            for (size_t channel = 0; channel < 3; channel++) {
-                linear[channel] = light_profile_color_component(emitters[i].color, channel);
-            }
-            client_lighting_add(width, height, occluders, accumulators, g->x, g->y,
-                                light_profile_mask(emitters[i].radius), multiplicity, 2, linear);
-        }
-    }
-
-    /* Resolve color as the server's radiance resolver does for local light:
-     * the capped positive part takes the accumulated hue and the rest is
-     * neutral. Channels stay signed here; the caller clamps them only after
-     * adding base radiance, as the server clamps its complete aggregate. */
+    client_lighting_accumulate(width, height, occluders, sorted, count, false, all);
+    client_lighting_accumulate(width, height, occluders, sorted, count, true, flicker);
     for (size_t index = 0; index < total; index++) {
-        const client_lighting_accumulator_t *a = &accumulators[index];
-        int64_t accumulated = a->weight > 0 ? a->weight / UINT16_MAX : 0;
-        int64_t effective = a->weight > 0 ? (a->positive > 0 ? a->positive : 0) : 0;
-        if (effective > accumulated) {
-            effective = accumulated;
-        }
-        cells[index].scalar = (int32_t)a->scalar;
-        for (size_t channel = 0; channel < 3; channel++) {
-            int64_t colored = 0;
-            if (effective > 0) {
-                colored = (a->color[channel] * effective + a->weight / 2) / a->weight;
-            }
-            cells[index].rgb[channel] = (int32_t)(a->scalar - effective + colored);
-        }
+        client_lighting_resolve(&all[index], &cells[index].scalar, cells[index].rgb);
+        client_lighting_resolve(&flicker[index], &cells[index].flicker_scalar,
+                                cells[index].flicker_rgb);
     }
-    free(accumulators);
-    free(groups);
+    free(flicker);
+    free(all);
     free(sorted);
+}
+
+/** Flicker keyframes: a new dip every this many milliseconds. */
+#define CLIENT_LIGHTING_FLICKER_STEP_MS 125
+/** Deepest dip in Q0.8: gains stay within 256 - 51 .. 256. */
+#define CLIENT_LIGHTING_FLICKER_DIP_MAX 51
+
+static uint32_t client_lighting_flicker_hash(uint64_t step) {
+    uint64_t z = step + UINT64_C(0x9e3779b97f4a7c15);
+    z = (z ^ (z >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+    z = (z ^ (z >> 27)) * UINT64_C(0x94d049bb133111eb);
+    return (uint32_t)(z ^ (z >> 31));
+}
+
+uint16_t client_lighting_flicker_gain(uint64_t time_ms) {
+    uint64_t step = time_ms / CLIENT_LIGHTING_FLICKER_STEP_MS;
+    uint32_t fraction =
+        (uint32_t)(time_ms % CLIENT_LIGHTING_FLICKER_STEP_MS) * 256 / CLIENT_LIGHTING_FLICKER_STEP_MS;
+    uint32_t from = client_lighting_flicker_hash(step) % (CLIENT_LIGHTING_FLICKER_DIP_MAX + 1);
+    uint32_t to = client_lighting_flicker_hash(step + 1) % (CLIENT_LIGHTING_FLICKER_DIP_MAX + 1);
+    uint32_t dip = (from * (256 - fraction) + to * fraction + 128) / 256;
+    return (uint16_t)(256 - dip);
 }
 
 int32_t client_lighting_compose(int32_t emitter_raw, int8_t level) {

@@ -3806,11 +3806,14 @@ static void map_temporal_lighting_update(void) {
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
 }
 
+static void map_flicker_lighting_update(void);
+
 void map_animate(void) {
     int x, y, layer;
     map_cell_t *cell;
 
     map_temporal_lighting_update();
+    map_flicker_lighting_update();
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         if (!(map_level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) ||
@@ -5381,6 +5384,8 @@ typedef struct map_client_lighting_field {
     int origin_y;
     int width;
     int height;
+    /** Whether any cell carries light from emitters that opted in to flicker. */
+    bool has_flicker;
     client_lighting_cell_t *cells;
 } map_client_lighting_field_t;
 
@@ -5443,8 +5448,34 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
         }
     }
     client_lighting_evaluate(width, height, occluders, emitters, emitter_count, field->cells);
+    field->has_flicker = false;
+    for (size_t index = 0; index < (size_t)width * height && !field->has_flicker; index++) {
+        field->has_flicker = field->cells[index].flicker_scalar != 0;
+    }
     free(emitters);
     free(occluders);
+}
+
+/** Relight levels whose emitter field flickers; flicker needs no server traffic. */
+static void map_flicker_lighting_update(void) {
+    bool flickering = false;
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        if (map_client_lighting_fields[level].valid && map_client_lighting_fields[level].has_flicker &&
+            (map_level_mask & (UINT16_C(1) << level))) {
+            level_lighting_revision[level]++;
+            flickering = true;
+        }
+    }
+    if (flickering) {
+        map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    }
+}
+
+/** Signed raw light to Q5.11 radiance, unsaturated, rounding as the server. */
+static int64_t map_lighting_raw_to_radiance_signed(int64_t raw) {
+    int64_t magnitude = raw < 0 ? -raw : raw;
+    int64_t radiance = (magnitude * 8 + 2) / 5;
+    return raw < 0 ? -radiance : radiance;
 }
 
 /**
@@ -5482,42 +5513,53 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
 
     int32_t emitter = local != NULL ? local->scalar : 0;
     int32_t composed = client_lighting_compose(emitter, level);
-    int32_t delta = composed >= 0 ? light_profile_raw_to_radiance(composed)
-                                  : -(int32_t)light_profile_raw_to_radiance(-composed);
-    /* Base words are signed Q4.11; composition stays signed until clamping. */
-    int32_t scalar_value = MAX(0, MIN((int32_t)UINT16_MAX, (int32_t)(int16_t)*scalar + delta));
-    int32_t channels[3];
+    /* Flicker modulates the emitter field after composition (L + E' - E), so
+     * the coarse floor of a block the emitter lights cannot suppress it. */
+    int64_t flicker_scalar = 0, flicker_rgb[3] = {0, 0, 0};
+    if (local != NULL && local->flicker_scalar != 0) {
+        int64_t gain = (int64_t)client_lighting_flicker_gain(LastTick) - 256;
+        flicker_scalar = local->flicker_scalar * gain / 256;
+        for (size_t channel = 0; channel < 3; channel++) {
+            flicker_rgb[channel] = local->flicker_rgb[channel] * gain / 256;
+        }
+    }
+    /* Base words are signed Q4.11. Everything stays signed and unsaturated
+     * until the vision floor, then clamps, scales and saturates once. */
+    int64_t scalar_value =
+        (int16_t)*scalar + map_lighting_raw_to_radiance_signed(composed + flicker_scalar);
+    int64_t channels[3];
     for (size_t channel = 0; channel < 3; channel++) {
         /* The emitter field's per-channel hue delta rides on the composed
          * scalar; coarse light beyond it is neutral. */
-        int32_t channel_raw = composed;
+        int64_t channel_raw = (int64_t)composed + flicker_rgb[channel];
         if (local != NULL) {
             channel_raw += local->rgb[channel] - local->scalar;
         }
-        int32_t channel_delta = channel_raw >= 0
-                                    ? light_profile_raw_to_radiance(channel_raw)
-                                    : -(int32_t)light_profile_raw_to_radiance(-channel_raw);
-        channels[channel] = MAX(0, (int32_t)(int16_t)rgb[channel] + channel_delta);
-    }
-    /* Common-vector overflow: scale all channels together to keep hue. */
-    int32_t peak = MAX(channels[0], MAX(channels[1], channels[2]));
-    if (peak > (int32_t)UINT16_MAX) {
-        for (size_t channel = 0; channel < 3; channel++) {
-            channels[channel] =
-                (int32_t)(((int64_t)channels[channel] * UINT16_MAX + peak / 2) / peak);
-        }
+        channels[channel] = (int16_t)rgb[channel] + map_lighting_raw_to_radiance_signed(channel_raw);
     }
 
     if (vision_floor) {
-        int32_t floor_value = light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
+        int64_t floor_value = light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
         if (scalar_value < floor_value) {
             for (size_t channel = 0; channel < 3; channel++) {
-                channels[channel] = MIN((int32_t)UINT16_MAX,
-                                        channels[channel] + floor_value - scalar_value);
+                channels[channel] += floor_value - scalar_value;
             }
             scalar_value = floor_value;
         }
     }
+
+    /* Negative clamp, then common-vector overflow scaling to keep hue. */
+    int64_t peak = 0;
+    for (size_t channel = 0; channel < 3; channel++) {
+        channels[channel] = MAX(0, channels[channel]);
+        peak = MAX(peak, channels[channel]);
+    }
+    if (peak > (int64_t)UINT16_MAX) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            channels[channel] = (channels[channel] * UINT16_MAX + peak / 2) / peak;
+        }
+    }
+    scalar_value = MAX(0, MIN((int64_t)UINT16_MAX, scalar_value));
 
     *scalar = (uint16_t)scalar_value;
     for (size_t channel = 0; channel < 3; channel++) {
@@ -6439,6 +6481,16 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success &&
               composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
+    /* The floor lifts still-signed channels neutrally, keeping their hue. */
+    map_set_light_radiance(18, 8, 0, (uint16_t)map_protocol_signed_radiance_encode(-320));
+    uint16_t dark_tint[NUM_SUB_LAYERS][3] = {
+        {(uint16_t)(int16_t)-512, (uint16_t)(int16_t)-256, (uint16_t)(int16_t)-512}};
+    map_set_light_rgb_radiance(18, 8, 1, dark_tint);
+    map_set_local_light(18, 8, map_protocol_local_light_encode(0, true));
+    map_lighting_radiance(18 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(18, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160 && composed_rgb[0] == 160 &&
+              composed_rgb[1] == 416 && composed_rgb[2] == 160;
     /* An overflowing colored sum scales its channels together. */
     map_set_light_radiance(14, 8, 0, 32000);
     uint16_t warm[NUM_SUB_LAYERS][3] = {{32700, 16000, 8000}};

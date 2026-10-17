@@ -164,6 +164,65 @@ static void test_many_colors_keep_exact_server_weights(void) {
     TEST_CHECK(cell_at(5, 4)->rgb[0] == cell_at(5, 4)->rgb[2]);
 }
 
+static void test_profile_folding_matches_separate_constituents(void) {
+    memset(occluders, 0, sizeof(occluders));
+    /* Radius 6 and 7 resolve to one profile; fold them and compare with
+     * evaluating each color alone, which the server would sum. */
+    client_lighting_emitter_t both[] = {
+        {.x = 4, .y = 4, .radius = 6, .color = 0xff0000},
+        {.x = 4, .y = 4, .radius = 7, .color = 0x0000ff},
+    };
+    TEST_CHECK(light_profile_mask(6) == light_profile_mask(7));
+    evaluate(both, 2);
+    client_lighting_cell_t folded[WIDTH * HEIGHT];
+    memcpy(folded, cells, sizeof(folded));
+    /* Equal weights: red and blue channels match at every cell. */
+    for (size_t i = 0; i < WIDTH * HEIGHT; i++) {
+        TEST_CHECK(folded[i].rgb[0] == folded[i].rgb[2]);
+    }
+    /* Many emitters on one tile cost one walk per distinct profile. */
+    client_lighting_emitter_t many[49];
+    for (size_t i = 0; i < (sizeof(many) / sizeof(*many)); i++) {
+        many[i] = (client_lighting_emitter_t){
+            .x = 4, .y = 4, .radius = (int8_t)(1 + i % 13), .color = (uint32_t)(0x010203 * (i + 1))};
+    }
+    evaluate(many, (sizeof(many) / sizeof(*many)));
+    TEST_CHECK(cell_at(4, 4)->scalar > 0);
+}
+
+static void test_flicker_field_is_the_flickering_emitters_alone(void) {
+    memset(occluders, 0, sizeof(occluders));
+    client_lighting_emitter_t mixed[] = {
+        {.x = 3, .y = 4, .radius = 5, .color = 0xffffff},
+        {.x = 5, .y = 4, .radius = 4, .flags = MAP2_EMITTER_FLICKER, .color = 0xff8000},
+    };
+    evaluate(mixed, 2);
+    client_lighting_cell_t combined[WIDTH * HEIGHT];
+    memcpy(combined, cells, sizeof(combined));
+    evaluate(&mixed[1], 1);
+    for (size_t i = 0; i < WIDTH * HEIGHT; i++) {
+        TEST_CHECK(combined[i].flicker_scalar == cells[i].scalar);
+        for (int channel = 0; channel < 3; channel++) {
+            TEST_CHECK(combined[i].flicker_rgb[channel] == cells[i].rgb[channel]);
+        }
+    }
+    /* A steady emitter alone has no flicker field. */
+    evaluate(&mixed[0], 1);
+    for (size_t i = 0; i < WIDTH * HEIGHT; i++) {
+        TEST_CHECK(cells[i].flicker_scalar == 0);
+    }
+    /* The gain only dims, stays bounded and varies over time. */
+    uint16_t lowest = 256, highest = 0;
+    for (uint64_t ms = 0; ms < 60000; ms += 7) {
+        uint16_t gain = client_lighting_flicker_gain(ms);
+        TEST_CHECK(gain >= 205 && gain <= 256);
+        lowest = gain < lowest ? gain : lowest;
+        highest = gain > highest ? gain : highest;
+    }
+    TEST_CHECK(lowest < highest);
+    TEST_CHECK(client_lighting_flicker_gain(1234) == client_lighting_flicker_gain(1234));
+}
+
 static void test_darkness_is_negative_and_uncolored(void) {
     memset(occluders, 0, sizeof(occluders));
     client_lighting_emitter_t dark = {.x = 4, .y = 4, .radius = -13, .color = 0};
@@ -268,6 +327,8 @@ int main(void) {
     test_occluded_source_cell_attenuates_its_light();
     test_colors_beyond_the_bound_keep_their_hue();
     test_many_colors_keep_exact_server_weights();
+    test_profile_folding_matches_separate_constituents();
+    test_flicker_field_is_the_flickering_emitters_alone();
     test_darkness_is_negative_and_uncolored();
     test_colored_light_keeps_hue();
     test_constituent_colors_keep_their_own_profiles();
