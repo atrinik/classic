@@ -40,7 +40,6 @@
 
 #define NR_LIGHT_MASK 10
 
-/** Advances whenever a space's source counter changes; see light_local_level(). */
 /** Advances with every source change anywhere; a coarse cache entry confirmed
  * at the current value needs no revalidation. */
 static uint64_t light_local_generation = 1;
