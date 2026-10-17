@@ -3,7 +3,7 @@
              renderer="gpu"
              input-root="../../../.."
              settings="src/tests/fixtures/player_view/settings.txt"
-             settings-sha256="c2f0eaf25a8a7f0f0fb453722fb8ad7bf7eacba95e3e57b6ea8ff25e888f5ad6"
+             settings-sha256="21bf2d19c80bc36bf1c6b78cdf401cf7e253f129f384c95eee6d748846f25d71"
              archdef="data/archdef.dat"
              archdef-sha256="977ce63e38f4795545f42bd2f4a9c62bd38fcdb4cfde7cb7fe3c2cd9fe73983e"
              snapshot="src/tests/fixtures/player_view/remembered-floor.map2.hex"

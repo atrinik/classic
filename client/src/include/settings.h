@@ -140,8 +140,6 @@ enum {
     OPT_PLAYER_NAMES,
     /** How much to zoom the map. */
     OPT_MAP_ZOOM,
-    /** Whether to render smoothly interpolated ground lighting. */
-    OPT_SMOOTH_LIGHTING,
     /** Health warning. */
     OPT_HEALTH_WARNING,
     /** Food warning. */

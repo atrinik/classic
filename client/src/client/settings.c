@@ -546,13 +546,6 @@ static void setting_apply_runtime(int cat, int setting) {
 
         case OPT_CAT_MAP:
             switch (setting) {
-                case OPT_SMOOTH_LIGHTING:
-                    if (!setting_get_int(cat, setting)) {
-                        lighting_deinit();
-                    }
-                    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
-                    break;
-
                     /* Map width/height change. */
                 case OPT_MAP_WIDTH:
                 case OPT_MAP_HEIGHT:

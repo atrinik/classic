@@ -63,6 +63,8 @@
 #include <popup.h>
 #include <toolkit/packet.h>
 #include <toolkit/map_protocol.h>
+#include <toolkit/light_profile.h>
+#include <client_lighting.h>
 #include <toolkit/string.h>
 #include <toolkit/bresenham.h>
 #include <toolkit/clioptions.h>
@@ -220,7 +222,58 @@ static uint64_t map_cell_peak_retained_bytes;
 static uint64_t map_cell_next_painter_identity = 1;
 static uint64_t map_next_presentation_token = 1;
 static uint64_t level_lighting_revision[MAP2_LEVELS];
+/* Advances only when a level's emitters, occluders or live residency change,
+ * so base-light and timed-light updates do not rebuild the emitter field.
+ * Values come from one clock and are never reused, so a revision moves with
+ * its store through level scrolls and is restored on abort without ever
+ * matching a field built from other cells. */
+static uint64_t level_emitter_revision[MAP2_LEVELS];
+static uint64_t level_emitter_clock;
+
+static void map_emitter_revision_bump(size_t level) {
+    level_emitter_revision[level] = ++level_emitter_clock;
+}
+
+/** Client-evaluated local light of one level's visible window (protocol 1085). */
+typedef struct map_client_lighting_field {
+    bool valid;
+    const map_cell_store_t *store;
+    uint64_t revision;
+    int cache_origin_x;
+    int cache_origin_y;
+    /* The cache scroll counters when the field was built: their difference
+     * to the current counters is the exact scroll since, never a guess from
+     * wrapped origins. */
+    int64_t scroll_x;
+    int64_t scroll_y;
+    int origin_x;
+    int origin_y;
+    int width;
+    int height;
+    /** Whether any cell carries light from emitters that opted in to flicker. */
+    bool has_flicker;
+    client_lighting_cell_t *cells;
+} map_client_lighting_field_t;
+
+static map_client_lighting_field_t map_client_lighting_fields[MAP2_LEVELS];
+/** Accumulated cache scroll offsets, unwrapped. */
+static int64_t map_cache_scroll_x;
+static int64_t map_cache_scroll_y;
+
+/**
+ * A level lost emitters or its store: give it a fresh revision and drop its
+ * field, so no frame presents the revoked emitters while a rebuild waits for
+ * the per-frame budget; until it is rebuilt the level composes coarse light
+ * only, and an allocator reusing the store's address cannot revive it.
+ */
+static void map_emitter_revoke(size_t level) {
+    map_emitter_revision_bump(level);
+    map_client_lighting_fields[level].valid = false;
+}
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
+/** Offline proofs only: the discrete per-tile projection pinned by approved
+ * conformance goldens. Players always get smooth lighting. */
+static bool map_discrete_lighting_proof;
 static uint16_t map_level_mask;
 static int map_width;
 static int map_height;
@@ -1344,10 +1397,12 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             int physical_y = (y + map_cache_origin_y) % height;
             size_t index = (size_t)physical_y * width + physical_x;
             map_cell_t *cell = map_cell_store_slot(level, index, false);
-            /* Cells leaving the window are no longer updated by the server:
-             * fog keeps its last signed base radiance and keyframe, its
-             * remembered occluders and its last authorized coarse levels, as
-             * the server freezes them for fog and a soft clear keeps them. */
+            /* Cells leaving the window keep their signed base radiance,
+             * keyframe, remembered occluders and coarse levels, as a soft
+             * clear does; their emitters are revoked. */
+            if (cell != NULL && cell->emitters != NULL && !cell->fow) {
+                map_emitter_revoke(level_index);
+            }
             if (cell != NULL && (!cell->fow || cell->structural_fow)) {
                 map_clear_live_cell(cell);
             }
@@ -1410,6 +1465,7 @@ void map_set_level_mask(uint16_t mask) {
             map_cell_store_destroy(level_cells[index]);
             level_cells[index] = NULL;
             level_lighting_revision[index]++;
+            map_emitter_revoke(index);
         }
     }
 
@@ -1451,9 +1507,12 @@ static struct {
     int height;
     int origin_x;
     int origin_y;
+    int64_t scroll_x;
+    int64_t scroll_y;
     size_t current_level_index;
     uint16_t level_mask;
     uint64_t lighting_revision[MAP2_LEVELS];
+    uint64_t emitter_revision[MAP2_LEVELS];
     map_cell_store_t *original_levels[MAP2_LEVELS];
     map_cell_store_t *full_snapshot_levels[MAP2_LEVELS];
     map_anim_t *animations;
@@ -1602,6 +1661,8 @@ void map_state_transaction_begin(bool full_snapshot) {
     map_state_transaction.height = map_height;
     map_state_transaction.origin_x = map_cache_origin_x;
     map_state_transaction.origin_y = map_cache_origin_y;
+    map_state_transaction.scroll_x = map_cache_scroll_x;
+    map_state_transaction.scroll_y = map_cache_scroll_y;
     map_state_transaction.current_level_index = current_level_index;
     map_state_transaction.level_mask = map_level_mask;
     map_state_transaction.map_data = MapData;
@@ -1611,6 +1672,9 @@ void map_state_transaction_begin(bool full_snapshot) {
     memcpy(map_state_transaction.lighting_revision,
            level_lighting_revision,
            sizeof(level_lighting_revision));
+    memcpy(map_state_transaction.emitter_revision,
+           level_emitter_revision,
+           sizeof(level_emitter_revision));
     map_state_transaction.ambient_clear = false;
     map_state_transaction.ambient_scroll_x = 0;
     map_state_transaction.ambient_scroll_y = 0;
@@ -1642,6 +1706,12 @@ void map_state_transaction_commit(void) {
     if (!map_state_transaction.full_snapshot) {
         for (size_t i = 0; i < arraysize(level_cells); i++) {
             if (!(map_level_mask & (UINT16_C(1) << i))) {
+                /* A depth whose destruction was deferred to commit is
+                 * revoked now, so a reused store address cannot revive its
+                 * emitter field. */
+                if (level_cells[i] != NULL) {
+                    map_emitter_revoke(i);
+                }
                 map_cell_store_destroy(level_cells[i]);
                 level_cells[i] = NULL;
             }
@@ -1710,11 +1780,19 @@ void map_state_transaction_abort(void) {
     map_height = map_state_transaction.height;
     map_cache_origin_x = map_state_transaction.origin_x;
     map_cache_origin_y = map_state_transaction.origin_y;
+    map_cache_scroll_x = map_state_transaction.scroll_x;
+    map_cache_scroll_y = map_state_transaction.scroll_y;
     current_level_index = map_state_transaction.current_level_index;
     map_level_mask = map_state_transaction.level_mask;
     memcpy(level_lighting_revision,
            map_state_transaction.lighting_revision,
            sizeof(level_lighting_revision));
+    /* The restored cells are the ones the saved revisions describe; a field
+     * built meanwhile holds a newer clock value and is rebuilt, while fields
+     * of untouched levels stay valid, so a no-op abort relights nothing. */
+    memcpy(level_emitter_revision,
+           map_state_transaction.emitter_revision,
+           sizeof(level_emitter_revision));
     MapData = map_state_transaction.map_data;
     map_state_transaction_restore_region_fow();
     cells = level_cells[current_level_index];
@@ -1986,6 +2064,11 @@ static void map_hard_clear_abort_pending(void) {
 }
 
 void clear_map(bool hard) {
+    /* Slots cleared in place keep the cache origin, so the emitter field must
+     * not mistake the next map's cells for the previous ones. */
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        map_emitter_revoke(level);
+    }
     if (hard) {
         map_hard_clear_abort_pending();
     } else {
@@ -2111,6 +2194,7 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
             map_cell_store_destroy(old_cells);
             level_cells[level] = new_cells;
             level_lighting_revision[level]++;
+            map_emitter_revoke(level);
         }
 
         map_cache_origin_x = 0;
@@ -2126,6 +2210,9 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
                                sizeof(level_cells[level]->headers[cell]));
                     }
                     level_lighting_revision[level]++;
+                    /* The origin may not move, so the store alone must stop
+                     * matching a field built from the discarded cells. */
+                    map_emitter_revoke(level);
                 }
             }
             map_cache_origin_x = 0;
@@ -2133,6 +2220,8 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
         } else if (dx != 0 || dy != 0) {
             map_cache_origin_x = (map_cache_origin_x + dx + width) % width;
             map_cache_origin_y = (map_cache_origin_y + dy + height) % height;
+            map_cache_scroll_x += dx;
+            map_cache_scroll_y += dy;
 
             int view_x = map_width * (MAP_FOW_SIZE / 2);
             int view_y = map_height * (MAP_FOW_SIZE / 2);
@@ -2231,6 +2320,13 @@ void map_level_scroll(int dz) {
 
     map_cell_store_t *shifted[MAP2_LEVELS] = {0};
     uint64_t shifted_revisions[MAP2_LEVELS] = {0};
+    /* Emitter fields move with their stores, so a level scroll rebuilds none. */
+    map_client_lighting_field_t shifted_fields[MAP2_LEVELS] = {0};
+    uint64_t shifted_emitter_revisions[MAP2_LEVELS];
+    for (size_t i = 0; i < MAP2_LEVELS; i++) {
+        /* A depth without a source store starts a fresh field. */
+        shifted_emitter_revisions[i] = ++level_emitter_clock;
+    }
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         int source_depth = depth + dz;
 
@@ -2238,6 +2334,12 @@ void map_level_scroll(int dz) {
             shifted[MAP2_DEPTH_INDEX(depth)] = level_cells[MAP2_DEPTH_INDEX(source_depth)];
             shifted_revisions[MAP2_DEPTH_INDEX(depth)] =
                 level_lighting_revision[MAP2_DEPTH_INDEX(source_depth)];
+            /* The emitter field's revision moves with its store. */
+            shifted_emitter_revisions[MAP2_DEPTH_INDEX(depth)] =
+                level_emitter_revision[MAP2_DEPTH_INDEX(source_depth)];
+            shifted_fields[MAP2_DEPTH_INDEX(depth)] =
+                map_client_lighting_fields[MAP2_DEPTH_INDEX(source_depth)];
+            map_client_lighting_fields[MAP2_DEPTH_INDEX(source_depth)].cells = NULL;
             level_cells[MAP2_DEPTH_INDEX(source_depth)] = NULL;
         }
     }
@@ -2246,6 +2348,9 @@ void map_level_scroll(int dz) {
         map_cell_store_destroy(level_cells[i]);
         level_cells[i] = shifted[i];
         level_lighting_revision[i] = shifted_revisions[i];
+        level_emitter_revision[i] = shifted_emitter_revisions[i];
+        free(map_client_lighting_fields[i].cells);
+        map_client_lighting_fields[i] = shifted_fields[i];
     }
 
     if (dz > 0) {
@@ -3124,6 +3229,13 @@ void map_set_data(int x,
  * level: the server keeps updating that level while its cache is valid. A
  * hard clear revokes both.
  */
+/** The occluder word the emitter field evaluates for a cell: zero when unknown. */
+static uint32_t map_cell_effective_occluder(const map_cell_header_t *header) {
+    return (header->client_light_known & 2U)
+               ? client_lighting_occluder(header->occluder, header->occluder_horizontal)
+               : 0;
+}
+
 static void map_cell_clear_client_light(size_t index, bool hard) {
     map_cell_header_t *header = &cells->headers[index];
     if (!hard || header->client_light_known == 0) {
@@ -3132,6 +3244,7 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
     header->client_light_known = 0;
     memset(header->local_light, 0, sizeof(header->local_light));
     header->occluder = 0;
+    header->occluder_horizontal = 0;
     header->occluder_vertical = 0;
     level_lighting_revision[current_level_index]++;
 }
@@ -3139,8 +3252,15 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
 void map_clear_cell(int x, int y, bool hard) {
     map_state_transaction_record_cell(x, y);
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
-    map_cell_clear_client_light(index, hard);
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
+    /* Only a clear that removes emitters, or an evaluated occluder on a hard
+     * clear, changes the emitter field; an idempotent clear relights nothing. */
+    if (cell != NULL && cell->emitters != NULL) {
+        map_emitter_revoke(current_level_index);
+    } else if (hard && map_cell_effective_occluder(&cells->headers[index]) != 0) {
+        map_emitter_revision_bump(current_level_index);
+    }
+    map_cell_clear_client_light(index, hard);
     if (cell == NULL) {
         if (hard) {
             map_cell_store_set_support_height(cells, index, 0);
@@ -3252,6 +3372,7 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     cell->emitters = next;
     map_cell_store_trim_slot(cells, index);
     level_lighting_revision[current_level_index]++;
+    map_emitter_revision_bump(current_level_index);
 }
 
 /** Return the emitter of one sent layer, if any. */
@@ -3307,11 +3428,31 @@ void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t 
         header->occluder_horizontal == horizontal && header->occluder_vertical == vertical) {
         return;
     }
+    /* The emitter field reads only the evaluated occluder word, an unknown
+     * occluder reading as zero, so a change of any other bit, of the vertical
+     * byte or of knownness alone never rebuilds it. */
+    bool evaluated =
+        map_cell_effective_occluder(header) != client_lighting_occluder(bits, horizontal);
     header->occluder = bits;
     header->occluder_horizontal = horizontal;
     header->occluder_vertical = vertical;
     header->client_light_known |= 2U;
     level_lighting_revision[current_level_index]++;
+    if (evaluated) {
+        map_emitter_revision_bump(current_level_index);
+    }
+}
+
+bool map_lighting_is_smooth(void) {
+    return !map_discrete_lighting_proof;
+}
+
+void map_set_discrete_lighting_proof(bool discrete) {
+    if (map_discrete_lighting_proof == discrete) {
+        return;
+    }
+    map_discrete_lighting_proof = discrete;
+    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
 }
 
 /** Return the signed coarse level, vision floor and viewer flags of a
@@ -3366,6 +3507,16 @@ void map_set_fow(int x, int y, bool fow) {
 
     map_cell_store_set_fow(cells, index, fow, fow);
     level_lighting_revision[current_level_index]++;
+    /* The emitter field skips fog cells' emitters, so only a cell that still
+     * carries emitters changes it; an emitter-free toggle relights nothing. */
+    cell = map_cell_store_slot(cells, index, false);
+    if (cell != NULL && cell->emitters != NULL) {
+        if (fow) {
+            map_emitter_revoke(current_level_index);
+        } else {
+            map_emitter_revision_bump(current_level_index);
+        }
+    }
 }
 
 /** Return the currently cached visibility state for one map tile. */
@@ -3794,11 +3945,14 @@ static void map_temporal_lighting_update(void) {
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
 }
 
+static void map_flicker_lighting_update(void);
+
 void map_animate(void) {
     int x, y, layer;
     map_cell_t *cell;
 
     map_temporal_lighting_update();
+    map_flicker_lighting_update();
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
         if (!(map_level_mask & (UINT16_C(1) << MAP2_DEPTH_INDEX(depth))) ||
@@ -4272,11 +4426,17 @@ static void map_lighting_radiance(int x,
                                   uint16_t *scalar,
                                   uint16_t rgb[3]);
 
+static void
+map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uint16_t rgb[3]);
+
 /** Historical scalar storage is not current lighting authority after a soft clear. */
-static uint16_t
-map_remembered_discrete_radiance(int x, int y, const map_cell_t *cell, uint8_t sub_layer) {
+static uint16_t map_remembered_discrete_radiance(int x,
+                                                 int y,
+                                                 const map_cell_t *cell,
+                                                 uint8_t sub_layer,
+                                                 uint16_t composed) {
     const map_cell_light_record_t *light = map_cell_light_record_read(cell, sub_layer);
-    uint16_t radiance = light->radiance;
+    uint16_t radiance = composed;
     if (!light->known) {
         uint16_t rgb[3];
         map_lighting_radiance(x, y, cell, sub_layer, &radiance, rgb);
@@ -4454,9 +4614,13 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
         uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
+        /* Discrete lighting composes client light like the smooth path, on
+         * remembered cells too: they keep receiving their coarse level. */
+        uint16_t rgb[3] = {radiance, radiance, radiance};
+        map_client_lighting_apply(data->x, data->y, data->sub_layer, &radiance, rgb);
         if (data->cell->fow && remembered) {
-            radiance =
-                map_remembered_discrete_radiance(data->x, data->y, data->cell, data->sub_layer);
+            radiance = map_remembered_discrete_radiance(
+                data->x, data->y, data->cell, data->sub_layer, radiance);
         } else if (data->world_surface && data->primary_level && data->depth == 0 &&
                    !data->cell->fow) {
             radiance = map_visibility_add_player_radiance(
@@ -5290,22 +5454,22 @@ static void map_dirty_lighting_fow(int dx, int dy) {
     }
 }
 
-static uint16_t
-map_lighting_interpolate(uint16_t current, uint16_t next, uint64_t progress, uint64_t duration) {
+/** Interpolate signed Q4.11 endpoints, rounding half away from zero. */
+static uint16_t map_lighting_interpolate_signed(uint16_t current,
+                                                uint16_t next,
+                                                uint64_t progress,
+                                                uint64_t duration) {
     if (progress == 0 || current == next) {
         return current;
     }
     if (progress >= duration) {
         return next;
     }
-    if (next > current) {
-        uint64_t delta = (uint64_t)(next - current);
-        return (uint16_t)MIN(UINT16_MAX,
-                             (uint64_t)current + (delta * progress + duration / 2) / duration);
-    }
-    uint64_t delta = (uint64_t)(current - next);
-    uint64_t reduction = (delta * progress + duration / 2) / duration;
-    return (uint16_t)(reduction > current ? 0 : current - reduction);
+    int64_t delta = (int64_t)(int16_t)next - (int16_t)current;
+    int64_t scaled = delta * (int64_t)progress;
+    int64_t step = (scaled + (scaled < 0 ? -(int64_t)duration / 2 : (int64_t)duration / 2)) /
+                   (int64_t)duration;
+    return (uint16_t)(int16_t)((int16_t)current + step);
 }
 
 /** Resolve one cell's temporal aggregate endpoint before spatial filtering. */
@@ -5329,12 +5493,14 @@ static bool map_lighting_temporal_sample(const map_cell_t *cell,
     uint64_t progress = now <= map_cell_light_keyframe_record_read(cell)->start_seconds
                             ? 0
                             : now - map_cell_light_keyframe_record_read(cell)->start_seconds;
-    *scalar = map_lighting_interpolate(map_cell_light_record_read(cell, sub_layer)->radiance,
-                                       map_cell_light_record_read(cell, sub_layer)->next_radiance,
-                                       progress,
-                                       duration);
+    uint16_t (*interpolate)(uint16_t, uint16_t, uint64_t, uint64_t) =
+        map_lighting_interpolate_signed;
+    *scalar = interpolate(map_cell_light_record_read(cell, sub_layer)->radiance,
+                          map_cell_light_record_read(cell, sub_layer)->next_radiance,
+                          progress,
+                          duration);
     for (size_t channel = 0; channel < 3; channel++) {
-        rgb[channel] = map_lighting_interpolate(
+        rgb[channel] = interpolate(
             map_cell_light_record_read(cell, sub_layer)->rgb_radiance[channel],
             map_cell_light_record_read(cell, sub_layer)->next_rgb_radiance[channel],
             progress,
@@ -5344,6 +5510,338 @@ static bool map_lighting_temporal_sample(const map_cell_t *cell,
         map_benchmark_statistics.temporal_light_samples++;
     }
     return true;
+}
+
+
+/* Emitter-field rebuilds a presented frame may run. A server can legitimately
+ * change an emitter, or move the cache window, on every depth in every update,
+ * so without a bound one update could cost 13 full field evaluations on the
+ * render path. Beyond the budget a depth presents its previous field (moved
+ * with the cache window when it scrolled) or, with no usable field, no
+ * emitter light, and following frames rebuild it. */
+#define MAP_EMITTER_REBUILDS_PER_FRAME 2
+static bool map_emitter_budget_enabled = true;
+static bool map_emitter_frame_active;
+static unsigned map_emitter_frame_rebuilds;
+static bool map_emitter_rebuild_deferred;
+
+void map_set_emitter_rebuild_budget(bool enabled) {
+    map_emitter_budget_enabled = enabled;
+}
+
+/** Start counting rebuilds for one presented primary frame. */
+static void map_emitter_frame_begin(void) {
+    map_emitter_frame_active = map_emitter_budget_enabled;
+    map_emitter_frame_rebuilds = 0;
+}
+
+/** Join an auxiliary view (the dynamic minimap) to the presented frame's
+ * budget without restarting its count. */
+static void map_emitter_auxiliary_begin(void) {
+    map_emitter_frame_active = map_emitter_budget_enabled;
+}
+
+/** After a frame's redraw is consumed: schedule the deferred rebuilds. */
+static void map_emitter_frame_end(void) {
+    map_emitter_frame_active = false;
+    if (map_emitter_rebuild_deferred) {
+        map_emitter_rebuild_deferred = false;
+        map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    }
+}
+
+/** Whether an out-of-date field may be rebuilt now; counts every rebuild. */
+static bool map_emitter_rebuild_allowed(void) {
+    if (!map_emitter_frame_active) {
+        return true;
+    }
+    if (map_emitter_frame_rebuilds >= MAP_EMITTER_REBUILDS_PER_FRAME) {
+        map_emitter_rebuild_deferred = true;
+        return false;
+    }
+    map_emitter_frame_rebuilds++;
+    return true;
+}
+
+/**
+ * Present a field built before the cache window scrolled: a physical cell's
+ * light moves with it by the exact accumulated scroll, cells newly exposed at
+ * the edge start unlit, and the field stays out of date until a frame within
+ * the budget rebuilds it.
+ * @return False, leaving the field unusable, when the scroll moved every cell
+ * out of it.
+ */
+static bool map_client_lighting_translate(map_client_lighting_field_t *field) {
+    int64_t scroll_dx = map_cache_scroll_x - field->scroll_x;
+    int64_t scroll_dy = map_cache_scroll_y - field->scroll_y;
+    if (scroll_dx <= -field->width || scroll_dx >= field->width ||
+        scroll_dy <= -field->height || scroll_dy >= field->height) {
+        field->valid = false;
+        return false;
+    }
+    int dx = (int)scroll_dx, dy = (int)scroll_dy;
+    size_t count = (size_t)field->width * field->height;
+    client_lighting_cell_t *moved = xcalloc(count, sizeof(*moved));
+    for (int y = 0; y < field->height; y++) {
+        int source_y = y + dy;
+        if (source_y < 0 || source_y >= field->height) {
+            continue;
+        }
+        for (int x = 0; x < field->width; x++) {
+            int source_x = x + dx;
+            if (source_x >= 0 && source_x < field->width) {
+                moved[(size_t)y * field->width + x] =
+                    field->cells[(size_t)source_y * field->width + source_x];
+            }
+        }
+    }
+    free(field->cells);
+    field->cells = moved;
+    field->cache_origin_x = map_cache_origin_x;
+    field->cache_origin_y = map_cache_origin_y;
+    field->scroll_x = map_cache_scroll_x;
+    field->scroll_y = map_cache_scroll_y;
+    /* No revision is ever this value, so the field stays out of date. */
+    field->revision = UINT64_MAX;
+    return true;
+}
+
+/** Rebuild the current level's emitter field from sent emitters and occluders. */
+static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
+    int margin = LIGHT_PROFILE_RADIUS_MAX;
+    int width = map_width + margin * 2, height = map_height + margin * 2;
+    size_t count = (size_t)width * height;
+    if (field->cells == NULL || field->width * field->height != width * height) {
+        free(field->cells);
+        field->cells = xcalloc(count, sizeof(*field->cells));
+    }
+    field->width = width;
+    field->height = height;
+    field->origin_x = MAP_STARTX - margin;
+    field->origin_y = MAP_STARTY - margin;
+    field->cache_origin_x = map_cache_origin_x;
+    field->cache_origin_y = map_cache_origin_y;
+    field->scroll_x = map_cache_scroll_x;
+    field->scroll_y = map_cache_scroll_y;
+    field->revision = level_emitter_revision[current_level_index];
+    field->store = cells;
+    field->valid = true;
+
+    int cache_width = map_width * MAP_FOW_SIZE, cache_height = map_height * MAP_FOW_SIZE;
+    uint32_t *occluders = xcalloc(count, sizeof(*occluders));
+    client_lighting_emitter_t *emitters = NULL;
+    size_t emitter_count = 0, emitter_capacity = 0;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int cache_x = field->origin_x + x, cache_y = field->origin_y + y;
+            if (cache_x < 0 || cache_y < 0 || cache_x >= cache_width || cache_y >= cache_height) {
+                continue;
+            }
+            const map_cell_header_t *header =
+                &cells->headers[map_cache_physical_index(cache_x, cache_y)];
+            if (header->client_light_known & 2U) {
+                occluders[(size_t)y * width + x] =
+                    client_lighting_occluder(header->occluder, header->occluder_horizontal);
+            }
+            /* Remembered cells keep their occluders, but their remembered
+             * objects' emitters may have changed since: compose none. Only
+             * the live wire window is current; cells beside it, such as
+             * those a resize leaves behind, are never live. */
+            const map_cell_t *cell = MAP_CELL_GET(cache_x, cache_y);
+            bool live = cache_x >= MAP_STARTX && cache_x < MAP_STARTX + map_width &&
+                        cache_y >= MAP_STARTY && cache_y < MAP_STARTY + map_height;
+            if (!live || cell->fow || cell->emitters == NULL) {
+                continue;
+            }
+            for (size_t i = 0; i < cell->emitters->count; i++) {
+                const map_cell_emitter_t *record = &cell->emitters->entries[i];
+                if (emitter_count == emitter_capacity) {
+                    emitter_capacity = emitter_capacity == 0 ? 64 : emitter_capacity * 2;
+                    emitters = xreallocarray(emitters, emitter_capacity, sizeof(*emitters));
+                }
+                emitters[emitter_count++] = (client_lighting_emitter_t){
+                    .x = x,
+                    .y = y,
+                    .radius = record->radius,
+                    .flags = record->flags,
+                    .color = (uint32_t)record->rgb[0] << 16 | (uint32_t)record->rgb[1] << 8 |
+                             record->rgb[2]};
+            }
+        }
+    }
+    client_lighting_evaluate(width, height, occluders, emitters, emitter_count, field->cells);
+    field->has_flicker = false;
+    for (size_t index = 0; index < (size_t)width * height && !field->has_flicker; index++) {
+        /* Grouping can cap the scalar while hue still flickers. */
+        const client_lighting_cell_t *cell = &field->cells[index];
+        field->has_flicker = cell->flicker_scalar != 0 || cell->flicker_rgb[0] != 0 ||
+                             cell->flicker_rgb[1] != 0 || cell->flicker_rgb[2] != 0;
+    }
+    free(emitters);
+    free(occluders);
+}
+
+/** Relight levels whose emitter field flickers; flicker needs no server traffic. */
+static void map_flicker_lighting_update(void) {
+    /* Driven by presentation frames as well as the animation tick, so the
+     * interpolated gain is shown between its 125 ms keys. */
+    static uint32_t last_tick;
+    if (LastTick - last_tick < 16) {
+        return;
+    }
+    last_tick = LastTick;
+    bool flickering = false;
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        if (map_client_lighting_fields[level].valid && map_client_lighting_fields[level].has_flicker &&
+            (map_level_mask & (UINT16_C(1) << level))) {
+            level_lighting_revision[level]++;
+            flickering = true;
+        }
+    }
+    if (flickering) {
+        map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+        /* A dynamic minimap retains its own target: advance its flicker too,
+         * at its own throttle. */
+        minimap_redraw_request();
+    }
+}
+
+/**
+ * Negative clamp, then common-vector overflow scaling that keeps hue, with the
+ * server's rule: scale by 65536 / peak, rounding half up, then clamp.
+ */
+static void map_lighting_scale_overflow(int64_t channels[3]) {
+    int64_t peak = 0;
+    for (size_t channel = 0; channel < 3; channel++) {
+        channels[channel] = MAX(0, channels[channel]);
+        peak = MAX(peak, channels[channel]);
+    }
+    if (peak > (int64_t)UINT16_MAX) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            channels[channel] =
+                MIN((int64_t)UINT16_MAX, (channels[channel] * 65536 + peak / 2) / peak);
+        }
+    }
+}
+
+/** Signed raw light to Q5.11 radiance, unsaturated, rounding as the server. */
+static int64_t map_lighting_raw_to_radiance_signed(int64_t raw) {
+    /* The base encoding's rounding without its saturation: only the base is
+     * bounded (to raw +-20479), so base + local stays exact whenever the
+     * environment lies in that range, residuals included. */
+    int64_t magnitude = raw < 0 ? -raw : raw;
+    int64_t radiance = (magnitude * 8 + 2) / 5;
+    return raw < 0 ? -radiance : radiance;
+}
+
+/**
+ * Compose client local light onto a received signed base sample and return
+ * the unsigned presentation radiance.
+ */
+static void
+map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uint16_t rgb[3]) {
+    const map_cell_header_t *header = &cells->headers[map_cache_physical_index(x, y)];
+    int8_t level = 0;
+    bool vision_floor = false;
+    /* Visible and remembered cells alike compose their coarse level; a cell
+     * without one composes only the emitter field. */
+    if (!(header->client_light_known & 1U) ||
+        sub_layer >= NUM_SUB_LAYERS ||
+        !map_protocol_local_light_decode(header->local_light[sub_layer], &level, &vision_floor)) {
+        level = 0;
+        vision_floor = false;
+    }
+    /* The viewer's tli override is a neutral raw term, refreshed by the
+     * server on remembered tiles too, never part of the base. */
+    int64_t tli = (header->client_light_known & 1U) && sub_layer < NUM_SUB_LAYERS &&
+                          (header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_TLI) != 0
+                      ? MAP2_LOCAL_LIGHT_TLI_RAW
+                      : 0;
+
+    map_client_lighting_field_t *field = &map_client_lighting_fields[current_level_index];
+    bool usable = field->valid && field->cells != NULL && field->store == cells &&
+                  field->width == map_width + LIGHT_PROFILE_RADIUS_MAX * 2 &&
+                  field->height == map_height + LIGHT_PROFILE_RADIUS_MAX * 2;
+    bool moved = usable && (field->cache_origin_x != map_cache_origin_x ||
+                            field->cache_origin_y != map_cache_origin_y ||
+                            field->scroll_x != map_cache_scroll_x ||
+                            field->scroll_y != map_cache_scroll_y);
+    if (!usable || moved || field->revision != level_emitter_revision[current_level_index]) {
+        if (map_emitter_rebuild_allowed()) {
+            map_client_lighting_rebuild(field);
+            usable = true;
+        } else if (moved) {
+            usable = map_client_lighting_translate(field);
+        }
+    }
+    const client_lighting_cell_t *local = NULL;
+    int fx = x - field->origin_x, fy = y - field->origin_y;
+    if (usable && fx >= 0 && fy >= 0 && fx < field->width && fy < field->height) {
+        local = &field->cells[(size_t)fy * field->width + fx];
+    }
+
+    int32_t emitter = local != NULL ? local->scalar : 0;
+    int32_t composed = client_lighting_compose(emitter, level);
+    /* Flicker modulates the composed value only where the emitter field
+     * supplied it (L = E), as L + E' - E, so the coarse floor of a block the
+     * emitter lights cannot suppress it; a dominating coarse floor carries
+     * other steady light and is left alone. Channel-only flicker counts. */
+    int64_t flicker_scalar = 0, flicker_rgb[3] = {0, 0, 0};
+    /* An emitter field equal to a nonzero coarse floor may coincide with
+     * hidden steady light, so equality counts as coarse-dominated. */
+    if (local != NULL && composed == emitter &&
+        (level == 0 || emitter != level * MAP2_LOCAL_LIGHT_LEVEL_RAW) &&
+        (local->flicker_scalar != 0 || local->flicker_rgb[0] != 0 ||
+         local->flicker_rgb[1] != 0 || local->flicker_rgb[2] != 0)) {
+        int64_t gain = (int64_t)client_lighting_flicker_gain(LastTick) - 256;
+        flicker_scalar = local->flicker_scalar * gain / 256;
+        for (size_t channel = 0; channel < 3; channel++) {
+            flicker_rgb[channel] = local->flicker_rgb[channel] * gain / 256;
+        }
+    }
+    /* Base words are signed Q4.11. Everything stays signed and unsaturated
+     * until the vision floor, then clamps, scales and saturates once. */
+    int64_t scalar_value =
+        (int16_t)*scalar + map_lighting_raw_to_radiance_signed(composed + flicker_scalar + tli);
+    int64_t channels[3];
+    for (size_t channel = 0; channel < 3; channel++) {
+        /* The emitter field's per-channel hue delta rides on the composed
+         * scalar; coarse light beyond it is neutral. */
+        int64_t channel_raw = (int64_t)composed + flicker_rgb[channel] + tli;
+        if (local != NULL) {
+            channel_raw += local->rgb[channel] - local->scalar;
+        }
+        channels[channel] = (int16_t)rgb[channel] + map_lighting_raw_to_radiance_signed(channel_raw);
+    }
+
+    if (vision_floor) {
+        int64_t floor_value = light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
+        if (scalar_value < floor_value) {
+            for (size_t channel = 0; channel < 3; channel++) {
+                channels[channel] += floor_value - scalar_value;
+            }
+            scalar_value = floor_value;
+        }
+    }
+
+    /* Remembered tiles get the remembered-world lift on the signed values,
+     * before the negative clamp, as C_display = max(0, C + lift) requires;
+     * the later presentation floor is then already met. */
+    if (header->fow != 0 && scalar_value < (int64_t)MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE) {
+        int64_t lift = (int64_t)MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - scalar_value;
+        for (size_t channel = 0; channel < 3; channel++) {
+            channels[channel] += lift;
+        }
+        scalar_value = MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+    }
+
+    map_lighting_scale_overflow(channels);
+    scalar_value = MAX(0, MIN((int64_t)UINT16_MAX, scalar_value));
+
+    *scalar = (uint16_t)scalar_value;
+    for (size_t channel = 0; channel < 3; channel++) {
+        rgb[channel] = (uint16_t)channels[channel];
+    }
 }
 
 /**
@@ -5382,6 +5880,7 @@ static bool map_lighting_radiance_ex(int x,
         } else if (interpolated != NULL) {
             *interpolated = true;
         }
+        map_client_lighting_apply(x, y, sub_layer, scalar, rgb);
         return true;
     }
 
@@ -5432,6 +5931,9 @@ static bool map_lighting_radiance_ex(int x,
                         *interpolated = true;
                     }
                 }
+                /* Borrow the neighbor's composed light, as it is drawn. */
+                map_client_lighting_apply(sample_x, sample_y, sample_sub_layer, &sample_scalar,
+                                          sample_rgb);
                 total[0] += sample_scalar;
                 for (size_t channel = 0; channel < 3; channel++) {
                     total[channel + 1] += sample_rgb[channel];
@@ -5606,8 +6108,11 @@ bool map_lighting_diagnostic_get(int depth,
 
     const map_cell_light_record_t *light = map_cell_light_record_read(cell, sub_layer);
     diagnostic->received = light->known != 0;
-    diagnostic->received_scalar = light->radiance;
-    memcpy(diagnostic->received_rgb, light->rgb_radiance, sizeof(diagnostic->received_rgb));
+    /* Base endpoints are signed words; report them as composition reads them. */
+    diagnostic->received_scalar = (int16_t)light->radiance;
+    for (size_t channel = 0; channel < 3; channel++) {
+        diagnostic->received_rgb[channel] = (int16_t)light->rgb_radiance[channel];
+    }
     diagnostic->received_rgb_explicit = light->rgb_explicit != 0;
 
     const map_cell_light_keyframe_record_t *keyframe = map_cell_light_keyframe_record_read(cell);
@@ -5616,8 +6121,10 @@ bool map_lighting_diagnostic_get(int depth,
     diagnostic->keyframe_start_seconds = keyframe->start_seconds;
     diagnostic->keyframe_end_seconds = keyframe->end_seconds;
     diagnostic->next_known = light->next_known != 0;
-    diagnostic->next_scalar = light->next_radiance;
-    memcpy(diagnostic->next_rgb, light->next_rgb_radiance, sizeof(diagnostic->next_rgb));
+    diagnostic->next_scalar = (int16_t)light->next_radiance;
+    for (size_t channel = 0; channel < 3; channel++) {
+        diagnostic->next_rgb[channel] = (int16_t)light->next_rgb_radiance[channel];
+    }
     diagnostic->next_rgb_explicit = light->next_rgb_explicit != 0;
     diagnostic->missing = !diagnostic->received && !diagnostic->received_rgb_explicit &&
                           !diagnostic->keyframe_valid && light->radiance == 0;
@@ -5784,10 +6291,10 @@ map_lighting_diagnostic_emit_tile(int depth, int x, int y, int sub_layer, bool s
     draw_info_format(COLOR_WHITE,
                      "lightdiag v%u x=%d y=%d depth=%d sub=%u "
                      "state=visible:%u remembered:%u fogged:%u stale:%u missing:%u cleared:%u "
-                     "source=server-map2-aggregate received:%u scalar:%u rgb:%u,%u,%u "
+                     "source=server-map2-aggregate received:%u scalar:%d rgb:%d,%d,%d "
                      "rgb-explicit:%u unit=Q5.11(sample/2048) "
                      "keyframe:valid:%u generation:%" PRIu64 " start:%" PRIu64 " end:%" PRIu64
-                     " next:%u scalar:%u rgb:%u,%u,%u rgb-explicit:%u "
+                     " next:%u scalar:%d rgb:%d,%d,%d rgb-explicit:%u "
                      "working:available:%u scalar:%u rgb:%u,%u,%u interpolated:%u borrowed:%u "
                      "presentation:mode:%s available:%u brightness:%u rgb:%u,%u,%u reasons=%s",
                      MAP_LIGHTING_DIAGNOSTIC_VERSION,
@@ -5944,8 +6451,7 @@ void map_lighting_diagnostic_command(const char *params) {
     const char *cursor = map_lighting_diagnostic_skip_space(params != NULL ? params : "");
     /* The command is normally reached after settings_init(), but keep the
      * standalone map-state diagnostic safe before client startup completes. */
-    bool smooth_lighting =
-        setting_categories != NULL && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0;
+    bool smooth_lighting = map_lighting_is_smooth();
     int default_sub_layer = MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
     int center_x = map_width > 0 ? map_width - map_width / 2 - 1 : 0;
     int center_y = map_height > 0 ? map_height - map_height / 2 - 1 : 0;
@@ -6071,17 +6577,17 @@ bool widget_map_temporal_lighting_test(void) {
     /* Without a retained sample the neighbors' interpolated light applies. */
     historical->known = 0;
     success = success &&
-              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 200;
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, historical->radiance) == 200;
     /* Current authoritative samples keep their established discrete transfer. */
     historical->known = 1;
     historical->radiance = 2048;
     success =
-        success && map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) == 2048;
+        success && map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, historical->radiance) == 2048;
     historical->known = 0;
     historical->radiance = UINT16_MAX;
     light->known = 0;
     success = success &&
-              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0) ==
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, historical->radiance) ==
                   MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
               historical->radiance == UINT16_MAX;
     light->known = 1;
@@ -6214,11 +6720,12 @@ bool widget_map_client_lighting_state_test(void) {
               signed_level == -2 &&
               map_get_local_light_layer(7, 7, NUM_SUB_LAYERS - 1, &signed_level, &vision, NULL) &&
               signed_level == -2;
-    /* The getter reports the remote-sample bit with the decoded level. */
+    /* The getter reports the tli bit with the decoded level. */
     uint8_t light_flags = 0xff;
-    uint8_t remote_layers[2] = {map_protocol_local_light_encode(1, false) | MAP2_LOCAL_LIGHT_TLI,
-                                map_protocol_local_light_encode(-2, false)};
-    map_set_local_light_layers(7, 7, 2, remote_layers);
+    uint8_t getter_layers[2] = {
+        map_protocol_local_light_encode(1, false) | MAP2_LOCAL_LIGHT_TLI,
+        map_protocol_local_light_encode(-2, false)};
+    map_set_local_light_layers(7, 7, 2, getter_layers);
     success = success &&
               map_get_local_light_layer(7, 7, 0, &signed_level, &vision, &light_flags) &&
               light_flags == MAP2_LOCAL_LIGHT_TLI &&
@@ -6226,7 +6733,14 @@ bool widget_map_client_lighting_state_test(void) {
               light_flags == 0 && signed_level == -2;
     map_set_local_light_layers(7, 7, 2, layered);
 
-    /* An aborted update restores the previous client-lighting state. */
+    /* An aborted update restores the previous client-lighting state, and
+     * with it the emitter revisions, so a no-op abort relights nothing. */
+    uint64_t emitter_revisions[MAP2_LEVELS];
+    memcpy(emitter_revisions, level_emitter_revision, sizeof(emitter_revisions));
+    map_state_transaction_begin(false);
+    map_state_transaction_abort();
+    success = success &&
+              memcmp(emitter_revisions, level_emitter_revision, sizeof(emitter_revisions)) == 0;
     map_state_transaction_begin(false);
     map_set_local_light(5, 5, map_protocol_local_light_encode(3, false));
     map_set_occluder(5, 5, MAP2_OCCLUDER_FLOOR, 0, 0);
@@ -6237,7 +6751,8 @@ bool widget_map_client_lighting_state_test(void) {
               map_get_occluder(5, 5, &bits, &horizontal, &vertical) &&
               bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF) && horizontal == 0x3210 &&
               vertical == 4 &&
-              !map_get_layer_emitter(5, 5, layer, &radius, &emitter_flags, &color);
+              !map_get_layer_emitter(5, 5, layer, &radius, &emitter_flags, &color) &&
+              memcmp(emitter_revisions, level_emitter_revision, sizeof(emitter_revisions)) == 0;
 
     /* A soft clear makes remembered fog, which keeps its occluders and the
      * coarse level the server keeps updating; a hard clear revokes both. */
@@ -6253,11 +6768,319 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && map_cell_changed(5, 5, &before) &&
               !map_get_occluder(5, 5, &bits, &horizontal, &vertical) &&
               !map_get_local_light(5, 5, &signed_level, &vision);
+    /* Clearing an already empty cell does not relight the level. */
+    map_clear_cell(9, 9, true);
+    uint64_t emitter_revision = level_emitter_revision[current_level_index];
+    map_clear_cell(9, 9, true);
+    map_clear_cell(9, 9, false);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
+    /* Only occluder inputs the emitter field evaluates rebuild it. */
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1111, 1);
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1111, 2);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision &&
+              map_get_occluder(9, 9, &bits, &horizontal, &vertical) && vertical == 2;
+    /* Geometry, roof and up/down face bits are not evaluated either. */
+    map_set_occluder(9, 9,
+                     MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
+                         (UINT16_C(0x30) << MAP2_OCCLUDER_FACE_SHIFT),
+                     0x1111, 2);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1112, 2);
+    success = success && level_emitter_revision[current_level_index] != emitter_revision;
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR | (UINT16_C(1) << MAP2_OCCLUDER_FACE_SHIFT),
+                     0x1112, 2);
+    success = success && level_emitter_revision[current_level_index] != emitter_revision;
+    map_clear_cell(9, 9, true);
+    /* FOW toggles of an emitter-free cell never rebuild the emitter field. */
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_fow(9, 9, true);
+    map_set_fow(9, 9, false);
+    map_set_fow(9, 9, true);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
+    map_clear_cell(9, 9, true);
+    /* Unknown and known-zero occluders are the same evaluator input. */
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0, 3);
+    map_clear_cell(9, 9, true);
+    map_set_occluder(9, 9, 0, 0, 0);
+    map_clear_cell(9, 9, true);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
+    /* Scrolling a lit tile into fog keeps its signed base, as a soft clear
+     * does, so remembered geometry never borrows neighboring light. */
+    map_set_light_radiance(11, 9, 0, (uint16_t)map_protocol_signed_radiance_encode(-160));
+    map_cache_mark_fow(cells, current_level_index, 11 + MAP_STARTX, 12 + MAP_STARTX,
+                       9 + MAP_STARTY, 10 + MAP_STARTY, map_width * MAP_FOW_SIZE,
+                       map_height * MAP_FOW_SIZE);
+    const map_cell_light_record_t *fog_light =
+        map_cell_light_record_read(MAP_CELL_GET_MIDDLE(11, 9), 0);
+    success = success && MAP_CELL_GET_MIDDLE(11, 9)->fow && fog_light->known &&
+              (int16_t)fog_light->radiance == -256;
+    map_clear_cell(11, 9, true);
     /* A header-only update is a visible change too. */
     map_cell_snapshot(6, 6, &before);
     map_set_local_light(6, 6, map_protocol_local_light_encode(2, false));
     success = success && map_cell_changed(6, 6, &before);
 
+    /* Composition adds client emitter light to the received signed base. */
+    uint16_t composed_scalar = 0, composed_rgb[3];
+    map_set_light_radiance(8, 8, 0, 160);
+    map_set_local_light(8, 8, map_protocol_local_light_encode(0, false));
+    map_lighting_radiance(8 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(8, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160;
+    map_set_layer_emitter(8, 8, layer, 1, 0, UINT32_C(0xffffff));
+    map_lighting_radiance(8 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(8, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40) &&
+              composed_rgb[0] == composed_scalar && composed_rgb[2] == composed_scalar;
+    /* A presented frame rebuilds at most its budget of out-of-date emitter
+     * fields; the rest are deferred to a requested redraw, and rebuilds
+     * outside a frame stay unbounded. */
+    map_client_lighting_field_t *budget_field = &map_client_lighting_fields[current_level_index];
+    uint16_t budget_scalar = 0, budget_rgb[3] = {0, 0, 0};
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    map_emitter_frame_begin();
+    for (int rebuild = 0; rebuild <= MAP_EMITTER_REBUILDS_PER_FRAME; rebuild++) {
+        map_emitter_revision_bump(current_level_index);
+        map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    }
+    success = success && budget_field->valid &&
+              budget_field->revision != level_emitter_revision[current_level_index];
+    /* Over budget, a scrolled window moves its previous field with it and
+     * stays out of date, and a depth without a usable field composes only
+     * its base and coarse level. */
+    int saved_budget_origin = map_cache_origin_x;
+    int64_t saved_budget_scroll = map_cache_scroll_x;
+    map_cache_origin_x = (map_cache_origin_x + 1) % (map_width * MAP_FOW_SIZE);
+    map_cache_scroll_x += 1;
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && budget_field->valid && budget_field->cache_origin_x == map_cache_origin_x &&
+              budget_field->scroll_x == map_cache_scroll_x &&
+              budget_field->revision == UINT64_MAX;
+    /* A scroll larger than half the cache keeps its true direction: one that
+     * moves every cell out of the field leaves it unusable, never translated
+     * onto unrelated cells through the wrapped origins. */
+    int cache_width = map_width * MAP_FOW_SIZE;
+    int large = cache_width - 2;
+    map_cache_origin_x = (map_cache_origin_x + large) % cache_width;
+    map_cache_scroll_x += large;
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && !budget_field->valid;
+    map_cache_origin_x = saved_budget_origin;
+    map_cache_scroll_x = saved_budget_scroll;
+    budget_field->valid = false;
+    map_set_light_radiance(8, 8, 0, 160);
+    budget_scalar = 160;
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && !budget_field->valid && budget_scalar == 160;
+    map_redraw_consume();
+    map_emitter_frame_end();
+    success = success && (map_redraw_pending_reasons() & MAP_REDRAW_REASON_LIGHTING) != 0;
+    map_redraw_consume();
+    /* A revocation drops the field at once: over budget, the level composes
+     * coarse light only rather than presenting the revoked emitters. */
+    map_emitter_frame_begin();
+    for (int rebuild = 0; rebuild <= MAP_EMITTER_REBUILDS_PER_FRAME; rebuild++) {
+        map_emitter_revision_bump(current_level_index);
+        map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    }
+    map_set_layer_emitter(9, 8, layer, 1, 0, UINT32_C(0xffffff));
+    map_set_fow(9, 8, true);
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && !budget_field->valid;
+    map_redraw_consume();
+    map_emitter_frame_end();
+    map_redraw_consume();
+    map_clear_cell(9, 8, true);
+    map_set_fow(9, 8, false);
+    /* A depth removed inside a transaction is revoked when the deferred
+     * destruction commits. */
+    success = success && map_select_level(1, true);
+    map_select_level(0, true);
+    map_client_lighting_fields[MAP2_DEPTH_INDEX(1)].valid = true;
+    uint64_t removed_revision = level_emitter_revision[MAP2_DEPTH_INDEX(1)];
+    uint16_t kept_mask = map_level_mask;
+    map_state_transaction_begin(false);
+    map_set_level_mask((uint16_t)(kept_mask & ~(UINT16_C(1) << MAP2_DEPTH_INDEX(1))));
+    map_state_transaction_commit();
+    success = success && level_cells[MAP2_DEPTH_INDEX(1)] == NULL &&
+              !map_client_lighting_fields[MAP2_DEPTH_INDEX(1)].valid &&
+              level_emitter_revision[MAP2_DEPTH_INDEX(1)] != removed_revision;
+    map_set_level_mask(kept_mask);
+    map_select_level(0, true);
+    /* An auxiliary view after the frame shares its spent budget. */
+    map_emitter_auxiliary_begin();
+    map_emitter_revision_bump(current_level_index);
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && budget_field->revision != level_emitter_revision[current_level_index];
+    map_emitter_frame_end();
+    map_redraw_consume();
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && budget_field->revision == level_emitter_revision[current_level_index];
+    /* Flicker never modulates a coarse floor that dominates the emitter: a
+     * radius-1 flickering emitter under a level-2 block stays at the floor. */
+    uint32_t saved_tick = LastTick;
+    uint32_t dim_tick = 0;
+    while (client_lighting_flicker_gain(dim_tick) == 256) {
+        dim_tick += 7;
+    }
+    map_set_light_radiance(16, 8, 0, 0);
+    map_set_layer_emitter(16, 8, layer, 1, MAP2_EMITTER_FLICKER, UINT32_C(0xffffff));
+    map_set_local_light(16, 8, map_protocol_local_light_encode(2, false));
+    LastTick = dim_tick;
+    map_lighting_radiance(16 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(16, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success &&
+              composed_scalar == light_profile_raw_to_radiance(2 * MAP2_LOCAL_LIGHT_LEVEL_RAW);
+    /* Nor one exactly equal to the floor: a radius-3 flickering emitter
+     * (raw 160) on a level-1 block may be hidden steady light. */
+    map_set_layer_emitter(16, 8, layer, 3, MAP2_EMITTER_FLICKER, UINT32_C(0xffffff));
+    map_set_local_light(16, 8, map_protocol_local_light_encode(1, false));
+    map_lighting_radiance(16 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(16, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success &&
+              composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_LEVEL_RAW);
+    LastTick = saved_tick;
+    map_clear_cell(16, 8, true);
+    /* Visible again for the tests that reuse this cell. */
+    map_set_fow(16, 8, false);
+    /* An emitter left beside the live window, as a resize leaves copied
+     * cells, never lights the window: only the live wire window is current. */
+    map_set_light_radiance(0, 12, 0, 160);
+    map_set_local_light(0, 12, map_protocol_local_light_encode(0, false));
+    map_set_layer_emitter(-1, 12, layer, 9, 0, UINT32_C(0xffffff));
+    map_lighting_radiance(0 + MAP_STARTX, 12 + MAP_STARTY, MAP_CELL_GET_MIDDLE(0, 12), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160;
+    map_clear_cell(-1, 12, true);
+    map_clear_cell(0, 12, true);
+    map_set_fow(-1, 12, false);
+    map_set_fow(0, 12, false);
+    /* Remembered tiles are lifted on signed values before the clamp: raw
+     * scalar -40 with a channel at raw -100 lifts to the floor and clamps
+     * that channel to 0, not to the lift. */
+    map_set_light_radiance(13, 9, 0, (uint16_t)map_protocol_signed_radiance_encode(-40));
+    uint16_t fog_tint[NUM_SUB_LAYERS][3] = {
+        {(uint16_t)map_protocol_signed_radiance_encode(-100),
+         (uint16_t)map_protocol_signed_radiance_encode(-40),
+         (uint16_t)map_protocol_signed_radiance_encode(-40)}};
+    map_set_light_rgb_radiance(13, 9, 1, fog_tint);
+    map_set_local_light(13, 9, map_protocol_local_light_encode(0, false));
+    map_clear_cell(13, 9, false);
+    map_lighting_radiance(13 + MAP_STARTX, 9 + MAP_STARTY, MAP_CELL_GET_MIDDLE(13, 9), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+              composed_rgb[0] == 0 && composed_rgb[1] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+    map_clear_cell(13, 9, true);
+    /* The tli bit adds daylight neutrally, on visible and remembered cells. */
+    map_set_light_radiance(12, 9, 0, 0);
+    map_set_local_light(12, 9, map_protocol_local_light_encode(0, false) | MAP2_LOCAL_LIGHT_TLI);
+    map_lighting_radiance(12 + MAP_STARTX, 9 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 9), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_TLI_RAW) &&
+              composed_rgb[0] == composed_scalar && composed_rgb[2] == composed_scalar;
+    map_clear_cell(12, 9, true);
+    /* The viewer's vision floor applies after composition. */
+    map_set_light_radiance(10, 8, 0, 0);
+    map_set_local_light(10, 8, map_protocol_local_light_encode(0, true));
+    map_lighting_radiance(10 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(10, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success &&
+              composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
+    /* Each sub-layer composes its own coarse level. */
+    map_set_light_radiance(20, 8, 0, 0);
+    map_set_light_radiance(20, 8, 1, 0);
+    uint8_t per_layer[2] = {map_protocol_local_light_encode(2, false),
+                            map_protocol_local_light_encode(0, false)};
+    map_set_local_light_layers(20, 8, 2, per_layer);
+    uint16_t lower_scalar = 0, upper_scalar = 0, layer_rgb[3];
+    map_lighting_radiance(20 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(20, 8), 0,
+                          &lower_scalar, layer_rgb);
+    map_lighting_radiance(20 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(20, 8), 1,
+                          &upper_scalar, layer_rgb);
+    success = success && lower_scalar == light_profile_raw_to_radiance(2 * MAP2_LOCAL_LIGHT_LEVEL_RAW) &&
+              upper_scalar == 0;
+    /* The floor lifts still-signed channels neutrally, keeping their hue. */
+    map_set_light_radiance(18, 8, 0, (uint16_t)map_protocol_signed_radiance_encode(-320));
+    uint16_t dark_tint[NUM_SUB_LAYERS][3] = {
+        {(uint16_t)(int16_t)-512, (uint16_t)(int16_t)-256, (uint16_t)(int16_t)-512}};
+    map_set_light_rgb_radiance(18, 8, 1, dark_tint);
+    map_set_local_light(18, 8, map_protocol_local_light_encode(0, true));
+    map_lighting_radiance(18 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(18, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160 && composed_rgb[0] == 160 &&
+              composed_rgb[1] == 416 && composed_rgb[2] == 160;
+    /* The common-vector conformance vector of the server rule. */
+    int64_t overflow[3] = {81919, 40959, 20480};
+    map_lighting_scale_overflow(overflow);
+    success = success && overflow[0] == 65535 && overflow[1] == 32768 && overflow[2] == 16384;
+    /* The local term is not saturated: with the environment in range the
+     * sum keeps its residual (raw 20000 - 25000 = -5000), and dense local
+     * light far beyond the base's bound keeps its full weight. */
+    success = success &&
+              (int64_t)map_protocol_signed_radiance_encode(20000) +
+                      map_lighting_raw_to_radiance_signed(-25000) ==
+                  map_lighting_raw_to_radiance_signed(-5000) &&
+              map_lighting_raw_to_radiance_signed(-30000) == -48000;
+    /* An overflowing colored sum scales its channels together. */
+    map_set_light_radiance(14, 8, 0, 32000);
+    uint16_t warm[NUM_SUB_LAYERS][3] = {{32700, 16000, 8000}};
+    map_set_light_rgb_radiance(14, 8, 1, warm);
+    map_set_local_light(14, 8, map_protocol_local_light_encode(MAP2_LOCAL_LIGHT_LEVEL_MAX, false));
+    map_lighting_radiance(14 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(14, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_rgb[0] < UINT16_MAX && composed_rgb[1] < composed_rgb[0] &&
+              composed_rgb[2] < composed_rgb[1] && composed_rgb[1] > 16000;
+    /* Negative environment cancels equal composed light exactly, and darker
+     * environment clamps at zero after composition. */
+    map_set_light_radiance(16, 8, 0, (uint16_t)map_protocol_signed_radiance_encode(-320));
+    map_set_local_light(16, 8, map_protocol_local_light_encode(2, false));
+    map_lighting_radiance(16 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(16, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 0 && composed_rgb[0] == 0;
+    map_set_light_radiance(16, 8, 0, (uint16_t)map_protocol_signed_radiance_encode(-160));
+    map_lighting_radiance(16 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(16, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success &&
+              composed_scalar == (uint16_t)(light_profile_raw_to_radiance(320) -
+                                            light_profile_raw_to_radiance(160));
+    /* Remembered fog keeps composing its coarse level. */
+    map_set_light_radiance(17, 8, 0, 0);
+    map_set_local_light(17, 8, map_protocol_local_light_encode(1, false));
+    map_clear_cell(17, 8, false);
+    map_lighting_radiance(17 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(17, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == light_profile_raw_to_radiance(160);
+    /* Signed keyframe endpoints interpolate through zero. */
+    success = success &&
+              (int16_t)map_lighting_interpolate_signed((uint16_t)(int16_t)-100, 100, 1, 2) == 0 &&
+              (int16_t)map_lighting_interpolate_signed((uint16_t)(int16_t)-100, 100, 1, 4) == -50 &&
+              (int16_t)map_lighting_interpolate_signed(100, (uint16_t)(int16_t)-101, 1, 2) == -1;
+    /* Without a coarse level the server's radiance stays authoritative. */
+    map_set_light_radiance(12, 8, 0, 300);
+    map_lighting_radiance(12 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 300;
+
+    /* A store carries its emitter revision through level scrolls: changed
+     * while at another depth, it never matches a field built before. */
+    success = success && map_select_level(0, true);
+    uint64_t unchanged = level_emitter_revision[MAP2_DEPTH_INDEX(0)];
+    map_level_scroll(-1);
+    success = success && level_emitter_revision[MAP2_DEPTH_INDEX(1)] == unchanged &&
+              level_emitter_revision[MAP2_DEPTH_INDEX(0)] != unchanged &&
+              map_select_level(1, false);
+    map_set_layer_emitter(3, 3, layer, 5, 0, UINT32_C(0xffffff));
+    uint64_t changed = level_emitter_revision[MAP2_DEPTH_INDEX(1)];
+    map_level_scroll(1);
+    success = success && changed != unchanged &&
+              level_emitter_revision[MAP2_DEPTH_INDEX(0)] == changed;
+
+    for (size_t store = 0; store < arraysize(map_client_lighting_fields); store++) {
+        map_client_lighting_fields[store].valid = false;
+    }
     for (size_t store = 0; store < arraysize(level_cells); store++) {
         map_cell_store_destroy(level_cells[store]);
         level_cells[store] = NULL;
@@ -6325,7 +7148,7 @@ bool widget_map_lighting_diagnostic_test(void) {
         {"moonlit", 8, 9, 128, {64, 96, 128}, false},
         {"moonless", 1, 0, 32, {32, 32, 32}, false},
         {"indoor", 2, 2, 768, {768, 768, 768}, false},
-        {"clamp", 7, 7, UINT16_MAX - 1, {UINT16_MAX - 1, UINT16_MAX - 1, UINT16_MAX - 1}, false},
+        {"peak", 7, 7, INT16_MAX, {INT16_MAX, INT16_MAX, INT16_MAX}, false},
         {"fog-boundary", 16, 16, 512, {512, 512, 512}, true},
     };
     uint16_t fixture_rgb[NUM_SUB_LAYERS][3] = {{0}};
@@ -6362,6 +7185,11 @@ bool widget_map_lighting_diagnostic_test(void) {
         success = fixture_received && diagnostic.received &&
                   diagnostic.received_scalar == fixtures[index].scalar;
     }
+    /* A negative signed base is reported as the value composition uses. */
+    map_set_light_radiance(8, 8, 0, (uint16_t)map_protocol_signed_radiance_encode(-160));
+    success = success && map_lighting_diagnostic_get(0, 8, 8, 0, false, &diagnostic) &&
+              diagnostic.received_scalar == -256;
+    map_set_light_radiance(8, 8, 0, 2048);
     bool got = success && map_lighting_diagnostic_get(0, 8, 8, 0, false, &diagnostic);
     success = success && got && diagnostic.visible && !diagnostic.fogged && diagnostic.received &&
               diagnostic.working_available && diagnostic.received_scalar == 2048 &&
@@ -6389,9 +7217,10 @@ bool widget_map_lighting_diagnostic_test(void) {
               (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE) != 0;
 
     got = success && map_lighting_diagnostic_get(0, 7, 7, 0, false, &diagnostic);
+    /* The brightest signed base is representable without clamping. */
     success = success && got && diagnostic.working_available &&
-              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED) != 0 &&
-              diagnostic.working_scalar == UINT16_MAX;
+              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED) == 0 &&
+              diagnostic.working_scalar >= INT16_MAX;
 
     got = success && map_lighting_diagnostic_get(0, 16, 16, 0, false, &diagnostic);
     /* Fog no longer revokes light state, so a remembered cell is neither
@@ -6617,7 +7446,7 @@ map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, i
 
 /** Rebuild only the compact light grid consumed by retained painter commands. */
 static void map_draw_retained_lighting(SDL_Surface *surface) {
-    if (!setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING)) {
+    if (!map_lighting_is_smooth()) {
         return;
     }
 
@@ -6704,7 +7533,7 @@ static void map_draw_level(SDL_Surface *surface,
     size_t visible_tiles_num = 0;
     map_visible_tile_t *visible_tiles =
         map_visible_tiles_create(surface, &data, x, y, w, h, &visible_tiles_num);
-    data.smooth_lighting = primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
+    data.smooth_lighting = primary_surface && map_lighting_is_smooth();
     if (data.smooth_lighting && !objects_only) {
         data.lightmap_pending = false;
     }
@@ -8361,8 +9190,7 @@ static bool map_retained_projection_matches(SDL_Surface *surface) {
            map_retained_primary_projection.origin_y == map_cache_origin_y &&
            map_retained_primary_projection.level_mask == map_level_mask &&
            map_retained_primary_projection.player_sub_layer == MapData.player_sub_layer &&
-           map_retained_primary_projection.smooth_lighting ==
-               (setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0) &&
+           map_retained_primary_projection.smooth_lighting == map_lighting_is_smooth() &&
            map_retained_primary_projection.face_content_generation ==
                image_face_content_generation();
 }
@@ -8377,7 +9205,7 @@ static void map_retained_projection_commit(SDL_Surface *surface) {
         .origin_y = map_cache_origin_y,
         .level_mask = map_level_mask,
         .player_sub_layer = MapData.player_sub_layer,
-        .smooth_lighting = setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0,
+        .smooth_lighting = map_lighting_is_smooth(),
         .face_content_generation = image_face_content_generation(),
         .valid = true,
     };
@@ -8391,6 +9219,10 @@ void map_draw_map(SDL_Surface *surface) {
 
     bool primary_surface = cur_widget[MAP_ID] != NULL && surface == cur_widget[MAP_ID]->surface;
     bool gpu_output = gpu_renderer_ready() && (primary_surface || map_gpu_auxiliary);
+    if (primary_surface) {
+        map_flicker_lighting_update();
+        map_emitter_frame_begin();
+    }
     uint32_t pending_redraw_reasons = primary_surface ? map_redraw_pending_reasons() : 0;
     bool animation_only = primary_surface && !map_redraw_due() && map_animation_redraw_due() &&
                           pending_redraw_reasons == MAP_REDRAW_REASON_ANIMATION;
@@ -8528,7 +9360,16 @@ void map_draw_map_gpu_auxiliary(SDL_Surface *surface) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(!map_gpu_auxiliary);
     map_gpu_auxiliary = true;
+    /* Auxiliary views such as the dynamic minimap share the presented
+     * frame's emitter rebuild budget instead of rebuilding unbounded. */
+    map_emitter_auxiliary_begin();
     map_draw_map(surface);
+    /* The auxiliary view keeps its own retained target: when it deferred a
+     * rebuild, re-arm its redraw so it is recomposed after the fields are. */
+    if (map_emitter_rebuild_deferred) {
+        minimap_redraw_force();
+    }
+    map_emitter_frame_end();
     map_gpu_auxiliary = false;
 }
 
@@ -9174,10 +10015,12 @@ static void widget_draw(widgetdata *widget) {
     if (!map_state_transaction_active() && map_redraw_due()) {
         map_draw_map(widget->surface);
         map_redraw_consume();
+        map_emitter_frame_end();
         effect_sprites_play();
     } else if (!map_state_transaction_active() && map_animation_redraw_due()) {
         map_draw_map(widget->surface);
         map_animation_redraw_consume();
+        map_emitter_frame_end();
         effect_sprites_play();
     }
 
@@ -11047,7 +11890,7 @@ static void map_edge_lighting_vertex(const char *phase, int marker, int x, int y
                value.remembered ? "true" : "false",
                value.reasons);
         if (value.visible && !value.fogged) {
-            printf(",\"received\":%s,\"received_scalar\":%u,\"received_rgb\":[%u,%u,%u],"
+            printf(",\"received\":%s,\"received_scalar\":%d,\"received_rgb\":[%d,%d,%d],"
                    "\"working_available\":%s,\"working_scalar\":%u,\"working_rgb\":[%u,%u,%u],"
                    "\"presentation_available\":%s,\"presentation_rgb\":[%u,%u,%u]",
                    value.received ? "true" : "false",
@@ -11408,16 +12251,17 @@ bool widget_map_projection_contract_test(void) {
                                   edge.green == 1024 * weight / 256 &&
                                   edge.blue == 512 * weight / 256 && edge_light->radiance == 2048 &&
                                   edge_light->rgb_radiance[0] == 2048;
-                        edge_light->radiance = UINT16_MAX;
-                        edge_light->rgb_radiance[0] = UINT16_MAX;
-                        edge_light->rgb_radiance[1] = 32768;
-                        edge_light->rgb_radiance[2] = 16384;
+                        /* The brightest signed base normalizes with its hue. */
+                        edge_light->radiance = INT16_MAX;
+                        edge_light->rgb_radiance[0] = INT16_MAX;
+                        edge_light->rgb_radiance[1] = 16384;
+                        edge_light->rgb_radiance[2] = 8192;
                         edge = map_lighting_vertex(surface, &lighting, sample_x, sample_y);
                         success =
                             success && edge.scalar == 2048 * weight / 256 &&
                             edge.red == 2048 * weight / 256 && edge.green == 1024 * weight / 256 &&
-                            edge.blue == 512 * weight / 256 && edge_light->radiance == UINT16_MAX &&
-                            edge_light->rgb_radiance[0] == UINT16_MAX;
+                            edge.blue == 512 * weight / 256 && edge_light->radiance == INT16_MAX &&
+                            edge_light->rgb_radiance[0] == INT16_MAX;
                     }
                 }
 
@@ -12176,6 +13020,11 @@ void map_runtime_deinit(void) {
     memset(&map_retained_primary_context, 0, sizeof(map_retained_primary_context));
     memset(&map_retained_primary_projection, 0, sizeof(map_retained_primary_projection));
 
+    /* Emitter fields belong to this runtime's stores. */
+    for (size_t i = 0; i < arraysize(map_client_lighting_fields); i++) {
+        free(map_client_lighting_fields[i].cells);
+        memset(&map_client_lighting_fields[i], 0, sizeof(map_client_lighting_fields[i]));
+    }
     for (size_t i = 0; i < arraysize(level_cells); i++) {
         map_cell_store_destroy(level_cells[i]);
         level_cells[i] = NULL;
