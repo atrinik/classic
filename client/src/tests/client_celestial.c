@@ -97,6 +97,16 @@ static void test_encoder_rejects_what_decoders_reject(void) {
     /* Current and next hour share one profile. */
     slots[0].next.day_brightness++;
     TEST_CHECK(!celestial_protocol_write(packet, 1, 0, slots, 1));
+    /* Brightness is bounded as region profiles bound it. */
+    slots[0] = slot_at(3, 5, CELESTIAL_MODEL_BRIGHTNESS_MAX);
+    TEST_CHECK(celestial_protocol_write(packet, 1, 0, slots, 1));
+    packet->len = 0;
+    slots[0] = slot_at(3, 5, CELESTIAL_MODEL_BRIGHTNESS_MAX + 1);
+    TEST_CHECK(!celestial_protocol_write(packet, 1, 0, slots, 1));
+    slots[0] = slot_at(3, 5, 200);
+    slots[0].current.night_brightness = slots[0].next.night_brightness =
+        CELESTIAL_MODEL_BRIGHTNESS_MAX + 1;
+    TEST_CHECK(!celestial_protocol_write(packet, 1, 0, slots, 1));
     slots[0] = slot_at(3, 5, 200);
     slots[0].current.lunar_period = 100;
     TEST_CHECK(!celestial_protocol_write(packet, 1, 0, slots, 1));
@@ -140,6 +150,11 @@ static void test_stale_and_malformed_payloads_keep_state(void) {
     /* A phase outside its period is rejected, not clamped. */
     packet->len--;
     packet->data[13 + 38] = CELESTIAL_MODEL_HOURS_PER_DAY;
+    TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
+    /* So is a day brightness beyond 1024 (bytes 13..14 of the slot). */
+    packet->data[13 + 38] = 0;
+    packet->data[13 + 13] = 0x04;
+    packet->data[13 + 14] = 0x01;
     TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
 

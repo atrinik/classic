@@ -188,6 +188,10 @@ bool celestial_model_inputs_valid(const celestial_model_inputs_t *inputs) {
     if (inputs == NULL) {
         return false;
     }
+    if (inputs->day_brightness > CELESTIAL_MODEL_BRIGHTNESS_MAX ||
+        inputs->night_brightness > CELESTIAL_MODEL_BRIGHTNESS_MAX) {
+        return false;
+    }
     celestial_lunar_input lunar;
     model_lunar_input(inputs, &lunar);
     return lunar_input_valid(&lunar);

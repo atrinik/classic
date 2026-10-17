@@ -73,7 +73,7 @@ the shared `celestial_protocol_write()`/`celestial_protocol_read()`:
 | count | `uint8` | number of slot records, `0..255` |
 | per slot: slot | `uint8` | `0..254`, strictly increasing |
 | day, night | `3 × uint16` each | normalized linear Q0.16 colors |
-| day, night brightness | `uint16` each | Q8.8 brightness |
+| day, night brightness | `uint16` each | Q8.8 brightness `0..1024` |
 | moon | `3 × uint16`, `uint8` | linear color, `moon_max` `0..20` |
 | starlight | `3 × uint16`, `uint8` | linear color, strength `0..2` |
 | lunar period | `uint16` | `168..8064`, a multiple of 24 and of 8 |
@@ -82,7 +82,7 @@ the shared `celestial_protocol_write()`/`celestial_protocol_read()`:
 A payload is complete state: it replaces every slot, and a slot it omits is no
 longer assigned. Decoders reject, before replacing anything, truncation,
 trailing bytes, unordered or out-of-range slots, out-of-range phases or
-strengths, a lunar period outside its rules, and a nonzero color that is not
+strengths, a day or night brightness above 1024, a lunar period outside its rules, and a nonzero color that is not
 normalized (a peak channel other than 65535). The server encodes the effective
 inputs of every slot on each MAP2 update and sends a new payload whenever the
 encoding differs from the last one sent, so an hour change, a gained or lost

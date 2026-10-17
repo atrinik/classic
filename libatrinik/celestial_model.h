@@ -42,6 +42,8 @@
 #define CELESTIAL_MODEL_LUNAR_PERIOD_MAX CELESTIAL_MODEL_HOURS_PER_YEAR
 /** Largest raw moon strength. */
 #define CELESTIAL_MODEL_MOON_MAX 20
+/** Largest day or night brightness, Q8.8, as region profiles bound it. */
+#define CELESTIAL_MODEL_BRIGHTNESS_MAX 1024
 /** Largest raw starlight strength. */
 #define CELESTIAL_MODEL_STARLIGHT_MAX 2
 /** Fixed-point transmission scale: 256 is open, 0 opaque. */
