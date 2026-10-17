@@ -47,6 +47,11 @@ harness have been removed from every build.
 
 ## Lighting
 
+Protocol 1085 replaces presentation lighting with client-computed lighting,
+the only lighting model, described in [CLIENT_LIGHTING.md](CLIENT_LIGHTING.md).
+There is no option, negotiation or legacy full-radiance path. Until its
+rollout lands, this section remains normative for what it does not replace.
+
 ### v1078 radiance contract
 
 Protocol v1078 replaces the v1077 scalar-byte/RGB888 lighting layout as one
@@ -87,8 +92,11 @@ inverse entries against the generator's checked-in vectors, not merely these
 sentinels.
 
 For an authored source `(r,g,b)`, decode each channel through that LUT, let
-`peak = max(decoded)`, and reject a zero peak for a positive source.  Its
-linear normalized vector is `round_half_up(decoded[channel] * 65535 / peak)`.
+`peak = max(decoded)`.  Its linear normalized vector is
+`round_half_up(decoded[channel] * 65535 / peak)`; a zero peak (authored
+`000000` on a positive source, which the loader and plugins accept) gives the
+zero vector, black light that still adds scalar light and weight and so
+dilutes the hue of other sources.
 The existing scalar mask/attenuation is multiplied by that vector, then all
 contributions are summed in signed 64-bit accumulators.  Same-cell positive
 source grouping and its scalar cap remain authoritative; negative sources
@@ -2098,7 +2106,9 @@ contribution. Q5.11 encoding remains the existing checked round-half-up
 `raw * 8 / 5` operation at the wire boundary; this contract adds no protocol
 field and no second visibility authority.
 
-With smooth lighting, feather the completed presentation sample at the negotiated
+With smooth lighting, the only player-facing mode (the discrete projection
+survives only for offline conformance proofs until protocol 1085 retires it),
+feather the completed presentation sample at the negotiated
 wire-window boundary. Let `distance` be the minimum integer distance from the
 sample to any of the four window sides. Its Q0.8 weight is `0` at distance zero,
 `16` at distance one, and `256` at distance two or greater; samples outside the
