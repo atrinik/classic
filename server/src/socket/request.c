@@ -134,8 +134,6 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
     uint8_t type;
 
     packet = packet_new(CLIENT_CMD_SETUP, 256, 256);
-    /* The wire mode changes only after the whole SETUP validates. */
-    bool client_lighting = false, client_lighting_present = false;
 
     while (pos < len) {
         type = packet_reader_read_uint8(&reader);
@@ -187,18 +185,6 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
                 ns->connection_mode = mode;
             }
             packet_writer_write_uint8(packet, ns->connection_mode);
-        } else if (type == CMD_SETUP_CLIENT_LIGHTING) {
-            uint8_t capabilities = packet_reader_read_uint8(&reader);
-            /* Fixed by the initial SETUP; later SETUPs only echo the mode, so
-             * a player cannot force repeated per-socket cache resets. */
-            client_lighting = ns->setup_completed
-                                  ? ns->client_lighting
-                                  : settings.client_lighting &&
-                                        (capabilities & CLIENT_LIGHTING_CAP_COMPOSITOR) != 0;
-            client_lighting_present = !ns->setup_completed;
-            packet_debug_data(packet, 0, "Client lighting");
-            packet_writer_write_uint8(packet,
-                                      client_lighting ? CLIENT_LIGHTING_CAP_COMPOSITOR : 0);
         } else {
             LOG(PACKET, "Unknown setup type: %u", type);
             packet_free(packet);
@@ -212,12 +198,6 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
         return;
     }
 
-    if (client_lighting_present && ns->client_lighting != client_lighting) {
-        /* Radiance meaning and client-light fields change: resend all cells. */
-        ns->client_lighting = client_lighting;
-        map_client_cache_clear(&ns->lastmap);
-        ns->lastmap_light_generation = 0;
-    }
     ns->setup_completed = true;
     socket_login_deadline_refresh(ns);
     socket_send_packet(ns, packet);
@@ -1183,8 +1163,6 @@ void draw_client_map2(object *pl) {
     /* Presentation raw light: base light only when clients compute local
      * light themselves. Gameplay darkness gating keeps using raw_light. */
     int present_raw[NUM_SUB_LAYERS];
-    /* Only a connection that negotiated the compositor gets base-only light. */
-    bool client_lighting = settings.client_lighting && CONTR(pl)->cs->client_lighting;
     uint16_t light_radiance[NUM_SUB_LAYERS];
     uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
     uint16_t light_next_radiance[NUM_SUB_LAYERS];
@@ -1445,7 +1423,7 @@ void draw_client_map2(object *pl) {
                     map_if_clearcell(false);
                     mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
-                    if (remembered && settings.client_lighting && CONTR(pl)->cs->client_lighting) {
+                    if (remembered) {
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
                         map_append_remembered_light(
                             packet,
@@ -1684,9 +1662,7 @@ void draw_client_map2(object *pl) {
                             present_raw[sub_layer] = raw_light[sub_layer];
                             /* Signed base carries negative environment, so
                              * darkness composes on the client everywhere. */
-                            if (client_lighting) {
-                                present_raw[sub_layer] -= light_spaces[sub_layer]->light_source_value;
-                            }
+                            present_raw[sub_layer] -= light_spaces[sub_layer]->light_source_value;
 
                             /* XRAY vision is an explicit authorization to see
                              * through darkness. Static MAP2 geometry remains
@@ -1698,28 +1674,17 @@ void draw_client_map2(object *pl) {
                             }
                             /* Client lighting applies the floor after it adds
                              * local light, as announced in the local byte. */
-                            if (!client_lighting && present_raw[sub_layer] < 100 &&
-                                special_vision & 1) {
-                                present_raw[sub_layer] = 100;
-                            }
 
-                            if (client_lighting) {
-                                /* Signed words travel as their uint16 bit
-                                 * patterns, so the delta cache is unchanged. */
-                                int16_t scalar, rgb[3];
-                                light_base_radiance_signed(light_spaces[sub_layer],
-                                                           present_raw[sub_layer],
-                                                           &scalar,
-                                                           rgb);
-                                light_radiance[sub_layer] = (uint16_t)scalar;
-                                for (size_t channel = 0; channel < 3; channel++) {
-                                    light_rgb_radiance[sub_layer][channel] = (uint16_t)rgb[channel];
-                                }
-                            } else {
-                                light_radiance_from_raw(light_spaces[sub_layer],
-                                                        present_raw[sub_layer],
-                                                        &light_radiance[sub_layer],
-                                                        light_rgb_radiance[sub_layer]);
+                            /* Signed words travel as their uint16 bit
+                             * patterns, so the delta cache is unchanged. */
+                            int16_t scalar, rgb[3];
+                            light_base_radiance_signed(light_spaces[sub_layer],
+                                                       present_raw[sub_layer],
+                                                       &scalar,
+                                                       rgb);
+                            light_radiance[sub_layer] = (uint16_t)scalar;
+                            for (size_t channel = 0; channel < 3; channel++) {
+                                light_rgb_radiance[sub_layer][channel] = (uint16_t)rgb[channel];
                             }
                         }
 
@@ -1975,7 +1940,7 @@ void draw_client_map2(object *pl) {
                             /* Darkness is achromatic; a positive source with a
                              * zero linear peak is rejected as authored light. */
                             /* Remembered cells in fog carry no live light. */
-                            if (client_lighting && !tile_fow && light_emitter_disclosed(pl, tmp) &&
+                            if (!tile_fow && light_emitter_disclosed(pl, tmp) &&
                                 tmp->glow_radius != 0 &&
                                 (tmp->glow_radius < 0 || emitter_color != 0)) {
                                 /* Unclamped: the client sums a tile's radii
@@ -1990,16 +1955,14 @@ void draw_client_map2(object *pl) {
                                 flags2 |= MAP2_FLAG2_EMITTER;
                             }
                             uint64_t emitter_bit = UINT64_C(1) << socket_layer;
-                            if (client_lighting) {
-                                cell_occluder = light_occluder_combine(
-                                    cell_occluder, light_occluder_object_bits(tmp));
-                                if (emitter != 0) {
-                                    uint64_t entry[2] = {(uint64_t)socket_layer, emitter};
-                                    const uint8_t *bytes = (const uint8_t *)entry;
-                                    for (size_t i = 0; i < sizeof(entry); i++) {
-                                        cell_emitter_digest = (cell_emitter_digest ^ bytes[i]) *
-                                                              UINT32_C(16777619);
-                                    }
+                            cell_occluder = light_occluder_combine(
+                                cell_occluder, light_occluder_object_bits(tmp));
+                            if (emitter != 0) {
+                                uint64_t entry[2] = {(uint64_t)socket_layer, emitter};
+                                const uint8_t *bytes = (const uint8_t *)entry;
+                                for (size_t i = 0; i < sizeof(entry); i++) {
+                                    cell_emitter_digest = (cell_emitter_digest ^ bytes[i]) *
+                                                          UINT32_C(16777619);
                                 }
                             }
 
@@ -2272,18 +2235,11 @@ void draw_client_map2(object *pl) {
                         memcpy(next_space.celestial_light_rgb,
                                light_spaces[sub_layer]->celestial_light_next_rgb,
                                sizeof(next_space.celestial_light_rgb));
-                        if (client_lighting) {
-                            int16_t scalar, rgb[3];
-                            light_base_radiance_signed(&next_space, next_raw, &scalar, rgb);
-                            light_next_radiance[sub_layer] = (uint16_t)scalar;
-                            for (size_t channel = 0; channel < 3; channel++) {
-                                light_next_rgb_radiance[sub_layer][channel] = (uint16_t)rgb[channel];
-                            }
-                        } else {
-                            light_radiance_from_raw(&next_space,
-                                                    next_raw,
-                                                    &light_next_radiance[sub_layer],
-                                                    light_next_rgb_radiance[sub_layer]);
+                        int16_t scalar, rgb[3];
+                        light_base_radiance_signed(&next_space, next_raw, &scalar, rgb);
+                        light_next_radiance[sub_layer] = (uint16_t)scalar;
+                        for (size_t channel = 0; channel < 3; channel++) {
+                            light_next_rgb_radiance[sub_layer][channel] = (uint16_t)rgb[channel];
                         }
                     }
 
@@ -2453,7 +2409,7 @@ void draw_client_map2(object *pl) {
                  * currently sees; remembered cells keep their last values. */
                 /* A value-only emitter change on a layer served from cache is
                  * resent on the next update. */
-                if (client_lighting && cell_emitter_digest != mp->emitter_digest) {
+                if (cell_emitter_digest != mp->emitter_digest) {
                     mp->emitter_stale |= mp->emitter_layers & ~cell_emitter_sent;
                     mp->emitter_digest = cell_emitter_digest;
                 }
@@ -2463,14 +2419,12 @@ void draw_client_map2(object *pl) {
                  * on return through the presence bit. */
                 uint8_t local_light = 0;
                 uint32_t occluder = 0;
-                if (client_lighting) {
-                    local_light = map_protocol_local_light_encode(light_local_level(m, nx, ny),
-                                                                  (special_vision & 1) != 0);
-                    if (!(mp->client_light_known & 1U) || mp->local_light != local_light) {
-                        ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
-                    }
+                local_light = map_protocol_local_light_encode(light_local_level(m, nx, ny),
+                                                              (special_vision & 1) != 0);
+                if (!(mp->client_light_known & 1U) || mp->local_light != local_light) {
+                    ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
                 }
-                if (client_lighting && !tile_fow) {
+                if (!tile_fow) {
                     occluder = cell_occluder |
                                light_occluder_faces(m, nx, ny,
                                                     map2_neighbors_in_view(pl, depth, ax, ay));

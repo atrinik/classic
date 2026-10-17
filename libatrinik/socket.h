@@ -203,10 +203,6 @@ typedef enum socket_role {
 #define CMD_SETUP_ASSET_TRANSPORT 4
 /** Direct connection mode selected by the client. */
 #define CMD_SETUP_CONNECTION_MODE 5
-/** Protocol 1085 client lighting capability; the server echoes the mode. */
-#define CMD_SETUP_CLIENT_LIGHTING 6
-/** The client composes emitters, the coarse level and occluders itself. */
-#define CLIENT_LIGHTING_CAP_COMPOSITOR 0x01U
 /** First socket protocol version supporting in-band asset downloads. */
 #define ASSET_TRANSPORT_SOCKET_VERSION 1067
 /** Generic path-based asset stream support; also the legacy true value. */

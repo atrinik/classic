@@ -485,9 +485,12 @@ extern void
 map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags, uint32_t color);
 extern bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint8_t *flags,
                                   uint32_t *color);
-extern void map_set_client_lighting_mode(bool compositor);
 extern void map_set_local_light(int x, int y, uint8_t value);
 extern void map_set_occluder(int x, int y, uint16_t bits, uint8_t vertical);
+/** Whether lighting renders smoothly: always, except in offline proofs. */
+extern bool map_lighting_is_smooth(void);
+/** Select the discrete projection for an offline conformance proof only. */
+extern void map_set_discrete_lighting_proof(bool discrete);
 extern bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor);
 extern bool map_get_occluder(int x, int y, uint16_t *bits, uint8_t *vertical);
 extern void

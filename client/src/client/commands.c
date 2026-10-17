@@ -124,7 +124,6 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
     uint8_t type;
     uint8_t asset_capabilities = 0;
     bool asset_capabilities_present = false;
-    uint8_t client_lighting = 0;
 
     while (packet_reader_error(&reader) == PACKET_ERROR_NONE && pos < len) {
         type = packet_reader_read_uint8(&reader);
@@ -151,8 +150,6 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
             asset_capabilities_present = true;
         } else if (type == CMD_SETUP_CONNECTION_MODE) {
             packet_reader_read_uint8(&reader);
-        } else if (type == CMD_SETUP_CLIENT_LIGHTING) {
-            client_lighting = packet_reader_read_uint8(&reader);
         } else {
             packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         }
@@ -167,9 +164,6 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
     }
 
     if (initial_setup) {
-        /* The echoed mode is fixed for the connection; it decides whether
-         * MAP2 base radiance words are signed. */
-        map_set_client_lighting_mode((client_lighting & CLIENT_LIGHTING_CAP_COMPOSITOR) != 0);
         cpl.state = ST_REQUEST_FILES_LISTING;
     }
 }

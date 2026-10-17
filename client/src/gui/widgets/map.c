@@ -223,10 +223,10 @@ static uint64_t level_lighting_revision[MAP2_LEVELS];
 /* Advances only when a level's emitters, occluders or live residency change,
  * so base-light and timed-light updates do not rebuild the emitter field. */
 static uint64_t level_emitter_revision[MAP2_LEVELS];
-/** Whether this connection runs protocol 1085 client lighting: base radiance
- * words are then signed Q4.11 and the client composes local light. */
-static bool map_client_lighting_mode;
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
+/** Offline proofs only: the discrete per-tile projection pinned by approved
+ * conformance goldens. Players always get smooth lighting. */
+static bool map_discrete_lighting_proof;
 static uint16_t map_level_mask;
 static int map_width;
 static int map_height;
@@ -3207,14 +3207,8 @@ void map_clear_cell(int x, int y, bool hard) {
     }
 
     map_clear_live_cell(cell);
-    /* Client lighting keeps a remembered tile's base radiance: its coarse
-     * level keeps arriving and composes onto it in fog. */
-    if (!map_client_lighting_mode) {
-        map_cell_clear_light_state(cell);
-        if (had_light_state) {
-            map_cell_store_set_light_state(cells, index, MAP_LIGHT_CACHE_CLEARED);
-        }
-    }
+    /* A remembered tile keeps its base radiance: its coarse level keeps
+     * arriving and composes onto it in fog. */
     map_cell_store_set_fow(cells, index, true, false);
     map_cell_store_trim_slot(cells, index);
 
@@ -3332,16 +3326,16 @@ void map_set_occluder(int x, int y, uint16_t bits, uint8_t vertical) {
     level_emitter_revision[current_level_index]++;
 }
 
-/** Select the radiance meaning negotiated by the initial SETUP. */
-void map_set_client_lighting_mode(bool compositor) {
-    if (map_client_lighting_mode == compositor) {
+bool map_lighting_is_smooth(void) {
+    return !map_discrete_lighting_proof;
+}
+
+void map_set_discrete_lighting_proof(bool discrete) {
+    if (map_discrete_lighting_proof == discrete) {
         return;
     }
-    map_client_lighting_mode = compositor;
-    for (size_t level = 0; level < MAP2_LEVELS; level++) {
-        level_lighting_revision[level]++;
-        level_emitter_revision[level]++;
-    }
+    map_discrete_lighting_proof = discrete;
+    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
 }
 
 /** Return the signed coarse local light level and vision floor of a cell. */
@@ -5318,24 +5312,6 @@ static void map_dirty_lighting_fow(int dx, int dy) {
     }
 }
 
-static uint16_t
-map_lighting_interpolate(uint16_t current, uint16_t next, uint64_t progress, uint64_t duration) {
-    if (progress == 0 || current == next) {
-        return current;
-    }
-    if (progress >= duration) {
-        return next;
-    }
-    if (next > current) {
-        uint64_t delta = (uint64_t)(next - current);
-        return (uint16_t)MIN(UINT16_MAX,
-                             (uint64_t)current + (delta * progress + duration / 2) / duration);
-    }
-    uint64_t delta = (uint64_t)(current - next);
-    uint64_t reduction = (delta * progress + duration / 2) / duration;
-    return (uint16_t)(reduction > current ? 0 : current - reduction);
-}
-
 /** Interpolate signed Q4.11 endpoints, rounding half away from zero. */
 static uint16_t map_lighting_interpolate_signed(uint16_t current,
                                                 uint16_t next,
@@ -5376,7 +5352,7 @@ static bool map_lighting_temporal_sample(const map_cell_t *cell,
                             ? 0
                             : now - map_cell_light_keyframe_record_read(cell)->start_seconds;
     uint16_t (*interpolate)(uint16_t, uint16_t, uint64_t, uint64_t) =
-        map_client_lighting_mode ? map_lighting_interpolate_signed : map_lighting_interpolate;
+        map_lighting_interpolate_signed;
     *scalar = interpolate(map_cell_light_record_read(cell, sub_layer)->radiance,
                           map_cell_light_record_read(cell, sub_layer)->next_radiance,
                           progress,
@@ -5473,15 +5449,11 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
 
 /**
  * Compose client local light onto a received signed base sample and return
- * the unsigned presentation radiance. On a legacy connection the sample is
- * already complete radiance and stays unchanged.
+ * the unsigned presentation radiance.
  */
 static void
 map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uint16_t rgb[3]) {
     (void)sub_layer;
-    if (!map_client_lighting_mode) {
-        return;
-    }
     const map_cell_header_t *header = &cells->headers[map_cache_physical_index(x, y)];
     int8_t level = 0;
     bool vision_floor = false;
@@ -6155,8 +6127,7 @@ void map_lighting_diagnostic_command(const char *params) {
     const char *cursor = map_lighting_diagnostic_skip_space(params != NULL ? params : "");
     /* The command is normally reached after settings_init(), but keep the
      * standalone map-state diagnostic safe before client startup completes. */
-    bool smooth_lighting =
-        setting_categories != NULL && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0;
+    bool smooth_lighting = map_lighting_is_smooth();
     int default_sub_layer = MIN(MapData.player_sub_layer, NUM_SUB_LAYERS - 1);
     int center_x = map_width > 0 ? map_width - map_width / 2 - 1 : 0;
     int center_y = map_height > 0 ? map_height - map_height / 2 - 1 : 0;
@@ -6277,9 +6248,12 @@ bool widget_map_temporal_lighting_test(void) {
     historical->radiance = UINT16_MAX;
     historical->known = 1;
     map_clear_cell(0, 0, false);
+    /* A remembered tile keeps its base radiance in fog. */
+    success = success && historical->radiance == UINT16_MAX && historical->known;
+    /* Without a retained sample the neighbors' interpolated light applies. */
+    historical->known = 0;
     success = success &&
-              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, historical->radiance) == 200 &&
-              historical->radiance == UINT16_MAX && !historical->known;
+              map_remembered_discrete_radiance(MAP_STARTX, MAP_STARTY, remembered, 0, historical->radiance) == 200;
     /* Current authoritative samples keep their established discrete transfer. */
     historical->known = 1;
     historical->radiance = 2048;
@@ -6447,8 +6421,6 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && map_cell_changed(6, 6, &before);
 
     /* Composition adds client emitter light to the received signed base. */
-    bool saved_mode = map_client_lighting_mode;
-    map_client_lighting_mode = true;
     uint16_t composed_scalar = 0, composed_rgb[3];
     map_set_light_radiance(8, 8, 0, 160);
     map_set_local_light(8, 8, map_protocol_local_light_encode(0, false));
@@ -6506,13 +6478,6 @@ bool widget_map_client_lighting_state_test(void) {
     map_lighting_radiance(12 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 8), 0,
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 300;
-    /* A legacy connection's words are complete unsigned radiance. */
-    map_client_lighting_mode = false;
-    map_set_light_radiance(12, 8, 0, 65000);
-    map_lighting_radiance(12 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 8), 0,
-                          &composed_scalar, composed_rgb);
-    success = success && composed_scalar == 65000;
-    map_client_lighting_mode = saved_mode;
 
     for (size_t store = 0; store < arraysize(map_client_lighting_fields); store++) {
         map_client_lighting_fields[store].valid = false;
@@ -6584,7 +6549,7 @@ bool widget_map_lighting_diagnostic_test(void) {
         {"moonlit", 8, 9, 128, {64, 96, 128}, false},
         {"moonless", 1, 0, 32, {32, 32, 32}, false},
         {"indoor", 2, 2, 768, {768, 768, 768}, false},
-        {"clamp", 7, 7, UINT16_MAX - 1, {UINT16_MAX - 1, UINT16_MAX - 1, UINT16_MAX - 1}, false},
+        {"peak", 7, 7, INT16_MAX, {INT16_MAX, INT16_MAX, INT16_MAX}, false},
         {"fog-boundary", 16, 16, 512, {512, 512, 512}, true},
     };
     uint16_t fixture_rgb[NUM_SUB_LAYERS][3] = {{0}};
@@ -6648,17 +6613,19 @@ bool widget_map_lighting_diagnostic_test(void) {
               (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_UNAVAILABLE) != 0;
 
     got = success && map_lighting_diagnostic_get(0, 7, 7, 0, false, &diagnostic);
+    /* The brightest signed base is representable without clamping. */
     success = success && got && diagnostic.working_available &&
-              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED) != 0 &&
-              diagnostic.working_scalar == UINT16_MAX;
+              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_CLAMPED) == 0 &&
+              diagnostic.working_scalar >= INT16_MAX;
 
     got = success && map_lighting_diagnostic_get(0, 16, 16, 0, false, &diagnostic);
+    /* Fog no longer revokes light state, so a remembered cell is neither
+     * stale nor cleared; with no sample received nothing is available. */
     success = success && got && !diagnostic.visible && diagnostic.fogged && diagnostic.remembered &&
-              diagnostic.stale && !diagnostic.received && !diagnostic.missing &&
-              diagnostic.cleared && !diagnostic.keyframe_valid && !diagnostic.working_available &&
+              !diagnostic.stale && !diagnostic.received && !diagnostic.missing &&
+              !diagnostic.cleared && !diagnostic.keyframe_valid && !diagnostic.working_available &&
               !diagnostic.presentation_available && diagnostic.received_scalar == 0 &&
-              diagnostic.working_scalar == 0 &&
-              (diagnostic.reasons & MAP_LIGHTING_DIAGNOSTIC_REASON_STALE) != 0;
+              diagnostic.working_scalar == 0;
 
     success = success &&
               map_light_keyframe_transaction_begin(8, 100, 200, MAP2_LIGHT_KEYFRAME_CONTINUOUS) &&
@@ -6875,7 +6842,7 @@ map_draw_lighting(SDL_Surface *surface, map_render_data_t *data, int x, int y, i
 
 /** Rebuild only the compact light grid consumed by retained painter commands. */
 static void map_draw_retained_lighting(SDL_Surface *surface) {
-    if (!setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING)) {
+    if (!map_lighting_is_smooth()) {
         return;
     }
 
@@ -6962,7 +6929,7 @@ static void map_draw_level(SDL_Surface *surface,
     size_t visible_tiles_num = 0;
     map_visible_tile_t *visible_tiles =
         map_visible_tiles_create(surface, &data, x, y, w, h, &visible_tiles_num);
-    data.smooth_lighting = primary_surface && setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING);
+    data.smooth_lighting = primary_surface && map_lighting_is_smooth();
     if (data.smooth_lighting && !objects_only) {
         data.lightmap_pending = false;
     }
@@ -8619,8 +8586,7 @@ static bool map_retained_projection_matches(SDL_Surface *surface) {
            map_retained_primary_projection.origin_y == map_cache_origin_y &&
            map_retained_primary_projection.level_mask == map_level_mask &&
            map_retained_primary_projection.player_sub_layer == MapData.player_sub_layer &&
-           map_retained_primary_projection.smooth_lighting ==
-               (setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0) &&
+           map_retained_primary_projection.smooth_lighting == map_lighting_is_smooth() &&
            map_retained_primary_projection.face_content_generation ==
                image_face_content_generation();
 }
@@ -8635,7 +8601,7 @@ static void map_retained_projection_commit(SDL_Surface *surface) {
         .origin_y = map_cache_origin_y,
         .level_mask = map_level_mask,
         .player_sub_layer = MapData.player_sub_layer,
-        .smooth_lighting = setting_get_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING) != 0,
+        .smooth_lighting = map_lighting_is_smooth(),
         .face_content_generation = image_face_content_generation(),
         .valid = true,
     };
@@ -11666,16 +11632,17 @@ bool widget_map_projection_contract_test(void) {
                                   edge.green == 1024 * weight / 256 &&
                                   edge.blue == 512 * weight / 256 && edge_light->radiance == 2048 &&
                                   edge_light->rgb_radiance[0] == 2048;
-                        edge_light->radiance = UINT16_MAX;
-                        edge_light->rgb_radiance[0] = UINT16_MAX;
-                        edge_light->rgb_radiance[1] = 32768;
-                        edge_light->rgb_radiance[2] = 16384;
+                        /* The brightest signed base normalizes with its hue. */
+                        edge_light->radiance = INT16_MAX;
+                        edge_light->rgb_radiance[0] = INT16_MAX;
+                        edge_light->rgb_radiance[1] = 16384;
+                        edge_light->rgb_radiance[2] = 8192;
                         edge = map_lighting_vertex(surface, &lighting, sample_x, sample_y);
                         success =
                             success && edge.scalar == 2048 * weight / 256 &&
                             edge.red == 2048 * weight / 256 && edge.green == 1024 * weight / 256 &&
-                            edge.blue == 512 * weight / 256 && edge_light->radiance == UINT16_MAX &&
-                            edge_light->rgb_radiance[0] == UINT16_MAX;
+                            edge.blue == 512 * weight / 256 && edge_light->radiance == INT16_MAX &&
+                            edge_light->rgb_radiance[0] == INT16_MAX;
                     }
                 }
 

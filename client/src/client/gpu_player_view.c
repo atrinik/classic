@@ -4880,7 +4880,7 @@ int gpu_player_view_main(int argc, char *argv[]) {
     setting_set_int(OPT_CAT_MAP, OPT_MAP_WIDTH, manifest.look_width);
     setting_set_int(OPT_CAT_MAP, OPT_MAP_HEIGHT, manifest.look_height);
     setting_set_int(OPT_CAT_MAP, OPT_MAP_ZOOM, manifest.map_zoom);
-    setting_set_int(OPT_CAT_MAP, OPT_SMOOTH_LIGHTING, manifest.smooth_lighting);
+    map_set_discrete_lighting_proof(!manifest.smooth_lighting);
     setting_set_int(OPT_CAT_MAP, OPT_PLAYER_NAMES, manifest.player_names ? 1 : 0);
     setting_set_int(OPT_CAT_CLIENT, OPT_ZOOM_FILTER, manifest.zoom_filter);
 

@@ -501,12 +501,6 @@ typedef struct settings_struct {
     bool recycle_tmp_maps : 1;
 
     /**
-     * Whether protocol 1085 clients compute presentation lighting from
-     * emitters, coarse local light and occluders; see CLIENT_LIGHTING.md.
-     */
-    bool client_lighting : 1;
-
-    /**
      * URL of the operator-managed HTTP asset origin.
      */
     char http_url[MAX_BUF];

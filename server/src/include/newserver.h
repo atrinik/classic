@@ -261,9 +261,6 @@ typedef struct socket_struct {
     /** Whether the initial client setup exchange completed successfully. */
     bool setup_completed;
 
-    /** Whether this connection negotiated protocol 1085 client lighting. */
-    bool client_lighting;
-
     /** Abuse-rate window and paced in-band asset response token bucket. */
     uint64_t asset_request_window_ms;
     unsigned int asset_window_requests;

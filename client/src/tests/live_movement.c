@@ -200,6 +200,9 @@ int64_t setting_get_int(int category, int setting) {
     (void)setting;
     return 0;
 }
+bool map_lighting_is_smooth(void) {
+    return true;
+}
 bool SDL_GetWindowSizeInPixels(SDL_Window *window, int *width, int *height) {
     (void)window;
     *width = 800;
