@@ -509,12 +509,59 @@ static void transport_line(mapstruct *map, const celestial_model *model,
     }
 }
 
-static void relax_diffuse(mapstruct *map, int32_t *values) {
+/** Spill coefficients depend only on geometry. One level's rebuild resolves
+ * all eight neighbours once, in the order its first relaxation pass did, and
+ * reuses them for every pass and field. The table is charged to the shared
+ * transient limit; when it does not fit, each pass evaluates them again. */
+typedef struct spill_table {
+    uint16_t *coefficients;
+    size_t bytes;
+    bool unavailable;
+} spill_table;
+
+static void spill_table_fill(spill_table *table, mapstruct *map) {
+    int width = celestial_scratch_width(map), height = celestial_scratch_height(map);
+    size_t bytes = (size_t)width * height * 8 * sizeof(*table->coefficients);
+    if (pending_memory > CELESTIAL_PENDING_MEMORY_MAX - bytes) {
+        table->unavailable = true;
+        return;
+    }
+    pending_memory += bytes;
+    table->bytes = bytes;
+    uint16_t *coefficients = table->coefficients = xcalloc(bytes, 1);
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            uint16_t *cell = &coefficients[((size_t)x + (size_t)width * y) * 8];
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 ||
+                        x + dx >= width || y + dy >= height) continue;
+                    int neighbour = (dy + 1) * 3 + dx + 1;
+                    cell[neighbour > 4 ? neighbour - 1 : neighbour] =
+                        celestial_spill_coefficient(map, x, y, dx, dy);
+                }
+            }
+        }
+    }
+}
+
+static void spill_table_release(spill_table *table) {
+    if (table->coefficients != NULL) {
+        HARD_ASSERT(pending_memory >= table->bytes);
+        pending_memory -= table->bytes;
+        free(table->coefficients);
+    }
+}
+
+static void relax_diffuse(mapstruct *map, int32_t *values, spill_table *table) {
     int width = celestial_scratch_width(map), height = celestial_scratch_height(map);
     size_t count = (size_t)width * height;
     bool active = false;
     for (size_t i = 0; i < count; i++) active |= values[i] != 0;
     if (!active) return;
+    if (table->coefficients == NULL && !table->unavailable) {
+        spill_table_fill(table, map);
+    }
     int32_t *next = xcalloc(count, sizeof(*next));
     int32_t *original = values;
     for (int pass = 0; pass < CELESTIAL_SPILL_PASSES; pass++) {
@@ -525,7 +572,11 @@ static void relax_diffuse(mapstruct *map, int32_t *values) {
                     for (int dx = -1; dx <= 1; dx++) {
                         if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 ||
                             x + dx >= width || y + dy >= height) continue;
-                        uint16_t coefficient = celestial_spill_coefficient(map, x, y, dx, dy);
+                        int neighbour = (dy + 1) * 3 + dx + 1;
+                        uint16_t coefficient = table->coefficients != NULL ?
+                            table->coefficients[((size_t)x + (size_t)width * y) * 8 +
+                                                (neighbour > 4 ? neighbour - 1 : neighbour)] :
+                            celestial_spill_coefficient(map, x, y, dx, dy);
                         int32_t candidate = transmit(values[x + dx + width * (y + dy)], coefficient);
                         candidate = transmit(candidate, dx != 0 && dy != 0 ? 181 : 192);
                         best = MAX(best, candidate);
@@ -816,9 +867,11 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
         if (model.moon != 0) {
             transport_line(current, &model, moon, moon_aperture, true);
         }
-        relax_diffuse(current, diffuse);
-        relax_diffuse(current, aperture_direct);
-        relax_diffuse(current, starlight);
+        spill_table spill = {0};
+        relax_diffuse(current, diffuse, &spill);
+        relax_diffuse(current, aperture_direct, &spill);
+        relax_diffuse(current, starlight, &spill);
+        spill_table_release(&spill);
         publish_map_field(current,
                           &model,
                           direct,
