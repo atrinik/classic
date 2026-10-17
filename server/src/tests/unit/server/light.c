@@ -1731,7 +1731,7 @@ START_TEST(test_client_lighting_local_level_fails_closed_on_unbounded_cycles) {
      * offset on a new map each lap place unboundedly many maps within reach;
      * past the bound the level fails closed to 0 instead of walking them. */
     enum { LAPS = 1100 };
-    mapstruct *start = get_empty_map(1, 1);
+    mapstruct *start = get_empty_map(3, 3);
     mapstruct *at = start;
     static const int steps[4][2] = {{TILED_EAST, TILED_WEST},
                                     {TILED_NORTH, TILED_SOUTH},
@@ -1739,7 +1739,7 @@ START_TEST(test_client_lighting_local_level_fails_closed_on_unbounded_cycles) {
                                     {TILED_SOUTH, TILED_NORTH}};
     for (int lap = 0; lap < LAPS; lap++) {
         for (int step = 0; step < 4; step++) {
-            mapstruct *next = get_empty_map(1, 1);
+            mapstruct *next = get_empty_map(3, 3);
             at->tile_map[steps[step][0]] = next;
             next->tile_map[steps[step][1]] = at;
             at = next;
@@ -1748,7 +1748,7 @@ START_TEST(test_client_lighting_local_level_fails_closed_on_unbounded_cycles) {
     add_colored_light(start->tile_map[TILED_EAST], 0, 0, 13, LIGHT_COLOR_WHITE);
     ck_assert_int_eq(light_local_level(start, 0, 0), 0);
     /* A single short lap stays well inside the bound and pools normally. */
-    mapstruct *west = get_empty_map(1, 1), *east = get_empty_map(1, 1);
+    mapstruct *west = get_empty_map(3, 3), *east = get_empty_map(3, 3);
     link_horizontal_maps(west, east);
     add_colored_light(east, 0, 0, 13, LIGHT_COLOR_WHITE);
     ck_assert_int_gt(light_local_level(west, 0, 0), 0);
@@ -1756,15 +1756,15 @@ START_TEST(test_client_lighting_local_level_fails_closed_on_unbounded_cycles) {
 END_TEST
 
 START_TEST(test_client_lighting_local_level_pools_every_reachable_tiny_map) {
-    /* Thirteen floors of 9x9 one-cell maps place 1053 maps within reach,
+    /* Twenty-five floors of 5x5 three-cell maps place 625 maps within reach,
      * more than any small fixed bound; none is dropped, so every floor still
-     * pools the source near the top floor's center and all floors agree. */
-    enum { GRID = 9, FLOORS = 13 };
+     * pools the source beside the top floor's center and all floors agree. */
+    enum { GRID = 5, FLOORS = 25 };
     static mapstruct *maps[FLOORS][GRID][GRID];
     for (int floor = 0; floor < FLOORS; floor++) {
         for (int y = 0; y < GRID; y++) {
             for (int x = 0; x < GRID; x++) {
-                maps[floor][y][x] = get_empty_map(1, 1);
+                maps[floor][y][x] = get_empty_map(3, 3);
                 if (x > 0) {
                     link_horizontal_maps(maps[floor][y][x - 1], maps[floor][y][x]);
                 }
@@ -1778,7 +1778,7 @@ START_TEST(test_client_lighting_local_level_pools_every_reachable_tiny_map) {
             }
         }
     }
-    add_colored_light(maps[FLOORS - 1][GRID / 2][GRID / 2 + 2], 0, 0, 13, LIGHT_COLOR_WHITE);
+    add_colored_light(maps[FLOORS - 1][GRID / 2][GRID / 2 + 1], 0, 0, 13, LIGHT_COLOR_WHITE);
     int level = light_local_level(maps[0][GRID / 2][GRID / 2], 0, 0);
     ck_assert_int_gt(level, 0);
     for (int floor = 1; floor < FLOORS; floor++) {
@@ -1880,10 +1880,16 @@ START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
             ck_assert_int_eq(light_local_level(map, x, y), level);
         }
     }
-    /* A map narrower than a block is one block. */
+    /* A map narrower than a block would locate a hidden source within fewer
+     * than nine cells: it reports and contributes nothing (fail closed). */
     mapstruct *narrow = get_empty_map(2, 2);
     add_colored_light(narrow, 1, 1, 13, LIGHT_COLOR_WHITE);
-    ck_assert_int_eq(light_local_level(narrow, 0, 0), light_local_level(narrow, 1, 1));
+    ck_assert_int_eq(light_local_level(narrow, 0, 0), 0);
+    mapstruct *beside = get_empty_map(9, 9);
+    mapstruct *sliver = get_empty_map(1, 9);
+    link_horizontal_maps(beside, sliver);
+    add_colored_light(sliver, 0, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level(beside, 8, 4), 0);
 }
 END_TEST
 

@@ -3455,10 +3455,9 @@ void map_set_discrete_lighting_proof(bool discrete) {
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
 }
 
-/** Return the signed coarse level, vision floor and viewer/sample flags of a
- * sub-layer: MAP2_LOCAL_LIGHT_REMOTE (lit at another space, so the cell's
- * emitter field never composes into it) and MAP2_LOCAL_LIGHT_TLI (add the
- * viewer's tli daylight during composition). */
+/** Return the signed coarse level, vision floor and viewer flags of a
+ * sub-layer: MAP2_LOCAL_LIGHT_TLI (add the viewer's tli daylight during
+ * composition). */
 bool map_get_local_light_layer(
     int x, int y, uint8_t sub_layer, int8_t *level, bool *vision_floor, uint8_t *flags) {
     const map_cell_header_t *header =
@@ -3468,7 +3467,7 @@ bool map_get_local_light_layer(
         return false;
     }
     if (flags != NULL) {
-        *flags = header->local_light[sub_layer] & (MAP2_LOCAL_LIGHT_REMOTE | MAP2_LOCAL_LIGHT_TLI);
+        *flags = header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_TLI;
     }
     return true;
 }
@@ -5645,9 +5644,13 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
                     client_lighting_occluder(header->occluder, header->occluder_horizontal);
             }
             /* Remembered cells keep their occluders, but their remembered
-             * objects' emitters may have changed since: compose none. */
+             * objects' emitters may have changed since: compose none. Only
+             * the live wire window is current; cells beside it, such as
+             * those a resize leaves behind, are never live. */
             const map_cell_t *cell = MAP_CELL_GET(cache_x, cache_y);
-            if (cell->fow || cell->emitters == NULL) {
+            bool live = cache_x >= MAP_STARTX && cache_x < MAP_STARTX + map_width &&
+                        cache_y >= MAP_STARTY && cache_y < MAP_STARTY + map_height;
+            if (!live || cell->fow || cell->emitters == NULL) {
                 continue;
             }
             for (size_t i = 0; i < cell->emitters->count; i++) {
@@ -5748,11 +5751,6 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
         level = 0;
         vision_floor = false;
     }
-    /* A remote sample's light comes from another space than this cell, whose
-     * emitters and occluders do not describe it: only its coarse level
-     * composes. */
-    bool remote = (header->client_light_known & 1U) && sub_layer < NUM_SUB_LAYERS &&
-                  (header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_REMOTE) != 0;
     /* The viewer's tli override is a neutral raw term, refreshed by the
      * server on remembered tiles too, never part of the base. */
     int64_t tli = (header->client_light_known & 1U) && sub_layer < NUM_SUB_LAYERS &&
@@ -5778,7 +5776,7 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
     }
     const client_lighting_cell_t *local = NULL;
     int fx = x - field->origin_x, fy = y - field->origin_y;
-    if (usable && !remote && fx >= 0 && fy >= 0 && fx < field->width && fy < field->height) {
+    if (usable && fx >= 0 && fy >= 0 && fx < field->width && fy < field->height) {
         local = &field->cells[(size_t)fy * field->width + fx];
     }
 
@@ -6722,17 +6720,17 @@ bool widget_map_client_lighting_state_test(void) {
               signed_level == -2 &&
               map_get_local_light_layer(7, 7, NUM_SUB_LAYERS - 1, &signed_level, &vision, NULL) &&
               signed_level == -2;
-    /* The getter reports the remote-sample bit with the decoded level. */
+    /* The getter reports the tli bit with the decoded level. */
     uint8_t light_flags = 0xff;
-    uint8_t remote_getter_layers[2] = {
+    uint8_t getter_layers[2] = {
         map_protocol_local_light_encode(1, false) | MAP2_LOCAL_LIGHT_TLI,
-        map_protocol_local_light_encode(-2, false) | MAP2_LOCAL_LIGHT_REMOTE};
-    map_set_local_light_layers(7, 7, 2, remote_getter_layers);
+        map_protocol_local_light_encode(-2, false)};
+    map_set_local_light_layers(7, 7, 2, getter_layers);
     success = success &&
               map_get_local_light_layer(7, 7, 0, &signed_level, &vision, &light_flags) &&
               light_flags == MAP2_LOCAL_LIGHT_TLI &&
               map_get_local_light_layer(7, 7, 1, &signed_level, &vision, &light_flags) &&
-              light_flags == MAP2_LOCAL_LIGHT_REMOTE && signed_level == -2;
+              light_flags == 0 && signed_level == -2;
     map_set_local_light_layers(7, 7, 2, layered);
 
     /* An aborted update restores the previous client-lighting state, and
@@ -6948,23 +6946,18 @@ bool widget_map_client_lighting_state_test(void) {
     map_clear_cell(16, 8, true);
     /* Visible again for the tests that reuse this cell. */
     map_set_fow(16, 8, false);
-    /* A remote sample composes its coarse level, never the cell's emitters. */
-    map_set_light_radiance(14, 8, 0, 160);
-    map_set_light_radiance(14, 8, 1, 160);
-    map_set_layer_emitter(14, 8, layer, 1, 0, UINT32_C(0xffffff));
-    uint8_t remote_layers[2] = {map_protocol_local_light_encode(0, false),
-                                map_protocol_local_light_encode(0, false) |
-                                    MAP2_LOCAL_LIGHT_REMOTE};
-    map_set_local_light_layers(14, 8, 2, remote_layers);
-    map_lighting_radiance(14 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(14, 8), 0,
-                          &composed_scalar, composed_rgb);
-    success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40);
-    map_lighting_radiance(14 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(14, 8), 1,
+    /* An emitter left beside the live window, as a resize leaves copied
+     * cells, never lights the window: only the live wire window is current. */
+    map_set_light_radiance(0, 12, 0, 160);
+    map_set_local_light(0, 12, map_protocol_local_light_encode(0, false));
+    map_set_layer_emitter(-1, 12, layer, 9, 0, UINT32_C(0xffffff));
+    map_lighting_radiance(0 + MAP_STARTX, 12 + MAP_STARTY, MAP_CELL_GET_MIDDLE(0, 12), 0,
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160;
-    map_clear_cell(14, 8, true);
-    /* Visible again for the tests that reuse this cell. */
-    map_set_fow(14, 8, false);
+    map_clear_cell(-1, 12, true);
+    map_clear_cell(0, 12, true);
+    map_set_fow(-1, 12, false);
+    map_set_fow(0, 12, false);
     /* Remembered tiles are lifted on signed values before the clamp: raw
      * scalar -40 with a channel at raw -100 lifts to the floor and clamps
      * that channel to 0, not to the lift. */

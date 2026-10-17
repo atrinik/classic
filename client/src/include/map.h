@@ -490,7 +490,7 @@ extern bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint8
 extern void map_set_local_light(int x, int y, uint8_t value);
 extern void map_set_local_light_layers(int x, int y, uint8_t count, const uint8_t *levels);
 /** Signed coarse level, vision floor and, if flags is not NULL, the
- * MAP2_LOCAL_LIGHT_REMOTE and MAP2_LOCAL_LIGHT_TLI bits of one sub-layer. */
+ * MAP2_LOCAL_LIGHT_TLI bit of one sub-layer. */
 extern bool map_get_local_light_layer(int x, int y, uint8_t sub_layer, int8_t *level,
                                       bool *vision_floor, uint8_t *flags);
 extern void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t vertical);
