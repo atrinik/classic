@@ -961,6 +961,22 @@ void send_game_time(player *recipient) {
         (_cell_)->cleared = 1;                                          \
     }
 
+/** Invalidate light state that the client discards when clearing a retained tile. */
+static void map_invalidate_light_cache(MapCell *cell) {
+    HARD_ASSERT(cell != NULL);
+
+    memset(cell->light_radiance, 0, sizeof(cell->light_radiance));
+    memset(cell->light_known, 0, sizeof(cell->light_known));
+    memset(cell->light_rgb_radiance, 0, sizeof(cell->light_rgb_radiance));
+    memset(cell->light_rgb_known, 0, sizeof(cell->light_rgb_known));
+    cell->light_rgb_explicit = 0;
+    memset(cell->light_next_radiance, 0, sizeof(cell->light_next_radiance));
+    memset(cell->light_next_known, 0, sizeof(cell->light_next_known));
+    cell->light_next_generation = 0;
+    memset(cell->light_next_rgb_radiance, 0, sizeof(cell->light_next_rgb_radiance));
+    cell->light_next_rgb_explicit = 0;
+}
+
 typedef los_camera_visibility map_level_visibility;
 #define MAP_LEVEL_HIDDEN LOS_CAMERA_HIDDEN
 #define MAP_LEVEL_WALL_BOUNDARY LOS_CAMERA_WALL_BOUNDARY
@@ -1674,11 +1690,7 @@ void draw_client_map2(object *pl) {
                 if (!mp->fow_known || (mp->fow != 0) != tile_fow) {
                     mask |= MAP2_MASK_FOW;
                 }
-                /* Fog freezes a tile's light at its last visible sample: the
-                 * client keeps its base radiance and keyframe in fog, so a
-                 * remembered tile receives no light record until it is seen
-                 * again, and its cache entry is kept to compare against. */
-                bool light_frozen = tile_fow;
+                bool light_state_discarded = tile_fow && (!mp->fow_known || mp->fow == 0);
 
                 /* Go through the visible layers. */
                 for (layer = LAYER_FLOOR; layer <= NUM_LAYERS; layer++) {
@@ -2364,15 +2376,13 @@ void draw_client_map2(object *pl) {
                         }
                     }
 
-                    if (light_frozen) {
-                        continue;
-                    }
                     if (light_next_radiance[sub_layer] != current_scalar ||
                         memcmp(light_next_rgb_radiance[sub_layer],
                                current_rgb,
                                sizeof(current_rgb)) != 0 ||
                         (timed_light_descriptor &&
-                         (mp->light_next_generation != timed_light_generation ||
+                         (light_state_discarded ||
+                          mp->light_next_generation != timed_light_generation ||
                           !mp->light_next_known[sub_layer] ||
                           mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer]))) {
                         light_next_bitmap |= UINT8_C(1) << sub_layer;
@@ -2383,14 +2393,16 @@ void draw_client_map2(object *pl) {
                         light_next_rgb_bitmap |= UINT8_C(1) << sub_layer;
                     }
                 }
-                if (!light_frozen && timed_light_descriptor &&
+                if (timed_light_descriptor &&
                     (mp->light_next_generation != timed_light_generation ||
-                     mp->light_next_rgb_explicit != light_next_rgb_bitmap)) {
+                     mp->light_next_rgb_explicit != light_next_rgb_bitmap ||
+                     light_state_discarded)) {
                     light_next_changed = true;
                 }
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                    if (!light_frozen && timed_light_descriptor &&
-                        (mp->light_next_generation != timed_light_generation ||
+                    if (timed_light_descriptor &&
+                        (light_state_discarded ||
+                         mp->light_next_generation != timed_light_generation ||
                          !mp->light_next_known[sub_layer] ||
                          mp->light_next_radiance[sub_layer] != light_next_radiance[sub_layer] ||
                          memcmp(mp->light_next_rgb_radiance[sub_layer],
@@ -2406,8 +2418,8 @@ void draw_client_map2(object *pl) {
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     uint16_t resolved_light = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
 
-                    if (!light_frozen && (!mp->light_known[sub_layer] ||
-                                          resolved_light != mp->light_radiance[sub_layer])) {
+                    if (light_state_discarded || !mp->light_known[sub_layer] ||
+                        resolved_light != mp->light_radiance[sub_layer]) {
                         if (sub_layer == 0) {
                             mask |= MAP2_MASK_LIGHT_LEVEL;
                         } else {
@@ -2430,10 +2442,8 @@ void draw_client_map2(object *pl) {
                         light_rgb_bitmap |= UINT8_C(1) << sub_layer;
                     }
 
-                    if (light_frozen) {
-                        continue;
-                    }
-                    if ((!mp->light_rgb_known[sub_layer] &&
+                    if (light_state_discarded ||
+                        (!mp->light_rgb_known[sub_layer] &&
                          (light_rgb_bitmap & (UINT8_C(1) << sub_layer))) ||
                         (mp->light_rgb_known[sub_layer] && memcmp(mp->light_rgb_radiance[sub_layer],
                                                                   resolved_rgb,
@@ -2441,7 +2451,7 @@ void draw_client_map2(object *pl) {
                         light_rgb_changed = true;
                     }
                 }
-                if (!light_frozen && light_rgb_bitmap != mp->light_rgb_explicit) {
+                if (light_state_discarded || light_rgb_bitmap != mp->light_rgb_explicit) {
                     light_rgb_changed = true;
                 }
 
@@ -2466,8 +2476,7 @@ void draw_client_map2(object *pl) {
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     if ((sub_layer == 0 && !(mask & MAP2_MASK_LIGHT_LEVEL)) ||
                         (sub_layer != 0 && !(mask & MAP2_MASK_LIGHT_LEVEL_MORE))) {
-                        if (!light_frozen && !light_set[sub_layer] &&
-                            mp->light_radiance[sub_layer] != 0) {
+                        if (!light_set[sub_layer] && mp->light_radiance[sub_layer] != 0) {
                             mp->light_radiance[sub_layer] = 0;
                         }
 
@@ -2648,6 +2657,11 @@ void draw_client_map2(object *pl) {
                     mp->light_next_generation = timed_light_generation;
                 }
 
+
+                if (light_state_discarded) {
+                    map_invalidate_light_cache(mp);
+                    light_state_invalidated = true;
+                }
 
                 /* Animation? Add its type and value. */
                 if (ext_flags & MAP2_FLAG_EXT_ANIM) {
