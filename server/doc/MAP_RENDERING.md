@@ -47,6 +47,10 @@ harness have been removed from every build.
 
 ## Lighting
 
+A proposed replacement that moves presentation lighting to the client is
+described in [CLIENT_LIGHTING.md](CLIENT_LIGHTING.md). It is not active; this
+section remains normative until its rollout completes.
+
 ### v1078 radiance contract
 
 Protocol v1078 replaces the v1077 scalar-byte/RGB888 lighting layout as one
