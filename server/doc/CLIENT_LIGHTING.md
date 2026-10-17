@@ -96,7 +96,7 @@ word already uses bits 6–15 for coordinates:
 
 | Field | Bytes | When | Meaning |
 | --- | --- | --- | --- |
-| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 + n | changed | `uint8` count `n` of `1..7`, then `n` level bytes: level `i` applies to sub-layer `i`, and sub-layers from `n` on use level `n - 1`. Each level byte: bits 0–4 signed level `-15..15` (two's complement; `-16` invalid); bits 5–6 reserved, zero; bit 7: apply the viewer's vision floor after composition |
+| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 + n | changed | `uint8` count `n` of `1..7`, then `n` level bytes: level `i` applies to sub-layer `i`, and sub-layers from `n` on use level `n - 1`. Each level byte: bits 0–4 signed level `-15..15` (two's complement; `-16` invalid); bit 5 reserved, zero; bit 6: remote sample, the sub-layer's light was sampled at another space than its cell, so the client composes no emitter field into it; bit 7: apply the viewer's vision floor during composition |
 | `MAP2_FLAG_EXT_OCCLUDER` (16) | 5 | changed | `uint16`: bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7 reserved, zero; bits 8–11: local light does not cross the north, east, south or west face; bits 12–13: nor the upward or downward face; bits 14–15 reserved, zero. Then `uint16`: attenuation `a` of the north, east, south and west faces, one nibble each from bit 0. Then `uint8`: bits 0–3 vertical attenuation `v` of the downward face; bits 4–7 reserved, zero |
 
 Attenuation `a` and `v` share one scale: 0 is unattenuated, 1–14 is the
@@ -157,8 +157,9 @@ bytes of header: 7 coarse levels, 5 bytes of occluder and a known-state byte.
 This design therefore raises the per-cell lighting storage cap to 72 bytes; the
 rollout qualifies client and server memory at that cap, and its final step
 records it in MAP_RENDERING.md. The celestial follow-up retires the base RGB
-words and next-hour endpoints once the base is neutral, reducing a cell to 26
-bytes. Emitters are object attributes, not lighting samples: their 5 bytes
+words and next-hour endpoints once the base is neutral, reducing a cell to 27
+bytes: 14 of scalar base, 7 coarse levels, 5 of occluder and the known-state
+byte. Emitters are object attributes, not lighting samples: their 5 bytes
 ride on the layer record of the object they describe, within the unchanged
 complete-MAP2 and continuation limits. The client stores emitters in one packed
 per-cell array of 6-byte entries (layer, radius, flags, RGB), allocated only
@@ -194,11 +195,17 @@ connection.
   the already maintained per-space source counters. No new per-map state is
   needed. Each sub-layer takes the level of the space its light was sampled
   at, which can differ between sub-layers; the server sends the shortest level
-  count describing them:
-  - the block is the fixed 3×3 square containing the cell, aligned to map-local
-    coordinates (`x - x % 3`, `y - y % 3`). A remainder of one or two cells at a
-    map edge joins the adjacent block instead of forming a smaller one, so no
-    block is narrower than three cells unless the map itself is;
+  count describing them. A sub-layer sampled at another space than its cell,
+  such as one showing a multi-part object's head, sets the remote-sample bit:
+  the cell's emitters and occluders describe the cell, not that space, so the
+  client composes only the sampled space's coarse level into it, never the
+  cell's emitter field:
+  - blocks partition each map axis of size `W` independently: with
+    `k = floor(W / 3)`, block `i < k - 1` covers `[3i, 3i + 3)` and the last
+    block covers `[3(k - 1), W)`, so a remainder of one or two cells joins it
+    and it is three to five cells wide; a map axis shorter than three cells is
+    one block `[0, W)`. A cell's block is the one containing it, so no block is
+    narrower than three cells unless the map itself is;
   - pool each block's sources as its strongest positive and strongest
     negative single-source mask, before any propagation. Every emitting
     object counts with its own glow radius, and light a space's counter holds
@@ -215,15 +222,17 @@ connection.
     every map reached through seams light crosses (a resident reciprocal link,
     and continuity as `light_face_continuous()` requires), horizontal seams
     and links to the levels above and below taken in any order, so corner maps
-    and a level linked only from a neighboring map count too. The vertical
-    distance adds to the horizontal gap as the server's masks combine `dx`,
-    `dy` and `dz`. Each map is divided into its own blocks and measured in the
+    and a level linked only from a neighboring map count too. With horizontal
+    gaps `gx`, `gy` and `dz` levels between them, two blocks are
+    `sqrt(gx² + gy² + dz²)` apart, as the server's masks combine `dx`, `dy` and
+    `dz`. Each map is divided into its own blocks and measured in the
     target map's coordinates, so the blocks of neighboring maps need not align.
     No map is ever loaded for it. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
     triangulate its tile;
   - the strongest positive and the strongest negative contribution reaching
-    the block compete; the larger magnitude wins;
+    the block compete; the larger magnitude wins, and on equal magnitudes the
+    positive one does;
   - quantize the magnitude down to 1/8-daylight levels (raw 160), clamp to 15,
     and keep the sign.
 - **Remembered tiles are frozen.** When base LOS loss turns an authorized tile
@@ -238,9 +247,10 @@ connection.
 - **Vision floor.** XRAY raises presentation light to raw 100 after all light
   is combined. The server sends base radiance without that floor and sets bit 7
   of the local-light byte for viewers with XRAY; the client applies the same
-  floor after composition. When bit 7 is set and the composed scalar `S` is
-  below raw 100, the client adds `100 - S` neutrally to the scalar and to every
-  channel, exactly as the server used to raise raw light before resolving color.
+  floor to the composed signed values, before clamping (Client, step 3). When
+  bit 7 is set and the composed scalar `S` is below raw 100, the client adds
+  `100 - S` neutrally to the scalar and to every channel, exactly as the server
+  used to raise raw light before resolving color.
   Conformance vector: scalar/RGB `(80, 80, 0, 0)` becomes `(100, 100, 20, 20)`.
   This is a property of the viewer only, so it discloses nothing about sources.
 - **Emitters** are copied from `glow_radius`, `light_color` and the
@@ -314,6 +324,11 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    color: a tile costs at most one walk per profile, however many emitters it
    carries. When some of a tile's emitters are not sent,
    the client underestimates and the coarse level supplies the rest. The
+   coarse level does not group: it pools each source alone (Server), so where
+   co-located sources of opposite sign cancel, such as `+3` and `-1` grouping
+   to `+2`, the coarse floor can present the block at its strongest single
+   source's level rather than the grouped one. Like the bleed below, that is
+   presentation only and the price of resisting co-located probing. The
    occluders are, per depth, an R16 grid of geometry and face bits (bits 8–13
    must reach the ray walk), a second R16 grid of the four horizontal face
    attenuation nibbles, and an R8 vertical-attenuation grid. The CPU reference
@@ -327,12 +342,16 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    `a` of the face they leave by, vertical steps apply `v` of the upper cell of
    the crossing, and a step across a face marked closed stops the ray: bits
    8–11 for horizontal steps and bits 12–13 for steps to the linked level above
-   or below. A vertical step that terminates on a visible floor or roof surface
-   skips that receiving slab's `v`, under the same terminal-surface predicate as
-   `light_path_value()`, so the exposed surface is lit; source-side virtual
+   or below. A vertical step that terminates on a cell whose sent occluder
+   blocks view (bit 0) or is a roof surface (bit 2) skips that receiving
+   slab's `v`, as `light_terminal_surface()` decides for `light_path_value()`,
+   so the exposed surface is lit; an ordinary floor (bit 1 alone) applies its
+   `v`, so an opaque floor receives no light from below. Source-side virtual
    cover still applies.
 3. Combine the client emitter sum `E` with the coarse block level `C` (raw
-   step 160), which is a bleed hint for the whole block:
+   step 160), which is a bleed hint for the whole block. A remote sample
+   (bit 6) uses `E = 0` and no flicker field, so only its own space's coarse
+   level and base compose:
    - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
    - then limit `L` to the block's level: at most `160(C + 1) - 1` when `C >= 0`
      and `C < 15`, and at least `160(C - 1) + 1` when `C <= 0` and `C > -15`.
@@ -351,10 +370,14 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    to its magnitude, `sign(r) · floor((|r| · 8 + 2) / 5)`, without saturating.
    The composed radiance is, per scalar and channel, signed base + converted
    `L`, all in Q5.11 units in unbounded signed arithmetic,
-   so the coarse and emitter terms keep their full weight. Negative channels then clamp to zero; if the largest channel then
+   so the coarse and emitter terms keep their full weight. The vision floor
+   (if bit 7 is set) applies next, to the signed scalar and channels, as the
+   server raises the raw scalar before resolving color: pre-floor scalar and
+   channel `(80, -40)` become `(100, -20)`, and then `(100, 0)`. Negative
+   channels then clamp to zero; if the largest channel then
    exceeds the finite range, all three channels scale together so the strongest
    is 65535, as the server's common-vector overflow rule requires, keeping hue.
-   The scalar saturates at 65535. The vision floor (if bit 7 is set) follows.
+   The scalar saturates at 65535.
 4. **Player field.** After composition, and after the vision floor, the
    existing independent local-player presentation field (radius 8, center
    strength 80, neutral) is added exactly as MAP_RENDERING.md specifies today:
@@ -404,6 +427,13 @@ overrides and gameplay darkness. It is specified and implemented in the
 follow-up pull request, in `CLIENT_CELESTIAL.md`. Until it lands, base
 radiance carries the server's celestial light, so presentation is complete.
 
+That interim base is not a release state. The server's celestial field is
+built from every object of a cell, including hidden and unsent doors and
+gates, and once local light leaves the base nothing masks it: a visible tile's
+exact base would reveal an unsent aperture opening. Protocol 1085 therefore
+ships to players only together with the celestial follow-up's step that removes
+celestial light from the base (see Rollout).
+
 ## Contract change: visible emitters and structure
 
 MAP_RENDERING.md currently states that no visual change may disclose radiance
@@ -430,10 +460,9 @@ What a modified client can learn, beyond today's MAP2:
   never combines with a hidden one, even on the same tile, so stepping its
   radius reveals only the maximum, which the level already shows. A source anywhere inside a block gives every block the
   same level, so neither the peak nor the levels of neighboring blocks locate
-  it more precisely than its block. Sources on one tile group before the
-  nonlinear profile, so separating co-located sources can change a level (for
-  example `+3` and `-1` group to `+2`); that reveals that they are no longer
-  co-located, not where they are. Hue, count and profile are never sent.
+  it more precisely than its block. Co-located sources are pooled alone, never
+  grouped, so the level depends on the strongest single source only, not on
+  which sources share a tile. Hue, count and profile are never sent.
   Remembered tiles keep the levels they last had while visible, so a moving
   hidden source cannot be followed through fog.
 - **Environment:** exact signed base radiance, including negative environment,
@@ -455,7 +484,9 @@ intentional increase for visible ones and for static structure.
 
 Protocol 1085 ships the new model; the legacy model is removed. Nothing is
 gated by an option or negotiated, so the steps below land as one stack, and a
-release containing protocol 1085 contains all of them.
+release containing protocol 1085 contains all of them, together with the
+celestial follow-up's removal of celestial light from the base radiance
+(Celestial light).
 
 1. Protocol 1085, server producer and client decoder: signed base radiance,
    emitters, the coarse local level and occluders on every connection. The
@@ -481,6 +512,8 @@ release containing protocol 1085 contains all of them.
 
 ## Test plan
 
+- Remote samples: a sub-layer sampled at another space carries bit 6 and its
+  own space's level, and the client composes no emitter field into it.
 - Protocol: encode/decode round trips; reserved bits in the local byte,
   occluder and emitter flags; `ext_flags` value 32; radius 0 and
   the full `int8` range; positive radius with color `000000`, negative radius
