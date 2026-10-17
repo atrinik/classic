@@ -1056,7 +1056,9 @@ static const char *clioptions_option_client_lighting_desc =
     "Whether protocol 1085 clients compute presentation lighting themselves.\n\n"
     "The server then sends base radiance, emitters of sent objects, a coarse "
     "source-anonymous local light level and occluders instead of complete "
-    "radiance. Gameplay darkness is unaffected. Defaults to false.";
+    "radiance, to connections that negotiate the client compositor; other "
+    "clients keep complete radiance. Gameplay darkness is unaffected. Defaults "
+    "to false.";
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_client_lighting(const char *arg, char **errmsg) {
     if (KEYWORD_IS_TRUE(arg)) {

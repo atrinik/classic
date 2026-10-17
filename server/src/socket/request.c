@@ -185,6 +185,13 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
                 ns->connection_mode = mode;
             }
             packet_writer_write_uint8(packet, ns->connection_mode);
+        } else if (type == CMD_SETUP_CLIENT_LIGHTING) {
+            uint8_t capabilities = packet_reader_read_uint8(&reader);
+            ns->client_lighting = settings.client_lighting &&
+                                  (capabilities & CLIENT_LIGHTING_CAP_COMPOSITOR) != 0;
+            packet_debug_data(packet, 0, "Client lighting");
+            packet_writer_write_uint8(packet,
+                                      ns->client_lighting ? CLIENT_LIGHTING_CAP_COMPOSITOR : 0);
         } else {
             LOG(PACKET, "Unknown setup type: %u", type);
             packet_free(packet);
@@ -1105,7 +1112,8 @@ void draw_client_map2(object *pl) {
     /* Presentation raw light: base light only when clients compute local
      * light themselves. Gameplay darkness gating keeps using raw_light. */
     int present_raw[NUM_SUB_LAYERS];
-    bool client_lighting = settings.client_lighting;
+    /* Only a connection that negotiated the compositor gets base-only light. */
+    bool client_lighting = settings.client_lighting && CONTR(pl)->cs->client_lighting;
     uint16_t light_radiance[NUM_SUB_LAYERS];
     uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
     uint16_t light_next_radiance[NUM_SUB_LAYERS];

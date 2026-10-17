@@ -3572,6 +3572,13 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     pl->tli = 1;
     bool saved_client_lighting = settings.client_lighting;
     settings.client_lighting = true;
+    /* Without the negotiated compositor the connection keeps full radiance. */
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    MapCell *plain = map_client_cache_cell(&pl->cs->lastmap, 0,
+                                          pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert(plain == NULL || plain->client_light_known == 0);
+    pl->cs->client_lighting = true;
 
     object *blocker = arch_get("letter");
     SET_FLAG(blocker, FLAG_BLOCKSVIEW);
@@ -3626,6 +3633,7 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     ck_assert_uint_eq(cell->emitter_layers, 0);
 
     settings.client_lighting = saved_client_lighting;
+    pl->cs->client_lighting = false;
 }
 END_TEST
 

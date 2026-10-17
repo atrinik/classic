@@ -50,7 +50,14 @@ the client.
 ## Wire contract (protocol revision 1085)
 
 `protocol/schema/game-commands.json` advances `protocol_version` to 1085. Peers
-below 1085 are rejected at setup, as for every revision. Reconnect clears all
+below 1085 are rejected at setup, as for every revision.
+
+Client lighting is negotiated per connection. A client that composes emitters
+sends SETUP subtype `CMD_SETUP_CLIENT_LIGHTING` (6) with capability byte
+`CLIENT_LIGHTING_CAP_COMPOSITOR` (1); the server echoes the effective mode,
+which is on only when its `client_lighting` option is enabled. A 1085 client
+that never sends the subtype, including one released before the compositor,
+keeps receiving complete radiance and no client-lighting fields. Reconnect clears all
 client emitter, occluder and coarse-light state with the map cache.
 
 Per MAP2 cell record (one record per cell and depth). The fields follow the
@@ -75,8 +82,18 @@ next layer record. Radii are not clamped on the wire, because the server sums a
 tile's radii before mapping the sum through `light_mask`, which saturates at
 ±13; clamping each emitter first would change that sum.
 
+Budgets: MAP_RENDERING.md caps per-sub-layer *lighting samples* at 8 bytes and
+the per-socket lighting cache at 56 bytes per cell. Emitters are object
+attributes, not lighting samples: their 4 bytes ride on the layer record of
+the object they describe, so a cell whose seven object layers of a sub-layer
+all emit adds 28 bytes of object payload, within the unchanged complete-MAP2
+and continuation limits. The client keeps an emitter in the layer record it
+already allocates for that object (8 bytes per emitting record), and the
+per-socket cache adds 23 bytes per cell (see Server). The rollout's final step
+records these figures in MAP_RENDERING.md.
+
 The existing per-sub-layer Q5.11 lighting bytes carry **base radiance only**
-when the server runs client lighting. So do the timed-light next-hour scalar and
+when the connection runs client lighting. So do the timed-light next-hour scalar and
 RGB endpoints (`MAP2_FLAG_EXT_LIGHT_KEYFRAME`) and their per-socket caches:
 they omit local sources and the XRAY floor, so interpolating towards them
 never reintroduces either. The 8-byte per-sub-layer budget is
@@ -101,7 +118,9 @@ both modes.
   needed, and a change anywhere in the block reaches every cell of it on the
   next update:
   - the block is the fixed 3×3 square containing the cell, aligned to map-local
-    coordinates (`x - x % 3`, `y - y % 3`) and clipped at the map edge; it never
+    coordinates (`x - x % 3`, `y - y % 3`). A remainder of one or two cells at a
+    map edge joins the adjacent block instead of forming a smaller one, so no
+    block is narrower than three cells unless the map itself is. The block never
     reads another map and never loads one;
   - take the strongest positive and the strongest negative local scalar in the
     block; the larger magnitude wins;
@@ -267,7 +286,8 @@ and equal disclosure for visible ones.
   composition and block limits for positive, negative and zero levels;
   vision floor after composition; FOW cells carry no emitters; GPU frame-time
   budgets.
-- Privacy: all nine cells of a block report the same level; levels never exceed
+- Privacy: all cells of a block report the same level; edge remainders join
+  the adjacent block; levels never exceed
   15 in magnitude; moving a source within its block leaves its own block's level
   unchanged.
 
