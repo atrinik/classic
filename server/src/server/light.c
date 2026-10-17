@@ -362,17 +362,12 @@ void light_base_radiance_signed(const MapSpace *space,
     }
 }
 
-/**
- * MAP2 occluder bits contributed by one object that is being sent to the
- * viewer. Only the object's own flags and authored horizontal transmission
- * count, never space-wide flags that also aggregate hidden or unsent objects.
- */
 /** Attenuation step of a coefficient, rounded up so the client never
  * transmits more light than the server. */
-static uint32_t light_occluder_attenuation(uint16_t coefficient) {
+static uint64_t light_occluder_attenuation(uint16_t coefficient) {
     int attenuation = (SPATIAL_LIGHT_SCALE - coefficient + MAP2_OCCLUDER_ATTENUATION_STEP - 1) /
                       MAP2_OCCLUDER_ATTENUATION_STEP;
-    return (uint32_t)MIN(attenuation, 15);
+    return (uint64_t)MIN(attenuation, 15);
 }
 
 /** Authored transmission of an object face, by door and gate state. */
@@ -390,12 +385,15 @@ static uint16_t light_occluder_transmission(const object *op) {
     return transmission == CELESTIAL_TRANSMISSION_INVALID ? 0 : (uint16_t)transmission;
 }
 
-uint32_t light_occluder_object_bits(const object *op) {
+/**
+ * MAP2 occluder bits contributed by one object that is being sent to the
+ * viewer. Only the object's own flags and authored face transmission count,
+ * never space-wide flags that also aggregate hidden or unsent objects.
+ */
+uint64_t light_occluder_object_bits(const object *op) {
     HARD_ASSERT(op != NULL);
     const object *head = HEAD(op);
-    uint32_t bits = 0;
-    uint16_t coefficient = SPATIAL_LIGHT_SCALE;
-    bool authored = false;
+    uint64_t bits = 0;
     if (QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
         bits |= MAP2_OCCLUDER_BLOCKSVIEW;
     }
@@ -410,18 +408,21 @@ uint32_t light_occluder_object_bits(const object *op) {
         bits |= MAP2_OCCLUDER_DOOR_CLOSED;
     }
     uint8_t faces = celestial_structure_faces(op);
-    uint8_t horizontal = CELESTIAL_FACE_NORTH | CELESTIAL_FACE_EAST | CELESTIAL_FACE_SOUTH |
-                         CELESTIAL_FACE_WEST;
-    if ((faces & horizontal) != 0) {
-        coefficient = light_occluder_transmission(op);
-        authored = true;
+    /* Each cardinal face keeps its own coefficient, as spatial_face_light()
+     * does: an authored face transmits its authored value, an unauthored face
+     * of a view blocker transmits nothing, and other faces stay open. */
+    static const uint8_t cardinal[4] = {CELESTIAL_FACE_NORTH, CELESTIAL_FACE_EAST,
+                                        CELESTIAL_FACE_SOUTH, CELESTIAL_FACE_WEST};
+    for (size_t face = 0; face < arraysize(cardinal); face++) {
+        uint16_t coefficient = SPATIAL_LIGHT_SCALE;
+        if ((faces & cardinal[face]) != 0) {
+            coefficient = light_occluder_transmission(op);
+        } else if (bits & MAP2_OCCLUDER_BLOCKSVIEW) {
+            coefficient = 0;
+        }
+        bits |= light_occluder_attenuation(coefficient)
+                << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face);
     }
-    /* Authored glass or grate keeps its transmission even on a view blocker;
-     * an unauthored blocker transmits nothing. */
-    if (!authored && (bits & MAP2_OCCLUDER_BLOCKSVIEW)) {
-        coefficient = 0;
-    }
-    bits |= light_occluder_attenuation(coefficient) << MAP2_OCCLUDER_ATTENUATION_SHIFT;
     /* The downward face is the slab between this cell and the one below, so a
      * glass floor attenuates only vertical crossings. */
     if ((faces & CELESTIAL_FACE_DOWN) != 0) {
@@ -448,15 +449,18 @@ bool light_emitter_disclosed(const object *viewer, const object *op) {
     return op->type != PLAYER || op == viewer;
 }
 
-/** Combine the occluder bits of two sent objects of one cell. */
-uint32_t light_occluder_combine(uint32_t first, uint32_t second) {
-    uint32_t geometry = (first | second) & ((1U << MAP2_OCCLUDER_ATTENUATION_SHIFT) - 1);
-    uint32_t attenuation = MAX((first >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U,
-                               (second >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U);
-    uint32_t vertical = MAX((first >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U,
+/** Combine the occluder bits of two sent objects of one cell: geometry and
+ * faces are joined, and every attenuation nibble keeps the stronger one. */
+uint64_t light_occluder_combine(uint64_t first, uint64_t second) {
+    uint64_t combined = (first | second) & UINT64_C(0xffff);
+    uint64_t vertical = MAX((first >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U,
                             (second >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U);
-    return geometry | attenuation << MAP2_OCCLUDER_ATTENUATION_SHIFT |
-           vertical << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    combined |= vertical << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    for (int face = 0; face < 4; face++) {
+        int shift = LIGHT_OCCLUDER_HORIZONTAL_SHIFT + MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face;
+        combined |= MAX((first >> shift) & 15U, (second >> shift) & 15U) << shift;
+    }
+    return combined;
 }
 
 typedef struct light_profile {

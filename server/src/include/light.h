@@ -65,9 +65,11 @@ extern int8_t light_local_level(mapstruct *map, int x, int y);
 /** Bit position of the vertical attenuation in combined occluder bits; the
  * wire carries it as the occluder's trailing byte. */
 #define LIGHT_OCCLUDER_VERTICAL_SHIFT 16
+/** Horizontal face nibbles (north, east, south, west) of a server occluder. */
+#define LIGHT_OCCLUDER_HORIZONTAL_SHIFT 32
 
 /** MAP2 occluder bits of one object being sent to the viewer (protocol 1085). */
-extern uint32_t light_occluder_object_bits(const object *op);
+extern uint64_t light_occluder_object_bits(const object *op);
 
 /** MAP2 occluder face bits of one cell; in_view bit i is set when the north,
  * east, south, west, upper or lower neighbor is in the viewer's view. */
@@ -80,7 +82,7 @@ extern bool light_emitter_flickers(const object *op);
 extern bool light_emitter_disclosed(const object *viewer, const object *op);
 
 /** Combine the occluder bits of two sent objects of one cell. */
-extern uint32_t light_occluder_combine(uint32_t first, uint32_t second);
+extern uint64_t light_occluder_combine(uint64_t first, uint64_t second);
 
 /** Invalidate the bounded celestial field after structural/topology changes. */
 extern void celestial_light_invalidate(mapstruct *map);

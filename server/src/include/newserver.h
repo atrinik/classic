@@ -110,11 +110,12 @@ typedef struct MapCell_struct {
     /** Whether the fog-of-war state has been sent at least once. */
     uint8_t fow_known;
 
-    /** Last coarse local light level sent (protocol 1085 client lighting). */
-    uint8_t local_light;
+    /** Encoded coarse local light per sub-layer, and how many were sent. */
+    uint8_t local_light[NUM_SUB_LAYERS];
+    uint8_t local_light_count;
 
     /** Last occluder bits sent, vertical attenuation in bits 16-19 (1085). */
-    uint32_t occluder;
+    uint64_t occluder;
 
     /** Bit 0: local_light sent; bit 1: occluder sent; bit 3: the cell was
      * authorized and is now remembered fog that keeps receiving light. */

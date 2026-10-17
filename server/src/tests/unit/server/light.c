@@ -1680,10 +1680,10 @@ START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     ck_assert_uint_eq(light_occluder_object_bits(plain), 0);
 
     object *blocker = add_light_blocker(map, 1, 1);
-    uint32_t blocker_bits = light_occluder_object_bits(blocker);
+    uint64_t blocker_bits = light_occluder_object_bits(blocker);
     ck_assert_uint_eq(blocker_bits & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
-    /* A view blocker transmits nothing through its faces. */
-    ck_assert_uint_eq((blocker_bits >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U, 15);
+    /* An unauthored view blocker transmits nothing through any of its faces. */
+    ck_assert_uint_eq((blocker_bits >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) & 0xffffU, 0xffffU);
 
     add_roof_surface(map, 2, 2);
     object *roof = NULL;
@@ -1696,17 +1696,21 @@ START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     ck_assert_uint_eq(light_occluder_object_bits(roof) & MAP2_OCCLUDER_ROOF, MAP2_OCCLUDER_ROOF);
 
     /* Combining keeps every geometry bit and the stronger attenuation. */
-    uint32_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
+    uint64_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
     ck_assert_uint_eq(combined & (MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW),
                       MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW);
-    ck_assert_uint_eq((combined >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U, 15);
+    ck_assert_uint_eq((combined >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) & 0xffffU, 0xffffU);
     ck_assert_uint_eq(light_occluder_combine(0, 0), 0);
     /* The vertical nibble combines by maximum, independently of the
      * horizontal one. */
-    uint32_t glass = 3U << LIGHT_OCCLUDER_VERTICAL_SHIFT, slab = 15U << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    uint64_t glass = UINT64_C(3) << LIGHT_OCCLUDER_VERTICAL_SHIFT,
+             slab = UINT64_C(15) << LIGHT_OCCLUDER_VERTICAL_SHIFT;
     ck_assert_uint_eq(light_occluder_combine(glass, slab), slab);
-    ck_assert_uint_eq(light_occluder_combine(glass, 2U << MAP2_OCCLUDER_ATTENUATION_SHIFT),
-                      glass | 2U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    /* Each horizontal face nibble combines by maximum on its own. */
+    uint64_t east = UINT64_C(2) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 4);
+    uint64_t west = UINT64_C(9) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 12);
+    ck_assert_uint_eq(light_occluder_combine(glass, east), glass | east);
+    ck_assert_uint_eq(light_occluder_combine(east, west), east | west);
 }
 END_TEST
 

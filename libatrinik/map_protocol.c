@@ -342,22 +342,31 @@ socket_command_map_validate_level(map_packet_reader_t *reader, int wire_width, i
         }
 
         if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
-            uint8_t value;
-            int8_t level;
-            bool vision_floor;
+            uint8_t count;
 
-            if (!map_packet_read_uint8(reader, &value) ||
-                !map_protocol_local_light_decode(value, &level, &vision_floor)) {
+            if (!map_packet_read_uint8(reader, &count) || count == 0 ||
+                count > MAP2_PROTOCOL_SUB_LAYERS) {
                 return false;
+            }
+            for (uint8_t i = 0; i < count; i++) {
+                uint8_t value;
+                int8_t level;
+                bool vision_floor;
+
+                if (!map_packet_read_uint8(reader, &value) ||
+                    !map_protocol_local_light_decode(value, &level, &vision_floor)) {
+                    return false;
+                }
             }
         }
 
         if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
-            uint16_t occluder;
+            uint16_t occluder, horizontal;
             uint8_t vertical;
 
             if (!map_packet_read_uint16(reader, &occluder) ||
                 (occluder & MAP2_OCCLUDER_RESERVED) != 0 ||
+                !map_packet_read_uint16(reader, &horizontal) ||
                 !map_packet_read_uint8(reader, &vertical) ||
                 (vertical & MAP2_OCCLUDER_VERTICAL_RESERVED) != 0) {
                 return false;

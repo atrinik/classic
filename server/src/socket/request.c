@@ -1075,11 +1075,66 @@ static uint8_t map2_neighbors_in_view(object *pl, int depth, int ax, int ay) {
  * Send the coarse level of a remembered fog cell without disclosing any
  * object layer. The client retains it in fog and composes it there.
  */
+/** Shortest level count describing per-sub-layer levels: sub-layers from the
+ * count on reuse its last level, so trailing equal levels collapse. */
+static uint8_t map2_local_light_count(const uint8_t levels[NUM_SUB_LAYERS]) {
+    uint8_t count = NUM_SUB_LAYERS;
+    while (count > 1 && levels[count - 1] == levels[count - 2]) {
+        count--;
+    }
+    return count;
+}
+
+/** Whether the client already holds exactly these levels. */
+static bool map2_local_light_known(const MapCell *cached, const uint8_t levels[NUM_SUB_LAYERS]) {
+    uint8_t count = map2_local_light_count(levels);
+    return (cached->client_light_known & 1U) && cached->local_light_count == count &&
+           memcmp(cached->local_light, levels, count) == 0;
+}
+
+/** Write a LOCAL_LIGHT payload and record it as sent. */
+static void map2_write_local_light(packet_struct *packet,
+                                   MapCell *cached,
+                                   const uint8_t levels[NUM_SUB_LAYERS]) {
+    uint8_t count = map2_local_light_count(levels);
+    packet_debug_data(packet, 1, "Coarse local light levels");
+    packet_writer_write_uint8(packet, count);
+    for (uint8_t i = 0; i < count; i++) {
+        packet_writer_write_uint8(packet, levels[i]);
+    }
+    memcpy(cached->local_light, levels, count);
+    cached->local_light_count = count;
+    cached->client_light_known |= 1U;
+}
+
+/**
+ * Levels of a cell outside current visibility: frozen at the last levels it
+ * was sent while visible, so fog never tracks a moving hidden source, with
+ * only the viewer's own vision floor refreshed. A cell never seen gets 0.
+ */
+static void map2_frozen_local_light(const MapCell *cached,
+                                    bool vision_floor,
+                                    uint8_t levels[NUM_SUB_LAYERS]) {
+    bool known = (cached->client_light_known & 1U) && cached->local_light_count != 0;
+    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        int8_t level = 0;
+        bool previous_floor;
+        if (known) {
+            uint8_t index = (uint8_t)MIN(sub_layer, cached->local_light_count - 1);
+            if (!map_protocol_local_light_decode(cached->local_light[index], &level,
+                                                 &previous_floor)) {
+                level = 0;
+            }
+        }
+        levels[sub_layer] = map_protocol_local_light_encode(level, vision_floor);
+    }
+}
+
 static bool map_append_remembered_light(packet_struct *packet,
                                         MapCell *cached,
                                         uint16_t mask,
-                                        uint8_t local_light) {
-    if ((cached->client_light_known & 1U) && cached->local_light == local_light) {
+                                        const uint8_t levels[NUM_SUB_LAYERS]) {
+    if (map2_local_light_known(cached, levels)) {
         return false;
     }
     packet_debug_data(packet, 0, "Remembered tile light, mask");
@@ -1088,10 +1143,7 @@ static bool map_append_remembered_light(packet_struct *packet,
     packet_writer_write_uint8(packet, 0);
     packet_debug_data(packet, 1, "Extended tile flags");
     packet_writer_write_uint8(packet, MAP2_FLAG_EXT_LOCAL_LIGHT);
-    packet_debug_data(packet, 1, "Coarse local light level");
-    packet_writer_write_uint8(packet, local_light);
-    cached->local_light = local_light;
-    cached->client_light_known |= 1U;
+    map2_write_local_light(packet, cached, levels);
     return true;
 }
 
@@ -1168,6 +1220,9 @@ void draw_client_map2(object *pl) {
     uint16_t light_next_radiance[NUM_SUB_LAYERS];
     uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
     MapSpace *light_spaces[NUM_SUB_LAYERS];
+    /* Where each sub-layer's light sample was taken, for its coarse level. */
+    mapstruct *light_maps[NUM_SUB_LAYERS];
+    int light_xs[NUM_SUB_LAYERS], light_ys[NUM_SUB_LAYERS];
     bool light_next_ready[NUM_SUB_LAYERS];
     int ext_flags, anim_num;
     int num_layers;
@@ -1425,12 +1480,9 @@ void draw_client_map2(object *pl) {
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
                     if (remembered) {
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
-                        map_append_remembered_light(
-                            packet,
-                            mp,
-                            mask,
-                            map_protocol_local_light_encode(light_local_level(m, nx, ny),
-                                                            (special_vision & 1) != 0));
+                        uint8_t frozen[NUM_SUB_LAYERS];
+                        map2_frozen_local_light(mp, (special_vision & 1) != 0, frozen);
+                        map_append_remembered_light(packet, mp, mask, frozen);
                     }
                     continue;
                 }
@@ -1528,6 +1580,7 @@ void draw_client_map2(object *pl) {
                            0,
                            sizeof(light_next_rgb_radiance[sub_layer]));
                     light_spaces[sub_layer] = NULL;
+                    light_maps[sub_layer] = NULL;
                     light_next_ready[sub_layer] = false;
                 }
 
@@ -1535,7 +1588,7 @@ void draw_client_map2(object *pl) {
                 ext_flags = 0;
                 /* Occluders of the objects actually sent to this viewer, and the
                  * emitters it shows, digested to detect value-only changes. */
-                uint32_t cell_occluder = 0;
+                uint64_t cell_occluder = 0;
                 uint32_t cell_emitter_digest = UINT32_C(2166136261);
                 uint64_t cell_emitter_sent = 0;
                 packet_writer_mark(packet, &packet_save_buf);
@@ -1653,6 +1706,9 @@ void draw_client_map2(object *pl) {
                                 }
                             }
                             light_spaces[sub_layer] = GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y);
+                            light_maps[sub_layer] = tmp->map;
+                            light_xs[sub_layer] = tmp->x;
+                            light_ys[sub_layer] = tmp->y;
                             raw_light[sub_layer] = map_get_darkness(tmp->map, tmp->x, tmp->y, NULL);
 
                             if (CONTR(pl)->tli) {
@@ -2417,11 +2473,24 @@ void draw_client_map2(object *pl) {
                  * client retains in fog; emitters and occluders describe sent
                  * objects, so fog withholds them and their layers are resent
                  * on return through the presence bit. */
-                uint8_t local_light = 0;
-                uint32_t occluder = 0;
-                local_light = map_protocol_local_light_encode(light_local_level(m, nx, ny),
-                                                              (special_vision & 1) != 0);
-                if (!(mp->client_light_known & 1U) || mp->local_light != local_light) {
+                /* Each sub-layer takes the coarse level where its light was
+                 * sampled; a cell in fog keeps its frozen levels. */
+                uint8_t local_light[NUM_SUB_LAYERS];
+                uint64_t occluder = 0;
+                if (tile_fow) {
+                    map2_frozen_local_light(mp, (special_vision & 1) != 0, local_light);
+                } else {
+                    for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                        int8_t level = light_maps[sub_layer] != NULL
+                                           ? light_local_level(light_maps[sub_layer],
+                                                               light_xs[sub_layer],
+                                                               light_ys[sub_layer])
+                                           : light_local_level(m, nx, ny);
+                        local_light[sub_layer] =
+                            map_protocol_local_light_encode(level, (special_vision & 1) != 0);
+                    }
+                }
+                if (!map2_local_light_known(mp, local_light)) {
                     ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
                 }
                 if (!tile_fow) {
@@ -2528,15 +2597,15 @@ void draw_client_map2(object *pl) {
                 }
 
                 if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
-                    packet_debug_data(packet, 1, "Coarse local light level");
-                    packet_writer_write_uint8(packet, local_light);
-                    mp->local_light = local_light;
-                    mp->client_light_known |= 1U;
+                    map2_write_local_light(packet, mp, local_light);
                 }
 
                 if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
                     packet_debug_data(packet, 1, "Occluder bits");
                     packet_writer_write_uint16(packet, (uint16_t)occluder);
+                    packet_debug_data(packet, 1, "Horizontal face attenuation");
+                    packet_writer_write_uint16(
+                        packet, (uint16_t)(occluder >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT));
                     packet_debug_data(packet, 1, "Vertical occluder attenuation");
                     packet_writer_write_uint8(packet,
                                               (uint8_t)(occluder >> LIGHT_OCCLUDER_VERTICAL_SHIFT));

@@ -197,14 +197,16 @@ typedef struct map_cell_header {
     uint8_t fow;
     uint8_t structural_fow;
     uint8_t light_state;
-    /** Protocol 1085 coarse local light byte: signed level and vision floor. */
-    uint8_t local_light;
+    /** Protocol 1085 coarse local light per sub-layer: signed level and vision floor. */
+    uint8_t local_light[NUM_SUB_LAYERS];
     /** Bit 0: local_light received; bit 1: occluder received. */
     uint8_t client_light_known;
     /** Protocol 1085 vertical attenuation byte of the occluder. */
     uint8_t occluder_vertical;
     /** Protocol 1085 occluder bits of the cell. */
     uint16_t occluder;
+    /** Protocol 1085 horizontal face attenuation nibbles (N, E, S, W). */
+    uint16_t occluder_horizontal;
 } map_cell_header_t;
 
 static map_cell_store_t *cells;
@@ -1355,7 +1357,7 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             /* Cells leaving the window are no longer updated by the server:
              * fog keeps remembered occluders but no live coarse level. */
             level->headers[index].client_light_known &= (uint8_t)~1U;
-            level->headers[index].local_light = 0;
+            memset(level->headers[index].local_light, 0, sizeof(level->headers[index].local_light));
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
         }
@@ -1935,11 +1937,12 @@ void map_cell_snapshot(int x, int y, map_cell_snapshot_t *snapshot) {
         .support_height = header->support_height,
         .fow = header->fow,
         .structural_fow = header->structural_fow,
-        .local_light = header->local_light,
         .occluder = header->occluder,
+        .occluder_horizontal = header->occluder_horizontal,
         .occluder_vertical = header->occluder_vertical,
         .client_light_known = header->client_light_known,
     };
+    memcpy(snapshot->local_light, header->local_light, sizeof(snapshot->local_light));
 }
 
 bool map_cell_changed(int x, int y, const map_cell_snapshot_t *snapshot) {
@@ -1949,8 +1952,9 @@ bool map_cell_changed(int x, int y, const map_cell_snapshot_t *snapshot) {
     return snapshot->content_hash != current.content_hash ||
            snapshot->support_height != current.support_height || snapshot->fow != current.fow ||
            snapshot->structural_fow != current.structural_fow ||
-           snapshot->local_light != current.local_light ||
+           memcmp(snapshot->local_light, current.local_light, sizeof(current.local_light)) != 0 ||
            snapshot->occluder != current.occluder ||
+           snapshot->occluder_horizontal != current.occluder_horizontal ||
            snapshot->occluder_vertical != current.occluder_vertical ||
            snapshot->client_light_known != current.client_light_known;
 }
@@ -3133,7 +3137,7 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
         return;
     }
     header->client_light_known = 0;
-    header->local_light = 0;
+    memset(header->local_light, 0, sizeof(header->local_light));
     header->occluder = 0;
     header->occluder_vertical = 0;
     level_lighting_revision[current_level_index]++;
@@ -3273,56 +3277,75 @@ bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint8_t *fla
     return true;
 }
 
-/** Store the validated coarse local light byte of a visible cell. */
-void map_set_local_light(int x, int y, uint8_t value) {
-    int8_t level;
-    bool vision_floor;
-    bool valid = map_protocol_local_light_decode(value, &level, &vision_floor);
-    HARD_ASSERT(valid);
+/** Store validated coarse local light levels: level i is sub-layer i's, and
+ * sub-layers from count on reuse the last one. */
+void map_set_local_light_layers(int x, int y, uint8_t count, const uint8_t *levels) {
+    HARD_ASSERT(count >= 1 && count <= NUM_SUB_LAYERS);
+    uint8_t expanded[NUM_SUB_LAYERS];
+    for (uint8_t sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+        int8_t level;
+        bool vision_floor;
+        expanded[sub_layer] = levels[MIN(sub_layer, count - 1)];
+        bool valid = map_protocol_local_light_decode(expanded[sub_layer], &level, &vision_floor);
+        HARD_ASSERT(valid);
+    }
     map_state_transaction_record_cell(x, y);
     map_cell_header_t *header =
         &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
-    if ((header->client_light_known & 1U) && header->local_light == value) {
+    if ((header->client_light_known & 1U) &&
+        memcmp(header->local_light, expanded, sizeof(expanded)) == 0) {
         return;
     }
-    header->local_light = value;
+    memcpy(header->local_light, expanded, sizeof(expanded));
     header->client_light_known |= 1U;
     level_lighting_revision[current_level_index]++;
 }
 
+/** Store one coarse local light level for every sub-layer of a cell. */
+void map_set_local_light(int x, int y, uint8_t value) {
+    map_set_local_light_layers(x, y, 1, &value);
+}
+
 /** Store the occluder bits of a cell; remembered cells keep their last bits. */
-void map_set_occluder(int x, int y, uint16_t bits, uint8_t vertical) {
+void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t vertical) {
     map_state_transaction_record_cell(x, y);
     map_cell_header_t *header =
         &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
     if ((header->client_light_known & 2U) && header->occluder == bits &&
-        header->occluder_vertical == vertical) {
+        header->occluder_horizontal == horizontal && header->occluder_vertical == vertical) {
         return;
     }
     header->occluder = bits;
+    header->occluder_horizontal = horizontal;
     header->occluder_vertical = vertical;
     header->client_light_known |= 2U;
     level_lighting_revision[current_level_index]++;
 }
 
-/** Return the signed coarse local light level and vision floor of a cell. */
-bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor) {
+/** Return the signed coarse local light level and vision floor of a sub-layer. */
+bool map_get_local_light_layer(int x, int y, uint8_t sub_layer, int8_t *level, bool *vision_floor) {
     const map_cell_header_t *header =
         &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
-    if (!(header->client_light_known & 1U)) {
+    if (!(header->client_light_known & 1U) || sub_layer >= NUM_SUB_LAYERS) {
         return false;
     }
-    return map_protocol_local_light_decode(header->local_light, level, vision_floor);
+    return map_protocol_local_light_decode(header->local_light[sub_layer], level, vision_floor);
+}
+
+/** Return the signed coarse local light level and vision floor of sub-layer 0. */
+bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor) {
+    return map_get_local_light_layer(x, y, 0, level, vision_floor);
 }
 
 /** Return the occluder bits and vertical byte of a cell, if received. */
-bool map_get_occluder(int x, int y, uint16_t *bits, uint8_t *vertical) {
+bool map_get_occluder(int x, int y, uint16_t *bits, uint16_t *horizontal, uint8_t *vertical) {
     const map_cell_header_t *header =
         &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
     if (!(header->client_light_known & 2U)) {
         return false;
     }
     *bits = header->occluder;
+    *horizontal = header->occluder_horizontal;
     *vertical = header->occluder_vertical;
     return true;
 }
@@ -6119,13 +6142,13 @@ bool widget_map_client_lighting_state_test(void) {
     int8_t radius = 0;
     uint8_t emitter_flags = 0;
     uint32_t color = 0;
-    uint16_t bits = 0;
+    uint16_t bits = 0, horizontal = 0;
     uint8_t vertical = 0;
     int8_t level = 0;
     bool vision_floor = false;
     success = success && !map_get_layer_emitter(4, 4, layer, &radius, &emitter_flags, &color) &&
               !map_get_local_light(4, 4, &level, &vision_floor) &&
-              !map_get_occluder(4, 4, &bits, &vertical);
+              !map_get_occluder(4, 4, &bits, &horizontal, &vertical);
 
     /* An emitter is a packed sidecar entry and changes the lighting revision. */
     uint64_t revision = level_lighting_revision[current_level_index];
@@ -6166,31 +6189,40 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && map_get_local_light(5, 5, &signed_level, &vision) && signed_level == 0 &&
               !vision;
     map_set_local_light(5, 5, map_protocol_local_light_encode(-MAP2_LOCAL_LIGHT_LEVEL_MAX, true));
-    map_set_occluder(5, 5, MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
-                               (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT), 4);
+    map_set_occluder(5, 5, MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF, 0x3210, 4);
     success = success && map_get_local_light(5, 5, &signed_level, &vision) &&
               signed_level == -MAP2_LOCAL_LIGHT_LEVEL_MAX && vision &&
-              map_get_occluder(5, 5, &bits, &vertical) &&
-              bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
-                       (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT)) &&
+              map_get_occluder(5, 5, &bits, &horizontal, &vertical) &&
+              bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF) && horizontal == 0x3210 &&
               vertical == 4;
     /* A vertical-only change is a change. */
     revision = level_lighting_revision[current_level_index];
-    map_set_occluder(5, 5, bits, 5);
-    map_set_occluder(5, 5, bits, 4);
-    success = success && level_lighting_revision[current_level_index] == revision + 2;
+    map_set_occluder(5, 5, bits, horizontal, 5);
+    map_set_occluder(5, 5, bits, horizontal, 4);
+    /* A single face change is a change. */
+    map_set_occluder(5, 5, bits, 0x3211, 4);
+    map_set_occluder(5, 5, bits, 0x3210, 4);
+    success = success && level_lighting_revision[current_level_index] == revision + 4;
+    /* Sub-layers from the level count on reuse its last level. */
+    uint8_t layered[2] = {map_protocol_local_light_encode(1, false),
+                          map_protocol_local_light_encode(-2, false)};
+    map_set_local_light_layers(7, 7, 2, layered);
+    success = success && map_get_local_light_layer(7, 7, 0, &signed_level, &vision) &&
+              signed_level == 1 && map_get_local_light_layer(7, 7, 1, &signed_level, &vision) &&
+              signed_level == -2 &&
+              map_get_local_light_layer(7, 7, NUM_SUB_LAYERS - 1, &signed_level, &vision) &&
+              signed_level == -2;
 
     /* An aborted update restores the previous client-lighting state. */
     map_state_transaction_begin(false);
     map_set_local_light(5, 5, map_protocol_local_light_encode(3, false));
-    map_set_occluder(5, 5, MAP2_OCCLUDER_FLOOR, 0);
+    map_set_occluder(5, 5, MAP2_OCCLUDER_FLOOR, 0, 0);
     map_set_layer_emitter(5, 5, layer, 4, 0, UINT32_C(0x00ff00));
     map_state_transaction_abort();
     success = success && map_get_local_light(5, 5, &signed_level, &vision) &&
               signed_level == -MAP2_LOCAL_LIGHT_LEVEL_MAX && vision &&
-              map_get_occluder(5, 5, &bits, &vertical) &&
-              bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
-                       (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT)) &&
+              map_get_occluder(5, 5, &bits, &horizontal, &vertical) &&
+              bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF) && horizontal == 0x3210 &&
               vertical == 4 &&
               !map_get_layer_emitter(5, 5, layer, &radius, &emitter_flags, &color);
 
@@ -6200,13 +6232,13 @@ bool widget_map_client_lighting_state_test(void) {
     map_clear_cell(5, 5, false);
     success = success && map_get_local_light(5, 5, &signed_level, &vision) &&
               signed_level == -MAP2_LOCAL_LIGHT_LEVEL_MAX &&
-              map_get_occluder(5, 5, &bits, &vertical);
+              map_get_occluder(5, 5, &bits, &horizontal, &vertical);
     map_set_local_light(5, 5, map_protocol_local_light_encode(2, false));
     success = success && map_get_local_light(5, 5, &signed_level, &vision) && signed_level == 2;
     map_cell_snapshot(5, 5, &before);
     map_clear_cell(5, 5, true);
     success = success && map_cell_changed(5, 5, &before) &&
-              !map_get_occluder(5, 5, &bits, &vertical) &&
+              !map_get_occluder(5, 5, &bits, &horizontal, &vertical) &&
               !map_get_local_light(5, 5, &signed_level, &vision);
     /* A header-only update is a visible change too. */
     map_cell_snapshot(6, 6, &before);

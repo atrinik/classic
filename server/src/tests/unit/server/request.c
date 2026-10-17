@@ -2746,7 +2746,7 @@ START_TEST(test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized) 
     ck_assert_uint_eq(cell->roof[socket_layer], 1);
     /* The client applies the XRAY floor after composing local light. */
     ck_assert_uint_eq(cell->light_radiance[roof->sub_layer], 0);
-    ck_assert_uint_ne(cell->local_light & MAP2_LOCAL_LIGHT_VISION_FLOOR, 0);
+    ck_assert_uint_ne(cell->local_light[0] & MAP2_LOCAL_LIGHT_VISION_FLOOR, 0);
 }
 END_TEST
 
@@ -3625,10 +3625,12 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     ck_assert_uint_eq(cell->cleared, 1);
     ck_assert_uint_ne(cell->client_light_known & 8U, 0);
     ck_assert_uint_ne(cell->client_light_known & 1U, 0);
-    uint8_t before = cell->local_light;
+    uint8_t before = cell->local_light[0];
 
-    /* Hidden light behind the wall reaches the remembered tile only as its
-     * coarse block level; no object, emitter or occluder is sent there. */
+    /* Hidden light that appears behind the wall never reaches the remembered
+     * tile: its coarse level stays frozen at the last authorized value, so a
+     * client cannot follow a hidden source through fog. No object, emitter or
+     * occluder is sent there either. */
     object *lamp = arch_get("letter");
     lamp->glow_radius = 9;
     lamp->light_color = UINT32_C(0xffffff);
@@ -3641,11 +3643,8 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
     cell = map_client_cache_cell(&pl->cs->lastmap, 0, ax, ay, false);
     ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_ne(cell->local_light, before);
-    int8_t level;
-    bool vision_floor;
-    ck_assert(map_protocol_local_light_decode(cell->local_light, &level, &vision_floor));
-    ck_assert_int_eq(level, light_local_level(map, lamp->x, lamp->y));
+    ck_assert_uint_eq(cell->local_light[0], before);
+    ck_assert_int_ne(light_local_level(map, lamp->x, lamp->y), 0);
     ck_assert_uint_eq(cell->emitter_layers, 0);
     ck_assert_uint_eq(cell->client_light_known & 2U, 0);
     for (size_t layer = 0; layer < NUM_REAL_LAYERS; layer++) {
