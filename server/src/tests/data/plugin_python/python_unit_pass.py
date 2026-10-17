@@ -52,3 +52,32 @@ monster.randomitems = "random_coin"
 inserted = test_map.InsertMonster(monster, 0, 2)
 if inserted != monster or not monster.inv:
     raise RuntimeError("Map.InsertMonster did not insert the generated monster")
+
+# Persistent non-player treasure needs the merchant-stock reason and no currency.
+merchant = test_map.CreateObject("raas", 0, 3)
+before = len(merchant.inv)
+for kwargs in ({}, {"reason": "script.item-grant"},
+               {"reason": "merchant.stock", "flags": Atrinik.GT_ENVIRONMENT}):
+    try:
+        merchant.CreateTreasure("random_wand", 1, **kwargs)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError(f"CreateTreasure stocked persistent state with {kwargs}")
+if len(merchant.inv) != before:
+    raise RuntimeError("Refused CreateTreasure still changed the inventory")
+try:
+    merchant.CreateTreasure("random_coin", 1, reason="merchant.stock")
+except RuntimeError:
+    pass
+else:
+    raise RuntimeError("CreateTreasure stocked currency into persistent state")
+if (len(merchant.inv) != before or
+        any(obj.type == Atrinik.Type.MONEY for obj in merchant.inv)):
+    raise RuntimeError("Refused currency stock changed the inventory")
+merchant.CreateTreasure("random_wand", 1, Atrinik.GT_ONLY_GOOD, reason="merchant.stock")
+if not any(obj.type == Atrinik.Type.WAND for obj in merchant.inv):
+    raise RuntimeError("CreateTreasure did not stock the merchant")
+if any(obj.type == Atrinik.Type.MONEY for obj in merchant.inv):
+    raise RuntimeError("Merchant stock contains currency")
+merchant.Destroy()
