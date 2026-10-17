@@ -387,6 +387,9 @@ static int game_status_chain(void) {
             packet_writer_write_uint8(packet, CMD_SETUP_CONNECTION_MODE);
             packet_writer_write_uint8(packet, connection_mode);
         }
+        /* This client composes emitters, the coarse level and occluders. */
+        packet_writer_write_uint8(packet, CMD_SETUP_CLIENT_LIGHTING);
+        packet_writer_write_uint8(packet, CLIENT_LIGHTING_CAP_COMPOSITOR);
         socket_send_packet(packet);
 
         cpl.state = ST_WAITSETUP;

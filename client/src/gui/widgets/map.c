@@ -1945,6 +1945,11 @@ static void map_hard_clear_abort_pending(void) {
 }
 
 void clear_map(bool hard) {
+    /* Slots cleared in place keep the cache origin, so the emitter field must
+     * not mistake the next map's cells for the previous ones. */
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        level_emitter_revision[level]++;
+    }
     if (hard) {
         map_hard_clear_abort_pending();
     } else {
