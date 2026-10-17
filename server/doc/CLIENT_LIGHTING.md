@@ -61,17 +61,23 @@ word already uses bits 6–15 for coordinates:
 | Field | Bytes | When | Meaning |
 | --- | --- | --- | --- |
 | `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 | changed | bits 0–4: signed level `-15..15` (two's complement; `-16` invalid); bits 5–6 reserved, zero; bit 7: apply the viewer's vision floor after composition |
-| `MAP2_FLAG_EXT_OCCLUDER` (16) | 1 | changed | bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7: transmission attenuation `a` (coefficient `256 - 16a`; 0 is unattenuated) |
+| `MAP2_FLAG_EXT_OCCLUDER` (16) | 1 | changed | bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7: transmission attenuation `a` (0 unattenuated, 1–14 coefficient `256 - 16a`, 15 opaque). A view blocker with authored transmission keeps its attenuation. |
 
 Per MAP2 layer (existing `flags2`):
 
 | Field | Bytes | Meaning |
 | --- | --- | --- |
-| `MAP2_FLAG2_EMITTER` (2048) | 1 + 3 | signed `glow_radius` clamped to `-13..13` (0 invalid), then authored sRGB `RRGGBB`: nonzero for a positive radius, `000000` for a negative one |
+| `MAP2_FLAG2_EMITTER` (2048) | 1 + 3 | signed `glow_radius` as stored (`int8`, 0 invalid), then authored sRGB `RRGGBB`: nonzero for a positive radius, `000000` for a negative one |
+
+The emitter payload is the last optional layer field: it follows the ALPHA,
+ROTATE, ZOOM, TARGET, PROBE and GLOW payloads in that order, and precedes the
+next layer record. Radii are not clamped on the wire, because the server sums a
+tile's radii before mapping the sum through `light_mask`, which saturates at
+±13; clamping each emitter first would change that sum.
 
 The existing per-sub-layer Q5.11 lighting bytes carry **base radiance only**
 when the server runs client lighting. The 8-byte per-sub-layer budget is
-unchanged. Decoders reject an emitter radius of 0 or outside `-13..13`, a
+unchanged. Decoders reject an emitter radius of 0, a
 positive radius with color `000000` (a zero linear peak, which MAP_RENDERING.md
 rejects for positive sources), a negative radius with a nonzero color (darkness
 is achromatic), a local level of `-16`, and nonzero reserved bits. Rejection happens before any state is
@@ -165,7 +171,10 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    coarse term is neutral. Final radiance = base + `L` per scalar and channel,
    saturated to `0..65535` before the vision floor (if bit 7 is set) and before
    the unchanged unsigned Q16 tone/LUT stage. Negative intermediate values never
-   reach that stage.
+   reach that stage. Base radiance above the finite Q5.11 range (raw 40959,
+   32× daylight) arrives saturated, so darkness composed onto it cannot recover
+   the lost magnitude. Current world, map and celestial anchors stay at or below
+   raw 1280, so this cannot occur with present content.
 4. Recompute when emitters, occluders, coarse levels or the camera change. A
    presentation-only time uniform permits flicker for emitters whose archetype
    opts in, without server traffic.
@@ -228,8 +237,8 @@ and equal disclosure for visible ones.
 
 ## Test plan
 
-- Protocol: encode/decode round trips; reserved bits; radius 0 and out of
-  range; positive radius with color `000000` and negative radius with a color;
+- Protocol: encode/decode round trips; reserved bits; radius 0 and the full
+  `int8` range; positive radius with color `000000` and negative radius with a color;
   level `-16`; truncated emitter/occluder fields; reconnect reset;
   and a failed parse leaving map state unchanged.
 - Server: coarse level equals the block's signed quantized peak for fixtures
