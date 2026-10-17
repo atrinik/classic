@@ -107,8 +107,12 @@ both modes.
   only, so it discloses nothing about sources.
 - **Emitters** are copied from `glow_radius` and `light_color` of the object
   MAP2 is already sending (the object on that tile, including the viewer's
-
-  Emitters of objects not sent, whether hidden, out of sight, dark-gated,
+  derived emitter). A negative radius is sent with color `000000`. The
+  per-socket cache keeps, per cell, a bitmap of layers that carry an emitter,
+  a bitmap of stale emitter layers and a digest of the cell's emitters
+  (20 bytes). Gaining or losing an emitter forces a layer delta; a radius- or
+  color-only change on a cached layer changes the digest and resends that
+  layer on the next update. Emitters of objects not sent, whether hidden, out of sight, dark-gated,
   plugin-hidden or below the top object of a layer, are never sent.
 - **Occluders** are derived only from the objects MAP2 sends to this viewer:
   the sent object of each layer, after plugin visibility and hidden-object
