@@ -772,6 +772,26 @@ static bool light_face_continuous(const spatial_face *face) {
                   region_celestial_for_map(to)->digest, 32) == 0;
 }
 
+/** MAP2 occluder face bits: faces of a sent cell that local light cannot cross. */
+uint16_t light_occluder_faces(mapstruct *map, int x, int y) {
+    HARD_ASSERT(map != NULL);
+    static const int8_t normals[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+    uint16_t bits = 0;
+    for (size_t i = 0; i < arraysize(normals); i++) {
+        int rx = x + normals[i][0], ry = y + normals[i][1];
+        mapstruct *target = get_map_from_coord2(map, &rx, &ry);
+        spatial_face face = {
+            .from = {.map = map, .x = x, .y = y, .z = 0},
+            .to = {.map = target, .x = rx, .y = ry, .z = 0},
+            .normal = {normals[i][0], normals[i][1], 0},
+        };
+        if (target == NULL || target->spaces == NULL || !light_face_continuous(&face)) {
+            bits |= (uint16_t)(1U << (MAP2_OCCLUDER_FACE_SHIFT + i));
+        }
+    }
+    return bits;
+}
+
 /** A terminal roof/wall sample represents its incident surface, not the
  * inaccessible contents behind it. A plain floor still covers its contents. */
 static bool light_terminal_surface(const spatial_cell *cell) {

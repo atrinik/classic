@@ -65,6 +65,9 @@ extern int8_t light_local_level(mapstruct *map, int x, int y);
 /** MAP2 occluder bits of one object being sent to the viewer (protocol 1085). */
 extern uint8_t light_occluder_object_bits(const object *op);
 
+/** MAP2 occluder face bits of one cell: faces local light cannot cross. */
+extern uint16_t light_occluder_faces(mapstruct *map, int x, int y);
+
 /** Combine the occluder bits of two sent objects of one cell. */
 extern uint8_t light_occluder_combine(uint8_t first, uint8_t second);
 

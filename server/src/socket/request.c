@@ -134,6 +134,8 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
     uint8_t type;
 
     packet = packet_new(CLIENT_CMD_SETUP, 256, 256);
+    /* The wire mode changes only after the whole SETUP validates. */
+    bool client_lighting = false, client_lighting_present = false;
 
     while (pos < len) {
         type = packet_reader_read_uint8(&reader);
@@ -187,11 +189,12 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
             packet_writer_write_uint8(packet, ns->connection_mode);
         } else if (type == CMD_SETUP_CLIENT_LIGHTING) {
             uint8_t capabilities = packet_reader_read_uint8(&reader);
-            ns->client_lighting = settings.client_lighting &&
-                                  (capabilities & CLIENT_LIGHTING_CAP_COMPOSITOR) != 0;
+            client_lighting = settings.client_lighting &&
+                              (capabilities & CLIENT_LIGHTING_CAP_COMPOSITOR) != 0;
+            client_lighting_present = true;
             packet_debug_data(packet, 0, "Client lighting");
             packet_writer_write_uint8(packet,
-                                      ns->client_lighting ? CLIENT_LIGHTING_CAP_COMPOSITOR : 0);
+                                      client_lighting ? CLIENT_LIGHTING_CAP_COMPOSITOR : 0);
         } else {
             LOG(PACKET, "Unknown setup type: %u", type);
             packet_free(packet);
@@ -205,6 +208,9 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
         return;
     }
 
+    if (client_lighting_present) {
+        ns->client_lighting = client_lighting;
+    }
     ns->setup_completed = true;
     socket_login_deadline_refresh(ns);
     socket_send_packet(ns, packet);
@@ -1112,6 +1118,8 @@ void draw_client_map2(object *pl) {
     /* Presentation raw light: base light only when clients compute local
      * light themselves. Gameplay darkness gating keeps using raw_light. */
     int present_raw[NUM_SUB_LAYERS];
+    /* Sub-layers whose base would be negative keep complete aggregate light. */
+    bool light_aggregate[NUM_SUB_LAYERS];
     /* Only a connection that negotiated the compositor gets base-only light. */
     bool client_lighting = settings.client_lighting && CONTR(pl)->cs->client_lighting;
     uint16_t light_radiance[NUM_SUB_LAYERS];
@@ -1454,6 +1462,7 @@ void draw_client_map2(object *pl) {
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     light_set[sub_layer] = 0;
                     present_raw[sub_layer] = 0;
+                    light_aggregate[sub_layer] = false;
                     light_radiance[sub_layer] = 0;
                     light_next_radiance[sub_layer] = 0;
                     memset(light_rgb_radiance[sub_layer], 0, sizeof(light_rgb_radiance[sub_layer]));
@@ -1595,6 +1604,12 @@ void draw_client_map2(object *pl) {
                             present_raw[sub_layer] = raw_light[sub_layer];
                             if (client_lighting) {
                                 present_raw[sub_layer] -= light_spaces[sub_layer]->light_source_value;
+                                /* Unsigned base bytes cannot carry negative
+                                 * environment: keep the legacy aggregate. */
+                                if (present_raw[sub_layer] < 0) {
+                                    light_aggregate[sub_layer] = true;
+                                    present_raw[sub_layer] = raw_light[sub_layer];
+                                }
                             }
 
                             /* XRAY vision is an explicit authorization to see
@@ -1607,12 +1622,12 @@ void draw_client_map2(object *pl) {
                             }
                             /* Client lighting applies the floor after it adds
                              * local light, as announced in the local byte. */
-                            if (!client_lighting && present_raw[sub_layer] < 100 &&
-                                special_vision & 1) {
+                            if ((!client_lighting || light_aggregate[sub_layer]) &&
+                                present_raw[sub_layer] < 100 && special_vision & 1) {
                                 present_raw[sub_layer] = 100;
                             }
 
-                            if (client_lighting) {
+                            if (client_lighting && !light_aggregate[sub_layer]) {
                                 light_base_radiance_from_raw(light_spaces[sub_layer],
                                                              present_raw[sub_layer],
                                                              &light_radiance[sub_layer],
@@ -2157,7 +2172,7 @@ void draw_client_map2(object *pl) {
                                 light_spaces[sub_layer]->celestial_light_rgb,
                                 sizeof(light_spaces[sub_layer]->celestial_light_rgb)) != 0)) {
                         MapSpace next_space = *light_spaces[sub_layer];
-                        if (client_lighting) {
+                        if (client_lighting && !light_aggregate[sub_layer]) {
                             next_space.light_source_color_weight = 0;
                         }
                         int next_raw = present_raw[sub_layer] -
@@ -2350,23 +2365,21 @@ void draw_client_map2(object *pl) {
                 if (client_lighting && tile_fow) {
                     mp->client_light_known &= (uint8_t)~5U;
                 }
-                uint8_t local_light = 0, occluder = 0;
-                uint16_t base_deficit = 0;
+                uint8_t local_light = 0;
+                uint16_t occluder = 0;
+                uint8_t aggregate = 0;
                 if (client_lighting && !tile_fow) {
-                    /* Negative environmental light the unsigned base bytes
-                     * cannot carry; the client subtracts it after composing. */
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                        if (light_set[sub_layer] && present_raw[sub_layer] < 0) {
-                            base_deficit = (uint16_t)MAX(base_deficit,
-                                                         MIN(-present_raw[sub_layer], UINT16_MAX));
+                        if (light_set[sub_layer] && light_aggregate[sub_layer]) {
+                            aggregate |= (uint8_t)(UINT8_C(1) << sub_layer);
                         }
                     }
-                    if (!(mp->client_light_known & 4U) || mp->base_deficit != base_deficit) {
-                        ext_flags |= MAP2_FLAG_EXT_BASE_DEFICIT;
+                    if (!(mp->client_light_known & 4U) || mp->light_aggregate != aggregate) {
+                        ext_flags |= MAP2_FLAG_EXT_LIGHT_AGGREGATE;
                     }
                     local_light = map_protocol_local_light_encode(light_local_level(m, nx, ny),
                                                                   (special_vision & 1) != 0);
-                    occluder = cell_occluder;
+                    occluder = (uint16_t)(cell_occluder | light_occluder_faces(m, nx, ny));
                     if (!(mp->client_light_known & 1U) || mp->local_light != local_light) {
                         ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
                     }
@@ -2475,16 +2488,16 @@ void draw_client_map2(object *pl) {
                     mp->client_light_known |= 1U;
                 }
 
-                if (ext_flags & MAP2_FLAG_EXT_BASE_DEFICIT) {
-                    packet_debug_data(packet, 1, "Base light deficit");
-                    packet_writer_write_uint16(packet, base_deficit);
-                    mp->base_deficit = base_deficit;
+                if (ext_flags & MAP2_FLAG_EXT_LIGHT_AGGREGATE) {
+                    packet_debug_data(packet, 1, "Aggregate light sub-layers");
+                    packet_writer_write_uint8(packet, aggregate);
+                    mp->light_aggregate = aggregate;
                     mp->client_light_known |= 4U;
                 }
 
                 if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
                     packet_debug_data(packet, 1, "Occluder bits");
-                    packet_writer_write_uint8(packet, occluder);
+                    packet_writer_write_uint16(packet, occluder);
                     mp->occluder = occluder;
                     mp->client_light_known |= 2U;
                 }
