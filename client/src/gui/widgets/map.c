@@ -1694,6 +1694,12 @@ void map_state_transaction_commit(void) {
     if (!map_state_transaction.full_snapshot) {
         for (size_t i = 0; i < arraysize(level_cells); i++) {
             if (!(map_level_mask & (UINT16_C(1) << i))) {
+                /* A depth whose destruction was deferred to commit is
+                 * revoked now, so a reused store address cannot revive its
+                 * emitter field. */
+                if (level_cells[i] != NULL) {
+                    map_emitter_revoke(i);
+                }
                 map_cell_store_destroy(level_cells[i]);
                 level_cells[i] = NULL;
             }
@@ -6848,6 +6854,21 @@ bool widget_map_client_lighting_state_test(void) {
     map_redraw_consume();
     map_clear_cell(9, 8, true);
     map_set_fow(9, 8, false);
+    /* A depth removed inside a transaction is revoked when the deferred
+     * destruction commits. */
+    success = success && map_select_level(1, true);
+    map_select_level(0, true);
+    map_client_lighting_fields[MAP2_DEPTH_INDEX(1)].valid = true;
+    uint64_t removed_revision = level_emitter_revision[MAP2_DEPTH_INDEX(1)];
+    uint16_t kept_mask = map_level_mask;
+    map_state_transaction_begin(false);
+    map_set_level_mask((uint16_t)(kept_mask & ~(UINT16_C(1) << MAP2_DEPTH_INDEX(1))));
+    map_state_transaction_commit();
+    success = success && level_cells[MAP2_DEPTH_INDEX(1)] == NULL &&
+              !map_client_lighting_fields[MAP2_DEPTH_INDEX(1)].valid &&
+              level_emitter_revision[MAP2_DEPTH_INDEX(1)] != removed_revision;
+    map_set_level_mask(kept_mask);
+    map_select_level(0, true);
     /* An auxiliary view after the frame shares its spent budget. */
     map_emitter_auxiliary_begin();
     map_emitter_revision_bump(current_level_index);
