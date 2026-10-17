@@ -972,7 +972,8 @@ class JournalTests(unittest.TestCase):
                 set(), {"python_object_reject_currency_move", "move_ob"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_CreateTreasure"): (
-                set(), {"python_object_is_persistent", "treasure_generate"},
+                set(), {"python_object_is_persistent", "treasure_generate",
+                        "python_inventory_contains_money", "object_insert_into_reason"},
             ),
             ("src/plugins/plugin_python/atrinik_object.c", "Atrinik_Object_Artificate"): (
                 set(), {"python_object_is_persistent", "artifact_change_object"},
@@ -1010,6 +1011,12 @@ class JournalTests(unittest.TestCase):
                 if function == "Atrinik_Object_CreateTreasure":
                     self.assertIn("flags & GT_ENVIRONMENT", structural_body)
                     self.assertIn("root->type != PLAYER", structural_body)
+                    # Persistent non-player stock needs the one accepted reason,
+                    # is generated detached, and is checked for currency first.
+                    self.assertIn("CREATE_TREASURE_STOCK_REASON", structural_body)
+                    self.assertIn("object_get()", structural_body)
+                    self.assertLess(structural_body.index("python_inventory_contains_money("),
+                                    structural_body.index("object_insert_into_reason("))
                 if function == "Atrinik_Object_Artificate":
                     self.assertIn("python_object_is_persistent(self->obj)", structural_body)
                 if function == "Atrinik_Object_Load":
