@@ -135,8 +135,10 @@ the celestial capability is on. Encoding from the server's raw value `r`:
 
 - `q = sign(r) · floor((|r| · 8 + 2) / 5)`, the legacy rounding applied to the
   magnitude, so `Q(-r) = -Q(r)`;
-- saturating to `-32767..32767` (raw ±20479, 16× daylight); `-32768` is invalid
-  and rejected.
+- saturating symmetrically to `-32767..32767` (raw ±20479, 16× daylight).
+  The server never encodes `-32768`; decoders read every word as a plain
+  `int16`, because the shared MAP2 validator does not know the connection's
+  mode and `0x8000` is a valid legacy unsigned sample.
 
 Conformance vectors: raw `0 → 0`, `1 → 2`, `-1 → -2`, `160 → 256`,
 `1280 → 2048`, `-1280 → -2048`, `20479 → 32766`, `20480 → 32767`,
@@ -170,8 +172,8 @@ Decoders reject, before any state is published, exactly as for other
 malformed MAP2 fields: an emitter radius of 0; a positive radius with color
 `000000` (a zero linear peak, which MAP_RENDERING.md rejects for positive
 sources); a negative radius with a nonzero color (darkness is achromatic) or
-with the flicker bit; a local level of `-16`; a signed base word of `-32768`;
-`ext_flags` value 32; and any nonzero reserved bit. A server running the legacy
+with the flicker bit; a local level of `-16`; `ext_flags` value 32; and any
+nonzero reserved bit. A server running the legacy
 path sends no client-lighting fields, and its base words keep their unsigned
 full-radiance meaning. A 1085 client therefore renders both modes.
 
@@ -201,9 +203,9 @@ full-radiance meaning. A 1085 client therefore renders both modes.
     and keep the sign.
 - **Remembered tiles keep receiving light.** When base LOS loss turns an
   authorized tile into fog, the server keeps its per-socket cache entry marked
-  as remembered and, on each update, sends the tile's coarse level (and its
-  base radiance, when it changes) in a layerless record, exactly as it does for
-  visible tiles. This continues while the per-socket cache is valid; a map
+  as remembered and, on each update, sends the tile's coarse level when it
+  changes, in a layerless record. The client keeps the tile's last base
+  radiance and computes its celestial light itself. This continues while the per-socket cache is valid; a map
   change, hard clear or reconnect ends it. Remembered tiles never receive
   objects, emitters or occluder changes: those describe objects, and the
   objects on a remembered tile are not currently sent.
@@ -519,8 +521,8 @@ intentional increase for visible ones and for static structure.
 - Protocol: encode/decode round trips; reserved bits in the local byte,
   occluder, emitter flags and capability byte; `ext_flags` value 32; radius 0 and
   the full `int8` range; positive radius with color `000000`, negative radius
-  with a color or with flicker; level `-16`; signed base `-32768` and the
-  conformance vectors; truncated emitter/occluder fields; reconnect reset; and
+  with a color or with flicker; level `-16`; the signed base conformance
+  vectors; truncated emitter/occluder fields; reconnect reset; and
   a failed parse leaving map state unchanged.
 - Server: coarse level equals the block's signed quantized peak for fixtures
   with a hidden source behind a wall; remembered tiles keep receiving coarse
