@@ -113,7 +113,7 @@ Per MAP2 layer (existing `flags2`):
 
 | Field | Bytes | Meaning |
 | --- | --- | --- |
-| `MAP2_FLAG2_EMITTER` (2048) | 1 + 1 + 3 | signed `glow_radius` as stored (`int8`, 0 invalid); emitter flags: bit 0 flicker opt-in, bits 1–7 reserved, zero; then authored sRGB `RRGGBB`: nonzero for a positive radius, `000000` for a negative one |
+| `MAP2_FLAG2_EMITTER` (2048) | 1 + 1 + 3 | signed `glow_radius` as stored (`int8`, 0 invalid); emitter flags: bit 0 flicker opt-in, bits 1–7 reserved, zero; then authored sRGB `RRGGBB`: any color for a positive radius (`000000` is black light, whose zero linear vector dilutes hue exactly as the server's resolver weighs it), `000000` for a negative one |
 
 The emitter payload is the last optional layer field: it follows the ALPHA,
 ROTATE, ZOOM, TARGET, PROBE and GLOW payloads in that order, and precedes the
@@ -175,11 +175,14 @@ MAP_RENDERING.md.
 ### Validation
 
 Decoders reject, before any state is published, exactly as for other
-malformed MAP2 fields: an emitter radius of 0; a positive radius with color
-`000000` (a zero linear peak, which MAP_RENDERING.md rejects for positive
-sources); a negative radius with a nonzero color (darkness is achromatic) or
-with the flicker bit; a local level of `-16`; `ext_flags` value 32; and any
-nonzero reserved bit. The base words have one meaning on every 1085
+malformed MAP2 fields: an emitter radius of 0; a negative radius with a nonzero
+color (darkness is achromatic) or with the flicker bit; a local-light count
+outside `1..7`, before reading or indexing any level byte; a local level of
+`-16`; `ext_flags` value 32; and any nonzero reserved bit. A positive radius
+with color `000000` is valid: the object loader and plugins accept it, and the
+server renders it as positive scalar light whose zero linear vector (the shared
+`light_profile_color_component()` resolves a zero peak to zero) dilutes hue, so
+the client resolves it the same way rather than rejecting the update. The base words have one meaning on every 1085
 connection.
 
 ## Server
@@ -286,8 +289,11 @@ connection.
   the objects authoring that face, and objects with a downward face set `v`;
   each is the maximum attenuation over the sent objects (the minimum
   coefficient, as the server's face traversal takes), quantized up to the next
-  step. A face a sent view blocker does not author is opaque, and other
-  unauthored faces stay open, as in `spatial_face_light()`. A client step
+  step. A cardinal face a sent view blocker does not author is opaque, and
+  other unauthored faces stay open, as in `spatial_cell_light_face()`, whose
+  implicit view-blocker fallback never applies to the downward face: an
+  ordinary wall without a downward face leaves `v` open, so light still
+  crosses between floors at walls. A client step
   leaves its cell through the exit face of its direction. A tied diagonal step
   crosses every face the shared supercover event emits: the source cell's two
   exit faces and both grazing side cells' faces towards the destination, and
@@ -399,7 +405,16 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    depend on the viewer's emitter, so an unlit player keeps it. Then the
    unchanged unsigned Q16 tone/LUT stage runs; negative intermediate values
    never reach it.
-5. Recompute when emitters, occluders, coarse levels or the camera change. A presentation-only time animates emitters whose flicker bit
+5. Recompute when emitters, occluders, coarse levels or the camera change.
+   Recomputation is bounded per presented frame: a server may change an
+   emitter, or move the cache window, on every depth in every update, so a
+   frame rebuilds at most two depths' emitter fields and every other depth
+   presents its previous field until following frames rebuild it. A depth
+   whose cache window moved presents its previous field translated by the move,
+   with cells newly exposed at its edge unlit; a depth that moved levels keeps
+   the field of its store; a depth with no field yet, or whose window was
+   resized, composes no emitter field (coarse level only) until it is built.
+   Offline proofs disable the bound so every frame is fully rebuilt. A presentation-only time animates emitters whose flicker bit
    is set, without server traffic. The function is deterministic: `t` is the
    client presentation clock in milliseconds since the client started (the
    frame tick `LastTick`, origin 0), the key is `k = floor(t / 125)`, and key
@@ -409,9 +424,15 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    64-bit wrapping); with `f = (t mod 125) · 256 / 125` (integer division) the
    interpolated dip is
    `(d(k)·(256 - f) + d(k+1)·f + 128) / 256`, and the Q0.8 gain is
-   `g = 256 - dip`, always in `205..256`. The flicker
-   emitters' own field `F` (scalar and channels) becomes `F · (g - 256) / 256`,
-   truncated towards zero, so `E' - E` is that delta. Conformance compares
+   `g = 256 - dip`, always in `205..256`. The flicker field `F` is the
+   flickering emitters' contribution to the grouped field: `F = E - E_s`, where
+   `E_s` is the field of the same tiles grouped without their flickering
+   emitters (every steady and negative emitter kept), each resolved as in
+   step 1, per scalar and channel. Because grouping is nonlinear per tile,
+   `F` is not the flickering emitters' standalone field. `F` becomes
+   `F · (g - 256) / 256`, truncated towards zero, so `E' - E` is that delta and
+   `E'` always lies between `E_s` and `E`: flicker only dims a tile towards its
+   steady light, never past it. Conformance compares
    flickered output at a fixed `t`. Flicker modulates the emitter
    field after composition (`L + E' - E` for flickered sum `E'`), so the coarse
    floor of a block that the emitter itself lights cannot suppress it. The delta
@@ -536,7 +557,8 @@ celestial follow-up's removal of celestial light from the base radiance
   own space's level, and the client composes no emitter field into it.
 - Protocol: encode/decode round trips; reserved bits in the local byte,
   occluder and emitter flags; `ext_flags` value 32; radius 0 and
-  the full `int8` range; positive radius with color `000000`, negative radius
+  the full `int8` range; local-light counts 0 and 8; positive radius with color
+  `000000` accepted, negative radius
   with a color or with flicker; level `-16`; the signed base conformance
   vectors; truncated emitter/occluder fields; reconnect reset; and
   a failed parse leaving map state unchanged.

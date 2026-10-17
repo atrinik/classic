@@ -3647,6 +3647,21 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     draw_client_map(op);
     ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
 
+    /* A black positive emitter is valid content; it is sent as it is and
+     * every queued payload still validates. */
+    digest = cell->emitter_digest;
+    blocker->light_color = 0;
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    pticks++;
+    socket_buffer_clear(pl->cs);
+    draw_client_map(op);
+    ck_assert_uint_gt(validate_queued_map_payloads(pl->cs), 0);
+    cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->emitter_digest, digest);
+
     /* A hidden object is not sent, so neither its geometry nor its light is
      * disclosed, although the space still blocks view server-side. */
     SET_FLAG(blocker, FLAG_HIDDEN);

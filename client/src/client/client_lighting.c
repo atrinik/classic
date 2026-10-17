@@ -206,24 +206,47 @@ static void client_lighting_add(int width,
  * their summed linear color. A tile therefore costs at most
  * LIGHT_PROFILE_COUNT color walks however many emitters it carries.
  */
+/** Which tiles and emitters one accumulation pass groups. */
+typedef enum client_lighting_pass {
+    /** Every tile with all its emitters. */
+    CLIENT_LIGHTING_PASS_ALL,
+    /** Only tiles with a flickering emitter, with all their emitters. */
+    CLIENT_LIGHTING_PASS_FLICKER_TILES,
+    /** Only tiles with a flickering emitter, without their flickering ones. */
+    CLIENT_LIGHTING_PASS_FLICKER_TILES_STEADY,
+} client_lighting_pass_t;
+
+static bool client_lighting_emitter_flickers(const client_lighting_emitter_t *emitter) {
+    return emitter->radius > 0 && (emitter->flags & MAP2_EMITTER_FLICKER) != 0;
+}
+
 static void client_lighting_accumulate(int width,
                                        int height,
                                        const uint32_t *occluders,
                                        const client_lighting_emitter_t *emitters,
                                        size_t count,
-                                       bool flicker_only,
+                                       client_lighting_pass_t pass,
                                        client_lighting_accumulator_t *accumulators) {
     size_t i = 0;
     while (i < count) {
         int x = emitters[i].x, y = emitters[i].y;
+        size_t end = i;
+        bool tile_flickers = false;
+        for (; end < count && emitters[end].x == x && emitters[end].y == y; end++) {
+            tile_flickers |= client_lighting_emitter_flickers(&emitters[end]);
+        }
+        if (pass != CLIENT_LIGHTING_PASS_ALL && !tile_flickers) {
+            i = end;
+            continue;
+        }
         int radius = 0, positive_radius = 0;
         int64_t linear[LIGHT_PROFILE_COUNT][3] = {{0}};
         int64_t multiplicity[LIGHT_PROFILE_COUNT] = {0};
         bool any = false;
-        for (; i < count && emitters[i].x == x && emitters[i].y == y; i++) {
+        for (; i < end; i++) {
             const client_lighting_emitter_t *emitter = &emitters[i];
-            if (flicker_only &&
-                (emitter->radius <= 0 || !(emitter->flags & MAP2_EMITTER_FLICKER))) {
+            if (pass == CLIENT_LIGHTING_PASS_FLICKER_TILES_STEADY &&
+                client_lighting_emitter_flickers(emitter)) {
                 continue;
             }
             any = true;
@@ -294,21 +317,44 @@ void client_lighting_evaluate(int width,
     client_lighting_emitter_t *sorted = malloc(count * sizeof(*sorted));
     client_lighting_accumulator_t *all = calloc(total, sizeof(*all));
     client_lighting_accumulator_t *flicker = calloc(total, sizeof(*flicker));
-    if (sorted == NULL || all == NULL || flicker == NULL) {
+    client_lighting_accumulator_t *flicker_steady = calloc(total, sizeof(*flicker_steady));
+    if (sorted == NULL || all == NULL || flicker == NULL || flicker_steady == NULL) {
         free(sorted);
         free(all);
         free(flicker);
+        free(flicker_steady);
         return;
     }
     memcpy(sorted, emitters, count * sizeof(*sorted));
     qsort(sorted, count, sizeof(*sorted), client_lighting_emitter_compare);
-    client_lighting_accumulate(width, height, occluders, sorted, count, false, all);
-    client_lighting_accumulate(width, height, occluders, sorted, count, true, flicker);
+    client_lighting_accumulate(width, height, occluders, sorted, count, CLIENT_LIGHTING_PASS_ALL,
+                               all);
+    client_lighting_accumulate(width, height, occluders, sorted, count,
+                               CLIENT_LIGHTING_PASS_FLICKER_TILES, flicker);
+    client_lighting_accumulate(width, height, occluders, sorted, count,
+                               CLIENT_LIGHTING_PASS_FLICKER_TILES_STEADY, flicker_steady);
     for (size_t index = 0; index < total; index++) {
         client_lighting_resolve(&all[index], &cells[index].scalar, cells[index].rgb);
-        client_lighting_resolve(&flicker[index], &cells[index].flicker_scalar,
-                                cells[index].flicker_rgb);
+        /* The flicker field is the flickering emitters' contribution to the
+         * grouped field, E - E_s: accumulators add across tiles, so the steady
+         * field swaps only the flickering tiles' terms. Flicker therefore
+         * dims each tile towards its steady light and never past it. */
+        client_lighting_accumulator_t steady = all[index];
+        steady.scalar += flicker_steady[index].scalar - flicker[index].scalar;
+        steady.positive += flicker_steady[index].positive - flicker[index].positive;
+        steady.weight += flicker_steady[index].weight - flicker[index].weight;
+        for (size_t channel = 0; channel < 3; channel++) {
+            steady.color[channel] += flicker_steady[index].color[channel] -
+                                     flicker[index].color[channel];
+        }
+        int32_t steady_scalar, steady_rgb[3];
+        client_lighting_resolve(&steady, &steady_scalar, steady_rgb);
+        cells[index].flicker_scalar = cells[index].scalar - steady_scalar;
+        for (size_t channel = 0; channel < 3; channel++) {
+            cells[index].flicker_rgb[channel] = cells[index].rgb[channel] - steady_rgb[channel];
+        }
     }
+    free(flicker_steady);
     free(flicker);
     free(all);
     free(sorted);

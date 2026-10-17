@@ -92,8 +92,11 @@ inverse entries against the generator's checked-in vectors, not merely these
 sentinels.
 
 For an authored source `(r,g,b)`, decode each channel through that LUT, let
-`peak = max(decoded)`, and reject a zero peak for a positive source.  Its
-linear normalized vector is `round_half_up(decoded[channel] * 65535 / peak)`.
+`peak = max(decoded)`.  Its linear normalized vector is
+`round_half_up(decoded[channel] * 65535 / peak)`; a zero peak (authored
+`000000` on a positive source, which the loader and plugins accept) gives the
+zero vector, black light that still adds scalar light and weight and so
+dilutes the hue of other sources.
 The existing scalar mask/attenuation is multiplied by that vector, then all
 contributions are summed in signed 64-bit accumulators.  Same-cell positive
 source grouping and its scalar cap remain authoritative; negative sources

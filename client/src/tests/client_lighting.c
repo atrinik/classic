@@ -239,7 +239,7 @@ static void test_profile_folding_matches_separate_constituents(void) {
     TEST_CHECK(cell_at(4, 4)->scalar > 0);
 }
 
-static void test_flicker_field_is_the_flickering_emitters_alone(void) {
+static void test_flicker_field_is_the_flickering_emitters_contribution(void) {
     memset(occluders, 0, sizeof(occluders));
     client_lighting_emitter_t mixed[] = {
         {.x = 3, .y = 4, .radius = 5, .color = 0xffffff},
@@ -248,12 +248,30 @@ static void test_flicker_field_is_the_flickering_emitters_alone(void) {
     evaluate(mixed, 2);
     client_lighting_cell_t combined[WIDTH * HEIGHT];
     memcpy(combined, cells, sizeof(combined));
-    evaluate(&mixed[1], 1);
+    /* F = E - E_s: the field minus the field without the flickering emitter. */
+    evaluate(&mixed[0], 1);
     for (size_t i = 0; i < WIDTH * HEIGHT; i++) {
-        TEST_CHECK(combined[i].flicker_scalar == cells[i].scalar);
+        TEST_CHECK(combined[i].flicker_scalar == combined[i].scalar - cells[i].scalar);
         for (int channel = 0; channel < 3; channel++) {
-            TEST_CHECK(combined[i].flicker_rgb[channel] == cells[i].rgb[channel]);
+            TEST_CHECK(combined[i].flicker_rgb[channel] ==
+                       combined[i].rgb[channel] - cells[i].rgb[channel]);
         }
+    }
+    /* Grouped with co-located darkness, flicker dims only towards the steady
+     * field: never past it, as a standalone flicker field would. */
+    client_lighting_emitter_t grouped[] = {
+        {.x = 4, .y = 4, .radius = 4, .flags = MAP2_EMITTER_FLICKER, .color = 0xffffff},
+        {.x = 4, .y = 4, .radius = -3},
+    };
+    evaluate(grouped, 2);
+    memcpy(combined, cells, sizeof(combined));
+    evaluate(&grouped[1], 1);
+    for (size_t i = 0; i < WIDTH * HEIGHT; i++) {
+        int32_t dimmed = combined[i].scalar + combined[i].flicker_scalar * (205 - 256) / 256;
+        int32_t low = cells[i].scalar < combined[i].scalar ? cells[i].scalar : combined[i].scalar;
+        int32_t high = cells[i].scalar < combined[i].scalar ? combined[i].scalar : cells[i].scalar;
+        TEST_CHECK(combined[i].flicker_scalar == combined[i].scalar - cells[i].scalar);
+        TEST_CHECK(dimmed >= low && dimmed <= high);
     }
     /* A steady emitter alone has no flicker field. */
     evaluate(&mixed[0], 1);
@@ -381,7 +399,7 @@ int main(void) {
     test_colors_beyond_the_bound_keep_their_hue();
     test_many_colors_keep_exact_server_weights();
     test_profile_folding_matches_separate_constituents();
-    test_flicker_field_is_the_flickering_emitters_alone();
+    test_flicker_field_is_the_flickering_emitters_contribution();
     test_darkness_is_negative_and_uncolored();
     test_colored_light_keeps_hue();
     test_constituent_colors_keep_their_own_profiles();

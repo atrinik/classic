@@ -233,6 +233,24 @@ static uint64_t level_emitter_clock;
 static void map_emitter_revision_bump(size_t level) {
     level_emitter_revision[level] = ++level_emitter_clock;
 }
+
+/** Client-evaluated local light of one level's visible window (protocol 1085). */
+typedef struct map_client_lighting_field {
+    bool valid;
+    const map_cell_store_t *store;
+    uint64_t revision;
+    int cache_origin_x;
+    int cache_origin_y;
+    int origin_x;
+    int origin_y;
+    int width;
+    int height;
+    /** Whether any cell carries light from emitters that opted in to flicker. */
+    bool has_flicker;
+    client_lighting_cell_t *cells;
+} map_client_lighting_field_t;
+
+static map_client_lighting_field_t map_client_lighting_fields[MAP2_LEVELS];
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 /** Offline proofs only: the discrete per-tile projection pinned by approved
  * conformance goldens. Players always get smooth lighting. */
@@ -2268,6 +2286,8 @@ void map_level_scroll(int dz) {
 
     map_cell_store_t *shifted[MAP2_LEVELS] = {0};
     uint64_t shifted_revisions[MAP2_LEVELS] = {0};
+    /* Emitter fields move with their stores, so a level scroll rebuilds none. */
+    map_client_lighting_field_t shifted_fields[MAP2_LEVELS] = {0};
     uint64_t shifted_emitter_revisions[MAP2_LEVELS];
     for (size_t i = 0; i < MAP2_LEVELS; i++) {
         /* A depth without a source store starts a fresh field. */
@@ -2283,6 +2303,9 @@ void map_level_scroll(int dz) {
             /* The emitter field's revision moves with its store. */
             shifted_emitter_revisions[MAP2_DEPTH_INDEX(depth)] =
                 level_emitter_revision[MAP2_DEPTH_INDEX(source_depth)];
+            shifted_fields[MAP2_DEPTH_INDEX(depth)] =
+                map_client_lighting_fields[MAP2_DEPTH_INDEX(source_depth)];
+            map_client_lighting_fields[MAP2_DEPTH_INDEX(source_depth)].cells = NULL;
             level_cells[MAP2_DEPTH_INDEX(source_depth)] = NULL;
         }
     }
@@ -2292,6 +2315,8 @@ void map_level_scroll(int dz) {
         level_cells[i] = shifted[i];
         level_lighting_revision[i] = shifted_revisions[i];
         level_emitter_revision[i] = shifted_emitter_revisions[i];
+        free(map_client_lighting_fields[i].cells);
+        map_client_lighting_fields[i] = shifted_fields[i];
     }
 
     if (dz > 0) {
@@ -5441,30 +5466,13 @@ static bool map_lighting_temporal_sample(const map_cell_t *cell,
     return true;
 }
 
-/** Client-evaluated local light of one level's visible window (protocol 1085). */
-typedef struct map_client_lighting_field {
-    bool valid;
-    const map_cell_store_t *store;
-    uint64_t revision;
-    int cache_origin_x;
-    int cache_origin_y;
-    int origin_x;
-    int origin_y;
-    int width;
-    int height;
-    /** Whether any cell carries light from emitters that opted in to flicker. */
-    bool has_flicker;
-    client_lighting_cell_t *cells;
-} map_client_lighting_field_t;
 
-static map_client_lighting_field_t map_client_lighting_fields[MAP2_LEVELS];
-
-/* Emitter-field rebuilds a presented frame may run for fields that are only
- * out of date. A server can legitimately change an emitter on every depth in
- * every update, so without a bound one update could cost 13 full field
- * evaluations on the render path. Fields beyond the budget keep their previous
- * result for that frame and are rebuilt on following frames; a field whose
- * store, origin or size changed is always rebuilt. */
+/* Emitter-field rebuilds a presented frame may run. A server can legitimately
+ * change an emitter, or move the cache window, on every depth in every update,
+ * so without a bound one update could cost 13 full field evaluations on the
+ * render path. Beyond the budget a depth presents its previous field (moved
+ * with the cache window when it scrolled) or, with no usable field, no
+ * emitter light, and following frames rebuild it. */
 #define MAP_EMITTER_REBUILDS_PER_FRAME 2
 static bool map_emitter_budget_enabled = true;
 static bool map_emitter_frame_active;
@@ -5491,16 +5499,55 @@ static void map_emitter_frame_end(void) {
 }
 
 /** Whether an out-of-date field may be rebuilt now; counts every rebuild. */
-static bool map_emitter_rebuild_allowed(bool required) {
+static bool map_emitter_rebuild_allowed(void) {
     if (!map_emitter_frame_active) {
         return true;
     }
-    if (!required && map_emitter_frame_rebuilds >= MAP_EMITTER_REBUILDS_PER_FRAME) {
+    if (map_emitter_frame_rebuilds >= MAP_EMITTER_REBUILDS_PER_FRAME) {
         map_emitter_rebuild_deferred = true;
         return false;
     }
     map_emitter_frame_rebuilds++;
     return true;
+}
+
+/** Signed shortest step from one cache origin to another on a wrapped axis. */
+static int map_cache_origin_delta(int from, int to, int size) {
+    int delta = ((to - from) % size + size) % size;
+    return delta > size / 2 ? delta - size : delta;
+}
+
+/**
+ * Present a field built before the cache window scrolled: a physical cell's
+ * light moves with it, cells newly exposed at the edge start unlit, and the
+ * field stays out of date until a frame within the budget rebuilds it.
+ */
+static void map_client_lighting_translate(map_client_lighting_field_t *field) {
+    int dx = map_cache_origin_delta(field->cache_origin_x, map_cache_origin_x,
+                                    map_width * MAP_FOW_SIZE);
+    int dy = map_cache_origin_delta(field->cache_origin_y, map_cache_origin_y,
+                                    map_height * MAP_FOW_SIZE);
+    size_t count = (size_t)field->width * field->height;
+    client_lighting_cell_t *moved = xcalloc(count, sizeof(*moved));
+    for (int y = 0; y < field->height; y++) {
+        int source_y = y + dy;
+        if (source_y < 0 || source_y >= field->height) {
+            continue;
+        }
+        for (int x = 0; x < field->width; x++) {
+            int source_x = x + dx;
+            if (source_x >= 0 && source_x < field->width) {
+                moved[(size_t)y * field->width + x] =
+                    field->cells[(size_t)source_y * field->width + source_x];
+            }
+        }
+    }
+    free(field->cells);
+    field->cells = moved;
+    field->cache_origin_x = map_cache_origin_x;
+    field->cache_origin_y = map_cache_origin_y;
+    /* No revision is ever this value, so the field stays out of date. */
+    field->revision = UINT64_MAX;
 }
 
 /** Rebuild the current level's emitter field from sent emitters and occluders. */
@@ -5640,18 +5687,22 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
                   (header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_REMOTE) != 0;
 
     map_client_lighting_field_t *field = &map_client_lighting_fields[current_level_index];
-    bool structural = !field->valid || field->store != cells ||
-                      field->cache_origin_x != map_cache_origin_x ||
-                      field->cache_origin_y != map_cache_origin_y ||
-                      field->width != map_width + LIGHT_PROFILE_RADIUS_MAX * 2 ||
-                      field->height != map_height + LIGHT_PROFILE_RADIUS_MAX * 2;
-    if ((structural || field->revision != level_emitter_revision[current_level_index]) &&
-        map_emitter_rebuild_allowed(structural)) {
-        map_client_lighting_rebuild(field);
+    bool usable = field->valid && field->cells != NULL && field->store == cells &&
+                  field->width == map_width + LIGHT_PROFILE_RADIUS_MAX * 2 &&
+                  field->height == map_height + LIGHT_PROFILE_RADIUS_MAX * 2;
+    bool moved = usable && (field->cache_origin_x != map_cache_origin_x ||
+                            field->cache_origin_y != map_cache_origin_y);
+    if (!usable || moved || field->revision != level_emitter_revision[current_level_index]) {
+        if (map_emitter_rebuild_allowed()) {
+            map_client_lighting_rebuild(field);
+            usable = true;
+        } else if (moved) {
+            map_client_lighting_translate(field);
+        }
     }
     const client_lighting_cell_t *local = NULL;
     int fx = x - field->origin_x, fy = y - field->origin_y;
-    if (!remote && fx >= 0 && fy >= 0 && fx < field->width && fy < field->height) {
+    if (usable && !remote && fx >= 0 && fy >= 0 && fx < field->width && fy < field->height) {
         local = &field->cells[(size_t)fy * field->width + fx];
     }
 
@@ -6693,6 +6744,20 @@ bool widget_map_client_lighting_state_test(void) {
     }
     success = success && budget_field->valid &&
               budget_field->revision != level_emitter_revision[current_level_index];
+    /* Over budget, a scrolled window moves its previous field with it and
+     * stays out of date, and a depth without a usable field composes only
+     * its base and coarse level. */
+    int saved_budget_origin = map_cache_origin_x;
+    map_cache_origin_x = (map_cache_origin_x + 1) % (map_width * MAP_FOW_SIZE);
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && budget_field->valid && budget_field->cache_origin_x == map_cache_origin_x &&
+              budget_field->revision == UINT64_MAX;
+    map_cache_origin_x = saved_budget_origin;
+    budget_field->valid = false;
+    map_set_light_radiance(8, 8, 0, 160);
+    budget_scalar = 160;
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && !budget_field->valid && budget_scalar == 160;
     map_redraw_consume();
     map_emitter_frame_end();
     success = success && (map_redraw_pending_reasons() & MAP_REDRAW_REASON_LIGHTING) != 0;
