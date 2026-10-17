@@ -2011,12 +2011,11 @@ void draw_client_map2(object *pl) {
                             /* Radius, flags and color: bits 32-39, 24-31, 0-23. */
                             uint64_t emitter = 0;
                             uint32_t emitter_color = tmp->light_color & UINT32_C(0xffffff);
-                            /* Darkness is achromatic; a positive source with a
-                             * zero linear peak is rejected as authored light. */
-                            /* Remembered cells in fog carry no live light. */
+                            /* Darkness is achromatic; black positive light is
+                             * sent as it is. Remembered cells in fog carry no
+                             * live light. */
                             if (!tile_fow && light_emitter_disclosed(pl, tmp) &&
-                                tmp->glow_radius != 0 &&
-                                (tmp->glow_radius < 0 || emitter_color != 0)) {
+                                tmp->glow_radius != 0) {
                                 /* Unclamped: the client sums a tile's radii
                                  * before light_mask saturates them. */
                                 int radius = tmp->glow_radius;

@@ -1646,6 +1646,66 @@ START_TEST(test_client_lighting_local_level_hides_source_floor) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_quantizes_each_sign_first) {
+    /* A known positive light cannot split a hidden darkness's bin: hidden
+     * raw -160 and -249 are both level -1, and against a known +180 both
+     * give the same result. */
+    ck_assert_int_eq(light_local_level_from_extrema(0, -160), -1);
+    ck_assert_int_eq(light_local_level_from_extrema(0, -249), -1);
+    ck_assert_int_eq(light_local_level_from_extrema(180, -160),
+                     light_local_level_from_extrema(180, -249));
+    ck_assert_int_eq(light_local_level_from_extrema(180, -249), 1);
+    ck_assert_int_eq(light_local_level_from_extrema(180, -320), -2);
+    ck_assert_int_eq(light_local_level_from_extrema(INT32_MAX, 0), MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    ck_assert_int_eq(light_local_level_from_extrema(0, INT32_MIN), -MAP2_LOCAL_LIGHT_LEVEL_MAX);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_crosses_diagonal_seams) {
+    /* A source on a map linked only diagonally still reaches the coarse
+     * level, as the light topology crosses that seam directly. */
+    mapstruct *southwest = get_empty_map(9, 9);
+    mapstruct *northeast = get_empty_map(9, 9);
+    southwest->tile_map[TILED_NORTHEAST] = northeast;
+    northeast->tile_map[TILED_SOUTHWEST] = southwest;
+    add_colored_light(northeast, 0, 8, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(southwest, 8, 0), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_final_block_is_order_independent) {
+    /* With a one-cell remainder every member of the final block shares one
+     * block, whichever member is sampled first. */
+    int levels[4][4];
+    for (int first = 0; first < 4; first++) {
+        mapstruct *map = get_empty_map(7, 7);
+        add_colored_light(map, 6, 3, 13, LIGHT_COLOR_WHITE);
+        levels[first][first] = light_local_level(map, 3 + first, 3);
+        for (int x = 0; x < 4; x++) {
+            levels[first][x] = light_local_level(map, 3 + x, 3);
+        }
+    }
+    for (int first = 0; first < 4; first++) {
+        for (int x = 0; x < 4; x++) {
+            ck_assert_int_eq(levels[first][x], levels[0][0]);
+        }
+    }
+    ck_assert_int_gt(levels[0][0], 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_hidden_wall_surfaces_own_a_downward_face) {
+    /* A hidden wall-layer surface without sky_boundary blocks vertical light
+     * as spatial_cell_light_face() makes it do. */
+    object *roof = arch_get("letter");
+    roof->layer = LAYER_WALL;
+    SET_FLAG(roof, FLAG_HIDDEN);
+    uint64_t bits = light_occluder_object_bits(roof);
+    ck_assert_uint_eq((bits >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U, 15U);
+    object_destroy(roof);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_pools_every_reachable_tiny_map) {
     /* Thirteen floors of 9x9 one-cell maps place 1053 maps within reach,
      * more than any small fixed bound; none is dropped, so every floor still
@@ -1947,6 +2007,10 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_source_floor);
+    tcase_add_test(tc_core, test_client_lighting_local_level_quantizes_each_sign_first);
+    tcase_add_test(tc_core, test_client_lighting_local_level_crosses_diagonal_seams);
+    tcase_add_test(tc_core, test_client_lighting_local_level_final_block_is_order_independent);
+    tcase_add_test(tc_core, test_client_lighting_hidden_wall_surfaces_own_a_downward_face);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_every_reachable_tiny_map);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
