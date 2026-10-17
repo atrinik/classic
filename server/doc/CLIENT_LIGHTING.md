@@ -42,7 +42,8 @@ The client computes the presentation lighting of everything it can already see,
 on the GPU. The server sends:
 
 1. **Signed base radiance** for every authorized tile: ambient, floor and world
-   light plus the viewer's own `tli` override, in exact signed Q4.11 with RGB.
+   light, in exact signed Q4.11 with RGB. The viewer's own `tli` override is
+   not part of it; it travels as bit 5 of the local-light byte.
    It describes the environment, not a source the player could locate.
    Negative environment (darkness floors) is carried directly, so the client
    composes darkness everywhere.
@@ -261,11 +262,8 @@ connection.
   into fog, the server keeps its per-socket cache entry marked as remembered
   and keeps its coarse levels at the values last sent while it was visible,
   so a client cannot follow a hidden source through fog. Only the viewer's
-  own vision-floor bit is refreshed, in a layerless record. A tile never seen
-  has level 0. The client keeps the tile's last base radiance and keyframe,
-  and the server sends a fogged tile no base, RGB or keyframe record and keeps
-  its cache entry, so remembered lighting is the last authorized sample and
-  never follows the hidden cell's environment. This continues while the per-socket cache is valid;
+  own vision-floor and `tli` bits are refreshed, in a layerless record. A tile never seen
+  has level 0. The client keeps the tile's last base radiance. This continues while the per-socket cache is valid;
   a map change, hard clear or reconnect ends it. Remembered tiles never
   receive objects, emitters or occluder changes: those describe objects, and
   the objects on a remembered tile are not currently sent.
@@ -470,8 +468,11 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    emitter itself lights cannot suppress it. Where the coarse level dominates
    (`L = 160C ≠ E`), that floor carries other steady light and `L` is
    unchanged. A cell whose flicker changes only its channels (grouping can cap
-   the scalar while hue still flickers) flickers too. The delta is added to
-   the signed, unbounded composed scalar and channels before the vision floor;
+   the scalar while hue still flickers) flickers too. The delta is applied in
+   raw light, replacing raw `L` by `L + E' - E` before the Q5.11 conversion of
+   step 3 (for `E = 160`, `E_s = 0` and `g = 205` the delta is raw `-31`, so
+   raw 129 converts to Q5.11 206), and the resulting signed, unbounded
+   scalar and channels reach the vision floor;
    the vision floor, negative clamp, common-vector scaling and scalar
    saturation of step 3 then run once, after it, so XRAY still raises the
    flickered light to its floor and no clipped magnitude or hue is lost.
@@ -592,8 +593,9 @@ celestial follow-up's removal of celestial light from the base radiance
   every floor's coarse level unchanged.
 - Remote samples: a sub-layer sampled at another space carries bit 6 and its
   own space's level, and the client composes no emitter field into it.
-- Protocol: encode/decode round trips; reserved bits in the local byte,
-  occluder and emitter flags; `ext_flags` value 32; radius 0 and
+- Protocol: encode/decode round trips; reserved bits in the occluder word,
+  vertical byte and emitter flags (the local-light byte has none: bits 0–4
+  are the level, bit 5 `tli`, bit 6 remote, bit 7 vision floor); `ext_flags` value 32; radius 0 and
   the full `int8` range; local-light counts 0 and 8; positive radius with color
   `000000` accepted, negative radius
   with a color or with flicker; level `-16`; the signed base conformance
@@ -607,7 +609,8 @@ celestial follow-up's removal of celestial light from the base radiance
   attenuation, including a cell whose only authored face is east; no emitter or occluder for an
   unsent object or cell; hidden and plugin-hidden blockers set no occluder bits;
   glass floors set `v` only; an emitter-only change (radius, flicker or color)
-  produces a layer delta; `tli` stays in base radiance; negative environment
+  produces a layer delta; `tli` is never in base radiance and its bit follows a
+  toggle on visible and remembered tiles alike; negative environment
   is sent as negative base; gameplay darkness gating, compared against a
   fixture of which live objects each viewer may receive at each light level,
   is unchanged by protocol 1085; the vision-floor bit follows XRAY; face bits closed towards
