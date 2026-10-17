@@ -1592,10 +1592,12 @@ START_TEST(test_client_lighting_local_level_neighbors_hide_translation) {
             }
         }
     }
-    /* Light still bleeds into edge neighbors, never into diagonal ones. */
+    /* Light bleeds into every neighboring block it reaches, edges at least
+     * as brightly as corners. */
     ck_assert_int_gt(reference[1][1], 0);
-    ck_assert_int_ge(reference[1][0], 0);
-    ck_assert_int_eq(reference[0][0], 0);
+    ck_assert_int_gt(reference[1][0], 0);
+    ck_assert_int_gt(reference[0][0], 0);
+    ck_assert_int_ge(reference[1][0], reference[0][0]);
 }
 END_TEST
 
@@ -1613,6 +1615,20 @@ START_TEST(test_client_lighting_local_level_reaches_linked_depths) {
     /* An unlinked level contributes nothing. */
     mapstruct *alone = get_empty_map(9, 9);
     ck_assert_int_eq(light_local_level(alone, 4, 4), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_crosses_horizontal_seams) {
+    /* A hidden source just across a continuous seam still reaches the coarse
+     * level, as the server's masks carry it into this map. */
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    link_horizontal_maps(west, east);
+    add_colored_light(east, 0, 4, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(west, 8, 4), 0);
+    /* Without the link nothing reaches it. */
+    mapstruct *alone = get_empty_map(9, 9);
+    ck_assert_int_eq(light_local_level(alone, 8, 4), 0);
 }
 END_TEST
 
@@ -1803,6 +1819,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
     tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
+    tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);

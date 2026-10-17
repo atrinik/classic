@@ -1475,13 +1475,17 @@ void draw_client_map2(object *pl) {
                                            ? previous->fow_known != 0
                                            : (previous->client_light_known &
                                               MAP2_CLIENT_LIGHT_REMEMBERED) != 0);
+                    /* Freeze from the last authorized levels before the
+                     * soft clear erases them from the cache. */
+                    uint8_t frozen[NUM_SUB_LAYERS];
+                    if (remembered) {
+                        map2_frozen_local_light(previous, (special_vision & 1) != 0, frozen);
+                    }
                     map_if_clearcell(false);
                     mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
                     if (remembered) {
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
-                        uint8_t frozen[NUM_SUB_LAYERS];
-                        map2_frozen_local_light(mp, (special_vision & 1) != 0, frozen);
                         map_append_remembered_light(packet, mp, mask, frozen);
                     }
                     continue;
