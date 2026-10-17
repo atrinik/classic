@@ -14,6 +14,7 @@
 #include <global.h>
 
 #include <arch.h>
+#include <celestial_dependencies.h>
 #include <celestial_structure.h>
 #include <loader.h>
 #include <map.h>
@@ -1189,6 +1190,7 @@ bool celestial_structure_validate_header(mapstruct *map, char *error, size_t err
     }
     if (!map->celestial_region_seen) {
         map->region = region_find_by_name("world");
+        celestial_dependencies_inputs_changed();
     }
     if (map->celestial_generated_origin_seen &&
         (map->celestial_generated_origin == NULL ||
@@ -1805,6 +1807,7 @@ void celestial_structure_reset_parse_state(mapstruct *map) {
     map->width = 0;
     map->height = 0;
     map->region = NULL;
+    celestial_dependencies_inputs_changed();
 }
 
 bool celestial_structure_logical_map_id_valid(const char *path) {
@@ -3808,6 +3811,7 @@ bool celestial_structure_initialize_generated_map(mapstruct *map,
     map->light_value = light;
     map->celestial_region_seen = true;
     map->region = origin->region != NULL ? origin->region : region_world();
+    celestial_dependencies_inputs_changed();
     FREE_AND_COPY_HASH(map->celestial_generated_origin, origin->path);
     map->celestial_generated_origin_seen = true;
     map->darkness = 0;
@@ -3857,6 +3861,7 @@ mapstruct *celestial_structure_create_map(int width,
     map->celestial_sky_seen = true;
     map->celestial_sky_above = strcmp(sky_above, "open") == 0 ? CELESTIAL_SKY_OPEN
                                                                : CELESTIAL_SKY_SEALED;
+    celestial_dependencies_inputs_changed();
     return map;
 }
 

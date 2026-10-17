@@ -35,6 +35,7 @@
 #include <map.h>
 #include <object.h>
 #include <server_main.h>
+#include <celestial_dependencies.h>
 #include <light.h>
 #include <swap.h>
 #include <toolkit/datetime.h>
@@ -415,6 +416,8 @@ static uint64_t issue566_view_pass(mapstruct *const *loaded, size_t count, uint6
     uint64_t started = datetime_monotonic_us();
     *calls = 0;
     *digest = UINT64_C(1469598103934665603);
+    /* Mirror the scope draw_client_map() opens around its MAP2 build. */
+    celestial_dependencies_cache_begin();
     for (size_t i = 0; i < count; i++) {
         mapstruct *map = loaded[i];
         for (int y = 0; y < MAP_HEIGHT(map); y++) {
@@ -435,6 +438,7 @@ static uint64_t issue566_view_pass(mapstruct *const *loaded, size_t count, uint6
             }
         }
     }
+    celestial_dependencies_cache_end();
     return datetime_monotonic_us() - started;
 }
 

@@ -152,10 +152,17 @@ static bool map_validator(void *ptr) {
     return map->count != 0;
 }
 
+/** Map identity, residency, dimensions or tile links changed. Both line of
+ * sight and celestial dependency signatures read these fields. */
+static void map_structure_changed(void) {
+    los_geometry_changed();
+    celestial_dependencies_inputs_changed();
+}
+
 /** Publish residency changes before callbacks can observe the new state. */
 static void map_set_memory_state(mapstruct *map, uint32_t state) {
     if (map->in_memory != state) {
-        los_geometry_changed();
+        map_structure_changed();
         map->in_memory = state;
     }
 }
@@ -163,7 +170,7 @@ static void map_set_memory_state(mapstruct *map, uint32_t state) {
 /** @copydoc chunk_constructor */
 static void map_constructor(void *ptr) {
     mapstruct *map = ptr;
-    los_geometry_changed();
+    map_structure_changed();
     DL_APPEND(first_map, map);
 
     map_set_memory_state(map, MAP_SWAPPED);
@@ -185,7 +192,7 @@ static void map_constructor(void *ptr) {
 /** @copydoc chunk_constructor */
 static void map_destructor(void *ptr) {
     mapstruct *map = ptr;
-    los_geometry_changed();
+    map_structure_changed();
     celestial_dependencies_forget(map);
     celestial_dependencies_field_forget(map);
     if (!map->global_removed) {
@@ -247,7 +254,7 @@ static inline mapstruct *load_and_link_tiled_map(mapstruct *orig_map, int tile_n
     }
 
     if (orig_map->tile_map[tile_num] == NULL) {
-        los_geometry_changed();
+        map_structure_changed();
         orig_map->tile_map[tile_num] = map;
         map->tile_map[map_tiled_reverse[tile_num]] = orig_map;
     } else if (map != orig_map->tile_map[tile_num]) {
@@ -255,7 +262,7 @@ static inline mapstruct *load_and_link_tiled_map(mapstruct *orig_map, int tile_n
                   orig_map->tile_path[tile_num],
                   tile_num,
                   orig_map->path);
-        los_geometry_changed();
+        map_structure_changed();
         FREE_AND_CLEAR_HASH(orig_map->tile_path[tile_num]);
         delete_map(map);
         return NULL;
@@ -1073,6 +1080,7 @@ static void allocate_map(mapstruct *m) {
     map_set_memory_state(m, MAP_LOADING);
 
     m->spaces = xcalloc(MAP_WIDTH(m) * MAP_HEIGHT(m), sizeof(*m->spaces));
+    celestial_dependencies_inputs_changed();
 }
 
 /**
@@ -1109,7 +1117,7 @@ void map_set_tile(mapstruct *m, int tile, const char *pathname) {
 
     /* Paths, missing-neighbor arrivals and reciprocal-link repairs all change
      * the resolved geometry, including schema-0 maps. */
-    los_geometry_changed();
+    map_structure_changed();
 
     if (m->tile_path[tile] != NULL) {
         LOG(BUG, "Tile location %d duplicated (%s <-> %s)", tile, m->path, m->tile_path[tile]);
@@ -1878,11 +1886,12 @@ void free_map(mapstruct *m, int flag) {
     FREE_AND_CLEAR_HASH(m->bg_music);
     FREE_AND_CLEAR_HASH(m->weather);
     FREE_AND_NULL_PTR(m->spaces);
+    celestial_dependencies_inputs_changed();
     FREE_AND_NULL_PTR(m->msg);
     celestial_structure_free(m);
     m->first_light = NULL;
 
-    los_geometry_changed();
+    map_structure_changed();
     for (i = 0; i < TILED_NUM; i++) {
         /* Delete the backlinks in other tiled maps to our map */
         if (m->tile_map[i]) {

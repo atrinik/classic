@@ -733,6 +733,7 @@ void celestial_light_invalidate(mapstruct *map) {
     if (map == NULL) {
         return;
     }
+    celestial_dependencies_inputs_changed();
     celestial_dependencies_forget(map);
     celestial_light_forget(map);
     mapstruct *cursor = map;
