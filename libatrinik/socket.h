@@ -468,10 +468,10 @@ typedef struct socket_face_batch_response {
 #define MAP2_OCCLUDER_DOOR_CLOSED 8
 #define MAP2_OCCLUDER_ATTENUATION_SHIFT 4
 #define MAP2_OCCLUDER_ATTENUATION_STEP 16
-/** First of four face bits (north, east, south, west) local light cannot cross. */
+/** First of six face bits (north, east, south, west, up, down) local light cannot cross. */
 #define MAP2_OCCLUDER_FACE_SHIFT 8
 /** Occluder bits a 1085 peer must leave zero. */
-#define MAP2_OCCLUDER_RESERVED 0xf000U
+#define MAP2_OCCLUDER_RESERVED 0xc000U
 /*@}*/
 
 /**

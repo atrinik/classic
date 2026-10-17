@@ -1609,12 +1609,19 @@ void draw_client_map2(object *pl) {
                                 present_raw[sub_layer] -= light_spaces[sub_layer]->light_source_value;
                                 /* Unsigned base bytes cannot carry negative
                                  * environment: keep the legacy aggregate. */
+                                /* Any environmental channel, now or at the
+                                 * ready next keyframe, would go negative. */
                                 const MapSpace *space = light_spaces[sub_layer];
-                                int next_present = present_raw[sub_layer] -
-                                                   space->celestial_light_value +
-                                                   space->celestial_light_next_value;
-                                if (present_raw[sub_layer] < 0 ||
-                                    (light_next_ready[sub_layer] && next_present < 0)) {
+                                int neutral = present_raw[sub_layer] - space->celestial_light_value;
+                                bool negative = present_raw[sub_layer] < 0;
+                                int next_present = neutral + space->celestial_light_next_value;
+                                negative |= light_next_ready[sub_layer] && next_present < 0;
+                                for (size_t channel = 0; channel < 3; channel++) {
+                                    negative |= neutral + MAX(space->celestial_light_rgb[channel], 0) < 0;
+                                    negative |= light_next_ready[sub_layer] &&
+                                                neutral + MAX(space->celestial_light_next_rgb[channel], 0) < 0;
+                                }
+                                if (negative) {
                                     light_aggregate[sub_layer] = true;
                                     present_raw[sub_layer] = raw_light[sub_layer];
                                 }

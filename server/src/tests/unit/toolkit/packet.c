@@ -573,8 +573,9 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
     ck_assert(map_protocol_client_lighting_valid(-13,
                                                  map_protocol_local_light_encode(-15, false),
                                                  0x0fff));
-    /* Reserved occluder bits 12-15 are malformed. */
-    ck_assert(!map_protocol_client_lighting_valid(1, 0, 0x1000));
+    /* Up and down face bits are valid; bits 14-15 are reserved. */
+    ck_assert(map_protocol_client_lighting_valid(1, 0, 0x3000));
+    ck_assert(!map_protocol_client_lighting_valid(1, 0, 0x4000));
     ck_assert(map_protocol_client_lighting_valid(1, map_protocol_local_light_encode(0, false), 0));
     /* A zero radius, level -16 and reserved local-light bits are malformed.
      * Every occluder byte is meaningful. */

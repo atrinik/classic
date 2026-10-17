@@ -711,15 +711,27 @@ static bool light_face_continuous(const spatial_face *face) {
 /** MAP2 occluder face bits: faces of a sent cell that local light cannot cross. */
 uint16_t light_occluder_faces(mapstruct *map, int x, int y) {
     HARD_ASSERT(map != NULL);
-    static const int8_t normals[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+    static const int8_t normals[6][3] = {
+        {0, -1, 0}, {1, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
+    };
     uint16_t bits = 0;
     for (size_t i = 0; i < arraysize(normals); i++) {
         int rx = x + normals[i][0], ry = y + normals[i][1];
-        mapstruct *target = get_map_from_coord2(map, &rx, &ry);
+        mapstruct *target;
+        if (normals[i][2] != 0) {
+            /* Vertical crossings use the linked level, like the light path. */
+            target = map->tile_map[normals[i][2] > 0 ? TILED_UP : TILED_DOWN];
+            if (target != NULL && (target->in_memory != MAP_IN_MEMORY ||
+                                   rx >= MAP_WIDTH(target) || ry >= MAP_HEIGHT(target))) {
+                target = NULL;
+            }
+        } else {
+            target = get_map_from_coord2(map, &rx, &ry);
+        }
         spatial_face face = {
             .from = {.map = map, .x = x, .y = y, .z = 0},
-            .to = {.map = target, .x = rx, .y = ry, .z = 0},
-            .normal = {normals[i][0], normals[i][1], 0},
+            .to = {.map = target, .x = rx, .y = ry, .z = normals[i][2]},
+            .normal = {normals[i][0], normals[i][1], normals[i][2]},
         };
         if (target == NULL || target->spaces == NULL || !light_face_continuous(&face)) {
             bits |= (uint16_t)(1U << (MAP2_OCCLUDER_FACE_SHIFT + i));
