@@ -1004,6 +1004,14 @@ object *object_insert_into(object *op, object *where, int flag);
 object_semantic_result_t
 object_insert_into_reason(object *op, object *where, const char *reason, object **inserted);
 /**
+ * Move every item in a detached, non-player source's inventory into a
+ * non-player destination with one reason, all or nothing. The whole batch is
+ * checked first (currency, hidden bank state, quantity, and combined weight);
+ * on FAILED nothing moved and the items remain in source.
+ */
+object_semantic_result_t
+object_insert_inventory_reason(object *source, object *where, const char *reason);
+/**
  * On AMBIGUOUS, removal/destruction already occurred. Persistent MONEY and
  * hidden-bank destruction are accepted only for canonical direct player state.
  */

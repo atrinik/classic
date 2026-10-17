@@ -2719,15 +2719,14 @@ Atrinik_Object_CreateTreasure(Atrinik_Object *self, PyObject *args, PyObject *ke
         return NULL;
     }
 
-    object *item;
-    while ((item = holder->inv) != NULL) {
-        object *inserted = NULL;
-        if (hooks->object_insert_into_reason(item, self->obj, CREATE_TREASURE_STOCK_REASON,
-                                             &inserted) != OBJECT_SEMANTIC_COMMITTED) {
-            hooks->object_destroy(holder);
-            PyErr_SetString(PyExc_RuntimeError, "Merchant stock could not be inserted.");
-            return NULL;
-        }
+    /* An empty batch stocks nothing. Otherwise the server preflights the whole
+     * batch, so a refusal leaves the merchant's inventory untouched. */
+    if (holder->inv != NULL &&
+        hooks->object_insert_inventory_reason(holder, self->obj, CREATE_TREASURE_STOCK_REASON) !=
+            OBJECT_SEMANTIC_COMMITTED) {
+        hooks->object_destroy(holder);
+        PyErr_SetString(PyExc_RuntimeError, "Merchant stock could not be inserted.");
+        return NULL;
     }
     hooks->object_destroy(holder);
     Py_RETURN_NONE;

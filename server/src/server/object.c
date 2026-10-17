@@ -3200,6 +3200,56 @@ object_insert_into_reason(object *op, object *where, const char *reason, object 
     return OBJECT_SEMANTIC_COMMITTED;
 }
 
+object_semantic_result_t
+object_insert_inventory_reason(object *source, object *where, const char *reason) {
+    HARD_ASSERT(source != NULL);
+    HARD_ASSERT(where != NULL);
+    HARD_ASSERT(reason != NULL);
+
+    /* Only detached, non-player state moves into non-player state here, so
+     * every insertion below takes the unjournaled path and the preflight
+     * covers each way it can fail. */
+    object *source_root = object_get_env(source);
+    object *destination_root = object_get_env(where);
+    if (source->inv == NULL || source_root != source || object_root_is_persistent(source) ||
+        source->type == PLAYER || destination_root->type == PLAYER || source == where ||
+        object_is_in_inventory(where, source)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+
+    uint64_t total = 0;
+    FOR_INV_PREPARE(source, item) {
+        if (item->type == MONEY || object_contains_money_descendant(item) ||
+            object_contains_hidden_bank_info(item) || item->nrof > INT32_MAX) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        uint64_t own_weight = (uint64_t)item->weight * MAX(1, item->nrof);
+        if (own_weight > UINT32_MAX - item->carrying) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+        total += own_weight + item->carrying;
+        if (total > UINT32_MAX) {
+            return OBJECT_SEMANTIC_FAILED;
+        }
+    }
+    FOR_INV_FINISH();
+    if (!object_weight_can_add(where, total)) {
+        return OBJECT_SEMANTIC_FAILED;
+    }
+
+    object *item;
+    while ((item = source->inv) != NULL) {
+        object *inserted = NULL;
+        object_semantic_result_t result = object_insert_into_reason(item, where, reason, &inserted);
+        /* The preflight established every condition this insertion checks. */
+        SOFT_ASSERT_RC(result == OBJECT_SEMANTIC_COMMITTED,
+                       result,
+                       "Preflighted inventory insertion failed: %s",
+                       object_get_str(item));
+    }
+    return OBJECT_SEMANTIC_COMMITTED;
+}
+
 object_semantic_result_t object_insert_map_reason(object *op,
                                                   mapstruct *m,
                                                   int x,
