@@ -1397,13 +1397,12 @@ void draw_client_map2(object *pl) {
     uint16_t light_next_radiance[NUM_SUB_LAYERS];
     uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
     MapSpace *light_spaces[NUM_SUB_LAYERS];
-    /* Where each sub-layer's light sample was taken, for its coarse level,
-     * and the candidate it was taken from: a candidate rejected afterwards
-     * by darkness gating or plugin visibility resets it to the cell, so no
-     * unsent object selects the sampled space or the remote-sample bit. */
-    mapstruct *light_maps[NUM_SUB_LAYERS];
-    int light_xs[NUM_SUB_LAYERS], light_ys[NUM_SUB_LAYERS];
+    /* The candidate each sub-layer's gating light was taken from, and
+     * whether that was another space than the cell: a candidate rejected
+     * afterwards by darkness gating or plugin visibility hands gating back to
+     * the cell. The light sent is always the cell's own. */
     const object *light_sample_objects[NUM_SUB_LAYERS];
+    bool light_sample_remote[NUM_SUB_LAYERS];
     bool light_next_ready[NUM_SUB_LAYERS];
     /* Whether a sub-layer's kept sample needs the update to snap. */
     bool light_next_snap[NUM_SUB_LAYERS];
@@ -1781,7 +1780,7 @@ void draw_client_map2(object *pl) {
                            0,
                            sizeof(light_next_rgb_radiance[sub_layer]));
                     light_spaces[sub_layer] = NULL;
-                    light_maps[sub_layer] = NULL;
+                    light_sample_remote[sub_layer] = false;
                     light_sample_objects[sub_layer] = NULL;
                     light_next_ready[sub_layer] = false;
                     light_next_snap[sub_layer] = false;
@@ -1901,13 +1900,20 @@ void draw_client_map2(object *pl) {
                         if (tmp != NULL &&
                             (!light_set[sub_layer] || (layer == LAYER_EFFECT && sub_layer > 0))) {
                             light_set[sub_layer] = 1;
-                            light_maps[sub_layer] = tmp->map;
                             light_sample_objects[sub_layer] = tmp;
-                            light_xs[sub_layer] = tmp->x;
-                            light_ys[sub_layer] = tmp->y;
                             map2_light_sample_t sample;
                             map2_sample_light(pl, tmp->map, tmp->x, tmp->y, (special_vision & 1) != 0,
                                               &sample);
+                            /* Gameplay darkness gating reads the candidate's
+                             * own space; the light sent is the record cell's,
+                             * the authorized tile, never another space. */
+                            light_sample_remote[sub_layer] = sample.space != msp;
+                            int gating_raw = sample.raw;
+                            if (light_sample_remote[sub_layer]) {
+                                map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0,
+                                                  &sample);
+                            }
+                            sample.raw = gating_raw;
                             light_next_ready[sub_layer] = sample.next_ready;
                             light_next_snap[sub_layer] = sample.snap;
                             light_spaces[sub_layer] = sample.space;
@@ -1922,22 +1928,16 @@ void draw_client_map2(object *pl) {
                         if (tmp != NULL && tmp != pl && raw_light[sub_layer] <= 0 &&
                             !map_layer_is_remembered_geometry(layer) && !roof_surface) {
                             if (light_sample_objects[sub_layer] == tmp) {
-                                /* The whole sample came from the rejected
-                                 * candidate's space: retake it at the cell. */
-                                light_maps[sub_layer] = NULL;
+                                /* The rejected candidate's own space no
+                                 * longer gates later objects of this
+                                 * sub-layer: the cell's light does. */
                                 light_sample_objects[sub_layer] = NULL;
-                                if (light_spaces[sub_layer] != msp) {
+                                if (light_sample_remote[sub_layer]) {
                                     map2_light_sample_t sample;
                                     map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0,
                                                       &sample);
-                                    light_next_ready[sub_layer] = sample.next_ready;
-                                    light_next_snap[sub_layer] = sample.snap;
-                                    light_spaces[sub_layer] = sample.space;
                                     raw_light[sub_layer] = sample.raw;
-                                    present_raw[sub_layer] = sample.present;
-                                    light_radiance[sub_layer] = sample.radiance;
-                                    memcpy(light_rgb_radiance[sub_layer], sample.rgb,
-                                           sizeof(sample.rgb));
+                                    light_sample_remote[sub_layer] = false;
                                 }
                             }
                             tmp = NULL;
@@ -2133,22 +2133,13 @@ void draw_client_map2(object *pl) {
                              * update. */
                             if (hidden) {
                                 if (light_sample_objects[sub_layer] == tmp) {
-                                    /* The whole sample came from the rejected
-                                     * candidate's space: retake it at the cell. */
-                                    light_maps[sub_layer] = NULL;
                                     light_sample_objects[sub_layer] = NULL;
-                                    if (light_spaces[sub_layer] != msp) {
+                                    if (light_sample_remote[sub_layer]) {
                                         map2_light_sample_t sample;
-                                        map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0,
-                                                          &sample);
-                                        light_next_ready[sub_layer] = sample.next_ready;
-                                        light_next_snap[sub_layer] = sample.snap;
-                                        light_spaces[sub_layer] = sample.space;
+                                        map2_sample_light(pl, m, nx, ny,
+                                                          (special_vision & 1) != 0, &sample);
                                         raw_light[sub_layer] = sample.raw;
-                                        present_raw[sub_layer] = sample.present;
-                                        light_radiance[sub_layer] = sample.radiance;
-                                        memcpy(light_rgb_radiance[sub_layer], sample.rgb,
-                                               sizeof(sample.rgb));
+                                        light_sample_remote[sub_layer] = false;
                                     }
                                 }
                                 if (flags2 & MAP2_FLAG2_PROBE) {
@@ -2688,25 +2679,15 @@ void draw_client_map2(object *pl) {
                  * client retains in fog; emitters and occluders describe sent
                  * objects, so fog withholds them and their layers are resent
                  * on return through the presence bit. */
-                /* Each sub-layer takes the coarse level where its light was
-                 * sampled, on visible and remembered cells alike. */
+                /* Every sub-layer takes the cell's coarse level, the light of
+                 * the authorized tile, on visible and remembered cells alike. */
                 uint8_t local_light[NUM_SUB_LAYERS];
                 uint64_t occluder = 0;
                 {
+                    int8_t level = light_local_level(m, nx, ny);
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-                        bool remote = light_maps[sub_layer] != NULL &&
-                                      (light_maps[sub_layer] != m || light_xs[sub_layer] != nx ||
-                                       light_ys[sub_layer] != ny);
-                        int8_t level = light_maps[sub_layer] != NULL
-                                           ? light_local_level(light_maps[sub_layer],
-                                                               light_xs[sub_layer],
-                                                               light_ys[sub_layer])
-                                           : light_local_level(m, nx, ny);
-                        /* The cell's emitters and occluders describe the
-                         * cell, not a remotely sampled space. */
                         local_light[sub_layer] =
                             map_protocol_local_light_encode(level, (special_vision & 1) != 0) |
-                            (remote ? MAP2_LOCAL_LIGHT_REMOTE : 0) |
                             (CONTR(pl)->tli ? MAP2_LOCAL_LIGHT_TLI : 0);
                     }
                 }

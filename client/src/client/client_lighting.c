@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include <toolkit/light_profile.h>
+#include <toolkit/memory.h>
 #include <toolkit/toolkit.h>
 #include <toolkit/socket.h>
 
@@ -313,18 +314,12 @@ void client_lighting_evaluate(int width,
         return;
     }
 
-    /* Sort a copy by tile so grouping stays linear in the emitter count. */
-    client_lighting_emitter_t *sorted = malloc(count * sizeof(*sorted));
-    client_lighting_accumulator_t *all = calloc(total, sizeof(*all));
-    client_lighting_accumulator_t *flicker = calloc(total, sizeof(*flicker));
-    client_lighting_accumulator_t *flicker_steady = calloc(total, sizeof(*flicker_steady));
-    if (sorted == NULL || all == NULL || flicker == NULL || flicker_steady == NULL) {
-        free(sorted);
-        free(all);
-        free(flicker);
-        free(flicker_steady);
-        return;
-    }
+    /* Sort a copy by tile so grouping stays linear in the emitter count. The
+     * client's fatal allocators keep a failure from caching a dark field. */
+    client_lighting_emitter_t *sorted = xmallocarray(count, sizeof(*sorted));
+    client_lighting_accumulator_t *all = xcalloc(total, sizeof(*all));
+    client_lighting_accumulator_t *flicker = xcalloc(total, sizeof(*flicker));
+    client_lighting_accumulator_t *flicker_steady = xcalloc(total, sizeof(*flicker_steady));
     memcpy(sorted, emitters, count * sizeof(*sorted));
     qsort(sorted, count, sizeof(*sorted), client_lighting_emitter_compare);
     client_lighting_accumulate(width, height, occluders, sorted, count, CLIENT_LIGHTING_PASS_ALL,
