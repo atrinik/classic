@@ -54,7 +54,8 @@ on the GPU. The server sends:
    signed, quantized, neutral level of local light, with sources pooled per
    fixed 3×3 block before they propagate. Light and darkness from hidden
    sources bleed through walls without identifying the source tile, count or
-   hue. A remembered tile keeps the levels it last had while visible.
+   hue. A remembered tile keeps receiving its levels while the per-socket
+   cache is valid, like all its light levels.
 4. **Occluders of sent cells**: geometry bits plus quantized transmission of
    each cardinal face and the downward face, derived only from objects MAP2
    sends, and face bits from static seam structure between authorized cells
@@ -143,12 +144,15 @@ Conformance vectors: raw `0 → 0`, `1 → 2`, `-1 → -2`, `160 → 256`,
 `-20480 → -32767`. Current world, map and celestial anchors stay within raw
 ±1280, far inside the range.
 
-Because the encoding is odd-symmetric, and the client saturates its composed
-local term with the same symmetric bound (Client, step 3), environment and
-composed light of equal magnitude cancel to exactly zero, as the server's
-single raw sum does, even beyond raw ±20479; other
-sums differ from the server's single rounding by at most one Q4.11 unit per
-channel. The scalar and each channel are encoded independently, and a negative
+The base is the only bounded term: the environment is saturated to raw
+±20479 (16× daylight) by its encoding, and the client converts its composed
+local term without saturation (Client, step 3). Because the encoding is
+odd-symmetric, environment and composed light of equal magnitude cancel to
+exactly zero whenever the environment lies in that range, as the server's
+single raw sum does, and every other sum, residuals included, differs from
+the server's single rounding by at most one Q4.11 unit per channel. An
+environment beyond the bound (only an extreme authored floor value can reach
+it) is presented at the bound. The scalar and each channel are encoded independently, and a negative
 channel is meaningful until composition finishes.
 
 ### Budgets
@@ -208,7 +212,8 @@ connection.
   the offset frozen in its base. The XRAY floor is not applied (see Vision
   floor). There is no aggregate fallback: negative environment is sent as
   negative base.
-- **Coarse local light** is derived each time MAP2 sends a visible cell, from
+- **Coarse local light** is derived each time MAP2 sends a visible or
+  remembered cell, from
   the already maintained per-space source counters. No new per-map state is
   needed. Each sub-layer takes the level of the space its light was sampled
   at, which can differ between sub-layers; the server sends the shortest level
@@ -428,12 +433,11 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    scalar, so overlapping light and darkness keep the server's color shift; the
    coarse term is neutral. `E`, `C` and `L` are raw light. `L`, with each
    channel's hue delta, converts to radiance with the server's rounding applied
-   to its magnitude, `sign(r) · floor((|r| · 8 + 2) / 5)`, saturating
-   symmetrically to `-32767..32767` exactly as the base encoding does, so
-   equal opposite terms still cancel when either lies beyond raw ±20479
-   (16× daylight), where presentation is already saturated. The composed
-   radiance is, per scalar and channel, signed base + converted `L`, both in
-   Q5.11 units, summed in signed arithmetic without further saturation. The vision floor
+   to its magnitude, `sign(r) · floor((|r| · 8 + 2) / 5)`, without saturating,
+   so dense local light keeps its full weight and its residual against the
+   base: raw environment 20000 with local darkness -25000 composes to raw
+   -5000. The composed radiance is, per scalar and channel, signed base +
+   converted `L`, both in Q5.11 units, in unbounded signed arithmetic. The vision floor
    (if bit 7 is set) applies next, to the signed scalar and channels, as the
    server raises the raw scalar before resolving color: pre-floor scalar and
    channel raw `(80, -40)` (Q5.11 `(128, -64)`) become raw `(100, -20)`
