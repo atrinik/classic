@@ -37,10 +37,14 @@
 #include <toolkit/map_protocol.h>
 #include <region.h>
 #include <toolkit/light_profile.h>
+#include <los.h>
 
 #define NR_LIGHT_MASK LIGHT_PROFILE_COUNT
 #define MAX_LIGHT_SOURCE LIGHT_PROFILE_SOURCE_MAX
 #define MAX_LIGHT_RADIUS LIGHT_PROFILE_RADIUS_MAX
+
+/** Advances whenever a space's source counter changes; see light_local_level(). */
+static uint64_t light_local_epoch = 1;
 /** Full queues publish early; this bounds scope bookkeeping, not reach. */
 #define LIGHT_PENDING_MAX ((1 + 2 * MAP2_MAX_DEPTH) * (1 + TILED_NUM_DIR))
 
@@ -917,6 +921,7 @@ static void adjust_grouped_light_source(mapstruct *map,
     MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
     int old_mask = get_real_light_source_value(*counter);
     *counter += light;
+    light_local_epoch++;
     int new_mask = get_real_light_source_value(*counter);
 
     if (map->in_memory != MAP_LOADING && old_mask != new_mask) {
@@ -1343,15 +1348,24 @@ static void light_local_block(int coordinate, int size, int *start, int *end) {
     *end = *start + 6 > size ? size : *start + 3;
 }
 
-/** Pooled source counter of a block: the sum of its spaces' scalar counters. */
-static int32_t light_local_block_sources(mapstruct *map, int bx, int ex, int by, int ey) {
-    int64_t sum = 0;
+/**
+ * Pooled sources of a block: the strongest positive and the strongest negative
+ * per-tile scalar mask. Tiles are never summed with one another, so a viewer's
+ * own known light on another tile of the block cannot combine with a hidden
+ * source through the nonlinear mask and reveal its radius by saturation;
+ * raising it only reveals max(own, hidden), which the level already discloses.
+ */
+static void light_local_block_sources(mapstruct *map, int bx, int ex, int by, int ey,
+                                      int *positive, int *negative) {
+    *positive = 0;
+    *negative = 0;
     for (int cy = by; cy < ey; cy++) {
         for (int cx = bx; cx < ex; cx++) {
-            sum += GET_MAP_SPACE_PTR(map, cx, cy)->light_source;
+            int mask = get_real_light_source_value(GET_MAP_SPACE_PTR(map, cx, cy)->light_source);
+            *positive = MAX(*positive, mask);
+            *negative = MIN(*negative, mask);
         }
     }
-    return (int32_t)MAX(INT32_MIN, MIN(INT32_MAX, sum));
 }
 
 /**
@@ -1397,11 +1411,44 @@ static mapstruct *light_local_level_map(mapstruct *map, int dz) {
     return map;
 }
 
+/** Remembered levels of recently sampled blocks, valid for one source and
+ * geometry epoch: every cell and sub-layer of a block shares its level. */
+#define LIGHT_LOCAL_CACHE_SIZE 1024
+
+typedef struct light_local_cache_entry {
+    const mapstruct *map;
+    tag_t count;
+    int bx, by;
+    uint64_t source_epoch, geometry_epoch;
+    int8_t level;
+} light_local_cache_entry;
+
+static light_local_cache_entry light_local_cache[LIGHT_LOCAL_CACHE_SIZE];
+
+static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey);
+
 int8_t light_local_level(mapstruct *map, int x, int y) {
     HARD_ASSERT(map != NULL && map->spaces != NULL);
     int bx, by, ex, ey;
     light_local_block(x, MAP_WIDTH(map), &bx, &ex);
     light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    uint64_t geometry = los_geometry_epoch();
+    size_t slot = (((uintptr_t)map >> 4) ^ ((size_t)bx * 31u) ^ ((size_t)by * 1031u)) %
+                  LIGHT_LOCAL_CACHE_SIZE;
+    light_local_cache_entry *entry = &light_local_cache[slot];
+    if (entry->map == map && entry->count == map->count && entry->bx == bx &&
+        entry->by == by && entry->source_epoch == light_local_epoch &&
+        entry->geometry_epoch == geometry) {
+        return entry->level;
+    }
+    int8_t level = light_local_level_compute(map, bx, ex, by, ey);
+    *entry = (light_local_cache_entry){.map = map, .count = map->count, .bx = bx, .by = by,
+                                       .source_epoch = light_local_epoch,
+                                       .geometry_epoch = geometry, .level = level};
+    return level;
+}
+
+static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
     /* Sources are pooled per block before propagation and reach a block by
      * the gap between the two blocks, which depends only on block geometry,
      * so a source's position inside its block never changes any block's
@@ -1453,26 +1500,30 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
                     light_local_block(probe, MAP_HEIGHT(map), &sy, &sey);
                 }
             }
-            int mask = get_real_light_source_value(
-                light_local_block_sources(source_map, sx, sex, sy, sey));
-            if (mask == 0) {
-                continue;
-            }
+            int strongest[2];
+            light_local_block_sources(source_map, sx, sex, sy, sey, &strongest[0], &strongest[1]);
             /* Gap in cells between the source block and this block, in this
              * map's coordinates; zero for the own block. */
             int ox = shift_x2 / 2, oy = shift_y2 / 2;
             int gap_x = MAX(0, MAX(sx + ox - (ex - 1), bx - (sex - 1 + ox)));
             int gap_y = MAX(0, MAX(sy + oy - (ey - 1), by - (sey - 1 + oy)));
             int distance_squared = gap_x * gap_x + gap_y * gap_y + dz * dz;
-            int radius = light_profile_radius(abs(mask));
-            if (distance_squared > radius * radius || abs(dz) > MIN(radius, MAP2_MAX_DEPTH)) {
-                continue;
-            }
-            int32_t value = light_mask_value(abs(mask), distance_squared);
-            if (mask > 0) {
-                positive = MAX(positive, value);
-            } else {
-                negative = MIN(negative, -value);
+            for (int sign = 0; sign < 2; sign++) {
+                int mask = strongest[sign];
+                if (mask == 0) {
+                    continue;
+                }
+                int radius = light_profile_radius(abs(mask));
+                if (distance_squared > radius * radius ||
+                    abs(dz) > MIN(radius, MAP2_MAX_DEPTH)) {
+                    continue;
+                }
+                int32_t value = light_mask_value(abs(mask), distance_squared);
+                if (mask > 0) {
+                    positive = MAX(positive, value);
+                } else {
+                    negative = MIN(negative, -value);
+                }
             }
         }
     }

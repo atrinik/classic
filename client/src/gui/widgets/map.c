@@ -1363,9 +1363,8 @@ static void map_cache_mark_fow(map_cell_store_t *level,
                 map_cell_store_set_light_state(level, index, MAP_LIGHT_CACHE_CLEARED);
             }
             /* Cells leaving the window are no longer updated by the server:
-             * fog keeps remembered occluders but no live coarse level. */
-            level->headers[index].client_light_known &= (uint8_t)~1U;
-            memset(level->headers[index].local_light, 0, sizeof(level->headers[index].local_light));
+             * fog keeps its remembered occluders and its last authorized
+             * coarse levels, as the server freezes them for fog. */
             level_emitter_revision[level_index]++;
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
@@ -3164,11 +3163,15 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
 
 void map_clear_cell(int x, int y, bool hard) {
     map_state_transaction_record_cell(x, y);
-    /* Clears can remove emitter-bearing layers and remembered occluders. */
-    level_emitter_revision[current_level_index]++;
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
-    map_cell_clear_client_light(index, hard);
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
+    /* Only a clear that removes emitters, or occluders on a hard clear,
+     * changes the emitter field; an idempotent clear relights nothing. */
+    if ((cell != NULL && cell->emitters != NULL) ||
+        (hard && (cells->headers[index].client_light_known & 2U))) {
+        level_emitter_revision[current_level_index]++;
+    }
+    map_cell_clear_client_light(index, hard);
     if (cell == NULL) {
         if (hard) {
             map_cell_store_set_support_height(cells, index, 0);
@@ -5483,6 +5486,13 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
 
 /** Relight levels whose emitter field flickers; flicker needs no server traffic. */
 static void map_flicker_lighting_update(void) {
+    /* Driven by presentation frames as well as the animation tick, so the
+     * interpolated gain is shown between its 125 ms keys. */
+    static uint32_t last_tick;
+    if (LastTick - last_tick < 16) {
+        return;
+    }
+    last_tick = LastTick;
     bool flickering = false;
     for (size_t level = 0; level < MAP2_LEVELS; level++) {
         if (map_client_lighting_fields[level].valid && map_client_lighting_fields[level].has_flicker &&
@@ -5493,6 +5503,24 @@ static void map_flicker_lighting_update(void) {
     }
     if (flickering) {
         map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+    }
+}
+
+/**
+ * Negative clamp, then common-vector overflow scaling that keeps hue, with the
+ * server's rule: scale by 65536 / peak, rounding half up, then clamp.
+ */
+static void map_lighting_scale_overflow(int64_t channels[3]) {
+    int64_t peak = 0;
+    for (size_t channel = 0; channel < 3; channel++) {
+        channels[channel] = MAX(0, channels[channel]);
+        peak = MAX(peak, channels[channel]);
+    }
+    if (peak > (int64_t)UINT16_MAX) {
+        for (size_t channel = 0; channel < 3; channel++) {
+            channels[channel] =
+                MIN((int64_t)UINT16_MAX, (channels[channel] * 65536 + peak / 2) / peak);
+        }
     }
 }
 
@@ -5573,17 +5601,7 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
         }
     }
 
-    /* Negative clamp, then common-vector overflow scaling to keep hue. */
-    int64_t peak = 0;
-    for (size_t channel = 0; channel < 3; channel++) {
-        channels[channel] = MAX(0, channels[channel]);
-        peak = MAX(peak, channels[channel]);
-    }
-    if (peak > (int64_t)UINT16_MAX) {
-        for (size_t channel = 0; channel < 3; channel++) {
-            channels[channel] = (channels[channel] * UINT16_MAX + peak / 2) / peak;
-        }
-    }
+    map_lighting_scale_overflow(channels);
     scalar_value = MAX(0, MIN((int64_t)UINT16_MAX, scalar_value));
 
     *scalar = (uint16_t)scalar_value;
@@ -6491,6 +6509,12 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && map_cell_changed(5, 5, &before) &&
               !map_get_occluder(5, 5, &bits, &horizontal, &vertical) &&
               !map_get_local_light(5, 5, &signed_level, &vision);
+    /* Clearing an already empty cell does not relight the level. */
+    map_clear_cell(9, 9, true);
+    uint64_t emitter_revision = level_emitter_revision[current_level_index];
+    map_clear_cell(9, 9, true);
+    map_clear_cell(9, 9, false);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
     /* A header-only update is a visible change too. */
     map_cell_snapshot(6, 6, &before);
     map_set_local_light(6, 6, map_protocol_local_light_encode(2, false));
@@ -6538,6 +6562,10 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160 && composed_rgb[0] == 160 &&
               composed_rgb[1] == 416 && composed_rgb[2] == 160;
+    /* The common-vector conformance vector of the server rule. */
+    int64_t overflow[3] = {81919, 40959, 20480};
+    map_lighting_scale_overflow(overflow);
+    success = success && overflow[0] == 65535 && overflow[1] == 32768 && overflow[2] == 16384;
     /* An overflowing colored sum scales its channels together. */
     map_set_light_radiance(14, 8, 0, 32000);
     uint16_t warm[NUM_SUB_LAYERS][3] = {{32700, 16000, 8000}};
@@ -8714,6 +8742,9 @@ void map_draw_map(SDL_Surface *surface) {
 
     bool primary_surface = cur_widget[MAP_ID] != NULL && surface == cur_widget[MAP_ID]->surface;
     bool gpu_output = gpu_renderer_ready() && (primary_surface || map_gpu_auxiliary);
+    if (primary_surface) {
+        map_flicker_lighting_update();
+    }
     uint32_t pending_redraw_reasons = primary_surface ? map_redraw_pending_reasons() : 0;
     bool animation_only = primary_surface && !map_redraw_due() && map_animation_redraw_due() &&
                           pending_redraw_reasons == MAP_REDRAW_REASON_ANIMATION;
