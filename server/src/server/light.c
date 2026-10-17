@@ -1500,9 +1500,6 @@ typedef struct light_local_region {
     int ox, oy;
 } light_local_region;
 
-/** Upper bound on the placed maps one block pools: a 3x3 neighborhood on
- * every level of a tall stack leaves room for maps smaller than the reach. */
-#define LIGHT_LOCAL_REGIONS_MAX 512
 
 static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
     /* Sources are pooled per block before propagation and reach a block by
@@ -1516,12 +1513,20 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
      * level of the stack gets the same level and the levels never reveal
      * which floor a hidden source is on. Regions are therefore keyed by map
      * and horizontal offset, which also ends cyclic level links. */
-    static light_local_region regions[LIGHT_LOCAL_REGIONS_MAX];
+    /* Placed maps grow with the reachable topology, never truncated: each
+     * (map, offset) is placed once and offsets stay within reach, so the set
+     * is finite however small the maps are. */
+    static light_local_region *regions;
+    static size_t capacity;
     static const int tiles[] = {TILED_WEST, TILED_EAST, TILED_NORTH, TILED_SOUTH, TILED_UP,
                                 TILED_DOWN};
     int reach = MAX_LIGHT_RADIUS;
     int32_t positive = 0, negative = 0;
     size_t count = 0;
+    if (capacity == 0) {
+        capacity = 64;
+        regions = xmallocarray(capacity, sizeof(*regions));
+    }
     regions[count++] = (light_local_region){.map = map};
     for (size_t i = 0; i < count; i++) {
         light_local_region region = regions[i];
@@ -1557,7 +1562,11 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
                 seen = regions[j].map == next.map && regions[j].ox == next.ox &&
                        regions[j].oy == next.oy;
             }
-            if (!seen && count < arraysize(regions)) {
+            if (!seen) {
+                if (count == capacity) {
+                    capacity *= 2;
+                    regions = xreallocarray(regions, capacity, sizeof(*regions));
+                }
                 regions[count++] = next;
             }
         }

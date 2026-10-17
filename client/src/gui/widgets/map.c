@@ -3420,19 +3420,26 @@ void map_set_discrete_lighting_proof(bool discrete) {
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
 }
 
-/** Return the signed coarse local light level and vision floor of a sub-layer. */
-bool map_get_local_light_layer(int x, int y, uint8_t sub_layer, int8_t *level, bool *vision_floor) {
+/** Return the signed coarse level, vision floor and remote-sample bit of a
+ * sub-layer: a remote sample was lit at another space, so the cell's emitter
+ * field never composes into it. */
+bool map_get_local_light_layer(
+    int x, int y, uint8_t sub_layer, int8_t *level, bool *vision_floor, bool *remote) {
     const map_cell_header_t *header =
         &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
-    if (!(header->client_light_known & 1U) || sub_layer >= NUM_SUB_LAYERS) {
+    if (!(header->client_light_known & 1U) || sub_layer >= NUM_SUB_LAYERS ||
+        !map_protocol_local_light_decode(header->local_light[sub_layer], level, vision_floor)) {
         return false;
     }
-    return map_protocol_local_light_decode(header->local_light[sub_layer], level, vision_floor);
+    if (remote != NULL) {
+        *remote = (header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_REMOTE) != 0;
+    }
+    return true;
 }
 
 /** Return the signed coarse local light level and vision floor of sub-layer 0. */
 bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor) {
-    return map_get_local_light_layer(x, y, 0, level, vision_floor);
+    return map_get_local_light_layer(x, y, 0, level, vision_floor, NULL);
 }
 
 /** Return the occluder bits and vertical byte of a cell, if received. */
@@ -6623,11 +6630,23 @@ bool widget_map_client_lighting_state_test(void) {
     uint8_t layered[2] = {map_protocol_local_light_encode(1, false),
                           map_protocol_local_light_encode(-2, false)};
     map_set_local_light_layers(7, 7, 2, layered);
-    success = success && map_get_local_light_layer(7, 7, 0, &signed_level, &vision) &&
-              signed_level == 1 && map_get_local_light_layer(7, 7, 1, &signed_level, &vision) &&
+    success = success && map_get_local_light_layer(7, 7, 0, &signed_level, &vision, NULL) &&
+              signed_level == 1 && map_get_local_light_layer(7, 7, 1, &signed_level, &vision, NULL) &&
               signed_level == -2 &&
-              map_get_local_light_layer(7, 7, NUM_SUB_LAYERS - 1, &signed_level, &vision) &&
+              map_get_local_light_layer(7, 7, NUM_SUB_LAYERS - 1, &signed_level, &vision, NULL) &&
               signed_level == -2;
+    /* The getter reports the remote-sample bit with the decoded level. */
+    bool remote_sample = true;
+    uint8_t remote_layers[2] = {map_protocol_local_light_encode(1, false),
+                                map_protocol_local_light_encode(-2, false) |
+                                    MAP2_LOCAL_LIGHT_REMOTE};
+    map_set_local_light_layers(7, 7, 2, remote_layers);
+    success = success &&
+              map_get_local_light_layer(7, 7, 0, &signed_level, &vision, &remote_sample) &&
+              !remote_sample &&
+              map_get_local_light_layer(7, 7, 1, &signed_level, &vision, &remote_sample) &&
+              remote_sample && signed_level == -2;
+    map_set_local_light_layers(7, 7, 2, layered);
 
     /* An aborted update restores the previous client-lighting state, and
      * with it the emitter revisions, so a no-op abort relights nothing. */
