@@ -3314,10 +3314,9 @@ void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t 
     level_lighting_revision[current_level_index]++;
 }
 
-/** Return the signed coarse level, vision floor and viewer/sample flags of a
- * sub-layer: MAP2_LOCAL_LIGHT_REMOTE (lit at another space, so the cell's
- * emitter field never composes into it) and MAP2_LOCAL_LIGHT_TLI (add the
- * viewer's tli daylight during composition). */
+/** Return the signed coarse level, vision floor and viewer flags of a
+ * sub-layer: MAP2_LOCAL_LIGHT_TLI (add the viewer's tli daylight during
+ * composition). */
 bool map_get_local_light_layer(
     int x, int y, uint8_t sub_layer, int8_t *level, bool *vision_floor, uint8_t *flags) {
     const map_cell_header_t *header =
@@ -3327,7 +3326,7 @@ bool map_get_local_light_layer(
         return false;
     }
     if (flags != NULL) {
-        *flags = header->local_light[sub_layer] & (MAP2_LOCAL_LIGHT_REMOTE | MAP2_LOCAL_LIGHT_TLI);
+        *flags = header->local_light[sub_layer] & MAP2_LOCAL_LIGHT_TLI;
     }
     return true;
 }
@@ -6218,14 +6217,13 @@ bool widget_map_client_lighting_state_test(void) {
     /* The getter reports the remote-sample bit with the decoded level. */
     uint8_t light_flags = 0xff;
     uint8_t remote_layers[2] = {map_protocol_local_light_encode(1, false) | MAP2_LOCAL_LIGHT_TLI,
-                                map_protocol_local_light_encode(-2, false) |
-                                    MAP2_LOCAL_LIGHT_REMOTE};
+                                map_protocol_local_light_encode(-2, false)};
     map_set_local_light_layers(7, 7, 2, remote_layers);
     success = success &&
               map_get_local_light_layer(7, 7, 0, &signed_level, &vision, &light_flags) &&
               light_flags == MAP2_LOCAL_LIGHT_TLI &&
               map_get_local_light_layer(7, 7, 1, &signed_level, &vision, &light_flags) &&
-              light_flags == MAP2_LOCAL_LIGHT_REMOTE && signed_level == -2;
+              light_flags == 0 && signed_level == -2;
     map_set_local_light_layers(7, 7, 2, layered);
 
     /* An aborted update restores the previous client-lighting state. */

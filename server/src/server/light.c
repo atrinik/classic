@@ -1561,6 +1561,11 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
 
 int8_t light_local_level(mapstruct *map, int x, int y) {
     HARD_ASSERT(map != NULL && map->spaces != NULL);
+    /* A block of fewer than nine cells would locate a hidden source too
+     * precisely: such a map reports no coarse light (fail closed). */
+    if (MAP_WIDTH(map) < 3 || MAP_HEIGHT(map) < 3) {
+        return 0;
+    }
     int bx, by, ex, ey;
     light_local_block(x, MAP_WIDTH(map), &bx, &ex);
     light_local_block(y, MAP_HEIGHT(map), &by, &ey);
@@ -1590,6 +1595,11 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
  */
 static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, int ex, int by,
                                     int ey, int32_t *positive, int32_t *negative) {
+    /* A map narrower than a block would pin a source to fewer than nine
+     * cells: it contributes nothing (fail closed). */
+    if (MAP_WIDTH(source) < 3 || MAP_HEIGHT(source) < 3) {
+        return;
+    }
     int reach = MAX_LIGHT_RADIUS;
     int x0 = MAX(0, bx - reach - ox), x1 = MIN(MAP_WIDTH(source), ex + reach - ox);
     int y0 = MAX(0, by - reach - oy), y1 = MIN(MAP_HEIGHT(source), ey + reach - oy);
