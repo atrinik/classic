@@ -1050,30 +1050,6 @@ static bool clioptions_option_recycle_tmp_maps(const char *arg, char **errmsg) {
 }
 
 /**
- * Description of the --client_lighting command.
- */
-static const char *clioptions_option_client_lighting_desc =
-    "Whether protocol 1085 clients compute presentation lighting themselves.\n\n"
-    "The server then sends base radiance, emitters of sent objects, a coarse "
-    "source-anonymous local light level and occluders instead of complete "
-    "radiance, to connections that negotiate the client compositor; other "
-    "clients keep complete radiance. Gameplay darkness is unaffected. Defaults "
-    "to false.";
-/** @copydoc clioptions_handler_func */
-static bool clioptions_option_client_lighting(const char *arg, char **errmsg) {
-    if (KEYWORD_IS_TRUE(arg)) {
-        settings.client_lighting = true;
-    } else if (KEYWORD_IS_FALSE(arg)) {
-        settings.client_lighting = false;
-    } else {
-        *errmsg = xstrdup("Expected true/false");
-        return false;
-    }
-
-    return true;
-}
-
-/**
  * Description of the --http_url command.
  */
 static const char *clioptions_option_http_url_desc =
@@ -1281,7 +1257,6 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE(cli, recycle_tmp_maps, "Preserve loaded map state across restarts");
     clioptions_enable_changeable(cli);
     /* Startup-only: connected sockets cache the lighting mode per cell. */
-    CLIOPTIONS_CREATE_ARGUMENT(cli, client_lighting, "Client-computed presentation lighting");
     CLIOPTIONS_CREATE_ARGUMENT(cli, speed, "Server speed");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, speed_multiplier, "Speed multiplier");

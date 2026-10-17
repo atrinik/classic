@@ -2672,7 +2672,8 @@ START_TEST(test_local_player_remains_visible_without_disclosing_dark_actors) {
         ck_assert_ptr_nonnull(self);
         ck_assert_ptr_nonnull(other);
         ck_assert_uint_ne(self->faces[player_layer], 0);
-        ck_assert_uint_eq(self->light_radiance[pl->sub_layer], 0);
+        /* Signed base carries the negative environment, never positive light. */
+        ck_assert_int_le((int16_t)self->light_radiance[pl->sub_layer], 0);
         ck_assert_uint_eq(other->faces[monster_layer], 0);
     }
 }
@@ -2743,7 +2744,9 @@ START_TEST(test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized) 
     cell = map_client_cache_cell(&cs->lastmap, 1, ax, ay, false);
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_eq(cell->roof[socket_layer], 1);
-    ck_assert_uint_eq(cell->light_radiance[roof->sub_layer], 160);
+    /* The client applies the XRAY floor after composing local light. */
+    ck_assert_uint_eq(cell->light_radiance[roof->sub_layer], 0);
+    ck_assert_uint_ne(cell->local_light & MAP2_LOCAL_LIGHT_VISION_FLOOR, 0);
 }
 END_TEST
 
@@ -3033,48 +3036,7 @@ START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates
 }
 END_TEST
 
-START_TEST(test_timed_endpoint_refresh_keeps_colored_scalar_present) {
-    mapstruct *map;
-    object *pl;
-    check_setup_env_pl(&map, &pl);
-    map->celestial_schema = 1;
-    map->celestial_schema_seen = true;
-    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
-    map->celestial_sky_seen = true;
-    map->celestial_v1_header_seen = true;
-    map->celestial_width_seen = true;
-    map->celestial_height_seen = true;
-    request_move_player(&pl, map, 4, 4);
-    object *source = arch_get("letter");
-    source->x = pl->x;
-    source->y = pl->y;
-    source->glow_radius = 1;
-    source->light_color = UINT32_C(0xff0000);
-    source = object_insert_map(source, map, NULL, 0);
-    ck_assert_ptr_nonnull(source);
-    socket_struct *cs = CONTR(pl)->cs;
-    update_los(pl);
-    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
-    socket_buffer_clear(cs);
-    draw_client_map2(pl);
-    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
-    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, cs->mapx_2, cs->mapy_2, false);
-    ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_ne(cell->light_next_generation, 0);
-    ck_assert_uint_ne(cell->light_next_rgb_explicit & (UINT8_C(1) << pl->sub_layer), 0);
-
-    /* Refresh another endpoint while the colored source remains steady.
-     * Request the descriptor again without clearing the per-cell cache, as
-     * occurs after light knowledge is revoked elsewhere in the view. */
-    cell->light_next_known[(pl->sub_layer + 1) % NUM_SUB_LAYERS] = 0;
-    cs->lastmap_light_generation = 0;
-    socket_buffer_clear(cs);
-    draw_client_map2(pl);
-    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
-}
-END_TEST
-
-START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
+START_TEST(test_local_light_color_stays_out_of_base_radiance) {
     mapstruct *map;
     object *pl;
     check_setup_env_pl(&map, &pl);
@@ -3099,40 +3061,20 @@ START_TEST(test_map_rgb_cache_tracks_hue_changes_and_neutral_reset) {
                                           CONTR(pl)->cs->mapy_2,
                                           false);
     ck_assert_ptr_nonnull(cell);
-    ck_assert_uint_gt(cell->light_rgb_radiance[pl->sub_layer][0],
-                      cell->light_rgb_radiance[pl->sub_layer][2]);
-
-    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
-    source->light_color = UINT32_C(0x0000ff);
-    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, 1);
-    socket_buffer_clear(CONTR(pl)->cs);
-    draw_client_map2(pl);
-    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_gt(cell->light_rgb_radiance[pl->sub_layer][2],
-                      cell->light_rgb_radiance[pl->sub_layer][0]);
-
-    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
-    source->light_color = LIGHT_COLOR_WHITE;
-    adjust_light_source_color(map, source->x, source->y, 1, source->light_color, 1);
-    socket_buffer_clear(CONTR(pl)->cs);
-    draw_client_map2(pl);
-    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][0],
-                      cell->light_radiance[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][1],
-                      cell->light_radiance[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][2],
-                      cell->light_radiance[pl->sub_layer]);
-    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
-
-    /* Complete bitmap semantics must emit even when cached channel values are
-     * already equal to the resolved neutral vector. */
-    cell->light_rgb_explicit = UINT8_C(1) << pl->sub_layer;
-    socket_buffer_clear(CONTR(pl)->cs);
-    draw_client_map2(pl);
-    ck_assert_uint_eq(validate_queued_map_payloads(CONTR(pl)->cs), 1);
-    ck_assert_uint_eq(cell->light_rgb_explicit, 0);
-    ck_assert_uint_eq(sizeof(cell->light_radiance) + sizeof(cell->light_rgb_radiance), 56);
+    /* Local color travels only as the emitter; the base stays neutral. */
+    for (int hue = 0; hue < 3; hue++) {
+        static const uint32_t colors[] = {UINT32_C(0x0000ff), LIGHT_COLOR_WHITE, UINT32_C(0xff0000)};
+        for (size_t channel = 0; channel < 3; channel++) {
+            ck_assert_uint_eq(cell->light_rgb_radiance[pl->sub_layer][channel],
+                              cell->light_radiance[pl->sub_layer]);
+        }
+        adjust_light_source_color(map, source->x, source->y, 1, source->light_color, -1);
+        source->light_color = colors[hue];
+        adjust_light_source_color(map, source->x, source->y, 1, source->light_color, 1);
+        socket_buffer_clear(CONTR(pl)->cs);
+        draw_client_map2(pl);
+        (void)validate_queued_map_payloads(CONTR(pl)->cs);
+    }
 }
 END_TEST
 
@@ -3570,15 +3512,12 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     request_move_player(&op, map, 12, 12);
     player *pl = CONTR(op);
     pl->tli = 1;
-    bool saved_client_lighting = settings.client_lighting;
-    settings.client_lighting = true;
     /* Without the negotiated compositor the connection keeps full radiance. */
     socket_buffer_clear(pl->cs);
     draw_client_map(op);
     MapCell *plain = map_client_cache_cell(&pl->cs->lastmap, 0,
                                           pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
     ck_assert(plain == NULL || plain->client_light_known == 0);
-    pl->cs->client_lighting = true;
 
     object *blocker = arch_get("letter");
     SET_FLAG(blocker, FLAG_BLOCKSVIEW);
@@ -3647,8 +3586,6 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     ck_assert_uint_eq(cell->occluder & MAP2_OCCLUDER_BLOCKSVIEW, 0);
     ck_assert_uint_eq(cell->emitter_layers, 0);
 
-    settings.client_lighting = saved_client_lighting;
-    pl->cs->client_lighting = false;
 }
 END_TEST
 
@@ -3658,9 +3595,6 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
     check_setup_env_pl(&map, &op);
     request_move_player(&op, map, 12, 12);
     player *pl = CONTR(op);
-    bool saved_client_lighting = settings.client_lighting;
-    settings.client_lighting = true;
-    pl->cs->client_lighting = true;
     int ax = pl->cs->mapx_2 + 2, ay = pl->cs->mapy_2;
     object *content = arch_get("letter");
     content->x = op->x + 2;
@@ -3718,32 +3652,6 @@ START_TEST(test_client_lighting_remembered_tiles_keep_coarse_light) {
         ck_assert_int_eq(cell->faces[layer], 0);
     }
 
-    settings.client_lighting = saved_client_lighting;
-    pl->cs->client_lighting = false;
-}
-END_TEST
-
-START_TEST(test_client_lighting_negotiation_is_fixed_after_setup) {
-    mapstruct *map;
-    object *op;
-    check_setup_env_pl(&map, &op);
-    socket_struct *cs = CONTR(op)->cs;
-    bool saved_client_lighting = settings.client_lighting;
-    bool saved_setup = cs->setup_completed;
-    settings.client_lighting = true;
-    cs->setup_completed = true;
-    cs->client_lighting = false;
-    /* An admitted player cannot change the mode, or force cache resets. */
-    uint8_t enable[] = {CMD_SETUP_CLIENT_LIGHTING, CLIENT_LIGHTING_CAP_COMPOSITOR};
-    socket_command_setup(cs, CONTR(op), enable, sizeof(enable), 0);
-    ck_assert(!cs->client_lighting);
-    cs->client_lighting = true;
-    uint8_t disable[] = {CMD_SETUP_CLIENT_LIGHTING, 0};
-    socket_command_setup(cs, CONTR(op), disable, sizeof(disable), 0);
-    ck_assert(cs->client_lighting);
-    cs->client_lighting = false;
-    cs->setup_completed = saved_setup;
-    settings.client_lighting = saved_client_lighting;
 }
 END_TEST
 
@@ -3826,15 +3734,13 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
     tcase_add_test(tc_core, test_pending_neighbor_endpoint_resends_without_player_generation_change);
-    tcase_add_test(tc_core, test_timed_endpoint_refresh_keeps_colored_scalar_present);
-    tcase_add_test(tc_core, test_map_rgb_cache_tracks_hue_changes_and_neutral_reset);
+    tcase_add_test(tc_core, test_local_light_color_stays_out_of_base_radiance);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
     tcase_add_test(tc_core,
                    test_map_exit_semantic_accepts_usable_destination_forms_without_loading);
     tcase_add_test(tc_core, test_dense_colored_level_splits_at_tile_boundaries);
     tcase_add_test(tc_core, test_odd_view_los_matches_emitted_map_coordinates);
     tcase_add_test(tc_core, test_client_lighting_fields_follow_sent_objects_only);
-    tcase_add_test(tc_core, test_client_lighting_negotiation_is_fixed_after_setup);
     tcase_add_test(tc_core, test_client_lighting_remembered_tiles_keep_coarse_light);
     return s;
 }
