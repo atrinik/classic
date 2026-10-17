@@ -1867,7 +1867,8 @@ void draw_client_map2(object *pl) {
                             uint32_t emitter_color = tmp->light_color & UINT32_C(0xffffff);
                             /* Darkness is achromatic; a positive source with a
                              * zero linear peak is rejected as authored light. */
-                            if (client_lighting && tmp->glow_radius != 0 &&
+                            /* Remembered cells in fog carry no live light. */
+                            if (client_lighting && !tile_fow && tmp->glow_radius != 0 &&
                                 (tmp->glow_radius < 0 || emitter_color != 0)) {
                                 /* Unclamped: the client sums a tile's radii
                                  * before light_mask saturates them. */
@@ -2335,13 +2336,11 @@ void draw_client_map2(object *pl) {
                     mp->emitter_stale |= mp->emitter_layers & ~cell_emitter_sent;
                     mp->emitter_digest = cell_emitter_digest;
                 }
-                /* The client forgets the live level and emitters in fog; resend
-                 * both once the cell is visible again. */
+                /* The client forgets the live level in fog; resend it once the
+                 * cell is visible again. Emitters are withheld in fog, so their
+                 * layers are resent on return through the presence bit. */
                 if (client_lighting && tile_fow) {
                     mp->client_light_known &= (uint8_t)~1U;
-                    if (light_state_discarded) {
-                        mp->emitter_stale |= mp->emitter_layers;
-                    }
                 }
                 uint8_t local_light = 0, occluder = 0;
                 if (client_lighting && !tile_fow) {

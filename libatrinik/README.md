@@ -11,7 +11,7 @@ commit. The historical checksum-pinned archive in `dependencies.lock.json`
 lacks the generated rendezvous admission definitions and current TALK API, so it
 already fails configure. Public `socket.h` exports the canonical TALK modes 1–7
 and authored framing header. Configuration and installed-package consumption
-require protocol revision 1084 or later with those definitions, the 4095-byte
+require protocol revision 1085 or later with those definitions, the 4095-byte
 message bound and eight-byte fixed framing; a package carrying admission alone
 is insufficient. Endpoint handshakes still enforce their exact wire revision.
 Until a matching immutable artifact is published, select matching sibling,

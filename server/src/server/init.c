@@ -1060,7 +1060,10 @@ static const char *clioptions_option_client_lighting_desc =
 /** @copydoc clioptions_handler_func */
 static bool clioptions_option_client_lighting(const char *arg, char **errmsg) {
     if (KEYWORD_IS_TRUE(arg)) {
-        settings.client_lighting = true;
+        /* Clients would render base radiance only until they compose
+         * emitters and the coarse level themselves. */
+        *errmsg = xstrdup("client_lighting needs the client compositor, which this release lacks");
+        return false;
     } else if (KEYWORD_IS_FALSE(arg)) {
         settings.client_lighting = false;
     } else {
