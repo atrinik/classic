@@ -34,6 +34,7 @@
 #include <object.h>
 #include <spatial.h>
 #include <region.h>
+#include <los.h>
 
 #define NR_LIGHT_MASK 10
 #define MAX_LIGHT_SOURCE 13
@@ -527,9 +528,96 @@ static void light_component_collect(light_map_set *component, const light_map_se
     graph->index = index;
 }
 
-static mapstruct *light_resolve_space(mapstruct *map, int x, int y, int z, int *rx, int *ry) {
+#define LIGHT_RESOLVE_SPAN (2 * MAX_LIGHT_RADIUS + 1)
+
+/** Resolutions of one source's mask box, shared by its target lookups and all
+ * of its ray steps. spatial_resolve() depends only on map structure, so an
+ * entry stays valid while the LOS geometry epoch is unchanged. Disabled while
+ * a dependency observer must see every visit.
+ *
+ * A rebuild also shares one cache between the scalar, positive and color masks
+ * of an origin. Their rays are identical, so each offset remembers its last
+ * path value. Object geometry cannot change within one synchronous rebuild;
+ * callers outside a rebuild use a private cache per mask. */
+typedef struct light_resolve_cache {
+    mapstruct *origin;
+    int x, y;
+    uint64_t epoch;
+    bool enabled;
+    uint8_t state[LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN];
+    spatial_cell cells[LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN];
+    bool path_known[LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN];
+    int path_in[LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN];
+    int path_out[LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN][LIGHT_RESOLVE_SPAN];
+} light_resolve_cache;
+
+enum { LIGHT_RESOLVE_UNKNOWN, LIGHT_RESOLVE_FOUND, LIGHT_RESOLVE_MISSING };
+
+static void light_resolve_cache_reset(light_resolve_cache *cache) {
+    memset(cache->state, LIGHT_RESOLVE_UNKNOWN, sizeof(cache->state));
+    memset(cache->path_known, 0, sizeof(cache->path_known));
+    cache->epoch = los_geometry_epoch();
+}
+
+static void light_resolve_cache_init(light_resolve_cache *cache, mapstruct *origin, int x, int y) {
+    cache->origin = origin;
+    cache->x = x;
+    cache->y = y;
+    cache->enabled = !spatial_observer_active();
+    light_resolve_cache_reset(cache);
+}
+
+static bool light_resolve_cached(light_resolve_cache *cache, int x, int y, int z,
+                                 spatial_cell *cell) {
+    int ix = x - cache->x + MAX_LIGHT_RADIUS, iy = y - cache->y + MAX_LIGHT_RADIUS;
+    int iz = z + MAX_LIGHT_RADIUS;
+    if (!cache->enabled || ix < 0 || iy < 0 || iz < 0 || ix >= LIGHT_RESOLVE_SPAN ||
+        iy >= LIGHT_RESOLVE_SPAN || iz >= LIGHT_RESOLVE_SPAN) {
+        return spatial_resolve(cache->origin, x, y, z, cell);
+    }
+    if (cache->epoch != los_geometry_epoch()) {
+        light_resolve_cache_reset(cache);
+    }
+    uint8_t *state = &cache->state[iz][iy][ix];
+    if (*state == LIGHT_RESOLVE_UNKNOWN) {
+        spatial_cell resolved;
+        bool found = spatial_resolve(cache->origin, x, y, z, &resolved);
+        if (cache->epoch != los_geometry_epoch()) {
+            /* Resolution loaded a map. Keep nothing from before or during it. */
+            light_resolve_cache_reset(cache);
+            if (found) {
+                *cell = resolved;
+            }
+            return found;
+        }
+        /* A failed resolution need not initialize its cell; keep only the state. */
+        if (!found) {
+            *state = LIGHT_RESOLVE_MISSING;
+            return false;
+        }
+        cache->cells[iz][iy][ix] = resolved;
+        *state = LIGHT_RESOLVE_FOUND;
+    }
+    if (*state == LIGHT_RESOLVE_MISSING) {
+        return false;
+    }
+    *cell = cache->cells[iz][iy][ix];
+    return true;
+}
+
+static bool light_ray_resolve(mapstruct *origin, int x, int y, int z, spatial_cell *cell,
+                              void *context) {
+    light_resolve_cache *cache = context;
+    if (origin != cache->origin) {
+        return spatial_resolve(origin, x, y, z, cell);
+    }
+    return light_resolve_cached(cache, x, y, z, cell);
+}
+
+static mapstruct *light_resolve_space(light_resolve_cache *cache, int x, int y, int z,
+                                      int *rx, int *ry) {
     spatial_cell cell;
-    if (!spatial_resolve(map, x, y, z, &cell)) return NULL;
+    if (!light_resolve_cached(cache, x, y, z, &cell)) return NULL;
     *rx = cell.x;
     *ry = cell.y;
     return cell.map;
@@ -671,15 +759,15 @@ static bool light_terminal_surface(const spatial_cell *cell) {
 
 /** The radial mask stays authoritative; physical crossings attenuate it in
  * travel order before signed scalar and normalized color aggregation. */
-static int light_path_value(mapstruct *map, int x, int y, int dx, int dy, int dz,
-                            int value) {
+static int light_path_trace(light_resolve_cache *cache, int dx, int dy, int dz, int value) {
     spatial_cursor ray;
-    if (!spatial_ray_init(&ray, map, x, y, dx, dy, dz)) return 0;
+    if (!spatial_ray_init(&ray, cache->origin, cache->x, cache->y, dx, dy, dz)) return 0;
     int sign = value < 0 ? -1 : 1;
     int32_t transmitted = abs(value);
     spatial_event event;
     int status;
-    while ((status = spatial_ray_next(&ray, &event)) == 1) {
+    while ((status = cache->enabled ? spatial_ray_next_resolved(&ray, &event, light_ray_resolve, cache)
+                                    : spatial_ray_next(&ray, &event)) == 1) {
         if (!event.valid) return 0;
         for (size_t i = 0; i < event.face_count; i++) {
             if (!light_face_continuous(&event.faces[i])) return 0;
@@ -704,6 +792,27 @@ static int light_path_value(mapstruct *map, int x, int y, int dx, int dy, int dz
         if (transmitted == 0) return 0;
     }
     return status == 0 ? sign * transmitted : 0;
+}
+
+static int light_path_value(light_resolve_cache *cache, int dx, int dy, int dz, int value) {
+    if (!cache->enabled) {
+        return light_path_trace(cache, dx, dy, dz, value);
+    }
+    if (cache->epoch != los_geometry_epoch()) {
+        light_resolve_cache_reset(cache);
+    }
+    int ix = dx + MAX_LIGHT_RADIUS, iy = dy + MAX_LIGHT_RADIUS, iz = dz + MAX_LIGHT_RADIUS;
+    if (cache->path_known[iz][iy][ix] && cache->path_in[iz][iy][ix] == value) {
+        return cache->path_out[iz][iy][ix];
+    }
+    uint64_t epoch = cache->epoch;
+    int result = light_path_trace(cache, dx, dy, dz, value);
+    if (cache->epoch == epoch && epoch == los_geometry_epoch()) {
+        cache->path_known[iz][iy][ix] = true;
+        cache->path_in[iz][iy][ix] = value;
+        cache->path_out[iz][iy][ix] = result;
+    }
+    return result;
 }
 
 /** Calculate the deterministic monotonic radial profile at one distance. */
@@ -764,7 +873,8 @@ static void light_mask_adjust(mapstruct *map,
                               const light_map_set *only_maps,
                               bool other_only,
                               light_mask_component_t component,
-                              uint32_t color) {
+                              uint32_t color,
+                              light_resolve_cache *shared) {
     if (intensity < 0) {
         mod = -mod;
     }
@@ -772,6 +882,13 @@ static void light_mask_adjust(mapstruct *map,
     intensity = abs(intensity);
     int radius = light_profiles[intensity].radial_radius;
     int vertical_radius = MIN(radius, MAP2_MAX_DEPTH);
+    HARD_ASSERT(radius <= MAX_LIGHT_RADIUS);
+    light_resolve_cache local, *cache = shared;
+    if (cache == NULL) {
+        cache = &local;
+        light_resolve_cache_init(cache, map, x, y);
+    }
+    HARD_ASSERT(cache->origin == map && cache->x == x && cache->y == y);
 
     for (int dy = -radius; dy <= radius; dy++) {
         for (int dx = -radius; dx <= radius; dx++) {
@@ -787,7 +904,7 @@ static void light_mask_adjust(mapstruct *map,
                 }
 
                 int xt, yt;
-                mapstruct *target = light_resolve_space(map, x + dx, y + dy, dz, &xt, &yt);
+                mapstruct *target = light_resolve_space(cache, x + dx, y + dy, dz, &xt, &yt);
 
                 if (target == NULL || (only_map != NULL && target != only_map) ||
                     (only_maps != NULL && !light_map_set_contains(only_maps, target)) ||
@@ -795,7 +912,7 @@ static void light_mask_adjust(mapstruct *map,
                     continue;
                 }
 
-                value = light_path_value(map, x, y, dx, dy, dz, value);
+                value = light_path_value(cache, dx, dy, dz, value);
                 if (value == 0) continue;
                 MapSpace *space = GET_MAP_SPACE_PTR(target, xt, yt);
                 if (component == LIGHT_MASK_SCALAR) {
@@ -862,10 +979,10 @@ static void adjust_grouped_light_source(mapstruct *map,
 
     if (map->in_memory != MAP_LOADING && old_mask != new_mask) {
         if (old_mask != 0) {
-            light_mask_adjust(map, x, y, old_mask, -1, NULL, NULL, false, component, 0);
+            light_mask_adjust(map, x, y, old_mask, -1, NULL, NULL, false, component, 0, NULL);
         }
         if (new_mask != 0) {
-            light_mask_adjust(map, x, y, new_mask, 1, NULL, NULL, false, component, 0);
+            light_mask_adjust(map, x, y, new_mask, 1, NULL, NULL, false, component, 0, NULL);
         }
     }
     light_origin_list_update(map, space);
@@ -916,7 +1033,8 @@ void adjust_light_source_color(mapstruct *map,
                           NULL,
                           false,
                           LIGHT_MASK_COLOR,
-                          color);
+                          color,
+                          NULL);
     }
 }
 
@@ -1006,6 +1124,8 @@ static void light_rebuild_targets(const light_map_set *maps, const light_map_set
             ptrdiff_t origin = tmp - source_map->spaces;
             int x = (int)(origin % MAP_WIDTH(source_map));
             int y = (int)(origin / MAP_WIDTH(source_map));
+            light_resolve_cache cache;
+            light_resolve_cache_init(&cache, source_map, x, y);
             int scalar_mask = get_real_light_source_value(tmp->light_source);
             if (scalar_mask != 0) {
                 light_mask_adjust(source_map,
@@ -1017,7 +1137,8 @@ static void light_rebuild_targets(const light_map_set *maps, const light_map_set
                                   write_targets,
                                   false,
                                   LIGHT_MASK_SCALAR,
-                                  0);
+                                  0,
+                                  &cache);
             }
             if (tmp->light_source_positive != 0) {
                 light_mask_adjust(source_map,
@@ -1029,7 +1150,8 @@ static void light_rebuild_targets(const light_map_set *maps, const light_map_set
                                   write_targets,
                                   false,
                                   LIGHT_MASK_POSITIVE,
-                                  0);
+                                  0,
+                                  &cache);
             }
             for (object *source = tmp->first; source != NULL; source = source->above) {
                 if (source->glow_radius <= 0) {
@@ -1045,7 +1167,8 @@ static void light_rebuild_targets(const light_map_set *maps, const light_map_set
                                   write_targets,
                                   false,
                                   LIGHT_MASK_COLOR,
-                                  color);
+                                  color,
+                                  &cache);
             }
         }
     }
@@ -1214,7 +1337,8 @@ void remove_light_source_list(mapstruct *map) {
                               NULL,
                               true,
                               LIGHT_MASK_SCALAR,
-                              0);
+                              0,
+                              NULL);
         }
         int positive_mask = get_real_light_source_value(tmp->light_source_positive);
         if (positive_mask != 0) {
@@ -1227,7 +1351,8 @@ void remove_light_source_list(mapstruct *map) {
                               NULL,
                               true,
                               LIGHT_MASK_POSITIVE,
-                              0);
+                              0,
+                              NULL);
         }
     }
 
@@ -1253,7 +1378,8 @@ void remove_light_source_list(mapstruct *map) {
                                       NULL,
                                       true,
                                       LIGHT_MASK_COLOR,
-                                      color);
+                                      color,
+                                      NULL);
                 }
             }
         }

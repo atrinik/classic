@@ -28,6 +28,7 @@
  */
 
 #include <global.h>
+#include <celestial_dependencies.h>
 #include <swap.h>
 #include <server_main.h>
 #include <initialization.h>
@@ -109,6 +110,7 @@ void read_map_log(void) {
             map->celestial_schema = 1;
             map->celestial_v1_header_seen = true;
         }
+        celestial_dependencies_inputs_changed();
 
         if (darkness == -1) {
             darkness = MAX_DARKNESS;
