@@ -129,7 +129,11 @@ only on a positive radius; darkness never flickers.
 Every per-sub-layer scalar and RGB lighting word is a **signed** two's
 complement `int16`, signed Q4.11 on the existing scale (2048 is raw 1280,
 daylight). It carries environment only: no local source, no XRAY floor and no
-celestial light, which the client computes itself (see Celestial lighting). Encoding from the server's raw value `r`:
+celestial light, which the client computes itself (see Celestial lighting).
+The one exception is a sub-layer whose light is sampled at another space than
+its own cell, such as a magic mirror showing a remote place: its word also
+carries that space's celestial radiance, because the client's celestial field
+covers only its own closure. Encoding from the server's raw value `r`:
 
 - `q = sign(r) · floor((|r| · 8 + 2) / 5)`, the existing Q5.11 rounding applied to the
   magnitude, so `Q(-r) = -Q(r)`;
@@ -201,21 +205,28 @@ connection.
     coordinates (`x - x % 3`, `y - y % 3`). A remainder of one or two cells at a
     map edge joins the adjacent block instead of forming a smaller one, so no
     block is narrower than three cells unless the map itself is;
-  - pool the scalar source counters of each block and resolve the sum through
-    the same mask table, before any propagation. The pooled source of a block
+  - pool each block's sources as its strongest positive and strongest
+    negative per-tile scalar mask, before any propagation. Tiles of a block are
+    never summed with each other, so a viewer who controls a known light on
+    another tile of the block cannot combine it with a hidden source through
+    the nonlinear mask and recover that source's radius from where the level
+    saturates: raising the known radius reveals only `max(known, hidden)`,
+    which the level already discloses with no known light at all. The pooled
+    source of a block
     reaches another block by the gap between the two blocks in cells (0 for
     the own block, 1 for an edge neighbor, `√2` for a corner one), which
     depends only on block geometry. The own block and its eight neighbors are
     within the largest radius. Neighbors across a seam light crosses (a
     resident reciprocal link, and continuity as `light_face_continuous()`
-    requires) count too, on maps that match along the seam so blocks align, and
-    so do blocks at the same position on such linked levels above and below,
-    adding the vertical distance as the server's masks do. No map is ever
+    requires) count too, on maps that match along the seam so blocks align.
+    The own block and its eight neighbors on every such linked level above and
+    below count as well, adding the vertical distance to the horizontal gap as
+    the server's masks combine `dx`, `dy` and `dz`. No map is ever
     loaded for it. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
     triangulate its tile;
-  - the strongest positive and the strongest negative pooled contribution
-    compete; the larger magnitude wins;
+  - the strongest positive and the strongest negative contribution reaching
+    the block compete; the larger magnitude wins;
   - quantize the magnitude down to 1/8-daylight levels (raw 160), clamp to 15,
     and keep the sign.
 - **Remembered tiles are frozen.** When base LOS loss turns an authorized tile
@@ -413,9 +424,13 @@ the closure.
 - the effective phases of the current hour and of the next hour: solar hour
   `0..23`, season phase `0..8063` and lunar age `0..lunar_period - 1`, after
   the server has applied the cycle mappings and any active lunar override;
-- the start of the current hour in game seconds, so the client interpolates
-  from the current to the next hour's phases over that hour in lockstep with the
-  base endpoints.
+- the start of the current hour in game seconds. The client solves one field
+  with the current hour's inputs and one with the next hour's, each with the
+  shared solver, and blends their final per-cell scalar and RGB values exactly
+  as it blends the base keyframe endpoints: for `p` game seconds since the
+  start, clamped to `0..3600`, a value is `c + round((n - c) · p / 3600)` with
+  rounding half away from zero, in signed arithmetic. Phases and directions are
+  never interpolated, so every client presents the same mid-hour field.
 
 The client never learns epochs, rates or override controls: the server resolves
 time to phases, so time authority stays on the server.
@@ -425,6 +440,7 @@ the shared `celestial_protocol_write()`/`celestial_protocol_read()`:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
+| generation | `uint32` | pairs this payload with one `CELESTIAL_STRUCTURE` |
 | start | `uint64` | start of the current hour, game seconds |
 | count | `uint8` | number of slot records, `0..255` |
 | per slot: slot | `uint8` | `0..254`, strictly increasing |
@@ -471,6 +487,7 @@ fragments, in network byte order:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
+| generation | `uint32` | the `CELESTIAL` payload whose slots it references |
 | count | `uint16` | number of fragments |
 | per fragment: depth | `int8` | `-6..6`, relative to the viewer |
 | x, y, width, height | `uint8` each | rectangle within the MAP2 window, nonempty and inside it |
@@ -490,9 +507,23 @@ exceeding its bounds, overlap and reserved bits, before replacing the closure.
 The fragment's slot selects the model that solves its cells, as the server
 selects a model per map. The worst case is the 17×17 window over 13 depths,
 3,757 cells, at most 4 bytes each even when no run merges, about 15 KB with
-fragment headers, so a complete closure always fits in one command: each `CELESTIAL_STRUCTURE` replaces the client's closure atomically,
-and no continuation framing is needed. It is resent when the closure moves
-with the player, or when a structure revision, door or gate changes a
+fragment headers, so a complete closure always fits in one command and no
+continuation framing is needed.
+
+The two commands are one publication. The server advances the generation
+whenever either payload changes and sends both with it; the client stages each
+validated payload and replaces its slots and closure together only once it
+holds both with the same generation, so fragments are never solved with
+another generation's profiles. A rejected payload is discarded and the
+previous published pair stays in use until a complete matching pair arrives.
+A fragment of a schema-0 map always carries slot 255: the server computes no
+celestial field for legacy maps, so neither does the client.
+
+The server recomputes the disclosed value of every closure cell on each MAP2
+update and sends a new pair whenever the closure or any value differs from the
+last one sent: when the closure moves with the player, and when a structure
+revision, door or gate, or a change in which objects MAP2 sends to this viewer
+(seeing invisible, direction filtering or plugin visibility) changes a
 currently visible cell.
 
 Disclosure rule: a cell's structure value is built only from the objects MAP2
@@ -573,8 +604,10 @@ What a modified client can learn, beyond today's MAP2:
 - **Sent emitters:** radius, flicker opt-in and color of objects it already
   sees. This is new, but it concerns only already-authorized objects.
 - **Hidden light:** for each visible authorized tile and sub-layer, the signed
-  1/8-daylight level of local light, with sources pooled per fixed 3×3 block
-  before propagation. A source anywhere inside a block gives every block the
+  1/8-daylight level of local light, with each block pooled as its strongest
+  per-tile masks before propagation. A known light the viewer controls never
+  combines with a hidden one on another tile, so stepping its radius reveals
+  only the maximum, which the level already shows. A source anywhere inside a block gives every block the
   same level, so neither the peak nor the levels of neighboring blocks locate
   it more precisely than its block. Sources on one tile group before the
   nonlinear profile, so separating co-located sources can change a level (for
