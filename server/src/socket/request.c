@@ -1222,9 +1222,13 @@ void draw_client_map2(object *pl) {
     uint16_t light_next_radiance[NUM_SUB_LAYERS];
     uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
     MapSpace *light_spaces[NUM_SUB_LAYERS];
-    /* Where each sub-layer's light sample was taken, for its coarse level. */
+    /* Where each sub-layer's light sample was taken, for its coarse level,
+     * and the candidate it was taken from: a candidate rejected afterwards
+     * by darkness gating or plugin visibility resets it to the cell, so no
+     * unsent object selects the sampled space or the remote-sample bit. */
     mapstruct *light_maps[NUM_SUB_LAYERS];
     int light_xs[NUM_SUB_LAYERS], light_ys[NUM_SUB_LAYERS];
+    const object *light_sample_objects[NUM_SUB_LAYERS];
     bool light_next_ready[NUM_SUB_LAYERS];
     int ext_flags, anim_num;
     int num_layers;
@@ -1587,6 +1591,7 @@ void draw_client_map2(object *pl) {
                            sizeof(light_next_rgb_radiance[sub_layer]));
                     light_spaces[sub_layer] = NULL;
                     light_maps[sub_layer] = NULL;
+                    light_sample_objects[sub_layer] = NULL;
                     light_next_ready[sub_layer] = false;
                 }
 
@@ -1713,6 +1718,7 @@ void draw_client_map2(object *pl) {
                             }
                             light_spaces[sub_layer] = GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y);
                             light_maps[sub_layer] = tmp->map;
+                            light_sample_objects[sub_layer] = tmp;
                             light_xs[sub_layer] = tmp->x;
                             light_ys[sub_layer] = tmp->y;
                             raw_light[sub_layer] = map_get_darkness(tmp->map, tmp->x, tmp->y, NULL);
@@ -1754,6 +1760,9 @@ void draw_client_map2(object *pl) {
                          * exception grants no visibility to other live objects. */
                         if (tmp != NULL && tmp != pl && raw_light[sub_layer] <= 0 &&
                             !map_layer_is_remembered_geometry(layer) && !roof_surface) {
+                            if (light_sample_objects[sub_layer] == tmp) {
+                                light_maps[sub_layer] = NULL;
+                            }
                             tmp = NULL;
                         }
 
@@ -1946,6 +1955,9 @@ void draw_client_map2(object *pl) {
                              * reveal transitions produce the required wire
                              * update. */
                             if (hidden) {
+                                if (light_sample_objects[sub_layer] == tmp) {
+                                    light_maps[sub_layer] = NULL;
+                                }
                                 if (flags2 & MAP2_FLAG2_PROBE) {
                                     CONTR(pl)->target_object = NULL;
                                     CONTR(pl)->target_object_count = 0;
