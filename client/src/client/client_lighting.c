@@ -33,12 +33,16 @@ typedef struct client_lighting_accumulator {
     int64_t weight;
 } client_lighting_accumulator_t;
 
-/** Coefficient of crossing a cell: 0 for view blockers, else its attenuation. */
+/**
+ * Coefficient of crossing a cell from its attenuation alone: 15 is opaque, so
+ * an unauthored view blocker stops light while authored glass or a grate that
+ * also blocks view still transmits.
+ */
 static uint16_t client_lighting_coefficient(uint8_t occluder) {
-    if (occluder & MAP2_OCCLUDER_BLOCKSVIEW) {
+    int attenuation = occluder >> MAP2_OCCLUDER_ATTENUATION_SHIFT;
+    if (attenuation == 15) {
         return 0;
     }
-    int attenuation = occluder >> MAP2_OCCLUDER_ATTENUATION_SHIFT;
     return (uint16_t)(256 - attenuation * MAP2_OCCLUDER_ATTENUATION_STEP);
 }
 

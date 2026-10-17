@@ -4187,6 +4187,8 @@ static void map_lighting_radiance(int x,
                                   uint16_t *scalar,
                                   uint16_t rgb[3]);
 
+static void map_client_lighting_apply(int x, int y, uint16_t *scalar, uint16_t rgb[3]);
+
 /** Historical scalar storage is not current lighting authority after a soft clear. */
 static uint16_t
 map_remembered_discrete_radiance(int x, int y, const map_cell_t *cell, uint8_t sub_layer) {
@@ -4369,6 +4371,11 @@ static void draw_map_object(SDL_Surface *surface, map_render_data_t *data) {
 
     if (BIT_QUERY(effects.flags, SPRITE_FLAG_DARK)) {
         uint16_t radiance = map_cell_light_record_read(data->cell, data->sub_layer)->radiance;
+        if (!data->cell->fow) {
+            /* Discrete lighting composes client light like the smooth path. */
+            uint16_t rgb[3] = {radiance, radiance, radiance};
+            map_client_lighting_apply(data->x, data->y, &radiance, rgb);
+        }
         if (data->cell->fow && remembered) {
             radiance =
                 map_remembered_discrete_radiance(data->x, data->y, data->cell, data->sub_layer);
