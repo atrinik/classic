@@ -157,9 +157,12 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    gating uses each cell's own server light, so such a cell can look lit while
    its dark-gated live objects remain unsent.
 
-   The emitter sum carries hue; the coarse term is neutral. Final radiance =
-   base + `L`, then the vision floor if bit 7 is set, before the unchanged
-   Q16 tone/LUT stage.
+   The emitter sum carries hue as signed per-channel deltas relative to its
+   scalar, so overlapping light and darkness keep the server's color shift; the
+   coarse term is neutral. Final radiance = base + `L` per scalar and channel,
+   saturated to `0..65535` before the vision floor (if bit 7 is set) and before
+   the unchanged unsigned Q16 tone/LUT stage. Negative intermediate values never
+   reach that stage.
 4. Recompute when emitters, occluders, coarse levels or the camera change. A
    presentation-only time uniform permits flicker for emitters whose archetype
    opts in, without server traffic.
@@ -169,6 +172,21 @@ coarse term already includes visible sources. The cost is underestimating
 overlaps of a visible and a hidden source, which is an accepted presentation
 trade-off. Remembered (FOW) cells keep their remembered occluders and no live
 emitters or coarse light.
+
+## Contract change: visible emitters
+
+MAP_RENDERING.md currently states that no visual change may disclose radiance
+source identity. This design deliberately narrows that invariant to **objects
+the viewer cannot see**. For a sent object, MAP2 now discloses whether it emits
+light, with its radius and color. Two visually identical sent objects with
+different light properties are therefore distinguishable. That is the price
+of computing presentation lighting on the client, and the rollout's final step
+updates MAP_RENDERING.md to say so.
+
+Content that must keep a visible object's light private can be excluded from
+emitter disclosure. A proposed `light_private` object attribute would keep that
+object's light server-side, contributing only through the coarse level, at the
+cost of coarser presentation (see Open questions).
 
 ## Privacy argument
 
@@ -249,6 +267,8 @@ and equal disclosure for visible ones.
   solver, but it requires sending sky-exposure structure for upper levels that
   are not visible.
 - Flicker opt-in: an archetype attribute versus a profile flag.
+- `light_private`: whether content needs visible objects whose light stays
+  server-side, and whether it should be an attribute or an archetype default.
 
 ## Follow-up work outside this protocol change
 

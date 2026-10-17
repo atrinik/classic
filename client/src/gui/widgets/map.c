@@ -1882,6 +1882,9 @@ void map_cell_snapshot(int x, int y, map_cell_snapshot_t *snapshot) {
         .support_height = header->support_height,
         .fow = header->fow,
         .structural_fow = header->structural_fow,
+        .local_light = header->local_light,
+        .occluder = header->occluder,
+        .client_light_known = header->client_light_known,
     };
 }
 
@@ -1891,7 +1894,10 @@ bool map_cell_changed(int x, int y, const map_cell_snapshot_t *snapshot) {
     map_cell_snapshot(x, y, &current);
     return snapshot->content_hash != current.content_hash ||
            snapshot->support_height != current.support_height || snapshot->fow != current.fow ||
-           snapshot->structural_fow != current.structural_fow;
+           snapshot->structural_fow != current.structural_fow ||
+           snapshot->local_light != current.local_light ||
+           snapshot->occluder != current.occluder ||
+           snapshot->client_light_known != current.client_light_known;
 }
 
 /**
@@ -3057,9 +3063,28 @@ void map_set_data(int x,
  * @param y Y of the cell.
  * @param hard Whether to discard cached geometry instead of retaining FOW.
  */
+/**
+ * Revoke protocol 1085 client-light state of a cache coordinate. A soft clear
+ * keeps remembered occluders and drops only the live coarse level.
+ */
+static void map_cell_clear_client_light(size_t index, bool hard) {
+    map_cell_header_t *header = &cells->headers[index];
+    uint8_t mask = hard ? 3U : 1U;
+    if ((header->client_light_known & mask) == 0) {
+        return;
+    }
+    header->client_light_known &= (uint8_t)~mask;
+    header->local_light = 0;
+    if (hard) {
+        header->occluder = 0;
+    }
+    level_lighting_revision[current_level_index]++;
+}
+
 void map_clear_cell(int x, int y, bool hard) {
     map_state_transaction_record_cell(x, y);
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    map_cell_clear_client_light(index, hard);
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
     if (cell == NULL) {
         if (hard) {
@@ -6199,6 +6224,21 @@ bool widget_map_client_lighting_state_test(void) {
               bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
                        (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT)) &&
               !map_get_layer_emitter(5, 5, layer, &radius, &color);
+
+    /* A soft clear drops the live level but keeps remembered occluders; a
+     * hard clear revokes both. Each is a visible change. */
+    map_cell_snapshot_t before;
+    map_cell_snapshot(5, 5, &before);
+    map_clear_cell(5, 5, false);
+    success = success && map_cell_changed(5, 5, &before) &&
+              !map_get_local_light(5, 5, &signed_level, &vision) && map_get_occluder(5, 5, &bits);
+    map_cell_snapshot(5, 5, &before);
+    map_clear_cell(5, 5, true);
+    success = success && map_cell_changed(5, 5, &before) && !map_get_occluder(5, 5, &bits);
+    /* A header-only update is a visible change too. */
+    map_cell_snapshot(6, 6, &before);
+    map_set_local_light(6, 6, map_protocol_local_light_encode(2, false));
+    success = success && map_cell_changed(6, 6, &before);
 
     /* Composition adds client emitter light to the received base sample. */
     uint16_t composed_scalar = 0, composed_rgb[3];

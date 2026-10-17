@@ -228,6 +228,9 @@ typedef struct map_cell_snapshot {
     int16_t support_height;
     uint8_t fow;
     uint8_t structural_fow;
+    uint8_t local_light;
+    uint8_t occluder;
+    uint8_t client_light_known;
 } map_cell_snapshot_t;
 
 /** Version of the copyable, opt-in lighting diagnostic record. */
