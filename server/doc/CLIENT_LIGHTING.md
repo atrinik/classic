@@ -200,16 +200,18 @@ connection.
   - the block is the fixed 3×3 square containing the cell, aligned to map-local
     coordinates (`x - x % 3`, `y - y % 3`). A remainder of one or two cells at a
     map edge joins the adjacent block instead of forming a smaller one, so no
-    block is narrower than three cells unless the map itself is. It never reads
-    a horizontally adjacent map and never loads one;
+    block is narrower than three cells unless the map itself is;
   - pool the scalar source counters of each block and resolve the sum through
     the same mask table, before any propagation. The pooled source of a block
-    reaches the block by block-center distance: the own block at distance 0
-    and its four edge neighbors at center distance 3 are within the largest
-    radius, diagonal blocks are not. Blocks at the same position on linked
-    levels above and below count too, adding the vertical distance as the
-    server's masks do, when every step is a resident, reciprocally linked map
-    of the same dimensions; a level is never loaded for it. A source anywhere inside a block therefore
+    reaches another block by the gap between the two blocks in cells (0 for
+    the own block, 1 for an edge neighbor, `√2` for a corner one), which
+    depends only on block geometry. The own block and its eight neighbors are
+    within the largest radius. Neighbors across a seam light crosses (a
+    resident reciprocal link, and continuity as `light_face_continuous()`
+    requires) count too, on maps that match along the seam so blocks align, and
+    so do blocks at the same position on such linked levels above and below,
+    adding the vertical distance as the server's masks do. No map is ever
+    loaded for it. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
     triangulate its tile;
   - the strongest positive and the strongest negative pooled contribution
@@ -273,9 +275,11 @@ connection.
   between two cells that are both currently in the viewer's view this update
   (the face's neighbor at the same depth, or at the adjacent depth for the
   upward and downward faces). A face is open when both cells are in view and
-  either lie on the same map, or the seam is continuous: both maps use the same
-  schema, both boundaries are authored continuous, the link is reciprocal, and
-  the effective profile digests match, as `light_path_value()` requires. The
+  either lie on the same map, or the seam is continuous as
+  `light_face_continuous()` requires: two schema-0 maps are continuous across
+  any reciprocal link, as MAP_RENDERING.md freezes for legacy maps, and two
+  celestial-v1 maps are continuous when both boundaries are authored
+  continuous, the link is reciprocal and the effective profile digests match. The
   upward face is also closed under a sealed virtual sky cover. Every face
   leading to a remembered, unauthorized or out-of-view cell is always blocked.
   Both cells in view are resident by construction, so the bits never depend on,
@@ -331,9 +335,12 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
 
    The emitter sum carries hue as signed per-channel deltas relative to its
    scalar, so overlapping light and darkness keep the server's color shift; the
-   coarse term is neutral. The composed radiance is, per scalar and channel,
-   signed base + celestial (when computed by the client) + `L`, in signed
-   arithmetic. Negative channels then clamp to zero; if the largest channel then
+   coarse term is neutral. `E`, `C` and `L` are raw light. `L`, with each
+   channel's hue delta, converts to radiance with the server's rounding applied
+   to its magnitude, `sign(r) · floor((|r| · 8 + 2) / 5)`, without saturating.
+   The composed radiance is, per scalar and channel, signed base + celestial
+   radiance + converted `L`, all in Q5.11 units in unbounded signed arithmetic,
+   so the coarse and emitter terms keep their full weight. Negative channels then clamp to zero; if the largest channel then
    exceeds the finite range, all three channels scale together so the strongest
    is 65535, as the server's common-vector overflow rule requires, keeping hue.
    The scalar saturates at 65535. The vision floor (if bit 7 is set) follows.
@@ -349,10 +356,11 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    camera change. A presentation-only time animates emitters whose flicker bit
    is set, without server traffic. The function is deterministic: for the
    client presentation clock `t` in milliseconds, keys fall every 125 ms; key
-   `k` has dip `h(k) mod 52`, where `h` is SplitMix64's finalizer of
+   `k` has dip `d(k) = h(k) mod 52`, where `h` is SplitMix64's finalizer of
    `k + 0x9e3779b97f4a7c15` truncated to 32 bits; with `f = (t mod 125) · 256 /
-   125` (integer division) the dip is `(h(k)·(256 - f) + h(k+1)·f + 128) / 256`
-   and the Q0.8 gain `g = 256 - dip`, always in `205..256`. The flicker
+   125` (integer division) the interpolated dip is
+   `(d(k)·(256 - f) + d(k+1)·f + 128) / 256`, and the Q0.8 gain is
+   `g = 256 - dip`, always in `205..256`. The flicker
    emitters' own field `F` (scalar and channels) becomes `F · (g - 256) / 256`,
    truncated towards zero, so `E' - E` is that delta. Conformance compares
    flickered output at a fixed `t`. Flicker modulates the emitter
@@ -405,13 +413,37 @@ the closure.
 - the effective phases of the current hour and of the next hour: solar hour
   `0..23`, season phase `0..8063` and lunar age `0..lunar_period - 1`, after
   the server has applied the cycle mappings and any active lunar override;
-- the timed-light keyframe generation and timing these phases belong to, so the
-  client interpolates celestial light and the base endpoints in lockstep.
+- the start of the current hour in game seconds, so the client interpolates
+  from the current to the next hour's phases over that hour in lockstep with the
+  base endpoints.
 
 The client never learns epochs, rates or override controls: the server resolves
-time to phases, so time authority stays on the server. A slot is resent when
-its phases change (hourly) or the closure gains a profile; reserved bits and
-out-of-range phases are rejected.
+time to phases, so time authority stays on the server.
+
+Payload, in network byte order like every MAP2 field, encoded and decoded by
+the shared `celestial_protocol_write()`/`celestial_protocol_read()`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| start | `uint64` | start of the current hour, game seconds |
+| count | `uint8` | number of slot records, `0..255` |
+| per slot: slot | `uint8` | `0..254`, strictly increasing |
+| day, night | `3 × uint16` each | normalized linear Q0.16 colors |
+| day, night brightness | `uint16` each | Q8.8 brightness |
+| moon | `3 × uint16`, `uint8` | linear color, `moon_max` `0..20` |
+| starlight | `3 × uint16`, `uint8` | linear color, strength `0..2` |
+| lunar period | `uint16` | `168..8064`, a multiple of 24 and of 8 |
+| current, next phases | `uint8`, `uint16`, `uint16` each | solar hour `0..23`, season `0..8063`, lunar age `< period` |
+
+A payload is complete state: it replaces every slot, and a slot it omits is no
+longer assigned. Decoders reject, before replacing anything, truncation,
+trailing bytes, unordered or out-of-range slots, out-of-range phases or
+strengths, a lunar period outside its rules, and a nonzero color that is not
+normalized (a peak channel other than 65535). The server encodes the effective
+inputs of every slot on each MAP2 update and sends a new payload whenever the
+encoding differs from the last one sent, so an hour change, a gained or lost
+profile, and every lunar override change through `/celestial` reach the client
+on the next update, in lockstep with gameplay gating.
 
 ### Structure inputs and the celestial closure
 
@@ -423,28 +455,53 @@ and seam continuity between maps (schema, boundary, reciprocal link, profile
 digest). Its rays travel at most 32 cells horizontally and 13 levels, and its
 diffuse relaxation spills 4 cells.
 
-The **celestial closure** of a viewer is its authorized tiles and their upper
-chains, and nothing else: structure of a cell the viewer has not been
-authorized for is never sent. Every cell outside the closure is solved as open
+The **celestial closure** of a viewer is the set of its authorized cells
+inside the current MAP2 window, over all 13 depths, and nothing else.
+Structure of a cell the viewer has never been authorized for is never sent, so
+there is no initial unauthorized record to choose; an upper level the viewer
+has not seen is solved like any cell outside the closure. Remembered tiles
+outside the current window keep the celestial field the client last computed
+for them; they are not part of the closure. Every cell outside the closure is solved as open
 air with an open sky exit. That constant discloses nothing; it makes sun, sky
 and spill light near the closure edge approximate instead of exact, and errs
 towards light, so outdoor views stay naturally lit at their edges.
 
 The server sends a `CELESTIAL_STRUCTURE` command describing the closure as
-fragments: each fragment record carries its depth, its view-relative rectangle
-within the MAP2 window, the profile slot of its map, and its cells, row-run
-encoded with 3 bytes per cell: the 16-bit signature, bit 16 sky cover open, bit
-17 sky exit, bits 18–21 continuity of the north, east, south and west faces to
-the neighboring cell (bits 22–23 the up and down faces), and reserved bits
-zero. The fragment's slot selects the model that solves its cells, as the
-server selects a model per map. The worst case is the 17×17 window over 13
-depths, 3,757 cells or about 11 KB, so a complete closure always fits in one
-command: each `CELESTIAL_STRUCTURE` replaces the client's closure atomically,
+fragments, in network byte order:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| count | `uint16` | number of fragments |
+| per fragment: depth | `int8` | `-6..6`, relative to the viewer |
+| x, y, width, height | `uint8` each | rectangle within the MAP2 window, nonempty and inside it |
+| slot | `uint8` | profile slot of the fragment's map, or 255 |
+| runs | repeated | covering the rectangle in row-major order |
+| per run: length | `uint8` | `1..255` cells |
+| per run: value | `3` bytes | the cell's 24-bit structure value |
+
+A run may continue past the end of a row into the next one but never past the
+rectangle; runs must cover it exactly, and fragments of one depth must not
+overlap. A cell outside every fragment is outside the closure. The structure
+value is the 16-bit signature, bit 16 sky cover open, bit 17 sky exit, bits
+18–21 continuity of the north, east, south and west faces to the neighboring
+cell (bits 22–23 the up and down faces), with reserved bits zero. Decoders
+reject truncation, trailing bytes, a run of length 0, a run or rectangle
+exceeding its bounds, overlap and reserved bits, before replacing the closure.
+The fragment's slot selects the model that solves its cells, as the server
+selects a model per map. The worst case is the 17×17 window over 13 depths,
+3,757 cells, at most 4 bytes each even when no run merges, about 15 KB with
+fragment headers, so a complete closure always fits in one command: each `CELESTIAL_STRUCTURE` replaces the client's closure atomically,
 and no continuation framing is needed. It is resent when the closure moves
 with the player, or when a structure revision, door or gate changes a
 currently visible cell.
 
-Disclosure rule: a structure record changes only for currently visible cells.
+Disclosure rule: a cell's structure value is built only from the objects MAP2
+sends to this viewer, with the same visibility, hidden-object and plugin
+filtering as occluders. The server's own cached `celestial_geometry`, which
+aggregates every object of the cell and falls back to the space-wide
+`P_BLOCKSVIEW`, is never serialized, so a hidden wall, gate or door contributes
+nothing and its state never reaches the client. A structure record changes
+only for currently visible cells.
 A remembered cell keeps its entire record (signature, sky cover, sky exit,
 continuity and door or gate coefficients) as it was when last visible, until
 it is visible again, so neither an unseen door opening nor a wall or floor
@@ -487,7 +544,7 @@ read stale.
 
 Structure is static between changes, and row runs compress the open air that
 dominates upper levels. The client keeps 3 bytes per closure cell; the worst
-case is 3,757 cells (about 11 KB), and typical scenes are far smaller. The rollout qualifies this against MAP_RENDERING.md budgets before
+case is 3,757 cells, about 11 KB stored and 15 KB on the wire, and typical scenes are far smaller. The rollout qualifies this against MAP_RENDERING.md budgets before
 the celestial step merges.
 
 ## Contract change: visible emitters and structure
@@ -533,9 +590,9 @@ What a modified client can learn, beyond today's MAP2:
   viewer, and static seam structure between two cells both in view. Face bits
   never reflect residency or anything beyond the authorized set.
 - **Celestial:** region light constants and effective phases (no epochs or
-  identities), and the structure of authorized tiles and their upper chains
-  only, with door and gate state current only for visible cells and frozen on
-  remembered ones.
+  identities), and the structure of authorized cells in the current window,
+  built only from objects sent to the viewer, with door and gate state current
+  only for visible cells and frozen on remembered ones.
 - **Never sent:** creatures, and the source identity, count, exact tile, color,
   profile or height of any local light source not itself sent in MAP2; no
   property of hidden or unsent objects; no dynamic state of cells outside the
@@ -629,8 +686,9 @@ release containing protocol 1085 contains all of them.
 - Coarse light pools sources per block before propagation, is sent per
   sub-layer, and is frozen on remembered tiles.
 - Horizontal transmission is per cardinal face.
-- The celestial closure is authorized tiles and their upper chains; cells
-  outside it are open air, and remembered doors keep their remembered state.
+- The celestial closure is the authorized cells in the current window; cells
+  outside it are open air, structure values come only from sent objects, and
+  remembered cells keep their whole remembered record.
 - Profile slots are 8-bit with slot 255 failing closed; one atomic
   `CELESTIAL_STRUCTURE` holds the whole closure.
 
