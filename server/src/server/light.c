@@ -34,6 +34,7 @@
 #include <object.h>
 #include <spatial.h>
 #include <celestial_structure.h>
+#include <toolkit/map_protocol.h>
 #include <region.h>
 
 #define NR_LIGHT_MASK 10
@@ -344,16 +345,21 @@ void light_radiance_from_raw(const MapSpace *space,
     }
 }
 
-void light_base_radiance_from_raw(const MapSpace *space,
-                                  int raw_light,
-                                  uint16_t *scalar_radiance,
-                                  uint16_t radiance[3]) {
+void light_base_radiance_signed(const MapSpace *space,
+                                int raw_light,
+                                int16_t *scalar_radiance,
+                                int16_t radiance[3]) {
     HARD_ASSERT(space != NULL);
-    /* Without a color weight the resolver keeps only the neutral non-local
-     * term and the celestial RGB field. */
-    MapSpace base = *space;
-    base.light_source_color_weight = 0;
-    light_radiance_from_raw(&base, raw_light, scalar_radiance, radiance);
+    HARD_ASSERT(scalar_radiance != NULL);
+    HARD_ASSERT(radiance != NULL);
+    /* The legacy resolver without local color, minus its zero clamp: the
+     * neutral non-local term plus the celestial RGB field, each signed. */
+    *scalar_radiance = map_protocol_signed_radiance_encode(raw_light);
+    int64_t neutral = (int64_t)raw_light - MAX(space->celestial_light_value, 0);
+    for (size_t channel = 0; channel < 3; channel++) {
+        radiance[channel] = map_protocol_signed_radiance_encode(
+            neutral + MAX(space->celestial_light_rgb[channel], 0));
+    }
 }
 
 /**
@@ -401,10 +407,33 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
  * viewer. Only the object's own flags and authored horizontal transmission
  * count, never space-wide flags that also aggregate hidden or unsent objects.
  */
-uint8_t light_occluder_object_bits(const object *op) {
+/** Attenuation step of a coefficient, rounded up so the client never
+ * transmits more light than the server. */
+static uint32_t light_occluder_attenuation(uint16_t coefficient) {
+    int attenuation = (SPATIAL_LIGHT_SCALE - coefficient + MAP2_OCCLUDER_ATTENUATION_STEP - 1) /
+                      MAP2_OCCLUDER_ATTENUATION_STEP;
+    return (uint32_t)MIN(attenuation, 15);
+}
+
+/** Authored transmission of an object face, by door and gate state. */
+static uint16_t light_occluder_transmission(const object *op) {
+    const char *value;
+    if (op->type == DOOR || op->type == GATE) {
+        bool shut = op->type == DOOR ? QUERY_FLAG(op, FLAG_DOOR_CLOSED)
+                                     : QUERY_FLAG(op, FLAG_NO_PASS);
+        value = object_get_value(op, shut ? "celestial_transmission_closed"
+                                          : "celestial_transmission_open");
+    } else {
+        value = object_get_value(op, "celestial_transmission");
+    }
+    celestial_transmission_t transmission = celestial_structure_transmission(value);
+    return transmission == CELESTIAL_TRANSMISSION_INVALID ? 0 : (uint16_t)transmission;
+}
+
+uint32_t light_occluder_object_bits(const object *op) {
     HARD_ASSERT(op != NULL);
     const object *head = HEAD(op);
-    uint8_t bits = 0;
+    uint32_t bits = 0;
     uint16_t coefficient = SPATIAL_LIGHT_SCALE;
     bool authored = false;
     if (QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
@@ -420,21 +449,11 @@ uint8_t light_occluder_object_bits(const object *op) {
     if (closed) {
         bits |= MAP2_OCCLUDER_DOOR_CLOSED;
     }
+    uint8_t faces = celestial_structure_faces(op);
     uint8_t horizontal = CELESTIAL_FACE_NORTH | CELESTIAL_FACE_EAST | CELESTIAL_FACE_SOUTH |
                          CELESTIAL_FACE_WEST;
-    if ((celestial_structure_faces(op) & horizontal) != 0) {
-        const char *value;
-        if (op->type == DOOR || op->type == GATE) {
-            bool shut = op->type == DOOR ? QUERY_FLAG(op, FLAG_DOOR_CLOSED)
-                                         : QUERY_FLAG(op, FLAG_NO_PASS);
-            value = object_get_value(op, shut ? "celestial_transmission_closed"
-                                              : "celestial_transmission_open");
-        } else {
-            value = object_get_value(op, "celestial_transmission");
-        }
-        celestial_transmission_t transmission = celestial_structure_transmission(value);
-        coefficient = transmission == CELESTIAL_TRANSMISSION_INVALID ? 0
-                                                                     : (uint16_t)transmission;
+    if ((faces & horizontal) != 0) {
+        coefficient = light_occluder_transmission(op);
         authored = true;
     }
     /* Authored glass or grate keeps its transmission even on a view blocker;
@@ -442,11 +461,23 @@ uint8_t light_occluder_object_bits(const object *op) {
     if (!authored && (bits & MAP2_OCCLUDER_BLOCKSVIEW)) {
         coefficient = 0;
     }
-    /* Round the attenuation up so the client never transmits more light. */
-    int attenuation = (SPATIAL_LIGHT_SCALE - coefficient + MAP2_OCCLUDER_ATTENUATION_STEP - 1) /
-                      MAP2_OCCLUDER_ATTENUATION_STEP;
-    bits |= (uint8_t)(MIN(attenuation, 15) << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    bits |= light_occluder_attenuation(coefficient) << MAP2_OCCLUDER_ATTENUATION_SHIFT;
+    /* The downward face is the slab between this cell and the one below, so a
+     * glass floor attenuates only vertical crossings. */
+    if ((faces & CELESTIAL_FACE_DOWN) != 0) {
+        bits |= light_occluder_attenuation(light_occluder_transmission(op))
+                << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    }
     return bits;
+}
+
+/**
+ * Whether a sent object's emitter opts in to client-side flicker, through the
+ * boolean light_flicker attribute (usually an archetype default).
+ */
+bool light_emitter_flickers(const object *op) {
+    const char *value = object_get_value(op, "light_flicker");
+    return value != NULL && (strcmp(value, "1") == 0 || KEYWORD_IS_TRUE(value));
 }
 
 /**
@@ -458,11 +489,14 @@ bool light_emitter_disclosed(const object *viewer, const object *op) {
 }
 
 /** Combine the occluder bits of two sent objects of one cell. */
-uint8_t light_occluder_combine(uint8_t first, uint8_t second) {
-    uint8_t geometry = (uint8_t)((first | second) & ((1U << MAP2_OCCLUDER_ATTENUATION_SHIFT) - 1));
-    uint8_t attenuation = MAX(first >> MAP2_OCCLUDER_ATTENUATION_SHIFT,
-                              second >> MAP2_OCCLUDER_ATTENUATION_SHIFT);
-    return (uint8_t)(geometry | attenuation << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+uint32_t light_occluder_combine(uint32_t first, uint32_t second) {
+    uint32_t geometry = (first | second) & ((1U << MAP2_OCCLUDER_ATTENUATION_SHIFT) - 1);
+    uint32_t attenuation = MAX((first >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U,
+                               (second >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U);
+    uint32_t vertical = MAX((first >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U,
+                            (second >> LIGHT_OCCLUDER_VERTICAL_SHIFT) & 15U);
+    return geometry | attenuation << MAP2_OCCLUDER_ATTENUATION_SHIFT |
+           vertical << LIGHT_OCCLUDER_VERTICAL_SHIFT;
 }
 
 typedef struct light_profile {
@@ -780,14 +814,24 @@ static bool light_face_continuous(const spatial_face *face) {
                   region_celestial_for_map(to)->digest, 32) == 0;
 }
 
-/** MAP2 occluder face bits: faces of a sent cell that local light cannot cross. */
-uint16_t light_occluder_faces(mapstruct *map, int x, int y) {
+/**
+ * MAP2 occluder face bits: faces of a sent cell that local light cannot cross.
+ * Only static seam structure between two cells both in the viewer's view is
+ * encoded; a face towards any other cell is closed, so the bits never depend
+ * on whether some map is resident.
+ */
+uint16_t light_occluder_faces(mapstruct *map, int x, int y, uint8_t in_view) {
     HARD_ASSERT(map != NULL);
     static const int8_t normals[6][3] = {
         {0, -1, 0}, {1, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1},
     };
     uint16_t bits = 0;
     for (size_t i = 0; i < arraysize(normals); i++) {
+        uint16_t bit = (uint16_t)(1U << (MAP2_OCCLUDER_FACE_SHIFT + i));
+        if ((in_view & (1U << i)) == 0) {
+            bits |= bit;
+            continue;
+        }
         int rx = x + normals[i][0], ry = y + normals[i][1];
         mapstruct *target;
         if (normals[i][2] != 0) {
@@ -805,8 +849,16 @@ uint16_t light_occluder_faces(mapstruct *map, int x, int y) {
             .to = {.map = target, .x = rx, .y = ry, .z = normals[i][2]},
             .normal = {normals[i][0], normals[i][1], normals[i][2]},
         };
+        /* A neighbor in view is resident; a failure here is a broken seam. */
         if (target == NULL || target->spaces == NULL || !light_face_continuous(&face)) {
-            bits |= (uint16_t)(1U << (MAP2_OCCLUDER_FACE_SHIFT + i));
+            bits |= bit;
+            continue;
+        }
+        /* A sealed virtual sky cover closes the upward face of the lower cell. */
+        const spatial_cell *lower = normals[i][2] > 0 ? &face.from
+                                    : normals[i][2] < 0 ? &face.to : NULL;
+        if (lower != NULL && spatial_cell_light_face(lower, 0, 0, 1, NULL) == 0) {
+            bits |= bit;
         }
     }
     return bits;

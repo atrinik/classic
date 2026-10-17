@@ -19,6 +19,7 @@
 #include <arch.h>
 #include <object.h>
 #include <swap.h>
+#include <toolkit/map_protocol.h>
 
 START_TEST(test_light_level_anchors) {
     ck_assert_uint_eq(light_level_from_raw(-1), 0);
@@ -1489,7 +1490,8 @@ END_TEST
 
 START_TEST(test_client_lighting_base_radiance_omits_local_color) {
     MapSpace space = {0};
-    uint16_t scalar, radiance[3], expected_scalar, expected[3];
+    int16_t scalar, radiance[3];
+    uint16_t expected_scalar, expected[3];
 
     space.light_source_value = 80;
     space.light_source_positive_value = 80;
@@ -1499,16 +1501,37 @@ START_TEST(test_client_lighting_base_radiance_omits_local_color) {
     space.celestial_light_rgb[0] = 100;
     space.celestial_light_rgb[1] = 200;
     space.celestial_light_rgb[2] = 400;
-    light_base_radiance_from_raw(&space, 1280, &scalar, radiance);
+    light_base_radiance_signed(&space, 1280, &scalar, radiance);
 
+    /* For positive environment the signed words equal the legacy neutral ones. */
     MapSpace neutral = space;
     neutral.light_source_color_weight = 0;
     memset(neutral.light_source_color, 0, sizeof(neutral.light_source_color));
     light_radiance_from_raw(&neutral, 1280, &expected_scalar, expected);
-    ck_assert_uint_eq(scalar, expected_scalar);
-    ck_assert_mem_eq(radiance, expected, sizeof(expected));
+    ck_assert_int_eq(scalar, expected_scalar);
+    for (size_t channel = 0; channel < 3; channel++) {
+        ck_assert_int_eq(radiance[channel], expected[channel]);
+    }
     /* Celestial hue survives; the local red tint does not. */
-    ck_assert_uint_lt(radiance[0], radiance[2]);
+    ck_assert_int_lt(radiance[0], radiance[2]);
+}
+END_TEST
+
+START_TEST(test_client_lighting_base_radiance_keeps_negative_environment) {
+    MapSpace space = {0};
+    int16_t scalar, radiance[3];
+    space.celestial_light_value = 100;
+    space.celestial_light_rgb[0] = 0;
+    space.celestial_light_rgb[1] = 100;
+    space.celestial_light_rgb[2] = 300;
+    /* A darkness floor of raw -400 under raw 100 of celestial light. */
+    light_base_radiance_signed(&space, -300, &scalar, radiance);
+    ck_assert_int_eq(scalar, map_protocol_signed_radiance_encode(-300));
+    ck_assert_int_eq(radiance[0], map_protocol_signed_radiance_encode(-400));
+    ck_assert_int_eq(radiance[1], map_protocol_signed_radiance_encode(-300));
+    ck_assert_int_eq(radiance[2], map_protocol_signed_radiance_encode(-100));
+    /* Equal light composed onto the darkness cancels exactly. */
+    ck_assert_int_eq(scalar + map_protocol_signed_radiance_encode(300), 0);
 }
 END_TEST
 
@@ -1574,13 +1597,28 @@ START_TEST(test_client_lighting_occluder_faces_mark_missing_neighbors) {
     mapstruct *map = get_empty_map(5, 5);
     uint16_t north = 1U << MAP2_OCCLUDER_FACE_SHIFT, east = north << 1, south = north << 2,
              west = north << 3, up = north << 4, down = north << 5;
+    uint8_t all = 0x3f;
     /* An unlinked map transmits no local light up or down either. */
-    ck_assert_uint_eq(light_occluder_faces(map, 2, 2), up | down);
-    ck_assert_uint_eq(light_occluder_faces(map, 0, 0), north | west | up | down);
-    ck_assert_uint_eq(light_occluder_faces(map, 4, 4), east | south | up | down);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, all), up | down);
+    ck_assert_uint_eq(light_occluder_faces(map, 0, 0, all), north | west | up | down);
+    ck_assert_uint_eq(light_occluder_faces(map, 4, 4, all), east | south | up | down);
     mapstruct *upper = get_empty_map(5, 5);
     link_stacked_maps(map, upper);
-    ck_assert_uint_eq(light_occluder_faces(map, 2, 2) & up, 0);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, all) & up, 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_occluder_faces_close_towards_unseen_cells) {
+    mapstruct *map = get_empty_map(5, 5);
+    mapstruct *upper = get_empty_map(5, 5);
+    link_stacked_maps(map, upper);
+    uint16_t north = 1U << MAP2_OCCLUDER_FACE_SHIFT, east = north << 1, up = north << 4;
+    /* A face towards a neighbor that is not in view is closed whatever the
+     * seam, so the bits never reflect anything beyond the view. */
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, 0x3f & ~1U) & north, north);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, 0x3f & ~2U) & east, east);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, 0x3f & ~16U) & up, up);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2, 0) & 0x3f00U, 0x3f00U);
 }
 END_TEST
 
@@ -1617,10 +1655,10 @@ START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     ck_assert_uint_eq(light_occluder_object_bits(plain), 0);
 
     object *blocker = add_light_blocker(map, 1, 1);
-    uint8_t blocker_bits = light_occluder_object_bits(blocker);
+    uint32_t blocker_bits = light_occluder_object_bits(blocker);
     ck_assert_uint_eq(blocker_bits & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
     /* A view blocker transmits nothing through its faces. */
-    ck_assert_uint_eq(blocker_bits >> MAP2_OCCLUDER_ATTENUATION_SHIFT, 15);
+    ck_assert_uint_eq((blocker_bits >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U, 15);
 
     add_roof_surface(map, 2, 2);
     object *roof = NULL;
@@ -1633,11 +1671,17 @@ START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     ck_assert_uint_eq(light_occluder_object_bits(roof) & MAP2_OCCLUDER_ROOF, MAP2_OCCLUDER_ROOF);
 
     /* Combining keeps every geometry bit and the stronger attenuation. */
-    uint8_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
+    uint32_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
     ck_assert_uint_eq(combined & (MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW),
                       MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW);
-    ck_assert_uint_eq(combined >> MAP2_OCCLUDER_ATTENUATION_SHIFT, 15);
+    ck_assert_uint_eq((combined >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U, 15);
     ck_assert_uint_eq(light_occluder_combine(0, 0), 0);
+    /* The vertical nibble combines by maximum, independently of the
+     * horizontal one. */
+    uint32_t glass = 3U << LIGHT_OCCLUDER_VERTICAL_SHIFT, slab = 15U << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    ck_assert_uint_eq(light_occluder_combine(glass, slab), slab);
+    ck_assert_uint_eq(light_occluder_combine(glass, 2U << MAP2_OCCLUDER_ATTENUATION_SHIFT),
+                      glass | 2U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
 }
 END_TEST
 
@@ -1713,6 +1757,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
+    tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);
+    tcase_add_test(tc_core, test_client_lighting_base_radiance_keeps_negative_environment);
     tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_sent_objects);
 
     return s;

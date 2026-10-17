@@ -52,27 +52,35 @@ extern void light_radiance_from_raw(const MapSpace *space,
                                     uint16_t *scalar_radiance,
                                     uint16_t radiance[3]);
 
-/** Resolve base Q5.11 radiance: ambient, floor, world, vision and celestial
- * light without local source contributions or their color (protocol 1085). */
-extern void light_base_radiance_from_raw(const MapSpace *space,
-                                         int raw_light,
-                                         uint16_t *scalar_radiance,
-                                         uint16_t radiance[3]);
+/** Resolve signed Q4.11 base radiance: ambient, floor, world, viewer and
+ * celestial light without local sources, negative environment kept (1085). */
+extern void light_base_radiance_signed(const MapSpace *space,
+                                       int raw_light,
+                                       int16_t *scalar_radiance,
+                                       int16_t radiance[3]);
 
 /** Signed, source-anonymous coarse local light level of one cell (protocol 1085). */
 extern int8_t light_local_level(mapstruct *map, int x, int y);
 
-/** MAP2 occluder bits of one object being sent to the viewer (protocol 1085). */
-extern uint8_t light_occluder_object_bits(const object *op);
+/** Bit position of the vertical attenuation in combined occluder bits; the
+ * wire carries it as the occluder's trailing byte. */
+#define LIGHT_OCCLUDER_VERTICAL_SHIFT 16
 
-/** MAP2 occluder face bits of one cell: faces local light cannot cross. */
-extern uint16_t light_occluder_faces(mapstruct *map, int x, int y);
+/** MAP2 occluder bits of one object being sent to the viewer (protocol 1085). */
+extern uint32_t light_occluder_object_bits(const object *op);
+
+/** MAP2 occluder face bits of one cell; in_view bit i is set when the north,
+ * east, south, west, upper or lower neighbor is in the viewer's view. */
+extern uint16_t light_occluder_faces(mapstruct *map, int x, int y, uint8_t in_view);
+
+/** Whether a sent object's emitter opts in to client flicker (protocol 1085). */
+extern bool light_emitter_flickers(const object *op);
 
 /** Whether MAP2 may disclose an object's emitter to a viewer (protocol 1085). */
 extern bool light_emitter_disclosed(const object *viewer, const object *op);
 
 /** Combine the occluder bits of two sent objects of one cell. */
-extern uint8_t light_occluder_combine(uint8_t first, uint8_t second);
+extern uint32_t light_occluder_combine(uint32_t first, uint32_t second);
 
 /** Invalidate the bounded celestial field after structural/topology changes. */
 extern void celestial_light_invalidate(mapstruct *map);

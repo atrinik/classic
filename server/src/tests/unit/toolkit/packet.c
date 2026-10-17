@@ -513,9 +513,12 @@ START_TEST(test_map_protocol_validates_timed_light_keyframes) {
 END_TEST
 
 /** One cell with an emitter layer and both client-lighting extensions. */
-static packet_struct *map_protocol_client_lighting_level_color(int8_t radius, uint32_t color,
-                                                              uint8_t level_value,
-                                                              uint16_t occluder) {
+static packet_struct *map_protocol_client_lighting_level_full(int8_t radius,
+                                                             uint8_t emitter_flags,
+                                                             uint32_t color,
+                                                             uint8_t level_value,
+                                                             uint16_t occluder,
+                                                             uint8_t vertical) {
     packet_struct *level = packet_new(0, 32, 16);
     packet_writer_write_uint16(level, 0);
     packet_writer_write_uint8(level, 1);
@@ -525,15 +528,37 @@ static packet_struct *map_protocol_client_lighting_level_color(int8_t radius, ui
     packet_writer_write_uint8(level, MAP2_FLAG_MORE);
     packet_writer_write_uint32(level, MAP2_FLAG2_EMITTER);
     packet_writer_write_int8(level, radius);
+    packet_writer_write_uint8(level, emitter_flags);
     packet_writer_write_uint8(level, (uint8_t)(color >> 16));
     packet_writer_write_uint8(level, (uint8_t)(color >> 8));
     packet_writer_write_uint8(level, (uint8_t)color);
-    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_LIGHT_AGGREGATE |
-                                         MAP2_FLAG_EXT_OCCLUDER);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_OCCLUDER);
     packet_writer_write_uint8(level, level_value);
-    packet_writer_write_uint8(level, 0x41);
     packet_writer_write_uint16(level, occluder);
+    packet_writer_write_uint8(level, vertical);
     return level;
+}
+
+static packet_struct *map_protocol_client_lighting_level_color(int8_t radius, uint32_t color,
+                                                              uint8_t level_value,
+                                                              uint16_t occluder) {
+    return map_protocol_client_lighting_level_full(radius, 0, color, level_value, occluder, 0);
+}
+
+static bool map_protocol_client_lighting_valid_full(int8_t radius, uint8_t emitter_flags,
+                                                    uint8_t vertical, uint8_t ext_extra) {
+    packet_struct *level = map_protocol_client_lighting_level_full(
+        radius, emitter_flags, radius > 0 ? UINT32_C(0xff8040) : 0, 0, 0, vertical);
+    if (ext_extra != 0) {
+        /* Rewrite the extended flags byte that follows the emitter payload. */
+        level->data[level->len - 5] |= ext_extra;
+    }
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    bool valid = map_protocol_validate(packet->data, packet->len, 0, 21, 21);
+    packet_free(packet);
+    packet_free(level);
+    return valid;
 }
 
 /** Positive emitters get an orange color and darkness the achromatic one. */
@@ -591,6 +616,25 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
     ck_assert(!map_protocol_client_lighting_valid_color(5, 0));
     ck_assert(map_protocol_client_lighting_valid_color(-5, 0));
     ck_assert(!map_protocol_client_lighting_valid_color(-5, UINT32_C(0x000100)));
+    /* Flicker is a light-only opt-in; other emitter flag bits are reserved. */
+    ck_assert(map_protocol_client_lighting_valid_full(5, MAP2_EMITTER_FLICKER, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid_full(-5, MAP2_EMITTER_FLICKER, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid_full(5, 0x02, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid_full(5, 0x80, 0, 0));
+    /* The vertical byte carries a nibble; its high nibble is reserved. */
+    ck_assert(map_protocol_client_lighting_valid_full(5, 0, 0x0f, 0));
+    ck_assert(!map_protocol_client_lighting_valid_full(5, 0, 0x10, 0));
+    /* The former aggregate bitmap flag is no longer part of 1085. */
+    ck_assert(!map_protocol_client_lighting_valid_full(5, 0, 0, 32));
+
+    /* Signed base radiance is odd-symmetric and saturates symmetrically. */
+    static const int64_t raw[] = {0, 1, 160, 1280, 20479, 20480, INT64_C(1) << 40};
+    static const int16_t expected[] = {0, 2, 256, 2048, 32766, 32767, 32767};
+    for (size_t i = 0; i < sizeof(raw) / sizeof(raw[0]); i++) {
+        ck_assert_int_eq(map_protocol_signed_radiance_encode(raw[i]), expected[i]);
+        ck_assert_int_eq(map_protocol_signed_radiance_encode(-raw[i]), -expected[i]);
+    }
+    ck_assert_int_eq(map_protocol_signed_radiance_encode(INT64_MIN), -32767);
 
     for (int level = -MAP2_LOCAL_LIGHT_LEVEL_MAX; level <= MAP2_LOCAL_LIGHT_LEVEL_MAX; level++) {
         for (int floor_bit = 0; floor_bit < 2; floor_bit++) {

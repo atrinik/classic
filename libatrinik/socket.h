@@ -421,7 +421,7 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG2_DOOR 512
 /** The object is a visible map transition. */
 #define MAP2_FLAG2_EXIT 1024
-/** The sent object emits light: int8 glow radius, then sRGB R, G, B (1085). */
+/** The sent object emits light: int8 glow radius, flags, then sRGB R, G, B (1085). */
 #define MAP2_FLAG2_EMITTER 2048
 /*@}*/
 
@@ -438,11 +438,14 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG_EXT_LIGHT_KEYFRAME 4
 /** Coarse, source-anonymous local light level byte follows (1085). */
 #define MAP2_FLAG_EXT_LOCAL_LIGHT 8
-/** Occluder bits of the cell follow (1085). */
+/** Occluder bits of the cell follow (1085): uint16, then the vertical byte. */
 #define MAP2_FLAG_EXT_OCCLUDER 16
-/** Bitmap of sub-layers carrying complete aggregate radiance follows (1085). */
-#define MAP2_FLAG_EXT_LIGHT_AGGREGATE 32
 /*@}*/
+
+/** Emitter flag: the client may animate this emitter's light (1085). */
+#define MAP2_EMITTER_FLICKER 0x01U
+/** Emitter flag bits a 1085 peer must leave zero. */
+#define MAP2_EMITTER_RESERVED 0xfeU
 
 /** Largest coarse local light magnitude; each level is 1/8 daylight. */
 #define MAP2_LOCAL_LIGHT_LEVEL_MAX 15
@@ -472,6 +475,10 @@ typedef struct socket_face_batch_response {
 #define MAP2_OCCLUDER_FACE_SHIFT 8
 /** Occluder bits a 1085 peer must leave zero. */
 #define MAP2_OCCLUDER_RESERVED 0xc000U
+/** Vertical attenuation v of the downward face, low nibble of the occluder byte. */
+#define MAP2_OCCLUDER_VERTICAL_MASK 0x0fU
+/** Occluder byte bits a 1085 peer must leave zero. */
+#define MAP2_OCCLUDER_VERTICAL_RESERVED 0xf0U
 /*@}*/
 
 /**
