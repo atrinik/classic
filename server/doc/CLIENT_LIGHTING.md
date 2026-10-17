@@ -69,7 +69,7 @@ word already uses bits 6–15 for coordinates:
 | --- | --- | --- | --- |
 | `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 | changed | bits 0–4: signed level `-15..15` (two's complement; `-16` invalid); bits 5–6 reserved, zero; bit 7: apply the viewer's vision floor after composition |
 | `MAP2_FLAG_EXT_LIGHT_AGGREGATE` (32) | 1 | changed | Bitmap of sub-layers whose radiance, including timed-light endpoints, is complete aggregate light with the legacy meaning; the client composes nothing for them. Bit 7 is reserved, zero. |
-| `MAP2_FLAG_EXT_OCCLUDER` (16) | 2 | changed | bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7: transmission attenuation `a` (0 unattenuated, 1–14 coefficient `256 - 16a`, 15 opaque; a view blocker with authored transmission keeps its attenuation); bits 8–11: local light does not cross the north, east, south or west face; bits 12–15 reserved, zero |
+| `MAP2_FLAG_EXT_OCCLUDER` (16) | 2 | changed | bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7: transmission attenuation `a` (0 unattenuated, 1–14 coefficient `256 - 16a`, 15 opaque; a view blocker with authored transmission keeps its attenuation); bits 8–11: local light does not cross the north, east, south or west face; bits 12–13: nor the upward or downward face; bits 14–15 reserved, zero |
 
 Per MAP2 layer (existing `flags2`):
 
@@ -130,7 +130,8 @@ both modes.
   its view, so the existing `tli` lighting override is already folded into it.
 - **Negative environment.** Environmental light can be negative, for example a
   floor with negative light, and the unsigned base bytes cannot carry that. A
-  sub-layer whose base would be negative is therefore sent as complete
+  sub-layer whose environmental scalar or any environmental RGB channel would
+  be negative, now or at its ready next keyframe, is therefore sent as complete
   aggregate radiance with the legacy meaning (local light, the XRAY floor and
   timed-light endpoints included), and marked in
   `MAP2_FLAG_EXT_LIGHT_AGGREGATE`. The client composes nothing for it, so
@@ -158,11 +159,13 @@ both modes.
 - **Occluders** are derived only from the objects MAP2 sends to this viewer:
   the sent object of each layer, after plugin visibility and hidden-object
   filtering. A sent view blocker, floor, roof surface or closed door sets its
-  bit. Its authored horizontal transmission (`celestial_transmission`, or the
-  door's open/closed value) gives a coefficient; the cell's attenuation is the
+  bit. Its authored horizontal transmission gives a coefficient: doors and
+  exact-type gates use `celestial_transmission_closed` or
+  `celestial_transmission_open` by their current state (`FLAG_DOOR_CLOSED` for
+  doors, `FLAG_NO_PASS` for gates), other objects `celestial_transmission`; the cell's attenuation is the
   maximum over all sent objects (the minimum coefficient, as the server's face
-  traversal takes), quantized up to the next step. Face bits 8–11 mark faces
-  that local light does not cross: a neighbor on another map whose seam is not
+  traversal takes), quantized up to the next step. Face bits 8–13 mark the
+  horizontal, upward and downward faces that local light does not cross: a neighbor on another map whose seam is not
   continuous for local light (mixed schema, discontinuous boundary,
   nonreciprocal link or a different effective profile digest), or one that is
   not resident, exactly as `light_path_value()` stops there. Seams are map
@@ -226,9 +229,10 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    presentation-only time uniform permits flicker for emitters whose archetype
    opts in, without server traffic. Flicker modulates the emitter field after
    composition (`L + E' - E` for flickered sum `E'`), so the coarse floor of a
-   block that the emitter itself lights cannot suppress it. The flickered
-   scalar and channels are then saturated again, negative values to zero and
-   positive overflow by common-vector scaling, before the unsigned Q16 stage.
+   block that the emitter itself lights cannot suppress it. The delta is added
+   to the signed, unbounded composed scalar and channels, and the negative clamp,
+   common-vector scaling and scalar saturation of step 3 then run once, after
+   it, so no clipped magnitude or hue is lost.
 
 Using `max()`/`min()` instead of a sum avoids double counting, because the
 coarse term already includes visible sources. The cost is underestimating
