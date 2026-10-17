@@ -1458,8 +1458,11 @@ void draw_client_map2(object *pl) {
 
                 /* Initialize default values for some variables. */
                 ext_flags = 0;
-                /* Occluders of the objects actually sent to this viewer. */
+                /* Occluders of the objects actually sent to this viewer, and the
+                 * emitters it shows, digested to detect value-only changes. */
                 uint8_t cell_occluder = 0;
+                uint32_t cell_emitter_digest = UINT32_C(2166136261);
+                uint64_t cell_emitter_sent = 0;
                 packet_writer_mark(packet, &packet_save_buf);
                 anim_num = 0;
                 uint8_t anim_type[NUM_SUB_LAYERS] = {0};
@@ -1816,14 +1819,17 @@ void draw_client_map2(object *pl) {
                                     target_cleared = true;
                                 }
 
-                                bool was_cached = mp->faces[socket_layer] != 0;
+                                uint64_t layer_bit = UINT64_C(1) << socket_layer;
+                                bool was_cached = mp->faces[socket_layer] != 0 ||
+                                                  (mp->emitter_layers & layer_bit) != 0;
                                 mp->faces[socket_layer] = 0;
                                 mp->quick_pos[socket_layer] = 0;
                                 mp->flags[socket_layer] = 0;
                                 mp->roof[socket_layer] = 0;
                                 mp->door[socket_layer] = 0;
                                 mp->exit[socket_layer] = 0;
-                                mp->emitter[socket_layer] = 0;
+                                mp->emitter_layers &= ~layer_bit;
+                                mp->emitter_stale &= ~layer_bit;
                                 mp->anim_speed[socket_layer] = 0;
                                 mp->anim_facing[socket_layer] = 0;
 
@@ -1869,9 +1875,18 @@ void draw_client_map2(object *pl) {
                                           (radius > 0 ? emitter_color : 0);
                                 flags2 |= MAP2_FLAG2_EMITTER;
                             }
+                            uint64_t emitter_bit = UINT64_C(1) << socket_layer;
                             if (client_lighting) {
                                 cell_occluder = light_occluder_combine(
                                     cell_occluder, light_occluder_object_bits(tmp));
+                                if (emitter != 0) {
+                                    uint32_t entry[2] = {(uint32_t)socket_layer, emitter};
+                                    const uint8_t *bytes = (const uint8_t *)entry;
+                                    for (size_t i = 0; i < sizeof(entry); i++) {
+                                        cell_emitter_digest = (cell_emitter_digest ^ bytes[i]) *
+                                                              UINT32_C(16777619);
+                                    }
+                                }
                             }
 
                             if (flags2) {
@@ -1895,7 +1910,8 @@ void draw_client_map2(object *pl) {
                                 mp->roof[socket_layer] == is_roof &&
                                 mp->door[socket_layer] == is_door &&
                                 mp->exit[socket_layer] == is_exit &&
-                                mp->emitter[socket_layer] == emitter &&
+                                ((mp->emitter_layers & emitter_bit) != 0) == (emitter != 0) &&
+                                (mp->emitter_stale & emitter_bit) == 0 &&
                                 (layer != LAYER_LIVING || !IS_LIVE(head) ||
                                  (mp->probe == probe_val &&
                                   mp->target_object_count[sub_layer] == target_object_count)) &&
@@ -1918,7 +1934,13 @@ void draw_client_map2(object *pl) {
                             mp->roof[socket_layer] = is_roof;
                             mp->door[socket_layer] = is_door;
                             mp->exit[socket_layer] = is_exit;
-                            mp->emitter[socket_layer] = emitter;
+                            if (emitter != 0) {
+                                mp->emitter_layers |= emitter_bit;
+                            } else {
+                                mp->emitter_layers &= ~emitter_bit;
+                            }
+                            mp->emitter_stale &= ~emitter_bit;
+                            cell_emitter_sent |= emitter_bit;
                             mp->anim_speed[socket_layer] = anim_speed;
                             mp->anim_facing[socket_layer] = anim_facing;
 
@@ -2072,7 +2094,8 @@ void draw_client_map2(object *pl) {
                                     packet_writer_write_uint8(packet_layer, (uint8_t)emitter);
                                 }
                             }
-                        } else if (mp->faces[socket_layer]) {
+                        } else if (mp->faces[socket_layer] ||
+                                   (mp->emitter_layers & (UINT64_C(1) << socket_layer)) != 0) {
                             /* Didn't find anything. Now, if we have previously seen
                              * a face on this layer, we will want the client to
                              * clear it. */
@@ -2082,7 +2105,8 @@ void draw_client_map2(object *pl) {
                             mp->roof[socket_layer] = 0;
                             mp->door[socket_layer] = 0;
                             mp->exit[socket_layer] = 0;
-                            mp->emitter[socket_layer] = 0;
+                            mp->emitter_layers &= ~(UINT64_C(1) << socket_layer);
+                            mp->emitter_stale &= ~(UINT64_C(1) << socket_layer);
                             mp->anim_speed[socket_layer] = 0;
                             mp->anim_facing[socket_layer] = 0;
 
@@ -2304,6 +2328,16 @@ void draw_client_map2(object *pl) {
 
                 /* Client lighting fields describe only cells the viewer
                  * currently sees; remembered cells keep their last values. */
+                /* A value-only emitter change on a layer served from cache is
+                 * resent on the next update. */
+                if (client_lighting && cell_emitter_digest != mp->emitter_digest) {
+                    mp->emitter_stale |= mp->emitter_layers & ~cell_emitter_sent;
+                    mp->emitter_digest = cell_emitter_digest;
+                }
+                /* The client forgets the live level in fog; resend on return. */
+                if (client_lighting && tile_fow) {
+                    mp->client_light_known &= (uint8_t)~1U;
+                }
                 uint8_t local_light = 0, occluder = 0;
                 if (client_lighting && !tile_fow) {
                     local_light = map_protocol_local_light_encode(light_local_level(m, nx, ny),

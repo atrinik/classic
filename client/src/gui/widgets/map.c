@@ -1301,6 +1301,9 @@ static void map_cache_mark_fow(map_cell_store_t *level,
             if (had_light_state) {
                 map_cell_store_set_light_state(level, index, MAP_LIGHT_CACHE_CLEARED);
             }
+            /* Fog keeps remembered occluders but no live coarse level. */
+            level->headers[index].client_light_known &= (uint8_t)~1U;
+            level->headers[index].local_light = 0;
             map_cell_store_set_fow(level, index, true, false);
             map_cell_store_trim_slot(level, index);
         }
@@ -2596,6 +2599,12 @@ static void map_clear_live_cell(map_cell_t *cell) {
                 }
             }
         }
+    }
+    /* Remembered floor and wall records stay, but no record keeps live
+     * emitter light once the cell is no longer visible. */
+    for (map_cell_layer_record_t *record = cell->layers; record != NULL; record = record->next) {
+        record->emitter_radius = 0;
+        record->emitter_color = 0;
     }
     map_cell_clear_live_state(cell);
     map_update_render_height(cell);
