@@ -41,6 +41,10 @@
 #define NR_LIGHT_MASK 10
 
 /** Advances whenever a space's source counter changes; see light_local_level(). */
+/** Advances with every source change anywhere; a coarse cache entry confirmed
+ * at the current value needs no revalidation. */
+static uint64_t light_local_generation = 1;
+
 #define MAX_LIGHT_SOURCE 13
 #define MAX_LIGHT_RADIUS 4
 #define LIGHT_DISTANCE_SCALE 256
@@ -1055,6 +1059,7 @@ static void adjust_grouped_light_source(mapstruct *map,
     *counter += light;
     /* Only coarse levels whose walk reaches this map are invalidated. */
     map->light_local_epoch++;
+    light_local_generation++;
     int new_mask = get_real_light_source_value(*counter);
 
     if (map->in_memory != MAP_LOADING && old_mask != new_mask) {
@@ -1548,20 +1553,96 @@ static mapstruct *light_local_seam(mapstruct *map, int tile) {
  * cell and sub-layer of a block shares its level. */
 #define LIGHT_LOCAL_CACHE_SIZE 1024
 
+/** One map placed relative to the target block: cell (cx, cy) lies at
+ * (cx + ox, cy + oy) on the target map, on any level of its linked stack. */
+typedef struct light_local_region {
+    mapstruct *map;
+    int ox, oy;
+} light_local_region;
+
+/**
+ * Most maps one coarse level may pool. Real topologies stay far below it (a
+ * 13-level stack of one-cell maps within reach places 1053); a component
+ * that exceeds it, such as an unbounded legacy link cycle or stack, fails
+ * closed to level 0 for every target in it, so no rebuild is unbounded and
+ * the levels of such a component still agree.
+ */
+#define LIGHT_LOCAL_REGIONS_MAX 4096
+
+/* Open-addressed sets, cleared by advancing a stamp, so a walk and its
+ * distinct-map listing stay linear in the regions they place. Sized above
+ * twice the region bound, they never fill. */
+#define LIGHT_LOCAL_SET_SIZE 16384
+
+typedef struct light_local_set_entry {
+    const mapstruct *map;
+    int ox, oy;
+    uint32_t stamp;
+} light_local_set_entry;
+
+static light_local_set_entry light_local_visited[LIGHT_LOCAL_SET_SIZE];
+static light_local_set_entry light_local_distinct[LIGHT_LOCAL_SET_SIZE];
+static uint32_t light_local_set_stamp;
+
+/** Insert (map, ox, oy) into a set; false when it was already present. */
+static bool light_local_set_insert(light_local_set_entry *set, const mapstruct *map, int ox,
+                                   int oy) {
+    uint64_t key = (uint64_t)(uintptr_t)map * UINT64_C(0x9e3779b97f4a7c15) ^
+                   (uint64_t)(uint32_t)ox * UINT64_C(0xbf58476d1ce4e5b9) ^
+                   (uint64_t)(uint32_t)oy * UINT64_C(0x94d049bb133111eb);
+    for (size_t slot = (size_t)(key >> 32) % LIGHT_LOCAL_SET_SIZE;;
+         slot = (slot + 1) % LIGHT_LOCAL_SET_SIZE) {
+        light_local_set_entry *entry = &set[slot];
+        if (entry->stamp != light_local_set_stamp) {
+            *entry = (light_local_set_entry){.map = map, .ox = ox, .oy = oy,
+                                             .stamp = light_local_set_stamp};
+            return true;
+        }
+        if (entry->map == map && entry->ox == ox && entry->oy == oy) {
+            return false;
+        }
+    }
+}
+
+/** Start a new walk: both sets become empty. */
+static void light_local_set_reset(void) {
+    if (++light_local_set_stamp == 0) {
+        memset(light_local_visited, 0, sizeof(light_local_visited));
+        memset(light_local_distinct, 0, sizeof(light_local_distinct));
+        light_local_set_stamp = 1;
+    }
+}
+
 typedef struct light_local_cache_entry {
     const mapstruct *map;
     tag_t count;
     int bx, by;
     uint64_t source_hash, geometry_epoch;
+    /** light_local_generation when the level was last confirmed current. */
+    uint64_t validated;
+    /** The distinct maps the block's walk reached, valid for its geometry
+     * epoch: revalidation hashes only their source epochs, never rewalks. */
+    mapstruct **deps;
+    size_t deps_count, deps_capacity;
     int8_t level;
 } light_local_cache_entry;
 
 static light_local_cache_entry light_local_cache[LIGHT_LOCAL_CACHE_SIZE];
 
-typedef struct light_local_region light_local_region;
+/** Hash of the source epochs of a cached block's dependency maps. */
+static uint64_t light_local_deps_hash(mapstruct *const *deps, size_t count) {
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (size_t i = 0; i < count; i++) {
+        uint64_t parts[2] = {(uint64_t)(uintptr_t)deps[i], deps[i]->light_local_epoch};
+        for (size_t part = 0; part < 2; part++) {
+            hash = (hash ^ parts[part]) * UINT64_C(1099511628211);
+        }
+    }
+    return hash;
+}
+
 static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
                              const light_local_region **regions, size_t *count);
-static uint64_t light_local_hash(const light_local_region *regions, size_t count);
 static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,
                                      int ex, int by, int ey);
 
@@ -1575,27 +1656,53 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     int bx, by, ex, ey;
     light_local_block(x, MAP_WIDTH(map), &bx, &ex);
     light_local_block(y, MAP_HEIGHT(map), &by, &ey);
-    /* The walk is cheap next to pooling: it decides which maps the level
-     * depends on, so a cached level stays valid until a source on one of
-     * those maps changes, never because of an unrelated map. */
-    const light_local_region *regions;
-    size_t count;
-    if (!light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
-        return 0;
-    }
-    uint64_t hash = light_local_hash(regions, count);
+    /* A block's walk depends only on topology, which the geometry epoch
+     * tracks, so each entry keeps the distinct maps it reached. A lookup
+     * returns at once when no source changed anywhere since the level was
+     * confirmed, rehashes only its own maps' source epochs otherwise, and
+     * walks and pools again only when the topology or one of those sources
+     * changed. Every cell of a block shares one entry. */
     uint64_t geometry = los_geometry_epoch();
     size_t slot = (((uintptr_t)map >> 4) ^ ((size_t)bx * 31u) ^ ((size_t)by * 1031u)) %
                   LIGHT_LOCAL_CACHE_SIZE;
     light_local_cache_entry *entry = &light_local_cache[slot];
     if (entry->map == map && entry->count == map->count && entry->bx == bx &&
-        entry->by == by && entry->source_hash == hash && entry->geometry_epoch == geometry) {
-        return entry->level;
+        entry->by == by && entry->geometry_epoch == geometry) {
+        if (entry->validated == light_local_generation) {
+            return entry->level;
+        }
+        if (light_local_deps_hash(entry->deps, entry->deps_count) == entry->source_hash) {
+            entry->validated = light_local_generation;
+            return entry->level;
+        }
     }
-    int8_t level = light_local_level_pool(regions, count, bx, ex, by, ey);
-    *entry = (light_local_cache_entry){.map = map, .count = map->count, .bx = bx, .by = by,
-                                       .source_hash = hash, .geometry_epoch = geometry,
-                                       .level = level};
+    const light_local_region *regions;
+    size_t count;
+    int8_t level = 0;
+    entry->deps_count = 0;
+    if (light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
+        level = light_local_level_pool(regions, count, bx, ex, by, ey);
+        /* Distinct maps, in walk order; a map placed at several offsets
+         * appears once. */
+        for (size_t i = 0; i < count; i++) {
+            if (!light_local_set_insert(light_local_distinct, regions[i].map, 0, 0)) {
+                continue;
+            }
+            if (entry->deps_count == entry->deps_capacity) {
+                entry->deps_capacity = entry->deps_capacity == 0 ? 8 : entry->deps_capacity * 2;
+                entry->deps = xreallocarray(entry->deps, entry->deps_capacity, sizeof(*entry->deps));
+            }
+            entry->deps[entry->deps_count++] = regions[i].map;
+        }
+    }
+    entry->map = map;
+    entry->count = map->count;
+    entry->bx = bx;
+    entry->by = by;
+    entry->geometry_epoch = geometry;
+    entry->source_hash = light_local_deps_hash(entry->deps, entry->deps_count);
+    entry->validated = light_local_generation;
+    entry->level = level;
     return level;
 }
 
@@ -1650,21 +1757,6 @@ static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, i
     }
 }
 
-/** One map placed relative to the target block: cell (cx, cy) lies at
- * (cx + ox, cy + oy) on the target map, on any level of its linked stack. */
-struct light_local_region {
-    mapstruct *map;
-    int ox, oy;
-};
-
-/**
- * Most maps one coarse level may pool. Real topologies stay far below it (a
- * 13-level stack of one-cell maps within reach places 1053); a component
- * that exceeds it, such as an unbounded legacy link cycle or stack, fails
- * closed to level 0 for every target in it, so no rebuild is unbounded and
- * the levels of such a component still agree.
- */
-#define LIGHT_LOCAL_REGIONS_MAX 4096
 
 
 static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
@@ -1696,7 +1788,9 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
         capacity = 64;
         regions = xmallocarray(capacity, sizeof(*regions));
     }
+    light_local_set_reset();
     regions[count++] = (light_local_region){.map = map};
+    light_local_set_insert(light_local_visited, map, 0, 0);
     for (size_t i = 0; i < count; i++) {
         light_local_region region = regions[i];
         for (size_t t = 0; t < arraysize(tiles); t++) {
@@ -1729,16 +1823,13 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
                 next.oy >= ey + reach || next.oy + MAP_HEIGHT(next.map) <= by - reach) {
                 continue;
             }
-            bool seen = false;
-            for (size_t j = 0; j < count && !seen; j++) {
-                seen = regions[j].map == next.map && regions[j].ox == next.ox &&
-                       regions[j].oy == next.oy;
+            /* Fail closed for the whole component past the bound. */
+            if (count == LIGHT_LOCAL_REGIONS_MAX &&
+                light_local_set_insert(light_local_visited, next.map, next.ox, next.oy)) {
+                return false;
             }
-            if (!seen) {
-                /* Fail closed for the whole component past the bound. */
-                if (count == LIGHT_LOCAL_REGIONS_MAX) {
-                    return false;
-                }
+            if (count < LIGHT_LOCAL_REGIONS_MAX &&
+                light_local_set_insert(light_local_visited, next.map, next.ox, next.oy)) {
                 if (count == capacity) {
                     capacity *= 2;
                     regions = xreallocarray(regions, capacity, sizeof(*regions));
@@ -1750,19 +1841,6 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
     *regions_out = regions;
     *count_out = count;
     return true;
-}
-
-/** Identity of the sources a walk reaches: each map with its source epoch. */
-static uint64_t light_local_hash(const light_local_region *regions, size_t count) {
-    uint64_t hash = UINT64_C(1469598103934665603);
-    for (size_t i = 0; i < count; i++) {
-        uint64_t parts[2] = {(uint64_t)(uintptr_t)regions[i].map,
-                             regions[i].map->light_local_epoch};
-        for (size_t part = 0; part < 2; part++) {
-            hash = (hash ^ parts[part]) * UINT64_C(1099511628211);
-        }
-    }
-    return hash;
 }
 
 static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,
