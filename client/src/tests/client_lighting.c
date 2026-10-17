@@ -163,21 +163,19 @@ static void test_many_emitters_are_all_evaluated(void) {
     }
 }
 
-static void test_duplicate_constituents_share_one_weighted_profile(void) {
+static void test_grouping_is_independent_of_emitter_order(void) {
     memset(occluders, 0, sizeof(occluders));
-    client_lighting_emitter_t one = {.x = 4, .y = 4, .radius = 5, .color = 0xff8040};
-    evaluate(&one, 1);
-    client_lighting_cell_t single = *cell_at(4, 4);
-    /* Many identical constituents on a tile resolve to the same hue. */
-    static client_lighting_emitter_t many[200];
-    for (size_t i = 0; i < 200; i++) {
-        many[i] = one;
+    static client_lighting_emitter_t forward[60], backward[60];
+    static const uint32_t colors[] = {0xff8040, 0x40ff80, 0x4080ff, 0xffffff};
+    for (size_t i = 0; i < 60; i++) {
+        forward[i] = (client_lighting_emitter_t){
+            .x = (int)(i % 3) + 3, .y = 4, .radius = (int8_t)(i % 5) + 1, .color = colors[i % 4]};
+        backward[59 - i] = forward[i];
     }
-    evaluate(many, 200);
-    for (int channel = 0; channel < 3; channel++) {
-        TEST_CHECK(cell_at(4, 4)->rgb[channel] - cell_at(4, 4)->scalar ==
-                   single.rgb[channel] - single.scalar);
-    }
+    static client_lighting_cell_t first[WIDTH * HEIGHT];
+    client_lighting_evaluate(WIDTH, HEIGHT, occluders, forward, 60, first);
+    client_lighting_evaluate(WIDTH, HEIGHT, occluders, backward, 60, cells);
+    TEST_CHECK(memcmp(first, cells, sizeof(cells)) == 0);
 }
 
 static void test_compose_by_sign_and_clamp_to_level(void) {
@@ -205,7 +203,7 @@ int main(void) {
     test_colored_light_keeps_hue();
     test_constituent_colors_keep_their_own_profiles();
     test_cancelled_scalar_keeps_color_shift();
-    test_duplicate_constituents_share_one_weighted_profile();
+    test_grouping_is_independent_of_emitter_order();
     test_many_emitters_are_all_evaluated();
     test_compose_by_sign_and_clamp_to_level();
     return EXIT_SUCCESS;
