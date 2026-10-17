@@ -351,16 +351,17 @@ static void test_grouping_is_independent_of_emitter_order(void) {
     TEST_CHECK(memcmp(first, cells, sizeof(cells)) == 0);
 }
 
-static void test_compose_by_sign_and_clamp_to_level(void) {
+static void test_compose_by_sign_over_the_coarse_floor(void) {
     int32_t step = MAP2_LOCAL_LIGHT_LEVEL_RAW;
     TEST_CHECK(client_lighting_compose(100, 2) == 2 * step);
     TEST_CHECK(client_lighting_compose(2 * step + 50, 2) == 2 * step + 50);
-    TEST_CHECK(client_lighting_compose(1000, 2) == 3 * step - 1);
+    /* Grouped visible light keeps its value above the coarse bin. */
+    TEST_CHECK(client_lighting_compose(1000, 2) == 1000);
     TEST_CHECK(client_lighting_compose(0, -1) == -step);
     TEST_CHECK(client_lighting_compose(-step - 20, -1) == -step - 20);
-    TEST_CHECK(client_lighting_compose(-1000, -1) == -2 * step + 1);
-    TEST_CHECK(client_lighting_compose(500, 0) == step - 1);
-    TEST_CHECK(client_lighting_compose(-500, 0) == -step + 1);
+    TEST_CHECK(client_lighting_compose(-1000, -1) == -1000);
+    TEST_CHECK(client_lighting_compose(500, 0) == 500);
+    TEST_CHECK(client_lighting_compose(-500, 0) == -500);
     TEST_CHECK(client_lighting_compose(42, 0) == 42);
     TEST_CHECK(client_lighting_compose(5000, MAP2_LOCAL_LIGHT_LEVEL_MAX) == 5000);
     TEST_CHECK(client_lighting_compose(-5000, -MAP2_LOCAL_LIGHT_LEVEL_MAX) == -5000);
@@ -387,6 +388,6 @@ int main(void) {
     test_cancelled_scalar_keeps_color_shift();
     test_grouping_is_independent_of_emitter_order();
     test_many_emitters_are_all_evaluated();
-    test_compose_by_sign_and_clamp_to_level();
+    test_compose_by_sign_over_the_coarse_floor();
     return EXIT_SUCCESS;
 }

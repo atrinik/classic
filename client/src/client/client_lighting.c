@@ -339,16 +339,13 @@ uint16_t client_lighting_flicker_gain(uint64_t time_ms) {
 int32_t client_lighting_compose(int32_t emitter_raw, int8_t level) {
     int32_t step = MAP2_LOCAL_LIGHT_LEVEL_RAW;
     int32_t local = emitter_raw;
+    /* The coarse level is a floor (a ceiling for darkness) under the emitter
+     * field, never a cap: it bins the strongest single source while the field
+     * groups a tile's sent emitters, which may exceed that bin. */
     if (level > 0 && local < level * step) {
         local = level * step;
     } else if (level < 0 && local > level * step) {
         local = level * step;
-    }
-    if (level >= 0 && level < MAP2_LOCAL_LIGHT_LEVEL_MAX && local > step * (level + 1) - 1) {
-        local = step * (level + 1) - 1;
-    }
-    if (level <= 0 && level > -MAP2_LOCAL_LIGHT_LEVEL_MAX && local < step * (level - 1) + 1) {
-        local = step * (level - 1) + 1;
     }
     return local;
 }
