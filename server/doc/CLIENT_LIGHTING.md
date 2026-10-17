@@ -196,7 +196,7 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    resolves its color accumulators, so hue can vary with distance. When some of
    a tile's emitters are not sent, the client underestimates and the coarse
    level supplies the rest. Every visible emitter is evaluated; the GPU stage
-   processes them in batches rather than truncating. The occluders are an R8
+   processes them in batches rather than truncating. The occluders are an R16
    cell grid per depth. That grid is 16-bit (R16), because face bits 8–11 must
    reach the ray walk.
 2. A compute (or full-screen fragment) pass evaluates every light vertex of the
