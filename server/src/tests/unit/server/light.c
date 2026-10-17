@@ -1706,10 +1706,9 @@ START_TEST(test_client_lighting_hidden_wall_surfaces_own_a_downward_face) {
 }
 END_TEST
 
-START_TEST(test_client_lighting_local_level_bounds_tall_stacks) {
-    /* A stack taller than a MAP2 window pools only within twelve levels of
-     * the target, so a long legacy stack never makes pooling unbounded,
-     * while every depth of one window still shares a source inside it. */
+START_TEST(test_client_lighting_local_level_shares_tall_stacks) {
+    /* A stack taller than a MAP2 window is still one vertical bucket: every
+     * level gets the same level, so its floors never reveal the source's. */
     enum { FLOORS = 20 };
     mapstruct *floors[FLOORS];
     for (int floor = 0; floor < FLOORS; floor++) {
@@ -1721,9 +1720,38 @@ START_TEST(test_client_lighting_local_level_bounds_tall_stacks) {
     add_colored_light(floors[FLOORS - 1], 4, 4, 13, LIGHT_COLOR_WHITE);
     int top = light_local_level(floors[FLOORS - 1], 4, 4);
     ck_assert_int_gt(top, 0);
-    ck_assert_int_eq(light_local_level(floors[FLOORS - 1 - 12], 4, 4), top);
-    ck_assert_int_eq(light_local_level(floors[FLOORS - 1 - 13], 4, 4), 0);
-    ck_assert_int_eq(light_local_level(floors[0], 4, 4), 0);
+    for (int floor = 0; floor < FLOORS; floor++) {
+        ck_assert_int_eq(light_local_level(floors[floor], 4, 4), top);
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_fails_closed_on_unbounded_cycles) {
+    /* Reciprocal east, north, west and south links that return to the same
+     * offset on a new map each lap place unboundedly many maps within reach;
+     * past the bound the level fails closed to 0 instead of walking them. */
+    enum { LAPS = 1100 };
+    mapstruct *start = get_empty_map(1, 1);
+    mapstruct *at = start;
+    static const int steps[4][2] = {{TILED_EAST, TILED_WEST},
+                                    {TILED_NORTH, TILED_SOUTH},
+                                    {TILED_WEST, TILED_EAST},
+                                    {TILED_SOUTH, TILED_NORTH}};
+    for (int lap = 0; lap < LAPS; lap++) {
+        for (int step = 0; step < 4; step++) {
+            mapstruct *next = get_empty_map(1, 1);
+            at->tile_map[steps[step][0]] = next;
+            next->tile_map[steps[step][1]] = at;
+            at = next;
+        }
+    }
+    add_colored_light(start->tile_map[TILED_EAST], 0, 0, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level(start, 0, 0), 0);
+    /* A single short lap stays well inside the bound and pools normally. */
+    mapstruct *west = get_empty_map(1, 1), *east = get_empty_map(1, 1);
+    link_horizontal_maps(west, east);
+    add_colored_light(east, 0, 0, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_gt(light_local_level(west, 0, 0), 0);
 }
 END_TEST
 
@@ -2053,7 +2081,8 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_diagonal_seams);
     tcase_add_test(tc_core, test_client_lighting_local_level_final_block_is_order_independent);
     tcase_add_test(tc_core, test_client_lighting_hidden_wall_surfaces_own_a_downward_face);
-    tcase_add_test(tc_core, test_client_lighting_local_level_bounds_tall_stacks);
+    tcase_add_test(tc_core, test_client_lighting_local_level_shares_tall_stacks);
+    tcase_add_test(tc_core, test_client_lighting_local_level_fails_closed_on_unbounded_cycles);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_every_reachable_tiny_map);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
