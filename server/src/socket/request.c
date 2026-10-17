@@ -1120,6 +1120,9 @@ typedef struct map2_light_sample {
     uint16_t radiance;
     uint16_t rgb[3];
     bool next_ready;
+    /** The sampled map's keyframe is not ready: the update must snap, but
+     * only once this sample is known to be the one the sub-layer keeps. */
+    bool snap;
 } map2_light_sample_t;
 
 /**
@@ -1132,14 +1135,12 @@ static void map2_sample_light(object *pl,
                               int x,
                               int y,
                               bool xray,
-                              map2_light_sample_t *sample,
-                              uint8_t *timed_light_flags) {
+                              map2_light_sample_t *sample) {
     sample->next_ready = false;
+    sample->snap = false;
     if (map->celestial_schema == 1) {
         sample->next_ready = celestial_light_keyframe_request(map, (uint64_t)todtick);
-        if (!sample->next_ready) {
-            *timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
-        }
+        sample->snap = !sample->next_ready;
     }
     sample->space = GET_MAP_SPACE_PTR(map, x, y);
     sample->raw = map_get_darkness(map, x, y, NULL);
@@ -1291,6 +1292,8 @@ void draw_client_map2(object *pl) {
     int light_xs[NUM_SUB_LAYERS], light_ys[NUM_SUB_LAYERS];
     const object *light_sample_objects[NUM_SUB_LAYERS];
     bool light_next_ready[NUM_SUB_LAYERS];
+    /* Whether a sub-layer's kept sample needs the update to snap. */
+    bool light_next_snap[NUM_SUB_LAYERS];
     int ext_flags, anim_num;
     int num_layers;
     object *tmp, *tmp2;
@@ -1655,6 +1658,7 @@ void draw_client_map2(object *pl) {
                     light_maps[sub_layer] = NULL;
                     light_sample_objects[sub_layer] = NULL;
                     light_next_ready[sub_layer] = false;
+                    light_next_snap[sub_layer] = false;
                 }
 
                 /* Initialize default values for some variables. */
@@ -1777,8 +1781,9 @@ void draw_client_map2(object *pl) {
                             light_ys[sub_layer] = tmp->y;
                             map2_light_sample_t sample;
                             map2_sample_light(pl, tmp->map, tmp->x, tmp->y, (special_vision & 1) != 0,
-                                              &sample, &timed_light_flags);
+                                              &sample);
                             light_next_ready[sub_layer] = sample.next_ready;
+                            light_next_snap[sub_layer] = sample.snap;
                             light_spaces[sub_layer] = sample.space;
                             raw_light[sub_layer] = sample.raw;
                             present_raw[sub_layer] = sample.present;
@@ -1798,8 +1803,9 @@ void draw_client_map2(object *pl) {
                                 if (light_spaces[sub_layer] != msp) {
                                     map2_light_sample_t sample;
                                     map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0,
-                                                      &sample, &timed_light_flags);
+                                                      &sample);
                                     light_next_ready[sub_layer] = sample.next_ready;
+                                    light_next_snap[sub_layer] = sample.snap;
                                     light_spaces[sub_layer] = sample.space;
                                     raw_light[sub_layer] = sample.raw;
                                     present_raw[sub_layer] = sample.present;
@@ -2008,8 +2014,9 @@ void draw_client_map2(object *pl) {
                                     if (light_spaces[sub_layer] != msp) {
                                         map2_light_sample_t sample;
                                         map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0,
-                                                          &sample, &timed_light_flags);
+                                                          &sample);
                                         light_next_ready[sub_layer] = sample.next_ready;
+                                        light_next_snap[sub_layer] = sample.snap;
                                         light_spaces[sub_layer] = sample.space;
                                         raw_light[sub_layer] = sample.raw;
                                         present_raw[sub_layer] = sample.present;
@@ -2342,6 +2349,11 @@ void draw_client_map2(object *pl) {
                 uint8_t light_next_rgb_bitmap = 0;
                 bool light_next_changed = false;
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                    /* Readiness counts only once the sample is final, so a
+                     * rejected candidate's map never makes the update snap. */
+                    if (light_set[sub_layer] && light_next_snap[sub_layer]) {
+                        timed_light_flags = MAP2_LIGHT_KEYFRAME_SNAP;
+                    }
                     uint16_t current_scalar = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
                     uint16_t current_rgb[3] = {current_scalar, current_scalar, current_scalar};
                     if (light_set[sub_layer]) {
