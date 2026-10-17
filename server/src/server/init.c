@@ -1277,8 +1277,9 @@ static void init_library(int argc, char *argv[]) {
     CLIOPTIONS_CREATE_ARGUMENT(cli, control_player, "Default player for control commands");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE(cli, recycle_tmp_maps, "Preserve loaded map state across restarts");
-    CLIOPTIONS_CREATE_ARGUMENT(cli, client_lighting, "Client-computed presentation lighting");
     clioptions_enable_changeable(cli);
+    /* Startup-only: connected sockets cache the lighting mode per cell. */
+    CLIOPTIONS_CREATE_ARGUMENT(cli, client_lighting, "Client-computed presentation lighting");
     CLIOPTIONS_CREATE_ARGUMENT(cli, speed, "Server speed");
     clioptions_enable_changeable(cli);
     CLIOPTIONS_CREATE_ARGUMENT(cli, speed_multiplier, "Speed multiplier");
