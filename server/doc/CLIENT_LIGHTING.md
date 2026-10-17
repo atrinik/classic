@@ -139,6 +139,8 @@ Celestial light), the environment includes the server's celestial light.
   The server never encodes `-32768`; decoders read every word as a plain
   `int16` and accept it.
 
+Base and keyframe endpoints are interpolated as signed values, in arithmetic
+wide enough for a cross-zero transition (`-2048` to `2048` passes through 0).
 Conformance vectors: raw `0 → 0`, `1 → 2`, `-1 → -2`, `160 → 256`,
 `1280 → 2048`, `-1280 → -2048`, `20479 → 32766`, `20480 → 32767`,
 `-20480 → -32767`. Current world, map and celestial anchors stay within raw
@@ -363,7 +365,7 @@ connection.
   Both cells in view are resident by construction, so the bits never depend on,
   and never encode, whether some other map is loaded.
 - **No per-player light recompute.** MAP2 reads cached base radiance and
-  per-cell scalars; coarse levels are cached per block. The celestial
+  per-cell scalars; coarse levels are cached per block, invalidated only by source changes on the maps their walk reaches. The celestial
   follow-up also removes MAP2's celestial ensure and keyframe calls.
 
 ## Client
@@ -645,7 +647,8 @@ celestial follow-up's removal of celestial light from the base radiance
   with a hidden source behind a wall; a source moved through every position of
   its block leaves every block's level unchanged; remembered tiles keep
   receiving their light levels as hidden light changes and never receive
-  objects, emitters or occluders; per-sub-layer level counts 1..7 and their reuse rule; per-face
+  objects, emitters or occluders; the producer emits one level per record (counts 1..7 and their reuse rule
+  are decoder tests); per-face
   attenuation, including a cell whose only authored face is east; no emitter or occluder for an
   unsent object or cell; hidden and plugin-hidden blockers set no occluder bits;
   glass floors set `v` only; an emitter-only change (radius, flicker or color)
