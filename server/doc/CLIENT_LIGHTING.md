@@ -50,12 +50,15 @@ client.
 below 1085 are rejected at setup, as for every revision. Reconnect clears all
 client emitter, occluder and coarse-light state with the map cache.
 
-Per MAP2 cell (current `MAP2_MASK_*` cell header):
+Per MAP2 cell record (one record per cell and depth). The fields follow the
+existing extended-tile data, in this order, after RGB, keyframe and animation
+data. They are announced by `ext_flags` bits, because the `MAP2_MASK_*` cell
+word already uses bits 6–15 for coordinates:
 
 | Field | Bytes | When | Meaning |
 | --- | --- | --- | --- |
-| `MAP2_MASK_LOCAL_LIGHT` (0x40) | 1 | changed | Coarse local light level `0..15` (high nibble reserved, zero) |
-| `MAP2_MASK_OCCLUDER` (0x80) | 1 per depth present | changed | bit0 blocks view, bit1 floor, bit2 roof surface, bit3 closed door; bits 4–7 reserved, zero |
+| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 | changed | Coarse local light level `0..15` (high nibble reserved, zero) |
+| `MAP2_FLAG_EXT_OCCLUDER` (16) | 1 | changed | bit0 blocks view, bit1 floor, bit2 roof surface, bit3 closed door; bits 4–7 reserved, zero |
 
 Per MAP2 layer (existing `flags2`):
 
