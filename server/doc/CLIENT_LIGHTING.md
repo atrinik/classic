@@ -211,12 +211,13 @@ connection.
     light at all. The pooled source of a block reaches another block by the
     gap between the two block rectangles in cells (0 for the own block, 1 for
     an edge neighbor, `√2` for a corner one), which depends only on block
-    geometry. Every block within the largest radius counts: on this map, on
-    maps across a seam light crosses (a resident reciprocal link, and
-    continuity as `light_face_continuous()` requires), on corner maps through
-    two such seams, and on linked levels above and below, adding the vertical
-    distance to the horizontal gap as the server's masks combine `dx`, `dy`
-    and `dz`. Each map is divided into its own blocks and measured in the
+    geometry. Every block within the largest radius counts: on this map and on
+    every map reached through seams light crosses (a resident reciprocal link,
+    and continuity as `light_face_continuous()` requires), horizontal seams
+    and links to the levels above and below taken in any order, so corner maps
+    and a level linked only from a neighboring map count too. The vertical
+    distance adds to the horizontal gap as the server's masks combine `dx`,
+    `dy` and `dz`. Each map is divided into its own blocks and measured in the
     target map's coordinates, so the blocks of neighboring maps need not align.
     No map is ever loaded for it. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot

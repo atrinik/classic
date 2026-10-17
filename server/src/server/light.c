@@ -1410,23 +1410,6 @@ static mapstruct *light_local_seam(mapstruct *map, int tile) {
     return next;
 }
 
-/**
- * The level dz steps above (positive) or below the map, when every step is a
- * seam light crosses into a map of the same dimensions, so blocks align.
- */
-static mapstruct *light_local_level_map(mapstruct *map, int dz) {
-    int direction = dz > 0 ? TILED_UP : TILED_DOWN;
-    for (int step = 0; step < abs(dz) && map != NULL; step++) {
-        mapstruct *next = light_local_seam(map, direction);
-        if (next == NULL || MAP_WIDTH(next) != MAP_WIDTH(map) ||
-            MAP_HEIGHT(next) != MAP_HEIGHT(map)) {
-            return NULL;
-        }
-        map = next;
-    }
-    return map;
-}
-
 /** Remembered levels of recently sampled blocks, valid for one source and
  * geometry epoch: every cell and sub-layer of a block shares its level. */
 #define LIGHT_LOCAL_CACHE_SIZE 1024
@@ -1509,51 +1492,68 @@ static void light_local_pool_region(mapstruct *source, int ox, int oy, int dz, i
     }
 }
 
+/** One map placed relative to the target block: cell (cx, cy) lies at
+ * (cx + ox, cy + oy) on the target map, dz levels above (positive) or below. */
+typedef struct light_local_region {
+    mapstruct *map;
+    int ox, oy, dz;
+} light_local_region;
+
+/** Upper bound on the placed maps one block pools: a 3x3 neighborhood on
+ * each of the 13 depths leaves room for maps smaller than the reach. */
+#define LIGHT_LOCAL_REGIONS_MAX 512
+
 static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
     /* Sources are pooled per block before propagation and reach a block by
      * the gap between the two blocks, which depends only on block geometry,
      * so a source's position inside its block never changes any block's
-     * level. Blocks within the largest radius count on this map, on maps
-     * across continuous seams, corners through two seams, and on linked
-     * levels above and below; no map is ever loaded for it. */
+     * level. Every map within the largest radius counts, reached through
+     * continuous horizontal seams and linked levels in any order (a level
+     * linked only from a neighbor counts too); no map is ever loaded for it. */
+    static light_local_region regions[LIGHT_LOCAL_REGIONS_MAX];
+    static const int tiles[] = {TILED_WEST, TILED_EAST, TILED_NORTH, TILED_SOUTH, TILED_UP,
+                                TILED_DOWN};
+    int reach = MAX_LIGHT_RADIUS, depth_reach = MIN(MAX_LIGHT_RADIUS, MAP2_MAX_DEPTH);
     int32_t positive = 0, negative = 0;
-    for (int dz = -MAX_LIGHT_RADIUS; dz <= MAX_LIGHT_RADIUS; dz++) {
-        mapstruct *level_map = dz == 0 ? map : light_local_level_map(map, dz);
-        if (level_map == NULL) {
-            continue;
-        }
-        light_local_pool_region(level_map, 0, 0, dz, bx, ex, by, ey, &positive, &negative);
-        static const int horizontal[2] = {TILED_WEST, TILED_EAST};
-        static const int vertical[2] = {TILED_NORTH, TILED_SOUTH};
-        mapstruct *columns[2];
-        int column_ox[2];
-        for (int side = 0; side < 2; side++) {
-            columns[side] = light_local_seam(level_map, horizontal[side]);
-            column_ox[side] = columns[side] == NULL ? 0
-                              : side == 0      ? -MAP_WIDTH(columns[side])
-                                               : MAP_WIDTH(level_map);
-            if (columns[side] != NULL) {
-                light_local_pool_region(columns[side], column_ox[side], 0, dz, bx, ex, by, ey,
-                                        &positive, &negative);
+    size_t count = 0;
+    regions[count++] = (light_local_region){.map = map};
+    for (size_t i = 0; i < count; i++) {
+        light_local_region region = regions[i];
+        light_local_pool_region(region.map, region.ox, region.oy, region.dz, bx, ex, by, ey,
+                                &positive, &negative);
+        for (size_t t = 0; t < arraysize(tiles); t++) {
+            light_local_region next = region;
+            next.map = light_local_seam(region.map, tiles[t]);
+            if (next.map == NULL) {
+                continue;
             }
-        }
-        for (int side = 0; side < 2; side++) {
-            mapstruct *row = light_local_seam(level_map, vertical[side]);
-            if (row != NULL) {
-                int oy = side == 0 ? -MAP_HEIGHT(row) : MAP_HEIGHT(level_map);
-                light_local_pool_region(row, 0, oy, dz, bx, ex, by, ey, &positive, &negative);
-            }
-            /* Corners are reached through the horizontal seam, then the vertical. */
-            for (int column = 0; column < 2; column++) {
-                if (columns[column] == NULL) {
+            if (tiles[t] == TILED_UP || tiles[t] == TILED_DOWN) {
+                /* Blocks align only across levels of the same dimensions. */
+                next.dz += tiles[t] == TILED_UP ? 1 : -1;
+                if (abs(next.dz) > depth_reach || MAP_WIDTH(next.map) != MAP_WIDTH(region.map) ||
+                    MAP_HEIGHT(next.map) != MAP_HEIGHT(region.map)) {
                     continue;
                 }
-                mapstruct *corner = light_local_seam(columns[column], vertical[side]);
-                if (corner != NULL) {
-                    int oy = side == 0 ? -MAP_HEIGHT(corner) : MAP_HEIGHT(columns[column]);
-                    light_local_pool_region(corner, column_ox[column], oy, dz, bx, ex, by, ey,
-                                            &positive, &negative);
-                }
+            } else if (tiles[t] == TILED_WEST) {
+                next.ox -= MAP_WIDTH(next.map);
+            } else if (tiles[t] == TILED_EAST) {
+                next.ox += MAP_WIDTH(region.map);
+            } else if (tiles[t] == TILED_NORTH) {
+                next.oy -= MAP_HEIGHT(next.map);
+            } else {
+                next.oy += MAP_HEIGHT(region.map);
+            }
+            if (next.ox >= ex + reach || next.ox + MAP_WIDTH(next.map) <= bx - reach ||
+                next.oy >= ey + reach || next.oy + MAP_HEIGHT(next.map) <= by - reach) {
+                continue;
+            }
+            bool seen = false;
+            for (size_t j = 0; j < count && !seen; j++) {
+                seen = regions[j].map == next.map && regions[j].ox == next.ox &&
+                       regions[j].oy == next.oy && regions[j].dz == next.dz;
+            }
+            if (!seen && count < arraysize(regions)) {
+                regions[count++] = next;
             }
         }
     }

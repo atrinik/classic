@@ -1618,6 +1618,23 @@ START_TEST(test_client_lighting_local_level_reaches_linked_depths) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_reaches_levels_linked_from_neighbors) {
+    /* The level above the east neighbor is linked only from that neighbor,
+     * yet the server's masks reach this map through the seam and then the
+     * link; the coarse level pools it as well. */
+    mapstruct *west = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    mapstruct *upper = get_empty_map(9, 9);
+    link_horizontal_maps(west, east);
+    link_stacked_maps(east, upper);
+    ck_assert_ptr_null(west->tile_map[TILED_UP]);
+    add_colored_light(upper, 0, 4, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(west, 8, 4);
+    ck_assert_int_gt(level, 0);
+    ck_assert_int_le(level, light_local_level(east, 0, 4));
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_crosses_horizontal_seams) {
     /* A hidden source just across a continuous seam still reaches the coarse
      * level, as the server's masks carry it into this map. */
@@ -1869,6 +1886,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
     tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
+    tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
     tcase_add_test(tc_core, test_client_lighting_local_level_resists_radius_probing);
     tcase_add_test(tc_core, test_client_lighting_local_level_resists_colocated_probing);
