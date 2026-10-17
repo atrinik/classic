@@ -1119,14 +1119,16 @@ static void map2_frozen_local_light(const MapCell *cached,
     for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
         int8_t level = 0;
         bool previous_floor;
+        uint8_t remote = 0;
         if (known) {
             uint8_t index = (uint8_t)MIN(sub_layer, cached->local_light_count - 1);
             if (!map_protocol_local_light_decode(cached->local_light[index], &level,
                                                  &previous_floor)) {
                 level = 0;
             }
+            remote = cached->local_light[index] & MAP2_LOCAL_LIGHT_REMOTE;
         }
-        levels[sub_layer] = map_protocol_local_light_encode(level, vision_floor);
+        levels[sub_layer] = map_protocol_local_light_encode(level, vision_floor) | remote;
     }
 }
 
@@ -2485,13 +2487,19 @@ void draw_client_map2(object *pl) {
                     map2_frozen_local_light(mp, (special_vision & 1) != 0, local_light);
                 } else {
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                        bool remote = light_maps[sub_layer] != NULL &&
+                                      (light_maps[sub_layer] != m || light_xs[sub_layer] != nx ||
+                                       light_ys[sub_layer] != ny);
                         int8_t level = light_maps[sub_layer] != NULL
                                            ? light_local_level(light_maps[sub_layer],
                                                                light_xs[sub_layer],
                                                                light_ys[sub_layer])
                                            : light_local_level(m, nx, ny);
+                        /* The cell's emitters and occluders describe the
+                         * cell, not a remotely sampled space. */
                         local_light[sub_layer] =
-                            map_protocol_local_light_encode(level, (special_vision & 1) != 0);
+                            map_protocol_local_light_encode(level, (special_vision & 1) != 0) |
+                            (remote ? MAP2_LOCAL_LIGHT_REMOTE : 0);
                     }
                 }
                 if (!map2_local_light_known(mp, local_light)) {

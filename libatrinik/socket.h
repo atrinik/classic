@@ -454,7 +454,10 @@ typedef struct socket_face_batch_response {
 /** Signed five-bit level of the local light byte. */
 #define MAP2_LOCAL_LIGHT_LEVEL_MASK 0x1f
 /** Bits a 1085 peer must leave zero in the local light byte. */
-#define MAP2_LOCAL_LIGHT_RESERVED 0x60
+#define MAP2_LOCAL_LIGHT_RESERVED 0x20
+/** The sub-layer's light was sampled at another space than its cell: the
+ * client composes only its coarse level, never the cell's emitter field. */
+#define MAP2_LOCAL_LIGHT_REMOTE 0x40
 /** Apply the viewer's vision floor after composing local light. */
 #define MAP2_LOCAL_LIGHT_VISION_FLOOR 0x80
 /** Raw light of the XRAY vision floor. */
