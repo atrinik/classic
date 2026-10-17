@@ -1487,6 +1487,98 @@ START_TEST(test_local_glass_floor_attenuates_color_and_neutral_darkness) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_base_radiance_omits_local_color) {
+    MapSpace space = {0};
+    uint16_t scalar, radiance[3], expected_scalar, expected[3];
+
+    space.light_source_value = 80;
+    space.light_source_positive_value = 80;
+    space.light_source_color_weight = INT64_C(80) * UINT16_MAX;
+    space.light_source_color[0] = INT64_C(80) * UINT16_MAX;
+    space.celestial_light_value = 200;
+    space.celestial_light_rgb[0] = 100;
+    space.celestial_light_rgb[1] = 200;
+    space.celestial_light_rgb[2] = 400;
+    light_base_radiance_from_raw(&space, 1280, &scalar, radiance);
+
+    MapSpace neutral = space;
+    neutral.light_source_color_weight = 0;
+    memset(neutral.light_source_color, 0, sizeof(neutral.light_source_color));
+    light_radiance_from_raw(&neutral, 1280, &expected_scalar, expected);
+    ck_assert_uint_eq(scalar, expected_scalar);
+    ck_assert_mem_eq(radiance, expected, sizeof(expected));
+    /* Celestial hue survives; the local red tint does not. */
+    ck_assert_uint_lt(radiance[0], radiance[2]);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_pools_and_quantizes) {
+    mapstruct *map = get_empty_map(9, 9);
+    add_colored_light(map, 4, 4, 13, UINT32_C(0xff0000));
+    int32_t peak = GET_MAP_SPACE_PTR(map, 4, 4)->light_source_value;
+    ck_assert_int_gt(peak, 0);
+    int expected = MIN(peak / MAP2_LOCAL_LIGHT_LEVEL_RAW, MAP2_LOCAL_LIGHT_LEVEL_MAX);
+
+    /* The fixed block (3..5, 3..5) holds the source; all nine cells share its
+     * peak, so the level cannot single out the source tile. */
+    for (int y = 3; y <= 5; y++) {
+        for (int x = 3; x <= 5; x++) {
+            ck_assert_int_eq(light_local_level(map, x, y), expected);
+        }
+    }
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            int level = light_local_level(map, x, y);
+            ck_assert_int_ge(level, 0);
+            ck_assert_int_le(level, expected);
+            /* Cells of one block always agree. */
+            ck_assert_int_eq(level, light_local_level(map, x - x % 3, y - y % 3));
+        }
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_hides_translation_within_block) {
+    int levels[9];
+    for (int position = 0; position < 9; position++) {
+        mapstruct *map = get_empty_map(9, 9);
+        add_colored_light(map, 3 + position % 3, 3 + position / 3, 13, LIGHT_COLOR_WHITE);
+        levels[position] = light_local_level(map, 4, 4);
+    }
+    for (int position = 1; position < 9; position++) {
+        ck_assert_int_eq(levels[position], levels[0]);
+    }
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_keeps_darkness_sign) {
+    mapstruct *map = get_empty_map(6, 6);
+    add_colored_light(map, 1, 1, -13, LIGHT_COLOR_WHITE);
+    int32_t darkest = GET_MAP_SPACE_PTR(map, 1, 1)->light_source_value;
+    ck_assert_int_lt(darkest, 0);
+    int expected = -MIN(-darkest / MAP2_LOCAL_LIGHT_LEVEL_RAW, MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    ck_assert_int_lt(expected, 0);
+    ck_assert_int_eq(light_local_level(map, 0, 0), expected);
+    ck_assert_int_eq(light_local_level(map, 2, 2), expected);
+    /* A map edge clips the block without reading or loading neighbors. */
+    ck_assert_int_ge(light_local_level(map, 5, 5), -MAP2_LOCAL_LIGHT_LEVEL_MAX);
+}
+END_TEST
+
+START_TEST(test_client_lighting_occluder_bits_follow_geometry) {
+    mapstruct *map = get_empty_map(5, 5);
+    ck_assert_uint_eq(light_occluder_bits(map, 1, 1), 0);
+    add_light_blocker(map, 1, 1);
+    ck_assert_uint_eq(light_occluder_bits(map, 1, 1) & MAP2_OCCLUDER_BLOCKSVIEW,
+                      MAP2_OCCLUDER_BLOCKSVIEW);
+    /* A view blocker transmits nothing through its faces. */
+    ck_assert_uint_eq(light_occluder_bits(map, 1, 1) >> MAP2_OCCLUDER_ATTENUATION_SHIFT, 15);
+    ck_assert_uint_eq(light_occluder_bits(map, 3, 3) >> MAP2_OCCLUDER_ATTENUATION_SHIFT, 0);
+    add_roof_surface(map, 2, 2);
+    ck_assert_uint_eq(light_occluder_bits(map, 2, 2) & MAP2_OCCLUDER_ROOF, MAP2_OCCLUDER_ROOF);
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("light");
     TCase *tc_core = tcase_create("Core");
@@ -1552,6 +1644,11 @@ static Suite *suite(void) {
                    test_map_teardown_withdraws_linked_light_and_invalidates_celestial_once);
     tcase_add_test(tc_core, test_successful_map_save_preserves_light_and_future_gameplay_rebuilds);
     tcase_add_test(tc_core, test_failed_map_save_preserves_live_objects_state_and_light);
+    tcase_add_test(tc_core, test_client_lighting_base_radiance_omits_local_color);
+    tcase_add_test(tc_core, test_client_lighting_local_level_pools_and_quantizes);
+    tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
+    tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
+    tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_geometry);
 
     return s;
 }

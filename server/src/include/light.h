@@ -52,6 +52,19 @@ extern void light_radiance_from_raw(const MapSpace *space,
                                     uint16_t *scalar_radiance,
                                     uint16_t radiance[3]);
 
+/** Resolve base Q5.11 radiance: ambient, floor, world, vision and celestial
+ * light without local source contributions or their color (protocol 1085). */
+extern void light_base_radiance_from_raw(const MapSpace *space,
+                                         int raw_light,
+                                         uint16_t *scalar_radiance,
+                                         uint16_t radiance[3]);
+
+/** Signed, source-anonymous coarse local light level of one cell (protocol 1085). */
+extern int8_t light_local_level(mapstruct *map, int x, int y);
+
+/** MAP2 occluder bits of one cell (protocol 1085). */
+extern uint8_t light_occluder_bits(mapstruct *map, int x, int y);
+
 /** Invalidate the bounded celestial field after structural/topology changes. */
 extern void celestial_light_invalidate(mapstruct *map);
 

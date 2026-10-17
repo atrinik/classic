@@ -62,6 +62,7 @@
 #include <rich_presence.h>
 #include <popup.h>
 #include <toolkit/packet.h>
+#include <toolkit/map_protocol.h>
 #include <toolkit/string.h>
 #include <toolkit/bresenham.h>
 #include <toolkit/clioptions.h>
@@ -95,6 +96,9 @@ typedef struct map_cell_layer_record {
     uint32_t visibility_actor_id;
     uint64_t presentation_token;
     bool visibility_local_player;
+    /** Protocol 1085 emitter of the sent object: glow radius and sRGB. */
+    int8_t emitter_radius;
+    uint32_t emitter_color;
     char glow[COLOR_BUF];
 } map_cell_layer_record_t;
 
@@ -180,6 +184,12 @@ typedef struct map_cell_header {
     uint8_t fow;
     uint8_t structural_fow;
     uint8_t light_state;
+    /** Protocol 1085 coarse local light byte: signed level and vision floor. */
+    uint8_t local_light;
+    /** Protocol 1085 occluder bits of the cell. */
+    uint8_t occluder;
+    /** Bit 0: local_light received; bit 1: occluder received. */
+    uint8_t client_light_known;
 } map_cell_header_t;
 
 static map_cell_store_t *cells;
@@ -369,7 +379,7 @@ static bool map_cell_layer_record_empty(const map_cell_layer_record_t *record) {
            record->anim_state == 0 && record->glow_speed == 0 && record->glow_state == 0 &&
            record->face == 0 && record->height == 0 && record->zoom_x == 0 && record->zoom_y == 0 &&
            record->align == 0 && record->rotate == 0 && !record->visibility.initialized &&
-           record->glow[0] == '\0';
+           record->emitter_radius == 0 && record->emitter_color == 0 && record->glow[0] == '\0';
 }
 
 static map_cell_sublayer_record_t *
@@ -3112,6 +3122,97 @@ void map_set_structural_support_height(int x, int y, int16_t height) {
         return;
     }
     level_lighting_revision[current_level_index]++;
+}
+
+/** Replace the emitter of one sent layer; radius 0 removes it. */
+void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint32_t color) {
+    HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
+    HARD_ASSERT(radius >= -MAP2_EMITTER_RADIUS_MAX && radius <= MAP2_EMITTER_RADIUS_MAX);
+    map_cell_t *cell = map_cell_store_slot(cells,
+                                           map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY),
+                                           false);
+    const map_cell_layer_record_t *old = cell != NULL ? map_cell_layer_record_read(cell, layer) : NULL;
+    color = radius != 0 ? color & UINT32_C(0xffffff) : 0;
+    if ((old == NULL || old->emitter_radius == 0) && radius == 0) {
+        return;
+    }
+    if (old != NULL && old->emitter_radius == radius && old->emitter_color == color) {
+        return;
+    }
+    map_state_transaction_record_cell(x, y);
+    cell = MAP_CELL_GET_MIDDLE_MUTABLE(x, y);
+    map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, true);
+    record->emitter_radius = radius;
+    record->emitter_color = color;
+    if (map_cell_layer_record_empty(record)) {
+        map_cell_layer_record_remove(cell, layer);
+    }
+    map_cell_store_trim_slot(cells, map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY));
+    level_lighting_revision[current_level_index]++;
+}
+
+/** Return the emitter of one sent layer, if any. */
+bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint32_t *color) {
+    HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
+    const map_cell_layer_record_t *record =
+        map_cell_layer_record_read(MAP_CELL_GET_MIDDLE(x, y), layer);
+    if (record->emitter_radius == 0) {
+        return false;
+    }
+    *radius = record->emitter_radius;
+    *color = record->emitter_color;
+    return true;
+}
+
+/** Store the validated coarse local light byte of a visible cell. */
+void map_set_local_light(int x, int y, uint8_t value) {
+    int8_t level;
+    bool vision_floor;
+    bool valid = map_protocol_local_light_decode(value, &level, &vision_floor);
+    HARD_ASSERT(valid);
+    map_state_transaction_record_cell(x, y);
+    map_cell_header_t *header =
+        &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+    if ((header->client_light_known & 1U) && header->local_light == value) {
+        return;
+    }
+    header->local_light = value;
+    header->client_light_known |= 1U;
+    level_lighting_revision[current_level_index]++;
+}
+
+/** Store the occluder bits of a cell; remembered cells keep their last bits. */
+void map_set_occluder(int x, int y, uint8_t bits) {
+    map_state_transaction_record_cell(x, y);
+    map_cell_header_t *header =
+        &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+    if ((header->client_light_known & 2U) && header->occluder == bits) {
+        return;
+    }
+    header->occluder = bits;
+    header->client_light_known |= 2U;
+    level_lighting_revision[current_level_index]++;
+}
+
+/** Return the signed coarse local light level and vision floor of a cell. */
+bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor) {
+    const map_cell_header_t *header =
+        &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+    if (!(header->client_light_known & 1U)) {
+        return false;
+    }
+    return map_protocol_local_light_decode(header->local_light, level, vision_floor);
+}
+
+/** Return the occluder bits of a cell, if they were received. */
+bool map_get_occluder(int x, int y, uint8_t *bits) {
+    const map_cell_header_t *header =
+        &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+    if (!(header->client_light_known & 2U)) {
+        return false;
+    }
+    *bits = header->occluder;
+    return true;
 }
 
 /** Apply an explicit server visibility state after a tile's layer deltas. */
@@ -5868,6 +5969,111 @@ bool widget_map_temporal_lighting_test(void) {
     MapData.light_keyframe_end_seconds = saved_end;
     MapData.light_keyframe_flags = saved_flags;
     MapData.light_keyframe_valid = saved_valid;
+    return success;
+}
+
+/** Verify protocol 1085 emitter, coarse local light and occluder state. */
+bool widget_map_client_lighting_state_test(void) {
+    for (size_t level = 0; level < arraysize(level_cells); level++) {
+        if (level_cells[level] != NULL) {
+            return false;
+        }
+    }
+
+    int saved_width = map_width;
+    int saved_height = map_height;
+    int saved_origin_x = map_cache_origin_x;
+    int saved_origin_y = map_cache_origin_y;
+    size_t saved_level_index = current_level_index;
+    uint16_t saved_level_mask = map_level_mask;
+    map_cell_store_t *saved_cells = cells;
+    uint64_t saved_allocation_count = map_cell_allocation_count;
+    uint64_t saved_allocation_bytes = map_cell_allocation_bytes;
+    uint64_t saved_retained_bytes = map_cell_retained_bytes;
+    uint64_t saved_peak_retained_bytes = map_cell_peak_retained_bytes;
+    uint64_t saved_next_painter_identity = map_cell_next_painter_identity;
+    uint64_t saved_revisions[MAP2_LEVELS];
+    memcpy(saved_revisions, level_lighting_revision, sizeof(saved_revisions));
+
+    map_width = 17;
+    map_height = 17;
+    map_cache_origin_x = 0;
+    map_cache_origin_y = 0;
+    current_level_index = MAP2_DEPTH_INDEX(0);
+    map_level_mask = UINT16_C(1) << current_level_index;
+    bool success = map_select_level(0, true);
+
+    int layer = GET_MAP_LAYER(LAYER_ITEM, 0);
+    int8_t radius = 0;
+    uint32_t color = 0;
+    uint8_t bits = 0;
+    int8_t level = 0;
+    bool vision_floor = false;
+    success = success && !map_get_layer_emitter(4, 4, layer, &radius, &color) &&
+              !map_get_local_light(4, 4, &level, &vision_floor) && !map_get_occluder(4, 4, &bits);
+
+    /* An emitter rides on its layer record and changes the lighting revision. */
+    uint64_t revision = level_lighting_revision[current_level_index];
+    map_set_layer_emitter(4, 4, layer, 9, UINT32_C(0x12ff8040));
+    success = success && map_get_layer_emitter(4, 4, layer, &radius, &color) && radius == 9 &&
+              color == UINT32_C(0xff8040) &&
+              level_lighting_revision[current_level_index] != revision;
+    revision = level_lighting_revision[current_level_index];
+    map_set_layer_emitter(4, 4, layer, 9, UINT32_C(0xff8040));
+    success = success && level_lighting_revision[current_level_index] == revision;
+    map_set_layer_emitter(4, 4, layer, -13, 0);
+    success = success && map_get_layer_emitter(4, 4, layer, &radius, &color) && radius == -13;
+    /* Removing the only field of a layer releases its record. */
+    map_set_layer_emitter(4, 4, layer, 0, 0);
+    success = success && !map_get_layer_emitter(4, 4, layer, &radius, &color) &&
+              map_cell_store_slot(cells,
+                                  map_cache_physical_index(4 + MAP_STARTX, 4 + MAP_STARTY),
+                                  false) == NULL;
+
+    bool vision = true;
+    int8_t signed_level = 1;
+    map_set_local_light(5, 5, map_protocol_local_light_encode(0, false));
+    success = success && map_get_local_light(5, 5, &signed_level, &vision) && signed_level == 0 &&
+              !vision;
+    map_set_local_light(5, 5, map_protocol_local_light_encode(-MAP2_LOCAL_LIGHT_LEVEL_MAX, true));
+    map_set_occluder(5, 5, MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
+                               (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT));
+    success = success && map_get_local_light(5, 5, &signed_level, &vision) &&
+              signed_level == -MAP2_LOCAL_LIGHT_LEVEL_MAX && vision &&
+              map_get_occluder(5, 5, &bits) &&
+              bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
+                       (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT));
+
+    /* An aborted update restores the previous client-lighting state. */
+    map_state_transaction_begin(false);
+    map_set_local_light(5, 5, map_protocol_local_light_encode(3, false));
+    map_set_occluder(5, 5, MAP2_OCCLUDER_FLOOR);
+    map_set_layer_emitter(5, 5, layer, 4, UINT32_C(0x00ff00));
+    map_state_transaction_abort();
+    success = success && map_get_local_light(5, 5, &signed_level, &vision) &&
+              signed_level == -MAP2_LOCAL_LIGHT_LEVEL_MAX && vision &&
+              map_get_occluder(5, 5, &bits) &&
+              bits == (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
+                       (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT)) &&
+              !map_get_layer_emitter(5, 5, layer, &radius, &color);
+
+    for (size_t store = 0; store < arraysize(level_cells); store++) {
+        map_cell_store_destroy(level_cells[store]);
+        level_cells[store] = NULL;
+    }
+    cells = saved_cells;
+    current_level_index = saved_level_index;
+    map_width = saved_width;
+    map_height = saved_height;
+    map_cache_origin_x = saved_origin_x;
+    map_cache_origin_y = saved_origin_y;
+    map_level_mask = saved_level_mask;
+    memcpy(level_lighting_revision, saved_revisions, sizeof(level_lighting_revision));
+    map_cell_next_painter_identity = saved_next_painter_identity;
+    map_cell_allocation_count = saved_allocation_count;
+    map_cell_allocation_bytes = saved_allocation_bytes;
+    map_cell_retained_bytes = saved_retained_bytes;
+    map_cell_peak_retained_bytes = saved_peak_retained_bytes;
     return success;
 }
 

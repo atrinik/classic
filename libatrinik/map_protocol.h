@@ -75,6 +75,20 @@ bool map_protocol_validate(const uint8_t *data,
                            int map_width,
                            int map_height);
 
+/**
+ * Encode a protocol-1085 coarse local light byte.
+ * @param level Signed level, -MAP2_LOCAL_LIGHT_LEVEL_MAX..MAP2_LOCAL_LIGHT_LEVEL_MAX.
+ * @param vision_floor Whether the viewer's vision floor applies after composition.
+ */
+uint8_t map_protocol_local_light_encode(int level, bool vision_floor);
+
+/**
+ * Decode a protocol-1085 coarse local light byte.
+ * @return False for reserved bits or the invalid level -16; outputs are then
+ * unchanged.
+ */
+bool map_protocol_local_light_decode(uint8_t value, int8_t *level, bool *vision_floor);
+
 /** Validate a MAP2 envelope and return side-effect-free routing metadata. */
 bool map_protocol_inspect(const uint8_t *data,
                           size_t len,

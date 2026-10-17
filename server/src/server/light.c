@@ -343,6 +343,75 @@ void light_radiance_from_raw(const MapSpace *space,
     }
 }
 
+void light_base_radiance_from_raw(const MapSpace *space,
+                                  int raw_light,
+                                  uint16_t *scalar_radiance,
+                                  uint16_t radiance[3]) {
+    HARD_ASSERT(space != NULL);
+    /* Without a color weight the resolver keeps only the neutral non-local
+     * term and the celestial RGB field. */
+    MapSpace base = *space;
+    base.light_source_color_weight = 0;
+    light_radiance_from_raw(&base, raw_light, scalar_radiance, radiance);
+}
+
+/**
+ * Signed coarse local light of the fixed 3x3 block containing a cell, aligned
+ * to map-local coordinates and clipped at the map edge. The strongest positive
+ * and negative local scalars compete by magnitude, which is quantized down to
+ * whole 1/8-daylight levels. Every cell of a block shares one value, so the
+ * peak does not single out a source tile; neither hue nor count is kept. The
+ * block never reads another map.
+ */
+int8_t light_local_level(mapstruct *map, int x, int y) {
+    HARD_ASSERT(map != NULL && map->spaces != NULL);
+    int32_t positive = 0, negative = 0;
+    int bx = x - x % 3, by = y - y % 3;
+    for (int cy = by; cy < MIN(by + 3, MAP_HEIGHT(map)); cy++) {
+        for (int cx = bx; cx < MIN(bx + 3, MAP_WIDTH(map)); cx++) {
+            int32_t value = GET_MAP_SPACE_PTR(map, cx, cy)->light_source_value;
+            positive = MAX(positive, value);
+            negative = MIN(negative, value);
+        }
+    }
+    bool darker = -(int64_t)negative > positive;
+    int64_t magnitude = darker ? -(int64_t)negative : positive;
+    int level = (int)MIN(magnitude / MAP2_LOCAL_LIGHT_LEVEL_RAW, MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    return (int8_t)(darker ? -level : level);
+}
+
+uint8_t light_occluder_bits(mapstruct *map, int x, int y) {
+    HARD_ASSERT(map != NULL);
+    const MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+    int flags = GET_MAP_FLAGS(map, x, y);
+    uint8_t bits = 0;
+    if (flags & P_BLOCKSVIEW) {
+        bits |= MAP2_OCCLUDER_BLOCKSVIEW;
+    }
+    if (space->light_geometry & 2U) {
+        bits |= MAP2_OCCLUDER_FLOOR;
+    }
+    if (space->light_geometry & 4U) {
+        bits |= MAP2_OCCLUDER_ROOF;
+    }
+    if (flags & P_DOOR_CLOSED) {
+        bits |= MAP2_OCCLUDER_DOOR_CLOSED;
+    }
+    /* Cell-wide minimum of the horizontal face coefficients, rounded up to
+     * the next attenuation step so the client never transmits more light. */
+    static const int normals[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    spatial_cell cell = {.map = map, .x = x, .y = y, .z = 0};
+    uint16_t coefficient = SPATIAL_LIGHT_SCALE;
+    for (size_t i = 0; i < arraysize(normals); i++) {
+        coefficient = MIN(coefficient,
+                          spatial_cell_light_face(&cell, normals[i][0], normals[i][1], 0, NULL));
+    }
+    int attenuation = (SPATIAL_LIGHT_SCALE - coefficient + MAP2_OCCLUDER_ATTENUATION_STEP - 1) /
+                      MAP2_OCCLUDER_ATTENUATION_STEP;
+    bits |= (uint8_t)(MIN(attenuation, 15) << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    return bits;
+}
+
 typedef struct light_profile {
     int center;
     int radial_radius;

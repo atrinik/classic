@@ -1102,6 +1102,10 @@ void draw_client_map2(object *pl) {
     int special_vision;
     uint16_t mask;
     int layer, raw_light[NUM_SUB_LAYERS], light_set[NUM_SUB_LAYERS];
+    /* Presentation raw light: base light only when clients compute local
+     * light themselves. Gameplay darkness gating keeps using raw_light. */
+    int present_raw[NUM_SUB_LAYERS];
+    bool client_lighting = settings.client_lighting;
     uint16_t light_radiance[NUM_SUB_LAYERS];
     uint16_t light_rgb_radiance[NUM_SUB_LAYERS][3];
     uint16_t light_next_radiance[NUM_SUB_LAYERS];
@@ -1441,6 +1445,7 @@ void draw_client_map2(object *pl) {
 
                 for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                     light_set[sub_layer] = 0;
+                    present_raw[sub_layer] = 0;
                     light_radiance[sub_layer] = 0;
                     light_next_radiance[sub_layer] = 0;
                     memset(light_rgb_radiance[sub_layer], 0, sizeof(light_rgb_radiance[sub_layer]));
@@ -1574,6 +1579,11 @@ void draw_client_map2(object *pl) {
                                 raw_light[sub_layer] += global_darkness_table[MAX_DARKNESS];
                             }
 
+                            present_raw[sub_layer] = raw_light[sub_layer];
+                            if (client_lighting) {
+                                present_raw[sub_layer] -= light_spaces[sub_layer]->light_source_value;
+                            }
+
                             /* XRAY vision is an explicit authorization to see
                              * through darkness. Static MAP2 geometry remains
                              * authorized at zero radiance so the client can
@@ -1582,11 +1592,24 @@ void draw_client_map2(object *pl) {
                             if (raw_light[sub_layer] < 100 && special_vision & 1) {
                                 raw_light[sub_layer] = 100;
                             }
+                            /* Client lighting applies the floor after it adds
+                             * local light, as announced in the local byte. */
+                            if (!client_lighting && present_raw[sub_layer] < 100 &&
+                                special_vision & 1) {
+                                present_raw[sub_layer] = 100;
+                            }
 
-                            light_radiance_from_raw(GET_MAP_SPACE_PTR(tmp->map, tmp->x, tmp->y),
-                                                    raw_light[sub_layer],
-                                                    &light_radiance[sub_layer],
-                                                    light_rgb_radiance[sub_layer]);
+                            if (client_lighting) {
+                                light_base_radiance_from_raw(light_spaces[sub_layer],
+                                                             present_raw[sub_layer],
+                                                             &light_radiance[sub_layer],
+                                                             light_rgb_radiance[sub_layer]);
+                            } else {
+                                light_radiance_from_raw(light_spaces[sub_layer],
+                                                        present_raw[sub_layer],
+                                                        &light_radiance[sub_layer],
+                                                        light_rgb_radiance[sub_layer]);
+                            }
                         }
 
                         /* The viewer remains visible even in total darkness. This
@@ -1798,6 +1821,7 @@ void draw_client_map2(object *pl) {
                                 mp->roof[socket_layer] = 0;
                                 mp->door[socket_layer] = 0;
                                 mp->exit[socket_layer] = 0;
+                                mp->emitter[socket_layer] = 0;
                                 mp->anim_speed[socket_layer] = 0;
                                 mp->anim_facing[socket_layer] = 0;
 
@@ -1829,6 +1853,17 @@ void draw_client_map2(object *pl) {
                                 is_exit = 1;
                             }
 
+                            /* The emitter of an object already being sent
+                             * discloses nothing beyond its face and tile. */
+                            uint32_t emitter = 0;
+                            if (client_lighting && tmp->glow_radius != 0) {
+                                int radius = MAX(-MAP2_EMITTER_RADIUS_MAX,
+                                                 MIN(MAP2_EMITTER_RADIUS_MAX, tmp->glow_radius));
+                                emitter = (uint32_t)(uint8_t)(int8_t)radius << 24 |
+                                          (tmp->light_color & UINT32_C(0xffffff));
+                                flags2 |= MAP2_FLAG2_EMITTER;
+                            }
+
                             if (flags2) {
                                 flags |= MAP2_FLAG_MORE;
                             }
@@ -1850,6 +1885,7 @@ void draw_client_map2(object *pl) {
                                 mp->roof[socket_layer] == is_roof &&
                                 mp->door[socket_layer] == is_door &&
                                 mp->exit[socket_layer] == is_exit &&
+                                mp->emitter[socket_layer] == emitter &&
                                 (layer != LAYER_LIVING || !IS_LIVE(head) ||
                                  (mp->probe == probe_val &&
                                   mp->target_object_count[sub_layer] == target_object_count)) &&
@@ -1872,6 +1908,7 @@ void draw_client_map2(object *pl) {
                             mp->roof[socket_layer] = is_roof;
                             mp->door[socket_layer] = is_door;
                             mp->exit[socket_layer] = is_exit;
+                            mp->emitter[socket_layer] = emitter;
                             mp->anim_speed[socket_layer] = anim_speed;
                             mp->anim_facing[socket_layer] = anim_facing;
 
@@ -2015,6 +2052,15 @@ void draw_client_map2(object *pl) {
                                     packet_debug_data(packet_layer, 3, "Glow speed");
                                     packet_writer_write_uint8(packet_layer, head->glow_speed);
                                 }
+
+                                if (flags2 & MAP2_FLAG2_EMITTER) {
+                                    packet_debug_data(packet_layer, 3, "Emitter glow radius");
+                                    packet_writer_write_int8(packet_layer, (int8_t)(emitter >> 24));
+                                    packet_debug_data(packet_layer, 3, "Emitter sRGB");
+                                    packet_writer_write_uint8(packet_layer, (uint8_t)(emitter >> 16));
+                                    packet_writer_write_uint8(packet_layer, (uint8_t)(emitter >> 8));
+                                    packet_writer_write_uint8(packet_layer, (uint8_t)emitter);
+                                }
                             }
                         } else if (mp->faces[socket_layer]) {
                             /* Didn't find anything. Now, if we have previously seen
@@ -2026,6 +2072,7 @@ void draw_client_map2(object *pl) {
                             mp->roof[socket_layer] = 0;
                             mp->door[socket_layer] = 0;
                             mp->exit[socket_layer] = 0;
+                            mp->emitter[socket_layer] = 0;
                             mp->anim_speed[socket_layer] = 0;
                             mp->anim_facing[socket_layer] = 0;
 
@@ -2066,7 +2113,10 @@ void draw_client_map2(object *pl) {
                                 light_spaces[sub_layer]->celestial_light_rgb,
                                 sizeof(light_spaces[sub_layer]->celestial_light_rgb)) != 0)) {
                         MapSpace next_space = *light_spaces[sub_layer];
-                        int next_raw = raw_light[sub_layer] -
+                        if (client_lighting) {
+                            next_space.light_source_color_weight = 0;
+                        }
+                        int next_raw = present_raw[sub_layer] -
                                        light_spaces[sub_layer]->celestial_light_value +
                                        light_spaces[sub_layer]->celestial_light_next_value;
                         next_space.celestial_light_value =
@@ -2242,6 +2292,21 @@ void draw_client_map2(object *pl) {
                     ext_flags |= MAP2_FLAG_EXT_LIGHT_KEYFRAME;
                 }
 
+                /* Client lighting fields describe only cells the viewer
+                 * currently sees; remembered cells keep their last values. */
+                uint8_t local_light = 0, occluder = 0;
+                if (client_lighting && !tile_fow) {
+                    local_light = map_protocol_local_light_encode(light_local_level(m, nx, ny),
+                                                                  (special_vision & 1) != 0);
+                    occluder = light_occluder_bits(m, nx, ny);
+                    if (!(mp->client_light_known & 1U) || mp->local_light != local_light) {
+                        ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
+                    }
+                    if (!(mp->client_light_known & 2U) || mp->occluder != occluder) {
+                        ext_flags |= MAP2_FLAG_EXT_OCCLUDER;
+                    }
+                }
+
                 /* Add flags for this tile. */
                 packet_debug_data(packet, 1, "Extended tile flags");
                 packet_writer_write_uint8(packet, ext_flags);
@@ -2333,6 +2398,20 @@ void draw_client_map2(object *pl) {
                         packet_debug_data(packet, 1, "Animation value");
                         packet_writer_write_int16(packet, anim_value[sub_layer]);
                     }
+                }
+
+                if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
+                    packet_debug_data(packet, 1, "Coarse local light level");
+                    packet_writer_write_uint8(packet, local_light);
+                    mp->local_light = local_light;
+                    mp->client_light_known |= 1U;
+                }
+
+                if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
+                    packet_debug_data(packet, 1, "Occluder bits");
+                    packet_writer_write_uint8(packet, occluder);
+                    mp->occluder = occluder;
+                    mp->client_light_known |= 2U;
                 }
 
                 /* If nothing has really changed, go back to the old position

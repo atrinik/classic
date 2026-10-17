@@ -512,6 +512,81 @@ START_TEST(test_map_protocol_validates_timed_light_keyframes) {
 }
 END_TEST
 
+/** One cell with an emitter layer and both client-lighting extensions. */
+static packet_struct *map_protocol_client_lighting_level(int8_t radius, uint8_t level_value,
+                                                        uint8_t occluder) {
+    packet_struct *level = packet_new(0, 32, 16);
+    packet_writer_write_uint16(level, 0);
+    packet_writer_write_uint8(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint16(level, 1);
+    packet_writer_write_uint8(level, 0);
+    packet_writer_write_uint8(level, MAP2_FLAG_MORE);
+    packet_writer_write_uint32(level, MAP2_FLAG2_EMITTER);
+    packet_writer_write_int8(level, radius);
+    packet_writer_write_uint8(level, 0xff);
+    packet_writer_write_uint8(level, 0x80);
+    packet_writer_write_uint8(level, 0x40);
+    packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_OCCLUDER);
+    packet_writer_write_uint8(level, level_value);
+    packet_writer_write_uint8(level, occluder);
+    return level;
+}
+
+static bool map_protocol_client_lighting_valid(int8_t radius, uint8_t level_value,
+                                               uint8_t occluder) {
+    packet_struct *level = map_protocol_client_lighting_level(radius, level_value, occluder);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    bool valid = map_protocol_validate(packet->data, packet->len, 0, 21, 21);
+    packet_free(packet);
+    packet_free(level);
+    return valid;
+}
+
+START_TEST(test_map_protocol_validates_client_lighting_fields) {
+    uint8_t all_geometry = MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_FLOOR | MAP2_OCCLUDER_ROOF |
+                           MAP2_OCCLUDER_DOOR_CLOSED;
+    ck_assert(map_protocol_client_lighting_valid(13,
+                                                 map_protocol_local_light_encode(15, true),
+                                                 all_geometry));
+    ck_assert(map_protocol_client_lighting_valid(-13,
+                                                 map_protocol_local_light_encode(-15, false),
+                                                 0xff));
+    ck_assert(map_protocol_client_lighting_valid(1, map_protocol_local_light_encode(0, false), 0));
+    /* A zero or out-of-range radius, level -16 and reserved local-light bits
+     * are malformed. Every occluder byte is meaningful. */
+    ck_assert(!map_protocol_client_lighting_valid(0, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid(14, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid(-14, 0, 0));
+    ck_assert(!map_protocol_client_lighting_valid(1, 0x10, 0));
+    ck_assert(!map_protocol_client_lighting_valid(1, 0x20, 0));
+    ck_assert(!map_protocol_client_lighting_valid(1, 0x40, 0));
+
+    for (int level = -MAP2_LOCAL_LIGHT_LEVEL_MAX; level <= MAP2_LOCAL_LIGHT_LEVEL_MAX; level++) {
+        for (int floor_bit = 0; floor_bit < 2; floor_bit++) {
+            int8_t decoded = 0;
+            bool vision_floor = false;
+            ck_assert(map_protocol_local_light_decode(
+                map_protocol_local_light_encode(level, floor_bit != 0), &decoded, &vision_floor));
+            ck_assert_int_eq(decoded, level);
+            ck_assert_int_eq(vision_floor, floor_bit != 0);
+        }
+    }
+
+    packet_struct *level = map_protocol_client_lighting_level(4, 3, MAP2_OCCLUDER_FLOOR);
+    packet_struct *packet = map_protocol_test_packet(1);
+    map_protocol_test_level(packet, 0, level);
+    ck_assert(map_protocol_validate(packet->data, packet->len, 0, 21, 21));
+    size_t packet_len = packet->len;
+    for (size_t len = 0; len < packet_len; len++) {
+        ck_assert(!map_protocol_validate(packet->data, len, 0, 21, 21));
+    }
+    packet_free(packet);
+    packet_free(level);
+}
+END_TEST
+
 START_TEST(test_map_protocol_accepts_bounded_continuation) {
     ck_assert_uint_eq(MAP2_PARTIAL_HEADER_SIZE + MAP2_LEVEL_FRAME_SIZE + MAP2_LEVEL_PAYLOAD_MAX,
                       PACKET_PAYLOAD_MAX);
@@ -1312,6 +1387,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_map_protocol_continuation_state_is_bounded_and_ordered);
     tcase_add_test(tc_core, test_map_protocol_rejects_unterminated_metadata);
     tcase_add_test(tc_core, test_map_protocol_enforces_metadata_string_bounds);
+    tcase_add_test(tc_core, test_map_protocol_validates_client_lighting_fields);
 
     return s;
 }

@@ -110,6 +110,18 @@ typedef struct MapCell_struct {
     /** Whether the fog-of-war state has been sent at least once. */
     uint8_t fow_known;
 
+    /** Last coarse local light level sent (protocol 1085 client lighting). */
+    uint8_t local_light;
+
+    /** Last occluder bits sent (protocol 1085 client lighting). */
+    uint8_t occluder;
+
+    /** Whether local_light and occluder have been sent, bit 0 and bit 1. */
+    uint8_t client_light_known;
+
+    /** Last emitter sent per layer: int8 radius in the top byte, then sRGB. */
+    uint32_t emitter[NUM_REAL_LAYERS];
+
     /** Faces we sent. */
     int16_t faces[NUM_REAL_LAYERS];
 

@@ -417,7 +417,12 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG2_DOOR 512
 /** The object is a visible map transition. */
 #define MAP2_FLAG2_EXIT 1024
+/** The sent object emits light: int8 glow radius, then sRGB R, G, B (1085). */
+#define MAP2_FLAG2_EMITTER 2048
 /*@}*/
+
+/** Largest absolute emitter glow radius carried by MAP2_FLAG2_EMITTER. */
+#define MAP2_EMITTER_RADIUS_MAX 13
 
 /**
  * @defgroup MAP2_FLAG_EXT_xxx Map2 tile flags
@@ -430,6 +435,36 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 2
 /** Next authoritative hourly aggregate-light endpoint follows. */
 #define MAP2_FLAG_EXT_LIGHT_KEYFRAME 4
+/** Coarse, source-anonymous local light level byte follows (1085). */
+#define MAP2_FLAG_EXT_LOCAL_LIGHT 8
+/** Occluder bits of the cell follow (1085). */
+#define MAP2_FLAG_EXT_OCCLUDER 16
+/*@}*/
+
+/** Largest coarse local light magnitude; each level is 1/8 daylight. */
+#define MAP2_LOCAL_LIGHT_LEVEL_MAX 15
+/** Raw light covered by one coarse local light level. */
+#define MAP2_LOCAL_LIGHT_LEVEL_RAW 160
+/** Signed five-bit level of the local light byte. */
+#define MAP2_LOCAL_LIGHT_LEVEL_MASK 0x1f
+/** Bits a 1085 peer must leave zero in the local light byte. */
+#define MAP2_LOCAL_LIGHT_RESERVED 0x60
+/** Apply the viewer's vision floor after composing local light. */
+#define MAP2_LOCAL_LIGHT_VISION_FLOOR 0x80
+/** Raw light of the XRAY vision floor. */
+#define MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW 100
+
+/**
+ * @defgroup MAP2_OCCLUDER_xxx Map2 occluder bits
+ * Geometry of a sent cell that the client uses to occlude emitter light.
+ * Bits 4-7 hold a transmission attenuation a: coefficient 256 - 16a.
+ *@{*/
+#define MAP2_OCCLUDER_BLOCKSVIEW 1
+#define MAP2_OCCLUDER_FLOOR 2
+#define MAP2_OCCLUDER_ROOF 4
+#define MAP2_OCCLUDER_DOOR_CLOSED 8
+#define MAP2_OCCLUDER_ATTENUATION_SHIFT 4
+#define MAP2_OCCLUDER_ATTENUATION_STEP 16
 /*@}*/
 
 /**
