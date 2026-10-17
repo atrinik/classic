@@ -1,7 +1,10 @@
 # Client-computed lighting (protocol 1085 proposal)
 
-Status: design, not yet the active contract. Until the rollout below
-completes, [MAP_RENDERING.md](MAP_RENDERING.md) remains normative.
+Status: design for protocol 1085. Client-computed lighting is the only
+lighting model: it is always on, with no server option, no per-connection
+negotiation and no legacy full-radiance path. Until the rollout below lands,
+[MAP_RENDERING.md](MAP_RENDERING.md) remains normative for the parts this
+document does not replace.
 
 ## Problem
 
@@ -79,17 +82,12 @@ the current contract, where fog carries no live light at all.
 `protocol/schema/game-commands.json` advances `protocol_version` to 1085. Peers
 below 1085 are rejected at setup, as for every revision.
 
-Client lighting is negotiated per connection. A client that composes emitters
-sends SETUP subtype `CMD_SETUP_CLIENT_LIGHTING` (6) with a capability byte:
-`CLIENT_LIGHTING_CAP_COMPOSITOR` (1) for local light and
-`CLIENT_LIGHTING_CAP_CELESTIAL` (2) for celestial light; other bits are
-reserved and rejected. The server echoes the effective capabilities: each is on
-only when its server option is enabled, and celestial requires the compositor.
-A 1085 client that never sends the subtype, including one released before the
-compositor, keeps receiving complete radiance and no client-lighting fields.
-The mode is fixed by the initial SETUP: a later SETUP during play only echoes
-it, so a client cannot force repeated cache resets. Reconnect clears all client
-lighting state with the map cache.
+Protocol 1085 means client-computed lighting; there is nothing to negotiate.
+Every 1085 connection receives signed base radiance and the client-lighting
+fields, and every 1085 client composes them. There is no SETUP subtype,
+capability byte or server option for it, and no way for a 1085 peer to receive
+the former full-radiance meaning. Reconnect clears all client lighting state
+with the map cache.
 
 Per MAP2 cell record (one record per cell and depth). The fields follow the
 existing extended-tile data, in this order, after RGB, keyframe and animation
@@ -126,19 +124,16 @@ only on a positive radius; darkness never flickers.
 
 ### Signed base radiance
 
-When the connection runs client lighting, every per-sub-layer scalar and RGB
-lighting word, and the timed-light next-hour scalar and RGB endpoints
-(`MAP2_FLAG_EXT_LIGHT_KEYFRAME`), is a **signed** two's complement `int16`,
-signed Q4.11 on the existing scale (2048 is raw 1280, daylight). It carries
-environment only: no local source, no XRAY floor, and no celestial light when
-the celestial capability is on. Encoding from the server's raw value `r`:
+Every per-sub-layer scalar and RGB lighting word is a **signed** two's
+complement `int16`, signed Q4.11 on the existing scale (2048 is raw 1280,
+daylight). It carries environment only: no local source, no XRAY floor and no
+celestial light, which the client computes itself (see Celestial lighting). Encoding from the server's raw value `r`:
 
-- `q = sign(r) · floor((|r| · 8 + 2) / 5)`, the legacy rounding applied to the
+- `q = sign(r) · floor((|r| · 8 + 2) / 5)`, the existing Q5.11 rounding applied to the
   magnitude, so `Q(-r) = -Q(r)`;
 - saturating symmetrically to `-32767..32767` (raw ±20479, 16× daylight).
   The server never encodes `-32768`; decoders read every word as a plain
-  `int16`, because the shared MAP2 validator does not know the connection's
-  mode and `0x8000` is a valid legacy unsigned sample.
+  `int16` and accept it.
 
 Conformance vectors: raw `0 → 0`, `1 → 2`, `-1 → -2`, `160 → 256`,
 `1280 → 2048`, `-1280 → -2048`, `20479 → 32766`, `20480 → 32767`,
@@ -149,8 +144,7 @@ Because the encoding is odd-symmetric, environment and composed light of equal
 magnitude cancel to exactly zero, as the server's single raw sum does; other
 sums differ from the server's single rounding by at most one Q4.11 unit per
 channel. The scalar and each channel are encoded independently, and a negative
-channel is meaningful until composition finishes. Legacy connections keep the
-unsigned Q5.11 meaning unchanged.
+channel is meaningful until composition finishes.
 
 ### Budgets
 
@@ -173,18 +167,19 @@ malformed MAP2 fields: an emitter radius of 0; a positive radius with color
 `000000` (a zero linear peak, which MAP_RENDERING.md rejects for positive
 sources); a negative radius with a nonzero color (darkness is achromatic) or
 with the flicker bit; a local level of `-16`; `ext_flags` value 32; and any
-nonzero reserved bit. A server running the legacy
-path sends no client-lighting fields, and its base words keep their unsigned
-full-radiance meaning. A 1085 client therefore renders both modes.
+nonzero reserved bit. The base words have one meaning on every 1085
+connection.
 
 ## Server
 
-- **Local masks stay complete.** Gameplay needs only the scalar mask, but the
-  positive and color masks remain for clients that did not negotiate the
-  compositor, which need exact legacy RGB.
+- **Gameplay light only.** The server keeps authoritative raw light for
+  darkness gating, infravision, stealth, XRAY and `tli`: the scalar local mask
+  and the celestial solver's scalar. Display-only code (positive and color
+  masks, display RGB, timed-light display endpoints) has no consumer once the
+  client computes celestial light, and is deleted in that step.
 - **Base radiance** is the environment term of each sub-layer: raw light minus
-  the local source value, minus the celestial value when the celestial
-  capability is on, encoded as signed Q4.11. The existing `tli` override is
+  the local source value and minus the celestial value, encoded as signed
+  Q4.11. The existing `tli` override is
   folded in per viewer, as today. The XRAY floor is not applied (see Vision
   floor). There is no aggregate fallback: negative environment is sent as
   negative base.
@@ -214,7 +209,7 @@ full-radiance meaning. A 1085 client therefore renders both modes.
   of the local-light byte for viewers with XRAY; the client applies the same
   floor after composition. When bit 7 is set and the composed scalar `S` is
   below raw 100, the client adds `100 - S` neutrally to the scalar and to every
-  channel, exactly as the legacy path raises raw light before resolving color.
+  channel, exactly as the server used to raise raw light before resolving color.
   Conformance vector: scalar/RGB `(80, 80, 0, 0)` becomes `(100, 100, 20, 20)`.
   This is a property of the viewer only, so it discloses nothing about sources.
 - **Emitters** are copied from `glow_radius`, `light_color` and the
@@ -258,8 +253,8 @@ full-radiance meaning. A 1085 client therefore renders both modes.
   Both cells in view are resident by construction, so the bits never depend on,
   and never encode, whether some other map is loaded.
 - **No per-player light recompute.** MAP2 reads cached base radiance and
-  per-cell scalars. With the celestial capability, MAP2 no longer calls the
-  celestial ensure or keyframe paths at all (see Celestial lighting).
+  per-cell scalars. It does not call the celestial ensure or keyframe paths at
+  all (see Celestial lighting).
 
 ## Client
 
@@ -430,7 +425,7 @@ and row runs compress the open air that dominates upper levels. The client
 keeps 3 bytes per closure cell; with the 17×17 window, a 36-cell halo and 13
 depths the worst case is about 103,000 cells (310 KB), and typical scenes are
 far smaller. The rollout qualifies this against MAP_RENDERING.md budgets before
-the celestial capability is enabled.
+the celestial step merges.
 
 ## Contract change: visible emitters and structure
 
@@ -442,7 +437,7 @@ objects with different light properties are therefore distinguishable. That is
 the price of computing presentation lighting on the client, and the rollout's
 final step updates MAP_RENDERING.md to say so.
 
-The celestial capability also discloses static celestial structure (walls,
+Celestial lighting also discloses static celestial structure (walls,
 roofs, floors and their transmission classes) of cells near authorized tiles
 that are not themselves authorized. That is map geometry, not creatures or
 light, and it is what the client needs to reproduce sun and sky light exactly.
@@ -492,34 +487,38 @@ intentional increase for visible ones and for static structure.
 
 ## Rollout
 
-1. Protocol 1085, server producer and client decoder, with server config
-   `client_lighting` defaulting to off and `true` rejected at startup until the
-   client compositor exists. The legacy path is unchanged, and 1085 clients
-   render it.
-2. Client emitter composition. `client_lighting.c` is the CPU reference: it
-   groups emitters per tile, evaluates the shared `light_profile` tables with a
-   line walk through the occluder grid, composes by sign and clamps to the
-   coarse level. The map sampler adds the result to received base radiance per
-   cell sample, before the existing GPU light rows, and `client_lighting=true`
-   is accepted from this step on. The line walk approximates the server's 3D
-   supercover rays and evaluates one depth.
+Protocol 1085 ships the new model; the legacy model is removed. Nothing is
+gated by an option or negotiated, so the steps below land as one stack, and a
+release containing protocol 1085 contains all of them.
+
+1. Protocol 1085, server producer and client decoder: signed base radiance,
+   emitters, the coarse local level and occluders on every connection. The
+   legacy full-radiance encoding, the SETUP subtype and the server option are
+   gone.
+2. Client emitter composition, the only rendering path. `client_lighting.c` is
+   the CPU reference: it groups emitters per tile, evaluates the shared
+   `light_profile` tables with a line walk through the occluder grid, composes
+   by sign and clamps to the coarse level. The map sampler adds the result to
+   received base radiance per cell sample, before the existing GPU light rows.
+   The client's Smooth lighting setting is removed; an existing settings file
+   that names it still loads, because unknown settings are skipped. The line
+   walk approximates the server's 3D supercover rays and evaluates one depth.
 3. Celestial: the shared libatrinik model and solver with the server
-   delegating to it, the `CELESTIAL` and `CELESTIAL_STRUCTURE` commands, and the
-   client solver behind `CLIENT_LIGHTING_CAP_CELESTIAL` and server option
-   `client_celestial` (default off), qualified against the server solver.
+   delegating to it, the `CELESTIAL` and `CELESTIAL_STRUCTURE` commands and the
+   client solver, qualified against the server solver. Base radiance then
+   excludes celestial light, and the server's display-only lighting code is
+   deleted.
 4. GPU emitter stage replacing the CPU reference, with linked depths, plus
-   qualification: GPU frame budgets as in MAP_RENDERING.md, plus offline
+   qualification: GPU frame budgets as in MAP_RENDERING.md, and offline
    player-view proofs comparing indoor, outdoor and cutaway Brynknot fixtures.
-5. Enable `client_lighting` and `client_celestial` on development, then
-   production.
-6. Remove the legacy full-radiance path for compositor clients. Positive and
-   color masks remain for clients that did not negotiate the compositor. Update
-   MAP_RENDERING.md to make this document normative.
+   The offline-only discrete projection, its conformance fixtures and goldens
+   are retired with golden re-approval.
+5. Update MAP_RENDERING.md to make this document normative.
 
 ## Test plan
 
 - Protocol: encode/decode round trips; reserved bits in the local byte,
-  occluder, emitter flags and capability byte; `ext_flags` value 32; radius 0 and
+  occluder and emitter flags; `ext_flags` value 32; radius 0 and
   the full `int8` range; positive radius with color `000000`, negative radius
   with a color or with flicker; level `-16`; the signed base conformance
   vectors; truncated emitter/occluder fields; reconnect reset; and
@@ -561,6 +560,8 @@ intentional increase for visible ones and for static structure.
 - Flicker: per-emitter flag bit. `light_private`: deferred, not proposed.
 - Celestial light moves to the client, with server authority over time,
   profiles and gameplay.
+- Client-computed lighting is the only model: always on, no option, no
+  negotiation and no legacy full-radiance path (maintainer decision).
 
 ## Open questions
 
@@ -578,9 +579,6 @@ intentional increase for visible ones and for static structure.
 
 ## Follow-up work outside this protocol change
 
-- Move `celestial_light_keyframe_request()` and `celestial_light_ensure()` out
-  of the per-cell MAP2 loop into a per-map, per-tick pre-pass for legacy
-  connections.
 - Replace the synchronous MAP2 fallback rebuild with serving the previous field
   while a budgeted job rebuilds it. This needs a decision on MAP_RENDERING.md's
   fail-closed contract.

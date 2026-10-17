@@ -47,9 +47,10 @@ harness have been removed from every build.
 
 ## Lighting
 
-A proposed replacement that moves presentation lighting to the client is
-described in [CLIENT_LIGHTING.md](CLIENT_LIGHTING.md). It is not active; this
-section remains normative until its rollout completes.
+Protocol 1085 replaces presentation lighting with client-computed lighting,
+the only lighting model, described in [CLIENT_LIGHTING.md](CLIENT_LIGHTING.md).
+There is no option, negotiation or legacy full-radiance path. Until its
+rollout lands, this section remains normative for what it does not replace.
 
 ### v1078 radiance contract
 
@@ -2088,7 +2089,7 @@ contribution. Q5.11 encoding remains the existing checked round-half-up
 `raw * 8 / 5` operation at the wire boundary; this contract adds no protocol
 field and no second visibility authority.
 
-With smooth lighting, feather the completed presentation sample at the negotiated
+Feather the completed presentation sample at the negotiated
 wire-window boundary. Let `distance` be the minimum integer distance from the
 sample to any of the four window sides. Its Q0.8 weight is `0` at distance zero,
 `16` at distance one, and `256` at distance two or greater; samples outside the
