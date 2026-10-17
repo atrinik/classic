@@ -862,7 +862,9 @@ static void map_cell_clear_live_state(map_cell_t *cell) {
     }
 }
 
-/** Discard presentation light knowledge while retaining scalar cache values. */
+#ifdef ATRINIK_WIDGET_TESTS
+/** Discard presentation light knowledge while retaining scalar cache values;
+ * only the sparse-state test still needs it, since fog keeps light state. */
 static void map_cell_clear_light_state(map_cell_t *cell) {
     HARD_ASSERT(cell != NULL);
     map_cell_light_record_t **link = &cell->lights;
@@ -885,6 +887,7 @@ static void map_cell_clear_light_state(map_cell_t *cell) {
     map_cell_record_release(cell->light_keyframe, sizeof(*cell->light_keyframe));
     cell->light_keyframe = NULL;
 }
+#endif
 
 #ifdef ATRINIK_WIDGET_TESTS
 bool widget_map_sparse_state_test(void) {
