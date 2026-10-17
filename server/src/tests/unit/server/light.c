@@ -1646,6 +1646,38 @@ START_TEST(test_client_lighting_local_level_hides_source_floor) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_pools_every_reachable_tiny_map) {
+    /* Thirteen floors of 9x9 one-cell maps place 1053 maps within reach,
+     * more than any small fixed bound; none is dropped, so every floor still
+     * pools the source near the top floor's center and all floors agree. */
+    enum { GRID = 9, FLOORS = 13 };
+    static mapstruct *maps[FLOORS][GRID][GRID];
+    for (int floor = 0; floor < FLOORS; floor++) {
+        for (int y = 0; y < GRID; y++) {
+            for (int x = 0; x < GRID; x++) {
+                maps[floor][y][x] = get_empty_map(1, 1);
+                if (x > 0) {
+                    link_horizontal_maps(maps[floor][y][x - 1], maps[floor][y][x]);
+                }
+                if (y > 0) {
+                    maps[floor][y - 1][x]->tile_map[TILED_SOUTH] = maps[floor][y][x];
+                    maps[floor][y][x]->tile_map[TILED_NORTH] = maps[floor][y - 1][x];
+                }
+                if (floor > 0) {
+                    link_stacked_maps(maps[floor - 1][y][x], maps[floor][y][x]);
+                }
+            }
+        }
+    }
+    add_colored_light(maps[FLOORS - 1][GRID / 2][GRID / 2 + 2], 0, 0, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(maps[0][GRID / 2][GRID / 2], 0, 0);
+    ck_assert_int_gt(level, 0);
+    for (int floor = 1; floor < FLOORS; floor++) {
+        ck_assert_int_eq(light_local_level(maps[floor][GRID / 2][GRID / 2], 0, 0), level);
+    }
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_reaches_levels_linked_from_neighbors) {
     /* The level above the east neighbor is linked only from that neighbor,
      * yet the server's masks reach this map through the seam and then the
@@ -1915,6 +1947,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_source_floor);
+    tcase_add_test(tc_core, test_client_lighting_local_level_pools_every_reachable_tiny_map);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
     tcase_add_test(tc_core, test_client_lighting_local_level_resists_radius_probing);
