@@ -3288,6 +3288,7 @@ void map_set_local_light_layers(int x, int y, uint8_t count, const uint8_t *leve
         expanded[sub_layer] = levels[MIN(sub_layer, count - 1)];
         bool valid = map_protocol_local_light_decode(expanded[sub_layer], &level, &vision_floor);
         HARD_ASSERT(valid);
+        (void)valid;
     }
     map_state_transaction_record_cell(x, y);
     map_cell_header_t *header =
