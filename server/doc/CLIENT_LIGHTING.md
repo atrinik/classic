@@ -131,9 +131,14 @@ complement `int16`, signed Q4.11 on the existing scale (2048 is raw 1280,
 daylight). It carries environment only: no local source, no XRAY floor and no
 celestial light, which the client computes itself (see Celestial lighting).
 The one exception is a sub-layer whose light is sampled at another space than
-its own cell, such as a magic mirror showing a remote place: its word also
-carries that space's celestial radiance, because the client's celestial field
-covers only its own closure. Encoding from the server's raw value `r`:
+its own cell, such as a magic mirror showing a remote place, because the
+client's celestial field covers only its own closure. Such a sub-layer is sent
+as a complete remote sample: its scalar and its explicit RGB words (the
+existing per-sub-layer RGB extension, which only remote samples keep once the
+base RGB words retire) carry that space's celestial radiance too, and the
+presence of the explicit RGB words marks it. The client composes no closure
+celestial field onto a remote sample; it still composes local light at the
+cell. Encoding from the server's raw value `r`:
 
 - `q = sign(r) · floor((|r| · 8 + 2) / 5)`, the existing Q5.11 rounding applied to the
   magnitude, so `Q(-r) = -Q(r)`;
@@ -206,23 +211,25 @@ connection.
     map edge joins the adjacent block instead of forming a smaller one, so no
     block is narrower than three cells unless the map itself is;
   - pool each block's sources as its strongest positive and strongest
-    negative per-tile scalar mask, before any propagation. Tiles of a block are
-    never summed with each other, so a viewer who controls a known light on
-    another tile of the block cannot combine it with a hidden source through
-    the nonlinear mask and recover that source's radius from where the level
-    saturates: raising the known radius reveals only `max(known, hidden)`,
-    which the level already discloses with no known light at all. The pooled
-    source of a block
-    reaches another block by the gap between the two blocks in cells (0 for
-    the own block, 1 for an edge neighbor, `√2` for a corner one), which
-    depends only on block geometry. The own block and its eight neighbors are
-    within the largest radius. Neighbors across a seam light crosses (a
-    resident reciprocal link, and continuity as `light_face_continuous()`
-    requires) count too, on maps that match along the seam so blocks align.
-    The own block and its eight neighbors on every such linked level above and
-    below count as well, adding the vertical distance to the horizontal gap as
-    the server's masks combine `dx`, `dy` and `dz`. No map is ever
-    loaded for it. A source anywhere inside a block therefore
+    negative single-source mask, before any propagation. Every emitting
+    object counts with its own glow radius, and light a space's counter holds
+    without an object counts as one more source; no two sources are summed,
+    not even on one tile. A viewer who controls a known light, on the hidden
+    source's tile or another, therefore cannot combine it with the hidden
+    source through the nonlinear mask and recover that source's radius from
+    where the level saturates: raising the known radius reveals only
+    `max(known, hidden)`, which the level already discloses with no known
+    light at all. The pooled source of a block reaches another block by the
+    gap between the two block rectangles in cells (0 for the own block, 1 for
+    an edge neighbor, `√2` for a corner one), which depends only on block
+    geometry. Every block within the largest radius counts: on this map, on
+    maps across a seam light crosses (a resident reciprocal link, and
+    continuity as `light_face_continuous()` requires), on corner maps through
+    two such seams, and on linked levels above and below, adding the vertical
+    distance to the horizontal gap as the server's masks combine `dx`, `dy`
+    and `dz`. Each map is divided into its own blocks and measured in the
+    target map's coordinates, so the blocks of neighboring maps need not align.
+    No map is ever loaded for it. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
     triangulate its tile;
   - the strongest positive and the strongest negative contribution reaching
@@ -291,7 +298,11 @@ connection.
   any reciprocal link, as MAP_RENDERING.md freezes for legacy maps, and two
   celestial-v1 maps are continuous when both boundaries are authored
   continuous, the link is reciprocal and the effective profile digests match. The
-  upward face is also closed under a sealed virtual sky cover. Every face
+  upward face is also closed under a sealed virtual sky cover, and so is the
+  matching downward face of the cell above, because `spatial_face_light()`
+  applies the lower cell's virtual cover in either travel direction. A vertical
+  step therefore tests the face it leaves by and the destination's opposite
+  face, and is stopped if either is closed. Every face
   leading to a remembered, unauthorized or out-of-view cell is always blocked.
   Both cells in view are resident by construction, so the bits never depend on,
   and never encode, whether some other map is loaded.
@@ -506,16 +517,22 @@ reject truncation, trailing bytes, a run of length 0, a run or rectangle
 exceeding its bounds, overlap and reserved bits, before replacing the closure.
 The fragment's slot selects the model that solves its cells, as the server
 selects a model per map. The worst case is the 17×17 window over 13 depths,
-3,757 cells, at most 4 bytes each even when no run merges, about 15 KB with
-fragment headers, so a complete closure always fits in one command and no
-continuation framing is needed.
+3,757 cells. A cell costs at most 4 bytes as a run and, in the worst case of
+one-cell fragments, 6 more bytes of fragment header, so a complete closure is
+at most about 38 KB and always fits in one command; no continuation framing is
+needed. The rollout's qualification measures this bound together with the
+client's memory.
 
-The two commands are one publication. The server advances the generation
-whenever either payload changes and sends both with it; the client stages each
-validated payload and replaces its slots and closure together only once it
-holds both with the same generation, so fragments are never solved with
-another generation's profiles. A rejected payload is discarded and the
-previous published pair stays in use until a complete matching pair arrives.
+The two commands are one publication, and it belongs to the MAP2 update that
+follows it. The server advances the generation whenever either payload changes
+and sends both, with that generation, immediately before the MAP2 update whose
+window and sent-object set they describe. The client stages each validated
+payload and replaces its slots and closure together only when it holds both
+with the same generation and the next MAP2 update has been applied
+transactionally, so neither the closure nor the map cache is ever presented
+with the other's window. A rejected payload, or a MAP2 update that fails to
+apply, discards the staged pair and keeps the previous published pair until a
+complete matching pair and its update arrive.
 A fragment of a schema-0 map always carries slot 255: the server computes no
 celestial field for legacy maps, so neither does the client.
 
@@ -588,10 +605,12 @@ objects with different light properties are therefore distinguishable. That is
 the price of computing presentation lighting on the client, and the rollout's
 final step updates MAP_RENDERING.md to say so.
 
-Celestial lighting also discloses static celestial structure (walls,
-roofs, floors and their transmission classes) of cells near authorized tiles
-that are not themselves authorized. That is map geometry, not creatures or
-light, and it is what the client needs to reproduce sun and sky light exactly.
+Celestial lighting also discloses the static celestial structure (walls,
+roofs, floors and their transmission classes) of authorized cells in the
+current window, built only from objects sent to the viewer. Cells the viewer
+has never been authorized for are never described and are solved as open air,
+so sun, sky and spill light near the closure edge are approximate rather than
+exact.
 
 A per-object opt-out (`light_private`, keeping a visible object's light
 server-side) is not part of this proposal. It can be added later without a
@@ -605,9 +624,9 @@ What a modified client can learn, beyond today's MAP2:
   sees. This is new, but it concerns only already-authorized objects.
 - **Hidden light:** for each visible authorized tile and sub-layer, the signed
   1/8-daylight level of local light, with each block pooled as its strongest
-  per-tile masks before propagation. A known light the viewer controls never
-  combines with a hidden one on another tile, so stepping its radius reveals
-  only the maximum, which the level already shows. A source anywhere inside a block gives every block the
+  single-source masks before propagation. A known light the viewer controls
+  never combines with a hidden one, even on the same tile, so stepping its
+  radius reveals only the maximum, which the level already shows. A source anywhere inside a block gives every block the
   same level, so neither the peak nor the levels of neighboring blocks locate
   it more precisely than its block. Sources on one tile group before the
   nonlinear profile, so separating co-located sources can change a level (for
@@ -650,15 +669,18 @@ release containing protocol 1085 contains all of them.
    by sign and clamps to the coarse level. The map sampler adds the result to
    received base radiance per cell sample, before the existing GPU light rows.
    The client's Smooth lighting setting is removed; an existing settings file
-   that names it still loads, because unknown settings are skipped. The line
-   walk approximates the server's 3D supercover rays and evaluates one depth.
+   that names it still loads, because unknown settings are skipped. The walk
+   generates the server's supercover events for the current depth only; it is
+   the presentation path of this step, not the reference for linked depths.
 3. Celestial: the shared libatrinik model and solver with the server
    delegating to it, the `CELESTIAL` and `CELESTIAL_STRUCTURE` commands and the
    client solver, qualified against the server solver. Base radiance then
    excludes celestial light, and the server's display-only lighting code is
    deleted.
-4. GPU emitter stage replacing the CPU reference, with linked depths, plus
-   qualification: GPU frame budgets as in MAP_RENDERING.md, and offline
+4. GPU emitter stage replacing the CPU walk, with linked depths, plus
+   qualification against an offline server oracle: `light_path_value()` run
+   over only the objects sent to the viewer, which is three-dimensional and
+   exact by construction: GPU frame budgets as in MAP_RENDERING.md, and offline
    player-view proofs comparing indoor, outdoor and cutaway Brynknot fixtures.
    The offline-only discrete projection, its conformance fixtures and goldens
    are retired with golden re-approval.
@@ -681,13 +703,14 @@ release containing protocol 1085 contains all of them.
   unsent object or cell; hidden and plugin-hidden blockers set no occluder bits;
   glass floors set `v` only; an emitter-only change (radius, flicker or color)
   produces a layer delta; `tli` stays in base radiance; negative environment
-  is sent as negative base; gameplay darkness gating identical with the flag on
-  and off; the vision-floor bit follows XRAY; face bits closed towards
+  is sent as negative base; gameplay darkness gating, compared against a
+  fixture of which live objects each viewer may receive at each light level,
+  is unchanged by protocol 1085; the vision-floor bit follows XRAY; face bits closed towards
   remembered and out-of-view neighbors and unchanged when an unrelated map
   loads or unloads.
-- Client: emitter field matches a CPU reference of `light_path_value()` for
-  open, walled, roofed, transmissive (horizontal and vertical) and multi-depth
-  fixtures; per-tile grouping with exact constituent colors beyond eight
+- Client: the current-depth walk matches the server oracle for open, walled,
+  roofed and transmissive fixtures, and the GPU stage matches it for
+  multi-depth ones; per-tile grouping with exact constituent colors beyond eight
   colors; composition and block limits for positive, negative and zero levels;
   signed base cancellation; vision floor after composition; player field after
   composition, absent on fog; fog tiles compose no remembered emitters; flicker
