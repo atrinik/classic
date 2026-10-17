@@ -5496,6 +5496,12 @@ static void map_emitter_frame_begin(void) {
     map_emitter_frame_rebuilds = 0;
 }
 
+/** Join an auxiliary view (the dynamic minimap) to the presented frame's
+ * budget without restarting its count. */
+static void map_emitter_auxiliary_begin(void) {
+    map_emitter_frame_active = map_emitter_budget_enabled;
+}
+
 /** After a frame's redraw is consumed: schedule the deferred rebuilds. */
 static void map_emitter_frame_end(void) {
     map_emitter_frame_active = false;
@@ -5617,7 +5623,10 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
     client_lighting_evaluate(width, height, occluders, emitters, emitter_count, field->cells);
     field->has_flicker = false;
     for (size_t index = 0; index < (size_t)width * height && !field->has_flicker; index++) {
-        field->has_flicker = field->cells[index].flicker_scalar != 0;
+        /* Grouping can cap the scalar while hue still flickers. */
+        const client_lighting_cell_t *cell = &field->cells[index];
+        field->has_flicker = cell->flicker_scalar != 0 || cell->flicker_rgb[0] != 0 ||
+                             cell->flicker_rgb[1] != 0 || cell->flicker_rgb[2] != 0;
     }
     free(emitters);
     free(occluders);
@@ -5715,10 +5724,14 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
 
     int32_t emitter = local != NULL ? local->scalar : 0;
     int32_t composed = client_lighting_compose(emitter, level);
-    /* Flicker modulates the emitter field after composition (L + E' - E), so
-     * the coarse floor of a block the emitter lights cannot suppress it. */
+    /* Flicker modulates the composed value only where the emitter field
+     * supplied it (L = E), as L + E' - E, so the coarse floor of a block the
+     * emitter lights cannot suppress it; a dominating coarse floor carries
+     * other steady light and is left alone. Channel-only flicker counts. */
     int64_t flicker_scalar = 0, flicker_rgb[3] = {0, 0, 0};
-    if (local != NULL && local->flicker_scalar != 0) {
+    if (local != NULL && composed == emitter &&
+        (local->flicker_scalar != 0 || local->flicker_rgb[0] != 0 ||
+         local->flicker_rgb[1] != 0 || local->flicker_rgb[2] != 0)) {
         int64_t gain = (int64_t)client_lighting_flicker_gain(LastTick) - 256;
         flicker_scalar = local->flicker_scalar * gain / 256;
         for (size_t channel = 0; channel < 3; channel++) {
@@ -6781,8 +6794,32 @@ bool widget_map_client_lighting_state_test(void) {
     map_emitter_frame_end();
     success = success && (map_redraw_pending_reasons() & MAP_REDRAW_REASON_LIGHTING) != 0;
     map_redraw_consume();
+    /* An auxiliary view after the frame shares its spent budget. */
+    map_emitter_auxiliary_begin();
+    map_emitter_revision_bump(current_level_index);
+    map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
+    success = success && budget_field->revision != level_emitter_revision[current_level_index];
+    map_emitter_frame_end();
+    map_redraw_consume();
     map_client_lighting_apply(8 + MAP_STARTX, 8 + MAP_STARTY, 0, &budget_scalar, budget_rgb);
     success = success && budget_field->revision == level_emitter_revision[current_level_index];
+    /* Flicker never modulates a coarse floor that dominates the emitter: a
+     * radius-1 flickering emitter under a level-2 block stays at the floor. */
+    uint32_t saved_tick = LastTick;
+    uint32_t dim_tick = 0;
+    while (client_lighting_flicker_gain(dim_tick) == 256) {
+        dim_tick += 7;
+    }
+    map_set_light_radiance(16, 8, 0, 0);
+    map_set_layer_emitter(16, 8, layer, 1, MAP2_EMITTER_FLICKER, UINT32_C(0xffffff));
+    map_set_local_light(16, 8, map_protocol_local_light_encode(2, false));
+    LastTick = dim_tick;
+    map_lighting_radiance(16 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(16, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success &&
+              composed_scalar == light_profile_raw_to_radiance(2 * MAP2_LOCAL_LIGHT_LEVEL_RAW);
+    LastTick = saved_tick;
+    map_clear_cell(16, 8, true);
     /* A remote sample composes its coarse level, never the cell's emitters. */
     map_set_light_radiance(14, 8, 0, 160);
     map_set_light_radiance(14, 8, 1, 160);
@@ -9168,7 +9205,11 @@ void map_draw_map_gpu_auxiliary(SDL_Surface *surface) {
     HARD_ASSERT(surface != NULL);
     HARD_ASSERT(!map_gpu_auxiliary);
     map_gpu_auxiliary = true;
+    /* Auxiliary views such as the dynamic minimap share the presented
+     * frame's emitter rebuild budget instead of rebuilding unbounded. */
+    map_emitter_auxiliary_begin();
     map_draw_map(surface);
+    map_emitter_frame_end();
     map_gpu_auxiliary = false;
 }
 
