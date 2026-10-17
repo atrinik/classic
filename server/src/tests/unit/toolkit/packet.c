@@ -533,8 +533,10 @@ static packet_struct *map_protocol_client_lighting_level_full(int8_t radius,
     packet_writer_write_uint8(level, (uint8_t)(color >> 8));
     packet_writer_write_uint8(level, (uint8_t)color);
     packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT | MAP2_FLAG_EXT_OCCLUDER);
+    packet_writer_write_uint8(level, 1);
     packet_writer_write_uint8(level, level_value);
     packet_writer_write_uint16(level, occluder);
+    packet_writer_write_uint16(level, 0x4321);
     packet_writer_write_uint8(level, vertical);
     return level;
 }
@@ -551,7 +553,7 @@ static bool map_protocol_client_lighting_valid_full(int8_t radius, uint8_t emitt
         radius, emitter_flags, radius > 0 ? UINT32_C(0xff8040) : 0, 0, 0, vertical);
     if (ext_extra != 0) {
         /* Rewrite the extended flags byte that follows the emitter payload. */
-        level->data[level->len - 5] |= ext_extra;
+        level->data[level->len - 8] |= ext_extra;
     }
     packet_struct *packet = map_protocol_test_packet(1);
     map_protocol_test_level(packet, 0, level);
@@ -597,7 +599,9 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
                                                  all_geometry));
     ck_assert(map_protocol_client_lighting_valid(-13,
                                                  map_protocol_local_light_encode(-15, false),
-                                                 0x0fff));
+                                                 0x0f0f));
+    /* The former single attenuation nibble is reserved: faces have their own. */
+    ck_assert(!map_protocol_client_lighting_valid(1, 0, 0x0010));
     /* Up and down face bits are valid; bits 14-15 are reserved. */
     ck_assert(map_protocol_client_lighting_valid(1, 0, 0x3000));
     ck_assert(!map_protocol_client_lighting_valid(1, 0, 0x4000));
@@ -624,6 +628,23 @@ START_TEST(test_map_protocol_validates_client_lighting_fields) {
     /* The vertical byte carries a nibble; its high nibble is reserved. */
     ck_assert(map_protocol_client_lighting_valid_full(5, 0, 0x0f, 0));
     ck_assert(!map_protocol_client_lighting_valid_full(5, 0, 0x10, 0));
+    /* Levels come with a count of 1..NUM_SUB_LAYERS. */
+    for (int count = 0; count <= NUM_SUB_LAYERS + 1; count++) {
+        packet_struct *level = packet_new(0, 32, 16);
+        packet_writer_write_uint16(level, 0);
+        packet_writer_write_uint8(level, 0);
+        packet_writer_write_uint8(level, MAP2_FLAG_EXT_LOCAL_LIGHT);
+        packet_writer_write_uint8(level, (uint8_t)count);
+        for (int i = 0; i < count; i++) {
+            packet_writer_write_uint8(level, map_protocol_local_light_encode(i - 3, false));
+        }
+        packet_struct *packet = map_protocol_test_packet(1);
+        map_protocol_test_level(packet, 0, level);
+        bool valid = map_protocol_validate(packet->data, packet->len, 0, 21, 21);
+        ck_assert_int_eq(valid, count >= 1 && count <= NUM_SUB_LAYERS);
+        packet_free(packet);
+        packet_free(level);
+    }
     /* The former aggregate bitmap flag is no longer part of 1085. */
     ck_assert(!map_protocol_client_lighting_valid_full(5, 0, 0, 32));
 

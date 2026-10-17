@@ -432,9 +432,13 @@ typedef struct socket_face_batch_response {
 #define MAP2_FLAG_EXT_LIGHT_RADIANCE_RGB16 2
 /** Next authoritative hourly aggregate-light endpoint follows. */
 #define MAP2_FLAG_EXT_LIGHT_KEYFRAME 4
-/** Coarse, source-anonymous local light level byte follows (1085). */
+/** Coarse, source-anonymous local light levels follow (1085): a count n of
+ * 1..MAP2_PROTOCOL_SUB_LAYERS, then n level bytes. Level i applies to sub-layer i, and
+ * sub-layers from n on use level n - 1. */
 #define MAP2_FLAG_EXT_LOCAL_LIGHT 8
-/** Occluder bits of the cell follow (1085): uint16, then the vertical byte. */
+/** Occluder of the cell follows (1085): uint16 geometry and face bits, uint16
+ * horizontal face attenuation nibbles (north, east, south, west from the low
+ * nibble), then the vertical byte. */
 #define MAP2_FLAG_EXT_OCCLUDER 16
 /*@}*/
 
@@ -465,12 +469,14 @@ typedef struct socket_face_batch_response {
 #define MAP2_OCCLUDER_FLOOR 2
 #define MAP2_OCCLUDER_ROOF 4
 #define MAP2_OCCLUDER_DOOR_CLOSED 8
-#define MAP2_OCCLUDER_ATTENUATION_SHIFT 4
+/** Attenuation of one face nibble: a crossing transmits 256 - 16 a. */
 #define MAP2_OCCLUDER_ATTENUATION_STEP 16
+/** Bits per horizontal face attenuation nibble. */
+#define MAP2_OCCLUDER_FACE_ATTENUATION_BITS 4
 /** First of six face bits (north, east, south, west, up, down) local light cannot cross. */
 #define MAP2_OCCLUDER_FACE_SHIFT 8
 /** Occluder bits a 1085 peer must leave zero. */
-#define MAP2_OCCLUDER_RESERVED 0xc000U
+#define MAP2_OCCLUDER_RESERVED 0xc0f0U
 /** Vertical attenuation v of the downward face, low nibble of the occluder byte. */
 #define MAP2_OCCLUDER_VERTICAL_MASK 0x0fU
 /** Occluder byte bits a 1085 peer must leave zero. */

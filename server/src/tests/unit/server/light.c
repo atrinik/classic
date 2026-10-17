@@ -1574,6 +1574,31 @@ START_TEST(test_client_lighting_local_level_hides_translation_within_block) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_neighbors_hide_translation) {
+    /* A source anywhere inside the center block yields the same level in
+     * every block, so neighboring blocks cannot triangulate its tile. */
+    int reference[3][3] = {{0}};
+    for (int position = 0; position < 9; position++) {
+        mapstruct *map = get_empty_map(9, 9);
+        add_colored_light(map, 3 + position % 3, 3 + position / 3, 13, LIGHT_COLOR_WHITE);
+        for (int by = 0; by < 3; by++) {
+            for (int bx = 0; bx < 3; bx++) {
+                int level = light_local_level(map, bx * 3 + 1, by * 3 + 1);
+                if (position == 0) {
+                    reference[by][bx] = level;
+                } else {
+                    ck_assert_int_eq(level, reference[by][bx]);
+                }
+            }
+        }
+    }
+    /* Light still bleeds into edge neighbors, never into diagonal ones. */
+    ck_assert_int_gt(reference[1][1], 0);
+    ck_assert_int_ge(reference[1][0], 0);
+    ck_assert_int_eq(reference[0][0], 0);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
     /* A 7-wide map has blocks 0..2 and 3..6: the last cell joins its
      * neighbor instead of forming a one-cell block. */
@@ -1655,10 +1680,10 @@ START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     ck_assert_uint_eq(light_occluder_object_bits(plain), 0);
 
     object *blocker = add_light_blocker(map, 1, 1);
-    uint32_t blocker_bits = light_occluder_object_bits(blocker);
+    uint64_t blocker_bits = light_occluder_object_bits(blocker);
     ck_assert_uint_eq(blocker_bits & MAP2_OCCLUDER_BLOCKSVIEW, MAP2_OCCLUDER_BLOCKSVIEW);
-    /* A view blocker transmits nothing through its faces. */
-    ck_assert_uint_eq((blocker_bits >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U, 15);
+    /* An unauthored view blocker transmits nothing through any of its faces. */
+    ck_assert_uint_eq((blocker_bits >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) & 0xffffU, 0xffffU);
 
     add_roof_surface(map, 2, 2);
     object *roof = NULL;
@@ -1671,17 +1696,21 @@ START_TEST(test_client_lighting_occluder_bits_follow_sent_objects) {
     ck_assert_uint_eq(light_occluder_object_bits(roof) & MAP2_OCCLUDER_ROOF, MAP2_OCCLUDER_ROOF);
 
     /* Combining keeps every geometry bit and the stronger attenuation. */
-    uint32_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
+    uint64_t combined = light_occluder_combine(light_occluder_object_bits(roof), blocker_bits);
     ck_assert_uint_eq(combined & (MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW),
                       MAP2_OCCLUDER_ROOF | MAP2_OCCLUDER_BLOCKSVIEW);
-    ck_assert_uint_eq((combined >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15U, 15);
+    ck_assert_uint_eq((combined >> LIGHT_OCCLUDER_HORIZONTAL_SHIFT) & 0xffffU, 0xffffU);
     ck_assert_uint_eq(light_occluder_combine(0, 0), 0);
     /* The vertical nibble combines by maximum, independently of the
      * horizontal one. */
-    uint32_t glass = 3U << LIGHT_OCCLUDER_VERTICAL_SHIFT, slab = 15U << LIGHT_OCCLUDER_VERTICAL_SHIFT;
+    uint64_t glass = UINT64_C(3) << LIGHT_OCCLUDER_VERTICAL_SHIFT,
+             slab = UINT64_C(15) << LIGHT_OCCLUDER_VERTICAL_SHIFT;
     ck_assert_uint_eq(light_occluder_combine(glass, slab), slab);
-    ck_assert_uint_eq(light_occluder_combine(glass, 2U << MAP2_OCCLUDER_ATTENUATION_SHIFT),
-                      glass | 2U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    /* Each horizontal face nibble combines by maximum on its own. */
+    uint64_t east = UINT64_C(2) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 4);
+    uint64_t west = UINT64_C(9) << (LIGHT_OCCLUDER_HORIZONTAL_SHIFT + 12);
+    ck_assert_uint_eq(light_occluder_combine(glass, east), glass | east);
+    ck_assert_uint_eq(light_occluder_combine(east, west), east | west);
 }
 END_TEST
 
@@ -1755,6 +1784,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
     tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
+    tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);

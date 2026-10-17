@@ -1519,13 +1519,19 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
             }
 
             if (ext_flags & MAP2_FLAG_EXT_LOCAL_LIGHT) {
-                map_set_local_light(x, y, packet_reader_read_uint8(&reader));
+                uint8_t count = packet_reader_read_uint8(&reader);
+                uint8_t levels[NUM_SUB_LAYERS] = {0};
+                for (uint8_t i = 0; i < count && i < NUM_SUB_LAYERS; i++) {
+                    levels[i] = packet_reader_read_uint8(&reader);
+                }
+                map_set_local_light_layers(x, y, count, levels);
             }
 
             if (ext_flags & MAP2_FLAG_EXT_OCCLUDER) {
                 uint16_t occluder = packet_reader_read_uint16(&reader);
+                uint16_t horizontal = packet_reader_read_uint16(&reader);
                 uint8_t vertical = packet_reader_read_uint8(&reader);
-                map_set_occluder(x, y, occluder, vertical);
+                map_set_occluder(x, y, occluder, horizontal, vertical);
             }
 
             if (fow_updated) {

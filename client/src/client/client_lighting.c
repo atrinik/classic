@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include <toolkit/light_profile.h>
+#include <toolkit/toolkit.h>
 #include <toolkit/socket.h>
 
 /** Order emitters by tile, then radius and color. */
@@ -39,21 +40,37 @@ typedef struct client_lighting_accumulator {
     int64_t weight;
 } client_lighting_accumulator_t;
 
-/**
- * Coefficient of crossing a cell from its attenuation alone: 15 is opaque, so
- * an unauthored view blocker stops light while authored glass or a grate that
- * also blocks view still transmits.
- */
-static uint16_t client_lighting_coefficient(uint16_t occluder) {
-    int attenuation = (occluder >> MAP2_OCCLUDER_ATTENUATION_SHIFT) & 15;
+/** Coefficient of one face from its attenuation nibble: 15 is opaque. */
+static uint16_t client_lighting_face_coefficient(uint32_t occluder, int face) {
+    int attenuation = (occluder >> (16 + MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face)) & 15;
     if (attenuation == 15) {
         return 0;
     }
     return (uint16_t)(256 - attenuation * MAP2_OCCLUDER_ATTENUATION_STEP);
 }
 
+/**
+ * Coefficient of leaving a cell towards (sx, sy) through its exit face; a
+ * diagonal step crosses two faces and takes the smaller, so the client never
+ * transmits more light than the server.
+ */
+static uint16_t client_lighting_coefficient(uint32_t occluder, int sx, int sy) {
+    uint16_t coefficient = 256;
+    if (sy < 0) {
+        coefficient = MIN(coefficient, client_lighting_face_coefficient(occluder, 0));
+    } else if (sy > 0) {
+        coefficient = MIN(coefficient, client_lighting_face_coefficient(occluder, 2));
+    }
+    if (sx > 0) {
+        coefficient = MIN(coefficient, client_lighting_face_coefficient(occluder, 1));
+    } else if (sx < 0) {
+        coefficient = MIN(coefficient, client_lighting_face_coefficient(occluder, 3));
+    }
+    return coefficient;
+}
+
 /** Whether local light cannot leave a cell through the face towards (sx, sy). */
-static bool client_lighting_face_closed(uint16_t occluder, int sx, int sy) {
+static bool client_lighting_face_closed(uint32_t occluder, int sx, int sy) {
     uint16_t faces = occluder >> MAP2_OCCLUDER_FACE_SHIFT;
     return (sy < 0 && (faces & 1U)) || (sx > 0 && (faces & 2U)) || (sy > 0 && (faces & 4U)) ||
            (sx < 0 && (faces & 8U));
@@ -68,7 +85,7 @@ static bool client_lighting_face_closed(uint16_t occluder, int sx, int sy) {
  */
 static int32_t client_lighting_path(int width,
                                     int height,
-                                    const uint16_t *occluders,
+                                    const uint32_t *occluders,
                                     int x,
                                     int y,
                                     int dx,
@@ -83,11 +100,11 @@ static int32_t client_lighting_path(int width,
         if (cx < 0 || cy < 0 || cx >= width || cy >= height) {
             return 0;
         }
-        uint16_t previous = occluders != NULL ? occluders[(size_t)py * width + px] : 0;
+        uint32_t previous = occluders != NULL ? occluders[(size_t)py * width + px] : 0;
         if (client_lighting_face_closed(previous, cx - px, cy - py)) {
             return 0;
         }
-        uint16_t coefficient = client_lighting_coefficient(previous);
+        uint16_t coefficient = client_lighting_coefficient(previous, cx - px, cy - py);
         transmitted = (int32_t)(((int64_t)transmitted * coefficient + 128) / 256);
         px = cx;
         py = cy;
@@ -98,7 +115,7 @@ static int32_t client_lighting_path(int width,
 /** Add one unsigned profile, transmitted from its tile, to the accumulators. */
 static void client_lighting_add(int width,
                                 int height,
-                                const uint16_t *occluders,
+                                const uint32_t *occluders,
                                 client_lighting_accumulator_t *accumulators,
                                 int x,
                                 int y,
@@ -150,7 +167,7 @@ static void client_lighting_add(int width,
  */
 static void client_lighting_accumulate(int width,
                                        int height,
-                                       const uint16_t *occluders,
+                                       const uint32_t *occluders,
                                        const client_lighting_emitter_t *emitters,
                                        size_t count,
                                        bool flicker_only,
@@ -222,7 +239,7 @@ static void client_lighting_resolve(const client_lighting_accumulator_t *a,
 
 void client_lighting_evaluate(int width,
                               int height,
-                              const uint16_t *occluders,
+                              const uint32_t *occluders,
                               const client_lighting_emitter_t *emitters,
                               size_t count,
                               client_lighting_cell_t *cells) {

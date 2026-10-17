@@ -46,16 +46,22 @@ typedef struct client_lighting_cell {
     int32_t flicker_rgb[3];
 } client_lighting_cell_t;
 
+/** A cell's occluder for evaluation: MAP2 geometry and face bits low, the
+ * horizontal face attenuation nibbles (north, east, south, west) high. */
+static inline uint32_t client_lighting_occluder(uint16_t bits, uint16_t horizontal) {
+    return (uint32_t)bits | (uint32_t)horizontal << 16;
+}
+
 /**
  * Evaluate emitters into a width-by-height grid.
  * Every emitter is evaluated; none is dropped for capacity.
- * @param occluders MAP2 occluder bits per cell in row-major order, or NULL
- * for open geometry.
+ * @param occluders client_lighting_occluder() words per cell in row-major
+ * order, or NULL for open geometry.
  * @param cells Output of width * height cells.
  */
 void client_lighting_evaluate(int width,
                               int height,
-                              const uint16_t *occluders,
+                              const uint32_t *occluders,
                               const client_lighting_emitter_t *emitters,
                               size_t count,
                               client_lighting_cell_t *cells);

@@ -31,7 +31,7 @@
     } while (0)
 
 static client_lighting_cell_t cells[WIDTH * HEIGHT];
-static uint16_t occluders[WIDTH * HEIGHT];
+static uint32_t occluders[WIDTH * HEIGHT];
 
 static const client_lighting_cell_t *cell_at(int x, int y) {
     return &cells[y * WIDTH + x];
@@ -58,7 +58,7 @@ static void test_open_white_source_matches_server_profile(void) {
 static void test_wall_stops_light_but_keeps_its_face(void) {
     memset(occluders, 0, sizeof(occluders));
     occluders[4 * WIDTH + 4] =
-        (uint16_t)(MAP2_OCCLUDER_BLOCKSVIEW | 15U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+        client_lighting_occluder(MAP2_OCCLUDER_BLOCKSVIEW, 0xffff);
     client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(4, 4)->scalar > 0);
@@ -82,9 +82,21 @@ static void test_transmission_attenuates_crossed_cells(void) {
     client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
     evaluate(&torch, 1);
     int32_t open = cell_at(4, 4)->scalar;
-    occluders[4 * WIDTH + 3] = (uint16_t)(8U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    occluders[4 * WIDTH + 3] = client_lighting_occluder(0, 0x8888);
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(4, 4)->scalar == (open * 128 + 128) / 256);
+}
+
+static void test_face_attenuation_is_directional(void) {
+    memset(occluders, 0, sizeof(occluders));
+    client_lighting_emitter_t torch = {.x = 3, .y = 4, .radius = 13, .color = 0xffffff};
+    evaluate(&torch, 1);
+    int32_t open_east = cell_at(4, 4)->scalar, open_north = cell_at(3, 3)->scalar;
+    /* Only the east face of the source cell is glass (attenuation 8). */
+    occluders[4 * WIDTH + 3] = client_lighting_occluder(0, 0x0080);
+    evaluate(&torch, 1);
+    TEST_CHECK(cell_at(4, 4)->scalar == (open_east * 128 + 128) / 256);
+    TEST_CHECK(cell_at(3, 3)->scalar == open_north);
 }
 
 static void test_transmissive_blocker_keeps_its_attenuation(void) {
@@ -94,7 +106,7 @@ static void test_transmissive_blocker_keeps_its_attenuation(void) {
     int32_t open = cell_at(4, 4)->scalar;
     /* Glass that blocks view but transmits 192/256 (attenuation 4). */
     occluders[4 * WIDTH + 3] =
-        (uint16_t)(MAP2_OCCLUDER_BLOCKSVIEW | 4U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+        client_lighting_occluder(MAP2_OCCLUDER_BLOCKSVIEW, 0x4444);
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(4, 4)->scalar == (open * 192 + 128) / 256);
 }
@@ -102,7 +114,7 @@ static void test_transmissive_blocker_keeps_its_attenuation(void) {
 static void test_discontinuous_face_stops_light(void) {
     memset(occluders, 0, sizeof(occluders));
     /* The east face of (4, 4) is a discontinuous seam. */
-    occluders[4 * WIDTH + 4] = (uint16_t)(2U << MAP2_OCCLUDER_FACE_SHIFT);
+    occluders[4 * WIDTH + 4] = client_lighting_occluder(2U << MAP2_OCCLUDER_FACE_SHIFT, 0);
     client_lighting_emitter_t torch = {.x = 2, .y = 4, .radius = 13, .color = 0xffffff};
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(4, 4)->scalar > 0);
@@ -118,11 +130,11 @@ static void test_occluded_source_cell_attenuates_its_light(void) {
     int32_t open_center = cell_at(4, 4)->scalar, open_side = cell_at(5, 4)->scalar;
     /* A lamp inside a transmissive cell keeps its own tile lit but leaves it
      * attenuated; inside an opaque cell nothing leaves. */
-    occluders[4 * WIDTH + 4] = (uint16_t)(8U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    occluders[4 * WIDTH + 4] = client_lighting_occluder(0, 0x8888);
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(4, 4)->scalar == open_center);
     TEST_CHECK(cell_at(5, 4)->scalar == (open_side * 128 + 128) / 256);
-    occluders[4 * WIDTH + 4] = (uint16_t)(15U << MAP2_OCCLUDER_ATTENUATION_SHIFT);
+    occluders[4 * WIDTH + 4] = client_lighting_occluder(0, 0xffff);
     evaluate(&torch, 1);
     TEST_CHECK(cell_at(5, 4)->scalar == 0);
 }
@@ -323,6 +335,7 @@ int main(void) {
     test_same_tile_emitters_share_the_server_cap();
     test_transmission_attenuates_crossed_cells();
     test_transmissive_blocker_keeps_its_attenuation();
+    test_face_attenuation_is_directional();
     test_discontinuous_face_stops_light();
     test_occluded_source_cell_attenuates_its_light();
     test_colors_beyond_the_bound_keep_their_hue();
