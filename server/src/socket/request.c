@@ -1107,11 +1107,6 @@ static void map2_write_local_light(packet_struct *packet,
     cached->client_light_known |= 1U;
 }
 
-/**
- * Levels of a cell outside current visibility: frozen at the last levels it
- * was sent while visible, so fog never tracks a moving hidden source, with
- * only the viewer's own vision floor refreshed. A cell never seen gets 0.
- */
 /** One sub-layer's light sample, taken at the space it is lit at. */
 typedef struct map2_light_sample {
     MapSpace *space;
@@ -1169,28 +1164,6 @@ static void map2_sample_light(object *pl,
     sample->radiance = (uint16_t)scalar;
     for (size_t channel = 0; channel < 3; channel++) {
         sample->rgb[channel] = (uint16_t)rgb[channel];
-    }
-}
-
-static void map2_frozen_local_light(const MapCell *cached,
-                                    bool vision_floor,
-                                    bool tli,
-                                    uint8_t levels[NUM_SUB_LAYERS]) {
-    bool known = (cached->client_light_known & 1U) && cached->local_light_count != 0;
-    for (int sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
-        int8_t level = 0;
-        bool previous_floor;
-        uint8_t remote = 0;
-        if (known) {
-            uint8_t index = (uint8_t)MIN(sub_layer, cached->local_light_count - 1);
-            if (!map_protocol_local_light_decode(cached->local_light[index], &level,
-                                                 &previous_floor)) {
-                level = 0;
-            }
-            remote = cached->local_light[index] & MAP2_LOCAL_LIGHT_REMOTE;
-        }
-        levels[sub_layer] = map_protocol_local_light_encode(level, vision_floor) | remote |
-                            (tli ? MAP2_LOCAL_LIGHT_TLI : 0);
     }
 }
 
@@ -1545,19 +1518,25 @@ void draw_client_map2(object *pl) {
                                            ? previous->fow_known != 0
                                            : (previous->client_light_known &
                                               MAP2_CLIENT_LIGHT_REMEMBERED) != 0);
-                    /* Freeze from the last authorized levels before the
-                     * soft clear erases them from the cache. */
-                    uint8_t frozen[NUM_SUB_LAYERS];
+                    /* A previously sent tile keeps receiving its current
+                     * coarse level (maintainer decision: light levels of
+                     * previously sent tiles are disclosed); no object,
+                     * emitter or occluder is sent for it. */
+                    uint8_t remembered_light[NUM_SUB_LAYERS];
                     if (remembered) {
-                        map2_frozen_local_light(previous, (special_vision & 1) != 0,
-                                                CONTR(pl)->tli != 0, frozen);
+                        int8_t level = light_local_level(m, nx, ny);
+                        for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
+                            remembered_light[sub_layer] =
+                                map_protocol_local_light_encode(level, (special_vision & 1) != 0) |
+                                (CONTR(pl)->tli ? MAP2_LOCAL_LIGHT_TLI : 0);
+                        }
                     }
                     map_if_clearcell(false);
                     mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
                     if (remembered) {
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
-                        map_append_remembered_light(packet, mp, mask, frozen);
+                        map_append_remembered_light(packet, mp, mask, remembered_light);
                     }
                     continue;
                 }
@@ -2563,13 +2542,10 @@ void draw_client_map2(object *pl) {
                  * objects, so fog withholds them and their layers are resent
                  * on return through the presence bit. */
                 /* Each sub-layer takes the coarse level where its light was
-                 * sampled; a cell in fog keeps its frozen levels. */
+                 * sampled, on visible and remembered cells alike. */
                 uint8_t local_light[NUM_SUB_LAYERS];
                 uint64_t occluder = 0;
-                if (tile_fow) {
-                    map2_frozen_local_light(mp, (special_vision & 1) != 0, CONTR(pl)->tli != 0,
-                                            local_light);
-                } else {
+                {
                     for (sub_layer = 0; sub_layer < NUM_SUB_LAYERS; sub_layer++) {
                         bool remote = light_maps[sub_layer] != NULL &&
                                       (light_maps[sub_layer] != m || light_xs[sub_layer] != nx ||
