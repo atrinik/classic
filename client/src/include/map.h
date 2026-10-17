@@ -495,6 +495,11 @@ extern void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, u
 extern bool map_lighting_is_smooth(void);
 /** Select the discrete projection for an offline conformance proof only. */
 extern void map_set_discrete_lighting_proof(bool discrete);
+/**
+ * Bound emitter-field rebuilds per presented frame (on by default). Offline
+ * proofs turn it off so every frame shows fully rebuilt fields.
+ */
+extern void map_set_emitter_rebuild_budget(bool enabled);
 extern bool map_get_local_light(int x, int y, int8_t *level, bool *vision_floor);
 extern bool map_get_occluder(int x, int y, uint16_t *bits, uint16_t *horizontal, uint8_t *vertical);
 extern void
