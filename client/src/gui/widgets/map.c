@@ -3362,10 +3362,11 @@ void map_set_occluder(int x, int y, uint16_t bits, uint16_t horizontal, uint8_t 
         header->occluder_horizontal == horizontal && header->occluder_vertical == vertical) {
         return;
     }
-    /* The emitter field reads only the geometry bits and horizontal
-     * attenuation, so a vertical-only change never rebuilds it. */
-    bool evaluated = !(header->client_light_known & 2U) || header->occluder != bits ||
-                     header->occluder_horizontal != horizontal;
+    /* The emitter field reads only the evaluated occluder word, so a change
+     * of any other bit or of the vertical byte never rebuilds it. */
+    bool evaluated = !(header->client_light_known & 2U) ||
+                     client_lighting_occluder(header->occluder, header->occluder_horizontal) !=
+                         client_lighting_occluder(bits, horizontal);
     header->occluder = bits;
     header->occluder_horizontal = horizontal;
     header->occluder_vertical = vertical;
@@ -6558,7 +6559,17 @@ bool widget_map_client_lighting_state_test(void) {
     map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1111, 2);
     success = success && level_emitter_revision[current_level_index] == emitter_revision &&
               map_get_occluder(9, 9, &bits, &horizontal, &vertical) && vertical == 2;
+    /* Geometry, roof and up/down face bits are not evaluated either. */
+    map_set_occluder(9, 9,
+                     MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF |
+                         (UINT16_C(0x30) << MAP2_OCCLUDER_FACE_SHIFT),
+                     0x1111, 2);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
     map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR, 0x1112, 2);
+    success = success && level_emitter_revision[current_level_index] != emitter_revision;
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR | (UINT16_C(1) << MAP2_OCCLUDER_FACE_SHIFT),
+                     0x1112, 2);
     success = success && level_emitter_revision[current_level_index] != emitter_revision;
     map_clear_cell(9, 9, true);
     /* A header-only update is a visible change too. */

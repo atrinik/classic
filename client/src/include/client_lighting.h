@@ -23,6 +23,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <toolkit/socket.h>
+
 /** One visible emitter at a grid cell. */
 typedef struct client_lighting_emitter {
     int x;
@@ -46,10 +48,16 @@ typedef struct client_lighting_cell {
     int32_t flicker_rgb[3];
 } client_lighting_cell_t;
 
-/** A cell's occluder for evaluation: MAP2 geometry and face bits low, the
- * horizontal face attenuation nibbles (north, east, south, west) high. */
+/** The MAP2 occluder bits local light evaluation reads: the closed north,
+ * east, south and west faces. Geometry, roof, door and up/down face bits
+ * matter only to other consumers. */
+#define CLIENT_LIGHTING_OCCLUDER_FACES (UINT16_C(0x0f) << MAP2_OCCLUDER_FACE_SHIFT)
+
+/** A cell's occluder for evaluation: the closed horizontal faces low, the
+ * horizontal face attenuation nibbles (north, east, south, west) high. It
+ * holds exactly the inputs evaluation reads, so equal words light equally. */
 static inline uint32_t client_lighting_occluder(uint16_t bits, uint16_t horizontal) {
-    return (uint32_t)bits | (uint32_t)horizontal << 16;
+    return (uint32_t)(bits & CLIENT_LIGHTING_OCCLUDER_FACES) | (uint32_t)horizontal << 16;
 }
 
 /**
