@@ -49,13 +49,15 @@ on the GPU. The server sends:
 2. **Emitters of sent objects**: glow radius, flicker opt-in and authored color,
    sent only with an object that MAP2 already sends. Its existence and tile are
    already disclosed by its face, so the emitter adds no location information.
-3. **Coarse local light** for every authorized tile, including remembered
-   tiles: one byte, a signed, quantized, neutral level of local light pooled over
-   a fixed 3×3 block. Light and darkness from hidden sources bleed through walls
-   without identifying the source tile, count or hue.
-4. **Occluders of sent cells**: geometry bits plus quantized horizontal and
-   vertical transmission, derived only from objects MAP2 sends, and face bits
-   from static seam structure between authorized cells only.
+3. **Coarse local light** for every authorized tile: per occupied sub-layer, a
+   signed, quantized, neutral level of local light, with sources pooled per
+   fixed 3×3 block before they propagate. Light and darkness from hidden
+   sources bleed through walls without identifying the source tile, count or
+   hue. A remembered tile keeps the levels it last had while visible.
+4. **Occluders of sent cells**: geometry bits plus quantized transmission of
+   each cardinal face and the downward face, derived only from objects MAP2
+   sends, and face bits from static seam structure between authorized cells
+   only.
 5. **Celestial inputs** (see Celestial lighting): the region profiles and
    effective phases of the current and next hour, and the static celestial
    structure that the server's celestial solver reads for authorized tiles. The
@@ -73,9 +75,9 @@ radiance, sent emitters, sent occluders, celestial inputs and structure.
 Only light of local sources the viewer cannot see is coarse. Exact per-tile
 local light on authorized tiles was considered and rejected: the per-cell
 gradient around a wall locates the hidden source, which is exactly the
-disclosure this design removes (see Problem). Remembered tiles gain live
-coarse light and client-computed celestial light, which is more detail than
-the current contract, where fog carries no live light at all.
+disclosure this design removes (see Problem). Remembered tiles keep the coarse
+levels they had while visible and gain client-computed celestial light, which
+needs no live information about the remembered area.
 
 ## Wire contract (protocol revision 1085)
 
@@ -96,8 +98,8 @@ word already uses bits 6–15 for coordinates:
 
 | Field | Bytes | When | Meaning |
 | --- | --- | --- | --- |
-| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 | changed | bits 0–4: signed level `-15..15` (two's complement; `-16` invalid); bits 5–6 reserved, zero; bit 7: apply the viewer's vision floor after composition |
-| `MAP2_FLAG_EXT_OCCLUDER` (16) | 3 | changed | `uint16`: bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7 horizontal attenuation `a`; bits 8–11: local light does not cross the north, east, south or west face; bits 12–13: nor the upward or downward face; bits 14–15 reserved, zero. Then `uint8`: bits 0–3 vertical attenuation `v` of the downward face; bits 4–7 reserved, zero |
+| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 + n | changed | `uint8` count `n` of `1..7`, then `n` level bytes: level `i` applies to sub-layer `i`, and sub-layers from `n` on use level `n - 1`. Each level byte: bits 0–4 signed level `-15..15` (two's complement; `-16` invalid); bits 5–6 reserved, zero; bit 7: apply the viewer's vision floor after composition |
+| `MAP2_FLAG_EXT_OCCLUDER` (16) | 5 | changed | `uint16`: bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7 reserved, zero; bits 8–11: local light does not cross the north, east, south or west face; bits 12–13: nor the upward or downward face; bits 14–15 reserved, zero. Then `uint16`: attenuation `a` of the north, east, south and west faces, one nibble each from bit 0. Then `uint8`: bits 0–3 vertical attenuation `v` of the downward face; bits 4–7 reserved, zero |
 
 Attenuation `a` and `v` share one scale: 0 is unattenuated, 1–14 is the
 coefficient `256 - 16n`, 15 is opaque. A view blocker with authored
@@ -183,27 +185,37 @@ connection.
   folded in per viewer, as today. The XRAY floor is not applied (see Vision
   floor). There is no aggregate fallback: negative environment is sent as
   negative base.
-- **Coarse local light** is derived each time MAP2 sends a cell, from the
-  already maintained per-cell `light_source_value`. No new per-map state is
-  needed, and a change anywhere in the block reaches every cell of it on the
-  next update:
+- **Coarse local light** is derived each time MAP2 sends a visible cell, from
+  the already maintained per-space source counters. No new per-map state is
+  needed. Each sub-layer takes the level of the space its light was sampled
+  at, which can differ between sub-layers; the server sends the shortest level
+  count describing them:
   - the block is the fixed 3×3 square containing the cell, aligned to map-local
     coordinates (`x - x % 3`, `y - y % 3`). A remainder of one or two cells at a
     map edge joins the adjacent block instead of forming a smaller one, so no
     block is narrower than three cells unless the map itself is. The block never
     reads another map and never loads one;
-  - take the strongest positive and the strongest negative local scalar in the
-    block; the larger magnitude wins;
+  - pool the scalar source counters of each block and resolve the sum through
+    the same mask table, before any propagation. The pooled source of a block
+    reaches the block by block-center distance: the own block at distance 0
+    and its four edge neighbors at center distance 3 are within the largest
+    radius, diagonal blocks are not. A source anywhere inside a block therefore
+    gives every block the same level, so neighboring blocks cannot
+    triangulate its tile;
+  - the strongest positive and the strongest negative pooled contribution
+    compete; the larger magnitude wins;
   - quantize the magnitude down to 1/8-daylight levels (raw 160), clamp to 15,
     and keep the sign.
-- **Remembered tiles keep receiving light.** When base LOS loss turns an
-  authorized tile into fog, the server keeps its per-socket cache entry marked
-  as remembered and, on each update, sends the tile's coarse level when it
-  changes, in a layerless record. The client keeps the tile's last base
-  radiance and computes its celestial light itself. This continues while the per-socket cache is valid; a map
-  change, hard clear or reconnect ends it. Remembered tiles never receive
-  objects, emitters or occluder changes: those describe objects, and the
-  objects on a remembered tile are not currently sent.
+- **Remembered tiles are frozen.** When base LOS loss turns an authorized tile
+  into fog, the server keeps its per-socket cache entry marked as remembered
+  and keeps its coarse levels at the values last sent while it was visible,
+  so a client cannot follow a hidden source through fog. Only the viewer's
+  own vision-floor bit is refreshed, in a layerless record. A tile never seen
+  has level 0. The client keeps the tile's last base radiance and computes its
+  celestial light itself. This continues while the per-socket cache is valid;
+  a map change, hard clear or reconnect ends it. Remembered tiles never
+  receive objects, emitters or occluder changes: those describe objects, and
+  the objects on a remembered tile are not currently sent.
 - **Vision floor.** XRAY raises presentation light to raw 100 after all light
   is combined. The server sends base radiance without that floor and sets bit 7
   of the local-light byte for viewers with XRAY; the client applies the same
@@ -233,11 +245,15 @@ connection.
   bit. Authored transmission gives the coefficients: doors and exact-type gates
   use `celestial_transmission_closed` or `celestial_transmission_open` by their
   current state (`FLAG_DOOR_CLOSED` for doors, `FLAG_NO_PASS` for gates), other
-  objects `celestial_transmission`. Objects with horizontal faces set `a`, and
-  objects with a downward face set `v`; each is the maximum attenuation over the
-  sent objects (the minimum coefficient, as the server's face traversal takes),
-  quantized up to the next step. A sent view blocker without authored
-  transmission is opaque horizontally. Space-wide flags such as `P_BLOCKSVIEW`
+  objects `celestial_transmission`. Each cardinal face has its own `a`, set by
+  the objects authoring that face, and objects with a downward face set `v`;
+  each is the maximum attenuation over the sent objects (the minimum
+  coefficient, as the server's face traversal takes), quantized up to the next
+  step. A face a sent view blocker does not author is opaque, and other
+  unauthored faces stay open, as in `spatial_face_light()`. A client step
+  leaves its cell through the exit face of its direction; a diagonal step takes
+  the smaller coefficient of the two faces it crosses, so the client never
+  transmits more light than the server. Space-wide flags such as `P_BLOCKSVIEW`
   are never used, because they aggregate hidden and unsent objects too. Unsent
   geometry therefore contributes nothing, and the client may light past a
   blocker it cannot see; that errs towards disclosing less.
@@ -325,7 +341,11 @@ overlaps of a visible and a hidden source, which is an accepted presentation
 trade-off.
 
 Remembered (fog) tiles compose their signed base, client celestial light and
-their live coarse level. They never compose the remembered emitters of the
+their frozen coarse levels, then receive the remembered-world lift of
+MAP_RENDERING.md: when the composed scalar `S` is below raw 40, `40 - S` is
+added neutrally before window attenuation, so dark remembered geometry keeps
+rendering at `(40, 40, 40)` rather than black. They never compose the
+remembered emitters of the
 objects shown in fog, which may since have changed, and their faces are closed
 by the server's face bits, so emitter rays from visible cells stop at their
 boundary; the coarse level carries hidden and visible local light there.
@@ -343,10 +363,15 @@ remembered tiles correctly.
 
 ### Region inputs
 
-A new server command `CELESTIAL` (schema `game-commands.json`) carries up to 16
-per-connection profile slots. A slot is assigned to each distinct effective
-region profile of the maps in the client's celestial closure (below) and
-carries only what the solver consumes, never the region's name or digest:
+A new server command `CELESTIAL` (schema `game-commands.json`) carries
+per-connection profile slots, numbered `0..254` in one byte. A slot is assigned
+to each distinct effective region profile of the maps in the client's celestial
+closure (below) and carries only what the solver consumes, never the region's
+name or digest. Slot 255 means "no profile": a closure needing more than 255
+distinct profiles marks the fragments beyond with it, and the client gives
+their cells zero celestial light, failing closed exactly as a missing upper
+target does on the server. A slot keeps its number while its profile stays in
+the closure.
 
 - day and night linear colors and brightnesses, moon linear color and
   `moon_max`, starlight linear color and strength, and `lunar_period`;
@@ -371,22 +396,31 @@ and seam continuity between maps (schema, boundary, reciprocal link, profile
 digest). Its rays travel at most 32 cells horizontally and 13 levels, and its
 diffuse relaxation spills 4 cells.
 
-The **celestial closure** of a viewer is the set of cells the solver reads to
-produce the field of the viewer's authorized tiles: each authorized tile, its
-4-cell spill halo, the cells its sun, moon and zenith rays cross, and its upper
-chain. The server sends a `CELESTIAL_STRUCTURE` command describing the closure
-as a view-relative grid (the MAP2 window extended by the 36-cell halo, and the
-authorized depths with their upper chains), row-run encoded, with 3 bytes per
-cell: the 16-bit signature, bit 16 sky cover open, bit 17 sky exit, bits 18–21
-continuity of the north, east, south and west faces to the neighboring grid
-cell (bits 22–23 the up and down faces), and reserved bits zero. Deltas are
-sent when the closure moves with the player, when a structure revision changes
-a cell, or when a door or gate in an authorized cell changes state.
+The **celestial closure** of a viewer is its authorized tiles and their upper
+chains, and nothing else: structure of a cell the viewer has not been
+authorized for is never sent. Every cell outside the closure is solved as open
+air with an open sky exit. That constant discloses nothing; it makes sun, sky
+and spill light near the closure edge approximate instead of exact, and errs
+towards light, so outdoor views stay naturally lit at their edges.
 
-Disclosure rule: closure cells that are not authorized carry **static
-structure only**. A door or gate face in such a cell is always sent with its
-closed coefficient, whatever its current state, because an opened door behind a
-wall reveals activity. Nothing else in a structure record changes at runtime.
+The server sends a `CELESTIAL_STRUCTURE` command describing the closure as
+fragments: each fragment record carries its depth, its view-relative rectangle
+within the MAP2 window, the profile slot of its map, and its cells, row-run
+encoded with 3 bytes per cell: the 16-bit signature, bit 16 sky cover open, bit
+17 sky exit, bits 18–21 continuity of the north, east, south and west faces to
+the neighboring cell (bits 22–23 the up and down faces), and reserved bits
+zero. The fragment's slot selects the model that solves its cells, as the
+server selects a model per map. The worst case is the 17×17 window over 13
+depths, 3,757 cells or about 11 KB, so a complete closure always fits in one
+command: each `CELESTIAL_STRUCTURE` replaces the client's closure atomically,
+and no continuation framing is needed. It is resent when the closure moves
+with the player, when a structure revision changes a cell, or when a door or
+gate in a currently visible cell changes state.
+
+Disclosure rule: door and gate coefficients carry their current state only for
+currently visible cells. A remembered cell keeps the coefficients it had when
+it was last visible, so an unseen door opening behind a wall reveals no
+activity. Nothing else in a structure record changes at runtime.
 The record never names objects, creatures, items or light sources, and closure
 cells carry no light of any kind. Seam continuity is static authored data; the
 server autoloads the closure's maps with the same bounded autoload the MAP2
@@ -403,28 +437,28 @@ color publish. The server's solver delegates to it, reading its structure from
 maps; the client runs it on the received closure grid. Given the same inputs,
 both produce bit-identical fields.
 
-Conformance therefore holds exactly for every authorized tile whose closure
-contains no open door or gate outside the authorized set. The test reference
-is the server solver run on the disclosed structure (closed unseen doors), and
+The test reference is the server solver run on the disclosed closure, with
+cells outside it as open air and remembered doors at their remembered state;
 the client must match it bit for bit. Against the gameplay field, the client
-differs only where sun, sky or spill light passes through such an open, unseen
-door, and then only by being darker.
+differs only where sun, sky or spill light reaches an authorized tile through
+cells outside the closure or through a remembered door that has since changed.
 
 The client adds its celestial field to the signed base before composition
 (step 3 above), for visible and remembered tiles alike. The base no longer
 contains celestial light, so the server never samples the celestial field in
-MAP2 for these connections: MAP2 stops calling `celestial_light_ensure()` and
-`celestial_light_keyframe_request()`, and the synchronous solve leaves the MAP2
-path. Gameplay darkness gating keeps reading the server's own field, which the
-budgeted pending solver maintains.
+MAP2 for display: it stops calling `celestial_light_keyframe_request()` and
+reading celestial display values. Gameplay darkness gating is unchanged and
+stays fail-closed: MAP2's per-cell gate keeps calling `map_get_darkness()`,
+which still obtains the current celestial generation synchronously through
+`celestial_light_ensure()` before any live object is serialized, so a field
+invalidated by a door, structure revision, profile or lunar override is never
+read stale.
 
 ### Celestial budget
 
-Structure is static and sent as deltas: on a move the grid shifts by one strip,
-and row runs compress the open air that dominates upper levels. The client
-keeps 3 bytes per closure cell; with the 17×17 window, a 36-cell halo and 13
-depths the worst case is about 103,000 cells (310 KB), and typical scenes are
-far smaller. The rollout qualifies this against MAP_RENDERING.md budgets before
+Structure is static between changes, and row runs compress the open air that
+dominates upper levels. The client keeps 3 bytes per closure cell; the worst
+case is 3,757 cells (about 11 KB), and typical scenes are far smaller. The rollout qualifies this against MAP_RENDERING.md budgets before
 the celestial step merges.
 
 ## Contract change: visible emitters and structure
@@ -452,21 +486,16 @@ What a modified client can learn, beyond today's MAP2:
 
 - **Sent emitters:** radius, flicker opt-in and color of objects it already
   sees. This is new, but it concerns only already-authorized objects.
-- **Hidden light:** for each authorized tile, visible or remembered, the signed
-  1/8-daylight level of the strongest local light in its fixed block. All cells
-  of a block share one value, so a single uncancelled source cannot be located
-  more precisely than its block from the peak alone. Sources on one tile group
-  before the nonlinear profile, so moving one of several co-located sources
-  within the block can change the level (for example `+3` and `-1` group to
-  `+2`, while separating them restores the `+3` peak). The level then reveals
-  that the sources are no longer co-located, not where they are. Hue, count and
-  profile are never sent. Remembered tiles receive the same coarse levels, which
-  is light from around a corner, never the objects there.
-- **Residual leakage, honestly stated:** moving a hidden source within its block
-  can still change the levels of neighboring blocks through falloff. Comparing
-  neighboring blocks therefore narrows the position somewhat, but only to the
-  extent that the falloff crosses a level boundary. Quantization limits this;
-  nothing short of hiding the field entirely removes it.
+- **Hidden light:** for each visible authorized tile and sub-layer, the signed
+  1/8-daylight level of local light, with sources pooled per fixed 3×3 block
+  before propagation. A source anywhere inside a block gives every block the
+  same level, so neither the peak nor the levels of neighboring blocks locate
+  it more precisely than its block. Sources on one tile group before the
+  nonlinear profile, so separating co-located sources can change a level (for
+  example `+3` and `-1` group to `+2`); that reveals that they are no longer
+  co-located, not where they are. Hue, count and profile are never sent.
+  Remembered tiles keep the levels they last had while visible, so a moving
+  hidden source cannot be followed through fog.
 - **Environment:** exact signed base radiance, including negative environment,
   on authorized tiles. It contains no local source and no gameplay state of
   others; the former aggregate fallback, which sent complete per-cell radiance
@@ -475,8 +504,9 @@ What a modified client can learn, beyond today's MAP2:
   viewer, and static seam structure between two cells both in view. Face bits
   never reflect residency or anything beyond the authorized set.
 - **Celestial:** region light constants and effective phases (no epochs or
-  identities), and static structure of the celestial closure, with doors and
-  gates outside the authorized set always reported closed.
+  identities), and the structure of authorized tiles and their upper chains
+  only, with door and gate state current only for visible cells and frozen on
+  remembered ones.
 - **Never sent:** creatures, and the source identity, count, exact tile, color,
   profile or height of any local light source not itself sent in MAP2; no
   property of hidden or unsent objects; no dynamic state of cells outside the
@@ -524,8 +554,11 @@ release containing protocol 1085 contains all of them.
   vectors; truncated emitter/occluder fields; reconnect reset; and
   a failed parse leaving map state unchanged.
 - Server: coarse level equals the block's signed quantized peak for fixtures
-  with a hidden source behind a wall; remembered tiles keep receiving coarse
-  level changes and never objects or emitters; no emitter or occluder for an
+  with a hidden source behind a wall; a source moved through every position of
+  its block leaves every block's level unchanged; remembered tiles keep their
+  last levels while hidden light changes and never receive objects or
+  emitters; per-sub-layer level counts 1..7 and their reuse rule; per-face
+  attenuation, including a cell whose only authored face is east; no emitter or occluder for an
   unsent object or cell; hidden and plugin-hidden blockers set no occluder bits;
   glass floors set `v` only; an emitter-only change (radius, flicker or color)
   produces a layer delta; `tli` stays in base radiance; negative environment
@@ -543,8 +576,9 @@ release containing protocol 1085 contains all of them.
 - Celestial: the libatrinik model matches the server's model for all solar
   hours, season months and lunar ages; the client solver on the encoded closure
   matches the server solver bit for bit on outdoor, roofed, glass, grate, door,
-  aperture-spill and multi-level fixtures; unseen open doors are reported
-  closed; region slots carry no digest or epoch.
+  aperture-spill and multi-level fixtures; remembered doors keep their remembered state and cells outside the closure
+  solve as open air; mixed-profile closures select each fragment's slot, and
+  slot 255 gives zero celestial light; region slots carry no digest or epoch.
 - Privacy: another player's inventory-derived emitter is never sent, while the
   viewer's own is; all cells of a block report the same level; edge remainders
   join the adjacent block; levels never exceed 15 in magnitude; moving a single
@@ -562,18 +596,16 @@ release containing protocol 1085 contains all of them.
   profiles and gameplay.
 - Client-computed lighting is the only model: always on, no option, no
   negotiation and no legacy full-radiance path (maintainer decision).
+- Coarse light pools sources per block before propagation, is sent per
+  sub-layer, and is frozen on remembered tiles.
+- Horizontal transmission is per cardinal face.
+- The celestial closure is authorized tiles and their upper chains; cells
+  outside it are open air, and remembered doors keep their remembered state.
+- Profile slots are 8-bit with slot 255 failing closed; one atomic
+  `CELESTIAL_STRUCTURE` holds the whole closure.
 
 ## Open questions
 
-- Directional faces: cell-wide horizontal transmission approximates walls that
-  block only some faces. Per-face coefficients would need four nibbles per cell.
-- Celestial closure disclosure: static structure of unauthorized cells within
-  the solver's reach (up to 32 cells and 13 levels) is sent so the client can
-  match the server exactly. A smaller closure (authorized tiles and their upper
-  chains only) would disclose less structure but make low-sun and spill light
-  approximate near unseen areas.
-- Unseen doors: reporting them closed keeps activity private at the cost of
-  exactness through open unseen doors. Content review may prefer exactness.
 - Whether the flicker opt-in should also cover authored flicker profiles
   (rate and depth) in the reserved emitter flag bits.
 
