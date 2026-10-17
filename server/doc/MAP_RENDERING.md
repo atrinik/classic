@@ -2089,7 +2089,9 @@ contribution. Q5.11 encoding remains the existing checked round-half-up
 `raw * 8 / 5` operation at the wire boundary; this contract adds no protocol
 field and no second visibility authority.
 
-Feather the completed presentation sample at the negotiated
+With smooth lighting, the only player-facing mode (the discrete projection
+survives only for offline conformance proofs until protocol 1085 retires it),
+feather the completed presentation sample at the negotiated
 wire-window boundary. Let `distance` be the minimum integer distance from the
 sample to any of the four window sides. Its Q0.8 weight is `0` at distance zero,
 `16` at distance one, and `256` at distance two or greater; samples outside the
