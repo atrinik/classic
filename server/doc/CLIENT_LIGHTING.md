@@ -76,7 +76,10 @@ tile's radii before mapping the sum through `light_mask`, which saturates at
 ±13; clamping each emitter first would change that sum.
 
 The existing per-sub-layer Q5.11 lighting bytes carry **base radiance only**
-when the server runs client lighting. The 8-byte per-sub-layer budget is
+when the server runs client lighting. So do the timed-light next-hour scalar and
+RGB endpoints (`MAP2_FLAG_EXT_LIGHT_KEYFRAME`) and their per-socket caches:
+they omit local sources and the XRAY floor, so interpolating towards them
+never reintroduces either. The 8-byte per-sub-layer budget is
 unchanged. Decoders reject an emitter radius of 0, a
 positive radius with color `000000` (a zero linear peak, which MAP_RENDERING.md
 rejects for positive sources), a negative radius with a nonzero color (darkness
@@ -168,9 +171,12 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
 
    The emitter sum carries hue as signed per-channel deltas relative to its
    scalar, so overlapping light and darkness keep the server's color shift; the
-   coarse term is neutral. Final radiance = base + `L` per scalar and channel,
-   saturated to `0..65535` before the vision floor (if bit 7 is set) and before
-   the unchanged unsigned Q16 tone/LUT stage. Negative intermediate values never
+   coarse term is neutral. Final radiance = base + `L` per scalar and channel.
+   Negative channels clamp to zero; if the largest channel then exceeds the
+   finite range, all three channels scale together so the strongest is 65535,
+   as the server's common-vector overflow rule requires, keeping hue. The scalar
+   saturates at 65535. The vision floor (if bit 7 is set) follows, before the
+   unchanged unsigned Q16 tone/LUT stage. Negative intermediate values never
    reach that stage. Base radiance above the finite Q5.11 range (raw 40959,
    32× daylight) arrives saturated, so darkness composed onto it cannot recover
    the lost magnitude. Current world, map and celestial anchors stay at or below
@@ -226,8 +232,9 @@ and equal disclosure for visible ones.
 ## Rollout
 
 1. Protocol 1085, server producer and client decoder, with server config
-   `client_lighting` defaulting to off. The legacy path is unchanged, and 1085
-   clients render it.
+   `client_lighting` defaulting to off and `true` rejected at startup until the
+   client compositor exists. The legacy path is unchanged, and 1085 clients
+   render it.
 2. Client emitter composition and GPU stage, plus qualification: GPU frame
    budgets as in MAP_RENDERING.md, plus offline player-view proofs comparing
    indoor, outdoor and cutaway Brynknot fixtures.
