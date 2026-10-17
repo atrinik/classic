@@ -57,7 +57,9 @@ sends SETUP subtype `CMD_SETUP_CLIENT_LIGHTING` (6) with capability byte
 `CLIENT_LIGHTING_CAP_COMPOSITOR` (1); the server echoes the effective mode,
 which is on only when its `client_lighting` option is enabled. A 1085 client
 that never sends the subtype, including one released before the compositor,
-keeps receiving complete radiance and no client-lighting fields. Reconnect clears all
+keeps receiving complete radiance and no client-lighting fields. The mode is
+fixed by the initial SETUP: a later SETUP during play only echoes it, so a
+client cannot force repeated cache resets. Reconnect clears all
 client emitter, occluder and coarse-light state with the map cache.
 
 Per MAP2 cell record (one record per cell and depth). The fields follow the
@@ -138,6 +140,11 @@ both modes.
   darkness cancels local light exactly as today, per sub-layer and across
   keyframes. Those samples disclose aggregate local light as the current
   contract does; this trade-off is an open question.
+- **Vision floor transformation.** When bit 7 is set and the composed scalar
+  `S` is below raw 100, the client adds `100 - S` neutrally to the scalar and to
+  every channel, exactly as the legacy path raises raw light before resolving
+  color. Conformance vector: scalar/RGB `(80, 80, 0, 0)` becomes
+  `(100, 100, 20, 20)`.
 - **Vision floor.** XRAY raises presentation light to raw 100 after all light
   is combined. The server therefore sends base radiance without that floor
   and sets bit 7 of the local-light byte for viewers with XRAY. The client then
@@ -189,7 +196,7 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    resolves its color accumulators, so hue can vary with distance. When some of
    a tile's emitters are not sent, the client underestimates and the coarse
    level supplies the rest. Every visible emitter is evaluated; the GPU stage
-   processes them in batches rather than truncating. The occluders are an R8
+   processes them in batches rather than truncating. The occluders are an R16
    cell grid per depth. That grid is 16-bit (R16), because face bits 8–11 must
    reach the ray walk.
 2. A compute (or full-screen fragment) pass evaluates every light vertex of the
@@ -198,7 +205,9 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    DDA through the occluder grid, so it follows the same "stop after the exposed
    face" and floor-crossing rules as `light_path_value()`. Partial transmission
    applies each crossed cell's attenuation, and a step across a face marked
-   discontinuous (bits 8–11) stops the ray, as at a discontinuous map seam.
+   discontinuous stops the ray, as at a discontinuous map seam: bits 8–11 for
+   horizontal steps and bits 12–13 for steps to the linked level above or below
+   in the linked-depth walk.
 3. Combine the client emitter sum `E` with the coarse block level `C` (raw
    step 160), which is a bleed hint for the whole block:
    - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
@@ -340,6 +349,14 @@ information (see Contract change).
   solver, but it requires sending sky-exposure structure for upper levels that
   are not visible.
 - Flicker opt-in: an archetype attribute versus a profile flag.
+- Vertical transmission: transmissive floors and roofs (for example glass
+  floors) attenuate only vertical crossings, which the cell-wide nibble cannot
+  express without making ordinary floors opaque horizontally. Occluder bits
+  14–15 are reserved for a vertical transmission level for the linked-depth GPU
+  stage.
+- Folded colors: beyond eight distinct color constituents per tile, the client
+  folds constituents per original profile into one radius-weighted color, which
+  bounds work but averages hue within each profile.
 - `light_private`: whether content needs visible objects whose light stays
   server-side, and whether it should be an attribute or an archetype default.
 
