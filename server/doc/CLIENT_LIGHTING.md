@@ -251,21 +251,20 @@ connection.
     diagonal horizontal seams and links to the levels above and below, taken
     in any order, so corner maps, maps linked only diagonally and a level
     linked only from a neighboring map count too. The linked levels
-    of a stack form one vertical bucket: a block on any of them, up to 12
-    levels (twice `MAP2_MAX_DEPTH`) above or below the target, reaches it at
-    the horizontal distance `sqrt(gx² + gy²)` of their gaps, whatever the
-    number of levels between them. Any two depths of one 13-depth MAP2 window
-    lie within that span, so every level of a window gets the same level from
-    a source inside it, and the bound keeps the work finite for stacks taller
-    than a window (legacy schema-0 stacks included); so the levels of a stack
-    agree and viewers with cells on several floors cannot tell which floor a
+    of a stack form one vertical bucket spanning the whole linked component:
+    a block on any of them reaches the target at the horizontal distance
+    `sqrt(gx² + gy²)` of their gaps, whatever the number of levels between
+    them, so the levels of a stack agree, however tall it is, and viewers with cells on several floors cannot tell which floor a
     hidden source is on, or follow it between floors. Light through floors is
     therefore presented at its horizontal strength; that bleed is presentation
     only, like the bleed through walls below. Each map is divided into its own blocks and measured in the
     target map's coordinates, so the blocks of neighboring maps need not align.
-    No map is ever loaded for it, and no reachable map is dropped: the pool
-    grows with the reachable topology, which is finite because every map is
-    placed once per offset within reach. A source anywhere inside a block therefore
+    No map is ever loaded for it, and no reachable map is dropped. The work is
+    bounded: a component that places more than 4096 maps (real topologies stay
+    far below; a 13-level stack of one-cell maps within reach places 1053),
+    such as an unbounded legacy link cycle or stack, fails closed to level 0
+    for every target in it, so its levels still agree and no rebuild is
+    unbounded. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
     triangulate its tile;
   - quantize the strongest positive and the strongest negative contribution
@@ -494,7 +493,9 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    steady light, never past it. Conformance compares
    flickered output at a fixed `t`. Flicker modulates the composed value only
    where the emitter field supplied it (`L = E`, decided before the `tli`
-   term is added): there it becomes
+   term is added, and with `E ≠ 160C` when `C ≠ 0`, since an emitter field
+   exactly equal to the floor may coincide with hidden steady light): there
+   it becomes
    `L + E' - E` for flickered sum `E'`, so the coarse floor never masks the
    flicker of light the emitter field supplies. Where the coarse level
    dominates (`L = 160C ≠ E`) `L` is unchanged: the coarse level is anonymous
