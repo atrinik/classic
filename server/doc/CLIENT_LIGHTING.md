@@ -226,10 +226,14 @@ connection.
     every map reached through seams light crosses (a resident reciprocal link,
     and continuity as `light_face_continuous()` requires), horizontal seams
     and links to the levels above and below taken in any order, so corner maps
-    and a level linked only from a neighboring map count too. With horizontal
-    gaps `gx`, `gy` and `dz` levels between them, two blocks are
-    `sqrt(gx² + gy² + dz²)` apart, as the server's masks combine `dx`, `dy` and
-    `dz`. Each map is divided into its own blocks and measured in the
+    and a level linked only from a neighboring map count too. The linked levels
+    of a stack form one vertical bucket: a block on any of them reaches the
+    target at the horizontal distance `sqrt(gx² + gy²)` of their gaps, whatever
+    the number of levels between them, so every level of a stack gets the same
+    level and viewers with cells on several floors cannot tell which floor a
+    hidden source is on, or follow it between floors. Light through floors is
+    therefore presented at its horizontal strength; that bleed is presentation
+    only, like the bleed through walls below. Each map is divided into its own blocks and measured in the
     target map's coordinates, so the blocks of neighboring maps need not align.
     No map is ever loaded for it. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
@@ -485,7 +489,9 @@ What a modified client can learn, beyond today's MAP2:
   viewer, and static seam structure between two cells both in view. Face bits
   never reflect residency or anything beyond the authorized set.
 - **Never sent:** creatures, and the source identity, count, exact tile, color,
-  profile or height of any local light source not itself sent in MAP2; no
+  profile or height of any local light source not itself sent in MAP2 (linked
+  levels share one coarse value, so even the floor of a hidden source is not
+  disclosed); no
   property of hidden or unsent objects; no dynamic state of cells outside the
   authorized set.
 
@@ -524,6 +530,8 @@ celestial follow-up's removal of celestial light from the base radiance
 
 ## Test plan
 
+- Floors: a hidden source moved between the floors of a linked stack leaves
+  every floor's coarse level unchanged.
 - Remote samples: a sub-layer sampled at another space carries bit 6 and its
   own space's level, and the client composes no emitter field into it.
 - Protocol: encode/decode round trips; reserved bits in the local byte,

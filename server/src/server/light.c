@@ -1451,10 +1451,12 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
  * Pool every block of one source map region within reach of the target block
  * [bx, ex) x [by, ey). The region's cell (cx, cy) lies at (cx + ox, cy + oy) in
  * the target map's coordinates; its blocks need not align with the target's,
- * because each reaches it by the gap between the two rectangles.
+ * because each reaches it by the gap between the two rectangles. The region
+ * may be any level of the target's linked stack: levels form one vertical
+ * bucket, so only the horizontal gap counts.
  */
-static void light_local_pool_region(mapstruct *source, int ox, int oy, int dz, int bx, int ex,
-                                    int by, int ey, int32_t *positive, int32_t *negative) {
+static void light_local_pool_region(mapstruct *source, int ox, int oy, int bx, int ex, int by,
+                                    int ey, int32_t *positive, int32_t *negative) {
     int reach = MAX_LIGHT_RADIUS;
     int x0 = MAX(0, bx - reach - ox), x1 = MIN(MAP_WIDTH(source), ex + reach - ox);
     int y0 = MAX(0, by - reach - oy), y1 = MIN(MAP_HEIGHT(source), ey + reach - oy);
@@ -1466,7 +1468,7 @@ static void light_local_pool_region(mapstruct *source, int ox, int oy, int dz, i
             light_local_block(cx, MAP_WIDTH(source), &sx, &sex);
             int gap_x = MAX(0, MAX(sx + ox - (ex - 1), bx - (sex - 1 + ox)));
             int gap_y = MAX(0, MAX(sy + oy - (ey - 1), by - (sey - 1 + oy)));
-            int distance_squared = gap_x * gap_x + gap_y * gap_y + dz * dz;
+            int distance_squared = gap_x * gap_x + gap_y * gap_y;
             int strongest[2];
             light_local_block_sources(source, sx, sex, sy, sey, &strongest[0], &strongest[1]);
             for (int sign = 0; sign < 2; sign++) {
@@ -1475,8 +1477,7 @@ static void light_local_pool_region(mapstruct *source, int ox, int oy, int dz, i
                     continue;
                 }
                 int radius = light_profile_radius(abs(mask));
-                if (distance_squared > radius * radius ||
-                    abs(dz) > MIN(radius, MAP2_MAX_DEPTH)) {
+                if (distance_squared > radius * radius) {
                     continue;
                 }
                 int32_t value = light_mask_value(abs(mask), distance_squared);
@@ -1493,34 +1494,39 @@ static void light_local_pool_region(mapstruct *source, int ox, int oy, int dz, i
 }
 
 /** One map placed relative to the target block: cell (cx, cy) lies at
- * (cx + ox, cy + oy) on the target map, dz levels above (positive) or below. */
+ * (cx + ox, cy + oy) on the target map, on any level of its linked stack. */
 typedef struct light_local_region {
     mapstruct *map;
-    int ox, oy, dz;
+    int ox, oy;
 } light_local_region;
 
 /** Upper bound on the placed maps one block pools: a 3x3 neighborhood on
- * each of the 13 depths leaves room for maps smaller than the reach. */
+ * every level of a tall stack leaves room for maps smaller than the reach. */
 #define LIGHT_LOCAL_REGIONS_MAX 512
 
 static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, int ey) {
     /* Sources are pooled per block before propagation and reach a block by
-     * the gap between the two blocks, which depends only on block geometry,
-     * so a source's position inside its block never changes any block's
-     * level. Every map within the largest radius counts, reached through
-     * continuous horizontal seams and linked levels in any order (a level
-     * linked only from a neighbor counts too); no map is ever loaded for it. */
+     * the horizontal gap between the two blocks, which depends only on block
+     * geometry, so a source's position inside its block never changes any
+     * block's level. Every map within the largest radius counts, reached
+     * through continuous horizontal seams and linked levels in any order (a
+     * level linked only from a neighbor counts too); no map is ever loaded
+     * for it. The linked levels of a stack form one vertical bucket: a
+     * source on any of them counts at its horizontal gap alone, so every
+     * level of the stack gets the same level and the levels never reveal
+     * which floor a hidden source is on. Regions are therefore keyed by map
+     * and horizontal offset, which also ends cyclic level links. */
     static light_local_region regions[LIGHT_LOCAL_REGIONS_MAX];
     static const int tiles[] = {TILED_WEST, TILED_EAST, TILED_NORTH, TILED_SOUTH, TILED_UP,
                                 TILED_DOWN};
-    int reach = MAX_LIGHT_RADIUS, depth_reach = MIN(MAX_LIGHT_RADIUS, MAP2_MAX_DEPTH);
+    int reach = MAX_LIGHT_RADIUS;
     int32_t positive = 0, negative = 0;
     size_t count = 0;
     regions[count++] = (light_local_region){.map = map};
     for (size_t i = 0; i < count; i++) {
         light_local_region region = regions[i];
-        light_local_pool_region(region.map, region.ox, region.oy, region.dz, bx, ex, by, ey,
-                                &positive, &negative);
+        light_local_pool_region(region.map, region.ox, region.oy, bx, ex, by, ey, &positive,
+                                &negative);
         for (size_t t = 0; t < arraysize(tiles); t++) {
             light_local_region next = region;
             next.map = light_local_seam(region.map, tiles[t]);
@@ -1529,8 +1535,7 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
             }
             if (tiles[t] == TILED_UP || tiles[t] == TILED_DOWN) {
                 /* Blocks align only across levels of the same dimensions. */
-                next.dz += tiles[t] == TILED_UP ? 1 : -1;
-                if (abs(next.dz) > depth_reach || MAP_WIDTH(next.map) != MAP_WIDTH(region.map) ||
+                if (MAP_WIDTH(next.map) != MAP_WIDTH(region.map) ||
                     MAP_HEIGHT(next.map) != MAP_HEIGHT(region.map)) {
                     continue;
                 }
@@ -1550,7 +1555,7 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
             bool seen = false;
             for (size_t j = 0; j < count && !seen; j++) {
                 seen = regions[j].map == next.map && regions[j].ox == next.ox &&
-                       regions[j].oy == next.oy && regions[j].dz == next.dz;
+                       regions[j].oy == next.oy;
             }
             if (!seen && count < arraysize(regions)) {
                 regions[count++] = next;

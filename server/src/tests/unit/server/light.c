@@ -1610,11 +1610,39 @@ START_TEST(test_client_lighting_local_level_reaches_linked_depths) {
     add_colored_light(upper, 4, 4, 13, LIGHT_COLOR_WHITE);
     int level = light_local_level(map, 4, 4);
     ck_assert_int_gt(level, 0);
-    /* Never stronger than on the source's own level. */
-    ck_assert_int_le(level, light_local_level(upper, 4, 4));
+    /* Linked levels are one vertical bucket: the same as on its own level. */
+    ck_assert_int_eq(level, light_local_level(upper, 4, 4));
     /* An unlinked level contributes nothing. */
     mapstruct *alone = get_empty_map(9, 9);
     ck_assert_int_eq(light_local_level(alone, 4, 4), 0);
+}
+END_TEST
+
+START_TEST(test_client_lighting_local_level_hides_source_floor) {
+    /* A hidden source moving between the floors of a linked stack never
+     * changes any floor's level, so viewers with cells on several floors
+     * cannot follow it from floor to floor. */
+    int reference[1][3];
+    for (int source_floor = 0; source_floor < 3; source_floor++) {
+        mapstruct *floors[3];
+        for (int floor = 0; floor < 3; floor++) {
+            floors[floor] = get_empty_map(9, 9);
+            if (floor > 0) {
+                link_stacked_maps(floors[floor - 1], floors[floor]);
+            }
+        }
+        add_colored_light(floors[source_floor], 4, 4, 5, LIGHT_COLOR_WHITE);
+        for (int floor = 0; floor < 3; floor++) {
+            for (int x = 0; x < 3; x++) {
+                int level = light_local_level(floors[floor], x * 3 + 1, 4);
+                if (source_floor == 0 && floor == 0) {
+                    reference[0][x] = level;
+                }
+                ck_assert_int_eq(level, reference[0][x]);
+            }
+        }
+    }
+    ck_assert_int_gt(reference[0][1], 0);
 }
 END_TEST
 
@@ -1886,6 +1914,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
     tcase_add_test(tc_core, test_client_lighting_local_level_neighbors_hide_translation);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_linked_depths);
+    tcase_add_test(tc_core, test_client_lighting_local_level_hides_source_floor);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);
     tcase_add_test(tc_core, test_client_lighting_local_level_crosses_horizontal_seams);
     tcase_add_test(tc_core, test_client_lighting_local_level_resists_radius_probing);
