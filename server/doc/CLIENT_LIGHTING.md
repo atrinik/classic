@@ -177,11 +177,17 @@ and equal disclosure for visible ones.
 1. Protocol 1085, server producer and client decoder, with server config
    `client_lighting` defaulting to off. The legacy path is unchanged, and 1085
    clients render it.
-2. Client emitter composition and GPU stage, plus qualification: GPU frame
-   budgets as in MAP_RENDERING.md, plus offline player-view proofs comparing
-   indoor, outdoor and cutaway Brynknot fixtures.
-3. Enable `client_lighting` on development, then production.
-4. Remove server positive/color local masks and the legacy full-radiance path.
+2. Client emitter composition. `client_lighting.c` is the CPU reference: it
+   groups emitters per tile, evaluates the shared `light_profile` tables with a
+   line walk through the occluder grid, composes by sign and clamps to the
+   coarse level. The map sampler adds the result to received base radiance per
+   cell sample, before the existing GPU light rows. The line walk approximates
+   the server's 3D supercover rays and evaluates one depth.
+3. GPU emitter stage replacing the CPU reference, with linked depths, plus
+   qualification: GPU frame budgets as in MAP_RENDERING.md, plus offline
+   player-view proofs comparing indoor, outdoor and cutaway Brynknot fixtures.
+4. Enable `client_lighting` on development, then production.
+5. Remove server positive/color local masks and the legacy full-radiance path.
    Update MAP_RENDERING.md to make this document normative.
 
 ## Test plan

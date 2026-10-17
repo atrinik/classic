@@ -358,6 +358,7 @@ set(LIBATRINIK_PUBLIC_HEADER_NAMES
     console.h
     curl.h
     datetime.h
+    light_profile.h
     logger.h
     map_protocol.h
     math.h
@@ -424,6 +425,7 @@ set(TOOLKIT_SOURCES
     console.c
     curl.c
     datetime.c
+    light_profile.c
     logger.c
     map_protocol.c
     metaserver_url.c

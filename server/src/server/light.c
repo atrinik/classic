@@ -34,11 +34,11 @@
 #include <object.h>
 #include <spatial.h>
 #include <region.h>
+#include <toolkit/light_profile.h>
 
-#define NR_LIGHT_MASK 10
-#define MAX_LIGHT_SOURCE 13
-#define MAX_LIGHT_RADIUS 4
-#define LIGHT_DISTANCE_SCALE 256
+#define NR_LIGHT_MASK LIGHT_PROFILE_COUNT
+#define MAX_LIGHT_SOURCE LIGHT_PROFILE_SOURCE_MAX
+#define MAX_LIGHT_RADIUS LIGHT_PROFILE_RADIUS_MAX
 /** Full queues publish early; this bounds scope bookkeeping, not reach. */
 #define LIGHT_PENDING_MAX ((1 + 2 * MAP2_MAX_DEPTH) * (1 + TILED_NUM_DIR))
 
@@ -241,38 +241,8 @@ static uint64_t light_div_round(uint64_t numerator, uint64_t denominator) {
     return quotient + (remainder >= (denominator + 1) / 2 ? 1 : 0);
 }
 
-/** Canonical IEC 61966-2-1 sRGB8 to scene-linear Q0.16 lookup. */
-static const uint16_t srgb8_to_linear_q16[UINT8_MAX + 1] = {
-    0,     20,    40,    60,    80,    99,    119,   139,   159,   179,   199,   219,   241,
-    264,   288,   313,   340,   367,   396,   427,   458,   491,   526,   562,   599,   637,
-    677,   718,   761,   805,   851,   898,   947,   997,   1048,  1101,  1156,  1212,  1270,
-    1330,  1391,  1453,  1517,  1583,  1651,  1720,  1790,  1863,  1937,  2013,  2090,  2170,
-    2250,  2333,  2418,  2504,  2592,  2681,  2773,  2866,  2961,  3058,  3157,  3258,  3360,
-    3464,  3570,  3678,  3788,  3900,  4014,  4129,  4247,  4366,  4488,  4611,  4736,  4864,
-    4993,  5124,  5257,  5392,  5530,  5669,  5810,  5953,  6099,  6246,  6395,  6547,  6700,
-    6856,  7014,  7174,  7335,  7500,  7666,  7834,  8004,  8177,  8352,  8528,  8708,  8889,
-    9072,  9258,  9445,  9635,  9828,  10022, 10219, 10417, 10619, 10822, 11028, 11235, 11446,
-    11658, 11873, 12090, 12309, 12530, 12754, 12980, 13209, 13440, 13673, 13909, 14146, 14387,
-    14629, 14874, 15122, 15371, 15623, 15878, 16135, 16394, 16656, 16920, 17187, 17456, 17727,
-    18001, 18277, 18556, 18837, 19121, 19407, 19696, 19987, 20281, 20577, 20876, 21177, 21481,
-    21787, 22096, 22407, 22721, 23038, 23357, 23678, 24002, 24329, 24658, 24990, 25325, 25662,
-    26001, 26344, 26688, 27036, 27386, 27739, 28094, 28452, 28813, 29176, 29542, 29911, 30282,
-    30656, 31033, 31412, 31794, 32179, 32567, 32957, 33350, 33745, 34143, 34544, 34948, 35355,
-    35764, 36176, 36591, 37008, 37429, 37852, 38278, 38706, 39138, 39572, 40009, 40449, 40891,
-    41337, 41785, 42236, 42690, 43147, 43606, 44069, 44534, 45002, 45473, 45947, 46423, 46903,
-    47385, 47871, 48359, 48850, 49344, 49841, 50341, 50844, 51349, 51858, 52369, 52884, 53401,
-    53921, 54445, 54971, 55500, 56032, 56567, 57105, 57646, 58190, 58737, 59287, 59840, 60396,
-    60955, 61517, 62082, 62650, 63221, 63795, 64372, 64952, 65535,
-};
-
 static uint16_t light_color_linear_component(uint32_t color, size_t channel) {
-    uint16_t components[3] = {
-        srgb8_to_linear_q16[(color >> 16) & UINT8_MAX],
-        srgb8_to_linear_q16[(color >> 8) & UINT8_MAX],
-        srgb8_to_linear_q16[color & UINT8_MAX],
-    };
-    uint16_t peak = MAX(components[0], MAX(components[1], components[2]));
-    return peak == 0 ? 0 : light_muldiv_round(components[channel], UINT16_MAX, peak);
+    return light_profile_color_component(color, channel);
 }
 
 void light_color_linearize(uint32_t color, uint16_t linear[3]) {
@@ -284,13 +254,7 @@ void light_color_linearize(uint32_t color, uint16_t linear[3]) {
 }
 
 static uint16_t light_raw_to_radiance(int64_t raw_light) {
-    if (raw_light <= 0) {
-        return 0;
-    }
-    if (raw_light >= INT64_C(40959)) {
-        return UINT16_MAX;
-    }
-    return (uint16_t)((raw_light * 8 + 2) / 5);
+    return light_profile_raw_to_radiance(raw_light);
 }
 
 void light_radiance_from_raw(const MapSpace *space,
@@ -412,44 +376,8 @@ uint8_t light_occluder_bits(mapstruct *map, int x, int y) {
     return bits;
 }
 
-typedef struct light_profile {
-    int center;
-    int radial_radius;
-    int radial_power;
-} light_profile_t;
-
-/* Authored glow_radius remains a bounded profile selector. Center intensity is
- * preserved; radial support gains one cell where the old four-cell cap allows
- * it, giving interpolation enough samples without increasing worst-case work. */
-static const light_profile_t light_profiles[NR_LIGHT_MASK] = {
-    {0, 0, 1},
-    {40, 2, 1},
-    {80, 3, 2},
-    {160, 3, 2},
-    {160, 4, 2},
-    {320, 4, 2},
-    {320, 4, 2},
-    {320, 4, 2},
-    {640, 4, 2},
-    {1280, 4, 2},
-};
-
-static const int light_mask[MAX_LIGHT_SOURCE + 1] = {0, 1, 2, 3, 4, 5, 6, 6, 7, 7, 8, 8, 8, 9};
-
 static int get_real_light_source_value(int l) {
-    if (l > MAX_LIGHT_SOURCE) {
-        return light_mask[MAX_LIGHT_SOURCE];
-    }
-
-    if (l < -MAX_LIGHT_SOURCE) {
-        return -light_mask[MAX_LIGHT_SOURCE];
-    }
-
-    if (l < 0) {
-        return -light_mask[-l];
-    }
-
-    return light_mask[l];
+    return light_profile_mask(l);
 }
 
 static bool light_map_set_contains(const light_map_set *set, const mapstruct *map) {
@@ -775,47 +703,8 @@ static int light_path_value(mapstruct *map, int x, int y, int dx, int dy, int dz
     return status == 0 ? sign * transmitted : 0;
 }
 
-/** Calculate the deterministic monotonic radial profile at one distance. */
-static int radial_light_mask_value(int intensity, int distance_squared) {
-    static const uint16_t distances[MAX_LIGHT_RADIUS * MAX_LIGHT_RADIUS + 1] = {
-        0,
-        256,
-        362,
-        443,
-        512,
-        572,
-        627,
-        677,
-        724,
-        768,
-        809,
-        849,
-        886,
-        923,
-        957,
-        991,
-        1024,
-    };
-    const light_profile_t *profile = &light_profiles[intensity];
-    uint32_t radius = (uint32_t)profile->radial_radius * LIGHT_DISTANCE_SCALE;
-    HARD_ASSERT(distance_squared >= 0 && distance_squared < (int)arraysize(distances));
-    uint32_t distance = distances[distance_squared];
-    if (distance >= radius) {
-        return 0;
-    }
-
-    uint64_t numerator = radius - distance;
-    uint64_t denominator = radius;
-    for (int power = 1; power < profile->radial_power; power++) {
-        numerator *= radius - distance;
-        denominator *= radius;
-    }
-
-    return (int)(((uint64_t)profile->center * numerator + denominator / 2) / denominator);
-}
-
 static int light_mask_value(int intensity, int distance_squared) {
-    return radial_light_mask_value(intensity, distance_squared);
+    return light_profile_value(intensity, distance_squared);
 }
 
 typedef enum light_mask_component {
@@ -839,7 +728,7 @@ static void light_mask_adjust(mapstruct *map,
     }
 
     intensity = abs(intensity);
-    int radius = light_profiles[intensity].radial_radius;
+    int radius = light_profile_radius(intensity);
     int vertical_radius = MIN(radius, MAP2_MAX_DEPTH);
 
     for (int dy = -radius; dy <= radius; dy++) {

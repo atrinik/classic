@@ -63,6 +63,8 @@
 #include <popup.h>
 #include <toolkit/packet.h>
 #include <toolkit/map_protocol.h>
+#include <toolkit/light_profile.h>
+#include <client_lighting.h>
 #include <toolkit/string.h>
 #include <toolkit/bresenham.h>
 #include <toolkit/clioptions.h>
@@ -3170,6 +3172,7 @@ void map_set_local_light(int x, int y, uint8_t value) {
     bool vision_floor;
     bool valid = map_protocol_local_light_decode(value, &level, &vision_floor);
     HARD_ASSERT(valid);
+    (void)valid;
     map_state_transaction_record_cell(x, y);
     map_cell_header_t *header =
         &cells->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
@@ -5212,6 +5215,140 @@ static bool map_lighting_temporal_sample(const map_cell_t *cell,
     return true;
 }
 
+/** Client-evaluated local light of one level's visible window (protocol 1085). */
+typedef struct map_client_lighting_field {
+    bool valid;
+    const map_cell_store_t *store;
+    uint64_t revision;
+    int cache_origin_x;
+    int cache_origin_y;
+    int origin_x;
+    int origin_y;
+    int width;
+    int height;
+    client_lighting_cell_t *cells;
+} map_client_lighting_field_t;
+
+static map_client_lighting_field_t map_client_lighting_fields[MAP2_LEVELS];
+
+/** Rebuild the current level's emitter field from sent emitters and occluders. */
+static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
+    int margin = LIGHT_PROFILE_RADIUS_MAX;
+    int width = map_width + margin * 2, height = map_height + margin * 2;
+    size_t count = (size_t)width * height;
+    if (field->cells == NULL || field->width * field->height != width * height) {
+        free(field->cells);
+        field->cells = xcalloc(count, sizeof(*field->cells));
+    }
+    field->width = width;
+    field->height = height;
+    field->origin_x = MAP_STARTX - margin;
+    field->origin_y = MAP_STARTY - margin;
+    field->cache_origin_x = map_cache_origin_x;
+    field->cache_origin_y = map_cache_origin_y;
+    field->revision = level_lighting_revision[current_level_index];
+    field->store = cells;
+    field->valid = true;
+
+    int cache_width = map_width * MAP_FOW_SIZE, cache_height = map_height * MAP_FOW_SIZE;
+    uint8_t *occluders = xcalloc(count, sizeof(*occluders));
+    client_lighting_emitter_t emitters[CLIENT_LIGHTING_EMITTERS_MAX];
+    size_t emitter_count = 0;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int cache_x = field->origin_x + x, cache_y = field->origin_y + y;
+            if (cache_x < 0 || cache_y < 0 || cache_x >= cache_width || cache_y >= cache_height) {
+                continue;
+            }
+            const map_cell_header_t *header =
+                &cells->headers[map_cache_physical_index(cache_x, cache_y)];
+            if (header->client_light_known & 2U) {
+                occluders[(size_t)y * width + x] = header->occluder;
+            }
+            /* Remembered cells keep their occluders but carry no live light. */
+            const map_cell_t *cell = MAP_CELL_GET(cache_x, cache_y);
+            if (cell->fow) {
+                continue;
+            }
+            for (const map_cell_layer_record_t *record = cell->layers; record != NULL;
+                 record = record->next) {
+                if (record->emitter_radius != 0 && emitter_count < arraysize(emitters)) {
+                    emitters[emitter_count++] = (client_lighting_emitter_t){
+                        .x = x, .y = y, .radius = record->emitter_radius,
+                        .color = record->emitter_color};
+                }
+            }
+        }
+    }
+    client_lighting_evaluate(width, height, occluders, emitters, emitter_count, field->cells);
+    free(occluders);
+}
+
+/**
+ * Add client-composed local light to a received base sample. Cells without a
+ * coarse level keep the server's complete radiance (the legacy path).
+ */
+static void map_client_lighting_apply(int x, int y, uint16_t *scalar, uint16_t rgb[3]) {
+    const map_cell_header_t *header = &cells->headers[map_cache_physical_index(x, y)];
+    int8_t level;
+    bool vision_floor;
+    if (!(header->client_light_known & 1U) || header->fow ||
+        !map_protocol_local_light_decode(header->local_light, &level, &vision_floor)) {
+        return;
+    }
+
+    map_client_lighting_field_t *field = &map_client_lighting_fields[current_level_index];
+    if (!field->valid || field->store != cells ||
+        field->revision != level_lighting_revision[current_level_index] ||
+        field->cache_origin_x != map_cache_origin_x ||
+        field->cache_origin_y != map_cache_origin_y ||
+        field->width != map_width + LIGHT_PROFILE_RADIUS_MAX * 2 ||
+        field->height != map_height + LIGHT_PROFILE_RADIUS_MAX * 2) {
+        map_client_lighting_rebuild(field);
+    }
+    const client_lighting_cell_t *local = NULL;
+    int fx = x - field->origin_x, fy = y - field->origin_y;
+    if (fx >= 0 && fy >= 0 && fx < field->width && fy < field->height) {
+        local = &field->cells[(size_t)fy * field->width + fx];
+    }
+
+    int32_t emitter = local != NULL ? local->scalar : 0;
+    int32_t composed = client_lighting_compose(emitter, level);
+    int32_t delta = composed >= 0 ? light_profile_raw_to_radiance(composed)
+                                  : -(int32_t)light_profile_raw_to_radiance(-composed);
+    int32_t scalar_value = MAX(0, MIN((int32_t)UINT16_MAX, (int32_t)*scalar + delta));
+    int32_t channels[3];
+    for (size_t channel = 0; channel < 3; channel++) {
+        int32_t channel_raw = composed;
+        /* The emitter field's hue scales with the composed magnitude; coarse
+         * light beyond it and all darkness stay neutral. */
+        if (composed > 0 && emitter > 0 && local != NULL) {
+            channel_raw = (int32_t)((int64_t)local->rgb[channel] * MIN(composed, emitter) / emitter) +
+                          MAX(composed - emitter, 0);
+        }
+        int32_t channel_delta = channel_raw >= 0
+                                    ? light_profile_raw_to_radiance(channel_raw)
+                                    : -(int32_t)light_profile_raw_to_radiance(-channel_raw);
+        channels[channel] = MAX(0, MIN((int32_t)UINT16_MAX, (int32_t)rgb[channel] + channel_delta));
+    }
+
+    if (vision_floor) {
+        int32_t floor_value = light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
+        if (scalar_value < floor_value) {
+            for (size_t channel = 0; channel < 3; channel++) {
+                channels[channel] = MIN((int32_t)UINT16_MAX,
+                                        channels[channel] + floor_value - scalar_value);
+            }
+            scalar_value = floor_value;
+        }
+    }
+
+    *scalar = (uint16_t)scalar_value;
+    for (size_t channel = 0; channel < 3; channel++) {
+        rgb[channel] = (uint16_t)channels[channel];
+    }
+}
+
 /**
  * Resolve a light sample without treating an unseen map-cache cell as dark.
  *
@@ -5248,6 +5385,7 @@ static bool map_lighting_radiance_ex(int x,
         } else if (interpolated != NULL) {
             *interpolated = true;
         }
+        map_client_lighting_apply(x, y, scalar, rgb);
         return true;
     }
 
@@ -6057,6 +6195,34 @@ bool widget_map_client_lighting_state_test(void) {
                        (3U << MAP2_OCCLUDER_ATTENUATION_SHIFT)) &&
               !map_get_layer_emitter(5, 5, layer, &radius, &color);
 
+    /* Composition adds client emitter light to the received base sample. */
+    uint16_t composed_scalar = 0, composed_rgb[3];
+    map_set_light_radiance(8, 8, 0, 160);
+    map_set_local_light(8, 8, map_protocol_local_light_encode(0, false));
+    map_lighting_radiance(8 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(8, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160;
+    map_set_layer_emitter(8, 8, layer, 1, UINT32_C(0xffffff));
+    map_lighting_radiance(8 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(8, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40) &&
+              composed_rgb[0] == composed_scalar && composed_rgb[2] == composed_scalar;
+    /* The viewer's vision floor applies after composition. */
+    map_set_light_radiance(10, 8, 0, 0);
+    map_set_local_light(10, 8, map_protocol_local_light_encode(0, true));
+    map_lighting_radiance(10 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(10, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success &&
+              composed_scalar == light_profile_raw_to_radiance(MAP2_LOCAL_LIGHT_VISION_FLOOR_RAW);
+    /* Without a coarse level the server's radiance stays authoritative. */
+    map_set_light_radiance(12, 8, 0, 300);
+    map_lighting_radiance(12 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(12, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 300;
+
+    for (size_t store = 0; store < arraysize(map_client_lighting_fields); store++) {
+        map_client_lighting_fields[store].valid = false;
+    }
     for (size_t store = 0; store < arraysize(level_cells); store++) {
         map_cell_store_destroy(level_cells[store]);
         level_cells[store] = NULL;
