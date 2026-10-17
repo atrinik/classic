@@ -3440,7 +3440,12 @@ void map_set_fow(int x, int y, bool fow) {
 
     map_cell_store_set_fow(cells, index, fow, fow);
     level_lighting_revision[current_level_index]++;
-    map_emitter_revision_bump(current_level_index);
+    /* The emitter field skips fog cells' emitters, so only a cell that still
+     * carries emitters changes it; an emitter-free toggle relights nothing. */
+    cell = map_cell_store_slot(cells, index, false);
+    if (cell != NULL && cell->emitters != NULL) {
+        map_emitter_revision_bump(current_level_index);
+    }
 }
 
 /** Return the currently cached visibility state for one map tile. */
@@ -6587,6 +6592,13 @@ bool widget_map_client_lighting_state_test(void) {
     map_set_occluder(9, 9, MAP2_OCCLUDER_FLOOR | (UINT16_C(1) << MAP2_OCCLUDER_FACE_SHIFT),
                      0x1112, 2);
     success = success && level_emitter_revision[current_level_index] != emitter_revision;
+    map_clear_cell(9, 9, true);
+    /* FOW toggles of an emitter-free cell never rebuild the emitter field. */
+    emitter_revision = level_emitter_revision[current_level_index];
+    map_set_fow(9, 9, true);
+    map_set_fow(9, 9, false);
+    map_set_fow(9, 9, true);
+    success = success && level_emitter_revision[current_level_index] == emitter_revision;
     map_clear_cell(9, 9, true);
     /* Unknown and known-zero occluders are the same evaluator input. */
     emitter_revision = level_emitter_revision[current_level_index];
