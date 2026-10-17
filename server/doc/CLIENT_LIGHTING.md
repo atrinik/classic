@@ -291,7 +291,12 @@ connection.
 - **Emitters** are copied from `glow_radius`, `light_color` and the
   `light_flicker` object attribute (archetype default, boolean) of the object
   MAP2 is already sending (the object on that tile, including the viewer's own
-  derived emitter). Another player's emitter is never sent: it is derived from
+  derived emitter). For a multi-part object this is the part on that tile,
+  with that part's own `glow_radius`, exactly as the server's light sources
+  are the parts at their own positions: the record's tile is the emitter's
+  origin, whatever `quick_pos` says about which part draws the face, so a
+  part that carries no light sends no emitter and the head's light stays at
+  the head's tile. Another player's emitter is never sent: it is derived from
   the strongest eligible item in that player's private inventory, so its exact
   radius and color would disclose inventory state that item packets show only to
   the owner. Other players' light reaches the viewer only through the coarse
@@ -398,7 +403,12 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    step 160), which is a bleed hint for the whole block. A remote sample
    (bit 6) uses `E = 0` and no flicker field, so only its own space's coarse
    level and base compose:
-   - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`.
+   - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
+   - except that an emitter field of the opposite sign at least as strong as
+     the floor keeps its value (`C < 0` and `E ≥ -160C`, or `C > 0` and
+     `E ≤ -160C` give `L = E`): `C`'s sign comes from single sources, so sent
+     emitters that group, such as four `+4` and one `-5` on a tile giving
+     `E = 640` against `C = -2`, are never reversed by it.
 
    The coarse term is only a floor (or, for darkness, a ceiling) under the
    emitter field; nothing caps `E` at the block's level. `C` measures the
