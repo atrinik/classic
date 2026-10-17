@@ -257,6 +257,15 @@ static void test_flicker_field_is_the_flickering_emitters_contribution(void) {
                        combined[i].rgb[channel] - cells[i].rgb[channel]);
         }
     }
+    /* Grouping can cap the scalar while the hue still flickers. */
+    client_lighting_emitter_t capped[] = {
+        {.x = 4, .y = 4, .radius = 13, .color = 0xffffff},
+        {.x = 4, .y = 4, .radius = 1, .flags = MAP2_EMITTER_FLICKER, .color = 0xff0000},
+    };
+    evaluate(capped, 2);
+    TEST_CHECK(cell_at(4, 4)->flicker_scalar == 0);
+    TEST_CHECK(cell_at(4, 4)->flicker_rgb[0] != 0 || cell_at(4, 4)->flicker_rgb[1] != 0 ||
+               cell_at(4, 4)->flicker_rgb[2] != 0);
     /* Grouped with co-located darkness, flicker dims only towards the steady
      * field: never past it, as a standalone flicker field would. */
     client_lighting_emitter_t grouped[] = {

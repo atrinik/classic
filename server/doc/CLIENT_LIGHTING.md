@@ -203,10 +203,13 @@ connection.
   needed. Each sub-layer takes the level of the space its light was sampled
   at, which can differ between sub-layers; the server sends the shortest level
   count describing them. A sub-layer sampled at another space than its cell,
-  such as one showing a multi-part object's head, sets the remote-sample bit:
-  the cell's emitters and occluders describe the cell, not that space, so the
-  client composes only the sampled space's coarse level into it, never the
-  cell's emitter field:
+  such as one showing a multi-part object's head, sets the remote-sample bit,
+  but only when that object is actually sent: a candidate that darkness gating
+  or plugin visibility rejects afterwards resets the sample to the cell, so an
+  unsent object never selects another space or the bit. The sampled space then:
+  the cell's emitters and occluders describe the cell, not it, so the client
+  composes only its coarse level into the sub-layer, never the cell's emitter
+  field:
   - blocks partition each map axis of size `W` independently: with
     `k = floor(W / 3)`, block `i < k - 1` covers `[3i, 3i + 3)` and the last
     block covers `[3(k - 1), W)`, so a remainder of one or two cells joins it
@@ -227,9 +230,10 @@ connection.
     an edge neighbor, `√2` for a corner one), which depends only on block
     geometry. Every block within the largest radius counts: on this map and on
     every map reached through seams light crosses (a resident reciprocal link,
-    and continuity as `light_face_continuous()` requires), horizontal seams
-    and links to the levels above and below taken in any order, so corner maps
-    and a level linked only from a neighboring map count too. The linked levels
+    and continuity as `light_face_continuous()` requires): cardinal and
+    diagonal horizontal seams and links to the levels above and below, taken
+    in any order, so corner maps, maps linked only diagonally and a level
+    linked only from a neighboring map count too. The linked levels
     of a stack form one vertical bucket: a block on any of them reaches the
     target at the horizontal distance `sqrt(gx² + gy²)` of their gaps, whatever
     the number of levels between them, so every level of a stack gets the same
@@ -238,14 +242,18 @@ connection.
     therefore presented at its horizontal strength; that bleed is presentation
     only, like the bleed through walls below. Each map is divided into its own blocks and measured in the
     target map's coordinates, so the blocks of neighboring maps need not align.
-    No map is ever loaded for it. A source anywhere inside a block therefore
+    No map is ever loaded for it, and no reachable map is dropped: the pool
+    grows with the reachable topology, which is finite because every map is
+    placed once per offset within reach. A source anywhere inside a block therefore
     gives every block the same level, so neighboring blocks cannot
     triangulate its tile;
-  - the strongest positive and the strongest negative contribution reaching
-    the block compete; the larger magnitude wins, and on equal magnitudes the
-    positive one does;
-  - quantize the magnitude down to 1/8-daylight levels (raw 160), clamp to 15,
-    and keep the sign.
+  - quantize the strongest positive and the strongest negative contribution
+    reaching the block separately, each magnitude down to 1/8-daylight levels
+    (raw 160) and clamped to 15;
+  - the two levels then compete: the larger wins with its sign, and equal
+    levels go to light. Quantizing first means a viewer's known light of the
+    opposite sign learns only the hidden extremum's level, never where it
+    lies inside its bin (`light_local_level_from_extrema()`).
 - **Remembered tiles are frozen.** When base LOS loss turns an authorized tile
   into fog, the server keeps its per-socket cache entry marked as remembered
   and keeps its coarse levels at the values last sent while it was visible,
@@ -286,7 +294,9 @@ connection.
   use `celestial_transmission_closed` or `celestial_transmission_open` by their
   current state (`FLAG_DOOR_CLOSED` for doors, `FLAG_NO_PASS` for gates), other
   objects `celestial_transmission`. Each cardinal face has its own `a`, set by
-  the objects authoring that face, and objects with a downward face set `v`;
+  the objects authoring that face, and objects with a downward face set `v`
+  (as in `spatial_cell_light_face()`, every hidden wall-layer surface, such
+  as a roof or camera surface, owns one even without `sky_boundary`);
   each is the maximum attenuation over the sent objects (the minimum
   coefficient, as the server's face traversal takes), quantized up to the next
   step. A cardinal face a sent view blocker does not author is opaque, and
@@ -433,12 +443,17 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    `F · (g - 256) / 256`, truncated towards zero, so `E' - E` is that delta and
    `E'` always lies between `E_s` and `E`: flicker only dims a tile towards its
    steady light, never past it. Conformance compares
-   flickered output at a fixed `t`. Flicker modulates the emitter
-   field after composition (`L + E' - E` for flickered sum `E'`), so the coarse
-   floor of a block that the emitter itself lights cannot suppress it. The delta
-   is added to the signed, unbounded composed scalar and channels, and the
-   negative clamp, common-vector scaling and scalar saturation of step 3 then
-   run once, after it, so no clipped magnitude or hue is lost.
+   flickered output at a fixed `t`. Flicker modulates the composed value only
+   where the emitter field supplied it (`L = E`): there it becomes
+   `L + E' - E` for flickered sum `E'`, so the coarse floor of a block that the
+   emitter itself lights cannot suppress it. Where the coarse level dominates
+   (`L = 160C ≠ E`), that floor carries other steady light and `L` is
+   unchanged. A cell whose flicker changes only its channels (grouping can cap
+   the scalar while hue still flickers) flickers too. The delta is added to
+   the signed, unbounded composed scalar and channels before the vision floor;
+   the vision floor, negative clamp, common-vector scaling and scalar
+   saturation of step 3 then run once, after it, so XRAY still raises the
+   flickered light to its floor and no clipped magnitude or hue is lost.
 
 Using `max()`/`min()` instead of a sum avoids double counting, because the
 coarse term already includes visible sources. The cost is underestimating
