@@ -98,7 +98,7 @@ word already uses bits 6–15 for coordinates:
 
 | Field | Bytes | When | Meaning |
 | --- | --- | --- | --- |
-| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 + n | changed | `uint8` count `n` of `1..7`, then `n` level bytes: level `i` applies to sub-layer `i`, and sub-layers from `n` on use level `n - 1`. Each level byte: bits 0–4 signed level `-15..15` (two's complement; `-16` invalid); bit 5: the viewer's `tli` override, which adds raw 1280 (daylight) neutrally during composition; bit 6: remote sample, the sub-layer's light was sampled at another space than its cell, so the client composes no emitter field into it; bit 7: apply the viewer's vision floor during composition |
+| `MAP2_FLAG_EXT_LOCAL_LIGHT` (8) | 1 + n | changed | `uint8` count `n` of `1..7`, then `n` level bytes: level `i` applies to sub-layer `i`, and sub-layers from `n` on use level `n - 1`. Each level byte: bits 0–4 signed level `-15..15` (two's complement; `-16` invalid); bit 5: the viewer's `tli` override, which adds raw 1280 (daylight) neutrally during composition; bit 6 reserved, zero; bit 7: apply the viewer's vision floor during composition |
 | `MAP2_FLAG_EXT_OCCLUDER` (16) | 5 | changed | `uint16`: bit 0 blocks view, bit 1 floor, bit 2 roof surface, bit 3 closed door; bits 4–7 reserved, zero; bits 8–11: local light does not cross the north, east, south or west face; bits 12–13: nor the upward or downward face; bits 14–15 reserved, zero. Then `uint16`: attenuation `a` of the north, east, south and west faces, one nibble each from bit 0. Then `uint8`: bits 0–3 vertical attenuation `v` of the downward face; bits 4–7 reserved, zero |
 
 Attenuation `a` and `v` share one scale: 0 is unattenuated, 1–14 is the
@@ -217,22 +217,21 @@ connection.
 - **Coarse local light** is derived each time MAP2 sends a visible or
   remembered cell, from
   the already maintained per-space source counters. No new per-map state is
-  needed. Each sub-layer takes the level of the space its light was sampled
-  at, which can differ between sub-layers; the server sends the shortest level
-  count describing them. A sub-layer sampled at another space than its cell,
-  such as one showing a multi-part object's head, sets the remote-sample bit,
-  but only when that object is actually sent: a candidate that darkness gating
-  or plugin visibility rejects afterwards resets the sample to the cell, so an
-  unsent object never selects another space or the bit. The sampled space then:
-  the cell's emitters and occluders describe the cell, not it, so the client
-  composes only its coarse level into the sub-layer, never the cell's emitter
-  field:
+  needed. All light MAP2 sends for a cell, base, keyframe and coarse level,
+  is the record cell's own: the authorized tile. Only gameplay darkness
+  gating reads the space of the object it gates (for a multi-part object,
+  the part's own space), and when that candidate is rejected the cell's light
+  gates the sub-layer's later objects instead. No light of any other space is
+  sent. The server sends the shortest level count describing the sub-layers;
+  with one cell sample per record they are equal:
   - blocks partition each map axis of size `W` independently: with
     `k = floor(W / 3)`, block `i < k - 1` covers `[3i, 3i + 3)` and the last
     block covers `[3(k - 1), W)`, so a remainder of one or two cells joins it
-    and it is three to five cells wide; a map axis shorter than three cells is
-    one block `[0, W)`. A cell's block is the one containing it, so no block is
-    narrower than three cells unless the map itself is;
+    and it is three to five cells wide. A cell's block is the one containing
+    it, so no block is narrower than three cells. A map with an axis shorter
+    than three cells would make blocks that locate a hidden source within
+    fewer than nine cells, so it fails closed: it reports level 0 and its
+    sources contribute to no block;
   - pool each block's sources as its strongest positive and strongest
     negative single-source mask, before any propagation. Every emitting
     object counts with its own glow radius, and light a space's counter holds
@@ -410,9 +409,7 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    lower surface is never lit through an opaque floor. Source-side virtual
    cover still applies.
 3. Combine the client emitter sum `E` with the coarse block level `C` (raw
-   step 160), which is a bleed hint for the whole block. A remote sample
-   (bit 6) uses `E = 0` and no flicker field, so only its own space's coarse
-   level and base compose:
+   step 160), which is a bleed hint for the whole block:
    - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
    - except that an emitter field of the opposite sign at least as strong as
      the floor keeps its value (`C < 0` and `E ≥ -160C`, or `C > 0` and
@@ -633,11 +630,12 @@ celestial follow-up's removal of celestial light from the base radiance
 
 - Floors: a hidden source moved between the floors of a linked stack leaves
   every floor's coarse level unchanged.
-- Remote samples: a sub-layer sampled at another space carries bit 6 and its
-  own space's level, and the client composes no emitter field into it.
+- Authorized light only: a multi-part object whose sampled space lies
+  outside the window sends its record cell's base and coarse level, never the
+  other space's; bit 6 of the local-light byte is rejected.
 - Protocol: encode/decode round trips; reserved bits in the occluder word,
-  vertical byte and emitter flags (the local-light byte has none: bits 0–4
-  are the level, bit 5 `tli`, bit 6 remote, bit 7 vision floor); `ext_flags` value 32; radius 0 and
+  vertical byte, emitter flags and the local-light byte (bits 0–4
+  are the level, bit 5 `tli`, bit 7 vision floor; bit 6 is reserved); `ext_flags` value 32; radius 0 and
   the full `int8` range; local-light counts 0 and 8; positive radius with color
   `000000` accepted, negative radius
   with a color or with flicker; level `-16`; the signed base conformance
