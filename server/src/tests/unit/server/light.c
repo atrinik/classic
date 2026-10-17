@@ -1551,6 +1551,25 @@ START_TEST(test_client_lighting_local_level_hides_translation_within_block) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_level_merges_edge_remainders) {
+    /* A 7-wide map has blocks 0..2 and 3..6: the last cell joins its
+     * neighbor instead of forming a one-cell block. */
+    mapstruct *map = get_empty_map(7, 7);
+    add_colored_light(map, 6, 6, 13, LIGHT_COLOR_WHITE);
+    int level = light_local_level(map, 6, 6);
+    ck_assert_int_gt(level, 0);
+    for (int y = 3; y < 7; y++) {
+        for (int x = 3; x < 7; x++) {
+            ck_assert_int_eq(light_local_level(map, x, y), level);
+        }
+    }
+    /* A map narrower than a block is one block. */
+    mapstruct *narrow = get_empty_map(2, 2);
+    add_colored_light(narrow, 1, 1, 13, LIGHT_COLOR_WHITE);
+    ck_assert_int_eq(light_local_level(narrow, 0, 0), light_local_level(narrow, 1, 1));
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_keeps_darkness_sign) {
     mapstruct *map = get_empty_map(6, 6);
     add_colored_light(map, 1, 1, -13, LIGHT_COLOR_WHITE);
@@ -1664,6 +1683,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_and_quantizes);
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
+    tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_sent_objects);
 
     return s;

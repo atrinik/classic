@@ -150,6 +150,8 @@ void socket_command_setup(uint8_t *data, size_t len, size_t pos) {
             asset_capabilities_present = true;
         } else if (type == CMD_SETUP_CONNECTION_MODE) {
             packet_reader_read_uint8(&reader);
+        } else if (type == CMD_SETUP_CLIENT_LIGHTING) {
+            packet_reader_read_uint8(&reader);
         } else {
             packet_reader_set_error(&reader, PACKET_ERROR_UNSUPPORTED);
         }

@@ -51,8 +51,10 @@
 
 - Revision 1085 preserves command IDs and adds client-computed lighting fields
   to MAP2: `MAP2_FLAG2_EMITTER` on sent layers and the `MAP2_FLAG_EXT_LOCAL_LIGHT`
-  and `MAP2_FLAG_EXT_OCCLUDER` cell extensions (`libatrinik/socket.h`). A server
-  sends them only with `client_lighting` enabled; see
+  and `MAP2_FLAG_EXT_OCCLUDER` cell extensions (`libatrinik/socket.h`), plus
+  SETUP subtype `CMD_SETUP_CLIENT_LIGHTING` (6). A server sends the MAP2
+  fields only to connections that negotiated the compositor while
+  `client_lighting` is enabled; see
   [`CLIENT_LIGHTING.md`](../server/doc/CLIENT_LIGHTING.md).
 
 - Rendezvous admission transport identities live in `schema/rendezvous-admission.json`

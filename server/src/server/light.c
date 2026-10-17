@@ -358,18 +358,33 @@ void light_base_radiance_from_raw(const MapSpace *space,
 
 /**
  * Signed coarse local light of the fixed 3x3 block containing a cell, aligned
- * to map-local coordinates and clipped at the map edge. The strongest positive
+ * to map-local coordinates; edge remainders join the adjacent block. The strongest positive
  * and negative local scalars compete by magnitude, which is quantized down to
  * whole 1/8-daylight levels. Every cell of a block shares one value, so the
  * peak does not single out a source tile; neither hue nor count is kept. The
  * block never reads another map.
  */
+/**
+ * Block of one axis: three cells aligned to the map, except that a one- or
+ * two-cell remainder at the edge joins its neighbor, so no block is narrower
+ * than three cells unless the map is.
+ */
+static void light_local_block(int coordinate, int size, int *start, int *end) {
+    *start = coordinate - coordinate % 3;
+    if (*start + 3 > size) {
+        *start = MAX(0, *start - 3);
+    }
+    *end = *start + 6 > size ? size : *start + 3;
+}
+
 int8_t light_local_level(mapstruct *map, int x, int y) {
     HARD_ASSERT(map != NULL && map->spaces != NULL);
     int32_t positive = 0, negative = 0;
-    int bx = x - x % 3, by = y - y % 3;
-    for (int cy = by; cy < MIN(by + 3, MAP_HEIGHT(map)); cy++) {
-        for (int cx = bx; cx < MIN(bx + 3, MAP_WIDTH(map)); cx++) {
+    int bx, by, ex, ey;
+    light_local_block(x, MAP_WIDTH(map), &bx, &ex);
+    light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    for (int cy = by; cy < ey; cy++) {
+        for (int cx = bx; cx < ex; cx++) {
             int32_t value = GET_MAP_SPACE_PTR(map, cx, cy)->light_source_value;
             positive = MAX(positive, value);
             negative = MIN(negative, value);
