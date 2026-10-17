@@ -262,7 +262,10 @@ connection.
   and keeps its coarse levels at the values last sent while it was visible,
   so a client cannot follow a hidden source through fog. Only the viewer's
   own vision-floor bit is refreshed, in a layerless record. A tile never seen
-  has level 0. The client keeps the tile's last base radiance. This continues while the per-socket cache is valid;
+  has level 0. The client keeps the tile's last base radiance and keyframe,
+  and the server sends a fogged tile no base, RGB or keyframe record and keeps
+  its cache entry, so remembered lighting is the last authorized sample and
+  never follows the hidden cell's environment. This continues while the per-socket cache is valid;
   a map change, hard clear or reconnect ends it. Remembered tiles never
   receive objects, emitters or occluder changes: those describe objects, and
   the objects on a remembered tile are not currently sent.
@@ -376,11 +379,14 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    `a` of the face they leave by, vertical steps apply `v` of the upper cell of
    the crossing, and a step across a face marked closed stops the ray: bits
    8–11 for horizontal steps and bits 12–13 for steps to the linked level above
-   or below. A vertical step that terminates on a cell whose sent occluder
+   or below. An upward step that terminates on a cell whose sent occluder
    blocks view (bit 0) or is a roof surface (bit 2) skips that receiving
-   slab's `v`, as `light_terminal_surface()` decides for `light_path_value()`,
-   so the exposed surface is lit; an ordinary floor (bit 1 alone) applies its
-   `v`, so an opaque floor receives no light from below. Source-side virtual
+   slab's `v`, as `light_terminal_surface()` decides for `light_path_value()`
+   under its upward-crossing guard (`face->normal[2] > 0`), so the exposed
+   surface is lit from below; an ordinary floor (bit 1 alone) applies its `v`,
+   so an opaque floor receives no light from below. A downward step never
+   skips a slab: it always applies the `v` of the upper cell it leaves, so a
+   lower surface is never lit through an opaque floor. Source-side virtual
    cover still applies.
 3. Combine the client emitter sum `E` with the coarse block level `C` (raw
    step 160), which is a bleed hint for the whole block. A remote sample
@@ -414,7 +420,9 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    server raises the raw scalar before resolving color: pre-floor scalar and
    channel raw `(80, -40)` (Q5.11 `(128, -64)`) become raw `(100, -20)`
    (Q5.11 `(160, -32)`), and then `(100, 0)`. A set `tli` bit adds raw 1280,
-   converted the same way, neutrally to `L` before the floor. Negative
+   converted the same way, neutrally after `L` is selected and before the
+   floor; whether the emitter field supplied `L` (for flicker, step 5) is
+   decided before this addition, so `tli` never disables flicker. Negative
    channels then clamp to zero; if the largest channel then
    exceeds the finite range, all three channels scale together so the strongest
    is 65535, as the server's common-vector overflow rule requires, keeping hue.
@@ -456,7 +464,8 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    `E'` always lies between `E_s` and `E`: flicker only dims a tile towards its
    steady light, never past it. Conformance compares
    flickered output at a fixed `t`. Flicker modulates the composed value only
-   where the emitter field supplied it (`L = E`): there it becomes
+   where the emitter field supplied it (`L = E`, decided before the `tli`
+   term is added): there it becomes
    `L + E' - E` for flickered sum `E'`, so the coarse floor of a block that the
    emitter itself lights cannot suppress it. Where the coarse level dominates
    (`L = 160C ≠ E`), that floor carries other steady light and `L` is
