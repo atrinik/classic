@@ -168,9 +168,8 @@ for emitting cells and bounded by the cell's sent layer records, so it scales
 with object storage rather than the lighting budget. The per-socket cache adds
 37 bytes per cell as stored: the 20 bytes of emitter state (see Server), the
 occluder word (8 bytes, 5 of them meaningful), and the 7 per-sub-layer coarse
-levels with their count byte and the known-state byte, which remembered cells
-must keep because the shared per-block cache cannot supply levels frozen at
-an earlier time. The rollout's final step records these figures in
+levels with their count byte and the known-state byte, which the delta
+encoding compares against for visible and remembered cells alike. The rollout's final step records these figures in
 MAP_RENDERING.md.
 
 ### Validation
@@ -263,15 +262,17 @@ connection.
     levels go to light. Quantizing first means a viewer's known light of the
     opposite sign learns only the hidden extremum's level, never where it
     lies inside its bin (`light_local_level_from_extrema()`).
-- **Remembered tiles are frozen.** When base LOS loss turns an authorized tile
-  into fog, the server keeps its per-socket cache entry marked as remembered
-  and keeps its coarse levels at the values last sent while it was visible,
-  so a client cannot follow a hidden source through fog. Only the viewer's
-  own vision-floor and `tli` bits are refreshed, in a layerless record. A tile never seen
-  has level 0. The client keeps the tile's last base radiance. This continues while the per-socket cache is valid;
-  a map change, hard clear or reconnect ends it. Remembered tiles never
-  receive objects, emitters or occluder changes: those describe objects, and
-  the objects on a remembered tile are not currently sent.
+- **Remembered tiles keep receiving light levels.** When base LOS loss turns
+  an authorized tile into fog, the server keeps its per-socket cache entry
+  marked as remembered and keeps sending that tile's light-level information,
+  its signed base radiance, keyframe and coarse local levels with the
+  viewer's vision-floor and `tli` bits, as they change, for as long as the
+  per-socket cache is valid; a map change, hard clear or reconnect ends it.
+  This is the maintainer's disclosure boundary: light levels of previously
+  sent tiles are disclosed. A tile never sent receives nothing. Remembered
+  tiles never receive objects, emitters, occluder changes or any other object
+  information: those describe objects, and the objects on a remembered tile
+  are not currently sent.
 - **Vision floor.** XRAY raises presentation light to raw 100 after all light
   is combined. The server sends base radiance without that floor and sets bit 7
   of the local-light byte for viewers with XRAY; the client applies the same
@@ -487,8 +488,8 @@ coarse term already includes visible sources. The cost is underestimating
 overlaps of a visible and a hidden source, which is an accepted presentation
 trade-off.
 
-Remembered (fog) tiles compose their signed base and their frozen coarse
-levels, then receive the remembered-world lift of
+Remembered (fog) tiles compose their signed base and their coarse levels,
+which keep updating while the per-socket cache is valid, then receive the remembered-world lift of
 MAP_RENDERING.md on the signed composed scalar and channels, after the vision
 floor and before the negative clamp and common-vector scaling of step 3, as
 `C_display = max(0, C + lift)` requires: when the composed scalar `S` is below
@@ -547,8 +548,10 @@ What a modified client can learn, beyond today's MAP2:
   it more precisely than its block. Co-located sources are pooled alone, never
   grouped, so the level depends on the strongest single source only, not on
   which sources share a tile. Hue, count and profile are never sent.
-  Remembered tiles keep the levels they last had while visible, so a moving
-  hidden source cannot be followed through fog.
+  Previously sent tiles, including remembered ones in fog, keep receiving
+  their light levels (base, keyframe and coarse) while the per-socket cache
+  is valid: that is the maintainer's disclosure boundary for light. They never
+  receive creatures, objects, emitters or occluder changes.
 - **Environment:** exact signed base radiance, including negative environment,
   on authorized tiles. It contains no local source and no gameplay state of
   others; the former aggregate fallback, which sent complete per-cell radiance
@@ -612,9 +615,9 @@ celestial follow-up's removal of celestial light from the base radiance
   a failed parse leaving map state unchanged.
 - Server: coarse level equals the block's signed quantized peak for fixtures
   with a hidden source behind a wall; a source moved through every position of
-  its block leaves every block's level unchanged; remembered tiles keep their
-  last levels while hidden light changes and never receive objects or
-  emitters; per-sub-layer level counts 1..7 and their reuse rule; per-face
+  its block leaves every block's level unchanged; remembered tiles keep
+  receiving their light levels as hidden light changes and never receive
+  objects, emitters or occluders; per-sub-layer level counts 1..7 and their reuse rule; per-face
   attenuation, including a cell whose only authored face is east; no emitter or occluder for an
   unsent object or cell; hidden and plugin-hidden blockers set no occluder bits;
   glass floors set `v` only; an emitter-only change (radius, flicker or color)
@@ -647,8 +650,11 @@ celestial follow-up's removal of celestial light from the base radiance
 - Flicker: per-emitter flag bit. `light_private`: deferred, not proposed.
 - Client-computed lighting is the only model: always on, no option, no
   negotiation and no legacy full-radiance path (maintainer decision).
-- Coarse light pools sources per block before propagation, is sent per
-  sub-layer, and is frozen on remembered tiles.
+- Coarse light pools sources per block before propagation and is sent per
+  sub-layer. Previously sent tiles, remembered ones included, keep receiving
+  all their light levels while the per-socket cache is valid (maintainer
+  decision); objects, emitters and occluders are sent only for currently sent
+  objects.
 - Horizontal transmission is per cardinal face.
 
 ## Open questions
