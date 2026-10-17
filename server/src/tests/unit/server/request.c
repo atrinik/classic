@@ -3587,6 +3587,8 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     cell = map_client_cache_cell(&pl->cs->lastmap, 0, pl->cs->mapx_2 + 1, pl->cs->mapy_2, false);
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_ne(cell->emitter_digest, digest);
+    /* The black emitter is still sent, not dropped. */
+    ck_assert_uint_ne(cell->emitter_layers, 0);
 
     /* A hidden object is not sent, so neither its geometry nor its light is
      * disclosed, although the space still blocks view server-side. */

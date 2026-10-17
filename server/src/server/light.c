@@ -412,6 +412,11 @@ uint64_t light_occluder_object_bits(const object *op) {
         bits |= MAP2_OCCLUDER_DOOR_CLOSED;
     }
     uint8_t faces = celestial_structure_faces(op);
+    /* Hidden wall-layer surfaces (roofs, camera surfaces) own a downward face
+     * as spatial_cell_light_face() gives them, even without sky_boundary. */
+    if (op->layer == LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) {
+        faces |= CELESTIAL_FACE_DOWN;
+    }
     /* Each cardinal face keeps its own coefficient, as spatial_face_light()
      * does: an authored face transmits its authored value, an unauthored face
      * of a view blocker transmits nothing, and other faces stay open. */
@@ -1629,7 +1634,9 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
      * is finite however small the maps are. */
     static light_local_region *regions;
     static size_t capacity;
-    static const int tiles[] = {TILED_WEST, TILED_EAST, TILED_NORTH, TILED_SOUTH, TILED_UP,
+    static const int tiles[] = {TILED_WEST,      TILED_EAST,      TILED_NORTH,
+                                TILED_SOUTH,     TILED_NORTHEAST, TILED_SOUTHEAST,
+                                TILED_SOUTHWEST, TILED_NORTHWEST, TILED_UP,
                                 TILED_DOWN};
     int reach = MAX_LIGHT_RADIUS;
     int32_t positive = 0, negative = 0;
@@ -1655,14 +1662,19 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
                     MAP_HEIGHT(next.map) != MAP_HEIGHT(region.map)) {
                     continue;
                 }
-            } else if (tiles[t] == TILED_WEST) {
-                next.ox -= MAP_WIDTH(next.map);
-            } else if (tiles[t] == TILED_EAST) {
-                next.ox += MAP_WIDTH(region.map);
-            } else if (tiles[t] == TILED_NORTH) {
-                next.oy -= MAP_HEIGHT(next.map);
             } else {
-                next.oy += MAP_HEIGHT(region.map);
+                /* Diagonal seams move on both axes, as the light topology
+                 * crosses them directly. */
+                bool west = tiles[t] == TILED_WEST || tiles[t] == TILED_SOUTHWEST ||
+                            tiles[t] == TILED_NORTHWEST;
+                bool east = tiles[t] == TILED_EAST || tiles[t] == TILED_NORTHEAST ||
+                            tiles[t] == TILED_SOUTHEAST;
+                bool north = tiles[t] == TILED_NORTH || tiles[t] == TILED_NORTHEAST ||
+                             tiles[t] == TILED_NORTHWEST;
+                bool south = tiles[t] == TILED_SOUTH || tiles[t] == TILED_SOUTHEAST ||
+                             tiles[t] == TILED_SOUTHWEST;
+                next.ox += west ? -MAP_WIDTH(next.map) : east ? MAP_WIDTH(region.map) : 0;
+                next.oy += north ? -MAP_HEIGHT(next.map) : south ? MAP_HEIGHT(region.map) : 0;
             }
             if (next.ox >= ex + reach || next.ox + MAP_WIDTH(next.map) <= bx - reach ||
                 next.oy >= ey + reach || next.oy + MAP_HEIGHT(next.map) <= by - reach) {
@@ -1682,8 +1694,16 @@ static int8_t light_local_level_compute(mapstruct *map, int bx, int ex, int by, 
             }
         }
     }
-    bool darker = -(int64_t)negative > positive;
-    int64_t magnitude = darker ? -(int64_t)negative : positive;
-    int level = (int)MIN(magnitude / MAP2_LOCAL_LIGHT_LEVEL_RAW, MAP2_LOCAL_LIGHT_LEVEL_MAX);
-    return (int8_t)(darker ? -level : level);
+    return light_local_level_from_extrema(positive, negative);
+}
+
+int8_t light_local_level_from_extrema(int32_t positive, int32_t negative) {
+    /* Each sign is quantized before they compete, so a viewer's known light of
+     * the opposite sign learns only the hidden extremum's level, never where
+     * it lies inside its 1/8-daylight bin. Equal levels go to light. */
+    int light = (int)MIN(MAX(positive, 0) / MAP2_LOCAL_LIGHT_LEVEL_RAW,
+                         MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    int dark = (int)MIN(MAX(-(int64_t)negative, 0) / MAP2_LOCAL_LIGHT_LEVEL_RAW,
+                        MAP2_LOCAL_LIGHT_LEVEL_MAX);
+    return (int8_t)(dark > light ? -dark : light);
 }
