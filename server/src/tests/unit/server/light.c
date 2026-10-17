@@ -1580,6 +1580,19 @@ START_TEST(test_client_lighting_occluder_faces_mark_missing_neighbors) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_withholds_other_players_emitters) {
+    object viewer = {0}, other_player = {0}, lamp = {0};
+    viewer.type = PLAYER;
+    other_player.type = PLAYER;
+    lamp.type = LIGHT_SOURCE;
+    /* Another player's glow comes from private inventory; the viewer's own
+     * and ordinary objects' emitters are public with the object. */
+    ck_assert(light_emitter_disclosed(&viewer, &viewer));
+    ck_assert(!light_emitter_disclosed(&viewer, &other_player));
+    ck_assert(light_emitter_disclosed(&viewer, &lamp));
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_level_keeps_darkness_sign) {
     mapstruct *map = get_empty_map(6, 6);
     add_colored_light(map, 1, 1, -13, LIGHT_COLOR_WHITE);
@@ -1693,6 +1706,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_and_quantizes);
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
+    tcase_add_test(tc_core, test_client_lighting_withholds_other_players_emitters);
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_sent_objects);

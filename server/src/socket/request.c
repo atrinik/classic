@@ -208,8 +208,11 @@ void socket_command_setup(socket_struct *ns, player *pl, uint8_t *data, size_t l
         return;
     }
 
-    if (client_lighting_present) {
+    if (client_lighting_present && ns->client_lighting != client_lighting) {
+        /* Radiance meaning and client-light fields change: resend all cells. */
         ns->client_lighting = client_lighting;
+        map_client_cache_clear(&ns->lastmap);
+        ns->lastmap_light_generation = 0;
     }
     ns->setup_completed = true;
     socket_login_deadline_refresh(ns);
@@ -1606,7 +1609,12 @@ void draw_client_map2(object *pl) {
                                 present_raw[sub_layer] -= light_spaces[sub_layer]->light_source_value;
                                 /* Unsigned base bytes cannot carry negative
                                  * environment: keep the legacy aggregate. */
-                                if (present_raw[sub_layer] < 0) {
+                                const MapSpace *space = light_spaces[sub_layer];
+                                int next_present = present_raw[sub_layer] -
+                                                   space->celestial_light_value +
+                                                   space->celestial_light_next_value;
+                                if (present_raw[sub_layer] < 0 ||
+                                    (light_next_ready[sub_layer] && next_present < 0)) {
                                     light_aggregate[sub_layer] = true;
                                     present_raw[sub_layer] = raw_light[sub_layer];
                                 }
@@ -1891,7 +1899,8 @@ void draw_client_map2(object *pl) {
                             /* Darkness is achromatic; a positive source with a
                              * zero linear peak is rejected as authored light. */
                             /* Remembered cells in fog carry no live light. */
-                            if (client_lighting && !tile_fow && tmp->glow_radius != 0 &&
+                            if (client_lighting && !tile_fow && light_emitter_disclosed(pl, tmp) &&
+                                tmp->glow_radius != 0 &&
                                 (tmp->glow_radius < 0 || emitter_color != 0)) {
                                 /* Unclamped: the client sums a tile's radii
                                  * before light_mask saturates them. */
@@ -2362,7 +2371,7 @@ void draw_client_map2(object *pl) {
                 /* The client forgets the live level in fog; resend it once the
                  * cell is visible again. Emitters are withheld in fog, so their
                  * layers are resent on return through the presence bit. */
-                if (client_lighting && tile_fow) {
+                if (tile_fow) {
                     mp->client_light_known &= (uint8_t)~5U;
                 }
                 uint8_t local_light = 0;

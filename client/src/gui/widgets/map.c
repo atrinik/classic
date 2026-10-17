@@ -96,11 +96,16 @@ typedef struct map_cell_layer_record {
     uint32_t visibility_actor_id;
     uint64_t presentation_token;
     bool visibility_local_player;
-    /** Protocol 1085 emitter of the sent object: glow radius and sRGB. */
-    int8_t emitter_radius;
-    uint32_t emitter_color;
     char glow[COLOR_BUF];
 } map_cell_layer_record_t;
+
+/** Protocol 1085 emitter of one sent layer, kept only for emitting layers. */
+typedef struct map_cell_emitter_record {
+    struct map_cell_emitter_record *next;
+    uint8_t layer;
+    int8_t radius;
+    uint32_t color;
+} map_cell_emitter_record_t;
 
 typedef struct map_cell_sublayer_record {
     struct map_cell_sublayer_record *next;
@@ -151,6 +156,7 @@ typedef struct map_cell {
     map_cell_actor_record_t *actors;
     map_cell_light_record_t *lights;
     map_cell_light_keyframe_record_t *light_keyframe;
+    map_cell_emitter_record_t *emitters;
     /** Monotonic identity retained across transaction clones for painter reuse. */
     uint64_t painter_identity;
     uint8_t fow;
@@ -336,6 +342,26 @@ static void map_cell_record_release(void *record, size_t size) {
     free(record);
 }
 
+static map_cell_emitter_record_t *map_cell_emitter_record(const map_cell_t *cell, int layer) {
+    for (map_cell_emitter_record_t *record = cell->emitters; record != NULL; record = record->next) {
+        if (record->layer == layer) {
+            return record;
+        }
+    }
+    return NULL;
+}
+
+/** Release every emitter of a cell; live light never outlives visibility. */
+static void map_cell_emitters_release(map_cell_t *cell) {
+    map_cell_emitter_record_t *record = cell->emitters;
+    while (record != NULL) {
+        map_cell_emitter_record_t *next = record->next;
+        map_cell_record_release(record, sizeof(*record));
+        record = next;
+    }
+    cell->emitters = NULL;
+}
+
 static map_cell_layer_record_t *map_cell_layer_record(map_cell_t *cell, int layer, bool create) {
     HARD_ASSERT(cell != NULL);
     HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
@@ -381,7 +407,7 @@ static bool map_cell_layer_record_empty(const map_cell_layer_record_t *record) {
            record->anim_state == 0 && record->glow_speed == 0 && record->glow_state == 0 &&
            record->face == 0 && record->height == 0 && record->zoom_x == 0 && record->zoom_y == 0 &&
            record->align == 0 && record->rotate == 0 && !record->visibility.initialized &&
-           record->emitter_radius == 0 && record->emitter_color == 0 && record->glow[0] == '\0';
+           record->glow[0] == '\0';
 }
 
 static map_cell_sublayer_record_t *
@@ -606,6 +632,14 @@ static uint64_t map_cell_content_hash(const map_cell_t *cell) {
     if (cell->light_keyframe != NULL) {
         hash = map_cell_hash_bytes(hash, cell->light_keyframe, sizeof(*cell->light_keyframe));
     }
+    for (int layer = 0; layer < NUM_REAL_LAYERS; layer++) {
+        const map_cell_emitter_record_t *emitter = map_cell_emitter_record(cell, layer);
+        if (emitter != NULL) {
+            hash = map_cell_hash_bytes(hash, &emitter->layer, sizeof(emitter->layer));
+            hash = map_cell_hash_bytes(hash, &emitter->radius, sizeof(emitter->radius));
+            hash = map_cell_hash_bytes(hash, &emitter->color, sizeof(emitter->color));
+        }
+    }
     return hash;
 }
 
@@ -646,6 +680,7 @@ static void map_cell_release_contents(map_cell_t *cell) {
         light = next;
     }
     map_cell_record_release(cell->light_keyframe, sizeof(*cell->light_keyframe));
+    map_cell_emitters_release(cell);
     cell->layers = NULL;
     cell->sub_layers = NULL;
     cell->actors = NULL;
@@ -706,6 +741,13 @@ static map_cell_t *map_cell_clone(const map_cell_t *source) {
     if (source->light_keyframe != NULL) {
         clone->light_keyframe = map_cell_record_allocate(sizeof(*clone->light_keyframe));
         *clone->light_keyframe = *source->light_keyframe;
+    }
+    for (const map_cell_emitter_record_t *record = source->emitters; record != NULL;
+         record = record->next) {
+        map_cell_emitter_record_t *copy = map_cell_record_allocate(sizeof(*copy));
+        *copy = *record;
+        copy->next = clone->emitters;
+        clone->emitters = copy;
     }
     return clone;
 }
@@ -1142,6 +1184,7 @@ static void map_cell_store_clear_slot(map_cell_store_t *store, size_t index) {
 static bool map_cell_sparse_empty(const map_cell_t *cell) {
     return cell != NULL && cell->layers == NULL && cell->sub_layers == NULL &&
            cell->actors == NULL && cell->lights == NULL && cell->light_keyframe == NULL &&
+           cell->emitters == NULL &&
            cell->stretch_dirty == 0 && cell->stretch_top_height == 0 &&
            cell->stretch_upper_height == 0 && cell->level_support_height == 0 &&
            cell->render_max_height == 0;
@@ -2607,10 +2650,7 @@ static void map_clear_live_cell(map_cell_t *cell) {
     }
     /* Remembered floor and wall records stay, but no record keeps live
      * emitter light once the cell is no longer visible. */
-    for (map_cell_layer_record_t *record = cell->layers; record != NULL; record = record->next) {
-        record->emitter_radius = 0;
-        record->emitter_color = 0;
-    }
+    map_cell_emitters_release(cell);
     map_cell_clear_live_state(cell);
     map_update_render_height(cell);
 }
@@ -3167,39 +3207,48 @@ void map_set_structural_support_height(int x, int y, int16_t height) {
 /** Replace the emitter of one sent layer; radius 0 removes it. */
 void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint32_t color) {
     HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
-    map_cell_t *cell = map_cell_store_slot(cells,
-                                           map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY),
-                                           false);
-    const map_cell_layer_record_t *old = cell != NULL ? map_cell_layer_record_read(cell, layer) : NULL;
+    size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
+    map_cell_t *cell = map_cell_store_slot(cells, index, false);
+    const map_cell_emitter_record_t *old = cell != NULL ? map_cell_emitter_record(cell, layer) : NULL;
     color = radius != 0 ? color & UINT32_C(0xffffff) : 0;
-    if ((old == NULL || old->emitter_radius == 0) && radius == 0) {
+    if (old == NULL && radius == 0) {
         return;
     }
-    if (old != NULL && old->emitter_radius == radius && old->emitter_color == color) {
+    if (old != NULL && old->radius == radius && old->color == color) {
         return;
     }
     map_state_transaction_record_cell(x, y);
     cell = MAP_CELL_GET_MIDDLE_MUTABLE(x, y);
-    map_cell_layer_record_t *record = map_cell_layer_record(cell, layer, true);
-    record->emitter_radius = radius;
-    record->emitter_color = color;
-    if (map_cell_layer_record_empty(record)) {
-        map_cell_layer_record_remove(cell, layer);
+    map_cell_emitter_record_t **link = &cell->emitters;
+    while (*link != NULL && (*link)->layer != layer) {
+        link = &(*link)->next;
     }
-    map_cell_store_trim_slot(cells, map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY));
+    if (radius == 0) {
+        map_cell_emitter_record_t *record = *link;
+        *link = record->next;
+        map_cell_record_release(record, sizeof(*record));
+    } else {
+        if (*link == NULL) {
+            *link = map_cell_record_allocate(sizeof(**link));
+            (*link)->layer = (uint8_t)layer;
+        }
+        (*link)->radius = radius;
+        (*link)->color = color;
+    }
+    map_cell_store_trim_slot(cells, index);
     level_lighting_revision[current_level_index]++;
 }
 
 /** Return the emitter of one sent layer, if any. */
 bool map_get_layer_emitter(int x, int y, int layer, int8_t *radius, uint32_t *color) {
     HARD_ASSERT(layer >= 0 && layer < NUM_REAL_LAYERS);
-    const map_cell_layer_record_t *record =
-        map_cell_layer_record_read(MAP_CELL_GET_MIDDLE(x, y), layer);
-    if (record->emitter_radius == 0) {
+    const map_cell_emitter_record_t *record =
+        map_cell_emitter_record(MAP_CELL_GET_MIDDLE(x, y), layer);
+    if (record == NULL) {
         return false;
     }
-    *radius = record->emitter_radius;
-    *color = record->emitter_color;
+    *radius = record->radius;
+    *color = record->color;
     return true;
 }
 
