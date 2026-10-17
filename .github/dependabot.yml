@@ -12,6 +12,15 @@ updates:
     directory: /server
     schedule:
       interval: weekly
+    # Both server/Dockerfile stages are qualified pins: the SDK image is bound to
+    # server/docker/runtime-provider.lock.json, every CLASSIC_LINUX_IMAGE pin and
+    # tools/tests/test_workflow_contracts.py, and the Ubuntu base must be
+    # requalified with the locked package closure (docs/CARES_PROVIDER.md). A
+    # Dockerfile-only bump of either always fails Check, so adopt new images in
+    # a qualification pull request instead.
+    ignore:
+      - dependency-name: atrinik/classic-build
+      - dependency-name: ubuntu
   - package-ecosystem: pip
     directory: /protocol
     schedule:
