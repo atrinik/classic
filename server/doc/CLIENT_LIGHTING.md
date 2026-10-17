@@ -165,7 +165,11 @@ complete-MAP2 and continuation limits. The client stores emitters in one packed
 per-cell array of 6-byte entries (layer, radius, flags, RGB), allocated only
 for emitting cells and bounded by the cell's sent layer records, so it scales
 with object storage rather than the lighting budget. The per-socket cache adds
-25 bytes per cell (see Server). The rollout's final step records these figures in
+37 bytes per cell as stored: the 20 bytes of emitter state (see Server), the
+occluder word (8 bytes, 5 of them meaningful), and the 7 per-sub-layer coarse
+levels with their count byte and the known-state byte, which remembered cells
+must keep because the shared per-block cache cannot supply levels frozen at
+an earlier time. The rollout's final step records these figures in
 MAP_RENDERING.md.
 
 ### Validation
@@ -352,9 +356,14 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    step 160), which is a bleed hint for the whole block. A remote sample
    (bit 6) uses `E = 0` and no flicker field, so only its own space's coarse
    level and base compose:
-   - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`;
-   - then limit `L` to the block's level: at most `160(C + 1) - 1` when `C >= 0`
-     and `C < 15`, and at least `160(C - 1) + 1` when `C <= 0` and `C > -15`.
+   - `C > 0`: `L = max(E, 160C)`; `C < 0`: `L = min(E, 160C)`; `C = 0`: `L = E`.
+
+   The coarse term is only a floor (or, for darkness, a ceiling) under the
+   emitter field; nothing caps `E` at the block's level. `C` measures the
+   strongest single source, while `E` groups a tile's sent emitters as the
+   server does, so three sent `+4` emitters on one tile keep their grouped
+   value even though `C` is the bin of one of them. `E` is built only from sent
+   objects, so leaving it unbounded discloses nothing.
 
    `C` is the block's extremum, not a per-cell bound. Cells of a block that are
    authoritatively darker than its brightest cell, such as the unlit side of a
@@ -387,11 +396,14 @@ The GPU light pass gains an emitter stage before the existing tone/LUT stages:
    unchanged unsigned Q16 tone/LUT stage runs; negative intermediate values
    never reach it.
 5. Recompute when emitters, occluders, coarse levels or the camera change. A presentation-only time animates emitters whose flicker bit
-   is set, without server traffic. The function is deterministic: for the
-   client presentation clock `t` in milliseconds, keys fall every 125 ms; key
-   `k` has dip `d(k) = h(k) mod 52`, where `h` is SplitMix64's finalizer of
-   `k + 0x9e3779b97f4a7c15` truncated to 32 bits; with `f = (t mod 125) · 256 /
-   125` (integer division) the interpolated dip is
+   is set, without server traffic. The function is deterministic: `t` is the
+   client presentation clock in milliseconds since the client started (the
+   frame tick `LastTick`, origin 0), the key is `k = floor(t / 125)`, and key
+   `k` has dip `d(k) = h(k) mod 52`, where `h(k)` is the low 32 bits of
+   SplitMix64's finalizer applied to `k + 0x9e3779b97f4a7c15` (`z ^= z >> 30;
+   z *= 0xbf58476d1ce4e5b9; z ^= z >> 27; z *= 0x94d049bb133111eb; z ^= z >> 31`,
+   64-bit wrapping); with `f = (t mod 125) · 256 / 125` (integer division) the
+   interpolated dip is
    `(d(k)·(256 - f) + d(k+1)·f + 128) / 256`, and the Q0.8 gain is
    `g = 256 - dip`, always in `205..256`. The flicker
    emitters' own field `F` (scalar and channels) becomes `F · (g - 256) / 256`,
@@ -495,7 +507,7 @@ celestial follow-up's removal of celestial light from the base radiance
 2. Client emitter composition, the only rendering path. `client_lighting.c` is
    the CPU reference: it groups emitters per tile, evaluates the shared
    `light_profile` tables with a line walk through the occluder grid, composes
-   by sign and clamps to the coarse level. The map sampler adds the result to
+   by sign with the coarse level as a floor. The map sampler adds the result to
    received base radiance per cell sample, before the existing GPU light rows.
    The client's Smooth lighting setting is removed; an existing settings file
    that names it still loads, because unknown settings are skipped. The walk
