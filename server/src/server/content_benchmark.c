@@ -403,6 +403,139 @@ static bool issue566_lookup(void) {
     return valid;
 }
 
+static bool issue566_celestial_enabled(void) {
+    const char *value = getenv("ATRINIK_ISSUE566_CELESTIAL");
+    return value != NULL && strcmp(value, "1") == 0;
+}
+
+/* One warm pass over every base cell, as one MAP2 update of the whole cohort
+ * would sample it: darkness for each cell plus the keyframe request. */
+static uint64_t issue566_view_pass(mapstruct *const *loaded, size_t count, uint64_t *calls,
+                                   uint64_t *digest) {
+    uint64_t started = datetime_monotonic_us();
+    *calls = 0;
+    *digest = UINT64_C(1469598103934665603);
+    for (size_t i = 0; i < count; i++) {
+        mapstruct *map = loaded[i];
+        for (int y = 0; y < MAP_HEIGHT(map); y++) {
+            for (int x = 0; x < MAP_WIDTH(map); x++) {
+                bool ready = celestial_light_keyframe_request(map, (uint64_t)todtick);
+                int darkness = map_get_darkness(map, x, y, NULL);
+                const MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
+                /* FNV-1a over everything this pass observed, so a faster
+                 * build must publish identical illumination. */
+                int64_t observed[] = {darkness, ready, space->celestial_light_value,
+                                      space->celestial_light_rgb[0],
+                                      space->celestial_light_rgb[1],
+                                      space->celestial_light_rgb[2]};
+                for (size_t j = 0; j < arraysize(observed); j++) {
+                    *digest = (*digest ^ (uint64_t)observed[j]) * UINT64_C(1099511628211);
+                }
+                (*calls)++;
+            }
+        }
+    }
+    return datetime_monotonic_us() - started;
+}
+
+/* Keep the upper levels resident exactly as a player view does (#614). */
+static void issue566_load_stack(mapstruct *map) {
+    for (int depth = 1; depth < MAP2_LEVELS && map != NULL; depth++) {
+        map = get_map_from_tiled(map, TILED_UP);
+    }
+}
+
+static object *issue566_view_blocker(mapstruct *map) {
+    for (int y = 0; y < MAP_HEIGHT(map); y++) {
+        for (int x = 0; x < MAP_WIDTH(map); x++) {
+            for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
+                if (op->head == NULL && op->more == NULL && QUERY_FLAG(op, FLAG_BLOCKSVIEW)) {
+                    return op;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Celestial and per-view costs for a resident cohort, including the upper
+ * levels a player view keeps loaded. Timed work only; no state is saved. */
+static bool issue566_celestial(mapstruct *const *loaded, size_t count) {
+    uint64_t started = datetime_monotonic_us();
+    size_t resident = 0;
+    for (size_t i = 0; i < count; i++) {
+        issue566_load_stack(loaded[i]);
+    }
+    uint64_t stack_us = datetime_monotonic_us() - started;
+    for (mapstruct *map = first_map; map != NULL; map = map->next) {
+        resident += map->in_memory == MAP_IN_MEMORY;
+    }
+    printf(ISSUE566_PREFIX "\tcelestial-stack-load\t%" PRIu64 "\t%" PRIuMAX "\n",
+           stack_us, (uintmax_t)resident);
+
+    for (size_t i = 0; i < count; i++) {
+        started = datetime_monotonic_us();
+        celestial_light_ensure(loaded[i]);
+        printf(ISSUE566_PREFIX "\tcelestial-cold-ensure\t%s\t%" PRIu64 "\n",
+               loaded[i]->path, datetime_monotonic_us() - started);
+    }
+
+    uint64_t calls, digest;
+    for (int sample = 0; sample < 3; sample++) {
+        uint64_t elapsed_us = issue566_view_pass(loaded, count, &calls, &digest);
+        printf(ISSUE566_PREFIX "\tcelestial-view-pass\twarm\t%d\t%" PRIu64 "\t%" PRIu64
+                              "\t%016" PRIx64 "\n",
+               sample, calls, elapsed_us, digest);
+    }
+
+    /* A corner map leaving and re-entering residency, as a walk across the
+     * town swaps maps, followed by the next whole-cohort view. */
+    mapstruct *corner = loaded[0];
+    started = datetime_monotonic_us();
+    swap_map(corner, 1);
+    uint64_t swap_us = datetime_monotonic_us() - started;
+    started = datetime_monotonic_us();
+    mapstruct *reloaded = ready_map_name(corner->path, NULL, 0);
+    uint64_t reload_us = datetime_monotonic_us() - started;
+    if (reloaded != corner || corner->in_memory != MAP_IN_MEMORY) {
+        LOG(ERROR, "Issue 566 celestial benchmark could not reload %s.", corner->path);
+        return false;
+    }
+    issue566_load_stack(corner);
+    printf(ISSUE566_PREFIX "\tcelestial-swap\t%s\t%" PRIu64 "\t%" PRIu64 "\n",
+           corner->path, swap_us, reload_us);
+    for (int sample = 0; sample < 2; sample++) {
+        uint64_t elapsed_us = issue566_view_pass(loaded, count, &calls, &digest);
+        printf(ISSUE566_PREFIX "\tcelestial-view-pass\tafter-swap\t%d\t%" PRIu64 "\t%" PRIu64
+                              "\t%016" PRIx64 "\n",
+               sample, calls, elapsed_us, digest);
+    }
+
+    /* A real structural change: a view blocker toggles, as a door does. */
+    mapstruct *middle = loaded[count / 2];
+    object *blocker = issue566_view_blocker(middle);
+    if (blocker == NULL) {
+        printf(ISSUE566_PREFIX "\tcelestial-toggle-skipped\t%s\tno-single-part-view-blocker\n",
+               middle->path);
+        return true;
+    }
+    for (int sample = 0; sample < 2; sample++) {
+        started = datetime_monotonic_us();
+        if (sample == 0) {
+            CLEAR_FLAG(blocker, FLAG_BLOCKSVIEW);
+        } else {
+            SET_FLAG(blocker, FLAG_BLOCKSVIEW);
+        }
+        object_update(blocker, UP_OBJ_FLAGS);
+        uint64_t update_us = datetime_monotonic_us() - started;
+        uint64_t elapsed_us = issue566_view_pass(loaded, count, &calls, &digest);
+        printf(ISSUE566_PREFIX "\tcelestial-toggle\t%s\t%d\t%d\t%d\t%" PRIu64 "\t%" PRIu64
+                              "\t%016" PRIx64 "\n",
+               middle->path, blocker->x, blocker->y, sample, update_us, elapsed_us, digest);
+    }
+    return true;
+}
+
 static bool issue566_cohort(char paths[CONTENT_BENCHMARK_MAX_MAPS][MAX_BUF], size_t count) {
     mapstruct *loaded[CONTENT_BENCHMARK_MAX_MAPS] = {0};
     bool success = true;
@@ -417,6 +550,9 @@ static bool issue566_cohort(char paths[CONTENT_BENCHMARK_MAX_MAPS][MAX_BUF], siz
         }
         printf(ISSUE566_PREFIX "\tcohort-load\t%s\t%" PRIu64 "\n",
                paths[initialized], elapsed_us);
+    }
+    if (success && issue566_celestial_enabled()) {
+        success = issue566_celestial(loaded, count);
     }
     if (success) {
         for (uint16_t sample = 0; sample < settings.content_benchmark_iterations && success; sample++) {
