@@ -5770,6 +5770,17 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
         }
     }
 
+    /* Remembered tiles get the remembered-world lift on the signed values,
+     * before the negative clamp, as C_display = max(0, C + lift) requires;
+     * the later presentation floor is then already met. */
+    if (header->fow != 0 && scalar_value < (int64_t)MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE) {
+        int64_t lift = (int64_t)MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE - scalar_value;
+        for (size_t channel = 0; channel < 3; channel++) {
+            channels[channel] += lift;
+        }
+        scalar_value = MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+    }
+
     map_lighting_scale_overflow(channels);
     scalar_value = MAX(0, MIN((int64_t)UINT16_MAX, scalar_value));
 
@@ -6827,6 +6838,8 @@ bool widget_map_client_lighting_state_test(void) {
               composed_scalar == light_profile_raw_to_radiance(2 * MAP2_LOCAL_LIGHT_LEVEL_RAW);
     LastTick = saved_tick;
     map_clear_cell(16, 8, true);
+    /* Visible again for the tests that reuse this cell. */
+    map_set_fow(16, 8, false);
     /* A remote sample composes its coarse level, never the cell's emitters. */
     map_set_light_radiance(14, 8, 0, 160);
     map_set_light_radiance(14, 8, 1, 160);
@@ -6842,6 +6855,24 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160;
     map_clear_cell(14, 8, true);
+    /* Visible again for the tests that reuse this cell. */
+    map_set_fow(14, 8, false);
+    /* Remembered tiles are lifted on signed values before the clamp: raw
+     * scalar -40 with a channel at raw -100 lifts to the floor and clamps
+     * that channel to 0, not to the lift. */
+    map_set_light_radiance(13, 9, 0, (uint16_t)map_protocol_signed_radiance_encode(-40));
+    uint16_t fog_tint[NUM_SUB_LAYERS][3] = {
+        {(uint16_t)map_protocol_signed_radiance_encode(-100),
+         (uint16_t)map_protocol_signed_radiance_encode(-40),
+         (uint16_t)map_protocol_signed_radiance_encode(-40)}};
+    map_set_light_rgb_radiance(13, 9, 1, fog_tint);
+    map_set_local_light(13, 9, map_protocol_local_light_encode(0, false));
+    map_clear_cell(13, 9, false);
+    map_lighting_radiance(13 + MAP_STARTX, 9 + MAP_STARTY, MAP_CELL_GET_MIDDLE(13, 9), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE &&
+              composed_rgb[0] == 0 && composed_rgb[1] == MAP_VISIBILITY_MEMORY_FLOOR_RADIANCE;
+    map_clear_cell(13, 9, true);
     /* The tli bit adds daylight neutrally, on visible and remembered cells. */
     map_set_light_radiance(12, 9, 0, 0);
     map_set_local_light(12, 9, map_protocol_local_light_encode(0, false) | MAP2_LOCAL_LIGHT_TLI);
@@ -9224,6 +9255,11 @@ void map_draw_map_gpu_auxiliary(SDL_Surface *surface) {
      * frame's emitter rebuild budget instead of rebuilding unbounded. */
     map_emitter_auxiliary_begin();
     map_draw_map(surface);
+    /* The auxiliary view keeps its own retained target: when it deferred a
+     * rebuild, re-arm its redraw so it is recomposed after the fields are. */
+    if (map_emitter_rebuild_deferred) {
+        minimap_redraw_force();
+    }
     map_emitter_frame_end();
     map_gpu_auxiliary = false;
 }

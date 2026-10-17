@@ -2750,7 +2750,7 @@ START_TEST(test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized) 
 }
 END_TEST
 
-START_TEST(test_retained_fow_freezes_light_state_until_reentry) {
+START_TEST(test_retained_fow_reentry_resends_zero_light_state) {
     mapstruct *base;
     object *pl;
     check_setup_env_pl(&base, &pl);
@@ -2791,12 +2791,13 @@ START_TEST(test_retained_fow_freezes_light_state_until_reentry) {
     ck_assert_uint_eq(cell->faces[layer], 0);
     ck_assert_uint_eq(cell->exit[layer], 0);
     ck_assert_uint_eq(cell->fow, 1);
-    /* Fog freezes the last visible light: the client keeps it, so the
-     * server keeps it to compare against and sends no light record. */
-    ck_assert_uint_eq(cell->light_known[portal->sub_layer], 1);
-    ck_assert_uint_eq(cell->light_radiance[portal->sub_layer], 0);
+    ck_assert_uint_eq(cell->light_known[portal->sub_layer], 0);
+    ck_assert_uint_eq(cell->light_rgb_known[portal->sub_layer], 0);
+    /* A remembered tile on the same map keeps receiving light-level
+     * updates while the per-socket cache is valid (maintainer decision). */
     socket_buffer_clear(cs);
     draw_client_map2(pl);
+    ck_assert_uint_eq(validate_queued_map_payloads(cs), 1);
     cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
     ck_assert_uint_eq(cell->fow, 1);
     ck_assert_uint_eq(cell->light_known[portal->sub_layer], 1);
@@ -3856,7 +3857,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_view_loads_upper_level_for_linked_sky_light);
     tcase_add_test(tc_core, test_local_player_remains_visible_without_disclosing_dark_actors);
     tcase_add_test(tc_core, test_zero_lit_roof_is_serialized_and_xray_vision_remains_authorized);
-    tcase_add_test(tc_core, test_retained_fow_freezes_light_state_until_reentry);
+    tcase_add_test(tc_core, test_retained_fow_reentry_resends_zero_light_state);
     tcase_add_test(tc_core, test_map_exit_semantic_not_disclosed_by_boundary_geometry);
     tcase_add_test(tc_core, test_greyton_roof_only_cover_hides_city_portal_face);
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
