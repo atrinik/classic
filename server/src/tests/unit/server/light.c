@@ -1573,10 +1573,14 @@ END_TEST
 START_TEST(test_client_lighting_occluder_faces_mark_missing_neighbors) {
     mapstruct *map = get_empty_map(5, 5);
     uint16_t north = 1U << MAP2_OCCLUDER_FACE_SHIFT, east = north << 1, south = north << 2,
-             west = north << 3;
-    ck_assert_uint_eq(light_occluder_faces(map, 2, 2), 0);
-    ck_assert_uint_eq(light_occluder_faces(map, 0, 0), north | west);
-    ck_assert_uint_eq(light_occluder_faces(map, 4, 4), east | south);
+             west = north << 3, up = north << 4, down = north << 5;
+    /* An unlinked map transmits no local light up or down either. */
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2), up | down);
+    ck_assert_uint_eq(light_occluder_faces(map, 0, 0), north | west | up | down);
+    ck_assert_uint_eq(light_occluder_faces(map, 4, 4), east | south | up | down);
+    mapstruct *upper = get_empty_map(5, 5);
+    link_stacked_maps(map, upper);
+    ck_assert_uint_eq(light_occluder_faces(map, 2, 2) & up, 0);
 }
 END_TEST
 
