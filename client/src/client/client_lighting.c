@@ -169,8 +169,9 @@ void client_lighting_evaluate(int width,
     }
 
     /* Resolve color as the server's radiance resolver does for local light:
-     * the capped positive part takes the accumulated hue, the rest is
-     * neutral, and channels never go below zero. */
+     * the capped positive part takes the accumulated hue and the rest is
+     * neutral. Channels stay signed here; the caller clamps them only after
+     * adding base radiance, as the server clamps its complete aggregate. */
     for (size_t index = 0; index < total; index++) {
         const client_lighting_accumulator_t *a = &accumulators[index];
         int64_t accumulated = a->weight > 0 ? a->weight / UINT16_MAX : 0;
@@ -184,8 +185,7 @@ void client_lighting_evaluate(int width,
             if (effective > 0) {
                 colored = (a->color[channel] * effective + a->weight / 2) / a->weight;
             }
-            int64_t value = a->scalar - effective + colored;
-            cells[index].rgb[channel] = (int32_t)(value > 0 ? value : 0);
+            cells[index].rgb[channel] = (int32_t)(a->scalar - effective + colored);
         }
     }
     free(accumulators);

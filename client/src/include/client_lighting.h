@@ -31,7 +31,11 @@ typedef struct client_lighting_emitter {
     uint32_t color;
 } client_lighting_emitter_t;
 
-/** Local light of one grid cell in raw light units. */
+/**
+ * Local light of one grid cell in signed raw light units. Each channel is the
+ * scalar plus that channel's hue delta and may be negative; clamp only after
+ * adding base radiance.
+ */
 typedef struct client_lighting_cell {
     int32_t scalar;
     int32_t rgb[3];

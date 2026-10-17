@@ -91,8 +91,9 @@ static void test_darkness_is_negative_and_uncolored(void) {
     client_lighting_emitter_t dark = {.x = 4, .y = 4, .radius = -13, .color = 0};
     evaluate(&dark, 1);
     TEST_CHECK(cell_at(4, 4)->scalar < 0);
+    /* Darkness carries no hue: every channel equals the scalar. */
     for (int channel = 0; channel < 3; channel++) {
-        TEST_CHECK(cell_at(4, 4)->rgb[channel] == 0);
+        TEST_CHECK(cell_at(4, 4)->rgb[channel] == cell_at(4, 4)->scalar);
     }
 }
 
@@ -116,6 +117,20 @@ static void test_constituent_colors_keep_their_own_profiles(void) {
     TEST_CHECK(cell_at(4, 4)->rgb[0] > 0 && cell_at(4, 4)->rgb[2] > 0);
     TEST_CHECK(cell_at(7, 4)->rgb[0] > 0);
     TEST_CHECK(cell_at(7, 4)->rgb[2] == 0);
+}
+
+static void test_cancelled_scalar_keeps_color_shift(void) {
+    memset(occluders, 0, sizeof(occluders));
+    client_lighting_emitter_t pair[2] = {
+        {.x = 4, .y = 4, .radius = 13, .color = 0xff0000},
+        {.x = 4, .y = 4, .radius = -13, .color = 0},
+    };
+    evaluate(pair, 2);
+    /* The scalars cancel, but red keeps its share while green and blue lose
+     * the positive part, as in the server's aggregate before clamping. */
+    TEST_CHECK(cell_at(4, 4)->scalar == 0);
+    TEST_CHECK(cell_at(4, 4)->rgb[0] == 0);
+    TEST_CHECK(cell_at(4, 4)->rgb[1] < 0 && cell_at(4, 4)->rgb[1] == cell_at(4, 4)->rgb[2]);
 }
 
 static void test_many_emitters_are_all_evaluated(void) {
@@ -158,6 +173,7 @@ int main(void) {
     test_darkness_is_negative_and_uncolored();
     test_colored_light_keeps_hue();
     test_constituent_colors_keep_their_own_profiles();
+    test_cancelled_scalar_keeps_color_shift();
     test_many_emitters_are_all_evaluated();
     test_compose_by_sign_and_clamp_to_level();
     return EXIT_SUCCESS;

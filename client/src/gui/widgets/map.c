@@ -205,6 +205,9 @@ static uint64_t map_cell_peak_retained_bytes;
 static uint64_t map_cell_next_painter_identity = 1;
 static uint64_t map_next_presentation_token = 1;
 static uint64_t level_lighting_revision[MAP2_LEVELS];
+/* Advances only when a level's emitters, occluders or live residency change,
+ * so base-light and timed-light updates do not rebuild the emitter field. */
+static uint64_t level_emitter_revision[MAP2_LEVELS];
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 static uint16_t map_level_mask;
 static int map_width;
@@ -1667,6 +1670,10 @@ void map_state_transaction_abort(void) {
     memcpy(level_lighting_revision,
            map_state_transaction.lighting_revision,
            sizeof(level_lighting_revision));
+    /* Restored cells invalidate any emitter field built meanwhile. */
+    for (size_t level = 0; level < MAP2_LEVELS; level++) {
+        level_emitter_revision[level]++;
+    }
     MapData = map_state_transaction.map_data;
     map_state_transaction_restore_region_fow();
     cells = level_cells[current_level_index];
@@ -3083,6 +3090,8 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
 
 void map_clear_cell(int x, int y, bool hard) {
     map_state_transaction_record_cell(x, y);
+    /* Clears can remove emitter-bearing layers and remembered occluders. */
+    level_emitter_revision[current_level_index]++;
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
     map_cell_clear_client_light(index, hard);
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
@@ -3176,6 +3185,7 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint32_t colo
     }
     map_cell_store_trim_slot(cells, map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY));
     level_lighting_revision[current_level_index]++;
+    level_emitter_revision[current_level_index]++;
 }
 
 /** Return the emitter of one sent layer, if any. */
@@ -3220,6 +3230,7 @@ void map_set_occluder(int x, int y, uint8_t bits) {
     header->occluder = bits;
     header->client_light_known |= 2U;
     level_lighting_revision[current_level_index]++;
+    level_emitter_revision[current_level_index]++;
 }
 
 /** Return the signed coarse local light level and vision floor of a cell. */
@@ -3260,6 +3271,7 @@ void map_set_fow(int x, int y, bool fow) {
 
     map_cell_store_set_fow(cells, index, fow, fow);
     level_lighting_revision[current_level_index]++;
+    level_emitter_revision[current_level_index]++;
 }
 
 /** Return the currently cached visibility state for one map tile. */
@@ -5271,7 +5283,7 @@ static void map_client_lighting_rebuild(map_client_lighting_field_t *field) {
     field->origin_y = MAP_STARTY - margin;
     field->cache_origin_x = map_cache_origin_x;
     field->cache_origin_y = map_cache_origin_y;
-    field->revision = level_lighting_revision[current_level_index];
+    field->revision = level_emitter_revision[current_level_index];
     field->store = cells;
     field->valid = true;
 
@@ -5329,7 +5341,7 @@ static void map_client_lighting_apply(int x, int y, uint16_t *scalar, uint16_t r
 
     map_client_lighting_field_t *field = &map_client_lighting_fields[current_level_index];
     if (!field->valid || field->store != cells ||
-        field->revision != level_lighting_revision[current_level_index] ||
+        field->revision != level_emitter_revision[current_level_index] ||
         field->cache_origin_x != map_cache_origin_x ||
         field->cache_origin_y != map_cache_origin_y ||
         field->width != map_width + LIGHT_PROFILE_RADIUS_MAX * 2 ||
@@ -5349,12 +5361,11 @@ static void map_client_lighting_apply(int x, int y, uint16_t *scalar, uint16_t r
     int32_t scalar_value = MAX(0, MIN((int32_t)UINT16_MAX, (int32_t)*scalar + delta));
     int32_t channels[3];
     for (size_t channel = 0; channel < 3; channel++) {
+        /* The emitter field's per-channel hue delta rides on the composed
+         * scalar; coarse light beyond it is neutral. */
         int32_t channel_raw = composed;
-        /* The emitter field's hue scales with the composed magnitude; coarse
-         * light beyond it and all darkness stay neutral. */
-        if (composed > 0 && emitter > 0 && local != NULL) {
-            channel_raw = (int32_t)((int64_t)local->rgb[channel] * MIN(composed, emitter) / emitter) +
-                          MAX(composed - emitter, 0);
+        if (local != NULL) {
+            channel_raw += local->rgb[channel] - local->scalar;
         }
         int32_t channel_delta = channel_raw >= 0
                                     ? light_profile_raw_to_radiance(channel_raw)
