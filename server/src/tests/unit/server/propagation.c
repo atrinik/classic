@@ -558,6 +558,35 @@ START_TEST(test_targeted_spell_vertical_range_and_open_floor_hole) {
 }
 END_TEST
 
+START_TEST(test_script_self_spell_reaches_a_visible_player) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    object_remove(pl, 0);
+    pl->x = pl->y = 8;
+    pl = object_insert_map(pl, map, NULL, INS_NO_MERGE);
+    /* A temple priest two squares away casts the range-0 self spell. */
+    object *priest = source_on(map, 8, 6);
+    ck_assert_int_eq(spells[SP_REMOVE_DEPLETION].range, 0);
+    object *depletion = arch_get("depletion");
+    depletion->stats.Str = -2;
+    object_insert_into(depletion, pl, 0);
+    ck_assert(perception_object_visible(priest, pl));
+    ck_assert_int_ne(cast_spell(pl, priest, 0, SP_REMOVE_DEPLETION, 0, CAST_NPC, NULL), 0);
+    ck_assert_ptr_null(object_find_arch(pl, arch_find("depletion")));
+    /* A wall still stops it. */
+    depletion = arch_get("depletion");
+    depletion->stats.Str = -2;
+    object_insert_into(depletion, pl, 0);
+    object *wall = source_on(map, 8, 7);
+    SET_FLAG(wall, FLAG_NO_PASS);
+    SET_FLAG(wall, FLAG_BLOCKSVIEW);
+    object_update(wall, UP_OBJ_FLAGS);
+    ck_assert_int_eq(cast_spell(pl, priest, 0, SP_REMOVE_DEPLETION, 0, CAST_NPC, NULL), 0);
+    ck_assert_ptr_nonnull(object_find_arch(pl, arch_find("depletion")));
+}
+END_TEST
+
 START_TEST(test_pre_event_escrow_survives_callback_exhaustion_and_nested_casts) {
     mapstruct *map = get_empty_map(5, 5);
     object *source = source_on(map, 2, 2);
@@ -622,6 +651,7 @@ void check_server_propagation(void) {
     tcase_add_test(core, test_disease_open_route_around_cover_retains_identity_and_slabs);
     tcase_add_test(core, test_targeted_spell_rejects_stale_identity_xray_and_glass);
     tcase_add_test(core, test_targeted_spell_vertical_range_and_open_floor_hole);
+    tcase_add_test(core, test_script_self_spell_reaches_a_visible_player);
     tcase_add_test(core, test_pre_event_escrow_survives_callback_exhaustion_and_nested_casts);
     tcase_add_test(core, test_admission_override_and_failed_creation_refund);
     suite_add_tcase(suite, core);

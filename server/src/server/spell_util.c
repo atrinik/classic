@@ -98,7 +98,12 @@ static bool spell_target_authorized(object *op, object *target, int type) {
         }
         dx += target->x - op->x;
         dy += target->y - op->y;
-        if (abs(dz) > 6 || MAX(abs(dx), MAX(abs(dy), abs(dz))) > spells[type].range) {
+        /* A self-only spell has no targeting range; only a script service,
+         * such as a temple priest, aims one at another creature, still
+         * bounded by sight and a clear line. */
+        bool ranged = (spells[type].flags & (SPELL_DESC_FRIENDLY | SPELL_DESC_ENEMY)) != 0;
+        if (abs(dz) > 6 ||
+            (ranged && MAX(abs(dx), MAX(abs(dy), abs(dz))) > spells[type].range)) {
             draw_info(COLOR_WHITE, op, "Your target is out of range!");
             return false;
         }
