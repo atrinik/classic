@@ -4530,6 +4530,36 @@ START_TEST(test_celestial_closure_too_large_is_sent_as_open_air) {
 }
 END_TEST
 
+START_TEST(test_view_prepares_every_shown_stack_for_the_next_hour) {
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    mapstruct *west = ready_map_name("/shattered_islands/world_0_68", NULL, 0);
+    ck_assert_ptr_nonnull(west);
+    mapstruct *east = get_map_from_tiled(west, TILED_EAST);
+    ck_assert_ptr_nonnull(east);
+    object *pl = player_get_dummy(NULL, NULL);
+    todtick = 5 * HOURS_PER_MONTH + 10;
+    /* The viewer stands at the seam: the update shows both stacks. */
+    request_move_player(&pl, west, 23, 18);
+    /* The view loads the stacks it shows a few maps a tick, and a job waits
+     * for room on the budget; later updates admit the rest. */
+    for (int update = 0; update < 12; update++) {
+        pticks++;
+        closure_redraw(pl);
+        celestial_light_process_steps_for_test(10000000);
+    }
+    ck_assert_ptr_nonnull(east->tile_map[TILED_UP]);
+    ck_assert(west->celestial_light_keyframe_valid);
+    ck_assert(east->celestial_light_keyframe_valid);
+    /* At the hour boundary both promote: no stack rebuilds inside MAP2. */
+    uint64_t builds = celestial_light_rebuilds_for_test();
+    todtick++;
+    closure_redraw(pl);
+    ck_assert_uint_eq(celestial_light_rebuilds_for_test(), builds);
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -4550,6 +4580,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
     tcase_add_test(tc_closure, test_celestial_closure_omits_plugin_controlled_static_faces);
     tcase_add_test(tc_closure, test_hidden_door_state_does_not_reach_base_radiance);
+    tcase_add_test(tc_closure, test_view_prepares_every_shown_stack_for_the_next_hour);
     tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);

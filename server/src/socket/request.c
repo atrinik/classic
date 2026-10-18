@@ -640,9 +640,6 @@ void draw_client_map(object *pl) {
         return;
     }
     view_controller->view_autoload_wait = view_wait;
-    /* The next hour's field is solved on the budget, so the hour boundary
-     * promotes it: gameplay gating never waits on that solve in MAP2. */
-    celestial_light_prepare_next(pl->map);
 
     CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
 
@@ -1040,6 +1037,22 @@ static int16_t map_space_support_height(MapSpace *msp) {
 /** The map of each cell in this update's celestial closure, NULL outside
  * it (server thread only). */
 static mapstruct *map2_closure_maps[MAP2_LEVELS][MAP_CLIENT_X][MAP_CLIENT_Y];
+
+/** Distinct maps one MAP2 update shows, whose next hour it prepares. */
+#define MAP2_SHOWN_MAPS_MAX 64
+static mapstruct *map2_shown_maps[MAP2_SHOWN_MAPS_MAX];
+static size_t map2_shown_count;
+
+static void map2_shown_note(mapstruct *map) {
+    for (size_t i = 0; i < map2_shown_count; i++) {
+        if (map2_shown_maps[i] == map) {
+            return;
+        }
+    }
+    if (map2_shown_count < MAP2_SHOWN_MAPS_MAX) {
+        map2_shown_maps[map2_shown_count++] = map;
+    }
+}
 
 /** Distinct celestial profiles of the maps one MAP2 update shows. */
 typedef struct map2_celestial_maps {
@@ -1680,6 +1693,7 @@ void draw_client_map2(object *pl) {
     packet_writer_mark_t packet_save_buf;
     map2_celestial_maps_t celestial_maps = {0};
     memset(map2_closure_maps, 0, sizeof(map2_closure_maps));
+    map2_shown_count = 0;
 
     if (!los_view_is_current(pl)) {
         goto abort_map;
@@ -1856,6 +1870,7 @@ void draw_client_map2(object *pl) {
                 level_present = true;
                 msp = GET_MAP_SPACE_PTR(m, nx, ny);
                 map2_celestial_note(&celestial_maps, m);
+                map2_shown_note(m);
                 blocksview = d & BLOCKED_LOS_BLOCKED;
                 bool camera_covered = level_visibility != MAP_LEVEL_VISIBLE;
                 /* An exposed roof/floor receives incident light even when its
@@ -3043,6 +3058,13 @@ void draw_client_map2(object *pl) {
     for (uint16_t i = 0; i < level_packet_count; i++) {
         HARD_ASSERT(level_sent[i]);
         packet_free(level_packets[i]);
+    }
+
+    /* Every stack the update showed solves its next hour on the budget, so
+     * at the hour boundary gating promotes it instead of rebuilding inside
+     * MAP2, neighboring stacks included. */
+    for (size_t i = 0; i < map2_shown_count; i++) {
+        celestial_light_prepare_next(map2_shown_maps[i]);
     }
 
     if (synchronize_time) {

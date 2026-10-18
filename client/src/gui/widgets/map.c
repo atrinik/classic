@@ -216,7 +216,7 @@ typedef struct map_cell_header {
      * whose start the blend between them counts from. A remembered cell keeps
      * the field it was last solved with. */
     int16_t celestial[2][4];
-    uint32_t celestial_hour;
+    uint64_t celestial_hour;
 } map_cell_header_t;
 
 static map_cell_store_t *cells;
@@ -3285,7 +3285,7 @@ void map_celestial_store(void *context, int depth, int x, int y, const int32_t c
         header->celestial[0][i] = map_celestial_word(current[i]);
         header->celestial[1][i] = map_celestial_word(next[i]);
     }
-    header->celestial_hour = (uint32_t)MIN(client_celestial_start_seconds() / 3600, UINT32_MAX);
+    header->celestial_hour = client_celestial_start_seconds() / 3600;
     header->client_light_known |= 4U;
     level_lighting_revision[level]++;
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
