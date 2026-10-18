@@ -267,26 +267,39 @@ static void test_pair_publishes_only_together(void) {
     packet_struct *packet = encode(1, &slot, 1);
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
-    /* A CELESTIAL payload alone is staged, not published. */
+    /* A CELESTIAL payload alone is not published, and its MAP update then
+     * expires it: it can never pair with a later structure. */
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
     TEST_CHECK(client_celestial_generation() == 0);
     celestial_model_t model;
     TEST_CHECK(!client_celestial_model(9, false, &model));
-    /* A closure of another generation does not pair with it. */
-    TEST_CHECK(stage_closure(2, NULL, 0));
+    TEST_CHECK(stage_closure(1, NULL, 0));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
-    /* A failed MAP2 update discards both. */
-    client_celestial_discard_staged();
+    /* Halves of different generations do not pair, and are both expired. */
     packet = encode(2, &slot, 1);
     TEST_CHECK(client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
+    TEST_CHECK(stage_closure(3, NULL, 0));
     TEST_CHECK(!client_celestial_publish(NULL, NULL));
     TEST_CHECK(stage_closure(2, NULL, 0));
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    /* A failed MAP2 update discards both. */
+    packet = encode(4, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(stage_closure(4, NULL, 0));
+    client_celestial_discard_staged();
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    /* Both halves staged before one update publish together. */
+    packet = encode(5, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(stage_closure(5, NULL, 0));
     TEST_CHECK(client_celestial_publish(NULL, NULL));
-    TEST_CHECK(client_celestial_generation() == 2);
+    TEST_CHECK(client_celestial_generation() == 5);
     TEST_CHECK(client_celestial_model(9, false, &model));
     /* Stale closures are rejected once a pair is published. */
-    TEST_CHECK(!stage_closure(2, NULL, 0));
+    TEST_CHECK(!stage_closure(5, NULL, 0));
 }
 
 static void test_staged_generations_never_regress(void) {

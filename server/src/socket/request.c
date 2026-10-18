@@ -1162,7 +1162,11 @@ size_t map2_closure_payload_max_exchange_for_test(size_t max) {
  * light rather than under another map's profile.
  */
 static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t *seen,
-                                 const int *slot_of, celestial_closure_t *closure) {
+                                 const int *slot_of, celestial_closure_t *closure,
+                                 uint64_t *membership) {
+    /* Which cells hold records: a lossy fallback can encode a change of it
+     * as the same bytes, so the publication digest mixes it in too. */
+    *membership = UINT64_C(1469598103934665603);
     celestial_closure_fragment_t *fragments = NULL;
     const mapstruct **owners = NULL;
     size_t count = 0, capacity = 0;
@@ -1180,6 +1184,8 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
                     map2_closure_maps[index][ax][ay] = NULL;
                     continue;
                 }
+                uint64_t member = (uint64_t)index << 16 | (uint64_t)ax << 8 | (uint64_t)ay;
+                *membership = (*membership ^ member) * UINT64_C(1099511628211);
                 size_t fragment = first;
                 while (fragment < count && owners[fragment] != map) {
                     fragment++;
@@ -1353,7 +1359,8 @@ static bool map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     packet_free(probe);
 
     celestial_closure_t closure;
-    if (!map2_closure_collect(cs, seen, slot_of, &closure)) {
+    uint64_t membership;
+    if (!map2_closure_collect(cs, seen, slot_of, &closure, &membership)) {
         /* Out of memory, or a fragment the server built that the codec
          * rejects (a bug): the update that needs this pair is not sent. */
         LOG(BUG, "Invalid celestial closure; not sent.");
@@ -1364,6 +1371,7 @@ static bool map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     HARD_ASSERT(encoded);
     (void)encoded;
     uint64_t structure_digest = map2_packet_digest(probe);
+    structure_digest = (structure_digest ^ membership) * UINT64_C(1099511628211);
     /* The closure is relative to the window: the same bytes describe other
      * cells once the window moves, so where it is anchored is part of what
      * was published, and a move always sends a new pair. */
