@@ -56,8 +56,11 @@ bool celestial_solver_direction_init(const celestial_solver_lattice_t *lattice,
     memset(cursor, 0, sizeof(*cursor));
     cursor->failed = true;
     celestial_solver_cell_t start;
+    /* Bounded origins leave every cursor step and endpoint inside int. */
     if (max_events == 0 || max_events > CELESTIAL_SOLVER_MAX_EVENTS || dx < -65536 ||
         dx > 65536 || dy < -65536 || dy > 65536 || dz < -65536 || dz > 65536 ||
+        x < -CELESTIAL_SOLVER_COORDINATE_MAX || x > CELESTIAL_SOLVER_COORDINATE_MAX ||
+        y < -CELESTIAL_SOLVER_COORDINATE_MAX || y > CELESTIAL_SOLVER_COORDINATE_MAX ||
         (dx == 0 && dy == 0 && dz == 0) || !resolve(lattice, origin, x, y, 0, &start)) {
         return false;
     }
@@ -266,8 +269,9 @@ void celestial_solver_ray_step(const celestial_solver_lattice_t *lattice,
             face.normal[axis] = (int8_t)-face.normal[axis];
         }
         bool crossed_aperture = false;
-        coefficient = MIN(coefficient,
-                          lattice->ops->light(lattice->context, &face, &crossed_aperture));
+        /* MIN evaluates its arguments twice: the callback runs once. */
+        uint16_t crossing = lattice->ops->light(lattice->context, &face, &crossed_aperture);
+        coefficient = MIN(coefficient, crossing);
         aperture |= crossed_aperture;
     }
     if (ray->count == CELESTIAL_SOLVER_RAY_EVENTS || coefficient == 0) {
@@ -320,15 +324,11 @@ int celestial_solver_scratch_height(const celestial_solver_lattice_t *lattice, v
     return height + 2 * CELESTIAL_MODEL_SPILL_PASSES;
 }
 
-/** Resolve a scratch cell, reaching past the map's edge only across
- * continuous faces. */
-static bool halo_cell(const celestial_solver_lattice_t *lattice, void *map, int x, int y,
-                      celestial_solver_cell_t *cell) {
+/** Resolve a scratch cell of a map of the given (snapshot) size, reaching
+ * past the map's edge only across continuous faces. */
+static bool halo_cell(const celestial_solver_lattice_t *lattice, void *map, int width,
+                      int height, int x, int y, celestial_solver_cell_t *cell) {
     if (!observe(lattice, map)) {
-        return false;
-    }
-    int width, height;
-    if (!dimensions(lattice, map, &width, &height)) {
         return false;
     }
     x -= CELESTIAL_MODEL_SPILL_PASSES;
@@ -360,11 +360,11 @@ static bool halo_cell(const celestial_solver_lattice_t *lattice, void *map, int 
     return resolve(lattice, map, x, y, 0, cell) && observe(lattice, cell->map);
 }
 
-void celestial_solver_halo_ray(const celestial_solver_lattice_t *lattice,
-                               celestial_solver_ray_t *ray, void *map, int x, int y,
-                               uint8_t direction, int32_t elevation) {
+static void halo_ray(const celestial_solver_lattice_t *lattice, celestial_solver_ray_t *ray,
+                     void *map, int width, int height, int x, int y, uint8_t direction,
+                     int32_t elevation) {
     celestial_solver_cell_t cell;
-    if (!halo_cell(lattice, map, x, y, &cell)) {
+    if (!halo_cell(lattice, map, width, height, x, y, &cell)) {
         memset(ray, 0, sizeof(*ray));
         ray->done = true;
         return;
@@ -372,10 +372,22 @@ void celestial_solver_halo_ray(const celestial_solver_lattice_t *lattice,
     celestial_solver_ray_init(lattice, ray, cell.map, cell.x, cell.y, direction, elevation);
 }
 
-uint16_t celestial_solver_spill(const celestial_solver_lattice_t *lattice, void *map, int x,
-                                int y, int dx, int dy) {
+void celestial_solver_halo_ray(const celestial_solver_lattice_t *lattice,
+                               celestial_solver_ray_t *ray, void *map, int x, int y,
+                               uint8_t direction, int32_t elevation) {
+    int width, height;
+    if (!dimensions(lattice, map, &width, &height)) {
+        memset(ray, 0, sizeof(*ray));
+        ray->done = true;
+        return;
+    }
+    halo_ray(lattice, ray, map, width, height, x, y, direction, elevation);
+}
+
+static uint16_t spill_coefficient(const celestial_solver_lattice_t *lattice, void *map,
+                                  int width, int height, int x, int y, int dx, int dy) {
     celestial_solver_cell_t cell;
-    if (!halo_cell(lattice, map, x + dx, y + dy, &cell)) {
+    if (!halo_cell(lattice, map, width, height, x + dx, y + dy, &cell)) {
         return 0;
     }
     celestial_solver_cursor_t cursor;
@@ -392,10 +404,19 @@ uint16_t celestial_solver_spill(const celestial_solver_lattice_t *lattice, void 
     }
     uint16_t coefficient = CELESTIAL_MODEL_SCALE;
     for (size_t face = 0; face < event.face_count; face++) {
-        coefficient = MIN(coefficient,
-                          lattice->ops->light(lattice->context, &event.faces[face], NULL));
+        uint16_t crossing = lattice->ops->light(lattice->context, &event.faces[face], NULL);
+        coefficient = MIN(coefficient, crossing);
     }
     return coefficient;
+}
+
+uint16_t celestial_solver_spill(const celestial_solver_lattice_t *lattice, void *map, int x,
+                                int y, int dx, int dy) {
+    int width, height;
+    if (!dimensions(lattice, map, &width, &height)) {
+        return 0;
+    }
+    return spill_coefficient(lattice, map, width, height, x, y, dx, dy);
 }
 
 /** Spill coefficients depend only on geometry. One level's solve resolves
@@ -405,7 +426,8 @@ uint16_t celestial_solver_spill(const celestial_solver_lattice_t *lattice, void 
 typedef struct spill_table {
     const celestial_solver_lattice_t *lattice;
     void *map;
-    int width, height;
+    /** Scratch size, and the map size of the solve's dimension snapshot. */
+    int width, height, map_width, map_height;
     uint16_t *coefficients;
     size_t bytes;
     /** Whether reserve charged bytes, so release returns exactly them. */
@@ -445,7 +467,8 @@ static void spill_table_fill(spill_table *table) {
                     }
                     int neighbor = (dy + 1) * 3 + dx + 1;
                     cell[neighbor > 4 ? neighbor - 1 : neighbor] =
-                        celestial_solver_spill(table->lattice, table->map, x, y, dx, dy);
+                        spill_coefficient(table->lattice, table->map, table->map_width,
+                                          table->map_height, x, y, dx, dy);
                 }
             }
         }
@@ -469,7 +492,8 @@ static uint16_t relax_spill(int x, int y, int dx, int dy, void *context) {
         spill_table_fill(table);
     }
     if (table->coefficients == NULL) {
-        return celestial_solver_spill(table->lattice, table->map, x, y, dx, dy);
+        return spill_coefficient(table->lattice, table->map, table->map_width,
+                                 table->map_height, x, y, dx, dy);
     }
     int neighbor = (dy + 1) * 3 + dx + 1;
     return table->coefficients[((size_t)x + (size_t)table->width * y) * 8 +
@@ -482,9 +506,9 @@ static void transport_line(const celestial_solver_lattice_t *lattice, void *map,
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             celestial_solver_ray_t ray;
-            celestial_solver_halo_ray(lattice, &ray, map, x, y,
-                                      moon ? model->moon_direction : model->solar_direction,
-                                      moon ? model->moon_elevation : model->solar_elevation);
+            halo_ray(lattice, &ray, map, width - 2 * CELESTIAL_MODEL_SPILL_PASSES, height - 2 * CELESTIAL_MODEL_SPILL_PASSES, x, y,
+                     moon ? model->moon_direction : model->solar_direction,
+                     moon ? model->moon_elevation : model->solar_elevation);
             while (!ray.done) {
                 celestial_solver_ray_step(lattice, &ray);
             }
@@ -520,7 +544,8 @@ bool celestial_solver_solve(const celestial_solver_lattice_t *lattice, void *map
             for (int x = 0; x < width; x++) {
                 int index = x + width * y;
                 celestial_solver_ray_t ray;
-                celestial_solver_halo_ray(lattice, &ray, map, x, y, CELESTIAL_MODEL_NORTH, 32768);
+                halo_ray(lattice, &ray, map, map_width, map_height, x, y, CELESTIAL_MODEL_NORTH,
+                         32768);
                 while (!ray.done) {
                     celestial_solver_ray_step(lattice, &ray);
                 }
@@ -532,7 +557,8 @@ bool celestial_solver_solve(const celestial_solver_lattice_t *lattice, void *map
         if (model->moon != 0) {
             transport_line(lattice, map, model, width, height, moon, moon_aperture, true);
         }
-        spill_table spill = {.lattice = lattice, .map = map, .width = width, .height = height};
+        spill_table spill = {.lattice = lattice, .map = map, .width = width, .height = height,
+                             .map_width = map_width, .map_height = map_height};
         complete = celestial_model_relax(diffuse, width, height, relax_spill, &spill) &&
                    celestial_model_relax(aperture_direct, width, height, relax_spill, &spill) &&
                    celestial_model_relax(starlight, width, height, relax_spill, &spill);

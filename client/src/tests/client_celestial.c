@@ -301,8 +301,16 @@ static void test_staged_generations_never_regress(void) {
     TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
     packet_free(packet);
     TEST_CHECK(!stage_closure(2, NULL, 0));
+    /* A duplicate of the staged generation never replaces it either. */
+    celestial_protocol_slot_t other = slot_at(4, 12, 500);
+    packet = encode(3, &other, 1);
+    TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!stage_closure(3, NULL, 0));
     TEST_CHECK(client_celestial_publish(NULL, NULL));
     TEST_CHECK(client_celestial_generation() == 3);
+    celestial_model_t model;
+    TEST_CHECK(client_celestial_model(9, false, &model) && !client_celestial_model(4, false, &model));
 }
 
 static void test_malformed_half_discards_the_staged_pair(void) {

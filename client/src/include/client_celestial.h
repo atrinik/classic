@@ -37,8 +37,9 @@ void client_celestial_reset(void);
 /**
  * Stage a complete CELESTIAL payload for the next publication.
  * @return False for a stale payload, one whose generation does not advance
- * past the published pair or regresses behind a staged one, keeping every
- * state; and for a malformed payload, which also discards the staged pair.
+ * past the published pair or a staged one (a duplicate never replaces what
+ * was staged first), keeping every state; and for a malformed payload, which
+ * also discards the staged pair.
  */
 bool client_celestial_apply(const uint8_t *data, size_t len);
 
