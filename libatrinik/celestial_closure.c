@@ -159,7 +159,10 @@ size_t celestial_closure_size(const celestial_closure_t *closure) {
 }
 
 bool celestial_closure_write(packet_struct *packet, const celestial_closure_t *closure) {
-    if (packet == NULL || closure == NULL || closure->count > UINT16_MAX ||
+    /* Only a closure from celestial_closure_build() or _read() is valid; it
+     * always carries its lattice, so anything else is refused unread. */
+    if (packet == NULL || closure == NULL || closure->lattice == NULL ||
+        closure->count > UINT16_MAX ||
         celestial_closure_size(closure) > PACKET_PAYLOAD_MAX ||
         packet_writer_error(packet) != PACKET_ERROR_NONE) {
         return false;
@@ -213,6 +216,14 @@ bool celestial_closure_decode(const uint8_t *data, size_t len, int window_width,
     uint32_t generation = packet_reader_read_uint32(&reader);
     uint16_t count = packet_reader_read_uint16(&reader);
     if (packet_reader_error(&reader) != PACKET_ERROR_NONE) {
+        return false;
+    }
+    /* A fragment takes at least its header and one run: a count the payload
+     * cannot hold, or more fragments than window cells over every depth, is
+     * malformed before anything is allocated. */
+    if ((size_t)count * (6 + 5) > len - 6 ||
+        (window_width > 0 && window_height > 0 &&
+         count > (size_t)window_width * window_height * CELESTIAL_CLOSURE_DEPTHS)) {
         return false;
     }
     celestial_closure_fragment_t *fragments =

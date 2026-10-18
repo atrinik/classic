@@ -503,6 +503,20 @@ static int test_invalid_inputs_fail_without_crashing(void) {
         require(!celestial_solver_solve(&lattice, &counts.map, &model, values, rgb));
         require(celestial_solver_scratch_width(&lattice, &counts.map) == 0);
     }
+    /* A count no payload of this length can hold is malformed, decided
+     * before any allocation, never reported as out of memory. */
+    static const uint8_t claims_many[] = {0, 0, 0, 1, 0xff, 0xff};
+    bool out_of_memory = true;
+    celestial_closure_t decoded;
+    require(!celestial_closure_decode(claims_many, sizeof(claims_many), 9, 9, &decoded,
+                                      &out_of_memory));
+    require(!out_of_memory);
+    /* Only a built closure is encoded. */
+    celestial_closure_t unbuilt = {.window_width = 9, .window_height = 9};
+    packet_struct *refused = packet_new(0, 64, 0);
+    require(!celestial_closure_write(refused, &unbuilt));
+    require(refused->len == 0);
+    packet_free(refused);
     /* A count without its fragment array is rejected and cleaned up. */
     celestial_closure_t closure;
     require(!celestial_closure_build(&closure, 1, 9, 9, NULL, 3));
