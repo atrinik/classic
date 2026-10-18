@@ -51,10 +51,10 @@ static uint64_t light_local_generation = 1;
  * cached dependency list is read after one of its maps may be gone. */
 static uint64_t light_local_frees = 1;
 
+#ifdef ATRINIK_TESTING
 /** Topology walks performed, for tests of the cache. */
 static uint64_t light_local_walks;
 
-#ifdef ATRINIK_TESTING
 uint64_t light_local_walks_for_test(void) {
     return light_local_walks;
 }
@@ -1729,7 +1729,9 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
         capacity = 64;
         regions = xmallocarray(capacity, sizeof(*regions));
     }
+#ifdef ATRINIK_TESTING
     light_local_walks++;
+#endif
     light_local_set_reset();
     regions[count++] = (light_local_region){.map = map};
     light_local_set_insert(light_local_visited, map, 0, 0);
