@@ -1630,7 +1630,9 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
 
     map_state_transaction_commit();
     /* The celestial pair staged before this update is published with it. */
-    client_celestial_publish(map_celestial_store, NULL);
+    if (client_celestial_publish(map_celestial_store, NULL)) {
+        map_celestial_retire_outside(client_celestial_closure());
+    }
     map_pending_effects_commit();
     map_publication_generation++;
     map_continuation_visible_change = false;

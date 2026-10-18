@@ -5035,6 +5035,20 @@ START_TEST(test_celestial_closure_headers_too_large_coalesce_by_depth) {
         ck_assert_uint_eq(fragment->values[0], CELESTIAL_CLOSURE_OUTSIDE_RECORD);
     }
     celestial_closure_free(&closure);
+    /* Too many fragments coalesce the same way, whatever their size: after
+     * an ordinary update restores both fragments, a cap of one merges them. */
+    closure_redraw(pl);
+    celestial_closure_t capped;
+    size_t fragments_limit = map2_closure_fragments_max_exchange_for_test(1);
+    closure_redraw(pl);
+    (void)map2_closure_fragments_max_exchange_for_test(fragments_limit);
+    ck_assert(closure_last(pl, &capped));
+    size_t capped_depth0 = 0;
+    for (size_t i = 0; i < capped.count; i++) {
+        capped_depth0 += capped.fragments[i].depth == 0;
+    }
+    ck_assert_uint_eq(capped_depth0, 1);
+    celestial_closure_free(&capped);
     west->tile_map[TILED_EAST] = NULL;
     east->tile_map[TILED_WEST] = NULL;
     todtick = saved_hour;

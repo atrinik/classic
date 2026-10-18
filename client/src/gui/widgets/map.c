@@ -48,6 +48,7 @@
 #include <main.h>
 #include <misc.h>
 #include <map.h>
+#include <toolkit/celestial_closure.h>
 #include <player.h>
 #include <animations.h>
 #include <map_transform.h>
@@ -3299,6 +3300,36 @@ void map_celestial_store(void *context, int depth, int x, int y, const int32_t c
         header->celestial[1][i] = map_celestial_word(next[i]);
     }
     header->client_light_known |= 4U;
+}
+
+void map_celestial_retire_outside(const celestial_closure_t *closure) {
+    /* A cell the new closure leaves out has no field of this publication:
+     * it is cleared rather than keep the previous one. */
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        size_t level = MAP2_DEPTH_INDEX(depth);
+        map_cell_store_t *store = level_cells[level];
+        bool changed = false;
+        for (int y = 0; store != NULL && y < closure->window_height; y++) {
+            for (int x = 0; x < closure->window_width; x++) {
+                if (x + MAP_STARTX >= map_width * MAP_FOW_SIZE ||
+                    y + MAP_STARTY >= map_height * MAP_FOW_SIZE ||
+                    celestial_closure_value(closure, depth, x, y) != 0) {
+                    continue;
+                }
+                map_cell_header_t *header =
+                    &store->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+                if ((header->client_light_known & 4U) != 0) {
+                    header->client_light_known &= (uint8_t)~4U;
+                    memset(header->celestial, 0, sizeof(header->celestial));
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            level_lighting_revision[level]++;
+            map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+        }
+    }
 }
 
 bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]) {

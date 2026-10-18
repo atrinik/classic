@@ -181,9 +181,11 @@ int celestial_solver_scratch_height(const celestial_solver_lattice_t *lattice, v
  * Solve one map's celestial field under the given model: sky exposure,
  * sun and moon transport, diffuse relaxation and publish, in the server's
  * order. Writes width × height values and RGB triples, row-major.
+ * The lattice, its ops with resolve, dimensions, sky, continuous and light
+ * set, the model and both output buffers are mandatory and must not be NULL;
+ * observe, reserve and release are optional.
  * Returns false only when the lattice reports invalid dimensions or an
- * allocation fails; the outputs are then
- * unspecified.
+ * allocation fails; the outputs are then unspecified.
  */
 bool celestial_solver_solve(const celestial_solver_lattice_t *lattice, void *map,
                             const celestial_model_t *model, int32_t *values,
