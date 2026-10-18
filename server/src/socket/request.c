@@ -1926,8 +1926,6 @@ void draw_client_map2(object *pl) {
                 /* Retain every physical level even when its delta is empty. */
                 level_present = true;
                 msp = GET_MAP_SPACE_PTR(m, nx, ny);
-                /* Preparing a stack's next hour discloses nothing. */
-                map2_shown_note(m);
                 blocksview = d & BLOCKED_LOS_BLOCKED;
                 bool camera_covered = level_visibility != MAP_LEVEL_VISIBLE;
                 /* An exposed roof/floor receives incident light even when its
@@ -1969,8 +1967,10 @@ void draw_client_map2(object *pl) {
                     mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
                     if (remembered) {
-                        /* Only an authorized cell contributes its profile. */
+                        /* Only an authorized cell contributes its profile,
+                         * and only a shown stack prepares its next hour. */
                         map2_celestial_note(&celestial_maps, m);
+                        map2_shown_note(m);
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
                         /* Remembered fog keeps its whole structure record as it
                          * was when last visible. */
@@ -1987,6 +1987,7 @@ void draw_client_map2(object *pl) {
                  * part of the update; a LOS-blocked, never-sent cell's is not. */
                 if (depth != 0 || !blocksview) {
                     map2_celestial_note(&celestial_maps, m);
+                    map2_shown_note(m);
                 }
                 if (depth > 0 && blocksview && level_visibility == MAP_LEVEL_VISIBLE) {
                     level_visibility = MAP_LEVEL_BOUNDARY;

@@ -1434,9 +1434,11 @@ int main(int argc, char *argv[]) {
 
             play_action_sounds();
         }
-        if (cpl.state == ST_PLAY) {
+        if (cpl.state == ST_PLAY && !map_state_transaction_active()) {
             /* Solve the published celestial closure a few milliseconds a
-             * frame; a fragment is the smallest unit. */
+             * frame; a fragment is the smallest unit. Stores are not
+             * journaled, so none lands in a cache a MAP2 update may still
+             * move or roll back. */
             client_celestial_process(3000);
         }
         rich_presence_tick();

@@ -929,6 +929,32 @@ static bool pending_fresh(const celestial_pending_t *job) {
     return true;
 }
 
+/**
+ * Before admitting a job for map's stack, drop the jobs it supersedes: those
+ * solving one of its levels, and stale ones that read it. A fresh job of
+ * another stack that only reads map at a seam is kept, so neighboring
+ * stacks prepared by one view never cancel each other's progress.
+ */
+static void pending_forget_superseded(mapstruct *map) {
+    celestial_pending_t **link = &pending_head;
+    pending_tail = NULL;
+    while (*link != NULL) {
+        celestial_pending_t *job = *link;
+        bool superseded = !pending_fresh(job) &&
+                          celestial_dependencies_references_map(job->dependencies, map);
+        for (size_t i = 0; i < job->count; i++) {
+            superseded |= job->levels[i].map == map;
+        }
+        if (superseded) {
+            *link = job->next;
+            pending_free(job);
+        } else {
+            pending_tail = job;
+            link = &job->next;
+        }
+    }
+}
+
 static void pending_append(celestial_pending_t *job) {
     job->next = NULL;
     if (pending_tail != NULL) {
@@ -1370,7 +1396,7 @@ void celestial_light_prepare_next(mapstruct *map) {
             }
         }
     }
-    celestial_light_forget(map);
+    pending_forget_superseded(map);
     size_t reservation = sizeof(celestial_pending_t), largest = 0;
     for (size_t i = 0; i < count; i++) {
         if (levels[i]->width < 1 || levels[i]->height < 1 ||

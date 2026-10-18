@@ -1545,6 +1545,9 @@ static struct {
     int ambient_scroll_x;
     int ambient_scroll_y;
     bool clear_target;
+    /** The update moved the cache: fragments still to solve address the
+     * window before it, so the solve is cancelled once the move commits. */
+    bool celestial_cancel;
 } map_state_transaction;
 
 static bool map_state_transaction_should_defer_level_free(void) {
@@ -1690,6 +1693,7 @@ void map_state_transaction_begin(bool full_snapshot) {
     map_state_transaction.ambient_scroll_x = 0;
     map_state_transaction.ambient_scroll_y = 0;
     map_state_transaction.clear_target = false;
+    map_state_transaction.celestial_cancel = false;
 
     if (full_snapshot) {
         for (size_t i = 0; i < arraysize(level_cells); i++) {
@@ -1737,8 +1741,12 @@ void map_state_transaction_commit(void) {
     int ambient_scroll_x = map_state_transaction.ambient_scroll_x;
     int ambient_scroll_y = map_state_transaction.ambient_scroll_y;
     bool clear_target = map_state_transaction.clear_target;
+    bool celestial_cancel = map_state_transaction.celestial_cancel;
     map_state_transaction_release_snapshot();
     map_state_transaction.active = false;
+    if (celestial_cancel) {
+        client_celestial_cancel();
+    }
     if (region_changed) {
         region_map_update(MapData.region_map, MapData.region_name);
     }
@@ -2172,8 +2180,13 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
     int height = map_height * MAP_FOW_SIZE;
 
     if (dx != 0 || dy != 0 || (old_w != 0 && old_h != 0 && (old_w != width || old_h != height))) {
-        /* Fragments still to solve address the window before this move. */
-        client_celestial_cancel();
+        /* Fragments still to solve address the window before this move; an
+         * aborted update restores that window, so they survive it. */
+        if (map_state_transaction.active) {
+            map_state_transaction.celestial_cancel = true;
+        } else {
+            client_celestial_cancel();
+        }
     }
 
     if (old_w != 0 && old_h != 0 && (old_w != width || old_h != height)) {
@@ -7307,17 +7320,18 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && changed != unchanged &&
               level_emitter_revision[MAP2_DEPTH_INDEX(0)] == changed;
 
-    /* A scroll cancels fragments still to solve: they address the window
-     * before it, so they would land on shifted cells, while solved cells
-     * move with the cache. The server sends a pair for the new window. */
+    /* A committed scroll cancels fragments still to solve: they address the
+     * window before it, so they would land on shifted cells, while solved
+     * cells move with the cache. The server sends a pair for the new window.
+     * An aborted update restores the window, so the solve goes on. */
     success = success && map_select_level(0, true);
     client_celestial_reset();
     packet_struct *celestial_packet = packet_new(0, 64, 0);
     success = success && celestial_protocol_write(celestial_packet, 1, 0, NULL, 0) &&
               client_celestial_apply(celestial_packet->data, celestial_packet->len);
     packet_free(celestial_packet);
-    celestial_closure_fragment_t *scroll_fragments = xcalloc(2, sizeof(*scroll_fragments));
-    for (size_t i = 0; i < 2; i++) {
+    celestial_closure_fragment_t *scroll_fragments = xcalloc(3, sizeof(*scroll_fragments));
+    for (size_t i = 0; i < 3; i++) {
         scroll_fragments[i] = (celestial_closure_fragment_t){
             .depth = 0, .x = (uint8_t)(12 + i), .y = 8, .width = 1, .height = 1,
             .slot = CELESTIAL_PROTOCOL_SLOT_NONE};
@@ -7328,7 +7342,7 @@ bool widget_map_client_lighting_state_test(void) {
     celestial_packet = packet_new(0, 64, 0);
     success = success &&
               celestial_closure_build(&scroll_closure, 1, map_width, map_height, scroll_fragments,
-                                      2) &&
+                                      3) &&
               celestial_closure_write(celestial_packet, &scroll_closure) &&
               client_celestial_apply_structure(celestial_packet->data, celestial_packet->len,
                                                map_width, map_height);
@@ -7337,11 +7351,20 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && client_celestial_publish(map_celestial_store, NULL) &&
               !client_celestial_process(0);
     int64_t saved_scroll_x = map_cache_scroll_x, saved_scroll_y = map_cache_scroll_y;
+    map_state_transaction_begin(false);
     display_mapscroll(1, 0, 0, 0);
+    map_state_transaction_abort();
+    success = success && !client_celestial_process(0) &&
+              map_celestial_field(0, 12, 8, false, stored) &&
+              map_celestial_field(0, 13, 8, false, stored);
+    map_state_transaction_begin(false);
+    display_mapscroll(1, 0, 0, 0);
+    map_state_transaction_commit();
     success = success && client_celestial_process(UINT64_MAX) &&
               map_celestial_field(0, 11, 8, false, stored) &&
-              !map_celestial_field(0, 12, 8, false, stored) &&
-              !map_celestial_field(0, 13, 8, false, stored);
+              map_celestial_field(0, 12, 8, false, stored) &&
+              !map_celestial_field(0, 13, 8, false, stored) &&
+              !map_celestial_field(0, 14, 8, false, stored);
     map_cache_scroll_x = saved_scroll_x;
     map_cache_scroll_y = saved_scroll_y;
     client_celestial_reset();

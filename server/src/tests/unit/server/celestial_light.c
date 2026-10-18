@@ -827,6 +827,46 @@ START_TEST(test_celestial_pending_matches_synchronous_oracle) {
 }
 END_TEST
 
+START_TEST(test_neighboring_stacks_keep_each_others_pending_jobs) {
+    /* Two stacks joined by a continuous seam, both prepared by one view: the
+     * second's admission must not cancel the first's job, which reads it. */
+    mapstruct *west = open_fixture(16, 16);
+    mapstruct *east = open_fixture(16, 16);
+    FREE_AND_COPY_HASH(west->path, "/celestial/seam-west");
+    FREE_AND_COPY_HASH(east->path, "/celestial/seam-east");
+    FREE_AND_COPY_HASH(west->tile_path[TILED_EAST], east->path);
+    FREE_AND_COPY_HASH(east->tile_path[TILED_WEST], west->path);
+    west->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = west;
+    west->celestial_tile_path_seen[TILED_EAST] = true;
+    east->celestial_tile_path_seen[TILED_WEST] = true;
+    west->celestial_boundary[TILED_EAST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    east->celestial_boundary[TILED_WEST] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 9;
+    /* Both current fields are valid, as in a view that has shown both. */
+    celestial_light_ensure(west);
+    celestial_light_ensure(east);
+    uint64_t builds = celestial_light_rebuilds_for_test();
+    celestial_light_prepare_next(west);
+    size_t one = celestial_light_pending_memory_for_test();
+    ck_assert_uint_gt(one, 0);
+    celestial_light_process_steps_for_test(100);
+    ck_assert(!west->celestial_light_keyframe_valid);
+    celestial_light_prepare_next(east);
+    /* Both jobs are queued, the first with its progress. */
+    ck_assert_uint_gt(celestial_light_pending_memory_for_test(), one);
+    celestial_light_process_steps_for_test(1000000);
+    ck_assert(west->celestial_light_keyframe_valid);
+    ck_assert(east->celestial_light_keyframe_valid);
+    ck_assert_uint_eq(celestial_light_rebuilds_for_test(), builds);
+    ck_assert_uint_eq(celestial_light_pending_memory_for_test(), 0);
+    west->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_pending_promotes_without_rebuild_and_jumps_fall_back) {
     mapstruct *map = open_fixture(8, 8);
     unsigned long saved_hour = todtick;
@@ -1183,6 +1223,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_memory, test_celestial_pending_memory_is_bounded_and_released);
     tcase_add_test(tc_core, test_current_reservation_failure_clears_both_published_endpoints);
     tcase_add_test(tc_core, test_celestial_pending_promotes_without_rebuild_and_jumps_fall_back);
+    tcase_add_test(tc_core, test_neighboring_stacks_keep_each_others_pending_jobs);
     tcase_add_test(tc_core, test_celestial_pending_is_fair_and_geometry_cancels);
     tcase_add_test(tc_core, test_celestial_view_preparation_promotes_at_the_hour);
     tcase_add_test(tc_core, test_celestial_pending_stack_exact_and_membership_fenced);
