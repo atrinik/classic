@@ -4649,6 +4649,31 @@ START_TEST(test_celestial_closure_applies_map2_direction_filtering) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_omits_cells_whose_objects_are_all_filtered) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *map = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(map->path, "/closure/filtered");
+    closure_fixture_schema(map);
+    /* One cell shows its object; the other holds only an invisible one, so
+     * MAP2 presents it empty and its structure is never disclosed. */
+    closure_structure(map, 30, 32, MISC_OBJECT, -1, NULL, NULL);
+    closure_structure(map, 34, 32, MISC_OBJECT, FLAG_IS_INVISIBLE, NULL, NULL);
+    request_move_player(&pl, map, 32, 32);
+    ck_assert(!QUERY_FLAG(pl, FLAG_SEE_INVISIBLE));
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    ck_assert_uint_ne(closure_cell(pl, &closure, 30, 32), 0);
+    ck_assert_uint_eq(closure_cell(pl, &closure, 34, 32), 0);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_closure_is_resent_when_the_window_moves) {
     mapstruct *old_map;
     object *pl;
@@ -4703,14 +4728,13 @@ START_TEST(test_celestial_closure_too_large_is_sent_as_open_air) {
     (void)map2_closure_payload_max_exchange_for_test(limit);
     celestial_closure_t closure;
     ck_assert(closure_last(pl, &closure));
-    /* The depth is not dropped: every cell of it is sent as open air, so the
-     * client solves and updates it. */
+    /* The depth is not dropped: every cell of it is sent as an outside
+     * record, which the client solves as open air and still updates. */
     ck_assert_uint_gt(closure.count, 0);
     const celestial_closure_fragment_t *fragment = &closure.fragments[0];
     ck_assert_int_eq(fragment->depth, 0);
     uint32_t open_air = fragment->values[0];
-    ck_assert_uint_ne(open_air & CELESTIAL_CLOSURE_IN, 0);
-    ck_assert_uint_eq(open_air & 0x3ffU, 0x3ffU);
+    ck_assert_uint_eq(open_air, CELESTIAL_CLOSURE_OUTSIDE_RECORD);
     for (size_t i = 0; i < (size_t)fragment->width * fragment->height; i++) {
         ck_assert_uint_eq(fragment->values[i], open_air);
     }
@@ -4803,7 +4827,7 @@ START_TEST(test_celestial_closure_headers_too_large_coalesce_by_depth) {
         for (size_t cell = 0; cell < (size_t)fragment->width * fragment->height; cell++) {
             ck_assert_uint_eq(fragment->values[cell], fragment->values[0]);
         }
-        ck_assert_uint_eq(fragment->values[0] & 0x3ffU, 0x3ffU);
+        ck_assert_uint_eq(fragment->values[0], CELESTIAL_CLOSURE_OUTSIDE_RECORD);
     }
     celestial_closure_free(&closure);
     west->tile_map[TILED_EAST] = NULL;
@@ -4834,6 +4858,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_applies_map2_direction_filtering);
     tcase_add_test(tc_closure, test_hidden_door_state_does_not_reach_base_radiance);
     tcase_add_test(tc_closure, test_view_prepares_every_shown_stack_for_the_next_hour);
+    tcase_add_test(tc_closure, test_celestial_closure_omits_cells_whose_objects_are_all_filtered);
     tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
     tcase_add_test(tc_closure, test_celestial_closure_headers_too_large_coalesce_by_depth);

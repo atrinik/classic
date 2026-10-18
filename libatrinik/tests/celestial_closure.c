@@ -169,8 +169,8 @@ static int test_rejections(void) {
     require(!celestial_closure_value_valid(CELESTIAL_CLOSURE_IN | CELESTIAL_CLOSURE_SKY_EXIT));
     require(celestial_closure_value_valid(CELESTIAL_CLOSURE_IN | CELESTIAL_CLOSURE_SKY_EXIT |
                                           CELESTIAL_CLOSURE_COVER_OPEN));
-    /* A reserved bit. */
-    static const uint8_t reserved[][5] = {{4, 0x08, 0x00, 0x80, 0x00}};
+    /* A reserved bit (bit 28; bit 27 alone with bit 15 is an outside record). */
+    static const uint8_t reserved[][5] = {{4, 0x10, 0x00, 0x80, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, reserved, 1), 4, 4,
                                     &closure));
     /* Overlapping fragments of one depth. */
@@ -354,6 +354,46 @@ static int test_release_pairs_with_reserve(void) {
     return 0;
 }
 
+static int test_outside_records_and_sky_exits(void) {
+    /* An outside record is valid only alone, and solves exactly as a cell
+     * of open air outside the closure. */
+    require(celestial_closure_value_valid(CELESTIAL_CLOSURE_OUTSIDE_RECORD));
+    require(!celestial_closure_value_valid(CELESTIAL_CLOSURE_OUTSIDE_RECORD |
+                                           CELESTIAL_CLOSURE_COVER_OPEN));
+    require(!celestial_closure_value_valid(CELESTIAL_CLOSURE_OUTSIDE));
+    celestial_model_t model;
+    model_at(12, &model);
+    celestial_closure_t outside, open;
+    require(build_one(&outside, 0, 2, 2, 5, 5, CELESTIAL_CLOSURE_OUTSIDE_RECORD));
+    require(build_one(&open, 0, 2, 2, 5, 5, OPEN_AIR));
+    int32_t a[25], a_rgb[25][3], b[25], b_rgb[25][3];
+    require(celestial_closure_solve(&outside, 0, &model, a, a_rgb));
+    require(celestial_closure_solve(&open, 0, &model, b, b_rgb));
+    require(memcmp(a, b, sizeof(a)) == 0 && memcmp(a_rgb, b_rgb, sizeof(a_rgb)) == 0);
+    require(a[12] > 0);
+    celestial_closure_free(&outside);
+    celestial_closure_free(&open);
+    /* A sky exit beneath a closure cell is rejected; beneath an outside
+     * record it stands. */
+    for (int above = 0; above < 2; above++) {
+        celestial_closure_fragment_t *fragments = calloc(2, sizeof(*fragments));
+        require(fragments != NULL);
+        fragments[0] = (celestial_closure_fragment_t){.depth = 0, .x = 1, .y = 1, .width = 1,
+                                                      .height = 1, .slot = 3};
+        fragments[0].values = values_of(1, OPEN_AIR);
+        fragments[1] = (celestial_closure_fragment_t){.depth = 1, .x = 1, .y = 1, .width = 1,
+                                                      .height = 1, .slot = 3};
+        fragments[1].values =
+            values_of(1, above == 0 ? (OPEN_AIR & ~CELESTIAL_CLOSURE_SKY_EXIT)
+                                    : CELESTIAL_CLOSURE_OUTSIDE_RECORD);
+        celestial_closure_t closure;
+        bool built = celestial_closure_build(&closure, 7, 9, 9, fragments, 2);
+        require(built == (above == 1));
+        celestial_closure_free(&closure);
+    }
+    return 0;
+}
+
 static int invalid_width;
 
 static void invalid_dimensions(void *context, void *map, int *width, int *height) {
@@ -429,6 +469,9 @@ int main(void) {
     }
     if (result == 0) {
         result = test_invalid_inputs_fail_without_crashing();
+    }
+    if (result == 0) {
+        result = test_outside_records_and_sky_exits();
     }
     toolkit_deinit();
     return result;

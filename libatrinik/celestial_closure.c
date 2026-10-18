@@ -38,6 +38,9 @@ void celestial_closure_free(celestial_closure_t *closure) {
 }
 
 bool celestial_closure_value_valid(uint32_t value) {
+    if ((value & CELESTIAL_CLOSURE_OUTSIDE) != 0) {
+        return value == CELESTIAL_CLOSURE_OUTSIDE_RECORD;
+    }
     return value == 0 ||
            ((value & ~CELESTIAL_CLOSURE_VALUE_MASK) == 0 && (value & CELESTIAL_CLOSURE_IN) != 0 &&
             /* An upward exit to the sky has no cell above to continue into,
@@ -86,6 +89,24 @@ bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, 
                         celestial_closure_value_valid(
                             fragment->values[(size_t)x + (size_t)fragment->width * y]);
                 *cell = (uint16_t)(i + 1);
+            }
+        }
+    }
+    /* A sky exit has no cell above it: a closure cell there, other than an
+     * outside record, contradicts it, and solving would skip that cell. */
+    for (size_t i = 0; valid && i < count; i++) {
+        const celestial_closure_fragment_t *fragment = &fragments[i];
+        for (int y = 0; valid && fragment->depth < CELESTIAL_CLOSURE_DEPTH_MAX &&
+                        y < fragment->height;
+             y++) {
+            for (int x = 0; valid && x < fragment->width; x++) {
+                if ((fragment->values[(size_t)x + (size_t)fragment->width * y] &
+                     CELESTIAL_CLOSURE_SKY_EXIT) == 0) {
+                    continue;
+                }
+                uint32_t above = celestial_closure_value(closure, fragment->depth + 1,
+                                                         fragment->x + x, fragment->y + y);
+                valid = above == 0 || above == CELESTIAL_CLOSURE_OUTSIDE_RECORD;
             }
         }
     }
@@ -263,13 +284,15 @@ static const celestial_closure_fragment_t *lattice_fragment(const closure_lattic
     return map != NULL ? ((const lattice_handle *)map)->fragment : NULL;
 }
 
-/** A cell's closure value; zero for open air and for unresolved cells. */
+/** A cell's closure value; zero for open air, for an outside record and for
+ * unresolved cells. */
 static uint32_t lattice_value(const closure_lattice *lattice, const celestial_solver_cell_t *cell) {
     const celestial_closure_fragment_t *fragment = lattice_fragment(lattice, cell->map);
     if (fragment == NULL) {
         return 0;
     }
-    return fragment->values[(size_t)cell->x + (size_t)fragment->width * cell->y];
+    uint32_t value = fragment->values[(size_t)cell->x + (size_t)fragment->width * cell->y];
+    return value == CELESTIAL_CLOSURE_OUTSIDE_RECORD ? 0 : value;
 }
 
 static bool lattice_resolve(void *context, void *origin, int x, int y, int z,

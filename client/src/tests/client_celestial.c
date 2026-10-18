@@ -305,6 +305,21 @@ static void test_staged_generations_never_regress(void) {
     TEST_CHECK(client_celestial_generation() == 3);
 }
 
+static void test_malformed_half_discards_the_staged_pair(void) {
+    client_celestial_reset();
+    celestial_protocol_slot_t slot = slot_at(9, 12, 500);
+    packet_struct *packet = encode(1, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    /* A malformed structure voids the staged CELESTIAL half, so a later
+     * structure of its generation cannot pair with it. */
+    static const uint8_t truncated[] = {0, 0, 0, 1, 0};
+    TEST_CHECK(!client_celestial_apply_structure(truncated, sizeof(truncated), 9, 9));
+    TEST_CHECK(stage_closure(1, NULL, 0));
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_generation() == 0);
+}
+
 static void test_publication_solves_every_closure_cell(void) {
     client_celestial_reset();
     celestial_protocol_slot_t slot = slot_at(9, 12, 900);
@@ -425,6 +440,7 @@ int main(void) {
     test_reset_forgets_slots_and_generation();
     test_pair_publishes_only_together();
     test_staged_generations_never_regress();
+    test_malformed_half_discards_the_staged_pair();
     test_publication_solves_every_closure_cell();
     test_cancel_stops_the_remaining_fragments();
     test_worst_case_closure_cost();

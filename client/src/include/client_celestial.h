@@ -36,15 +36,16 @@ void client_celestial_reset(void);
 
 /**
  * Stage a complete CELESTIAL payload for the next publication.
- * @return False, keeping every state, for a malformed payload or one whose
- * generation does not advance past the published one.
+ * @return False for a stale payload, one whose generation does not advance
+ * past the published pair or regresses behind a staged one, keeping every
+ * state; and for a malformed payload, which also discards the staged pair.
  */
 bool client_celestial_apply(const uint8_t *data, size_t len);
 
 /**
  * Stage a CELESTIAL_STRUCTURE payload for a MAP2 window of the given size.
- * @return False, keeping every state, for a malformed payload or one whose
- * generation does not advance past the published one.
+ * @return False for a stale payload, keeping every state, and for a
+ * malformed one, which also discards the staged pair.
  */
 bool client_celestial_apply_structure(const uint8_t *data, size_t len, int window_width,
                                       int window_height);
