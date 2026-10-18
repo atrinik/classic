@@ -313,6 +313,24 @@ static void test_staged_generations_never_regress(void) {
     TEST_CHECK(client_celestial_model(9, false, &model) && !client_celestial_model(4, false, &model));
 }
 
+static void test_fragments_must_name_published_slots(void) {
+    client_celestial_reset();
+    celestial_protocol_slot_t slot = slot_at(9, 12, 500);
+    packet_struct *packet = encode(1, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    /* Slot 4 is not in the paired CELESTIAL: the pair is malformed. */
+    celestial_closure_fragment_t *fragments = malloc(sizeof(*fragments));
+    TEST_CHECK(fragments != NULL);
+    fragments[0] = fragment_of(0, 1, 1, 2, 2, 4, OPEN_AIR);
+    TEST_CHECK(stage_closure(1, fragments, 1));
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_generation() == 0);
+    /* The pair was discarded, so its CELESTIAL half cannot pair again. */
+    TEST_CHECK(stage_closure(1, NULL, 0));
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+}
+
 static void test_malformed_half_discards_the_staged_pair(void) {
     client_celestial_reset();
     celestial_protocol_slot_t slot = slot_at(9, 12, 500);
@@ -449,6 +467,7 @@ int main(void) {
     test_pair_publishes_only_together();
     test_staged_generations_never_regress();
     test_malformed_half_discards_the_staged_pair();
+    test_fragments_must_name_published_slots();
     test_publication_solves_every_closure_cell();
     test_cancel_stops_the_remaining_fragments();
     test_worst_case_closure_cost();

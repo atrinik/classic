@@ -389,6 +389,13 @@ static bool lattice_continuous(void *context, const celestial_solver_face_t *fac
                          (int8_t)-face->normal[2]};
     uint32_t from = lattice_value(lattice, &face->from);
     uint32_t to = lattice_value(lattice, &face->to);
+    /* A seam between two profiles is never continuous, as on the server,
+     * where continuity requires equal profiles, which share a slot. */
+    if (from != 0 && to != 0 &&
+        lattice_fragment(lattice, face->from.map)->slot !=
+            lattice_fragment(lattice, face->to.map)->slot) {
+        return false;
+    }
     return (from == 0 || (from & continuity_bit(face->normal)) != 0) &&
            (to == 0 || (to & continuity_bit(reverse)) != 0);
 }

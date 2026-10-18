@@ -422,6 +422,34 @@ static const celestial_solver_ops_t paired_open_ops = {
     .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
     .continuous = counting_continuous, .light = counting_light};
 
+static int test_seams_between_profiles_are_closed(void) {
+    /* Two adjacent fragments claiming a continuous seam: with one profile
+     * slot light crosses it, with two it does not, as on the server. */
+    celestial_model_t model;
+    model_at(12, &model);
+    int32_t field[2][9], field_rgb[2][9][3];
+    for (int variant = 0; variant < 2; variant++) {
+        celestial_closure_fragment_t *fragments = calloc(2, sizeof(*fragments));
+        require(fragments != NULL);
+        uint32_t covered = OPEN_AIR & ~(CELESTIAL_CLOSURE_COVER_OPEN | CELESTIAL_CLOSURE_SKY_EXIT);
+        fragments[0] = (celestial_closure_fragment_t){.depth = 0, .x = 1, .y = 3, .width = 3,
+                                                      .height = 3, .slot = 3};
+        fragments[0].values = values_of(9, covered);
+        fragments[1] = (celestial_closure_fragment_t){.depth = 0, .x = 4, .y = 3, .width = 3,
+                                                      .height = 3,
+                                                      .slot = (uint8_t)(variant == 0 ? 3 : 4)};
+        fragments[1].values = values_of(9, OPEN_AIR);
+        celestial_closure_t closure;
+        require(celestial_closure_build(&closure, 7, 9, 9, fragments, 2));
+        require(celestial_closure_solve(&closure, 0, &model, field[variant], field_rgb[variant]));
+        celestial_closure_free(&closure);
+    }
+    /* The middle of the covered fragment's east edge receives spill from
+     * the open one only across a continuous seam. */
+    require(field[0][5] > field[1][5]);
+    return 0;
+}
+
 static int test_continuity_is_symmetric(void) {
     /* Two adjacent closure cells disagreeing about their seam: light crosses
      * it neither way, as if both called it discontinuous. */
@@ -547,6 +575,9 @@ int main(void) {
     }
     if (result == 0) {
         result = test_continuity_is_symmetric();
+    }
+    if (result == 0) {
+        result = test_seams_between_profiles_are_closed();
     }
     toolkit_deinit();
     return result;

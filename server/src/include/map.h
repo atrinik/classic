@@ -707,6 +707,12 @@ typedef struct mapdef {
     struct light_local_cache_entry *light_local_cache;
     size_t light_local_cache_blocks;
 
+    /** Every map some block's walk reached, ordered by address: one shared
+     * dependency set the blocks revalidate against, so its size grows with
+     * the topology rather than with blocks times reachable maps. */
+    struct mapdef **light_local_deps;
+    size_t light_local_deps_count, light_local_deps_capacity;
+
     /** Parsed celestial-v1 sky anchor. */
     uint8_t celestial_sky_above;
 

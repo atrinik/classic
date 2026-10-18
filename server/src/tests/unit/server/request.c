@@ -3147,6 +3147,8 @@ START_TEST(test_celestial_generation_exhaustion_closes_the_connection) {
     socket_buffer_clear(cs);
     draw_client_map2(pl);
     ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL));
+    /* Nor is the MAP update the pair belonged to. */
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_MAP));
     ck_assert_int_eq(cs->state, ST_DEAD);
     ck_assert_uint_eq(cs->celestial_generation, UINT32_MAX);
     cs->state = ST_PLAYING;

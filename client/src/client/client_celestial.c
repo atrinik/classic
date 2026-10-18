@@ -138,6 +138,17 @@ bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {
             client_celestial.staged_closure.generation) {
         return false;
     }
+    /* Only slot 255 means no profile: a fragment naming a slot its paired
+     * CELESTIAL omits makes the pair malformed, and it is discarded rather
+     * than published as darkness that no later duplicate could repair. */
+    for (size_t i = 0; i < client_celestial.staged_closure.count; i++) {
+        uint8_t slot = client_celestial.staged_closure.fragments[i].slot;
+        if (slot != CELESTIAL_PROTOCOL_SLOT_NONE &&
+            !client_celestial_assigned(&client_celestial.staged_slots, slot)) {
+            client_celestial_discard_staged();
+            return false;
+        }
+    }
     client_celestial.slots = client_celestial.staged_slots;
     celestial_closure_free(&client_celestial.closure);
     client_celestial.closure = client_celestial.staged_closure;
