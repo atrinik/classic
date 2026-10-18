@@ -64,6 +64,9 @@ extern void light_base_radiance_signed(const MapSpace *space,
 extern int8_t light_local_level(mapstruct *map, int x, int y);
 
 /** Free a map's coarse light cache, with the map. */
+/** Note a change of the links between maps or of a map's residency, the
+ * topology coarse local light walks. */
+extern void light_local_topology_changed(void);
 extern void light_local_forget(mapstruct *map);
 
 #ifdef ATRINIK_TESTING
