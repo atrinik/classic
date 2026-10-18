@@ -110,7 +110,37 @@ static void test_encoder_rejects_what_decoders_reject(void) {
     slots[0] = slot_at(3, 5, 200);
     slots[0].current.lunar_period = 100;
     TEST_CHECK(!celestial_protocol_write(packet, 1, 0, slots, 1));
+    /* Day and night colors are black or normalized to a 65535 peak. */
+    slots[0] = slot_at(3, 5, 200);
+    slots[0].current.day_linear[0] = slots[0].next.day_linear[0] = 30000;
+    slots[0].current.day_linear[1] = slots[0].next.day_linear[1] = 30000;
+    slots[0].current.day_linear[2] = slots[0].next.day_linear[2] = 30000;
+    TEST_CHECK(!celestial_protocol_write(packet, 1, 0, slots, 1));
+    slots[0] = slot_at(3, 5, 200);
+    slots[0].current.night_linear[2] = slots[0].next.night_linear[2] = 1;
+    TEST_CHECK(!celestial_protocol_write(packet, 1, 0, slots, 1));
     TEST_CHECK(packet->len == 0);
+    /* Padding never decides whether two hours share a profile. */
+    celestial_protocol_slot_t padded;
+    memset(&padded, 0xa5, sizeof(padded));
+    celestial_protocol_slot_t clean = slot_at(3, 5, 200);
+    padded.slot = clean.slot;
+    padded.current = clean.current;
+    memcpy(padded.next.day_linear, clean.next.day_linear, sizeof(clean.next.day_linear));
+    memcpy(padded.next.night_linear, clean.next.night_linear, sizeof(clean.next.night_linear));
+    padded.next.day_brightness = clean.next.day_brightness;
+    padded.next.night_brightness = clean.next.night_brightness;
+    memcpy(padded.next.moon_linear, clean.next.moon_linear, sizeof(clean.next.moon_linear));
+    padded.next.moon_max = clean.next.moon_max;
+    memcpy(padded.next.starlight_linear, clean.next.starlight_linear,
+           sizeof(clean.next.starlight_linear));
+    padded.next.starlight_strength = clean.next.starlight_strength;
+    padded.next.lunar_period = clean.next.lunar_period;
+    padded.next.solar_hour = clean.next.solar_hour;
+    padded.next.season_phase = clean.next.season_phase;
+    padded.next.lunar_age = clean.next.lunar_age;
+    TEST_CHECK(celestial_protocol_write(packet, 1, 0, &padded, 1));
+    packet->len = 0;
     packet_free(packet);
 }
 

@@ -19,9 +19,12 @@
 #include <toolkit/toolkit.h>
 #include <toolkit/socket.h>
 
-/** Order emitters by tile, then radius and color. */
+/** Order emitters by tile (level, row, column), then radius and color. */
 static int client_lighting_emitter_compare(const void *left, const void *right) {
     const client_lighting_emitter_t *a = left, *b = right;
+    if (a->z != b->z) {
+        return a->z < b->z ? -1 : 1;
+    }
     if (a->y != b->y) {
         return a->y < b->y ? -1 : 1;
     }
@@ -41,69 +44,113 @@ typedef struct client_lighting_accumulator {
     int64_t weight;
 } client_lighting_accumulator_t;
 
-/** Coefficient of one face from its attenuation nibble: 15 is opaque. */
-static uint16_t client_lighting_face_coefficient(uint32_t occluder, int face) {
-    int attenuation = (occluder >> (16 + MAP2_OCCLUDER_FACE_ATTENUATION_BITS * face)) & 15;
-    if (attenuation == 15) {
+/** The stack being evaluated and the level whose cells are wanted. */
+typedef struct client_lighting_grid {
+    int levels, target, width, height;
+    const uint64_t *occluders;
+} client_lighting_grid_t;
+
+static bool client_lighting_inside(const client_lighting_grid_t *grid, const int p[3]) {
+    return p[0] >= 0 && p[1] >= 0 && p[2] >= 0 && p[0] < grid->width && p[1] < grid->height &&
+           p[2] < grid->levels;
+}
+
+static uint64_t client_lighting_occluder_at(const client_lighting_grid_t *grid, const int p[3]) {
+    if (grid->occluders == NULL) {
         return 0;
     }
-    return (uint16_t)(256 - attenuation * MAP2_OCCLUDER_ATTENUATION_STEP);
+    return grid->occluders[((size_t)p[2] * grid->height + p[1]) * grid->width + p[0]];
+}
+
+/** Coefficient of an attenuation nibble: 15 is opaque. */
+static uint16_t client_lighting_attenuation(unsigned attenuation) {
+    return attenuation == 15 ? 0 : (uint16_t)(256 - attenuation * MAP2_OCCLUDER_ATTENUATION_STEP);
+}
+
+/** Face index of a unit step for the closed-face bits: north, east, south,
+ * west, up, down. */
+static int client_lighting_face(int axis, int step) {
+    if (axis == 0) {
+        return step > 0 ? 1 : 3;
+    }
+    if (axis == 1) {
+        return step > 0 ? 2 : 0;
+    }
+    return step > 0 ? 4 : 5;
+}
+
+static bool client_lighting_closed(uint64_t occluder, int face) {
+    return ((occluder >> MAP2_OCCLUDER_FACE_SHIFT) >> face) & 1U;
 }
 
 /**
- * Coefficient of leaving a cell towards (sx, sy) through its exit face; a
- * diagonal step crosses two faces and takes the smaller, so the client never
- * transmits more light than the server.
+ * Light coefficient of one face crossed from 'from' to the neighbor along an
+ * axis, or a negative value when light cannot cross it. A horizontal face
+ * attenuates by the nibble of the cell light leaves; a vertical face by the
+ * vertical attenuation of the upper cell, closed by either cell's bit. An
+ * upward step ending on a view blocker or roof surface skips that receiving
+ * slab, so its exposed underside is lit, as light_terminal_surface() decides.
  */
-static uint16_t client_lighting_coefficient(uint32_t occluder, int sx, int sy) {
-    uint16_t coefficient = 256;
-    if (sy < 0) {
-        coefficient = MIN(coefficient, client_lighting_face_coefficient(occluder, 0));
-    } else if (sy > 0) {
-        coefficient = MIN(coefficient, client_lighting_face_coefficient(occluder, 2));
+static int client_lighting_face_light(const client_lighting_grid_t *grid,
+                                      const int from[3],
+                                      int axis,
+                                      int step,
+                                      const int destination[3],
+                                      bool terminal) {
+    int to[3] = {from[0], from[1], from[2]};
+    to[axis] += step;
+    if (!client_lighting_inside(grid, from) || !client_lighting_inside(grid, to)) {
+        return -1;
     }
-    if (sx > 0) {
-        coefficient = MIN(coefficient, client_lighting_face_coefficient(occluder, 1));
-    } else if (sx < 0) {
-        coefficient = MIN(coefficient, client_lighting_face_coefficient(occluder, 3));
+    uint64_t leaving = client_lighting_occluder_at(grid, from);
+    uint64_t entering = client_lighting_occluder_at(grid, to);
+    if (axis < 2) {
+        int face = client_lighting_face(axis, step);
+        if (client_lighting_closed(leaving, face)) {
+            return -1;
+        }
+        return client_lighting_attenuation((leaving >> (16 + MAP2_OCCLUDER_FACE_ATTENUATION_BITS *
+                                                                 (unsigned)face)) & 15U);
     }
-    return coefficient;
-}
-
-/** Whether local light cannot leave a cell through the face towards (sx, sy). */
-static bool client_lighting_face_closed(uint32_t occluder, int sx, int sy) {
-    uint16_t faces = occluder >> MAP2_OCCLUDER_FACE_SHIFT;
-    return (sy < 0 && (faces & 1U)) || (sx > 0 && (faces & 2U)) || (sy > 0 && (faces & 4U)) ||
-           (sx < 0 && (faces & 8U));
+    uint64_t lower = step > 0 ? leaving : entering, upper = step > 0 ? entering : leaving;
+    if (client_lighting_closed(lower, 4) || client_lighting_closed(upper, 5)) {
+        return -1;
+    }
+    if (step > 0 && terminal && to[0] == destination[0] && to[1] == destination[1] &&
+        to[2] == destination[2] &&
+        (upper & (MAP2_OCCLUDER_BLOCKSVIEW | MAP2_OCCLUDER_ROOF)) != 0) {
+        return 256;
+    }
+    return client_lighting_attenuation((upper >> 32) & 15U);
 }
 
 /**
- * Transmit a value from (x, y) to (x + dx, y + dy). Every cell the ray leaves,
- * the source included, attenuates it in travel order, as the server takes a
- * crossed face's coefficient from its source cell; a diagonal step also
- * crosses both side cells' faces. A view blocker stops it, and so does a face
- * marked discontinuous. The destination is an exposed face and
- * keeps the light that reaches it.
+ * Transmit a value from (x, y, z) to (x + dx, y + dy, z + dz) along the same
+ * supercover events as spatial_ray_next_resolved(): each step advances the
+ * axes whose next boundary comes first, and a tie crosses every face between
+ * the touched cells, grazing ones included, each attenuating in travel order.
+ * A cell outside the stack, or a closed face, stops the light; the
+ * destination keeps the light that reaches it.
  */
-static int32_t client_lighting_path(int width,
-                                    int height,
-                                    const uint32_t *occluders,
+static int32_t client_lighting_path(const client_lighting_grid_t *grid,
                                     int x,
                                     int y,
+                                    int z,
                                     int dx,
                                     int dy,
+                                    int dz,
                                     int32_t value) {
-    /* The same supercover events as spatial_ray_next_resolved(): each step
-     * advances the axis whose next boundary comes first, and only an exact tie
-     * advances both, crossing the faces of both grazing side cells too. */
-    const int direction[2] = {dx, dy};
-    uint64_t crossed[2] = {0, 0};
+    const int direction[3] = {dx, dy, dz};
+    const int destination[3] = {x + dx, y + dy, z + dz};
+    uint64_t crossed[3] = {0, 0, 0};
+    int position[3] = {x, y, z};
     int32_t transmitted = value;
-    int px = x, py = y;
-    while ((px != x + dx || py != y + dy) && transmitted != 0) {
+    while ((position[0] != destination[0] || position[1] != destination[1] ||
+            position[2] != destination[2]) &&
+           transmitted != 0) {
         int first = -1;
         unsigned axes = 0;
-        for (int axis = 0; axis < 2; axis++) {
+        for (int axis = 0; axis < 3; axis++) {
             if (direction[axis] == 0) {
                 continue;
             }
@@ -121,46 +168,52 @@ static int32_t client_lighting_path(int width,
                 axes |= 1U << axis;
             }
         }
-        int sx = (axes & 1U) ? (dx > 0 ? 1 : -1) : 0;
-        int sy = (axes & 2U) ? (dy > 0 ? 1 : -1) : 0;
-        int cx = px + sx, cy = py + sy;
-        if (cx < 0 || cy < 0 || cx >= width || cy >= height) {
-            return 0;
+        int step[3];
+        for (int axis = 0; axis < 3; axis++) {
+            step[axis] = (axes & (1U << axis)) ? (direction[axis] > 0 ? 1 : -1) : 0;
         }
-        uint32_t previous = occluders != NULL ? occluders[(size_t)py * width + px] : 0;
-        if (client_lighting_face_closed(previous, sx, sy)) {
-            return 0;
-        }
-        uint16_t coefficient = client_lighting_coefficient(previous, sx, sy);
-        if (sx != 0 && sy != 0) {
-            uint32_t side_x = occluders != NULL ? occluders[(size_t)py * width + cx] : 0;
-            uint32_t side_y = occluders != NULL ? occluders[(size_t)cy * width + px] : 0;
-            if (client_lighting_face_closed(side_x, 0, sy) ||
-                client_lighting_face_closed(side_y, sx, 0)) {
-                return 0;
+        bool terminal = position[0] + step[0] == destination[0] &&
+                        position[1] + step[1] == destination[1] &&
+                        position[2] + step[2] == destination[2];
+        int coefficient = 256;
+        for (unsigned mask = 0; mask < 8; mask++) {
+            if ((mask & ~axes) != 0) {
+                continue;
             }
-            coefficient = MIN(coefficient, client_lighting_coefficient(side_x, 0, sy));
-            coefficient = MIN(coefficient, client_lighting_coefficient(side_y, sx, 0));
+            int from[3];
+            for (int axis = 0; axis < 3; axis++) {
+                from[axis] = position[axis] + ((mask & (1U << axis)) ? step[axis] : 0);
+            }
+            for (int axis = 0; axis < 3; axis++) {
+                if ((axes & (1U << axis)) == 0 || (mask & (1U << axis)) != 0) {
+                    continue;
+                }
+                int face = client_lighting_face_light(grid, from, axis, step[axis], destination,
+                                                      terminal);
+                if (face < 0) {
+                    return 0;
+                }
+                coefficient = MIN(coefficient, face);
+            }
         }
         transmitted = (int32_t)(((int64_t)transmitted * coefficient + 128) / 256);
-        for (int axis = 0; axis < 2; axis++) {
+        for (int axis = 0; axis < 3; axis++) {
             if (axes & (1U << axis)) {
                 crossed[axis]++;
+                position[axis] += step[axis];
             }
         }
-        px = cx;
-        py = cy;
     }
     return transmitted;
 }
 
-/** Add one unsigned profile, transmitted from its tile, to the accumulators. */
-static void client_lighting_add(int width,
-                                int height,
-                                const uint32_t *occluders,
+/** Add one unsigned profile, transmitted from its tile to the target level, to
+ * the accumulators. Its vertical reach is that of the server's transport. */
+static void client_lighting_add(const client_lighting_grid_t *grid,
                                 client_lighting_accumulator_t *accumulators,
                                 int x,
                                 int y,
+                                int z,
                                 int mask,
                                 int sign,
                                 int target,
@@ -169,20 +222,24 @@ static void client_lighting_add(int width,
         return;
     }
     int radius = light_profile_radius(mask);
+    int dz = grid->target - z;
+    if (abs(dz) > MIN(radius, MAP2_MAX_DEPTH)) {
+        return;
+    }
     for (int dy = -radius; dy <= radius; dy++) {
         for (int dx = -radius; dx <= radius; dx++) {
-            int distance_squared = dx * dx + dy * dy;
+            int distance_squared = dx * dx + dy * dy + dz * dz;
             if (distance_squared > radius * radius || x + dx < 0 || y + dy < 0 ||
-                x + dx >= width || y + dy >= height) {
+                x + dx >= grid->width || y + dy >= grid->height) {
                 continue;
             }
             int32_t value = light_profile_value(mask, distance_squared);
-            value = client_lighting_path(width, height, occluders, x, y, dx, dy, value);
+            value = client_lighting_path(grid, x, y, z, dx, dy, dz, value);
             if (value == 0) {
                 continue;
             }
             client_lighting_accumulator_t *cell =
-                &accumulators[(size_t)(y + dy) * width + (x + dx)];
+                &accumulators[(size_t)(y + dy) * grid->width + (x + dx)];
             if (target == 0) {
                 cell->scalar += (int64_t)sign * value;
             } else if (target == 1) {
@@ -221,19 +278,19 @@ static bool client_lighting_emitter_flickers(const client_lighting_emitter_t *em
     return emitter->radius > 0 && (emitter->flags & MAP2_EMITTER_FLICKER) != 0;
 }
 
-static void client_lighting_accumulate(int width,
-                                       int height,
-                                       const uint32_t *occluders,
+static void client_lighting_accumulate(const client_lighting_grid_t *grid,
                                        const client_lighting_emitter_t *emitters,
                                        size_t count,
                                        client_lighting_pass_t pass,
                                        client_lighting_accumulator_t *accumulators) {
     size_t i = 0;
     while (i < count) {
-        int x = emitters[i].x, y = emitters[i].y;
+        int x = emitters[i].x, y = emitters[i].y, z = emitters[i].z;
         size_t end = i;
         bool tile_flickers = false;
-        for (; end < count && emitters[end].x == x && emitters[end].y == y; end++) {
+        for (; end < count && emitters[end].x == x && emitters[end].y == y &&
+               emitters[end].z == z;
+             end++) {
             tile_flickers |= client_lighting_emitter_flickers(&emitters[end]);
         }
         if (pass != CLIENT_LIGHTING_PASS_ALL && !tile_flickers) {
@@ -266,13 +323,13 @@ static void client_lighting_accumulate(int width,
             continue;
         }
         int scalar_mask = light_profile_mask(radius);
-        client_lighting_add(width, height, occluders, accumulators, x, y, abs(scalar_mask),
+        client_lighting_add(grid, accumulators, x, y, z, abs(scalar_mask),
                             scalar_mask < 0 ? -1 : 1, 0, NULL);
-        client_lighting_add(width, height, occluders, accumulators, x, y,
-                            light_profile_mask(positive_radius), 1, 1, NULL);
+        client_lighting_add(grid, accumulators, x, y, z, light_profile_mask(positive_radius), 1,
+                            1, NULL);
         for (int profile = 1; profile < LIGHT_PROFILE_COUNT; profile++) {
             if (multiplicity[profile] != 0) {
-                client_lighting_add(width, height, occluders, accumulators, x, y, profile,
+                client_lighting_add(grid, accumulators, x, y, z, profile,
                                     (int)multiplicity[profile], 2, linear[profile]);
             }
         }
@@ -302,17 +359,21 @@ static void client_lighting_resolve(const client_lighting_accumulator_t *a,
     }
 }
 
-void client_lighting_evaluate(int width,
-                              int height,
-                              const uint32_t *occluders,
-                              const client_lighting_emitter_t *emitters,
-                              size_t count,
-                              client_lighting_cell_t *cells) {
+void client_lighting_evaluate_stack(int levels,
+                                    int target,
+                                    int width,
+                                    int height,
+                                    const uint64_t *occluders,
+                                    const client_lighting_emitter_t *emitters,
+                                    size_t count,
+                                    client_lighting_cell_t *cells) {
     size_t total = (size_t)width * height;
     memset(cells, 0, total * sizeof(*cells));
-    if (count == 0 || width <= 0 || height <= 0) {
+    if (count == 0 || width <= 0 || height <= 0 || target < 0 || target >= levels) {
         return;
     }
+    client_lighting_grid_t grid = {.levels = levels, .target = target, .width = width,
+                                   .height = height, .occluders = occluders};
 
     /* Sort a copy by tile so grouping stays linear in the emitter count. The
      * client's fatal allocators keep a failure from caching a dark field. */
@@ -322,12 +383,10 @@ void client_lighting_evaluate(int width,
     client_lighting_accumulator_t *flicker_steady = xcalloc(total, sizeof(*flicker_steady));
     memcpy(sorted, emitters, count * sizeof(*sorted));
     qsort(sorted, count, sizeof(*sorted), client_lighting_emitter_compare);
-    client_lighting_accumulate(width, height, occluders, sorted, count, CLIENT_LIGHTING_PASS_ALL,
-                               all);
-    client_lighting_accumulate(width, height, occluders, sorted, count,
-                               CLIENT_LIGHTING_PASS_FLICKER_TILES, flicker);
-    client_lighting_accumulate(width, height, occluders, sorted, count,
-                               CLIENT_LIGHTING_PASS_FLICKER_TILES_STEADY, flicker_steady);
+    client_lighting_accumulate(&grid, sorted, count, CLIENT_LIGHTING_PASS_ALL, all);
+    client_lighting_accumulate(&grid, sorted, count, CLIENT_LIGHTING_PASS_FLICKER_TILES, flicker);
+    client_lighting_accumulate(&grid, sorted, count, CLIENT_LIGHTING_PASS_FLICKER_TILES_STEADY,
+                               flicker_steady);
     for (size_t index = 0; index < total; index++) {
         client_lighting_resolve(&all[index], &cells[index].scalar, cells[index].rgb);
         /* The flicker field is the flickering emitters' contribution to the
@@ -353,6 +412,15 @@ void client_lighting_evaluate(int width,
     free(flicker);
     free(all);
     free(sorted);
+}
+
+void client_lighting_evaluate(int width,
+                              int height,
+                              const uint64_t *occluders,
+                              const client_lighting_emitter_t *emitters,
+                              size_t count,
+                              client_lighting_cell_t *cells) {
+    client_lighting_evaluate_stack(1, 0, width, height, occluders, emitters, count, cells);
 }
 
 /** Flicker keyframes: a new dip every this many milliseconds. */
