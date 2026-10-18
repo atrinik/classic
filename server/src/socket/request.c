@@ -2251,7 +2251,7 @@ void draw_client_map2(object *pl) {
                 uint64_t cell_occluder = 0;
                 celestial_closure_accumulator_t cell_celestial;
                 celestial_closure_begin(&cell_celestial);
-                uint32_t cell_emitter_digest = UINT32_C(2166136261);
+                uint64_t cell_emitter_digest = UINT64_C(1469598103934665603);
                 uint64_t cell_emitter_sent = 0;
                 anim_num = 0;
                 uint8_t anim_type[NUM_SUB_LAYERS] = {0};
@@ -2657,7 +2657,7 @@ void draw_client_map2(object *pl) {
                                 const uint8_t *bytes = (const uint8_t *)entry;
                                 for (size_t i = 0; i < sizeof(entry); i++) {
                                     cell_emitter_digest = (cell_emitter_digest ^ bytes[i]) *
-                                                          UINT32_C(16777619);
+                                                          UINT64_C(1099511628211);
                                 }
                             }
 

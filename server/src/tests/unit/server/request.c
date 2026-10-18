@@ -3920,7 +3920,7 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_ne(cell->emitter_layers, 0);
     ck_assert_uint_eq(cell->emitter_stale, 0);
-    uint32_t digest = cell->emitter_digest;
+    uint64_t digest = cell->emitter_digest;
 
     /* A color-only change reuses the cached layer once, marks it stale and
      * resends it on the next update. */
@@ -3997,7 +3997,7 @@ START_TEST(test_client_lighting_cache_fields_add_no_padding) {
     ck_assert_uint_eq(offsetof(MapCell, emitter_stale), offsetof(MapCell, emitter_layers) + 8);
     ck_assert_uint_eq(offsetof(MapCell, emitter_digest), offsetof(MapCell, emitter_stale) + 8);
     ck_assert_uint_eq(offsetof(MapCell, light_next_rgb_radiance),
-                      offsetof(MapCell, emitter_digest) + sizeof(uint32_t));
+                      offsetof(MapCell, emitter_digest) + sizeof(uint64_t));
 }
 END_TEST
 

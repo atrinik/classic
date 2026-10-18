@@ -1783,20 +1783,22 @@ START_TEST(test_client_lighting_local_cache_survives_unrelated_frees) {
 END_TEST
 
 START_TEST(test_client_lighting_local_cache_ignores_unrelated_geometry) {
-    /* A geometry change elsewhere, such as another map being saved, only
-     * rehashes a cached block's own maps; a link change on one of them
-     * walks again. */
+    /* A blocker change anywhere leaves a cached block on the constant-time
+     * path, since coarse light reads only topology; a link change on one of
+     * its maps walks again. */
     mapstruct *map = get_empty_map(9, 9);
     add_colored_light(map, 4, 4, 13, LIGHT_COLOR_WHITE);
     int level = light_local_level(map, 4, 4);
     ck_assert_int_gt(level, 0);
     uint64_t walks = light_local_walks_for_test();
+    uint64_t rehashes = light_local_rehashes_for_test();
     los_geometry_changed();
     ck_assert_int_eq(light_local_level(map, 4, 4), level);
     ck_assert_uint_eq(light_local_walks_for_test(), walks);
+    ck_assert_uint_eq(light_local_rehashes_for_test(), rehashes);
     mapstruct *east = get_empty_map(9, 9);
     link_horizontal_maps(map, east);
-    los_geometry_changed();
+    light_local_topology_changed();
     ck_assert_int_eq(light_local_level(map, 8, 4), light_local_level(map, 8, 4));
     ck_assert_uint_gt(light_local_walks_for_test(), walks);
 }
