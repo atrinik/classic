@@ -306,8 +306,11 @@ and the client composes its closure field there like anywhere else.
 
 Structure is static between changes, and row runs compress the open air that
 dominates upper levels. The client keeps the published closure (4 bytes per
-cell of its fragments' rectangles) and 16 bytes of solved field in every map
-cache header: the scalar and RGB words of the current and next hour.
+cell of its fragments' rectangles) and 20 bytes of solved field in every map
+cache header: the scalar and RGB words of the current and next hour, and the
+low 32 bits of the hour they were solved for (the full hour is restored from
+the published one, which a cell never postdates). The header stays free of
+alignment padding.
 
 ## Privacy
 

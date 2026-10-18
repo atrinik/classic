@@ -214,10 +214,17 @@ typedef struct map_cell_header {
     /** Celestial field the client solved for the current and next hour:
      * scalar, then red, green and blue, and the hour (game seconds / 3600)
      * whose start the blend between them counts from. A remembered cell keeps
-     * the field it was last solved with. */
+     * the field it was last solved with. The hour keeps its low 32 bits, so
+     * the header grows by 4 bytes with no padding: a cell is never solved
+     * after the published hour, which restores the full value
+     * (map_cell_celestial_hour()). */
     int16_t celestial[2][4];
-    uint64_t celestial_hour;
+    uint32_t celestial_hour;
 } map_cell_header_t;
+
+/* Every cache coordinate carries a header: the celestial field adds 20 bytes
+ * and no alignment padding (CLIENT_CELESTIAL.md budget). */
+_Static_assert(sizeof(map_cell_header_t) == 48, "map cache header grew");
 
 static map_cell_store_t *cells;
 static map_cell_store_t *level_cells[MAP2_LEVELS];
@@ -3298,6 +3305,13 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
  * hour; set on store, cleared lazily once a scan finds none. */
 static bool map_celestial_moving;
 
+/** The full hour a cell was solved for: at or before the published hour,
+ * within 2^32 hours of it. */
+static uint64_t map_cell_celestial_hour(const map_cell_header_t *header) {
+    uint64_t published = client_celestial_start_seconds() / 3600;
+    return published - (uint32_t)((uint32_t)published - header->celestial_hour);
+}
+
 /** Saturate a solved celestial word into its cache cell. */
 static int16_t map_celestial_word(int32_t value) {
     return (int16_t)MAX(INT16_MIN, MIN(INT16_MAX, value));
@@ -3321,7 +3335,7 @@ void map_celestial_store(void *context, int depth, int x, int y, const int32_t c
         header->celestial[0][i] = map_celestial_word(current[i]);
         header->celestial[1][i] = map_celestial_word(next[i]);
     }
-    header->celestial_hour = client_celestial_start_seconds() / 3600;
+    header->celestial_hour = (uint32_t)(client_celestial_start_seconds() / 3600);
     header->client_light_known |= 4U;
     if (memcmp(header->celestial[0], header->celestial[1], sizeof(header->celestial[0])) != 0) {
         map_celestial_moving = true;
@@ -3350,7 +3364,7 @@ static bool map_cell_celestial(const map_cell_header_t *header, int64_t field[4]
     if ((header->client_light_known & 4U) == 0) {
         return false;
     }
-    uint64_t now, start = (uint64_t)header->celestial_hour * 3600;
+    uint64_t now, start = map_cell_celestial_hour(header) * 3600;
     int64_t progress = 0;
     if (telemetry_game_time_seconds(&now) && now > start) {
         progress = (int64_t)MIN(now - start, UINT64_C(3600));
@@ -3366,7 +3380,7 @@ static bool map_celestial_any_moving(uint64_t now) {
         for (size_t i = 0; store != NULL && i < store->count; i++) {
             const map_cell_header_t *header = &store->headers[i];
             if ((header->client_light_known & 4U) != 0 &&
-                now < ((uint64_t)header->celestial_hour + 1) * 3600 &&
+                now < (map_cell_celestial_hour(header) + 1) * 3600 &&
                 memcmp(header->celestial[0], header->celestial[1],
                        sizeof(header->celestial[0])) != 0) {
                 return true;
