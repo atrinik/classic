@@ -1562,6 +1562,15 @@ static void map2_sample_light(object *pl,
  * receiving these while the per-socket cache is valid (maintainer decision);
  * the record carries no layer, object, emitter or occluder.
  */
+#ifdef ATRINIK_TESTING
+/** Timed-light keyframe extensions MAP2 has written to visible cells. */
+static uint64_t map2_keyframe_extensions;
+
+uint64_t map2_keyframe_extensions_for_test(void) {
+    return map2_keyframe_extensions;
+}
+#endif
+
 static bool map_append_remembered_tile(packet_struct *packet,
                                        MapCell *cached,
                                        uint16_t mask,
@@ -1624,11 +1633,16 @@ static bool map_append_remembered_tile(packet_struct *packet,
                            memcmp(cached->light_next_rgb_radiance[sub_layer], next_rgb,
                                   sizeof(next_rgb)) != 0 ||
                            cached->light_next_generation != timed_light_generation;
-            if (differs || next_scalar != scalar ||
-                memcmp(next_rgb, rgb, sizeof(rgb)) != 0) {
+            bool endpoint_differs =
+                next_scalar != scalar || memcmp(next_rgb, rgb, sizeof(rgb)) != 0;
+            if (differs || endpoint_differs) {
                 next_bitmap |= (uint8_t)(1U << sub_layer);
             }
-            next_changed |= differs;
+            /* Resending the current scalar clears the client's endpoint, so a
+             * differing endpoint is resent with it even when unchanged. */
+            bool rebased =
+                !cached->light_known[sub_layer] || cached->light_radiance[sub_layer] != scalar;
+            next_changed |= differs || (endpoint_differs && rebased);
         }
     }
 
@@ -2943,6 +2957,16 @@ void draw_client_map2(object *pl) {
                                 sizeof(light_next_rgb_radiance[sub_layer])) != 0)) {
                         light_next_changed = true;
                     }
+                    /* Resending the current scalar clears the client's
+                     * endpoint, so an endpoint that differs from it is resent
+                     * with it even when its own cache is unchanged. */
+                    uint16_t current_scalar = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
+                    bool rebased = light_state_discarded || !mp->light_known[sub_layer] ||
+                                   mp->light_radiance[sub_layer] != current_scalar;
+                    if (timed_light_descriptor && (light_next_bitmap & (UINT8_C(1) << sub_layer)) &&
+                        rebased) {
+                        light_next_changed = true;
+                    }
                 }
 
                 /* A zero-valued sample is meaningful too. Compare the completed
@@ -3069,6 +3093,9 @@ void draw_client_map2(object *pl) {
                 }
                 if (timed_light_descriptor && light_next_changed) {
                     ext_flags |= MAP2_FLAG_EXT_LIGHT_KEYFRAME;
+#ifdef ATRINIK_TESTING
+                    map2_keyframe_extensions++;
+#endif
                 }
 
                 /* Client lighting fields describe only cells the viewer

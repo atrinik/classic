@@ -405,6 +405,8 @@ typedef enum {
 } socket_command_result_t;
 #ifdef ATRINIK_TESTING
 void socket_server_process_received_for_test(socket_struct *cs);
+/** Timed-light keyframe extensions MAP2 has written to visible cells. */
+uint64_t map2_keyframe_extensions_for_test(void);
 #endif
 extern socket_command_result_t
 socket_server_handle_command(socket_struct *cs, player *pl, uint8_t *data, size_t len);

@@ -3252,6 +3252,45 @@ START_TEST(test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates
 }
 END_TEST
 
+START_TEST(test_timed_endpoint_is_resent_when_its_current_sample_rebases) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_SEALED;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    request_move_player(&pl, map, 4, 4);
+    ck_assert(celestial_light_keyframe_ensure(map, (uint64_t)todtick));
+    MapSpace *space = GET_MAP_SPACE_PTR(map, pl->x, pl->y);
+    space->celestial_light_value = 0;
+    space->celestial_light_next_value = 0;
+    memset(space->celestial_light_rgb, 0, sizeof(space->celestial_light_rgb));
+    memset(space->celestial_light_next_rgb, 0, sizeof(space->celestial_light_next_rgb));
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    cs->ext_title_flag = 0;
+    /* An aperture opens in the last twilight hour: the current sample rises
+     * while the next endpoint, still dark, keeps its cached value. Resending
+     * the current scalar clears the client's endpoint, so it is resent too. */
+    space->celestial_light_value = 200;
+    for (int channel = 0; channel < 3; channel++) {
+        space->celestial_light_rgb[channel] = 200;
+    }
+    uint64_t extensions = map2_keyframe_extensions_for_test();
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    ck_assert_uint_gt(map2_keyframe_extensions_for_test(), extensions);
+}
+END_TEST
+
 START_TEST(test_local_light_color_stays_out_of_base_radiance) {
     mapstruct *map;
     object *pl;
@@ -4907,6 +4946,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_celestial_profiles_come_only_from_authorized_cells);
     tcase_add_test(tc_core, test_remembered_fog_is_bound_to_its_map_cell);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
+    tcase_add_test(tc_core, test_timed_endpoint_is_resent_when_its_current_sample_rebases);
     tcase_add_test(tc_core, test_pending_neighbor_endpoint_resends_without_player_generation_change);
     tcase_add_test(tc_core, test_local_light_color_stays_out_of_base_radiance);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
