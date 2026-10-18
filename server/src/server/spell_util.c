@@ -80,6 +80,9 @@ static object *spell_aim_target(object *source) {
             perception_object_visible(source, target)) ? target : NULL;
 }
 
+/* Planar NPC talk range: a scripted self-spell service reaches this far. */
+#define SPELL_SERVICE_RANGE 2
+
 static bool spell_target_authorized(object *op, object *target, int type) {
     /* Retained identity and camera authorization are fresh requirements for
      * targeted spatial spells. Xray can disclose a target but never lets magic
@@ -98,7 +101,15 @@ static bool spell_target_authorized(object *op, object *target, int type) {
         }
         dx += target->x - op->x;
         dy += target->y - op->y;
-        if (abs(dz) > 6 || MAX(abs(dx), MAX(abs(dy), abs(dz))) > spells[type].range) {
+        /* Only a script service, such as a temple priest, aims a self-only
+         * spell at another creature; on the same level it reaches at least
+         * the planar NPC talk range (the SIZEOFFREE2 ring), so a served
+         * player is never out of range. Other stories keep the spell's own. */
+        int range = spells[type].range;
+        if (dz == 0 && !(spells[type].flags & (SPELL_DESC_FRIENDLY | SPELL_DESC_ENEMY))) {
+            range = MAX(range, SPELL_SERVICE_RANGE);
+        }
+        if (abs(dz) > 6 || MAX(abs(dx), MAX(abs(dy), abs(dz))) > range) {
             draw_info(COLOR_WHITE, op, "Your target is out of range!");
             return false;
         }
