@@ -184,7 +184,7 @@ static void client_lighting_add(int width,
             client_lighting_accumulator_t *cell =
                 &accumulators[(size_t)(y + dy) * width + (x + dx)];
             if (target == 0) {
-                cell->scalar += sign * value;
+                cell->scalar += (int64_t)sign * value;
             } else if (target == 1) {
                 cell->positive += value;
             } else {
