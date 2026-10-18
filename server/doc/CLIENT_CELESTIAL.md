@@ -8,23 +8,28 @@ per-connection negotiation and no legacy path to fall back to.
 
 ## Implementation status
 
-This pull request implements:
+Implemented:
 
 - the shared celestial model in libatrinik (`celestial_model.{c,h}`): solar
   and seasonal tables, brightness and color mixing and lunar evaluation, with
   the server's `celestial_lunar.c` and the model inputs of `celestial_light.c`
-  delegating to it;
-- the `CELESTIAL` command and its shared codec, sent to every connection
-  before each MAP2 update whose shown profiles' encoding changed, and the
-  client's validated slot table (`client_celestial.{c,h}`).
+  delegating to it (step 1);
+- the `CELESTIAL` command and its shared codec, and the client's validated
+  slot table (`client_celestial.{c,h}`) (step 1);
+- the shared solver in libatrinik (`celestial_solver.{c,h}`): the exact
+  integer traversal, sky backtraces, halo resolution, spill coefficients,
+  relaxation and publish, behind lattice operations. The server solves its
+  gameplay field through operations on its maps, unchanged bit for bit (step
+  2);
+- `CELESTIAL_STRUCTURE`, the celestial closure and its codec and lattice
+  (`celestial_closure.{c,h}`), sent with `CELESTIAL` as one publication; the
+  client stages both, publishes them with the MAP2 update that follows, and
+  solves its closure (step 2).
 
-Until the remaining steps land, base radiance keeps carrying the server's
-celestial light, so presentation stays complete and the client does not yet
-compose its own celestial field. The remaining steps of this design are
-`CELESTIAL_STRUCTURE` and the celestial closure, the shared ray and relaxation
-solver with the client solving the closure, base radiance excluding celestial
-light, and the deletion of the server's display-only celestial code
-(Rollout below).
+Until step 3 lands, base radiance keeps carrying the server's celestial
+light: the client solves its closure but does not yet compose the field.
+Step 3 removes celestial light from the base, composes the client's field and
+deletes the server's display-only celestial code (Rollout below).
 
 ## Split of authority
 
@@ -104,7 +109,10 @@ digest). Its rays travel at most 32 cells horizontally and 13 levels, and its
 diffuse relaxation spills 4 cells.
 
 The **celestial closure** of a viewer is the set of its authorized cells
-inside the current MAP2 window, over all 13 depths, and nothing else.
+inside the current MAP2 window, over all 13 depths, and nothing else. A cell
+is authorized while MAP2 sends its content to the viewer, and while it is
+remembered fog that keeps receiving light (CLIENT_LIGHTING.md, Privacy);
+every other cell, an empty or camera-hidden one included, is outside it.
 Structure of a cell the viewer has never been authorized for is never sent, so
 there is no initial unauthorized record to choose; an upper level the viewer
 has not seen is solved like any cell outside the closure. Remembered tiles
@@ -115,34 +123,54 @@ and spill light near the closure edge approximate instead of exact, and errs
 towards light, so outdoor views stay naturally lit at their edges.
 
 The server sends a `CELESTIAL_STRUCTURE` command describing the closure as
-fragments, in network byte order:
+fragments, one per map and depth, in network byte order:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | generation | `uint32` | the `CELESTIAL` payload whose slots it references |
 | count | `uint16` | number of fragments |
 | per fragment: depth | `int8` | `-6..6`, relative to the viewer |
-| x, y, width, height | `uint8` each | rectangle within the MAP2 window, nonempty and inside it |
+| x, y, width, height | `uint8` each | the bounding rectangle of the map's closure cells in the MAP2 window, nonempty and inside it |
 | slot | `uint8` | profile slot of the fragment's map, or 255 |
 | runs | repeated | covering the rectangle in row-major order |
 | per run: length | `uint8` | `1..255` cells |
-| per run: value | `3` bytes | the cell's 24-bit structure value |
+| per run: value | `uint32` | the cell's structure value, zero for a cell outside the closure |
 
 A run may continue past the end of a row into the next one but never past the
 rectangle; runs must cover it exactly, and fragments of one depth must not
-overlap. A cell outside every fragment is outside the closure. The structure
-value is the 16-bit signature, bit 16 sky cover open, bit 17 sky exit, bits
-18–21 continuity of the north, east, south and west faces to the neighboring
-cell (bits 22–23 the up and down faces), with reserved bits zero. Decoders
-reject truncation, trailing bytes, a run of length 0, a run or rectangle
-exceeding its bounds, overlap and reserved bits, before replacing the closure.
-The fragment's slot selects the model that solves its cells, as the server
-selects a model per map. The worst case is the 17×17 window over 13 depths,
-3,757 cells. A cell costs at most 4 bytes as a run and, in the worst case of
-one-cell fragments, 6 more bytes of fragment header, so a complete closure is
-at most about 38 KB and always fits in one command; no continuation framing is
-needed. The rollout's qualification measures this bound together with the
-client's memory.
+overlap. A cell outside every fragment, or with value zero, is outside the
+closure. A fragment is one map: the client solves it as the server solves a
+map, with the same halo, so spill across seams follows the server exactly.
+
+Structure value bits (faces indexed 0 down, 1 north, 2 east, 3 south, 4
+west):
+
+| Bits | Meaning |
+| --- | --- |
+| 0–9 | transmission class of face i, two bits each: opaque, glass, grate, open |
+| 10–14 | face i carries a door, gate or authored transmission |
+| 15 | set on every closure cell |
+| 16 | the virtual cover above the cell is open |
+| 17 | no cell lies above, and an upward exit reaches the sky |
+| 18–23 | continuity of the north, east, south, west, up and down faces |
+| 24–25 | class of the static floor or roof of the cell above |
+| 26 | that face carries a door, gate or authored transmission |
+| 27–31 | reserved, zero |
+
+Bits 24–26 are read only while the cell above is outside the closure. They
+are what shades an indoor viewer: the ceiling above the room is cut away from
+view, so its cell is not authorized, but it is the authorized room's own
+roof. Doors and gates in it count as closed, so no unseen state is disclosed.
+Decoders reject truncation, trailing bytes, a run of length 0, a run or
+rectangle exceeding its bounds, overlap, a nonzero value without bit 15, a
+sky exit that also continues upward, and reserved bits, before replacing the
+closure. The fragment's slot selects the model that solves its cells, as the
+server selects a model per map.
+
+A run costs 5 bytes, and runs compress the open air that dominates upper
+levels: a 32×32 window filled over all 13 depths encodes in 409 bytes. A
+closure too large for one command loses its farthest depths, which the client
+then solves as open air; no continuation framing is needed.
 
 The two commands are one publication, and it belongs to the MAP2 update that
 follows it. The server advances the generation whenever either payload changes
@@ -164,9 +192,13 @@ revision, door or gate, or a change in which objects MAP2 sends to this viewer
 (seeing invisible, direction filtering or plugin visibility) changes a
 currently visible cell.
 
-Disclosure rule: a cell's structure value is built only from the objects MAP2
-sends to this viewer, with the same visibility, hidden-object and plugin
-filtering as occluders. The server's own cached `celestial_geometry`, which
+Disclosure rule: a cell's faces are built only from the objects MAP2 sends to
+this viewer, with the same visibility, hidden-object and plugin filtering as
+occluders, and a sent view blocker making its unauthored cardinal faces
+opaque. Two static faces are added: the cell's own floor, which the camera
+may leave undrawn on a boundary level, and the floor or roof of the cell
+above (bits 24–26), each from every object the viewer may see, with doors and
+gates closed or left out. The server's own cached `celestial_geometry`, which
 aggregates every object of the cell and falls back to the space-wide
 `P_BLOCKSVIEW`, is never serialized, so a hidden wall, gate or door contributes
 nothing and its state never reaches the client. A structure record changes
@@ -194,7 +226,18 @@ both produce bit-identical fields.
 
 The test reference is the server solver run on the disclosed closure, with
 cells outside it as open air and remembered doors at their remembered state;
-the client must match it bit for bit. Against the gameplay field, the client
+the client must match it bit for bit. It runs on the server's real maps and
+links: topology, continuity, sky exits and authored cover come from the maps,
+the faces the viewer was shown from the disclosed records, and every cell
+outside the closure, or no map resolves, is open air under an open sky.
+
+The client solves a publication a few milliseconds a frame, one fragment and
+both hours at a time; a newer publication supersedes the rest. Each cell's
+field lives in its map cache header, which scrolls with the map and survives
+fog, so a cell keeps its last field until it is solved again. An optimized
+build solves one hourly field of a full 32×32 window over 13 depths in about
+29 ms, a 17×17 one in about 11 ms; authored Brynknot views of 300–900 closure
+cells take a few milliseconds. Against the gameplay field, the client
 differs only where sun, sky or spill light reaches an authorized tile through
 cells outside the closure or through a remembered door that has since changed.
 
@@ -224,9 +267,9 @@ cell.
 ## Celestial budget
 
 Structure is static between changes, and row runs compress the open air that
-dominates upper levels. The client keeps 3 bytes per closure cell; the worst
-case is 3,757 cells, about 11 KB stored and 15 KB on the wire, and typical scenes are far smaller. The rollout qualifies this against MAP_RENDERING.md budgets before
-the celestial step merges.
+dominates upper levels. The client keeps the published closure (4 bytes per
+cell of its fragments' rectangles) and 16 bytes of solved field in every map
+cache header: the scalar and RGB words of the current and next hour.
 
 ## Privacy
 
@@ -248,8 +291,7 @@ exact.
 ## Rollout
 
 1. Shared model and lunar evaluation in libatrinik with the server delegating
-   to it, and the `CELESTIAL` command with the client's slot table (this pull
-   request).
+   to it, and the `CELESTIAL` command with the client's slot table.
 2. `CELESTIAL_STRUCTURE`, the celestial closure and the shared solver, with
    the client solving the closure, qualified bit for bit against the server
    solver.
@@ -263,13 +305,17 @@ exact.
   generations and malformed payloads keep the previous state; a new connection
   resets slots and generation; the server sends a payload only when its
   encoding changes (step 1).
-- the libatrinik model matches the server's model for all solar
-  hours, season months and lunar ages; the client solver on the encoded closure
-  matches the server solver bit for bit on outdoor, roofed, glass, grate, door,
-  aperture-spill and multi-level fixtures; remembered cells keep their whole structure record when another player builds,
-  removes or opens there, checked with two clients; cells outside the closure
-  solve as open air; mixed-profile closures select each fragment's slot, and
-  slot 255 gives zero celestial light; region slots carry no digest or epoch. (steps 2 and 3)
+- the shared solver reproduces the server's gameplay field bit for bit
+  (golden digests of every Brynknot stack at six times of day); the client's
+  solve of the received closure matches the server solver on the disclosed
+  closure bit for bit on synthetic outdoor, glass, grate, door, gate,
+  aperture and roofed multi-level fixtures, where it also equals the gameplay
+  field, and on Brynknot outdoor, indoor, upper-level, door and gate views; a
+  visible door's change sends the next pair, an unchanged view sends none, an
+  invisible object contributes nothing, and a remembered door that changes out
+  of sight keeps its record and sends nothing; the client publishes only a
+  matching pair after its MAP2 update, discards it when the update fails, and
+  gives slot 255 zero celestial light (step 2).
 
 ## Decisions recorded
 
