@@ -1369,6 +1369,15 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
         celestial_closure_free(&closure);
         return;
     }
+    if (cs->celestial_generation == UINT32_MAX) {
+        /* The client accepts only advancing generations, so a wrapped one
+         * would leave it stale for the rest of the connection: end it
+         * instead, and a new connection starts over at generation zero. */
+        LOG(PACKET, "Celestial publication generation exhausted; closing connection.");
+        cs->state = ST_DEAD;
+        celestial_closure_free(&closure);
+        return;
+    }
     cs->celestial_generation++;
     packet_struct *packet = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
     packet_debug_data(packet, 0, "Celestial inputs");

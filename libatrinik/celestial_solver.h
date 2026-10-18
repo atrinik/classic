@@ -29,6 +29,9 @@
 /** Most boundary events one traversal may take, as the server's spatial
  * traversal bounds them. */
 #define CELESTIAL_SOLVER_MAX_EVENTS 12288
+/** Largest origin coordinate magnitude a cursor accepts, so every step and
+ * endpoint stays inside int; larger origins fail initialization. */
+#define CELESTIAL_SOLVER_COORDINATE_MAX (1 << 24)
 /** Vertical extent of a solved stack and of a ray's vertical travel. */
 #define CELESTIAL_SOLVER_LEVELS 13
 /** Crossings one backtrace records: its horizontal reach plus every level. */

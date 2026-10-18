@@ -83,6 +83,9 @@ typedef struct celestial_closure {
     celestial_closure_fragment_t *fragments;
     /** Per depth, the fragment index + 1 of each window cell, or 0. */
     uint16_t *index;
+    /** The solver lattice over the fragments, built once with the closure
+     * and shared by every fragment and hour solve (opaque). */
+    void *lattice;
 } celestial_closure_t;
 
 /** Free a closure's storage and reset it to empty. */

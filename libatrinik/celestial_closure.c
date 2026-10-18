@@ -34,8 +34,11 @@ void celestial_closure_free(celestial_closure_t *closure) {
     }
     free(closure->fragments);
     free(closure->index);
+    free(closure->lattice);
     memset(closure, 0, sizeof(*closure));
 }
+
+static void *closure_lattice_create(const celestial_closure_t *closure);
 
 bool celestial_closure_value_valid(uint32_t value) {
     if ((value & CELESTIAL_CLOSURE_OUTSIDE) != 0) {
@@ -109,6 +112,10 @@ bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, 
                 valid = above == 0 || above == CELESTIAL_CLOSURE_OUTSIDE_RECORD;
             }
         }
+    }
+    if (valid) {
+        closure->lattice = closure_lattice_create(closure);
+        valid = closure->lattice != NULL;
     }
     if (!valid) {
         celestial_closure_free(closure);
@@ -201,6 +208,12 @@ bool celestial_closure_read(const uint8_t *data, size_t len, int window_width, i
     }
     bool valid = true;
     size_t parsed = 0;
+    /* Non-overlapping fragments cover at most every window cell of every
+     * depth: a payload claiming more is rejected before it is allocated. */
+    size_t total = 0, total_max = window_width > 0 && window_height > 0
+                                      ? (size_t)window_width * window_height *
+                                            CELESTIAL_CLOSURE_DEPTHS
+                                      : 0;
     for (; valid && parsed < count; parsed++) {
         celestial_closure_fragment_t *fragment = &fragments[parsed];
         fragment->depth = packet_reader_read_int8(&reader);
@@ -210,9 +223,10 @@ bool celestial_closure_read(const uint8_t *data, size_t len, int window_width, i
         fragment->height = packet_reader_read_uint8(&reader);
         fragment->slot = packet_reader_read_uint8(&reader);
         size_t cells = (size_t)fragment->width * fragment->height;
+        total += cells;
         valid = packet_reader_error(&reader) == PACKET_ERROR_NONE && cells != 0 &&
                 fragment->x + fragment->width <= window_width &&
-                fragment->y + fragment->height <= window_height;
+                fragment->y + fragment->height <= window_height && total <= total_max;
         if (valid) {
             fragment->values = calloc(cells, sizeof(*fragment->values));
             valid = fragment->values != NULL;
@@ -445,33 +459,42 @@ static const celestial_solver_ops_t closure_ops = {
     .light = lattice_light,
 };
 
+/** The lattice context of a built closure: its handles, one per fragment,
+ * and the open air around it, in one allocation. */
+static void *closure_lattice_create(const celestial_closure_t *closure) {
+    closure_lattice *context =
+        malloc(sizeof(*context) + closure->count * sizeof(*context->fragments));
+    if (context == NULL) {
+        return NULL;
+    }
+    context->closure = closure;
+    context->fragments = (lattice_handle *)(context + 1);
+    for (size_t i = 0; i < closure->count; i++) {
+        context->fragments[i] = (lattice_handle){.fragment = &closure->fragments[i],
+                                                 .depth = closure->fragments[i].depth};
+    }
+    for (int i = 0; i < OUTSIDE_DEPTHS; i++) {
+        context->outside[i] = (lattice_handle){.depth = OUTSIDE_DEPTH_MIN + i};
+    }
+    return context;
+}
+
 bool celestial_closure_solve(const celestial_closure_t *closure, size_t fragment,
                              const celestial_model_t *model, int32_t *values, int32_t (*rgb)[3]) {
     if (closure == NULL || fragment >= closure->count || model == NULL || values == NULL ||
         rgb == NULL) {
         return false;
     }
-    closure_lattice *context = malloc(sizeof(*context));
-    lattice_handle *handles = malloc(closure->count * sizeof(*handles));
-    if (context == NULL || handles == NULL) {
-        free(context);
-        free(handles);
+    closure_lattice *context = closure->lattice;
+    if (context == NULL) {
         return false;
     }
+    /* A closure may have moved since it was built: its storage did not. */
     context->closure = closure;
-    context->fragments = handles;
-    for (size_t i = 0; i < closure->count; i++) {
-        handles[i] = (lattice_handle){.fragment = &closure->fragments[i],
-                                      .depth = closure->fragments[i].depth};
-    }
-    for (int i = 0; i < OUTSIDE_DEPTHS; i++) {
-        context->outside[i] = (lattice_handle){.depth = OUTSIDE_DEPTH_MIN + i};
-    }
     celestial_solver_lattice_t lattice = {.ops = &closure_ops, .context = context};
     const celestial_closure_fragment_t *solved = &closure->fragments[fragment];
-    bool complete = celestial_solver_solve(&lattice, &handles[fragment], model, values, rgb);
-    free(handles);
-    free(context);
+    bool complete =
+        celestial_solver_solve(&lattice, &context->fragments[fragment], model, values, rgb);
     if (complete) {
         size_t cells = (size_t)solved->width * solved->height;
         for (size_t cell = 0; cell < cells; cell++) {

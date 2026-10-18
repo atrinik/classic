@@ -3160,6 +3160,35 @@ START_TEST(test_celestial_profiles_skip_maps_without_closure_records) {
 }
 END_TEST
 
+START_TEST(test_celestial_generation_exhaustion_closes_the_connection) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    map->celestial_schema = 1;
+    map->celestial_schema_seen = true;
+    map->celestial_sky_above = CELESTIAL_SKY_OPEN;
+    map->celestial_sky_seen = true;
+    map->celestial_v1_header_seen = true;
+    map->celestial_width_seen = true;
+    map->celestial_height_seen = true;
+    request_move_player(&pl, map, 4, 4);
+    socket_struct *cs = CONTR(pl)->cs;
+    /* A wrapped generation would be ignored by the client for the rest of
+     * the connection, so the connection ends instead of sending it. */
+    cs->celestial_generation = UINT32_MAX;
+    cs->celestial_sent = false;
+    update_los(pl);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_ptr_null(queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL));
+    ck_assert_int_eq(cs->state, ST_DEAD);
+    ck_assert_uint_eq(cs->celestial_generation, UINT32_MAX);
+    cs->state = ST_PLAYING;
+    socket_buffer_clear(cs);
+}
+END_TEST
+
 START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
     mapstruct *map;
     object *pl;
@@ -5064,6 +5093,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_celestial_inputs_precede_map_and_resend_only_on_change);
     tcase_add_test(tc_core, test_celestial_profiles_come_only_from_authorized_cells);
+    tcase_add_test(tc_core, test_celestial_generation_exhaustion_closes_the_connection);
     tcase_add_test(tc_core, test_celestial_profiles_skip_maps_without_closure_records);
     tcase_add_test(tc_core, test_remembered_fog_is_bound_to_its_map_cell);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);

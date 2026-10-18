@@ -169,6 +169,20 @@ static int test_rejections(void) {
     require(!celestial_closure_value_valid(CELESTIAL_CLOSURE_IN | CELESTIAL_CLOSURE_SKY_EXIT));
     require(celestial_closure_value_valid(CELESTIAL_CLOSURE_IN | CELESTIAL_CLOSURE_SKY_EXIT |
                                           CELESTIAL_CLOSURE_COVER_OPEN));
+    /* More fragment cells than non-overlapping fragments could cover: a 1x1
+     * window has 13 cells over all depths, and 14 fragments claim 14. */
+    {
+        uint8_t many[6 + 14 * 11];
+        size_t at = 0;
+        many[at++] = 0; many[at++] = 0; many[at++] = 0; many[at++] = 7;
+        many[at++] = 0; many[at++] = 14;
+        for (int i = 0; i < 14; i++) {
+            const uint8_t fragment[] = {0, 0, 0, 1, 1, 3, 1, 0x00, 0x00, 0x80, 0x00};
+            memcpy(&many[at], fragment, sizeof(fragment));
+            at += sizeof(fragment);
+        }
+        require(!celestial_closure_read(many, at, 1, 1, &closure));
+    }
     /* A reserved bit (bit 28; bit 27 alone with bit 15 is an outside record). */
     static const uint8_t reserved[][5] = {{4, 0x10, 0x00, 0x80, 0x00}};
     require(!celestial_closure_read(buffer, encode(buffer, 0, 0, 0, 2, 2, reserved, 1), 4, 4,
@@ -465,6 +479,13 @@ static int test_invalid_inputs_fail_without_crashing(void) {
     celestial_closure_t closure;
     require(!celestial_closure_build(&closure, 1, 9, 9, NULL, 3));
     celestial_closure_free(&closure);
+    /* An origin beyond the coordinate bound is rejected up front, so no
+     * cursor arithmetic can overflow. */
+    celestial_solver_cursor_t cursor;
+    require(!celestial_solver_direction_init(&lattice, &cursor, &counts.map,
+                                             CELESTIAL_SOLVER_COORDINATE_MAX + 1, 1, 1, 0, 0, 4));
+    require(!celestial_solver_direction_init(&lattice, &cursor, &counts.map, 1, INT_MIN, 1, 0, 0,
+                                             4));
     /* An azimuth outside the eight directions traces nothing either. */
     lattice.ops = &paired_open_ops;
     celestial_solver_ray_t probe;
