@@ -286,6 +286,7 @@ static void map_emitter_revoke(size_t level) {
     map_client_lighting_fields[level].valid = false;
 }
 static void map_emitter_revoke_cell(size_t level, const map_cell_t *cell);
+static void map_emitter_revoke_reach(size_t level, int radius);
 static size_t current_level_index = MAP2_DEPTH_INDEX(0);
 /** Offline proofs only: the discrete per-tile projection pinned by approved
  * conformance goldens. Players always get smooth lighting. */
@@ -1485,7 +1486,8 @@ void map_set_level_mask(uint16_t mask) {
             map_cell_store_destroy(level_cells[index]);
             level_cells[index] = NULL;
             level_lighting_revision[index]++;
-            map_emitter_revoke(index);
+            /* Fields of neighboring depths read its emitters too. */
+            map_emitter_revoke_reach(index, LIGHT_PROFILE_RADIUS_MAX);
         }
     }
 
@@ -1734,7 +1736,7 @@ void map_state_transaction_commit(void) {
                  * revoked now, so a reused store address cannot revive its
                  * emitter field. */
                 if (level_cells[i] != NULL) {
-                    map_emitter_revoke(i);
+                    map_emitter_revoke_reach(i, LIGHT_PROFILE_RADIUS_MAX);
                 }
                 map_cell_store_destroy(level_cells[i]);
                 level_cells[i] = NULL;
@@ -7403,6 +7405,15 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && !map_client_lighting_fields[MAP2_DEPTH_INDEX(-MAP2_MAX_DEPTH)].valid &&
               map_client_lighting_fields[MAP2_DEPTH_INDEX(MAP2_MAX_DEPTH - 2)].valid;
     map_level_scroll(-1);
+    /* Removing a depth revokes the fields of every depth within reach, which
+     * read its emitters too. */
+    success = success && map_select_level(1, true) && map_select_level(0, true);
+    uint16_t depth_mask = map_level_mask;
+    map_client_lighting_fields[MAP2_DEPTH_INDEX(0)].valid = true;
+    map_set_level_mask((uint16_t)(UINT16_C(1) << MAP2_DEPTH_INDEX(0)));
+    success = success && level_cells[MAP2_DEPTH_INDEX(1)] == NULL &&
+              !map_client_lighting_fields[MAP2_DEPTH_INDEX(0)].valid;
+    map_level_mask = depth_mask;
 
     /* A committed scroll cancels fragments still to solve: they address the
      * window before it, so they would land on shifted cells, while solved
