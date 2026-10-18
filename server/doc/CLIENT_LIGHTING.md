@@ -128,10 +128,10 @@ only on a positive radius; darkness never flickers.
 
 Every per-sub-layer scalar and RGB lighting word is a **signed** two's
 complement `int16`, signed Q4.11 on the existing scale (2048 is raw 1280,
-daylight). It carries environment only: no local source and no XRAY floor.
-Until the celestial follow-up moves celestial light to the client (see
-Celestial light), the environment includes the server's celestial light.
- Encoding from the server's raw value `r`:
+daylight). It carries environment only: no local source, no celestial light
+and no XRAY floor. The client composes celestial light itself (Celestial
+light), so the environment is achromatic: every channel equals the scalar.
+Encoding from the server's raw value `r`:
 
 - `q = sign(r) · floor((|r| · 8 + 2) / 5)`, the existing Q5.11 rounding applied to the
   magnitude, so `Q(-r) = -Q(r)`;
@@ -139,8 +139,11 @@ Celestial light), the environment includes the server's celestial light.
   The server never encodes `-32768`; decoders read every word as a plain
   `int16` and accept it.
 
-Base and keyframe endpoints are interpolated as signed values, in arithmetic
-wide enough for a cross-zero transition (`-2048` to `2048` passes through 0).
+The base no longer changes within an hour, so MAP2 sends no timed-light
+descriptor or next-hour endpoints; the client blends its own celestial field
+between the current and next hour instead. Decoders still read both as
+signed values, in arithmetic wide enough for a cross-zero transition (`-2048`
+to `2048` passes through 0).
 Conformance vectors: raw `0 → 0`, `1 → 2`, `-1 → -2`, `160 → 256`,
 `1280 → 2048`, `-1280 → -2048`, `20479 → 32766`, `20480 → 32767`,
 `-20480 → -32767`. Current world, map and celestial anchors stay within raw
@@ -167,10 +170,11 @@ This design therefore raises the client's per-cell lighting storage cap to 72
 bytes. The server's per-socket cell keeps the 56 bytes of signed base and adds
 the 37 bytes of protocol-1085 state below, so its cap is 93 bytes per fully
 populated cell. The rollout qualifies client memory at 72 and server memory
-at 93 bytes, and its final step records both in MAP_RENDERING.md. The celestial follow-up retires the base RGB
-words and next-hour endpoints once the base is neutral, reducing a cell to 27
-bytes: 14 of scalar base, 7 coarse levels, 5 of occluder and the known-state
-byte. Emitters are object attributes, not lighting samples: their 5 bytes
+at 93 bytes, and its final step records both in MAP_RENDERING.md. With the base neutral, the
+server no longer sends base RGB words or next-hour endpoints and its
+per-socket cell drops the next-hour endpoint cache; a sent cell carries 27
+bytes of lighting state: 14 of scalar base, 7 coarse levels, 5 of occluder
+and the known-state byte. Emitters are object attributes, not lighting samples: their 5 bytes
 ride on the layer record of the object they describe, within the unchanged
 complete-MAP2 and continuation limits. The client stores emitters in one packed
 per-cell array of 6-byte entries (layer, radius, flags, RGB), allocated only
@@ -199,17 +203,14 @@ connection.
 
 - **Gameplay light only.** The server keeps authoritative raw light for
   darkness gating, infravision, stealth, XRAY and `tli`: the scalar local mask
-  and the celestial solver's scalar. Display-only lighting code that no
-  longer has a consumer (local positive and color masks, display RGB and the
-  timed-light display endpoints, once celestial light leaves the base) is
-  deleted with the celestial follow-up.
+  and the celestial solver's field (CLIENT_CELESTIAL.md, What stays on the
+  server). Display-only lighting code without a consumer is deleted: MAP2's
+  per-cell keyframe sampling, the timed-light descriptor and next-hour
+  endpoints, the per-socket light generation and the celestial-colored base.
 - **Base radiance** is the environment term of each sub-layer: raw light minus
-  the local source value, encoded as signed Q4.11. Its channels are built
-  directly from the signed environment components, never by subtracting local
-  light from an aggregate whose channels were already clamped: each channel is
-  the neutral non-local, non-celestial term plus that channel of the
-  celestial RGB field, in signed arithmetic (`light_base_radiance_signed()`),
-  so neutral `-80` beside a red `+80` emitter stays `(-80, -80, -80)`. The viewer's `tli`
+  the local source value and the celestial value, encoded as signed Q4.11. It
+  is achromatic, so every channel equals the scalar: neutral `-80` beside a red
+  `+80` emitter stays `(-80, -80, -80)`. The viewer's `tli`
   override is not folded in: it is a viewer property carried as bit 5 of the
   local-light byte, refreshed on remembered tiles like the vision-floor bit,
   so a tile that entered fog follows a later `/tli` toggle instead of keeping
@@ -219,8 +220,8 @@ connection.
 - **Coarse local light** is derived each time MAP2 sends a visible or
   remembered cell, from
   the already maintained per-space source counters. No new per-map state is
-  needed. All light MAP2 sends for a cell, base, keyframe and coarse level,
-  is the record cell's own: the authorized tile. Only gameplay darkness
+  needed. All light MAP2 sends for a cell, base and coarse level, is the
+  record cell's own: the authorized tile. Only gameplay darkness
   gating reads the space of the object it gates (for a multi-part object,
   the part's own space), and when that candidate is rejected the cell's light
   gates the sub-layer's later objects instead. No light of any other space is
@@ -278,7 +279,7 @@ connection.
 - **Remembered tiles keep receiving light levels.** When base LOS loss turns
   an authorized tile into fog, the server keeps its per-socket cache entry
   marked as remembered and keeps sending that tile's light-level information,
-  its signed base radiance, keyframe and coarse local levels with the
+  its signed base radiance and coarse local levels with the
   viewer's vision-floor and `tli` bits, as they change, for as long as the
   per-socket cache is valid; a map change, hard clear or reconnect ends it.
   This is the maintainer's disclosure boundary: light levels of previously
@@ -365,8 +366,9 @@ connection.
   Both cells in view are resident by construction, so the bits never depend on,
   and never encode, whether some other map is loaded.
 - **No per-player light recompute.** MAP2 reads cached base radiance and
-  per-cell scalars; coarse levels are cached per block, invalidated only by source changes on the maps their walk reaches. The celestial
-  follow-up also removes MAP2's celestial ensure and keyframe calls.
+  per-cell scalars; coarse levels are cached per block, invalidated only by source changes on the maps their walk reaches. MAP2
+  makes no keyframe calls; the only celestial work left in it is gameplay
+  gating's current field.
 
 ## Client
 
@@ -537,16 +539,14 @@ boundary; the coarse level carries hidden and visible local light there.
 Celestial light (sun, moon, sky and starlight) moves to the client as well: it
 is always on, with no option, negotiation or legacy path, exactly like local
 light. The server keeps authority over game time, region profiles, lunar
-overrides and gameplay darkness. It is specified and implemented in the
-follow-up pull request, in `CLIENT_CELESTIAL.md`. Until it lands, base
-radiance carries the server's celestial light, so presentation is complete.
+overrides and gameplay darkness. It is specified in `CLIENT_CELESTIAL.md`:
+the client solves the celestial closure it receives and composes the field
+onto the base, which carries no celestial light.
 
-That interim base is not a release state. The server's celestial field is
-built from every object of a cell, including hidden and unsent doors and
-gates, and once local light leaves the base nothing masks it: a visible tile's
-exact base would reveal an unsent aperture opening. Protocol 1085 therefore
-ships to players only together with the celestial follow-up's step that removes
-celestial light from the base (see Rollout).
+The server's celestial field is built from every object of a cell, including
+hidden and unsent doors and gates; a base carrying it would reveal an unsent
+aperture opening on a visible tile. That is why protocol 1085 ships only with
+celestial light removed from the base (see Rollout).
 
 ## Contract change: visible emitters and structure
 
@@ -578,7 +578,7 @@ What a modified client can learn, beyond today's MAP2:
   grouped, so the level depends on the strongest single source only, not on
   which sources share a tile. Hue, count and profile are never sent.
   Previously sent tiles, including remembered ones in fog, keep receiving
-  their light levels (base, keyframe and coarse) while the per-socket cache
+  their light levels (base and coarse) while the per-socket cache
   is valid: that is the maintainer's disclosure boundary for light. They never
   receive creatures, objects, emitters or occluder changes.
 - **Environment:** exact signed base radiance, including negative environment,

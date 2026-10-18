@@ -49,6 +49,7 @@
 #include <misc.h>
 #include <map.h>
 #include <player.h>
+#include <client_celestial.h>
 #include <animations.h>
 #include <map_transform.h>
 #include <settings.h>
@@ -211,9 +212,11 @@ typedef struct map_cell_header {
     /** Protocol 1085 horizontal face attenuation nibbles (N, E, S, W). */
     uint16_t occluder_horizontal;
     /** Celestial field the client solved for the current and next hour:
-     * scalar, then red, green and blue. A remembered cell keeps the field it
-     * was last solved with. */
+     * scalar, then red, green and blue, and the hour (game seconds / 3600)
+     * whose start the blend between them counts from. A remembered cell keeps
+     * the field it was last solved with. */
     int16_t celestial[2][4];
+    uint32_t celestial_hour;
 } map_cell_header_t;
 
 static map_cell_store_t *cells;
@@ -3281,7 +3284,52 @@ void map_celestial_store(void *context, int depth, int x, int y, const int32_t c
         header->celestial[0][i] = map_celestial_word(current[i]);
         header->celestial[1][i] = map_celestial_word(next[i]);
     }
+    header->celestial_hour = (uint32_t)MIN(client_celestial_start_seconds() / 3600, UINT32_MAX);
     header->client_light_known |= 4U;
+    level_lighting_revision[level]++;
+    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+}
+
+/**
+ * The celestial field of a cell at the client's game time: the current and
+ * next hour blended as c + round((n - c) * p / 3600), rounding half away from
+ * zero, for p game seconds since its hour started, clamped to 0..3600.
+ */
+static void map_celestial_blend(const map_cell_header_t *header, int64_t progress,
+                                int64_t field[4]) {
+    for (size_t i = 0; i < 4; i++) {
+        int64_t delta = ((int64_t)header->celestial[1][i] - header->celestial[0][i]) * progress;
+        int64_t step = delta >= 0 ? (delta + 1800) / 3600 : -((-delta + 1800) / 3600);
+        field[i] = header->celestial[0][i] + step;
+    }
+}
+
+static bool map_cell_celestial(const map_cell_header_t *header, int64_t field[4]) {
+    if ((header->client_light_known & 4U) == 0) {
+        return false;
+    }
+    uint64_t now, start = (uint64_t)header->celestial_hour * 3600;
+    int64_t progress = 0;
+    if (telemetry_game_time_seconds(&now) && now > start) {
+        progress = (int64_t)MIN(now - start, UINT64_C(3600));
+    }
+    map_celestial_blend(header, progress, field);
+    return true;
+}
+
+/** Relight once a game minute while a celestial field may move. */
+static void map_celestial_temporal_update(void) {
+    static uint64_t minute = UINT64_MAX;
+    uint64_t now;
+    if (client_celestial_generation() == 0 || !telemetry_game_time_seconds(&now) ||
+        now / 60 == minute) {
+        return;
+    }
+    minute = now / 60;
+    for (size_t level = 0; level < arraysize(level_lighting_revision); level++) {
+        level_lighting_revision[level]++;
+    }
+    map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
 }
 
 bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]) {
@@ -4005,6 +4053,7 @@ void map_animate(void) {
     map_cell_t *cell;
 
     map_temporal_lighting_update();
+    map_celestial_temporal_update();
     map_flicker_lighting_update();
 
     for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
@@ -5852,15 +5901,22 @@ map_client_lighting_apply(int x, int y, uint8_t sub_layer, uint16_t *scalar, uin
             flicker_rgb[channel] = local->flicker_rgb[channel] * gain / 256;
         }
     }
+    /* Celestial light is the client's own: the base carries none, so the
+     * solved field joins the raw terms on visible and remembered cells. */
+    int64_t celestial[4] = {0, 0, 0, 0};
+    (void)map_cell_celestial(header, celestial);
     /* Base words are signed Q4.11. Everything stays signed and unsaturated
      * until the vision floor, then clamps, scales and saturates once. */
     int64_t scalar_value =
-        (int16_t)*scalar + map_lighting_raw_to_radiance_signed(composed + flicker_scalar + tli);
+        (int16_t)*scalar +
+        map_lighting_raw_to_radiance_signed(composed + flicker_scalar + tli + celestial[0]);
     int64_t channels[3];
     for (size_t channel = 0; channel < 3; channel++) {
         /* The emitter field's per-channel hue delta rides on the composed
-         * scalar; coarse light beyond it is neutral. */
-        int64_t channel_raw = (int64_t)composed + flicker_rgb[channel] + tli;
+         * scalar; coarse light beyond it is neutral, celestial light its own
+         * color. */
+        int64_t channel_raw =
+            (int64_t)composed + flicker_rgb[channel] + tli + celestial[1 + channel];
         if (local != NULL) {
             channel_raw += local->rgb[channel] - local->scalar;
         }
@@ -6888,6 +6944,35 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40) &&
               composed_rgb[0] == composed_scalar && composed_rgb[2] == composed_scalar;
+    /* The client's celestial field composes onto the base as raw light, its
+     * own color per channel; a hard clear forgets it. */
+    map_set_light_radiance(10, 8, 0, 160);
+    map_set_local_light(10, 8, map_protocol_local_light_encode(0, false));
+    int32_t sky[4] = {500, 300, 400, 600};
+    int celestial_depth = (int)current_level_index - MAP2_MAX_DEPTH;
+    map_celestial_store(NULL, celestial_depth, 10, 8, sky, sky);
+    map_lighting_radiance(10 + MAP_STARTX, 8 + MAP_STARTY, MAP_CELL_GET_MIDDLE(10, 8), 0,
+                          &composed_scalar, composed_rgb);
+    success = success && composed_scalar == 160 + map_lighting_raw_to_radiance_signed(500) &&
+              composed_rgb[0] == 160 + map_lighting_raw_to_radiance_signed(300) &&
+              composed_rgb[1] == 160 + map_lighting_raw_to_radiance_signed(400) &&
+              composed_rgb[2] == 160 + map_lighting_raw_to_radiance_signed(600);
+    int16_t stored[4];
+    success = success && map_celestial_field(celestial_depth, 10, 8, false, stored) &&
+              stored[0] == 500 && stored[3] == 600;
+    map_clear_cell(10, 8, true);
+    success = success && !map_celestial_field(celestial_depth, 10, 8, false, stored);
+    /* The hourly blend rounds half away from zero, in signed arithmetic. */
+    map_cell_header_t blend = {0};
+    blend.celestial[0][0] = 100;
+    blend.celestial[1][0] = 201;
+    blend.celestial[0][1] = 100;
+    blend.celestial[1][1] = -1;
+    int64_t blended[4];
+    map_celestial_blend(&blend, 1800, blended);
+    success = success && blended[0] == 151 && blended[1] == 49;
+    map_celestial_blend(&blend, 3600, blended);
+    success = success && blended[0] == 201 && blended[1] == -1;
     /* A presented frame rebuilds at most its budget of out-of-date emitter
      * fields; the rest are deferred to a requested redraw, and rebuilds
      * outside a frame stay unbounded. */

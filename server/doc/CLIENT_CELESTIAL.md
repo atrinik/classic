@@ -24,12 +24,10 @@ Implemented:
 - `CELESTIAL_STRUCTURE`, the celestial closure and its codec and lattice
   (`celestial_closure.{c,h}`), sent with `CELESTIAL` as one publication; the
   client stages both, publishes them with the MAP2 update that follows, and
-  solves its closure (step 2).
-
-Until step 3 lands, base radiance keeps carrying the server's celestial
-light: the client solves its closure but does not yet compose the field.
-Step 3 removes celestial light from the base, composes the client's field and
-deletes the server's display-only celestial code (Rollout below).
+  solves its closure (step 2);
+- base radiance without celestial light, the client composing its own field
+  onto it, and the server's display-only celestial code deleted (step 3; What
+  stays on the server, below).
 
 ## Split of authority
 
@@ -241,28 +239,59 @@ cells take a few milliseconds. Against the gameplay field, the client
 differs only where sun, sky or spill light reaches an authorized tile through
 cells outside the closure or through a remembered door that has since changed.
 
-The client adds its celestial field to the signed base before it combines the
-base with local light (client step 3 of CLIENT_LIGHTING.md), for visible and
-remembered tiles alike. The base no longer contains celestial light, so the server never samples the celestial field in
-MAP2 for display: it stops calling `celestial_light_keyframe_request()` and
-reading celestial display values. Gameplay darkness gating is unchanged and
-stays fail-closed: MAP2's per-cell gate keeps calling `map_get_darkness()`,
-which still obtains the current celestial generation synchronously through
-`celestial_light_ensure()` before any live object is serialized, so a field
-invalidated by a door, structure revision, profile or lunar override is never
-read stale.
+The client adds its celestial field to the signed base together with local
+light (client step 3 of CLIENT_LIGHTING.md), for visible and remembered tiles
+alike: the scalar and each RGB channel of the field join the raw terms that
+are converted onto the base. A cell blends its two hourly fields from the
+start of the hour it was solved for, so a remembered cell outside the window
+keeps its last field rather than borrowing a newer hour's. The client relights
+once a game minute while a field is published.
+
+## What stays on the server
+
+The base carries no celestial light, so MAP2 samples no celestial field for
+display. Deleted: MAP2's per-cell keyframe requests, the timed-light
+descriptor and next-hour endpoints, the per-socket light generation, the
+field's generation counter, and the celestial-colored base. What remains is
+what gameplay needs:
+
+- **The current field** (`celestial_light_ensure()`), which gameplay darkness
+  gating reads through `map_get_darkness()`. It stays fail-closed: MAP2's
+  per-cell gate obtains it synchronously before any live object is
+  serialized, so a field invalidated by a door, structure revision, profile or
+  lunar override is never read stale. A synchronous rebuild remains only for
+  such invalidations and for maps a view loads, since gating needs the exact
+  field there.
+- **The next hour's field**, solved on the budgeted server-thread solver
+  (`celestial_light_process_pending()`), so that the hour boundary promotes it
+  instead of rebuilding every shown stack inside MAP2. The view admits it once
+  per update, before MAP2 (`celestial_light_prepare_next()`), never per cell.
+- **Dependency tracking** for both fields (`celestial_dependencies.c`), which
+  invalidates them when a structure or link they read changes.
+- **The publication** of `CELESTIAL` and `CELESTIAL_STRUCTURE`, and the
+  synchronous next-hour solve `celestial_light_keyframe_ensure()` that offline
+  callers and the solver oracle tests use.
+
+Measured with the offline issue-566 harness on the authored Brynknot
+cohort (Debug build, 12 maps, 6,912 base cells, three runs each, step 2
+against step 3):
+
+| Measure | Step 2 | Step 3 |
+| --- | --- | --- |
+| Walking route, MAP2 per update, p50 | 60–64 ms | 22–24 ms |
+| Walking route, MAP2 per update, p95 | 109–120 ms | 64–66 ms |
+| Walking route, updates over the slow threshold | 348–363 of 517 | 27–28 of 517 |
+| Cohort celestial view pass, warm | 132–168 ms | 35–40 ms |
+| Cohort view pass after a map swap | 263–317 ms | 176–183 ms |
+
+The worst single update is unchanged (about 300–350 ms): it is gameplay's
+synchronous rebuild of a map a view loads.
 
 ## Remote samples
 
-The one exception is a sub-layer whose light is sampled at another space than
-its own cell, such as a magic mirror showing a remote place, because the
-client's celestial field covers only its own closure. Such a sub-layer is sent
-as a complete remote sample: its scalar and its explicit RGB words (the
-existing per-sub-layer RGB extension, which only remote samples keep once the
-base RGB words retire) carry that space's celestial radiance too, and the
-presence of the explicit RGB words marks it. The client composes no closure
-celestial field onto a remote sample; it still composes local light at the
-cell.
+None. The light MAP2 sends is always the record cell's own (CLIENT_LIGHTING.md),
+so a sub-layer whose object sits on another space presents the cell's light,
+and the client composes its closure field there like anywhere else.
 
 ## Celestial budget
 
@@ -315,7 +344,12 @@ exact.
   invisible object contributes nothing, and a remembered door that changes out
   of sight keeps its record and sends nothing; the client publishes only a
   matching pair after its MAP2 update, discards it when the update fails, and
-  gives slot 255 zero celestial light (step 2).
+  gives slot 255 zero celestial light (step 2);
+- a door on the cut-away upper level that alone decides an indoor room's
+  gameplay light changes neither the base the viewer receives nor the closure
+  when it closes out of sight; the client composes a stored field onto the base
+  per channel, forgets it on a hard clear, and blends hours rounding half away
+  from zero (step 3).
 
 ## Decisions recorded
 
