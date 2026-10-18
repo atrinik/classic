@@ -26,6 +26,7 @@
 #include <spatial.h>
 #include <tod.h>
 #include <toolkit/celestial_model.h>
+#include <toolkit/celestial_solver.h>
 #include <toolkit/datetime.h>
 
 #include <stdint.h>
@@ -47,14 +48,6 @@ static void celestial_spatial_observe(const mapstruct *map, void *context) {
 static bool celestial_observe(const mapstruct *map) {
     return map == NULL || active_dependencies == NULL ||
            celestial_dependencies_observe(active_dependencies, map);
-}
-
-static bool celestial_observe_event(const spatial_event *event) {
-    for (size_t i = 0; i < event->face_count; i++) {
-        if (!celestial_observe(event->faces[i].from.map) ||
-            !celestial_observe(event->faces[i].to.map)) return false;
-    }
-    return true;
 }
 
 #ifdef ATRINIK_TESTING
@@ -182,93 +175,6 @@ bool celestial_light_geometry_update(mapstruct *map, int x, int y) {
     return changed;
 }
 
-static int32_t transmit(int32_t value, uint16_t coefficient) {
-    return celestial_model_transmit(value, coefficient);
-}
-
-static void direction_delta(uint8_t direction, int *dx, int *dy) {
-    *dx = 0;
-    *dy = 0;
-    switch (direction) {
-    case NORTH:
-        *dy = 1;
-        break;
-    case NORTHEAST:
-        *dx = -1;
-        *dy = 1;
-        break;
-    case EAST:
-        *dx = -1;
-        break;
-    case SOUTHEAST:
-        *dx = -1;
-        *dy = -1;
-        break;
-    case SOUTH:
-        *dy = -1;
-        break;
-    case SOUTHWEST:
-        *dx = 1;
-        *dy = -1;
-        break;
-    case WEST:
-        *dx = 1;
-        break;
-    case NORTHWEST:
-        *dx = 1;
-        *dy = 1;
-        break;
-    default:
-        HARD_ASSERT(false);
-    }
-}
-
-/* A backtrace has at most 32 horizontal events and thirteen vertical exits.
- * Store coefficients rather than pre-rounded gains: radiance rounds separately
- * at each physical crossing in source-to-receiver order. */
-#define CELESTIAL_RAY_EVENTS (CELESTIAL_DIRECT_REACH + MAP2_LEVELS)
-typedef struct celestial_ray {
-    spatial_cursor cursor;
-    uint16_t coefficients[CELESTIAL_RAY_EVENTS];
-    bool apertures[CELESTIAL_RAY_EVENTS];
-    unsigned count, horizontal;
-    bool done, sky;
-} celestial_ray;
-
-static uint32_t celestial_sqrt(uint64_t value) {
-    uint64_t root = 0, bit = UINT64_C(1) << 62;
-    while (bit > value) bit >>= 2;
-    while (bit != 0) {
-        if (value >= root + bit) {
-            value -= root + bit;
-            root = (root >> 1) + bit;
-        } else {
-            root >>= 1;
-        }
-        bit >>= 2;
-    }
-    return (uint32_t)root;
-}
-
-static void celestial_ray_init(celestial_ray *ray, mapstruct *map, int x, int y,
-                               uint8_t direction, int32_t elevation) {
-    memset(ray, 0, sizeof(*ray));
-    if (elevation <= 0) {
-        ray->done = true;
-        return;
-    }
-    int dx, dy;
-    direction_delta(direction, &dx, &dy);
-    uint64_t horizontal_squared = UINT64_C(32768) * 32768 -
-                                  (uint64_t)elevation * elevation;
-    uint32_t horizontal = celestial_sqrt(horizontal_squared /
-                                        (dx != 0 && dy != 0 ? 2 : 1));
-    /* Azimuth names the source; direction_delta names light travel. */
-    ray->done = !celestial_observe(map) || !spatial_direction_init(&ray->cursor, map, x, y,
-                                        -dx * (int)horizontal, -dy * (int)horizontal,
-                                        elevation, CELESTIAL_RAY_EVENTS);
-}
-
 static bool celestial_sky_exit(const spatial_cell *cell) {
     if (cell->map == NULL || cell->map->celestial_sky_above == CELESTIAL_SKY_LINKED)
         return false;
@@ -296,213 +202,122 @@ static bool celestial_face_continuous(const spatial_face *face) {
                   region_celestial_for_map(to)->digest, 32) == 0;
 }
 
-/* One bounded crossing per call, also used by the runtime deadline scheduler. */
+static spatial_cell spatial_from_solver(const celestial_solver_cell_t *cell) {
+    return (spatial_cell){.map = cell->map, .x = cell->x, .y = cell->y, .z = cell->z};
+}
+
+static spatial_face spatial_face_from_solver(const celestial_solver_face_t *face) {
+    spatial_face converted = {.from = spatial_from_solver(&face->from),
+                              .to = spatial_from_solver(&face->to)};
+    memcpy(converted.normal, face->normal, sizeof(converted.normal));
+    return converted;
+}
+
+static bool lattice_resolve(void *context, void *origin, int x, int y, int z,
+                            celestial_solver_cell_t *cell) {
+    (void)context;
+    spatial_cell resolved;
+    if (!spatial_resolve(origin, x, y, z, &resolved)) {
+        return false;
+    }
+    *cell = (celestial_solver_cell_t){.map = resolved.map, .x = resolved.x, .y = resolved.y,
+                                      .z = resolved.z};
+    return true;
+}
+
+static bool lattice_observe(void *context, void *map) {
+    (void)context;
+    return celestial_observe(map);
+}
+
+static void lattice_dimensions(void *context, void *map, int *width, int *height) {
+    (void)context;
+    *width = ((mapstruct *)map)->width;
+    *height = ((mapstruct *)map)->height;
+}
+
+static bool lattice_sky(void *context, const celestial_solver_face_t *face) {
+    (void)context;
+    spatial_cell from = spatial_from_solver(&face->from);
+    return face->to.map == NULL && celestial_sky_exit(&from);
+}
+
+static bool lattice_continuous(void *context, const celestial_solver_face_t *face) {
+    (void)context;
+    spatial_face converted = spatial_face_from_solver(face);
+    return celestial_face_continuous(&converted);
+}
+
+static uint16_t lattice_light(void *context, const celestial_solver_face_t *face,
+                              bool *aperture) {
+    (void)context;
+    spatial_face converted = spatial_face_from_solver(face);
+    return spatial_face_light(&converted, aperture);
+}
+
+/* Spill tables are charged to the shared transient limit. */
+static bool lattice_reserve(void *context, size_t bytes) {
+    (void)context;
+    if (pending_memory > CELESTIAL_PENDING_MEMORY_MAX - bytes) {
+        return false;
+    }
+    pending_memory += bytes;
+    return true;
+}
+
+static void lattice_release(void *context, size_t bytes) {
+    (void)context;
+    HARD_ASSERT(pending_memory >= bytes);
+    pending_memory -= bytes;
+}
+
+/* The server's lattice is its maps, read through the spatial resolver with
+ * the structure predicates gameplay transport always used. */
+static const celestial_solver_ops_t lattice_ops = {
+    .resolve = lattice_resolve,
+    .observe = lattice_observe,
+    .dimensions = lattice_dimensions,
+    .sky = lattice_sky,
+    .continuous = lattice_continuous,
+    .light = lattice_light,
+    .reserve = lattice_reserve,
+    .release = lattice_release,
+};
+static const celestial_solver_lattice_t lattice = {.ops = &lattice_ops};
+
+static int32_t transmit(int32_t value, uint16_t coefficient) {
+    return celestial_model_transmit(value, coefficient);
+}
+
+typedef celestial_solver_ray_t celestial_ray;
+
 static void celestial_ray_step(celestial_ray *ray) {
-    if (ray->done) return;
-    spatial_event event;
-    if (spatial_ray_next(&ray->cursor, &event) != 1) {
-        ray->done = true;
-        return;
-    }
-    if (!celestial_observe_event(&event)) {
-        ray->done = true;
-        return;
-    }
-    if ((event.axes & 3) != 0 && ++ray->horizontal > CELESTIAL_DIRECT_REACH) {
-        ray->done = true;
-        return;
-    }
-    uint16_t coefficient = CELESTIAL_SCALE;
-    bool aperture = false, sky = false;
-    for (size_t i = 0; i < event.face_count; i++) {
-        spatial_face face = event.faces[i];
-        if (face.to.map == NULL && face.normal[2] > 0 &&
-            celestial_sky_exit(&face.from)) {
-            sky = true;
-            continue;
-        }
-        if (!celestial_face_continuous(&face)) {
-            ray->done = true;
-            return;
-        }
-        spatial_cell swap = face.from;
-        face.from = face.to;
-        face.to = swap;
-        for (size_t axis = 0; axis < 3; axis++) face.normal[axis] = -face.normal[axis];
-        bool crossed_aperture = false;
-        coefficient = MIN(coefficient, spatial_face_light(&face, &crossed_aperture));
-        aperture |= crossed_aperture;
-    }
-    if (ray->count == CELESTIAL_RAY_EVENTS || coefficient == 0) {
-        ray->done = true;
-        return;
-    }
-    ray->coefficients[ray->count] = coefficient;
-    ray->apertures[ray->count++] = aperture;
-    if (sky) {
-        ray->sky = true;
-        ray->done = true;
-    }
+    celestial_solver_ray_step(&lattice, ray);
 }
 
-static int32_t celestial_ray_value(const celestial_ray *ray, int32_t source,
-                                   int32_t *aperture) {
-    return celestial_model_ray_value(ray->coefficients, ray->apertures, ray->count, ray->sky,
-                                     source, aperture);
+static int32_t celestial_ray_value(const celestial_ray *ray, int32_t source, int32_t *aperture) {
+    return celestial_solver_ray_value(ray, source, aperture);
 }
 
-/* Four spill cells around the output plus each seed's 32-cell directional
- * backtrace give the frozen 36-cell dependency halo. Only one level's seed
- * buffers exist at once, including for thirteen-member stacks. */
-static int celestial_scratch_width(const mapstruct *map) {
-    return map->width + 2 * CELESTIAL_SPILL_PASSES;
+static int celestial_scratch_width(mapstruct *map) {
+    return celestial_solver_scratch_width(&lattice, map);
 }
 
-static int celestial_scratch_height(const mapstruct *map) {
-    return map->height + 2 * CELESTIAL_SPILL_PASSES;
+static int celestial_scratch_height(mapstruct *map) {
+    return celestial_solver_scratch_height(&lattice, map);
 }
 
-static size_t celestial_scratch_cells(const mapstruct *map) {
+static size_t celestial_scratch_cells(mapstruct *map) {
     return (size_t)celestial_scratch_width(map) * celestial_scratch_height(map);
-}
-
-static bool celestial_halo_cell(mapstruct *map, int x, int y, spatial_cell *cell) {
-    if (!celestial_observe(map)) return false;
-    x -= CELESTIAL_SPILL_PASSES;
-    y -= CELESTIAL_SPILL_PASSES;
-    int start_x = MAX(0, MIN(x, map->width - 1));
-    int start_y = MAX(0, MIN(y, map->height - 1));
-    if (start_x != x || start_y != y) {
-        spatial_cursor cursor;
-        if (!spatial_ray_init(&cursor, map, start_x, start_y, x - start_x, y - start_y, 0))
-            return false;
-        spatial_event event;
-        int status;
-        while ((status = spatial_ray_next(&cursor, &event)) == 1) {
-            if (!celestial_observe_event(&event) || !event.valid) return false;
-            for (size_t face = 0; face < event.face_count; face++) {
-                if (!celestial_face_continuous(&event.faces[face])) return false;
-            }
-        }
-        if (status != 0) return false;
-    }
-    return spatial_resolve(map, x, y, 0, cell) && celestial_observe(cell->map);
 }
 
 static void celestial_halo_ray(celestial_ray *ray, mapstruct *map, int x, int y,
                                uint8_t direction, int32_t elevation) {
-    spatial_cell cell;
-    if (!celestial_halo_cell(map, x, y, &cell)) {
-        memset(ray, 0, sizeof(*ray));
-        ray->done = true;
-        return;
-    }
-    celestial_ray_init(ray, cell.map, cell.x, cell.y, direction, elevation);
+    celestial_solver_halo_ray(&lattice, ray, map, x, y, direction, elevation);
 }
 
 static uint16_t celestial_spill_coefficient(mapstruct *map, int x, int y, int dx, int dy) {
-    spatial_cell cell;
-    if (!celestial_halo_cell(map, x + dx, y + dy, &cell)) return 0;
-    spatial_cursor cursor;
-    spatial_event event;
-    if (!spatial_ray_init(&cursor, cell.map, cell.x, cell.y, -dx, -dy, 0) ||
-        spatial_ray_next(&cursor, &event) != 1 ||
-        !celestial_observe_event(&event) || !event.valid) return 0;
-    for (size_t face = 0; face < event.face_count; face++) {
-        if (!celestial_face_continuous(&event.faces[face])) return 0;
-    }
-    return spatial_event_light(&event);
-}
-
-static void transport_line(mapstruct *map, const celestial_model *model,
-                           int32_t *values, int32_t *apertures, bool moon) {
-    int width = celestial_scratch_width(map), height = celestial_scratch_height(map);
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            celestial_ray ray;
-            celestial_halo_ray(&ray, map, x, y,
-                               moon ? model->moon_direction : model->solar_direction,
-                               moon ? model->moon_elevation : model->solar_elevation);
-            while (!ray.done) celestial_ray_step(&ray);
-            int index = x + width * y;
-            values[index] = celestial_ray_value(&ray, moon ? model->moon : model->direct,
-                                                 &apertures[index]);
-        }
-    }
-}
-
-/** Spill coefficients depend only on geometry. One level's rebuild resolves
- * all eight neighbours once, in the order its first relaxation pass did, and
- * reuses them for every pass and field. The table is charged to the shared
- * transient limit; when it does not fit, each pass evaluates them again. */
-typedef struct spill_table {
-    uint16_t *coefficients;
-    size_t bytes;
-    bool unavailable;
-} spill_table;
-
-static void spill_table_fill(spill_table *table, mapstruct *map) {
-    int width = celestial_scratch_width(map), height = celestial_scratch_height(map);
-    size_t bytes = (size_t)width * height * 8 * sizeof(*table->coefficients);
-    if (pending_memory > CELESTIAL_PENDING_MEMORY_MAX - bytes) {
-        table->unavailable = true;
-        return;
-    }
-    pending_memory += bytes;
-    table->bytes = bytes;
-    uint16_t *coefficients = table->coefficients = xcalloc(bytes, 1);
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            uint16_t *cell = &coefficients[((size_t)x + (size_t)width * y) * 8];
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    if ((dx == 0 && dy == 0) || x + dx < 0 || y + dy < 0 ||
-                        x + dx >= width || y + dy >= height) continue;
-                    int neighbour = (dy + 1) * 3 + dx + 1;
-                    cell[neighbour > 4 ? neighbour - 1 : neighbour] =
-                        celestial_spill_coefficient(map, x, y, dx, dy);
-                }
-            }
-        }
-    }
-}
-
-static void spill_table_release(spill_table *table) {
-    if (table->coefficients != NULL) {
-        HARD_ASSERT(pending_memory >= table->bytes);
-        pending_memory -= table->bytes;
-        free(table->coefficients);
-    }
-}
-
-/** A level's spill table, filled on the relaxation's first coefficient
- * request so an unlit field never allocates it. */
-typedef struct relax_context {
-    mapstruct *map;
-    spill_table *table;
-} relax_context;
-
-static uint16_t relax_spill(int x, int y, int dx, int dy, void *context) {
-    relax_context *relax = context;
-    spill_table *table = relax->table;
-    if (table->coefficients == NULL && !table->unavailable) {
-        spill_table_fill(table, relax->map);
-    }
-    if (table->coefficients == NULL) {
-        return celestial_spill_coefficient(relax->map, x, y, dx, dy);
-    }
-    int neighbour = (dy + 1) * 3 + dx + 1;
-    return table->coefficients[((size_t)x + (size_t)celestial_scratch_width(relax->map) * y) * 8 +
-                               (neighbour > 4 ? neighbour - 1 : neighbour)];
-}
-
-static void relax_diffuse(mapstruct *map, int32_t *values, spill_table *table) {
-    relax_context context = {.map = map, .table = table};
-    if (!celestial_model_relax(values, celestial_scratch_width(map), celestial_scratch_height(map),
-                               relax_spill, &context)) {
-        LOG(ERROR, "Out of memory relaxing the celestial field.");
-        abort();
-    }
+    return celestial_solver_spill(&lattice, map, x, y, dx, dy);
 }
 
 static void clear_map_field(mapstruct *map) {
@@ -597,29 +412,6 @@ static void celestial_clear_failed_stack(mapstruct *map) {
         current->celestial_light_generation_id++;
         celestial_dependencies_field_release(current, false);
         celestial_dependencies_field_release(current, true);
-    }
-}
-
-static void publish_map_field(mapstruct *map,
-                              const celestial_model *model,
-                              int32_t *direct,
-                              int32_t *diffuse,
-                              int32_t *aperture_direct,
-                              int32_t *moon,
-                              int32_t *moon_aperture,
-                              int32_t *starlight) {
-    for (int y = 0; y < map->height; y++) {
-        for (int x = 0; x < map->width; x++) {
-            int index = x + CELESTIAL_SPILL_PASSES + celestial_scratch_width(map) *
-                        (y + CELESTIAL_SPILL_PASSES);
-            int32_t value, rgb[3];
-            celestial_model_publish(model, direct[index], diffuse[index], aperture_direct[index],
-                                    moon[index], moon_aperture[index], starlight[index], &value,
-                                    rgb);
-            MapSpace *space = GET_MAP_SPACE_PTR(map, x, y);
-            space->celestial_light_value = value;
-            memcpy(space->celestial_light_rgb, rgb, sizeof(rgb));
-        }
     }
 }
 
@@ -736,46 +528,24 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
 
     for (size_t level = count; level-- > 0;) {
         mapstruct *current = levels[level];
-        size_t cells = celestial_scratch_cells(current);
         celestial_model model;
         celestial_model_for_map(current, absolute_hour, &model);
-        int32_t *direct = xcalloc(cells, sizeof(*direct));
-        int32_t *diffuse = xcalloc(cells, sizeof(*diffuse));
-        int32_t *aperture_direct = xcalloc(cells, sizeof(*aperture_direct));
-        int32_t *moon = xcalloc(cells, sizeof(*moon));
-        int32_t *moon_aperture = xcalloc(cells, sizeof(*moon_aperture));
-        int32_t *starlight = xcalloc(cells, sizeof(*starlight));
-        for (int y = 0; y < celestial_scratch_height(current); y++) {
-            for (int x = 0; x < celestial_scratch_width(current); x++) {
-                int index = x + celestial_scratch_width(current) * y;
-                celestial_ray ray;
-                celestial_halo_ray(&ray, current, x, y, NORTH, 32768);
-                while (!ray.done) celestial_ray_step(&ray);
-                diffuse[index] = celestial_ray_value(&ray, model.diffuse, NULL);
-                starlight[index] = celestial_ray_value(&ray, model.starlight, NULL);
-            }
+        size_t cells = (size_t)current->width * current->height;
+        int32_t *values = xcalloc(cells, sizeof(*values));
+        int32_t (*rgb)[3] = xcalloc(cells, sizeof(*rgb));
+        if (!celestial_solver_solve(&lattice, current, &model, values, rgb)) {
+            LOG(ERROR, "Out of memory solving the celestial field.");
+            abort();
         }
+        for (size_t cell = 0; cell < cells; cell++) {
+            current->spaces[cell].celestial_light_value = values[cell];
+            memcpy(current->spaces[cell].celestial_light_rgb, rgb[cell], sizeof(rgb[cell]));
+        }
+        free(rgb);
+        free(values);
 
         region_celestial_phases_t phases;
         region_celestial_phases(region_celestial_for_map(current), absolute_hour, &phases);
-        transport_line(current, &model, direct, aperture_direct, false);
-        if (model.moon != 0) {
-            transport_line(current, &model, moon, moon_aperture, true);
-        }
-        spill_table spill = {0};
-        relax_diffuse(current, diffuse, &spill);
-        relax_diffuse(current, aperture_direct, &spill);
-        relax_diffuse(current, starlight, &spill);
-        spill_table_release(&spill);
-        publish_map_field(current,
-                          &model,
-                          direct,
-                          diffuse,
-                          aperture_direct,
-                          moon,
-                          moon_aperture,
-                          starlight);
-
         const region_celestial_profile_t *profile = region_celestial_for_map(current);
         uint64_t previous_key = current->celestial_light_key;
         bool previous_valid = current->celestial_light_valid &&
@@ -791,12 +561,6 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
         }
         current->celestial_light_valid = true;
         current->celestial_light_keyframe_valid = false;
-        free(starlight);
-        free(moon);
-        free(moon_aperture);
-        free(aperture_direct);
-        free(diffuse);
-        free(direct);
     }
     bool complete = celestial_dependencies_finish(dependencies, levels, count, false);
     if (!complete) {

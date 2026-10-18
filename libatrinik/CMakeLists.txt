@@ -353,6 +353,7 @@ set(LIBATRINIK_PUBLIC_HEADER_NAMES
     binreloc.h
     bresenham.h
     celestial_model.h
+    celestial_solver.h
     clioptions.h
     colorspace.h
     common.h
@@ -422,6 +423,7 @@ set(TOOLKIT_SOURCES
     access_resolve.c
     binreloc.c
     celestial_model.c
+    celestial_solver.c
     clioptions.c
     colorspace.c
     console.c
