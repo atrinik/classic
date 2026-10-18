@@ -757,6 +757,16 @@ void socket_command_celestial(uint8_t *data, size_t len, size_t pos) {
     }
 }
 
+/** @copydoc socket_command_struct::handle_func */
+void socket_command_celestial_structure(uint8_t *data, size_t len, size_t pos) {
+    int wire_width = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_WIDTH));
+    int wire_height = MAP_LOOK_TO_WIRE_SIZE(setting_get_int(OPT_CAT_MAP, OPT_MAP_HEIGHT));
+    if (pos > len ||
+        !client_celestial_apply_structure(data + pos, len - pos, wire_width, wire_height)) {
+        LOG(PACKET, "Rejected malformed or stale celestial structure packet.");
+    }
+}
+
 /**
  * Plays the footstep sounds when moving on the map.
  */
@@ -923,6 +933,8 @@ void socket_command_map_abort_pending(void) {
     map_light_keyframe_transaction_abort();
     map_state_transaction_abort();
     map_pending_effects_abort();
+    /* The celestial pair belongs to the update that failed. */
+    client_celestial_discard_staged();
     map_continuation_visible_change = false;
     map_continuation_region_fow_update = false;
 }
@@ -1617,6 +1629,8 @@ static void socket_command_map_apply(uint8_t *data, size_t len, size_t pos) {
     }
 
     map_state_transaction_commit();
+    /* The celestial pair staged before this update is published with it. */
+    client_celestial_publish(map_celestial_store, NULL);
     map_pending_effects_commit();
     map_publication_generation++;
     map_continuation_visible_change = false;

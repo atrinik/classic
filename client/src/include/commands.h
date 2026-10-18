@@ -57,6 +57,7 @@ extern int cmd_aliases_handle(const char *cmd);
 
 extern void socket_command_book_edit(uint8_t *data, size_t len, size_t pos);
 extern void socket_command_celestial(uint8_t *data, size_t len, size_t pos);
+extern void socket_command_celestial_structure(uint8_t *data, size_t len, size_t pos);
 
 extern void socket_command_book(uint8_t *data, size_t len, size_t pos);
 

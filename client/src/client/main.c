@@ -1434,6 +1434,11 @@ int main(int argc, char *argv[]) {
 
             play_action_sounds();
         }
+        if (cpl.state == ST_PLAY) {
+            /* Solve the published celestial closure a few milliseconds a
+             * frame; a fragment is the smallest unit. */
+            client_celestial_process(3000);
+        }
         rich_presence_tick();
         live_movement_tick();
         if (live_movement_finished()) {

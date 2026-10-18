@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <toolkit/packet.h>
 #include <toolkit/toolkit.h>
@@ -60,11 +61,25 @@ static packet_struct *encode(uint32_t generation, const celestial_protocol_slot_
     return packet;
 }
 
+/** Stage a closure of the given heap fragments for a 9 x 9 window. */
+static bool stage_closure(uint32_t generation, celestial_closure_fragment_t *fragments,
+                          size_t count) {
+    celestial_closure_t closure;
+    TEST_CHECK(celestial_closure_build(&closure, generation, 9, 9, fragments, count));
+    packet_struct *packet = packet_new(0, 64, 0);
+    TEST_CHECK(celestial_closure_write(packet, &closure));
+    bool staged = client_celestial_apply_structure(packet->data, packet->len, 9, 9);
+    packet_free(packet);
+    celestial_closure_free(&closure);
+    return staged;
+}
+
+/** Stage and publish a CELESTIAL payload with an empty closure. */
 static bool apply(uint32_t generation, const celestial_protocol_slot_t *slots, size_t count) {
     packet_struct *packet = encode(generation, slots, count);
     bool applied = client_celestial_apply(packet->data, packet->len);
     packet_free(packet);
-    return applied;
+    return applied && stage_closure(generation, NULL, 0) && client_celestial_publish(NULL, NULL);
 }
 
 static void test_payload_round_trips_every_slot_id(void) {
@@ -179,6 +194,159 @@ static void test_reset_forgets_slots_and_generation(void) {
     TEST_CHECK(apply(1, &slot, 1));
 }
 
+#define OPEN_AIR                                                                        \
+    (CELESTIAL_CLOSURE_IN | UINT32_C(0x3ff) | CELESTIAL_CLOSURE_COVER_OPEN |            \
+     CELESTIAL_CLOSURE_SKY_EXIT | CELESTIAL_CLOSURE_CONTINUOUS_NORTH |                  \
+     CELESTIAL_CLOSURE_CONTINUOUS_EAST | CELESTIAL_CLOSURE_CONTINUOUS_SOUTH |           \
+     CELESTIAL_CLOSURE_CONTINUOUS_WEST)
+
+static celestial_closure_fragment_t fragment_of(int8_t depth, uint8_t x, uint8_t y,
+                                                uint8_t width, uint8_t height, uint8_t slot,
+                                                uint32_t value) {
+    celestial_closure_fragment_t fragment = {.depth = depth, .x = x, .y = y, .width = width,
+                                             .height = height, .slot = slot};
+    fragment.values = malloc((size_t)width * height * sizeof(*fragment.values));
+    TEST_CHECK(fragment.values != NULL);
+    for (size_t i = 0; i < (size_t)width * height; i++) {
+        fragment.values[i] = value;
+    }
+    return fragment;
+}
+
+typedef struct published_cells {
+    size_t count;
+    int depth[81], x[81], y[81];
+    int32_t current[81][4], next[81][4];
+} published_cells;
+
+static void record_cell(void *context, int depth, int x, int y, const int32_t current[4],
+                        const int32_t next[4]) {
+    published_cells *cells = context;
+    TEST_CHECK(cells->count < 81);
+    cells->depth[cells->count] = depth;
+    cells->x[cells->count] = x;
+    cells->y[cells->count] = y;
+    memcpy(cells->current[cells->count], current, sizeof(cells->current[0]));
+    memcpy(cells->next[cells->count], next, sizeof(cells->next[0]));
+    cells->count++;
+}
+
+static void test_pair_publishes_only_together(void) {
+    client_celestial_reset();
+    celestial_protocol_slot_t slot = slot_at(9, 12, 500);
+    packet_struct *packet = encode(1, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    /* A CELESTIAL payload alone is staged, not published. */
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_generation() == 0);
+    celestial_model_t model;
+    TEST_CHECK(!client_celestial_model(9, false, &model));
+    /* A closure of another generation does not pair with it. */
+    TEST_CHECK(stage_closure(2, NULL, 0));
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    /* A failed MAP2 update discards both. */
+    client_celestial_discard_staged();
+    packet = encode(2, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!client_celestial_publish(NULL, NULL));
+    TEST_CHECK(stage_closure(2, NULL, 0));
+    TEST_CHECK(client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_generation() == 2);
+    TEST_CHECK(client_celestial_model(9, false, &model));
+    /* Stale closures are rejected once a pair is published. */
+    TEST_CHECK(!stage_closure(2, NULL, 0));
+}
+
+static void test_publication_solves_every_closure_cell(void) {
+    client_celestial_reset();
+    celestial_protocol_slot_t slot = slot_at(9, 12, 900);
+    packet_struct *packet = encode(1, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    celestial_closure_fragment_t *fragments = malloc(2 * sizeof(*fragments));
+    TEST_CHECK(fragments != NULL);
+    fragments[0] = fragment_of(0, 1, 1, 3, 2, 9, OPEN_AIR);
+    fragments[1] = fragment_of(1, 4, 4, 2, 2, CELESTIAL_PROTOCOL_SLOT_NONE, OPEN_AIR);
+    fragments[0].values[1] = 0;
+    TEST_CHECK(stage_closure(1, fragments, 2));
+    published_cells cells = {0};
+    TEST_CHECK(client_celestial_publish(record_cell, &cells));
+    /* Fragments are solved whole, one at least per call. */
+    TEST_CHECK(cells.count == 0);
+    TEST_CHECK(!client_celestial_process(0));
+    TEST_CHECK(cells.count == 5);
+    TEST_CHECK(client_celestial_process(UINT64_MAX));
+    /* Five closure cells of the first fragment, four of the second. */
+    TEST_CHECK(cells.count == 9);
+    celestial_model_t current, next;
+    celestial_model_evaluate(&slot.current, &current);
+    celestial_model_evaluate(&slot.next, &next);
+    const celestial_closure_t *closure = client_celestial_closure();
+    int32_t values[6], rgb[6][3], next_values[6], next_rgb[6][3];
+    TEST_CHECK(celestial_closure_solve(closure, 0, &current, values, rgb));
+    TEST_CHECK(celestial_closure_solve(closure, 0, &next, next_values, next_rgb));
+    for (size_t i = 0; i < cells.count; i++) {
+        if (cells.depth[i] == 1) {
+            /* Slot 255: zero celestial light. */
+            for (size_t w = 0; w < 4; w++) {
+                TEST_CHECK(cells.current[i][w] == 0 && cells.next[i][w] == 0);
+            }
+            continue;
+        }
+        size_t index = (size_t)(cells.x[i] - 1) + 3 * (size_t)(cells.y[i] - 1);
+        TEST_CHECK(index != 1);
+        TEST_CHECK(cells.current[i][0] == values[index]);
+        TEST_CHECK(memcmp(&cells.current[i][1], rgb[index], sizeof(rgb[index])) == 0);
+        TEST_CHECK(cells.next[i][0] == next_values[index]);
+        TEST_CHECK(memcmp(&cells.next[i][1], next_rgb[index], sizeof(next_rgb[index])) == 0);
+        TEST_CHECK(cells.current[i][0] > 0);
+    }
+}
+
+static void test_worst_case_closure_cost(void) {
+    /* Every cell of a 32 x 32 window over all 13 depths. */
+    client_celestial_reset();
+    celestial_protocol_slot_t slot = slot_at(0, 15, 900);
+    packet_struct *packet = encode(1, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    celestial_closure_fragment_t *fragments =
+        malloc(CELESTIAL_CLOSURE_DEPTHS * sizeof(*fragments));
+    TEST_CHECK(fragments != NULL);
+    for (int depth = 0; depth < CELESTIAL_CLOSURE_DEPTHS; depth++) {
+        uint32_t value = (OPEN_AIR & ~CELESTIAL_CLOSURE_SKY_EXIT) |
+                         CELESTIAL_CLOSURE_CONTINUOUS_UP | CELESTIAL_CLOSURE_CONTINUOUS_DOWN;
+        if (depth == CELESTIAL_CLOSURE_DEPTHS - 1) {
+            value = (OPEN_AIR | CELESTIAL_CLOSURE_CONTINUOUS_DOWN);
+        }
+        fragments[depth] = fragment_of((int8_t)(depth - CELESTIAL_CLOSURE_DEPTH_MAX), 0, 0, 32,
+                                       32, 0, value);
+    }
+    celestial_closure_t closure;
+    TEST_CHECK(celestial_closure_build(&closure, 1, 32, 32, fragments, CELESTIAL_CLOSURE_DEPTHS));
+    packet = packet_new(0, 1024, 0);
+    TEST_CHECK(celestial_closure_write(packet, &closure));
+    size_t wire = packet->len;
+    TEST_CHECK(client_celestial_apply_structure(packet->data, packet->len, 32, 32));
+    packet_free(packet);
+    celestial_closure_free(&closure);
+    TEST_CHECK(client_celestial_publish(NULL, NULL));
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    celestial_model_t model;
+    TEST_CHECK(client_celestial_model(0, false, &model));
+    for (size_t i = 0; i < client_celestial_closure()->count; i++) {
+        static int32_t values[32 * 32], rgb[32 * 32][3];
+        TEST_CHECK(celestial_closure_solve(client_celestial_closure(), i, &model, values, rgb));
+    }
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double ms = (end.tv_sec - start.tv_sec) * 1e3 + (end.tv_nsec - start.tv_nsec) / 1e6;
+    fprintf(stderr, "worst-case closure: %zu bytes on the wire, one hourly field in %.1f ms\n",
+            wire, ms);
+}
+
 int main(void) {
     toolkit_import(packet);
     test_payload_round_trips_every_slot_id();
@@ -186,6 +354,9 @@ int main(void) {
     test_payload_replaces_the_slot_table();
     test_stale_and_malformed_payloads_keep_state();
     test_reset_forgets_slots_and_generation();
+    test_pair_publishes_only_together();
+    test_publication_solves_every_closure_cell();
+    test_worst_case_closure_cost();
     toolkit_deinit();
     return EXIT_SUCCESS;
 }

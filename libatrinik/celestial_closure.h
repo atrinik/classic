@@ -84,7 +84,8 @@ typedef struct celestial_closure {
 void celestial_closure_free(celestial_closure_t *closure);
 
 /**
- * Build a closure from fragments, taking ownership of their value arrays.
+ * Build a closure from fragments, taking ownership of the heap-allocated
+ * fragment array and of each fragment's value array.
  * @return False, freeing everything, for any fragment the codec would reject.
  */
 bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, int window_width,

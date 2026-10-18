@@ -475,6 +475,11 @@ bool widget_map_projection_contract_test(void);
 extern void map_level_scroll(int dz);
 
 extern void map_clear_cell(int x, int y, bool hard);
+/** Store one closure cell's solved celestial field (client_celestial_cell_fn). */
+extern void map_celestial_store(void *context, int depth, int x, int y, const int32_t current[4],
+                                const int32_t next[4]);
+/** The celestial field last solved for a MAP2 window cell, if any. */
+extern bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]);
 
 extern void map_set_structural_support_height(int x, int y, int16_t height);
 

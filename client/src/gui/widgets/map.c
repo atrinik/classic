@@ -201,7 +201,8 @@ typedef struct map_cell_header {
     uint8_t light_state;
     /** Protocol 1085 coarse local light per sub-layer: signed level and vision floor. */
     uint8_t local_light[NUM_SUB_LAYERS];
-    /** Bit 0: local_light received; bit 1: occluder received. */
+    /** Bit 0: local_light received; bit 1: occluder received; bit 2: the
+     * celestial field was solved. */
     uint8_t client_light_known;
     /** Protocol 1085 vertical attenuation byte of the occluder. */
     uint8_t occluder_vertical;
@@ -209,6 +210,10 @@ typedef struct map_cell_header {
     uint16_t occluder;
     /** Protocol 1085 horizontal face attenuation nibbles (N, E, S, W). */
     uint16_t occluder_horizontal;
+    /** Celestial field the client solved for the current and next hour:
+     * scalar, then red, green and blue. A remembered cell keeps the field it
+     * was last solved with. */
+    int16_t celestial[2][4];
 } map_cell_header_t;
 
 static map_cell_store_t *cells;
@@ -3246,10 +3251,55 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
     }
     header->client_light_known = 0;
     memset(header->local_light, 0, sizeof(header->local_light));
+    memset(header->celestial, 0, sizeof(header->celestial));
     header->occluder = 0;
     header->occluder_horizontal = 0;
     header->occluder_vertical = 0;
     level_lighting_revision[current_level_index]++;
+}
+
+/** Saturate a solved celestial word into its cache cell. */
+static int16_t map_celestial_word(int32_t value) {
+    return (int16_t)MAX(INT16_MIN, MIN(INT16_MAX, value));
+}
+
+void map_celestial_store(void *context, int depth, int x, int y, const int32_t current[4],
+                         const int32_t next[4]) {
+    (void)context;
+    if (depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH) {
+        return;
+    }
+    size_t level = MAP2_DEPTH_INDEX(depth);
+    map_cell_store_t *store = level_cells[level];
+    if (store == NULL || x < 0 || y < 0 || x + MAP_STARTX >= map_width * MAP_FOW_SIZE ||
+        y + MAP_STARTY >= map_height * MAP_FOW_SIZE) {
+        return;
+    }
+    map_cell_header_t *header =
+        &store->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+    for (size_t i = 0; i < 4; i++) {
+        header->celestial[0][i] = map_celestial_word(current[i]);
+        header->celestial[1][i] = map_celestial_word(next[i]);
+    }
+    header->client_light_known |= 4U;
+}
+
+bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]) {
+    if (depth < -MAP2_MAX_DEPTH || depth > MAP2_MAX_DEPTH) {
+        return false;
+    }
+    map_cell_store_t *store = level_cells[MAP2_DEPTH_INDEX(depth)];
+    if (store == NULL || x < 0 || y < 0 || x + MAP_STARTX >= map_width * MAP_FOW_SIZE ||
+        y + MAP_STARTY >= map_height * MAP_FOW_SIZE) {
+        return false;
+    }
+    const map_cell_header_t *header =
+        &store->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+    if ((header->client_light_known & 4U) == 0) {
+        return false;
+    }
+    memcpy(field, header->celestial[next ? 1 : 0], sizeof(header->celestial[0]));
+    return true;
 }
 
 void map_clear_cell(int x, int y, bool hard) {
