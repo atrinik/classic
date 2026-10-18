@@ -23,6 +23,7 @@ struct celestial_dependencies {
     size_t count, capacity, maximum, references, last;
     size_t *reserved;
     size_t limit, bytes, share;
+    uint64_t fresh_epoch;
     bool invalid, completed;
 };
 
@@ -33,6 +34,12 @@ typedef struct field_binding {
 } field_binding;
 
 static celestial_dependencies *contexts;
+/* Advances on every notified change to a map input that signature() or
+ * edge_target() reads, and when a cache scope opens. Inside a scope, a context
+ * proven fresh at the current value stays fresh until the next change, so
+ * repeated checks skip the hashing. Outside scopes every check is complete. */
+static uint64_t input_epoch = 1;
+static unsigned cache_depth;
 static field_binding *bindings;
 static size_t retained_bytes, binding_count;
 
@@ -203,6 +210,7 @@ bool celestial_dependencies_observe_at(celestial_dependencies *ctx,
         ctx->bytes += growth;
     }
     ctx->last = ctx->count;
+    ctx->fresh_epoch = 0;
     dependency_entry *entry = &ctx->entries[ctx->count++];
     entry->map = map;
     entry->transform[0] = tx;
@@ -219,10 +227,27 @@ bool celestial_dependencies_observe(celestial_dependencies *ctx, const mapstruct
     return celestial_dependencies_observe_at(ctx, map, 0, 0, 0);
 }
 
-bool celestial_dependencies_fresh(const celestial_dependencies *ctx) {
-    if (ctx == NULL || ctx->invalid || ctx->count == 0) {
-        return false;
+void celestial_dependencies_inputs_changed(void) {
+    if (input_epoch == UINT64_MAX) {
+        IMPOSSIBLE();
     }
+    input_epoch++;
+}
+
+void celestial_dependencies_cache_begin(void) {
+    HARD_ASSERT(cache_depth < UINT_MAX);
+    if (cache_depth++ == 0) {
+        /* Changes between scopes need not have been notified. */
+        celestial_dependencies_inputs_changed();
+    }
+}
+
+void celestial_dependencies_cache_end(void) {
+    HARD_ASSERT(cache_depth != 0);
+    cache_depth--;
+}
+
+static bool dependencies_fresh_full(const celestial_dependencies *ctx) {
     for (size_t i = 0; i < ctx->count; i++) {
         /* A newly linked target is not one of our retained lifetime handles.
          * Detect that change before signature() can inspect its residency. */
@@ -236,6 +261,26 @@ bool celestial_dependencies_fresh(const celestial_dependencies *ctx) {
         if (memcmp(current, ctx->entries[i].signature, sizeof(current)) != 0) {
             return false;
         }
+    }
+    return true;
+}
+
+bool celestial_dependencies_fresh(const celestial_dependencies *ctx) {
+    if (ctx == NULL || ctx->invalid || ctx->count == 0) {
+        return false;
+    }
+    if (cache_depth != 0 && ctx->fresh_epoch == input_epoch) {
+#ifdef ATRINIK_TESTING
+        HARD_ASSERT(dependencies_fresh_full(ctx));
+#endif
+        return true;
+    }
+    if (!dependencies_fresh_full(ctx)) {
+        return false;
+    }
+    if (cache_depth != 0) {
+        /* The epoch is a cache of this result, not observable context state. */
+        ((celestial_dependencies *)ctx)->fresh_epoch = input_epoch;
     }
     return true;
 }
