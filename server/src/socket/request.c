@@ -1279,8 +1279,10 @@ static uint64_t map2_packet_digest(const packet_struct *packet) {
  * encoding differs from the last payload sent. A profile keeps its slot while
  * it stays in view; a slot no shown profile uses is reassigned only when one
  * is needed.
+ * @return False when the pair the update needs could not be prepared, or the
+ * connection ended; the caller then aborts the update.
  */
-static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *seen,
+static bool map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *seen,
                                 const object *pl) {
     static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
     int slot_of[CELESTIAL_PROTOCOL_SLOTS_MAX];
@@ -1337,17 +1339,19 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     /* Compare the encoding without the generation, which only advances. */
     packet_struct *probe = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
     if (!celestial_protocol_write(probe, 0, start_seconds, slots, count)) {
-        LOG(ERROR, "Invalid celestial inputs; not sent.");
+        LOG(BUG, "Invalid celestial inputs; not sent.");
         packet_free(probe);
-        return;
+        return false;
     }
     uint64_t digest = map2_packet_digest(probe);
     packet_free(probe);
 
     celestial_closure_t closure;
     if (!map2_closure_collect(cs, seen, slot_of, &closure)) {
-        LOG(ERROR, "Invalid celestial closure; not sent.");
-        return;
+        /* Out of memory, or a fragment the server built that the codec
+         * rejects (a bug): the update that needs this pair is not sent. */
+        LOG(BUG, "Invalid celestial closure; not sent.");
+        return false;
     }
     probe = packet_new(CLIENT_CMD_CELESTIAL_STRUCTURE, celestial_closure_size(&closure), 0);
     bool encoded = celestial_closure_write(probe, &closure);
@@ -1367,7 +1371,7 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     if (cs->celestial_sent && cs->celestial_sent_digest == digest &&
         cs->celestial_structure_digest == structure_digest) {
         celestial_closure_free(&closure);
-        return;
+        return true;
     }
     if (cs->celestial_generation == UINT32_MAX) {
         /* The client accepts only advancing generations, so a wrapped one
@@ -1376,7 +1380,7 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
         LOG(PACKET, "Celestial publication generation exhausted; closing connection.");
         cs->state = ST_DEAD;
         celestial_closure_free(&closure);
-        return;
+        return false;
     }
     cs->celestial_generation++;
     packet_struct *packet = packet_new(CLIENT_CMD_CELESTIAL, 16 + count * 43, 0);
@@ -1399,7 +1403,7 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     (void)written;
     cs->celestial_structure_digest = structure_digest;
     celestial_closure_free(&closure);
-    socket_send_packet(cs, packet);
+    socket_send_packet(cs, packet);    return true;
 }
 
 /**
@@ -3370,8 +3374,11 @@ void draw_client_map2(object *pl) {
     exploration_flush(view_socket, false);
     bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
                             CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
-    /* Celestial inputs precede the map update that shows their profiles. */
-    map2_send_celestial(CONTR(pl)->cs, &celestial_maps, pl);
+    /* Celestial inputs precede the map update that shows their profiles; an
+     * update whose pair cannot be prepared is not published without it. */
+    if (!map2_send_celestial(CONTR(pl)->cs, &celestial_maps, pl)) {
+        goto abort_map;
+    }
     socket_send_packet(CONTR(pl)->cs, packet_header);
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
