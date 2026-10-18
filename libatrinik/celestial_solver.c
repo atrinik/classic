@@ -502,8 +502,10 @@ bool celestial_solver_solve(const celestial_solver_lattice_t *lattice, void *map
     if (!dimensions(lattice, map, &map_width, &map_height)) {
         return false;
     }
-    int width = celestial_solver_scratch_width(lattice, map);
-    int height = celestial_solver_scratch_height(lattice, map);
+    /* One snapshot sizes every buffer and the publication: a lattice whose
+     * dimensions change between calls cannot make them disagree. */
+    int width = map_width + 2 * CELESTIAL_MODEL_SPILL_PASSES;
+    int height = map_height + 2 * CELESTIAL_MODEL_SPILL_PASSES;
     size_t cells = (size_t)width * height;
     int32_t *direct = calloc(cells, sizeof(*direct));
     int32_t *diffuse = calloc(cells, sizeof(*diffuse));

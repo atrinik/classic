@@ -3112,6 +3112,54 @@ START_TEST(test_remembered_fog_is_bound_to_its_map_cell) {
 }
 END_TEST
 
+START_TEST(test_celestial_profiles_skip_maps_without_closure_records) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    mapstruct *maps[] = {map, east};
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i]->celestial_schema = 1;
+        maps[i]->celestial_schema_seen = true;
+        maps[i]->celestial_sky_above = CELESTIAL_SKY_OPEN;
+        maps[i]->celestial_sky_seen = true;
+        maps[i]->celestial_v1_header_seen = true;
+        maps[i]->celestial_width_seen = true;
+        maps[i]->celestial_height_seen = true;
+    }
+    /* A visible neighbor holding nothing has a profile of its own, but no
+     * closure record, so it takes no slot: it neither discloses its profile
+     * nor crowds out a rendered map's. */
+    region_struct region = {.name = "empty", .map_first = "/world/empty"};
+    region.celestial = *region_celestial_for_map(map);
+    region.celestial.digest[0] ^= 0xff;
+    east->region = &region;
+    east->celestial_region_seen = true;
+    request_move_player(&pl, map, 20, 12);
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    packet_struct *celestial = queued_command_payload_find(cs, CLIENT_CMD_CELESTIAL);
+    ck_assert_ptr_nonnull(celestial);
+    static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
+    uint32_t generation;
+    uint64_t start;
+    size_t count;
+    ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
+                                      &count));
+    ck_assert_uint_eq(count, 1);
+    socket_buffer_clear(cs);
+    east->region = NULL;
+    map->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+}
+END_TEST
+
 START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
     mapstruct *map;
     object *pl;
@@ -3129,11 +3177,32 @@ START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
         maps[i]->celestial_width_seen = true;
         maps[i]->celestial_height_seen = true;
     }
-    /* The neighbor behind the wall has a profile of its own. */
+    /* The neighbor behind the wall has a profile of its own, and a floor, so
+     * its cells contribute closure records once shown. */
+    for (int y = 0; y < east->height; y++) {
+        for (int x = 0; x < 6; x++) {
+            object *floor = arch_get("water_still");
+            floor->x = x;
+            floor->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(floor, east, NULL, 0));
+        }
+    }
+    /* A steady lamp keeps the floors lit, so MAP2 sends them once shown. */
+    object *lamp = arch_get("letter");
+    lamp->glow_radius = 13;
+    lamp->light_color = UINT32_C(0xffffff);
+    lamp->x = 1;
+    lamp->y = 12;
+    ck_assert_ptr_nonnull(object_insert_map(lamp, east, NULL, INS_NO_MERGE));
+    /* At noon, so the open-sky floors are lit and sent. */
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
     region_struct region = {.name = "hidden", .map_first = "/world/hidden"};
     region.celestial = *region_celestial_for_map(map);
     region.celestial.digest[0] ^= 0xff;
     east->region = &region;
+    /* Authored, so validation keeps it instead of assigning the world's. */
+    east->celestial_region_seen = true;
     request_move_player(&pl, map, 20, 12);
     object *walls[24];
     for (int y = 0; y < map->height; y++) {
@@ -3176,6 +3245,7 @@ START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
     ck_assert(celestial_protocol_read(celestial->data, celestial->len, &generation, &start, slots,
                                       &count));
     ck_assert_uint_eq(count, 2);
+    todtick = saved_hour;
     socket_buffer_clear(cs);
     east->region = NULL;
 }
@@ -4717,6 +4787,55 @@ START_TEST(test_celestial_closure_omits_cells_whose_objects_are_all_filtered) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_static_faces_read_only_selected_objects) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *lower = closure_open_world("/closure/selected-lower");
+    mapstruct *upper = get_empty_map(64, 64);
+    FREE_AND_COPY_HASH(upper->path, "/closure/selected-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* The viewer stands under a roof the camera cuts away. Above (32, 31) an
+     * opaque roof lies beneath a glass one on the same layer: MAP2 selects
+     * the glass, so the one beneath is never disclosed. */
+    for (int y = 29; y <= 33; y++) {
+        for (int x = 29; x <= 33; x++) {
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+        }
+    }
+    object *glass = arch_get("roof_thatch");
+    glass->x = 32;
+    glass->y = 31;
+    ck_assert(object_set_value(glass, "celestial_transmission", "glass", true));
+    glass = object_insert_map(glass, upper, NULL, 0);
+    ck_assert_ptr_nonnull(glass);
+    MapSpace *msp = GET_MAP_SPACE_PTR(upper, 32, 31);
+    ck_assert_ptr_eq(GET_MAP_SPACE_LAYER(msp, glass->layer, glass->sub_layer), glass);
+    request_move_player(&pl, lower, 31, 31);
+    closure_redraw(pl);
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    uint32_t under_glass = closure_cell(pl, &closure, 32, 31);
+    ck_assert_uint_ne(under_glass, 0);
+    ck_assert_uint_eq((under_glass >> CELESTIAL_CLOSURE_OVERHEAD_SHIFT) & 3U, 1);
+    ck_assert_uint_ne(under_glass & CELESTIAL_CLOSURE_OVERHEAD_APERTURE, 0);
+    celestial_closure_free(&closure);
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_closure_is_resent_when_the_window_moves) {
     mapstruct *old_map;
     object *pl;
@@ -4869,6 +4988,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
     tcase_add_test(tc_closure, test_celestial_closure_omits_plugin_controlled_static_faces);
     tcase_add_test(tc_closure, test_celestial_closure_applies_map2_direction_filtering);
+    tcase_add_test(tc_closure, test_celestial_closure_static_faces_read_only_selected_objects);
     tcase_add_test(tc_closure, test_celestial_closure_omits_cells_whose_objects_are_all_filtered);
     tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
@@ -4944,6 +5064,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_celestial_inputs_precede_map_and_resend_only_on_change);
     tcase_add_test(tc_core, test_celestial_profiles_come_only_from_authorized_cells);
+    tcase_add_test(tc_core, test_celestial_profiles_skip_maps_without_closure_records);
     tcase_add_test(tc_core, test_remembered_fog_is_bound_to_its_map_cell);
     tcase_add_test(tc_core, test_timed_endpoint_tracks_rgb_only_changes_without_redundant_updates);
     tcase_add_test(tc_core, test_timed_endpoint_is_resent_when_its_current_sample_rebases);
