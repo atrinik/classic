@@ -209,8 +209,10 @@ void celestial_solver_ray_init(const celestial_solver_lattice_t *lattice,
                                celestial_solver_ray_t *ray, void *map, int x, int y,
                                uint8_t direction, int32_t elevation) {
     memset(ray, 0, sizeof(*ray));
-    /* Outside (0, 32768] there is no source above the horizon to trace. */
-    if (elevation <= 0 || elevation > 32768) {
+    /* Outside (0, 32768] there is no source above the horizon to trace, and
+     * an azimuth outside the eight directions names no source at all. */
+    if (elevation <= 0 || elevation > 32768 || direction < CELESTIAL_MODEL_NORTH ||
+        direction > CELESTIAL_MODEL_NORTHWEST) {
         ray->done = true;
         return;
     }
@@ -414,14 +416,16 @@ typedef struct spill_table {
 static void spill_table_fill(spill_table *table) {
     size_t bytes = (size_t)table->width * table->height * 8 * sizeof(*table->coefficients);
     const celestial_solver_ops_t *ops = table->lattice->ops;
-    if (ops->reserve != NULL && !ops->reserve(table->lattice->context, bytes)) {
+    /* The hooks charge as a pair: a charge nothing could return is never
+     * taken. */
+    bool charged = ops->reserve != NULL && ops->release != NULL;
+    if (charged && !ops->reserve(table->lattice->context, bytes)) {
         table->unavailable = true;
         return;
     }
-    bool charged = ops->reserve != NULL;
     uint16_t *coefficients = calloc(bytes, 1);
     if (coefficients == NULL) {
-        if (charged && ops->release != NULL) {
+        if (charged) {
             ops->release(table->lattice->context, bytes);
         }
         table->unavailable = true;
@@ -451,7 +455,7 @@ static void spill_table_fill(spill_table *table) {
 static void spill_table_release(spill_table *table) {
     if (table->coefficients != NULL) {
         free(table->coefficients);
-        if (table->charged && table->lattice->ops->release != NULL) {
+        if (table->charged) {
             table->lattice->ops->release(table->lattice->context, table->bytes);
         }
     }
