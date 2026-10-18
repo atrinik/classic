@@ -1793,7 +1793,6 @@ void draw_client_map2(object *pl) {
                 /* Retain every physical level even when its delta is empty. */
                 level_present = true;
                 msp = GET_MAP_SPACE_PTR(m, nx, ny);
-                map2_celestial_note(&celestial_maps, m);
                 blocksview = d & BLOCKED_LOS_BLOCKED;
                 bool camera_covered = level_visibility != MAP_LEVEL_VISIBLE;
                 /* An exposed roof/floor receives incident light even when its
@@ -1835,6 +1834,8 @@ void draw_client_map2(object *pl) {
                     mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     map_append_support_height(packet, mp, mask, map_space_support_height(msp));
                     if (remembered) {
+                        /* Only an authorized cell contributes its profile. */
+                        map2_celestial_note(&celestial_maps, m);
                         mp->client_light_known |= MAP2_CLIENT_LIGHT_REMEMBERED;
                         map2_light_sample_t sample;
                         map2_sample_light(pl, m, nx, ny, (special_vision & 1) != 0, &sample);
@@ -1846,6 +1847,11 @@ void draw_client_map2(object *pl) {
                                                    timed_light_generation);
                     }
                     map2_next_cell();
+                }
+                /* Past the LOS checks: the cell is shown, so its profile is
+                 * part of the update; a LOS-blocked, never-sent cell's is not. */
+                if (depth != 0 || !blocksview) {
+                    map2_celestial_note(&celestial_maps, m);
                 }
                 if (depth > 0 && blocksview && level_visibility == MAP_LEVEL_VISIBLE) {
                     level_visibility = MAP_LEVEL_BOUNDARY;
