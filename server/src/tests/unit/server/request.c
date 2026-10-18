@@ -3043,6 +3043,40 @@ START_TEST(test_remembered_fog_is_bound_to_its_map_cell) {
 }
 END_TEST
 
+START_TEST(test_view_skips_preparation_of_stacks_it_renders_nothing_of) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    mapstruct *maps[] = {map, east};
+    for (size_t i = 0; i < arraysize(maps); i++) {
+        maps[i]->celestial_schema = 1;
+        maps[i]->celestial_schema_seen = true;
+        maps[i]->celestial_sky_above = CELESTIAL_SKY_OPEN;
+        maps[i]->celestial_sky_seen = true;
+        maps[i]->celestial_v1_header_seen = true;
+        maps[i]->celestial_width_seen = true;
+        maps[i]->celestial_height_seen = true;
+    }
+    /* The neighbor is in view but holds nothing: its cells are sent only as
+     * clears, so its stack is neither solved nor queued. */
+    request_move_player(&pl, map, 20, 12);
+    socket_struct *cs = CONTR(pl)->cs;
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    ck_assert(!east->celestial_light_valid);
+    ck_assert(!east->celestial_light_keyframe_valid);
+    socket_buffer_clear(cs);
+    map->tile_map[TILED_EAST] = NULL;
+    east->tile_map[TILED_WEST] = NULL;
+}
+END_TEST
+
 START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
     mapstruct *map;
     object *pl;
@@ -4558,6 +4592,15 @@ START_TEST(test_hidden_door_state_does_not_reach_base_radiance) {
     ck_assert_int_gt(open_value, closed_value);
 
     todtick = 5 * HOURS_PER_MONTH + found;
+    /* A steady lamp keeps the room's objects visible in both door states:
+     * MAP2 already shows nothing in a room too dark to see, which is
+     * gameplay visibility; this test isolates what the door alone sends. */
+    object *lamp = arch_get("letter");
+    lamp->glow_radius = 13;
+    lamp->light_color = UINT32_C(0xffffff);
+    lamp->x = 33;
+    lamp->y = 31;
+    ck_assert_ptr_nonnull(object_insert_map(lamp, fixture.lower, NULL, INS_NO_MERGE));
     closure_hidden_door_set(&fixture, false);
     closure_redraw(pl);
     socket_struct *cs = CONTR(pl)->cs;
@@ -4933,6 +4976,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_celestial_inputs_precede_map_and_resend_only_on_change);
     tcase_add_test(tc_core, test_celestial_profiles_come_only_from_authorized_cells);
+    tcase_add_test(tc_core, test_view_skips_preparation_of_stacks_it_renders_nothing_of);
     tcase_add_test(tc_core, test_remembered_fog_is_bound_to_its_map_cell);
     tcase_add_test(tc_core, test_local_light_color_stays_out_of_base_radiance);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);

@@ -1994,7 +1994,6 @@ void draw_client_map2(object *pl) {
                  * LOS-blocked, never-sent cell is neither. */
                 if (depth != 0 || !blocksview) {
                     map2_celestial_note(&celestial_maps, m);
-                    map2_shown_note(m);
                     MapCell *shown =
                         map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
                     if (shown->source_map != m->count || shown->source_x != nx ||
@@ -2025,6 +2024,11 @@ void draw_client_map2(object *pl) {
 
                 level_present = true;
                 mp = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
+                /* Only a stack the update renders content of prepares its next
+                 * hour; an empty cell sent only as a clear costs nothing. */
+                if (depth != 0 || !blocksview) {
+                    map2_shown_note(m);
+                }
 
                 /* Check whether there is ambient sound effect on this tile. */
                 have_sound_ambient = msp->sound_ambient &&

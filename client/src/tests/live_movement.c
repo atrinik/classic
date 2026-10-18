@@ -145,6 +145,17 @@ void client_command_queue_statistics_get(uint64_t timestamp,
 void image_face_statistics_get(image_face_statistics_t *statistics) {
     *statistics = (image_face_statistics_t){0};
 }
+static uint32_t celestial_generation;
+static uint64_t celestial_start_seconds;
+
+uint32_t client_celestial_generation(void) {
+    return celestial_generation;
+}
+
+uint64_t client_celestial_start_seconds(void) {
+    return celestial_start_seconds;
+}
+
 bool telemetry_game_time_seconds(uint64_t *game_seconds) {
     *game_seconds = telemetry_seconds;
     telemetry_seconds += telemetry_increment;
@@ -922,23 +933,20 @@ static int test_lighting_phase_barrier(void) {
     CHECK(command_count == 1U && strcmp(commands[0], "/settime 15") == 0);
     telemetry_valid = true;
     telemetry_seconds = 15 * 3600;
-    MapData.light_keyframe_valid = true;
-    MapData.light_keyframe_generation = 1;
-    MapData.light_keyframe_start_seconds = 15 * 3600;
-    MapData.light_keyframe_end_seconds = 16 * 3600;
+    /* The barrier waits on the published celestial pair's hour. */
+    celestial_generation = 1;
+    celestial_start_seconds = 15 * 3600;
     publication_generation++;
     live_movement_tick();
     CHECK(command_count == 3U && strcmp(commands[1], "/celestial phase new") == 0 &&
           strcmp(commands[2], "/settime 0") == 0);
     telemetry_seconds = 24 * 3600;
-    MapData.light_keyframe_start_seconds = 0;
-    MapData.light_keyframe_end_seconds = 3600;
+    celestial_start_seconds = 0;
     publication_generation++;
     live_movement_tick();
     CHECK(review_lighting_stage == 2U);
-    MapData.light_keyframe_generation++;
-    MapData.light_keyframe_start_seconds = 24 * 3600;
-    MapData.light_keyframe_end_seconds = 25 * 3600;
+    celestial_generation++;
+    celestial_start_seconds = 24 * 3600;
     publication_generation++;
     live_movement_tick();
     CHECK(review_lighting_stage == 3U);
