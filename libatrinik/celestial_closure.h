@@ -71,7 +71,8 @@ typedef struct celestial_closure_fragment {
     uint8_t x, y, width, height;
     /** Profile slot of the fragment's map, or CELESTIAL_PROTOCOL_SLOT_NONE. */
     uint8_t slot;
-    /** Row-major 27-bit cell values; zero for a cell outside the closure. */
+    /** Row-major 28-bit cell values (bits 28-31 reserved); zero for a cell
+     * outside the closure. */
     uint32_t *values;
 } celestial_closure_fragment_t;
 
@@ -103,14 +104,16 @@ bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, 
                              size_t count);
 
 /**
- * Encode CELESTIAL_STRUCTURE.
- * @return False, writing nothing, when the closure does not fit in one
+ * Encode CELESTIAL_STRUCTURE from a closure made by celestial_closure_build()
+ * or celestial_closure_read(), which validated it.
+ * @return False, writing nothing, for any other closure, when it does not fit in one
  * packet payload, the packet already has a writer error, or the writer
  * fails part way (its limit or an allocation).
  */
 bool celestial_closure_write(struct packet_struct *packet, const celestial_closure_t *closure);
 
-/** Encoded size of the closure in bytes. */
+/** Encoded size of the closure's fragments in bytes; they need valid value
+ * arrays, but the closure need not be built (the server sizes candidates). */
 size_t celestial_closure_size(const celestial_closure_t *closure);
 
 /**
@@ -145,7 +148,9 @@ uint32_t celestial_closure_value(const celestial_closure_t *closure, int depth, 
  * cells outside the closure are written as zero. Solves only read the
  * closure, so several may share one at once, on any threads, while it is
  * neither freed nor rebuilt.
- * @return False only when an allocation fails.
+ * @return False for a NULL argument, a fragment index out of range or a
+ * closure not made by celestial_closure_build() or _read() (invalid calls a
+ * retry cannot fix), or when an allocation fails.
  */
 bool celestial_closure_solve(const celestial_closure_t *closure, size_t fragment,
                              const celestial_model_t *model, int32_t *values, int32_t (*rgb)[3]);
