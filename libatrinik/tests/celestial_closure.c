@@ -2,6 +2,7 @@
 #include <toolkit/celestial_solver.h>
 #include <toolkit/packet.h>
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -353,6 +354,39 @@ static int test_release_pairs_with_reserve(void) {
     return 0;
 }
 
+static int invalid_width;
+
+static void invalid_dimensions(void *context, void *map, int *width, int *height) {
+    (void)context;
+    (void)map;
+    *width = invalid_width;
+    *height = 3;
+}
+
+static int test_invalid_inputs_fail_without_crashing(void) {
+    celestial_model_t model;
+    model_at(12, &model);
+    int32_t values[9], rgb[9][3];
+    /* Dimensions outside 1..CELESTIAL_SOLVER_DIMENSION_MAX fail the solve
+     * before any size arithmetic. */
+    static const celestial_solver_ops_t invalid = {
+        .resolve = counting_resolve, .dimensions = invalid_dimensions, .sky = counting_sky,
+        .continuous = counting_continuous, .light = counting_light};
+    counting_lattice counts = {0};
+    celestial_solver_lattice_t lattice = {.ops = &invalid, .context = &counts};
+    static const int widths[] = {0, -1, CELESTIAL_SOLVER_DIMENSION_MAX + 1, INT_MAX};
+    for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        invalid_width = widths[i];
+        require(!celestial_solver_solve(&lattice, &counts.map, &model, values, rgb));
+        require(celestial_solver_scratch_width(&lattice, &counts.map) == 0);
+    }
+    /* A count without its fragment array is rejected and cleaned up. */
+    celestial_closure_t closure;
+    require(!celestial_closure_build(&closure, 1, 9, 9, NULL, 3));
+    celestial_closure_free(&closure);
+    return 0;
+}
+
 int main(void) {
     toolkit_import(packet);
     int result = test_round_trip();
@@ -370,6 +404,9 @@ int main(void) {
     }
     if (result == 0) {
         result = test_release_pairs_with_reserve();
+    }
+    if (result == 0) {
+        result = test_invalid_inputs_fail_without_crashing();
     }
     toolkit_deinit();
     return result;

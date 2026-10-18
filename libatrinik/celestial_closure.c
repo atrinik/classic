@@ -28,7 +28,8 @@ void celestial_closure_free(celestial_closure_t *closure) {
     if (closure == NULL) {
         return;
     }
-    for (size_t i = 0; i < closure->count; i++) {
+    /* A rejected build may record a count without its array. */
+    for (size_t i = 0; closure->fragments != NULL && i < closure->count; i++) {
         free(closure->fragments[i].values);
     }
     free(closure->fragments);
