@@ -4336,6 +4336,130 @@ START_TEST(test_celestial_closure_omits_plugin_controlled_static_faces) {
 }
 END_TEST
 
+/** An indoor viewer under a cut-away roof whose one sky opening, above the
+ * viewer, is reached only through a door on the hidden upper level. */
+typedef struct closure_hidden_door {
+    mapstruct *lower, *upper;
+    object *door;
+} closure_hidden_door;
+
+static closure_hidden_door closure_hidden_door_fixture(void) {
+    closure_hidden_door fixture;
+    fixture.lower = closure_open_world("/closure/door-lower");
+    fixture.upper = get_empty_map(64, 64);
+    mapstruct *lower = fixture.lower, *upper = fixture.upper;
+    FREE_AND_COPY_HASH(upper->path, "/closure/door-upper");
+    closure_fixture_schema(upper);
+    FREE_AND_COPY_HASH(lower->tile_path[TILED_UP], upper->path);
+    FREE_AND_COPY_HASH(upper->tile_path[TILED_DOWN], lower->path);
+    lower->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = lower;
+    lower->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    lower->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    /* A roof over the room except above the viewer's cell (32, 30). */
+    for (int y = 26; y <= 36; y++) {
+        for (int x = 26; x <= 38; x++) {
+            if (x == 32 && y == 30) {
+                continue;
+            }
+            object *roof = arch_get("roof_thatch");
+            roof->x = x;
+            roof->y = y;
+            ck_assert_ptr_nonnull(object_insert_map(roof, upper, NULL, 0));
+        }
+    }
+    /* The opening is covered above and walled on three sides; its fourth
+     * side is a door to the open upper level. */
+    upper->celestial_rectangles = xcalloc(1, sizeof(celestial_rectangle_t));
+    upper->celestial_rectangle_count = 1;
+    upper->celestial_rectangles[0] = (celestial_rectangle_t){
+        .type = CELESTIAL_RECT_SKY_COVERED, .x = 32, .y = 30, .width = 1, .height = 1};
+    closure_structure(upper, 31, 30, MISC_OBJECT, FLAG_BLOCKSVIEW, NULL, NULL);
+    closure_structure(upper, 33, 30, MISC_OBJECT, FLAG_BLOCKSVIEW, NULL, NULL);
+    closure_structure(upper, 32, 29, MISC_OBJECT, FLAG_BLOCKSVIEW, NULL, NULL);
+    fixture.door = closure_structure(upper, 32, 31, DOOR, -1, "celestial_transmission_open",
+                                     "open");
+    ck_assert(object_set_value(fixture.door, "celestial_transmission_closed", "opaque", true));
+    return fixture;
+}
+
+static void closure_hidden_door_set(closure_hidden_door *fixture, bool closed) {
+    if (closed) {
+        SET_FLAG(fixture->door, FLAG_DOOR_CLOSED);
+    } else {
+        CLEAR_FLAG(fixture->door, FLAG_DOOR_CLOSED);
+    }
+    celestial_light_invalidate(fixture->upper);
+}
+
+START_TEST(test_hidden_door_state_does_not_reach_base_radiance) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    (void)celestial_override_clear();
+    closure_hidden_door fixture = closure_hidden_door_fixture();
+    /* The viewer stands under the roof, which the camera cuts away; the room
+     * cell under the opening is in view. */
+    request_move_player(&pl, fixture.lower, 34, 32);
+    MapSpace *room = GET_MAP_SPACE_PTR(fixture.lower, 32, 30);
+
+    /* Find an hour when the hidden door decides the room's gameplay light,
+     * which is what the base used to carry. */
+    int found = -1;
+    int32_t open_value = 0, closed_value = 0;
+    for (int hour = 5; hour <= 19 && found < 0; hour++) {
+        todtick = 5 * HOURS_PER_MONTH + hour;
+        closure_hidden_door_set(&fixture, false);
+        celestial_light_ensure(fixture.lower);
+        open_value = room->celestial_light_value;
+        closure_hidden_door_set(&fixture, true);
+        celestial_light_ensure(fixture.lower);
+        closed_value = room->celestial_light_value;
+        if (open_value != closed_value) {
+            found = hour;
+        }
+    }
+    ck_assert_msg(found >= 0, "the hidden door never changes the room's light");
+    ck_assert_int_gt(open_value, closed_value);
+
+    todtick = 5 * HOURS_PER_MONTH + found;
+    closure_hidden_door_set(&fixture, false);
+    closure_redraw(pl);
+    socket_struct *cs = CONTR(pl)->cs;
+    int ax = 32 - (pl->x + (cs->mapx + 1) / 2 - cs->mapx);
+    int ay = 30 - (pl->y + (cs->mapy + 1) / 2 - cs->mapy);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_ne(cell->light_known[0], 0);
+    uint16_t base[NUM_SUB_LAYERS], base_rgb[NUM_SUB_LAYERS][3];
+    memcpy(base, cell->light_radiance, sizeof(base));
+    memcpy(base_rgb, cell->light_rgb_radiance, sizeof(base_rgb));
+    celestial_closure_t closure;
+    ck_assert(closure_last(pl, &closure));
+    /* Neither the opening nor the door is in the viewer's closure. */
+    ck_assert_uint_ne(closure_cell(pl, &closure, 32, 30), 0);
+    int x0 = pl->x + (cs->mapx + 1) / 2 - cs->mapx, y0 = pl->y + (cs->mapy + 1) / 2 - cs->mapy;
+    ck_assert_uint_eq(celestial_closure_value(&closure, 1, 32 - x0, 30 - y0), 0);
+    ck_assert_uint_eq(celestial_closure_value(&closure, 1, 32 - x0, 31 - y0), 0);
+    celestial_closure_free(&closure);
+
+    /* Closing the door out of sight changes the gameplay field, but not one
+     * byte the viewer receives: the base and the closure stay as they were. */
+    closure_hidden_door_set(&fixture, true);
+    closure_redraw(pl);
+    ck_assert_int_eq(room->celestial_light_value, closed_value);
+    cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert(memcmp(cell->light_radiance, base, sizeof(base)) == 0);
+    ck_assert(memcmp(cell->light_rgb_radiance, base_rgb, sizeof(base_rgb)) == 0);
+    ck_assert_ptr_null(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    ck_assert_ptr_null(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL));
+    todtick = saved_hour;
+}
+END_TEST
+
 static Suite *suite(void) {
     Suite *s = suite_create("request");
     TCase *tc_core = tcase_create("Core");
@@ -4355,6 +4479,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_matches_server_solver_in_brynknot);
     tcase_add_test(tc_closure, test_celestial_closure_discloses_only_sent_structure);
     tcase_add_test(tc_closure, test_celestial_closure_omits_plugin_controlled_static_faces);
+    tcase_add_test(tc_closure, test_hidden_door_state_does_not_reach_base_radiance);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);
