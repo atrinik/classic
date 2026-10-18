@@ -35,6 +35,7 @@
 #include <capture_privacy.h>
 #include <access_resolver.h>
 #include <client.h>
+#include <client_celestial.h>
 #include <commands.h>
 #include <config.h>
 #include <effects.h>
@@ -326,6 +327,7 @@ static int game_status_chain(void) {
     } else if (cpl.state == ST_STARTCONNECT) {
         draw_info_format(COLOR_GREEN, "Trying server %s...", selected_server->name);
         keepalive_reset();
+        client_celestial_reset();
         cpl.state = ST_CONNECT;
     } else if (cpl.state == ST_CONNECT) {
         if (!string_is_hex_fixed(selected_server->quic_certificate_sha256, 64, true)) {

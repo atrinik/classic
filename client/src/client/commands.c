@@ -36,6 +36,7 @@
 #include <book.h>
 #include <book_edit.h>
 #include <client.h>
+#include <client_celestial.h>
 #include <commands.h>
 #include <effects.h>
 #include <image.h>
@@ -748,6 +749,12 @@ void socket_command_player_status(uint8_t *data, size_t len, size_t pos) {
         image_request_face(status->face);
     }
     WIDGET_REDRAW_ALL(ACTIVE_EFFECTS_ID);
+}
+
+void socket_command_celestial(uint8_t *data, size_t len, size_t pos) {
+    if (pos > len || !client_celestial_apply(data + pos, len - pos)) {
+        LOG(PACKET, "Rejected malformed or stale celestial packet.");
+    }
 }
 
 /**

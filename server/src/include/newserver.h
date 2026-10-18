@@ -34,6 +34,7 @@
 #include "map.h"
 #include "server_clock.h"
 #include "access_tokens.h"
+#include <toolkit/celestial_model.h>
 
 /** Maximum time a connection may remain in the handshake/setup phase. */
 #define SOCKET_SETUP_TIMEOUT 30
@@ -263,6 +264,17 @@ typedef struct socket_struct {
 
     /** Whether the initial client setup exchange completed successfully. */
     bool setup_completed;
+
+    /** Profile digest owning each CELESTIAL slot, for stable slot identities. */
+    uint8_t celestial_slot_digest[CELESTIAL_PROTOCOL_SLOTS_MAX][32];
+
+    /** Assigned CELESTIAL slots, one bit per slot id. */
+    uint64_t celestial_slots_assigned[(CELESTIAL_PROTOCOL_SLOTS_MAX + 63) / 64];
+
+    /** Digest of the last CELESTIAL payload sent, and its generation. */
+    uint64_t celestial_sent_digest;
+    uint32_t celestial_generation;
+    bool celestial_sent;
 
     /** Abuse-rate window and paced in-band asset response token bucket. */
     uint64_t asset_request_window_ms;

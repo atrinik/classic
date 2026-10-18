@@ -548,6 +548,15 @@ if (BUILD_TESTING)
     target_link_libraries(client-lighting-tests PRIVATE Atrinik::Core)
     add_test(NAME client-lighting COMMAND client-lighting-tests)
 
+    add_executable(client-celestial-tests
+        src/tests/client_celestial.c
+        src/client/client_celestial.c)
+    atrinik_configure_target(client-celestial-tests)
+    target_include_directories(client-celestial-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/include)
+    target_link_libraries(client-celestial-tests PRIVATE Atrinik::Core)
+    add_test(NAME client-celestial COMMAND client-celestial-tests)
+
     add_executable(client-gpu-light-row-tests src/tests/gpu_light_row.c)
     atrinik_configure_target(client-gpu-light-row-tests)
     target_include_directories(client-gpu-light-row-tests PRIVATE
