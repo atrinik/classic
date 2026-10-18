@@ -3253,6 +3253,31 @@ static void map_cell_clear_client_light(size_t index, bool hard) {
     level_lighting_revision[current_level_index]++;
 }
 
+/**
+ * Revoke every field that may include an emitter of this radius on the
+ * given level: the levels within its reach, by magnitude, since darkness
+ * emitters carry negative radii. Fields then compose coarse light until
+ * rebuilt, rather than keep drawing a removed emitter while rebuilds wait.
+ */
+static void map_emitter_revoke_reach(size_t level, int radius) {
+    int reach = MIN(abs(radius), MAP2_MAX_DEPTH * 2);
+    for (int dz = -reach; dz <= reach; dz++) {
+        int target = (int)level + dz;
+        if (target >= 0 && target < MAP2_LEVELS) {
+            map_emitter_revoke((size_t)target);
+        }
+    }
+}
+
+/** As map_emitter_revoke_reach() for every emitter of a cell. */
+static void map_emitter_revoke_cell(size_t level, const map_cell_t *cell) {
+    int radius = 0;
+    for (size_t i = 0; i < cell->emitters->count; i++) {
+        radius = MAX(radius, abs((int)cell->emitters->entries[i].radius));
+    }
+    map_emitter_revoke_reach(level, radius);
+}
+
 void map_clear_cell(int x, int y, bool hard) {
     map_state_transaction_record_cell(x, y);
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
@@ -3260,7 +3285,7 @@ void map_clear_cell(int x, int y, bool hard) {
     /* Only a clear that removes emitters, or an evaluated occluder on a hard
      * clear, changes the emitter field; an idempotent clear relights nothing. */
     if (cell != NULL && cell->emitters != NULL) {
-        map_emitter_revoke(current_level_index);
+        map_emitter_revoke_cell(current_level_index, cell);
     } else if (hard && map_cell_effective_occluder(&cells->headers[index]) != 0) {
         map_emitter_revision_bump(current_level_index);
     }
@@ -3380,16 +3405,8 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     level_lighting_revision[current_level_index]++;
     map_emitter_revision_bump(current_level_index);
     if (present && radius == 0) {
-        /* A removed emitter fails closed: every field that may include it,
-         * on any level within its reach, composes coarse light until rebuilt
-         * rather than keep drawing it while rebuilds are deferred. */
-        int reach = MIN(old_radius, MAP2_MAX_DEPTH * 2);
-        for (int dz = -reach; dz <= reach; dz++) {
-            int level = (int)current_level_index + dz;
-            if (level >= 0 && level < MAP2_LEVELS) {
-                map_emitter_revoke((size_t)level);
-            }
-        }
+        /* A removed emitter fails closed on every level within its reach. */
+        map_emitter_revoke_reach(current_level_index, old_radius);
     }
 }
 
@@ -3530,7 +3547,7 @@ void map_set_fow(int x, int y, bool fow) {
     cell = map_cell_store_slot(cells, index, false);
     if (cell != NULL && cell->emitters != NULL) {
         if (fow) {
-            map_emitter_revoke(current_level_index);
+            map_emitter_revoke_cell(current_level_index, cell);
         } else {
             map_emitter_revision_bump(current_level_index);
         }
@@ -6898,6 +6915,17 @@ bool widget_map_client_lighting_state_test(void) {
     success = success && map_client_lighting_fields[current_level_index].valid;
     map_set_layer_emitter(8, 8, layer, 0, 0, 0);
     success = success && !map_client_lighting_fields[current_level_index].valid;
+    /* Every level within reach is revoked, by the radius magnitude: a removed
+     * darkness emitter too, and a cleared cell's emitters on linked levels. */
+    size_t above = current_level_index + 1;
+    map_set_layer_emitter(8, 8, layer, -2, 0, 0);
+    map_client_lighting_fields[above].valid = true;
+    map_set_layer_emitter(8, 8, layer, 0, 0, 0);
+    success = success && !map_client_lighting_fields[above].valid;
+    map_set_layer_emitter(8, 8, layer, 2, 0, UINT32_C(0xffffff));
+    map_client_lighting_fields[above].valid = true;
+    map_clear_cell(8, 8, false);
+    success = success && !map_client_lighting_fields[above].valid;
     map_set_layer_emitter(8, 8, layer, 1, 0, UINT32_C(0xffffff));
     /* A presented frame rebuilds at most its budget of out-of-date emitter
      * fields; the rest are deferred to a requested redraw, and rebuilds
