@@ -289,6 +289,22 @@ static void test_pair_publishes_only_together(void) {
     TEST_CHECK(!stage_closure(2, NULL, 0));
 }
 
+static void test_staged_generations_never_regress(void) {
+    client_celestial_reset();
+    celestial_protocol_slot_t slot = slot_at(9, 12, 500);
+    /* Generation 3 is staged; an older 2 arriving late cannot replace it. */
+    packet_struct *packet = encode(3, &slot, 1);
+    TEST_CHECK(client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(stage_closure(3, NULL, 0));
+    packet = encode(2, &slot, 1);
+    TEST_CHECK(!client_celestial_apply(packet->data, packet->len));
+    packet_free(packet);
+    TEST_CHECK(!stage_closure(2, NULL, 0));
+    TEST_CHECK(client_celestial_publish(NULL, NULL));
+    TEST_CHECK(client_celestial_generation() == 3);
+}
+
 static void test_publication_solves_every_closure_cell(void) {
     client_celestial_reset();
     celestial_protocol_slot_t slot = slot_at(9, 12, 900);
@@ -385,6 +401,7 @@ int main(void) {
     test_stale_and_malformed_payloads_keep_state();
     test_reset_forgets_slots_and_generation();
     test_pair_publishes_only_together();
+    test_staged_generations_never_regress();
     test_publication_solves_every_closure_cell();
     test_worst_case_closure_cost();
     toolkit_deinit();

@@ -97,8 +97,12 @@ typedef struct celestial_solver_ops {
      * 'to'; *aperture (when not NULL) reports a door, gate or authored
      * transmission on it. */
     uint16_t (*light)(void *context, const celestial_solver_face_t *face, bool *aperture);
-    /** Charge transient solve memory; false declines it. May be NULL to
-     * allow every allocation. */
+    /** Charge the optional spill table a solve may build; false declines it
+     * and the solve evaluates spill coefficients again on each pass. May be
+     * NULL to allow it. The solver's fixed working fields, six int32 values
+     * per scratch cell ((width + 8) x (height + 8)), and the relaxation
+     * buffer are not charged: bound them through the dimensions the lattice
+     * reports, as the server reserves them before a rebuild. */
     bool (*reserve)(void *context, size_t bytes);
     /** Return memory charged by reserve; called only for bytes a reserve
      * call accepted, never when reserve is NULL. May be NULL. */
@@ -146,7 +150,8 @@ int celestial_solver_next(const celestial_solver_lattice_t *lattice,
 uint32_t celestial_solver_sqrt(uint64_t value);
 
 /** Start a backtrace from a map cell towards a source at the given direction
- * (CELESTIAL_MODEL_NORTH..NORTHWEST) and Q15 elevation. */
+ * (CELESTIAL_MODEL_NORTH..NORTHWEST) and Q15 elevation, 1..32768; any other
+ * elevation leaves the ray done. */
 void celestial_solver_ray_init(const celestial_solver_lattice_t *lattice,
                                celestial_solver_ray_t *ray, void *map, int x, int y,
                                uint8_t direction, int32_t elevation);

@@ -384,6 +384,28 @@ static int test_invalid_inputs_fail_without_crashing(void) {
     celestial_closure_t closure;
     require(!celestial_closure_build(&closure, 1, 9, 9, NULL, 3));
     celestial_closure_free(&closure);
+    /* An elevation above the Q15 zenith traces nothing. */
+    static const celestial_solver_ops_t open_ops = {
+        .resolve = counting_resolve, .dimensions = counting_dimensions, .sky = counting_sky,
+        .continuous = counting_continuous, .light = counting_light};
+    lattice.ops = &open_ops;
+    celestial_solver_ray_t ray;
+    celestial_solver_ray_init(&lattice, &ray, &counts.map, 1, 1, 0, 32769);
+    require(ray.done);
+    celestial_solver_ray_init(&lattice, &ray, &counts.map, 1, 1, 0, 32768);
+    require(!ray.done);
+    /* A writer failing part way leaves no partial payload. */
+    require(build_one(&closure, 0, 0, 0, 3, 3, OPEN_AIR));
+    packet_struct *packet = packet_new(0, 64, 0);
+    packet_writer_write_uint8(packet, 7);
+    packet_writer_set_limit(packet, 8);
+    require(!celestial_closure_write(packet, &closure));
+    require(packet->len == 1);
+    packet_free(packet);
+    packet = packet_new(0, 64, 0);
+    require(celestial_closure_write(packet, &closure));
+    packet_free(packet);
+    celestial_closure_free(&closure);
     return 0;
 }
 
