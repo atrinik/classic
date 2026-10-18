@@ -1410,10 +1410,11 @@ static bool map_append_remembered_tile(packet_struct *packet,
             if (differs || endpoint_differs) {
                 next_bitmap |= (uint8_t)(1U << sub_layer);
             }
-            /* Resending the current scalar clears the client's endpoint, so a
+            /* Resending the current light rebases the client's endpoint (the
+             * scalar clears it, the RGB setter overwrites its color), so a
              * differing endpoint is resent with it even when unchanged. */
-            bool rebased =
-                !cached->light_known[sub_layer] || cached->light_radiance[sub_layer] != scalar;
+            bool rebased = !cached->light_known[sub_layer] ||
+                           cached->light_radiance[sub_layer] != scalar || rgb_changed;
             next_changed |= differs || (endpoint_differs && rebased);
         }
     }
@@ -2740,12 +2741,27 @@ void draw_client_map2(object *pl) {
                                 sizeof(light_next_rgb_radiance[sub_layer])) != 0)) {
                         light_next_changed = true;
                     }
-                    /* Resending the current scalar clears the client's
-                     * endpoint, so an endpoint that differs from it is resent
-                     * with it even when its own cache is unchanged. */
+                    /* Resending the current light rebases the client's
+                     * endpoint (the scalar clears it, the RGB setter
+                     * overwrites its color), so an endpoint that differs from
+                     * it is resent with it even when its own cache is
+                     * unchanged. */
                     uint16_t current_scalar = light_set[sub_layer] ? light_radiance[sub_layer] : 0;
-                    bool rebased = light_state_discarded || !mp->light_known[sub_layer] ||
-                                   mp->light_radiance[sub_layer] != current_scalar;
+                    uint16_t current_rgb[3] = {current_scalar, current_scalar, current_scalar};
+                    if (light_set[sub_layer]) {
+                        memcpy(current_rgb, light_rgb_radiance[sub_layer], sizeof(current_rgb));
+                    }
+                    bool rgb_explicit = current_rgb[0] != current_scalar ||
+                                        current_rgb[1] != current_scalar ||
+                                        current_rgb[2] != current_scalar;
+                    bool rebased =
+                        light_state_discarded || !mp->light_known[sub_layer] ||
+                        mp->light_radiance[sub_layer] != current_scalar ||
+                        ((mp->light_rgb_explicit >> sub_layer) & 1U) != (rgb_explicit ? 1U : 0U) ||
+                        (rgb_explicit &&
+                         (!mp->light_rgb_known[sub_layer] ||
+                          memcmp(mp->light_rgb_radiance[sub_layer], current_rgb,
+                                 sizeof(current_rgb)) != 0));
                     if (timed_light_descriptor && (light_next_bitmap & (UINT8_C(1) << sub_layer)) &&
                         rebased) {
                         light_next_changed = true;

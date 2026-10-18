@@ -3283,6 +3283,16 @@ START_TEST(test_timed_endpoint_is_resent_when_its_current_sample_rebases) {
     draw_client_map2(pl);
     ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
     ck_assert_uint_gt(map2_keyframe_extensions_for_test(), extensions);
+    /* An RGB-only rebase: equally strong, differently colored current light
+     * overwrites the client's endpoint color, so the endpoint is resent. */
+    space->celestial_light_rgb[0] = 300;
+    space->celestial_light_rgb[1] = 150;
+    space->celestial_light_rgb[2] = 150;
+    extensions = map2_keyframe_extensions_for_test();
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    ck_assert_uint_gt(validate_queued_map_payloads(cs), 0);
+    ck_assert_uint_gt(map2_keyframe_extensions_for_test(), extensions);
 }
 END_TEST
 
