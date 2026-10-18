@@ -314,6 +314,10 @@ extern void
 packet_writer_write_map_weather(struct packet_struct *packet, object *op, object *map_info);
 
 extern void draw_client_map2(object *pl);
+#ifdef ATRINIK_TESTING
+/** Swap the CELESTIAL_STRUCTURE payload limit, returning the previous one. */
+extern size_t map2_closure_payload_max_exchange_for_test(size_t max);
+#endif
 
 extern void send_game_time(player *recipient);
 

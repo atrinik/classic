@@ -657,6 +657,8 @@ void draw_client_map(object *pl) {
             CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_NEW;
             CONTR(pl)->cs->target_map_publication_pending = true;
             map_client_cache_clear(&CONTR(pl)->cs->lastmap);
+            /* A cleared cache holds no closure: the next update sends a new pair. */
+            CONTR(pl)->cs->celestial_sent = false;
             CONTR(pl)->cs->lastmap_light_generation = 0;
             CONTR(pl)->last_update = pl->map;
             redraw_below = 1;
@@ -1095,12 +1097,35 @@ static uint8_t map2_closure_slot(const mapstruct *map, const map2_celestial_maps
     return CELESTIAL_PROTOCOL_SLOT_NONE;
 }
 
+/** Largest CELESTIAL_STRUCTURE payload: the wire's, or a smaller one a test
+ * sets to exercise the open-air fallback. */
+static size_t map2_closure_payload_max = PACKET_PAYLOAD_MAX;
+
+#ifdef ATRINIK_TESTING
+size_t map2_closure_payload_max_exchange_for_test(size_t max) {
+    size_t previous = map2_closure_payload_max;
+    map2_closure_payload_max = max;
+    return previous;
+}
+#endif
+
+/** The record of open air that every face crosses and that continues to the
+ * cells around it, so the client solves the cell as it solves a cell outside
+ * the closure. */
+#define MAP2_CLOSURE_OPEN_AIR                                                                  \
+    (CELESTIAL_CLOSURE_IN | UINT32_C(0x3ff) | CELESTIAL_CLOSURE_COVER_OPEN |                   \
+     CELESTIAL_CLOSURE_CONTINUOUS_NORTH | CELESTIAL_CLOSURE_CONTINUOUS_EAST |                  \
+     CELESTIAL_CLOSURE_CONTINUOUS_SOUTH | CELESTIAL_CLOSURE_CONTINUOUS_WEST |                  \
+     CELESTIAL_CLOSURE_CONTINUOUS_UP | CELESTIAL_CLOSURE_CONTINUOUS_DOWN |                     \
+     (UINT32_C(3) << CELESTIAL_CLOSURE_OVERHEAD_SHIFT))
+
 /**
  * Collect this update's celestial closure from the per-socket records: one
  * fragment per map and depth, the bounding rectangle of its closure cells.
  * Records of cells outside the closure are dropped. A closure too large for
- * one command loses its farthest depths, which the client then solves as
- * open air.
+ * one command sends its farthest depths, then if need be every depth, as
+ * uniform open air, which compresses to a few runs; the client solves those
+ * cells as it solves cells outside the closure, so none keeps a stale field.
  */
 static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t *seen,
                                  const int *slot_of, celestial_closure_t *closure) {
@@ -1164,20 +1189,28 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
         }
     }
     free(owners);
-    for (int farthest = MAP2_MAX_DEPTH; farthest > 0; farthest--) {
+    for (int farthest = MAP2_MAX_DEPTH; farthest >= 0; farthest--) {
         celestial_closure_t sized = {.count = count, .fragments = fragments};
-        if (celestial_closure_size(&sized) <= PACKET_PAYLOAD_MAX) {
+        if (celestial_closure_size(&sized) <= map2_closure_payload_max) {
             break;
         }
-        size_t kept = 0;
         for (size_t i = 0; i < count; i++) {
-            if (abs(fragments[i].depth) >= farthest) {
-                free(fragments[i].values);
-            } else {
-                fragments[kept++] = fragments[i];
+            if (abs(fragments[i].depth) == farthest) {
+                size_t cells = (size_t)fragments[i].width * fragments[i].height;
+                for (size_t cell = 0; cell < cells; cell++) {
+                    fragments[i].values[cell] = MAP2_CLOSURE_OPEN_AIR;
+                }
             }
         }
-        count = kept;
+    }
+    celestial_closure_t sized = {.count = count, .fragments = fragments};
+    if (celestial_closure_size(&sized) > map2_closure_payload_max) {
+        /* Only countless tiny maps get here: an empty closure leaves every
+         * cell open air. */
+        for (size_t i = 0; i < count; i++) {
+            free(fragments[i].values);
+        }
+        count = 0;
     }
     return celestial_closure_build(closure, 0, cs->mapx, cs->mapy, fragments, count);
 }
@@ -1196,7 +1229,8 @@ static uint64_t map2_packet_digest(const packet_struct *packet) {
  * it stays in view; a slot no shown profile uses is reassigned only when one
  * is needed.
  */
-static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *seen) {
+static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *seen,
+                                const object *pl) {
     static celestial_protocol_slot_t slots[CELESTIAL_PROTOCOL_SLOTS_MAX];
     int slot_of[CELESTIAL_PROTOCOL_SLOTS_MAX];
     uint64_t used[(CELESTIAL_PROTOCOL_SLOTS_MAX + 63) / 64] = {0};
@@ -1269,6 +1303,14 @@ static void map2_send_celestial(socket_struct *cs, const map2_celestial_maps_t *
     HARD_ASSERT(encoded);
     (void)encoded;
     uint64_t structure_digest = map2_packet_digest(probe);
+    /* The closure is relative to the window: the same bytes describe other
+     * cells once the window moves, so where it is anchored is part of what
+     * was published, and a move always sends a new pair. */
+    uint64_t anchor[] = {(uint64_t)(uintptr_t)pl->map, (uint64_t)(uint32_t)pl->x,
+                         (uint64_t)(uint32_t)pl->y, (uint64_t)cs->mapx, (uint64_t)cs->mapy};
+    for (size_t i = 0; i < arraysize(anchor); i++) {
+        structure_digest = (structure_digest ^ anchor[i]) * UINT64_C(1099511628211);
+    }
     packet_free(probe);
     /* The two payloads are one publication: either changing sends both. */
     if (cs->celestial_sent && cs->celestial_sent_digest == digest &&
@@ -1746,6 +1788,8 @@ void draw_client_map2(object *pl) {
     if (!CONTR(pl)->cs->lastmap_player_level_known ||
         CONTR(pl)->cs->lastmap_player_level != pl->level) {
         map_client_cache_clear(&CONTR(pl)->cs->lastmap);
+        /* A cleared cache holds no closure: the next update sends a new pair. */
+        CONTR(pl)->cs->celestial_sent = false;
         CONTR(pl)->cs->lastmap_light_generation = 0;
         CONTR(pl)->cs->lastmap_player_level = pl->level;
         CONTR(pl)->cs->lastmap_player_level_known = true;
@@ -3229,7 +3273,7 @@ void draw_client_map2(object *pl) {
     bool synchronize_time = CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_NEW ||
                             CONTR(pl)->map_update_cmd == MAP_UPDATE_CMD_CONNECTED;
     /* Celestial inputs precede the map update that shows their profiles. */
-    map2_send_celestial(CONTR(pl)->cs, &celestial_maps);
+    map2_send_celestial(CONTR(pl)->cs, &celestial_maps, pl);
     socket_send_packet(CONTR(pl)->cs, packet_header);
     for (uint16_t i = 0; i < continuation_packet_count; i++) {
         socket_send_packet(CONTR(pl)->cs, continuation_packets[i]);
@@ -3309,6 +3353,8 @@ abort_map:
     if (player_connection_is_current(pl, view_player_count, view_player, view_socket)) {
         /* A partially changed delta cache cannot describe a client generation. */
         map_client_cache_clear(&view_socket->lastmap);
+        /* A cleared cache holds no closure: the next update sends a new pair. */
+        view_socket->celestial_sent = false;
         view_socket->lastmap_light_generation = 0;
         view_socket->target_map_published_map = NULL;
         view_socket->target_map_published_count = 0;
@@ -3673,6 +3719,8 @@ void target_map_publication_forget_socket(socket_struct *cs, mapstruct *map) {
         cs->target_map_published_depths = 0;
         cs->target_map_publication_pending = false;
         map_client_cache_clear(&cs->lastmap);
+        /* A cleared cache holds no closure: the next update sends a new pair. */
+        cs->celestial_sent = false;
     }
 }
 
