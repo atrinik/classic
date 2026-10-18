@@ -1758,6 +1758,30 @@ START_TEST(test_client_lighting_local_cache_ignores_unreachable_sources) {
 }
 END_TEST
 
+START_TEST(test_client_lighting_local_cache_survives_unrelated_frees) {
+    /* Freeing a map retires only the caches within its reach: a block on a
+     * disconnected map keeps its walk (the free's geometry change costs it
+     * only a rehash of its own maps), while one that walked through the
+     * freed map walks again. */
+    mapstruct *map = get_empty_map(9, 9);
+    mapstruct *east = get_empty_map(9, 9);
+    mapstruct *far = get_empty_map(9, 9);
+    link_horizontal_maps(map, east);
+    add_colored_light(east, 0, 4, 13, LIGHT_COLOR_WHITE);
+    int lit = light_local_level(map, 7, 4);
+    ck_assert_int_gt(lit, 0);
+    uint64_t walks = light_local_walks_for_test();
+    free_map(far, 1);
+    ck_assert_int_eq(light_local_level(map, 7, 4), lit);
+    ck_assert_uint_eq(light_local_walks_for_test(), walks);
+    /* Teardown retires it while its links still stand, then unlinks it. */
+    free_map(east, 1);
+    map->tile_map[TILED_EAST] = NULL;
+    ck_assert_int_eq(light_local_level(map, 7, 4), 0);
+    ck_assert_uint_gt(light_local_walks_for_test(), walks);
+}
+END_TEST
+
 START_TEST(test_client_lighting_local_cache_ignores_unrelated_geometry) {
     /* A geometry change elsewhere, such as another map being saved, only
      * rehashes a cached block's own maps; a link change on one of them
@@ -2143,6 +2167,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_source_epochs_are_per_map);
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unrelated_geometry);
     tcase_add_test(tc_core, test_client_lighting_local_cache_ignores_unreachable_sources);
+    tcase_add_test(tc_core, test_client_lighting_local_cache_survives_unrelated_frees);
     tcase_add_test(tc_core, test_client_lighting_local_level_fails_closed_on_unbounded_cycles);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_every_reachable_tiny_map);
     tcase_add_test(tc_core, test_client_lighting_local_level_reaches_levels_linked_from_neighbors);
