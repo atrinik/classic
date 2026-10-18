@@ -44,6 +44,19 @@
  * at the current value needs no revalidation. */
 static uint64_t light_local_generation = 1;
 
+/** Advances whenever a map's spaces are freed (light_local_forget()), so no
+ * cached dependency list is read after one of its maps may be gone. */
+static uint64_t light_local_frees = 1;
+
+/** Topology walks performed, for tests of the cache. */
+static uint64_t light_local_walks;
+
+#ifdef ATRINIK_TESTING
+uint64_t light_local_walks_for_test(void) {
+    return light_local_walks;
+}
+#endif
+
 #define MAX_LIGHT_SOURCE 13
 #define MAX_LIGHT_RADIUS 4
 #define LIGHT_DISTANCE_SCALE 256
@@ -1617,6 +1630,9 @@ typedef struct light_local_cache_entry {
     uint64_t source_hash;
     /** light_local_generation when the level was last confirmed current. */
     uint64_t validated;
+    /** light_local_frees when the entry was walked: a later free may have
+     * released one of its dependency maps. */
+    uint64_t frees;
     /** The distinct maps the block's walk reached, valid for its geometry
      * epoch: revalidation hashes only their source epochs, never rewalks. */
     mapstruct **deps;
@@ -1626,6 +1642,8 @@ typedef struct light_local_cache_entry {
 
 
 void light_local_forget(mapstruct *map) {
+    /* Any cached walk may hold this map: walk again before reading one. */
+    light_local_frees++;
     for (size_t i = 0; i < map->light_local_cache_blocks; i++) {
         free(map->light_local_cache[i].deps);
     }
@@ -1635,13 +1653,32 @@ void light_local_forget(mapstruct *map) {
 
 /** Hash of the source epochs of a cached block's dependency maps. */
 static uint64_t light_local_deps_hash(mapstruct *const *deps, size_t count) {
+    /* Everything the block's walk and pooling read from its maps: their
+     * sources, and for each the links the walk may follow, whether the
+     * linked map is resident, and the profile digest that seam continuity
+     * compares. A change anywhere else, such as another map being saved,
+     * leaves the signature and so the cached level intact. */
     uint64_t hash = UINT64_C(1469598103934665603);
+#define LIGHT_LOCAL_MIX(value) (hash = (hash ^ (uint64_t)(value)) * UINT64_C(1099511628211))
     for (size_t i = 0; i < count; i++) {
-        uint64_t parts[2] = {(uint64_t)(uintptr_t)deps[i], deps[i]->light_local_epoch};
-        for (size_t part = 0; part < 2; part++) {
-            hash = (hash ^ parts[part]) * UINT64_C(1099511628211);
+        LIGHT_LOCAL_MIX((uintptr_t)deps[i]);
+        LIGHT_LOCAL_MIX(deps[i]->light_local_epoch);
+        for (int tile = 0; tile < TILED_NUM; tile++) {
+            const mapstruct *next = deps[i]->tile_map[tile];
+            LIGHT_LOCAL_MIX((uintptr_t)next);
+            if (next == NULL) {
+                continue;
+            }
+            LIGHT_LOCAL_MIX(next->in_memory == MAP_IN_MEMORY && next->spaces != NULL);
+            LIGHT_LOCAL_MIX(next->tile_map[map_tiled_reverse[tile]] == deps[i]);
+            if (next->celestial_schema == 1) {
+                uint64_t digest;
+                memcpy(&digest, region_celestial_for_map(next)->digest, sizeof(digest));
+                LIGHT_LOCAL_MIX(digest);
+            }
         }
     }
+#undef LIGHT_LOCAL_MIX
     return hash;
 }
 
@@ -1680,12 +1717,17 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     HARD_ASSERT(index < map->light_local_cache_blocks);
     light_local_cache_entry *entry = &map->light_local_cache[index];
     uint64_t geometry = los_geometry_epoch();
-    if (entry->geometry_epoch != 0 && entry->geometry_epoch == geometry) {
-        if (entry->validated == light_local_generation) {
+    /* An entry whose maps may since have been freed is never read: it walks
+     * again. Otherwise nothing changed when neither the source generation
+     * nor the geometry epoch moved, and a change elsewhere only costs
+     * rehashing this block's own maps. */
+    if (entry->geometry_epoch != 0 && entry->frees == light_local_frees) {
+        if (entry->validated == light_local_generation && entry->geometry_epoch == geometry) {
             return entry->level;
         }
         if (light_local_deps_hash(entry->deps, entry->deps_count) == entry->source_hash) {
             entry->validated = light_local_generation;
+            entry->geometry_epoch = geometry;
             return entry->level;
         }
     }
@@ -1709,6 +1751,7 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
         }
     }
     entry->geometry_epoch = geometry;
+    entry->frees = light_local_frees;
     entry->source_hash = light_local_deps_hash(entry->deps, entry->deps_count);
     entry->validated = light_local_generation;
     entry->level = level;
@@ -1797,6 +1840,7 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
         capacity = 64;
         regions = xmallocarray(capacity, sizeof(*regions));
     }
+    light_local_walks++;
     light_local_set_reset();
     regions[count++] = (light_local_region){.map = map};
     light_local_set_insert(light_local_visited, map, 0, 0);
