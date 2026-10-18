@@ -167,6 +167,26 @@ START_TEST(test_unloaded_lower_map_does_not_gate_upper_light) {
 }
 END_TEST
 
+START_TEST(test_rebuild_reserves_every_level_and_returns_it) {
+    /* A small map under the largest supported upper level: the reserve grows
+     * to the larger level's working fields and outputs, and is returned. */
+    mapstruct *map = open_fixture(3, 3);
+    mapstruct *upper = open_fixture(64, 64);
+    map->celestial_sky_above = CELESTIAL_SKY_LINKED;
+    map->celestial_boundary[TILED_UP] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    upper->celestial_boundary[TILED_DOWN] = CELESTIAL_BOUNDARY_CONTINUOUS;
+    map->tile_map[TILED_UP] = upper;
+    upper->tile_map[TILED_DOWN] = map;
+    ck_assert_uint_eq(celestial_light_pending_memory_for_test(), 0);
+    (void)celestial_light_rebuild(map, 5 * HOURS_PER_MONTH + 12);
+    ck_assert_uint_eq(celestial_light_pending_memory_for_test(), 0);
+    (void)celestial_light_rebuild(upper, 5 * HOURS_PER_MONTH + 12);
+    ck_assert_uint_eq(celestial_light_pending_memory_for_test(), 0);
+    map->tile_map[TILED_UP] = NULL;
+    upper->tile_map[TILED_DOWN] = NULL;
+}
+END_TEST
+
 START_TEST(test_brynknot_and_outside_fields_follow_settime) {
     const char *paths[] = {
         "/shattered_islands/world_0_67", "/shattered_islands/world_1_67",
@@ -1142,6 +1162,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_real_maps, test_brynknot_and_outside_fields_follow_settime);
     tcase_add_test(tc_real_maps, test_brynknot_fields_match_golden_digests);
     tcase_add_test(tc_core, test_unloaded_lower_map_does_not_gate_upper_light);
+    tcase_add_test(tc_core, test_rebuild_reserves_every_level_and_returns_it);
     tcase_add_test(tc_core, test_real_wilderness_midnight_full_and_new_moon_samples);
     tcase_add_test(tc_core, test_derived_horizontal_neighbors_preserve_day_and_lunar_light);
     tcase_add_test(tc_core, test_celestial_elevation_bounds_shadow_and_requires_proven_sky);

@@ -1322,8 +1322,11 @@ wrap is a fatal error, never an invitation to reuse a cache entry.
   before recycling storage.
   Admission reserves `sizeof(job) + 16 * stack_cells + 29 * largest_level_cells`
   bytes before allocating a job. All jobs share the existing 1,923,584-byte
-  transient limit, reserving 184,320 bytes (`45 * 64 * 64`) for one synchronous
-  current-field fallback. Runtime fallback solves cannot overlap on the server
+  transient limit, reserving 249,856 bytes (`61 * 64 * 64`) for one synchronous
+  current-field fallback. That fallback charges 28 bytes per scratch cell and
+  16 per map cell of solve output for the largest level of its stack, growing
+  its reserve as levels are found, and fails the stack closed when the reserve
+  cannot grow. Runtime fallback solves cannot overlap on the server
   thread. Admission that would exceed the remaining queued limit allocates
   nothing and retries on a later request. Completion or cancellation releases
   the reservation. The synchronous two-endpoint snapshot helper is retained

@@ -39,7 +39,17 @@
 
 /* All solve allocations, including dependency snapshots, share one ceiling. */
 #define CELESTIAL_PENDING_MEMORY_MAX ((size_t)1923584)
-#define CELESTIAL_CURRENT_SCRATCH_MAX ((size_t)45 * 64 * 64)
+/* A synchronous rebuild's reservation: 28 bytes per scratch cell for the
+ * solver's working fields, and 16 per map cell for its value and RGB
+ * outputs. Asynchronous admission leaves at least this much, plus dependency
+ * bookkeeping, for the largest supported map. */
+#define CELESTIAL_REBUILD_BYTES(width, height)                                             \
+    ((size_t)28 * ((width) + 2 * CELESTIAL_MODEL_SPILL_PASSES) *                          \
+         ((height) + 2 * CELESTIAL_MODEL_SPILL_PASSES) +                                  \
+     (size_t)16 * (width) * (height))
+#define CELESTIAL_CURRENT_SCRATCH_MAX ((size_t)61 * 64 * 64)
+_Static_assert(CELESTIAL_CURRENT_SCRATCH_MAX >= CELESTIAL_REBUILD_BYTES(64, 64) + 39168,
+               "the rebuild headroom covers the largest rebuild and its bookkeeping");
 static size_t pending_memory, pending_memory_limit = CELESTIAL_PENDING_MEMORY_MAX;
 static celestial_dependencies *active_dependencies;
 
@@ -262,10 +272,11 @@ static uint32_t closure_class(uint16_t coefficient) {
  * The static downward face of a cell, from every object on it a viewer may
  * see, as spatial_cell_light_face() reads it. Floors and roofs belong to the
  * cell whether or not the camera draws their layer. Doors and gates count as
- * closed, or are skipped, since their state is shown only when sent.
+ * closed, or are skipped, since their state is shown only when sent. An object
+ * drawn by direction counts only where MAP2 shows it at window position ax, ay.
  */
-static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *viewer,
-                                    bool doors_closed, bool *aperture) {
+static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *viewer, int ax,
+                                    int ay, bool doors_closed, bool *aperture) {
     uint16_t coefficient = CELESTIAL_SCALE;
     for (object *op = GET_MAP_OB(map, x, y); op != NULL; op = op->above) {
         /* A plugin decides per viewer whether MAP2 shows an object; one that
@@ -273,7 +284,7 @@ static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *
         const object *head = HEAD(op);
         if ((QUERY_FLAG(op, FLAG_IS_INVISIBLE) && !QUERY_FLAG(viewer, FLAG_SEE_INVISIBLE)) ||
             (op->layer != LAYER_WALL && QUERY_FLAG(op, FLAG_HIDDEN)) ||
-            HAS_EVENT(head, EVENT_ASK_SHOW)) {
+            HAS_EVENT(head, EVENT_ASK_SHOW) || !map2_direction_shown(op, viewer, ax, ay)) {
             continue;
         }
         uint8_t faces = celestial_structure_faces(op);
@@ -305,10 +316,12 @@ static uint16_t closure_static_down(mapstruct *map, int x, int y, const object *
 }
 
 uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *accumulator,
-                                      mapstruct *map, int x, int y, const object *viewer) {
+                                      mapstruct *map, int x, int y, const object *viewer, int ax,
+                                      int ay) {
     uint32_t value = CELESTIAL_CLOSURE_IN;
     bool static_aperture = false;
-    uint16_t static_down = closure_static_down(map, x, y, viewer, false, &static_aperture);
+    uint16_t static_down =
+        closure_static_down(map, x, y, viewer, ax, ay, false, &static_aperture);
     for (size_t i = 0; i < arraysize(accumulator->coefficient); i++) {
         uint8_t face = (uint8_t)(1U << i);
         uint16_t coefficient = accumulator->coefficient[i];
@@ -365,8 +378,8 @@ uint32_t celestial_closure_cell_value(const celestial_closure_accumulator_t *acc
              * cell is outside the closure: an indoor viewer's own ceiling is
              * cut away from view but still shades the room. */
             bool overhead_aperture = false;
-            uint16_t overhead = closure_static_down(face.to.map, face.to.x, face.to.y, viewer,
-                                                    true, &overhead_aperture);
+            uint16_t overhead = closure_static_down(face.to.map, face.to.x, face.to.y, viewer, ax,
+                                                    ay, true, &overhead_aperture);
             value |= closure_class(overhead) << CELESTIAL_CLOSURE_OVERHEAD_SHIFT;
             if (overhead_aperture) {
                 value |= CELESTIAL_CLOSURE_OVERHEAD_APERTURE;
@@ -640,9 +653,10 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
     rebuild_count++;
 #endif
 
-    /* The synchronous fallback is server-thread exclusive. Its existing
-     * reserve covers the largest one-level halo plus dependency bookkeeping. */
-    size_t scratch = 28 * celestial_scratch_cells(map);
+    /* The synchronous fallback is server-thread exclusive. Its reserve covers
+     * the largest one-level halo and solve outputs plus dependency
+     * bookkeeping. */
+    size_t scratch = CELESTIAL_REBUILD_BYTES(map->width, map->height);
     bool reservation_available = pending_memory <= CELESTIAL_PENDING_MEMORY_MAX - scratch;
 #ifdef ATRINIK_TESTING
     reservation_available &= !current_reservation_fail;
@@ -670,6 +684,24 @@ bool celestial_light_rebuild(mapstruct *map, uint64_t absolute_hour) {
     char error[HUGE_BUF];
     bool stack_valid = collect_stack(map, levels, &count);
     for (size_t i = 0; i < count; i++) (void)celestial_observe(levels[i]);
+    /* Levels solve one at a time: the reserve grows to the largest one, or
+     * the stack fails as when the first reserve is unavailable. */
+    for (size_t i = 0; stack_valid && i < count; i++) {
+        size_t need = CELESTIAL_REBUILD_BYTES(levels[i]->width, levels[i]->height);
+        if (need <= scratch) {
+            continue;
+        }
+        if (pending_memory > CELESTIAL_PENDING_MEMORY_MAX - (need - scratch)) {
+            (void)spatial_observer_exchange(observer);
+            active_dependencies = NULL;
+            celestial_dependencies_release(dependencies);
+            pending_memory -= scratch;
+            celestial_clear_failed_stack(map);
+            return false;
+        }
+        pending_memory += need - scratch;
+        scratch = need;
+    }
     if (!stack_valid || !celestial_structure_validate_light_dependencies(map, VS(error))) {
         for (size_t i = 0; i < count; i++) {
             mapstruct *current = levels[i];
