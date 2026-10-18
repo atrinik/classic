@@ -574,10 +574,15 @@ START_TEST(test_script_self_spell_reaches_a_visible_player) {
     ck_assert(perception_object_visible(priest, pl));
     ck_assert_int_ne(cast_spell(pl, priest, 0, SP_REMOVE_DEPLETION, 0, CAST_NPC, NULL), 0);
     ck_assert_ptr_null(object_find_arch(pl, arch_find("depletion")));
-    /* A wall still stops it. */
     depletion = arch_get("depletion");
     depletion->stats.Str = -2;
     object_insert_into(depletion, pl, 0);
+    /* Beyond talk range it is out of reach, though still in sight. */
+    object *distant = source_on(map, 8, 5);
+    ck_assert(perception_object_visible(distant, pl));
+    ck_assert_int_eq(cast_spell(pl, distant, 0, SP_REMOVE_DEPLETION, 0, CAST_NPC, NULL), 0);
+    ck_assert_ptr_nonnull(object_find_arch(pl, arch_find("depletion")));
+    /* A wall still stops it. */
     object *wall = source_on(map, 8, 7);
     SET_FLAG(wall, FLAG_NO_PASS);
     SET_FLAG(wall, FLAG_BLOCKSVIEW);
