@@ -285,20 +285,35 @@ int32_t celestial_solver_ray_value(const celestial_solver_ray_t *ray, int32_t so
                                      source, aperture);
 }
 
-static void dimensions(const celestial_solver_lattice_t *lattice, void *map, int *width,
+/** The map's dimensions; false, with both zeroed, when either is outside
+ * 1..CELESTIAL_SOLVER_DIMENSION_MAX, so no size arithmetic can overflow. */
+static bool dimensions(const celestial_solver_lattice_t *lattice, void *map, int *width,
                        int *height) {
+    *width = 0;
+    *height = 0;
     lattice->ops->dimensions(lattice->context, map, width, height);
+    if (*width < 1 || *height < 1 || *width > CELESTIAL_SOLVER_DIMENSION_MAX ||
+        *height > CELESTIAL_SOLVER_DIMENSION_MAX) {
+        *width = 0;
+        *height = 0;
+        return false;
+    }
+    return true;
 }
 
 int celestial_solver_scratch_width(const celestial_solver_lattice_t *lattice, void *map) {
     int width, height;
-    dimensions(lattice, map, &width, &height);
+    if (!dimensions(lattice, map, &width, &height)) {
+        return 0;
+    }
     return width + 2 * CELESTIAL_MODEL_SPILL_PASSES;
 }
 
 int celestial_solver_scratch_height(const celestial_solver_lattice_t *lattice, void *map) {
     int width, height;
-    dimensions(lattice, map, &width, &height);
+    if (!dimensions(lattice, map, &width, &height)) {
+        return 0;
+    }
     return height + 2 * CELESTIAL_MODEL_SPILL_PASSES;
 }
 
@@ -310,7 +325,9 @@ static bool halo_cell(const celestial_solver_lattice_t *lattice, void *map, int 
         return false;
     }
     int width, height;
-    dimensions(lattice, map, &width, &height);
+    if (!dimensions(lattice, map, &width, &height)) {
+        return false;
+    }
     x -= CELESTIAL_MODEL_SPILL_PASSES;
     y -= CELESTIAL_MODEL_SPILL_PASSES;
     int start_x = MAX(0, MIN(x, width - 1));
@@ -477,7 +494,9 @@ bool celestial_solver_solve(const celestial_solver_lattice_t *lattice, void *map
                             const celestial_model_t *model, int32_t *values,
                             int32_t (*rgb)[3]) {
     int map_width, map_height;
-    dimensions(lattice, map, &map_width, &map_height);
+    if (!dimensions(lattice, map, &map_width, &map_height)) {
+        return false;
+    }
     int width = celestial_solver_scratch_width(lattice, map);
     int height = celestial_solver_scratch_height(lattice, map);
     size_t cells = (size_t)width * height;

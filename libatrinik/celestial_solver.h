@@ -72,6 +72,10 @@ typedef struct celestial_solver_cursor {
     bool segment, failed;
 } celestial_solver_cursor_t;
 
+/** Largest map width or height a lattice may report: the wire's 8-bit
+ * closure window, and far above the server's 64-cell maps. */
+#define CELESTIAL_SOLVER_DIMENSION_MAX 255
+
 /** The structure a lattice exposes to the solver. */
 typedef struct celestial_solver_ops {
     /** Resolve a point given in the origin map's coordinates (z relative to
@@ -81,7 +85,8 @@ typedef struct celestial_solver_ops {
     /** Report a consulted map; returning false fails the operation closed.
      * May be NULL. Never called with a NULL map. */
     bool (*observe)(void *context, void *map);
-    /** The map's width and height. */
+    /** The map's width and height, each 1..CELESTIAL_SOLVER_DIMENSION_MAX;
+     * the solver rejects a lattice reporting anything else. */
     void (*dimensions)(void *context, void *map, int *width, int *height);
     /** Whether an upward face, as met walking from the receiver, leaves for
      * the sky. */
@@ -159,6 +164,7 @@ int32_t celestial_solver_ray_value(const celestial_solver_ray_t *ray, int32_t so
  * (x + dx, y + dy). */
 uint16_t celestial_solver_spill(const celestial_solver_lattice_t *lattice, void *map, int x,
                                 int y, int dx, int dy);
+/** Scratch grid size of a map, or 0 when its dimensions are invalid. */
 int celestial_solver_scratch_width(const celestial_solver_lattice_t *lattice, void *map);
 int celestial_solver_scratch_height(const celestial_solver_lattice_t *lattice, void *map);
 
@@ -166,7 +172,8 @@ int celestial_solver_scratch_height(const celestial_solver_lattice_t *lattice, v
  * Solve one map's celestial field under the given model: sky exposure,
  * sun and moon transport, diffuse relaxation and publish, in the server's
  * order. Writes width × height values and RGB triples, row-major.
- * Returns false only when an allocation fails; the outputs are then
+ * Returns false only when the lattice reports invalid dimensions or an
+ * allocation fails; the outputs are then
  * unspecified.
  */
 bool celestial_solver_solve(const celestial_solver_lattice_t *lattice, void *map,

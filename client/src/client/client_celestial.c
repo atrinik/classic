@@ -170,8 +170,9 @@ bool client_celestial_process(uint64_t budget_us) {
             break;
         }
         if (!client_celestial_solve_fragment(client_celestial.solved)) {
-            /* Out of memory: the cells keep the field they last had. */
-            client_celestial.solved = client_celestial.closure.count;
+            /* Out of memory: the cells keep the field they last had, and the
+             * fragment is retried on the next call, since an unchanged pair
+             * is never sent again. */
             break;
         }
         client_celestial.solved++;
