@@ -51,6 +51,15 @@ static uint64_t light_local_generation = 1;
  * every coarse cache entry then revalidates. */
 static uint64_t light_local_generation_all = 1;
 
+/** Advances whenever a link between maps or a map's residency changes: the
+ * only geometry a coarse level's walk reads. Blockers never matter to it, so
+ * door and wall changes leave every entry on the constant-time path. */
+static uint64_t light_local_topology = 1;
+
+void light_local_topology_changed(void) {
+    light_local_topology++;
+}
+
 
 #ifdef ATRINIK_TESTING
 /** Coarse levels walked and pooled again by light_local_level(), for tests
@@ -1775,7 +1784,7 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
                    MIN((size_t)bx / 3, blocks_x - 1);
     HARD_ASSERT(index < map->light_local_cache_blocks);
     light_local_cache_entry *entry = &map->light_local_cache[index];
-    uint64_t geometry = los_geometry_epoch();
+    uint64_t geometry = light_local_topology;
     /* An entry whose maps may since have been freed is never read: it walks
      * again. Otherwise nothing changed when neither the source generation
      * nor the geometry epoch moved, and a change elsewhere only costs

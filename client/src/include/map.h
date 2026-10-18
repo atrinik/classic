@@ -480,6 +480,10 @@ extern void map_celestial_store(void *context, int depth, int x, int y, const in
                                 const int32_t next[4]);
 /** The celestial field last solved for a MAP2 window cell, if any. */
 extern bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]);
+struct celestial_closure;
+/** Clear the celestial field of every window cell a newly published closure
+ * leaves out. */
+extern void map_celestial_retire_outside(const struct celestial_closure *closure);
 
 extern void map_set_structural_support_height(int x, int y, int16_t height);
 

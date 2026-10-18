@@ -89,8 +89,9 @@ typedef struct MapCell_struct {
     /** Emitter layers to resend on the next update because a value changed. */
     uint64_t emitter_stale;
 
-    /** FNV-1a digest of every emitter the cell currently shows. */
-    uint32_t emitter_digest;
+    /** 64-bit FNV-1a digest of every emitter the cell currently shows, wide
+     * enough that two configurations colliding is negligible. */
+    uint64_t emitter_digest;
 
     uint8_t cleared;
 

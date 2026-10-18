@@ -373,8 +373,11 @@ static void test_publication_solves_every_closure_cell(void) {
     TEST_CHECK(stage_closure(1, fragments, 2));
     published_cells cells = {0};
     TEST_CHECK(client_celestial_publish(record_cell, &cells));
-    /* Fragments are solved whole, one at least per call. */
+    /* One hour of one fragment per step, one step at least per call: the
+     * fragment is reported once its next hour is solved too. */
     TEST_CHECK(cells.count == 0 && !client_celestial_solved());
+    TEST_CHECK(!client_celestial_process(0));
+    TEST_CHECK(cells.count == 0);
     TEST_CHECK(!client_celestial_process(0));
     TEST_CHECK(cells.count == 5 && !client_celestial_solved());
     TEST_CHECK(client_celestial_process(UINT64_MAX) && client_celestial_solved());
@@ -418,7 +421,8 @@ static void test_cancel_stops_the_remaining_fragments(void) {
     TEST_CHECK(stage_closure(1, fragments, 2));
     published_cells cells = {0};
     TEST_CHECK(client_celestial_publish(record_cell, &cells));
-    TEST_CHECK(!client_celestial_process(0));
+    /* Two steps solve the first fragment's two hours. */
+    TEST_CHECK(!client_celestial_process(0) && !client_celestial_process(0));
     TEST_CHECK(cells.count == 2);
     /* The window moved: the second fragment is never reported. */
     client_celestial_cancel();

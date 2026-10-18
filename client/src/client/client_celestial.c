@@ -39,7 +39,19 @@ static struct {
     size_t solved;
     client_celestial_cell_fn cell;
     void *context;
+    /** The fragment being solved keeps its current hour here while its next
+     * hour waits for another step, so a step is at most one hourly solve. */
+    int32_t *partial_values;
+    int32_t (*partial_rgb)[3];
 } client_celestial;
+
+/** Drop a fragment solved for its current hour only. */
+static void client_celestial_partial_free(void) {
+    free(client_celestial.partial_values);
+    free(client_celestial.partial_rgb);
+    client_celestial.partial_values = NULL;
+    client_celestial.partial_rgb = NULL;
+}
 
 static bool client_celestial_assigned(const client_celestial_slots_t *slots, uint8_t slot) {
     return slot < CELESTIAL_PROTOCOL_SLOTS_MAX &&
@@ -53,11 +65,13 @@ void client_celestial_discard_staged(void) {
 }
 
 void client_celestial_cancel(void) {
+    client_celestial_partial_free();
     client_celestial.solved = client_celestial.closure.count;
 }
 
 void client_celestial_reset(void) {
     uint64_t revision = client_celestial.revision;
+    client_celestial_partial_free();
     client_celestial_discard_staged();
     celestial_closure_free(&client_celestial.closure);
     memset(&client_celestial, 0, sizeof(client_celestial));
@@ -171,20 +185,40 @@ bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {
     client_celestial.revision++;
 
     /* A newer publication supersedes any fragment still to solve. */
+    client_celestial_partial_free();
     client_celestial.solved = 0;
     client_celestial.cell = cell;
     client_celestial.context = context;
     return true;
 }
 
-/** Solve one fragment for both hours and report its closure cells. */
-static bool client_celestial_solve_fragment(size_t i) {
+/**
+ * Take one step of solving fragment i: its current hour, or, once that is
+ * held, its next hour and the report of its closure cells.
+ * @return False when an allocation fails; the step is retried later.
+ */
+static bool client_celestial_solve_step(size_t i, bool *done) {
     const celestial_closure_fragment_t *fragment = &client_celestial.closure.fragments[i];
     size_t cells = (size_t)fragment->width * fragment->height;
-    int32_t *values = malloc(2 * cells * sizeof(*values));
-    int32_t (*rgb)[3] = malloc(2 * cells * sizeof(*rgb));
-    bool solved = values != NULL && rgb != NULL && client_celestial_solve(i, false, values, rgb) &&
-                  client_celestial_solve(i, true, values + cells, rgb + cells);
+    *done = false;
+    if (client_celestial.partial_values == NULL) {
+        int32_t *values = malloc(cells * sizeof(*values));
+        int32_t (*rgb)[3] = malloc(cells * sizeof(*rgb));
+        if (values == NULL || rgb == NULL || !client_celestial_solve(i, false, values, rgb)) {
+            free(values);
+            free(rgb);
+            return false;
+        }
+        client_celestial.partial_values = values;
+        client_celestial.partial_rgb = rgb;
+        return true;
+    }
+    int32_t *next_values = malloc(cells * sizeof(*next_values));
+    int32_t (*next_rgb)[3] = malloc(cells * sizeof(*next_rgb));
+    bool solved = next_values != NULL && next_rgb != NULL &&
+                  client_celestial_solve(i, true, next_values, next_rgb);
+    const int32_t *values = client_celestial.partial_values;
+    const int32_t (*rgb)[3] = (const int32_t (*)[3])client_celestial.partial_rgb;
     for (int y = 0; solved && y < fragment->height; y++) {
         for (int x = 0; x < fragment->width; x++) {
             size_t index = (size_t)x + (size_t)fragment->width * y;
@@ -192,14 +226,18 @@ static bool client_celestial_solve_fragment(size_t i) {
                 continue;
             }
             int32_t current[4] = {values[index], rgb[index][0], rgb[index][1], rgb[index][2]};
-            int32_t following[4] = {values[cells + index], rgb[cells + index][0],
-                                    rgb[cells + index][1], rgb[cells + index][2]};
+            int32_t following[4] = {next_values[index], next_rgb[index][0], next_rgb[index][1],
+                                    next_rgb[index][2]};
             client_celestial.cell(client_celestial.context, fragment->depth, fragment->x + x,
                                   fragment->y + y, current, following);
         }
     }
-    free(values);
-    free(rgb);
+    free(next_values);
+    free(next_rgb);
+    if (solved) {
+        client_celestial_partial_free();
+        *done = true;
+    }
     return solved;
 }
 
@@ -210,13 +248,16 @@ bool client_celestial_process(uint64_t budget_us) {
             client_celestial.solved = client_celestial.closure.count;
             break;
         }
-        if (!client_celestial_solve_fragment(client_celestial.solved)) {
+        bool done;
+        if (!client_celestial_solve_step(client_celestial.solved, &done)) {
             /* Out of memory: the cells keep the field they last had, and the
-             * fragment is retried on the next call, since an unchanged pair
-             * is never sent again. */
+             * step is retried on the next call, since an unchanged pair is
+             * never sent again. */
             break;
         }
-        client_celestial.solved++;
+        if (done) {
+            client_celestial.solved++;
+        }
         if (datetime_monotonic_us() - start >= budget_us) {
             break;
         }

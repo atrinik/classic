@@ -48,6 +48,7 @@
 #include <main.h>
 #include <misc.h>
 #include <map.h>
+#include <toolkit/celestial_closure.h>
 #include <player.h>
 #include <client_celestial.h>
 #include <animations.h>
@@ -3422,6 +3423,36 @@ static void map_celestial_temporal_update(void) {
     }
     map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
     minimap_redraw_request();
+}
+
+void map_celestial_retire_outside(const celestial_closure_t *closure) {
+    /* A cell the new closure leaves out has no field of this publication:
+     * it is cleared rather than keep the previous one. */
+    for (int depth = -MAP2_MAX_DEPTH; depth <= MAP2_MAX_DEPTH; depth++) {
+        size_t level = MAP2_DEPTH_INDEX(depth);
+        map_cell_store_t *store = level_cells[level];
+        bool changed = false;
+        for (int y = 0; store != NULL && y < closure->window_height; y++) {
+            for (int x = 0; x < closure->window_width; x++) {
+                if (x + MAP_STARTX >= map_width * MAP_FOW_SIZE ||
+                    y + MAP_STARTY >= map_height * MAP_FOW_SIZE ||
+                    celestial_closure_value(closure, depth, x, y) != 0) {
+                    continue;
+                }
+                map_cell_header_t *header =
+                    &store->headers[map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY)];
+                if ((header->client_light_known & 4U) != 0) {
+                    header->client_light_known &= (uint8_t)~4U;
+                    memset(header->celestial, 0, sizeof(header->celestial));
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            level_lighting_revision[level]++;
+            map_redraw_request(MAP_REDRAW_REASON_LIGHTING);
+        }
+    }
 }
 
 bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]) {
@@ -7140,6 +7171,14 @@ bool widget_map_client_lighting_state_test(void) {
               stored[0] == 500 && stored[3] == 600;
     map_clear_cell(10, 8, true);
     success = success && !map_celestial_field(celestial_depth, 10, 8, false, stored);
+    /* A published closure that leaves the cell out retires its field. */
+    map_celestial_store(NULL, celestial_depth, 10, 8, sky, sky);
+    celestial_closure_t empty_closure;
+    success = success && map_celestial_field(celestial_depth, 10, 8, false, stored) &&
+              celestial_closure_build(&empty_closure, 1, map_width, map_height, NULL, 0);
+    map_celestial_retire_outside(&empty_closure);
+    celestial_closure_free(&empty_closure);
+    success = success && !map_celestial_field(celestial_depth, 10, 8, false, stored);
     /* The hourly blend rounds half away from zero, in signed arithmetic. */
     map_cell_header_t blend = {0};
     blend.celestial[0][0] = 100;
@@ -7452,13 +7491,14 @@ bool widget_map_client_lighting_state_test(void) {
                                                map_width, map_height);
     celestial_closure_free(&scroll_closure);
     packet_free(celestial_packet);
+    /* Two steps solve a fragment's two hours. */
     success = success && client_celestial_publish(map_celestial_store, NULL) &&
-              !client_celestial_process(0);
+              !client_celestial_process(0) && !client_celestial_process(0);
     int64_t saved_scroll_x = map_cache_scroll_x, saved_scroll_y = map_cache_scroll_y;
     map_state_transaction_begin(false);
     display_mapscroll(1, 0, 0, 0);
     map_state_transaction_abort();
-    success = success && !client_celestial_process(0) &&
+    success = success && !client_celestial_process(0) && !client_celestial_process(0) &&
               map_celestial_field(0, 12, 8, false, stored) &&
               map_celestial_field(0, 13, 8, false, stored);
     map_state_transaction_begin(false);

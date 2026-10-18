@@ -68,8 +68,9 @@ typedef void (*client_celestial_cell_fn)(void *context, int depth, int x, int y,
 bool client_celestial_publish(client_celestial_cell_fn cell, void *context);
 
 /**
- * Solve fragments of the published closure until the budget is spent; a
- * fragment is solved whole, so the first always completes.
+ * Solve fragments of the published closure until the budget is spent, one
+ * hour of one fragment per step: its cells are reported once both hours are
+ * solved. A step is the smallest unit, so the first always runs.
  * @return Whether every fragment is solved.
  */
 bool client_celestial_process(uint64_t budget_us);

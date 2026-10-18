@@ -1135,7 +1135,18 @@ static uint8_t map2_closure_slot(const mapstruct *map, const map2_celestial_maps
  * sets to exercise the open-air fallback. */
 static size_t map2_closure_payload_max = PACKET_PAYLOAD_MAX;
 
+/** Most fragments a closure keeps before coalescing per depth: the client
+ * solves each fragment's two hours separately, so a view over countless
+ * tiny maps would otherwise multiply its solver work. A test may lower it. */
+static size_t map2_closure_fragments_max = 256;
+
 #ifdef ATRINIK_TESTING
+size_t map2_closure_fragments_max_exchange_for_test(size_t max) {
+    size_t previous = map2_closure_fragments_max;
+    map2_closure_fragments_max = max;
+    return previous;
+}
+
 size_t map2_closure_payload_max_exchange_for_test(size_t max) {
     size_t previous = map2_closure_payload_max;
     map2_closure_payload_max = max;
@@ -1244,7 +1255,8 @@ static bool map2_closure_collect(socket_struct *cs, const map2_celestial_maps_t 
         }
     }
     celestial_closure_t sized = {.count = count, .fragments = fragments};
-    if (celestial_closure_size(&sized) > map2_closure_payload_max) {
+    if (celestial_closure_size(&sized) > map2_closure_payload_max ||
+        count > map2_closure_fragments_max) {
         /* Fragments are collected depth by depth, so each depth's run is
          * contiguous and coalesces in place. */
         size_t coalesced = 0;
@@ -2123,7 +2135,7 @@ void draw_client_map2(object *pl) {
                 uint64_t cell_occluder = 0;
                 celestial_closure_accumulator_t cell_celestial;
                 celestial_closure_begin(&cell_celestial);
-                uint32_t cell_emitter_digest = UINT32_C(2166136261);
+                uint64_t cell_emitter_digest = UINT64_C(1469598103934665603);
                 uint64_t cell_emitter_sent = 0;
                 anim_num = 0;
                 uint8_t anim_type[NUM_SUB_LAYERS] = {0};
@@ -2526,7 +2538,7 @@ void draw_client_map2(object *pl) {
                                 const uint8_t *bytes = (const uint8_t *)entry;
                                 for (size_t i = 0; i < sizeof(entry); i++) {
                                     cell_emitter_digest = (cell_emitter_digest ^ bytes[i]) *
-                                                          UINT32_C(16777619);
+                                                          UINT64_C(1099511628211);
                                 }
                             }
 

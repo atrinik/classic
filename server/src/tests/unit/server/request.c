@@ -3765,7 +3765,7 @@ START_TEST(test_client_lighting_fields_follow_sent_objects_only) {
     ck_assert_ptr_nonnull(cell);
     ck_assert_uint_ne(cell->emitter_layers, 0);
     ck_assert_uint_eq(cell->emitter_stale, 0);
-    uint32_t digest = cell->emitter_digest;
+    uint64_t digest = cell->emitter_digest;
 
     /* A color-only change reuses the cached layer once, marks it stale and
      * resends it on the next update. */
@@ -3847,7 +3847,7 @@ START_TEST(test_client_lighting_cache_fields_add_no_padding) {
     ck_assert_uint_eq(offsetof(MapCell, emitter_stale), offsetof(MapCell, emitter_layers) + 8);
     ck_assert_uint_eq(offsetof(MapCell, emitter_digest), offsetof(MapCell, emitter_stale) + 8);
     ck_assert_uint_eq(offsetof(MapCell, cleared),
-                      offsetof(MapCell, emitter_digest) + sizeof(uint32_t));
+                      offsetof(MapCell, emitter_digest) + sizeof(uint64_t));
 }
 END_TEST
 
@@ -5053,6 +5053,20 @@ START_TEST(test_celestial_closure_headers_too_large_coalesce_by_depth) {
         ck_assert_uint_eq(fragment->values[0], CELESTIAL_CLOSURE_OUTSIDE_RECORD);
     }
     celestial_closure_free(&closure);
+    /* Too many fragments coalesce the same way, whatever their size: after
+     * an ordinary update restores both fragments, a cap of one merges them. */
+    closure_redraw(pl);
+    celestial_closure_t capped;
+    size_t fragments_limit = map2_closure_fragments_max_exchange_for_test(1);
+    closure_redraw(pl);
+    (void)map2_closure_fragments_max_exchange_for_test(fragments_limit);
+    ck_assert(closure_last(pl, &capped));
+    size_t capped_depth0 = 0;
+    for (size_t i = 0; i < capped.count; i++) {
+        capped_depth0 += capped.fragments[i].depth == 0;
+    }
+    ck_assert_uint_eq(capped_depth0, 1);
+    celestial_closure_free(&capped);
     west->tile_map[TILED_EAST] = NULL;
     east->tile_map[TILED_WEST] = NULL;
     todtick = saved_hour;

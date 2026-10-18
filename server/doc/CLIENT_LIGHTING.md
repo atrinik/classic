@@ -168,9 +168,9 @@ the 8 bytes per sub-layer, 56 per fully populated cell, and the cell gains 13
 bytes of header: 7 coarse levels, 5 bytes of occluder and a known-state byte.
 This design therefore raises the client's per-cell lighting storage cap to 72
 bytes. The server's per-socket cell keeps the 56 bytes of signed base and adds
-the 37 bytes of protocol-1085 state below, so its cap is 93 bytes per fully
+the 45 bytes of protocol-1085 state below, so its cap is 101 bytes per fully
 populated cell. The rollout qualifies client memory at 72 and server memory
-at 93 bytes, and its final step records both in MAP_RENDERING.md. With the base neutral, the
+at 101 bytes, and its final step records both in MAP_RENDERING.md. With the base neutral, the
 server no longer sends base RGB words or next-hour endpoints and its
 per-socket cell drops the next-hour endpoint cache; a sent cell carries 27
 bytes of lighting state: 14 of scalar base, 7 coarse levels, 5 of occluder
@@ -180,10 +180,12 @@ complete-MAP2 and continuation limits. The client stores emitters in one packed
 per-cell array of 6-byte entries (layer, radius, flags, RGB), allocated only
 for emitting cells and bounded by the cell's sent layer records, so it scales
 with object storage rather than the lighting budget. The per-socket cache adds
-37 bytes per cell as stored: the 20 bytes of emitter state (see Server), the
-occluder word (8 bytes, 5 of them meaningful), and the 7 per-sub-layer coarse
+45 bytes per cell as stored: the 24 bytes of emitter state (see Server), the
+occluder word (8 bytes, 5 of them meaningful), the 7 per-sub-layer coarse
 levels with their count byte and the known-state byte, which the delta
-encoding compares against for visible and remembered cells alike. The rollout's final step records these figures in
+encoding compares against for visible and remembered cells alike, and the 8
+bytes of the map cell the coordinate last authorized (map count and
+coordinates), which binds remembered fog to it. The rollout's final step records these figures in
 MAP_RENDERING.md.
 
 ### Validation
@@ -314,7 +316,8 @@ connection.
   the owner. Other players' light reaches the viewer only through the coarse
   level. A negative radius is sent with color `000000` and no flicker. The
   per-socket cache keeps, per cell, a bitmap of layers that carry an emitter, a
-  bitmap of stale emitter layers and a digest of the cell's emitters (20 bytes).
+  bitmap of stale emitter layers and a 64-bit digest of the cell's emitters (24
+bytes).
   Gaining or losing an emitter forces a layer delta; a radius-, flag- or
   color-only change on a cached layer changes the digest and resends that layer
   on the next update. Emitters of objects not sent, whether hidden, out of

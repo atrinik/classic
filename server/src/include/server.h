@@ -318,6 +318,7 @@ extern void draw_client_map2(object *pl);
 /** Swap the MAP2 level chunk boundary, returning the previous one. */
 extern size_t map2_level_chunk_max_exchange_for_test(size_t max);
 /** Swap the CELESTIAL_STRUCTURE payload limit, returning the previous one. */
+size_t map2_closure_fragments_max_exchange_for_test(size_t max);
 extern size_t map2_closure_payload_max_exchange_for_test(size_t max);
 #endif
 
