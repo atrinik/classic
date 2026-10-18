@@ -1026,7 +1026,10 @@ static int16_t map_space_support_height(MapSpace *msp) {
 #define map_if_clearcell(_hard_)                                                                \
     {                                                                                           \
         MapCell *cached = map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, false); \
-        if (cached != NULL && cached->cleared != 1) {                                           \
+        /* A hard clear also revokes a soft-cleared cell's remembered light. */                \
+        if (cached != NULL &&                                                                   \
+            (cached->cleared != 1 ||                                                            \
+             ((_hard_) && (cached->client_light_known & MAP2_CLIENT_LIGHT_REMEMBERED) != 0))) { \
             packet_debug_data(packet, 0, "Clearing tile %d,%d, mask", ax, ay);                  \
             packet_writer_write_uint16(packet,                                                  \
                                        mask | MAP2_MASK_CLEAR |                                 \
@@ -1035,6 +1038,38 @@ static int16_t map_space_support_height(MapSpace *msp) {
             light_state_invalidated = true;                                                     \
             level_present = true;                                                               \
         }                                                                                       \
+    }
+
+/**
+ * Move the record started at packet_save_buf into a new chunk when it pushed
+ * the current level payload past the wire chunk boundary.
+ */
+#define map2_split_level_record()                                                         \
+    {                                                                                     \
+        if (!map_protocol_level_payload_fits(packet->len)) {                              \
+            size_t record_size = packet->len - packet_save_buf.pos;                       \
+            HARD_ASSERT(record_size <= MAP2_LEVEL_PAYLOAD_MAX);                           \
+            packet_struct *overflow = packet_new(0, record_size, 512);                    \
+            packet_writer_set_limit(overflow, MAP2_LEVEL_PAYLOAD_MAX * 2U);               \
+            packet_writer_write_bytes(overflow,                                           \
+                                      packet->data + packet_save_buf.pos,                 \
+                                      record_size);                                       \
+            packet_writer_rollback(packet, &packet_save_buf);                             \
+            if (packet->len != 0) {                                                       \
+                HARD_ASSERT(level_packet_count < MAP2_LEVEL_CHUNKS_MAX);                  \
+                level_packets[level_packet_count] = map2_frame_level_chunk(depth, packet); \
+                level_depths[level_packet_count++] = depth;                               \
+            }                                                                             \
+            packet_free(packet);                                                          \
+            packet = overflow;                                                            \
+        }                                                                                 \
+    }
+
+/** Finish a cell record early, keeping it within the chunk boundary. */
+#define map2_next_cell()            \
+    {                               \
+        map2_split_level_record(); \
+        continue;                   \
     }
 
 /** Remembered fog that keeps receiving client light (MapCell bit 3). */
@@ -1606,19 +1641,21 @@ void draw_client_map2(object *pl) {
                  x >= pl->x - CONTR(pl)->cs->mapx_2;
                  x--, ax--) {
                 d = CONTR(pl)->blocked_los_depth[MAP2_DEPTH_INDEX(depth)][ax][ay];
+                /* Every record of this cell, clears included, starts here. */
+                packet_writer_mark(packet, &packet_save_buf);
                 /* Form the data packet for x and y positions. */
                 mask = (ax & 0x1f) << 11 | (ay & 0x1f) << 6;
                 /* Space is out of map or blocked. Update space and clear values if
                  * needed. */
                 if (d & BLOCKED_LOS_OUT_OF_MAP) {
                     map_if_clearcell(depth != 0);
-                    continue;
+                    map2_next_cell();
                 }
 
                 spatial_cell resolved;
                 if (!spatial_resolve(pl->map, x, y, depth, &resolved)) {
                     map_if_clearcell(depth != 0);
-                    continue;
+                    map2_next_cell();
                 }
                 nx = resolved.x;
                 ny = resolved.y;
@@ -1627,7 +1664,7 @@ void draw_client_map2(object *pl) {
                     CONTR(pl)->camera_visibility[MAP2_DEPTH_INDEX(depth)][ax][ay];
                 if (level_visibility == MAP_LEVEL_HIDDEN) {
                     map_if_clearcell(true);
-                    continue;
+                    map2_next_cell();
                 }
 
                 /* Retain every physical level even when its delta is empty. */
@@ -1642,7 +1679,7 @@ void draw_client_map2(object *pl) {
                                 (depth == 0 && blocksview);
                 if (depth < 0 && blocksview) {
                     map_if_clearcell(true);
-                    continue;
+                    map2_next_cell();
                 }
                 /* Ordinary base LOS loss preserves only previously authorized
                  * static fog geometry. Camera cover instead serializes explicit
@@ -1684,7 +1721,7 @@ void draw_client_map2(object *pl) {
                                                    timed_light_descriptor,
                                                    timed_light_generation);
                     }
-                    continue;
+                    map2_next_cell();
                 }
                 if (depth > 0 && blocksview && level_visibility == MAP_LEVEL_VISIBLE) {
                     level_visibility = MAP_LEVEL_BOUNDARY;
@@ -1702,7 +1739,7 @@ void draw_client_map2(object *pl) {
                             level_present = true;
                         }
                     }
-                    continue;
+                    map2_next_cell();
                 }
 
                 level_present = true;
@@ -1793,7 +1830,6 @@ void draw_client_map2(object *pl) {
                 uint64_t cell_occluder = 0;
                 uint32_t cell_emitter_digest = UINT32_C(2166136261);
                 uint64_t cell_emitter_sent = 0;
-                packet_writer_mark(packet, &packet_save_buf);
                 anim_num = 0;
                 uint8_t anim_type[NUM_SUB_LAYERS] = {0};
                 int16_t anim_value[NUM_SUB_LAYERS] = {0};
@@ -2821,23 +2857,7 @@ void draw_client_map2(object *pl) {
                     packet_writer_rollback(packet, &packet_save_buf);
                 }
 
-                if (!map_protocol_level_payload_fits(packet->len)) {
-                    size_t record_size = packet->len - packet_save_buf.pos;
-                    HARD_ASSERT(record_size <= MAP2_LEVEL_PAYLOAD_MAX);
-                    packet_struct *overflow = packet_new(0, record_size, 512);
-                    packet_writer_set_limit(overflow, MAP2_LEVEL_PAYLOAD_MAX * 2U);
-                    packet_writer_write_bytes(overflow,
-                                              packet->data + packet_save_buf.pos,
-                                              record_size);
-                    packet_writer_rollback(packet, &packet_save_buf);
-                    if (packet->len != 0) {
-                        HARD_ASSERT(level_packet_count < MAP2_LEVEL_CHUNKS_MAX);
-                        level_packets[level_packet_count] = map2_frame_level_chunk(depth, packet);
-                        level_depths[level_packet_count++] = depth;
-                    }
-                    packet_free(packet);
-                    packet = overflow;
-                }
+                map2_split_level_record();
             }
         }
 
