@@ -3334,6 +3334,8 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
     const map_cell_emitter_t *old = map_cell_emitter_record(cell, layer);
+    /* The record is released below; keep the reach a removal revokes. */
+    int old_radius = old != NULL ? old->radius : 0;
     color = radius != 0 ? color & UINT32_C(0xffffff) : 0;
     flags = radius != 0 ? flags : 0;
     map_cell_emitter_t entry = {
@@ -3377,6 +3379,18 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     map_cell_store_trim_slot(cells, index);
     level_lighting_revision[current_level_index]++;
     map_emitter_revision_bump(current_level_index);
+    if (present && radius == 0) {
+        /* A removed emitter fails closed: every field that may include it,
+         * on any level within its reach, composes coarse light until rebuilt
+         * rather than keep drawing it while rebuilds are deferred. */
+        int reach = MIN(old_radius, MAP2_MAX_DEPTH * 2);
+        for (int dz = -reach; dz <= reach; dz++) {
+            int level = (int)current_level_index + dz;
+            if (level >= 0 && level < MAP2_LEVELS) {
+                map_emitter_revoke((size_t)level);
+            }
+        }
+    }
 }
 
 /** Return the emitter of one sent layer, if any. */
@@ -6879,6 +6893,12 @@ bool widget_map_client_lighting_state_test(void) {
                           &composed_scalar, composed_rgb);
     success = success && composed_scalar == 160 + light_profile_raw_to_radiance(40) &&
               composed_rgb[0] == composed_scalar && composed_rgb[2] == composed_scalar;
+    /* Removing the emitter revokes the field that drew it, so a deferred
+     * rebuild composes coarse light rather than the removed light. */
+    success = success && map_client_lighting_fields[current_level_index].valid;
+    map_set_layer_emitter(8, 8, layer, 0, 0, 0);
+    success = success && !map_client_lighting_fields[current_level_index].valid;
+    map_set_layer_emitter(8, 8, layer, 1, 0, UINT32_C(0xffffff));
     /* A presented frame rebuilds at most its budget of out-of-date emitter
      * fields; the rest are deferred to a requested redraw, and rebuilds
      * outside a frame stay unbounded. */

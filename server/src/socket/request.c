@@ -1041,6 +1041,9 @@ static int16_t map_space_support_height(MapSpace *msp) {
             light_state_invalidated = true;                                                     \
             level_present = true;                                                               \
         }                                                                                       \
+        if ((_hard_) && cached != NULL) {                                                       \
+            cached->source_map = 0;                                                             \
+        }                                                                                       \
     }
 
 /** Distinct celestial profiles of the maps one MAP2 update shows. */
@@ -1812,7 +1815,16 @@ void draw_client_map2(object *pl) {
                      * that keeps receiving light while this cache is valid. */
                     MapCell *previous =
                         map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, false);
-                    bool remembered = previous != NULL &&
+                    /* Remembered fog is authorized for the cell it was sent
+                     * for: should the coordinate now resolve elsewhere (a
+                     * replaced or repaired link), nothing of it is sent. */
+                    if (previous != NULL && previous->source_map != 0 &&
+                        (previous->source_map != m->count || previous->source_x != nx ||
+                         previous->source_y != ny)) {
+                        map_if_clearcell(true);
+                        map2_next_cell();
+                    }
+                    bool remembered = previous != NULL && previous->source_map != 0 &&
                                       (previous->cleared != 1
                                            ? previous->fow_known != 0
                                            : (previous->client_light_known &
@@ -1849,9 +1861,18 @@ void draw_client_map2(object *pl) {
                     map2_next_cell();
                 }
                 /* Past the LOS checks: the cell is shown, so its profile is
-                 * part of the update; a LOS-blocked, never-sent cell's is not. */
+                 * part of the update and it is bound to this map cell; a
+                 * LOS-blocked, never-sent cell is neither. */
                 if (depth != 0 || !blocksview) {
                     map2_celestial_note(&celestial_maps, m);
+                    MapCell *shown =
+                        map_client_cache_cell(&CONTR(pl)->cs->lastmap, depth, ax, ay, true);
+                    if (shown->source_map != m->count || shown->source_x != nx ||
+                        shown->source_y != ny) {
+                        shown->source_map = m->count;
+                        shown->source_x = (int16_t)nx;
+                        shown->source_y = (int16_t)ny;
+                    }
                 }
                 if (depth > 0 && blocksview && level_visibility == MAP_LEVEL_VISIBLE) {
                     level_visibility = MAP_LEVEL_BOUNDARY;

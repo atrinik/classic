@@ -697,6 +697,11 @@ typedef struct mapdef {
      * coarse light caches validate against the maps their walk reaches. */
     uint64_t light_local_epoch;
 
+    /** Stamp of the last source change whose light can reach this map's
+     * blocks: a coarse cache entry confirmed at it needs no revalidation, so
+     * activity elsewhere keeps it on the constant-time path. */
+    uint64_t light_local_reach_generation;
+
     /** Cached coarse level of each of this map's blocks, allocated on first
      * use and freed with the map (light_local_forget()). */
     struct light_local_cache_entry *light_local_cache;

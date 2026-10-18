@@ -69,6 +69,7 @@ extern void light_local_forget(mapstruct *map);
 #ifdef ATRINIK_TESTING
 /** Coarse-light topology walks performed so far. */
 extern uint64_t light_local_walks_for_test(void);
+extern uint64_t light_local_rehashes_for_test(void);
 #endif
 
 /** The signed coarse level of a block's strongest positive and negative raw

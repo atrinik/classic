@@ -64,6 +64,12 @@ typedef struct MapCell_struct {
     /** Cache of last sent ambient sound. */
     tag_t sound_ambient_count;
 
+    /** The map (its count, 0 for none) and cell this coordinate last
+     * authorized. Kept across soft clears, so remembered fog stays bound to
+     * the cell it was sent for; a hard clear resets it. */
+    tag_t source_map;
+    int16_t source_x, source_y;
+
     /* Everything below will be cleared by memset() in when the map
      * cell is no longer visible. */
 
