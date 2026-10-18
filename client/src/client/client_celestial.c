@@ -11,6 +11,7 @@
 
 #include <client_celestial.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -96,7 +97,16 @@ bool client_celestial_apply(const uint8_t *data, size_t len) {
 bool client_celestial_apply_structure(const uint8_t *data, size_t len, int window_width,
                                       int window_height) {
     celestial_closure_t closure;
-    if (!celestial_closure_read(data, len, window_width, window_height, &closure)) {
+    bool out_of_memory;
+    if (!celestial_closure_decode(data, len, window_width, window_height, &closure,
+                                  &out_of_memory)) {
+        if (out_of_memory) {
+            /* A valid payload the server will not resend: running on without
+             * it would present a stale closure, so out of memory is fatal
+             * here as it is for every client allocation (xmalloc()). */
+            fputs("fatal: memory allocation failed\n", stderr);
+            abort();
+        }
         client_celestial_discard_staged();
         return false;
     }
@@ -132,6 +142,9 @@ bool client_celestial_publish(client_celestial_cell_fn cell, void *context) {
     if (!client_celestial.staged_slots_valid || !client_celestial.staged_closure_valid ||
         client_celestial.staged_slots.generation !=
             client_celestial.staged_closure.generation) {
+        /* Each half belongs to the MAP update right after it: one left
+         * unmatched by that update can never pair with a later one. */
+        client_celestial_discard_staged();
         return false;
     }
     /* Only slot 255 means no profile: a fragment naming a slot its paired

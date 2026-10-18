@@ -4946,6 +4946,38 @@ START_TEST(test_celestial_closure_too_large_is_sent_as_open_air) {
 }
 END_TEST
 
+START_TEST(test_celestial_closure_fallback_resends_membership_changes) {
+    mapstruct *old_map;
+    object *pl;
+    check_setup_env_pl(&old_map, &pl);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 12;
+    mapstruct *map = closure_open_world("/closure/fallback-membership");
+    request_move_player(&pl, map, 32, 32);
+    socket_struct *cs = CONTR(pl)->cs;
+    size_t limit = map2_closure_payload_max_exchange_for_test(64);
+    closure_redraw(pl);
+    ck_assert_ptr_nonnull(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    closure_redraw(pl);
+    ck_assert_ptr_null(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    /* An interior cell loses its only object: as outside records the bytes
+     * stay the same, but the cell left the closure, so a pair is sent. */
+    object *structure = NULL;
+    for (object *op = GET_MAP_OB(map, 30, 30); op != NULL; op = op->above) {
+        if (op->type == MISC_OBJECT) {
+            structure = op;
+        }
+    }
+    ck_assert_ptr_nonnull(structure);
+    object_remove(structure, 0);
+    object_destroy(structure);
+    closure_redraw(pl);
+    ck_assert_ptr_nonnull(queued_command_payload_last(cs, CLIENT_CMD_CELESTIAL_STRUCTURE));
+    (void)map2_closure_payload_max_exchange_for_test(limit);
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_closure_headers_too_large_coalesce_by_depth) {
     mapstruct *old_map;
     object *pl;
@@ -5034,6 +5066,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_closure, test_celestial_closure_is_resent_when_the_window_moves);
     tcase_add_test(tc_closure, test_celestial_closure_too_large_is_sent_as_open_air);
     tcase_add_test(tc_closure, test_celestial_closure_headers_too_large_coalesce_by_depth);
+    tcase_add_test(tc_closure, test_celestial_closure_fallback_resends_membership_changes);
     tcase_add_test(tc_core, test_removed_player_connection_keeps_servicing_queued_output);
     tcase_add_test(tc_core, test_map_name_metadata_handles_transient_unnamed_maps);
     tcase_add_test(tc_core, test_talk_target_binds_actor_without_selection_acknowledgement);

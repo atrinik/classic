@@ -59,6 +59,8 @@ typedef void (*client_celestial_cell_fn)(void *context, int depth, int x, int y,
 /**
  * Publish the staged pair after the MAP2 update that follows it applied:
  * only both payloads with the same generation replace the published ones.
+ * Anything else staged is discarded, since each half belongs only to the
+ * update right after it.
  * Every cell of the new closure is then solved by client_celestial_process()
  * and reported through cell; a newer publication supersedes the rest.
  * @return Whether a pair was published.
