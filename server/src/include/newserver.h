@@ -70,7 +70,21 @@ typedef struct MapCell_struct {
     uint32_t celestial_structure;
 
     /* Everything below will be cleared by memset() in when the map
-     * cell is no longer visible. */
+     * cell is no longer visible, from MAP_CELL_CLEAR_START. Its 64-bit
+     * protocol-1085 fields come first and sit together, so they add no
+     * alignment padding to every cell (client lighting budget). */
+
+    /** Last occluder bits sent, vertical attenuation in bits 16-19 (1085). */
+    uint64_t occluder;
+
+    /** Layers whose last sent object carried an emitter, one bit each. */
+    uint64_t emitter_layers;
+
+    /** Emitter layers to resend on the next update because a value changed. */
+    uint64_t emitter_stale;
+
+    /** FNV-1a digest of every emitter the cell currently shows. */
+    uint32_t emitter_digest;
 
     uint8_t cleared;
 
@@ -88,35 +102,6 @@ typedef struct MapCell_struct {
 
     /** Last complete bitmap of explicitly colored sub-layers. */
     uint8_t light_rgb_explicit;
-
-    /** Last next-hour scalar endpoint sent to the client. */
-    uint16_t light_next_radiance[NUM_SUB_LAYERS];
-
-    /** Whether each next-hour scalar endpoint is established client-side. */
-    uint8_t light_next_known[NUM_SUB_LAYERS];
-
-    /** Timed-light generation for the cached next endpoint. */
-    uint64_t light_next_generation;
-
-    /* 64-bit protocol-1085 cache fields sit together so they add no
-     * alignment padding to every cell (client lighting budget). */
-    /** Last occluder bits sent, vertical attenuation in bits 16-19 (1085). */
-    uint64_t occluder;
-
-    /** Layers whose last sent object carried an emitter, one bit each. */
-    uint64_t emitter_layers;
-
-    /** Emitter layers to resend on the next update because a value changed. */
-    uint64_t emitter_stale;
-
-    /** FNV-1a digest of every emitter the cell currently shows. */
-    uint32_t emitter_digest;
-
-    /** Last next-hour RGB endpoint sent to the client. */
-    uint16_t light_next_rgb_radiance[NUM_SUB_LAYERS][3];
-
-    /** Whether each next-hour RGB endpoint is explicitly colored. */
-    uint8_t light_next_rgb_explicit;
 
     /** Last base-map structural support height sent to the client. */
     int16_t support_height;
@@ -181,6 +166,9 @@ typedef struct MapCell_struct {
 
     uint8_t is_friend : NUM_SUB_LAYERS; ///< Friendly state cache.
 } MapCell;
+
+/** Offset of the first field a cleared cell resets. */
+#define MAP_CELL_CLEAR_START offsetof(MapCell, occluder)
 
 /** One map for a player. */
 struct Map {
@@ -354,9 +342,6 @@ typedef struct socket_struct {
 
     /** Whether ::lastmap_player_level has been initialized. */
     bool lastmap_player_level_known;
-
-    /** Timed-light generation currently established in the client map cache. */
-    uint64_t lastmap_light_generation;
 
     /** Outgoing packets. */
     struct packet_struct *packets;

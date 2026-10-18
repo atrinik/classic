@@ -743,9 +743,6 @@ typedef struct mapdef {
     /** Absolute hour of the complete next field; phase keys alone may repeat. */
     uint64_t celestial_light_next_hour;
 
-    /** Monotonic generation of the published field and endpoint readiness. */
-    uint64_t celestial_light_generation_id;
-
     /** True when the next-hour field is complete for this map stack. */
     bool celestial_light_keyframe_valid;
 

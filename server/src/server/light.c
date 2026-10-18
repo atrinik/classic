@@ -328,23 +328,6 @@ void light_radiance_from_raw(const MapSpace *space,
     }
 }
 
-void light_base_radiance_signed(const MapSpace *space,
-                                int raw_light,
-                                int16_t *scalar_radiance,
-                                int16_t radiance[3]) {
-    HARD_ASSERT(space != NULL);
-    HARD_ASSERT(scalar_radiance != NULL);
-    HARD_ASSERT(radiance != NULL);
-    /* The legacy resolver without local color, minus its zero clamp: the
-     * neutral non-local term plus the celestial RGB field, each signed. */
-    *scalar_radiance = map_protocol_signed_radiance_encode(raw_light);
-    int64_t neutral = (int64_t)raw_light - MAX(space->celestial_light_value, 0);
-    for (size_t channel = 0; channel < 3; channel++) {
-        radiance[channel] = map_protocol_signed_radiance_encode(
-            neutral + MAX(space->celestial_light_rgb[channel], 0));
-    }
-}
-
 /** Attenuation step of a coefficient, rounded up so the client never
  * transmits more light than the server. */
 static uint64_t light_occluder_attenuation(uint16_t coefficient) {

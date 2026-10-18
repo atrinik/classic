@@ -314,6 +314,10 @@ extern void
 packet_writer_write_map_weather(struct packet_struct *packet, object *op, object *map_info);
 
 extern void draw_client_map2(object *pl);
+#ifdef ATRINIK_TESTING
+/** Swap the MAP2 level chunk boundary, returning the previous one. */
+extern size_t map2_level_chunk_max_exchange_for_test(size_t max);
+#endif
 
 extern void send_game_time(player *recipient);
 

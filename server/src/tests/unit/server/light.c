@@ -1489,53 +1489,6 @@ START_TEST(test_local_glass_floor_attenuates_color_and_neutral_darkness) {
 }
 END_TEST
 
-START_TEST(test_client_lighting_base_radiance_omits_local_color) {
-    MapSpace space = {0};
-    int16_t scalar, radiance[3];
-    uint16_t expected_scalar, expected[3];
-
-    space.light_source_value = 80;
-    space.light_source_positive_value = 80;
-    space.light_source_color_weight = INT64_C(80) * UINT16_MAX;
-    space.light_source_color[0] = INT64_C(80) * UINT16_MAX;
-    space.celestial_light_value = 200;
-    space.celestial_light_rgb[0] = 100;
-    space.celestial_light_rgb[1] = 200;
-    space.celestial_light_rgb[2] = 400;
-    light_base_radiance_signed(&space, 1280, &scalar, radiance);
-
-    /* For positive environment the signed words equal the legacy neutral ones. */
-    MapSpace neutral = space;
-    neutral.light_source_color_weight = 0;
-    memset(neutral.light_source_color, 0, sizeof(neutral.light_source_color));
-    light_radiance_from_raw(&neutral, 1280, &expected_scalar, expected);
-    ck_assert_int_eq(scalar, expected_scalar);
-    for (size_t channel = 0; channel < 3; channel++) {
-        ck_assert_int_eq(radiance[channel], expected[channel]);
-    }
-    /* Celestial hue survives; the local red tint does not. */
-    ck_assert_int_lt(radiance[0], radiance[2]);
-}
-END_TEST
-
-START_TEST(test_client_lighting_base_radiance_keeps_negative_environment) {
-    MapSpace space = {0};
-    int16_t scalar, radiance[3];
-    space.celestial_light_value = 100;
-    space.celestial_light_rgb[0] = 0;
-    space.celestial_light_rgb[1] = 100;
-    space.celestial_light_rgb[2] = 300;
-    /* A darkness floor of raw -400 under raw 100 of celestial light. */
-    light_base_radiance_signed(&space, -300, &scalar, radiance);
-    ck_assert_int_eq(scalar, map_protocol_signed_radiance_encode(-300));
-    ck_assert_int_eq(radiance[0], map_protocol_signed_radiance_encode(-400));
-    ck_assert_int_eq(radiance[1], map_protocol_signed_radiance_encode(-300));
-    ck_assert_int_eq(radiance[2], map_protocol_signed_radiance_encode(-100));
-    /* Equal light composed onto the darkness cancels exactly. */
-    ck_assert_int_eq(scalar + map_protocol_signed_radiance_encode(300), 0);
-}
-END_TEST
-
 START_TEST(test_client_lighting_local_level_pools_and_quantizes) {
     mapstruct *map = get_empty_map(9, 9);
     add_colored_light(map, 4, 4, 13, UINT32_C(0xff0000));
@@ -2108,7 +2061,6 @@ static Suite *suite(void) {
                    test_map_teardown_withdraws_linked_light_and_invalidates_celestial_once);
     tcase_add_test(tc_core, test_successful_map_save_preserves_light_and_future_gameplay_rebuilds);
     tcase_add_test(tc_core, test_failed_map_save_preserves_live_objects_state_and_light);
-    tcase_add_test(tc_core, test_client_lighting_base_radiance_omits_local_color);
     tcase_add_test(tc_core, test_client_lighting_local_level_pools_and_quantizes);
     tcase_add_test(tc_core, test_client_lighting_local_level_hides_translation_within_block);
     tcase_add_test(tc_core, test_client_lighting_local_level_keeps_darkness_sign);
@@ -2133,7 +2085,6 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_client_lighting_local_level_merges_edge_remainders);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_mark_missing_neighbors);
     tcase_add_test(tc_core, test_client_lighting_occluder_faces_close_towards_unseen_cells);
-    tcase_add_test(tc_core, test_client_lighting_base_radiance_keeps_negative_environment);
     tcase_add_test(tc_core, test_client_lighting_occluder_bits_follow_sent_objects);
 
     return s;

@@ -53,12 +53,6 @@ extern void light_radiance_from_raw(const MapSpace *space,
                                     uint16_t *scalar_radiance,
                                     uint16_t radiance[3]);
 
-/** Resolve signed Q4.11 base radiance: ambient, floor, world, viewer and
- * celestial light without local sources, negative environment kept (1085). */
-extern void light_base_radiance_signed(const MapSpace *space,
-                                       int raw_light,
-                                       int16_t *scalar_radiance,
-                                       int16_t radiance[3]);
 
 /** Signed, source-anonymous coarse local light level of one cell (protocol 1085). */
 extern int8_t light_local_level(mapstruct *map, int x, int y);
@@ -130,8 +124,10 @@ extern void celestial_light_ensure(mapstruct *map);
 /** Synchronously ensure both hourly fields (offline callers and solver oracle). */
 extern bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour);
 
-/** Ensure current lighting, queue next hour, and return only complete readiness. */
-extern bool celestial_light_keyframe_request(mapstruct *map, uint64_t absolute_hour);
+/** Queue the next hour's field of a map's stack on the budgeted solver unless
+ * it is ready or queued, so the hour boundary promotes it without a
+ * synchronous rebuild. Called once per view update, before MAP2. */
+extern void celestial_light_prepare_next(mapstruct *map);
 
 /** Advance queued cell work on the server thread within this monotonic budget. */
 extern void celestial_light_process_pending(uint64_t budget_us);
@@ -189,9 +185,6 @@ extern uint64_t celestial_light_rebuilds_for_test(void);
 extern size_t celestial_light_pending_memory_for_test(void);
 extern void celestial_light_pending_memory_limit_for_test(size_t limit);
 #endif
-
-/** Return the nonzero generation of the authoritative field/endpoint pair. */
-extern uint64_t celestial_light_generation(const mapstruct *map);
 
 extern void adjust_light_source(mapstruct *map, int x, int y, int light);
 
