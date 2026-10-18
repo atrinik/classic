@@ -85,7 +85,9 @@ void celestial_closure_free(celestial_closure_t *closure);
 
 /**
  * Build a closure from fragments, taking ownership of the heap-allocated
- * fragment array and of each fragment's value array.
+ * fragment array and of each fragment's value array. *closure is
+ * overwritten, never freed: pass an empty one, freeing a populated closure
+ * first.
  * @return False, freeing everything, for any fragment the codec would reject.
  */
 bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, int window_width,
@@ -95,7 +97,8 @@ bool celestial_closure_build(celestial_closure_t *closure, uint32_t generation, 
 /**
  * Encode CELESTIAL_STRUCTURE.
  * @return False, writing nothing, when the closure does not fit in one
- * packet payload.
+ * packet payload, the packet already has a writer error, or the writer
+ * fails part way (its limit or an allocation).
  */
 bool celestial_closure_write(struct packet_struct *packet, const celestial_closure_t *closure);
 
@@ -106,7 +109,8 @@ size_t celestial_closure_size(const celestial_closure_t *closure);
  * Decode CELESTIAL_STRUCTURE for a window of the given size.
  * @return False, leaving *closure empty, for truncation, trailing bytes, a
  * run of length 0, a run or rectangle exceeding its bounds, overlap, or a
- * value outside the closure value rules.
+ * value outside the closure value rules. *closure is overwritten, never
+ * freed: pass an empty one, freeing a populated closure first.
  */
 bool celestial_closure_read(const uint8_t *data, size_t len, int window_width, int window_height,
                             celestial_closure_t *closure);

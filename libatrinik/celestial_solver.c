@@ -209,7 +209,8 @@ void celestial_solver_ray_init(const celestial_solver_lattice_t *lattice,
                                celestial_solver_ray_t *ray, void *map, int x, int y,
                                uint8_t direction, int32_t elevation) {
     memset(ray, 0, sizeof(*ray));
-    if (elevation <= 0) {
+    /* Outside (0, 32768] there is no source above the horizon to trace. */
+    if (elevation <= 0 || elevation > 32768) {
         ray->done = true;
         return;
     }

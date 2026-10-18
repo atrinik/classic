@@ -120,9 +120,12 @@ size_t celestial_closure_size(const celestial_closure_t *closure) {
 
 bool celestial_closure_write(packet_struct *packet, const celestial_closure_t *closure) {
     if (packet == NULL || closure == NULL || closure->count > UINT16_MAX ||
-        celestial_closure_size(closure) > PACKET_PAYLOAD_MAX) {
+        celestial_closure_size(closure) > PACKET_PAYLOAD_MAX ||
+        packet_writer_error(packet) != PACKET_ERROR_NONE) {
         return false;
     }
+    packet_writer_mark_t mark;
+    packet_writer_mark(packet, &mark);
     packet_writer_write_uint32(packet, closure->generation);
     packet_writer_write_uint16(packet, (uint16_t)closure->count);
     for (size_t i = 0; i < closure->count; i++) {
@@ -145,6 +148,11 @@ bool celestial_closure_write(packet_struct *packet, const celestial_closure_t *c
             packet_writer_write_uint32(packet, value);
             cell += length;
         }
+    }
+    if (packet_writer_error(packet) != PACKET_ERROR_NONE) {
+        /* A partial payload is never left behind. */
+        packet_writer_rollback(packet, &mark);
+        return false;
     }
     return true;
 }

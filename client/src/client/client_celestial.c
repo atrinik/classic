@@ -68,8 +68,12 @@ bool client_celestial_apply(const uint8_t *data, size_t len) {
     uint32_t generation;
     uint64_t start_seconds;
     size_t count;
+    /* Generations never regress, against the published pair or a newer
+     * payload already staged. */
     if (!celestial_protocol_read(data, len, &generation, &start_seconds, slots, &count) ||
-        generation <= client_celestial.slots.generation) {
+        generation <= client_celestial.slots.generation ||
+        (client_celestial.staged_slots_valid &&
+         generation < client_celestial.staged_slots.generation)) {
         return false;
     }
     /* The payload is complete state: slots it omits are no longer shown. */
@@ -93,7 +97,9 @@ bool client_celestial_apply_structure(const uint8_t *data, size_t len, int windo
     if (!celestial_closure_read(data, len, window_width, window_height, &closure)) {
         return false;
     }
-    if (closure.generation <= client_celestial.slots.generation) {
+    if (closure.generation <= client_celestial.slots.generation ||
+        (client_celestial.staged_closure_valid &&
+         closure.generation < client_celestial.staged_closure.generation)) {
         celestial_closure_free(&closure);
         return false;
     }
