@@ -326,9 +326,10 @@ static bool capture_checkpoint_request(size_t index,
 }
 
 /* The celestial publication stands in for the retired timed-light keyframe
- * in the report schema: its generation, and the hour it solves. */
+ * in the report schema: its generation, and the hour it solves. It is ready
+ * only once solved, so no capture mixes old and requested light. */
 static bool review_celestial_valid(void) {
-    return client_celestial_generation() != 0;
+    return client_celestial_generation() != 0 && client_celestial_solved();
 }
 
 static uint64_t review_celestial_start(void) {

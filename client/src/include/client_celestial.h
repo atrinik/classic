@@ -93,6 +93,10 @@ bool client_celestial_model(uint8_t slot, bool next, celestial_model_t *model);
 /** Start of the current hour in game seconds, as last received. */
 uint64_t client_celestial_start_seconds(void);
 
+/** Whether every fragment of the published closure has been solved (or the
+ * solve was cancelled for a moved window, which the next pair replaces). */
+bool client_celestial_solved(void);
+
 /** Generation of the published pair; 0 before the first one. */
 uint32_t client_celestial_generation(void);
 

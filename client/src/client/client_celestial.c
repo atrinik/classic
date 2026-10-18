@@ -215,6 +215,10 @@ uint64_t client_celestial_start_seconds(void) {
     return client_celestial.slots.start_seconds;
 }
 
+bool client_celestial_solved(void) {
+    return client_celestial.solved == client_celestial.closure.count;
+}
+
 uint32_t client_celestial_generation(void) {
     return client_celestial.slots.generation;
 }

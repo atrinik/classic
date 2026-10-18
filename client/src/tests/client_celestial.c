@@ -335,10 +335,10 @@ static void test_publication_solves_every_closure_cell(void) {
     published_cells cells = {0};
     TEST_CHECK(client_celestial_publish(record_cell, &cells));
     /* Fragments are solved whole, one at least per call. */
-    TEST_CHECK(cells.count == 0);
+    TEST_CHECK(cells.count == 0 && !client_celestial_solved());
     TEST_CHECK(!client_celestial_process(0));
-    TEST_CHECK(cells.count == 5);
-    TEST_CHECK(client_celestial_process(UINT64_MAX));
+    TEST_CHECK(cells.count == 5 && !client_celestial_solved());
+    TEST_CHECK(client_celestial_process(UINT64_MAX) && client_celestial_solved());
     /* Five closure cells of the first fragment, four of the second. */
     TEST_CHECK(cells.count == 9);
     celestial_model_t current, next;
