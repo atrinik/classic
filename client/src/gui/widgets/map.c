@@ -2093,7 +2093,22 @@ static void map_hard_clear_abort_pending(void) {
     minimap_invalidate_map_generation();
 }
 
+/**
+ * Cancel the celestial solve because the cache it writes into moved, was
+ * replaced or remapped its depths: fragments still to solve address the
+ * old cache. Inside a MAP2 transaction the cancel waits for the commit, since
+ * an abort restores that cache and the solve may go on.
+ */
+static void map_celestial_cancel_request(void) {
+    if (map_state_transaction.active) {
+        map_state_transaction.celestial_cancel = true;
+    } else {
+        client_celestial_cancel();
+    }
+}
+
 void clear_map(bool hard) {
+    map_celestial_cancel_request();
     /* Slots cleared in place keep the cache origin, so the emitter field must
      * not mistake the next map's cells for the previous ones. */
     for (size_t level = 0; level < MAP2_LEVELS; level++) {
@@ -2191,13 +2206,7 @@ void display_mapscroll(int dx, int dy, int old_w, int old_h) {
     int height = map_height * MAP_FOW_SIZE;
 
     if (dx != 0 || dy != 0 || (old_w != 0 && old_h != 0 && (old_w != width || old_h != height))) {
-        /* Fragments still to solve address the window before this move; an
-         * aborted update restores that window, so they survive it. */
-        if (map_state_transaction.active) {
-            map_state_transaction.celestial_cancel = true;
-        } else {
-            client_celestial_cancel();
-        }
+        map_celestial_cancel_request();
     }
 
     if (old_w != 0 && old_h != 0 && (old_w != width || old_h != height)) {
@@ -2357,6 +2366,8 @@ void map_level_scroll(int dz) {
     if (dz == 0) {
         return;
     }
+    /* Depth stores are remapped under any fragment still to solve. */
+    map_celestial_cancel_request();
 
     map_cell_store_t *shifted[MAP2_LEVELS] = {0};
     uint64_t shifted_revisions[MAP2_LEVELS] = {0};
@@ -7460,6 +7471,34 @@ bool widget_map_client_lighting_state_test(void) {
               !map_celestial_field(0, 14, 8, false, stored);
     map_cache_scroll_x = saved_scroll_x;
     map_cache_scroll_y = saved_scroll_y;
+    /* A depth remap cancels an unfinished solve too. */
+    uint32_t generation = client_celestial_generation() + 1;
+    celestial_packet = packet_new(0, 64, 0);
+    success = success && celestial_protocol_write(celestial_packet, generation, 0, NULL, 0) &&
+              client_celestial_apply(celestial_packet->data, celestial_packet->len);
+    packet_free(celestial_packet);
+    celestial_closure_fragment_t *pending = xcalloc(2, sizeof(*pending));
+    for (size_t i = 0; i < 2; i++) {
+        pending[i] = (celestial_closure_fragment_t){
+            .depth = 0, .x = (uint8_t)(12 + i), .y = 9, .width = 1, .height = 1,
+            .slot = CELESTIAL_PROTOCOL_SLOT_NONE};
+        pending[i].values = xcalloc(1, sizeof(*pending[i].values));
+        pending[i].values[0] = CELESTIAL_CLOSURE_IN;
+    }
+    celestial_packet = packet_new(0, 64, 0);
+    success = success &&
+              celestial_closure_build(&scroll_closure, generation, map_width, map_height,
+                                      pending, 2) &&
+              celestial_closure_write(celestial_packet, &scroll_closure) &&
+              client_celestial_apply_structure(celestial_packet->data, celestial_packet->len,
+                                               map_width, map_height);
+    celestial_closure_free(&scroll_closure);
+    packet_free(celestial_packet);
+    success = success && client_celestial_publish(map_celestial_store, NULL) &&
+              !client_celestial_process(0) && !client_celestial_solved();
+    map_level_scroll(1);
+    success = success && client_celestial_solved();
+    map_level_scroll(-1);
     client_celestial_reset();
 
     for (size_t store = 0; store < arraysize(map_client_lighting_fields); store++) {
