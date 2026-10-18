@@ -1656,14 +1656,45 @@ typedef struct light_local_cache_entry {
     /** The map's light_local_reach_generation, and light_local_generation_all,
      * when the level was last confirmed current. */
     uint64_t validated, validated_all;
-    /** The distinct maps the block's walk reached, valid for its geometry
-     * epoch: revalidation hashes only their source epochs, never rewalks.
-     * Freeing one of them sends the entry back to a walk first, so these
-     * pointers are only ever followed while their maps are live. */
-    mapstruct **deps;
-    size_t deps_count, deps_capacity;
     int8_t level;
 } light_local_cache_entry;
+
+/** The position of dep in a map's ordered dependency set, or where it
+ * would be inserted. Addresses order the set; they are compared, never
+ * followed. */
+static size_t light_local_deps_find(const mapstruct *map, const mapstruct *dep, bool *found) {
+    size_t low = 0, high = map->light_local_deps_count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if ((uintptr_t)map->light_local_deps[middle] < (uintptr_t)dep) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    *found = low < map->light_local_deps_count && map->light_local_deps[low] == dep;
+    return low;
+}
+
+/** Add one map a block's walk reached to the map's shared dependency set. */
+static void light_local_deps_add(mapstruct *map, mapstruct *dep) {
+    bool found;
+    size_t at = light_local_deps_find(map, dep, &found);
+    if (found) {
+        return;
+    }
+    if (map->light_local_deps_count == map->light_local_deps_capacity) {
+        map->light_local_deps_capacity =
+            map->light_local_deps_capacity == 0 ? 8 : map->light_local_deps_capacity * 2;
+        map->light_local_deps = xreallocarray(map->light_local_deps,
+                                              map->light_local_deps_capacity,
+                                              sizeof(*map->light_local_deps));
+    }
+    memmove(&map->light_local_deps[at + 1], &map->light_local_deps[at],
+            (map->light_local_deps_count - at) * sizeof(*map->light_local_deps));
+    map->light_local_deps[at] = dep;
+    map->light_local_deps_count++;
+}
 
 
 void light_local_forget(mapstruct *map) {
@@ -1675,21 +1706,25 @@ void light_local_forget(mapstruct *map) {
      * swapped out but kept. */
     map->light_local_epoch++;
     for (mapstruct *other = first_map; other != NULL; other = other->next) {
-        for (size_t i = 0; other != map && i < other->light_local_cache_blocks; i++) {
-            light_local_cache_entry *entry = &other->light_local_cache[i];
-            for (size_t dep = 0; dep < entry->deps_count; dep++) {
-                if (entry->deps[dep] == map) {
-                    entry->geometry_epoch = 0;
-                    break;
-                }
-            }
+        bool found;
+        if (other == map || other->light_local_deps_count == 0) {
+            continue;
         }
-    }
-    for (size_t i = 0; i < map->light_local_cache_blocks; i++) {
-        free(map->light_local_cache[i].deps);
+        (void)light_local_deps_find(other, map, &found);
+        if (!found) {
+            continue;
+        }
+        /* Its blocks walk again and rebuild the set without this map. */
+        for (size_t i = 0; i < other->light_local_cache_blocks; i++) {
+            other->light_local_cache[i].geometry_epoch = 0;
+        }
+        other->light_local_deps_count = 0;
     }
     FREE_AND_NULL_PTR(map->light_local_cache);
     map->light_local_cache_blocks = 0;
+    FREE_AND_NULL_PTR(map->light_local_deps);
+    map->light_local_deps_count = 0;
+    map->light_local_deps_capacity = 0;
 }
 
 /** Hash of the source epochs of a cached block's dependency maps. */
@@ -1771,7 +1806,8 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
 #ifdef ATRINIK_TESTING
         light_local_rehashes++;
 #endif
-        if (light_local_deps_hash(entry->deps, entry->deps_count) == entry->source_hash) {
+        if (light_local_deps_hash(map->light_local_deps, map->light_local_deps_count) ==
+            entry->source_hash) {
             entry->validated = map->light_local_reach_generation;
             entry->validated_all = light_local_generation_all;
             entry->geometry_epoch = geometry;
@@ -1781,27 +1817,22 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     const light_local_region *regions;
     size_t count;
     int8_t level = 0;
-    entry->deps_count = 0;
 #ifdef ATRINIK_TESTING
     light_local_walks++;
 #endif
     if (light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
         level = light_local_level_pool(regions, count, bx, ex, by, ey);
-        /* Distinct maps, in walk order; a map placed at several offsets
-         * appears once. */
+        /* Into the map's shared set: a superset of this block's maps is a
+         * conservative signature, and a set that grows sends the other
+         * blocks back to one walk each until it settles. */
         for (size_t i = 0; i < count; i++) {
-            if (!light_local_set_insert(light_local_distinct, regions[i].map, 0, 0)) {
-                continue;
+            if (light_local_set_insert(light_local_distinct, regions[i].map, 0, 0)) {
+                light_local_deps_add(map, regions[i].map);
             }
-            if (entry->deps_count == entry->deps_capacity) {
-                entry->deps_capacity = entry->deps_capacity == 0 ? 8 : entry->deps_capacity * 2;
-                entry->deps = xreallocarray(entry->deps, entry->deps_capacity, sizeof(*entry->deps));
-            }
-            entry->deps[entry->deps_count++] = regions[i].map;
         }
     }
     entry->geometry_epoch = geometry;
-    entry->source_hash = light_local_deps_hash(entry->deps, entry->deps_count);
+    entry->source_hash = light_local_deps_hash(map->light_local_deps, map->light_local_deps_count);
     entry->validated = map->light_local_reach_generation;
     entry->validated_all = light_local_generation_all;
     entry->level = level;

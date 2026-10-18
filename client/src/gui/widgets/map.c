@@ -3326,7 +3326,7 @@ bool map_celestial_field(int depth, int x, int y, bool next, int16_t field[4]) {
  * rebuilt, rather than keep drawing a removed emitter while rebuilds wait.
  */
 static void map_emitter_revoke_reach(size_t level, int radius) {
-    int reach = MIN(abs(radius), MAP2_MAX_DEPTH * 2);
+    int reach = MIN(abs(radius), LIGHT_PROFILE_RADIUS_MAX);
     for (int dz = -reach; dz <= reach; dz++) {
         int target = (int)level + dz;
         if (target >= 0 && target < MAP2_LEVELS) {
@@ -3335,13 +3335,12 @@ static void map_emitter_revoke_reach(size_t level, int radius) {
     }
 }
 
-/** As map_emitter_revoke_reach() for every emitter of a cell. */
+/** As map_emitter_revoke_reach() for the emitters of a cell. Co-located
+ * radii are summed before their profile is chosen, so no single radius
+ * bounds the cell's reach: the full profile reach is revoked. */
 static void map_emitter_revoke_cell(size_t level, const map_cell_t *cell) {
-    int radius = 0;
-    for (size_t i = 0; i < cell->emitters->count; i++) {
-        radius = MAX(radius, abs((int)cell->emitters->entries[i].radius));
-    }
-    map_emitter_revoke_reach(level, radius);
+    (void)cell;
+    map_emitter_revoke_reach(level, LIGHT_PROFILE_RADIUS_MAX);
 }
 
 void map_clear_cell(int x, int y, bool hard) {
@@ -3425,8 +3424,6 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     size_t index = map_cache_physical_index(x + MAP_STARTX, y + MAP_STARTY);
     map_cell_t *cell = map_cell_store_slot(cells, index, false);
     const map_cell_emitter_t *old = map_cell_emitter_record(cell, layer);
-    /* The record is released below; keep the reach a removal revokes. */
-    int old_radius = old != NULL ? old->radius : 0;
     color = radius != 0 ? color & UINT32_C(0xffffff) : 0;
     flags = radius != 0 ? flags : 0;
     map_cell_emitter_t entry = {
@@ -3471,8 +3468,9 @@ void map_set_layer_emitter(int x, int y, int layer, int8_t radius, uint8_t flags
     level_lighting_revision[current_level_index]++;
     map_emitter_revision_bump(current_level_index);
     if (present && radius == 0) {
-        /* A removed emitter fails closed on every level within its reach. */
-        map_emitter_revoke_reach(current_level_index, old_radius);
+        /* A removed emitter changes its cell's summed profile: every level
+         * within the full profile reach fails closed. */
+        map_emitter_revoke_reach(current_level_index, LIGHT_PROFILE_RADIUS_MAX);
     }
 }
 
