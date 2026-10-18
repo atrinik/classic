@@ -833,6 +833,27 @@ START_TEST(test_celestial_pending_promotes_without_rebuild_and_jumps_fall_back) 
 }
 END_TEST
 
+START_TEST(test_celestial_view_preparation_promotes_at_the_hour) {
+    mapstruct *map = open_fixture(8, 8);
+    unsigned long saved_hour = todtick;
+    todtick = 5 * HOURS_PER_MONTH + 7;
+    celestial_light_prepare_next(map);
+    celestial_light_process_steps_for_test(100000);
+    ck_assert(map->celestial_light_keyframe_valid);
+    int32_t next = map->spaces[0].celestial_light_next_value;
+    uint64_t builds = celestial_light_rebuilds_for_test();
+    /* The view prepares before MAP2's gating reads the field: at the hour
+     * boundary that preparation promotes the ready field, never rebuilds. */
+    todtick++;
+    celestial_light_prepare_next(map);
+    celestial_light_ensure(map);
+    ck_assert_uint_eq(celestial_light_rebuilds_for_test(), builds);
+    ck_assert_int_eq(map->spaces[0].celestial_light_value, next);
+    celestial_light_forget(map);
+    todtick = saved_hour;
+}
+END_TEST
+
 START_TEST(test_celestial_pending_is_fair_and_geometry_cancels) {
     mapstruct *first = open_fixture(16, 16);
     mapstruct *second = open_fixture(16, 16);
@@ -1142,6 +1163,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_current_reservation_failure_clears_both_published_endpoints);
     tcase_add_test(tc_core, test_celestial_pending_promotes_without_rebuild_and_jumps_fall_back);
     tcase_add_test(tc_core, test_celestial_pending_is_fair_and_geometry_cancels);
+    tcase_add_test(tc_core, test_celestial_view_preparation_promotes_at_the_hour);
     tcase_add_test(tc_core, test_celestial_pending_stack_exact_and_membership_fenced);
     return s;
 }

@@ -1309,6 +1309,10 @@ void celestial_light_prepare_next(mapstruct *map) {
         absolute_hour == UINT64_MAX) {
         return;
     }
+    /* Promote a field prepared for this hour first: only then is the stack's
+     * next-hour readiness about the following hour, and an hour boundary is a
+     * promotion, never a rebuild. */
+    celestial_light_ensure(map);
     mapstruct *levels[MAP2_LEVELS] = {0};
     size_t count = 0;
     if (!collect_stack(map, levels, &count)) {

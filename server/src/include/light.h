@@ -124,9 +124,9 @@ extern void celestial_light_ensure(mapstruct *map);
 /** Synchronously ensure both hourly fields (offline callers and solver oracle). */
 extern bool celestial_light_keyframe_ensure(mapstruct *map, uint64_t absolute_hour);
 
-/** Queue the next hour's field of a map's stack on the budgeted solver unless
- * it is ready or queued, so the hour boundary promotes it without a
- * synchronous rebuild. Called once per view update, before MAP2. */
+/** Ensure the current field, promoting a prepared one at an hour boundary,
+ * then queue the next hour's field of the map's stack on the budgeted solver
+ * unless it is ready or queued. Called once per view update, before MAP2. */
 extern void celestial_light_prepare_next(mapstruct *map);
 
 /** Advance queued cell work on the server thread within this monotonic budget. */
