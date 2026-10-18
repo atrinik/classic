@@ -43,20 +43,32 @@
 #define MAX_LIGHT_SOURCE LIGHT_PROFILE_SOURCE_MAX
 #define MAX_LIGHT_RADIUS LIGHT_PROFILE_RADIUS_MAX
 
-/** Advances with every source change anywhere; a coarse cache entry confirmed
- * at the current value needs no revalidation. */
+/** Stamps source changes: each one advances it and stamps every map its light
+ * can reach (mapstruct::light_local_reach_generation). */
 static uint64_t light_local_generation = 1;
+
+/** Advances when a source change could not enumerate the maps it reaches;
+ * every coarse cache entry then revalidates. */
+static uint64_t light_local_generation_all = 1;
 
 /** Advances whenever a map's spaces are freed (light_local_forget()), so no
  * cached dependency list is read after one of its maps may be gone. */
 static uint64_t light_local_frees = 1;
 
 #ifdef ATRINIK_TESTING
-/** Topology walks performed, for tests of the cache. */
+/** Coarse levels walked and pooled again by light_local_level(), for tests
+ * of the cache; a source change's reach walk is not one. */
 static uint64_t light_local_walks;
 
 uint64_t light_local_walks_for_test(void) {
     return light_local_walks;
+}
+
+/** Cached levels revalidated by rehashing their dependency maps. */
+static uint64_t light_local_rehashes;
+
+uint64_t light_local_rehashes_for_test(void) {
+    return light_local_rehashes;
 }
 #endif
 
@@ -1047,6 +1059,8 @@ static void light_origin_list_update(mapstruct *map, MapSpace *space) {
     map->first_light = space;
 }
 
+static void light_local_reach_stamp(mapstruct *map, int x, int y);
+
 /** Adjust one grouped scalar component at a source origin. */
 static void adjust_grouped_light_source(mapstruct *map,
                                         int x,
@@ -1059,7 +1073,7 @@ static void adjust_grouped_light_source(mapstruct *map,
     *counter += light;
     /* Only coarse levels whose walk reaches this map are invalidated. */
     map->light_local_epoch++;
-    light_local_generation++;
+    light_local_reach_stamp(map, x, y);
     int new_mask = get_real_light_source_value(*counter);
 
     if (map->in_memory != MAP_LOADING && old_mask != new_mask) {
@@ -1625,8 +1639,9 @@ typedef struct light_local_cache_entry {
     /** Zero until the block's level is first computed. */
     uint64_t geometry_epoch;
     uint64_t source_hash;
-    /** light_local_generation when the level was last confirmed current. */
-    uint64_t validated;
+    /** The map's light_local_reach_generation, and light_local_generation_all,
+     * when the level was last confirmed current. */
+    uint64_t validated, validated_all;
     /** light_local_frees when the entry was walked: a later free may have
      * released one of its dependency maps. */
     uint64_t frees;
@@ -1719,11 +1734,17 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
      * nor the geometry epoch moved, and a change elsewhere only costs
      * rehashing this block's own maps. */
     if (entry->geometry_epoch != 0 && entry->frees == light_local_frees) {
-        if (entry->validated == light_local_generation && entry->geometry_epoch == geometry) {
+        if (entry->validated == map->light_local_reach_generation &&
+            entry->validated_all == light_local_generation_all &&
+            entry->geometry_epoch == geometry) {
             return entry->level;
         }
+#ifdef ATRINIK_TESTING
+        light_local_rehashes++;
+#endif
         if (light_local_deps_hash(entry->deps, entry->deps_count) == entry->source_hash) {
-            entry->validated = light_local_generation;
+            entry->validated = map->light_local_reach_generation;
+            entry->validated_all = light_local_generation_all;
             entry->geometry_epoch = geometry;
             return entry->level;
         }
@@ -1732,6 +1753,9 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     size_t count;
     int8_t level = 0;
     entry->deps_count = 0;
+#ifdef ATRINIK_TESTING
+    light_local_walks++;
+#endif
     if (light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
         level = light_local_level_pool(regions, count, bx, ex, by, ey);
         /* Distinct maps, in walk order; a map placed at several offsets
@@ -1750,7 +1774,8 @@ int8_t light_local_level(mapstruct *map, int x, int y) {
     entry->geometry_epoch = geometry;
     entry->frees = light_local_frees;
     entry->source_hash = light_local_deps_hash(entry->deps, entry->deps_count);
-    entry->validated = light_local_generation;
+    entry->validated = map->light_local_reach_generation;
+    entry->validated_all = light_local_generation_all;
     entry->level = level;
     return level;
 }
@@ -1837,9 +1862,6 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
         capacity = 64;
         regions = xmallocarray(capacity, sizeof(*regions));
     }
-#ifdef ATRINIK_TESTING
-    light_local_walks++;
-#endif
     light_local_set_reset();
     regions[count++] = (light_local_region){.map = map};
     light_local_set_insert(light_local_visited, map, 0, 0);
@@ -1893,6 +1915,38 @@ static bool light_local_walk(mapstruct *map, int bx, int ex, int by, int ey,
     *regions_out = regions;
     *count_out = count;
     return true;
+}
+
+/**
+ * Stamp every map a source change at (x, y) can reach. Reach is symmetric:
+ * the walk from the source's block places exactly the maps whose blocks'
+ * walks place it. A map narrower than a block contributes no coarse light,
+ * so its change stamps only itself. A change on a map not yet resident (it
+ * is loading, and its neighbors' signatures will see it arrive) or a walk
+ * that fails closed revalidates every entry, as any change once did.
+ */
+static void light_local_reach_stamp(mapstruct *map, int x, int y) {
+    uint64_t stamp = ++light_local_generation;
+    map->light_local_reach_generation = stamp;
+    if (map->in_memory != MAP_IN_MEMORY || map->spaces == NULL) {
+        light_local_generation_all++;
+        return;
+    }
+    if (MAP_WIDTH(map) < 3 || MAP_HEIGHT(map) < 3) {
+        return;
+    }
+    int bx, by, ex, ey;
+    light_local_block(x, MAP_WIDTH(map), &bx, &ex);
+    light_local_block(y, MAP_HEIGHT(map), &by, &ey);
+    const light_local_region *regions;
+    size_t count;
+    if (!light_local_walk(map, bx, ex, by, ey, &regions, &count)) {
+        light_local_generation_all++;
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        regions[i].map->light_local_reach_generation = stamp;
+    }
 }
 
 static int8_t light_local_level_pool(const light_local_region *regions, size_t count, int bx,

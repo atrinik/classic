@@ -69,6 +69,12 @@ typedef struct MapCell_struct {
      * when last visible, so it lives outside the cleared part. */
     uint32_t celestial_structure;
 
+    /** The map (its count, 0 for none) and cell this coordinate last
+     * authorized. Kept across soft clears, so remembered fog stays bound to
+     * the cell it was sent for; a hard clear resets it. */
+    tag_t source_map;
+    int16_t source_x, source_y;
+
     /* Everything below will be cleared by memset() in when the map
      * cell is no longer visible, from MAP_CELL_CLEAR_START. Its 64-bit
      * protocol-1085 fields come first and sit together, so they add no

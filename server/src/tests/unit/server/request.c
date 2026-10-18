@@ -2984,6 +2984,65 @@ START_TEST(test_celestial_inputs_precede_map_and_resend_only_on_change) {
 }
 END_TEST
 
+START_TEST(test_remembered_fog_is_bound_to_its_map_cell) {
+    mapstruct *map;
+    object *pl;
+    check_setup_env_pl(&map, &pl);
+    mapstruct *east = get_empty_map(24, 24);
+    mapstruct *unseen = get_empty_map(24, 24);
+    map->tile_map[TILED_EAST] = east;
+    east->tile_map[TILED_WEST] = map;
+    for (int y = 0; y < 24; y++) {
+        object *floor = arch_get("water_still");
+        floor->x = 0;
+        floor->y = y;
+        ck_assert_ptr_nonnull(object_insert_map(floor, east, NULL, 0));
+        floor = arch_get("water_still");
+        floor->x = 0;
+        floor->y = y;
+        ck_assert_ptr_nonnull(object_insert_map(floor, unseen, NULL, 0));
+    }
+    request_move_player(&pl, map, 20, 12);
+    socket_struct *cs = CONTR(pl)->cs;
+    int ax = cs->mapx_2 + 4, ay = cs->mapy_2;
+    /* Seen, then walled off: the neighbor cell becomes remembered fog. */
+    update_los(pl);
+    map_client_cache_clear(&cs->lastmap);
+    socket_buffer_clear(cs);
+    CONTR(pl)->map_update_cmd = MAP_UPDATE_CMD_SAME;
+    draw_client_map2(pl);
+    object *walls[24];
+    for (int y = 0; y < map->height; y++) {
+        walls[y] = arch_get("wall_wood_1");
+        walls[y]->x = 21;
+        walls[y]->y = y;
+        walls[y] = object_insert_map(walls[y], map, NULL, 0);
+        ck_assert_ptr_nonnull(walls[y]);
+    }
+    update_los(pl);
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    MapCell *cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->source_map, east->count);
+    ck_assert_uint_ne(cell->client_light_known & 8U, 0);
+    /* The link is replaced: the coordinate now resolves to a map the viewer
+     * never saw, so the remembered cell is revoked, not relit from it. */
+    map->tile_map[TILED_EAST] = unseen;
+    unseen->tile_map[TILED_WEST] = map;
+    east->tile_map[TILED_WEST] = NULL;
+    socket_buffer_clear(cs);
+    draw_client_map2(pl);
+    cell = map_client_cache_cell(&cs->lastmap, 0, ax, ay, false);
+    ck_assert_ptr_nonnull(cell);
+    ck_assert_uint_eq(cell->client_light_known & 8U, 0);
+    ck_assert_uint_eq(cell->source_map, 0);
+    socket_buffer_clear(cs);
+    map->tile_map[TILED_EAST] = NULL;
+    unseen->tile_map[TILED_WEST] = NULL;
+}
+END_TEST
+
 START_TEST(test_celestial_profiles_come_only_from_authorized_cells) {
     mapstruct *map;
     object *pl;
@@ -4846,6 +4905,7 @@ static Suite *suite(void) {
     tcase_add_test(tc_core, test_region_exploration_grants_only_visible_public_base_cells);
     tcase_add_test(tc_core, test_celestial_inputs_precede_map_and_resend_only_on_change);
     tcase_add_test(tc_core, test_celestial_profiles_come_only_from_authorized_cells);
+    tcase_add_test(tc_core, test_remembered_fog_is_bound_to_its_map_cell);
     tcase_add_test(tc_core, test_local_light_color_stays_out_of_base_radiance);
     tcase_add_test(tc_core, test_map_exit_semantic_tracks_visible_layer_and_cache_changes);
     tcase_add_test(tc_core,
