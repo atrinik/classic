@@ -3702,10 +3702,13 @@ END_TEST
 
 START_TEST(test_client_lighting_cache_fields_add_no_padding) {
     /* The 64-bit protocol-1085 fields open the cleared part right after the
-     * two retained 32-bit words and pack without alignment padding, as the
+     * retained words (ambient sound, closure value and the authorized cell
+     * identity, 16 bytes) and pack without alignment padding, as the
      * per-socket budget counts them. */
-    ck_assert_uint_eq(offsetof(MapCell, occluder),
+    ck_assert_uint_eq(offsetof(MapCell, source_map),
                       offsetof(MapCell, celestial_structure) + sizeof(uint32_t));
+    ck_assert_uint_eq(offsetof(MapCell, occluder),
+                      offsetof(MapCell, source_y) + sizeof(int16_t));
     ck_assert_uint_eq(MAP_CELL_CLEAR_START, offsetof(MapCell, occluder));
     ck_assert_uint_eq(offsetof(MapCell, emitter_layers), offsetof(MapCell, occluder) + 8);
     ck_assert_uint_eq(offsetof(MapCell, emitter_stale), offsetof(MapCell, emitter_layers) + 8);
