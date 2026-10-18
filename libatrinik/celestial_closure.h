@@ -56,7 +56,12 @@
 #define CELESTIAL_CLOSURE_OVERHEAD_SHIFT 24
 /** That face carries a door, gate or authored transmission. */
 #define CELESTIAL_CLOSURE_OVERHEAD_APERTURE UINT32_C(0x4000000)
-#define CELESTIAL_CLOSURE_VALUE_MASK UINT32_C(0x7ffffff)
+/** Solve the cell exactly as one outside the closure (open air) yet still
+ * report it, as a closure too large to send stands in for its cells; valid
+ * only as CELESTIAL_CLOSURE_OUTSIDE_RECORD. */
+#define CELESTIAL_CLOSURE_OUTSIDE UINT32_C(0x8000000)
+#define CELESTIAL_CLOSURE_OUTSIDE_RECORD (CELESTIAL_CLOSURE_IN | CELESTIAL_CLOSURE_OUTSIDE)
+#define CELESTIAL_CLOSURE_VALUE_MASK UINT32_C(0xfffffff)
 /*@}*/
 
 /** One map's part of the closure at one depth: the bounding rectangle of its

@@ -1137,15 +1137,9 @@ size_t map2_closure_payload_max_exchange_for_test(size_t max) {
 }
 #endif
 
-/** The record of open air that every face crosses and that continues to the
- * cells around it, so the client solves the cell as it solves a cell outside
- * the closure. */
-#define MAP2_CLOSURE_OPEN_AIR                                                                  \
-    (CELESTIAL_CLOSURE_IN | UINT32_C(0x3ff) | CELESTIAL_CLOSURE_COVER_OPEN |                   \
-     CELESTIAL_CLOSURE_CONTINUOUS_NORTH | CELESTIAL_CLOSURE_CONTINUOUS_EAST |                  \
-     CELESTIAL_CLOSURE_CONTINUOUS_SOUTH | CELESTIAL_CLOSURE_CONTINUOUS_WEST |                  \
-     CELESTIAL_CLOSURE_CONTINUOUS_UP | CELESTIAL_CLOSURE_CONTINUOUS_DOWN |                     \
-     (UINT32_C(3) << CELESTIAL_CLOSURE_OVERHEAD_SHIFT))
+/** The record the client solves exactly as a cell outside the closure, open
+ * air with immediate sky, while still reporting and so updating it. */
+#define MAP2_CLOSURE_OPEN_AIR CELESTIAL_CLOSURE_OUTSIDE_RECORD
 
 /**
  * Collect this update's celestial closure from the per-socket records: one
@@ -3104,10 +3098,17 @@ void draw_client_map2(object *pl) {
                 if (!map2_local_light_known(mp, local_light)) {
                     ext_flags |= MAP2_FLAG_EXT_LOCAL_LIGHT;
                 }
-                /* The cell is authorized: its structure record is current. */
-                mp->celestial_structure =
-                    celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl, ax, ay);
-                map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
+                /* The cell is authorized: its structure record is current.
+                 * One whose every object was filtered (invisible, hidden,
+                 * direction or plugin) is shown empty, so its authored
+                 * structure stays undisclosed. */
+                if (cell_celestial.sent) {
+                    mp->celestial_structure =
+                        celestial_closure_cell_value(&cell_celestial, m, nx, ny, pl, ax, ay);
+                    map2_closure_maps[MAP2_DEPTH_INDEX(depth)][ax][ay] = m;
+                } else {
+                    mp->celestial_structure = 0;
+                }
                 if (!tile_fow) {
                     occluder = light_occluder_finish(cell_occluder) |
                                light_occluder_faces(m, nx, ny,

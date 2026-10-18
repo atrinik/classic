@@ -155,7 +155,8 @@ west):
 | 18–23 | continuity of the north, east, south, west, up and down faces |
 | 24–25 | class of the static floor or roof of the cell above |
 | 26 | that face carries a door, gate or authored transmission |
-| 27–31 | reserved, zero |
+| 27 | outside record: solve the cell as one outside the closure, yet report it; valid only with bit 15 and no other bit |
+| 28–31 | reserved, zero |
 
 Bits 24–26 are read only while the cell above is outside the closure. They
 are what shades an indoor viewer: the ceiling above the room is cut away from
@@ -163,14 +164,19 @@ view, so its cell is not authorized, but it is the authorized room's own
 roof. Doors and gates in it count as closed, so no unseen state is disclosed.
 Decoders reject truncation, trailing bytes, a run of length 0, a run or
 rectangle exceeding its bounds, overlap, a nonzero value without bit 15, a
-sky exit that also continues upward, and reserved bits, before replacing the
-closure. The fragment's slot selects the model that solves its cells, as the
+sky exit that also continues upward or has a closure cell other than an
+outside record above it, an outside record with any other bit, and reserved
+bits, before replacing the closure. The fragment's slot selects the model that solves its cells, as the
 server selects a model per map.
 
 A run costs 5 bytes, and runs compress the open air that dominates upper
 levels: a 32×32 window filled over all 13 depths encodes in 409 bytes. A
-closure too large for one command loses its farthest depths, which the client
-then solves as open air; no continuation framing is needed.
+closure too large for one command sends its farthest depths, then if need be
+every depth, as outside records, which compress to a few runs; should the
+fragment headers alone still not fit, each depth becomes one outside-record
+fragment over its fragments' bounds, keeping their shared profile slot or
+none. The client solves those cells as open air and still updates every one,
+so none keeps a previous field; no continuation framing is needed.
 
 The two commands are one publication, and it belongs to the MAP2 update that
 follows it. The server advances the generation whenever either payload changes
@@ -179,9 +185,10 @@ window and sent-object set they describe. The client stages each validated
 payload and replaces its slots and closure together only when it holds both
 with the same generation and the next MAP2 update has been applied
 transactionally, so neither the closure nor the map cache is ever presented
-with the other's window. A rejected payload, or a MAP2 update that fails to
-apply, discards the staged pair and keeps the previous published pair until a
-complete matching pair and its update arrive.
+with the other's window. A malformed payload, or a MAP2 update that fails to
+apply, discards the staged pair, while a stale one (an older generation) is
+ignored without touching it; either way the client keeps the previous
+published pair until a complete matching pair and its update arrive.
 A fragment of a schema-0 map always carries slot 255: the server computes no
 celestial field for legacy maps, so neither does the client.
 
@@ -192,7 +199,9 @@ revision, door or gate, or a change in which objects MAP2 sends to this viewer
 (seeing invisible, direction filtering or plugin visibility) changes a
 currently visible cell.
 
-Disclosure rule: a cell's faces are built only from the objects MAP2 sends to
+Disclosure rule: a cell is in the closure only when MAP2 sends it at least one
+object; one whose every object is filtered is presented empty and stays
+outside. Its faces are built only from the objects MAP2 sends to
 this viewer, with the same visibility, hidden-object and plugin filtering as
 occluders, and a sent view blocker making its unauthored cardinal faces
 opaque. Two static faces are added: the cell's own floor, which the camera

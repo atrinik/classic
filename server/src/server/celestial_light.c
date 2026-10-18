@@ -223,6 +223,7 @@ void celestial_closure_begin(celestial_closure_accumulator_t *accumulator) {
 
 void celestial_closure_accumulate(celestial_closure_accumulator_t *accumulator,
                                   const object *op) {
+    accumulator->sent = true;
     /* Per face exactly as spatial_cell_light_face(), restricted to sent
      * objects. */
     uint8_t faces = celestial_structure_faces(op);
@@ -1197,11 +1198,13 @@ typedef struct reference_lattice {
 } reference_lattice;
 
 static reference_air *reference_air_of(reference_lattice *lattice, const void *map) {
-    if ((const char *)map < (const char *)lattice->air ||
-        (const char *)map >= (const char *)(lattice->air + lattice->air_count)) {
-        return NULL;
+    /* Equality only: ordering a real map against this array is undefined. */
+    for (size_t i = 0; i < lattice->air_count; i++) {
+        if (map == &lattice->air[i]) {
+            return &lattice->air[i];
+        }
     }
-    return (reference_air *)map;
+    return NULL;
 }
 
 /** The disclosed record of a closure cell, zero outside the closure. */

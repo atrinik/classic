@@ -149,6 +149,9 @@ typedef struct celestial_closure_accumulator {
     uint8_t found, aperture;
     /** A sent object blocks view: unauthored cardinal faces are opaque. */
     bool blocker;
+    /** Some object of the cell was sent; a cell whose every object was
+     * filtered is shown empty and stays outside the closure. */
+    bool sent;
 } celestial_closure_accumulator_t;
 
 /** Start a cell's accumulator with every face open. */

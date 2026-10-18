@@ -64,10 +64,15 @@ bool client_celestial_apply(const uint8_t *data, size_t len) {
     uint32_t generation;
     uint64_t start_seconds;
     size_t count;
+    if (!celestial_protocol_read(data, len, &generation, &start_seconds, slots, &count)) {
+        /* A malformed half voids the pair: its counterpart must not wait
+         * staged for a MAP2 update that cannot publish it. */
+        client_celestial_discard_staged();
+        return false;
+    }
     /* Generations never regress, against the published pair or a newer
      * payload already staged. */
-    if (!celestial_protocol_read(data, len, &generation, &start_seconds, slots, &count) ||
-        generation <= client_celestial.slots.generation ||
+    if (generation <= client_celestial.slots.generation ||
         (client_celestial.staged_slots_valid &&
          generation < client_celestial.staged_slots.generation)) {
         return false;
@@ -91,6 +96,7 @@ bool client_celestial_apply_structure(const uint8_t *data, size_t len, int windo
                                       int window_height) {
     celestial_closure_t closure;
     if (!celestial_closure_read(data, len, window_width, window_height, &closure)) {
+        client_celestial_discard_staged();
         return false;
     }
     if (closure.generation <= client_celestial.slots.generation ||
